@@ -1,0 +1,30 @@
+{
+  "name": "trenchscanner",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Solana memecoin ecosystem monitor - scans for tokens with breakout potential",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "prisma:generate": "npm run prisma:generate -w @trenchscanner/core",
+    "prisma:migrate": "npm run prisma:migrate -w @trenchscanner/core",
+    "dev:api": "npm run dev -w @trenchscanner/api",
+    "dev:worker": "npm run dev -w @trenchscanner/worker",
+    "dev:web": "npm run dev -w @trenchscanner/web"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.4",
+    "@types/node": "^22.9.0"
+  }
+}
