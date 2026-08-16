@@ -1,3 +1,4 @@
+import "./bootstrap-env.js"; // must run before any @trenchscanner/core import - see file comment
 import { loadEnv, createLogger } from "@trenchscanner/core";
 import { buildServer } from "./server.js";
 

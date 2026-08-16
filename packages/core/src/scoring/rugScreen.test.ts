@@ -66,4 +66,27 @@ describe("runRugScreen", () => {
     const result = runRugScreen(safeProfile, tight);
     expect(result.passed).toBe(false);
   });
+
+  it("fails when RugCheck's own risk score exceeds the threshold", () => {
+    const result = runRugScreen({ ...safeProfile, riskScore: 85 });
+    expect(result.passed).toBe(false);
+    expect(result.reasons.some((r) => r.includes("risk score"))).toBe(true);
+  });
+
+  it("fails on a critical risk flag even when every numeric check passes", () => {
+    // Regression case found via live testing: a token can clear every threshold here and
+    // still have a creator with a documented history of rugging previous tokens.
+    const result = runRugScreen({
+      ...safeProfile,
+      riskScore: 20,
+      riskFlags: ["Creator history of rugged tokens"],
+    });
+    expect(result.passed).toBe(false);
+    expect(result.reasons.some((r) => r.includes("critical risk flag"))).toBe(true);
+  });
+
+  it("ignores non-critical risk flags below the score threshold", () => {
+    const result = runRugScreen({ ...safeProfile, riskScore: 20, riskFlags: ["High holder correlation"] });
+    expect(result.passed).toBe(true);
+  });
 });

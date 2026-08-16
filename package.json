@@ -15,8 +15,9 @@
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "prisma:generate": "npm run prisma:generate -w @trenchscanner/core",
-    "prisma:migrate": "npm run prisma:migrate -w @trenchscanner/core",
+    "prisma:generate": "dotenv -e .env -- prisma generate --schema packages/core/prisma/schema.prisma",
+    "prisma:migrate": "dotenv -e .env -- prisma migrate dev --schema packages/core/prisma/schema.prisma",
+    "prisma:deploy": "dotenv -e .env -- prisma migrate deploy --schema packages/core/prisma/schema.prisma",
     "dev:api": "npm run dev -w @trenchscanner/api",
     "dev:worker": "npm run dev -w @trenchscanner/worker",
     "dev:web": "npm run dev -w @trenchscanner/web"
@@ -25,6 +26,8 @@
     "typescript": "^5.6.3",
     "tsx": "^4.19.2",
     "vitest": "^2.1.4",
-    "@types/node": "^22.9.0"
+    "@types/node": "^22.9.0",
+    "dotenv-cli": "^7.4.4",
+    "prisma": "^5.21.1"
   }
 }

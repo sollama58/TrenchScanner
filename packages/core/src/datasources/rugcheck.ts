@@ -11,7 +11,9 @@ interface RugCheckReport {
   creatorBalance?: number;
   totalHolders?: number;
   topHolders?: { pct: number; owner?: string; address: string }[];
-  lpLockedPct?: number;
+  // NOTE: lpLockedPct only appears at the top level of the /report/summary endpoint. The full
+  // /report endpoint (what we call) nests it per-market instead - see toProfile() below.
+  markets?: { pubkey: string; lp?: { lpLockedPct?: number } }[];
   score_normalised?: number;
   risks?: { name: string; level: string; description?: string }[];
 }
@@ -79,23 +81,39 @@ export class RugCheckClient {
 }
 
 function toProfile(mintAddress: string, report: RugCheckReport): RugCheckProfile {
-  const topHolders = report.topHolders ?? [];
-  const top10HolderPct = topHolders
+  const markets = report.markets ?? [];
+
+  // The AMM pool's own authority shows up in topHolders holding whatever's currently in the
+  // pool (e.g. 40%+ of supply right after a pump.fun graduation) - that's locked, protocol-owned
+  // liquidity, not a wallet that can dump on holders, so it must be excluded from concentration
+  // risk. Confirmed against live data: a market's `pubkey` is exactly the `owner` that shows up
+  // on the pool's token holdings in topHolders.
+  const poolAuthorities = new Set(markets.map((m) => m.pubkey));
+  const realHolders = (report.topHolders ?? []).filter(
+    (h) => !poolAuthorities.has(h.owner ?? h.address),
+  );
+  const top10HolderPct = realHolders
     .slice(0, TOP_N_FOR_CONCENTRATION)
     .reduce((sum, h) => sum + (h.pct ?? 0), 0);
 
-  // Dev wallet % is derived from topHolders: the creator only shows up there
-  // if they still hold enough of the supply to rank in the top holder list.
-  const devHolder = topHolders.find((h) => h.owner === report.creator || h.address === report.creator);
+  // Dev wallet % is derived from the (pool-excluded) holder list: the creator only shows up
+  // there if they still hold enough of the supply to rank in the top holder list.
+  const devHolder = realHolders.find((h) => h.owner === report.creator || h.address === report.creator);
+
+  // lpLockedPct lives per-market on the full /report endpoint (unlike /report/summary, which
+  // has it at the top level). Most tokens have exactly one market; if there are several, treat
+  // the LP as burned only when every one of them is - a single unlocked pool is still a rug vector.
+  const lpBurned =
+    markets.length > 0 && markets.every((m) => (m.lp?.lpLockedPct ?? 0) >= 95);
 
   return {
     mintAddress,
     holderCount: report.totalHolders,
-    top10HolderPct: topHolders.length > 0 ? top10HolderPct : undefined,
+    top10HolderPct: realHolders.length > 0 ? top10HolderPct : undefined,
     devWalletPct: devHolder?.pct,
     mintAuthorityActive: Boolean(report.token?.mintAuthority),
     freezeAuthorityActive: Boolean(report.token?.freezeAuthority),
-    lpBurned: (report.lpLockedPct ?? 0) >= 95,
+    lpBurned,
     riskScore: report.score_normalised ?? 0,
     riskFlags: (report.risks ?? []).map((r) => r.name),
   };

@@ -32,6 +32,10 @@ export interface OnChainProfile {
   mintAuthorityActive: boolean;
   freezeAuthorityActive: boolean;
   lpBurned: boolean;
+  /** 0-100, higher = riskier. Only populated by providers that compute a composite risk score (e.g. RugCheck). */
+  riskScore?: number;
+  /** Named risk flags from the provider (e.g. "Creator history of rugged tokens"). */
+  riskFlags?: string[];
 }
 
 /** A CandidateToken enriched with on-chain data and derived metrics, ready to score. */

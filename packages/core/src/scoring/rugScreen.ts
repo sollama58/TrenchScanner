@@ -3,12 +3,22 @@ import type { OnChainProfile, RugScreenResult } from "../types.js";
 export interface RugScreenThresholds {
   maxTop10HolderPct: number;
   maxDevWalletPct: number;
+  /** RugCheck's composite risk score (0-100, higher = riskier). Catches things our own checks don't, e.g. insider clustering. */
+  maxRiskScore: number;
 }
 
 export const DEFAULT_RUG_THRESHOLDS: RugScreenThresholds = {
   maxTop10HolderPct: 60,
   maxDevWalletPct: 15,
+  maxRiskScore: 70,
 };
+
+/**
+ * Named risk flags that fail the screen outright regardless of score - found via live testing
+ * (see git history): a token can pass every numeric threshold here and still have RugCheck flag
+ * the creator's own track record, which our own checks have no way to see.
+ */
+const CRITICAL_RISK_FLAGS = new Set(["Creator history of rugged tokens"]);
 
 /**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
@@ -50,6 +60,13 @@ export function runRugScreen(
     reasons.push(
       `dev wallet owns ${profile.devWalletPct.toFixed(1)}% (max ${thresholds.maxDevWalletPct}%)`,
     );
+  }
+  if (profile.riskScore !== undefined && profile.riskScore > thresholds.maxRiskScore) {
+    reasons.push(`risk score ${profile.riskScore} exceeds max ${thresholds.maxRiskScore}`);
+  }
+  const criticalFlags = (profile.riskFlags ?? []).filter((f) => CRITICAL_RISK_FLAGS.has(f));
+  if (criticalFlags.length > 0) {
+    reasons.push(`critical risk flag: ${criticalFlags.join(", ")}`);
   }
 
   return { passed: reasons.length === 0, reasons };

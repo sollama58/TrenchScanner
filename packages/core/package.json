@@ -10,12 +10,9 @@
     "./prisma": "./generated/prisma/index.js"
   },
   "scripts": {
-    "build": "prisma generate && tsc -p tsconfig.json",
+    "build": "dotenv -e ../../.env -- prisma generate && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:deploy": "prisma migrate deploy"
+    "test": "vitest run"
   },
   "dependencies": {
     "@prisma/client": "^5.21.1",

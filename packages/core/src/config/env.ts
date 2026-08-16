@@ -19,6 +19,11 @@ const envSchema = z.object({
   DIGEST_HOUR_UTC: z.coerce.number().min(0).max(23).default(13),
   MCAP_FILTER_MIN: z.coerce.number().nonnegative().default(50_000),
   MCAP_FILTER_MAX: z.coerce.number().positive().default(500_000),
+  // How long a discovered mint stays on the active watchlist (re-checked every scan cycle) before
+  // it's considered stale and dropped. Most tokens that haven't gained traction go quiet well
+  // before this; it exists to bound DexScreener batch-lookup volume per cycle.
+  WATCHLIST_TTL_HOURS: z.coerce.number().positive().default(24),
+  WATCHLIST_MAX_TRACKED: z.coerce.number().int().positive().default(900),
 
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   // Used only to build the "tap to open Telegram" deep link on the dashboard - not required

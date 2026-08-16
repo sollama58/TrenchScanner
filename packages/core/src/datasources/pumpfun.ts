@@ -52,19 +52,29 @@ export class PumpFunClient {
   }
 
   /**
-   * Discovers candidate mints for the scan loop by combining two views:
-   * the newest coins (catches tokens still climbing toward the target band)
-   * and coins sorted by market cap descending, page-limited so we skip the
-   * mega-cap tail and only walk pages likely to still contain sub-$500k coins.
+   * Discovers newly-created mints, newest first. This is deliberately NOT
+   * filtered by market cap: pump.fun's `sort=market_cap&order=ASC` was
+   * tried and found useless for finding our target band - the vast
+   * majority of tokens sit at ~0 mcap (freshly launched, untraded) or
+   * exactly at pump.fun's bonding-curve starting value, so ascending pages
+   * are dominated by dead-on-arrival tokens and rarely reach five figures
+   * within any reasonable page depth. `order=DESC` is just as useless from
+   * the top (hundreds of millions in mcap, thousands of pages to page
+   * through). There is no market-cap range filter in this API.
+   *
+   * Instead, the caller (the worker's scan job) is expected to add every
+   * newly-seen mint to a persistent watchlist and re-check its live mcap
+   * via DexScreener on every subsequent cycle - that's what actually
+   * catches a token as it climbs from ~$2k at launch into the 50k-500k
+   * band, rather than needing this snapshot to catch it mid-band by luck.
    */
-  async discoverCandidates(opts: { pages?: number; limit?: number } = {}): Promise<DiscoveredCoin[]> {
-    const { pages = 3, limit = 50 } = opts;
+  async discoverNewMints(opts: { pages?: number; limit?: number } = {}): Promise<DiscoveredCoin[]> {
+    const { pages = 6, limit = 100 } = opts;
     const seen = new Map<string, DiscoveredCoin>();
 
     const fetches: Promise<PumpFunCoin[]>[] = [];
-    fetches.push(this.listCoins({ offset: 0, limit, sort: "created_timestamp", order: "DESC" }));
     for (let page = 0; page < pages; page++) {
-      fetches.push(this.listCoins({ offset: page * limit, limit, sort: "market_cap", order: "ASC" }));
+      fetches.push(this.listCoins({ offset: page * limit, limit, sort: "created_timestamp", order: "DESC" }));
     }
 
     const settled = await Promise.allSettled(fetches);

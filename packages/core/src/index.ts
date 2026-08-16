@@ -1,7 +1,7 @@
 export * from "./types.js";
 export * from "./logger.js";
 export * from "./config/env.js";
-export { prisma } from "./db.js";
+export * from "./db.js";
 
 export * from "./datasources/httpClient.js";
 export * from "./datasources/dexscreener.js";
@@ -9,7 +9,7 @@ export * from "./datasources/pumpfun.js";
 export * from "./datasources/rugcheck.js";
 export * from "./datasources/helius.js";
 
-export * from "./discovery/discoverCandidates.js";
+export * from "./discovery/refreshCandidates.js";
 export * from "./discovery/enrich.js";
 
 export * from "./narratives/keywords.js";
