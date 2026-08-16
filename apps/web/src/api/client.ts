@@ -1,0 +1,117 @@
+import type {
+  AlertMode,
+  FilterInput,
+  Match,
+  TelegramLinkResponse,
+  TelegramStatus,
+  Token,
+  User,
+  UserFilter,
+} from "./types";
+
+const BASE_URL = import.meta.env.VITE_API_URL;
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: {
+      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...init.headers,
+    },
+  });
+
+  if (!res.ok) {
+    let message = `Request failed with status ${res.status}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.error === "string") message = body.error;
+    } catch {
+      // response wasn't JSON - keep the generic message
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────
+export function getNonce(wallet: string) {
+  return request<{ nonce: string; message: string; expiresAt: string }>(
+    `/auth/nonce?wallet=${encodeURIComponent(wallet)}`,
+  );
+}
+
+export function verifySignIn(walletAddress: string, nonce: string, signature: string) {
+  return request<User>("/auth/verify", {
+    method: "POST",
+    body: JSON.stringify({ walletAddress, nonce, signature }),
+  });
+}
+
+export function getMe() {
+  return request<User>("/auth/me");
+}
+
+export function logout() {
+  return request<{ ok: true }>("/auth/logout", { method: "POST" });
+}
+
+// ── Filters ──────────────────────────────────────────────────────────────
+export function listFilters() {
+  return request<UserFilter[]>("/filters");
+}
+
+export function createFilter(input: Partial<FilterInput>) {
+  return request<UserFilter>("/filters", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function updateFilter(id: string, input: Partial<FilterInput>) {
+  return request<UserFilter>(`/filters/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export function deleteFilter(id: string) {
+  return request<void>(`/filters/${id}`, { method: "DELETE" });
+}
+
+// ── Matches ──────────────────────────────────────────────────────────────
+export function listMatches(since?: string) {
+  const query = since ? `?since=${encodeURIComponent(since)}` : "";
+  return request<Match[]>(`/matches${query}`);
+}
+
+// ── Tokens ───────────────────────────────────────────────────────────────
+export function getToken(mintAddress: string) {
+  return request<Token & { snapshots: unknown[] }>(`/tokens/${mintAddress}`);
+}
+
+// ── Telegram ─────────────────────────────────────────────────────────────
+export function getTelegramStatus() {
+  return request<TelegramStatus>("/telegram/status");
+}
+
+export function linkTelegram() {
+  return request<TelegramLinkResponse>("/telegram/link", { method: "POST" });
+}
+
+export function setAlertMode(alertMode: AlertMode) {
+  return request<{ alertMode: AlertMode }>("/telegram/alert-mode", {
+    method: "PATCH",
+    body: JSON.stringify({ alertMode }),
+  });
+}
+
+export function unlinkTelegram() {
+  return request<{ ok: true }>("/telegram/unlink", { method: "POST" });
+}

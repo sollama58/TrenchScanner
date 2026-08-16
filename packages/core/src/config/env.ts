@@ -8,7 +8,15 @@ import { z } from "zod";
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
-  JWT_SECRET: z.string().min(16, "JWT_SECRET must be at least 16 characters"),
+  // Only apps/api actually uses this (to sign session JWTs) - apps/worker never touches it, but
+  // both share this one schema. Rather than force every consumer to configure a secret it
+  // doesn't need, this falls back to an obviously-insecure default and apps/api itself checks
+  // for and warns loudly about that default at startup (see apps/api/src/index.ts) - so a real
+  // deployment can't silently ship with it, but the worker's startup is never blocked by it.
+  JWT_SECRET: z
+    .string()
+    .min(16, "JWT_SECRET must be at least 16 characters")
+    .default("dev-insecure-default-jwt-secret-change-me"),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(168),
 
   HELIUS_API_KEY: z.string().optional().default(""),
