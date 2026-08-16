@@ -21,6 +21,9 @@ const envSchema = z.object({
   MCAP_FILTER_MAX: z.coerce.number().positive().default(500_000),
 
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
+  // Used only to build the "tap to open Telegram" deep link on the dashboard - not required
+  // for the bot itself to function, but without it users have to type /start <code> manually.
+  TELEGRAM_BOT_USERNAME: z.string().optional().default(""),
 
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),

@@ -47,10 +47,13 @@ CREATE TABLE "UserFilter" (
 CREATE TABLE "TelegramLink" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
-    "chatId" TEXT NOT NULL,
+    "chatId" TEXT,
     "alertMode" "AlertMode" NOT NULL DEFAULT 'BOTH',
     "linkCode" TEXT,
-    "linkedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "linkCodeExpiresAt" TIMESTAMP(3),
+    "linkedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "TelegramLink_pkey" PRIMARY KEY ("id")
 );
@@ -131,6 +134,9 @@ CREATE UNIQUE INDEX "TelegramLink_userId_key" ON "TelegramLink"("userId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "TelegramLink_chatId_key" ON "TelegramLink"("chatId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TelegramLink_linkCode_key" ON "TelegramLink"("linkCode");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Token_mintAddress_key" ON "Token"("mintAddress");

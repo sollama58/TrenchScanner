@@ -67,16 +67,24 @@ model UserFilter {
   @@index([userId])
 }
 
-/// A user's linked Telegram chat for alerts.
+/// A user's linked Telegram chat for alerts. Linking is a two-step flow: the API issues a
+/// short-lived linkCode, the user sends "/start <linkCode>" to the bot (long-polled by the
+/// worker - Render background workers have no inbound HTTP, so webhooks aren't an option),
+/// and the worker fills in chatId/linkedAt and clears the code.
 model TelegramLink {
   id     String @id @default(cuid())
   userId String @unique
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  chatId    String    @unique
+  chatId    String?   @unique
   alertMode AlertMode @default(BOTH)
-  linkCode  String? // pending code shown on dashboard until confirmed via bot /start
-  linkedAt  DateTime  @default(now())
+
+  linkCode          String?   @unique
+  linkCodeExpiresAt DateTime?
+  linkedAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// A distinct Solana token being tracked.
