@@ -1,11 +1,12 @@
 import { Bot } from "grammy";
-import { prisma, createLogger } from "@trenchscanner/core";
+import { Prisma, prisma, createLogger } from "@trenchscanner/core";
 
 const logger = createLogger("telegram-bot");
 
 export interface AlertBot {
   readonly enabled: boolean;
-  sendMessage(chatId: string, text: string): Promise<void>;
+  /** Returns whether the message was actually delivered - callers use this to decide what to persist as "sent". */
+  sendMessage(chatId: string, text: string): Promise<boolean>;
   start(): void;
   stop(): Promise<void>;
 }
@@ -26,6 +27,7 @@ export function createBot(token: string): AlertBot {
       enabled: false,
       async sendMessage(chatId, text) {
         logger.debug("skipping telegram send (bot disabled)", { chatId, textLength: text.length });
+        return false;
       },
       start() {
         /* no-op */
@@ -58,8 +60,10 @@ export function createBot(token: string): AlertBot {
     async sendMessage(chatId, text) {
       try {
         await bot.api.sendMessage(chatId, text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+        return true;
       } catch (err) {
         logger.warn("failed to send telegram message", { chatId, error: String(err) });
+        return false;
       }
     },
     start() {
@@ -82,10 +86,19 @@ async function handleLinkCode(chatId: string, code: string, reply: (text: string
     return;
   }
 
-  await prisma.telegramLink.update({
-    where: { id: link.id },
-    data: { chatId, linkedAt: new Date(), linkCode: null, linkCodeExpiresAt: null },
-  });
+  try {
+    await prisma.telegramLink.update({
+      where: { id: link.id },
+      data: { chatId, linkedAt: new Date(), linkCode: null, linkCodeExpiresAt: null },
+    });
+  } catch (err) {
+    // chatId is @unique - this chat is already linked to a different TrenchScanner account.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      await reply("This Telegram chat is already linked to a different TrenchScanner account. Unlink it there first.");
+      return;
+    }
+    throw err;
+  }
 
   await reply("✅ Linked! You'll get alerts here based on your saved filters.");
   logger.info("telegram link completed", { userId: link.userId });

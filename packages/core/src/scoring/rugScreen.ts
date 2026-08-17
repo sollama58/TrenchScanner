@@ -17,8 +17,14 @@ export const DEFAULT_RUG_THRESHOLDS: RugScreenThresholds = {
  * Named risk flags that fail the screen outright regardless of score - found via live testing
  * (see git history): a token can pass every numeric threshold here and still have RugCheck flag
  * the creator's own track record, which our own checks have no way to see.
+ *
+ * "Creator identity unknown" is synthesized in rugcheck.ts's toProfile(), not RugCheck's own
+ * risks[] - it exists specifically so a missing creator field fails closed (genuinely
+ * unverifiable) without also failing the far more common case of a creator who simply holds too
+ * little to appear in the top-holders list (safe, and indistinguishable from "unknown" by
+ * devWalletPct's undefined alone - see the comment there).
  */
-const CRITICAL_RISK_FLAGS = new Set(["Creator history of rugged tokens"]);
+const CRITICAL_RISK_FLAGS = new Set(["Creator history of rugged tokens", "Creator identity unknown"]);
 
 /**
  * Hard exclusion gate. A token must pass this before it's ever shown to a

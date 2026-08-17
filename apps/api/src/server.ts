@@ -34,7 +34,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   app.get("/health", async () => ({ ok: true }));
 
-  await app.register(registerAuthRoutes, { prefix: "/auth" });
+  await app.register(registerAuthRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters" });
   await app.register(registerMatchRoutes, { prefix: "/matches" });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });

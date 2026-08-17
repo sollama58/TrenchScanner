@@ -55,6 +55,14 @@ export function Settings() {
 
   if (!status) return <p className="empty-state">Loading settings…</p>;
 
+  // linkInfo only exists right after clicking "Link Telegram" this session; status.pendingLinkCode
+  // survives a reload. Reconstruct the same deep link from status when linkInfo is gone so the
+  // "Open Telegram" button doesn't disappear just because the page was refreshed mid-flow.
+  const pendingCode = linkInfo?.linkCode ?? status.pendingLinkCode;
+  const deepLink =
+    linkInfo?.deepLink ??
+    (status.botUsername && pendingCode ? `https://t.me/${status.botUsername}?start=${pendingCode}` : null);
+
   return (
     <div className="settings-page">
       <h2>Settings</h2>
@@ -86,19 +94,13 @@ export function Settings() {
         ) : (
           <>
             <p className="settings-card__status">Not linked yet.</p>
-            {linkInfo || status.pendingLinkCode ? (
+            {pendingCode ? (
               <div className="settings-card__pending">
                 <p>
-                  Send <code>/start {linkInfo?.linkCode ?? status.pendingLinkCode}</code> to the
-                  bot on Telegram to finish linking.
+                  Send <code>/start {pendingCode}</code> to the bot on Telegram to finish linking.
                 </p>
-                {(linkInfo?.deepLink ?? (status.botUsername ? null : undefined)) && (
-                  <a
-                    className="btn btn--primary"
-                    href={linkInfo?.deepLink ?? undefined}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                {deepLink && (
+                  <a className="btn btn--primary" href={deepLink} target="_blank" rel="noreferrer">
                     Open Telegram
                   </a>
                 )}

@@ -225,6 +225,13 @@ async function processCandidate(
     const shouldRealtimeAlert =
       telegramLink?.chatId && (telegramLink.alertMode === "REALTIME" || telegramLink.alertMode === "BOTH");
 
+    // Send (if applicable) before persisting, so deliveredTelegram reflects what actually
+    // happened rather than what we merely intended - sendMessage swallows its own errors and
+    // reports success/failure via its return value, it never throws.
+    const delivered = shouldRealtimeAlert
+      ? await bot.sendMessage(telegramLink.chatId!, formatRealtimeAlert(token, snapshot, scored.score.total))
+      : false;
+
     await prisma.match.create({
       data: {
         userId: filter.userId,
@@ -233,14 +240,10 @@ async function processCandidate(
         snapshotId: snapshot.id,
         score: scored.score.total,
         deliveredDashboard: true,
-        deliveredTelegram: Boolean(shouldRealtimeAlert),
+        deliveredTelegram: delivered,
       },
     });
     matchCount += 1;
-
-    if (shouldRealtimeAlert && telegramLink?.chatId) {
-      await bot.sendMessage(telegramLink.chatId, formatRealtimeAlert(token, snapshot, scored.score.total));
-    }
   }
 
   return matchCount;

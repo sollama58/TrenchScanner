@@ -37,15 +37,18 @@ export async function runDigestJob(bot: AlertBot): Promise<void> {
       });
 
       const text = formatDigest(matches.map((m) => ({ token: m.token, snapshot: m.snapshot, score: m.score })));
-      await bot.sendMessage(link.chatId, text);
+      const delivered = await bot.sendMessage(link.chatId, text);
 
-      if (matches.length > 0) {
+      // Only stamp digestSentAt on an actual successful send - these matches are otherwise
+      // permanently excluded from every future digest (query above filters on digestSentAt:
+      // null), so a swallowed send failure must not look like a delivered one here.
+      if (delivered && matches.length > 0) {
         await prisma.match.updateMany({
           where: { id: { in: matches.map((m) => m.id) } },
           data: { digestSentAt: new Date() },
         });
       }
-      sent += 1;
+      if (delivered) sent += 1;
     } catch (err) {
       logger.error("failed to send digest", { userId: link.userId, error: String(err) });
     }

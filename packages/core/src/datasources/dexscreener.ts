@@ -45,7 +45,7 @@ export class DexScreenerClient {
    * A token can have multiple pairs (e.g. multiple DEXes); we keep the
    * highest-liquidity pair per mint as the canonical price source.
    */
-  async getTokensByAddresses(mintAddresses: string[]): Promise<CandidateToken[]> {
+  async getTokensByAddresses(mintAddresses: string[], concurrency = 5): Promise<CandidateToken[]> {
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
 
@@ -54,17 +54,30 @@ export class DexScreenerClient {
       chunks.push(unique.slice(i, i + BATCH_SIZE));
     }
 
+    // Bounded-concurrency worker pool (same pattern as RugCheckClient.getProfiles): fetching
+    // chunks one at a time made the watchlist refresh step scale linearly with watchlist size -
+    // at the default WATCHLIST_MAX_TRACKED that's up to 30 sequential round trips, adding real
+    // wall-clock time to every scan cycle. A modest concurrency cap gets most of the speedup
+    // without hammering a public, unauthenticated API with 30 simultaneous requests.
     const results: CandidateToken[] = [];
-    for (const chunk of chunks) {
-      try {
-        const pairs = await fetchJson<DexScreenerPair[]>(
-          `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
-        );
-        results.push(...this.selectCanonicalPairs(pairs ?? []));
-      } catch (err) {
-        logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
+    const queue = [...chunks];
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        const chunk = queue.shift();
+        if (!chunk) continue;
+        try {
+          const pairs = await fetchJson<DexScreenerPair[]>(
+            `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
+          );
+          results.push(...this.selectCanonicalPairs(pairs ?? []));
+        } catch (err) {
+          logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
+        }
       }
-    }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, chunks.length) }, worker));
     return results;
   }
 

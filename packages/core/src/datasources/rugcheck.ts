@@ -5,7 +5,7 @@ import type { OnChainProfile } from "../types.js";
 const logger = createLogger("rugcheck");
 
 /** Subset of https://api.rugcheck.xyz/v1/tokens/{mint}/report we use. Public, no API key required. */
-interface RugCheckReport {
+export interface RugCheckReport {
   token?: { mintAuthority: string | null; freezeAuthority: string | null };
   creator?: string;
   creatorBalance?: number;
@@ -80,7 +80,7 @@ export class RugCheckClient {
   }
 }
 
-function toProfile(mintAddress: string, report: RugCheckReport): RugCheckProfile {
+export function toProfile(mintAddress: string, report: RugCheckReport): RugCheckProfile {
   const markets = report.markets ?? [];
 
   // The AMM pool's own authority shows up in topHolders holding whatever's currently in the
@@ -97,8 +97,18 @@ function toProfile(mintAddress: string, report: RugCheckReport): RugCheckProfile
     .reduce((sum, h) => sum + (h.pct ?? 0), 0);
 
   // Dev wallet % is derived from the (pool-excluded) holder list: the creator only shows up
-  // there if they still hold enough of the supply to rank in the top holder list.
+  // there if they still hold enough of the supply to rank in the top holder list. Note this
+  // means devWalletPct is undefined in two very different situations - (a) the creator holds a
+  // negligible amount (safe, common, expected) and (b) we have no creator identity at all
+  // (genuinely unknown, not safe). Only (b) should fail the rug screen closed; conflating the
+  // two would reject the common, benign case. (b) is surfaced as a critical risk flag instead of
+  // via devWalletPct itself, since a bare `undefined` can't carry that distinction - see
+  // CRITICAL_RISK_FLAGS in rugScreen.ts.
   const devHolder = realHolders.find((h) => h.owner === report.creator || h.address === report.creator);
+  const riskFlags = (report.risks ?? []).map((r) => r.name);
+  if (!report.creator) {
+    riskFlags.push("Creator identity unknown");
+  }
 
   // lpLockedPct lives per-market on the full /report endpoint (unlike /report/summary, which
   // has it at the top level). Most tokens have exactly one market; if there are several, treat
@@ -115,6 +125,6 @@ function toProfile(mintAddress: string, report: RugCheckReport): RugCheckProfile
     freezeAuthorityActive: Boolean(report.token?.freezeAuthority),
     lpBurned,
     riskScore: report.score_normalised ?? 0,
-    riskFlags: (report.risks ?? []).map((r) => r.name),
+    riskFlags,
   };
 }

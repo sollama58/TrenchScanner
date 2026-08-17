@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import bs58 from "bs58";
-import { prisma } from "@trenchscanner/core";
+import { prisma, type Env } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 
@@ -15,7 +15,7 @@ const verifyBodySchema = z.object({
   signature: z.string().min(1),
 });
 
-export async function registerAuthRoutes(app: FastifyInstance) {
+export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.get("/nonce", async (request, reply) => {
     const parsed = nonceQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -49,7 +49,9 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
-      maxAge: 60 * 60 * 24 * 7,
+      // Kept in sync with the JWT's own expiry (see createSessionSigner) - a mismatch here would
+      // mean the cookie either outlives the token it holds or expires before it does.
+      maxAge: opts.env.SESSION_TTL_HOURS * 60 * 60,
     });
 
     return { id: user.id, walletAddress: user.walletAddress, createdAt: user.createdAt };
