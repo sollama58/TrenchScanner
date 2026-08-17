@@ -35,8 +35,13 @@ const verifyBodySchema = z.discriminatedUnion("method", [
   }),
 ]);
 
+// The tightest limits in the API: both routes are unauthenticated (reachable by anyone) and
+// touch the DB (a nonce row per /nonce call). The global default (server.ts) covers everything
+// else; a legitimate user signing in a few times a minute is well within this.
+const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+
 export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env }) {
-  app.get("/nonce", async (request, reply) => {
+  app.get("/nonce", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = nonceQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
@@ -48,7 +53,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     return { nonce, message, signInInput, expiresAt };
   });
 
-  app.post("/verify", async (request, reply) => {
+  app.post("/verify", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = verifyBodySchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
