@@ -11,6 +11,7 @@ import {
 import { createBot } from "./telegram/bot.js";
 import { runScanCycle } from "./jobs/scanJob.js";
 import { runDigestJob } from "./jobs/digestJob.js";
+import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { scheduleInterval, scheduleDailyAt } from "./scheduler.js";
 
 const logger = createLogger("worker");
@@ -30,10 +31,12 @@ async function main() {
 
   const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env, bot), env.SCAN_INTERVAL_MINUTES);
   const digestJob = scheduleDailyAt("digest", () => runDigestJob(bot), env.DIGEST_HOUR_UTC);
+  const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC);
 
   logger.info("worker started", {
     scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
     digestHourUtc: env.DIGEST_HOUR_UTC,
+    cleanupHourUtc: env.CLEANUP_HOUR_UTC,
     telegramEnabled: bot.enabled,
     usingHeliusRpc: deps.helius.usingHelius,
   });
@@ -42,6 +45,7 @@ async function main() {
     logger.info("shutting down", { signal });
     scanJob.stop();
     digestJob.stop();
+    cleanupJob.stop();
     await bot.stop();
     await prisma.$disconnect();
     process.exit(0);

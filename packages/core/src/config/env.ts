@@ -33,6 +33,14 @@ const envSchema = z.object({
   WATCHLIST_TTL_HOURS: z.coerce.number().positive().default(24),
   WATCHLIST_MAX_TRACKED: z.coerce.number().int().positive().default(900),
 
+  // Daily cleanup job (see apps/worker/src/jobs/cleanupJob.ts) - prunes TokenSnapshot rows older
+  // than this that aren't referenced by any Match (deleting a referenced one would cascade-delete
+  // real match history), and Token rows older than this with zero snapshots and zero matches ever
+  // (dead watchlist entries). Both tables would otherwise grow unbounded forever.
+  CLEANUP_HOUR_UTC: z.coerce.number().min(0).max(23).default(4),
+  SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
+  STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(90),
+
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   // Used only to build the "tap to open Telegram" deep link on the dashboard - not required
   // for the bot itself to function, but without it users have to type /start <code> manually.
