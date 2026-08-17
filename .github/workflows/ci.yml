@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    # A real Postgres, not a mock - prisma:deploy actually applies every migration against it,
+    # which catches migration-file drift/corruption that a schema-only check would miss.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trenchscanner
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/trenchscanner
+      # Not a real secret - CI never talks to production anything. apps/api's own startup check
+      # only hard-fails on the insecure default when NODE_ENV=production, which CI never sets.
+      JWT_SECRET: ci-test-secret-not-used-anywhere-real-00000000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Builds the Prisma client + compiles packages/core - every other workspace's typecheck/
+      # build/test imports @trenchscanner/core's dist output, so this has to happen first.
+      - name: Build packages/core
+        run: npm run build -w @trenchscanner/core
+
+      - name: Apply migrations to the CI database
+        run: npm run prisma:deploy
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build all workspaces
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Validate render.yaml
+        run: npx -y js-yaml render.yaml > /dev/null
