@@ -353,6 +353,43 @@ select {
   white-space: nowrap;
 }
 
+/* ── Score breakdown ────────────────────────────────────────────────── */
+
+.token-card__breakdown {
+  display: flex;
+  gap: 10px;
+  margin: 2px 0 10px;
+}
+
+.breakdown-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.breakdown-bar__label {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.breakdown-bar__track {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+
+.breakdown-bar__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-dim);
+  border-radius: 2px;
+}
+
 /* ── Filters page ───────────────────────────────────────────────────── */
 
 .filter-list {

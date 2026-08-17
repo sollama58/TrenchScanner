@@ -57,6 +57,10 @@ export interface TokenSnapshot {
   lpBurned: boolean | null;
   ageMinutes: number | null;
   score: number | null;
+  scoreMomentum: number | null;
+  scoreHolderHealth: number | null;
+  scoreAge: number | null;
+  scoreNarrative: number | null;
   rugScreenPassed: boolean;
   rugScreenReasons: string[];
 }

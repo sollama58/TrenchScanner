@@ -131,7 +131,16 @@ model TokenSnapshot {
 
   ageMinutes Int?
 
-  score            Float?
+  score Float?
+  // Individual components behind `score` (see packages/core/src/scoring/scorer.ts's
+  // ScoreBreakdown) - persisted so the dashboard can show *why* a token scored the way it did,
+  // not just the composite number. Nullable because snapshots taken before this field existed
+  // won't have them.
+  scoreMomentum     Float?
+  scoreHolderHealth Float?
+  scoreAge          Float?
+  scoreNarrative    Float?
+
   rugScreenPassed  Boolean  @default(false)
   rugScreenReasons String[] @default([])
 

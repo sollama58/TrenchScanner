@@ -72,8 +72,53 @@ export function TokenCard({ match }: { match: Match }) {
         </div>
       </dl>
 
+      <ScoreBreakdown snapshot={snapshot} />
+
       <div className="token-card__mint">{token.mintAddress}</div>
     </a>
+  );
+}
+
+/** Why the token scored the way it did - the 4 components behind the single number in the header. */
+function ScoreBreakdown({
+  snapshot,
+}: {
+  snapshot: {
+    scoreMomentum: number | null;
+    scoreHolderHealth: number | null;
+    scoreAge: number | null;
+    scoreNarrative: number | null;
+  };
+}) {
+  const bars: { label: string; title: string; value: number | null }[] = [
+    { label: "Mom", title: "Momentum (volume/mcap ratio, buy pressure)", value: snapshot.scoreMomentum },
+    { label: "Hold", title: "Holder health (growth, concentration)", value: snapshot.scoreHolderHealth },
+    { label: "Age", title: "Age (sweet spot vs. too new/too mature)", value: snapshot.scoreAge },
+    { label: "Narr", title: "Narrative (theme + social presence)", value: snapshot.scoreNarrative },
+  ];
+
+  // Older snapshots (pre-breakdown-tracking) won't have these - skip the row entirely rather
+  // than show four empty bars.
+  if (bars.every((b) => b.value === null)) return null;
+
+  return (
+    <div className="token-card__breakdown">
+      {bars.map((bar) => (
+        <div
+          key={bar.label}
+          className="breakdown-bar"
+          title={`${bar.title}: ${bar.value?.toFixed(0) ?? "—"}`}
+        >
+          <span className="breakdown-bar__label">{bar.label}</span>
+          <span className="breakdown-bar__track">
+            <span
+              className="breakdown-bar__fill"
+              style={{ width: `${Math.max(0, Math.min(100, bar.value ?? 0))}%` }}
+            />
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
