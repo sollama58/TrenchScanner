@@ -8,6 +8,7 @@ import type {
   Token,
   User,
   UserFilter,
+  WorkerHealth,
 } from "./types";
 
 const BASE_URL = import.meta.env.VITE_API_URL;
@@ -108,6 +109,11 @@ export function listMatches(since?: string) {
 // ── Tokens ───────────────────────────────────────────────────────────────
 export function getToken(mintAddress: string) {
   return request<Token & { snapshots: unknown[] }>(`/tokens/${mintAddress}`);
+}
+
+// ── Health ───────────────────────────────────────────────────────────────
+export function getWorkerHealth() {
+  return request<WorkerHealth>("/health/worker");
 }
 
 // ── Telegram ─────────────────────────────────────────────────────────────

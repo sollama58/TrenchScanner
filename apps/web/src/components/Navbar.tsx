@@ -1,4 +1,5 @@
 import { useAuth } from "../context/AuthContext";
+import { HealthBadge } from "./HealthBadge";
 
 export type Tab = "dashboard" | "filters" | "settings";
 
@@ -28,6 +29,7 @@ export function Navbar({ tab, onTabChange }: { tab: Tab; onTabChange: (tab: Tab)
         ))}
       </nav>
       <div className="navbar__account">
+        <HealthBadge />
         <span className="navbar__wallet">{user ? shortWallet(user.walletAddress) : ""}</span>
         <button className="btn btn--ghost" onClick={() => void signOut()}>
           Sign out

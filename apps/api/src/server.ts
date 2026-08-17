@@ -10,6 +10,7 @@ import { registerFilterRoutes } from "./routes/filters.js";
 import { registerMatchRoutes } from "./routes/matches.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
+import { registerHealthRoutes } from "./routes/health.js";
 
 const logger = createLogger("api");
 
@@ -45,7 +46,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     request.user = session;
   });
 
-  app.get("/health", async () => ({ ok: true }));
+  await app.register(registerHealthRoutes, { prefix: "/health" });
 
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters" });

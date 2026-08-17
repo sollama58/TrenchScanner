@@ -17,6 +17,18 @@ enum AlertMode {
   OFF
 }
 
+/// One row per background job (scan, digest, cleanup, ...), updated on every run whether it
+/// succeeds or fails. This is what lets the API/dashboard answer "is the worker actually alive"
+/// without needing a separate monitoring service - see packages/core/src/heartbeat.ts.
+model SystemHeartbeat {
+  job           String    @id
+  lastRunAt     DateTime
+  lastSuccessAt DateTime?
+  lastError     String?
+  meta          Json?
+  updatedAt     DateTime  @updatedAt
+}
+
 /// A person, identified by their Solana wallet (Sign-In With Solana).
 model User {
   id            String   @id @default(cuid())

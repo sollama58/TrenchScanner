@@ -1,4 +1,4 @@
-import { createLogger } from "@trenchscanner/core";
+import { createLogger, recordHeartbeat, type HeartbeatJob } from "@trenchscanner/core";
 
 const logger = createLogger("scheduler");
 
@@ -10,9 +10,13 @@ export interface ScheduledJob {
  * Runs `fn` immediately, then every `intervalMinutes`. Guards against
  * overlapping runs - if a cycle is still in flight when the next tick
  * fires, that tick is skipped rather than piling up concurrent scans.
+ *
+ * Every run (success or failure) updates the job's heartbeat row, so
+ * GET /health/worker can tell "still running, just erroring" apart from
+ * "stopped running entirely" - see packages/core/src/heartbeat.ts.
  */
 export function scheduleInterval(
-  name: string,
+  name: HeartbeatJob,
   fn: () => Promise<void>,
   intervalMinutes: number,
 ): ScheduledJob {
@@ -26,8 +30,13 @@ export function scheduleInterval(
     running = true;
     try {
       await fn();
+      await recordHeartbeat(name, { success: true });
     } catch (err) {
       logger.error("job threw an unhandled error", { job: name, error: String(err) });
+      await recordHeartbeat(name, { success: false, error: String(err) }).catch(() => {
+        // If the DB itself is unreachable, the heartbeat write will fail too - nothing more we
+        // can do here, the original error is already logged above.
+      });
     } finally {
       running = false;
     }
@@ -39,7 +48,7 @@ export function scheduleInterval(
 }
 
 /** Runs `fn` once daily at `hourUtc:00 UTC`, then every 24h from that point on. */
-export function scheduleDailyAt(name: string, fn: () => Promise<void>, hourUtc: number): ScheduledJob {
+export function scheduleDailyAt(name: HeartbeatJob, fn: () => Promise<void>, hourUtc: number): ScheduledJob {
   const msUntilNext = msUntilNextHour(hourUtc);
   logger.info("daily job scheduled", {
     job: name,
@@ -61,11 +70,13 @@ export function scheduleDailyAt(name: string, fn: () => Promise<void>, hourUtc: 
   };
 }
 
-async function runSafely(name: string, fn: () => Promise<void>) {
+async function runSafely(name: HeartbeatJob, fn: () => Promise<void>) {
   try {
     await fn();
+    await recordHeartbeat(name, { success: true });
   } catch (err) {
     logger.error("job threw an unhandled error", { job: name, error: String(err) });
+    await recordHeartbeat(name, { success: false, error: String(err) }).catch(() => {});
   }
 }
 

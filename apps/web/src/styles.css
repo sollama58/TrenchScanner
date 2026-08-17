@@ -128,6 +128,36 @@ select {
   font-family: ui-monospace, monospace;
 }
 
+.health-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.health-badge__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.health-badge[data-status="live"] .health-badge__dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.health-badge[data-status="degraded"] .health-badge__dot {
+  background: var(--warn);
+  box-shadow: 0 0 6px var(--warn);
+}
+
+.health-badge[data-status="down"] .health-badge__dot {
+  background: var(--danger);
+}
+
 /* ── Buttons ────────────────────────────────────────────────────────── */
 
 .btn {

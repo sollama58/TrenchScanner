@@ -1,0 +1,42 @@
+import type { FastifyInstance } from "fastify";
+import { prisma } from "@trenchscanner/core";
+
+/**
+ * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
+ * expected cadence (scan/discovery run every few minutes, digest/cleanup/outcome-tracking daily).
+ * Falls back to 30 minutes for any job name not listed here.
+ */
+const STALE_THRESHOLD_MS: Record<string, number> = {
+  scan: 20 * 60_000,
+  "discovery-secondary": 20 * 60_000,
+  digest: 26 * 3_600_000,
+  cleanup: 26 * 3_600_000,
+  "outcome-tracking": 26 * 3_600_000,
+};
+const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
+const MAX_ERROR_LENGTH = 300;
+
+export async function registerHealthRoutes(app: FastifyInstance) {
+  /** Plain liveness check - what Render's healthCheckPath hits. */
+  app.get("/", async () => ({ ok: true }));
+
+  /**
+   * Public (no auth) on purpose, like /health itself - lets an external uptime monitor or the
+   * dashboard check worker health without needing a session. Error messages are truncated as a
+   * light defense-in-depth measure against dumping internal detail to an unauthenticated caller.
+   */
+  app.get("/worker", async () => {
+    const heartbeats = await prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } });
+    const now = Date.now();
+
+    return {
+      jobs: heartbeats.map((h) => ({
+        job: h.job,
+        lastRunAt: h.lastRunAt,
+        lastSuccessAt: h.lastSuccessAt,
+        lastError: h.lastError ? h.lastError.slice(0, MAX_ERROR_LENGTH) : null,
+        stale: now - h.lastRunAt.getTime() > (STALE_THRESHOLD_MS[h.job] ?? DEFAULT_STALE_THRESHOLD_MS),
+      })),
+    };
+  });
+}

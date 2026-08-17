@@ -95,3 +95,15 @@ export interface TelegramLinkResponse {
   expiresAt: string;
   deepLink: string | null;
 }
+
+export interface WorkerHeartbeat {
+  job: string;
+  lastRunAt: string;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  stale: boolean;
+}
+
+export interface WorkerHealth {
+  jobs: WorkerHeartbeat[];
+}
