@@ -23,6 +23,7 @@ RugCheck (on-chain) ────┘      scoring, alerts)
 - **Rug screen**: a hard, non-optional gate (mint/freeze authority, LP lock status, holder concentration, dev wallet %, plus RugCheck's own risk score and flags) that a token must pass before it's ever shown to anyone.
 - **Scoring**: a 0–100 composite (momentum, holder health, age, narrative) used to rank what passes.
 - **Matching**: each user's saved filter is checked against every scored token; matches land on the dashboard and, if linked, Telegram.
+- **Auth**: Sign-In With Solana via the Wallet Standard's `signIn` feature (Phantom, Solflare, and every other current wallet support it) - the wallet itself checks the signed message's `domain` field against the page's real origin before signing, so a phishing site cannot get a valid session no matter what it shows the user. Falls back to plain `signMessage` (not domain-bound) only for wallets that don't implement `signIn`. See `apps/api/src/auth/siws.ts`.
 
 ## Local development
 
@@ -66,7 +67,7 @@ This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) 
    - **`HELIUS_API_KEY`** on both `trenchscanner-api` and `trenchscanner-worker` - get one free at [dev.helius.xyz](https://dev.helius.xyz).
    - **`TELEGRAM_BOT_TOKEN`** on `trenchscanner-worker` - create a bot via [@BotFather](https://t.me/BotFather) on Telegram (`/newbot`), then paste the token it gives you. Leave blank to run without Telegram alerts.
    - **`TELEGRAM_BOT_USERNAME`** on both services - the bot's `@username` (no `@`), used to build the "tap to open Telegram" link on the dashboard.
-4. `CORS_ORIGINS` (on the API) and `VITE_API_URL` (on the static site) default to the blueprint's own predictable service URLs (`trenchscanner-api.onrender.com` / `trenchscanner-web.onrender.com`). If you rename a service or attach a custom domain, update both to match.
+4. `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` (on the API) and `VITE_API_URL` (on the static site) default to the blueprint's own predictable service URLs (`trenchscanner-api.onrender.com` / `trenchscanner-web.onrender.com`). If you rename a service or attach a custom domain, update all three to match - `PUBLIC_APP_DOMAIN` especially, since a mismatch there breaks sign-in entirely (wallets refuse to sign a message claiming a domain that doesn't match the page they're actually on).
 
 Database migrations run automatically on every API deploy via `preDeployCommand` - no manual step needed after the first setup.
 

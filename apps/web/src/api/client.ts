@@ -1,3 +1,4 @@
+import type { SolanaSignInInput } from "@solana/wallet-standard-features";
 import type {
   AlertMode,
   FilterInput,
@@ -48,15 +49,28 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // ── Auth ─────────────────────────────────────────────────────────────────
 export function getNonce(wallet: string) {
-  return request<{ nonce: string; message: string; expiresAt: string }>(
+  return request<{ nonce: string; message: string; signInInput: SolanaSignInInput; expiresAt: string }>(
     `/auth/nonce?wallet=${encodeURIComponent(wallet)}`,
   );
 }
 
-export function verifySignIn(walletAddress: string, nonce: string, signature: string) {
+/** Preferred: verifies a wallet.signIn() result (domain-bound, see the wallet's own SolanaSignInOutput). */
+export function verifyWalletSignIn(
+  walletAddress: string,
+  nonce: string,
+  output: { publicKey: string; signedMessage: string; signature: string },
+) {
   return request<User>("/auth/verify", {
     method: "POST",
-    body: JSON.stringify({ walletAddress, nonce, signature }),
+    body: JSON.stringify({ method: "signIn", walletAddress, nonce, output }),
+  });
+}
+
+/** Fallback for wallets that don't implement solana:signIn - not domain-bound, see AuthContext. */
+export function verifySignMessage(walletAddress: string, nonce: string, signature: string) {
+  return request<User>("/auth/verify", {
+    method: "POST",
+    body: JSON.stringify({ method: "signMessage", walletAddress, nonce, signature }),
   });
 }
 

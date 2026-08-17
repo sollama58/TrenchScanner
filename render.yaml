@@ -57,6 +57,11 @@ services:
       # it must match wherever trenchscanner-web actually serves from.
       - key: CORS_ORIGINS
         value: https://trenchscanner-web.onrender.com
+      # Anti-phishing anchor for Sign-In With Solana - must be the dashboard's real host[:port],
+      # no protocol. Update this alongside CORS_ORIGINS if you rename trenchscanner-web or attach
+      # a custom domain; see the comment on this var in packages/core/src/config/env.ts.
+      - key: PUBLIC_APP_DOMAIN
+        value: trenchscanner-web.onrender.com
 
   - type: worker
     name: trenchscanner-worker

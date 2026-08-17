@@ -2,18 +2,36 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import bs58 from "bs58";
 import { prisma, type Env } from "@trenchscanner/core";
-import { issueNonce, verifyAndConsumeNonce } from "../auth/siws.js";
+import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 
 const nonceQuerySchema = z.object({
   wallet: z.string().refine(isValidSolanaAddress, "wallet must be a valid base58 Solana public key"),
 });
 
-const verifyBodySchema = z.object({
-  walletAddress: z.string().refine(isValidSolanaAddress, "walletAddress must be a valid base58 Solana public key"),
-  nonce: z.string().min(1),
-  signature: z.string().min(1),
-});
+const walletAddressSchema = z.string().refine(isValidSolanaAddress, "walletAddress must be a valid base58 Solana public key");
+
+// Two ways a client can prove wallet ownership: the preferred wallet.signIn() (Wallet Standard,
+// domain-bound - see siws.ts) when the connected wallet supports it, or a plain signMessage()
+// fallback for wallets that don't. Both consume the same nonce issued by GET /nonce.
+const verifyBodySchema = z.discriminatedUnion("method", [
+  z.object({
+    method: z.literal("signIn"),
+    walletAddress: walletAddressSchema,
+    nonce: z.string().min(1),
+    output: z.object({
+      publicKey: z.string().min(1),
+      signedMessage: z.string().min(1),
+      signature: z.string().min(1),
+    }),
+  }),
+  z.object({
+    method: z.literal("signMessage"),
+    walletAddress: walletAddressSchema,
+    nonce: z.string().min(1),
+    signature: z.string().min(1),
+  }),
+]);
 
 export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.get("/nonce", async (request, reply) => {
@@ -21,8 +39,8 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { nonce, message, expiresAt } = await issueNonce(parsed.data.wallet);
-    return { nonce, message, expiresAt };
+    const { nonce, message, signInInput, expiresAt } = await issueNonce(parsed.data.wallet, opts.env.PUBLIC_APP_DOMAIN);
+    return { nonce, message, signInInput, expiresAt };
   });
 
   app.post("/verify", async (request, reply) => {
@@ -30,13 +48,27 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { walletAddress, nonce, signature } = parsed.data;
+    const body = parsed.data;
 
-    const result = await verifyAndConsumeNonce({ walletAddress, nonce, signature });
+    const result =
+      body.method === "signIn"
+        ? await verifySignInAndConsumeNonce({
+            walletAddress: body.walletAddress,
+            nonce: body.nonce,
+            domain: opts.env.PUBLIC_APP_DOMAIN,
+            output: body.output,
+          })
+        : await verifyAndConsumeNonce({
+            walletAddress: body.walletAddress,
+            nonce: body.nonce,
+            signature: body.signature,
+          });
+
     if (!result.ok) {
       return reply.code(401).send({ error: result.reason });
     }
 
+    const { walletAddress } = body;
     const user = await prisma.user.upsert({
       where: { walletAddress },
       create: { walletAddress },
