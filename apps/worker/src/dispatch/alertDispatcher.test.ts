@@ -55,7 +55,11 @@ describe("formatRealtimeAlert", () => {
   });
 
   it("formats market cap and volume in compact USD", () => {
-    const text = formatRealtimeAlert(makeToken(), makeSnapshot({ marketCapUsd: 180_000, volume24hUsd: 2_500_000 }), 72);
+    const text = formatRealtimeAlert(
+      makeToken(),
+      makeSnapshot({ marketCapUsd: 180_000, volume24hUsd: 2_500_000 }),
+      72,
+    );
     expect(text).toContain("$180.0k");
     expect(text).toContain("$2.50M");
   });

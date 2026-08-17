@@ -48,14 +48,14 @@ Telegram is optional locally - leave `TELEGRAM_BOT_TOKEN` blank and the worker l
 
 ### Useful scripts
 
-| Command | What it does |
-|---|---|
-| `npm run build` | Builds every workspace |
-| `npm test` | Runs `packages/core`'s vitest suite (scoring, rug screen, filter matching) |
-| `npm run typecheck` | Typechecks every workspace |
-| `npm run prisma:generate` | Regenerates the Prisma client after a schema change |
-| `npm run prisma:migrate` | Creates + applies a new migration (interactive, local dev) |
-| `npm run prisma:deploy` | Applies pending migrations non-interactively (used by Render's `preDeployCommand`) |
+| Command                   | What it does                                                                       |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| `npm run build`           | Builds every workspace                                                             |
+| `npm test`                | Runs `packages/core`'s vitest suite (scoring, rug screen, filter matching)         |
+| `npm run typecheck`       | Typechecks every workspace                                                         |
+| `npm run prisma:generate` | Regenerates the Prisma client after a schema change                                |
+| `npm run prisma:migrate`  | Creates + applies a new migration (interactive, local dev)                         |
+| `npm run prisma:deploy`   | Applies pending migrations non-interactively (used by Render's `preDeployCommand`) |
 
 ## Deploying to Render
 

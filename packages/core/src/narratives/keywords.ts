@@ -18,7 +18,11 @@ const NARRATIVE_TAXONOMY: Record<string, string[]> = {
   based: ["based", "chad", "sigma", "alpha"],
 };
 
-export function extractNarrativeTags(input: { name?: string; symbol?: string; description?: string }): string[] {
+export function extractNarrativeTags(input: {
+  name?: string;
+  symbol?: string;
+  description?: string;
+}): string[] {
   const haystack = `${input.name ?? ""} ${input.symbol ?? ""} ${input.description ?? ""}`.toLowerCase();
   const tags: string[] = [];
   for (const [tag, keywords] of Object.entries(NARRATIVE_TAXONOMY)) {
@@ -35,7 +39,8 @@ export function matchesNarrativeKeywords(
   userKeywords: string[] | undefined,
 ): boolean {
   if (!userKeywords || userKeywords.length === 0) return true;
-  const haystack = `${token.name ?? ""} ${token.symbol ?? ""} ${token.description ?? ""} ${token.narrativeTags.join(" ")}`.toLowerCase();
+  const haystack =
+    `${token.name ?? ""} ${token.symbol ?? ""} ${token.description ?? ""} ${token.narrativeTags.join(" ")}`.toLowerCase();
   return userKeywords.some((kw) => haystack.includes(kw.toLowerCase().trim()));
 }
 

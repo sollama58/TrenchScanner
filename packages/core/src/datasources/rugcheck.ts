@@ -45,10 +45,10 @@ export class RugCheckClient {
    */
   async getProfile(mintAddress: string): Promise<RugCheckProfile | null> {
     try {
-      const report = await fetchJson<RugCheckReport>(
-        `${this.baseUrl}/tokens/${mintAddress}/report`,
-        { timeoutMs: 10_000, retries: 1 },
-      );
+      const report = await fetchJson<RugCheckReport>(`${this.baseUrl}/tokens/${mintAddress}/report`, {
+        timeoutMs: 10_000,
+        retries: 1,
+      });
       return toProfile(mintAddress, report);
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) {
@@ -89,9 +89,7 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   // risk. Confirmed against live data: a market's `pubkey` is exactly the `owner` that shows up
   // on the pool's token holdings in topHolders.
   const poolAuthorities = new Set(markets.map((m) => m.pubkey));
-  const realHolders = (report.topHolders ?? []).filter(
-    (h) => !poolAuthorities.has(h.owner ?? h.address),
-  );
+  const realHolders = (report.topHolders ?? []).filter((h) => !poolAuthorities.has(h.owner ?? h.address));
   const top10HolderPct = realHolders
     .slice(0, TOP_N_FOR_CONCENTRATION)
     .reduce((sum, h) => sum + (h.pct ?? 0), 0);
@@ -113,8 +111,7 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   // lpLockedPct lives per-market on the full /report endpoint (unlike /report/summary, which
   // has it at the top level). Most tokens have exactly one market; if there are several, treat
   // the LP as burned only when every one of them is - a single unlocked pool is still a rug vector.
-  const lpBurned =
-    markets.length > 0 && markets.every((m) => (m.lp?.lpLockedPct ?? 0) >= 95);
+  const lpBurned = markets.length > 0 && markets.every((m) => (m.lp?.lpLockedPct ?? 0) >= 95);
 
   return {
     mintAddress,

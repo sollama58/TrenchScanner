@@ -60,7 +60,17 @@ describe("matchesFilter", () => {
 
   it("applies minScore", () => {
     const filter = { ...baseFilter, minScore: 80 };
-    expect(matchesFilter(baseToken({ score: { momentum: 50, holderHealth: 50, age: 50, narrative: 50, total: 50 } }), filter)).toBe(false);
-    expect(matchesFilter(baseToken({ score: { momentum: 90, holderHealth: 90, age: 90, narrative: 90, total: 90 } }), filter)).toBe(true);
+    expect(
+      matchesFilter(
+        baseToken({ score: { momentum: 50, holderHealth: 50, age: 50, narrative: 50, total: 50 } }),
+        filter,
+      ),
+    ).toBe(false);
+    expect(
+      matchesFilter(
+        baseToken({ score: { momentum: 90, holderHealth: 90, age: 90, narrative: 90, total: 90 } }),
+        filter,
+      ),
+    ).toBe(true);
   });
 });

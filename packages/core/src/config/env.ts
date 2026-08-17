@@ -75,5 +75,7 @@ export function resetEnvCacheForTests(): void {
 }
 
 export function corsOriginList(env: Env): string[] {
-  return env.CORS_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
+  return env.CORS_ORIGINS.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }

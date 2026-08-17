@@ -9,7 +9,9 @@ const nonceQuerySchema = z.object({
   wallet: z.string().refine(isValidSolanaAddress, "wallet must be a valid base58 Solana public key"),
 });
 
-const walletAddressSchema = z.string().refine(isValidSolanaAddress, "walletAddress must be a valid base58 Solana public key");
+const walletAddressSchema = z
+  .string()
+  .refine(isValidSolanaAddress, "walletAddress must be a valid base58 Solana public key");
 
 // Two ways a client can prove wallet ownership: the preferred wallet.signIn() (Wallet Standard,
 // domain-bound - see siws.ts) when the connected wallet supports it, or a plain signMessage()
@@ -39,7 +41,10 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { nonce, message, signInInput, expiresAt } = await issueNonce(parsed.data.wallet, opts.env.PUBLIC_APP_DOMAIN);
+    const { nonce, message, signInInput, expiresAt } = await issueNonce(
+      parsed.data.wallet,
+      opts.env.PUBLIC_APP_DOMAIN,
+    );
     return { nonce, message, signInInput, expiresAt };
   });
 

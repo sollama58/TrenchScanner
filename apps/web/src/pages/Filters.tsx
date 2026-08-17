@@ -58,8 +58,8 @@ export function Filters() {
 
       {filters.length === 0 && editingId === null && (
         <p className="empty-state">
-          No filters yet. The platform scans the $50k-$500k market cap band by default - create a
-          filter to start matching tokens against your own criteria.
+          No filters yet. The platform scans the $50k-$500k market cap band by default - create a filter to
+          start matching tokens against your own criteria.
         </p>
       )}
 
@@ -84,8 +84,7 @@ export function Filters() {
               <p className="filter-card__summary">
                 ${filter.mcapMin.toLocaleString()} – ${filter.mcapMax.toLocaleString()} mcap
                 {filter.minScore != null && ` · min score ${filter.minScore}`}
-                {filter.narrativeKeywords.length > 0 &&
-                  ` · keywords: ${filter.narrativeKeywords.join(", ")}`}
+                {filter.narrativeKeywords.length > 0 && ` · keywords: ${filter.narrativeKeywords.join(", ")}`}
               </p>
               <div className="filter-card__actions">
                 <button className="btn" onClick={() => setEditingId(filter.id)}>

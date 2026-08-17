@@ -85,7 +85,11 @@ function randomWallet(): string {
 }
 
 /** Simulates exactly what a real Wallet-Standard wallet does inside wallet.signIn(input). */
-function signAsWallet(nonce: string, issuedAt: Date, domain: string): { wallet: string; output: SolanaSignInOutput } {
+function signAsWallet(
+  nonce: string,
+  issuedAt: Date,
+  domain: string,
+): { wallet: string; output: SolanaSignInOutput } {
   const keypair = nacl.sign.keyPair();
   const wallet = bs58.encode(keypair.publicKey);
   const input = buildSignInInput(wallet, nonce, issuedAt, domain) as SolanaSignInInputWithRequiredFields;

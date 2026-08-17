@@ -46,8 +46,8 @@ export function Dashboard() {
 
       {!loading && matches.length === 0 && (
         <p className="empty-state">
-          No matches yet. Once a token in the trenches passes the rug screen and matches one of
-          your filters, it'll show up here within a few minutes.
+          No matches yet. Once a token in the trenches passes the rug screen and matches one of your filters,
+          it'll show up here within a few minutes.
         </p>
       )}
 

@@ -1,7 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import bs58 from "bs58";
-import { getMe, getNonce, logout as apiLogout, verifySignMessage, verifyWalletSignIn, ApiError } from "../api/client";
+import {
+  getMe,
+  getNonce,
+  logout as apiLogout,
+  verifySignMessage,
+  verifyWalletSignIn,
+  ApiError,
+} from "../api/client";
 import type { User } from "../api/types";
 
 interface AuthContextValue {
@@ -89,6 +96,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// The provider + its hook are meant to live together; this only affects hot-reload state
+// preservation, not correctness.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within an AuthProvider");

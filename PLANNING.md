@@ -8,20 +8,20 @@ Monitor the Solana memecoin ecosystem in near-real-time for tokens sitting in th
 
 ## 2. Decisions Made So Far
 
-| Area | Decision |
-|---|---|
-| Market data | Helius (on-chain truth: mint/freeze authority, LP burn status, holder data) + DexScreener (price, volume, market cap, liquidity, pool age) |
-| Budget | ~$10–30/mo total (Render services + API tiers) |
-| Rug/scam filtering | Auto-exclude: active mint or freeze authority, unburned/unlocked LP, extreme top-holder concentration |
-| Users | Multiple users, each with their own saved filters |
-| Onboarding / Auth | Full account system — **Sign-In With Solana (SIWS)**: connect wallet (Phantom/Solflare), sign a message, session issued. No email/password. |
-| Alerts | Web dashboard live feed is primary. Users can additionally opt in from the dashboard to link a Telegram chat for real-time pings and/or a daily digest. |
+| Area                   | Decision                                                                                                                                                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Market data            | Helius (on-chain truth: mint/freeze authority, LP burn status, holder data) + DexScreener (price, volume, market cap, liquidity, pool age)                                                                                                                               |
+| Budget                 | ~$10–30/mo total (Render services + API tiers)                                                                                                                                                                                                                           |
+| Rug/scam filtering     | Auto-exclude: active mint or freeze authority, unburned/unlocked LP, extreme top-holder concentration                                                                                                                                                                    |
+| Users                  | Multiple users, each with their own saved filters                                                                                                                                                                                                                        |
+| Onboarding / Auth      | Full account system — **Sign-In With Solana (SIWS)**: connect wallet (Phantom/Solflare), sign a message, session issued. No email/password.                                                                                                                              |
+| Alerts                 | Web dashboard live feed is primary. Users can additionally opt in from the dashboard to link a Telegram chat for real-time pings and/or a daily digest.                                                                                                                  |
 | Filter/scoring signals | Market cap range, volume & buy/sell pressure, holder growth & distribution (top-10 %, dev wallet %), token age, narrative/keyword matching. **Liquidity ratio excluded** (Pump.fun-origin tokens are structurally uniform on this metric, so it's not a differentiator). |
-| Social signals | Skipped for v1 (no paid Twitter/X API, no LunarCrush). Only free/on-chain-visible signals (does the token have a linked X/Telegram/site at all). Architected so a social provider can be added later without a redesign. |
-| Scan frequency | Every 5–10 minutes |
-| Tech stack | Node.js / TypeScript across API, worker, and bot |
-| Telegram bot | Deferred — bot creation + token wiring happens during implementation, not planning |
-| Hosting | Render Blueprint: background worker (scanner) + web service (API) + static site (dashboard) + managed Postgres |
+| Social signals         | Skipped for v1 (no paid Twitter/X API, no LunarCrush). Only free/on-chain-visible signals (does the token have a linked X/Telegram/site at all). Architected so a social provider can be added later without a redesign.                                                 |
+| Scan frequency         | Every 5–10 minutes                                                                                                                                                                                                                                                       |
+| Tech stack             | Node.js / TypeScript across API, worker, and bot                                                                                                                                                                                                                         |
+| Telegram bot           | Deferred — bot creation + token wiring happens during implementation, not planning                                                                                                                                                                                       |
+| Hosting                | Render Blueprint: background worker (scanner) + web service (API) + static site (dashboard) + managed Postgres                                                                                                                                                           |
 
 ## 3. Architecture
 
@@ -47,6 +47,7 @@ Monitor the Solana memecoin ecosystem in near-real-time for tokens sitting in th
 ```
 
 **Render Blueprint services (`render.yaml`):**
+
 1. `trenchscanner-api` — Node/TS web service (Express or Fastify), REST API + SIWS auth + Telegram webhook.
 2. `trenchscanner-worker` — Node/TS background worker, polling loop + scoring engine + alert dispatch.
 3. `trenchscanner-web` — Static site (React/Vite build output), the dashboard.
@@ -73,15 +74,15 @@ Worker and API share a `packages/core` (Prisma/Drizzle schema, scoring logic, da
 
 ## 6. Cost Estimate (fits $10–30/mo target)
 
-| Item | Est. cost |
-|---|---|
-| Render web service (starter) | ~$7/mo |
-| Render background worker (starter) | ~$7/mo |
-| Render Postgres (starter) | ~$7/mo |
-| Render static site | Free |
-| Helius (free or Developer tier) | $0–~$10/mo depending on volume |
-| DexScreener API | Free |
-| **Total** | **~$21–31/mo** |
+| Item                               | Est. cost                      |
+| ---------------------------------- | ------------------------------ |
+| Render web service (starter)       | ~$7/mo                         |
+| Render background worker (starter) | ~$7/mo                         |
+| Render Postgres (starter)          | ~$7/mo                         |
+| Render static site                 | Free                           |
+| Helius (free or Developer tier)    | $0–~$10/mo depending on volume |
+| DexScreener API                    | Free                           |
+| **Total**                          | **~$21–31/mo**                 |
 
 ## 7. Build Phases
 

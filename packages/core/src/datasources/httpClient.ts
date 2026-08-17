@@ -31,7 +31,6 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
   const { timeoutMs = 10_000, retries = 2, retryDelayMs = 500, ...init } = options;
 
   let attempt = 0;
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);

@@ -44,7 +44,7 @@ export function createBot(token: string): AlertBot {
     const code = ctx.match?.trim();
     if (!code) {
       await ctx.reply(
-        "Welcome to TrenchScanner! Open the dashboard, go to Settings, and tap \"Link Telegram\" to get your code, then send /start <code> here.",
+        'Welcome to TrenchScanner! Open the dashboard, go to Settings, and tap "Link Telegram" to get your code, then send /start <code> here.',
       );
       return;
     }
@@ -59,7 +59,10 @@ export function createBot(token: string): AlertBot {
     enabled: true,
     async sendMessage(chatId, text) {
       try {
-        await bot.api.sendMessage(chatId, text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+        await bot.api.sendMessage(chatId, text, {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+        });
         return true;
       } catch (err) {
         logger.warn("failed to send telegram message", { chatId, error: String(err) });
@@ -94,7 +97,9 @@ async function handleLinkCode(chatId: string, code: string, reply: (text: string
   } catch (err) {
     // chatId is @unique - this chat is already linked to a different TrenchScanner account.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      await reply("This Telegram chat is already linked to a different TrenchScanner account. Unlink it there first.");
+      await reply(
+        "This Telegram chat is already linked to a different TrenchScanner account. Unlink it there first.",
+      );
       return;
     }
     throw err;

@@ -87,9 +87,7 @@ export class DexScreenerClient {
       const data = await fetchJson<{ pairs?: DexScreenerPair[] }>(
         `${this.baseUrl}/latest/dex/search?q=${encodeURIComponent(query)}`,
       );
-      return this.selectCanonicalPairs(
-        (data.pairs ?? []).filter((p) => p.chainId === SOLANA_CHAIN_ID),
-      );
+      return this.selectCanonicalPairs((data.pairs ?? []).filter((p) => p.chainId === SOLANA_CHAIN_ID));
     } catch (err) {
       logger.warn("search failed", { query, error: String(err) });
       return [];

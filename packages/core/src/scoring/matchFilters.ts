@@ -12,17 +12,11 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
-  if (
-    filter.minVolumeMcapRatio != null &&
-    (token.volumeToMcapRatio ?? 0) < filter.minVolumeMcapRatio
-  ) {
+  if (filter.minVolumeMcapRatio != null && (token.volumeToMcapRatio ?? 0) < filter.minVolumeMcapRatio) {
     return false;
   }
 
-  if (
-    filter.minHolderGrowthPct != null &&
-    (token.holderGrowthPct ?? -Infinity) < filter.minHolderGrowthPct
-  ) {
+  if (filter.minHolderGrowthPct != null && (token.holderGrowthPct ?? -Infinity) < filter.minHolderGrowthPct) {
     return false;
   }
 

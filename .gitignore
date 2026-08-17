@@ -10,3 +10,4 @@ coverage/
 apps/web/dist/
 packages/core/generated/
 *.tsbuildinfo
+.husky/_

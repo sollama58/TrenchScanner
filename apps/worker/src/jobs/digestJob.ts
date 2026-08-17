@@ -36,7 +36,9 @@ export async function runDigestJob(bot: AlertBot): Promise<void> {
         take: 25,
       });
 
-      const text = formatDigest(matches.map((m) => ({ token: m.token, snapshot: m.snapshot, score: m.score })));
+      const text = formatDigest(
+        matches.map((m) => ({ token: m.token, snapshot: m.snapshot, score: m.score })),
+      );
       const delivered = await bot.sendMessage(link.chatId, text);
 
       // Only stamp digestSentAt on an actual successful send - these matches are otherwise

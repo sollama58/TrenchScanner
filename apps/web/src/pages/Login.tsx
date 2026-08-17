@@ -12,8 +12,8 @@ export function Login() {
         <div className="login__logo">🎯</div>
         <h1>TrenchScanner</h1>
         <p className="login__tagline">
-          Scan the Solana memecoin trenches for tokens with breakout potential. Connect your
-          wallet to set up filters and get alerts.
+          Scan the Solana memecoin trenches for tokens with breakout potential. Connect your wallet to set up
+          filters and get alerts.
         </p>
 
         <div className="login__actions">
@@ -28,8 +28,8 @@ export function Login() {
         {error && <p className="form-error">{error}</p>}
 
         <p className="login__note">
-          Signing in only signs a message to prove wallet ownership - it never submits a
-          transaction and costs no fees.
+          Signing in only signs a message to prove wallet ownership - it never submits a transaction and costs
+          no fees.
         </p>
       </div>
     </div>

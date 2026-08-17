@@ -63,9 +63,7 @@ export function runRugScreen(
     );
   }
   if (profile.devWalletPct !== undefined && profile.devWalletPct > thresholds.maxDevWalletPct) {
-    reasons.push(
-      `dev wallet owns ${profile.devWalletPct.toFixed(1)}% (max ${thresholds.maxDevWalletPct}%)`,
-    );
+    reasons.push(`dev wallet owns ${profile.devWalletPct.toFixed(1)}% (max ${thresholds.maxDevWalletPct}%)`);
   }
   if (profile.riskScore !== undefined && profile.riskScore > thresholds.maxRiskScore) {
     reasons.push(`risk score ${profile.riskScore} exceeds max ${thresholds.maxRiskScore}`);

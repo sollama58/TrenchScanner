@@ -65,7 +65,12 @@ export function buildSignInMessage(walletAddress: string, nonce: string, issuedA
  * wallets (Phantom, Solflare) cross-check it against the page's real origin before signing, so a
  * phishing site cannot get a valid signature for our domain no matter what message text it shows.
  */
-export function buildSignInInput(walletAddress: string, nonce: string, issuedAt: Date, domain: string): SolanaSignInInput {
+export function buildSignInInput(
+  walletAddress: string,
+  nonce: string,
+  issuedAt: Date,
+  domain: string,
+): SolanaSignInInput {
   return {
     domain,
     address: walletAddress,

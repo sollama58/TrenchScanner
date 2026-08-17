@@ -17,7 +17,7 @@ export async function registerTelegramRoutes(app: FastifyInstance, opts: { env: 
     return {
       linked: Boolean(link?.chatId),
       alertMode: link?.alertMode ?? "OFF",
-      pendingLinkCode: link?.chatId ? null : link?.linkCode ?? null,
+      pendingLinkCode: link?.chatId ? null : (link?.linkCode ?? null),
       botUsername: opts.env.TELEGRAM_BOT_USERNAME || null,
     };
   });
