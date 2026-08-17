@@ -184,6 +184,13 @@ model Match {
   deliveredTelegram  Boolean   @default(false)
   digestSentAt       DateTime?
 
+  // Backtesting data: the highest market cap observed for this token since the match, tracked by
+  // the outcome-tracking job (apps/worker/src/jobs/outcomeTrackingJob.ts). Both null until that
+  // job's first run after the match. Baseline for "how far did it run" is snapshot.marketCapUsd
+  // (the mcap at match time), not these fields - see outcomeTrackingJob.ts for why.
+  peakMcapUsd Float?
+  peakMcapAt  DateTime?
+
   @@unique([userId, tokenId, filterId, matchedAt])
   @@index([userId, matchedAt])
   @@index([tokenId])

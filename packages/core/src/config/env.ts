@@ -41,6 +41,12 @@ const envSchema = z.object({
   SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
   STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(90),
 
+  // Daily outcome-tracking job (see apps/worker/src/jobs/outcomeTrackingJob.ts) - backtesting
+  // data: re-checks recent Match rows against live market data and records the highest mcap seen
+  // since the match, so scoring quality can eventually be measured against real outcomes. Runs an
+  // hour after cleanup purely to keep the two daily jobs from overlapping on a cold start.
+  OUTCOME_TRACKING_HOUR_UTC: z.coerce.number().min(0).max(23).default(5),
+
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   // Used only to build the "tap to open Telegram" deep link on the dashboard - not required
   // for the bot itself to function, but without it users have to type /start <code> manually.

@@ -91,6 +91,8 @@ services:
         value: "30"
       - key: STALE_TOKEN_RETENTION_DAYS
         value: "90"
+      - key: OUTCOME_TRACKING_HOUR_UTC
+        value: "5"
 
   - type: static
     name: trenchscanner-web

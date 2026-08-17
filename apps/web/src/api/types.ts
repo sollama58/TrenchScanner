@@ -76,6 +76,10 @@ export interface Match {
   deliveredDashboard: boolean;
   deliveredTelegram: boolean;
   digestSentAt: string | null;
+  /** Backtesting data: highest mcap seen since this match, updated daily. Both null until the
+   *  outcome-tracking job's first run after the match - see apps/worker/src/jobs/outcomeTrackingJob.ts. */
+  peakMcapUsd: number | null;
+  peakMcapAt: string | null;
   token: Token;
   snapshot: TokenSnapshot;
   filter: { id: string; name: string };

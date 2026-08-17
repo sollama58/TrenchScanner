@@ -70,6 +70,14 @@ export function TokenCard({ match }: { match: Match }) {
           <dt>Matched</dt>
           <dd>{new Date(match.matchedAt).toLocaleTimeString()}</dd>
         </div>
+        {match.peakMcapUsd !== null && snapshot.marketCapUsd > 0 && (
+          <div>
+            <dt>Peak since</dt>
+            <dd title="Highest market cap seen since this match, updated daily">
+              {fmtUsd(match.peakMcapUsd)} ({(match.peakMcapUsd / snapshot.marketCapUsd).toFixed(1)}x)
+            </dd>
+          </div>
+        )}
       </dl>
 
       <ScoreBreakdown snapshot={snapshot} />
