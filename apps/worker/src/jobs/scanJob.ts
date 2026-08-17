@@ -13,6 +13,7 @@ import {
   type OnChainProfile,
   type CandidateToken,
   type DiscoveredCoin,
+  type WatchlistCandidate,
   type UserFilter,
   type TelegramLink,
 } from "@trenchscanner/core";
@@ -37,16 +38,27 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   const startedAt = Date.now();
   logger.info("scan cycle starting");
 
-  // 1. Grow the watchlist: any mint pump.fun shows us that we haven't seen before gets tracked,
-  // regardless of its current mcap - see PumpFunClient.discoverNewMints for why filtering here
-  // doesn't work. This is what lets us catch a token as it later climbs into the target band.
+  // 1. Grow the watchlist from every discovery source, regardless of a mint's current mcap - see
+  // PumpFunClient.discoverNewMints for why filtering at discovery time doesn't work. This is what
+  // lets us catch a token as it later climbs into the target band. Two independent sources
+  // (Pump.fun's newest-mints feed, DexScreener's trending/boosted-tokens feed): each is wrapped
+  // separately so one source's outage doesn't also take down the other's contribution - Pump.fun
+  // in particular is an unofficial, undocumented API that could change or block us at any time.
+  const discovered: WatchlistCandidate[] = [];
   try {
-    const discovered = await deps.pumpFun.discoverNewMints();
-    await addNewMintsToWatchlist(discovered);
-    logger.info("discovery complete", { newlySeen: discovered.length });
+    const pumpFunMints = await deps.pumpFun.discoverNewMints();
+    discovered.push(...pumpFunMints.map(toWatchlistCandidate));
   } catch (err) {
-    logger.error("discovery failed (continuing with existing watchlist)", { error: String(err) });
+    logger.error("pump.fun discovery failed", { error: String(err) });
   }
+  try {
+    const trending = await deps.dexScreener.discoverTrendingMints();
+    discovered.push(...trending);
+  } catch (err) {
+    logger.error("dexscreener trending discovery failed", { error: String(err) });
+  }
+  await addNewMintsToWatchlist(discovered);
+  logger.info("discovery complete", { newlySeen: discovered.length });
 
   // 2. Re-check every mint on the active watchlist against live market data, and keep only the
   // ones currently sitting in (or near) the target band.
@@ -113,18 +125,36 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   });
 }
 
-/** Bulk-inserts any not-yet-seen mints as bare watchlist entries. Existing rows are left untouched. */
-async function addNewMintsToWatchlist(discovered: DiscoveredCoin[]): Promise<void> {
+function toWatchlistCandidate(coin: DiscoveredCoin): WatchlistCandidate {
+  return {
+    mintAddress: coin.mintAddress,
+    symbol: coin.symbol,
+    name: coin.name,
+    createdAt: coin.createdAt,
+    hasTwitter: coin.hasTwitter,
+    hasTelegram: coin.hasTelegram,
+    hasWebsite: coin.hasWebsite,
+  };
+}
+
+/**
+ * Bulk-inserts any not-yet-seen mints as bare watchlist entries. Existing rows are left
+ * untouched. Deduped by mint first (rather than relying solely on skipDuplicates against the DB)
+ * since the same mint can legitimately show up from both discovery sources in the same cycle.
+ */
+async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): Promise<void> {
   if (discovered.length === 0) return;
+  const uniqueByMint = new Map(discovered.map((c) => [c.mintAddress, c]));
+
   await prisma.token.createMany({
-    data: discovered.map((coin) => ({
+    data: [...uniqueByMint.values()].map((coin) => ({
       mintAddress: coin.mintAddress,
       symbol: coin.symbol,
       name: coin.name,
       firstSeenAt: coin.createdAt ?? new Date(),
-      hasTwitter: coin.hasTwitter,
-      hasTelegram: coin.hasTelegram,
-      hasWebsite: coin.hasWebsite,
+      hasTwitter: coin.hasTwitter ?? false,
+      hasTelegram: coin.hasTelegram ?? false,
+      hasWebsite: coin.hasWebsite ?? false,
     })),
     skipDuplicates: true,
   });

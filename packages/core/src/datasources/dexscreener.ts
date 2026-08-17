@@ -1,6 +1,6 @@
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
-import type { CandidateToken } from "../types.js";
+import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
 const logger = createLogger("dexscreener");
 
@@ -22,6 +22,13 @@ interface DexScreenerPair {
     websites?: { url: string }[];
     socials?: { type: string; url: string }[];
   };
+}
+
+/** Subset of https://api.dexscreener.com/token-profiles/latest/v1 and .../token-boosts/latest/v1 - both share this shape. */
+interface DexScreenerDiscoveryEntry {
+  chainId: string;
+  tokenAddress: string;
+  links?: { type?: string; url: string }[];
 }
 
 const SOLANA_CHAIN_ID = "solana";
@@ -79,6 +86,49 @@ export class DexScreenerClient {
 
     await Promise.all(Array.from({ length: Math.min(concurrency, chunks.length) }, worker));
     return results;
+  }
+
+  /**
+   * Secondary discovery source, alongside Pump.fun: mints DexScreener itself has recently seen a
+   * profile update or a paid boost for. This exists for resilience (Pump.fun's API is unofficial
+   * and undocumented - if it changes or blocks us, discovery shouldn't stop entirely) and for
+   * coverage (catches tokens that launched directly on a DEX rather than through a pump.fun
+   * bonding curve, which the Pump.fun-only discovery path would never see at all).
+   *
+   * Neither endpoint returns market data or a symbol/name, only the mint address and social
+   * links - callers add these to the watchlist bare and let the next cycle's DexScreener batch
+   * lookup (getTokensByAddresses) fill in the rest, same as freshly-discovered Pump.fun mints do.
+   */
+  async discoverTrendingMints(): Promise<WatchlistCandidate[]> {
+    const [profiles, boosts] = await Promise.all([
+      this.fetchDiscoveryEndpoint("/token-profiles/latest/v1"),
+      this.fetchDiscoveryEndpoint("/token-boosts/latest/v1"),
+    ]);
+
+    const byMint = new Map<string, WatchlistCandidate>();
+    for (const entry of [...profiles, ...boosts]) {
+      if (entry.chainId !== SOLANA_CHAIN_ID || !entry.tokenAddress) continue;
+      const links = entry.links ?? [];
+      byMint.set(entry.tokenAddress, {
+        mintAddress: entry.tokenAddress,
+        hasTwitter: links.some((l) => l.type === "twitter"),
+        hasTelegram: links.some((l) => l.type === "telegram"),
+        hasWebsite: links.some((l) => !l.type || l.type === "website"),
+      });
+    }
+    return [...byMint.values()];
+  }
+
+  private async fetchDiscoveryEndpoint(path: string): Promise<DexScreenerDiscoveryEntry[]> {
+    try {
+      return await fetchJson<DexScreenerDiscoveryEntry[]>(`${this.baseUrl}${path}`, {
+        timeoutMs: 8000,
+        retries: 1,
+      });
+    } catch (err) {
+      logger.warn("discovery endpoint failed", { path, error: String(err) });
+      return [];
+    }
   }
 
   /** Free-text search, mainly useful for manual lookups / debugging rather than the scan loop. */

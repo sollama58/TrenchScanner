@@ -3,12 +3,11 @@ import { prisma } from "@trenchscanner/core";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
- * expected cadence (scan/discovery run every few minutes, digest/cleanup/outcome-tracking daily).
- * Falls back to 30 minutes for any job name not listed here.
+ * expected cadence (scan runs every few minutes, digest/cleanup/outcome-tracking daily). Falls
+ * back to 30 minutes for any job name not listed here.
  */
 const STALE_THRESHOLD_MS: Record<string, number> = {
   scan: 20 * 60_000,
-  "discovery-secondary": 20 * 60_000,
   digest: 26 * 3_600_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,

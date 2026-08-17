@@ -24,6 +24,24 @@ export interface CandidateToken {
   description?: string;
 }
 
+/**
+ * A newly-seen mint from any discovery source (Pump.fun, DexScreener's trending endpoints, ...),
+ * before anything is known about its market data. This is the minimal shape the watchlist needs
+ * to track a mint going forward - see apps/worker/src/jobs/scanJob.ts's addNewMintsToWatchlist().
+ * Deliberately decoupled from any one source's own richer type (e.g. Pump.fun's DiscoveredCoin)
+ * so scanJob.ts can merge candidates from multiple sources without depending on source-specific
+ * fields like Pump.fun's bonding-curve "graduated" flag.
+ */
+export interface WatchlistCandidate {
+  mintAddress: string;
+  symbol?: string;
+  name?: string;
+  createdAt?: Date;
+  hasTwitter?: boolean;
+  hasTelegram?: boolean;
+  hasWebsite?: boolean;
+}
+
 export interface OnChainProfile {
   mintAddress: string;
   holderCount?: number;
