@@ -4,7 +4,7 @@ _Last updated: 2026-08-15_
 
 ## 1. Goal
 
-Monitor the Solana memecoin ecosystem in near-real-time for tokens sitting in the **$50k–$500k market cap** zone that show the strongest signals of running to multi-million market caps. Surface matches to users via a web dashboard, with opt-in Telegram alerts and daily digests. Deployed entirely on Render via a single Blueprint (`render.yaml`).
+Monitor the Solana memecoin ecosystem in near-real-time for tokens sitting in the **$10k–$1M market cap** zone that show the strongest signals of running to multi-million market caps. Surface matches to users via a web dashboard, with opt-in Telegram alerts and daily digests. Deployed entirely on Render via a single Blueprint (`render.yaml`).
 
 ## 2. Decisions Made So Far
 

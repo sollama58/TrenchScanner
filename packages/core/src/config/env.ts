@@ -25,8 +25,8 @@ const envSchema = z.object({
 
   SCAN_INTERVAL_MINUTES: z.coerce.number().positive().default(7),
   DIGEST_HOUR_UTC: z.coerce.number().min(0).max(23).default(13),
-  MCAP_FILTER_MIN: z.coerce.number().nonnegative().default(50_000),
-  MCAP_FILTER_MAX: z.coerce.number().positive().default(500_000),
+  MCAP_FILTER_MIN: z.coerce.number().nonnegative().default(10_000),
+  MCAP_FILTER_MAX: z.coerce.number().positive().default(1_000_000),
   // How long a discovered mint stays on the active watchlist (re-checked every scan cycle) before
   // it's considered stale and dropped. Most tokens that haven't gained traction go quiet well
   // before this; it exists to bound DexScreener batch-lookup volume per cycle.

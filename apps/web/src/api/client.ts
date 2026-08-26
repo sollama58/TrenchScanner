@@ -6,6 +6,7 @@ import type {
   AdminUser,
   AlertMode,
   FilterInput,
+  LeaderboardResponse,
   MatchesPage,
   PublicConfig,
   TelegramLinkResponse,
@@ -118,6 +119,11 @@ export function listMatches(page = 1) {
 // ── Tokens ───────────────────────────────────────────────────────────────
 export function getToken(mintAddress: string) {
   return request<Token & { snapshots: unknown[] }>(`/tokens/${mintAddress}`);
+}
+
+// ── Leaderboard ──────────────────────────────────────────────────────────
+export function getLeaderboard() {
+  return request<LeaderboardResponse>("/leaderboard");
 }
 
 // ── Health ───────────────────────────────────────────────────────────────

@@ -2,28 +2,35 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { type Env, prisma, scanBand } from "@trenchscanner/core";
 
-const filterInputSchema = z.object({
-  name: z.string().min(1).max(60).default("Default"),
-  mcapMin: z.number().nonnegative().default(50_000),
-  mcapMax: z.number().positive().default(500_000),
-  minVolumeMcapRatio: z.number().nonnegative().nullable().optional(),
-  minHolderGrowthPct: z.number().nullable().optional(),
-  maxTop10HolderPct: z.number().min(0).max(100).nullable().optional(),
-  maxDevWalletPct: z.number().min(0).max(100).nullable().optional(),
-  maxRiskScore: z.number().min(0).max(100).nullable().optional(),
-  excludeCriticalRiskFlags: z.boolean().default(false),
-  minTokenAgeMinutes: z.number().int().nonnegative().nullable().optional(),
-  maxTokenAgeMinutes: z.number().int().nonnegative().nullable().optional(),
-  narrativeKeywords: z.array(z.string()).default([]),
-  minScore: z.number().min(0).max(100).nullable().optional(),
-  maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
-  isActive: z.boolean().default(true),
-});
-
-const filterUpdateSchema = filterInputSchema.partial();
+// A factory (rather than a module-level constant) so mcapMin/mcapMax default to this deployment's
+// own MCAP_FILTER_MIN/MAX instead of a hardcoded literal that could drift out of sync with them -
+// only matters for a POST that omits mcapMin/mcapMax entirely, but there's no reason to duplicate
+// the number when env already has it.
+function buildFilterInputSchema(env: Env) {
+  return z.object({
+    name: z.string().min(1).max(60).default("Default"),
+    mcapMin: z.number().nonnegative().default(env.MCAP_FILTER_MIN),
+    mcapMax: z.number().positive().default(env.MCAP_FILTER_MAX),
+    minVolumeMcapRatio: z.number().nonnegative().nullable().optional(),
+    minHolderGrowthPct: z.number().nullable().optional(),
+    maxTop10HolderPct: z.number().min(0).max(100).nullable().optional(),
+    maxDevWalletPct: z.number().min(0).max(100).nullable().optional(),
+    maxRiskScore: z.number().min(0).max(100).nullable().optional(),
+    excludeCriticalRiskFlags: z.boolean().default(false),
+    minTokenAgeMinutes: z.number().int().nonnegative().nullable().optional(),
+    maxTokenAgeMinutes: z.number().int().nonnegative().nullable().optional(),
+    narrativeKeywords: z.array(z.string()).default([]),
+    minScore: z.number().min(0).max(100).nullable().optional(),
+    maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
+    isActive: z.boolean().default(true),
+  });
+}
 
 export async function registerFilterRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.addHook("preHandler", app.authenticate);
+
+  const filterInputSchema = buildFilterInputSchema(opts.env);
+  const filterUpdateSchema = filterInputSchema.partial();
 
   // The true range a token could ever be scanned/matched at - see scanBand()'s own doc comment.
   // A user's mcapMin/mcapMax outside this can never match anything regardless of what they set,

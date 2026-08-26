@@ -83,15 +83,9 @@ export function TokenCard({ match }: { match: Match }) {
           <dt>Matched</dt>
           <dd>{new Date(match.matchedAt).toLocaleTimeString()}</dd>
         </div>
-        {match.peakMcapUsd !== null && snapshot.marketCapUsd > 0 && (
-          <div>
-            <dt>Peak since</dt>
-            <dd title="Highest market cap seen since this match, updated daily">
-              {fmtUsd(match.peakMcapUsd)} ({(match.peakMcapUsd / snapshot.marketCapUsd).toFixed(1)}x)
-            </dd>
-          </div>
-        )}
       </dl>
+
+      <AthSection match={match} />
 
       <ScoreBreakdown snapshot={snapshot} />
 
@@ -117,6 +111,36 @@ function pctChangeSinceAlert(
   const pct = Math.round(((nowMcap - alertMcap) / alertMcap) * 100);
   const tone = pct > 0 ? "up" : pct < 0 ? "down" : "flat";
   return { text: `${pct > 0 ? "+" : ""}${pct}%`, tone };
+}
+
+/**
+ * The highest market cap this token has reached since the match, tracked daily by
+ * apps/worker/src/jobs/outcomeTrackingJob.ts. Null (and this section hidden entirely) until that
+ * job's first run after the match - "no ATH recorded yet" is not the same as "never went up."
+ * peakMcapUsd only ever moves up from snapshot.marketCapUsd, so the % here is always a gain -
+ * this is a record of the best it's done, not a live price, and can lag up to a day behind.
+ */
+function AthSection({ match }: { match: Match }) {
+  const { snapshot } = match;
+  if (match.peakMcapUsd === null || snapshot.marketCapUsd <= 0) return null;
+
+  const pct =
+    match.peakReturnPct ?? ((match.peakMcapUsd - snapshot.marketCapUsd) / snapshot.marketCapUsd) * 100;
+
+  return (
+    <div className="token-card__ath">
+      <div className="token-card__ath-label">All-Time High (after alert)</div>
+      <div className="token-card__ath-value">
+        {fmtUsd(match.peakMcapUsd)}
+        <span className="token-card__ath-pct">+{Math.round(pct)}%</span>
+      </div>
+      {match.peakMcapAt && (
+        <div className="token-card__ath-meta" title={new Date(match.peakMcapAt).toLocaleString()}>
+          as of {new Date(match.peakMcapAt).toLocaleDateString()}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Copies the mint address to the clipboard - stops the click from also triggering the card's

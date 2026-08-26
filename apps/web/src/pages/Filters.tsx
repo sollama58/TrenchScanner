@@ -6,10 +6,10 @@ import { FilterForm } from "../components/FilterForm";
 // Mirrors the server's own defaults (packages/core/src/config/env.ts + scanBand()) - used only if
 // GET /config is unreachable, so the filter form still has sane bounds instead of being unusable.
 const FALLBACK_CONFIG: PublicConfig = {
-  mcapFilterMin: 50_000,
-  mcapFilterMax: 500_000,
-  scanBandMin: 25_000,
-  scanBandMax: 750_000,
+  mcapFilterMin: 10_000,
+  mcapFilterMax: 1_000_000,
+  scanBandMin: 5_000,
+  scanBandMax: 1_500_000,
 };
 
 export function Filters() {

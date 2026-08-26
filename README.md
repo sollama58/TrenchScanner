@@ -4,7 +4,7 @@
 
 A user-friendly tool to scan the trenches for runners before they happen. Get Telegram alerts and daily updates for your review. Don't FOMO, be the candle that makes them FOMO.
 
-TrenchScanner watches the Solana memecoin ecosystem for tokens sitting in the **$50k–$500k market cap** band, screens out likely scams, scores what's left for breakout potential, and surfaces matches on a live dashboard (with optional Telegram alerts) against filters you define.
+TrenchScanner watches the Solana memecoin ecosystem for tokens sitting in the **$10k–$1M market cap** band, screens out likely scams, scores what's left for breakout potential, and surfaces matches on a live dashboard (with optional Telegram alerts) against filters you define.
 
 See [`PLANNING.md`](./PLANNING.md) for the full architecture writeup and the product decisions behind it.
 
