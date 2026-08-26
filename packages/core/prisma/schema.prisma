@@ -222,8 +222,18 @@ model Match {
   // (the mcap at match time), not these fields - see outcomeTrackingJob.ts for why.
   peakMcapUsd Float?
   peakMcapAt  DateTime?
+  // (peakMcapUsd - snapshot.marketCapUsd) / snapshot.marketCapUsd * 100 - recomputed alongside
+  // peakMcapUsd every time it rises. Persisted (rather than computed at read time from every
+  // Match ever created) so the Leaderboard can ORDER BY this column directly instead of pulling
+  // every candidate row into memory to sort - see apps/api/src/routes/leaderboard.ts.
+  peakReturnPct Float?
+  // Set once, the moment peakReturnPct first reaches >= 100 (a +100%/2x gain) - never touched
+  // again after that even as peakMcapUsd/peakReturnPct keep climbing on future highs. Marks this
+  // match as eligible for the public Leaderboard; indexed so that query never scans every Match.
+  hitHundredPctAt DateTime?
 
   @@unique([userId, tokenId, filterId, matchedAt])
   @@index([userId, matchedAt])
   @@index([tokenId])
+  @@index([hitHundredPctAt, peakReturnPct])
 }

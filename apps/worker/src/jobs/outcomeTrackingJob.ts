@@ -13,11 +13,13 @@ const OUTCOME_TRACKING_WINDOW_DAYS = 30;
 
 /**
  * Backtesting data: for every recent Match, checks the token's current market cap against the
- * highest one recorded so far and updates Match.peakMcapUsd/peakMcapAt on a new high. The
- * baseline for "how far did it run" is always snapshot.marketCapUsd (the mcap at match time,
- * frozen forever on the TokenSnapshot row) - peakMcapUsd only ever tracks the ceiling above that,
- * so `peakMcapUsd / snapshot.marketCapUsd` is a stable "best multiple reached" figure regardless
- * of how many times this job has run.
+ * highest one recorded so far and updates Match.peakMcapUsd/peakMcapAt/peakReturnPct on a new
+ * high. The baseline for "how far did it run" is always snapshot.marketCapUsd (the mcap at match
+ * time, frozen forever on the TokenSnapshot row) - peakMcapUsd only ever tracks the ceiling above
+ * that, so `peakMcapUsd / snapshot.marketCapUsd` is a stable "best multiple reached" figure
+ * regardless of how many times this job has run. The first time a new high pushes peakReturnPct
+ * to +100% or beyond, Match.hitHundredPctAt is stamped (once, permanently) - that's what makes
+ * the match eligible for the public Leaderboard (apps/api/src/routes/leaderboard.ts).
  *
  * This is what eventually lets scoring quality be measured against real outcomes (did
  * high-scored matches run further than low-scored ones?) instead of staying a set of reasoned-but
@@ -58,9 +60,20 @@ export async function runOutcomeTrackingJob(dexScreener: DexScreenerClient): Pro
 
     const priorPeak = match.peakMcapUsd ?? match.snapshot.marketCapUsd;
     if (currentMcap > priorPeak) {
+      const alertMcap = match.snapshot.marketCapUsd;
+      const returnPct = alertMcap > 0 ? ((currentMcap - alertMcap) / alertMcap) * 100 : null;
+      // Only stamped the first time this crosses the threshold - never overwritten again, even
+      // though peakMcapUsd/peakReturnPct keep climbing on later, even bigger highs.
+      const justHitHundredPct = returnPct !== null && returnPct >= 100 && match.hitHundredPctAt === null;
+
       await prisma.match.update({
         where: { id: match.id },
-        data: { peakMcapUsd: currentMcap, peakMcapAt: now },
+        data: {
+          peakMcapUsd: currentMcap,
+          peakMcapAt: now,
+          peakReturnPct: returnPct,
+          hitHundredPctAt: justHitHundredPct ? now : undefined,
+        },
       });
       updated += 1;
     }

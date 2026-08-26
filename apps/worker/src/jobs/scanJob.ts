@@ -89,8 +89,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
 
   // Tokens someone currently has open on a Live Feed page (see the comment on
   // Token.lastViewedAt) keep getting re-scanned regardless of mcap band, so "Now"/% change
-  // stays live for a genuine breakout winner instead of freezing the moment it leaves
-  // $50k-$500k. Only looks up ones the in-band refresh above didn't already cover.
+  // stays live for a genuine breakout winner instead of freezing the moment it leaves the
+  // MCAP_FILTER_MIN/MAX band. Only looks up ones the in-band refresh above didn't already cover.
   const alreadyCovered = new Set(candidates.map((c) => c.mintAddress));
   const viewCutoff = new Date(Date.now() - env.ACTIVE_VIEW_WINDOW_MINUTES * 60_000);
   const activelyViewed = await prisma.token.findMany({

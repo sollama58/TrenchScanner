@@ -5,6 +5,7 @@ import { Navbar, type Tab } from "./components/Navbar";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Filters } from "./pages/Filters";
+import { Leaderboard } from "./pages/Leaderboard";
 import { Settings } from "./pages/Settings";
 import { Admin } from "./pages/Admin";
 
@@ -30,6 +31,7 @@ function AppShell() {
       <main className="app-content">
         {tab === "dashboard" && <Dashboard onGoToFilters={() => setTab("filters")} />}
         {tab === "filters" && <Filters />}
+        {tab === "leaderboard" && <Leaderboard />}
         {tab === "settings" && <Settings />}
         {tab === "admin" && user.isAdmin && <Admin />}
       </main>

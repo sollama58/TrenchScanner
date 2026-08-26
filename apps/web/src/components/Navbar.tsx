@@ -1,11 +1,12 @@
 import { useAuth } from "../context/AuthContext";
 import { HealthBadge } from "./HealthBadge";
 
-export type Tab = "dashboard" | "filters" | "settings" | "admin";
+export type Tab = "dashboard" | "filters" | "leaderboard" | "settings" | "admin";
 
 const BASE_TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Live Feed" },
   { id: "filters", label: "Filters" },
+  { id: "leaderboard", label: "Leaderboard" },
   { id: "settings", label: "Settings" },
 ];
 

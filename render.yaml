@@ -97,9 +97,9 @@ services:
       - key: DIGEST_HOUR_UTC
         value: "13"
       - key: MCAP_FILTER_MIN
-        value: "50000"
+        value: "10000"
       - key: MCAP_FILTER_MAX
-        value: "500000"
+        value: "1000000"
       - key: WATCHLIST_TTL_HOURS
         value: "24"
       - key: WATCHLIST_MAX_TRACKED

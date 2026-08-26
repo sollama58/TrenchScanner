@@ -104,6 +104,8 @@ export interface Match {
    *  outcome-tracking job's first run after the match - see apps/worker/src/jobs/outcomeTrackingJob.ts. */
   peakMcapUsd: number | null;
   peakMcapAt: string | null;
+  /** (peakMcapUsd - snapshot.marketCapUsd) / snapshot.marketCapUsd * 100 - null on the same terms as peakMcapUsd. */
+  peakReturnPct: number | null;
   token: Token;
   /** The frozen snapshot from when this match was created - "alerted at," never updated. */
   snapshot: TokenSnapshot;
@@ -123,6 +125,23 @@ export interface MatchesPage {
   page: number;
   pageSize: number;
   totalCount: number;
+}
+
+/** One row on the public Leaderboard - the best-ever alert for a single token, only ever present
+ *  once it's reached +100% above its alert-time market cap. See apps/api/src/routes/leaderboard.ts. */
+export interface LeaderboardEntry {
+  matchId: string;
+  token: Token;
+  alertMcapUsd: number;
+  peakMcapUsd: number | null;
+  peakMcapAt: string | null;
+  returnPct: number | null;
+  matchedAt: string;
+  hitHundredPctAt: string | null;
+}
+
+export interface LeaderboardResponse {
+  entries: LeaderboardEntry[];
 }
 
 export type AlertMode = "REALTIME" | "DIGEST" | "BOTH" | "OFF";

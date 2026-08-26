@@ -13,6 +13,7 @@ import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerConfigRoutes } from "./routes/config.js";
+import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 
 const logger = createLogger("api");
 
@@ -77,6 +78,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
   await app.register(registerMatchRoutes, { prefix: "/matches" });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
+  await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
   await app.register(registerAdminRoutes, { prefix: "/admin", env });
 
