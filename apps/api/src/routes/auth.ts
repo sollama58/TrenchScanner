@@ -40,6 +40,23 @@ const verifyBodySchema = z.discriminatedUnion("method", [
 // else; a legitimate user signing in a few times a minute is well within this.
 const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 
+// onrender.com is on the Public Suffix List, so trenchscanner-web.onrender.com and
+// trenchscanner-api.onrender.com are different "sites" to the browser despite sharing a parent
+// domain - SameSite=Lax never gets attached to the dashboard's cross-site fetch() calls, so a
+// cookie set with it is silently dropped by the browser on every request after the one that set
+// it. SameSite=None is required for this cross-subdomain setup to work at all, but browsers
+// reject SameSite=None without Secure - gated on production, since local dev (localhost:5173
+// talking to localhost:4000) is same-site (differs only by port) and plain HTTP, where Lax
+// already works and None+Secure wouldn't. Shared by both setCookie and clearCookie below -
+// browsers key a cookie's identity on name+domain+path, not these attributes, but keeping them
+// identical avoids relying on that rather than confirming it per browser.
+const isProduction = process.env.NODE_ENV === "production";
+const SESSION_COOKIE_ATTRS = {
+  secure: isProduction,
+  sameSite: isProduction ? ("none" as const) : ("lax" as const),
+  path: "/",
+};
+
 export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.get("/nonce", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = nonceQuerySchema.safeParse(request.query);
@@ -88,9 +105,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     const token = await app.sessionSigner.sign({ userId: user.id, walletAddress: user.walletAddress });
     reply.setCookie(SESSION_COOKIE_NAME, token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
+      ...SESSION_COOKIE_ATTRS,
       // Kept in sync with the JWT's own expiry (see createSessionSigner) - a mismatch here would
       // mean the cookie either outlives the token it holds or expires before it does.
       maxAge: opts.env.SESSION_TTL_HOURS * 60 * 60,
@@ -100,7 +115,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
   });
 
   app.post("/logout", async (_request, reply) => {
-    reply.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+    reply.clearCookie(SESSION_COOKIE_NAME, SESSION_COOKIE_ATTRS);
     return { ok: true };
   });
 
