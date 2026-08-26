@@ -72,9 +72,10 @@ export interface OnChainProfile {
   top10HolderAddresses?: string[];
   /**
    * % of top10HolderAddresses whose earliest on-chain activity is within the last 24h - a wallet
-   * that only exists to snipe one specific launch. Computed separately via Helius (see
-   * HeliusClient.getFreshWalletPct), not part of the RugCheck report itself, so it's undefined
-   * whenever top10HolderAddresses is (no holder list) or the lookup was skipped/failed.
+   * that only exists to snipe one specific launch. Computed separately via Helius (see the
+   * worker's apps/worker/src/jobs/walletFreshness.ts, built on HeliusClient.getEarliestActivity),
+   * not part of the RugCheck report itself, so it's undefined whenever top10HolderAddresses is
+   * (no holder list) or the lookup was skipped/failed.
    */
   freshTop10WalletPct?: number;
 }

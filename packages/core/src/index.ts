@@ -3,6 +3,8 @@ export * from "./logger.js";
 export * from "./config/env.js";
 export * from "./db.js";
 export * from "./heartbeat.js";
+export * from "./concurrency.js";
+export * from "./solana.js";
 
 export * from "./datasources/httpClient.js";
 export * from "./datasources/dexscreener.js";

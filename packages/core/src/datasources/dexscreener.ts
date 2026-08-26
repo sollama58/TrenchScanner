@@ -1,5 +1,6 @@
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
+import { forEachWithConcurrency } from "../concurrency.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
 const logger = createLogger("dexscreener");
@@ -61,30 +62,22 @@ export class DexScreenerClient {
       chunks.push(unique.slice(i, i + BATCH_SIZE));
     }
 
-    // Bounded-concurrency worker pool (same pattern as RugCheckClient.getProfiles): fetching
-    // chunks one at a time made the watchlist refresh step scale linearly with watchlist size -
-    // at the default WATCHLIST_MAX_TRACKED that's up to 30 sequential round trips, adding real
-    // wall-clock time to every scan cycle. A modest concurrency cap gets most of the speedup
-    // without hammering a public, unauthenticated API with 30 simultaneous requests.
+    // Bounded-concurrency worker pool (same shared helper as RugCheckClient.getProfiles):
+    // fetching chunks one at a time made the watchlist refresh step scale linearly with
+    // watchlist size - at the default WATCHLIST_MAX_TRACKED that's up to 30 sequential round
+    // trips, adding real wall-clock time to every scan cycle. A modest concurrency cap gets most
+    // of the speedup without hammering a public, unauthenticated API with 30 simultaneous requests.
     const results: CandidateToken[] = [];
-    const queue = [...chunks];
-
-    const worker = async () => {
-      while (queue.length > 0) {
-        const chunk = queue.shift();
-        if (!chunk) continue;
-        try {
-          const pairs = await fetchJson<DexScreenerPair[]>(
-            `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
-          );
-          results.push(...this.selectCanonicalPairs(pairs ?? []));
-        } catch (err) {
-          logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
-        }
+    await forEachWithConcurrency(chunks, concurrency, async (chunk) => {
+      try {
+        const pairs = await fetchJson<DexScreenerPair[]>(
+          `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
+        );
+        results.push(...this.selectCanonicalPairs(pairs ?? []));
+      } catch (err) {
+        logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
       }
-    };
-
-    await Promise.all(Array.from({ length: Math.min(concurrency, chunks.length) }, worker));
+    });
     return results;
   }
 

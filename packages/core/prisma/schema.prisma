@@ -237,3 +237,21 @@ model Match {
   @@index([tokenId])
   @@index([hitHundredPctAt, peakReturnPct])
 }
+
+/// Caches a wallet's earliest-ever transaction timestamp, keyed by address - not scoped to any
+/// one Token, since the same wallet can legitimately show up as a top holder on many different
+/// mints. This is Helius's single most expensive per-address call (getSignaturesForAddress with
+/// limit 1000) and the answer never changes once known, so re-fetching it for a wallet we've
+/// already seen - whether on a later scan cycle or as a top holder of a different token in the
+/// same cycle - is pure waste. See apps/worker/src/jobs/walletFreshness.ts for how this is
+/// populated and read.
+model WalletActivityCache {
+  address String @id
+
+  /// Null means "checked, but genuinely indeterminate" (no signatures found at all, or 1000+
+  /// meaning the true earliest is beyond what HeliusClient.getEarliestActivity paginates to) -
+  /// still cached, since re-asking Helius the same unanswerable question every cycle would be
+  /// exactly the waste this table exists to avoid.
+  earliestActivityAt DateTime?
+  checkedAt          DateTime  @default(now())
+}

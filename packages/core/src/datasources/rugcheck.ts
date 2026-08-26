@@ -1,5 +1,6 @@
 import { fetchJson, HttpError } from "./httpClient.js";
 import { createLogger } from "../logger.js";
+import { forEachWithConcurrency } from "../concurrency.js";
 import type { OnChainProfile } from "../types.js";
 
 const logger = createLogger("rugcheck");
@@ -61,21 +62,16 @@ export class RugCheckClient {
     }
   }
 
-  /** Fetches profiles for many mints with limited concurrency to be a polite API citizen. */
+  /** Fetches profiles for many mints with limited concurrency to be a polite API citizen.
+   *  Deduped first (same pattern as DexScreenerClient.getTokensByAddresses) so a caller that
+   *  hands back the same mint twice in one list doesn't cost a duplicate outbound request. */
   async getProfiles(mintAddresses: string[], concurrency = 5): Promise<Map<string, RugCheckProfile>> {
+    const unique = [...new Set(mintAddresses)];
     const results = new Map<string, RugCheckProfile>();
-    const queue = [...mintAddresses];
-
-    async function worker(client: RugCheckClient) {
-      while (queue.length > 0) {
-        const mint = queue.shift();
-        if (!mint) continue;
-        const profile = await client.getProfile(mint);
-        if (profile) results.set(mint, profile);
-      }
-    }
-
-    await Promise.all(Array.from({ length: concurrency }, () => worker(this)));
+    await forEachWithConcurrency(unique, concurrency, async (mint) => {
+      const profile = await this.getProfile(mint);
+      if (profile) results.set(mint, profile);
+    });
     return results;
   }
 }
@@ -125,9 +121,9 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     lpBurned,
     riskScore: report.score_normalised ?? 0,
     riskFlags,
-    // Feeds HeliusClient.getFreshWalletPct (see scanJob.ts) - a wallet address per top-10 holder,
-    // already pool-excluded above. Falls back to `address` for a holder entry that has no
-    // separate `owner` (RugCheck's shape allows both).
+    // Feeds the worker's wallet-freshness check (apps/worker/src/jobs/walletFreshness.ts) - a
+    // wallet address per top-10 holder, already pool-excluded above. Falls back to `address` for
+    // a holder entry that has no separate `owner` (RugCheck's shape allows both).
     top10HolderAddresses: top10Holders.map((h) => h.owner ?? h.address),
   };
 }
