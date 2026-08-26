@@ -75,7 +75,7 @@ Database migrations run automatically on every API deploy via `preDeployCommand`
 
 ### Cost
 
-Per the plan in `PLANNING.md`: ~$21–31/mo (Render Starter web service + Starter worker + Starter Postgres, the static site is free, Helius's free/low tier covers light usage). Background workers specifically require a paid Render plan - there's no free tier for them.
+Per the plan in `PLANNING.md`: ~$21–31/mo (Render Starter web service + Starter worker + the cheapest Postgres tier (`basic-256mb`), the static site is free, Helius's free/low tier covers light usage). Background workers specifically require a paid Render plan - there's no free tier for them.
 
 ## Known limitations (v1)
 

@@ -119,6 +119,10 @@ services:
 
 databases:
   - name: trenchscanner-db
-    plan: starter
+    # Legacy "starter" no longer accepted for new Postgres instances - Render moved to flexible
+    # plans (basic-256mb/1gb/4gb, pro-*, accelerated-*) with storage billed separately. This is
+    # the cheapest paid tier, matching what "starter" used to cost (~$7/mo); its default disk
+    # size (15GB) is more than this app needs at v1 scale.
+    plan: basic-256mb
     databaseName: trenchscanner
     user: trenchscanner
