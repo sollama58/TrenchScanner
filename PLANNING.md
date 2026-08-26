@@ -51,7 +51,7 @@ Monitor the Solana memecoin ecosystem in near-real-time for tokens sitting in th
 1. `trenchscanner-api` — Node/TS web service (Express or Fastify), REST API + SIWS auth + Telegram webhook.
 2. `trenchscanner-worker` — Node/TS background worker, polling loop + scoring engine + alert dispatch.
 3. `trenchscanner-web` — Static site (React/Vite build output), the dashboard.
-4. `trenchscanner-db` — Render managed Postgres (starter tier).
+4. `trenchscanner-db` — Render managed Postgres (cheapest paid tier, `basic-256mb`).
 
 Worker and API share a `packages/core` (Prisma/Drizzle schema, scoring logic, data-source clients) in a small monorepo so scoring logic isn't duplicated.
 
@@ -78,7 +78,7 @@ Worker and API share a `packages/core` (Prisma/Drizzle schema, scoring logic, da
 | ---------------------------------- | ------------------------------ |
 | Render web service (starter)       | ~$7/mo                         |
 | Render background worker (starter) | ~$7/mo                         |
-| Render Postgres (starter)          | ~$7/mo                         |
+| Render Postgres (`basic-256mb`)    | ~$7/mo                         |
 | Render static site                 | Free                           |
 | Helius (free or Developer tier)    | $0–~$10/mo depending on volume |
 | DexScreener API                    | Free                           |
