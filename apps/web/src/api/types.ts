@@ -95,7 +95,15 @@ export interface Match {
   peakMcapUsd: number | null;
   peakMcapAt: string | null;
   token: Token;
+  /** The frozen snapshot from when this match was created - "alerted at," never updated. */
   snapshot: TokenSnapshot;
+  /**
+   * This token's most recent snapshot as of now, which may be the same row as `snapshot` above
+   * if the worker hasn't re-scanned it since the match (e.g. it's since dropped out of the mcap
+   * band). Lets the dashboard show a live-ish "now" mcap and % change alongside the frozen
+   * alert-time one - see apps/api/src/routes/matches.ts.
+   */
+  latestSnapshot: TokenSnapshot | null;
   filter: { id: string; name: string };
 }
 
