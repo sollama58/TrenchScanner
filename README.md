@@ -27,6 +27,16 @@ RugCheck (on-chain) ────┘      scoring, alerts)
 - **Matching**: each user's saved filter is checked against every scored token; matches land on the dashboard and, if linked, Telegram.
 - **Auth**: Sign-In With Solana via the Wallet Standard's `signIn` feature (Phantom, Solflare, and every other current wallet support it) - the wallet itself checks the signed message's `domain` field against the page's real origin before signing, so a phishing site cannot get a valid session no matter what it shows the user. Falls back to plain `signMessage` (not domain-bound) only for wallets that don't implement `signIn`. See `apps/api/src/auth/siws.ts`.
 
+## Admin Panel
+
+A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; empty by default) sees an extra **Admin** tab in the dashboard, backed by `GET`/`POST /admin/*` on the API (every route 403s anyone else - see `apps/api/src/routes/admin.ts`). Admin status is config, not a DB column, so promoting/demoting an admin is a one-line env change rather than a manual DB write. It covers:
+
+- **Overview** - user/filter/token/match counts at a glance.
+- **Monitoring** - every worker job's heartbeat (scan/digest/cleanup/outcome-tracking), not just the single-job dot in the navbar's `HealthBadge`.
+- **Live Feed** - every tracked token's latest snapshot, unfiltered: upstream of both the rug screen and per-user filter matching, so a token that failed the rug screen (with its reasons) or never matched anyone's filter is visible here even though it never produces a `Match` row anywhere else in the product.
+- **Users** - wallet, join date, filter/match counts, Telegram link status, and a force-unlink action for moderation.
+- **Config** - the non-secret half of the shared env schema (mcap band, scan cadence, retention windows, ...), so you can see what's actually running without opening the Render dashboard.
+
 ## Local development
 
 **Prerequisites:** Node.js 20+, a local Postgres instance.

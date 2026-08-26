@@ -6,6 +6,7 @@ import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Filters } from "./pages/Filters";
 import { Settings } from "./pages/Settings";
+import { Admin } from "./pages/Admin";
 
 function AppShell() {
   const { user, loading } = useAuth();
@@ -30,6 +31,7 @@ function AppShell() {
         {tab === "dashboard" && <Dashboard />}
         {tab === "filters" && <Filters />}
         {tab === "settings" && <Settings />}
+        {tab === "admin" && user.isAdmin && <Admin />}
       </main>
     </div>
   );

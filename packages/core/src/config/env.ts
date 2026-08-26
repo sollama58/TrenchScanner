@@ -63,6 +63,13 @@ const envSchema = z.object({
   // this domain while running on a different one. Must be updated if the dashboard's real domain
   // changes (same caveat as CORS_ORIGINS/VITE_API_URL already have).
   PUBLIC_APP_DOMAIN: z.string().default("localhost:5173"),
+
+  // Comma-separated base58 wallet addresses allowed into the Admin Panel (GET/POST /admin/*) -
+  // see apps/api/src/routes/admin.ts. Deliberately config, not a DB column: there's no
+  // chicken-and-egg "how does the first admin get flagged" problem, and promoting/demoting an
+  // admin is a one-line env change + redeploy rather than a manual DB write. Empty by default,
+  // which means the Admin Panel is unreachable (every request 403s) until explicitly configured.
+  ADMIN_WALLET_ADDRESSES: z.string().optional().default(""),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -92,4 +99,13 @@ export function corsOriginList(env: Env): string[] {
   return env.CORS_ORIGINS.split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/** Parses ADMIN_WALLET_ADDRESSES into a lookup set. Same comma-separated-list shape as CORS_ORIGINS. */
+export function adminWalletSet(env: Env): Set<string> {
+  return new Set(
+    env.ADMIN_WALLET_ADDRESSES.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
 }

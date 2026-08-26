@@ -11,6 +11,7 @@
 #   - HELIUS_API_KEY (both api + worker)          https://dev.helius.xyz
 #   - TELEGRAM_BOT_TOKEN (worker only)             via @BotFather
 #   - TELEGRAM_BOT_USERNAME (both api + worker)    the bot's @username, no leading @
+#   - ADMIN_WALLET_ADDRESSES (api only)            your own wallet's base58 address, to reach /admin
 #
 # See PLANNING.md and README.md for the full architecture and local dev setup.
 
@@ -66,6 +67,10 @@ services:
       # a custom domain; see the comment on this var in packages/core/src/config/env.ts.
       - key: PUBLIC_APP_DOMAIN
         value: trenchscanner-web.onrender.com
+      # Comma-separated base58 wallet addresses allowed into the Admin Panel - set this to your
+      # own wallet's address after the first deploy. Empty means the Admin Panel 403s everyone.
+      - key: ADMIN_WALLET_ADDRESSES
+        sync: false
 
   - type: worker
     name: trenchscanner-worker

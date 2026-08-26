@@ -1,9 +1,9 @@
-import Fastify, { type FastifyInstance, type FastifyError } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyError } from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
-import { type Env, corsOriginList, createLogger } from "@trenchscanner/core";
+import { type Env, corsOriginList, adminWalletSet, createLogger } from "@trenchscanner/core";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "./auth/session.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerFilterRoutes } from "./routes/filters.js";
@@ -11,6 +11,7 @@ import { registerMatchRoutes } from "./routes/matches.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerAdminRoutes } from "./routes/admin.js";
 
 const logger = createLogger("api");
 
@@ -36,14 +37,36 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   app.decorate("sessionSigner", createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS));
 
-  app.decorate("authenticate", async (request, reply) => {
+  // Shared by authenticate and authenticateAdmin below so the cookie-read-and-verify step (and
+  // any future change to it) only lives in one place.
+  async function resolveSession(request: FastifyRequest) {
     const token = request.cookies[SESSION_COOKIE_NAME];
-    const session = token ? await app.sessionSigner.verify(token) : null;
+    return token ? await app.sessionSigner.verify(token) : null;
+  }
+
+  app.decorate("authenticate", async (request, reply) => {
+    const session = await resolveSession(request);
     if (!session) {
       reply.code(401).send({ error: "unauthenticated" });
       return;
     }
     request.user = session;
+  });
+
+  // Computed once at startup, not per-request - ADMIN_WALLET_ADDRESSES only ever changes via a
+  // redeploy anyway.
+  const admins = adminWalletSet(env);
+  app.decorate("authenticateAdmin", async (request, reply) => {
+    const session = await resolveSession(request);
+    if (!session) {
+      reply.code(401).send({ error: "unauthenticated" });
+      return;
+    }
+    request.user = session;
+    if (!admins.has(session.walletAddress)) {
+      reply.code(403).send({ error: "forbidden" });
+      return;
+    }
   });
 
   await app.register(registerHealthRoutes, { prefix: "/health" });
@@ -53,6 +76,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerMatchRoutes, { prefix: "/matches" });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
+  await app.register(registerAdminRoutes, { prefix: "/admin", env });
 
   app.setErrorHandler((err: FastifyError, request, reply) => {
     logger.error("unhandled route error", { url: request.url, error: err.message });
