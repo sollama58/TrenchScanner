@@ -32,6 +32,12 @@ const envSchema = z.object({
   // before this; it exists to bound DexScreener batch-lookup volume per cycle.
   WATCHLIST_TTL_HOURS: z.coerce.number().positive().default(24),
   WATCHLIST_MAX_TRACKED: z.coerce.number().int().positive().default(900),
+  // How long after GET /matches last stamped a token's lastViewedAt (i.e. someone had it on a
+  // Live Feed page) the scan job keeps re-scanning it even if it's fallen out of the mcap band -
+  // see the comment on Token.lastViewedAt. Comfortably longer than one scan cycle so a token
+  // being actively watched never goes a full cycle without a check due to poll/scan timing
+  // jitter, but short enough that closing the tab lets a long-dead winner's tracking lapse.
+  ACTIVE_VIEW_WINDOW_MINUTES: z.coerce.number().positive().default(10),
 
   // Daily cleanup job (see apps/worker/src/jobs/cleanupJob.ts) - prunes TokenSnapshot rows older
   // than this that aren't referenced by any Match (deleting a referenced one would cascade-delete

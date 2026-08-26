@@ -112,6 +112,8 @@ services:
         value: "90"
       - key: OUTCOME_TRACKING_HOUR_UTC
         value: "5"
+      - key: ACTIVE_VIEW_WINDOW_MINUTES
+        value: "10"
 
   - type: web
     runtime: static

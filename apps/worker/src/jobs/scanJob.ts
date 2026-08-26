@@ -87,12 +87,37 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   }
   logger.info("refreshed watchlist", { tracked: tracked.length, inBand: candidates.length });
 
+  // Tokens someone currently has open on a Live Feed page (see the comment on
+  // Token.lastViewedAt) keep getting re-scanned regardless of mcap band, so "Now"/% change
+  // stays live for a genuine breakout winner instead of freezing the moment it leaves
+  // $50k-$500k. Only looks up ones the in-band refresh above didn't already cover.
+  const alreadyCovered = new Set(candidates.map((c) => c.mintAddress));
+  const viewCutoff = new Date(Date.now() - env.ACTIVE_VIEW_WINDOW_MINUTES * 60_000);
+  const activelyViewed = await prisma.token.findMany({
+    where: { lastViewedAt: { gt: viewCutoff }, mintAddress: { notIn: [...alreadyCovered] } },
+  });
+  if (activelyViewed.length > 0) {
+    try {
+      const viewedMarketData = await deps.dexScreener.getTokensByAddresses(
+        activelyViewed.map((t) => t.mintAddress),
+      );
+      candidates.push(...viewedMarketData);
+      logger.info("kept scanning actively-viewed tokens outside the mcap band", {
+        count: viewedMarketData.length,
+      });
+    } catch (err) {
+      logger.warn("failed to refresh actively-viewed out-of-band tokens", { error: String(err) });
+    }
+  }
+
   if (candidates.length === 0) {
-    logger.info("scan cycle complete (nothing in band)", { durationMs: Date.now() - startedAt });
+    logger.info("scan cycle complete (nothing in band or actively viewed)", {
+      durationMs: Date.now() - startedAt,
+    });
     return;
   }
 
-  const firstSeenByMint = new Map(tracked.map((t) => [t.mintAddress, t.firstSeenAt]));
+  const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
   const rugProfiles = await deps.rugCheck.getProfiles(candidates.map((c) => c.mintAddress));
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens do.

@@ -275,6 +275,19 @@ select {
   gap: 14px;
 }
 
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.pagination__label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 .token-card {
   display: block;
   background: var(--surface);

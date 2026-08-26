@@ -14,6 +14,7 @@ function makeToken(overrides: Partial<Token> = {}): Token {
     hasTelegram: false,
     hasWebsite: false,
     narrativeTags: ["dog"],
+    lastViewedAt: null,
     ...overrides,
   };
 }
