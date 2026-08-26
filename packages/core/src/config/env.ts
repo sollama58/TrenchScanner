@@ -61,13 +61,14 @@ const envSchema = z.object({
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),
 
-  // The dashboard's real, canonical host[:port] (no protocol) - e.g. "trenchscanner-web.onrender.com"
+  // The dashboard's real, canonical host[:port] (no protocol) - e.g. "holdex.live"
   // in production, "localhost:5173" for local dev. This is the anti-phishing anchor for Sign-In
   // With Solana: it's embedded in every sign-in message as the EIP-4361 `domain` field, which
   // Wallet-Standard-compliant wallets (Phantom, Solflare) cross-check against the page's actual
   // origin before signing - a phishing site simply cannot get a wallet to sign a message claiming
   // this domain while running on a different one. Must be updated if the dashboard's real domain
-  // changes (same caveat as CORS_ORIGINS/VITE_API_URL already have).
+  // changes (same caveat CORS_ORIGINS already has). The dashboard is served by the CultScreener/
+  // HolDEX site (its /trenches/ tab), not from this repo's own Render blueprint.
   PUBLIC_APP_DOMAIN: z.string().default("localhost:5173"),
 
   // Comma-separated base58 wallet addresses allowed into the Admin Panel (GET/POST /admin/*) -

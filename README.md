@@ -12,9 +12,9 @@ See [`PLANNING.md`](./PLANNING.md) for the full architecture writeup and the pro
 
 ```
 Pump.fun (discovery) ──┐
-                        ├─► trenchscanner-worker ──► Postgres ◄── trenchscanner-api ──► trenchscanner-web
-DexScreener (pricing) ──┤        (scan loop,                        (SIWS auth,          (dashboard)
-                        │       rug screen,                          filters, matches)
+                        ├─► trenchscanner-worker ──► Postgres ◄── trenchscanner-api ──► holdex.live/trenches
+DexScreener (pricing) ──┤        (scan loop,                        (SIWS auth,          (dashboard, lives in
+                        │       rug screen,                          filters, matches)     the CultScreener repo)
 RugCheck (on-chain) ────┘      scoring, alerts)
                                     │
                                     ▼
@@ -49,10 +49,11 @@ npm run build -w @trenchscanner/core
 
 npm run dev:api               # http://localhost:4000
 npm run dev:worker             # runs the scan loop against live Pump.fun/DexScreener/RugCheck
-npm run dev:web                 # http://localhost:5173
 ```
 
-All three apps read from the **single root `.env`** - there's deliberately no per-package `.env` file (see the comment in `apps/*/src/bootstrap-env.ts` for why: Prisma auto-loads a `.env` colocated with `schema.prisma`, and that can silently shadow an app's real config if more than one `.env` exists in the tree).
+The dashboard is **not** in this repo - it lives in [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) as its `/trenches/` tab. To work on it, run that repo's dev server against the API above, and set `CORS_ORIGINS`/`PUBLIC_APP_DOMAIN` here to whatever host:port it serves on (`localhost:5173` by default).
+
+Both apps read from the **single root `.env`** - there's deliberately no per-package `.env` file (see the comment in `apps/*/src/bootstrap-env.ts` for why: Prisma auto-loads a `.env` colocated with `schema.prisma`, and that can silently shadow an app's real config if more than one `.env` exists in the tree).
 
 The worker runs against the real, live Pump.fun/DexScreener/RugCheck APIs even in local dev - there's no sandbox/mock mode. It's safe to run: everything it does is read-only against those APIs (writes only go to your own Postgres).
 
@@ -71,21 +72,21 @@ Telegram is optional locally - leave `TELEGRAM_BOT_TOKEN` blank and the worker l
 
 ## Deploying to Render
 
-This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) (`render.yaml`) that provisions all four pieces - the API, the worker, the static dashboard, and a managed Postgres - in one shot.
+This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) (`render.yaml`) that provisions all three backend pieces - the API, the worker, and a managed Postgres - in one shot. The dashboard is deployed separately from the [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) repo.
 
 1. Push this repo to your own GitHub (or connect this one) and go to the Render dashboard → **New** → **Blueprint**, and select the repo.
-2. Render reads `render.yaml` and shows you the four services it's about to create. Deploy.
+2. Render reads `render.yaml` and shows you the three services it's about to create. Deploy.
 3. Once the first deploy finishes, set the secrets that can't be auto-generated (Render will prompt for these since they're marked `sync: false` in the blueprint):
    - **`HELIUS_API_KEY`** on both `trenchscanner-api` and `trenchscanner-worker` - get one free at [dev.helius.xyz](https://dev.helius.xyz).
    - **`TELEGRAM_BOT_TOKEN`** on `trenchscanner-worker` - create a bot via [@BotFather](https://t.me/BotFather) on Telegram (`/newbot`), then paste the token it gives you. Leave blank to run without Telegram alerts.
    - **`TELEGRAM_BOT_USERNAME`** on both services - the bot's `@username` (no `@`), used to build the "tap to open Telegram" link on the dashboard.
-4. `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` (on the API) and `VITE_API_URL` (on the static site) default to the blueprint's own predictable service URLs (`trenchscanner-api.onrender.com` / `trenchscanner-web.onrender.com`). If you rename a service or attach a custom domain, update all three to match - `PUBLIC_APP_DOMAIN` especially, since a mismatch there breaks sign-in entirely (wallets refuse to sign a message claiming a domain that doesn't match the page they're actually on).
+4. `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` (on the API) point at wherever the dashboard is actually served from - `https://holdex.live,https://www.holdex.live` and `holdex.live` respectively. The dashboard is **not** deployed from this repo: it lives in [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) as the `/trenches/` tab, and that repo's build sets its own API base URL. If the dashboard's domain ever changes, update both to match - `PUBLIC_APP_DOMAIN` especially, since a mismatch there breaks sign-in entirely (wallets refuse to sign a message claiming a domain that doesn't match the page they're actually on).
 
 Database migrations run automatically on every API deploy via `preDeployCommand` - no manual step needed after the first setup.
 
 ### Cost
 
-Per the plan in `PLANNING.md`: ~$21–31/mo (Render Starter web service + Starter worker + the cheapest Postgres tier (`basic-256mb`), the static site is free, Helius's free/low tier covers light usage). Background workers specifically require a paid Render plan - there's no free tier for them.
+Per the plan in `PLANNING.md`: ~$21–31/mo (Render Starter web service + Starter worker + the cheapest Postgres tier (`basic-256mb`), Helius's free/low tier covers light usage; the dashboard is hosted by the CultScreener site, not billed here). Background workers specifically require a paid Render plan - there's no free tier for them.
 
 ## Known limitations (v1)
 

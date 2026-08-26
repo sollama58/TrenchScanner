@@ -1,10 +1,14 @@
 # TrenchScanner Render Blueprint
 #
-# Four services, one Postgres database:
+# Three services, one Postgres database:
 #   - trenchscanner-api    Fastify REST API (SIWS auth, filters, matches, telegram)
 #   - trenchscanner-worker Background scanner (discovery, scoring, rug screen, alerts)
-#   - trenchscanner-web    Static dashboard (React/Vite)
 #   - trenchscanner-db     Managed Postgres
+#
+# The dashboard is NOT deployed from this repo. It lives in the CultScreener/HolDEX site
+# (https://github.com/sollama58/CultScreener) as the /trenches/ tab, and is built and served from
+# there - which is why CORS_ORIGINS/PUBLIC_APP_DOMAIN below point at holdex.live rather than at a
+# service in this blueprint.
 #
 # After the first deploy, fill in the envVars marked `sync: false` below
 # from the Render dashboard (Environment tab on each service):
@@ -58,15 +62,16 @@ services:
         generateValue: true
       - key: SESSION_TTL_HOURS
         value: "168"
-      # Update this if you rename the static site service or attach a custom domain -
-      # it must match wherever trenchscanner-web actually serves from.
+      # Both the apex and www hosts the dashboard is served from - the CultScreener/HolDEX site
+      # answers on both, and an origin missing here is silently blocked by the browser.
       - key: CORS_ORIGINS
-        value: https://trenchscanner-web.onrender.com
-      # Anti-phishing anchor for Sign-In With Solana - must be the dashboard's real host[:port],
-      # no protocol. Update this alongside CORS_ORIGINS if you rename trenchscanner-web or attach
-      # a custom domain; see the comment on this var in packages/core/src/config/env.ts.
+        value: https://holdex.live,https://www.holdex.live
+      # Anti-phishing anchor for Sign-In With Solana - must be the single canonical host the
+      # dashboard actually serves from, no protocol. A mismatch breaks sign-in outright: wallets
+      # refuse to sign a message claiming a domain that isn't the page they're on. See the comment
+      # on this var in packages/core/src/config/env.ts.
       - key: PUBLIC_APP_DOMAIN
-        value: trenchscanner-web.onrender.com
+        value: holdex.live
       # Comma-separated base58 wallet addresses allowed into the Admin Panel - set this to your
       # own wallet's address after the first deploy. Empty means the Admin Panel 403s everyone.
       - key: ADMIN_WALLET_ADDRESSES
@@ -114,20 +119,6 @@ services:
         value: "5"
       - key: ACTIVE_VIEW_WINDOW_MINUTES
         value: "10"
-
-  - type: web
-    runtime: static
-    name: trenchscanner-web
-    # This service doesn't set NODE_ENV itself, but --include=dev costs nothing if it's already
-    # unnecessary, and vite/typescript here are devDependencies too if Render sets it regardless.
-    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/web
-    staticPublishPath: apps/web/dist
-    envVars:
-      # Update this if you rename the API service or attach a custom domain.
-      - key: VITE_API_URL
-        value: https://trenchscanner-api.onrender.com
-      - key: VITE_SOLANA_RPC_URL
-        value: https://solana-rpc.publicnode.com
 
 databases:
   - name: trenchscanner-db

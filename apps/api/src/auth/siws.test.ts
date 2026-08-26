@@ -37,7 +37,7 @@ describe("buildSignInMessage", () => {
 describe("buildSignInInput", () => {
   const nonce = "39ffde1b9f79290e8e7ad56bc873aebf";
   const issuedAt = new Date("2026-01-01T00:00:00.000Z");
-  const domain = "trenchscanner-web.onrender.com";
+  const domain = "holdex.live";
 
   it("includes domain, address, and nonce", () => {
     const wallet = randomWallet();
