@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import bs58 from "bs58";
-import { prisma, type Env } from "@trenchscanner/core";
+import { prisma, adminWalletSet, type Env, type User } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 
@@ -57,6 +57,17 @@ const SESSION_COOKIE_ATTRS = {
   path: "/",
 };
 
+/** Shapes the public-facing user object - notably where isAdmin gets attached, since that's
+ *  derived from config (ADMIN_WALLET_ADDRESSES) rather than stored on the User row itself. */
+function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
+  return {
+    id: user.id,
+    walletAddress: user.walletAddress,
+    createdAt: user.createdAt,
+    isAdmin: adminWalletSet(env).has(user.walletAddress),
+  };
+}
+
 export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.get("/nonce", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = nonceQuerySchema.safeParse(request.query);
@@ -111,7 +122,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       maxAge: opts.env.SESSION_TTL_HOURS * 60 * 60,
     });
 
-    return { id: user.id, walletAddress: user.walletAddress, createdAt: user.createdAt };
+    return toUserResponse(user, opts.env);
   });
 
   app.post("/logout", async (_request, reply) => {
@@ -121,7 +132,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 
   app.get("/me", { preHandler: app.authenticate }, async (request) => {
     const user = await prisma.user.findUniqueOrThrow({ where: { id: request.user!.userId } });
-    return { id: user.id, walletAddress: user.walletAddress, createdAt: user.createdAt };
+    return toUserResponse(user, opts.env);
   });
 }
 

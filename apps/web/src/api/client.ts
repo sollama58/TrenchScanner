@@ -1,5 +1,9 @@
 import type { SolanaSignInInput } from "@solana/wallet-standard-features";
 import type {
+  AdminConfig,
+  AdminLiveFeed,
+  AdminStats,
+  AdminUser,
   AlertMode,
   FilterInput,
   Match,
@@ -134,4 +138,27 @@ export function setAlertMode(alertMode: AlertMode) {
 
 export function unlinkTelegram() {
   return request<{ ok: true }>("/telegram/unlink", { method: "POST" });
+}
+
+// ── Admin ────────────────────────────────────────────────────────────────
+export function getAdminStats() {
+  return request<AdminStats>("/admin/stats");
+}
+
+export function getAdminLiveFeed(limit = 100) {
+  return request<AdminLiveFeed>(`/admin/live-feed?limit=${limit}`);
+}
+
+export function getAdminUsers() {
+  return request<AdminUser[]>("/admin/users");
+}
+
+export function unlinkUserTelegram(userId: string) {
+  return request<{ ok: true; unlinked: boolean }>(`/admin/users/${userId}/unlink-telegram`, {
+    method: "POST",
+  });
+}
+
+export function getAdminConfig() {
+  return request<AdminConfig>("/admin/config");
 }

@@ -1,9 +1,9 @@
 import { useAuth } from "../context/AuthContext";
 import { HealthBadge } from "./HealthBadge";
 
-export type Tab = "dashboard" | "filters" | "settings";
+export type Tab = "dashboard" | "filters" | "settings" | "admin";
 
-const TABS: { id: Tab; label: string }[] = [
+const BASE_TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Live Feed" },
   { id: "filters", label: "Filters" },
   { id: "settings", label: "Settings" },
@@ -11,6 +11,10 @@ const TABS: { id: Tab; label: string }[] = [
 
 export function Navbar({ tab, onTabChange }: { tab: Tab; onTabChange: (tab: Tab) => void }) {
   const { user, signOut } = useAuth();
+  // Admin is the only tab gated on anything - everyone else always sees the same three. The
+  // server enforces this independently (every /admin/* route 403s a non-admin), so hiding the
+  // link is purely so a non-admin never sees a dead end, not the actual security boundary.
+  const tabs = user?.isAdmin ? [...BASE_TABS, { id: "admin" as const, label: "Admin" }] : BASE_TABS;
 
   return (
     <header className="navbar">
@@ -18,7 +22,7 @@ export function Navbar({ tab, onTabChange }: { tab: Tab; onTabChange: (tab: Tab)
         <span className="navbar__logo">🎯</span> TrenchScanner
       </div>
       <nav className="navbar__tabs">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             className={`navbar__tab ${tab === t.id ? "navbar__tab--active" : ""}`}

@@ -1,22 +1,5 @@
 import type { Match } from "../api/types";
-
-function fmtUsd(n: number | null): string {
-  if (n === null) return "—";
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}k`;
-  return `$${n.toFixed(2)}`;
-}
-
-function fmtPct(n: number | null): string {
-  return n === null ? "—" : `${n.toFixed(1)}%`;
-}
-
-function fmtAge(minutes: number | null): string {
-  if (minutes === null) return "—";
-  if (minutes < 60) return `${minutes}m`;
-  if (minutes < 1440) return `${Math.round(minutes / 60)}h`;
-  return `${Math.round(minutes / 1440)}d`;
-}
+import { fmtUsd, fmtPct, fmtAge } from "../utils/format";
 
 export function TokenCard({ match }: { match: Match }) {
   const { token, snapshot } = match;
