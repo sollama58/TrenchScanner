@@ -99,12 +99,20 @@ export interface Match {
   snapshot: TokenSnapshot;
   /**
    * This token's most recent snapshot as of now, which may be the same row as `snapshot` above
-   * if the worker hasn't re-scanned it since the match (e.g. it's since dropped out of the mcap
-   * band). Lets the dashboard show a live-ish "now" mcap and % change alongside the frozen
-   * alert-time one - see apps/api/src/routes/matches.ts.
+   * if the worker hasn't re-scanned it since the match. Fetching this very page is what keeps it
+   * fresh even once the token drops out of the mcap band - see the comment on
+   * Token.lastViewedAt in schema.prisma. Lets the dashboard show a live-ish "now" mcap and %
+   * change alongside the frozen alert-time one - see apps/api/src/routes/matches.ts.
    */
   latestSnapshot: TokenSnapshot | null;
   filter: { id: string; name: string };
+}
+
+export interface MatchesPage {
+  matches: Match[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
 }
 
 export type AlertMode = "REALTIME" | "DIGEST" | "BOTH" | "OFF";

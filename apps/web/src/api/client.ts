@@ -6,7 +6,7 @@ import type {
   AdminUser,
   AlertMode,
   FilterInput,
-  Match,
+  MatchesPage,
   TelegramLinkResponse,
   TelegramStatus,
   Token,
@@ -105,9 +105,8 @@ export function deleteFilter(id: string) {
 }
 
 // ── Matches ──────────────────────────────────────────────────────────────
-export function listMatches(since?: string) {
-  const query = since ? `?since=${encodeURIComponent(since)}` : "";
-  return request<Match[]>(`/matches${query}`);
+export function listMatches(page = 1) {
+  return request<MatchesPage>(`/matches?page=${page}`);
 }
 
 // ── Tokens ───────────────────────────────────────────────────────────────

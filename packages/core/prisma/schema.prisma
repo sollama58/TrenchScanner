@@ -120,8 +120,19 @@ model Token {
   hasWebsite     Boolean  @default(false)
   narrativeTags  String[] @default([])
 
+  // Stamped by GET /matches (see apps/api/src/routes/matches.ts) whenever this token appears on
+  // a page someone actually fetched - not per-user, just "is anyone currently looking at this."
+  // The scan job (apps/worker/src/jobs/scanJob.ts) keeps re-scanning a token within
+  // ACTIVE_VIEW_WINDOW_MINUTES of this timestamp even after it's dropped out of the mcap band,
+  // so a genuine breakout winner someone has open doesn't go stale the moment it leaves the
+  // $50k-$500k band - but a token nobody's looking at anymore is left alone once it's out of
+  // band, rather than tracking every historical match forever.
+  lastViewedAt DateTime?
+
   snapshots TokenSnapshot[]
   matches   Match[]
+
+  @@index([lastViewedAt])
 }
 
 /// A point-in-time reading of a token's market + on-chain state, produced each scan cycle.

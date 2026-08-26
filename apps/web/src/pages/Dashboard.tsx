@@ -1,37 +1,51 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { listMatches } from "../api/client";
 import type { Match } from "../api/types";
 import { TokenCard } from "../components/TokenCard";
 
 const POLL_INTERVAL_MS = 20_000;
-const MAX_FEED_SIZE = 100;
 
 export function Dashboard() {
+  const [page, setPage] = useState(1);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [pageSize, setPageSize] = useState(12);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const latestMatchedAt = useRef<string | undefined>(undefined);
 
-  const poll = useCallback(async () => {
-    try {
-      const fresh = await listMatches(latestMatchedAt.current);
-      if (fresh.length > 0) {
-        latestMatchedAt.current = fresh[0]!.matchedAt;
-        setMatches((prev) => [...fresh, ...prev].slice(0, MAX_FEED_SIZE));
-      }
-      setLastUpdated(new Date());
-    } catch {
-      // A single failed poll isn't worth surfacing to the user - the next tick will retry.
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Re-runs whenever `page` changes, and the cleanup's `cancelled` flag is what keeps this scoped
+  // to "actively displayed" tokens: if the user flips pages while a request for the old page is
+  // still in flight, that response is discarded instead of briefly overwriting the new page's
+  // content. Each poll only ever asks the API for the 12 matches on the current page, and the API
+  // itself only stamps those 12 tokens' lastViewedAt (see apps/api/src/routes/matches.ts) -
+  // nothing off-page gets refreshed just because it's technically still in the feed.
   useEffect(() => {
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const result = await listMatches(page);
+        if (cancelled) return;
+        setMatches(result.matches);
+        setTotalCount(result.totalCount);
+        setPageSize(result.pageSize);
+        setLastUpdated(new Date());
+      } catch {
+        // A single failed poll isn't worth surfacing to the user - the next tick will retry.
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
     void poll();
     const interval = setInterval(() => void poll(), POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [poll]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [page]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   return (
     <div className="dashboard">
@@ -56,6 +70,24 @@ export function Dashboard() {
           <TokenCard key={match.id} match={match} />
         ))}
       </div>
+
+      {totalCount > pageSize && (
+        <div className="pagination">
+          <button className="btn" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            ← Prev
+          </button>
+          <span className="pagination__label">
+            Page {page} of {totalPages}
+          </span>
+          <button
+            className="btn"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            Next →
+          </button>
+        </div>
+      )}
     </div>
   );
 }
