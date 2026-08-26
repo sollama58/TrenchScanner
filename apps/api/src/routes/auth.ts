@@ -40,14 +40,22 @@ const verifyBodySchema = z.discriminatedUnion("method", [
 // else; a legitimate user signing in a few times a minute is well within this.
 const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 
-// onrender.com is on the Public Suffix List, so trenchscanner-web.onrender.com and
-// trenchscanner-api.onrender.com are different "sites" to the browser despite sharing a parent
-// domain - SameSite=Lax never gets attached to the dashboard's cross-site fetch() calls, so a
-// cookie set with it is silently dropped by the browser on every request after the one that set
-// it. SameSite=None is required for this cross-subdomain setup to work at all, but browsers
-// reject SameSite=None without Secure - gated on production, since local dev (localhost:5173
-// talking to localhost:4000) is same-site (differs only by port) and plain HTTP, where Lax
-// already works and None+Secure wouldn't. Shared by both setCookie and clearCookie below -
+// The dashboard (holdex.live, served by the CultScreener/HolDEX site) and this API
+// (trenchscanner-api.onrender.com) are different registrable domains, so they're different
+// "sites" to the browser - SameSite=Lax never gets attached to the dashboard's cross-site
+// fetch() calls, so a cookie set with it is silently dropped on every request after the one that
+// set it. SameSite=None is required for this to work at all, but browsers reject SameSite=None
+// without Secure - gated on production, since local dev (a Vite dev server on localhost talking
+// to localhost:4000) is same-site (differs only by port) and plain HTTP, where Lax already works
+// and None+Secure wouldn't.
+//
+// KNOWN LIMITATION: SameSite=None is a third-party cookie here, which Safari blocks outright and
+// Chrome is progressively restricting - sign-in can fail in those browsers through no fault of
+// the flow itself. The fix is to make the two first-party rather than to change anything here:
+// put this API behind a subdomain of the dashboard's own domain (e.g. api.holdex.live via a
+// Render custom domain), at which point this should become sameSite: "lax" unconditionally.
+//
+// Shared by both setCookie and clearCookie below -
 // browsers key a cookie's identity on name+domain+path, not these attributes, but keeping them
 // identical avoids relying on that rather than confirming it per browser.
 const isProduction = process.env.NODE_ENV === "production";

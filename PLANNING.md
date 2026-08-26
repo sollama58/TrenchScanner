@@ -50,8 +50,11 @@ Monitor the Solana memecoin ecosystem in near-real-time for tokens sitting in th
 
 1. `trenchscanner-api` — Node/TS web service (Express or Fastify), REST API + SIWS auth + Telegram webhook.
 2. `trenchscanner-worker` — Node/TS background worker, polling loop + scoring engine + alert dispatch.
-3. `trenchscanner-web` — Static site (React/Vite build output), the dashboard.
-4. `trenchscanner-db` — Render managed Postgres (cheapest paid tier, `basic-256mb`).
+3. `trenchscanner-db` — Render managed Postgres (cheapest paid tier, `basic-256mb`).
+
+The dashboard (React/Vite) is no longer deployed from this repo - it was moved into the
+[CultScreener/HolDEX](https://github.com/sollama58/CultScreener) site as its `/trenches/` tab,
+and is built and served from there against this repo's API.
 
 Worker and API share a `packages/core` (Prisma/Drizzle schema, scoring logic, data-source clients) in a small monorepo so scoring logic isn't duplicated.
 
