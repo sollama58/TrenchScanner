@@ -14,19 +14,14 @@
 #
 # See PLANNING.md and README.md for the full architecture and local dev setup.
 
+# Only plain, static key/value pairs can live in a shared env var group - Render's Blueprint
+# schema doesn't allow a group's envVars to use fromDatabase (references another resource) or
+# sync: false (a per-service manual-entry placeholder). DATABASE_URL/HELIUS_API_KEY/
+# TELEGRAM_BOT_TOKEN/TELEGRAM_BOT_USERNAME need one of those, so they're declared directly on
+# each service that needs them below instead of here.
 envVarGroups:
   - name: trenchscanner-shared
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: trenchscanner-db
-          property: connectionString
-      - key: HELIUS_API_KEY
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_BOT_USERNAME
-        sync: false
       - key: DEXSCREENER_BASE_URL
         value: https://api.dexscreener.com
       - key: PUMPFUN_BASE_URL
@@ -48,6 +43,14 @@ services:
     healthCheckPath: /health
     envVars:
       - fromGroup: trenchscanner-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trenchscanner-db
+          property: connectionString
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: SESSION_TTL_HOURS
@@ -71,6 +74,16 @@ services:
     startCommand: npm run start -w @trenchscanner/worker
     envVars:
       - fromGroup: trenchscanner-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trenchscanner-db
+          property: connectionString
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
       - key: SCAN_INTERVAL_MINUTES
         value: "7"
       - key: DIGEST_HOUR_UTC
