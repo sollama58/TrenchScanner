@@ -28,7 +28,7 @@ function AppShell() {
     <div className="app-shell">
       <Navbar tab={tab} onTabChange={setTab} />
       <main className="app-content">
-        {tab === "dashboard" && <Dashboard />}
+        {tab === "dashboard" && <Dashboard onGoToFilters={() => setTab("filters")} />}
         {tab === "filters" && <Filters />}
         {tab === "settings" && <Settings />}
         {tab === "admin" && user.isAdmin && <Admin />}

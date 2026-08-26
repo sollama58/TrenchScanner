@@ -1,17 +1,32 @@
 import { useEffect, useState } from "react";
-import { createFilter, deleteFilter, listFilters, updateFilter } from "../api/client";
-import type { FilterInput, UserFilter } from "../api/types";
+import { createFilter, deleteFilter, getConfig, listFilters, updateFilter } from "../api/client";
+import type { FilterInput, PublicConfig, UserFilter } from "../api/types";
 import { FilterForm } from "../components/FilterForm";
+
+// Mirrors the server's own defaults (packages/core/src/config/env.ts + scanBand()) - used only if
+// GET /config is unreachable, so the filter form still has sane bounds instead of being unusable.
+const FALLBACK_CONFIG: PublicConfig = {
+  mcapFilterMin: 50_000,
+  mcapFilterMax: 500_000,
+  scanBandMin: 25_000,
+  scanBandMax: 750_000,
+};
 
 export function Filters() {
   const [filters, setFilters] = useState<UserFilter[]>([]);
+  const [config, setConfig] = useState<PublicConfig>(FALLBACK_CONFIG);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
 
   const refresh = () => listFilters().then(setFilters);
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    Promise.all([
+      refresh(),
+      getConfig()
+        .then(setConfig)
+        .catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, []);
 
   const handleCreate = async (input: Partial<FilterInput>) => {
@@ -50,17 +65,38 @@ export function Filters() {
         )}
       </div>
 
+      <div className="info-callout">
+        <h3>Two checks run automatically, before your filters below ever come into play</h3>
+        <ul>
+          <li>
+            <strong>Safety screen (always on - you can't turn this off):</strong> a token is rejected outright
+            if its creator can still mint new supply or freeze holders' wallets, or if its liquidity hasn't
+            been locked or burned. This applies to every token, for every user, no exceptions.
+          </li>
+          <li>
+            <strong>Market cap range:</strong> TrenchScanner only ever tracks tokens roughly between{" "}
+            <strong>${config.scanBandMin.toLocaleString()}</strong> and{" "}
+            <strong>${config.scanBandMax.toLocaleString()}</strong> market cap (we target $
+            {config.mcapFilterMin.toLocaleString()}–${config.mcapFilterMax.toLocaleString()}, with some buffer
+            on each side so a token isn't dropped the instant it dips just below or pops just above). A token
+            outside that wider range never shows up here, so your own market cap filter below can't be set
+            beyond it either.
+          </li>
+        </ul>
+        <p className="info-callout__note">
+          Everything below this is entirely optional. Leaving a field blank means it just isn't checked - it's
+          never treated as a strike against a token.
+        </p>
+      </div>
+
       {editingId === "new" && (
         <div className="filter-card filter-card--editing">
-          <FilterForm onSave={handleCreate} onCancel={() => setEditingId(null)} />
+          <FilterForm config={config} onSave={handleCreate} onCancel={() => setEditingId(null)} />
         </div>
       )}
 
       {filters.length === 0 && editingId === null && (
-        <p className="empty-state">
-          No filters yet. The platform scans the $50k-$500k market cap band by default - create a filter to
-          start matching tokens against your own criteria.
-        </p>
+        <p className="empty-state">No filters yet - create one above to start matching tokens.</p>
       )}
 
       <div className="filter-list">
@@ -69,6 +105,7 @@ export function Filters() {
             <div key={filter.id} className="filter-card filter-card--editing">
               <FilterForm
                 initial={filter}
+                config={config}
                 onSave={(input) => handleUpdate(filter.id, input)}
                 onCancel={() => setEditingId(null)}
               />

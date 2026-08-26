@@ -1,8 +1,12 @@
 import { useState, type FormEvent } from "react";
-import type { FilterInput, UserFilter } from "../api/types";
+import type { FilterInput, PublicConfig, UserFilter } from "../api/types";
 
 interface FilterFormProps {
   initial?: UserFilter;
+  /** mcapFilterMin/Max seed a brand new filter's fields (the platform's advertised target band);
+   *  scanBandMin/Max are the hard limits mcapMin/mcapMax can't be set outside of, since nothing
+   *  out there would ever match anyway - see scanBand() in packages/core. */
+  config: PublicConfig;
   onSave: (input: Partial<FilterInput>) => Promise<void>;
   onCancel?: () => void;
 }
@@ -25,11 +29,13 @@ interface FormState {
   isActive: boolean;
 }
 
-function toFormState(filter?: UserFilter): FormState {
+function toFormState(config: PublicConfig, filter?: UserFilter): FormState {
   return {
     name: filter?.name ?? "New filter",
-    mcapMin: String(filter?.mcapMin ?? 50_000),
-    mcapMax: String(filter?.mcapMax ?? 500_000),
+    // A brand new filter starts at the platform's own advertised target band, not the wider
+    // padded limit - that's a ceiling you can opt into narrowing away from, not a suggestion.
+    mcapMin: String(filter?.mcapMin ?? config.mcapFilterMin),
+    mcapMax: String(filter?.mcapMax ?? config.mcapFilterMax),
     minVolumeMcapRatio: filter?.minVolumeMcapRatio?.toString() ?? "",
     minHolderGrowthPct: filter?.minHolderGrowthPct?.toString() ?? "",
     maxTop10HolderPct: filter?.maxTop10HolderPct?.toString() ?? "",
@@ -52,9 +58,9 @@ function toNumberOrNull(value: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** A small "ⓘ" next to a label, with the explanation as a native hover tooltip. Used for the
- *  RugCheck-derived criteria below, since none of these are self-explanatory from the field name
- *  alone - what "counts" as a critical risk flag, how risk score is computed, etc. */
+/** A small "ⓘ" next to a label, with the explanation as a native hover tooltip. Plain-language by
+ *  design - these are read by everyday users deciding whether to touch a field, not just power
+ *  users, so each one favors "what does this mean for me" over precise technical definitions. */
 function Hint({ text }: { text: string }) {
   return (
     <span className="filter-form__hint" title={text}>
@@ -63,10 +69,11 @@ function Hint({ text }: { text: string }) {
   );
 }
 
-export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
-  const [form, setForm] = useState<FormState>(() => toFormState(initial));
+export function FilterForm({ initial, config, onSave, onCancel }: FilterFormProps) {
+  const [form, setForm] = useState<FormState>(() => toFormState(config, initial));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { scanBandMin, scanBandMax } = config;
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -79,6 +86,13 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
     const mcapMax = Number(form.mcapMax);
     if (!Number.isFinite(mcapMin) || !Number.isFinite(mcapMax) || mcapMin >= mcapMax) {
       setError("Min market cap must be a number less than max market cap.");
+      return;
+    }
+    if (mcapMin < scanBandMin || mcapMax > scanBandMax) {
+      setError(
+        `Market cap must be between $${scanBandMin.toLocaleString()} and $${scanBandMax.toLocaleString()} - ` +
+          "TrenchScanner doesn't track tokens outside that range.",
+      );
       return;
     }
 
@@ -130,30 +144,45 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
 
       <div className="filter-form__row">
         <label>
-          Min market cap ($)
+          <span className="filter-form__label-row">
+            Min market cap ($)
+            <Hint text="The smallest market cap a token can have to reach you. TrenchScanner never sees tokens below the platform-wide floor shown above, so this can't go lower than that." />
+          </span>
           <input
             type="number"
-            min={0}
+            min={scanBandMin}
+            max={scanBandMax}
             value={form.mcapMin}
             onChange={(e) => update("mcapMin", e.target.value)}
             required
           />
         </label>
         <label>
-          Max market cap ($)
+          <span className="filter-form__label-row">
+            Max market cap ($)
+            <Hint text="The largest market cap a token can have to reach you. TrenchScanner never sees tokens above the platform-wide ceiling shown above, so this can't go higher than that." />
+          </span>
           <input
             type="number"
-            min={0}
+            min={scanBandMin}
+            max={scanBandMax}
             value={form.mcapMax}
             onChange={(e) => update("mcapMax", e.target.value)}
             required
           />
         </label>
       </div>
+      <p className="filter-form__caption">
+        Must be within ${scanBandMin.toLocaleString()}–${scanBandMax.toLocaleString()} - see the explanation
+        at the top of this page for why.
+      </p>
 
       <div className="filter-form__row">
         <label>
-          Min volume/mcap ratio
+          <span className="filter-form__label-row">
+            Min volume/mcap ratio
+            <Hint text="How much the token is trading relative to its size, over the last 24 hours. A ratio of 1 means its trading volume roughly equals its whole market cap that day - a sign of real, active trading rather than a quiet chart nobody's touching. Leave blank to not check this." />
+          </span>
           <input
             type="number"
             step="0.1"
@@ -163,7 +192,10 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
           />
         </label>
         <label>
-          Min holder growth %
+          <span className="filter-form__label-row">
+            Min holder growth %
+            <Hint text="How much the number of holders has grown recently. A rising holder count usually means new buyers are discovering the token, which is a good early sign. Leave blank to not check this." />
+          </span>
           <input
             type="number"
             placeholder="e.g. 10"
@@ -175,7 +207,10 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
 
       <div className="filter-form__row">
         <label>
-          Min score (0-100)
+          <span className="filter-form__label-row">
+            Min score (0-100)
+            <Hint text="TrenchScanner's own 0-100 score for breakout potential - it blends price/volume momentum, holder growth, token age, and narrative into one number. This is not a safety score; a token can score high here and still carry risks you'd only catch with the RugCheck-derived fields below. Leave blank to see tokens at any score." />
+          </span>
           <input
             type="number"
             min={0}
@@ -188,7 +223,7 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
         <label>
           <span className="filter-form__label-row">
             Max fresh top-10 wallets %
-            <Hint text="% of the top-10 holders whose wallet was first funded less than 24 hours ago - a cluster of brand-new wallets among the top holders often means insiders or a sniper bot loaded up right at launch, not organic buyers. Leave blank to not check this. Unknown for a token RugCheck has not indexed a holder list for." />
+            <Hint text="What share of the 10 biggest wallet-holders were only just created (funded less than 24 hours ago). A lot of brand-new wallets among the biggest holders can mean insiders or a bot grabbed a large chunk right at launch, rather than real buyers. Leave blank to not check this - and note it's left unchecked automatically whenever we don't have enough wallet data for a token." />
           </span>
           <input
             type="number"
@@ -202,15 +237,15 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
       </div>
 
       <p className="filter-form__section-label">
-        RugCheck-derived signals
-        <Hint text="These four used to be a mandatory pass/fail check applied to every token before anyone could see it. They're opt-in now, since different users legitimately want different risk tolerances here - unlike mint/freeze authority and LP lock, which still are and always will be mandatory. Leaving one blank/unchecked means it isn't checked at all, not that it's assumed safe." />
+        Extra risk checks (optional)
+        <Hint text="These four are additional safety checks you can turn on if you want to be more cautious than our baseline screen. They used to be mandatory for everyone, but people reasonably disagree on how much risk is too much here, so now it's your call. Leaving one blank simply skips that check - it's never counted against a token." />
       </p>
 
       <div className="filter-form__row">
         <label>
           <span className="filter-form__label-row">
             Max top-10 holder %
-            <Hint text="What % of total supply the top 10 wallets hold combined, excluding the liquidity pool itself. Higher concentration means a small number of wallets can crash the price by selling. RugCheck computes this from on-chain holder balances." />
+            <Hint text="How much of the total supply the 10 biggest wallets hold combined (not counting the liquidity pool). The higher this is, the easier it is for a handful of wallets to crash the price by selling at the same time. Leave blank to not check this." />
           </span>
           <input
             type="number"
@@ -224,7 +259,7 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
         <label>
           <span className="filter-form__label-row">
             Max dev wallet %
-            <Hint text="What % of supply the token's creator personally holds, if they rank among the top 10 holders. Left blank/unset here rather than treated as 0% when the creator holds too little to rank - that's the common, benign case, not a red flag." />
+            <Hint text="How much of the supply the token's own creator personally holds. A high number here means the creator could dump a lot of supply on the market at once. If this is blank on a token, it usually just means the creator's wallet is too small to rank among the top 10 holders - a good sign, not a gap in the data." />
           </span>
           <input
             type="number"
@@ -241,7 +276,7 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
         <label>
           <span className="filter-form__label-row">
             Max RugCheck risk score
-            <Hint text="RugCheck's own composite score (0-100, higher = riskier), combining signals beyond what we check ourselves - things like insider wallet clustering and bundled buys at launch. Not the same number as this app's own 0-100 score above, which measures breakout potential, not risk." />
+            <Hint text="A 0-100 risk score from RugCheck, an independent token-safety scanner (higher = riskier). It looks for things we don't check ourselves, like wallets that look coordinated or suspicious buying patterns right after launch. Don't confuse this with the score field above - that one measures upside potential, this one measures risk." />
           </span>
           <input
             type="number"
@@ -259,13 +294,16 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
             onChange={(e) => update("excludeCriticalRiskFlags", e.target.checked)}
           />
           Exclude critical risk flags
-          <Hint text="Excludes any token where RugCheck flags the specific creator wallet as either having a documented history of rugging previous tokens, or where the creator identity cannot be determined at all. These are the two flags severe enough that this app used to reject them automatically for everyone." />
+          <Hint text="When checked, hides any token whose creator RugCheck has flagged as either having rug-pulled a previous token before, or whose identity can't be determined at all. These are the two most serious warning signs RugCheck reports." />
         </label>
       </div>
 
       <div className="filter-form__row">
         <label>
-          Min age (minutes)
+          <span className="filter-form__label-row">
+            Min age (minutes)
+            <Hint text="How long ago the token launched, at minimum. Set this to skip brand-new tokens and only see ones that have had a little time to prove themselves. Leave blank to see tokens of any age." />
+          </span>
           <input
             type="number"
             min={0}
@@ -275,7 +313,10 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
           />
         </label>
         <label>
-          Max age (minutes)
+          <span className="filter-form__label-row">
+            Max age (minutes)
+            <Hint text="How long ago the token launched, at most. Set this if you only want fresh opportunities and don't care about tokens that have been around for a while. Leave blank to see tokens of any age." />
+          </span>
           <input
             type="number"
             min={0}
@@ -287,7 +328,10 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
       </div>
 
       <label>
-        Narrative keywords (comma-separated, optional)
+        <span className="filter-form__label-row">
+          Narrative keywords (comma-separated, optional)
+          <Hint text="Only match tokens whose name, symbol, or detected theme contains one of these words - handy for following a trend (like a specific meme or event) as it plays out. Leave blank to match on any theme." />
+        </span>
         <input
           placeholder="e.g. dog, ai, trump"
           value={form.narrativeKeywords}
