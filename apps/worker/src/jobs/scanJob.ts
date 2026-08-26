@@ -4,6 +4,7 @@ import {
   refreshAndFilterToBand,
   buildScoredToken,
   matchesFilter,
+  runRugScreen,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
   type Env,
@@ -12,6 +13,7 @@ import {
   type RugCheckClient,
   type RugCheckProfile,
   type HeliusClient,
+  type MintAuthorityResult,
   type OnChainProfile,
   type CandidateToken,
   type DiscoveredCoin,
@@ -22,6 +24,7 @@ import {
 import type { AlertBot } from "../telegram/bot.js";
 import { formatRealtimeAlert } from "../dispatch/alertDispatcher.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
+import { resolveMintAuthorities } from "./mintAuthority.js";
 
 const logger = createLogger("scan-job");
 
@@ -29,10 +32,9 @@ const logger = createLogger("scan-job");
 const ALERT_COOLDOWN_HOURS = 12;
 
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
- *  run concurrently across candidates - each touches a different token's rows - and no longer
- *  risks piling up Helius calls the way it would before wallet-freshness lookups were batched
- *  once per cycle (see resolveEarliestActivity below): the only Helius call left inside this loop
- *  is the rare per-candidate mint-authority fallback. */
+ *  run concurrently across candidates - each touches a different token's rows - and cheap now
+ *  that every external API call has been hoisted out of the loop entirely (market data, rug
+ *  profiles, mint authorities and wallet freshness are all resolved in batches beforehand). */
 const CANDIDATE_CONCURRENCY = 5;
 
 export interface ScanDeps {
@@ -130,19 +132,44 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
   const rugProfiles = await deps.rugCheck.getProfiles(candidates.map((c) => c.mintAddress));
 
-  // Resolved ONCE per cycle for every candidate's top-10 holders combined (deduped), not once per
-  // candidate - the same wallet showing up as a top holder on several candidates in this same
-  // cycle (common for repeat snipers/insiders) is looked up once, and every cycle after the first
-  // time we've seen a given wallet, this is a cache hit rather than a Helius round trip at all.
-  // See walletFreshness.ts for the caching itself.
-  const allTop10Addresses = [...rugProfiles.values()].flatMap((p) => p.top10HolderAddresses ?? []);
-  const earliestActivityByAddress = await resolveEarliestActivity(allTop10Addresses, deps.helius);
-
-  // Loaded once per cycle and reused for every token - filters change far less often than tokens do.
+  // Loaded once per cycle and reused for every token - filters change far less often than tokens
+  // do. Loaded before the on-chain work below because what users actually filter on decides how
+  // much of that work is worth doing at all.
   const activeFilters = (await prisma.userFilter.findMany({
     where: { isActive: true },
     include: { user: { select: { id: true, telegramLink: true } } },
   })) as FilterWithUser[];
+
+  // Batched fallback for mints RugCheck has no report for - resolved up front for the whole cycle
+  // rather than one un-batched call at a time from inside the candidate loop.
+  const needsAuthorityLookup = candidates
+    .filter((c) => !rugProfiles.has(c.mintAddress))
+    .map((c) => c.mintAddress);
+  const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius);
+
+  const onChainByMint = new Map<string, OnChainProfile | null>(
+    candidates.map((c) => [c.mintAddress, buildOnChainProfile(c.mintAddress, rugProfiles, mintAuthorities)]),
+  );
+
+  // Wallet freshness is by far the most expensive thing this job can do, so it's gated twice:
+  //   1. Nobody's filtering on it -> skip the entire pass. freshTop10WalletPct is a purely opt-in
+  //      criterion (maxFreshTop10WalletPct), so with no filter using it the answer changes
+  //      nothing about what anyone gets alerted to.
+  //   2. Only candidates that actually clear the mandatory rug screen are worth checking - one
+  //      that fails it can never produce a Match no matter how its holders look, so resolving
+  //      those wallets is spend with no possible payoff.
+  // `null` (rather than an empty map) marks "not computed this cycle", so a skipped pass records
+  // freshTop10WalletPct as unknown instead of a fabricated 0%.
+  const anyFilterNeedsFreshness = activeFilters.some((f) => f.maxFreshTop10WalletPct != null);
+  let earliestActivityByAddress: Map<string, Date | null> | null = null;
+  if (anyFilterNeedsFreshness) {
+    const eligibleAddresses = candidates
+      .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
+      .flatMap((c) => onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []);
+    earliestActivityByAddress = await resolveEarliestActivity(eligibleAddresses, deps.helius);
+  } else {
+    logger.info("skipping wallet-freshness pass - no active filter uses maxFreshTop10WalletPct");
+  }
 
   let matchCount = 0;
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
@@ -150,9 +177,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
       matchCount += await processCandidate(
         candidate,
         firstSeenByMint.get(candidate.mintAddress),
-        rugProfiles,
+        onChainByMint.get(candidate.mintAddress) ?? null,
         activeFilters,
-        deps.helius,
         earliestActivityByAddress,
         bot,
       );
@@ -226,10 +252,9 @@ async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): Promise
 async function processCandidate(
   candidate: CandidateToken,
   watchlistFirstSeenAt: Date | undefined,
-  rugProfiles: Map<string, RugCheckProfile>,
+  onChainProfile: OnChainProfile | null,
   activeFilters: FilterWithUser[],
-  helius: HeliusClient,
-  earliestActivityByAddress: Map<string, Date | null>,
+  earliestActivityByAddress: Map<string, Date | null> | null,
   bot: AlertBot,
 ): Promise<number> {
   const existingToken = await prisma.token.findUnique({ where: { mintAddress: candidate.mintAddress } });
@@ -240,10 +265,7 @@ async function processCandidate(
       })
     : null;
 
-  const onChain = withFreshWalletPct(
-    await resolveOnChainProfile(candidate.mintAddress, rugProfiles, helius),
-    earliestActivityByAddress,
-  );
+  const onChain = withFreshWalletPct(onChainProfile, earliestActivityByAddress);
   // Prefer the DEX pair's own creation time (accurate for tokens that already migrated off the
   // bonding curve); fall back to when we first added this mint to our watchlist.
   const createdAt = candidate.pairCreatedAt ?? watchlistFirstSeenAt ?? existingToken?.firstSeenAt;
@@ -355,23 +377,23 @@ async function processCandidate(
 }
 
 /**
- * Prefers RugCheck's full risk profile. Falls back to a bare Helius RPC
- * authority check when RugCheck hasn't indexed the mint yet - this still
- * won't pass the rug screen (lpBurned stays unverified, which fails
- * closed), but lets us record a more informative snapshot instead of
- * nothing at all. Note this fallback profile has no top10HolderAddresses,
- * so withFreshWalletPct below is a no-op for it.
+ * Prefers RugCheck's full risk profile. Falls back to a bare mint/freeze authority check when
+ * RugCheck hasn't indexed the mint yet - this still won't pass the rug screen (lpBurned stays
+ * unverified, which fails closed), but lets us record a more informative snapshot instead of
+ * nothing at all. Note this fallback profile has no top10HolderAddresses, so withFreshWalletPct
+ * is a no-op for it. A failed authority lookup yields null rather than a fabricated profile -
+ * "we couldn't check" must not read as "nothing is active".
  */
-async function resolveOnChainProfile(
+function buildOnChainProfile(
   mintAddress: string,
   rugProfiles: Map<string, RugCheckProfile>,
-  helius: HeliusClient,
-): Promise<OnChainProfile | null> {
+  mintAuthorities: Map<string, MintAuthorityResult>,
+): OnChainProfile | null {
   const rugProfile = rugProfiles.get(mintAddress);
   if (rugProfile) return rugProfile;
 
-  const authorities = await helius.getMintAuthorityStatus(mintAddress);
-  if (!authorities) return null;
+  const authorities = mintAuthorities.get(mintAddress);
+  if (!authorities || authorities.status !== "found") return null;
 
   return {
     mintAddress,
@@ -383,15 +405,17 @@ async function resolveOnChainProfile(
 
 /**
  * Fills in freshTop10WalletPct from the cycle's already-resolved earliest-activity map (see
- * resolveEarliestActivity in walletFreshness.ts, called once up front for every candidate's
- * top-10 holders combined) whenever the profile actually has a holder list to check. Purely a
- * synchronous lookup + percentage calc now - no Helius call happens here. Skipped entirely
- * otherwise (no RugCheck profile, or one with zero real holders) - there's nothing to look up.
+ * resolveEarliestActivity in walletFreshness.ts) whenever the profile actually has a holder list
+ * to check. Purely a synchronous lookup + percentage calc - no RPC call happens here.
+ *
+ * A null map means the freshness pass was skipped entirely this cycle (nobody filters on it), so
+ * the field is left undefined - recording 0% would claim we checked and found none fresh.
  */
 function withFreshWalletPct(
   onChain: OnChainProfile | null,
-  earliestActivityByAddress: Map<string, Date | null>,
+  earliestActivityByAddress: Map<string, Date | null> | null,
 ): OnChainProfile | null {
+  if (!earliestActivityByAddress) return onChain;
   if (!onChain?.top10HolderAddresses?.length) return onChain;
   const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
   return { ...onChain, freshTop10WalletPct: freshTop10WalletPct ?? undefined };

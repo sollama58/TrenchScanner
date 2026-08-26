@@ -162,7 +162,9 @@ model TokenSnapshot {
   riskFlags String[] @default([])
   // % of the (pool-excluded) top-10 holders whose wallet was funded <24h ago - a sniper/insider
   // signal. Null whenever there was no holder list to check (e.g. RugCheck hadn't indexed the
-  // mint) or the Helius lookup was skipped/failed - see HeliusClient.getFreshWalletPct.
+  // mint), the lookup failed, or the whole freshness pass was skipped because no active filter
+  // uses maxFreshTop10WalletPct - see apps/worker/src/jobs/walletFreshness.ts. Deliberately null
+  // rather than 0 in every one of those cases: 0 would claim we checked and found none fresh.
   freshTop10WalletPct Float?
   // Whether the mint has graduated off a Pump.fun bonding curve to a real AMM, derived from
   // DexScreener's dexId (see dexscreener.ts's deriveGraduated) - null for anything DexScreener
@@ -248,10 +250,41 @@ model Match {
 model WalletActivityCache {
   address String @id
 
-  /// Null means "checked, but genuinely indeterminate" (no signatures found at all, or 1000+
-  /// meaning the true earliest is beyond what HeliusClient.getEarliestActivity paginates to) -
-  /// still cached, since re-asking Helius the same unanswerable question every cycle would be
-  /// exactly the waste this table exists to avoid.
+  /// Null means "we asked and the answer is genuinely indeterminate" - no signatures at all, or a
+  /// full getSignaturesForAddress page meaning older history exists beyond it. That's a real,
+  /// final answer worth remembering, since re-asking the same unanswerable question every cycle
+  /// would be exactly the waste this table exists to avoid.
+  ///
+  /// Crucially, a row is only ever written for a DEFINITIVE result. A lookup that failed in
+  /// transit (timeout, rate limit, RPC error) writes nothing at all, so a transient Helius blip
+  /// can't permanently poison a wallet as "indeterminate" - see EarliestActivityResult's
+  /// "failed" case in helius.ts and resolveEarliestActivity in walletFreshness.ts.
   earliestActivityAt DateTime?
   checkedAt          DateTime  @default(now())
+
+  /// Supports the cleanup job's retention sweep - without it that DELETE full-scans a table
+  /// that grows one row per distinct wallet ever seen.
+  @@index([checkedAt])
+}
+
+/// Caches mints whose mint AND freeze authorities are both already revoked - the one state that
+/// is permanently, irreversibly safe, so a row here is never re-checked or invalidated.
+///
+/// Deliberately one-directional: revocation can't be undone, but the reverse absolutely happens -
+/// a creator who still holds an active authority today can renounce it tomorrow (one of the most
+/// common ways a memecoin signals legitimacy). Caching THAT state would permanently fail a token
+/// that later became safe, so an unrevoked mint simply gets no row and is re-checked next cycle.
+/// Both columns are stored (rather than implied) so the row is self-describing on inspection.
+///
+/// Only populated on the fallback path where RugCheck has no report for a mint - see
+/// resolveMintAuthorities in apps/worker/src/jobs/mintAuthority.ts.
+model MintAuthorityCache {
+  mintAddress String @id
+
+  mintAuthorityActive   Boolean
+  freezeAuthorityActive Boolean
+  checkedAt             DateTime @default(now())
+
+  /// Same reason as WalletActivityCache.checkedAt - see the cleanup job's retention sweep.
+  @@index([checkedAt])
 }
