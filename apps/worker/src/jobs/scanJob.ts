@@ -176,7 +176,10 @@ async function processCandidate(
       })
     : null;
 
-  const onChain = await resolveOnChainProfile(candidate.mintAddress, rugProfiles, helius);
+  const onChain = await withFreshWalletPct(
+    await resolveOnChainProfile(candidate.mintAddress, rugProfiles, helius),
+    helius,
+  );
   // Prefer the DEX pair's own creation time (accurate for tokens that already migrated off the
   // bonding curve); fall back to when we first added this mint to our watchlist.
   const createdAt = candidate.pairCreatedAt ?? watchlistFirstSeenAt ?? existingToken?.firstSeenAt;
@@ -232,6 +235,10 @@ async function processCandidate(
       scoreHolderHealth: scored.score.holderHealth,
       scoreAge: scored.score.age,
       scoreNarrative: scored.score.narrative,
+      riskScore: scored.riskScore,
+      riskFlags: scored.riskFlags ?? [],
+      freshTop10WalletPct: scored.freshTop10WalletPct,
+      graduated: scored.graduated,
       rugScreenPassed: scored.rugScreen.passed,
       rugScreenReasons: scored.rugScreen.reasons,
     },
@@ -286,9 +293,10 @@ async function processCandidate(
 /**
  * Prefers RugCheck's full risk profile. Falls back to a bare Helius RPC
  * authority check when RugCheck hasn't indexed the mint yet - this still
- * won't pass the rug screen (lpBurned/top10HolderPct stay unverified, and
- * the screen fails closed on those), but lets us record a more informative
- * snapshot instead of nothing at all.
+ * won't pass the rug screen (lpBurned stays unverified, which fails
+ * closed), but lets us record a more informative snapshot instead of
+ * nothing at all. Note this fallback profile has no top10HolderAddresses,
+ * so withFreshWalletPct below is a no-op for it.
  */
 async function resolveOnChainProfile(
   mintAddress: string,
@@ -307,4 +315,19 @@ async function resolveOnChainProfile(
     freezeAuthorityActive: authorities.freezeAuthorityActive,
     lpBurned: false,
   };
+}
+
+/**
+ * Fills in freshTop10WalletPct via Helius (up to 10 extra RPC calls, bounded-concurrency - see
+ * HeliusClient.getFreshWalletPct) whenever the profile actually has a holder list to check.
+ * Skipped entirely otherwise (no RugCheck profile, or one with zero real holders) - there's
+ * nothing to look up and no point spending the RPC budget.
+ */
+async function withFreshWalletPct(
+  onChain: OnChainProfile | null,
+  helius: HeliusClient,
+): Promise<OnChainProfile | null> {
+  if (!onChain?.top10HolderAddresses?.length) return onChain;
+  const freshTop10WalletPct = await helius.getFreshWalletPct(onChain.top10HolderAddresses);
+  return { ...onChain, freshTop10WalletPct: freshTop10WalletPct ?? undefined };
 }

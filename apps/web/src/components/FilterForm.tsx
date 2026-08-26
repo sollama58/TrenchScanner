@@ -14,10 +14,14 @@ interface FormState {
   minVolumeMcapRatio: string;
   minHolderGrowthPct: string;
   maxTop10HolderPct: string;
+  maxDevWalletPct: string;
+  maxRiskScore: string;
+  excludeCriticalRiskFlags: boolean;
   minTokenAgeMinutes: string;
   maxTokenAgeMinutes: string;
   narrativeKeywords: string;
   minScore: string;
+  maxFreshTop10WalletPct: string;
   isActive: boolean;
 }
 
@@ -29,10 +33,14 @@ function toFormState(filter?: UserFilter): FormState {
     minVolumeMcapRatio: filter?.minVolumeMcapRatio?.toString() ?? "",
     minHolderGrowthPct: filter?.minHolderGrowthPct?.toString() ?? "",
     maxTop10HolderPct: filter?.maxTop10HolderPct?.toString() ?? "",
+    maxDevWalletPct: filter?.maxDevWalletPct?.toString() ?? "",
+    maxRiskScore: filter?.maxRiskScore?.toString() ?? "",
+    excludeCriticalRiskFlags: filter?.excludeCriticalRiskFlags ?? false,
     minTokenAgeMinutes: filter?.minTokenAgeMinutes?.toString() ?? "",
     maxTokenAgeMinutes: filter?.maxTokenAgeMinutes?.toString() ?? "",
     narrativeKeywords: filter?.narrativeKeywords?.join(", ") ?? "",
     minScore: filter?.minScore?.toString() ?? "",
+    maxFreshTop10WalletPct: filter?.maxFreshTop10WalletPct?.toString() ?? "",
     isActive: filter?.isActive ?? true,
   };
 }
@@ -42,6 +50,17 @@ function toNumberOrNull(value: string): number | null {
   if (trimmed === "") return null;
   const n = Number(trimmed);
   return Number.isFinite(n) ? n : null;
+}
+
+/** A small "ⓘ" next to a label, with the explanation as a native hover tooltip. Used for the
+ *  RugCheck-derived criteria below, since none of these are self-explanatory from the field name
+ *  alone - what "counts" as a critical risk flag, how risk score is computed, etc. */
+function Hint({ text }: { text: string }) {
+  return (
+    <span className="filter-form__hint" title={text}>
+      ⓘ
+    </span>
+  );
 }
 
 export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
@@ -72,6 +91,9 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
         minVolumeMcapRatio: toNumberOrNull(form.minVolumeMcapRatio),
         minHolderGrowthPct: toNumberOrNull(form.minHolderGrowthPct),
         maxTop10HolderPct: toNumberOrNull(form.maxTop10HolderPct),
+        maxDevWalletPct: toNumberOrNull(form.maxDevWalletPct),
+        maxRiskScore: toNumberOrNull(form.maxRiskScore),
+        excludeCriticalRiskFlags: form.excludeCriticalRiskFlags,
         minTokenAgeMinutes: toNumberOrNull(form.minTokenAgeMinutes),
         maxTokenAgeMinutes: toNumberOrNull(form.maxTokenAgeMinutes),
         narrativeKeywords: form.narrativeKeywords
@@ -79,6 +101,7 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
           .map((k) => k.trim())
           .filter(Boolean),
         minScore: toNumberOrNull(form.minScore),
+        maxFreshTop10WalletPct: toNumberOrNull(form.maxFreshTop10WalletPct),
         isActive: form.isActive,
       });
     } catch {
@@ -152,15 +175,6 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
 
       <div className="filter-form__row">
         <label>
-          Max top-10 holder %
-          <input
-            type="number"
-            placeholder="e.g. 40"
-            value={form.maxTop10HolderPct}
-            onChange={(e) => update("maxTop10HolderPct", e.target.value)}
-          />
-        </label>
-        <label>
           Min score (0-100)
           <input
             type="number"
@@ -170,6 +184,82 @@ export function FilterForm({ initial, onSave, onCancel }: FilterFormProps) {
             value={form.minScore}
             onChange={(e) => update("minScore", e.target.value)}
           />
+        </label>
+        <label>
+          <span className="filter-form__label-row">
+            Max fresh top-10 wallets %
+            <Hint text="% of the top-10 holders whose wallet was first funded less than 24 hours ago - a cluster of brand-new wallets among the top holders often means insiders or a sniper bot loaded up right at launch, not organic buyers. Leave blank to not check this. Unknown for a token RugCheck has not indexed a holder list for." />
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            placeholder="e.g. 30"
+            value={form.maxFreshTop10WalletPct}
+            onChange={(e) => update("maxFreshTop10WalletPct", e.target.value)}
+          />
+        </label>
+      </div>
+
+      <p className="filter-form__section-label">
+        RugCheck-derived signals
+        <Hint text="These four used to be a mandatory pass/fail check applied to every token before anyone could see it. They're opt-in now, since different users legitimately want different risk tolerances here - unlike mint/freeze authority and LP lock, which still are and always will be mandatory. Leaving one blank/unchecked means it isn't checked at all, not that it's assumed safe." />
+      </p>
+
+      <div className="filter-form__row">
+        <label>
+          <span className="filter-form__label-row">
+            Max top-10 holder %
+            <Hint text="What % of total supply the top 10 wallets hold combined, excluding the liquidity pool itself. Higher concentration means a small number of wallets can crash the price by selling. RugCheck computes this from on-chain holder balances." />
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            placeholder="e.g. 40"
+            value={form.maxTop10HolderPct}
+            onChange={(e) => update("maxTop10HolderPct", e.target.value)}
+          />
+        </label>
+        <label>
+          <span className="filter-form__label-row">
+            Max dev wallet %
+            <Hint text="What % of supply the token's creator personally holds, if they rank among the top 10 holders. Left blank/unset here rather than treated as 0% when the creator holds too little to rank - that's the common, benign case, not a red flag." />
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            placeholder="e.g. 15"
+            value={form.maxDevWalletPct}
+            onChange={(e) => update("maxDevWalletPct", e.target.value)}
+          />
+        </label>
+      </div>
+
+      <div className="filter-form__row">
+        <label>
+          <span className="filter-form__label-row">
+            Max RugCheck risk score
+            <Hint text="RugCheck's own composite score (0-100, higher = riskier), combining signals beyond what we check ourselves - things like insider wallet clustering and bundled buys at launch. Not the same number as this app's own 0-100 score above, which measures breakout potential, not risk." />
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            placeholder="e.g. 70"
+            value={form.maxRiskScore}
+            onChange={(e) => update("maxRiskScore", e.target.value)}
+          />
+        </label>
+        <label className="filter-form__checkbox">
+          <input
+            type="checkbox"
+            checked={form.excludeCriticalRiskFlags}
+            onChange={(e) => update("excludeCriticalRiskFlags", e.target.checked)}
+          />
+          Exclude critical risk flags
+          <Hint text="Excludes any token where RugCheck flags the specific creator wallet as either having a documented history of rugging previous tokens, or where the creator identity cannot be determined at all. These are the two flags severe enough that this app used to reject them automatically for everyone." />
         </label>
       </div>
 

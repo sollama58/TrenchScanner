@@ -59,4 +59,19 @@ describe("enrichToken", () => {
     expect(enriched.lpBurned).toBeUndefined();
     expect(enriched.holderGrowthPct).toBeUndefined();
   });
+
+  it("derives graduated: false for a pump.fun bonding-curve pair", () => {
+    const enriched = enrichToken({ ...candidate, dexId: "pumpfun" }, onChain);
+    expect(enriched.graduated).toBe(false);
+  });
+
+  it("derives graduated: true for any real DEX pair (pumpswap, raydium, ...)", () => {
+    expect(enrichToken({ ...candidate, dexId: "pumpswap" }, onChain).graduated).toBe(true);
+    expect(enrichToken({ ...candidate, dexId: "raydium" }, onChain).graduated).toBe(true);
+  });
+
+  it("leaves graduated undefined when dexId itself is unknown", () => {
+    const enriched = enrichToken(candidate, onChain);
+    expect(enriched.graduated).toBeUndefined();
+  });
 });

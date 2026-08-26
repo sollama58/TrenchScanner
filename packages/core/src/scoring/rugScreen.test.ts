@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runRugScreen, DEFAULT_RUG_THRESHOLDS } from "./rugScreen.js";
+import { runRugScreen } from "./rugScreen.js";
 import type { OnChainProfile } from "../types.js";
 
 const safeProfile: OnChainProfile = {
@@ -43,50 +43,33 @@ describe("runRugScreen", () => {
     expect(result.reasons.some((r) => r.includes("liquidity"))).toBe(true);
   });
 
-  it("fails when top-10 holder concentration exceeds the threshold", () => {
-    const result = runRugScreen({ ...safeProfile, top10HolderPct: 75 });
-    expect(result.passed).toBe(false);
-    expect(result.reasons.some((r) => r.includes("top 10 holders"))).toBe(true);
+  // Top-10 concentration, dev wallet %, RugCheck's risk score, and its named risk flags used to
+  // be hard-gated here too - they're now opt-in UserFilter criteria instead (see
+  // matchFilters.test.ts), so a profile that would have failed on any of those alone now passes
+  // the automatic screen. This is the intended behavior change, not a gap: different users
+  // legitimately want different thresholds for these, unlike mint/freeze/LP.
+  it("passes despite extreme top-10 concentration - that's now opt-in, not automatic", () => {
+    const result = runRugScreen({ ...safeProfile, top10HolderPct: 95 });
+    expect(result.passed).toBe(true);
   });
 
-  it("fails closed when top-10 holder concentration is unknown", () => {
+  it("passes despite an unknown top-10 concentration - that's now opt-in, not automatic", () => {
     const result = runRugScreen({ ...safeProfile, top10HolderPct: undefined });
-    expect(result.passed).toBe(false);
-    expect(result.reasons.some((r) => r.includes("unknown"))).toBe(true);
+    expect(result.passed).toBe(true);
   });
 
-  it("fails when the dev wallet owns too much supply", () => {
-    const result = runRugScreen({ ...safeProfile, devWalletPct: 40 });
-    expect(result.passed).toBe(false);
-    expect(result.reasons.some((r) => r.includes("dev wallet"))).toBe(true);
+  it("passes despite a large dev wallet - that's now opt-in, not automatic", () => {
+    const result = runRugScreen({ ...safeProfile, devWalletPct: 90 });
+    expect(result.passed).toBe(true);
   });
 
-  it("respects custom thresholds", () => {
-    const tight = { ...DEFAULT_RUG_THRESHOLDS, maxTop10HolderPct: 10 };
-    const result = runRugScreen(safeProfile, tight);
-    expect(result.passed).toBe(false);
+  it("passes despite a high RugCheck risk score - that's now opt-in, not automatic", () => {
+    const result = runRugScreen({ ...safeProfile, riskScore: 100 });
+    expect(result.passed).toBe(true);
   });
 
-  it("fails when RugCheck's own risk score exceeds the threshold", () => {
-    const result = runRugScreen({ ...safeProfile, riskScore: 85 });
-    expect(result.passed).toBe(false);
-    expect(result.reasons.some((r) => r.includes("risk score"))).toBe(true);
-  });
-
-  it("fails on a critical risk flag even when every numeric check passes", () => {
-    // Regression case found via live testing: a token can clear every threshold here and
-    // still have a creator with a documented history of rugging previous tokens.
-    const result = runRugScreen({
-      ...safeProfile,
-      riskScore: 20,
-      riskFlags: ["Creator history of rugged tokens"],
-    });
-    expect(result.passed).toBe(false);
-    expect(result.reasons.some((r) => r.includes("critical risk flag"))).toBe(true);
-  });
-
-  it("ignores non-critical risk flags below the score threshold", () => {
-    const result = runRugScreen({ ...safeProfile, riskScore: 20, riskFlags: ["High holder correlation"] });
+  it("passes despite a critical risk flag - that's now opt-in, not automatic", () => {
+    const result = runRugScreen({ ...safeProfile, riskFlags: ["Creator history of rugged tokens"] });
     expect(result.passed).toBe(true);
   });
 });

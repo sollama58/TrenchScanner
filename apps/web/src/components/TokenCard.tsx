@@ -19,6 +19,18 @@ export function TokenCard({ match }: { match: Match }) {
       </div>
 
       <div className="token-card__tags">
+        {snapshot.graduated !== null && (
+          <span
+            className="tag tag--muted"
+            title={
+              snapshot.graduated
+                ? "Graduated off the Pump.fun bonding curve to a real AMM"
+                : "Still trading on the Pump.fun bonding curve - not yet graduated"
+            }
+          >
+            {snapshot.graduated ? "Graduated" : "Bonding"}
+          </span>
+        )}
         {token.narrativeTags.map((tag) => (
           <span key={tag} className="tag">
             {tag}

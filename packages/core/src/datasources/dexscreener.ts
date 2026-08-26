@@ -179,5 +179,20 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     hasTwitter: socials.some((s) => s.type === "twitter"),
     hasTelegram: socials.some((s) => s.type === "telegram"),
     hasWebsite: (pair.info?.websites?.length ?? 0) > 0,
+    dexId: pair.dexId,
   };
+}
+
+/**
+ * Whether a Pump.fun mint has graduated off its bonding curve, derived from which DEX its
+ * DexScreener pair currently trades on - the reliable, current signal, unlike Pump.fun's own
+ * `complete` flag (only known at discovery time, and discarded well before a mint reaches
+ * scoring - see WatchlistCandidate's comment). Confirmed live: a pre-bond mint's pair reports
+ * `dexId: "pumpfun"` with no liquidity object at all (the bonding curve isn't a discrete pool);
+ * a graduated one reports `dexId: "pumpswap"` (Pump.fun's own AMM, their current graduation
+ * target) with real liquidity. Undefined dexId (no pair at all, e.g. a mint DexScreener hasn't
+ * indexed) means unknown, not "not graduated" - deliberately not assumed either way.
+ */
+export function deriveGraduated(dexId: string | undefined): boolean | undefined {
+  return dexId === undefined ? undefined : dexId !== "pumpfun";
 }
