@@ -25,7 +25,7 @@
     "dev:api": "npm run dev -w @trenchscanner/api",
     "dev:worker": "npm run dev -w @trenchscanner/worker",
     "dev:web": "npm run dev -w @trenchscanner/web",
-    "prepare": "husky"
+    "prepare": "node .husky/install.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx}": [

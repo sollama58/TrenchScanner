@@ -35,7 +35,9 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: npm install && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/api
+    # --include=dev: NODE_ENV=production (set below) makes npm omit devDependencies by default,
+    # but prisma/typescript/dotenv-cli - all needed just to build - are devDependencies here.
+    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/api
     startCommand: npm run start -w @trenchscanner/api
     # Runs once per deploy, before the new instance takes traffic - applies any pending
     # migrations. Only declared here (not on the worker) so it only ever runs once per deploy.
@@ -70,7 +72,8 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: npm install && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
+    # See the api service's buildCommand comment above - same reason.
+    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
     startCommand: npm run start -w @trenchscanner/worker
     envVars:
       - fromGroup: trenchscanner-shared
@@ -108,7 +111,9 @@ services:
   - type: web
     runtime: static
     name: trenchscanner-web
-    buildCommand: npm install && npm run build -w @trenchscanner/web
+    # This service doesn't set NODE_ENV itself, but --include=dev costs nothing if it's already
+    # unnecessary, and vite/typescript here are devDependencies too if Render sets it regardless.
+    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/web
     staticPublishPath: apps/web/dist
     envVars:
       # Update this if you rename the API service or attach a custom domain.
