@@ -94,10 +94,9 @@ services:
       - key: OUTCOME_TRACKING_HOUR_UTC
         value: "5"
 
-  - type: static
+  - type: web
+    runtime: static
     name: trenchscanner-web
-    plan: free
-    region: oregon
     buildCommand: npm install && npm run build -w @trenchscanner/web
     staticPublishPath: apps/web/dist
     envVars:
