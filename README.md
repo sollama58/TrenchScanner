@@ -46,7 +46,7 @@ All three apps read from the **single root `.env`** - there's deliberately no pe
 
 The worker runs against the real, live Pump.fun/DexScreener/RugCheck APIs even in local dev - there's no sandbox/mock mode. It's safe to run: everything it does is read-only against those APIs (writes only go to your own Postgres).
 
-Telegram is optional locally - leave `TELEGRAM_BOT_TOKEN` blank and the worker logs a warning and no-ops instead of failing.
+Telegram is optional locally - leave `TELEGRAM_BOT_TOKEN` blank and the worker logs a warning and no-ops instead of failing. The dashboard's Settings page checks the same thing through the API and hides the "Link Telegram" flow entirely while it's unset, rather than handing out a link code no bot is listening for. Add the token (and `TELEGRAM_BOT_USERNAME`) whenever you're ready and both sides pick it up with no code changes.
 
 ### Useful scripts
 

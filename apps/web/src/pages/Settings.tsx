@@ -70,7 +70,12 @@ export function Settings() {
       <div className="settings-card">
         <h3>Telegram alerts</h3>
 
-        {status.linked ? (
+        {!status.enabled ? (
+          <p className="settings-card__status">
+            Telegram alerts aren't set up on this deployment yet - check back later. The dashboard will keep
+            showing your matches here in the meantime.
+          </p>
+        ) : status.linked ? (
           <>
             <p className="settings-card__status settings-card__status--linked">✅ Telegram linked</p>
             <label className="settings-card__select">

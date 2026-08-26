@@ -88,6 +88,8 @@ export interface Match {
 export type AlertMode = "REALTIME" | "DIGEST" | "BOTH" | "OFF";
 
 export interface TelegramStatus {
+  /** False when this deployment has no TELEGRAM_BOT_TOKEN configured yet - Settings hides the link flow entirely rather than offering a code nothing will ever consume. */
+  enabled: boolean;
   linked: boolean;
   alertMode: AlertMode;
   pendingLinkCode: string | null;

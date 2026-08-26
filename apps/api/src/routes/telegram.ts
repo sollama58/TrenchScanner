@@ -12,9 +12,18 @@ const alertModeSchema = z.object({
 export async function registerTelegramRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.addHook("preHandler", app.authenticate);
 
+  // TELEGRAM_BOT_TOKEN is what actually makes the worker's bot come up and start long-polling
+  // (see apps/worker/src/telegram/bot.ts) - without it, no bot is listening for /start, so a
+  // link code generated here could never be completed. Gating on it (rather than just
+  // TELEGRAM_BOT_USERNAME, which only affects the deep link's URL) is what lets the dashboard
+  // hide the whole flow instead of offering a dead end, and is entirely env-driven: setting the
+  // token later re-enables this on both sides with no code changes.
+  const telegramConfigured = Boolean(opts.env.TELEGRAM_BOT_TOKEN);
+
   app.get("/status", async (request) => {
     const link = await prisma.telegramLink.findUnique({ where: { userId: request.user!.userId } });
     return {
+      enabled: telegramConfigured,
       linked: Boolean(link?.chatId),
       alertMode: link?.alertMode ?? "OFF",
       pendingLinkCode: link?.chatId ? null : (link?.linkCode ?? null),
@@ -23,7 +32,11 @@ export async function registerTelegramRoutes(app: FastifyInstance, opts: { env: 
   });
 
   /** (Re)issues a short-lived link code. The user sends "/start <code>" to the bot to complete linking. */
-  app.post("/link", async (request) => {
+  app.post("/link", async (request, reply) => {
+    if (!telegramConfigured) {
+      return reply.code(400).send({ error: "Telegram alerts aren't configured on this deployment yet" });
+    }
+
     const linkCode = generateLinkCode();
     const linkCodeExpiresAt = new Date(Date.now() + LINK_CODE_TTL_MINUTES * 60_000);
 
