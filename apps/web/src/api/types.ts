@@ -15,10 +15,14 @@ export interface UserFilter {
   minVolumeMcapRatio: number | null;
   minHolderGrowthPct: number | null;
   maxTop10HolderPct: number | null;
+  maxDevWalletPct: number | null;
+  maxRiskScore: number | null;
+  excludeCriticalRiskFlags: boolean;
   minTokenAgeMinutes: number | null;
   maxTokenAgeMinutes: number | null;
   narrativeKeywords: string[];
   minScore: number | null;
+  maxFreshTop10WalletPct: number | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -54,6 +58,14 @@ export interface TokenSnapshot {
   holderGrowthPct: number | null;
   top10HolderPct: number | null;
   devWalletPct: number | null;
+  /** RugCheck's own composite risk score, 0-100 (higher = riskier). */
+  riskScore: number | null;
+  /** Named risk flags from RugCheck, e.g. "Creator history of rugged tokens". */
+  riskFlags: string[];
+  /** % of the top-10 holders whose wallet was funded <24h ago. Null if there was no holder list to check. */
+  freshTop10WalletPct: number | null;
+  /** Has the mint graduated off a Pump.fun bonding curve to a real AMM? Null if unknown (no DexScreener pair). */
+  graduated: boolean | null;
   mintAuthorityActive: boolean | null;
   freezeAuthorityActive: boolean | null;
   lpBurned: boolean | null;

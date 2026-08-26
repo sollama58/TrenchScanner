@@ -77,4 +77,10 @@ describe("toProfile", () => {
     expect(profile.riskScore).toBe(43);
     expect(profile.riskFlags).toContain("High holder concentration");
   });
+
+  it("exposes top10HolderAddresses excluding the pool authority, for the freshness check", () => {
+    const profile = toProfile(MINT, baseReport());
+    expect(profile.top10HolderAddresses).toEqual(["wallet-2", "wallet-3"]);
+    expect(profile.top10HolderAddresses).not.toContain(POOL_AUTHORITY);
+  });
 });

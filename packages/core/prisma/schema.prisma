@@ -64,11 +64,19 @@ model UserFilter {
 
   minVolumeMcapRatio Float? // volume24h / marketCap, momentum signal
   minHolderGrowthPct Float? // % holder growth over the lookback window
-  maxTop10HolderPct  Float? // user can tighten the baseline rug-screen threshold further
-  minTokenAgeMinutes Int?
-  maxTokenAgeMinutes Int?
-  narrativeKeywords  String[] @default([])
-  minScore           Float? // minimum composite score, 0-100
+  // These four used to be part of the mandatory automatic rug screen (packages/core/src/scoring/
+  // rugScreen.ts) - different users legitimately want different thresholds here, unlike mint/
+  // freeze authority or LP lock, so they moved to being opt-in criteria instead. Unset (null/
+  // false) means "don't check this," not "reject unless known" - see matchFilters.ts.
+  maxTop10HolderPct        Float? // top-10 holder concentration, %
+  maxDevWalletPct          Float? // creator's own holding, % (only if they rank in the top 10)
+  maxRiskScore             Float? // RugCheck's own composite risk score, 0-100 (higher = riskier)
+  excludeCriticalRiskFlags Boolean @default(false) // e.g. "Creator history of rugged tokens"
+  minTokenAgeMinutes       Int?
+  maxTokenAgeMinutes       Int?
+  narrativeKeywords        String[] @default([])
+  minScore                 Float? // minimum composite score, 0-100
+  maxFreshTop10WalletPct   Float? // % of top-10 holders funded <24h ago (sniper/insider signal)
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -136,6 +144,19 @@ model TokenSnapshot {
   holderGrowthPct Float?
   top10HolderPct  Float?
   devWalletPct    Float?
+  // RugCheck's own composite risk score/named flags - stored raw (not just baked into
+  // rugScreenPassed) now that a user can filter on them directly. See rugScreen.ts's
+  // CRITICAL_RISK_FLAGS for which named flags matter to excludeCriticalRiskFlags.
+  riskScore Float?
+  riskFlags String[] @default([])
+  // % of the (pool-excluded) top-10 holders whose wallet was funded <24h ago - a sniper/insider
+  // signal. Null whenever there was no holder list to check (e.g. RugCheck hadn't indexed the
+  // mint) or the Helius lookup was skipped/failed - see HeliusClient.getFreshWalletPct.
+  freshTop10WalletPct Float?
+  // Whether the mint has graduated off a Pump.fun bonding curve to a real AMM, derived from
+  // DexScreener's dexId (see dexscreener.ts's deriveGraduated) - null for anything DexScreener
+  // hasn't indexed a pair for at all.
+  graduated Boolean?
 
   mintAuthorityActive   Boolean?
   freezeAuthorityActive Boolean?

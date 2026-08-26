@@ -1,4 +1,5 @@
 import { extractNarrativeTags } from "../narratives/keywords.js";
+import { deriveGraduated } from "../datasources/dexscreener.js";
 import type { CandidateToken, EnrichedToken, OnChainProfile } from "../types.js";
 
 export interface EnrichOptions {
@@ -44,5 +45,6 @@ export function enrichToken(
     volumeToMcapRatio,
     holderGrowthPct,
     narrativeTags,
+    graduated: deriveGraduated(candidate.dexId),
   };
 }

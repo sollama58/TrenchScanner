@@ -517,6 +517,40 @@ select {
   justify-content: flex-end;
 }
 
+/* A label's text + its (i) hint icon need to sit inline together as a single flex item - a
+   column-direction .filter-form label would otherwise stack the icon on its own line between
+   the label text and the input. */
+.filter-form__label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.filter-form__hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: help;
+  font-size: 0.85rem;
+}
+
+.filter-form__hint:hover {
+  color: var(--accent);
+}
+
+.filter-form__section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 -4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
 .filter-form__actions {
   display: flex;
   gap: 10px;

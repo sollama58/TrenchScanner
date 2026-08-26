@@ -113,6 +113,8 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   // the LP as burned only when every one of them is - a single unlocked pool is still a rug vector.
   const lpBurned = markets.length > 0 && markets.every((m) => (m.lp?.lpLockedPct ?? 0) >= 95);
 
+  const top10Holders = realHolders.slice(0, TOP_N_FOR_CONCENTRATION);
+
   return {
     mintAddress,
     holderCount: report.totalHolders,
@@ -123,5 +125,9 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     lpBurned,
     riskScore: report.score_normalised ?? 0,
     riskFlags,
+    // Feeds HeliusClient.getFreshWalletPct (see scanJob.ts) - a wallet address per top-10 holder,
+    // already pool-excluded above. Falls back to `address` for a holder entry that has no
+    // separate `owner` (RugCheck's shape allows both).
+    top10HolderAddresses: top10Holders.map((h) => h.owner ?? h.address),
   };
 }

@@ -22,7 +22,7 @@ RugCheck (on-chain) ────┘      scoring, alerts)
 ```
 
 - **Discovery**: the worker maintains a persistent watchlist of every mint Pump.fun shows it, re-checking each one's live market cap via DexScreener every cycle - this is what catches a token as it climbs from launch into the target band, not just a point-in-time snapshot.
-- **Rug screen**: a hard, non-optional gate (mint/freeze authority, LP lock status, holder concentration, dev wallet %, plus RugCheck's own risk score and flags) that a token must pass before it's ever shown to anyone.
+- **Rug screen**: a hard, non-optional gate (mint/freeze authority, LP lock status) that a token must pass before it's ever shown to anyone - the three signals where "unverifiable or bad" has one universally-correct answer regardless of risk tolerance. Holder concentration, dev wallet %, RugCheck's own risk score, and its named risk flags (e.g. a creator's history of rugging) are opt-in filter criteria instead, since different users legitimately want different thresholds there.
 - **Scoring**: a 0–100 composite (momentum, holder health, age, narrative) used to rank what passes.
 - **Matching**: each user's saved filter is checked against every scored token; matches land on the dashboard and, if linked, Telegram.
 - **Auth**: Sign-In With Solana via the Wallet Standard's `signIn` feature (Phantom, Solflare, and every other current wallet support it) - the wallet itself checks the signed message's `domain` field against the page's real origin before signing, so a phishing site cannot get a valid session no matter what it shows the user. Falls back to plain `signMessage` (not domain-bound) only for wallets that don't implement `signIn`. See `apps/api/src/auth/siws.ts`.
@@ -90,6 +90,6 @@ Per the plan in `PLANNING.md`: ~$21–31/mo (Render Starter web service + Starte
 ## Known limitations (v1)
 
 - **Pump.fun's API is unofficial** (no public contract) - used only for discovery, wrapped so a failure there just means fewer new tokens found this cycle, never a crash.
-- **RugCheck's rug screen is a screen, not a guarantee.** It catches the common vectors (unrenounced authorities, unlocked LP, holder concentration, a creator's history of rugging), but nothing here is a substitute for your own judgment.
+- **The rug screen is a screen, not a guarantee.** The mandatory part catches unrenounced authorities and unlocked LP; holder concentration, dev wallet %, RugCheck's risk score, and a creator's rugging history are opt-in filters a user has to consciously turn on. Nothing here is a substitute for your own judgment.
 - **No social-signal provider yet** (Twitter/Telegram mention volume, follower growth) - deferred per the plan to stay in budget; the data model has room to add one later.
 - **`@solana/wallet-adapter-react`'s own dependency tree** carries some deep transitive vulnerabilities (mostly React Native/Metro mobile-bundler tooling that never executes in a browser). Not fixable without abandoning the standard wallet adapter library.

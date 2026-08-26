@@ -22,6 +22,15 @@ export interface CandidateToken {
   hasTelegram?: boolean;
   hasWebsite?: boolean;
   description?: string;
+  /**
+   * DexScreener's own identifier for which DEX/pool the pricing pair trades on. For a Pump.fun
+   * mint this is the reliable, current signal for bonding-curve status: "pumpfun" means still
+   * pre-bond (trading directly against the bonding curve, no discrete liquidity pool), anything
+   * else (their own AMM "pumpswap", or a migration target like "raydium") means graduated - see
+   * deriveGraduated() in dexscreener.ts. Previously this field wasn't captured at all, even
+   * though it's already present on every DexScreener response we fetch.
+   */
+  dexId?: string;
 }
 
 /**
@@ -54,6 +63,20 @@ export interface OnChainProfile {
   riskScore?: number;
   /** Named risk flags from the provider (e.g. "Creator history of rugged tokens"). */
   riskFlags?: string[];
+  /**
+   * The (pool-excluded) top-10 holder addresses behind top10HolderPct, only populated by
+   * RugCheckClient - the Helius-only fallback profile has no holder list at all. Used to compute
+   * freshTop10WalletPct (how many of them were funded within the last 24h - a sniper/insider
+   * signal RugCheck itself doesn't expose), not for display.
+   */
+  top10HolderAddresses?: string[];
+  /**
+   * % of top10HolderAddresses whose earliest on-chain activity is within the last 24h - a wallet
+   * that only exists to snipe one specific launch. Computed separately via Helius (see
+   * HeliusClient.getFreshWalletPct), not part of the RugCheck report itself, so it's undefined
+   * whenever top10HolderAddresses is (no holder list) or the lookup was skipped/failed.
+   */
+  freshTop10WalletPct?: number;
 }
 
 /** A CandidateToken enriched with on-chain data and derived metrics, ready to score. */
@@ -62,6 +85,9 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   volumeToMcapRatio?: number;
   holderGrowthPct?: number;
   narrativeTags: string[];
+  /** Derived from dexId, not the on-chain profile - see the comment on CandidateToken.dexId.
+   *  Undefined only if dexId itself is (shouldn't happen for anything that reached scoring). */
+  graduated?: boolean;
 }
 
 export interface RugScreenResult {
@@ -92,9 +118,18 @@ export interface FilterCriteria {
   mcapMax: number;
   minVolumeMcapRatio?: number | null;
   minHolderGrowthPct?: number | null;
+  // maxTop10HolderPct/maxDevWalletPct/maxRiskScore/excludeCriticalRiskFlags used to only tighten
+  // a baseline the automatic rug screen already enforced (see rugScreen.ts) - now they're the
+  // only gate for these signals at all. Unset (null/false) means "don't check this," same as
+  // every other optional criterion here - not "reject unless known."
   maxTop10HolderPct?: number | null;
+  maxDevWalletPct?: number | null;
+  maxRiskScore?: number | null;
+  excludeCriticalRiskFlags?: boolean;
   minTokenAgeMinutes?: number | null;
   maxTokenAgeMinutes?: number | null;
   narrativeKeywords?: string[];
   minScore?: number | null;
+  /** Max % of the top-10 holders whose wallet was funded <24h ago - a sniper/insider signal. */
+  maxFreshTop10WalletPct?: number | null;
 }

@@ -9,10 +9,14 @@ const filterInputSchema = z.object({
   minVolumeMcapRatio: z.number().nonnegative().nullable().optional(),
   minHolderGrowthPct: z.number().nullable().optional(),
   maxTop10HolderPct: z.number().min(0).max(100).nullable().optional(),
+  maxDevWalletPct: z.number().min(0).max(100).nullable().optional(),
+  maxRiskScore: z.number().min(0).max(100).nullable().optional(),
+  excludeCriticalRiskFlags: z.boolean().default(false),
   minTokenAgeMinutes: z.number().int().nonnegative().nullable().optional(),
   maxTokenAgeMinutes: z.number().int().nonnegative().nullable().optional(),
   narrativeKeywords: z.array(z.string()).default([]),
   minScore: z.number().min(0).max(100).nullable().optional(),
+  maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
   isActive: z.boolean().default(true),
 });
 

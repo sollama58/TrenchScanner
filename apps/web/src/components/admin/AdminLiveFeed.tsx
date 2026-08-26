@@ -75,6 +75,8 @@ export function AdminLiveFeed() {
                 <th>Score</th>
                 <th>Rug screen</th>
                 <th>Top 10</th>
+                <th>Risk</th>
+                <th>Bonded</th>
                 <th>Age</th>
                 <th>Taken at</th>
               </tr>
@@ -106,6 +108,16 @@ export function AdminLiveFeed() {
                     )}
                   </td>
                   <td>{fmtPct(s.top10HolderPct)}</td>
+                  <td>
+                    {s.riskScore ?? "—"}
+                    {hasCriticalRiskFlag(s.riskFlags) && (
+                      <span className="admin-table__reasons" title={s.riskFlags.join("; ")}>
+                        {" "}
+                        ⚠
+                      </span>
+                    )}
+                  </td>
+                  <td>{s.graduated === null ? "—" : s.graduated ? "Graduated" : "Bonding"}</td>
                   <td>{fmtAge(s.ageMinutes)}</td>
                   <td>{new Date(s.takenAt).toLocaleTimeString()}</td>
                 </tr>
@@ -116,4 +128,12 @@ export function AdminLiveFeed() {
       )}
     </div>
   );
+}
+
+// Mirrors rugScreen.ts's CRITICAL_RISK_FLAGS - can't import it directly, the web app doesn't
+// depend on @trenchscanner/core (a backend-only package built around Prisma).
+const CRITICAL_RISK_FLAGS = new Set(["Creator history of rugged tokens", "Creator identity unknown"]);
+
+function hasCriticalRiskFlag(flags: string[]): boolean {
+  return flags.some((f) => CRITICAL_RISK_FLAGS.has(f));
 }
