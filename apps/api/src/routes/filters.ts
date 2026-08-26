@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma } from "@trenchscanner/core";
+import { type Env, prisma, scanBand } from "@trenchscanner/core";
 
 const filterInputSchema = z.object({
   name: z.string().min(1).max(60).default("Default"),
@@ -22,8 +22,22 @@ const filterInputSchema = z.object({
 
 const filterUpdateSchema = filterInputSchema.partial();
 
-export async function registerFilterRoutes(app: FastifyInstance) {
+export async function registerFilterRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.addHook("preHandler", app.authenticate);
+
+  // The true range a token could ever be scanned/matched at - see scanBand()'s own doc comment.
+  // A user's mcapMin/mcapMax outside this can never match anything regardless of what they set,
+  // so both the create and update handlers below reject it rather than silently accepting a
+  // filter that will never fire. Computed once at startup since env only changes via redeploy.
+  const { min: scanMin, max: scanMax } = scanBand(opts.env.MCAP_FILTER_MIN, opts.env.MCAP_FILTER_MAX);
+
+  function mcapRangeError(mcapMin: number, mcapMax: number): string | null {
+    if (mcapMin >= mcapMax) return "mcapMin must be less than mcapMax";
+    if (mcapMin < scanMin || mcapMax > scanMax) {
+      return `Market cap range must be within $${scanMin.toLocaleString()}-$${scanMax.toLocaleString()} - the platform never scans tokens outside that range`;
+    }
+    return null;
+  }
 
   app.get("/", async (request) => {
     return prisma.userFilter.findMany({
@@ -37,8 +51,9 @@ export async function registerFilterRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    if (parsed.data.mcapMin >= parsed.data.mcapMax) {
-      return reply.code(400).send({ error: "mcapMin must be less than mcapMax" });
+    const rangeError = mcapRangeError(parsed.data.mcapMin, parsed.data.mcapMax);
+    if (rangeError) {
+      return reply.code(400).send({ error: rangeError });
     }
     const filter = await prisma.userFilter.create({
       data: { ...parsed.data, userId: request.user!.userId },
@@ -59,8 +74,9 @@ export async function registerFilterRoutes(app: FastifyInstance) {
     }
 
     const merged = { ...existing, ...parsed.data };
-    if (merged.mcapMin >= merged.mcapMax) {
-      return reply.code(400).send({ error: "mcapMin must be less than mcapMax" });
+    const rangeError = mcapRangeError(merged.mcapMin, merged.mcapMax);
+    if (rangeError) {
+      return reply.code(400).send({ error: rangeError });
     }
 
     const updated = await prisma.userFilter.update({ where: { id }, data: parsed.data });

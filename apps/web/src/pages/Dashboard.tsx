@@ -1,17 +1,33 @@
 import { useEffect, useState } from "react";
-import { listMatches } from "../api/client";
+import { listFilters, listMatches } from "../api/client";
 import type { Match } from "../api/types";
 import { TokenCard } from "../components/TokenCard";
 
 const POLL_INTERVAL_MS = 20_000;
 
-export function Dashboard() {
+interface DashboardProps {
+  /** Jumps to the Filters tab - wired to the same tab state the Navbar uses (see App.tsx). */
+  onGoToFilters: () => void;
+}
+
+export function Dashboard({ onGoToFilters }: DashboardProps) {
   const [page, setPage] = useState(1);
   const [matches, setMatches] = useState<Match[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [pageSize, setPageSize] = useState(12);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  // null while we haven't checked yet - distinct from `false` so the welcome message can't
+  // flash-and-disappear before the first /filters response comes back.
+  const [hasFilters, setHasFilters] = useState<boolean | null>(null);
+
+  // Checked once on mount, not on every poll tick - a brand new user creating their first filter
+  // just needs the welcome message to go away next time they load the page, not live mid-session.
+  useEffect(() => {
+    listFilters()
+      .then((filters) => setHasFilters(filters.length > 0))
+      .catch(() => setHasFilters(true)); // fail open - never block the feed on this check
+  }, []);
 
   // Re-runs whenever `page` changes, and the cleanup's `cancelled` flag is what keeps this scoped
   // to "actively displayed" tokens: if the user flips pages while a request for the old page is
@@ -56,13 +72,33 @@ export function Dashboard() {
         )}
       </div>
 
-      {loading && matches.length === 0 && <p className="empty-state">Loading matches…</p>}
+      {hasFilters === false ? (
+        <div className="welcome-card">
+          <h3>Welcome to TrenchScanner 👋</h3>
+          <p>
+            This feed shows tokens matched to <strong>your own filters</strong> - and you don't have any set
+            up yet, so there's nothing here for now.
+          </p>
+          <p>
+            Every token is already screened for basic safety before it ever reaches you (see the Filters page
+            for what that covers), but you decide the rest: market cap range, how much of the supply insiders
+            hold, how new the token is, and more.
+          </p>
+          <button className="btn btn--primary" onClick={onGoToFilters}>
+            Create your first filter →
+          </button>
+        </div>
+      ) : (
+        <>
+          {loading && matches.length === 0 && <p className="empty-state">Loading matches…</p>}
 
-      {!loading && matches.length === 0 && (
-        <p className="empty-state">
-          No matches yet. Once a token in the trenches passes the rug screen and matches one of your filters,
-          it'll show up here within a few minutes.
-        </p>
+          {!loading && matches.length === 0 && (
+            <p className="empty-state">
+              No matches yet. Once a token in the trenches passes the screen and matches one of your filters,
+              it'll show up here within a few minutes.
+            </p>
+          )}
+        </>
       )}
 
       <div className="token-grid">

@@ -7,6 +7,7 @@ import type {
   AlertMode,
   FilterInput,
   MatchesPage,
+  PublicConfig,
   TelegramLinkResponse,
   TelegramStatus,
   Token,
@@ -85,6 +86,11 @@ export function getMe() {
 
 export function logout() {
   return request<{ ok: true }>("/auth/logout", { method: "POST" });
+}
+
+// ── Config ───────────────────────────────────────────────────────────────
+export function getConfig() {
+  return request<PublicConfig>("/config");
 }
 
 // ── Filters ──────────────────────────────────────────────────────────────

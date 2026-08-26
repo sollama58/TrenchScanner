@@ -30,6 +30,16 @@ export interface UserFilter {
 
 export type FilterInput = Omit<UserFilter, "id" | "userId" | "createdAt" | "updatedAt">;
 
+/** Public, non-sensitive scan settings - lets the filter builder clamp mcapMin/mcapMax to what
+ *  the platform actually scans instead of accepting a range that can never match anything. */
+export interface PublicConfig {
+  mcapFilterMin: number;
+  mcapFilterMax: number;
+  /** The true, padded range a token could ever be scanned/matched at - see scanBand() in packages/core. */
+  scanBandMin: number;
+  scanBandMax: number;
+}
+
 export interface Token {
   id: string;
   mintAddress: string;
