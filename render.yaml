@@ -46,9 +46,8 @@ services:
     # migrations. Only declared here (not on the worker) so it only ever runs once per deploy.
     preDeployCommand: npm run prisma:deploy
     healthCheckPath: /health
-    envVarGroups:
-      - trenchscanner-shared
     envVars:
+      - fromGroup: trenchscanner-shared
       - key: JWT_SECRET
         generateValue: true
       - key: SESSION_TTL_HOURS
@@ -70,9 +69,8 @@ services:
     region: oregon
     buildCommand: npm install && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
     startCommand: npm run start -w @trenchscanner/worker
-    envVarGroups:
-      - trenchscanner-shared
     envVars:
+      - fromGroup: trenchscanner-shared
       - key: SCAN_INTERVAL_MINUTES
         value: "7"
       - key: DIGEST_HOUR_UTC
