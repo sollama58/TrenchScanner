@@ -97,13 +97,13 @@ export class HeliusClient {
   }
 
   /**
-   * Best-effort earliest-activity timestamp for any address (mint or wallet).
-   * Only looks at the most recent 1000 signatures - if the address has more
-   * history than that, we can't cheaply find genesis, so this returns null
-   * rather than doing an expensive full paginated walk. Used two ways:
-   * as a token-age fallback for mints (when a launchpad-provided creation
-   * timestamp isn't available), and per-wallet by getFreshWalletPct below
-   * to flag holder wallets that only exist to snipe one specific launch.
+   * Best-effort earliest-activity timestamp for a wallet address. Only looks at the most recent
+   * 1000 signatures - if the address has more history than that, we can't cheaply find genesis,
+   * so this returns null rather than doing an expensive full paginated walk. This is Helius's
+   * single most expensive per-address call, and the answer never changes once known - callers
+   * should cache the result themselves rather than re-fetching it every time (see the worker's
+   * apps/worker/src/jobs/walletFreshness.ts, the only current caller: it flags holder wallets
+   * that only exist to snipe one specific launch, feeding the opt-in maxFreshTop10WalletPct filter).
    */
   async getEarliestActivity(address: string): Promise<Date | null> {
     try {
@@ -132,41 +132,5 @@ export class HeliusClient {
       logger.warn("getEarliestActivity failed", { address, error: String(err) });
       return null;
     }
-  }
-
-  /**
-   * % of the given wallet addresses whose earliest known activity is within `withinHours` -
-   * i.e. wallets that appear to exist only to have bought into this one launch. Returns null
-   * (not 0) when the address list is empty, so callers can tell "nothing to check" apart from
-   * "checked, found none fresh."
-   *
-   * Both ways getEarliestActivity can come back null (no signatures at all, or 1000+ meaning we
-   * gave up rather than paginate) are treated as "not fresh" here, not "unknown, don't count
-   * it either way": a wallet that already holds a meaningful chunk of a token's supply
-   * necessarily has at least one transaction (the buy itself), so a true zero-signature result
-   * is a rare indexing gap rather than a real answer; and 1000+ signatures unambiguously rules
-   * out "funded in the last 24h" regardless of exactly how old it really is. This is a
-   * risk-scoring input a user opts into (maxFreshTop10WalletPct), not a security gate, so
-   * erring toward under- rather than over-counting on missing data is the appropriate default -
-   * unlike the mandatory rug screen, which fails closed the other way on purpose.
-   */
-  async getFreshWalletPct(addresses: string[], withinHours = 24, concurrency = 5): Promise<number | null> {
-    if (addresses.length === 0) return null;
-
-    const cutoffMs = Date.now() - withinHours * 3_600_000;
-    let freshCount = 0;
-    const queue = [...addresses];
-
-    const worker = async () => {
-      while (queue.length > 0) {
-        const address = queue.shift();
-        if (!address) continue;
-        const earliest = await this.getEarliestActivity(address);
-        if (earliest && earliest.getTime() >= cutoffMs) freshCount += 1;
-      }
-    };
-
-    await Promise.all(Array.from({ length: Math.min(concurrency, addresses.length) }, worker));
-    return (freshCount / addresses.length) * 100;
   }
 }
