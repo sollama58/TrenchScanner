@@ -1,0 +1,114 @@
+# TrenchScanner Render Blueprint
+#
+# Four services, one Postgres database:
+#   - trenchscanner-api    Fastify REST API (SIWS auth, filters, matches, telegram)
+#   - trenchscanner-worker Background scanner (discovery, scoring, rug screen, alerts)
+#   - trenchscanner-web    Static dashboard (React/Vite)
+#   - trenchscanner-db     Managed Postgres
+#
+# After the first deploy, fill in the envVars marked `sync: false` below
+# from the Render dashboard (Environment tab on each service):
+#   - HELIUS_API_KEY (both api + worker)          https://dev.helius.xyz
+#   - TELEGRAM_BOT_TOKEN (worker only)             via @BotFather
+#   - TELEGRAM_BOT_USERNAME (both api + worker)    the bot's @username, no leading @
+#
+# See PLANNING.md and README.md for the full architecture and local dev setup.
+
+envVarGroups:
+  - name: trenchscanner-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trenchscanner-db
+          property: connectionString
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      - key: DEXSCREENER_BASE_URL
+        value: https://api.dexscreener.com
+      - key: PUMPFUN_BASE_URL
+        value: https://frontend-api-v3.pump.fun
+      - key: NODE_ENV
+        value: production
+
+services:
+  - type: web
+    name: trenchscanner-api
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/api
+    startCommand: npm run start -w @trenchscanner/api
+    # Runs once per deploy, before the new instance takes traffic - applies any pending
+    # migrations. Only declared here (not on the worker) so it only ever runs once per deploy.
+    preDeployCommand: npm run prisma:deploy
+    healthCheckPath: /health
+    envVarGroups:
+      - trenchscanner-shared
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SESSION_TTL_HOURS
+        value: "168"
+      # Update this if you rename the static site service or attach a custom domain -
+      # it must match wherever trenchscanner-web actually serves from.
+      - key: CORS_ORIGINS
+        value: https://trenchscanner-web.onrender.com
+      # Anti-phishing anchor for Sign-In With Solana - must be the dashboard's real host[:port],
+      # no protocol. Update this alongside CORS_ORIGINS if you rename trenchscanner-web or attach
+      # a custom domain; see the comment on this var in packages/core/src/config/env.ts.
+      - key: PUBLIC_APP_DOMAIN
+        value: trenchscanner-web.onrender.com
+
+  - type: worker
+    name: trenchscanner-worker
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
+    startCommand: npm run start -w @trenchscanner/worker
+    envVarGroups:
+      - trenchscanner-shared
+    envVars:
+      - key: SCAN_INTERVAL_MINUTES
+        value: "7"
+      - key: DIGEST_HOUR_UTC
+        value: "13"
+      - key: MCAP_FILTER_MIN
+        value: "50000"
+      - key: MCAP_FILTER_MAX
+        value: "500000"
+      - key: WATCHLIST_TTL_HOURS
+        value: "24"
+      - key: WATCHLIST_MAX_TRACKED
+        value: "900"
+      - key: CLEANUP_HOUR_UTC
+        value: "4"
+      - key: SNAPSHOT_RETENTION_DAYS
+        value: "30"
+      - key: STALE_TOKEN_RETENTION_DAYS
+        value: "90"
+      - key: OUTCOME_TRACKING_HOUR_UTC
+        value: "5"
+
+  - type: static
+    name: trenchscanner-web
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build -w @trenchscanner/web
+    staticPublishPath: apps/web/dist
+    envVars:
+      # Update this if you rename the API service or attach a custom domain.
+      - key: VITE_API_URL
+        value: https://trenchscanner-api.onrender.com
+      - key: VITE_SOLANA_RPC_URL
+        value: https://solana-rpc.publicnode.com
+
+databases:
+  - name: trenchscanner-db
+    plan: starter
+    databaseName: trenchscanner
+    user: trenchscanner

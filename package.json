@@ -1,0 +1,57 @@
+{
+  "name": "trenchscanner",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Solana memecoin ecosystem monitor - scans for tokens with breakout potential",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prisma:generate": "dotenv -e .env -- prisma generate --schema packages/core/prisma/schema.prisma",
+    "prisma:migrate": "dotenv -e .env -- prisma migrate dev --schema packages/core/prisma/schema.prisma",
+    "prisma:deploy": "dotenv -e .env -- prisma migrate deploy --schema packages/core/prisma/schema.prisma",
+    "dev:api": "npm run dev -w @trenchscanner/api",
+    "dev:worker": "npm run dev -w @trenchscanner/worker",
+    "dev:web": "npm run dev -w @trenchscanner/web",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yaml,yml,css,html}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.9.0",
+    "dotenv-cli": "^7.4.4",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
+    "prettier": "^3.9.6",
+    "prisma": "^5.21.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^2.1.4"
+  }
+}

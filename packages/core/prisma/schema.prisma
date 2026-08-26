@@ -1,0 +1,197 @@
+// TrenchScanner data model
+// See PLANNING.md section 4 for the design rationale.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AlertMode {
+  REALTIME
+  DIGEST
+  BOTH
+  OFF
+}
+
+/// One row per background job (scan, digest, cleanup, ...), updated on every run whether it
+/// succeeds or fails. This is what lets the API/dashboard answer "is the worker actually alive"
+/// without needing a separate monitoring service - see packages/core/src/heartbeat.ts.
+model SystemHeartbeat {
+  job           String    @id
+  lastRunAt     DateTime
+  lastSuccessAt DateTime?
+  lastError     String?
+  meta          Json?
+  updatedAt     DateTime  @updatedAt
+}
+
+/// A person, identified by their Solana wallet (Sign-In With Solana).
+model User {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+  createdAt     DateTime @default(now())
+
+  filters      UserFilter[]
+  telegramLink TelegramLink?
+  matches      Match[]
+}
+
+/// Short-lived nonce a wallet must sign to authenticate. One-time use.
+model AuthNonce {
+  id            String    @id @default(cuid())
+  walletAddress String
+  nonce         String    @unique
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  usedAt        DateTime?
+
+  @@index([walletAddress])
+}
+
+/// A saved filter configuration. A user may have more than one.
+model UserFilter {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name    String @default("Default")
+  mcapMin Float  @default(50000)
+  mcapMax Float  @default(500000)
+
+  minVolumeMcapRatio Float? // volume24h / marketCap, momentum signal
+  minHolderGrowthPct Float? // % holder growth over the lookback window
+  maxTop10HolderPct  Float? // user can tighten the baseline rug-screen threshold further
+  minTokenAgeMinutes Int?
+  maxTokenAgeMinutes Int?
+  narrativeKeywords  String[] @default([])
+  minScore           Float? // minimum composite score, 0-100
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  matches Match[]
+
+  @@index([userId])
+}
+
+/// A user's linked Telegram chat for alerts. Linking is a two-step flow: the API issues a
+/// short-lived linkCode, the user sends "/start <linkCode>" to the bot (long-polled by the
+/// worker - Render background workers have no inbound HTTP, so webhooks aren't an option),
+/// and the worker fills in chatId/linkedAt and clears the code.
+model TelegramLink {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  chatId    String?   @unique
+  alertMode AlertMode @default(BOTH)
+
+  linkCode          String?   @unique
+  linkCodeExpiresAt DateTime?
+  linkedAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// A distinct Solana token being tracked.
+model Token {
+  id             String   @id @default(cuid())
+  mintAddress    String   @unique
+  symbol         String?
+  name           String?
+  pairAddress    String? // primary DexScreener pair used for pricing
+  firstSeenAt    DateTime @default(now())
+  hasTwitter     Boolean  @default(false)
+  hasTelegram    Boolean  @default(false)
+  hasWebsite     Boolean  @default(false)
+  narrativeTags  String[] @default([])
+
+  snapshots TokenSnapshot[]
+  matches   Match[]
+}
+
+/// A point-in-time reading of a token's market + on-chain state, produced each scan cycle.
+model TokenSnapshot {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  takenAt DateTime @default(now())
+
+  priceUsd          Float
+  marketCapUsd       Float
+  liquidityUsd       Float?
+  volume24hUsd       Float?
+  volumeToMcapRatio  Float?
+  buys24h            Int?
+  sells24h           Int?
+
+  holderCount     Int?
+  holderGrowthPct Float?
+  top10HolderPct  Float?
+  devWalletPct    Float?
+
+  mintAuthorityActive   Boolean?
+  freezeAuthorityActive Boolean?
+  lpBurned              Boolean?
+
+  ageMinutes Int?
+
+  score Float?
+  // Individual components behind `score` (see packages/core/src/scoring/scorer.ts's
+  // ScoreBreakdown) - persisted so the dashboard can show *why* a token scored the way it did,
+  // not just the composite number. Nullable because snapshots taken before this field existed
+  // won't have them.
+  scoreMomentum     Float?
+  scoreHolderHealth Float?
+  scoreAge          Float?
+  scoreNarrative    Float?
+
+  rugScreenPassed  Boolean  @default(false)
+  rugScreenReasons String[] @default([])
+
+  matches Match[]
+
+  @@index([tokenId, takenAt])
+  @@index([marketCapUsd])
+}
+
+/// A token that matched a specific user's filter on a specific scan cycle.
+model Match {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  filterId String
+  filter   UserFilter @relation(fields: [filterId], references: [id], onDelete: Cascade)
+
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  snapshotId String
+  snapshot   TokenSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  matchedAt DateTime @default(now())
+  score     Float
+
+  deliveredDashboard Boolean   @default(true)
+  deliveredTelegram  Boolean   @default(false)
+  digestSentAt       DateTime?
+
+  // Backtesting data: the highest market cap observed for this token since the match, tracked by
+  // the outcome-tracking job (apps/worker/src/jobs/outcomeTrackingJob.ts). Both null until that
+  // job's first run after the match. Baseline for "how far did it run" is snapshot.marketCapUsd
+  // (the mcap at match time), not these fields - see outcomeTrackingJob.ts for why.
+  peakMcapUsd Float?
+  peakMcapAt  DateTime?
+
+  @@unique([userId, tokenId, filterId, matchedAt])
+  @@index([userId, matchedAt])
+  @@index([tokenId])
+}
