@@ -1,10 +1,12 @@
+import { useState, type MouseEvent } from "react";
 import type { Match } from "../api/types";
 import { fmtUsd, fmtPct, fmtAge } from "../utils/format";
 
 export function TokenCard({ match }: { match: Match }) {
-  const { token, snapshot } = match;
+  const { token, snapshot, latestSnapshot } = match;
   const name = token.name ?? token.symbol ?? token.mintAddress.slice(0, 8);
   const dexUrl = `https://dexscreener.com/solana/${token.pairAddress ?? token.mintAddress}`;
+  const change = pctChangeSinceAlert(snapshot.marketCapUsd, latestSnapshot?.marketCapUsd);
 
   return (
     <a className="token-card" href={dexUrl} target="_blank" rel="noreferrer">
@@ -42,8 +44,24 @@ export function TokenCard({ match }: { match: Match }) {
 
       <dl className="token-card__stats">
         <div>
-          <dt>Market cap</dt>
-          <dd>{fmtUsd(snapshot.marketCapUsd)}</dd>
+          <dt>Alerted at</dt>
+          <dd title={`Market cap when this match was found: ${new Date(match.matchedAt).toLocaleString()}`}>
+            {fmtUsd(snapshot.marketCapUsd)}
+          </dd>
+        </div>
+        <div>
+          <dt>Now</dt>
+          <dd
+            className={change ? `token-card__change--${change.tone}` : undefined}
+            title={
+              latestSnapshot
+                ? `As of the worker's most recent scan of this token: ${new Date(latestSnapshot.takenAt).toLocaleString()}`
+                : "No scan of this token since it matched yet"
+            }
+          >
+            {latestSnapshot ? fmtUsd(latestSnapshot.marketCapUsd) : "—"}
+            {change && ` (${change.text})`}
+          </dd>
         </div>
         <div>
           <dt>24h volume</dt>
@@ -77,8 +95,60 @@ export function TokenCard({ match }: { match: Match }) {
 
       <ScoreBreakdown snapshot={snapshot} />
 
-      <div className="token-card__mint">{token.mintAddress}</div>
+      <div className="token-card__mint">
+        <span className="token-card__mint-text">{token.mintAddress}</span>
+        <CopyButton value={token.mintAddress} />
+      </div>
     </a>
+  );
+}
+
+/**
+ * `latestSnapshot` reflects however recently the worker last re-scanned this specific token
+ * (every ~7 minutes while it's still in the mcap band, per SCAN_INTERVAL_MINUTES - not at all
+ * once it falls out of band) - so this is "as of the last data we actually have," not a live
+ * price feed. Undefined/null when there's nothing newer than the alert-time snapshot to compare.
+ */
+function pctChangeSinceAlert(
+  alertMcap: number,
+  nowMcap: number | undefined,
+): { text: string; tone: "up" | "down" | "flat" } | null {
+  if (nowMcap === undefined || alertMcap <= 0) return null;
+  const pct = Math.round(((nowMcap - alertMcap) / alertMcap) * 100);
+  const tone = pct > 0 ? "up" : pct < 0 ? "down" : "flat";
+  return { text: `${pct > 0 ? "+" : ""}${pct}%`, tone };
+}
+
+/** Copies the mint address to the clipboard - stops the click from also triggering the card's
+ *  own link-out to DexScreener, since the whole card is one big <a>. */
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleClick = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard
+      .writeText(value)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {
+        // Clipboard access can be denied (permissions, insecure context) - nothing to recover
+        // into here beyond just not showing the "Copied!" confirmation.
+      });
+  };
+
+  return (
+    <button
+      type="button"
+      className="token-card__copy"
+      onClick={handleClick}
+      title="Copy contract address"
+      aria-label="Copy contract address"
+    >
+      {copied ? "Copied!" : "Copy CA"}
+    </button>
   );
 }
 

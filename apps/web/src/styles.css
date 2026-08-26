@@ -375,12 +375,49 @@ select {
 }
 
 .token-card__mint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.token-card__mint-text {
   color: var(--text-muted);
   font-size: 0.65rem;
   font-family: ui-monospace, monospace;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.token-card__copy {
+  flex-shrink: 0;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.token-card__copy:hover {
+  color: var(--text);
+  border-color: var(--accent-dim);
+}
+
+.token-card__change--up {
+  color: var(--accent);
+}
+
+.token-card__change--down {
+  color: var(--danger);
+}
+
+.token-card__change--flat {
+  color: var(--text-muted);
 }
 
 /* ── Score breakdown ────────────────────────────────────────────────── */
