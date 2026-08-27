@@ -103,7 +103,7 @@ Three shipping phases, each useful on its own:
   candidate gets sampled (at most hourly per token) and its price watched for an hour. The label:
   reached **2x within 1h without first trading at/below 50% of the anchor** (the drawdown clause
   makes the label mean "tradeable win", not "eventually printed a green candle"). The training
-  target is graded - log2 of the 1h peak multiple, capped at 4 doublings - so the learner prefers
+  target is graded - log2 of the 1h peak multiple, capped at a 100x - so the learner prefers
   bigger runs in proportion. Labels are recorded for ALL candidates, not just curated/matched ones:
   full-population outcomes are what let any future gate be evaluated offline, and they remove the
   explore/exploit problem entirely. Winners (and curated picks) stay watched to 24h for their
@@ -118,7 +118,10 @@ Three shipping phases, each useful on its own:
   regularized model on the banked labels, evaluates it walk-forward against the heuristic on the
   same weeks of history, and promotes it to be the curator only when it wins repeatedly. Model
   versions live in the DB with their eval metrics; the learning panel shows the takeover when it
-  happens.
+  happens. Whichever curator is NOT holding the job also runs in shadow on the same scan moments
+  (`CuratedShadowEmission`, graded by the same labels, invisible to subscribers), so both curators
+  carry a live production record - the panel's 30-day comparison - rather than only meeting in
+  backtests.
 
 ## 8. Open Items / Risks
 

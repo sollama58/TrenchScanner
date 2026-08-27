@@ -83,4 +83,32 @@ describe("evaluateCandidateHeuristic", () => {
     });
     expect(evaluateCandidateHeuristic(unknownRisk, MIN_SCORE).curate).toBe(true);
   });
+
+  it("judges buy pressure on the last hour when DexScreener reported it, not the 24h total", () => {
+    // A strong morning, a sell-heavy last hour: the 24h ratio still looks great, and the last
+    // hour is the evidence that matters for "2x within the NEXT hour".
+    const fading = strongCandidate({ buys24h: 700, sells24h: 300, buys1h: 20, sells1h: 80 });
+    expect(evaluateCandidateHeuristic(fading, MIN_SCORE).curate).toBe(false);
+
+    // The mirror image: a weak day but a buy-heavy last hour is exactly a setup.
+    const turning = strongCandidate({ buys24h: 400, sells24h: 600, buys1h: 80, sells1h: 20 });
+    expect(evaluateCandidateHeuristic(turning, MIN_SCORE).curate).toBe(true);
+  });
+
+  it("falls back to the 24h buy ratio when the 1h window saw no trades", () => {
+    const quietHour = strongCandidate({ buys1h: 0, sells1h: 0 });
+    expect(evaluateCandidateHeuristic(quietHour, MIN_SCORE).curate).toBe(true);
+  });
+
+  it("vetoes a token mid-flush (heavy 5m dump) but not normal chop, and skips when unobserved", () => {
+    expect(evaluateCandidateHeuristic(strongCandidate({ priceChange5mPct: -40 }), MIN_SCORE).curate).toBe(
+      false,
+    );
+    expect(evaluateCandidateHeuristic(strongCandidate({ priceChange5mPct: -10 }), MIN_SCORE).curate).toBe(
+      true,
+    );
+    expect(
+      evaluateCandidateHeuristic(strongCandidate({ priceChange5mPct: undefined }), MIN_SCORE).curate,
+    ).toBe(true);
+  });
 });

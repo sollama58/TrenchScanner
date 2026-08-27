@@ -32,8 +32,21 @@ const MIN_LIQUIDITY_USD = 10_000;
  * while the model gathers a wider slice of the market to learn from.
  */
 const MIN_VOLUME_MCAP_RATIO = 0.25;
-/** Buys must be the clear majority of 24h transactions. */
+/**
+ * Buys must be the clear majority of transactions - judged on the LAST HOUR's flow when
+ * DexScreener reported it (the label is "2x within the next hour"; the last hour's flow is the
+ * relevant evidence), falling back to the 24h window when it didn't (older banked rows replayed
+ * in the walk-forward exam predate the short-window capture, and grading them on a signal they
+ * never carried would silently change what their heuristic verdicts mean).
+ */
 const MIN_BUY_RATIO = 0.55;
+/**
+ * Skip-if-unknown risk cap: a token down more than this in the last five minutes is mid-flush,
+ * and an alert into a flush is exactly the shape the label's 50%-drawdown clause disqualifies -
+ * the entry gets stopped out even when the chart later "wins". Lenient on purpose (normal
+ * memecoin chop swings +/-10% in five minutes without meaning anything).
+ */
+const MAX_5M_DUMP_PCT = -25;
 /** Younger than this, one wallet can still paint the whole chart; the label window needs a market. */
 const MIN_AGE_MINUTES = 5;
 /** Older than this, the fast 50k->multi-million move this feed hunts has usually already happened. */
@@ -77,8 +90,15 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
   }
   if (!(scored.volumeToMcapRatio !== undefined && scored.volumeToMcapRatio >= MIN_VOLUME_MCAP_RATIO))
     return no;
-  const totalTxns = (scored.buys24h ?? 0) + (scored.sells24h ?? 0);
-  const buyRatio = totalTxns > 0 ? (scored.buys24h ?? 0) / totalTxns : undefined;
+  // The 1h window when it saw trades, the 24h window otherwise - see MIN_BUY_RATIO.
+  const totalTxns1h = (scored.buys1h ?? 0) + (scored.sells1h ?? 0);
+  const totalTxns24h = (scored.buys24h ?? 0) + (scored.sells24h ?? 0);
+  const buyRatio =
+    totalTxns1h > 0
+      ? (scored.buys1h ?? 0) / totalTxns1h
+      : totalTxns24h > 0
+        ? (scored.buys24h ?? 0) / totalTxns24h
+        : undefined;
   if (!(buyRatio !== undefined && buyRatio >= MIN_BUY_RATIO)) return no;
   if (!(
     scored.ageMinutes !== undefined &&
@@ -89,6 +109,7 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
   }
 
   // Risk caps - unknown skips, see above.
+  if (scored.priceChange5mPct !== undefined && scored.priceChange5mPct < MAX_5M_DUMP_PCT) return no;
   if (scored.top10HolderPct !== undefined && scored.top10HolderPct > MAX_TOP10_HOLDER_PCT) return no;
   if (scored.freshTop10WalletPct !== undefined && scored.freshTop10WalletPct > MAX_FRESH_TOP10_WALLET_PCT) {
     return no;
@@ -111,7 +132,13 @@ function buildReasons(scored: ScoredToken, buyRatio: number | undefined): string
     reasons.push(`24h volume ${scored.volumeToMcapRatio.toFixed(1)}x its market cap`);
   }
   if (buyRatio !== undefined) {
-    reasons.push(`${Math.round(buyRatio * 100)}% of 24h transactions are buys`);
+    // "recent" rather than a window name: the ratio is judged on the last hour when DexScreener
+    // reported it and on 24h otherwise (see MIN_BUY_RATIO), and the card shouldn't claim one
+    // window while the gate used the other.
+    reasons.push(`${Math.round(buyRatio * 100)}% of recent transactions are buys`);
+  }
+  if (scored.priceChange1hPct !== undefined && scored.priceChange1hPct >= 25) {
+    reasons.push(`+${Math.round(scored.priceChange1hPct)}% in the last hour`);
   }
   if (scored.holderGrowthPct !== undefined && scored.holderGrowthPct > 0) {
     reasons.push(`holders +${scored.holderGrowthPct.toFixed(1)}% over the growth window`);

@@ -89,14 +89,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   await addNewMintsToWatchlist(discovered);
   logger.info("discovery complete", { newlySeen: discovered.length });
 
-  // 2. Re-check every mint on the active watchlist against live market data, and keep only the
-  // ones currently sitting in (or near) the target band.
-  const cutoff = new Date(Date.now() - env.WATCHLIST_TTL_HOURS * 3_600_000);
-  const tracked = await prisma.token.findMany({
-    where: { firstSeenAt: { gt: cutoff } },
-    orderBy: { firstSeenAt: "desc" },
-    take: env.WATCHLIST_MAX_TRACKED,
-  });
+  // 2. Re-check the active watchlist against live market data, and keep only the mints currently
+  // sitting in (or near) the target band.
+  const { tracked, alive } = await selectWatchlist(env);
 
   if (tracked.length === 0) {
     logger.info("scan cycle complete (empty watchlist)", { durationMs: Date.now() - startedAt });
@@ -105,16 +100,31 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
 
   let candidates: CandidateToken[];
   try {
-    candidates = await refreshAndFilterToBand(
+    const refreshed = await refreshAndFilterToBand(
       deps.dexScreener,
       tracked.map((t) => t.mintAddress),
       { mcapMin: env.MCAP_FILTER_MIN, mcapMax: env.MCAP_FILTER_MAX },
     );
+    candidates = refreshed.inBand;
+    // The stamp the liveness-prioritized selection above runs on. Never worth failing a cycle
+    // over - a missed stamp just costs a mint one cycle of priority.
+    if (refreshed.liveMints.length > 0) {
+      await prisma.token
+        .updateMany({
+          where: { mintAddress: { in: refreshed.liveMints } },
+          data: { lastLiveAt: new Date() },
+        })
+        .catch((err) => logger.warn("failed to stamp lastLiveAt", { error: String(err) }));
+    }
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
     return;
   }
-  logger.info("refreshed watchlist", { tracked: tracked.length, inBand: candidates.length });
+  logger.info("refreshed watchlist", {
+    tracked: tracked.length,
+    alive,
+    inBand: candidates.length,
+  });
 
   // Tokens someone currently has open on a Live Feed page (see the comment on
   // Token.lastViewedAt) keep getting re-scanned regardless of mcap band, so "Now"/% change
@@ -176,8 +186,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   );
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
-  // do. Loaded before the on-chain work below because what users actually filter on decides how
-  // much of that work is worth doing at all.
+  // do.
   const activeFilters = (await prisma.userFilter.findMany({
     where: { isActive: true },
     include: { user: { select: { id: true, telegramLink: true } } },
@@ -207,25 +216,21 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     ]),
   );
 
-  // Wallet freshness is by far the most expensive thing this job can do, so it's gated twice:
-  //   1. Nobody's filtering on it -> skip the entire pass. freshTop10WalletPct is a purely opt-in
-  //      criterion (maxFreshTop10WalletPct), so with no filter using it the answer changes
-  //      nothing about what anyone gets alerted to.
-  //   2. Only candidates that actually clear the mandatory rug screen are worth checking - one
-  //      that fails it can never produce a Match no matter how its holders look, so resolving
-  //      those wallets is spend with no possible payoff.
-  // `null` (rather than an empty map) marks "not computed this cycle", so a skipped pass records
-  // freshTop10WalletPct as unknown instead of a fabricated 0%.
-  const anyFilterNeedsFreshness = activeFilters.some((f) => f.maxFreshTop10WalletPct != null);
-  let earliestActivityByAddress: Map<string, Date | null> | null = null;
-  if (anyFilterNeedsFreshness) {
-    const eligibleAddresses = candidates
-      .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
-      .flatMap((c) => onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []);
-    earliestActivityByAddress = await resolveEarliestActivity(eligibleAddresses, deps.helius);
-  } else {
-    logger.info("skipping wallet-freshness pass - no active filter uses maxFreshTop10WalletPct");
-  }
+  // Wallet freshness runs every cycle, unconditionally - it used to be skipped whenever no user
+  // filter opted into maxFreshTop10WalletPct, which quietly meant the curated pipeline's
+  // strongest sniper signal (the curator's fresh-wallet risk cap, and the model's
+  // freshTop10WalletPct feature) was null in almost every banked training sample. Affordable
+  // always-on because wallet history is immutable (every resolved wallet caches forever, so the
+  // steady state only pays for genuinely-new wallets), and bounded even in the worst case by the
+  // per-cycle lookup budget (env WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE - see
+  // resolveEarliestActivity). Still scoped to candidates that clear the mandatory rug screen: one
+  // that fails it never reaches matching OR curation, so its wallets are spend with no payoff.
+  const eligibleAddresses = candidates
+    .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
+    .flatMap((c) => onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []);
+  const earliestActivityByAddress = await resolveEarliestActivity(eligibleAddresses, deps.helius, {
+    maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
+  });
 
   // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
   // counter BEFORE the await and writes it after, so two candidates finishing close together can
@@ -257,6 +262,37 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     inBand: candidates.length,
     matches: matchCount,
   });
+}
+
+/**
+ * The mints this cycle will refresh, liveness-prioritized rather than newest-first: Pump.fun
+ * launches mints far faster than WATCHLIST_MAX_TRACKED can hold a day of, so a purely
+ * newest-first cap spans well under an hour of launches at busy times - which silently evicted
+ * exactly the tokens this watchlist exists for, the ones still climbing toward the band an hour
+ * or two after launch. Mints that have shown life (DexScreener returned market data for them -
+ * see Token.lastLiveAt) keep their full WATCHLIST_TTL_HOURS; never-live mints only get
+ * WATCHLIST_PROBATION_MINUTES before they stop costing refresh capacity, since the
+ * dead-on-arrival majority never trades at all. The same probation window doubles as the
+ * liveness staleness horizon: a mint whose market data stopped coming back that long ago is
+ * dead, not climbing.
+ */
+export async function selectWatchlist(
+  env: Env,
+): Promise<{ tracked: { id: string; mintAddress: string; firstSeenAt: Date }[]; alive: number }> {
+  const now = Date.now();
+  const ttlCutoff = new Date(now - env.WATCHLIST_TTL_HOURS * 3_600_000);
+  const probationCutoff = new Date(now - env.WATCHLIST_PROBATION_MINUTES * 60_000);
+  const alive = await prisma.token.findMany({
+    where: { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } },
+    orderBy: { firstSeenAt: "desc" },
+    take: env.WATCHLIST_MAX_TRACKED,
+  });
+  const probation = await prisma.token.findMany({
+    where: { firstSeenAt: { gt: probationCutoff }, lastLiveAt: null },
+    orderBy: { firstSeenAt: "desc" },
+    take: Math.max(0, env.WATCHLIST_MAX_TRACKED - alive.length),
+  });
+  return { tracked: [...alive, ...probation], alive: alive.length };
 }
 
 function toWatchlistCandidate(coin: DiscoveredCoin): WatchlistCandidate {
@@ -341,7 +377,7 @@ async function processCandidate(
   watchlistFirstSeenAt: Date | undefined,
   onChainProfile: OnChainProfile | null,
   activeFilters: FilterWithUser[],
-  earliestActivityByAddress: Map<string, Date | null> | null,
+  earliestActivityByAddress: Map<string, Date | null>,
   bot: AlertBot,
   env: Env,
 ): Promise<number> {
@@ -411,6 +447,16 @@ async function processCandidate(
       volumeToMcapRatio: scored.volumeToMcapRatio,
       buys24h: scored.buys24h,
       sells24h: scored.sells24h,
+      priceChange5mPct: scored.priceChange5mPct,
+      priceChange1hPct: scored.priceChange1hPct,
+      priceChange6hPct: scored.priceChange6hPct,
+      priceChange24hPct: scored.priceChange24hPct,
+      volume5mUsd: scored.volume5mUsd,
+      volume1hUsd: scored.volume1hUsd,
+      buys5m: scored.buys5m,
+      sells5m: scored.sells5m,
+      buys1h: scored.buys1h,
+      sells1h: scored.sells1h,
       holderCount: scored.holderCount,
       holderGrowthPct: scored.holderGrowthPct,
       top10HolderPct: scored.top10HolderPct,
@@ -536,16 +582,14 @@ function buildOnChainProfile(
 /**
  * Fills in freshTop10WalletPct from the cycle's already-resolved earliest-activity map (see
  * resolveEarliestActivity in walletFreshness.ts) whenever the profile actually has a holder list
- * to check. Purely a synchronous lookup + percentage calc - no RPC call happens here.
- *
- * A null map means the freshness pass was skipped entirely this cycle (nobody filters on it), so
- * the field is left undefined - recording 0% would claim we checked and found none fresh.
+ * to check. Purely a synchronous lookup + percentage calc - no RPC call happens here. A holder
+ * the per-cycle lookup budget deferred makes computeFreshPct return null (unknown), which
+ * records as undefined rather than a percentage of a part-checked list.
  */
 function withFreshWalletPct(
   onChain: OnChainProfile | null,
-  earliestActivityByAddress: Map<string, Date | null> | null,
+  earliestActivityByAddress: Map<string, Date | null>,
 ): OnChainProfile | null {
-  if (!earliestActivityByAddress) return onChain;
   if (!onChain?.top10HolderAddresses?.length) return onChain;
   const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
   return { ...onChain, freshTop10WalletPct: freshTop10WalletPct ?? undefined };

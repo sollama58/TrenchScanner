@@ -152,10 +152,20 @@ model Token {
   livePriceUsd     Float?
   liveDataAt       DateTime?
 
+  // Last time DexScreener returned any market data for this mint - i.e. it has (or had) a real
+  // pair or bonding curve trading somewhere. This is what the scan's watchlist selection
+  // prioritizes on: mints that have shown life keep their full WATCHLIST_TTL_HOURS of tracking,
+  // while never-live mints only get WATCHLIST_PROBATION_MINUTES before they stop being refreshed.
+  // Without this split, eviction was purely newest-first, and at real Pump.fun launch rates the
+  // newest WATCHLIST_MAX_TRACKED mints span well under an hour - so a token that took two hours
+  // to climb into the band silently fell off the radar. Null = never seen live by DexScreener.
+  lastLiveAt DateTime?
+
   snapshots TokenSnapshot[]
   matches   Match[]
   candidateOutcomes CandidateOutcome[]
   curatedAlerts     CuratedAlert[]
+  curatedShadowEmissions CuratedShadowEmission[]
 
   @@index([lastViewedAt])
 }
@@ -211,7 +221,37 @@ model CuratedAlert {
   @@index([tokenId, createdAt])
 }
 
-/// One trained curator - the output of a nightly training run (apps/worker/src/jobs/
+/// What the BENCH curator would have emitted - the newest candidate model while the heuristic
+/// holds the job, or the heuristic while a model does. Recorded from the same scan moments and
+/// graded by the same CandidateOutcome labels as real alerts, so the two curators build a live,
+/// production track record side by side instead of only meeting in walk-forward backtests.
+/// Invisible to subscribers; the learning panel reads it in aggregate. One row per would-be
+/// emission, under the same per-token cooldown as the real feed so the rates stay comparable.
+model CuratedShadowEmission {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  /// The training row whose anchor this shadow pick shares - grading joins through it (no
+  /// outcome copies here: shadow rows are evaluation data, pruned on the same horizon as the
+  /// training set itself, so the link never outlives what it points at by design).
+  candidateOutcomeId String?
+  candidateOutcome   CandidateOutcome? @relation(fields: [candidateOutcomeId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  /// Which bench curator made the call - "heuristic-v1" or a CuratorModel id.
+  source     String
+  confidence Float
+
+  anchorPriceUsd Float
+  anchorMcapUsd  Float
+
+  @@index([createdAt])
+  @@index([tokenId, createdAt])
+  @@index([source, createdAt])
+}
+
+/// One trained curator - the output of a training run (apps/worker/src/jobs/
 /// curatorTrainingJob.ts) over the CandidateOutcome training set. Kept as data, not code: the
 /// weights, the feature scaling, the emission threshold, and the walk-forward evidence all live
 /// in this row, so promotion is auditable and rollback is "flip status back". At most one row is
@@ -314,7 +354,8 @@ model CandidateOutcome {
   finalized24hAt   DateTime?
   peak24hReturnPct Float?
 
-  curatedAlerts CuratedAlert[]
+  curatedAlerts   CuratedAlert[]
+  shadowEmissions CuratedShadowEmission[]
 
   @@index([tokenId, anchorAt])
   @@index([finalized24hAt, nextCheckAt])
@@ -338,6 +379,24 @@ model TokenSnapshot {
   buys24h           Int?
   sells24h          Int?
 
+  // Short-window market data, from the same DexScreener pair response the 24h figures come from
+  // (its priceChange/volume/txns objects carry m5/h1/h6 buckets alongside h24 - free to capture,
+  // dropped for the pipeline's whole first year). These are the momentum signals: for a
+  // 45-minute-old token, "24h volume" is lifetime volume, and a token that pumped all morning
+  // but has been dumping for 15 minutes still shows a strong 24h buy ratio. The last hour is
+  // what predicts the next one. Null on rows from before these existed, or when DexScreener
+  // omits a bucket.
+  priceChange5mPct  Float?
+  priceChange1hPct  Float?
+  priceChange6hPct  Float?
+  priceChange24hPct Float?
+  volume5mUsd       Float?
+  volume1hUsd       Float?
+  buys5m            Int?
+  sells5m           Int?
+  buys1h            Int?
+  sells1h           Int?
+
   holderCount         Int?
   holderGrowthPct     Float?
   top10HolderPct      Float?
@@ -349,9 +408,9 @@ model TokenSnapshot {
   riskFlags           String[] @default([])
   // % of the (pool-excluded) top-10 holders whose wallet was funded <24h ago - a sniper/insider
   // signal. Null whenever there was no holder list to check (e.g. RugCheck hadn't indexed the
-  // mint), the lookup failed, or the whole freshness pass was skipped because no active filter
-  // uses maxFreshTop10WalletPct - see apps/worker/src/jobs/walletFreshness.ts. Deliberately null
-  // rather than 0 in every one of those cases: 0 would claim we checked and found none fresh.
+  // mint) or part of the list was deferred by the per-cycle Helius lookup budget - see
+  // apps/worker/src/jobs/walletFreshness.ts. Deliberately null rather than 0 in every one of
+  // those cases: 0 would claim we checked the full list and found none fresh.
   freshTop10WalletPct Float?
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token

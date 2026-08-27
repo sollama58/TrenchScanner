@@ -69,6 +69,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     // exam has to as well - otherwise it grades emissions production never makes.
     mcapBand,
     minRowsToPromote: env.CURATOR_MIN_TRAINING_ROWS,
+    recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
   });
 
   // The deployable model trains on the FULL window - the walk-forward folds were the exam, this
@@ -76,7 +77,9 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   // Out-of-band samples still teach (mcap is a feature), but the emission threshold is
   // calibrated on in-band rows only: those are the only candidates it will ever be applied to,
   // and letting unemittable rows into the rate math would skew it quiet.
-  const trained = trainCurator(trainingRows);
+  const trained = trainCurator(trainingRows, {
+    recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
+  });
   const inBandRows = trainingRows.filter((r) => inMcapBand(r.anchorMcapUsd, mcapBand));
   const params: TrainedCuratorParams = {
     ...trained,

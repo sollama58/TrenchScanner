@@ -29,6 +29,17 @@ export function scanBand(
   return { min: mcapMin * (1 - bandPaddingRatio), max: mcapMax * (1 + bandPaddingRatio) };
 }
 
+export interface BandRefreshResult {
+  /** Candidates currently inside the (padded) target band - what the scan cycle scores. */
+  inBand: CandidateToken[];
+  /**
+   * Every mint DexScreener returned ANY market data for, in or out of band - proof the mint has
+   * a real pair (or bonding curve) trading somewhere. The scan job stamps these as
+   * Token.lastLiveAt, which is what the watchlist's liveness-prioritized selection runs on.
+   */
+  liveMints: string[];
+}
+
 /**
  * Refreshes live market data for a set of already-known mint addresses (the
  * persistent watchlist - see PumpFunClient.discoverNewMints for how new
@@ -41,12 +52,15 @@ export async function refreshAndFilterToBand(
   dexScreener: DexScreenerClient,
   mintAddresses: string[],
   options: BandFilterOptions,
-): Promise<CandidateToken[]> {
-  if (mintAddresses.length === 0) return [];
+): Promise<BandRefreshResult> {
+  if (mintAddresses.length === 0) return { inBand: [], liveMints: [] };
 
   const { mcapMin, mcapMax, bandPaddingRatio } = options;
   const { min: lowerBound, max: upperBound } = scanBand(mcapMin, mcapMax, bandPaddingRatio);
 
   const marketData = await dexScreener.getTokensByAddresses(mintAddresses);
-  return marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound);
+  return {
+    inBand: marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound),
+    liveMints: marketData.map((t) => t.mintAddress),
+  };
 }

@@ -50,6 +50,21 @@ const envSchema = z.object({
   // before this; it exists to bound DexScreener batch-lookup volume per cycle.
   WATCHLIST_TTL_HOURS: z.coerce.number().positive().default(24),
   WATCHLIST_MAX_TRACKED: z.coerce.number().int().positive().default(900),
+  // How long a never-live mint (no DexScreener market data yet - see Token.lastLiveAt) stays in
+  // the refresh rotation before it stops being checked. Pump.fun launches mints far faster than
+  // WATCHLIST_MAX_TRACKED can hold a day of, so the cap has to be spent on mints that have shown
+  // life: the selection takes alive mints first for their full WATCHLIST_TTL_HOURS, and
+  // never-live ones only within this probation window. Long enough for DexScreener to index a
+  // brand-new bonding curve; short enough that the dead-on-arrival majority stops costing
+  // refresh capacity within a couple of hours.
+  WATCHLIST_PROBATION_MINUTES: z.coerce.number().positive().default(120),
+  // Cap on UNCACHED wallet earliest-activity lookups per scan cycle - the Helius budget guard
+  // for the always-on fresh-wallet pass (see the worker's walletFreshness.ts). Wallet history is
+  // immutable, so every resolved wallet is cached forever and the steady-state cost is only the
+  // genuinely-new wallets each cycle; this cap bounds the worst case (a cold cache, a sudden
+  // flood of new tokens) so the pass can never blow through the Helius Dev tier. Wallets over
+  // the cap simply stay unknown for a cycle and retry on the next.
+  WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(50),
   // How long after GET /matches last stamped a token's lastViewedAt (i.e. someone had it on a
   // Live Feed page) the scan job keeps re-scanning it even if it's fallen out of the mcap band -
   // see the comment on Token.lastViewedAt. Comfortably longer than one scan cycle so a token
@@ -121,6 +136,13 @@ const envSchema = z.object({
   // evaluation (the learning panel shows progress) but never lets the model take over.
   CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().positive().default(4),
   CURATOR_TRAINING_WINDOW_DAYS: z.coerce.number().positive().default(60),
+  // Half-life for the trainer's recency decay: a sample this many days older than the newest one
+  // counts half as much in the loss. The meta this market trades on rotates in weeks, and an
+  // equal-weighted 60-day window means a third of the gradient comes from a regime that no
+  // longer exists. The window still sets what history is SEEN (and what the walk-forward folds
+  // are graded on); this only tilts training toward the part of it that still describes the
+  // present.
+  CURATOR_RECENCY_HALF_LIFE_DAYS: z.coerce.number().positive().default(14),
   CURATED_TARGET_PER_HOUR: z.coerce.number().positive().default(6),
   CURATOR_MIN_TRAINING_ROWS: z.coerce.number().int().positive().default(1500),
 

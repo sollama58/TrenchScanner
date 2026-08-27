@@ -24,6 +24,17 @@ const FRESH_WITHIN_HOURS = 24;
 export async function resolveEarliestActivity(
   addresses: string[],
   helius: HeliusClient,
+  opts: {
+    /**
+     * Cap on how many UNCACHED wallets are actually sent to Helius this call - the per-cycle
+     * budget guard (env WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE) that lets the freshness pass run
+     * unconditionally every cycle without a worst case that outruns the Helius tier. Wallets
+     * beyond the cap are simply absent from the result (unknown, NOT "not fresh") and retry next
+     * cycle, by which point the cache has absorbed this cycle's batch. Cache reads are never
+     * capped - they're free.
+     */
+    maxNewLookups?: number;
+  } = {},
 ): Promise<Map<string, Date | null>> {
   const unique = [...new Set(addresses)];
   const result = new Map<string, Date | null>();
@@ -32,7 +43,15 @@ export async function resolveEarliestActivity(
   const cached = await prisma.walletActivityCache.findMany({ where: { address: { in: unique } } });
   for (const row of cached) result.set(row.address, row.earliestActivityAt);
 
-  const uncached = unique.filter((address) => !result.has(address));
+  let uncached = unique.filter((address) => !result.has(address));
+  const overBudget = opts.maxNewLookups !== undefined && uncached.length > opts.maxNewLookups;
+  if (overBudget) {
+    logger.info("wallet freshness lookups over per-cycle budget, deferring the rest", {
+      uncached: uncached.length,
+      budget: opts.maxNewLookups,
+    });
+    uncached = uncached.slice(0, opts.maxNewLookups);
+  }
   if (uncached.length === 0) {
     logger.info("resolved wallet earliest-activity", {
       requested: unique.length,
@@ -90,14 +109,20 @@ export async function resolveEarliestActivity(
  * appear to exist only to have bought into this one launch. Returns null (not 0) when there's
  * nothing to check, so callers can tell "nothing to check" apart from "checked, found none fresh."
  *
- * A missing/null entry in `earliestByAddress` is treated as "not fresh" here, not "unknown, don't
+ * A null entry in `earliestByAddress` is treated as "not fresh" here, not "unknown, don't
  * count it either way": a wallet that already holds a meaningful chunk of a token's supply
  * necessarily has at least one transaction (the buy itself), so a true zero-signature result is a
  * rare indexing gap rather than a real answer, and an address with more history than one
  * signatures page unambiguously rules out "funded in the last 24h" regardless of exactly how old
- * it really is. This is a risk-scoring input a user opts into (maxFreshTop10WalletPct), not a
- * security gate, so erring toward under- rather than over-counting on missing data is the
- * appropriate default - unlike the mandatory rug screen, which fails closed the other way.
+ * it really is. This is a risk-scoring input, not a security gate, so erring toward under-
+ * rather than over-counting on missing data is the appropriate default - unlike the mandatory
+ * rug screen, which fails closed the other way.
+ *
+ * An address ABSENT from the map is different: it was never attempted at all (deferred by the
+ * per-cycle lookup budget - see resolveEarliestActivity's maxNewLookups), and a percentage
+ * quoted over a top-10 list we only part-checked would just be a fabricated low number. Any
+ * absent address makes the whole answer null; the deferred wallets retry (from cache-warm
+ * ground) next cycle.
  */
 export function computeFreshPct(
   addresses: string[],
@@ -108,6 +133,7 @@ export function computeFreshPct(
   const cutoffMs = Date.now() - FRESH_WITHIN_HOURS * 3_600_000;
   let freshCount = 0;
   for (const address of addresses) {
+    if (!earliestByAddress.has(address)) return null;
     const earliest = earliestByAddress.get(address);
     if (earliest && earliest.getTime() >= cutoffMs) freshCount += 1;
   }

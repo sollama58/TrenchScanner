@@ -8,9 +8,22 @@ describe("computeFreshPct", () => {
     expect(computeFreshPct([], new Map())).toBeNull();
   });
 
-  it("counts a wallet with no resolved activity (missing from the map) as not fresh", () => {
-    const pct = computeFreshPct(["a", "b"], new Map([["a", null]]));
+  it("counts a wallet the lookup attempted but couldn't date (present as null) as not fresh", () => {
+    const pct = computeFreshPct(
+      ["a", "b"],
+      new Map([
+        ["a", null],
+        ["b", null],
+      ]),
+    );
     expect(pct).toBe(0);
+  });
+
+  it("returns null when any wallet was never attempted at all (absent from the map)", () => {
+    // The per-cycle lookup budget can defer wallets entirely - a percentage over a part-checked
+    // top-10 list would just be a fabricated low number, so the whole answer is "unknown".
+    const pct = computeFreshPct(["a", "b"], new Map([["a", new Date()]]));
+    expect(pct).toBeNull();
   });
 
   it("counts an address funded within the last 24h as fresh", () => {

@@ -54,6 +54,13 @@ export async function runCleanupJob(env: Env): Promise<void> {
     where: { anchorAt: { lt: candidateOutcomeCutoff } },
   });
 
+  // The bench curator's ledger (see CuratedShadowEmission), on the same horizon as the training
+  // set it grades against: unlike CuratedAlert rows these are evaluation data, not a public
+  // track record, and a shadow row whose outcome link has been pruned can't be graded anyway.
+  const deletedShadowEmissions = await prisma.curatedShadowEmission.deleteMany({
+    where: { createdAt: { lt: candidateOutcomeCutoff } },
+  });
+
   // Old non-active curator models: one is minted every CURATOR_TRAINING_INTERVAL_HOURS (several a
   // day), so keep the recent history (which the learning panel and any postmortem want) and drop
   // the deep past. The active model is never touched here, whatever its age.
@@ -90,6 +97,7 @@ export async function runCleanupJob(env: Env): Promise<void> {
     durationMs: Date.now() - startedAt,
     deletedSnapshots: deletedSnapshots.count,
     deletedCandidateOutcomes: deletedCandidateOutcomes.count,
+    deletedShadowEmissions: deletedShadowEmissions.count,
     deletedCuratorModels: deletedCuratorModels.count,
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
