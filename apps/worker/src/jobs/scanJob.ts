@@ -255,6 +255,7 @@ function toWatchlistCandidate(coin: DiscoveredCoin): WatchlistCandidate {
     mintAddress: coin.mintAddress,
     symbol: coin.symbol,
     name: coin.name,
+    imageUrl: coin.imageUrl,
     createdAt: coin.createdAt,
     hasTwitter: coin.hasTwitter,
     hasTelegram: coin.hasTelegram,
@@ -295,6 +296,7 @@ async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): Promise
       mintAddress: coin.mintAddress,
       symbol: coin.symbol,
       name: coin.name,
+      imageUrl: coin.imageUrl,
       firstSeenAt: coin.createdAt ?? new Date(),
       hasTwitter: coin.hasTwitter ?? false,
       hasTelegram: coin.hasTelegram ?? false,
@@ -302,6 +304,27 @@ async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): Promise
     })),
     skipDuplicates: true,
   });
+
+  // createMany with skipDuplicates leaves existing rows alone, so every token discovered before
+  // images existed would keep a null one forever. Backfilling here costs nothing - the URL is
+  // already in hand from a response we just fetched - and touches only the rows still missing it,
+  // so it settles to zero writes rather than rewriting the watchlist every cycle.
+  const backfill = valid.filter((coin) => coin.imageUrl);
+  if (backfill.length > 0) {
+    const missing = await prisma.token.findMany({
+      where: { mintAddress: { in: backfill.map((c) => c.mintAddress) }, imageUrl: null },
+      select: { id: true, mintAddress: true },
+    });
+    const urlByMint = new Map(backfill.map((c) => [c.mintAddress, c.imageUrl!]));
+    await Promise.all(
+      missing.map((token) =>
+        prisma.token
+          .update({ where: { id: token.id }, data: { imageUrl: urlByMint.get(token.mintAddress) } })
+          .catch(() => undefined),
+      ),
+    );
+    if (missing.length > 0) logger.info("backfilled token images", { count: missing.length });
+  }
 }
 
 async function processCandidate(
@@ -358,7 +381,10 @@ async function processCandidate(
       symbol: candidate.symbol,
       name: candidate.name,
       pairAddress: candidate.pairAddress,
-      imageUrl: candidate.imageUrl,
+      // Only when there is one. DexScreener has no artwork for almost any token in this band, so
+      // assigning candidate.imageUrl unconditionally on re-scan would blank the Pump.fun image
+      // that discovery already recorded.
+      ...(candidate.imageUrl ? { imageUrl: candidate.imageUrl } : {}),
       hasTwitter: candidate.hasTwitter ?? false,
       hasTelegram: candidate.hasTelegram ?? false,
       hasWebsite: candidate.hasWebsite ?? false,

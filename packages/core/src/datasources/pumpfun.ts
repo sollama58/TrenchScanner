@@ -15,6 +15,8 @@ interface PumpFunCoin {
   name?: string;
   symbol?: string;
   description?: string;
+  /** The token's artwork, usually an IPFS gateway URL. Present on essentially every coin. */
+  image_uri?: string;
   created_timestamp?: number; // epoch ms
   complete?: boolean; // true once the bonding curve has graduated to an AMM pool
   usd_market_cap?: number;
@@ -28,6 +30,7 @@ export interface DiscoveredCoin {
   mintAddress: string;
   symbol?: string;
   name?: string;
+  imageUrl?: string;
   description?: string;
   createdAt?: Date;
   graduated: boolean;
@@ -118,6 +121,7 @@ function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {
     mintAddress: coin.mint,
     symbol: coin.symbol,
     name: coin.name,
+    imageUrl: coin.image_uri,
     description: coin.description,
     createdAt: coin.created_timestamp ? new Date(coin.created_timestamp) : undefined,
     graduated: coin.complete ?? false,
