@@ -4,7 +4,7 @@ const logger = createLogger("cleanup-job");
 const DAY_MS = 86_400_000;
 
 /**
- * How long an RPC cache entry (WalletActivityCache, MintAuthorityCache) is kept. Both hold
+ * How long an RPC cache entry (WalletActivityCache, MintAuthorityCache, MayhemModeCache) is kept. Both hold
  * answers that are permanently true, so this is purely about storage, not staleness - a wallet
  * or mint we haven't encountered in this long probably isn't coming back, and if it does, one
  * batched RPC call re-establishes it. Deliberately far longer than the snapshot/token horizons:
@@ -49,9 +49,10 @@ export async function runCleanupJob(env: Env): Promise<void> {
   });
 
   const rpcCacheCutoff = new Date(startedAt - RPC_CACHE_RETENTION_DAYS * DAY_MS);
-  const [deletedWalletCache, deletedMintAuthorityCache] = await Promise.all([
+  const [deletedWalletCache, deletedMintAuthorityCache, deletedMayhemCache] = await Promise.all([
     prisma.walletActivityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
     prisma.mintAuthorityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
+    prisma.mayhemModeCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
   ]);
 
   logger.info("cleanup job complete", {
@@ -60,5 +61,6 @@ export async function runCleanupJob(env: Env): Promise<void> {
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,
+    deletedMayhemCache: deletedMayhemCache.count,
   });
 }

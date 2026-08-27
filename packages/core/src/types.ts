@@ -78,6 +78,13 @@ export interface OnChainProfile {
    * (no holder list) or the lookup was skipped/failed.
    */
   freshTop10WalletPct?: number;
+  /**
+   * Whether this mint was launched in Pump.fun's Mayhem Mode - see mayhemStateAddress() in
+   * solana.ts for how it's detected and why nothing cheaper works. `undefined` means the check
+   * hasn't been run or failed, which the rug screen treats as a rejection rather than an
+   * all-clear (see runRugScreen), so it must not be defaulted to false anywhere.
+   */
+  isMayhemMode?: boolean;
 }
 
 /** A CandidateToken enriched with on-chain data and derived metrics, ready to score. */

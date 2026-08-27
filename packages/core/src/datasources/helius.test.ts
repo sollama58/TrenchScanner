@@ -257,3 +257,69 @@ describe("HeliusClient.getMintAuthorityStatusBatch", () => {
     expect((await client.getMintAuthorityStatusBatch(["m"])).get("m")).toEqual({ status: "failed" });
   });
 });
+
+describe("HeliusClient.getMayhemModeBatch", () => {
+  const MAYHEM_MINT = "GuYxhafeew241DThgKquTXEEBpt8FRPdRq6xfstdpump";
+  const OTHER_MINT = "3jNd8LdRvzCKBdWevmaqdDfqGk7op8GqkXnb3qVBpump";
+
+  it("reports isMayhemMode when the mayhem-state PDA exists", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) => ({
+        jsonrpc: "2.0",
+        id: c.id,
+        result: { value: { data: ["", "base64"], owner: "x" } },
+      })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+
+    expect((await client.getMayhemModeBatch([MAYHEM_MINT])).get(MAYHEM_MINT)).toEqual({
+      status: "found",
+      isMayhemMode: true,
+    });
+  });
+
+  it("reports NOT mayhem when the account does not exist", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { value: null } })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+
+    expect((await client.getMayhemModeBatch([OTHER_MINT])).get(OTHER_MINT)).toEqual({
+      status: "found",
+      isMayhemMode: false,
+    });
+  });
+
+  it("queries the derived mayhem-state PDA, not the mint itself", async () => {
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { value: null } })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    await client.getMayhemModeBatch([MAYHEM_MINT]);
+
+    const calls = requests[0]!.body as { id: string; params: [string, unknown] }[];
+    expect(calls[0]!.id).toBe(MAYHEM_MINT); // response keyed back to the mint
+    expect(calls[0]!.params[0]).toBe("HmT6rHQvnpx8nk6WqtZbzeThLmSwhsZQUJeVoEdWJWTr"); // but queried by PDA
+  });
+
+  it("reports failed - never a false all-clear - when the lookup errors", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "boom" } })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+
+    expect((await client.getMayhemModeBatch([MAYHEM_MINT])).get(MAYHEM_MINT)).toEqual({ status: "failed" });
+  });
+
+  it("batches every mint into one POST and dedupes", async () => {
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { value: null } })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    const result = await client.getMayhemModeBatch([MAYHEM_MINT, OTHER_MINT, MAYHEM_MINT]);
+
+    expect(requests).toHaveLength(1);
+    expect((requests[0]!.body as unknown[]).length).toBe(2);
+    expect(result.size).toBe(2);
+  });
+});

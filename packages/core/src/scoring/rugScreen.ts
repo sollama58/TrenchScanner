@@ -36,6 +36,20 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
   if (!profile.lpBurned) {
     reasons.push("liquidity not burned/locked (LP can be pulled)");
   }
+  // Mayhem Mode tokens have an extra 1B supply minted and traded by Pump.fun's own AI agents for
+  // their first 24h, with whatever goes unsold burned afterwards. Every market signal this app
+  // scores on - volume, buy/sell pressure, holder growth, momentum - is manufactured during that
+  // window, so a Mayhem token's numbers don't mean what they mean for any other token. Excluded
+  // outright, in both bonding-curve and graduated state, rather than scored on figures that
+  // aren't comparable. `!== false` rather than `=== true`: an unverified mint (undefined, the
+  // check errored) is rejected too, consistent with this screen failing closed everywhere else.
+  if (profile.isMayhemMode !== false) {
+    reasons.push(
+      profile.isMayhemMode === true
+        ? "Pump.fun Mayhem Mode token (AI-driven supply and trading)"
+        : "Mayhem Mode status unverified - failing closed",
+    );
+  }
 
   return { passed: reasons.length === 0, reasons };
 }

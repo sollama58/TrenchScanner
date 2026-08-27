@@ -14,6 +14,7 @@ import {
   type RugCheckProfile,
   type HeliusClient,
   type MintAuthorityResult,
+  type MayhemModeResult,
   type OnChainProfile,
   type CandidateToken,
   type DiscoveredCoin,
@@ -25,6 +26,7 @@ import type { AlertBot } from "../telegram/bot.js";
 import { formatRealtimeAlert } from "../dispatch/alertDispatcher.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
+import { resolveMayhemMode } from "./mayhemMode.js";
 
 const logger = createLogger("scan-job");
 
@@ -147,8 +149,21 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     .map((c) => c.mintAddress);
   const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius);
 
+  // Mayhem Mode is a mandatory rejection (see rugScreen.ts), so unlike the authority fallback this
+  // is resolved for EVERY candidate, not just the ones RugCheck missed - RugCheck doesn't report
+  // it at all. Cached permanently per mint, so in steady state this only touches the network for
+  // mints first seen this cycle. Resolved before the profiles are assembled so that the rug-screen
+  // filter below (which decides whose wallets are worth looking up) already accounts for it.
+  const mayhemByMint = await resolveMayhemMode(
+    candidates.map((c) => c.mintAddress),
+    deps.helius,
+  );
+
   const onChainByMint = new Map<string, OnChainProfile | null>(
-    candidates.map((c) => [c.mintAddress, buildOnChainProfile(c.mintAddress, rugProfiles, mintAuthorities)]),
+    candidates.map((c) => [
+      c.mintAddress,
+      buildOnChainProfile(c.mintAddress, rugProfiles, mintAuthorities, mayhemByMint),
+    ]),
   );
 
   // Wallet freshness is by far the most expensive thing this job can do, so it's gated twice:
@@ -324,6 +339,7 @@ async function processCandidate(
       riskScore: scored.riskScore,
       riskFlags: scored.riskFlags ?? [],
       freshTop10WalletPct: scored.freshTop10WalletPct,
+      isMayhemMode: scored.isMayhemMode,
       graduated: scored.graduated,
       rugScreenPassed: scored.rugScreen.passed,
       rugScreenReasons: scored.rugScreen.reasons,
@@ -388,9 +404,15 @@ function buildOnChainProfile(
   mintAddress: string,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
+  mayhemByMint: Map<string, MayhemModeResult>,
 ): OnChainProfile | null {
+  // Left undefined (not false) when the check failed - the rug screen rejects an unverified mint,
+  // and defaulting to false here would quietly turn that rejection into a pass.
+  const mayhem = mayhemByMint.get(mintAddress);
+  const isMayhemMode = mayhem?.status === "found" ? mayhem.isMayhemMode : undefined;
+
   const rugProfile = rugProfiles.get(mintAddress);
-  if (rugProfile) return rugProfile;
+  if (rugProfile) return { ...rugProfile, isMayhemMode };
 
   const authorities = mintAuthorities.get(mintAddress);
   if (!authorities || authorities.status !== "found") return null;
@@ -400,6 +422,7 @@ function buildOnChainProfile(
     mintAuthorityActive: authorities.mintAuthorityActive,
     freezeAuthorityActive: authorities.freezeAuthorityActive,
     lpBurned: false,
+    isMayhemMode,
   };
 }
 
