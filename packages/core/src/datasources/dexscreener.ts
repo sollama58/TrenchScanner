@@ -20,6 +20,8 @@ interface DexScreenerPair {
   txns?: { h24?: { buys?: number; sells?: number } };
   pairCreatedAt?: number;
   info?: {
+    /** DexScreener's own hosted copy of the token's logo. Absent for plenty of new mints. */
+    imageUrl?: string;
     websites?: { url: string }[];
     socials?: { type: string; url: string }[];
   };
@@ -172,6 +174,7 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     hasTwitter: socials.some((s) => s.type === "twitter"),
     hasTelegram: socials.some((s) => s.type === "telegram"),
     hasWebsite: (pair.info?.websites?.length ?? 0) > 0,
+    imageUrl: pair.info?.imageUrl,
     dexId: pair.dexId,
   };
 }

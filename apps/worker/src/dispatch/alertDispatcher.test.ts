@@ -9,6 +9,7 @@ function makeToken(overrides: Partial<Token> = {}): Token {
     symbol: "MOON",
     name: "Moon Dog",
     pairAddress: "Pair1111111111111111111111111111111111111",
+    imageUrl: null,
     firstSeenAt: new Date(),
     hasTwitter: true,
     hasTelegram: false,

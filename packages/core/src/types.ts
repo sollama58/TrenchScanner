@@ -23,6 +23,13 @@ export interface CandidateToken {
   hasWebsite?: boolean;
   description?: string;
   /**
+   * The token's logo, as hosted by DexScreener. Taken from the pair response the scan already
+   * fetches rather than derived from the mint address: CDN URL shapes are undocumented and change,
+   * and a guessed one 404s silently for every token that has no image, which is a lot of them.
+   * Undefined whenever DexScreener has no artwork for the mint.
+   */
+  imageUrl?: string;
+  /**
    * DexScreener's own identifier for which DEX/pool the pricing pair trades on. For a Pump.fun
    * mint this is the reliable, current signal for bonding-curve status: "pumpfun" means still
    * pre-bond (trading directly against the bonding curve, no discrete liquidity pool), anything
