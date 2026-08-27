@@ -86,6 +86,32 @@ This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) 
    - **`TELEGRAM_BOT_USERNAME`** on both services - the bot's `@username` (no `@`), used to build the "tap to open Telegram" link on the dashboard.
 4. `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` (on the API) point at wherever the dashboard is actually served from - `https://holdex.live,https://www.holdex.live` and `holdex.live` respectively. The dashboard is **not** deployed from this repo: it lives in [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) as the `/trenches/` tab, and that repo's build sets its own API base URL. If the dashboard's domain ever changes, update both to match - `PUBLIC_APP_DOMAIN` especially, since a mismatch there breaks sign-in entirely (wallets refuse to sign a message claiming a domain that doesn't match the page they're actually on).
 
+### Cookie policy and the API's domain (do this before promoting the dashboard)
+
+Sign-in stores an `httpOnly` session cookie. The API decides its `SameSite` per request, by
+comparing the host it was reached on against `PUBLIC_APP_DOMAIN`:
+
+| API reached on                   | vs `PUBLIC_APP_DOMAIN` | Cookie                  |
+| -------------------------------- | ---------------------- | ----------------------- |
+| `trenchscanner-api.onrender.com` | cross-site             | `SameSite=None; Secure` |
+| `api.holdex.live`                | same-site              | `SameSite=Lax; Secure`  |
+| `localhost:4000` (dev)           | same-site              | `SameSite=Lax`          |
+
+`SameSite=None` is a **third-party cookie**, which Safari and Brave block by default - so while the
+API answers on `onrender.com`, sign-in simply does not work in those browsers. The fix is a DNS
+change, not a code change:
+
+1. Render → `trenchscanner-api` → **Settings → Custom Domains → Add** `api.holdex.live`.
+2. At your DNS provider, add the `CNAME` Render shows you (`api` → `<service>.onrender.com`).
+3. Wait for Render to issue the certificate.
+4. Point the dashboard at the new host: in the CultScreener repo, `frontend/js/config.js`
+   (`trenches.baseUrl`) and the `connect-src` entry in `frontend/_headers`.
+
+Nothing needs redeploying here. Requests on the old host keep getting `SameSite=None` and requests
+on the new one get `Lax`, so both work while DNS propagates. `PUBLIC_APP_DOMAIN` stays
+`holdex.live` throughout - it names the _dashboard's_ domain, not the API's, and changing it would
+break Sign-In With Solana.
+
 Database migrations run automatically on every API deploy via `preDeployCommand` - no manual step needed after the first setup.
 
 ### Cost

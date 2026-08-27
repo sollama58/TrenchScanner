@@ -70,6 +70,14 @@ services:
       # dashboard actually serves from, no protocol. A mismatch breaks sign-in outright: wallets
       # refuse to sign a message claiming a domain that isn't the page they're on. See the comment
       # on this var in packages/core/src/config/env.ts.
+      #
+      # Also decides the session cookie's SameSite: this API compares the host it was reached on
+      # against this value per request. While it answers on trenchscanner-api.onrender.com that is
+      # cross-site, so the cookie needs SameSite=None - a third-party cookie, which Safari and
+      # Brave block outright, so sign-in fails there. Adding api.holdex.live as a custom domain on
+      # this service fixes it: requests arriving on that host become same-site and get SameSite=Lax
+      # automatically, with no code change, no env change and no redeploy. See the comment above
+      # sessionCookieAttrs in apps/api/src/routes/auth.ts.
       - key: PUBLIC_APP_DOMAIN
         value: holdex.live
       # Comma-separated base58 wallet addresses allowed into the Admin Panel - set this to your
