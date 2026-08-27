@@ -118,6 +118,48 @@ Database migrations run automatically on every API deploy via `preDeployCommand`
 
 Per the plan in `PLANNING.md`: ~$21–31/mo (Render Starter web service + Starter worker + the cheapest Postgres tier (`basic-256mb`), Helius's free/low tier covers light usage; the dashboard is hosted by the CultScreener site, not billed here). Background workers specifically require a paid Render plan - there's no free tier for them.
 
+## Trenches subscription (burn gate)
+
+Access to the dashboard is paid for by burning **55,200 $ASDFASDFA**
+(`9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Spump`, 6 decimals) for 30 days. Burning a multiple buys
+the multiple, up to 12 months. Renewing early stacks onto the remaining time rather than replacing
+it.
+
+Three independent paths grant access, so no single failure can take a paying user's month away:
+
+1. **The claim endpoint** (`POST /subscription/claim`) - the fast path, used by the dashboard
+   immediately after a burn.
+2. **The reconciler** (`burn-scan`, every `BURN_SCAN_INTERVAL_MINUTES`) - walks the mint's burns
+   on-chain and credits any it finds that nobody claimed. This is what makes the guarantee hold
+   when the browser never reports back: a closed tab, a flat battery, or someone who burned from a
+   wallet UI and has not opened the dashboard at all. A burn from a wallet with no account yet is
+   held and settled the moment that wallet first signs in.
+3. **A manual admin grant**, for anything the first two cannot reach.
+
+Crediting is idempotent - the burn's transaction signature is unique in the ledger - so all three
+can run at once, and any of them can be retried, without granting the same burn twice.
+
+### Choosing an RPC (`SOLANA_RPC_URL`)
+
+Set this to a paid endpoint before taking real money. The default is the public mainnet RPC, and
+measured against the real endpoints:
+
+| Endpoint                                | Batching          | Pagination                        | Rate limit                          |
+| --------------------------------------- | ----------------- | --------------------------------- | ----------------------------------- |
+| `api.mainnet-beta.solana.com` (default) | yes               | yes                               | 429s within seconds of a cold start |
+| `solana-rpc.publicnode.com`             | **no** (HTTP 400) | **caps at ~86, ignores `before`** | generous                            |
+
+The client copes with both - it falls back to unbatched fetching when a batch is refused, and it
+never advances its cursor over a transaction it failed to read, so nothing is silently skipped -
+but a throttled reconciler is a paying user waiting for access.
+
+### Admin
+
+The Subscriptions tab shows active subscribers, the full burn ledger, burns from wallets that have
+never signed in, the whitelist (free access, with an optional expiry), and manual grant/revoke.
+Revoking deletes the subscription but never edits the burn ledger: that is the record of what
+happened, and tidying it would be falsifying it.
+
 ## Known limitations (v1)
 
 - **Pump.fun's API is unofficial** (no public contract) - used only for discovery, wrapped so a failure there just means fewer new tokens found this cycle, never a crash.

@@ -23,3 +23,4 @@ export * from "./scoring/rugScreen.js";
 export * from "./scoring/scorer.js";
 export * from "./scoring/matchFilters.js";
 export * from "./scoring/pipeline.js";
+export * from "./subscription/index.js";

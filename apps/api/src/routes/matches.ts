@@ -15,7 +15,8 @@ export async function registerMatchRoutes(
   app: FastifyInstance,
   opts: { env: Env; dexScreener: DexScreenerClient; matchStream: MatchStream },
 ) {
-  app.addHook("preHandler", app.authenticate);
+  // The feed itself, and the live stream that pushes to it. Behind the paywall - see authenticateSubscriber in server.ts.
+  app.addHook("preHandler", app.authenticateSubscriber);
 
   // Bounded to one page's worth per request - a single batched DexScreener lookup - and skips
   // anything already as fresh as the worker's live-price cadence promises. See liveRefresh.ts.

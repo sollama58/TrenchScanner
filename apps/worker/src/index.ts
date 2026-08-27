@@ -7,6 +7,7 @@ import {
   PumpFunClient,
   RugCheckClient,
   HeliusClient,
+  SolanaRpc,
 } from "@trenchscanner/core";
 import { createBot } from "./telegram/bot.js";
 import { runScanCycle } from "./jobs/scanJob.js";
@@ -14,6 +15,7 @@ import { runDigestJob } from "./jobs/digestJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob } from "./jobs/outcomeTrackingJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
+import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { scheduleInterval, scheduleDailyAt } from "./scheduler.js";
 
 const logger = createLogger("worker");
@@ -28,6 +30,13 @@ async function main() {
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
   };
 
+  // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because
+  // it insists on `finalized` commitment - money depends on these answers, not enrichment quality.
+  const rpc = new SolanaRpc({
+    rpcUrl: env.SOLANA_RPC_URL || undefined,
+    apiKey: env.HELIUS_API_KEY || undefined,
+  });
+
   const bot = createBot(env.TELEGRAM_BOT_TOKEN);
   bot.start();
 
@@ -38,6 +47,15 @@ async function main() {
     "live-price",
     () => runLivePriceJob(deps.dexScreener, env),
     env.LIVE_PRICE_INTERVAL_MINUTES,
+  );
+  // The backstop that makes the paywall's promise true: it finds burns whose owners never told us
+  // about them - a closed tab, a flat battery, or someone who burned from a wallet UI and has not
+  // opened the dashboard yet - and credits them anyway. Runs often, because the gap between
+  // burning and having access is time a paying user spends locked out.
+  const burnScanJob = scheduleInterval(
+    "burn-scan",
+    async () => void (await reconcileBurns(env, rpc)),
+    env.BURN_SCAN_INTERVAL_MINUTES,
   );
   const digestJob = scheduleDailyAt("digest", () => runDigestJob(bot), env.DIGEST_HOUR_UTC);
   const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC);
@@ -55,12 +73,14 @@ async function main() {
     outcomeTrackingHourUtc: env.OUTCOME_TRACKING_HOUR_UTC,
     telegramEnabled: bot.enabled,
     usingHeliusRpc: deps.helius.usingHelius,
+    burnScanIntervalMinutes: env.BURN_SCAN_INTERVAL_MINUTES,
   });
 
   const shutdown = async (signal: string) => {
     logger.info("shutting down", { signal });
     scanJob.stop();
     livePriceJob.stop();
+    burnScanJob.stop();
     digestJob.stop();
     cleanupJob.stop();
     outcomeTrackingJob.stop();

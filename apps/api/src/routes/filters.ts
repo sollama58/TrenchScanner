@@ -27,7 +27,8 @@ function buildFilterInputSchema(env: Env) {
 }
 
 export async function registerFilterRoutes(app: FastifyInstance, opts: { env: Env }) {
-  app.addHook("preHandler", app.authenticate);
+  // Filters are the product: they decide what the paid feed shows. Behind the paywall - see authenticateSubscriber in server.ts.
+  app.addHook("preHandler", app.authenticateSubscriber);
 
   const filterInputSchema = buildFilterInputSchema(opts.env);
   const filterUpdateSchema = filterInputSchema.partial();

@@ -107,6 +107,33 @@ const envSchema = z.object({
   // admin is a one-line env change + redeploy rather than a manual DB write. Empty by default,
   // which means the Admin Panel is unreachable (every request 403s) until explicitly configured.
   ADMIN_WALLET_ADDRESSES: z.string().optional().default(""),
+
+  // Where the burn reconciler and the claim endpoint read the chain.
+  //
+  // Set this. The default is the public mainnet RPC, and measurement against the real endpoints
+  // shows why that is a stopgap rather than a configuration:
+  //   - api.mainnet-beta.solana.com rate-limits a cold start into a stutter (429s within seconds
+  //     of starting a first scan), though it does support batching and proper pagination.
+  //   - solana-rpc.publicnode.com rejects JSON-RPC batches outright with a 400, and caps
+  //     getSignaturesForAddress at ~86 results while ignoring `before` - so a cold start on it
+  //     silently sees only recent history.
+  // The client copes with both (it falls back to unbatched fetching and never advances its cursor
+  // over anything it failed to read), but "copes" is not the same as "is fine": this is the path
+  // that decides whether someone who paid gets what they paid for.
+  //
+  // Kept separate from HELIUS_API_KEY so the two can diverge - the enrichment path can tolerate a
+  // throttled RPC, this one cannot.
+  SOLANA_RPC_URL: z.string().optional().default(""),
+
+  // How often the reconciler sweeps the chain for burns nobody claimed. This is the backstop that
+  // makes the promise "if you burn, you get access" true even when the browser never reports in,
+  // so it runs on a tight-ish loop rather than daily.
+  BURN_SCAN_INTERVAL_MINUTES: z.coerce.number().positive().default(3),
+
+  // How far back a cold start looks. Only used when there is no cursor yet (a fresh deploy, or a
+  // wiped BurnScanCursor); after that every pass walks forward from where the last one stopped.
+  // Bounded so a first run doesn't try to page through the mint's entire history.
+  BURN_SCAN_COLD_START_DAYS: z.coerce.number().positive().default(30),
 });
 
 /**

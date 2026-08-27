@@ -11,6 +11,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   scan: 10 * 60_000,
   // Runs every minute, so a few missed passes is already a real signal - unlike the daily jobs.
   "live-price": 10 * 60_000,
+  // Every few minutes. Worth surfacing promptly: while this is down, someone who burned and closed
+  // the tab is locked out of what they paid for, and nothing else will notice.
+  "burn-scan": 20 * 60_000,
   digest: 26 * 3_600_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,

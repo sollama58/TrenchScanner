@@ -11,6 +11,8 @@ export default tseslint.config(
       "**/generated/**",
       "**/*.d.ts",
       "packages/core/prisma/migrations/**",
+      // Throwaway verification scripts - see .gitignore.
+      ".preview/**",
     ],
   },
   js.configs.recommended,
