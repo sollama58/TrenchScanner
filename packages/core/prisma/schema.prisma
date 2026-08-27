@@ -38,6 +38,8 @@ model User {
   filters      UserFilter[]
   telegramLink TelegramLink?
   matches      Match[]
+  subscription Subscription?
+  burns        BurnEvent[]
 }
 
 /// Short-lived nonce a wallet must sign to authenticate. One-time use.
@@ -62,8 +64,8 @@ model UserFilter {
   mcapMin Float  @default(50000)
   mcapMax Float  @default(500000)
 
-  minVolumeMcapRatio Float? // volume24h / marketCap, momentum signal
-  minHolderGrowthPct Float? // % holder growth over the lookback window
+  minVolumeMcapRatio       Float? // volume24h / marketCap, momentum signal
+  minHolderGrowthPct       Float? // % holder growth over the lookback window
   // These four used to be part of the mandatory automatic rug screen (packages/core/src/scoring/
   // rugScreen.ts) - different users legitimately want different thresholds here, unlike mint/
   // freeze authority or LP lock, so they moved to being opt-in criteria instead. Unset (null/
@@ -71,7 +73,7 @@ model UserFilter {
   maxTop10HolderPct        Float? // top-10 holder concentration, %
   maxDevWalletPct          Float? // creator's own holding, % (only if they rank in the top 10)
   maxRiskScore             Float? // RugCheck's own composite risk score, 0-100 (higher = riskier)
-  excludeCriticalRiskFlags Boolean @default(false) // e.g. "Creator history of rugged tokens"
+  excludeCriticalRiskFlags Boolean  @default(false) // e.g. "Creator history of rugged tokens"
   minTokenAgeMinutes       Int?
   maxTokenAgeMinutes       Int?
   narrativeKeywords        String[] @default([])
@@ -109,21 +111,21 @@ model TelegramLink {
 
 /// A distinct Solana token being tracked.
 model Token {
-  id             String   @id @default(cuid())
-  mintAddress    String   @unique
-  symbol         String?
-  name           String?
-  pairAddress    String? // primary DexScreener pair used for pricing
+  id            String   @id @default(cuid())
+  mintAddress   String   @unique
+  symbol        String?
+  name          String?
+  pairAddress   String? // primary DexScreener pair used for pricing
   /// The token's logo, as hosted by DexScreener. Read from the pair response the scan already
   /// fetches rather than derived from the mint address: CDN URL shapes are undocumented and
   /// change, and a guessed one 404s silently for every mint that has no artwork - which is a lot
   /// of them. Null means DexScreener has no image, not that we failed to look.
-  imageUrl       String?
-  firstSeenAt    DateTime @default(now())
-  hasTwitter     Boolean  @default(false)
-  hasTelegram    Boolean  @default(false)
-  hasWebsite     Boolean  @default(false)
-  narrativeTags  String[] @default([])
+  imageUrl      String?
+  firstSeenAt   DateTime @default(now())
+  hasTwitter    Boolean  @default(false)
+  hasTelegram   Boolean  @default(false)
+  hasWebsite    Boolean  @default(false)
+  narrativeTags String[] @default([])
 
   // Stamped by GET /matches (see apps/api/src/routes/matches.ts) whenever this token appears on
   // a page someone actually fetched - not per-user, just "is anyone currently looking at this."
@@ -161,22 +163,22 @@ model TokenSnapshot {
   takenAt DateTime @default(now())
 
   priceUsd          Float
-  marketCapUsd       Float
-  liquidityUsd       Float?
-  volume24hUsd       Float?
-  volumeToMcapRatio  Float?
-  buys24h            Int?
-  sells24h           Int?
+  marketCapUsd      Float
+  liquidityUsd      Float?
+  volume24hUsd      Float?
+  volumeToMcapRatio Float?
+  buys24h           Int?
+  sells24h          Int?
 
-  holderCount     Int?
-  holderGrowthPct Float?
-  top10HolderPct  Float?
-  devWalletPct    Float?
+  holderCount         Int?
+  holderGrowthPct     Float?
+  top10HolderPct      Float?
+  devWalletPct        Float?
   // RugCheck's own composite risk score/named flags - stored raw (not just baked into
   // rugScreenPassed) now that a user can filter on them directly. See rugScreen.ts's
   // CRITICAL_RISK_FLAGS for which named flags matter to excludeCriticalRiskFlags.
-  riskScore Float?
-  riskFlags String[] @default([])
+  riskScore           Float?
+  riskFlags           String[] @default([])
   // % of the (pool-excluded) top-10 holders whose wallet was funded <24h ago - a sniper/insider
   // signal. Null whenever there was no holder list to check (e.g. RugCheck hadn't indexed the
   // mint), the lookup failed, or the whole freshness pass was skipped because no active filter
@@ -186,11 +188,11 @@ model TokenSnapshot {
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
   // was screened out. Null means the check never ran or failed, which the screen also rejects.
-  isMayhemMode Boolean?
+  isMayhemMode        Boolean?
   // Whether the mint has graduated off a Pump.fun bonding curve to a real AMM, derived from
   // DexScreener's dexId (see dexscreener.ts's deriveGraduated) - null for anything DexScreener
   // hasn't indexed a pair for at all.
-  graduated Boolean?
+  graduated           Boolean?
 
   mintAuthorityActive   Boolean?
   freezeAuthorityActive Boolean?
@@ -198,7 +200,7 @@ model TokenSnapshot {
 
   ageMinutes Int?
 
-  score Float?
+  score             Float?
   // Individual components behind `score` (see packages/core/src/scoring/scorer.ts's
   // ScoreBreakdown) - persisted so the dashboard can show *why* a token scored the way it did,
   // not just the composite number. Nullable because snapshots taken before this field existed
@@ -243,14 +245,14 @@ model Match {
   // the outcome-tracking job (apps/worker/src/jobs/outcomeTrackingJob.ts). Both null until that
   // job's first run after the match. Baseline for "how far did it run" is snapshot.marketCapUsd
   // (the mcap at match time), not these fields - see outcomeTrackingJob.ts for why.
-  peakMcapUsd Float?
-  peakMcapAt  DateTime?
+  peakMcapUsd     Float?
+  peakMcapAt      DateTime?
   // (peakMcapUsd - snapshot.marketCapUsd) / snapshot.marketCapUsd * 100 - kept in step with
   // peakMcapUsd by the outcome-tracking job, which recomputes it whenever the peak rises AND
   // repairs it wherever the two have drifted apart (rows whose peak was recorded before this
   // column existed). Persisted rather than computed at read time so the Leaderboard can rank on
   // this column directly instead of pulling every Match ever created into memory to sort.
-  peakReturnPct Float?
+  peakReturnPct   Float?
   // Set once, as soon as the *recorded peak* is worth >= +100% (a 2x on the alert mcap) - never
   // touched again after that even as peakMcapUsd/peakReturnPct keep climbing on future highs.
   // Deliberately keyed off the recorded peak rather than off "this run saw a new high": a token
@@ -355,4 +357,120 @@ model MayhemModeCache {
   /// Supports the cleanup job's retention sweep, same as the other RPC caches. The horizon is
   /// about bounding storage rather than staleness - see RPC_CACHE_RETENTION_DAYS.
   @@index([checkedAt])
+}
+
+/// How a user came to have access to the Trenches dashboard.
+enum AccessSource {
+  /// Paid for by burning $ASDFASDFA - see BurnEvent.
+  BURN
+  /// Granted by hand from the Admin Panel, e.g. to make good on a burn that couldn't be
+  /// attributed automatically.
+  ///
+  /// There is deliberately no WHITELIST member: a whitelisted wallet never gets a Subscription
+  /// row at all - resolveAccess() answers for it directly - so a value that could never be
+  /// written would just be a state readers have to rule out by hand.
+  ADMIN_GRANT
+}
+
+/// A user's paid access window.
+///
+/// One row per user, extended rather than replaced: a renewal moves `expiresAt` forward from
+/// whichever is later, now or the current expiry, so buying a second month early stacks instead of
+/// throwing away what's left of the first.
+model Subscription {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime
+  /// What most recently extended this window. Not an audit trail - BurnEvent is.
+  source    AccessSource
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+/// One on-chain burn of the subscription token, whether or not we have a user for it yet.
+///
+/// This is the ledger, and the chain is its source of truth: every burn the reconciler finds gets
+/// a row, including burns from wallets that have never signed in (userId null). A burn is credited
+/// exactly once - `signature` is unique, which is what makes both the claim endpoint and the
+/// reconciler safe to retry and safe to run at the same time.
+model BurnEvent {
+  id String @id @default(cuid())
+
+  /// The transaction signature. UNIQUE: this is the replay guard. Two concurrent claims for the
+  /// same burn race to insert, one wins, and the loser is handled as "already credited" rather
+  /// than as an error.
+  signature String @unique
+
+  /// Slot and block time as reported on-chain. blockTime is nullable because Solana does not
+  /// guarantee it for older transactions.
+  slot      BigInt
+  blockTime DateTime?
+
+  /// The `authority` on the burn instruction - the wallet that signed the burn away. This, not
+  /// "some signer on the transaction", is who the month belongs to.
+  burnerWallet String
+  mint         String
+
+  /// Base units (this mint has 6 decimals, so 55200 tokens = "55200000000"). Stored as a string
+  /// and compared as BigInt: a float would silently lose precision on large burns, and there is no
+  /// good reason to let a rounding error decide whether someone paid.
+  rawAmount String
+
+  monthsCredited Int
+
+  /// Null until a User exists for burnerWallet - someone can burn before they ever sign in, and
+  /// their months are waiting when they do.
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// When this burn was turned into subscription time. Null means found but not yet credited,
+  /// which for an unattributed burn is the normal resting state.
+  creditedAt DateTime?
+
+  /// Which path found it - "claim" (the user told us) or "reconciler" (we found it ourselves).
+  discoveredBy String @default("reconciler")
+
+  createdAt DateTime @default(now())
+
+  @@index([burnerWallet])
+  @@index([userId])
+  @@index([creditedAt])
+}
+
+/// Wallets that get in free, managed from the Admin Panel.
+///
+/// Keyed by wallet rather than by user id so a wallet can be whitelisted before it has ever signed
+/// in - which is the usual case, since you whitelist someone by pasting their address.
+model Whitelist {
+  walletAddress String @id
+
+  /// Null means indefinite. A date lets you hand out a trial without having to remember to revoke.
+  expiresAt DateTime?
+  note      String?
+  /// Wallet address of the admin who added it, for the audit trail.
+  addedBy   String
+
+  createdAt DateTime @default(now())
+}
+
+/// Where the burn reconciler got to, so each pass only walks what it hasn't seen.
+///
+/// A single row (id "burn-scan"). Kept in its own table rather than in SystemHeartbeat.meta
+/// because losing it silently would mean silently missing burns - it deserves a column, not a
+/// corner of a JSON blob.
+model BurnScanCursor {
+  id String @id @default("burn-scan")
+
+  /// The newest signature fully processed. The next pass walks backwards from the tip until it
+  /// reaches this, then stops. Null on a fresh install, which triggers a bounded first scan.
+  lastSignature String?
+  /// How far back a cold start is allowed to look, so a fresh deploy doesn't walk all history.
+  scanFloor     DateTime?
+
+  updatedAt DateTime @updatedAt
 }
