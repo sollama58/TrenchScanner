@@ -23,7 +23,25 @@ const envSchema = z.object({
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api-v3.pump.fun"),
 
-  SCAN_INTERVAL_MINUTES: z.coerce.number().positive().default(7),
+  // One minute. Not a performance figure - a full cycle takes ~10 seconds - but a rate-limit one:
+  // RugCheck is called once per in-band candidate per cycle, so this interval used to multiply its
+  // traffic one-for-one and was held at 7 minutes because of it. RUGCHECK_CACHE_TTL_MINUTES below
+  // breaks that coupling, which is what makes a one-minute alert loop affordable.
+  SCAN_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
+  // How long a RugCheck report is reused before being re-fetched (see the worker's
+  // rugCheckProfiles.ts). Short, because everything RugCheck reports is mutable - holder
+  // distribution, dev wallet %, risk score - unlike mint authority revocation or Mayhem Mode,
+  // which are cached permanently. Raising this cuts RugCheck traffic and makes the holder and
+  // risk figures staler; it does not slow down how fast a *new* alert can appear, since a mint
+  // that has never been screened is always a cache miss.
+  RUGCHECK_CACHE_TTL_MINUTES: z.coerce.number().positive().default(5),
+  // The wall-clock span holderGrowthPct is measured over: growth is compared against the newest
+  // snapshot at least this old, rather than against whatever the previous snapshot happened to be.
+  // Anchoring it this way is what keeps the number's meaning independent of SCAN_INTERVAL_MINUTES
+  // - see the comment at its use site in the worker's scanJob.ts. Must comfortably exceed
+  // RUGCHECK_CACHE_TTL_MINUTES, or a cached holder count on both sides of the comparison would
+  // make growth read 0 rather than "unmeasured".
+  HOLDER_GROWTH_WINDOW_MINUTES: z.coerce.number().positive().default(30),
   DIGEST_HOUR_UTC: z.coerce.number().min(0).max(23).default(13),
   MCAP_FILTER_MIN: z.coerce.number().nonnegative().default(10_000),
   MCAP_FILTER_MAX: z.coerce.number().positive().default(1_000_000),

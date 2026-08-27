@@ -4,7 +4,8 @@ const logger = createLogger("cleanup-job");
 const DAY_MS = 86_400_000;
 
 /**
- * How long an RPC cache entry (WalletActivityCache, MintAuthorityCache, MayhemModeCache) is kept. Both hold
+ * How long an RPC cache entry (WalletActivityCache, MintAuthorityCache,
+ * MayhemModeCache, RugCheckCache) is kept. Both hold
  * answers that are permanently true, so this is purely about storage, not staleness - a wallet
  * or mint we haven't encountered in this long probably isn't coming back, and if it does, one
  * batched RPC call re-establishes it. Deliberately far longer than the snapshot/token horizons:
@@ -53,6 +54,10 @@ export async function runCleanupJob(env: Env): Promise<void> {
     prisma.walletActivityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
     prisma.mintAuthorityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
     prisma.mayhemModeCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
+    // RugCheckCache is a TTL cache (RUGCHECK_CACHE_TTL_MINUTES), so its rows go stale within
+    // minutes - but a stale row is still *kept*, and rewritten in place, for as long as the mint
+    // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
+    prisma.rugCheckCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
   ]);
 
   logger.info("cleanup job complete", {

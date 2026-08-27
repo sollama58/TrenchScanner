@@ -24,6 +24,13 @@ export interface RugCheckProfile extends OnChainProfile {
   riskFlags: string[];
 }
 
+/**
+ * A definitive "here is the report" / "RugCheck has no report for this mint" / "the lookup itself
+ * failed". The third must never be cached - see RugCheckCache in schema.prisma.
+ */
+export type RugCheckProfileResult =
+  { status: "found"; profile: RugCheckProfile } | { status: "absent" } | { status: "failed" };
+
 export interface RugCheckClientOptions {
   baseUrl?: string;
 }
@@ -43,22 +50,36 @@ export class RugCheckClient {
    * (rather than throwing) on failure so the scan loop can treat "unknown"
    * distinctly from "failed the screen" - callers should decide how to
    * handle missing data (v1 treats unknown as fail-closed, see rugScreen.ts).
+   *
+   * Prefer getProfileResult when the answer is going to be cached: this collapses "RugCheck has
+   * no report" and "the request failed" into the same null, and caching the second as if it were
+   * the first would persist a transport blip for the whole TTL.
    */
   async getProfile(mintAddress: string): Promise<RugCheckProfile | null> {
+    const result = await this.getProfileResult(mintAddress);
+    return result.status === "found" ? result.profile : null;
+  }
+
+  /**
+   * Same lookup, with "no report exists" and "the lookup failed" kept apart. Matches the shape
+   * HeliusClient already uses for its cached lookups (EarliestActivityResult and friends) for the
+   * same reason: only a definitive answer is safe to write to a cache.
+   */
+  async getProfileResult(mintAddress: string): Promise<RugCheckProfileResult> {
     try {
       const report = await fetchJson<RugCheckReport>(`${this.baseUrl}/tokens/${mintAddress}/report`, {
         timeoutMs: 10_000,
         retries: 1,
       });
-      return toProfile(mintAddress, report);
+      return { status: "found", profile: toProfile(mintAddress, report) };
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) {
-        // Not yet indexed by RugCheck (very new token) - treat as unknown, not an error.
+        // Not yet indexed by RugCheck (very new token) - a real answer, not an error.
         logger.debug("no rugcheck report yet", { mintAddress });
-        return null;
+        return { status: "absent" };
       }
       logger.warn("failed to fetch rugcheck report", { mintAddress, error: String(err) });
-      return null;
+      return { status: "failed" };
     }
   }
 
@@ -66,11 +87,22 @@ export class RugCheckClient {
    *  Deduped first (same pattern as DexScreenerClient.getTokensByAddresses) so a caller that
    *  hands back the same mint twice in one list doesn't cost a duplicate outbound request. */
   async getProfiles(mintAddresses: string[], concurrency = 5): Promise<Map<string, RugCheckProfile>> {
-    const unique = [...new Set(mintAddresses)];
     const results = new Map<string, RugCheckProfile>();
+    for (const [mint, result] of await this.getProfileResults(mintAddresses, concurrency)) {
+      if (result.status === "found") results.set(mint, result.profile);
+    }
+    return results;
+  }
+
+  /** getProfiles, keeping "no report" and "lookup failed" apart for every mint. */
+  async getProfileResults(
+    mintAddresses: string[],
+    concurrency = 5,
+  ): Promise<Map<string, RugCheckProfileResult>> {
+    const unique = [...new Set(mintAddresses)];
+    const results = new Map<string, RugCheckProfileResult>();
     await forEachWithConcurrency(unique, concurrency, async (mint) => {
-      const profile = await this.getProfile(mint);
-      if (profile) results.set(mint, profile);
+      results.set(mint, await this.getProfileResult(mint));
     });
     return results;
   }
