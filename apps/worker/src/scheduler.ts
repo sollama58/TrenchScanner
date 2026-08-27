@@ -56,14 +56,22 @@ export function scheduleDailyAt(name: HeartbeatJob, fn: () => Promise<void>, hou
     firstRunInMinutes: Math.round(msUntilNext / 60_000),
   });
 
+  // Checked before the interval is created, not just in stop(): stop() can be called while the
+  // first run is still awaiting inside the timeout callback, and without this the callback would
+  // then create an interval that nothing ever clears - a stopped job that quietly keeps running
+  // every 24h.
+  let stopped = false;
+  let interval: NodeJS.Timeout | undefined;
+
   const timeout = setTimeout(async () => {
     await runSafely(name, fn);
+    if (stopped) return;
     interval = setInterval(() => void runSafely(name, fn), 24 * 3_600_000);
   }, msUntilNext);
 
-  let interval: NodeJS.Timeout | undefined;
   return {
     stop: () => {
+      stopped = true;
       clearTimeout(timeout);
       if (interval) clearInterval(interval);
     },

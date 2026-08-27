@@ -130,7 +130,9 @@ export async function verifyAndConsumeNonce(params: {
     return { ok: false, reason: "bad_signature" };
   }
 
-  await prisma.authNonce.update({ where: { id: lookup.record.id }, data: { usedAt: new Date() } });
+  if (!(await consumeNonce(lookup.record.id))) {
+    return { ok: false, reason: "nonce_used" };
+  }
   return { ok: true };
 }
 
@@ -201,8 +203,29 @@ export async function verifySignInAndConsumeNonce(params: {
     return { ok: false, reason: "bad_signature" };
   }
 
-  await prisma.authNonce.update({ where: { id: lookup.record.id }, data: { usedAt: new Date() } });
+  if (!(await consumeNonce(lookup.record.id))) {
+    return { ok: false, reason: "nonce_used" };
+  }
   return { ok: true };
+}
+
+/**
+ * Marks a nonce used, atomically.
+ *
+ * findValidNonce() checks usedAt and this sets it, and between the two sits a signature
+ * verification - plenty of time for a second request carrying the same nonce to pass the same
+ * check. A plain update() would then let both through: two sessions minted from one nonce.
+ * The conditional updateMany turns "check then set" into one statement - whichever request
+ * updates the row first wins, and the loser's count of 0 reads as the nonce already being spent.
+ * Only the wallet's own signer can reach this point at all (the signature verified), so the
+ * stakes are consistency rather than theft - but single-use should mean single-use.
+ */
+async function consumeNonce(id: string): Promise<boolean> {
+  const result = await prisma.authNonce.updateMany({
+    where: { id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+  return result.count === 1;
 }
 
 function verifySignature(walletAddress: string, message: string, signatureBase58: string): boolean {

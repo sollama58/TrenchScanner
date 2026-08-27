@@ -8,11 +8,18 @@ import { CRITICAL_RISK_FLAGS } from "./rugScreen.js";
  * this for tokens that passed it - matchesFilter does not repeat that
  * check, it only applies the user's own (optional) criteria.
  *
- * Every criterion here follows the same "unset or unknown = don't reject on
- * this one" rule, including the ones that used to be part of the mandatory
- * rug screen (top10/devWallet/riskScore/criticalFlags) - a token with
- * genuinely unknown data on one of these can still match if the user hasn't
- * opted into checking it, same as any other optional field below.
+ * Unknown data is handled by direction, not uniformly - and the split is
+ * deliberate, so don't "fix" one side to match the other:
+ *
+ *  - MAX criteria (top10/devWallet/riskScore/maxAge/maxFresh) skip an unknown
+ *    value: a ceiling can't be shown to be exceeded by data we don't have,
+ *    and rejecting on unknowns here would hide tokens for reasons no user
+ *    chose.
+ *  - MIN criteria (minVolumeMcapRatio/minHolderGrowthPct/minTokenAgeMinutes)
+ *    fail closed on unknown: the user asked for "at least X", and a value we
+ *    can't measure can't be shown to clear that floor. Treating unknown as
+ *    passing would alert on exactly the thin, unmeasurable tokens a floor
+ *    exists to screen out.
  */
 export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boolean {
   if (token.marketCapUsd < filter.mcapMin || token.marketCapUsd > filter.mcapMax) {

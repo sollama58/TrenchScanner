@@ -66,6 +66,15 @@ export type CreditOutcome =
 /**
  * Record a burn and turn it into subscription time, exactly once.
  *
+ * Expiry is anchored to NOW, not to the burn's block time - which matters for the
+ * disaster-recovery path. Rebuilding a lost ledger by rescanning the chain replays old burns
+ * through this same function, and each replays as a fresh grant from the moment of the rebuild.
+ * That is deliberately generous: the alternative (anchoring to block time) would hand a user who
+ * burned three months ago and signed in today an already-expired subscription - "you paid, and
+ * you get nothing" - which is the one outcome this system is built to never produce. A rebuild
+ * over-granting people who already used part of their month is the cheaper error in both
+ * directions that matter: money and trust.
+ *
  * Idempotency is the whole job here, because two things race by design: the user's own claim and
  * the reconciler that would have found the same burn anyway. Rather than checking-then-inserting -
  * which leaves a window where both see "not yet recorded" - this inserts first and lets the unique
