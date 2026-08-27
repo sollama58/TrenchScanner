@@ -1,0 +1,271 @@
+import { describe, expect, it } from "vitest";
+import { foldCuratedIntoPage, resolveOutcome, serializeCuratedAlert } from "./curatedFeed.js";
+import { currentMarketCap } from "./routes/matches.js";
+
+const T0 = new Date("2026-08-27T12:00:00Z");
+const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
+const WINDOW = 6 * 3_600_000;
+
+/** Serialized feed cards, as the route builds them before folding. */
+const matchCard = (tokenId: string, minutes: number) => ({
+  kind: "match" as const,
+  tokenId,
+  matchedAt: at(minutes),
+  curated: null as { alertId: string } | null,
+});
+const curatedCard = (tokenId: string, minutes: number, alertId = `a-${tokenId}-${minutes}`) => ({
+  kind: "curated" as const,
+  tokenId,
+  matchedAt: at(minutes),
+  curated: { alertId } as { alertId: string } | null,
+});
+
+describe("foldCuratedIntoPage", () => {
+  it("folds a curated card into the user's own match for the same token", () => {
+    const out = foldCuratedIntoPage([matchCard("tokenA", 0), curatedCard("tokenA", 30)], WINDOW);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.kind).toBe("match");
+    expect(out[0]!.curated).not.toBeNull();
+  });
+
+  it("leaves a curated card alone when no match of this user's caught the token", () => {
+    const out = foldCuratedIntoPage([matchCard("tokenA", 0), curatedCard("tokenB", 5)], WINDOW);
+    expect(out).toHaveLength(2);
+    expect(out.find((c) => c.kind === "curated")).toBeDefined();
+  });
+
+  it("does not fold a match and an alert days apart, even for the same token", () => {
+    // Different events entirely - folding them would stamp a week-old card with a curation that
+    // has nothing to do with it.
+    const out = foldCuratedIntoPage([matchCard("tokenA", 0), curatedCard("tokenA", 60 * 24 * 3)], WINDOW);
+    expect(out).toHaveLength(2);
+  });
+
+  it("gives each match at most one alert, so a token alerted twice still shows twice", () => {
+    const out = foldCuratedIntoPage(
+      [matchCard("tokenA", 0), curatedCard("tokenA", 10, "a1"), curatedCard("tokenA", 20, "a2")],
+      WINDOW,
+    );
+    expect(out).toHaveLength(2);
+    expect(out.filter((c) => c.kind === "curated")).toHaveLength(1);
+  });
+
+  it("preserves order and leaves an all-match page untouched", () => {
+    const page = [matchCard("tokenA", 0), matchCard("tokenB", -5), matchCard("tokenC", -10)];
+    expect(foldCuratedIntoPage(page, WINDOW)).toEqual(page);
+  });
+});
+
+/** A curated alert row as Prisma returns it, with the relations the serializer reads. */
+function alertRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "alert1",
+    tokenId: "tokenA",
+    candidateOutcomeId: "co1",
+    snapshotId: null,
+    createdAt: at(0),
+    source: "heuristic-v1",
+    confidence: 61,
+    reasons: ["24h volume 2.8x its market cap"],
+    anchorPriceUsd: 0.001,
+    anchorMcapUsd: 100_000,
+    peak1hReturnPct: null,
+    maxDrawdown1hPct: null,
+    hit2xIn1h: null,
+    disqualified: null,
+    peak24hReturnPct: null,
+    outcomeFinalizedAt: null,
+    snapshot: null,
+    token: {
+      id: "tokenA",
+      mintAddress: "mint111",
+      symbol: "TEST",
+      name: "Test",
+      pairAddress: null,
+      imageUrl: null,
+      firstSeenAt: at(-10),
+      hasTwitter: false,
+      hasTelegram: false,
+      hasWebsite: false,
+      narrativeTags: [],
+      lastViewedAt: null,
+      liveMarketCapUsd: 150_000,
+      liveDataAt: at(5),
+      livePriceUsd: 0.0015,
+      snapshots: [],
+    },
+    candidateOutcome: {
+      anchorPriceUsd: 0.001,
+      peak1hPriceUsd: 0.0018,
+      low1hPriceUsd: 0.0009,
+      peak24hPriceUsd: 0.0018,
+      hit2xAt: null,
+      finalizedAt: null,
+      peak1hReturnPct: null,
+      maxDrawdown1hPct: null,
+      hit2xIn1h: null,
+      disqualified: null,
+      peak24hReturnPct: null,
+    },
+    ...overrides,
+  };
+}
+
+describe("serializeCuratedAlert", () => {
+  it("renders as a Match-shaped feed card carrying the curated block", () => {
+    const card = serializeCuratedAlert(alertRow() as any, currentMarketCap);
+    expect(card.kind).toBe("curated");
+    expect(card.matchedAt).toEqual(at(0));
+    expect(card.score).toBe(61);
+    expect(card.filter).toEqual({ id: "curated", name: "Curated" });
+    expect(card.curated.outcome.status).toBe("watching");
+    // "Now" is reconciled by the same helper the Live Feed uses.
+    expect(card.currentMarketCapUsd).toBe(150_000);
+  });
+
+  it("synthesizes an anchor snapshot when the real one has aged out, without inventing detail", () => {
+    const card = serializeCuratedAlert(alertRow() as any, currentMarketCap);
+    expect(card.snapshot.marketCapUsd).toBe(100_000);
+    expect(card.snapshot.priceUsd).toBe(0.001);
+    // Everything the scan would have filled reads null - "we no longer hold it", not "it was 0".
+    expect(card.snapshot.volume24hUsd).toBeNull();
+    expect(card.snapshot.ageMinutes).toBeNull();
+    expect(card.snapshot.graduated).toBeNull();
+  });
+
+  it("derives the card's peak from the outcome watcher, since supply is fixed", () => {
+    const row = alertRow({
+      peak24hReturnPct: 240,
+      hit2xIn1h: true,
+      disqualified: false,
+      outcomeFinalizedAt: at(90),
+      candidateOutcome: null,
+    });
+    const card = serializeCuratedAlert(row as any, currentMarketCap);
+    expect(card.peakReturnPct).toBe(240);
+    expect(card.peakMcapUsd).toBeCloseTo(340_000);
+  });
+
+  it("leaves the peak null for an alert that never traded above its anchor", () => {
+    const row = alertRow({
+      hit2xIn1h: false,
+      disqualified: false,
+      peak24hReturnPct: -30,
+      candidateOutcome: null,
+    });
+    const card = serializeCuratedAlert(row as any, currentMarketCap);
+    expect(card.peakMcapUsd).toBeNull();
+    expect(card.peakReturnPct).toBeNull();
+  });
+});
+
+// ── resolveOutcome ───────────────────────────────────────────────────────
+
+/** A live CandidateOutcome link mid-window: nothing finalized, aggregates moving. */
+function liveRow(
+  overrides: Partial<NonNullable<Parameters<typeof resolveOutcome>[0]["candidateOutcome"]>> = {},
+) {
+  return {
+    anchorPriceUsd: 1,
+    peak1hPriceUsd: 1.4,
+    low1hPriceUsd: 0.9,
+    peak24hPriceUsd: 1.4,
+    hit2xAt: null,
+    finalizedAt: null,
+    peak1hReturnPct: null,
+    maxDrawdown1hPct: null,
+    hit2xIn1h: null,
+    disqualified: null,
+    peak24hReturnPct: null,
+    ...overrides,
+  };
+}
+
+function alert(overrides: Partial<Parameters<typeof resolveOutcome>[0]> = {}) {
+  return {
+    createdAt: new Date(),
+    peak1hReturnPct: null,
+    maxDrawdown1hPct: null,
+    hit2xIn1h: null,
+    disqualified: null,
+    peak24hReturnPct: null,
+    outcomeFinalizedAt: null,
+    candidateOutcome: liveRow(),
+    ...overrides,
+  };
+}
+
+describe("resolveOutcome", () => {
+  it("shows a watching alert's running peaks from the live link", () => {
+    const view = resolveOutcome(alert());
+    expect(view.status).toBe("watching");
+    expect(view.hit2x).toBe(false);
+    expect(view.peak1hReturnPct).toBeCloseTo(40);
+    expect(view.maxDrawdown1hPct).toBeCloseTo(-10);
+    expect(view.finalized).toBe(false);
+  });
+
+  it("flips the 2x badge the moment it is observed, before the window closes", () => {
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({ hit2xAt: new Date(), peak1hPriceUsd: 2.1, peak24hPriceUsd: 2.1 }),
+      }),
+    );
+    expect(view.status).toBe("watching");
+    expect(view.hit2x).toBe(true);
+    expect(view.peak1hReturnPct).toBeCloseTo(110);
+  });
+
+  it("reads the verdict from a finalized live row", () => {
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          finalizedAt: new Date(),
+          hit2xIn1h: true,
+          disqualified: false,
+          peak1hReturnPct: 160,
+          maxDrawdown1hPct: -12,
+          peak24hPriceUsd: 3.4,
+        }),
+      }),
+    );
+    expect(view.status).toBe("won");
+    expect(view.peak1hReturnPct).toBe(160);
+    // Winner still on its 24h watch: the 24h number is the running peak, and nothing is final.
+    expect(view.peak24hReturnPct).toBeCloseTo(240);
+    expect(view.finalized).toBe(false);
+  });
+
+  it("labels a disqualified 2x as such, not as a win", () => {
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({ finalizedAt: new Date(), hit2xIn1h: true, disqualified: true }),
+      }),
+    );
+    expect(view.status).toBe("disqualified");
+  });
+
+  it("falls back to the copied columns after the training row is pruned", () => {
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: null,
+        hit2xIn1h: true,
+        disqualified: false,
+        peak1hReturnPct: 130,
+        maxDrawdown1hPct: -8,
+        peak24hReturnPct: 410,
+        outcomeFinalizedAt: new Date(),
+      }),
+    );
+    expect(view.status).toBe("won");
+    expect(view.peak1hReturnPct).toBe(130);
+    expect(view.peak24hReturnPct).toBe(410);
+    expect(view.finalized).toBe(true);
+  });
+
+  it("admits ignorance when neither source exists, instead of guessing", () => {
+    const view = resolveOutcome(alert({ candidateOutcome: null }));
+    expect(view.status).toBe("unknown");
+    expect(view.peak1hReturnPct).toBeNull();
+  });
+});

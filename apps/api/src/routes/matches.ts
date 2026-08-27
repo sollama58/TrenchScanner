@@ -1,11 +1,42 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma, corsOriginList, type Env, type DexScreenerClient } from "@trenchscanner/core";
 import { OnDemandLiveRefresher } from "../liveRefresh.js";
+import { curatedAlertInclude, foldCuratedIntoPage, serializeCuratedAlert } from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
+
+/**
+ * A curated alert and one of this user's matches for the same token, this close together, are
+ * the same event seen twice - the scanner alerted them and the curator picked it. The feed shows
+ * one card carrying both facts rather than two cards for one token.
+ */
+const CURATED_MATCH_LINK_WINDOW_MS = 6 * 3_600_000;
+
+/**
+ * How deep the interleaved feed stays interleaved. Merging two time-ordered sources exactly
+ * means fetching `page * PAGE_SIZE` of each and slicing the union, so the cost grows with page
+ * depth - this bounds it. Past this depth the feed falls back to the user's own matches alone,
+ * which is the right thing anyway: that far back is history browsing, and the whole curated
+ * history has its own tab.
+ */
+const MAX_MERGE_DEPTH = 300;
+
+/**
+ * Only the latest snapshot per token, not the whole history - lets the dashboard show "now"
+ * (marketCapUsd/% change) alongside the frozen alert-time snapshot without a separate request
+ * per card. Will be the same row as `snapshot` itself whenever the worker hasn't re-scanned this
+ * token since the match - that's an honest "no new data," not a bug, and the dashboard shows the
+ * snapshot's own age either way.
+ */
+const matchInclude = {
+  token: { include: { snapshots: { orderBy: { takenAt: "desc" }, take: 1 } } },
+  snapshot: true,
+  filter: { select: { id: true, name: true } },
+} satisfies Prisma.MatchInclude;
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -87,32 +118,83 @@ export async function registerMatchRoutes(
     const { page } = parsed.data;
     const where = { userId: request.user!.userId };
 
-    const [matches, totalCount] = await Promise.all([
+    /*
+     * The curated feed is interleaved into this one: a curated alert is an alert, and the point
+     * of curation is that a subscriber sees it without having to build a filter for it.
+     *
+     * Merging two independently-paginated time-ordered sources exactly: take the newest
+     * `page * PAGE_SIZE` of each, merge, sort, and slice out this page. The union's first N
+     * items are always inside those 2N, so the slice is exact - no duplicates across pages, and
+     * no curated alert stranded for being older than the newest twelve matches, which is what a
+     * time-window merge does to anyone whose filters are busy.
+     *
+     * Past MAX_MERGE_DEPTH the feed is the user's own matches alone, paginated the way it always
+     * was: that far back is history browsing, and the curated history has its own tab.
+     */
+    const mergeDepth = page * PAGE_SIZE;
+    const interleave = mergeDepth <= MAX_MERGE_DEPTH;
+
+    const [matches, matchTotal] = await Promise.all([
       prisma.match.findMany({
         where,
         orderBy: { matchedAt: "desc" },
-        skip: (page - 1) * PAGE_SIZE,
-        take: PAGE_SIZE,
-        include: {
-          // Only the latest snapshot per token, not the whole history - lets the dashboard show
-          // "now" (marketCapUsd/% change) alongside the frozen alert-time snapshot without a
-          // separate request per card. Will be the same row as `snapshot` itself whenever the
-          // worker hasn't re-scanned this token since the match - that's an honest "no new
-          // data," not a bug, and the dashboard shows the snapshot's own age either way.
-          token: { include: { snapshots: { orderBy: { takenAt: "desc" }, take: 1 } } },
-          snapshot: true,
-          filter: { select: { id: true, name: true } },
-        },
+        // Interleaving needs the whole run up to this page (it slices the union itself);
+        // otherwise this IS the page.
+        ...(interleave ? { take: mergeDepth } : { skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE }),
+        include: matchInclude,
       }),
       prisma.match.count({ where }),
     ]);
+
+    const [curatedAlerts, curatedTotal] = interleave
+      ? await Promise.all([
+          prisma.curatedAlert.findMany({
+            orderBy: { createdAt: "desc" },
+            take: mergeDepth,
+            include: curatedAlertInclude,
+          }),
+          prisma.curatedAlert.count(),
+        ])
+      : [[], 0];
+
+    const matchCards = matches.map((match) => {
+      const { snapshots, ...token } = match.token;
+      const latestSnapshot = snapshots[0] ?? null;
+      const current = currentMarketCap(token, latestSnapshot);
+      return {
+        ...match,
+        kind: "match" as const,
+        token,
+        latestSnapshot,
+        // The freshest market cap we have and when it was read, resolved server-side so every
+        // client doesn't have to re-implement the "which of these two is newer" comparison.
+        currentMarketCapUsd: current.marketCapUsd,
+        currentMarketCapAt: current.at,
+        curated: null as ReturnType<typeof serializeCuratedAlert>["curated"] | null,
+      };
+    });
+    const curatedCards = curatedAlerts.map((alert) => serializeCuratedAlert(alert, currentMarketCap));
+
+    const merged = [...matchCards, ...curatedCards].sort(
+      (a, b) => b.matchedAt.getTime() - a.matchedAt.getTime(),
+    );
+    // Folded after slicing, so a card's curated badge depends only on the page it is on - see
+    // foldCuratedIntoPage.
+    const cards = foldCuratedIntoPage(
+      interleave ? merged.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : merged,
+      CURATED_MATCH_LINK_WINDOW_MS,
+    );
+
+    // An upper bound: a page that folds two cards into one leaves this a little high, which at
+    // worst costs a short final page and never a missing card.
+    const totalCount = matchTotal + curatedTotal;
 
     // Marks every token on this page as "currently being looked at," regardless of which user
     // fetched it - see the comment on Token.lastViewedAt. This is a side effect of a GET, which
     // is unusual, but it's idempotent and lossy-tolerant (worst case a token's tracking lapses a
     // few minutes early), and piggybacking on the poll the dashboard already makes avoids a
     // second round trip just to say "I'm looking at these."
-    const tokenIds = [...new Set(matches.map((m) => m.tokenId))];
+    const tokenIds = [...new Set(cards.map((c) => c.tokenId))];
     if (tokenIds.length > 0) {
       await prisma.token.updateMany({ where: { id: { in: tokenIds } }, data: { lastViewedAt: new Date() } });
     }
@@ -123,23 +205,12 @@ export async function registerMatchRoutes(
     // specific tokens to be refreshed right now. Deliberately not awaited: the numbers in *this*
     // response are the ones we already have, and the dashboard's next poll picks up the new ones a
     // few seconds later. A slow or broken DexScreener can't delay or fail the page load.
-    liveRefresher.request(matches.map((m) => m.token));
+    liveRefresher.request(cards.map((c) => c.token));
 
     return {
-      matches: matches.map((match) => {
-        const { snapshots, ...token } = match.token;
-        const latestSnapshot = snapshots[0] ?? null;
-        const current = currentMarketCap(token, latestSnapshot);
-        return {
-          ...match,
-          token,
-          latestSnapshot,
-          // The freshest market cap we have and when it was read, resolved server-side so every
-          // client doesn't have to re-implement the "which of these two is newer" comparison.
-          currentMarketCapUsd: current.marketCapUsd,
-          currentMarketCapAt: current.at,
-        };
-      }),
+      // Still `matches`, and every entry still Match-shaped, so a bundle deployed before this
+      // change renders curated cards as ordinary ones instead of breaking on an unknown key.
+      matches: cards,
       page,
       pageSize: PAGE_SIZE,
       totalCount,

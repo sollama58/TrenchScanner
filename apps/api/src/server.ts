@@ -146,7 +146,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
   await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener, matchStream });
-  await app.register(registerCuratedRoutes, { prefix: "/curated", env, matchStream });
+  await app.register(registerCuratedRoutes, { prefix: "/curated", env, dexScreener, matchStream });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });

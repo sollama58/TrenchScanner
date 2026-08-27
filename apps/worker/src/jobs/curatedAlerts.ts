@@ -90,6 +90,13 @@ export async function maybeEmitCuratedAlert(
   scored: ScoredToken,
   cycleSample: CandidateSampleRef | null,
   env: Env,
+  /**
+   * The scan snapshot this candidate was evaluated from. Recorded on the alert so the feed can
+   * render a curated call with the same statistics a Live Feed card carries (see
+   * CuratedAlert.snapshotId) rather than a market cap alone. Optional so a caller without one
+   * still emits - the card then falls back to the anchor figures.
+   */
+  snapshotId?: string,
 ): Promise<boolean> {
   // The feed's promise is the trenches band. The scan deliberately keeps re-scanning
   // actively-viewed tokens after they leave the band (see scanJob's lastViewedAt path), and the
@@ -128,6 +135,7 @@ export async function maybeEmitCuratedAlert(
     data: {
       tokenId: token.id,
       candidateOutcomeId: anchor.id,
+      snapshotId: snapshotId ?? null,
       source: decision.source,
       confidence: decision.confidence,
       reasons: decision.reasons,
