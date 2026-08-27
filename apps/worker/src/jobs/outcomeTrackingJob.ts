@@ -19,14 +19,6 @@ const OUTCOME_TRACKING_WINDOW_DAYS = 30;
 /** The return that makes a match eligible for the public Leaderboard (a 2x on the alert mcap). */
 export const LEADERBOARD_QUALIFYING_RETURN_PCT = 100;
 
-/**
- * How many rows the age-unbounded repair pass pulls at a time, and the ceiling on how many
- * batches one run will work through. The bound exists so a huge one-off backlog can't turn a
- * nightly job into an hour-long table rewrite; whatever is left is picked up the next night.
- */
-const REPAIR_BATCH_SIZE = 1_000;
-const REPAIR_MAX_BATCHES = 20;
-
 /** The persisted outcome state of one Match, plus the alert-time mcap it's all measured against. */
 export interface MatchOutcomeState {
   /** snapshot.marketCapUsd - the mcap at match time, frozen forever. The baseline for every %. */
@@ -178,7 +170,7 @@ export async function runOutcomeTrackingJob(
     }
   }
 
-  const repaired = await repairOutcomeBookkeeping(now);
+  const repaired = await repairOutcomeBookkeeping(snapshotRetentionDays);
 
   logger.info("outcome tracking job complete", {
     durationMs: Date.now() - startedAt,
@@ -192,61 +184,56 @@ export async function runOutcomeTrackingJob(
 }
 
 /**
- * Brings older matches' derived columns in line with the peak already recorded against them, with
- * no network access at all - everything it needs is on the row.
+ * Recomputes every match's derived outcome columns from the peak already recorded against it.
  *
- * Needed because peakMcapUsd/peakMcapAt shipped before peakReturnPct/hitHundredPctAt did, so every
- * match that peaked before those columns existed still has them null and would otherwise stay
- * invisible to the Leaderboard forever. It also covers matches that have aged out of the live-data
- * window above before ever being reconciled.
+ * peakReturnPct and hitHundredPctAt are functions of peakMcapUsd and the alert-time market cap,
+ * but they are not written by the statement that sets peakMcapUsd - recordMatchPeaks updates the
+ * peak alone, on the scan cadence. That split is what made the "All-Time High (after alert)"
+ * percentage wrong: this used to select rows by `peakReturnPct IS NULL OR (>= 100 AND unstamped)`,
+ * so the moment a match had both a percentage and a stamp it stopped matching, and every later
+ * new high raised the dollar figure while the percentage beside it stayed frozen at whatever it
+ * had been the first time. Reproduced: a token climbing $130k -> $750k kept reading "+300%" long
+ * after it was worth +650%.
  *
- * The `where` is the exact set of rows that can still change: a recorded peak whose return is
- * either not computed yet, or computed and qualifying but not yet stamped. Once a row is fixed it
- * stops matching, so this settles to zero work per run rather than rewriting the table nightly.
+ * So the selection is no longer a guess at which rows might be out of date - it compares the
+ * stored value against the recomputed one and fixes whatever actually disagrees. That makes it
+ * self-healing rather than dependent on catching every way a row can drift, and it covers rows
+ * written before any of this existed for free.
+ *
+ * One statement rather than a batched loop: it only writes rows that genuinely differ, so in
+ * steady state it updates nothing and there is nothing to page through.
  */
-export async function repairOutcomeBookkeeping(now: Date): Promise<number> {
-  let repaired = 0;
-
-  for (let batch = 0; batch < REPAIR_MAX_BATCHES; batch += 1) {
-    const stale = await prisma.match.findMany({
-      where: {
-        peakMcapUsd: { not: null },
-        // Nothing to compute against a zero alert mcap - excluded here so such a row doesn't get
-        // re-selected on every single run only to produce no update.
-        snapshot: { marketCapUsd: { gt: 0 } },
-        OR: [
-          { peakReturnPct: null },
-          { peakReturnPct: { gte: LEADERBOARD_QUALIFYING_RETURN_PCT }, hitHundredPctAt: null },
-        ],
-      },
-      take: REPAIR_BATCH_SIZE,
-      include: { snapshot: { select: { marketCapUsd: true } } },
-    });
-    if (stale.length === 0) break;
-
-    for (const match of stale) {
-      const update = reconcileMatchOutcome(
-        {
-          alertMcapUsd: match.snapshot.marketCapUsd,
-          peakMcapUsd: match.peakMcapUsd,
-          peakMcapAt: match.peakMcapAt,
-          peakReturnPct: match.peakReturnPct,
-          hitHundredPctAt: match.hitHundredPctAt,
-        },
-        undefined,
-        now,
-      );
-      if (!update) continue;
-
-      await prisma.match.update({ where: { id: match.id }, data: update });
-      repaired += 1;
-    }
-
-    // Every fixed row drops out of the `where` above, so a short batch means the backlog is gone.
-    // Bailing on `repaired === 0` as well guarantees termination even if some row somehow keeps
-    // matching without ever producing an update.
-    if (stale.length < REPAIR_BATCH_SIZE || repaired === 0) break;
-  }
-
-  return repaired;
+export async function repairOutcomeBookkeeping(retentionDays: number): Promise<number> {
+  return prisma.$executeRaw`
+    UPDATE "Match" m
+    SET "peakReturnPct"   = d.pct,
+        -- Set once and never moved, and dated to when the qualifying peak was actually seen
+        -- rather than to the run that noticed it.
+        "hitHundredPctAt" = COALESCE(
+          m."hitHundredPctAt",
+          CASE WHEN d.pct >= ${LEADERBOARD_QUALIFYING_RETURN_PCT} THEN COALESCE(m."peakMcapAt", NOW()) END
+        )
+    FROM (
+      SELECT m2.id,
+             -- A zero alert mcap can't produce a meaningful multiple; NULL is the honest answer,
+             -- and the WHERE below then leaves the row alone rather than reselecting it forever.
+             CASE
+               WHEN alert."marketCapUsd" > 0
+               THEN (m2."peakMcapUsd" - alert."marketCapUsd") / alert."marketCapUsd" * 100
+             END AS pct
+      FROM "Match" m2
+      JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
+      WHERE m2."peakMcapUsd" IS NOT NULL
+        AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${retentionDays}::int)
+    ) d
+    WHERE m.id = d.id
+      AND d.pct IS NOT NULL
+      AND (
+        -- IS DISTINCT FROM rather than <>, so a NULL on either side counts as a difference.
+        -- Recomputing the same expression yields a bit-identical double, so an already-correct
+        -- row produces no write and this settles to zero work.
+        m."peakReturnPct" IS DISTINCT FROM d.pct
+        OR (d.pct >= ${LEADERBOARD_QUALIFYING_RETURN_PCT} AND m."hitHundredPctAt" IS NULL)
+      )
+  `;
 }
