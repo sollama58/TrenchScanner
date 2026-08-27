@@ -151,7 +151,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
     await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
     fullPeakSweepDone = true;
-    await repairOutcomeBookkeeping(new Date());
+    await repairOutcomeBookkeeping(env.SNAPSHOT_RETENTION_DAYS);
   } catch (err) {
     // Bookkeeping over data already banked - never worth failing a scan cycle over.
     logger.warn("failed to record match peaks", { error: String(err) });
