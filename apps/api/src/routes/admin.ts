@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, type Env } from "@trenchscanner/core";
+import { prisma, AccessSource, type Env } from "@trenchscanner/core";
 
 const DAY_MS = 86_400_000;
 
@@ -10,6 +10,24 @@ const usersQuerySchema = z.object({
 
 const liveFeedQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(300).default(100),
+});
+
+/** Base58 - the shape of every Solana address. Rejects the empty string and obvious typos. */
+const SOLANA_ADDRESS = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "not a valid Solana address");
+
+const whitelistSchema = z.object({
+  walletAddress: SOLANA_ADDRESS,
+  note: z.string().max(200).optional(),
+  // Null/absent means indefinite; a date lets you hand out a trial without having to remember to
+  // revoke it.
+  expiresAt: z.coerce.date().optional(),
+});
+
+const grantSchema = z.object({
+  walletAddress: SOLANA_ADDRESS,
+  // Capped at two years: a manual grant is a fix for a specific problem, and a typo'd 3650 should
+  // not silently become a decade of free access.
+  days: z.coerce.number().int().min(1).max(730),
 });
 
 /**
@@ -153,5 +171,180 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       outcomeTrackingHourUtc: env.OUTCOME_TRACKING_HOUR_UTC,
       telegramConfigured: Boolean(env.TELEGRAM_BOT_TOKEN),
     };
+  });
+}
+
+/**
+ * Subscription administration: who has access, what came in, and the two levers for fixing it by
+ * hand.
+ *
+ * Registered as its own function rather than inlined above so the burn/whitelist surface stays
+ * legible next to the operational stats it sits beside. Everything here is already behind
+ * `authenticateAdmin` via the parent plugin's preHandler.
+ */
+export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
+  /** Headline numbers for the Subscriptions tab. */
+  app.get("/subscriptions/stats", async () => {
+    const now = new Date();
+    const [active, expired, whitelisted, burns, unattributed, totals, cursor] = await Promise.all([
+      prisma.subscription.count({ where: { expiresAt: { gt: now } } }),
+      prisma.subscription.count({ where: { expiresAt: { lte: now } } }),
+      prisma.whitelist.count(),
+      prisma.burnEvent.count(),
+      prisma.burnEvent.count({ where: { userId: null } }),
+      prisma.burnEvent.aggregate({ _sum: { monthsCredited: true } }),
+      prisma.burnScanCursor.findUnique({ where: { id: "burn-scan" } }),
+    ]);
+
+    // Summed in SQL as numeric rather than in JS: rawAmount is a u64 string, and adding those up
+    // through Number would start losing precision once the ledger gets big.
+    const summed = await prisma.$queryRaw<{ total: string | null }[]>`
+      SELECT SUM("rawAmount"::numeric)::text AS total FROM "BurnEvent"
+    `;
+    // SUM over no rows still returns one row holding NULL, so this should always have an element -
+    // but reading [0] off an array the type system says may be empty is exactly the assumption that
+    // turns an empty ledger into a 500 on the admin page.
+    const total = summed[0]?.total ?? null;
+
+    return {
+      activeSubscriptions: active,
+      expiredSubscriptions: expired,
+      whitelisted,
+      totalBurns: burns,
+      unattributedBurns: unattributed,
+      totalMonthsCredited: totals._sum.monthsCredited ?? 0,
+      totalRawBurned: total ?? "0",
+      scanCursor: cursor?.lastSignature ?? null,
+      scanCursorUpdatedAt: cursor?.updatedAt ?? null,
+    };
+  });
+
+  /** The burn ledger, newest first. `unattributed=true` narrows it to burns with no account. */
+  app.get("/subscriptions/burns", async (request) => {
+    const query = request.query as { limit?: string; unattributed?: string };
+    const limit = Math.min(200, Math.max(1, Number(query.limit) || 50));
+    const burns = await prisma.burnEvent.findMany({
+      where: query.unattributed === "true" ? { userId: null } : {},
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      include: { user: { select: { walletAddress: true } } },
+    });
+    return burns.map((b) => ({
+      signature: b.signature,
+      burnerWallet: b.burnerWallet,
+      rawAmount: b.rawAmount,
+      monthsCredited: b.monthsCredited,
+      blockTime: b.blockTime,
+      creditedAt: b.creditedAt,
+      discoveredBy: b.discoveredBy,
+      // Distinct from burnerWallet only when a burn was credited to an account by hand.
+      linkedWallet: b.user?.walletAddress ?? null,
+      slot: b.slot.toString(),
+    }));
+  });
+
+  /** Everyone with a subscription row, live or lapsed. */
+  app.get("/subscriptions", async (request) => {
+    const query = request.query as { limit?: string };
+    const limit = Math.min(200, Math.max(1, Number(query.limit) || 50));
+    const subs = await prisma.subscription.findMany({
+      orderBy: { expiresAt: "desc" },
+      take: limit,
+      include: { user: { select: { walletAddress: true, _count: { select: { burns: true } } } } },
+    });
+    return subs.map((s) => ({
+      walletAddress: s.user.walletAddress,
+      expiresAt: s.expiresAt,
+      source: s.source,
+      burnCount: s.user._count.burns,
+      updatedAt: s.updatedAt,
+    }));
+  });
+
+  app.get("/whitelist", async () => {
+    return prisma.whitelist.findMany({ orderBy: { createdAt: "desc" } });
+  });
+
+  app.post("/whitelist", async (request, reply) => {
+    const parsed = whitelistSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { walletAddress, note, expiresAt } = parsed.data;
+    const entry = await prisma.whitelist.upsert({
+      where: { walletAddress },
+      update: { note: note ?? null, expiresAt: expiresAt ?? null },
+      create: {
+        walletAddress,
+        note: note ?? null,
+        expiresAt: expiresAt ?? null,
+        addedBy: request.user!.walletAddress,
+      },
+    });
+    request.log.info({ walletAddress, by: request.user!.walletAddress }, "whitelisted a wallet");
+    return entry;
+  });
+
+  app.delete("/whitelist/:walletAddress", async (request) => {
+    const { walletAddress } = request.params as { walletAddress: string };
+    const result = await prisma.whitelist.deleteMany({ where: { walletAddress } });
+    request.log.info(
+      { walletAddress, by: request.user!.walletAddress },
+      "removed a wallet from the whitelist",
+    );
+    return { ok: true, removed: result.count > 0 };
+  });
+
+  /**
+   * Extend a wallet's access by hand.
+   *
+   * The escape hatch for the cases automation can't reach: a burn from a wallet other than the one
+   * they sign in with, a chain reorg nobody expected, a refund. Creates the user if they have
+   * never signed in, so an address pasted from a support conversation works without them having to
+   * log in first.
+   */
+  app.post("/subscriptions/grant", async (request, reply) => {
+    const parsed = grantSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { walletAddress, days } = parsed.data;
+
+    const user = await prisma.user.upsert({
+      where: { walletAddress },
+      update: {},
+      create: { walletAddress },
+      select: { id: true, subscription: { select: { expiresAt: true } } },
+    });
+
+    const current = user.subscription?.expiresAt ?? null;
+    const now = new Date();
+    const base = current !== null && current > now ? current : now;
+    const expiresAt = new Date(base.getTime() + days * 86_400_000);
+
+    await prisma.subscription.upsert({
+      where: { userId: user.id },
+      update: { expiresAt, source: AccessSource.ADMIN_GRANT },
+      create: { userId: user.id, expiresAt, source: AccessSource.ADMIN_GRANT },
+    });
+
+    request.log.info({ walletAddress, days, by: request.user!.walletAddress }, "granted access by hand");
+    return { walletAddress, expiresAt };
+  });
+
+  /**
+   * Revoke access outright, for a refund or an abuse case.
+   *
+   * Deletes the subscription rather than back-dating it, so the row doesn't linger looking like a
+   * lapsed customer. The burn ledger is untouched - that is the record of what happened, and
+   * editing it to make the present tidier would be falsifying it.
+   */
+  app.delete("/subscriptions/:walletAddress", async (request) => {
+    const { walletAddress } = request.params as { walletAddress: string };
+    const user = await prisma.user.findUnique({ where: { walletAddress }, select: { id: true } });
+    if (!user) return { ok: true, revoked: false };
+    const result = await prisma.subscription.deleteMany({ where: { userId: user.id } });
+    request.log.info({ walletAddress, by: request.user!.walletAddress }, "revoked access");
+    return { ok: true, revoked: result.count > 0 };
   });
 }

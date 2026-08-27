@@ -10,3 +10,8 @@ coverage/
 packages/core/generated/
 *.tsbuildinfo
 .husky/_
+
+# Local verification scaffolding: seed scripts, throwaway servers, and the session cookies they
+# mint. Ignored rather than remembered-to-be-deleted, because one of the things that lands here is
+# a signed session JWT and "I'll clean it up before committing" is not a credential control.
+.preview/

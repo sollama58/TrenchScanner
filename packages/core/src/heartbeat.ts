@@ -4,7 +4,7 @@ import { Prisma, prisma } from "./db.js";
  * Background jobs that report a heartbeat. Kept as a literal union (not a free string) so a
  * typo in a job name doesn't silently create an orphan row nobody ever looks at.
  */
-export type HeartbeatJob = "scan" | "digest" | "cleanup" | "outcome-tracking" | "live-price";
+export type HeartbeatJob = "scan" | "digest" | "cleanup" | "outcome-tracking" | "live-price" | "burn-scan";
 
 export interface HeartbeatResult {
   success: boolean;

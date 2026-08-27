@@ -5,7 +5,8 @@ import { prisma } from "@trenchscanner/core";
 const LEADERBOARD_SIZE = 50;
 
 export async function registerLeaderboardRoutes(app: FastifyInstance) {
-  app.addHook("preHandler", app.authenticate);
+  // The leaderboard is built from the same paid pipeline as the feed. Behind the paywall - see authenticateSubscriber in server.ts.
+  app.addHook("preHandler", app.authenticateSubscriber);
 
   /**
    * The best-performing alerts this platform has ever surfaced: every Match that reached at

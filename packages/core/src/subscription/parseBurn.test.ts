@@ -163,6 +163,58 @@ describe("parseBurnTransaction", () => {
     expect(parseBurnTransaction(tx([transfer]))).toEqual({ ok: false, reason: "no_burn_instruction" });
   });
 
+  /**
+   * Captured verbatim from mainnet transaction
+   * 43WG2oAfrLiUgccnJLE3DonuEfb6Ua8D9XknWVNgk1T1xk2uJPQSyRzQbhnJ1SNrr7qVt68mVyWHPzsTdNbESvQn.
+   *
+   * The point of pinning a real one: every field this parser depends on - `authority`, `mint`,
+   * `amount`, and the `program`/`programId` pair - is asserted against what the RPC actually
+   * emits, rather than against what the docs imply it emits. It also arrived at stackHeight 4,
+   * i.e. as an inner instruction, which is exactly the case a top-level-only parser drops on the
+   * floor while telling the user their burn never happened.
+   */
+  const REAL_MAINNET_BURN: ParsedInstruction = {
+    parsed: {
+      info: {
+        account: "9BTvwo4Ci2Qui8A8F8iqAeBjv7TGW23H9nSvTcTLzAeg",
+        amount: "242158630",
+        authority: "HtzGtJC4f4PqwzrVto6PmNhuQLFNeufma6kpWuAiCwjd",
+        mint: "FZN7QZ8ZUUAxMPfxYEYkH3cXUASzH8EqA6B4tyCL8f1j",
+      },
+      type: "burn",
+    },
+    program: "spl-token",
+    programId: SPL_TOKEN_PROGRAM_ID,
+  };
+
+  it("rejects a real mainnet burn of some other token", () => {
+    const nested = tx([], {
+      meta: { err: null, innerInstructions: [{ instructions: [REAL_MAINNET_BURN] }] },
+    });
+    expect(parseBurnTransaction(nested)).toEqual({ ok: false, reason: "wrong_mint" });
+  });
+
+  it("accepts that same real burn shape when it is our mint and clears the price", () => {
+    const ours: ParsedInstruction = {
+      ...REAL_MAINNET_BURN,
+      parsed: {
+        type: "burn",
+        info: {
+          ...REAL_MAINNET_BURN.parsed!.info,
+          mint: SUBSCRIPTION_MINT,
+          amount: SUBSCRIPTION_RAW_PER_MONTH.toString(),
+        },
+      },
+    };
+    const nested = tx([], { meta: { err: null, innerInstructions: [{ instructions: [ours] }] } });
+    const result = parseBurnTransaction(nested);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.credit.burnerWallet).toBe("HtzGtJC4f4PqwzrVto6PmNhuQLFNeufma6kpWuAiCwjd");
+      expect(result.credit.months).toBe(1);
+    }
+  });
+
   it("tolerates a missing blockTime", () => {
     const result = parseBurnTransaction(tx([burnIx()], { blockTime: null }));
     expect(result.ok).toBe(true);

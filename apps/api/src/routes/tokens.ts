@@ -8,7 +8,8 @@ import { prisma } from "@trenchscanner/core";
  * individual filters" rather than an open public tool.
  */
 export async function registerTokenRoutes(app: FastifyInstance) {
-  app.addHook("preHandler", app.authenticate);
+  // Token detail is reached from the paid feed. Behind the paywall - see authenticateSubscriber in server.ts.
+  app.addHook("preHandler", app.authenticateSubscriber);
 
   app.get("/:mintAddress", async (request, reply) => {
     const { mintAddress } = request.params as { mintAddress: string };

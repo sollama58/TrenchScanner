@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import bs58 from "bs58";
-import { prisma, adminWalletSet, type Env, type User } from "@trenchscanner/core";
+import { prisma, adminWalletSet, claimHeldBurns, type Env, type User } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 
@@ -144,6 +144,20 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       create: { walletAddress },
       update: {},
     });
+
+    // Settle any burns this wallet made before it had an account here. Burning first and signing
+    // in afterwards is a completely ordinary order of events - and the one a first-time user is
+    // most likely to follow, since the paywall is what sends them to buy. Without this their
+    // tokens would be gone and the ledger would hold a row nobody ever acted on.
+    const heldMonths = await claimHeldBurns(user.id, walletAddress).catch((err: unknown) => {
+      // Never block a login on this. The reconciler and the /subscription/claim path both settle
+      // the same rows, so a failure here costs a delay, not the access.
+      request.log.error({ err, walletAddress }, "failed to settle held burns on login");
+      return 0;
+    });
+    if (heldMonths > 0) {
+      request.log.info({ walletAddress, months: heldMonths }, "settled burns made before sign-up");
+    }
 
     const token = await app.sessionSigner.sign({ userId: user.id, walletAddress: user.walletAddress });
     reply.setCookie(SESSION_COOKIE_NAME, token, {

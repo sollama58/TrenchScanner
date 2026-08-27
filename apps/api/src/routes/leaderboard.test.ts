@@ -30,6 +30,10 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
     const env = loadEnv();
     const user = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet` } });
     userId = user.id;
+    // The leaderboard now sits behind the subscription gate, so this fixture needs access to
+    // reach it at all. Whitelisted rather than given a subscription: this test is about ranking,
+    // and threading a burn through it would only add a second thing that could fail.
+    await prisma.whitelist.create({ data: { walletAddress: `${TAG}-wallet`, addedBy: TAG } });
     const filter = await prisma.userFilter.create({
       data: { userId, name: TAG, mcapMin: 10_000, mcapMax: 1_000_000 },
     });
@@ -79,6 +83,7 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
   });
 
   afterAll(async () => {
+    await prisma.whitelist.deleteMany({ where: { walletAddress: `${TAG}-wallet` } });
     if (!dbAvailable) return;
     await app?.close();
     await prisma.match.deleteMany({ where: { userId } });
