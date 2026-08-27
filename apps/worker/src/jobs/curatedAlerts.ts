@@ -2,6 +2,7 @@ import {
   prisma,
   createLogger,
   evaluateCandidateHeuristic,
+  inMcapBand,
   notifyCuratedAlert,
   buildCandidateFeatures,
   scoreCandidateWithModel,
@@ -90,6 +91,16 @@ export async function maybeEmitCuratedAlert(
   cycleSample: CandidateSampleRef | null,
   env: Env,
 ): Promise<boolean> {
+  // The feed's promise is the trenches band. The scan deliberately keeps re-scanning
+  // actively-viewed tokens after they leave the band (see scanJob's lastViewedAt path), and the
+  // band refresh has a near-band tolerance - both are right for user filters, which carry their
+  // own mcap bounds, but a curated alert has no user filter behind it. Without this check, a
+  // $5M breakout someone happens to have open (or a sub-band token the tolerance let through)
+  // can end up curated, whatever the gate or model thinks of its other numbers.
+  if (!inMcapBand(scored.marketCapUsd, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX })) {
+    return false;
+  }
+
   const decision = await decideCuration(scored, env);
   if (!decision.curate) return false;
 

@@ -1,5 +1,5 @@
 import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, scoredFromFeatures } from "./features.js";
-import { evaluateCandidateHeuristic } from "./curator.js";
+import { evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator.js";
 
 /**
  * The self-learning half of Curated Alerts: a weighted logistic regression trained on the
@@ -237,6 +237,13 @@ export interface WalkForwardOptions {
   targetPerHour: number;
   /** The heuristic's score floor (env CURATED_MIN_SCORE), so both sides play the real gate. */
   heuristicMinScore: number;
+  /**
+   * The mcap band emission actually enforces (env MCAP_FILTER_MIN/MAX). Applied as a pre-filter
+   * to BOTH sides' emissions here, because it is applied before either curator in production
+   * (see maybeEmitCuratedAlert) - without it the backtest would grade the curators on
+   * out-of-band emissions production never makes. Omitted = no band (tests).
+   */
+  mcapBand?: McapBand;
   /** Total-rows floor below which promotion is refused outright. */
   minRowsToPromote?: number;
 }
@@ -282,14 +289,32 @@ export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOption
       const test = sorted.slice(start, end);
       if (train.length < minTrainRows || test.length < minTestRows) continue;
 
+      const inBand = (r: TrainingRow) => !opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand);
+
       const params = trainCurator(train);
-      const threshold = calibrateThreshold(params, train, opts.targetPerHour);
+      // Calibrated on the band-filtered train slice, exactly as the training job calibrates the
+      // deployable threshold - a fold whose threshold is ranked against unemittable rows grades
+      // a model production never ships. Training itself stays full-window (mcap is a feature).
+      const trainEmittable = train.filter(inBand);
+      const threshold = calibrateThreshold(
+        params,
+        trainEmittable.length > 0 ? trainEmittable : train,
+        opts.targetPerHour,
+      );
 
       const spanMs = test[test.length - 1]!.anchorAt.getTime() - test[0]!.anchorAt.getTime();
       const spanHours = Math.max(1, spanMs / 3_600_000);
 
-      const modelEmitted = test.filter((r) => scoreCandidateWithModel(params, r.features) >= threshold);
-      const heuristicEmitted = test.filter(
+      // Everything a fold judges - emissions AND the blind-chance baselines - is measured over
+      // the rows either curator could actually emit. Out-of-band test rows skew high (they're
+      // disproportionately past breakouts still sampled via the actively-viewed path), and
+      // letting them into meanLabelPerRow would raise the "beat blind chance" bar with wins
+      // nobody was allowed to pick.
+      const testEmittable = test.filter(inBand);
+      const modelEmitted = testEmittable.filter(
+        (r) => scoreCandidateWithModel(params, r.features) >= threshold,
+      );
+      const heuristicEmitted = testEmittable.filter(
         (r) =>
           evaluateCandidateHeuristic(
             scoredFromFeatures(r.features, r.anchorPriceUsd, r.anchorMcapUsd),
@@ -302,8 +327,14 @@ export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOption
         testTo: test[test.length - 1]!.anchorAt.toISOString(),
         trainRows: train.length,
         testRows: test.length,
-        baseWinRatePct: (test.filter((r) => r.labelValue > 0).length / test.length) * 100,
-        meanLabelPerRow: test.reduce((s, r) => s + r.labelValue, 0) / test.length,
+        baseWinRatePct:
+          testEmittable.length > 0
+            ? (testEmittable.filter((r) => r.labelValue > 0).length / testEmittable.length) * 100
+            : 0,
+        meanLabelPerRow:
+          testEmittable.length > 0
+            ? testEmittable.reduce((s, r) => s + r.labelValue, 0) / testEmittable.length
+            : 0,
         model: sideMetrics(modelEmitted, spanHours),
         heuristic: sideMetrics(heuristicEmitted, spanHours),
       });

@@ -123,3 +123,20 @@ function buildReasons(scored: ScoredToken, buyRatio: number | undefined): string
   }
   return reasons.slice(0, 4);
 }
+
+/** The mcap band curated emission is confined to - env MCAP_FILTER_MIN/MAX at every call site. */
+export interface McapBand {
+  min: number;
+  max: number;
+}
+
+/**
+ * THE band predicate for curation, shared by emission (curatedAlerts.ts), threshold calibration
+ * (curatorTrainingJob.ts), and the walk-forward exam (trainer.ts). One definition on purpose:
+ * those three must agree exactly - a backtest grading a different band than production emits is
+ * precisely the bug class the band checks exist to prevent - and three hand-written copies of an
+ * inclusive range comparison is how they'd quietly stop agreeing.
+ */
+export function inMcapBand(mcapUsd: number, band: McapBand): boolean {
+  return mcapUsd >= band.min && mcapUsd <= band.max;
+}

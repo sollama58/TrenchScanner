@@ -154,6 +154,34 @@ describe("walkForwardEvaluate", () => {
     expect(result.verdict.promote).toBe(true);
   });
 
+  it("keeps out-of-band rows out of both sides' emissions, matching production", () => {
+    // Every row is far above the band ceiling: with the band passed (as the training job passes
+    // it), neither curator may emit a single one, however strong the model's signal is.
+    const rows = syntheticRows(3_000).map((r) => ({ ...r, anchorMcapUsd: 5_000_000 }));
+    const excluded = walkForwardEvaluate(rows, {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      mcapBand: { min: 50_000, max: 500_000 },
+      minRowsToPromote: 1_500,
+    });
+    for (const fold of excluded.folds) {
+      expect(fold.model.emitted).toBe(0);
+      expect(fold.heuristic.emitted).toBe(0);
+    }
+    expect(excluded.verdict.promote).toBe(false);
+
+    // The companion direction: the SAME rows under a band that contains them must emit - this is
+    // what catches an inverted (always-false) band predicate, which the assertions above would
+    // wave straight through.
+    const included = walkForwardEvaluate(rows, {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      mcapBand: { min: 1, max: 10_000_000 },
+      minRowsToPromote: 1_500,
+    });
+    for (const fold of included.folds) expect(fold.model.emitted).toBeGreaterThan(0);
+  });
+
   it("refuses to judge on too little history", () => {
     const result = walkForwardEvaluate(syntheticRows(100), {
       targetPerHour: 5,

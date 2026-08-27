@@ -111,6 +111,20 @@ describe.skipIf(!dbAvailable)("maybeEmitCuratedAlert", () => {
     expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(2);
   });
 
+  it("never curates outside the mcap band, however good the candidate looks", async () => {
+    // Actively-viewed tokens keep being scanned after leaving the band - a breakout at many
+    // times the band ceiling must not reach the curated feed on the back of that.
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-out-of-band` } });
+    const scored = curatableFixture(token.mintAddress, { marketCapUsd: env.MCAP_FILTER_MAX * 10 });
+
+    expect(await maybeEmitCuratedAlert(token, scored, null, env)).toBe(false);
+    expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(0);
+
+    const under = await prisma.token.create({ data: { mintAddress: `${TAG}-under-band` } });
+    const scoredUnder = curatableFixture(under.mintAddress, { marketCapUsd: env.MCAP_FILTER_MIN / 2 });
+    expect(await maybeEmitCuratedAlert(under, scoredUnder, null, env)).toBe(false);
+  });
+
   it("emits nothing for a candidate the gate rejects, and creates no extra rows doing it", async () => {
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-rejected` } });
     const scored = curatableFixture(token.mintAddress, { liquidityUsd: 2_000 });

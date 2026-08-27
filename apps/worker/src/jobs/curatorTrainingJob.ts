@@ -4,6 +4,7 @@ import {
   trainCurator,
   calibrateThreshold,
   walkForwardEvaluate,
+  inMcapBand,
   CURATOR_MODEL_KIND,
   type Env,
   type TrainingRow,
@@ -59,18 +60,30 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     anchorMcapUsd: r.anchorMcapUsd,
   }));
 
+  const mcapBand = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
   const evaluation = walkForwardEvaluate(trainingRows, {
     targetPerHour: env.CURATED_TARGET_PER_HOUR,
     heuristicMinScore: env.CURATED_MIN_SCORE,
+    // Emission enforces the band before either curator runs (see maybeEmitCuratedAlert), so the
+    // exam has to as well - otherwise it grades emissions production never makes.
+    mcapBand,
     minRowsToPromote: env.CURATOR_MIN_TRAINING_ROWS,
   });
 
   // The deployable model trains on the FULL window - the walk-forward folds were the exam, this
   // is the model that actually ships, with strictly more (and newer) data than any fold saw.
+  // Out-of-band samples still teach (mcap is a feature), but the emission threshold is
+  // calibrated on in-band rows only: those are the only candidates it will ever be applied to,
+  // and letting unemittable rows into the rate math would skew it quiet.
   const trained = trainCurator(trainingRows);
+  const inBandRows = trainingRows.filter((r) => inMcapBand(r.anchorMcapUsd, mcapBand));
   const params: TrainedCuratorParams = {
     ...trained,
-    threshold: calibrateThreshold(trained, trainingRows, env.CURATED_TARGET_PER_HOUR),
+    threshold: calibrateThreshold(
+      trained,
+      inBandRows.length > 0 ? inBandRows : trainingRows,
+      env.CURATED_TARGET_PER_HOUR,
+    ),
   };
 
   const modelId = await applyTrainingResult(evaluation, params, trainingRows.length, windowStart);
