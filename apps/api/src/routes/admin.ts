@@ -128,7 +128,20 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
     return {
       scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
       livePriceIntervalMinutes: env.LIVE_PRICE_INTERVAL_MINUTES,
+      livePriceMaxTracked: env.LIVE_PRICE_MAX_TRACKED,
       activeViewWindowMinutes: env.ACTIVE_VIEW_WINDOW_MINUTES,
+      // The constraint that lets the scan run every minute without multiplying RugCheck traffic
+      // one-for-one - see the worker's rugCheckProfiles.ts. Worth reading next to the scan
+      // interval, since the two are only sound in combination.
+      rugCheckCacheTtlMinutes: env.RUGCHECK_CACHE_TTL_MINUTES,
+      // The most consequential one to be able to read back: this is the span every user's
+      // minHolderGrowthPct threshold is actually measured over, so "is +5% growth a lot?" cannot
+      // be answered without it.
+      holderGrowthWindowMinutes: env.HOLDER_GROWTH_WINDOW_MINUTES,
+      // Not a scan setting, but the value that decides both the SIWS domain binding and the
+      // session cookie's SameSite - the two things most likely to be behind "sign-in doesn't work
+      // in this browser", and otherwise only visible in the Render dashboard.
+      publicAppDomain: env.PUBLIC_APP_DOMAIN,
       digestHourUtc: env.DIGEST_HOUR_UTC,
       mcapFilterMin: env.MCAP_FILTER_MIN,
       mcapFilterMax: env.MCAP_FILTER_MAX,

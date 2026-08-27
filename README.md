@@ -39,7 +39,7 @@ A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; e
 - **Monitoring** - every worker job's heartbeat (scan/live-price/digest/cleanup/outcome-tracking), not just the single-job dot in the navbar's `HealthBadge`.
 - **Live Feed** - every tracked token's latest snapshot, unfiltered: upstream of both the rug screen and per-user filter matching, so a token that failed the rug screen (with its reasons) or never matched anyone's filter is visible here even though it never produces a `Match` row anywhere else in the product.
 - **Users** - wallet, join date, filter/match counts, Telegram link status, and a force-unlink action for moderation.
-- **Config** - the non-secret half of the shared env schema (mcap band, scan cadence, retention windows, ...), so you can see what's actually running without opening the Render dashboard.
+- **Config** - the non-secret half of the shared env schema (mcap band, scan cadence, RugCheck cache TTL, holder-growth window, retention windows, `PUBLIC_APP_DOMAIN`, ...), so you can see what's actually running without opening the Render dashboard. `apps/api/src/routes/admin.config.test.ts` asserts the endpoint still returns every one of them and no secret - the tab fails silently otherwise, by simply rendering one fewer row.
 
 ## Local development
 
