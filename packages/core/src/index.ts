@@ -24,3 +24,8 @@ export * from "./scoring/scorer.js";
 export * from "./scoring/matchFilters.js";
 export * from "./scoring/pipeline.js";
 export * from "./subscription/index.js";
+
+export * from "./curation/features.js";
+export * from "./curation/labels.js";
+export * from "./curation/curator.js";
+export * from "./curation/trainer.js";

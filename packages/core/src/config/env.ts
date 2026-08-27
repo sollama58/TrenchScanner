@@ -83,6 +83,44 @@ const envSchema = z.object({
   // hour after cleanup purely to keep the two daily jobs from overlapping on a cold start.
   OUTCOME_TRACKING_HOUR_UTC: z.coerce.number().min(0).max(23).default(5),
 
+  // Curated-alerts training data (see apps/worker/src/jobs/candidateOutcomeJob.ts and
+  // packages/core/src/curation/). Every rug-screen-passing candidate gets a CandidateOutcome row
+  // at most once per CANDIDATE_SAMPLE_SPACING_MINUTES, and the watcher job price-checks open rows
+  // every CANDIDATE_WATCH_INTERVAL_MINUTES (the label is "2x within the hour", so the sampling
+  // cadence is also the label's resolution - stretching it coarsens every future label).
+  // CANDIDATE_WATCH_MAX_BATCH caps rows per sweep as DexScreener back-pressure; at the default
+  // creation rate the whole open set fits in one sweep with room to spare.
+  // Retention is deliberately much longer than SNAPSHOT_RETENTION_DAYS - these rows ARE the
+  // training set, they carry their own copy of the features precisely so snapshots can be pruned
+  // on the normal horizon, and 180 days is enough history to ride out a full meta-shift.
+  CANDIDATE_SAMPLE_SPACING_MINUTES: z.coerce.number().positive().default(60),
+  CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
+  CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(600),
+  CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(180),
+
+  // Curated Alerts feed (see packages/core/src/curation/curator.ts). CURATED_MIN_SCORE is the
+  // heuristic curator's composite-score floor - env-tunable so emission volume can be steered in
+  // production without a deploy while the pipeline is young. The cooldown stops one token from
+  // being re-alerted every cycle it stays hot; a re-emission after the cooldown is a genuinely
+  // new call on a token that survived a day.
+  // 55, not higher: replayed against live in-band samples, composite scores run p50~40 / p90~63
+  // with 70+ essentially unreached, and the whole gate passes ~2-3% of samples at 55 - the right
+  // order of magnitude for the feed's a-few-per-hour target once the per-token cooldown bites.
+  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
+  CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
+
+  // The nightly curator-training job (apps/worker/src/jobs/curatorTrainingJob.ts): trains on the
+  // rolling window of finalized CandidateOutcome rows, walk-forward-evaluates against the
+  // heuristic, and promotes the model to be the live curator only when it wins (see trainer.ts).
+  // TARGET_PER_HOUR steers the model's emission-threshold calibration - a target, never a quota:
+  // the calibrated threshold still has an absolute quality floor, so dead hours emit nothing.
+  // MIN_TRAINING_ROWS is the promotion floor - below it the job still trains and records the
+  // evaluation (the learning panel shows progress) but never lets the model take over.
+  CURATOR_TRAINING_HOUR_UTC: z.coerce.number().min(0).max(23).default(6),
+  CURATOR_TRAINING_WINDOW_DAYS: z.coerce.number().positive().default(60),
+  CURATED_TARGET_PER_HOUR: z.coerce.number().positive().default(6),
+  CURATOR_MIN_TRAINING_ROWS: z.coerce.number().int().positive().default(1500),
+
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   // Used only to build the "tap to open Telegram" deep link on the dashboard - not required
   // for the bot itself to function, but without it users have to type /start <code> manually.

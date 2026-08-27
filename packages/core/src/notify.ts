@@ -30,6 +30,27 @@ export interface MatchNotification {
  * simply misses it, and the client's fallback poll covers that. So a failure here must never fail
  * the scan cycle that produced the match - the match row is already committed either way.
  */
+/**
+ * Channel for curated alerts - separate from MATCH_CHANNEL because the fan-out rule is opposite:
+ * a match belongs to one user and must never reach anyone else's stream, while a curated alert
+ * is broadcast to every connected subscriber.
+ */
+export const CURATED_CHANNEL = "trenchscanner_curated";
+
+export interface CuratedAlertNotification {
+  alertId: string;
+}
+
+/** Same contract and caveats as notifyMatchCreated, for the broadcast curated feed. */
+export async function notifyCuratedAlert(notification: CuratedAlertNotification): Promise<void> {
+  try {
+    const payload = JSON.stringify(notification);
+    await prisma.$executeRaw`SELECT pg_notify(${CURATED_CHANNEL}, ${payload})`;
+  } catch (err) {
+    logger.warn("failed to publish curated alert notification", { error: String(err) });
+  }
+}
+
 export async function notifyMatchCreated(notification: MatchNotification): Promise<void> {
   try {
     const payload = JSON.stringify(notification);

@@ -31,6 +31,8 @@ import { resolveMayhemMode } from "./mayhemMode.js";
 import { recordMatchPeaks } from "./matchPeaks.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { repairOutcomeBookkeeping } from "./outcomeTrackingJob.js";
+import { recordCandidateSample } from "./candidateOutcomeJob.js";
+import { maybeEmitCuratedAlert } from "./curatedAlerts.js";
 
 const logger = createLogger("scan-job");
 
@@ -434,6 +436,20 @@ async function processCandidate(
 
   if (!scored.rugScreen.passed) {
     return 0;
+  }
+
+  // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample
+  // for why it's every candidate and not just matched ones - then let the curator decide whether
+  // this moment goes on the public feed. Never worth failing the candidate over: user matching
+  // below is the product, this is the product's homework.
+  try {
+    const sample = await recordCandidateSample(token.id, scored, env);
+    await maybeEmitCuratedAlert(token, scored, sample, env);
+  } catch (err) {
+    logger.warn("failed to record candidate outcome sample / curated alert", {
+      mint: candidate.mintAddress,
+      error: String(err),
+    });
   }
 
   let matchCount = 0;
