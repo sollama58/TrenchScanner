@@ -114,6 +114,11 @@ model Token {
   symbol         String?
   name           String?
   pairAddress    String? // primary DexScreener pair used for pricing
+  /// The token's logo, as hosted by DexScreener. Read from the pair response the scan already
+  /// fetches rather than derived from the mint address: CDN URL shapes are undocumented and
+  /// change, and a guessed one 404s silently for every mint that has no artwork - which is a lot
+  /// of them. Null means DexScreener has no image, not that we failed to look.
+  imageUrl       String?
   firstSeenAt    DateTime @default(now())
   hasTwitter     Boolean  @default(false)
   hasTelegram    Boolean  @default(false)
