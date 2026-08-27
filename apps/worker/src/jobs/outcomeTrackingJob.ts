@@ -1,4 +1,5 @@
 import { prisma, createLogger, type DexScreenerClient } from "@trenchscanner/core";
+import { recordMatchPeaks } from "./matchPeaks.js";
 
 const logger = createLogger("outcome-tracking-job");
 
@@ -121,9 +122,18 @@ export function reconcileMatchOutcome(
  * high-scored matches run further than low-scored ones?) instead of staying a set of reasoned-but
  * -unvalidated weights forever.
  */
-export async function runOutcomeTrackingJob(dexScreener: DexScreenerClient): Promise<void> {
+export async function runOutcomeTrackingJob(
+  dexScreener: DexScreenerClient,
+  snapshotRetentionDays: number,
+): Promise<void> {
   const startedAt = Date.now();
   logger.info("outcome tracking job starting");
+
+  // A full, unbounded peak sweep once a day. The scan cycle's own pass is scoped to tokens that
+  // moved recently, which is right for a one-minute cadence but means a token whose history was
+  // written before this deploy - or during a stretch when the worker was down - is never revisited
+  // by it. This is the safety net for exactly those rows.
+  const swept = await recordMatchPeaks(snapshotRetentionDays);
 
   const cutoff = new Date(startedAt - OUTCOME_TRACKING_WINDOW_DAYS * 86_400_000);
   const matches = await prisma.match.findMany({
@@ -176,6 +186,7 @@ export async function runOutcomeTrackingJob(dexScreener: DexScreenerClient): Pro
     uniqueMints,
     peaksUpdated: updated,
     missingLiveData: skipped,
+    peaksRecoveredInFullSweep: swept.fromSnapshots + swept.fromLivePings,
     bookkeepingRepaired: repaired,
   });
 }

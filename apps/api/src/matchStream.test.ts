@@ -1,14 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { MatchStream, type StreamSink } from "./matchStream.js";
 
-/** Collects what would have gone down the socket. `fail` simulates a peer that has vanished. */
-function sink(options: { fail?: boolean } = {}) {
+/**
+ * Collects what would have gone down the socket.
+ *
+ * `destroyed` is how a real peer disappearance actually presents: Node's ServerResponse.write()
+ * to a torn-down socket returns normally and reports the failure through its callback - it does
+ * NOT throw. An earlier version of this fake threw synchronously, which made the drop-dead-
+ * subscriber test pass against behaviour that never happens in production. `throws` is kept as a
+ * separate mode purely to cover the belt-and-braces catch.
+ */
+function sink(options: { destroyed?: boolean; asyncError?: boolean; throws?: boolean } = {}) {
   const written: string[] = [];
   let ended = false;
   const s: StreamSink = {
-    write(chunk) {
-      if (options.fail) throw new Error("EPIPE");
+    destroyed: options.destroyed ?? false,
+    writableEnded: false,
+    write(chunk, callback) {
+      if (options.throws) throw new Error("EPIPE");
+      if (options.asyncError) {
+        callback?.(new Error("EPIPE"));
+        return false;
+      }
       written.push(chunk);
+      callback?.(null);
       return true;
     },
     end() {
@@ -69,13 +84,32 @@ describe("MatchStream.dispatch", () => {
     expect(alice.written).toEqual([]);
   });
 
-  it("drops a subscriber whose socket is already gone", () => {
-    // A client that vanished without a FIN (laptop lid, dead mobile network) only shows up as a
-    // failed write - without this it would sit in the set collecting heartbeats forever.
+  it("drops a subscriber whose response is already destroyed", () => {
+    // A client that vanished without a FIN (laptop lid, dead mobile network). Writing to it does
+    // not throw, so the destroyed flag is the only thing that catches this.
     const s = stream();
-    const dead = sink({ fail: true });
-    s.subscribe("alice", dead.sink);
+    s.subscribe("alice", sink({ destroyed: true }).sink);
     expect(s.subscriberCount).toBe(1);
+
+    s.dispatch(notification("alice"));
+
+    expect(s.subscriberCount).toBe(0);
+  });
+
+  it("drops a subscriber whose write fails asynchronously", () => {
+    // The other real shape: the socket looked fine at write time and the error arrives via the
+    // callback. Passing a callback is also what stops Node treating it as an unhandled error.
+    const s = stream();
+    s.subscribe("alice", sink({ asyncError: true }).sink);
+
+    s.dispatch(notification("alice"));
+
+    expect(s.subscriberCount).toBe(0);
+  });
+
+  it("still drops a sink that throws synchronously", () => {
+    const s = stream();
+    s.subscribe("alice", sink({ throws: true }).sink);
 
     s.dispatch(notification("alice"));
 
@@ -119,7 +153,7 @@ describe("MatchStream.sendHeartbeat", () => {
 
   it("sweeps out subscribers whose socket died between events", () => {
     const s = stream();
-    s.subscribe("alice", sink({ fail: true }).sink);
+    s.subscribe("alice", sink({ destroyed: true }).sink);
 
     s.sendHeartbeat();
 

@@ -1,24 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { prisma, type Prisma } from "@trenchscanner/core";
+import { prisma } from "@trenchscanner/core";
 
 /** How many entries the Leaderboard shows. */
 const LEADERBOARD_SIZE = 50;
-
-/**
- * What makes a Match eligible for the board: it reached at least +100% (2x) over its alert-time
- * market cap, and we have the actual figure to rank it by.
- *
- * Requiring peakReturnPct explicitly matters beyond tidiness. Postgres sorts NULLs *first* under
- * `ORDER BY ... DESC`, so a stamped-but-unquantified row would take the top spot on the board and
- * render as a dash - the opposite of what a "best returns" ranking should do with a row it can't
- * rank. The outcome-tracking job now keeps the two columns in lockstep, so this should never
- * exclude anything; it's here so that if they ever drift again, the failure is a missing entry
- * rather than a corrupted ranking.
- */
-const ELIGIBLE: Prisma.MatchWhereInput = {
-  hitHundredPctAt: { not: null },
-  peakReturnPct: { not: null },
-};
 
 export async function registerLeaderboardRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.authenticate);
@@ -33,56 +17,57 @@ export async function registerLeaderboardRoutes(app: FastifyInstance) {
    * everything else with near-identical rows.
    */
   app.get("/", async () => {
-    // Rank tokens by their best alert *in the database*, then fetch just those rows. The obvious
-    // alternative - take the top N matches and de-duplicate by token afterwards - silently breaks
-    // at exactly the moment this feature gets interesting: one token that a hundred users' filters
-    // all matched contributes a hundred near-identical rows, and with enough of them the board
-    // never reaches N distinct tokens no matter how large the pool is. Grouping first makes the
-    // count exact regardless of how many duplicate matches any one token has.
-    const topTokens = await prisma.match.groupBy({
-      by: ["tokenId"],
-      where: ELIGIBLE,
-      _max: { peakReturnPct: true },
-      orderBy: { _max: { peakReturnPct: "desc" } },
-      take: LEADERBOARD_SIZE,
-    });
-    if (topTokens.length === 0) return { entries: [] };
+    // One row per token - its single best-returning alert - ranked, in one statement.
+    //
+    // DISTINCT ON rather than "group by token, then look the winning row back up by its
+    // peakReturnPct": that lookup compared a float for equality after a round trip through the
+    // driver, and measurement showed the value does not always come back bit-identical (a stored
+    // 110.00000000000001 read back as 110, 333.33333333333337 as 333.3333333333334). Those
+    // happened to still match, but a ranking that silently drops an entry when a comparison
+    // misses by one ulp is not something to leave in place. Selecting the row directly removes
+    // the comparison altogether.
+    //
+    // Doing it in SQL also fixes the crowd-out this endpoint originally had: taking the top N
+    // rows and de-duplicating by token afterwards meant one token that a hundred users' filters
+    // all matched could fill the whole board with near-identical rows.
+    const ranked = await prisma.$queryRaw<{ id: string }[]>`
+      SELECT best.id
+      FROM (
+        SELECT DISTINCT ON (m."tokenId") m.id, m."peakReturnPct"
+        FROM "Match" m
+        WHERE m."hitHundredPctAt" IS NOT NULL
+          AND m."peakReturnPct" IS NOT NULL
+        ORDER BY m."tokenId", m."peakReturnPct" DESC
+      ) best
+      ORDER BY best."peakReturnPct" DESC
+      LIMIT ${LEADERBOARD_SIZE}
+    `;
+    if (ranked.length === 0) return { entries: [] };
 
-    // Pull back the specific match behind each token's best figure. Matching on the exact
-    // peakReturnPct we just read keeps this to one row per token (plus any exact tie) instead of
-    // every match those tokens ever produced.
-    const best = await prisma.match.findMany({
-      where: {
-        ...ELIGIBLE,
-        OR: topTokens.map((group) => ({
-          tokenId: group.tokenId,
-          peakReturnPct: group._max.peakReturnPct,
-        })),
-      },
+    const rows = await prisma.match.findMany({
+      where: { id: { in: ranked.map((r) => r.id) } },
       include: { token: true, snapshot: true },
     });
+    const byId = new Map(rows.map((row) => [row.id, row]));
 
-    const bestByToken = new Map(best.map((match) => [match.tokenId, match]));
-
-    // Rendered in the groupBy's order, which is the ranking - `best` came back in whatever order
-    // Postgres found the rows in, so it can't be used for ordering directly.
-    const entries = topTokens.flatMap((group) => {
-      const match = bestByToken.get(group.tokenId);
-      if (!match) return [];
-      return [
-        {
-          matchId: match.id,
-          token: match.token,
-          alertMcapUsd: match.snapshot.marketCapUsd,
-          peakMcapUsd: match.peakMcapUsd,
-          peakMcapAt: match.peakMcapAt,
-          returnPct: match.peakReturnPct,
-          matchedAt: match.matchedAt,
-          hitHundredPctAt: match.hitHundredPctAt,
-        },
-      ];
-    });
-
-    return { entries };
+    // Rendered in the ranked order - `rows` comes back in whatever order Postgres found them.
+    return {
+      entries: ranked.flatMap(({ id }) => {
+        const match = byId.get(id);
+        if (!match) return [];
+        return [
+          {
+            matchId: match.id,
+            token: match.token,
+            alertMcapUsd: match.snapshot.marketCapUsd,
+            peakMcapUsd: match.peakMcapUsd,
+            peakMcapAt: match.peakMcapAt,
+            returnPct: match.peakReturnPct,
+            matchedAt: match.matchedAt,
+            hitHundredPctAt: match.hitHundredPctAt,
+          },
+        ];
+      }),
+    };
   });
 }

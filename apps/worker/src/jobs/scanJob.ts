@@ -37,6 +37,15 @@ const logger = createLogger("scan-job");
 /** Once a user has been alerted for a token+filter, don't re-alert for it again within this window. */
 const ALERT_COOLDOWN_HOURS = 12;
 
+/**
+ * Whether this process has already done one unbounded peak-recovery sweep. The first cycle after
+ * start-up does the expensive full pass (which is also what backfills history on a fresh deploy);
+ * every cycle after it runs the cheap scoped version. Process-local on purpose - a restart
+ * repeating the sweep once is harmless and idempotent, and it means no coordination is needed
+ * between instances.
+ */
+let fullPeakSweepDone = false;
+
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
  *  run concurrently across candidates - each touches a different token's rows - and cheap now
  *  that every external API call has been hoisted out of the loop entirely (market data, rug
@@ -134,7 +143,14 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   // inside a single day, which is most of them. See recordMatchPeaks for the full reasoning.
   // Placed before the early return below so it still runs on a cycle that finds nothing in band.
   try {
-    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS);
+    // Scoped to tokens observed in the last few cycles, except on the first pass after start-up.
+    // That first full sweep is what retroactively recovers peaks from history already in the
+    // database (and what fills the Leaderboard on deploy); every pass after it only has to look
+    // at tokens something actually moved, so the per-cycle cost tracks how much was scanned rather
+    // than how much history has accumulated.
+    const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
+    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
+    fullPeakSweepDone = true;
     await repairOutcomeBookkeeping(new Date());
   } catch (err) {
     // Bookkeeping over data already banked - never worth failing a scan cycle over.
