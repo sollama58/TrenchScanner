@@ -133,7 +133,14 @@ const envSchema = z.object({
   // How far back a cold start looks. Only used when there is no cursor yet (a fresh deploy, or a
   // wiped BurnScanCursor); after that every pass walks forward from where the last one stopped.
   // Bounded so a first run doesn't try to page through the mint's entire history.
-  BURN_SCAN_COLD_START_DAYS: z.coerce.number().positive().default(30),
+  //
+  // The default is sized to the product, not to politeness: a single burn can buy up to
+  // MAX_MONTHS_PER_BURN (12) months, so the disaster-recovery path - rebuild the ledger by
+  // rescanning the chain - has to be able to see a burn that far back, or the people who paid
+  // the most are exactly the ones a rebuild would drop. 400 days = 12 months + margin. At this
+  // mint's measured ~53 tx/day that is ~21k signatures, which the cursor walks across a few
+  // passes; it is a one-time cost on a fresh install, not a recurring one.
+  BURN_SCAN_COLD_START_DAYS: z.coerce.number().positive().default(400),
 });
 
 /**

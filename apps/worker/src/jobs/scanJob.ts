@@ -225,22 +225,29 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     logger.info("skipping wallet-freshness pass - no active filter uses maxFreshTop10WalletPct");
   }
 
-  let matchCount = 0;
+  // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
+  // counter BEFORE the await and writes it after, so two candidates finishing close together can
+  // each add to the same stale base and lose an increment. Only a log line was ever wrong, but a
+  // counter that undercounts under exactly the concurrency it was built for is not worth keeping.
+  const perCandidateMatches: number[] = [];
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
     try {
-      matchCount += await processCandidate(
-        candidate,
-        firstSeenByMint.get(candidate.mintAddress),
-        onChainByMint.get(candidate.mintAddress) ?? null,
-        activeFilters,
-        earliestActivityByAddress,
-        bot,
-        env,
+      perCandidateMatches.push(
+        await processCandidate(
+          candidate,
+          firstSeenByMint.get(candidate.mintAddress),
+          onChainByMint.get(candidate.mintAddress) ?? null,
+          activeFilters,
+          earliestActivityByAddress,
+          bot,
+          env,
+        ),
       );
     } catch (err) {
       logger.error("failed to process candidate", { mint: candidate.mintAddress, error: String(err) });
     }
   });
+  const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
 
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,

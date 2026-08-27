@@ -333,6 +333,50 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
   });
 
   /**
+   * One JSON snapshot of everything the chain cannot rebuild.
+   *
+   * The burn ledger is reconstructible by rescanning the mint - the chain is a second source of
+   * truth for it. The whitelist and manual grants are not: they exist nowhere but this database,
+   * so they are the part of the subscription system a database loss actually destroys. This
+   * endpoint exists so an admin (or a cron hitting it with an admin session) can keep an
+   * off-database copy of exactly that irreplaceable slice. Burns are included too - not because
+   * they need backing up, but because restoring from a snapshot that already has them beats
+   * waiting for a 400-day rescan.
+   */
+  app.get("/subscriptions/export", async () => {
+    const [whitelist, subscriptions, burns] = await Promise.all([
+      prisma.whitelist.findMany({ orderBy: { createdAt: "asc" } }),
+      prisma.subscription.findMany({
+        include: { user: { select: { walletAddress: true } } },
+        orderBy: { updatedAt: "asc" },
+      }),
+      prisma.burnEvent.findMany({ orderBy: { createdAt: "asc" } }),
+    ]);
+    return {
+      exportedAt: new Date(),
+      whitelist,
+      subscriptions: subscriptions.map((s) => ({
+        walletAddress: s.user.walletAddress,
+        expiresAt: s.expiresAt,
+        source: s.source,
+        updatedAt: s.updatedAt,
+      })),
+      burns: burns.map((b) => ({
+        signature: b.signature,
+        burnerWallet: b.burnerWallet,
+        mint: b.mint,
+        rawAmount: b.rawAmount,
+        monthsCredited: b.monthsCredited,
+        // BigInt cannot survive JSON.stringify - serialised explicitly, like the ledger route.
+        slot: b.slot.toString(),
+        blockTime: b.blockTime,
+        creditedAt: b.creditedAt,
+        discoveredBy: b.discoveredBy,
+      })),
+    };
+  });
+
+  /**
    * Revoke access outright, for a refund or an abuse case.
    *
    * Deletes the subscription rather than back-dating it, so the row doesn't linger looking like a
