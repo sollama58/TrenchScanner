@@ -40,30 +40,54 @@ const verifyBodySchema = z.discriminatedUnion("method", [
 // else; a legitimate user signing in a few times a minute is well within this.
 const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 
-// The dashboard (holdex.live, served by the CultScreener/HolDEX site) and this API
-// (trenchscanner-api.onrender.com) are different registrable domains, so they're different
-// "sites" to the browser - SameSite=Lax never gets attached to the dashboard's cross-site
-// fetch() calls, so a cookie set with it is silently dropped on every request after the one that
-// set it. SameSite=None is required for this to work at all, but browsers reject SameSite=None
-// without Secure - gated on production, since local dev (a Vite dev server on localhost talking
-// to localhost:4000) is same-site (differs only by port) and plain HTTP, where Lax already works
-// and None+Secure wouldn't.
+// Whether the session cookie has to survive a *cross-site* request, decided per request by
+// comparing the host this API was actually reached on against the dashboard's own domain
+// (PUBLIC_APP_DOMAIN).
 //
-// KNOWN LIMITATION: SameSite=None is a third-party cookie here, which Safari blocks outright and
-// Chrome is progressively restricting - sign-in can fail in those browsers through no fault of
-// the flow itself. The fix is to make the two first-party rather than to change anything here:
-// put this API behind a subdomain of the dashboard's own domain (e.g. api.holdex.live via a
-// Render custom domain), at which point this should become sameSite: "lax" unconditionally.
+// It matters because a cross-site cookie needs SameSite=None (Lax is simply never attached to the
+// dashboard's fetch() calls, so the cookie is silently dropped on every request after the one that
+// set it) - but SameSite=None is a third-party cookie, which Safari blocks outright and Chrome is
+// progressively restricting. So None is what makes cross-site work at all, and also what makes it
+// fail in some browsers. The real fix is to stop being cross-site: serve this API from a subdomain
+// of the dashboard's domain (api.holdex.live), at which point Lax is correct and third-party
+// cookie policy stops applying.
 //
-// Shared by both setCookie and clearCookie below -
-// browsers key a cookie's identity on name+domain+path, not these attributes, but keeping them
-// identical avoids relying on that rather than confirming it per browser.
-const isProduction = process.env.NODE_ENV === "production";
-const SESSION_COOKIE_ATTRS = {
-  secure: isProduction,
-  sameSite: isProduction ? ("none" as const) : ("lax" as const),
-  path: "/",
-};
+// Derived rather than configured so that switch needs no code change, no redeploy, and no flag
+// day. Pointing api.holdex.live at this service is enough: requests arriving on the old
+// onrender.com host keep getting None while requests on the new one get Lax, so both work
+// simultaneously and the cutover can happen at whatever pace DNS propagates.
+//
+// The Host header is client-controlled, which is harmless here: a request only ever influences the
+// attributes of the cookie set on its own response, so the worst anyone can do is make their own
+// session cookie more restrictive than it needed to be.
+function isSameSiteAsDashboard(requestHost: string, appDomain: string): boolean {
+  // Ports are irrelevant to what a browser considers a "site" - localhost:4000 and localhost:5173
+  // are the same site - and PUBLIC_APP_DOMAIN carries one in local dev.
+  const host = stripPort(requestHost);
+  const domain = stripPort(appDomain);
+  if (!host || !domain) return false;
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+function stripPort(value: string): string {
+  return value.trim().toLowerCase().split(":")[0] ?? "";
+}
+
+/**
+ * Secure is taken from the scheme the request actually arrived on rather than from NODE_ENV.
+ * Browsers reject SameSite=None unless Secure is also set, so deciding the two independently means
+ * a deployment that is cross-site but not flagged as production would emit a combination every
+ * browser silently discards - a failure with no error anywhere, just a session that never sticks.
+ * Reading the scheme couples them to the same fact instead. Fastify's `protocol` honours
+ * X-Forwarded-Proto because the server sets trustProxy, which is what Render terminates TLS with.
+ */
+export function sessionCookieAttrs(requestHost: string, appDomain: string, protocol = "https") {
+  return {
+    secure: protocol === "https",
+    sameSite: isSameSiteAsDashboard(requestHost, appDomain) ? ("lax" as const) : ("none" as const),
+    path: "/",
+  };
+}
 
 /** Shapes the public-facing user object - notably where isAdmin gets attached, since that's
  *  derived from config (ADMIN_WALLET_ADDRESSES) rather than stored on the User row itself. */
@@ -124,7 +148,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     const token = await app.sessionSigner.sign({ userId: user.id, walletAddress: user.walletAddress });
     reply.setCookie(SESSION_COOKIE_NAME, token, {
       httpOnly: true,
-      ...SESSION_COOKIE_ATTRS,
+      ...sessionCookieAttrs(request.hostname, opts.env.PUBLIC_APP_DOMAIN, request.protocol),
       // Kept in sync with the JWT's own expiry (see createSessionSigner) - a mismatch here would
       // mean the cookie either outlives the token it holds or expires before it does.
       maxAge: opts.env.SESSION_TTL_HOURS * 60 * 60,
@@ -133,8 +157,14 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     return toUserResponse(user, opts.env);
   });
 
-  app.post("/logout", async (_request, reply) => {
-    reply.clearCookie(SESSION_COOKIE_NAME, SESSION_COOKIE_ATTRS);
+  app.post("/logout", async (request, reply) => {
+    // Same attributes as when it was set. Browsers key a cookie's identity on name+domain+path
+    // rather than on these, but matching them avoids relying on that rather than confirming it
+    // per browser.
+    reply.clearCookie(
+      SESSION_COOKIE_NAME,
+      sessionCookieAttrs(request.hostname, opts.env.PUBLIC_APP_DOMAIN, request.protocol),
+    );
     return { ok: true };
   });
 
