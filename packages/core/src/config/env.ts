@@ -51,6 +51,10 @@ const envSchema = z.object({
   // than this that aren't referenced by any Match (deleting a referenced one would cascade-delete
   // real match history), and Token rows older than this with zero snapshots and zero matches ever
   // (dead watchlist entries). Both tables would otherwise grow unbounded forever.
+  // SNAPSHOT_RETENTION_DAYS doubles as the horizon for peak recovery: recordMatchPeaks
+  // (apps/worker/src/jobs/matchPeaks.ts) mines a match's peak out of its token's snapshot history,
+  // and once those snapshots are pruned there is nothing left to mine, so it doesn't look further
+  // back than this.
   CLEANUP_HOUR_UTC: z.coerce.number().min(0).max(23).default(4),
   SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
   STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(90),
