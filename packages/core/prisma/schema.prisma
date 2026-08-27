@@ -125,8 +125,8 @@ model Token {
   // The scan job (apps/worker/src/jobs/scanJob.ts) keeps re-scanning a token within
   // ACTIVE_VIEW_WINDOW_MINUTES of this timestamp even after it's dropped out of the mcap band,
   // so a genuine breakout winner someone has open doesn't go stale the moment it leaves the
-  // $50k-$500k band - but a token nobody's looking at anymore is left alone once it's out of
-  // band, rather than tracking every historical match forever.
+  // MCAP_FILTER_MIN/MAX band - but a token nobody's looking at anymore is left alone once it's
+  // out of band, rather than tracking every historical match forever.
   lastViewedAt DateTime?
 
   // A lightweight, display-only price ping for tokens someone currently has open, refreshed far
@@ -240,14 +240,19 @@ model Match {
   // (the mcap at match time), not these fields - see outcomeTrackingJob.ts for why.
   peakMcapUsd Float?
   peakMcapAt  DateTime?
-  // (peakMcapUsd - snapshot.marketCapUsd) / snapshot.marketCapUsd * 100 - recomputed alongside
-  // peakMcapUsd every time it rises. Persisted (rather than computed at read time from every
-  // Match ever created) so the Leaderboard can ORDER BY this column directly instead of pulling
-  // every candidate row into memory to sort - see apps/api/src/routes/leaderboard.ts.
+  // (peakMcapUsd - snapshot.marketCapUsd) / snapshot.marketCapUsd * 100 - kept in step with
+  // peakMcapUsd by the outcome-tracking job, which recomputes it whenever the peak rises AND
+  // repairs it wherever the two have drifted apart (rows whose peak was recorded before this
+  // column existed). Persisted rather than computed at read time so the Leaderboard can rank on
+  // this column directly instead of pulling every Match ever created into memory to sort.
   peakReturnPct Float?
-  // Set once, the moment peakReturnPct first reaches >= 100 (a +100%/2x gain) - never touched
-  // again after that even as peakMcapUsd/peakReturnPct keep climbing on future highs. Marks this
-  // match as eligible for the public Leaderboard; indexed so that query never scans every Match.
+  // Set once, as soon as the *recorded peak* is worth >= +100% (a 2x on the alert mcap) - never
+  // touched again after that even as peakMcapUsd/peakReturnPct keep climbing on future highs.
+  // Deliberately keyed off the recorded peak rather than off "this run saw a new high": a token
+  // that 5x'd and then dumped has to stay eligible, and it is by definition never going to set
+  // another high. Dated to peakMcapAt (when the qualifying peak was actually seen), not to the
+  // run that noticed. Marks this match as eligible for the public Leaderboard; indexed so that
+  // query never scans every Match - see apps/api/src/routes/leaderboard.ts.
   hitHundredPctAt DateTime?
 
   @@unique([userId, tokenId, filterId, matchedAt])
