@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma } from "@trenchscanner/core";
+import { prisma, type Env, type DexScreenerClient } from "@trenchscanner/core";
+import { OnDemandLiveRefresher } from "../liveRefresh.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
@@ -9,8 +10,18 @@ const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
 });
 
-export async function registerMatchRoutes(app: FastifyInstance) {
+export async function registerMatchRoutes(
+  app: FastifyInstance,
+  opts: { env: Env; dexScreener: DexScreenerClient },
+) {
   app.addHook("preHandler", app.authenticate);
+
+  // Bounded to one page's worth per request - a single batched DexScreener lookup - and skips
+  // anything already as fresh as the worker's live-price cadence promises. See liveRefresh.ts.
+  const liveRefresher = new OnDemandLiveRefresher(opts.dexScreener, {
+    maxAgeMs: opts.env.LIVE_PRICE_INTERVAL_MINUTES * 60_000,
+    limit: PAGE_SIZE,
+  });
 
   /** The live feed: this user's matches, newest first, 12 per page. */
   app.get("/", async (request, reply) => {
@@ -50,6 +61,14 @@ export async function registerMatchRoutes(app: FastifyInstance) {
     if (tokenIds.length > 0) {
       await prisma.token.updateMany({ where: { id: { in: tokenIds } }, data: { lastViewedAt: new Date() } });
     }
+
+    // Stamping lastViewedAt above is only half of it: the worker acts on that stamp once a minute,
+    // so a page being opened - a first visit, or paging back to one seen earlier - would show
+    // whatever the last tick left behind until the next one came round. This asks for those
+    // specific tokens to be refreshed right now. Deliberately not awaited: the numbers in *this*
+    // response are the ones we already have, and the dashboard's next poll picks up the new ones a
+    // few seconds later. A slow or broken DexScreener can't delay or fail the page load.
+    liveRefresher.request(matches.map((m) => m.token));
 
     return {
       matches: matches.map((match) => {

@@ -1,4 +1,10 @@
-import { prisma, createLogger, type Env, type DexScreenerClient } from "@trenchscanner/core";
+import {
+  prisma,
+  createLogger,
+  refreshLiveMarketData,
+  type Env,
+  type DexScreenerClient,
+} from "@trenchscanner/core";
 
 const logger = createLogger("live-price-job");
 
@@ -12,13 +18,12 @@ const logger = createLogger("live-price-job");
  * call covering 30 tokens at a time. So this job does only that, and can afford to run every
  * minute.
  *
- * It deliberately writes to Token.liveMarketCapUsd/livePriceUsd/liveDataAt rather than creating
- * TokenSnapshot rows - see the comment on those fields for why. Nothing here feeds scoring,
- * matching or alerting; a token's history and everything derived from it still comes exclusively
- * from the scan cycle.
- *
  * Scope is "tokens someone is actually looking at", using the same lastViewedAt window the scan
  * job uses, so an idle deployment with nobody on the dashboard does no work at all.
+ *
+ * This is the steady-state cadence. The moment a page is *opened* is handled separately, by the
+ * API's on-demand refresh (apps/api/src/liveRefresh.ts) - otherwise paging back to an already-seen
+ * page would show up-to-a-minute-old numbers until this job's next tick came round.
  */
 export async function runLivePriceJob(dexScreener: DexScreenerClient, env: Env): Promise<void> {
   const startedAt = Date.now();
@@ -37,44 +42,18 @@ export async function runLivePriceJob(dexScreener: DexScreenerClient, env: Env):
     return;
   }
 
-  let live;
+  let result;
   try {
-    live = await dexScreener.getTokensByAddresses(viewed.map((t) => t.mintAddress));
+    result = await refreshLiveMarketData(dexScreener, viewed);
   } catch (err) {
     logger.warn("live price refresh failed", { viewed: viewed.length, error: String(err) });
     return;
   }
 
-  const byMint = new Map(live.map((c) => [c.mintAddress, c]));
-  const now = new Date();
-  let updated = 0;
-
-  await Promise.all(
-    viewed.map(async (token) => {
-      const data = byMint.get(token.mintAddress);
-      // Not in the response (delisted, liquidity pulled, DexScreener hasn't indexed it) - leave
-      // whatever was last recorded rather than blanking it, exactly as outcomeTrackingJob does.
-      if (!data) return;
-      try {
-        await prisma.token.update({
-          where: { id: token.id },
-          data: {
-            liveMarketCapUsd: data.marketCapUsd,
-            livePriceUsd: data.priceUsd,
-            liveDataAt: now,
-          },
-        });
-        updated += 1;
-      } catch (err) {
-        logger.warn("failed to persist live price", { mint: token.mintAddress, error: String(err) });
-      }
-    }),
-  );
-
   logger.info("live price refresh complete", {
     durationMs: Date.now() - startedAt,
-    viewed: viewed.length,
-    updated,
-    missingFromDexScreener: viewed.length - updated,
+    viewed: result.requested,
+    updated: result.updated,
+    missingFromDexScreener: result.requested - result.updated,
   });
 }

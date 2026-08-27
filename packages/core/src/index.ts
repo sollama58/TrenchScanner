@@ -5,6 +5,7 @@ export * from "./db.js";
 export * from "./heartbeat.js";
 export * from "./concurrency.js";
 export * from "./solana.js";
+export * from "./liveMarketData.js";
 
 export * from "./datasources/httpClient.js";
 export * from "./datasources/dexscreener.js";

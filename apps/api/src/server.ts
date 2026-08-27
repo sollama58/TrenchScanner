@@ -3,7 +3,13 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
-import { type Env, corsOriginList, adminWalletSet, createLogger } from "@trenchscanner/core";
+import {
+  type Env,
+  corsOriginList,
+  adminWalletSet,
+  createLogger,
+  DexScreenerClient,
+} from "@trenchscanner/core";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "./auth/session.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerFilterRoutes } from "./routes/filters.js";
@@ -76,7 +82,11 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
-  await app.register(registerMatchRoutes, { prefix: "/matches" });
+  // The API's only outbound data source. Used for one thing: refreshing the market caps on a page
+  // the moment it's opened, instead of leaving them until the worker's next tick - see
+  // liveRefresh.ts for how that's kept from becoming a per-request upstream call.
+  const dexScreener = new DexScreenerClient({ baseUrl: env.DEXSCREENER_BASE_URL });
+  await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
