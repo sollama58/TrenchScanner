@@ -23,10 +23,18 @@ export interface CandidateToken {
   hasWebsite?: boolean;
   description?: string;
   /**
-   * The token's logo, as hosted by DexScreener. Taken from the pair response the scan already
-   * fetches rather than derived from the mint address: CDN URL shapes are undocumented and change,
-   * and a guessed one 404s silently for every token that has no image, which is a lot of them.
-   * Undefined whenever DexScreener has no artwork for the mint.
+   * The token's logo.
+   *
+   * Sourced from Pump.fun's own `image_uri`, not from DexScreener's `info.imageUrl`. The latter
+   * was the first thing tried and is close to useless here: measured against 107 freshly
+   * discovered mints it was populated for exactly zero of them, because it is DexScreener's
+   * *curated* artwork (note the /cms/images/ path) - present for established tokens, absent for
+   * the brand-new ones this product exists to watch. Pump.fun carried an image for 70 out of 70
+   * in the same kind of sample.
+   *
+   * Usually an IPFS gateway URL, and the host varies per token (ipfs.io, pinata, filebase, ...),
+   * so anything rendering these needs an image policy that permits arbitrary https hosts rather
+   * than an allow-list.
    */
   imageUrl?: string;
   /**
@@ -52,6 +60,7 @@ export interface WatchlistCandidate {
   mintAddress: string;
   symbol?: string;
   name?: string;
+  imageUrl?: string;
   createdAt?: Date;
   hasTwitter?: boolean;
   hasTelegram?: boolean;
