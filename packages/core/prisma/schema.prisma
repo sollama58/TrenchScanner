@@ -129,6 +129,18 @@ model Token {
   // band, rather than tracking every historical match forever.
   lastViewedAt DateTime?
 
+  // A lightweight, display-only price ping for tokens someone currently has open, refreshed far
+  // more often than a full scan cycle (see apps/worker/src/jobs/livePriceJob.ts). Deliberately
+  // NOT a TokenSnapshot: a snapshot is a full point-in-time evaluation that feeds scoring,
+  // matching and history, and minting one every minute purely to move a number on screen would
+  // both bloat that table and attach stale on-chain/score data to fresh market data. These three
+  // fields are the opposite - current market data with no claim to anything else. Null until the
+  // first refresh; `liveDataAt` is what lets a reader tell whether this or the latest snapshot is
+  // actually fresher (see currentMarketCap() in apps/api/src/routes/matches.ts).
+  liveMarketCapUsd Float?
+  livePriceUsd     Float?
+  liveDataAt       DateTime?
+
   snapshots TokenSnapshot[]
   matches   Match[]
 

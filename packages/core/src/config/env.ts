@@ -39,6 +39,14 @@ const envSchema = z.object({
   // jitter, but short enough that closing the tab lets a long-dead winner's tracking lapse.
   ACTIVE_VIEW_WINDOW_MINUTES: z.coerce.number().positive().default(10),
 
+  // How often the live-price job refreshes market data for tokens someone currently has open
+  // (see apps/worker/src/jobs/livePriceJob.ts). Much faster than SCAN_INTERVAL_MINUTES because
+  // it is far cheaper: market data only, one batched DexScreener call per 30 tokens, no RugCheck
+  // or Helius work and no scoring/matching. Safety cap on how many tokens one pass will refresh,
+  // so an unexpectedly large viewed set can't turn a per-minute job into a DexScreener hammer.
+  LIVE_PRICE_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
+  LIVE_PRICE_MAX_TRACKED: z.coerce.number().int().positive().default(150),
+
   // Daily cleanup job (see apps/worker/src/jobs/cleanupJob.ts) - prunes TokenSnapshot rows older
   // than this that aren't referenced by any Match (deleting a referenced one would cascade-delete
   // real match history), and Token rows older than this with zero snapshots and zero matches ever

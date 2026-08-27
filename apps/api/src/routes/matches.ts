@@ -54,11 +54,47 @@ export async function registerMatchRoutes(app: FastifyInstance) {
     return {
       matches: matches.map((match) => {
         const { snapshots, ...token } = match.token;
-        return { ...match, token, latestSnapshot: snapshots[0] ?? null };
+        const latestSnapshot = snapshots[0] ?? null;
+        const current = currentMarketCap(token, latestSnapshot);
+        return {
+          ...match,
+          token,
+          latestSnapshot,
+          // The freshest market cap we have and when it was read, resolved server-side so every
+          // client doesn't have to re-implement the "which of these two is newer" comparison.
+          currentMarketCapUsd: current.marketCapUsd,
+          currentMarketCapAt: current.at,
+        };
       }),
       page,
       pageSize: PAGE_SIZE,
       totalCount,
     };
   });
+}
+
+/**
+ * Picks whichever of the two market cap readings is actually newer.
+ *
+ * Token.liveMarketCapUsd is refreshed roughly every minute for tokens someone currently has open
+ * (apps/worker/src/jobs/livePriceJob.ts); a TokenSnapshot is written on the much slower full scan
+ * cycle. Usually the live value wins, but not always - a token nobody has viewed recently stops
+ * getting live pings while still being re-scanned if it's in the mcap band, and a snapshot written
+ * seconds ago is genuinely fresher than a live ping from ten minutes ago. Comparing timestamps
+ * rather than assuming an ordering is what keeps "Now" honest in both directions.
+ */
+export function currentMarketCap(
+  token: { liveMarketCapUsd: number | null; liveDataAt: Date | null },
+  latestSnapshot: { marketCapUsd: number; takenAt: Date } | null,
+): { marketCapUsd: number | null; at: Date | null } {
+  const liveAt = token.liveDataAt?.getTime() ?? -Infinity;
+  const snapshotAt = latestSnapshot?.takenAt.getTime() ?? -Infinity;
+
+  if (token.liveMarketCapUsd != null && liveAt >= snapshotAt) {
+    return { marketCapUsd: token.liveMarketCapUsd, at: token.liveDataAt };
+  }
+  if (latestSnapshot) {
+    return { marketCapUsd: latestSnapshot.marketCapUsd, at: latestSnapshot.takenAt };
+  }
+  return { marketCapUsd: null, at: null };
 }
