@@ -444,7 +444,7 @@ async function processCandidate(
   // below is the product, this is the product's homework.
   try {
     const sample = await recordCandidateSample(token.id, scored, env);
-    await maybeEmitCuratedAlert(token, scored, sample, env);
+    await maybeEmitCuratedAlert(token, scored, sample, env, snapshot.id);
   } catch (err) {
     logger.warn("failed to record candidate outcome sample / curated alert", {
       mint: candidate.mintAddress,

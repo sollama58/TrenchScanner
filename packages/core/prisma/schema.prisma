@@ -175,6 +175,15 @@ model CuratedAlert {
   candidateOutcomeId String?
   candidateOutcome   CandidateOutcome? @relation(fields: [candidateOutcomeId], references: [id], onDelete: SetNull)
 
+  /// The scan snapshot this alert was emitted from - the same "alerted at" row a Match carries,
+  /// so a curated alert can render with the full statistics a Live Feed card shows (volume,
+  /// age, graduation, holder concentration) instead of just a market cap. SetNull rather than
+  /// Cascade, and deliberately NOT protected from the snapshot retention sweep: the feed's own
+  /// record has to outlive the 30-day snapshot horizon, and a card older than that degrades to
+  /// the anchor figures copied onto this row rather than disappearing.
+  snapshotId String?
+  snapshot   TokenSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   /// Which decision-maker emitted it - "heuristic-v1", or a CuratorModel id once the learner
   /// takes over (Phase C). Shown in the feed's learning panel, and what lets the panel compare
@@ -375,7 +384,8 @@ model TokenSnapshot {
   rugScreenPassed  Boolean  @default(false)
   rugScreenReasons String[] @default([])
 
-  matches Match[]
+  matches       Match[]
+  curatedAlerts CuratedAlert[]
 
   @@index([tokenId, takenAt])
   @@index([marketCapUsd])
