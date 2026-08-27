@@ -26,8 +26,12 @@ import type { ScoredToken } from "../types.js";
  * every one of them pre-bond.
  */
 const MIN_LIQUIDITY_USD = 10_000;
-/** 24h volume at least half the mcap - the churn floor that separates "moving" from "parked". */
-const MIN_VOLUME_MCAP_RATIO = 0.5;
+/**
+ * 24h volume at least a quarter of the mcap - the churn floor that separates "moving" from
+ * "parked". Loosened from 0.5 (launch value) to let more genuinely-active candidates through
+ * while the model gathers a wider slice of the market to learn from.
+ */
+const MIN_VOLUME_MCAP_RATIO = 0.25;
 /** Buys must be the clear majority of 24h transactions. */
 const MIN_BUY_RATIO = 0.55;
 /** Younger than this, one wallet can still paint the whole chart; the label window needs a market. */

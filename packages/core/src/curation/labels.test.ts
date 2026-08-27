@@ -73,7 +73,7 @@ describe("candidate outcome labels", () => {
   });
 
   it("caps the label so one moonshot cannot outweigh a month of 2xs", () => {
-    const agg = replay(1, [[40, 30]]);
+    const agg = replay(1, [[150, 30]]);
     expect(computeOneHourLabels(agg).labelValue).toBe(LABEL_LOG2_CAP);
   });
 

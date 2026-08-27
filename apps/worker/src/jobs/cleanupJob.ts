@@ -54,9 +54,9 @@ export async function runCleanupJob(env: Env): Promise<void> {
     where: { anchorAt: { lt: candidateOutcomeCutoff } },
   });
 
-  // Old non-active curator models: one is minted nightly, so keep the recent history (which the
-  // learning panel and any postmortem want) and drop the deep past. The active model is never
-  // touched here, whatever its age.
+  // Old non-active curator models: one is minted every CURATOR_TRAINING_INTERVAL_HOURS (several a
+  // day), so keep the recent history (which the learning panel and any postmortem want) and drop
+  // the deep past. The active model is never touched here, whatever its age.
   const curatorModelCutoff = new Date(startedAt - CURATOR_MODEL_RETENTION_DAYS * DAY_MS);
   const deletedCuratorModels = await prisma.curatorModel.deleteMany({
     where: { status: { not: "active" }, createdAt: { lt: curatorModelCutoff } },

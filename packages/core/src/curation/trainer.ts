@@ -10,7 +10,7 @@ import { evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator
  * already have.
  *
  * Everything here is pure - rows in, params out - so the whole training/evaluation/promotion
- * path is unit-testable without a database. The nightly job
+ * path is unit-testable without a database. The periodic training job
  * (apps/worker/src/jobs/curatorTrainingJob.ts) owns the IO.
  */
 
@@ -276,7 +276,7 @@ export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOption
 
   if (sorted.length >= minTrainRows + minTestRows) {
     // Test folds tile the newest 50% of history; the oldest 50% is the first fold's training
-    // floor. Each later fold trains on strictly more history, mirroring how the nightly job
+    // floor. Each later fold trains on strictly more history, mirroring how the training job
     // will actually behave as data accumulates.
     const testStartIndex = Math.floor(sorted.length * 0.5);
     const testRowsTotal = sorted.length - testStartIndex;

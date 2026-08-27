@@ -75,12 +75,15 @@ async function main() {
     () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
     env.OUTCOME_TRACKING_HOUR_UTC,
   );
-  // The self-learning half of Curated Alerts: nightly walk-forward evaluation, and the curator
-  // changes hands only on a win - see runCuratorTrainingJob.
-  const curatorTrainingJob = scheduleDailyAt(
+  // The self-learning half of Curated Alerts: walk-forward evaluation every
+  // CURATOR_TRAINING_INTERVAL_HOURS, and the curator changes hands only on a win - see
+  // runCuratorTrainingJob. An interval, not a fixed daily hour: this pipeline is still
+  // experimental, and a frequent retrain is what lets a model that just earned (or just lost) the
+  // job take effect within hours rather than up to a day later.
+  const curatorTrainingJob = scheduleInterval(
     "curator-training",
     () => runCuratorTrainingJob(env),
-    env.CURATOR_TRAINING_HOUR_UTC,
+    env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
   );
 
   logger.info("worker started", {

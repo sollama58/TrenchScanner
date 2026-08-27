@@ -9,7 +9,7 @@
  * the bottom" stopped out anyone who actually bought the alert, so it trains as a loss.
  *
  * The training target is graded, not binary: labelValue is log2 of the 1h peak multiple
- * (a 2x = 1.0, a 4x = 2.0, an 8x = 3.0), capped at LABEL_LOG2_CAP, and 0 for a miss or a
+ * (a 2x = 1.0, a 4x = 2.0, an 8x = 3.0), capped at LABEL_LOG2_CAP (a 100x), and 0 for a miss or a
  * disqualified run - the learner prefers higher multiples exactly as much as they're worth
  * in doublings.
  *
@@ -26,8 +26,14 @@ export const CANDIDATE_EXTENDED_WATCH_HOURS = 24;
 export const WIN_MULTIPLE = 2;
 /** Trading at or below this fraction of the anchor before the first 2x disqualifies the win. */
 export const DISQUALIFYING_DRAWDOWN_FRACTION = 0.5;
-/** labelValue ceiling, in doublings: 4 = a 16x. Uncapped, one 100x would outweigh a month of 2xs. */
-export const LABEL_LOG2_CAP = 4;
+/**
+ * labelValue ceiling, expressed as the multiple it corresponds to rather than the raw doublings
+ * count - a 100x is the single biggest run this pipeline lets outweigh the rest of the training
+ * set. Still capped, not uncapped: without any ceiling, one true moonshot (a 1000x, say) would
+ * dominate the loss function outright.
+ */
+const LABEL_CAP_MULTIPLE = 100;
+export const LABEL_LOG2_CAP = Math.log2(LABEL_CAP_MULTIPLE);
 
 /** The running aggregates a CandidateOutcome row carries between price ticks. */
 export interface OutcomeAggregates {

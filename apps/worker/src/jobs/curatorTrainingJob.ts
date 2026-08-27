@@ -24,11 +24,12 @@ const logger = createLogger("curator-training");
 const MIN_ROWS_TO_TRAIN = 300;
 
 /**
- * The nightly learner. Loads the rolling window of finalized training rows, walk-forward
- * evaluates the model family against the live heuristic on that same history, trains the
- * deployable model on the full window, and stores it all as one CuratorModel row - active if the
- * evaluation earned promotion, candidate otherwise. See applyTrainingResult for how activation
- * and fallback work; see packages/core/src/curation/trainer.ts for every piece of math.
+ * The learner, run every CURATOR_TRAINING_INTERVAL_HOURS. Loads the rolling window of finalized
+ * training rows, walk-forward evaluates the model family against the live heuristic on that same
+ * history, trains the deployable model on the full window, and stores it all as one CuratorModel
+ * row - active if the evaluation earned promotion, candidate otherwise. See applyTrainingResult
+ * for how activation and fallback work; see packages/core/src/curation/trainer.ts for every piece
+ * of math.
  */
 export async function runCuratorTrainingJob(env: Env): Promise<void> {
   const startedAt = Date.now();

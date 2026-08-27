@@ -114,10 +114,11 @@ Three shipping phases, each useful on its own:
   emits nothing. Every alert card publicly grades itself (watching / won / missed / disqualified,
   peak returns), and the tab's learning panel shows the training-set size, the base win rate, and
   the feed's own hit rate. Emission volume is steered by `CURATED_MIN_SCORE` (env) while young.
-- **Phase C — the learner**: a nightly job trains a regularized model on the banked labels,
-  evaluates it walk-forward against the heuristic on the same weeks of history, and promotes it
-  to be the curator only when it wins repeatedly. Model versions live in the DB with their eval
-  metrics; the learning panel shows the takeover when it happens.
+- **Phase C — the learner**: a job, run every `CURATOR_TRAINING_INTERVAL_HOURS`, trains a
+  regularized model on the banked labels, evaluates it walk-forward against the heuristic on the
+  same weeks of history, and promotes it to be the curator only when it wins repeatedly. Model
+  versions live in the DB with their eval metrics; the learning panel shows the takeover when it
+  happens.
 
 ## 8. Open Items / Risks
 

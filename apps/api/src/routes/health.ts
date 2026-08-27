@@ -20,7 +20,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   digest: 26 * 3_600_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
-  "curator-training": 26 * 3_600_000,
+  // Runs every CURATOR_TRAINING_INTERVAL_HOURS (4h by default), not daily - same "expected
+  // cadence + 2h" buffer as the daily jobs above, scaled to its own interval.
+  "curator-training": 6 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 const MAX_ERROR_LENGTH = 300;

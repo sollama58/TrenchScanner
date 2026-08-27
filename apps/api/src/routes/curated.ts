@@ -126,8 +126,8 @@ export async function registerCuratedRoutes(
       prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" } }),
     ]);
 
-    // The nightly training job stores its walk-forward verdict inside evalMetrics; surface just
-    // the verdict here - the panel shows WHY the model is or isn't live, not every fold number.
+    // The training job stores its walk-forward verdict inside evalMetrics; surface just the
+    // verdict here - the panel shows WHY the model is or isn't live, not every fold number.
     const latestVerdict =
       latestModel && typeof latestModel.evalMetrics === "object" && latestModel.evalMetrics !== null
         ? ((latestModel.evalMetrics as { verdict?: { promote?: boolean; reason?: string } }).verdict ?? null)

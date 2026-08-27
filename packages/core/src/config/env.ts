@@ -103,20 +103,23 @@ const envSchema = z.object({
   // production without a deploy while the pipeline is young. The cooldown stops one token from
   // being re-alerted every cycle it stays hot; a re-emission after the cooldown is a genuinely
   // new call on a token that survived a day.
-  // 55, not higher: replayed against live in-band samples, composite scores run p50~40 / p90~63
-  // with 70+ essentially unreached, and the whole gate passes ~2-3% of samples at 55 - the right
-  // order of magnitude for the feed's a-few-per-hour target once the per-token cooldown bites.
-  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
+  // Lowered from the 55 launch value to 45: a deliberately looser floor (paired with the looser
+  // MIN_VOLUME_MCAP_RATIO in curator.ts) so more of the market reaches the feed and the training
+  // set while the self-learning half of this pipeline is still experimental and hungry for data.
+  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(45),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
 
-  // The nightly curator-training job (apps/worker/src/jobs/curatorTrainingJob.ts): trains on the
-  // rolling window of finalized CandidateOutcome rows, walk-forward-evaluates against the
-  // heuristic, and promotes the model to be the live curator only when it wins (see trainer.ts).
+  // The curator-training job (apps/worker/src/jobs/curatorTrainingJob.ts): trains on the rolling
+  // window of finalized CandidateOutcome rows, walk-forward-evaluates against the heuristic, and
+  // promotes the model to be the live curator only when it wins (see trainer.ts).
+  // TRAINING_INTERVAL_HOURS is deliberately frequent (not once a day): this whole pipeline is
+  // still experimental, and retraining every few hours lets a model that's earned the job (or one
+  // that's stopped earning it) take effect within hours of the evidence, not up to a day later.
   // TARGET_PER_HOUR steers the model's emission-threshold calibration - a target, never a quota:
   // the calibrated threshold still has an absolute quality floor, so dead hours emit nothing.
   // MIN_TRAINING_ROWS is the promotion floor - below it the job still trains and records the
   // evaluation (the learning panel shows progress) but never lets the model take over.
-  CURATOR_TRAINING_HOUR_UTC: z.coerce.number().min(0).max(23).default(6),
+  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().positive().default(4),
   CURATOR_TRAINING_WINDOW_DAYS: z.coerce.number().positive().default(60),
   CURATED_TARGET_PER_HOUR: z.coerce.number().positive().default(6),
   CURATOR_MIN_TRAINING_ROWS: z.coerce.number().int().positive().default(1500),
