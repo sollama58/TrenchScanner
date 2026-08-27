@@ -1,0 +1,125 @@
+import type { ScoredToken } from "../types.js";
+
+/**
+ * The hand-tuned v1 curator behind the Curated Alerts feed - the gate that decides which
+ * rug-screen-passing candidates are worth putting in front of every subscriber at once.
+ *
+ * Posture: this is a QUALITY FLOOR, not a quota. It emits whatever clears the bar - several in a
+ * hot ten minutes, nothing at all on a dead afternoon - and the per-token cooldown lives at the
+ * emission site (the worker), not here. The thresholds are launch values chosen from the same
+ * reasoning as the scorer's weights; the whole point of the CandidateOutcome pipeline is that the
+ * trained curator (Phase C) replaces this function the moment it beats it on walk-forward
+ * backtest, and until then every emission this gate makes is publicly graded in the feed.
+ *
+ * Two kinds of checks, same split as matchFilters.ts and for the same reason:
+ *  - REQUIRED signals (score, liquidity, churn, buy pressure, age) fail closed when unknown -
+ *    a curated alert vouches for the token, and we can't vouch on signals we never saw.
+ *  - RISK CAPS (concentration, fresh wallets, risk score, dev bag) skip when unknown - they
+ *    exist to veto a known-bad profile, and "RugCheck hasn't indexed it yet" is not a veto.
+ */
+
+/**
+ * Below this pool liquidity a subscriber can't enter AND exit - the alert would be untradeable.
+ * Applied to GRADUATED tokens only: a pre-bond Pump.fun mint trades against its bonding curve,
+ * which has no discrete pool to report (DexScreener sends null) and can't be pulled - measured
+ * against live data, requiring a known pool here silently excluded ~80% of the in-band universe,
+ * every one of them pre-bond.
+ */
+const MIN_LIQUIDITY_USD = 10_000;
+/** 24h volume at least half the mcap - the churn floor that separates "moving" from "parked". */
+const MIN_VOLUME_MCAP_RATIO = 0.5;
+/** Buys must be the clear majority of 24h transactions. */
+const MIN_BUY_RATIO = 0.55;
+/** Younger than this, one wallet can still paint the whole chart; the label window needs a market. */
+const MIN_AGE_MINUTES = 5;
+/** Older than this, the fast 50k->multi-million move this feed hunts has usually already happened. */
+const MAX_AGE_MINUTES = 2_880;
+/** Risk caps - applied only when the underlying signal was actually observed. */
+const MAX_TOP10_HOLDER_PCT = 40;
+const MAX_FRESH_TOP10_WALLET_PCT = 30;
+const MAX_RISK_SCORE = 60;
+const MAX_DEV_WALLET_PCT = 10;
+
+export const HEURISTIC_CURATOR_SOURCE = "heuristic-v1";
+
+export interface CurationDecision {
+  curate: boolean;
+  /** 0-100 conviction; for the heuristic this is the composite score itself. */
+  confidence: number;
+  /** Short human-readable strings: why it was curated - shown on the alert card. */
+  reasons: string[];
+  source: string;
+}
+
+/**
+ * Evaluates one scored, rug-screen-passing candidate. `minScore` comes from env
+ * (CURATED_MIN_SCORE) so the floor can be tuned in production without a deploy.
+ */
+export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number): CurationDecision {
+  const no: CurationDecision = {
+    curate: false,
+    confidence: 0,
+    reasons: [],
+    source: HEURISTIC_CURATOR_SOURCE,
+  };
+
+  // Required signals - unknown fails, see above.
+  if (scored.score.total < minScore) return no;
+  // Liquidity is judged per venue: a graduated token must show a real pool; a pre-bond token's
+  // bonding curve IS its liquidity (see MIN_LIQUIDITY_USD). Unknown venue fails closed.
+  if (scored.graduated === undefined) return no;
+  if (scored.graduated && !(scored.liquidityUsd !== undefined && scored.liquidityUsd >= MIN_LIQUIDITY_USD)) {
+    return no;
+  }
+  if (!(scored.volumeToMcapRatio !== undefined && scored.volumeToMcapRatio >= MIN_VOLUME_MCAP_RATIO))
+    return no;
+  const totalTxns = (scored.buys24h ?? 0) + (scored.sells24h ?? 0);
+  const buyRatio = totalTxns > 0 ? (scored.buys24h ?? 0) / totalTxns : undefined;
+  if (!(buyRatio !== undefined && buyRatio >= MIN_BUY_RATIO)) return no;
+  if (!(
+    scored.ageMinutes !== undefined &&
+    scored.ageMinutes >= MIN_AGE_MINUTES &&
+    scored.ageMinutes <= MAX_AGE_MINUTES
+  )) {
+    return no;
+  }
+
+  // Risk caps - unknown skips, see above.
+  if (scored.top10HolderPct !== undefined && scored.top10HolderPct > MAX_TOP10_HOLDER_PCT) return no;
+  if (scored.freshTop10WalletPct !== undefined && scored.freshTop10WalletPct > MAX_FRESH_TOP10_WALLET_PCT) {
+    return no;
+  }
+  if (scored.riskScore !== undefined && scored.riskScore > MAX_RISK_SCORE) return no;
+  if (scored.devWalletPct !== undefined && scored.devWalletPct > MAX_DEV_WALLET_PCT) return no;
+
+  return {
+    curate: true,
+    confidence: scored.score.total,
+    reasons: buildReasons(scored, buyRatio),
+    source: HEURISTIC_CURATOR_SOURCE,
+  };
+}
+
+/** The standout signals, strongest first, phrased for the alert card - not a full criteria dump. */
+function buildReasons(scored: ScoredToken, buyRatio: number | undefined): string[] {
+  const reasons: string[] = [];
+  if (scored.volumeToMcapRatio !== undefined) {
+    reasons.push(`24h volume ${scored.volumeToMcapRatio.toFixed(1)}x its market cap`);
+  }
+  if (buyRatio !== undefined) {
+    reasons.push(`${Math.round(buyRatio * 100)}% of 24h transactions are buys`);
+  }
+  if (scored.holderGrowthPct !== undefined && scored.holderGrowthPct > 0) {
+    reasons.push(`holders +${scored.holderGrowthPct.toFixed(1)}% over the growth window`);
+  }
+  if (scored.top10HolderPct !== undefined && scored.top10HolderPct <= 25) {
+    reasons.push(`top-10 wallets hold only ${scored.top10HolderPct.toFixed(0)}%`);
+  }
+  if (scored.freshTop10WalletPct !== undefined && scored.freshTop10WalletPct === 0) {
+    reasons.push("no fresh-wallet snipers in the top 10");
+  }
+  if (scored.ageMinutes !== undefined && scored.ageMinutes < 60) {
+    reasons.push(`${Math.round(scored.ageMinutes)}m old`);
+  }
+  return reasons.slice(0, 4);
+}

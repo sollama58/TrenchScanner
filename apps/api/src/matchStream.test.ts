@@ -173,3 +173,56 @@ describe("MatchStream.stop", () => {
     expect(s.subscriberCount).toBe(0);
   });
 });
+
+describe("MatchStream.dispatchCurated", () => {
+  it("broadcasts a curated alert to every curated subscriber and no match subscriber", () => {
+    const s = stream();
+    const curatedA = sink();
+    const curatedB = sink();
+    const matchSub = sink();
+    s.subscribeCurated(curatedA.sink);
+    s.subscribeCurated(curatedB.sink);
+    s.subscribe("alice", matchSub.sink);
+
+    s.dispatchCurated(JSON.stringify({ alertId: "alert-1" }));
+
+    const frame = 'event: curated\ndata: {"alertId":"alert-1"}\n\n';
+    expect(curatedA.written).toEqual([frame]);
+    expect(curatedB.written).toEqual([frame]);
+    // A match subscriber's stream carries only that user's matches - curated traffic has its own
+    // endpoint, and mixing them would surprise every existing client.
+    expect(matchSub.written).toEqual([]);
+  });
+
+  it("keeps match traffic off curated streams", () => {
+    const s = stream();
+    const curated = sink();
+    s.subscribeCurated(curated.sink);
+
+    s.dispatch(notification("alice", "match-1"));
+
+    expect(curated.written).toEqual([]);
+  });
+
+  it("ignores unparseable and id-less curated payloads", () => {
+    const s = stream();
+    const curated = sink();
+    s.subscribeCurated(curated.sink);
+
+    s.dispatchCurated("{not json");
+    s.dispatchCurated(JSON.stringify({}));
+
+    expect(curated.written).toEqual([]);
+  });
+
+  it("disposes a curated subscriber cleanly", () => {
+    const s = stream();
+    const curated = sink();
+    const dispose = s.subscribeCurated(curated.sink)!;
+    dispose();
+
+    s.dispatchCurated(JSON.stringify({ alertId: "alert-1" }));
+
+    expect(curated.written).toEqual([]);
+  });
+});

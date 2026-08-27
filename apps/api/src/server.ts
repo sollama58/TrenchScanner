@@ -16,6 +16,7 @@ import { createSessionSigner, SESSION_COOKIE_NAME } from "./auth/session.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerFilterRoutes } from "./routes/filters.js";
 import { registerMatchRoutes } from "./routes/matches.js";
+import { registerCuratedRoutes } from "./routes/curated.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -145,6 +146,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
   await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener, matchStream });
+  await app.register(registerCuratedRoutes, { prefix: "/curated", env, matchStream });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });

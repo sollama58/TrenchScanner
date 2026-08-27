@@ -93,6 +93,32 @@ Worker and API share a `packages/core` (Prisma/Drizzle schema, scoring logic, da
 - **Phase 2**: Telegram bot — link chat from dashboard, real-time alerts, daily digest.
 - **Phase 3**: Narrative/keyword tuning based on real results, optional social-signal provider, historical performance tracking (did matched tokens actually run?).
 
+## 7b. Curated Alerts (self-learning feed)
+
+A subscriber-facing "Curated" tab: one global feed of high-conviction calls, curated first by a
+hand-tuned heuristic and eventually by a model trained on the system's own recorded outcomes.
+Three shipping phases, each useful on its own:
+
+- **Phase A — labels** (`CandidateOutcome`, `packages/core/src/curation/`): every rug-screen-passing
+  candidate gets sampled (at most hourly per token) and its price watched for an hour. The label:
+  reached **2x within 1h without first trading at/below 50% of the anchor** (the drawdown clause
+  makes the label mean "tradeable win", not "eventually printed a green candle"). The training
+  target is graded - log2 of the 1h peak multiple, capped at 4 doublings - so the learner prefers
+  bigger runs in proportion. Labels are recorded for ALL candidates, not just curated/matched ones:
+  full-population outcomes are what let any future gate be evaluated offline, and they remove the
+  explore/exploit problem entirely. Winners (and curated picks) stay watched to 24h for their
+  ultimate peak. Sampling is minutely, so intra-minute wicks are invisible - accepted; the label
+  describes what a human at the same cadence could have traded.
+- **Phase B — the feed** (`CuratedAlert`, `/curated` routes, the Curated tab): a strict
+  quality-floor gate (see `curator.ts`) emits alerts - no quota, no forced picks; a dead hour
+  emits nothing. Every alert card publicly grades itself (watching / won / missed / disqualified,
+  peak returns), and the tab's learning panel shows the training-set size, the base win rate, and
+  the feed's own hit rate. Emission volume is steered by `CURATED_MIN_SCORE` (env) while young.
+- **Phase C — the learner**: a nightly job trains a regularized model on the banked labels,
+  evaluates it walk-forward against the heuristic on the same weeks of history, and promotes it
+  to be the curator only when it wins repeatedly. Model versions live in the DB with their eval
+  metrics; the learning panel shows the takeover when it happens.
+
 ## 8. Open Items / Risks
 
 - **API rate limits**: Helius/DexScreener free tiers may throttle under frequent polling across many tracked tokens — may need to upgrade Helius tier as user base grows.

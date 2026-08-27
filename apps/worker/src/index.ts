@@ -15,6 +15,8 @@ import { runDigestJob } from "./jobs/digestJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob } from "./jobs/outcomeTrackingJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
+import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
+import { runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { scheduleInterval, scheduleDailyAt } from "./scheduler.js";
 
@@ -48,6 +50,15 @@ async function main() {
     () => runLivePriceJob(deps.dexScreener, env),
     env.LIVE_PRICE_INTERVAL_MINUTES,
   );
+  // Prices the open curated-alerts training rows and closes their label windows - one batched
+  // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution
+  // ("2x within the hour", sampled minutely), which is why it matches the live-price cadence
+  // rather than the scan's.
+  const candidateWatchJob = scheduleInterval(
+    "candidate-watch",
+    () => runCandidateWatchJob(deps.dexScreener, env),
+    env.CANDIDATE_WATCH_INTERVAL_MINUTES,
+  );
   // The backstop that makes the paywall's promise true: it finds burns whose owners never told us
   // about them - a closed tab, a flat battery, or someone who burned from a wallet UI and has not
   // opened the dashboard yet - and credits them anyway. Runs often, because the gap between
@@ -63,6 +74,13 @@ async function main() {
     "outcome-tracking",
     () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
     env.OUTCOME_TRACKING_HOUR_UTC,
+  );
+  // The self-learning half of Curated Alerts: nightly walk-forward evaluation, and the curator
+  // changes hands only on a win - see runCuratorTrainingJob.
+  const curatorTrainingJob = scheduleDailyAt(
+    "curator-training",
+    () => runCuratorTrainingJob(env),
+    env.CURATOR_TRAINING_HOUR_UTC,
   );
 
   logger.info("worker started", {
@@ -80,10 +98,12 @@ async function main() {
     logger.info("shutting down", { signal });
     scanJob.stop();
     livePriceJob.stop();
+    candidateWatchJob.stop();
     burnScanJob.stop();
     digestJob.stop();
     cleanupJob.stop();
     outcomeTrackingJob.stop();
+    curatorTrainingJob.stop();
     await bot.stop();
     await prisma.$disconnect();
     process.exit(0);

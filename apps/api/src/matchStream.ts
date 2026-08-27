@@ -1,5 +1,11 @@
 import { Client } from "pg";
-import { createLogger, MATCH_CHANNEL, type MatchNotification } from "@trenchscanner/core";
+import {
+  createLogger,
+  MATCH_CHANNEL,
+  CURATED_CHANNEL,
+  type MatchNotification,
+  type CuratedAlertNotification,
+} from "@trenchscanner/core";
 
 const logger = createLogger("match-stream");
 
@@ -32,6 +38,13 @@ export interface StreamSink {
 }
 
 interface Subscriber {
+  /**
+   * "match" subscribers receive only their own user's matches; "curated" subscribers receive
+   * every curated alert - the feed is the same for all subscribers by design, so there is
+   * nothing per-user to leak.
+   */
+  kind: "match" | "curated";
+  /** Only meaningful for kind "match". */
   userId: string;
   sink: StreamSink;
 }
@@ -90,8 +103,9 @@ export class MatchStream {
     const client = new Client({ connectionString: this.databaseUrl });
 
     client.on("notification", (msg) => {
-      if (msg.channel !== MATCH_CHANNEL || !msg.payload) return;
-      this.dispatch(msg.payload);
+      if (!msg.payload) return;
+      if (msg.channel === MATCH_CHANNEL) this.dispatch(msg.payload);
+      else if (msg.channel === CURATED_CHANNEL) this.dispatchCurated(msg.payload);
     });
     // A dropped LISTEN connection is silent by nature - no request fails, clients just stop
     // receiving - so it has to be actively noticed and rebuilt.
@@ -104,9 +118,12 @@ export class MatchStream {
     try {
       await client.connect();
       await client.query(`LISTEN ${MATCH_CHANNEL}`);
+      await client.query(`LISTEN ${CURATED_CHANNEL}`);
       this.client = client;
       this.reconnectDelay = RECONNECT_BASE_MS;
-      logger.info("listening for match notifications", { channel: MATCH_CHANNEL });
+      logger.info("listening for match + curated notifications", {
+        channels: [MATCH_CHANNEL, CURATED_CHANNEL],
+      });
     } catch (err) {
       logger.warn("failed to open listen connection", { error: String(err) });
       await client.end().catch(() => {});
@@ -152,7 +169,29 @@ export class MatchStream {
     // alerts - even just their existence and timing - is not something a stream should ever do.
     const frame = `event: match\ndata: ${JSON.stringify({ matchId: notification.matchId })}\n\n`;
     for (const subscriber of this.subscribers) {
-      if (subscriber.userId !== notification.userId) continue;
+      if (subscriber.kind !== "match" || subscriber.userId !== notification.userId) continue;
+      this.writeTo(subscriber, frame);
+    }
+  }
+
+  /**
+   * Fans one curated-alert NOTIFY out to every curated subscriber - broadcast on purpose, the
+   * feed is identical for everyone behind the paywall. Same nudge-only contract as dispatch():
+   * the payload carries just the id, the client refetches the feed.
+   */
+  dispatchCurated(payload: string): void {
+    let notification: CuratedAlertNotification;
+    try {
+      notification = JSON.parse(payload) as CuratedAlertNotification;
+    } catch {
+      logger.warn("ignoring unparseable curated alert notification");
+      return;
+    }
+    if (!notification?.alertId) return;
+
+    const frame = `event: curated\ndata: ${JSON.stringify({ alertId: notification.alertId })}\n\n`;
+    for (const subscriber of this.subscribers) {
+      if (subscriber.kind !== "curated") continue;
       this.writeTo(subscriber, frame);
     }
   }
@@ -164,7 +203,15 @@ export class MatchStream {
    */
   subscribe(userId: string, sink: StreamSink): (() => void) | null {
     if (this.subscribers.size >= MAX_SUBSCRIBERS) return null;
-    const subscriber: Subscriber = { userId, sink };
+    const subscriber: Subscriber = { kind: "match", userId, sink };
+    this.subscribers.add(subscriber);
+    return () => this.subscribers.delete(subscriber);
+  }
+
+  /** Same contract as subscribe(), for the broadcast curated feed - shares the same capacity cap. */
+  subscribeCurated(sink: StreamSink): (() => void) | null {
+    if (this.subscribers.size >= MAX_SUBSCRIBERS) return null;
+    const subscriber: Subscriber = { kind: "curated", userId: "", sink };
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
   }

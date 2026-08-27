@@ -14,9 +14,13 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every few minutes. Worth surfacing promptly: while this is down, someone who burned and closed
   // the tab is locked out of what they paid for, and nothing else will notice.
   "burn-scan": 20 * 60_000,
+  // Every minute, and while it's down every open training row's label window is silently
+  // recording nothing - an hour of downtime is an hour of alerts whose outcomes read "flat".
+  "candidate-watch": 10 * 60_000,
   digest: 26 * 3_600_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
+  "curator-training": 26 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 const MAX_ERROR_LENGTH = 300;

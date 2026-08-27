@@ -154,8 +154,163 @@ model Token {
 
   snapshots TokenSnapshot[]
   matches   Match[]
+  candidateOutcomes CandidateOutcome[]
+  curatedAlerts     CuratedAlert[]
 
   @@index([lastViewedAt])
+}
+
+/// A token the curator promoted to the Curated Alerts feed - the public, self-grading output of
+/// the self-learning pipeline. One row per emission (at most one per token per cooldown window).
+/// The feed's track record IS the product's marketing, so outcome numbers are copied in from the
+/// linked CandidateOutcome as its windows close - the copies survive the training set's own
+/// retention horizon, and until they land the API reads the live link instead.
+model CuratedAlert {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  /// The training row whose anchor this alert shares. SetNull, not Cascade: pruning the training
+  /// set after CANDIDATE_OUTCOME_RETENTION_DAYS must not erase the public track record.
+  candidateOutcomeId String?
+  candidateOutcome   CandidateOutcome? @relation(fields: [candidateOutcomeId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  /// Which decision-maker emitted it - "heuristic-v1", or a CuratorModel id once the learner
+  /// takes over (Phase C). Shown in the feed's learning panel, and what lets the panel compare
+  /// the two on their own emissions.
+  source     String
+  /// The curator's conviction at emission, 0-100.
+  confidence Float
+  /// Why, as short human-readable strings - the top contributing signals at emission time.
+  reasons String[] @default([])
+
+  anchorPriceUsd Float
+  anchorMcapUsd  Float
+
+  /// Outcome copies - written by the watcher when the linked row's 1h window (and, for winners,
+  /// its 24h watch) closes. Null until then; the API prefers the live candidateOutcome link
+  /// while it exists.
+  peak1hReturnPct    Float?
+  maxDrawdown1hPct   Float?
+  hit2xIn1h          Boolean?
+  disqualified       Boolean?
+  peak24hReturnPct   Float?
+  outcomeFinalizedAt DateTime?
+
+  @@index([createdAt])
+  @@index([tokenId, createdAt])
+}
+
+/// One trained curator - the output of a nightly training run (apps/worker/src/jobs/
+/// curatorTrainingJob.ts) over the CandidateOutcome training set. Kept as data, not code: the
+/// weights, the feature scaling, the emission threshold, and the walk-forward evidence all live
+/// in this row, so promotion is auditable and rollback is "flip status back". At most one row is
+/// ACTIVE at a time; while none is, the hand-tuned heuristic curates (curation/curator.ts).
+model CuratorModel {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  /// Model family + featurization version, e.g. "weighted-logistic-v1". A reader that doesn't
+  /// recognize the kind must ignore the row rather than guess at params.
+  kind String
+  /// Everything needed to score a candidate: feature names, standardization stats, weights,
+  /// bias, emission threshold. Shape is owned by packages/core/src/curation/trainer.ts.
+  params Json
+  trainingRows Int
+  trainingFrom DateTime
+  trainingTo   DateTime
+  /// The walk-forward folds this model was judged on, plus the promotion verdict - the public
+  /// evidence behind "the model took over" (or didn't).
+  evalMetrics Json
+  /// candidate: trained + evaluated, not curating. active: the current curator. retired: was
+  /// active once.
+  status      String
+  activatedAt DateTime?
+  retiredAt   DateTime?
+
+  @@index([status, createdAt])
+}
+
+/// One training sample for the curated-alerts learner: a rug-screen-passing candidate at a
+/// moment in time ("the anchor"), plus what its price actually did over the following hour.
+/// Written for EVERY scored candidate - not just ones a user filter matched - because a model
+/// trained only on user-selected tokens can never learn anything outside the box users already
+/// drew. At most one row per token per CANDIDATE_SAMPLE_SPACING_MINUTES, so a token that sits in
+/// the mcap band all day yields decorrelated samples rather than sixty near-identical ones an
+/// hour. See packages/core/src/curation/ for the label math and feature contract.
+model CandidateOutcome {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  /// The moment the label is measured FROM - "if the curator had alerted right now".
+  anchorAt       DateTime @default(now())
+  anchorPriceUsd Float
+  anchorMcapUsd  Float
+
+  /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
+  /// snapshot knew, NOT a snapshot reference, so training data outlives the 30-day
+  /// TokenSnapshot purge without forcing snapshots to live 6 months. Names are the stable
+  /// contract in packages/core/src/curation/features.ts; null means "genuinely unknown at
+  /// anchor time" (the trainer turns those into missing-value indicators, never fake zeros).
+  features Json
+  /// The heuristic composite score at anchor. Also inside `features`; duplicated as a real
+  /// column so stats queries can aggregate on it without unpacking JSON.
+  score Float?
+
+  // ---- Watch state (driven by apps/worker/src/jobs/candidateOutcomeJob.ts) ----
+  /// When the watcher should next price-check this row. Advances every tick whether or not
+  /// DexScreener returned a price, so a dead pair can't hot-loop the sweep.
+  nextCheckAt   DateTime
+  lastCheckedAt DateTime?
+  lastPriceUsd  Float?
+  /// Whether this row keeps being watched past the 1h label window, out to 24h - set for rows
+  /// that hit 2x (to record how far winners ultimately ran) and for rows a curated alert points
+  /// at (their public outcome badge shows the 24h peak). Everything else stops at 1h: the
+  /// extended watch is 3x the API volume of the label window, and a dud's 24h peak teaches
+  /// nothing the 1h window didn't.
+  extended24h Boolean @default(false)
+
+  // ---- Running aggregates, initialized to the anchor price at creation ----
+  /// Highest price seen within the 1h label window.
+  peak1hPriceUsd Float
+  peak1hAt       DateTime?
+  /// Lowest price seen within the 1h window - the worst drawdown a buyer at the anchor endured.
+  low1hPriceUsd Float
+  /// Lowest price seen BEFORE the first observed 2x - frozen the tick the price first reaches
+  /// 2x the anchor. This is what decides disqualification: a token that dropped 50%+ and then
+  /// "2x'd from the bottom" stopped out anyone who actually bought the alert.
+  lowBefore2xPriceUsd Float
+  /// First tick at which price >= 2x anchor was observed (within the 1h window).
+  hit2xAt DateTime?
+  /// Highest price seen over the whole watch (up to 24h for extended rows).
+  peak24hPriceUsd Float
+  peak24hAt       DateTime?
+
+  // ---- Labels, written once when the 1h window closes ----
+  finalizedAt      DateTime?
+  /// (peak1h - anchor) / anchor * 100.
+  peak1hReturnPct  Float?
+  /// (low1h - anchor) / anchor * 100 - zero or negative.
+  maxDrawdown1hPct Float?
+  hit2xIn1h        Boolean?
+  /// Hit 2x, but only after first dropping through the disqualifying drawdown - see
+  /// lowBefore2xPriceUsd. Disqualified rows train as losses.
+  disqualified     Boolean?
+  /// The training target: 0 for a miss or disqualified row, else log2 of the 1h peak multiple,
+  /// capped - a 2x is 1.0, a 4x is 2.0, so the learner prefers higher multiples exactly as much
+  /// as they're worth in doublings. See computeOneHourLabels in curation/labels.ts.
+  labelValue       Float?
+  /// Set when the row is completely done (at 1h for non-extended rows, 24h for extended ones).
+  finalized24hAt   DateTime?
+  peak24hReturnPct Float?
+
+  curatedAlerts CuratedAlert[]
+
+  @@index([tokenId, anchorAt])
+  @@index([finalized24hAt, nextCheckAt])
+  @@index([anchorAt])
+  @@index([finalizedAt])
 }
 
 /// A point-in-time reading of a token's market + on-chain state, produced each scan cycle.
