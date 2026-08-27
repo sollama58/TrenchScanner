@@ -17,8 +17,10 @@ function buildFilterInputSchema(env: Env) {
     maxDevWalletPct: z.number().min(0).max(100).nullable().optional(),
     maxRiskScore: z.number().min(0).max(100).nullable().optional(),
     excludeCriticalRiskFlags: z.boolean().default(false),
-    minTokenAgeMinutes: z.number().int().nonnegative().nullable().optional(),
-    maxTokenAgeMinutes: z.number().int().nonnegative().nullable().optional(),
+    // Not .int(): a fraction of a minute is how you express seconds here, and rejecting 0.25
+    // would make the field's own placeholder a lie.
+    minTokenAgeMinutes: z.number().nonnegative().nullable().optional(),
+    maxTokenAgeMinutes: z.number().nonnegative().nullable().optional(),
     narrativeKeywords: z.array(z.string()).default([]),
     minScore: z.number().min(0).max(100).nullable().optional(),
     maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),

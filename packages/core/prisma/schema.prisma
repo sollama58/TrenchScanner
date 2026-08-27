@@ -74,8 +74,12 @@ model UserFilter {
   maxDevWalletPct          Float? // creator's own holding, % (only if they rank in the top 10)
   maxRiskScore             Float? // RugCheck's own composite risk score, 0-100 (higher = riskier)
   excludeCriticalRiskFlags Boolean  @default(false) // e.g. "Creator history of rugged tokens"
-  minTokenAgeMinutes       Int?
-  maxTokenAgeMinutes       Int?
+  /// Float, not Int: people filtering the very freshest launches think in seconds, and 0.25 is
+  /// how you say fifteen of them without inventing a second unit. See TokenSnapshot.ageMinutes,
+  /// which carries matching precision - a fractional bound compared against a whole-minute age
+  /// would quietly round away and do nothing.
+  minTokenAgeMinutes       Float?
+  maxTokenAgeMinutes       Float?
   narrativeKeywords        String[] @default([])
   minScore                 Float? // minimum composite score, 0-100
   maxFreshTop10WalletPct   Float? // % of top-10 holders funded <24h ago (sniper/insider signal)
@@ -198,7 +202,10 @@ model TokenSnapshot {
   freezeAuthorityActive Boolean?
   lpBurned              Boolean?
 
-  ageMinutes Int?
+  /// Float, to sub-minute precision. Was Int, which meant a token 15 seconds old and one 40
+  /// seconds old both recorded as "0" and "1" respectively - fine for display, useless for a
+  /// filter that wants to distinguish them.
+  ageMinutes Float?
 
   score             Float?
   // Individual components behind `score` (see packages/core/src/scoring/scorer.ts's

@@ -18,8 +18,12 @@ export function enrichToken(
 ): EnrichedToken {
   const now = options.now ?? new Date();
   const createdAt = options.createdAt ?? candidate.pairCreatedAt;
+  // Kept to two decimals (0.01 min = 0.6s) rather than rounded to whole minutes. Rounding here
+  // is what made sub-minute filters meaningless: a token 15 seconds old recorded as 0 and one 40
+  // seconds old as 1, so "min age 0.25" could never distinguish them. Two decimals is finer than
+  // the scan cadence can resolve anyway, and keeps the stored figure readable.
   const ageMinutes = createdAt
-    ? Math.max(0, Math.round((now.getTime() - createdAt.getTime()) / 60_000))
+    ? Math.max(0, Math.round(((now.getTime() - createdAt.getTime()) / 60_000) * 100) / 100)
     : undefined;
 
   const volumeToMcapRatio =
