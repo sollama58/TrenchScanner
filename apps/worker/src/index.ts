@@ -13,6 +13,7 @@ import { runScanCycle } from "./jobs/scanJob.js";
 import { runDigestJob } from "./jobs/digestJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob } from "./jobs/outcomeTrackingJob.js";
+import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { scheduleInterval, scheduleDailyAt } from "./scheduler.js";
 
 const logger = createLogger("worker");
@@ -31,6 +32,13 @@ async function main() {
   bot.start();
 
   const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env, bot), env.SCAN_INTERVAL_MINUTES);
+  // Runs far more often than the scan cycle, but only touches tokens someone currently has open
+  // and only fetches market data - see runLivePriceJob's own comment.
+  const livePriceJob = scheduleInterval(
+    "live-price",
+    () => runLivePriceJob(deps.dexScreener, env),
+    env.LIVE_PRICE_INTERVAL_MINUTES,
+  );
   const digestJob = scheduleDailyAt("digest", () => runDigestJob(bot), env.DIGEST_HOUR_UTC);
   const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC);
   const outcomeTrackingJob = scheduleDailyAt(
@@ -41,6 +49,7 @@ async function main() {
 
   logger.info("worker started", {
     scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
+    livePriceIntervalMinutes: env.LIVE_PRICE_INTERVAL_MINUTES,
     digestHourUtc: env.DIGEST_HOUR_UTC,
     cleanupHourUtc: env.CLEANUP_HOUR_UTC,
     outcomeTrackingHourUtc: env.OUTCOME_TRACKING_HOUR_UTC,
@@ -51,6 +60,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     logger.info("shutting down", { signal });
     scanJob.stop();
+    livePriceJob.stop();
     digestJob.stop();
     cleanupJob.stop();
     outcomeTrackingJob.stop();

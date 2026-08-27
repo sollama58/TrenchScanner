@@ -119,6 +119,13 @@ services:
         value: "5"
       - key: ACTIVE_VIEW_WINDOW_MINUTES
         value: "10"
+      # Live market-cap refresh for tokens someone currently has open - see livePriceJob.ts.
+      # Cheap enough for a one-minute cadence: market data only, and no work at all when nobody
+      # has the dashboard open.
+      - key: LIVE_PRICE_INTERVAL_MINUTES
+        value: "1"
+      - key: LIVE_PRICE_MAX_TRACKED
+        value: "150"
 
 databases:
   - name: trenchscanner-db

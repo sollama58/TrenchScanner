@@ -127,6 +127,8 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
     const { env } = opts;
     return {
       scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
+      livePriceIntervalMinutes: env.LIVE_PRICE_INTERVAL_MINUTES,
+      activeViewWindowMinutes: env.ACTIVE_VIEW_WINDOW_MINUTES,
       digestHourUtc: env.DIGEST_HOUR_UTC,
       mcapFilterMin: env.MCAP_FILTER_MIN,
       mcapFilterMax: env.MCAP_FILTER_MAX,

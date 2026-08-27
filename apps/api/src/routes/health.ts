@@ -8,6 +8,8 @@ import { prisma } from "@trenchscanner/core";
  */
 const STALE_THRESHOLD_MS: Record<string, number> = {
   scan: 20 * 60_000,
+  // Runs every minute, so a few missed passes is already a real signal - unlike the daily jobs.
+  "live-price": 10 * 60_000,
   digest: 26 * 3_600_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
