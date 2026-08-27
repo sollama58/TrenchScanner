@@ -7,6 +7,7 @@ import {
   runRugScreen,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
+  notifyMatchCreated,
   type Env,
   type DexScreenerClient,
   type PumpFunClient,
@@ -409,7 +410,7 @@ async function processCandidate(
       ? await bot.sendMessage(telegramLink.chatId!, formatRealtimeAlert(token, snapshot, scored.score.total))
       : false;
 
-    await prisma.match.create({
+    const match = await prisma.match.create({
       data: {
         userId: filter.userId,
         filterId: filter.id,
@@ -420,6 +421,11 @@ async function processCandidate(
         deliveredTelegram: delivered,
       },
     });
+    // Nudges any API instance holding this user's dashboard open so the card appears now rather
+    // than on their next poll. After the create, never before: the row has to exist by the time a
+    // client acts on the notification. Swallows its own errors - the match is already committed
+    // and the client's fallback poll covers a missed nudge.
+    await notifyMatchCreated({ userId: filter.userId, matchId: match.id });
     matchCount += 1;
   }
 

@@ -1,0 +1,141 @@
+import { describe, expect, it } from "vitest";
+import { MatchStream, type StreamSink } from "./matchStream.js";
+
+/** Collects what would have gone down the socket. `fail` simulates a peer that has vanished. */
+function sink(options: { fail?: boolean } = {}) {
+  const written: string[] = [];
+  let ended = false;
+  const s: StreamSink = {
+    write(chunk) {
+      if (options.fail) throw new Error("EPIPE");
+      written.push(chunk);
+      return true;
+    },
+    end() {
+      ended = true;
+    },
+  };
+  return {
+    sink: s,
+    written,
+    get ended() {
+      return ended;
+    },
+  };
+}
+
+/** Never started, so no database connection is opened - dispatch is pure fan-out. */
+const stream = () => new MatchStream("postgresql://unused");
+
+const notification = (userId: string, matchId = "m1") => JSON.stringify({ userId, matchId });
+
+describe("MatchStream.dispatch", () => {
+  it("delivers a match only to the user it belongs to", () => {
+    // A match belongs to one user's filter. Leaking another user's alerts - even just their
+    // existence and timing - is not something a stream should ever do.
+    const s = stream();
+    const alice = sink();
+    const bob = sink();
+    s.subscribe("alice", alice.sink);
+    s.subscribe("bob", bob.sink);
+
+    s.dispatch(notification("alice", "match-1"));
+
+    expect(alice.written).toEqual(['event: match\ndata: {"matchId":"match-1"}\n\n']);
+    expect(bob.written).toEqual([]);
+  });
+
+  it("delivers to every one of a user's open tabs", () => {
+    const s = stream();
+    const tabOne = sink();
+    const tabTwo = sink();
+    s.subscribe("alice", tabOne.sink);
+    s.subscribe("alice", tabTwo.sink);
+
+    s.dispatch(notification("alice"));
+
+    expect(tabOne.written).toHaveLength(1);
+    expect(tabTwo.written).toHaveLength(1);
+  });
+
+  it("ignores an unparseable payload rather than throwing into the pg callback", () => {
+    const s = stream();
+    const alice = sink();
+    s.subscribe("alice", alice.sink);
+
+    expect(() => s.dispatch("not json")).not.toThrow();
+    expect(() => s.dispatch(JSON.stringify({ userId: "alice" }))).not.toThrow();
+    expect(() => s.dispatch(JSON.stringify({ matchId: "m1" }))).not.toThrow();
+    expect(alice.written).toEqual([]);
+  });
+
+  it("drops a subscriber whose socket is already gone", () => {
+    // A client that vanished without a FIN (laptop lid, dead mobile network) only shows up as a
+    // failed write - without this it would sit in the set collecting heartbeats forever.
+    const s = stream();
+    const dead = sink({ fail: true });
+    s.subscribe("alice", dead.sink);
+    expect(s.subscriberCount).toBe(1);
+
+    s.dispatch(notification("alice"));
+
+    expect(s.subscriberCount).toBe(0);
+  });
+
+  it("stops delivering once the subscriber is disposed", () => {
+    const s = stream();
+    const alice = sink();
+    const dispose = s.subscribe("alice", alice.sink);
+    dispose?.();
+
+    s.dispatch(notification("alice"));
+
+    expect(alice.written).toEqual([]);
+    expect(s.subscriberCount).toBe(0);
+  });
+});
+
+describe("MatchStream capacity", () => {
+  it("refuses new subscribers past the cap instead of pinning unbounded sockets", () => {
+    const s = stream();
+    const accepted = [];
+    for (let i = 0; i < 500; i += 1) accepted.push(s.subscribe(`u${i}`, sink().sink));
+
+    expect(accepted.every((d) => d !== null)).toBe(true);
+    expect(s.subscribe("one-too-many", sink().sink)).toBe(null);
+  });
+});
+
+describe("MatchStream.sendHeartbeat", () => {
+  it("writes a comment frame that EventSource ignores but the socket does not", () => {
+    const s = stream();
+    const alice = sink();
+    s.subscribe("alice", alice.sink);
+
+    s.sendHeartbeat();
+
+    expect(alice.written).toEqual([": ping\n\n"]);
+  });
+
+  it("sweeps out subscribers whose socket died between events", () => {
+    const s = stream();
+    s.subscribe("alice", sink({ fail: true }).sink);
+
+    s.sendHeartbeat();
+
+    expect(s.subscriberCount).toBe(0);
+  });
+});
+
+describe("MatchStream.stop", () => {
+  it("closes every open stream", async () => {
+    const s = stream();
+    const alice = sink();
+    s.subscribe("alice", alice.sink);
+
+    await s.stop();
+
+    expect(alice.ended).toBe(true);
+    expect(s.subscriberCount).toBe(0);
+  });
+});

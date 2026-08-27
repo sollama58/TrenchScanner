@@ -20,6 +20,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
+import { MatchStream } from "./matchStream.js";
 
 const logger = createLogger("api");
 
@@ -77,16 +78,32 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     }
   });
 
+  // The API's only outbound data source. Used for one thing: refreshing the market caps on a page
+  // the moment it's opened, instead of leaving them until the worker's next tick - see
+  // liveRefresh.ts for how that's kept from becoming a per-request upstream call.
+  const dexScreener = new DexScreenerClient({ baseUrl: env.DEXSCREENER_BASE_URL });
+
+  // Holds one Postgres LISTEN connection and pushes new matches to connected dashboards the moment
+  // the worker records them - see matchStream.ts. Built here rather than in index.ts so a server
+  // constructed for a test gets a working stream too, and torn down via onClose so nothing leaks
+  // between test servers or blocks shutdown.
+  //
+  // Declared before any route is registered, not after: Fastify creates a plugin's encapsulated
+  // instance at register time, so a decoration added later only reaches it through the prototype
+  // chain. That happens to work, but it is far too subtle a thing for /health/stream to depend on.
+  const matchStream = new MatchStream(env.DATABASE_URL);
+  matchStream.start();
+  app.decorate("matchStream", matchStream);
+  app.addHook("onClose", async () => {
+    await matchStream.stop();
+  });
+
   await app.register(registerHealthRoutes, { prefix: "/health" });
   await app.register(registerConfigRoutes, { prefix: "/config", env });
 
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
-  // The API's only outbound data source. Used for one thing: refreshing the market caps on a page
-  // the moment it's opened, instead of leaving them until the worker's next tick - see
-  // liveRefresh.ts for how that's kept from becoming a per-request upstream call.
-  const dexScreener = new DexScreenerClient({ baseUrl: env.DEXSCREENER_BASE_URL });
-  await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener });
+  await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener, matchStream });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });

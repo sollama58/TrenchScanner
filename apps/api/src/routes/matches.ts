@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, type Env, type DexScreenerClient } from "@trenchscanner/core";
+import { prisma, corsOriginList, type Env, type DexScreenerClient } from "@trenchscanner/core";
 import { OnDemandLiveRefresher } from "../liveRefresh.js";
+import type { MatchStream } from "../matchStream.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
@@ -12,7 +13,7 @@ const listQuerySchema = z.object({
 
 export async function registerMatchRoutes(
   app: FastifyInstance,
-  opts: { env: Env; dexScreener: DexScreenerClient },
+  opts: { env: Env; dexScreener: DexScreenerClient; matchStream: MatchStream },
 ) {
   app.addHook("preHandler", app.authenticate);
 
@@ -21,6 +22,60 @@ export async function registerMatchRoutes(
   const liveRefresher = new OnDemandLiveRefresher(opts.dexScreener, {
     maxAgeMs: opts.env.LIVE_PRICE_INTERVAL_MINUTES * 60_000,
     limit: PAGE_SIZE,
+  });
+
+  /**
+   * Server-sent events: a nudge the instant a match is created for this user, rather than waiting
+   * out the client's poll. See MatchStream for how the worker's notification gets here.
+   *
+   * Each event carries only `{ matchId }` - the client refetches page 1 to render it. That keeps
+   * one definition of the match payload (the route above) instead of a second one here that could
+   * drift, and costs one round trip on an event that is rare by nature.
+   *
+   * The stream is a latency optimisation, never the only path. Clients must keep a slow fallback
+   * poll: NOTIFY is not durable, so a client that is disconnected at the moment of publication
+   * simply misses that event, and corporate proxies do sometimes break long-lived responses
+   * outright. A missed nudge should cost seconds, not an alert.
+   */
+  app.get("/stream", (request, reply) => {
+    const userId = request.user!.userId;
+
+    // reply.hijack() hands the socket over and skips Fastify's onSend hooks - which is where
+    // @fastify/cors would normally attach its headers - so anything the browser needs has to be
+    // set here explicitly. EventSource sends the session cookie only under withCredentials, and
+    // that requires an exact origin echo; a wildcard is rejected by the browser.
+    const origin = request.headers.origin;
+    if (origin && corsOriginList(opts.env).includes(origin)) {
+      reply.raw.setHeader("Access-Control-Allow-Origin", origin);
+      reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
+      reply.raw.setHeader("Vary", "Origin");
+    }
+
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+    reply.raw.setHeader("Connection", "keep-alive");
+    // Tells nginx-family proxies (Render's included) not to buffer the response - without it a
+    // stream can be held back until some byte threshold is reached, which for SSE means events
+    // arrive late or in clumps, i.e. exactly the thing this endpoint exists to avoid.
+    reply.raw.setHeader("X-Accel-Buffering", "no");
+    reply.hijack();
+
+    const dispose = opts.matchStream.subscribe(userId, reply.raw);
+    if (!dispose) {
+      // At capacity. Say so in-band and close, rather than holding a socket that will never be
+      // fed - the client's fallback poll takes over.
+      reply.raw.writeHead(503);
+      reply.raw.end();
+      return;
+    }
+
+    // `retry` sets the browser's own reconnect delay for this stream; EventSource reconnects on
+    // its own, so this is the whole recovery story for a dropped connection.
+    reply.raw.write("retry: 5000\n\n");
+    reply.raw.write("event: ready\ndata: {}\n\n");
+
+    request.raw.on("close", dispose);
+    request.raw.on("error", dispose);
   });
 
   /** The live feed: this user's matches, newest first, 12 per page. */
