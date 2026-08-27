@@ -27,6 +27,8 @@ import { formatRealtimeAlert } from "../dispatch/alertDispatcher.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
+import { recordMatchPeaks } from "./matchPeaks.js";
+import { repairOutcomeBookkeeping } from "./outcomeTrackingJob.js";
 
 const logger = createLogger("scan-job");
 
@@ -122,6 +124,19 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     } catch (err) {
       logger.warn("failed to refresh actively-viewed out-of-band tokens", { error: String(err) });
     }
+  }
+
+  // Roll every match's recorded peak forward from the snapshots and live pings already written -
+  // no network access, no upstream cost. This runs on the scan cadence rather than in the nightly
+  // outcome job because a once-a-day price sample simply cannot see a token that runs and retraces
+  // inside a single day, which is most of them. See recordMatchPeaks for the full reasoning.
+  // Placed before the early return below so it still runs on a cycle that finds nothing in band.
+  try {
+    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS);
+    await repairOutcomeBookkeeping(new Date());
+  } catch (err) {
+    // Bookkeeping over data already banked - never worth failing a scan cycle over.
+    logger.warn("failed to record match peaks", { error: String(err) });
   }
 
   if (candidates.length === 0) {

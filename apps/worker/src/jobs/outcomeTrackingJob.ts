@@ -100,12 +100,20 @@ export function reconcileMatchOutcome(
 }
 
 /**
- * Backtesting data: for every recent Match, checks the token's current market cap against the
- * highest one recorded so far and updates Match.peakMcapUsd/peakMcapAt/peakReturnPct on a new
- * high. The baseline for "how far did it run" is always snapshot.marketCapUsd (the mcap at match
- * time, frozen forever on the TokenSnapshot row) - peakMcapUsd only ever tracks the ceiling above
- * that, so `peakMcapUsd / snapshot.marketCapUsd` is a stable "best multiple reached" figure
- * regardless of how many times this job has run. Once the recorded peak is +100% or beyond,
+ * The long-tail half of outcome tracking: fetches one fresh market cap per recently-matched token
+ * and records it if it beats the peak already on file.
+ *
+ * The *primary* peak recorder is recordMatchPeaks (matchPeaks.ts), which runs on the scan cadence
+ * and mines the snapshot/live-ping history this app already collects. This job exists for what
+ * that can't see: a token that has dropped out of the mcap band stops being snapshotted, so its
+ * history goes quiet, and only an explicit price fetch will notice if it later runs. Once a day is
+ * the right cadence for *that* - it would be badly wrong as the only sampling of a live token,
+ * which is exactly the bug that kept the Leaderboard empty.
+ *
+ * The baseline for "how far did it run" is always snapshot.marketCapUsd (the mcap at match time,
+ * frozen forever on the TokenSnapshot row) - peakMcapUsd only ever tracks the ceiling above that,
+ * so `peakMcapUsd / snapshot.marketCapUsd` is a stable "best multiple reached" figure regardless
+ * of how many times this job has run. Once the recorded peak is +100% or beyond,
  * Match.hitHundredPctAt is stamped (once, permanently) - that's what makes the match eligible for
  * the public Leaderboard (apps/api/src/routes/leaderboard.ts).
  *
@@ -185,7 +193,7 @@ export async function runOutcomeTrackingJob(dexScreener: DexScreenerClient): Pro
  * either not computed yet, or computed and qualifying but not yet stamped. Once a row is fixed it
  * stops matching, so this settles to zero work per run rather than rewriting the table nightly.
  */
-async function repairOutcomeBookkeeping(now: Date): Promise<number> {
+export async function repairOutcomeBookkeeping(now: Date): Promise<number> {
   let repaired = 0;
 
   for (let batch = 0; batch < REPAIR_MAX_BATCHES; batch += 1) {
