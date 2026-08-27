@@ -33,6 +33,22 @@ describe("enrichToken", () => {
     expect(enriched.ageMinutes).toBe(30);
   });
 
+  it("keeps sub-minute ages, so a fractional filter bound can act on them", () => {
+    const now = new Date("2026-01-01T00:00:00Z");
+    const fifteenSeconds = new Date(now.getTime() - 15_000);
+    const enriched = enrichToken(candidate, onChain, { now, createdAt: fifteenSeconds });
+    // 0.25, not 0: rounding this to a whole minute is what used to make "min age 0.25" a no-op.
+    expect(enriched.ageMinutes).toBe(0.25);
+  });
+
+  it("distinguishes two tokens that used to collapse to the same whole minute", () => {
+    const now = new Date("2026-01-01T00:00:00Z");
+    const young = enrichToken(candidate, onChain, { now, createdAt: new Date(now.getTime() - 15_000) });
+    const older = enrichToken(candidate, onChain, { now, createdAt: new Date(now.getTime() - 40_000) });
+    expect(young.ageMinutes).not.toBe(older.ageMinutes);
+    expect(young.ageMinutes! < 0.5 && older.ageMinutes! > 0.5).toBe(true);
+  });
+
   it("leaves ageMinutes undefined when no creation time is known", () => {
     const enriched = enrichToken(candidate, onChain);
     expect(enriched.ageMinutes).toBeUndefined();
