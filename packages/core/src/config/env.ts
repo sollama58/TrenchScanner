@@ -109,6 +109,22 @@ const envSchema = z.object({
   ADMIN_WALLET_ADDRESSES: z.string().optional().default(""),
 });
 
+/**
+ * Holder growth is measured across HOLDER_GROWTH_WINDOW_MINUTES, but the holder count on each end
+ * of that comparison can be up to RUGCHECK_CACHE_TTL_MINUTES stale. If the window is not clearly
+ * the larger of the two, both readings can come from the same cached report and growth reads a
+ * confident 0% - which is not "no growth", it is "not measured", and nothing downstream can tell
+ * the difference. Cheap to state here; expensive to diagnose in production.
+ */
+const validatedEnvSchema = envSchema.refine(
+  (env) => env.HOLDER_GROWTH_WINDOW_MINUTES > env.RUGCHECK_CACHE_TTL_MINUTES,
+  {
+    path: ["HOLDER_GROWTH_WINDOW_MINUTES"],
+    message:
+      "HOLDER_GROWTH_WINDOW_MINUTES must be greater than RUGCHECK_CACHE_TTL_MINUTES, or holder growth is measured between two readings of the same cached report and always reads 0%",
+  },
+);
+
 export type Env = z.infer<typeof envSchema>;
 
 let cached: Env | undefined;
@@ -116,7 +132,7 @@ let cached: Env | undefined;
 /** Parses `process.env` once and caches the result. Throws with a readable message on failure. */
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (cached) return cached;
-  const parsed = envSchema.safeParse(source);
+  const parsed = validatedEnvSchema.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`)

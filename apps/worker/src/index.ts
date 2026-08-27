@@ -43,7 +43,7 @@ async function main() {
   const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC);
   const outcomeTrackingJob = scheduleDailyAt(
     "outcome-tracking",
-    () => runOutcomeTrackingJob(deps.dexScreener),
+    () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
     env.OUTCOME_TRACKING_HOUR_UTC,
   );
 

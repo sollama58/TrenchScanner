@@ -9,18 +9,25 @@ const logger = createLogger("rugcheck-cache");
  * version - validating on read turns that into an ordinary cache miss instead of a crash or, worse,
  * a half-populated profile silently reaching the rug screen.
  */
-const cachedProfileSchema = z.object({
-  mintAddress: z.string(),
-  holderCount: z.number().optional(),
-  top10HolderPct: z.number().optional(),
-  devWalletPct: z.number().optional(),
-  mintAuthorityActive: z.boolean(),
-  freezeAuthorityActive: z.boolean(),
-  lpBurned: z.boolean(),
-  riskScore: z.number(),
-  riskFlags: z.array(z.string()),
-  top10HolderAddresses: z.array(z.string()).optional(),
-});
+const cachedProfileSchema = z
+  .object({
+    mintAddress: z.string(),
+    holderCount: z.number().optional(),
+    top10HolderPct: z.number().optional(),
+    devWalletPct: z.number().optional(),
+    mintAuthorityActive: z.boolean(),
+    freezeAuthorityActive: z.boolean(),
+    lpBurned: z.boolean(),
+    riskScore: z.number(),
+    riskFlags: z.array(z.string()),
+    top10HolderAddresses: z.array(z.string()).optional(),
+    // passthrough, not strip: zod drops unknown keys by default, so a field added to toProfile()
+    // would vanish from every cached profile while fresh ones still carried it - a difference that
+    // shows up as behaviour changing depending on cache state, which is close to unfindable.
+    // Rejecting outright would be worse: the row would be refetched and rewritten in the same shape
+    // forever, never satisfying the schema.
+  })
+  .passthrough();
 
 export interface RugProfileResolution {
   profiles: Map<string, RugCheckProfile>;

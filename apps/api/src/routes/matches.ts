@@ -40,6 +40,14 @@ export async function registerMatchRoutes(
   app.get("/stream", (request, reply) => {
     const userId = request.user!.userId;
 
+    // Capacity is checked before anything is hijacked or any header is set, so a rejection is an
+    // ordinary JSON 503 the client can actually read. Doing it after hijack meant replying 503
+    // with Content-Type: text/event-stream already on the response.
+    const dispose = opts.matchStream.subscribe(userId, reply.raw);
+    if (!dispose) {
+      return reply.code(503).send({ error: "stream capacity reached - fall back to polling" });
+    }
+
     // reply.hijack() hands the socket over and skips Fastify's onSend hooks - which is where
     // @fastify/cors would normally attach its headers - so anything the browser needs has to be
     // set here explicitly. EventSource sends the session cookie only under withCredentials, and
@@ -59,15 +67,6 @@ export async function registerMatchRoutes(
     // arrive late or in clumps, i.e. exactly the thing this endpoint exists to avoid.
     reply.raw.setHeader("X-Accel-Buffering", "no");
     reply.hijack();
-
-    const dispose = opts.matchStream.subscribe(userId, reply.raw);
-    if (!dispose) {
-      // At capacity. Say so in-band and close, rather than holding a socket that will never be
-      // fed - the client's fallback poll takes over.
-      reply.raw.writeHead(503);
-      reply.raw.end();
-      return;
-    }
 
     // `retry` sets the browser's own reconnect delay for this stream; EventSource reconnects on
     // its own, so this is the whole recovery story for a dropped connection.

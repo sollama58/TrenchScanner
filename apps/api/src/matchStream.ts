@@ -24,8 +24,11 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 
 export interface StreamSink {
-  write(chunk: string): boolean;
+  write(chunk: string, callback?: (err?: Error | null) => void): boolean;
   end(): void;
+  /** Node's ServerResponse exposes this; it is the only reliable "the peer is gone" signal here. */
+  readonly destroyed?: boolean;
+  readonly writableEnded?: boolean;
 }
 
 interface Subscriber {
@@ -174,10 +177,22 @@ export class MatchStream {
   }
 
   private writeTo(subscriber: Subscriber, frame: string): void {
+    const { sink } = subscriber;
+    // Checked up front because writing to an already-destroyed response does NOT throw - it
+    // returns normally and reports the failure asynchronously. Relying on the catch below alone
+    // meant a subscriber whose socket had gone was never actually swept out by this path.
+    if (sink.destroyed || sink.writableEnded) {
+      this.subscribers.delete(subscriber);
+      return;
+    }
     try {
-      subscriber.sink.write(frame);
+      // The callback is what turns an async write failure into a drop. Passing one also stops
+      // Node treating the error as unhandled on the response stream.
+      sink.write(frame, (err) => {
+        if (err) this.subscribers.delete(subscriber);
+      });
     } catch {
-      // The peer is gone and the socket is already torn down; drop it rather than retrying.
+      // Belt and braces: a sink that does throw synchronously still gets dropped.
       this.subscribers.delete(subscriber);
     }
   }
