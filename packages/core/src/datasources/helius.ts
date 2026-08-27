@@ -1,6 +1,7 @@
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
+import { mayhemStateAddress } from "../solana.js";
 
 const logger = createLogger("helius");
 
@@ -57,6 +58,11 @@ export type EarliestActivityResult =
 
 export type MintAuthorityResult =
   { status: "found"; mintAuthorityActive: boolean; freezeAuthorityActive: boolean } | { status: "failed" };
+
+/** Whether a mint was launched in Pump.fun's Mayhem Mode. "failed" is kept distinct from a
+ *  definitive false for the same reason as EarliestActivityResult: the rug screen treats an
+ *  unverified answer as a rejection, which is only correct if we can tell the two apart. */
+export type MayhemModeResult = { status: "found"; isMayhemMode: boolean } | { status: "failed" };
 
 export interface HeliusClientOptions {
   apiKey?: string;
@@ -240,6 +246,47 @@ export class HeliusClient {
           ? { status: "found", earliestActivityAt: new Date(oldest.blockTime * 1000) }
           : { status: "indeterminate" },
       );
+    }
+    return out;
+  }
+
+  /**
+   * Whether each mint was launched in Pump.fun's Mayhem Mode, batched. Detected purely by whether
+   * the mint's `["mayhem-state", mint]` PDA exists on chain - see mayhemStateAddress() for why
+   * that is the only workable signal, and why it holds for bonding-curve and graduated tokens
+   * alike. The account's contents are irrelevant, so this asks for base64 and ignores the data.
+   *
+   * A mint whose lookup errors out reports "failed" rather than `isMayhemMode: false` - the
+   * difference matters, because the rug screen rejects unverified tokens rather than admitting
+   * them (see runRugScreen).
+   */
+  async getMayhemModeBatch(mintAddresses: string[]): Promise<Map<string, MayhemModeResult>> {
+    const unique = [...new Set(mintAddresses)];
+    const out = new Map<string, MayhemModeResult>();
+    if (unique.length === 0) return out;
+
+    // PDA derivation is local hashing, but it is not free - one derivation per mint, each looping
+    // over bumps until it finds an off-curve point. Done once here and kept alongside the mint so
+    // the response can be mapped back without re-deriving.
+    const pdaByMint = new Map(unique.map((mint) => [mint, mayhemStateAddress(mint)]));
+
+    const calls: RpcCall[] = unique.map((mint) => ({
+      id: mint,
+      method: "getAccountInfo",
+      params: [pdaByMint.get(mint)!, { encoding: "base64" }],
+    }));
+    const responses = await this.sendBatched<{ value?: unknown | null }>(calls, 10_000);
+
+    for (const mint of unique) {
+      const res = responses.get(mint);
+      if (!res || res.error) {
+        if (res?.error) logger.warn("rpc error checking mayhem-state", { mint, error: res.error });
+        out.set(mint, { status: "failed" });
+        continue;
+      }
+      // getAccountInfo returns a null `value` for an address nothing has ever been created at,
+      // which for this PDA means the mint simply was not launched in Mayhem Mode.
+      out.set(mint, { status: "found", isMayhemMode: res.result?.value != null });
     }
     return out;
   }

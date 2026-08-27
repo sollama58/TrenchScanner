@@ -10,6 +10,9 @@ const safeProfile: OnChainProfile = {
   mintAuthorityActive: false,
   freezeAuthorityActive: false,
   lpBurned: true,
+  // Explicitly verified as NOT a Mayhem token. Deliberately not defaulted anywhere in the
+  // production types either - an absent value means "unverified", which the screen rejects.
+  isMayhemMode: false,
 };
 
 describe("runRugScreen", () => {
@@ -71,5 +74,41 @@ describe("runRugScreen", () => {
   it("passes despite a critical risk flag - that's now opt-in, not automatic", () => {
     const result = runRugScreen({ ...safeProfile, riskFlags: ["Creator history of rugged tokens"] });
     expect(result.passed).toBe(true);
+  });
+});
+
+describe("runRugScreen - Pump.fun Mayhem Mode", () => {
+  it("fails a Mayhem Mode token", () => {
+    const result = runRugScreen({ ...safeProfile, isMayhemMode: true });
+    expect(result.passed).toBe(false);
+    expect(result.reasons.join(" ")).toMatch(/Mayhem Mode/i);
+  });
+
+  it("fails closed when Mayhem status is unverified, rather than assuming it's clean", () => {
+    const { isMayhemMode: _omitted, ...unverified } = safeProfile;
+    const result = runRugScreen(unverified);
+    expect(result.passed).toBe(false);
+    expect(result.reasons.join(" ")).toMatch(/unverified/i);
+  });
+
+  it("rejects a Mayhem token that is otherwise completely clean", () => {
+    // The whole point: these tokens look great on every other axis precisely because their
+    // volume and holder activity are manufactured by Pump.fun's AI agents.
+    const result = runRugScreen({
+      ...safeProfile,
+      isMayhemMode: true,
+      top10HolderPct: 5,
+      devWalletPct: 0,
+      riskScore: 0,
+      riskFlags: [],
+    });
+    expect(result.passed).toBe(false);
+    expect(result.reasons).toHaveLength(1);
+  });
+
+  it("reports Mayhem alongside any other failures rather than short-circuiting", () => {
+    const result = runRugScreen({ ...safeProfile, isMayhemMode: true, lpBurned: false });
+    expect(result.passed).toBe(false);
+    expect(result.reasons).toHaveLength(2);
   });
 });

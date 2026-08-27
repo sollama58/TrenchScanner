@@ -166,6 +166,10 @@ model TokenSnapshot {
   // uses maxFreshTop10WalletPct - see apps/worker/src/jobs/walletFreshness.ts. Deliberately null
   // rather than 0 in every one of those cases: 0 would claim we checked and found none fresh.
   freshTop10WalletPct Float?
+  // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
+  // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
+  // was screened out. Null means the check never ran or failed, which the screen also rejects.
+  isMayhemMode Boolean?
   // Whether the mint has graduated off a Pump.fun bonding curve to a real AMM, derived from
   // DexScreener's dexId (see dexscreener.ts's deriveGraduated) - null for anything DexScreener
   // hasn't indexed a pair for at all.
@@ -286,5 +290,24 @@ model MintAuthorityCache {
   checkedAt             DateTime @default(now())
 
   /// Same reason as WalletActivityCache.checkedAt - see the cleanup job's retention sweep.
+  @@index([checkedAt])
+}
+
+/// Caches whether a mint was launched in Pump.fun's Mayhem Mode, detected by the existence of its
+/// `["mayhem-state", mint]` PDA (see mayhemStateAddress() in packages/core/src/solana.ts).
+///
+/// Unlike MintAuthorityCache, BOTH answers are cached permanently: Mayhem Mode is chosen at launch
+/// and cannot be added to or removed from an existing token, so neither a true nor a false can go
+/// stale. Only definitive results are written - a lookup that errored stores nothing and is
+/// retried, since the rug screen rejects unverified mints and a cached wrong answer would be
+/// indistinguishable from a real one.
+model MayhemModeCache {
+  mintAddress String @id
+
+  isMayhemMode Boolean
+  checkedAt    DateTime @default(now())
+
+  /// Supports the cleanup job's retention sweep, same as the other RPC caches. The horizon is
+  /// about bounding storage rather than staleness - see RPC_CACHE_RETENTION_DAYS.
   @@index([checkedAt])
 }
