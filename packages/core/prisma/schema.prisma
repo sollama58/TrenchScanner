@@ -318,6 +318,29 @@ model MintAuthorityCache {
 /// stale. Only definitive results are written - a lookup that errored stores nothing and is
 /// retried, since the rug screen rejects unverified mints and a cached wrong answer would be
 /// indistinguishable from a real one.
+/// Short-lived cache of RugCheck's per-mint report.
+///
+/// Unlike MayhemModeCache/MintAuthorityCache, what RugCheck reports is genuinely mutable - holder
+/// distribution, dev wallet %, and the composite risk score move constantly - so this is a TTL
+/// cache (RUGCHECK_CACHE_TTL_MINUTES), never a permanent one.
+///
+/// It exists so the scan cadence and the RugCheck request rate can be set independently. RugCheck
+/// is called once per in-band candidate per cycle and is the only upstream with no cache at all,
+/// which made it, not our own compute, the thing pinning SCAN_INTERVAL_MINUTES. With this, a
+/// one-minute scan re-requests a mint at most every TTL minutes, so most cycles only pay for
+/// candidates that are newly in band.
+///
+/// `profile` null means RugCheck genuinely has no report for this mint yet (a 404 - very new
+/// token), which is worth caching so those mints aren't re-requested every cycle either. A
+/// transport failure is never written here at all - see resolveRugProfiles.
+model RugCheckCache {
+  mintAddress String   @id
+  profile     Json?
+  checkedAt   DateTime @default(now())
+
+  @@index([checkedAt])
+}
+
 model MayhemModeCache {
   mintAddress String @id
 

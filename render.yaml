@@ -97,8 +97,17 @@ services:
         sync: false
       - key: TELEGRAM_BOT_USERNAME
         sync: false
+      # One minute, so a new alert reaches the dashboard within ~a minute of the token qualifying.
+      # Affordable only because RUGCHECK_CACHE_TTL_MINUTES below decouples this cadence from
+      # RugCheck's request rate - see the worker's rugCheckProfiles.ts. A full cycle takes ~10s.
       - key: SCAN_INTERVAL_MINUTES
-        value: "7"
+        value: "1"
+      - key: RUGCHECK_CACHE_TTL_MINUTES
+        value: "5"
+      # Wall-clock span holderGrowthPct is measured over, deliberately independent of the scan
+      # cadence above so shortening it doesn't silently redefine every user's threshold.
+      - key: HOLDER_GROWTH_WINDOW_MINUTES
+        value: "30"
       - key: DIGEST_HOUR_UTC
         value: "13"
       - key: MCAP_FILTER_MIN

@@ -28,6 +28,7 @@ import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import { recordMatchPeaks } from "./matchPeaks.js";
+import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { repairOutcomeBookkeeping } from "./outcomeTrackingJob.js";
 
 const logger = createLogger("scan-job");
@@ -147,7 +148,13 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   }
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
-  const rugProfiles = await deps.rugCheck.getProfiles(candidates.map((c) => c.mintAddress));
+  // Cached with a short TTL so the scan cadence and RugCheck's request rate are independent -
+  // see resolveRugProfiles. This is what makes a one-minute scan interval affordable.
+  const { profiles: rugProfiles } = await resolveRugProfiles(
+    candidates.map((c) => c.mintAddress),
+    deps.rugCheck,
+    env.RUGCHECK_CACHE_TTL_MINUTES,
+  );
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
   // do. Loaded before the on-chain work below because what users actually filter on decides how
@@ -211,6 +218,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
         activeFilters,
         earliestActivityByAddress,
         bot,
+        env,
       );
     } catch (err) {
       logger.error("failed to process candidate", { mint: candidate.mintAddress, error: String(err) });
@@ -286,11 +294,22 @@ async function processCandidate(
   activeFilters: FilterWithUser[],
   earliestActivityByAddress: Map<string, Date | null> | null,
   bot: AlertBot,
+  env: Env,
 ): Promise<number> {
   const existingToken = await prisma.token.findUnique({ where: { mintAddress: candidate.mintAddress } });
-  const previousSnapshot = existingToken
+  // The baseline for holderGrowthPct is the newest snapshot at least HOLDER_GROWTH_WINDOW_MINUTES
+  // old, NOT simply the previous one. Using "the previous snapshot" made the number mean "growth
+  // since the last scan", so its meaning silently tracked SCAN_INTERVAL_MINUTES: shortening the
+  // scan interval would have quietly redefined every user's minHolderGrowthPct threshold to cover
+  // a shorter span, making it harder to clear and producing *fewer* alerts. Anchoring to wall
+  // clock keeps "% holder growth over the last N minutes" a fixed thing that a user can reason
+  // about, whatever cadence the worker happens to run at.
+  const growthBaseline = existingToken
     ? await prisma.tokenSnapshot.findFirst({
-        where: { tokenId: existingToken.id },
+        where: {
+          tokenId: existingToken.id,
+          takenAt: { lte: new Date(Date.now() - env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000) },
+        },
         orderBy: { takenAt: "desc" },
       })
     : null;
@@ -302,7 +321,7 @@ async function processCandidate(
 
   const scored = buildScoredToken(candidate, onChain, {
     createdAt,
-    previousHolderCount: previousSnapshot?.holderCount ?? undefined,
+    previousHolderCount: growthBaseline?.holderCount ?? undefined,
   });
 
   const token = await prisma.token.upsert({
