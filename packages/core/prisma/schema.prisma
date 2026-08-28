@@ -40,6 +40,56 @@ model User {
   matches      Match[]
   subscription Subscription?
   burns        BurnEvent[]
+  linkCodes    MobileLinkCode[]
+  devices      LinkedDevice[]
+}
+
+/// A single-use code, shown as a QR on a signed-in desktop, that mints a session on a phone.
+///
+/// Only the SHA-256 of the code is stored. The raw value exists in the desktop's response and in
+/// the QR pixels and nowhere else, so a dump of this table cannot be replayed into anyone's
+/// account - the same discipline AuthNonce follows.
+///
+/// The window is deliberately tiny. A QR on a screen is visible to whoever is in the room and to
+/// anything recording it, so its usefulness has to end almost immediately; single-use is not
+/// enough on its own, because an unclaimed code would otherwise stay valid indefinitely.
+model MobileLinkCode {
+  id       String @id @default(cuid())
+  codeHash String @unique
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  /// Set the instant it is redeemed. The claim is a conditional update, so two phones racing the
+  /// same code cannot both win - see redeemLinkCode.
+  claimedAt DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// A phone that has been linked to an account, and the thing that makes those sessions revocable.
+///
+/// Sessions here are stateless JWTs, so a token cannot be withdrawn once issued - the only lever
+/// is to stop honouring it. A device session's JWT carries this row's id, and every request
+/// resolves it (see resolveSession); revoking sets revokedAt and the next request from that phone
+/// is rejected. That is what lets a linked phone last until it is revoked rather than until an
+/// expiry nobody chose.
+model LinkedDevice {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  /// Throttled, not written per request - see touchDevice.
+  lastSeenAt DateTime @default(now())
+  /// Whatever the phone reported when it redeemed, so the list is recognisable ("iPhone, Safari")
+  /// rather than a row of identical cuids. Untrusted client text: rendered, never interpreted.
+  userAgent String?
+  revokedAt DateTime?
+
+  @@index([userId])
 }
 
 /// Short-lived nonce a wallet must sign to authenticate. One-time use.
