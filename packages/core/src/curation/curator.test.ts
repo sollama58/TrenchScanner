@@ -71,16 +71,29 @@ describe("evaluateCandidateHeuristic", () => {
   it.each([
     ["concentrated top 10", { top10HolderPct: 55 }],
     ["fresh-wallet snipers", { freshTop10WalletPct: 60 }],
+    ["a holder list of empty shells", { emptyTop10WalletPct: 85 }],
     ["risky per RugCheck", { riskScore: 80 }],
     ["heavy dev bag", { devWalletPct: 20 }],
   ] as const)("risk cap vetoes a known-bad profile: %s", (_label, overrides) => {
     expect(evaluateCandidateHeuristic(strongCandidate(overrides), MIN_SCORE).curate).toBe(false);
   });
 
+  it("tolerates a mostly-empty holder list up to the bar, since the figure is a floor", () => {
+    // 70 is deliberately lenient: unpriced holdings read as $0, so this number overstates
+    // emptiness. A list at the bar still curates; only a clearly bare one is vetoed.
+    expect(evaluateCandidateHeuristic(strongCandidate({ emptyTop10WalletPct: 70 }), MIN_SCORE).curate).toBe(
+      true,
+    );
+    expect(evaluateCandidateHeuristic(strongCandidate({ emptyTop10WalletPct: 71 }), MIN_SCORE).curate).toBe(
+      false,
+    );
+  });
+
   it("does NOT veto on risk signals that were never observed", () => {
     const unknownRisk = strongCandidate({
       top10HolderPct: undefined,
       freshTop10WalletPct: undefined,
+      emptyTop10WalletPct: undefined,
       riskScore: undefined,
       devWalletPct: undefined,
     });

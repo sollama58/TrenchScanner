@@ -14,8 +14,9 @@ import type { ScoredToken } from "../types.js";
  * Two kinds of checks, same split as matchFilters.ts and for the same reason:
  *  - REQUIRED signals (score, liquidity, churn, buy pressure, age) fail closed when unknown -
  *    a curated alert vouches for the token, and we can't vouch on signals we never saw.
- *  - RISK CAPS (concentration, fresh wallets, risk score, dev bag) skip when unknown - they
- *    exist to veto a known-bad profile, and "RugCheck hasn't indexed it yet" is not a veto.
+ *  - RISK CAPS (concentration, fresh wallets, empty wallets, risk score, dev bag) skip when
+ *    unknown - they exist to veto a known-bad profile, and "RugCheck hasn't indexed it yet" is
+ *    not a veto.
  */
 
 /**
@@ -57,6 +58,19 @@ const MAX_AGE_MINUTES = 2_880;
 /** Risk caps - applied only when the underlying signal was actually observed. */
 const MAX_TOP10_HOLDER_PCT = 40;
 const MAX_FRESH_TOP10_WALLET_PCT = 30;
+/**
+ * Above this share of top-10 wallets holding under WALLET_HOLDINGS_MIN_USD of anything but cash
+ * and gas, the holder list looks like a farm funded to hold this one launch (see
+ * apps/worker/src/jobs/walletHoldings.ts).
+ *
+ * Deliberately lenient at 70, and not the 30 its fresh-wallet sibling uses, for a measurement
+ * reason rather than a risk one: the underlying figure is a FLOOR - holdings the indexer cannot
+ * price count as nothing - so it overstates emptiness, and illiquid brand-new memecoins are
+ * exactly the assets most likely to be unpriced. A tight bar here would mostly reject tokens for
+ * being hard to value. At 70 it only fires when the great majority of the list looks bare, which
+ * is the shape it is meant to catch.
+ */
+const MAX_EMPTY_TOP10_WALLET_PCT = 70;
 const MAX_RISK_SCORE = 60;
 const MAX_DEV_WALLET_PCT = 10;
 
@@ -120,6 +134,9 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
   if (scored.priceChange5mPct !== undefined && scored.priceChange5mPct < MAX_5M_DUMP_PCT) return no;
   if (scored.top10HolderPct !== undefined && scored.top10HolderPct > MAX_TOP10_HOLDER_PCT) return no;
   if (scored.freshTop10WalletPct !== undefined && scored.freshTop10WalletPct > MAX_FRESH_TOP10_WALLET_PCT) {
+    return no;
+  }
+  if (scored.emptyTop10WalletPct !== undefined && scored.emptyTop10WalletPct > MAX_EMPTY_TOP10_WALLET_PCT) {
     return no;
   }
   if (scored.riskScore !== undefined && scored.riskScore > MAX_RISK_SCORE) return no;
