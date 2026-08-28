@@ -83,20 +83,26 @@ export async function runCleanupJob(env: Env): Promise<void> {
   });
 
   const rpcCacheCutoff = new Date(startedAt - RPC_CACHE_RETENTION_DAYS * DAY_MS);
-  const [deletedWalletCache, deletedMintAuthorityCache, deletedMayhemCache] = await Promise.all([
-    prisma.walletActivityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-    prisma.mintAuthorityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-    prisma.mayhemModeCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-    // RugCheckCache is a TTL cache (RUGCHECK_CACHE_TTL_MINUTES), so its rows go stale within
-    // minutes - but a stale row is still *kept*, and rewritten in place, for as long as the mint
-    // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
-    prisma.rugCheckCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-  ]);
+  const [deletedWalletCache, deletedMintAuthorityCache, deletedMayhemCache, deletedHoldingsCache] =
+    await Promise.all([
+      prisma.walletActivityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
+      // Same horizon, but this one is already a TTL cache during normal operation (see
+      // WALLET_HOLDINGS_CACHE_TTL_MINUTES): a row in continuous use is rewritten in place, so this
+      // sweep only collects wallets that stopped appearing as top holders entirely.
+      prisma.walletHoldingsCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
+      prisma.mintAuthorityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
+      prisma.mayhemModeCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
+      // RugCheckCache is a TTL cache (RUGCHECK_CACHE_TTL_MINUTES), so its rows go stale within
+      // minutes - but a stale row is still *kept*, and rewritten in place, for as long as the mint
+      // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
+      prisma.rugCheckCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
+    ]);
 
   logger.info("cleanup job complete", {
     durationMs: Date.now() - startedAt,
     deletedSnapshots: deletedSnapshots.count,
     deletedCandidateOutcomes: deletedCandidateOutcomes.count,
+    deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
     deletedCuratorModels: deletedCuratorModels.count,
     deletedTokens: deletedTokens.count,

@@ -83,6 +83,12 @@ model UserFilter {
   narrativeKeywords        String[] @default([])
   minScore                 Float? // minimum composite score, 0-100
   maxFreshTop10WalletPct   Float? // % of top-10 holders funded <24h ago (sniper/insider signal)
+  /// % of top-10 holders whose non-cash token holdings are worth less than
+  /// WALLET_HOLDINGS_MIN_USD - wallets that exist only to hold this launch (see
+  /// apps/worker/src/jobs/walletHoldings.ts). The substance counterpart to
+  /// maxFreshTop10WalletPct's wallet-age test: a sniper farm can age its wallets, but funding
+  /// each one with a real portfolio costs real money.
+  maxEmptyTop10WalletPct   Float?
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -427,6 +433,10 @@ model TokenSnapshot {
   // apps/worker/src/jobs/walletFreshness.ts. Deliberately null rather than 0 in every one of
   // those cases: 0 would claim we checked the full list and found none fresh.
   freshTop10WalletPct Float?
+  // % of the top-10 holder list holding under WALLET_HOLDINGS_MIN_USD of tokens that are neither
+  // cash nor gas. Null under exactly the same conditions as freshTop10WalletPct above, plus one
+  // more: an endpoint that doesn't serve the DAS API can't answer it at all.
+  emptyTop10WalletPct Float?
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
   // was screened out. Null means the check never ran or failed, which the screen also rejects.
@@ -538,6 +548,28 @@ model WalletActivityCache {
 
   /// Supports the cleanup job's retention sweep - without it that DELETE full-scans a table
   /// that grows one row per distinct wallet ever seen.
+  @@index([checkedAt])
+}
+
+/// Per-wallet USD value of holdings that are neither cash (USDC/USDT) nor gas (SOL) - the input
+/// to the empty-top-10-wallet signal.
+///
+/// Unlike WalletActivityCache, whose answer is immutable once known (a wallet's first-ever
+/// transaction never changes), THIS answer decays: a portfolio changes with every trade. So rows
+/// carry a TTL (env WALLET_HOLDINGS_CACHE_TTL_MINUTES) and are refreshed rather than trusted
+/// forever, which also means the hit rate here is structurally lower than the activity cache's.
+/// What still makes it pay is overlap: the same wallets recur as top holders across many
+/// different launches within any one TTL window.
+model WalletHoldingsCache {
+  address String @id
+
+  /// A FLOOR on the wallet's non-cash holdings, in USD - assets the indexer had no price for
+  /// contribute nothing. See getOtherHoldingsUsdBatch in datasources/helius.ts. Only ever
+  /// written for a definitive answer; a failed lookup writes no row at all.
+  otherHoldingsUsd Float
+  checkedAt        DateTime @default(now())
+
+  /// Serves both the TTL sweep and the cleanup job's retention sweep.
   @@index([checkedAt])
 }
 

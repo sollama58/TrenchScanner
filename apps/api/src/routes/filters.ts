@@ -24,6 +24,7 @@ function buildFilterInputSchema(env: Env) {
     narrativeKeywords: z.array(z.string()).default([]),
     minScore: z.number().min(0).max(100).nullable().optional(),
     maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
+    maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     isActive: z.boolean().default(true),
   });
 }

@@ -110,3 +110,27 @@ describe("matchesFilter", () => {
     ).toBe(true);
   });
 });
+
+describe("maxEmptyTop10WalletPct", () => {
+  it("rejects a token whose top-10 are mostly wallets holding nothing else", () => {
+    const token = baseToken({ emptyTop10WalletPct: 80 });
+    expect(matchesFilter(token, { ...baseFilter, maxEmptyTop10WalletPct: 50 })).toBe(false);
+  });
+
+  it("accepts one whose holders are real traders", () => {
+    const token = baseToken({ emptyTop10WalletPct: 10 });
+    expect(matchesFilter(token, { ...baseFilter, maxEmptyTop10WalletPct: 50 })).toBe(true);
+  });
+
+  it("does not reject when the signal was never resolved", () => {
+    // Unknown skips, like every other risk cap: a lookup the per-cycle budget deferred - or an
+    // endpoint that cannot serve DAS at all - must not silently filter out every token.
+    const token = baseToken({ emptyTop10WalletPct: undefined });
+    expect(matchesFilter(token, { ...baseFilter, maxEmptyTop10WalletPct: 0 })).toBe(true);
+  });
+
+  it("is inert when the user has not set it", () => {
+    const token = baseToken({ emptyTop10WalletPct: 100 });
+    expect(matchesFilter(token, baseFilter)).toBe(true);
+  });
+});

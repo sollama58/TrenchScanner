@@ -53,6 +53,7 @@ function makeSnapshot(overrides: Partial<TokenSnapshot> = {}): TokenSnapshot {
     riskScore: 20,
     riskFlags: [],
     freshTop10WalletPct: 0,
+    emptyTop10WalletPct: 0,
     isMayhemMode: false,
     graduated: true,
     mintAuthorityActive: false,

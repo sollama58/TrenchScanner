@@ -49,6 +49,7 @@ export function snapshotDataFor(
     riskScore: scored.riskScore,
     riskFlags: scored.riskFlags ?? [],
     freshTop10WalletPct: scored.freshTop10WalletPct,
+    emptyTop10WalletPct: scored.emptyTop10WalletPct,
     isMayhemMode: scored.isMayhemMode,
     graduated: scored.graduated,
     rugScreenPassed: scored.rugScreen.passed,

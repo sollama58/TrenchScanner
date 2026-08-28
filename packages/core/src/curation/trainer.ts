@@ -72,6 +72,29 @@ function vectorize(
   return x;
 }
 
+/**
+ * Folded rather than spread. Math.max(...array) passes every row as a separate argument and
+ * overflows the call stack somewhere around a hundred thousand of them - which this set reaches
+ * simply by succeeding, since it grows with every scanned candidate over a 60-day window.
+ */
+function maxAnchorMs(rows: TrainingRow[]): number {
+  let max = -Infinity;
+  for (const row of rows) {
+    const t = row.anchorAt.getTime();
+    if (t > max) max = t;
+  }
+  return max;
+}
+
+function minAnchorMs(rows: TrainingRow[]): number {
+  let min = Infinity;
+  for (const row of rows) {
+    const t = row.anchorAt.getTime();
+    if (t < min) min = t;
+  }
+  return min;
+}
+
 export interface TrainOptions {
   /**
    * Half-life for recency decay of sample weights, in days: a row this much older than the
@@ -117,7 +140,7 @@ export function trainCurator(
   const ys = rows.map((r) => (r.labelValue > 0 ? 1 : 0));
   const sampleWeights = rows.map((r) => 1 + Math.max(0, r.labelValue));
   if (opts.recencyHalfLifeDays !== undefined && opts.recencyHalfLifeDays > 0) {
-    const newestMs = Math.max(...rows.map((r) => r.anchorAt.getTime()));
+    const newestMs = maxAnchorMs(rows);
     const halfLifeMs = opts.recencyHalfLifeDays * 86_400_000;
     for (let i = 0; i < rows.length; i++) {
       sampleWeights[i] = sampleWeights[i]! * 0.5 ** ((newestMs - rows[i]!.anchorAt.getTime()) / halfLifeMs);
@@ -178,8 +201,7 @@ export function calibrateThreshold(
 ): number {
   if (rows.length === 0) return 0.5;
   const probs = rows.map((r) => scoreCandidateWithModel(params, r.features)).sort((a, b) => b - a);
-  const spanMs =
-    Math.max(...rows.map((r) => r.anchorAt.getTime())) - Math.min(...rows.map((r) => r.anchorAt.getTime()));
+  const spanMs = maxAnchorMs(rows) - minAnchorMs(rows);
   const spanHours = Math.max(1, spanMs / 3_600_000);
   const allowed = Math.min(probs.length, Math.max(1, Math.round(targetPerHour * spanHours)));
   const byRate = probs[allowed - 1]!;
