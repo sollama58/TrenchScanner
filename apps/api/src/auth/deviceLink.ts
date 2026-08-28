@@ -102,8 +102,43 @@ export async function deviceIsActive(deviceId: string): Promise<boolean> {
 const TOUCH_INTERVAL_MS = 5 * 60_000;
 const lastTouched = new Map<string, number>();
 
+/**
+ * The map would otherwise hold one entry per device seen since the process started, and a
+ * long-lived API process eventually sees every device there is - a slow leak rather than a fast
+ * one, but a leak.
+ *
+ * An entry older than the throttle window is already dead weight: the next touch writes whatever
+ * it says. So sweeping on that basis keeps the map to roughly the devices active in the last few
+ * minutes, which is the working set it is meant to represent. The hard cap below it is a
+ * backstop for the case where they really are all active at once.
+ */
+const MAX_TOUCH_ENTRIES = 10_000;
+
+let lastSweep = 0;
+
+function sweepTouches(now: number): void {
+  lastSweep = now;
+  for (const [id, at] of lastTouched) {
+    if (now - at >= TOUCH_INTERVAL_MS) lastTouched.delete(id);
+  }
+  if (lastTouched.size <= MAX_TOUCH_ENTRIES) return;
+  // Everything left is inside its window, so age cannot separate them. Map iteration is in
+  // insertion order, so this drops the longest-standing first. Losing a live entry costs one
+  // redundant UPDATE and nothing else, which is why it is the safe thing to spend here.
+  let excess = lastTouched.size - MAX_TOUCH_ENTRIES;
+  for (const id of lastTouched.keys()) {
+    lastTouched.delete(id);
+    if (--excess <= 0) break;
+  }
+}
+
 export function touchDevice(deviceId: string): void {
   const now = Date.now();
+  // Before the throttle check, not after: a sweep may drop this device's own stale entry, and
+  // when it does the write below is exactly what should happen next.
+  if (now - lastSweep >= TOUCH_INTERVAL_MS || lastTouched.size >= MAX_TOUCH_ENTRIES) {
+    sweepTouches(now);
+  }
   if (now - (lastTouched.get(deviceId) ?? 0) < TOUCH_INTERVAL_MS) return;
   lastTouched.set(deviceId, now);
   void prisma.linkedDevice
@@ -116,4 +151,10 @@ export function touchDevice(deviceId: string): void {
 /** Test hook: forget the throttle so a test can observe consecutive touches. */
 export function resetDeviceTouchThrottle(): void {
   lastTouched.clear();
+  lastSweep = 0;
+}
+
+/** Test hook: how many devices the throttle is currently remembering. */
+export function touchThrottleSize(): number {
+  return lastTouched.size;
 }
