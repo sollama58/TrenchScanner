@@ -38,8 +38,22 @@ const matchInclude = {
   filter: { select: { id: true, name: true } },
 } satisfies Prisma.MatchInclude;
 
-const listQuerySchema = z.object({
+export const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
+  /**
+   * Whether to interleave the curated feed into this user's own matches. Opt-in, and defaulted
+   * OFF here rather than in the client: the Live Feed's promise is "what YOUR filters caught",
+   * and a reader who never asked for the curator's picks shouldn't have to recognise which cards
+   * are theirs. Curated alerts always have their own tab regardless.
+   *
+   * Parsed by hand rather than z.coerce.boolean(), which treats the string "false" as true -
+   * every value here arrives as a query string, so that coercion would make the flag impossible
+   * to turn off.
+   */
+  includeCurated: z
+    .string()
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
 });
 
 export async function registerMatchRoutes(
@@ -115,12 +129,14 @@ export async function registerMatchRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { page } = parsed.data;
+    const { page, includeCurated } = parsed.data;
     const where = { userId: request.user!.userId };
 
     /*
-     * The curated feed is interleaved into this one: a curated alert is an alert, and the point
-     * of curation is that a subscriber sees it without having to build a filter for it.
+     * The curated feed can be interleaved into this one, for readers who ask for it
+     * (includeCurated): a curated alert is an alert, and the point of curation is that a
+     * subscriber can see it without having to build a filter for it. Off unless requested,
+     * because the Live Feed's default promise is the reader's own matches.
      *
      * Merging two independently-paginated time-ordered sources exactly: take the newest
      * `page * PAGE_SIZE` of each, merge, sort, and slice out this page. The union's first N
@@ -132,7 +148,9 @@ export async function registerMatchRoutes(
      * was: that far back is history browsing, and the curated history has its own tab.
      */
     const mergeDepth = page * PAGE_SIZE;
-    const interleave = mergeDepth <= MAX_MERGE_DEPTH;
+    // Skipped entirely when the reader hasn't opted in - no curated rows are fetched, so nothing
+    // is filtered out after the fact and the page count stays exact.
+    const interleave = includeCurated && mergeDepth <= MAX_MERGE_DEPTH;
 
     const [matches, matchTotal] = await Promise.all([
       prisma.match.findMany({

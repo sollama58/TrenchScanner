@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currentMarketCap } from "./matches.js";
+import { currentMarketCap, listQuerySchema } from "./matches.js";
 
 const T = (isoMinutesAgo: number) => new Date(Date.now() - isoMinutesAgo * 60_000);
 
@@ -58,5 +58,27 @@ describe("currentMarketCap", () => {
       { marketCapUsd: 200_000, takenAt: T(6) },
     );
     expect(result.at).toBe(liveAt);
+  });
+});
+
+describe("listQuerySchema - includeCurated", () => {
+  const parse = (query: Record<string, string>) => listQuerySchema.parse(query);
+
+  it("leaves curated alerts out unless they are asked for", () => {
+    expect(parse({}).includeCurated).toBe(false);
+    expect(parse({ page: "2" }).includeCurated).toBe(false);
+  });
+
+  it("accepts the affirmative forms a client actually sends", () => {
+    expect(parse({ includeCurated: "true" }).includeCurated).toBe(true);
+    expect(parse({ includeCurated: "1" }).includeCurated).toBe(true);
+  });
+
+  it('reads "false" as false - the trap z.coerce.boolean() falls into', () => {
+    // Every query value arrives as a string, and coercion treats any non-empty one as true, so
+    // the flag would have been impossible to turn off once a client started sending it.
+    expect(parse({ includeCurated: "false" }).includeCurated).toBe(false);
+    expect(parse({ includeCurated: "0" }).includeCurated).toBe(false);
+    expect(parse({ includeCurated: "" }).includeCurated).toBe(false);
   });
 });
