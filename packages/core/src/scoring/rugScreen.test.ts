@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runRugScreen } from "./rugScreen.js";
+import { passesLocalRugScreen, runRugScreen } from "./rugScreen.js";
 import type { OnChainProfile } from "../types.js";
 
 const safeProfile: OnChainProfile = {
@@ -110,5 +110,33 @@ describe("runRugScreen - Pump.fun Mayhem Mode", () => {
     const result = runRugScreen({ ...safeProfile, isMayhemMode: true, lpBurned: false });
     expect(result.passed).toBe(false);
     expect(result.reasons).toHaveLength(2);
+  });
+});
+
+describe("passesLocalRugScreen", () => {
+  it("passes on the free conditions alone, without waiting on the Mayhem lookup", () => {
+    // The whole point: this answers "is this mint worth spending an RPC call on?" before the one
+    // screen condition that costs one has been resolved.
+    const { isMayhemMode: _unverified, ...unchecked } = safeProfile;
+    expect(passesLocalRugScreen(unchecked)).toBe(true);
+    expect(runRugScreen(unchecked).passed).toBe(false); // ...but it is NOT admitted unverified
+  });
+
+  it.each([
+    ["mint authority active", { mintAuthorityActive: true }],
+    ["freeze authority active", { freezeAuthorityActive: true }],
+    ["LP not burned", { lpBurned: false }],
+  ] as const)("rejects on %s, so no Mayhem call is ever spent on it", (_label, overrides) => {
+    expect(passesLocalRugScreen({ ...safeProfile, ...overrides })).toBe(false);
+  });
+
+  it("fails closed with no profile at all, same as the full screen", () => {
+    expect(passesLocalRugScreen(null)).toBe(false);
+    expect(passesLocalRugScreen(undefined)).toBe(false);
+  });
+
+  it("ignores Mayhem status entirely - that is the full screen's job", () => {
+    expect(passesLocalRugScreen({ ...safeProfile, isMayhemMode: true })).toBe(true);
+    expect(runRugScreen({ ...safeProfile, isMayhemMode: true }).passed).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import {
   buildScoredToken,
   matchesFilter,
   runRugScreen,
+  passesLocalRugScreen,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
   notifyMatchCreated,
@@ -15,7 +16,6 @@ import {
   type RugCheckProfile,
   type HeliusClient,
   type MintAuthorityResult,
-  type MayhemModeResult,
   type OnChainProfile,
   type CandidateToken,
   type DiscoveredCoin,
@@ -197,23 +197,33 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   const needsAuthorityLookup = candidates
     .filter((c) => !rugProfiles.has(c.mintAddress))
     .map((c) => c.mintAddress);
-  const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius);
+  const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius, env);
 
-  // Mayhem Mode is a mandatory rejection (see rugScreen.ts), so unlike the authority fallback this
-  // is resolved for EVERY candidate, not just the ones RugCheck missed - RugCheck doesn't report
-  // it at all. Cached permanently per mint, so in steady state this only touches the network for
-  // mints first seen this cycle. Resolved before the profiles are assembled so that the rug-screen
-  // filter below (which decides whose wallets are worth looking up) already accounts for it.
-  const mayhemByMint = await resolveMayhemMode(
-    candidates.map((c) => c.mintAddress),
-    deps.helius,
+  // Profiles are assembled in two passes, because Mayhem Mode is the ONE rug-screen condition
+  // that costs a network call. The first pass leaves it unresolved and asks only what the
+  // already-fetched data can answer (authorities, LP - see passesLocalRugScreen); a candidate
+  // failing any of those is rejected whatever Mayhem would have said, so it never earns a
+  // lookup. On a Pump.fun-heavy watchlist that is most of them, and since Mayhem caches
+  // permanently, first-sight lookups ARE the recurring cost - the watchlist turns over daily.
+  const baseProfileByMint = new Map<string, OnChainProfile | null>(
+    candidates.map((c) => [c.mintAddress, buildOnChainProfile(c.mintAddress, rugProfiles, mintAuthorities)]),
   );
+  const mayhemCandidates = candidates
+    .filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress)))
+    .map((c) => c.mintAddress);
+  const mayhemByMint = await resolveMayhemMode(mayhemCandidates, deps.helius);
 
+  // Anything not looked up keeps isMayhemMode undefined, which the screen rejects - the same
+  // verdict its local conditions already reached, with the reason it actually failed on first.
   const onChainByMint = new Map<string, OnChainProfile | null>(
-    candidates.map((c) => [
-      c.mintAddress,
-      buildOnChainProfile(c.mintAddress, rugProfiles, mintAuthorities, mayhemByMint),
-    ]),
+    candidates.map((c) => {
+      const base = baseProfileByMint.get(c.mintAddress) ?? null;
+      const mayhem = mayhemByMint.get(c.mintAddress);
+      return [
+        c.mintAddress,
+        base && mayhem?.status === "found" ? { ...base, isMayhemMode: mayhem.isMayhemMode } : base,
+      ];
+    }),
   );
 
   // Wallet freshness runs every cycle, unconditionally - it used to be skipped whenever no user
@@ -222,13 +232,23 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   // freshTop10WalletPct feature) was null in almost every banked training sample. Affordable
   // always-on because wallet history is immutable (every resolved wallet caches forever, so the
   // steady state only pays for genuinely-new wallets), and bounded even in the worst case by the
-  // per-cycle lookup budget (env WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE - see
-  // resolveEarliestActivity). Still scoped to candidates that clear the mandatory rug screen: one
-  // that fails it never reaches matching OR curation, so its wallets are spend with no payoff.
-  const eligibleAddresses = candidates
+  // per-cycle lookup budget (env WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE).
+  //
+  // Passed as one group per candidate, highest 24h churn first, because the freshness figure is
+  // all-or-nothing: nine of a candidate's ten wallets resolved is worth exactly as much as none,
+  // so the budget is spent completing whole candidates rather than smeared across many that all
+  // end up null anyway (see resolveEarliestActivity). Churn is the cheap stand-in for "likely to
+  // clear the curator's gate" available at this point - scoring hasn't run yet.
+  const walletGroups = candidates
     .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
-    .flatMap((c) => onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []);
-  const earliestActivityByAddress = await resolveEarliestActivity(eligibleAddresses, deps.helius, {
+    .map((c) => ({
+      addresses: onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? [],
+      churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
+    }))
+    .filter((g) => g.addresses.length > 0)
+    .sort((a, b) => b.churn - a.churn)
+    .map((g) => g.addresses);
+  const earliestActivityByAddress = await resolveEarliestActivity(walletGroups, deps.helius, {
     maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
   });
 
@@ -261,6 +281,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,
+    // Per-METHOD invocation counts, which is what a metered RPC plan actually bills on - batching
+    // collapses these into far fewer HTTP requests, so nothing else in this log reveals the real
+    // number. Reset each read, so this is the cycle's own spend.
+    rpcCalls: deps.helius.takeCallStats(),
   });
 }
 
@@ -557,15 +581,12 @@ function buildOnChainProfile(
   mintAddress: string,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
-  mayhemByMint: Map<string, MayhemModeResult>,
 ): OnChainProfile | null {
-  // Left undefined (not false) when the check failed - the rug screen rejects an unverified mint,
-  // and defaulting to false here would quietly turn that rejection into a pass.
-  const mayhem = mayhemByMint.get(mintAddress);
-  const isMayhemMode = mayhem?.status === "found" ? mayhem.isMayhemMode : undefined;
-
+  // isMayhemMode is deliberately left unset here and filled in later for the candidates that
+  // earn a lookup (see the two-pass assembly in runScanCycle). Unset means unverified, which the
+  // rug screen rejects - so a candidate that never gets checked is never accidentally admitted.
   const rugProfile = rugProfiles.get(mintAddress);
-  if (rugProfile) return { ...rugProfile, isMayhemMode };
+  if (rugProfile) return rugProfile;
 
   const authorities = mintAuthorities.get(mintAddress);
   if (!authorities || authorities.status !== "found") return null;
@@ -575,7 +596,6 @@ function buildOnChainProfile(
     mintAuthorityActive: authorities.mintAuthorityActive,
     freezeAuthorityActive: authorities.freezeAuthorityActive,
     lpBurned: false,
-    isMayhemMode,
   };
 }
 

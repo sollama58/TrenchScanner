@@ -95,6 +95,11 @@ async function main() {
     outcomeTrackingHourUtc: env.OUTCOME_TRACKING_HOUR_UTC,
     telegramEnabled: bot.enabled,
     usingHeliusRpc: deps.helius.usingHelius,
+    // Which method is answering wallet-freshness lookups. Worth logging because the two differ
+    // in both cost and precision, and a silent downgrade to the signatures path (an endpoint
+    // that doesn't serve the Helius-only method) is otherwise invisible - see
+    // getEarliestActivityBatch. It can change at runtime; this is only the starting state.
+    earliestActivityMethod: deps.helius.earliestActivityMethod,
     burnScanIntervalMinutes: env.BURN_SCAN_INTERVAL_MINUTES,
   });
 

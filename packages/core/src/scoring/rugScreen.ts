@@ -25,17 +25,8 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
     return { passed: false, reasons: ["on-chain profile unavailable - failing closed"] };
   }
 
-  const reasons: string[] = [];
+  const reasons = [...localScreenReasons(profile)];
 
-  if (profile.mintAuthorityActive) {
-    reasons.push("mint authority not renounced (supply can be inflated)");
-  }
-  if (profile.freezeAuthorityActive) {
-    reasons.push("freeze authority not renounced (holders can be frozen)");
-  }
-  if (!profile.lpBurned) {
-    reasons.push("liquidity not burned/locked (LP can be pulled)");
-  }
   // Mayhem Mode tokens have an extra 1B supply minted and traded by Pump.fun's own AI agents for
   // their first 24h, with whatever goes unsold burned afterwards. Every market signal this app
   // scores on - volume, buy/sell pressure, holder growth, momentum - is manufactured during that
@@ -52,6 +43,37 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
   }
 
   return { passed: reasons.length === 0, reasons };
+}
+
+/** The screen's conditions that are already in hand from the RugCheck profile - no network call. */
+function localScreenReasons(profile: OnChainProfile): string[] {
+  const reasons: string[] = [];
+  if (profile.mintAuthorityActive) {
+    reasons.push("mint authority not renounced (supply can be inflated)");
+  }
+  if (profile.freezeAuthorityActive) {
+    reasons.push("freeze authority not renounced (holders can be frozen)");
+  }
+  if (!profile.lpBurned) {
+    reasons.push("liquidity not burned/locked (LP can be pulled)");
+  }
+  return reasons;
+}
+
+/**
+ * Everything runRugScreen checks EXCEPT Mayhem Mode - i.e. every condition answerable from data
+ * already in hand, with no RPC call.
+ *
+ * This exists so the scan can spend its Mayhem lookups only where they can change an outcome.
+ * Mayhem is the one screen condition that costs a Helius call per mint, and a candidate that
+ * already fails on authorities or LP is rejected whatever the answer turns out to be - so
+ * checking it first and only resolving Mayhem for the survivors is free savings, on the exact
+ * path (first sight of a mint) that dominates the recurring cost. Fails closed on a missing
+ * profile, same as the full screen.
+ */
+export function passesLocalRugScreen(profile: OnChainProfile | null | undefined): boolean {
+  if (!profile) return false;
+  return localScreenReasons(profile).length === 0;
 }
 
 /**

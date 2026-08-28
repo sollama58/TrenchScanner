@@ -65,6 +65,12 @@ const envSchema = z.object({
   // flood of new tokens) so the pass can never blow through the Helius Dev tier. Wallets over
   // the cap simply stay unknown for a cycle and retry on the next.
   WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(50),
+  // How long a "mint/freeze authority still active" answer is trusted before being re-checked
+  // (see the worker's mintAuthority.ts). Revocation is permanent and cached forever; this TTL
+  // covers only the reversible direction, which used to be re-queried every single scan cycle
+  // for as long as the mint sat on the watchlist. Short enough that a renouncement is noticed
+  // within minutes, long enough to cut that path's RPC volume by well over an order of magnitude.
+  MINT_AUTHORITY_ACTIVE_TTL_MINUTES: z.coerce.number().positive().default(20),
   // How long after GET /matches last stamped a token's lastViewedAt (i.e. someone had it on a
   // Live Feed page) the scan job keeps re-scanning it even if it's fallen out of the mcap band -
   // see the comment on Token.lastViewedAt. Comfortably longer than one scan cycle so a token
