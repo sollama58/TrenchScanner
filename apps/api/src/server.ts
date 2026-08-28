@@ -13,7 +13,9 @@ import {
   resolveAccess,
 } from "@trenchscanner/core";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "./auth/session.js";
+import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerDeviceLinkRoutes } from "./routes/deviceLink.js";
 import { registerFilterRoutes } from "./routes/filters.js";
 import { registerMatchRoutes } from "./routes/matches.js";
 import { registerCuratedRoutes } from "./routes/curated.js";
@@ -54,7 +56,18 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // any future change to it) only lives in one place.
   async function resolveSession(request: FastifyRequest) {
     const token = request.cookies[SESSION_COOKIE_NAME];
-    return token ? await app.sessionSigner.verify(token) : null;
+    const session = token ? await app.sessionSigner.verify(token) : null;
+    if (!session) return null;
+
+    // A paired-phone session is only as good as its device row. The JWT itself cannot be
+    // withdrawn once signed, so this lookup IS the revocation: switch the device off and the very
+    // next request from that phone fails here. Desktop sessions carry no deviceId and skip it
+    // entirely, so the ordinary path costs nothing.
+    if (session.deviceId) {
+      if (!(await deviceIsActive(session.deviceId))) return null;
+      touchDevice(session.deviceId);
+    }
+    return session;
   }
 
   app.decorate("authenticate", async (request, reply) => {
@@ -144,6 +157,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerConfigRoutes, { prefix: "/config", env });
 
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
+
+  await app.register(registerDeviceLinkRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
   await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener, matchStream });
   await app.register(registerCuratedRoutes, { prefix: "/curated", env, dexScreener, matchStream });
