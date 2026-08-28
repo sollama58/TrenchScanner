@@ -58,6 +58,14 @@ const envSchema = z.object({
   // brand-new bonding curve; short enough that the dead-on-arrival majority stops costing
   // refresh capacity within a couple of hours.
   WATCHLIST_PROBATION_MINUTES: z.coerce.number().positive().default(120),
+  // The share of WATCHLIST_MAX_TRACKED held back for mints that have never shown life, so the
+  // alive set can never crowd them out entirely. Without a reserve this starves: a mint cannot
+  // become "alive" until it has been refreshed at least once, so once the alive set fills the
+  // cap, brand-new mints get zero refresh slots, never get stamped, and never become alive -
+  // the watchlist ossifies around whatever was already trading and stops catching new launches,
+  // which is the one thing it exists to do. DexScreener returns market data for essentially any
+  // Pump.fun mint (the bonding curve IS a pair), so the alive set saturates readily.
+  WATCHLIST_PROBATION_RESERVE_PCT: z.coerce.number().min(0).max(100).default(35),
   // Cap on UNCACHED wallet earliest-activity lookups per scan cycle - the Helius budget guard
   // for the always-on fresh-wallet pass (see the worker's walletFreshness.ts). Wallet history is
   // immutable, so every resolved wallet is cached forever and the steady-state cost is only the
@@ -83,6 +91,13 @@ const envSchema = z.object({
   // it is far cheaper: market data only, one batched DexScreener call per 30 tokens, no RugCheck
   // or Helius work and no scoring/matching. Safety cap on how many tokens one pass will refresh,
   // so an unexpectedly large viewed set can't turn a per-minute job into a DexScreener hammer.
+  // The fast match pass (see apps/worker/src/jobs/fastMatchJob.ts): re-prices recently-vetted
+  // tokens and alerts on user filters, with no discovery and no RugCheck/Helius work. This is
+  // the interval that actually sets alert latency - the full SCAN_INTERVAL_MINUTES cycle is
+  // paced by how expensive enrichment is, not by how fast a filter can be re-evaluated, and at
+  // one minute it left an average half-minute between a token becoming matchable and anyone
+  // hearing about it. Seconds, not minutes, because that is the unit the answer belongs in.
+  FAST_MATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(15),
   LIVE_PRICE_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
   LIVE_PRICE_MAX_TRACKED: z.coerce.number().int().positive().default(150),
 

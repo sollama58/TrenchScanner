@@ -1,6 +1,6 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
 import { selectWatchlist } from "./scanJob.js";
 
@@ -11,6 +11,13 @@ const TAG = `watchlist-test-${Date.now()}`;
 describe.skipIf(!dbAvailable)("selectWatchlist", () => {
   const env = loadEnv();
   const MINUTE = 60_000;
+
+  // selectWatchlist reads the whole Token table, so each case has to own its universe - one
+  // test seeding a saturated watchlist would otherwise decide what the next one sees.
+  beforeEach(async () => {
+    if (!dbAvailable) return;
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
 
   afterAll(async () => {
     if (!dbAvailable) return;
@@ -49,6 +56,49 @@ describe.skipIf(!dbAvailable)("selectWatchlist", () => {
       tracked.filter((t) => t.mintAddress.startsWith(TAG)).map((t) => t.mintAddress.slice(TAG.length + 1)),
     );
     expect(mine).toEqual(new Set(["alive-old", "fresh-unknown"]));
+  });
+
+  it("always keeps refresh slots for never-live mints, even with the alive set saturated", async () => {
+    // The starvation case: a mint cannot become "alive" until it has been refreshed once, so if
+    // the alive set is allowed to consume the whole cap, brand-new mints get zero slots, are
+    // never stamped, and never become alive - the watchlist ossifies and stops catching launches.
+    const now = Date.now();
+    const cap = env.WATCHLIST_MAX_TRACKED;
+    await prisma.token.createMany({
+      data: Array.from({ length: cap + 20 }, (_, i) => ({
+        mintAddress: `${TAG}-sat-alive-${i}`,
+        firstSeenAt: new Date(now - 60 * MINUTE),
+        lastLiveAt: new Date(now - MINUTE),
+      })),
+    });
+    await prisma.token.createMany({
+      data: Array.from({ length: 40 }, (_, i) => ({
+        mintAddress: `${TAG}-sat-new-${i}`,
+        firstSeenAt: new Date(now - MINUTE),
+      })),
+    });
+
+    const { tracked } = await selectWatchlist(env);
+    const newMints = tracked.filter((t) => t.mintAddress.startsWith(`${TAG}-sat-new-`));
+    expect(newMints.length).toBe(40);
+    expect(tracked.length).toBeLessThanOrEqual(cap);
+  });
+
+  it("gives unused probation slots back to the alive set rather than wasting the cap", async () => {
+    // Only a handful of new mints exist, so the reserve must not hold capacity hostage.
+    const now = Date.now();
+    const cap = env.WATCHLIST_MAX_TRACKED;
+    await prisma.token.createMany({
+      data: Array.from({ length: cap + 20 }, (_, i) => ({
+        mintAddress: `${TAG}-give-alive-${i}`,
+        firstSeenAt: new Date(now - 60 * MINUTE),
+        lastLiveAt: new Date(now - MINUTE),
+      })),
+    });
+
+    const { tracked, alive } = await selectWatchlist(env);
+    expect(tracked.length).toBe(cap);
+    expect(alive).toBe(cap);
   });
 
   it("orders alive tokens ahead of probation ones, so the cap evicts the unknowns first", async () => {

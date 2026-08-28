@@ -3,12 +3,10 @@ import {
   createLogger,
   refreshAndFilterToBand,
   buildScoredToken,
-  matchesFilter,
   runRugScreen,
   passesLocalRugScreen,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
-  notifyMatchCreated,
   type Env,
   type DexScreenerClient,
   type PumpFunClient,
@@ -20,11 +18,10 @@ import {
   type CandidateToken,
   type DiscoveredCoin,
   type WatchlistCandidate,
-  type UserFilter,
-  type TelegramLink,
 } from "@trenchscanner/core";
 import type { AlertBot } from "../telegram/bot.js";
-import { formatRealtimeAlert } from "../dispatch/alertDispatcher.js";
+import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
+import { snapshotDataFor } from "./snapshotData.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
@@ -35,9 +32,6 @@ import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import { maybeEmitCuratedAlert } from "./curatedAlerts.js";
 
 const logger = createLogger("scan-job");
-
-/** Once a user has been alerted for a token+filter, don't re-alert for it again within this window. */
-const ALERT_COOLDOWN_HOURS = 12;
 
 /**
  * Whether this process has already done one unbounded peak-recovery sweep. The first cycle after
@@ -51,8 +45,13 @@ let fullPeakSweepDone = false;
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
  *  run concurrently across candidates - each touches a different token's rows - and cheap now
  *  that every external API call has been hoisted out of the loop entirely (market data, rug
- *  profiles, mint authorities and wallet freshness are all resolved in batches beforehand). */
-const CANDIDATE_CONCURRENCY = 5;
+ *  profiles, mint authorities and wallet freshness are all resolved in batches beforehand).
+ *
+ *  Raised from 5, which was set when this loop still made network calls of its own: at 5, the
+ *  hundredth in-band candidate waits out twenty sequential rounds before anyone is alerted to
+ *  it. The work per candidate is now a handful of queries, so the practical ceiling is the
+ *  Postgres connection pool rather than any upstream's patience. */
+const CANDIDATE_CONCURRENCY = 15;
 
 export interface ScanDeps {
   pumpFun: PumpFunClient;
@@ -60,8 +59,6 @@ export interface ScanDeps {
   rugCheck: RugCheckClient;
   helius: HeliusClient;
 }
-
-type FilterWithUser = UserFilter & { user: { id: string; telegramLink: TelegramLink | null } };
 
 export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Promise<void> {
   const startedAt = Date.now();
@@ -149,27 +146,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     }
   }
 
-  // Roll every match's recorded peak forward from the snapshots and live pings already written -
-  // no network access, no upstream cost. This runs on the scan cadence rather than in the nightly
-  // outcome job because a once-a-day price sample simply cannot see a token that runs and retraces
-  // inside a single day, which is most of them. See recordMatchPeaks for the full reasoning.
-  // Placed before the early return below so it still runs on a cycle that finds nothing in band.
-  try {
-    // Scoped to tokens observed in the last few cycles, except on the first pass after start-up.
-    // That first full sweep is what retroactively recovers peaks from history already in the
-    // database (and what fills the Leaderboard on deploy); every pass after it only has to look
-    // at tokens something actually moved, so the per-cycle cost tracks how much was scanned rather
-    // than how much history has accumulated.
-    const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
-    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
-    fullPeakSweepDone = true;
-    await repairOutcomeBookkeeping(env.SNAPSHOT_RETENTION_DAYS);
-  } catch (err) {
-    // Bookkeeping over data already banked - never worth failing a scan cycle over.
-    logger.warn("failed to record match peaks", { error: String(err) });
-  }
-
   if (candidates.length === 0) {
+    // Still rolls peaks forward: nothing in band does not mean nothing moved, and this is the
+    // one thing in the cycle that has to happen whether or not there was anything to alert on.
+    await rollPeaksForward(env);
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
       durationMs: Date.now() - startedAt,
     });
@@ -276,6 +256,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   });
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
 
+  await rollPeaksForward(env);
+
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
@@ -306,17 +288,53 @@ export async function selectWatchlist(
   const now = Date.now();
   const ttlCutoff = new Date(now - env.WATCHLIST_TTL_HOURS * 3_600_000);
   const probationCutoff = new Date(now - env.WATCHLIST_PROBATION_MINUTES * 60_000);
-  const alive = await prisma.token.findMany({
-    where: { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } },
-    orderBy: { firstSeenAt: "desc" },
-    take: env.WATCHLIST_MAX_TRACKED,
-  });
+
+  // Probation is selected FIRST, against a reserved share of the cap - see
+  // WATCHLIST_PROBATION_RESERVE_PCT for why giving it only the leftovers starves new launches
+  // outright. Whatever the reserve doesn't use flows back to the alive set, so the cap is never
+  // wasted on slots nothing is waiting for.
+  const probationReserve = Math.floor(
+    (env.WATCHLIST_MAX_TRACKED * env.WATCHLIST_PROBATION_RESERVE_PCT) / 100,
+  );
   const probation = await prisma.token.findMany({
     where: { firstSeenAt: { gt: probationCutoff }, lastLiveAt: null },
     orderBy: { firstSeenAt: "desc" },
-    take: Math.max(0, env.WATCHLIST_MAX_TRACKED - alive.length),
+    take: probationReserve,
+  });
+  const alive = await prisma.token.findMany({
+    where: { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } },
+    orderBy: { firstSeenAt: "desc" },
+    take: Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length),
   });
   return { tracked: [...alive, ...probation], alive: alive.length };
+}
+
+/**
+ * Rolls every match's recorded peak forward from the snapshots and live pings already written -
+ * no network access, no upstream cost. Runs on the scan cadence rather than in the nightly
+ * outcome job because a once-a-day price sample simply cannot see a token that runs and retraces
+ * inside a single day, which is most of them. See recordMatchPeaks for the full reasoning.
+ *
+ * Called at the END of a cycle, not before the matching: it is bookkeeping over data already
+ * banked, and it used to sit between the watchlist refresh and the candidate loop - so every
+ * alert waited on a sweep whose cost grows with the database rather than with anything the alert
+ * needs. Called on the nothing-in-band path too, since a quiet cycle still has peaks to record.
+ */
+async function rollPeaksForward(env: Env): Promise<void> {
+  try {
+    // Scoped to tokens observed in the last few cycles, except on the first pass after start-up.
+    // That first full sweep is what retroactively recovers peaks from history already in the
+    // database (and what fills the Leaderboard on deploy); every pass after it only has to look
+    // at tokens something actually moved, so the per-cycle cost tracks how much was scanned rather
+    // than how much history has accumulated.
+    const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
+    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
+    fullPeakSweepDone = true;
+    await repairOutcomeBookkeeping(env.SNAPSHOT_RETENTION_DAYS);
+  } catch (err) {
+    // Bookkeeping over data already banked - never worth failing a scan cycle over.
+    logger.warn("failed to record match peaks", { error: String(err) });
+  }
 }
 
 function toWatchlistCandidate(coin: DiscoveredCoin): WatchlistCandidate {
@@ -461,57 +479,27 @@ async function processCandidate(
     },
   });
 
-  const snapshot = await prisma.tokenSnapshot.create({
-    data: {
-      tokenId: token.id,
-      priceUsd: scored.priceUsd,
-      marketCapUsd: scored.marketCapUsd,
-      liquidityUsd: scored.liquidityUsd,
-      volume24hUsd: scored.volume24hUsd,
-      volumeToMcapRatio: scored.volumeToMcapRatio,
-      buys24h: scored.buys24h,
-      sells24h: scored.sells24h,
-      priceChange5mPct: scored.priceChange5mPct,
-      priceChange1hPct: scored.priceChange1hPct,
-      priceChange6hPct: scored.priceChange6hPct,
-      priceChange24hPct: scored.priceChange24hPct,
-      volume5mUsd: scored.volume5mUsd,
-      volume1hUsd: scored.volume1hUsd,
-      buys5m: scored.buys5m,
-      sells5m: scored.sells5m,
-      buys1h: scored.buys1h,
-      sells1h: scored.sells1h,
-      holderCount: scored.holderCount,
-      holderGrowthPct: scored.holderGrowthPct,
-      top10HolderPct: scored.top10HolderPct,
-      devWalletPct: scored.devWalletPct,
-      mintAuthorityActive: scored.mintAuthorityActive,
-      freezeAuthorityActive: scored.freezeAuthorityActive,
-      lpBurned: scored.lpBurned,
-      ageMinutes: scored.ageMinutes,
-      score: scored.score.total,
-      scoreMomentum: scored.score.momentum,
-      scoreHolderHealth: scored.score.holderHealth,
-      scoreAge: scored.score.age,
-      scoreNarrative: scored.score.narrative,
-      riskScore: scored.riskScore,
-      riskFlags: scored.riskFlags ?? [],
-      freshTop10WalletPct: scored.freshTop10WalletPct,
-      isMayhemMode: scored.isMayhemMode,
-      graduated: scored.graduated,
-      rugScreenPassed: scored.rugScreen.passed,
-      rugScreenReasons: scored.rugScreen.reasons,
-    },
-  });
+  const snapshot = await prisma.tokenSnapshot.create({ data: snapshotDataFor(token.id, scored) });
 
   if (!scored.rugScreen.passed) {
     return 0;
   }
 
+  // User matching first, and nothing slower in front of it: this is the product, and every
+  // millisecond here is a millisecond between the backend knowing about a token and the person
+  // who asked for it seeing it. The curated/training writes below are the product's homework -
+  // they used to run ahead of this, which put two or three DB writes in front of every alert.
+  const matchCount = await createMatchesForCandidate({
+    token,
+    snapshot,
+    scored,
+    activeFilters,
+    bot,
+  });
+
   // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample
   // for why it's every candidate and not just matched ones - then let the curator decide whether
-  // this moment goes on the public feed. Never worth failing the candidate over: user matching
-  // below is the product, this is the product's homework.
+  // this moment goes on the public feed. Never worth failing the candidate over.
   try {
     const sample = await recordCandidateSample(token.id, scored, env);
     await maybeEmitCuratedAlert(token, scored, sample, env, snapshot.id);
@@ -520,50 +508,6 @@ async function processCandidate(
       mint: candidate.mintAddress,
       error: String(err),
     });
-  }
-
-  let matchCount = 0;
-  for (const filter of activeFilters) {
-    if (!matchesFilter(scored, filter)) continue;
-
-    const recentlyAlerted = await prisma.match.findFirst({
-      where: {
-        userId: filter.userId,
-        tokenId: token.id,
-        filterId: filter.id,
-        matchedAt: { gt: new Date(Date.now() - ALERT_COOLDOWN_HOURS * 3_600_000) },
-      },
-    });
-    if (recentlyAlerted) continue;
-
-    const telegramLink = filter.user.telegramLink;
-    const shouldRealtimeAlert =
-      telegramLink?.chatId && (telegramLink.alertMode === "REALTIME" || telegramLink.alertMode === "BOTH");
-
-    // Send (if applicable) before persisting, so deliveredTelegram reflects what actually
-    // happened rather than what we merely intended - sendMessage swallows its own errors and
-    // reports success/failure via its return value, it never throws.
-    const delivered = shouldRealtimeAlert
-      ? await bot.sendMessage(telegramLink.chatId!, formatRealtimeAlert(token, snapshot, scored.score.total))
-      : false;
-
-    const match = await prisma.match.create({
-      data: {
-        userId: filter.userId,
-        filterId: filter.id,
-        tokenId: token.id,
-        snapshotId: snapshot.id,
-        score: scored.score.total,
-        deliveredDashboard: true,
-        deliveredTelegram: delivered,
-      },
-    });
-    // Nudges any API instance holding this user's dashboard open so the card appears now rather
-    // than on their next poll. After the create, never before: the row has to exist by the time a
-    // client acts on the notification. Swallows its own errors - the match is already committed
-    // and the client's fallback poll covers a missed nudge.
-    await notifyMatchCreated({ userId: filter.userId, matchId: match.id });
-    matchCount += 1;
   }
 
   return matchCount;

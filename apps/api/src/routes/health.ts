@@ -11,6 +11,10 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   scan: 10 * 60_000,
   // Runs every minute, so a few missed passes is already a real signal - unlike the daily jobs.
   "live-price": 10 * 60_000,
+  // Every FAST_MATCH_INTERVAL_SECONDS (15s by default). This is the path users actually feel -
+  // while it is down alerts still arrive, but on the full cycle's minute rather than in seconds,
+  // so it is worth surfacing quickly.
+  "fast-match": 5 * 60_000,
   // Every few minutes. Worth surfacing promptly: while this is down, someone who burned and closed
   // the tab is locked out of what they paid for, and nothing else will notice.
   "burn-scan": 20 * 60_000,

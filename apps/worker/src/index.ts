@@ -14,6 +14,7 @@ import { runScanCycle } from "./jobs/scanJob.js";
 import { runDigestJob } from "./jobs/digestJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob } from "./jobs/outcomeTrackingJob.js";
+import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
 import { runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
@@ -49,6 +50,16 @@ async function main() {
     "live-price",
     () => runLivePriceJob(deps.dexScreener, env),
     env.LIVE_PRICE_INTERVAL_MINUTES,
+  );
+  // The path a subscriber actually feels. Re-prices tokens the scan cycle has recently vetted and
+  // alerts on user filters, four times a minute, without any of the discovery or enrichment that
+  // paces the full cycle - see runFastMatchCycle for why that split is safe. The scan cycle still
+  // owns everything else; this only shortens the distance between a token becoming matchable and
+  // the person who asked for it hearing about it.
+  const fastMatchJob = scheduleInterval(
+    "fast-match",
+    () => runFastMatchCycle(deps.dexScreener, env, bot),
+    env.FAST_MATCH_INTERVAL_SECONDS / 60,
   );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
   // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
@@ -89,6 +100,7 @@ async function main() {
 
   logger.info("worker started", {
     scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
+    fastMatchIntervalSeconds: env.FAST_MATCH_INTERVAL_SECONDS,
     livePriceIntervalMinutes: env.LIVE_PRICE_INTERVAL_MINUTES,
     digestHourUtc: env.DIGEST_HOUR_UTC,
     cleanupHourUtc: env.CLEANUP_HOUR_UTC,
@@ -106,6 +118,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     logger.info("shutting down", { signal });
     scanJob.stop();
+    fastMatchJob.stop();
     livePriceJob.stop();
     candidateWatchJob.stop();
     burnScanJob.stop();
