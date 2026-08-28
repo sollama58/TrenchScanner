@@ -50,6 +50,35 @@ const envSchema = z.object({
   // before this; it exists to bound DexScreener batch-lookup volume per cycle.
   WATCHLIST_TTL_HOURS: z.coerce.number().positive().default(24),
   WATCHLIST_MAX_TRACKED: z.coerce.number().int().positive().default(900),
+  // How long a never-live mint (no DexScreener market data yet - see Token.lastLiveAt) stays in
+  // the refresh rotation before it stops being checked. Pump.fun launches mints far faster than
+  // WATCHLIST_MAX_TRACKED can hold a day of, so the cap has to be spent on mints that have shown
+  // life: the selection takes alive mints first for their full WATCHLIST_TTL_HOURS, and
+  // never-live ones only within this probation window. Long enough for DexScreener to index a
+  // brand-new bonding curve; short enough that the dead-on-arrival majority stops costing
+  // refresh capacity within a couple of hours.
+  WATCHLIST_PROBATION_MINUTES: z.coerce.number().positive().default(120),
+  // The share of WATCHLIST_MAX_TRACKED held back for mints that have never shown life, so the
+  // alive set can never crowd them out entirely. Without a reserve this starves: a mint cannot
+  // become "alive" until it has been refreshed at least once, so once the alive set fills the
+  // cap, brand-new mints get zero refresh slots, never get stamped, and never become alive -
+  // the watchlist ossifies around whatever was already trading and stops catching new launches,
+  // which is the one thing it exists to do. DexScreener returns market data for essentially any
+  // Pump.fun mint (the bonding curve IS a pair), so the alive set saturates readily.
+  WATCHLIST_PROBATION_RESERVE_PCT: z.coerce.number().min(0).max(100).default(35),
+  // Cap on UNCACHED wallet earliest-activity lookups per scan cycle - the Helius budget guard
+  // for the always-on fresh-wallet pass (see the worker's walletFreshness.ts). Wallet history is
+  // immutable, so every resolved wallet is cached forever and the steady-state cost is only the
+  // genuinely-new wallets each cycle; this cap bounds the worst case (a cold cache, a sudden
+  // flood of new tokens) so the pass can never blow through the Helius Dev tier. Wallets over
+  // the cap simply stay unknown for a cycle and retry on the next.
+  WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(50),
+  // How long a "mint/freeze authority still active" answer is trusted before being re-checked
+  // (see the worker's mintAuthority.ts). Revocation is permanent and cached forever; this TTL
+  // covers only the reversible direction, which used to be re-queried every single scan cycle
+  // for as long as the mint sat on the watchlist. Short enough that a renouncement is noticed
+  // within minutes, long enough to cut that path's RPC volume by well over an order of magnitude.
+  MINT_AUTHORITY_ACTIVE_TTL_MINUTES: z.coerce.number().positive().default(20),
   // How long after GET /matches last stamped a token's lastViewedAt (i.e. someone had it on a
   // Live Feed page) the scan job keeps re-scanning it even if it's fallen out of the mcap band -
   // see the comment on Token.lastViewedAt. Comfortably longer than one scan cycle so a token
@@ -62,6 +91,13 @@ const envSchema = z.object({
   // it is far cheaper: market data only, one batched DexScreener call per 30 tokens, no RugCheck
   // or Helius work and no scoring/matching. Safety cap on how many tokens one pass will refresh,
   // so an unexpectedly large viewed set can't turn a per-minute job into a DexScreener hammer.
+  // The fast match pass (see apps/worker/src/jobs/fastMatchJob.ts): re-prices recently-vetted
+  // tokens and alerts on user filters, with no discovery and no RugCheck/Helius work. This is
+  // the interval that actually sets alert latency - the full SCAN_INTERVAL_MINUTES cycle is
+  // paced by how expensive enrichment is, not by how fast a filter can be re-evaluated, and at
+  // one minute it left an average half-minute between a token becoming matchable and anyone
+  // hearing about it. Seconds, not minutes, because that is the unit the answer belongs in.
+  FAST_MATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(15),
   LIVE_PRICE_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
   LIVE_PRICE_MAX_TRACKED: z.coerce.number().int().positive().default(150),
 
@@ -86,8 +122,11 @@ const envSchema = z.object({
   // Curated-alerts training data (see apps/worker/src/jobs/candidateOutcomeJob.ts and
   // packages/core/src/curation/). Every rug-screen-passing candidate gets a CandidateOutcome row
   // at most once per CANDIDATE_SAMPLE_SPACING_MINUTES, and the watcher job price-checks open rows
-  // every CANDIDATE_WATCH_INTERVAL_MINUTES (the label is "2x within the hour", so the sampling
-  // cadence is also the label's resolution - stretching it coarsens every future label).
+  // every CANDIDATE_WATCH_INTERVAL_MINUTES. That cadence is the label's resolution, and it
+  // matters more since the win bar moved to "2x within 15 minutes": the decisive window is now
+  // only ~15 observations wide at the default, so a 2x that round-trips inside a minute is
+  // invisible. Shortening this sharpens every future label at a directly proportional cost in
+  // DexScreener calls; stretching it coarsens them.
   // CANDIDATE_WATCH_MAX_BATCH caps rows per sweep as DexScreener back-pressure; at the default
   // creation rate the whole open set fits in one sweep with room to spare.
   // Retention is deliberately much longer than SNAPSHOT_RETENTION_DAYS - these rows ARE the
@@ -103,21 +142,31 @@ const envSchema = z.object({
   // production without a deploy while the pipeline is young. The cooldown stops one token from
   // being re-alerted every cycle it stays hot; a re-emission after the cooldown is a genuinely
   // new call on a token that survived a day.
-  // 55, not higher: replayed against live in-band samples, composite scores run p50~40 / p90~63
-  // with 70+ essentially unreached, and the whole gate passes ~2-3% of samples at 55 - the right
-  // order of magnitude for the feed's a-few-per-hour target once the per-token cooldown bites.
-  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
+  // Lowered from the 55 launch value to 45: a deliberately looser floor (paired with the looser
+  // MIN_VOLUME_MCAP_RATIO in curator.ts) so more of the market reaches the feed and the training
+  // set while the self-learning half of this pipeline is still experimental and hungry for data.
+  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(45),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
 
-  // The nightly curator-training job (apps/worker/src/jobs/curatorTrainingJob.ts): trains on the
-  // rolling window of finalized CandidateOutcome rows, walk-forward-evaluates against the
-  // heuristic, and promotes the model to be the live curator only when it wins (see trainer.ts).
+  // The curator-training job (apps/worker/src/jobs/curatorTrainingJob.ts): trains on the rolling
+  // window of finalized CandidateOutcome rows, walk-forward-evaluates against the heuristic, and
+  // promotes the model to be the live curator only when it wins (see trainer.ts).
+  // TRAINING_INTERVAL_HOURS is deliberately frequent (not once a day): this whole pipeline is
+  // still experimental, and retraining every few hours lets a model that's earned the job (or one
+  // that's stopped earning it) take effect within hours of the evidence, not up to a day later.
   // TARGET_PER_HOUR steers the model's emission-threshold calibration - a target, never a quota:
   // the calibrated threshold still has an absolute quality floor, so dead hours emit nothing.
   // MIN_TRAINING_ROWS is the promotion floor - below it the job still trains and records the
   // evaluation (the learning panel shows progress) but never lets the model take over.
-  CURATOR_TRAINING_HOUR_UTC: z.coerce.number().min(0).max(23).default(6),
+  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().positive().default(4),
   CURATOR_TRAINING_WINDOW_DAYS: z.coerce.number().positive().default(60),
+  // Half-life for the trainer's recency decay: a sample this many days older than the newest one
+  // counts half as much in the loss. The meta this market trades on rotates in weeks, and an
+  // equal-weighted 60-day window means a third of the gradient comes from a regime that no
+  // longer exists. The window still sets what history is SEEN (and what the walk-forward folds
+  // are graded on); this only tilts training toward the part of it that still describes the
+  // present.
+  CURATOR_RECENCY_HALF_LIFE_DAYS: z.coerce.number().positive().default(14),
   CURATED_TARGET_PER_HOUR: z.coerce.number().positive().default(6),
   CURATOR_MIN_TRAINING_ROWS: z.coerce.number().int().positive().default(1500),
 

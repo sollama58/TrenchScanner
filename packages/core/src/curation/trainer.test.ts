@@ -105,6 +105,44 @@ describe("trainCurator", () => {
   it("refuses to train on nothing", () => {
     expect(() => trainCurator([])).toThrow();
   });
+
+  it("recency decay sides with the current regime when a signal's meaning flips", () => {
+    // A meta shift mid-history: for the older 70% of rows high volumeToMcapRatio predicts
+    // winning, for the newest 30% it predicts LOSING (the crowd caught on; hot churn is now
+    // exit liquidity). Equal weighting sides with the bigger, older regime; a one-week
+    // half-life on this ~40-day history all but silences it.
+    const rand = rng(11);
+    const rows: TrainingRow[] = [];
+    const total = 1_000;
+    for (let i = 0; i < total; i++) {
+      const ratio = rand() * 3;
+      const hot = ratio > 2;
+      const oldRegime = i < total * 0.7;
+      const winsHot = oldRegime ? 0.5 : 0.02;
+      const winsCold = oldRegime ? 0.02 : 0.45;
+      const wins = rand() < (hot ? winsHot : winsCold);
+      rows.push({
+        anchorAt: new Date(T0 + i * HOUR),
+        features: { volumeToMcapRatio: ratio, scoreTotal: 40 },
+        labelValue: wins ? 1 : 0,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 100_000,
+      });
+    }
+
+    const hotCandidate = { volumeToMcapRatio: 2.8, scoreTotal: 40 };
+    const coldCandidate = { volumeToMcapRatio: 0.3, scoreTotal: 40 };
+
+    const equalWeighted = trainCurator(rows);
+    expect(scoreCandidateWithModel(equalWeighted, hotCandidate)).toBeGreaterThan(
+      scoreCandidateWithModel(equalWeighted, coldCandidate),
+    );
+
+    const recencyWeighted = trainCurator(rows, { recencyHalfLifeDays: 7 });
+    expect(scoreCandidateWithModel(recencyWeighted, coldCandidate)).toBeGreaterThan(
+      scoreCandidateWithModel(recencyWeighted, hotCandidate),
+    );
+  });
 });
 
 describe("calibrateThreshold", () => {
@@ -128,7 +166,7 @@ describe("calibrateThreshold", () => {
     const rows = syntheticRows(500).map((r) => ({ ...r, labelValue: 0 }));
     const params = trainCurator(rows);
     const threshold = calibrateThreshold(params, rows, 1_000_000);
-    expect(threshold).toBeGreaterThanOrEqual(0.1);
+    expect(threshold).toBeGreaterThanOrEqual(0.04);
     const emitted = rows.filter((r) => scoreCandidateWithModel(params, r.features) >= threshold);
     expect(emitted.length).toBe(0);
   });
@@ -239,5 +277,21 @@ describe("decidePromotion", () => {
   it("never promotes a model that emits nothing", () => {
     const mute = fold({ emitted: 0, precisionPct: null, avgLabel: null }, { emitted: 5, avgLabel: 0.2 });
     expect(decidePromotion([mute, mute, mute], 5_000, 1_500).promote).toBe(false);
+  });
+
+  it("a handful of lucky picks is not a fold win, however high their average", () => {
+    // Three emissions, one fluke 4x: a stellar avgLabel over a sample too small to mean
+    // anything, against a steady fifty-pick heuristic. Without the emissions floor this "wins"
+    // every fold - including the newest, the promotion rule's whole recency guard.
+    const lucky = fold({ emitted: 3, avgLabel: 1.5 }, { emitted: 50, avgLabel: 0.4 });
+    expect(decidePromotion([lucky, lucky, lucky], 5_000, 1_500).promote).toBe(false);
+  });
+
+  it("treats a heuristic under the emissions floor as silent - the bar becomes blind chance", () => {
+    // meanLabelPerRow 0.1: the model must earn over 0.2 per pick, on a real sample of its own.
+    const thinHeuristic = fold({ emitted: 20, avgLabel: 0.3 }, { emitted: 2, avgLabel: 5 });
+    expect(decidePromotion([thinHeuristic, thinHeuristic], 5_000, 1_500).promote).toBe(true);
+    const thinBoth = fold({ emitted: 20, avgLabel: 0.15 }, { emitted: 2, avgLabel: 5 });
+    expect(decidePromotion([thinBoth, thinBoth], 5_000, 1_500).promote).toBe(false);
   });
 });

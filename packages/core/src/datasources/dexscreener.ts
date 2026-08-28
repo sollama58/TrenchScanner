@@ -16,8 +16,15 @@ interface DexScreenerPair {
   marketCap?: number;
   fdv?: number;
   liquidity?: { usd?: number };
-  volume?: { h24?: number };
-  txns?: { h24?: { buys?: number; sells?: number } };
+  /** All four windows ship in every pair response - h24 alone was captured for the first year. */
+  volume?: { m5?: number; h1?: number; h6?: number; h24?: number };
+  txns?: {
+    m5?: { buys?: number; sells?: number };
+    h1?: { buys?: number; sells?: number };
+    h24?: { buys?: number; sells?: number };
+  };
+  /** Percent change per window, e.g. 12.5 for +12.5%. */
+  priceChange?: { m5?: number; h1?: number; h6?: number; h24?: number };
   pairCreatedAt?: number;
   info?: {
     /** DexScreener's own hosted copy of the token's logo. Absent for plenty of new mints. */
@@ -170,6 +177,16 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     volume24hUsd: pair.volume?.h24,
     buys24h: pair.txns?.h24?.buys,
     sells24h: pair.txns?.h24?.sells,
+    priceChange5mPct: pair.priceChange?.m5,
+    priceChange1hPct: pair.priceChange?.h1,
+    priceChange6hPct: pair.priceChange?.h6,
+    priceChange24hPct: pair.priceChange?.h24,
+    volume5mUsd: pair.volume?.m5,
+    volume1hUsd: pair.volume?.h1,
+    buys5m: pair.txns?.m5?.buys,
+    sells5m: pair.txns?.m5?.sells,
+    buys1h: pair.txns?.h1?.buys,
+    sells1h: pair.txns?.h1?.sells,
     pairCreatedAt: pair.pairCreatedAt ? new Date(pair.pairCreatedAt) : undefined,
     hasTwitter: socials.some((s) => s.type === "twitter"),
     hasTelegram: socials.some((s) => s.type === "telegram"),

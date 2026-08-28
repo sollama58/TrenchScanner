@@ -18,7 +18,7 @@ Monitor the Solana memecoin ecosystem in near-real-time for tokens sitting in th
 | Alerts                 | Web dashboard live feed is primary. Users can additionally opt in from the dashboard to link a Telegram chat for real-time pings and/or a daily digest.                                                                                                                  |
 | Filter/scoring signals | Market cap range, volume & buy/sell pressure, holder growth & distribution (top-10 %, dev wallet %), token age, narrative/keyword matching. **Liquidity ratio excluded** (Pump.fun-origin tokens are structurally uniform on this metric, so it's not a differentiator). |
 | Social signals         | Skipped for v1 (no paid Twitter/X API, no LunarCrush). Only free/on-chain-visible signals (does the token have a linked X/Telegram/site at all). Architected so a social provider can be added later without a redesign.                                                 |
-| Scan frequency         | Every 5–10 minutes                                                                                                                                                                                                                                                       |
+| Scan frequency         | Full enrichment cycle every minute; a fast match-only pass every 15s re-prices recently-vetted tokens and alerts on user filters (see `apps/worker/src/jobs/fastMatchJob.ts`)                                                                                            |
 | Tech stack             | Node.js / TypeScript across API, worker, and bot                                                                                                                                                                                                                         |
 | Telegram bot           | Deferred — bot creation + token wiring happens during implementation, not planning                                                                                                                                                                                       |
 | Hosting                | Render Blueprint: background worker (scanner) + web service (API) + static site (dashboard) + managed Postgres                                                                                                                                                           |
@@ -100,11 +100,14 @@ hand-tuned heuristic and eventually by a model trained on the system's own recor
 Three shipping phases, each useful on its own:
 
 - **Phase A — labels** (`CandidateOutcome`, `packages/core/src/curation/`): every rug-screen-passing
-  candidate gets sampled (at most hourly per token) and its price watched for an hour. The label:
-  reached **2x within 1h without first trading at/below 50% of the anchor** (the drawdown clause
-  makes the label mean "tradeable win", not "eventually printed a green candle"). The training
-  target is graded - log2 of the 1h peak multiple, capped at 4 doublings - so the learner prefers
-  bigger runs in proportion. Labels are recorded for ALL candidates, not just curated/matched ones:
+  candidate gets sampled (at most hourly per token) and its price watched for an hour. Two
+  horizons, deliberately different: the **win** is reaching **2x within 15 minutes without first
+  trading at/below 50% of the anchor** (the drawdown clause makes the label mean "tradeable win",
+  not "eventually printed a green candle"; the short window keeps credit away from slow grinds
+  that are hard to trade), while the **goal** is a **4x by the hour**. The training target is
+  graded on the goal window - log2 of the 1h peak multiple, capped at a 100x, awarded only to
+  rows that cleared the 15-minute bar - so the learner hunts candidates that double fast and keep
+  running, preferring bigger runs exactly in proportion to their doublings. Labels are recorded for ALL candidates, not just curated/matched ones:
   full-population outcomes are what let any future gate be evaluated offline, and they remove the
   explore/exploit problem entirely. Winners (and curated picks) stay watched to 24h for their
   ultimate peak. Sampling is minutely, so intra-minute wicks are invisible - accepted; the label
@@ -114,10 +117,14 @@ Three shipping phases, each useful on its own:
   emits nothing. Every alert card publicly grades itself (watching / won / missed / disqualified,
   peak returns), and the tab's learning panel shows the training-set size, the base win rate, and
   the feed's own hit rate. Emission volume is steered by `CURATED_MIN_SCORE` (env) while young.
-- **Phase C — the learner**: a nightly job trains a regularized model on the banked labels,
-  evaluates it walk-forward against the heuristic on the same weeks of history, and promotes it
-  to be the curator only when it wins repeatedly. Model versions live in the DB with their eval
-  metrics; the learning panel shows the takeover when it happens.
+- **Phase C — the learner**: a job, run every `CURATOR_TRAINING_INTERVAL_HOURS`, trains a
+  regularized model on the banked labels, evaluates it walk-forward against the heuristic on the
+  same weeks of history, and promotes it to be the curator only when it wins repeatedly. Model
+  versions live in the DB with their eval metrics; the learning panel shows the takeover when it
+  happens. Whichever curator is NOT holding the job also runs in shadow on the same scan moments
+  (`CuratedShadowEmission`, graded by the same labels, invisible to subscribers), so both curators
+  carry a live production record - the panel's 30-day comparison - rather than only meeting in
+  backtests.
 
 ## 8. Open Items / Risks
 

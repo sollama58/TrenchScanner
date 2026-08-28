@@ -101,14 +101,34 @@ describe("HeliusClient.getEarliestActivityBatch (non-Helius endpoint)", () => {
     expect((await client.getEarliestActivityBatch(["a"])).get("a")).toEqual({ status: "indeterminate" });
   });
 
-  it("reports indeterminate when a full signatures page comes back (older history beyond it)", async () => {
-    const fullPage = Array.from({ length: 1000 }, (_, i) => ({ signature: `s${i}`, blockTime: SECONDS }));
+  it("asks for a bounded page rather than the method's 1000 maximum", async () => {
+    // The answer extracted is only "is the first transaction recent?", and a signature is ~120
+    // bytes on the wire - a full 1000 page ran ~120KB per wallet for two fields.
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: [{ signature: "s", blockTime: SECONDS }] })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    await client.getEarliestActivityBatch(["a"]);
+
+    const calls = requests[0]!.body as { params: [string, { limit: number }] }[];
+    expect(calls[0]!.params[1].limit).toBeLessThanOrEqual(200);
+  });
+
+  it("returns a usable upper bound - not a shrug - when the page comes back full", async () => {
+    const fullPage = Array.from({ length: 200 }, (_, i) => ({
+      signature: `s${i}`,
+      // Newest first; the last entry is as far back as this page reaches.
+      blockTime: SECONDS + (200 - i),
+    }));
     const { url } = await startServer((calls) =>
       calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: fullPage })),
     );
     const client = new HeliusClient({ rpcUrl: url });
 
-    expect((await client.getEarliestActivityBatch(["a"])).get("a")).toEqual({ status: "indeterminate" });
+    expect((await client.getEarliestActivityBatch(["a"])).get("a")).toEqual({
+      status: "older-than",
+      boundAt: new Date((SECONDS + 1) * 1000),
+    });
   });
 
   it("reports failed (not indeterminate) for a per-entry RPC error", async () => {
@@ -194,6 +214,83 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
     const methods = requests.map((r) => (r.body as { method: string }[])[0]!.method);
     expect(methods).toEqual(["getTransactionsForAddress", "getSignaturesForAddress"]);
     expect(result.get("a")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+  });
+
+  it("falls back when the endpoint rejects the method at the HTTP level, not as a JSON-RPC error", async () => {
+    // The bug this covers: the fallback used to trigger ONLY on a -32601 error object. An
+    // endpoint that answers an unknown method with a 4xx instead produced an all-failed map that
+    // was returned as the result - the signatures path was never reached, wallet freshness was
+    // permanently null, and a wasted batch was re-sent every cycle looking like a blip.
+    let sawGtfa = false;
+    server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        const calls = JSON.parse(raw) as { id: string; method: string }[];
+        if (calls[0]!.method === "getTransactionsForAddress") {
+          sawGtfa = true;
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: "unsupported method" }));
+          return;
+        }
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify(
+            calls.map((c) => ({
+              jsonrpc: "2.0",
+              id: c.id,
+              result: [{ signature: "s", blockTime: SECONDS }],
+            })),
+          ),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (typeof address === "string" || address === null) throw new Error("failed to bind test server");
+    const client = new HeliusClient({ rpcUrl: `http://127.0.0.1:${address.port}/?helius=1` });
+
+    const result = await client.getEarliestActivityBatch(["a"]);
+
+    expect(sawGtfa).toBe(true);
+    expect(result.get("a")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+  });
+
+  it("keeps trying the Helius path through a brief outage, then latches if it stays barren", async () => {
+    // A round where everything fails is ambiguous - an unsupported method and a total outage look
+    // identical - so it must not latch on the first one, or an outage would permanently downgrade
+    // a healthy deployment until restart.
+    let failGtfa = true;
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => {
+        const method = (c as { method: string }).method;
+        if (method === "getTransactionsForAddress") {
+          return failGtfa
+            ? { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "upstream unavailable" } }
+            : { jsonrpc: "2.0", id: c.id, result: { data: [{ signature: "f", blockTime: SECONDS }] } };
+        }
+        return { jsonrpc: "2.0", id: c.id, result: [{ signature: "s", blockTime: SECONDS }] };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+
+    await client.getEarliestActivityBatch(["a"]);
+    expect(client.earliestActivityMethod).toBe("getTransactionsForAddress"); // one bad round is not a verdict
+
+    failGtfa = false;
+    requests.length = 0;
+    const recovered = await client.getEarliestActivityBatch(["b"]);
+    expect((requests[0]!.body as { method: string }[])[0]!.method).toBe("getTransactionsForAddress");
+    expect(recovered.get("b")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+
+    // Now let it stay broken for the full latch threshold.
+    failGtfa = true;
+    for (let i = 0; i < 3; i++) await client.getEarliestActivityBatch([`c${i}`]);
+    expect(client.earliestActivityMethod).toBe("getSignaturesForAddress");
+
+    requests.length = 0;
+    await client.getEarliestActivityBatch(["d"]);
+    expect((requests[0]!.body as { method: string }[])[0]!.method).toBe("getSignaturesForAddress");
   });
 
   it("latches the fallback so later batches skip getTransactionsForAddress entirely", async () => {
@@ -321,5 +418,40 @@ describe("HeliusClient.getMayhemModeBatch", () => {
     expect(requests).toHaveLength(1);
     expect((requests[0]!.body as unknown[]).length).toBe(2);
     expect(result.size).toBe(2);
+  });
+});
+
+describe("HeliusClient call accounting", () => {
+  it("counts RPC method invocations, not HTTP requests - the number a plan bills on", async () => {
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: [{ signature: "s", blockTime: SECONDS }] })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+
+    await client.getEarliestActivityBatch(Array.from({ length: 60 }, (_, i) => `a${i}`));
+
+    // Two POSTs (50 + 10), but sixty billable calls - the whole point of measuring here.
+    expect(requests).toHaveLength(2);
+    expect(client.takeCallStats()).toEqual({ getSignaturesForAddress: 60 });
+    // Reads reset, so each cycle reports its own spend.
+    expect(client.takeCallStats()).toEqual({});
+  });
+
+  it("counts a batch that failed in transit - the attempt was still spent", async () => {
+    const { url } = await startServer(() => ({ not: "an array" }));
+    const client = new HeliusClient({ rpcUrl: url });
+
+    await client.getEarliestActivityBatch(["a", "b"]);
+    expect(client.takeCallStats()).toEqual({ getSignaturesForAddress: 2 });
+  });
+
+  it("honours an explicit isHelius flag for a proxied endpoint the URL can't reveal", async () => {
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { data: [{ blockTime: SECONDS }] } })),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    await client.getEarliestActivityBatch(["a"]);
+
+    expect((requests[0]!.body as { method: string }[])[0]!.method).toBe("getTransactionsForAddress");
   });
 });

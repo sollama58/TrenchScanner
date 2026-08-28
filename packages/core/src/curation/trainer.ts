@@ -10,7 +10,7 @@ import { evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator
  * already have.
  *
  * Everything here is pure - rows in, params out - so the whole training/evaluation/promotion
- * path is unit-testable without a database. The nightly job
+ * path is unit-testable without a database. The periodic training job
  * (apps/worker/src/jobs/curatorTrainingJob.ts) owns the IO.
  */
 
@@ -72,12 +72,28 @@ function vectorize(
   return x;
 }
 
+export interface TrainOptions {
+  /**
+   * Half-life for recency decay of sample weights, in days: a row this much older than the
+   * NEWEST row in the set counts half as much. Referenced to the newest row, not to wall-clock
+   * now, so training is a pure function of its rows - the same set always yields the same model,
+   * whenever it's trained. Omitted = no decay (every row weighs its label-worth alone).
+   */
+  recencyHalfLifeDays?: number;
+}
+
 /**
  * Trains the model on labeled rows. Sample weights encode the "prefer higher multiples" choice:
  * a loss weighs 1, a winner weighs 1 + labelValue - so a clean 16x (label 4) pulls the boundary
- * five times as hard as any single loss, exactly its worth in doublings.
+ * five times as hard as any single loss, exactly its worth in doublings. On top of that,
+ * recencyHalfLifeDays (when set) decays every weight by the row's age: this market's meta
+ * rotates in weeks, and an equal-weighted long window spends a third of its gradient learning a
+ * regime that no longer exists.
  */
-export function trainCurator(rows: TrainingRow[]): Omit<TrainedCuratorParams, "threshold"> {
+export function trainCurator(
+  rows: TrainingRow[],
+  opts: TrainOptions = {},
+): Omit<TrainedCuratorParams, "threshold"> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const featureNames = [...CANDIDATE_FEATURE_NAMES];
   const n = featureNames.length;
@@ -100,6 +116,13 @@ export function trainCurator(rows: TrainingRow[]): Omit<TrainedCuratorParams, "t
   const xs = rows.map((r) => vectorize(r.features, featureNames, means, stdevs));
   const ys = rows.map((r) => (r.labelValue > 0 ? 1 : 0));
   const sampleWeights = rows.map((r) => 1 + Math.max(0, r.labelValue));
+  if (opts.recencyHalfLifeDays !== undefined && opts.recencyHalfLifeDays > 0) {
+    const newestMs = Math.max(...rows.map((r) => r.anchorAt.getTime()));
+    const halfLifeMs = opts.recencyHalfLifeDays * 86_400_000;
+    for (let i = 0; i < rows.length; i++) {
+      sampleWeights[i] = sampleWeights[i]! * 0.5 ** ((newestMs - rows[i]!.anchorAt.getTime()) / halfLifeMs);
+    }
+  }
   const totalWeight = sampleWeights.reduce((s, w) => s + w, 0);
 
   const dim = 2 * n;
@@ -130,7 +153,7 @@ export function trainCurator(rows: TrainingRow[]): Omit<TrainedCuratorParams, "t
   return { kind: CURATOR_MODEL_KIND, featureNames, means, stdevs, weights, bias };
 }
 
-/** Predicted probability of a clean 2x-in-1h for one candidate's feature vector. */
+/** Predicted probability of a clean 2x-within-15-minutes for one candidate's feature vector. */
 export function scoreCandidateWithModel(
   params: Omit<TrainedCuratorParams, "threshold">,
   features: Record<string, number | null | undefined>,
@@ -161,11 +184,14 @@ export function calibrateThreshold(
   const allowed = Math.min(probs.length, Math.max(1, Math.round(targetPerHour * spanHours)));
   const byRate = probs[allowed - 1]!;
 
-  // Twice the base rate, but never below an absolute 10%: with a 0% base rate the relative floor
-  // vanishes entirely, and an absurd target rate would then emit every row. 10% predicted
-  // probability is already 2-5x the win rates this market actually produces.
+  // Twice the base rate, but never below an absolute floor: with a 0% base rate the relative
+  // floor vanishes entirely, and an absurd target rate would then emit every row. The absolute
+  // floor is deliberately low - 2x-within-15-minutes is a much rarer event than the hour-long
+  // bar this pipeline started with, so predicted probabilities compress downward and a floor
+  // set for the old bar would quietly silence the feed. The RELATIVE floor is the real guard
+  // ("at least twice as likely as random"); this one only catches a degenerate market.
   const baseRate = rows.filter((r) => r.labelValue > 0).length / rows.length;
-  const floor = Math.max(0.1, Math.min(0.95, 2 * baseRate));
+  const floor = Math.max(0.04, Math.min(0.95, 2 * baseRate));
   return Math.max(byRate, floor);
 }
 
@@ -246,6 +272,10 @@ export interface WalkForwardOptions {
   mcapBand?: McapBand;
   /** Total-rows floor below which promotion is refused outright. */
   minRowsToPromote?: number;
+  /** Recency decay applied to each fold's training slice - see TrainOptions. */
+  recencyHalfLifeDays?: number;
+  /** Emissions a side needs in a fold before its average means anything - see decidePromotion. */
+  minEmissionsToWin?: number;
 }
 
 function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
@@ -276,7 +306,7 @@ export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOption
 
   if (sorted.length >= minTrainRows + minTestRows) {
     // Test folds tile the newest 50% of history; the oldest 50% is the first fold's training
-    // floor. Each later fold trains on strictly more history, mirroring how the nightly job
+    // floor. Each later fold trains on strictly more history, mirroring how the training job
     // will actually behave as data accumulates.
     const testStartIndex = Math.floor(sorted.length * 0.5);
     const testRowsTotal = sorted.length - testStartIndex;
@@ -291,7 +321,7 @@ export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOption
 
       const inBand = (r: TrainingRow) => !opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand);
 
-      const params = trainCurator(train);
+      const params = trainCurator(train, { recencyHalfLifeDays: opts.recencyHalfLifeDays });
       // Calibrated on the band-filtered train slice, exactly as the training job calibrates the
       // deployable threshold - a fold whose threshold is ranked against unemittable rows grades
       // a model production never ships. Training itself stays full-window (mcap is a feature).
@@ -341,17 +371,30 @@ export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOption
     }
   }
 
-  return { folds, verdict: decidePromotion(folds, rows.length, minRowsToPromote) };
+  return {
+    folds,
+    verdict: decidePromotion(folds, rows.length, minRowsToPromote, opts.minEmissionsToWin),
+  };
 }
+
+/**
+ * Emissions a side needs in a fold before its average label is evidence rather than luck. Below
+ * this, one fluke 4x among three picks "beats" a steady fifty-pick record - and the newest-fold
+ * requirement, the promotion rule's whole recency guard, could be satisfied by exactly that
+ * noise. A side under the floor is treated as not having meaningfully emitted at all.
+ */
+const MIN_FOLD_EMISSIONS_TO_WIN = 5;
 
 /**
  * The promotion rule, spelled out so the learning panel can show WHY:
  *  - refuse outright below the training-rows floor or with fewer than 2 scoreable folds;
  *  - a fold is scoreable when at least one side emitted;
  *  - the model wins a fold by a higher avgLabel (expected doublings per alert); when the
- *    heuristic emitted nothing, the model instead has to beat BLIND CHANCE convincingly - an
- *    avgLabel over twice the fold's per-row mean label, i.e. its picks earn at least double
- *    what random emission would have - and it loses outright by emitting nothing itself;
+ *    heuristic emitted too few to judge (under minEmissionsToWin), the model instead has to beat
+ *    BLIND CHANCE convincingly - an avgLabel over twice the fold's per-row mean label, i.e. its
+ *    picks earn at least double what random emission would have - and it loses outright when its
+ *    own emissions are under that same floor (an average over a handful of picks is luck, not a
+ *    record);
  *  - promote when the model wins a strict majority of scoreable folds INCLUDING the newest one.
  *    The newest-fold requirement is the recency guard: a model that used to be good and just
  *    stopped being good must not take over on its record.
@@ -360,6 +403,7 @@ export function decidePromotion(
   folds: EvalFold[],
   totalRows: number,
   minRowsToPromote: number,
+  minEmissionsToWin: number = MIN_FOLD_EMISSIONS_TO_WIN,
 ): PromotionVerdict {
   if (totalRows < minRowsToPromote) {
     return {
@@ -374,8 +418,8 @@ export function decidePromotion(
   }
 
   const modelWon = (f: EvalFold): boolean => {
-    if (f.model.emitted === 0) return false;
-    if (f.heuristic.emitted === 0) return (f.model.avgLabel ?? 0) > 2 * f.meanLabelPerRow;
+    if (f.model.emitted < minEmissionsToWin) return false;
+    if (f.heuristic.emitted < minEmissionsToWin) return (f.model.avgLabel ?? 0) > 2 * f.meanLabelPerRow;
     return (f.model.avgLabel ?? 0) > (f.heuristic.avgLabel ?? 0);
   };
 

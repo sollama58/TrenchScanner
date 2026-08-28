@@ -95,12 +95,55 @@ export async function registerCuratedRoutes(
   });
 
   /**
+   * One curator's last-30-days production record, combined across BOTH ledgers: real
+   * CuratedAlert emissions (when it held the job) and CuratedShadowEmission rows (when it was
+   * the bench - see that model's schema comment). This is what makes "the model takes over when
+   * it beats the gate" a claim subscribers can check against live picks, not just backtests.
+   * Alerts carry their outcome copies; shadow rows are graded through their outcome link.
+   */
+  const curatorRecord30d = async (side: "heuristic" | "model", since: Date) => {
+    const sourceFilter =
+      side === "heuristic" ? { equals: HEURISTIC_CURATOR_SOURCE } : { not: HEURISTIC_CURATOR_SOURCE };
+    const [liveEmitted, liveGraded, liveWins, shadowEmitted, shadowGraded, shadowWins] = await Promise.all([
+      prisma.curatedAlert.count({ where: { source: sourceFilter, createdAt: { gte: since } } }),
+      prisma.curatedAlert.count({
+        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn15m: { not: null } },
+      }),
+      prisma.curatedAlert.count({
+        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn15m: true, disqualified: false },
+      }),
+      prisma.curatedShadowEmission.count({
+        where: { source: sourceFilter, createdAt: { gte: since } },
+      }),
+      prisma.curatedShadowEmission.count({
+        where: {
+          source: sourceFilter,
+          createdAt: { gte: since },
+          candidateOutcome: { finalizedAt: { not: null } },
+        },
+      }),
+      prisma.curatedShadowEmission.count({
+        where: {
+          source: sourceFilter,
+          createdAt: { gte: since },
+          candidateOutcome: { labelValue: { gt: 0 } },
+        },
+      }),
+    ]);
+    const emitted = liveEmitted + shadowEmitted;
+    const graded = liveGraded + shadowGraded;
+    const wins = liveWins + shadowWins;
+    return { emitted, graded, wins, hitRatePct: graded > 0 ? (wins / graded) * 100 : null };
+  };
+
+  /**
    * The learning panel: how much the pipeline has learned from, and how the curator's own calls
    * are scoring. Shown inside the tab on purpose - the feed grades itself in public, and "the
    * model takes over when it beats this" is a promise subscribers can watch happen.
    */
   app.get("/stats", async () => {
     const day7 = new Date(Date.now() - 7 * 86_400_000);
+    const day30 = new Date(Date.now() - 30 * 86_400_000);
 
     const [
       finalizedSamples,
@@ -110,24 +153,30 @@ export async function registerCuratedRoutes(
       alerts7d,
       graded,
       wins,
+      goalHits,
       feedBest,
       activeModel,
       latestModel,
+      heuristic30d,
+      model30d,
     ] = await Promise.all([
       prisma.candidateOutcome.count({ where: { finalizedAt: { not: null } } }),
       prisma.candidateOutcome.count({ where: { anchorAt: { gte: day7 } } }),
       prisma.candidateOutcome.count({ where: { labelValue: { gt: 0 } } }),
       prisma.curatedAlert.count(),
       prisma.curatedAlert.count({ where: { createdAt: { gte: day7 } } }),
-      prisma.curatedAlert.count({ where: { hit2xIn1h: { not: null } } }),
-      prisma.curatedAlert.count({ where: { hit2xIn1h: true, disqualified: false } }),
+      prisma.curatedAlert.count({ where: { hit2xIn15m: { not: null } } }),
+      prisma.curatedAlert.count({ where: { hit2xIn15m: true, disqualified: false } }),
+      prisma.curatedAlert.count({ where: { hit4xIn1h: true } }),
       prisma.curatedAlert.aggregate({ _max: { peak24hReturnPct: true } }),
       prisma.curatorModel.findFirst({ where: { status: "active" }, orderBy: { activatedAt: "desc" } }),
       prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" } }),
+      curatorRecord30d("heuristic", day30),
+      curatorRecord30d("model", day30),
     ]);
 
-    // The nightly training job stores its walk-forward verdict inside evalMetrics; surface just
-    // the verdict here - the panel shows WHY the model is or isn't live, not every fold number.
+    // The training job stores its walk-forward verdict inside evalMetrics; surface just the
+    // verdict here - the panel shows WHY the model is or isn't live, not every fold number.
     const latestVerdict =
       latestModel && typeof latestModel.evalMetrics === "object" && latestModel.evalMetrics !== null
         ? ((latestModel.evalMetrics as { verdict?: { promote?: boolean; reason?: string } }).verdict ?? null)
@@ -162,7 +211,19 @@ export async function registerCuratedRoutes(
         graded,
         wins,
         hitRatePct: graded > 0 ? (wins / graded) * 100 : null,
+        // How often a win went on to reach the 4x goal within the hour - the ambition behind
+        // the bar, counted separately so it can't be mistaken for the hit rate itself.
+        goalHits,
+        goalRatePct: graded > 0 ? (goalHits / graded) * 100 : null,
         bestPeak24hReturnPct: feedBest._max.peak24hReturnPct,
+      },
+      // The two curators side by side on the last 30 days of PRODUCTION picks - each one's real
+      // alerts from any time it held the job plus its shadow picks from the bench (see
+      // curatorRecord30d). The walk-forward backtest decides takeovers; this is the live-fire
+      // record subscribers can hold that decision against.
+      comparison30d: {
+        heuristic: heuristic30d,
+        model: model30d,
       },
     };
   });

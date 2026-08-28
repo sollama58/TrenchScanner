@@ -14,6 +14,7 @@ import { runScanCycle } from "./jobs/scanJob.js";
 import { runDigestJob } from "./jobs/digestJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob } from "./jobs/outcomeTrackingJob.js";
+import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
 import { runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
@@ -50,10 +51,21 @@ async function main() {
     () => runLivePriceJob(deps.dexScreener, env),
     env.LIVE_PRICE_INTERVAL_MINUTES,
   );
+  // The path a subscriber actually feels. Re-prices tokens the scan cycle has recently vetted and
+  // alerts on user filters, four times a minute, without any of the discovery or enrichment that
+  // paces the full cycle - see runFastMatchCycle for why that split is safe. The scan cycle still
+  // owns everything else; this only shortens the distance between a token becoming matchable and
+  // the person who asked for it hearing about it.
+  const fastMatchJob = scheduleInterval(
+    "fast-match",
+    () => runFastMatchCycle(deps.dexScreener, env, bot),
+    env.FAST_MATCH_INTERVAL_SECONDS / 60,
+  );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
-  // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution
-  // ("2x within the hour", sampled minutely), which is why it matches the live-price cadence
-  // rather than the scan's.
+  // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
+  // and the win bar is "2x within 15 minutes", so at the default it decides each verdict on
+  // about fifteen observations - which is why it matches the live-price cadence rather than the
+  // scan's, and why lowering it is the lever for sharper labels.
   const candidateWatchJob = scheduleInterval(
     "candidate-watch",
     () => runCandidateWatchJob(deps.dexScreener, env),
@@ -75,28 +87,38 @@ async function main() {
     () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
     env.OUTCOME_TRACKING_HOUR_UTC,
   );
-  // The self-learning half of Curated Alerts: nightly walk-forward evaluation, and the curator
-  // changes hands only on a win - see runCuratorTrainingJob.
-  const curatorTrainingJob = scheduleDailyAt(
+  // The self-learning half of Curated Alerts: walk-forward evaluation every
+  // CURATOR_TRAINING_INTERVAL_HOURS, and the curator changes hands only on a win - see
+  // runCuratorTrainingJob. An interval, not a fixed daily hour: this pipeline is still
+  // experimental, and a frequent retrain is what lets a model that just earned (or just lost) the
+  // job take effect within hours rather than up to a day later.
+  const curatorTrainingJob = scheduleInterval(
     "curator-training",
     () => runCuratorTrainingJob(env),
-    env.CURATOR_TRAINING_HOUR_UTC,
+    env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
   );
 
   logger.info("worker started", {
     scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
+    fastMatchIntervalSeconds: env.FAST_MATCH_INTERVAL_SECONDS,
     livePriceIntervalMinutes: env.LIVE_PRICE_INTERVAL_MINUTES,
     digestHourUtc: env.DIGEST_HOUR_UTC,
     cleanupHourUtc: env.CLEANUP_HOUR_UTC,
     outcomeTrackingHourUtc: env.OUTCOME_TRACKING_HOUR_UTC,
     telegramEnabled: bot.enabled,
     usingHeliusRpc: deps.helius.usingHelius,
+    // Which method is answering wallet-freshness lookups. Worth logging because the two differ
+    // in both cost and precision, and a silent downgrade to the signatures path (an endpoint
+    // that doesn't serve the Helius-only method) is otherwise invisible - see
+    // getEarliestActivityBatch. It can change at runtime; this is only the starting state.
+    earliestActivityMethod: deps.helius.earliestActivityMethod,
     burnScanIntervalMinutes: env.BURN_SCAN_INTERVAL_MINUTES,
   });
 
   const shutdown = async (signal: string) => {
     logger.info("shutting down", { signal });
     scanJob.stop();
+    fastMatchJob.stop();
     livePriceJob.stop();
     candidateWatchJob.stop();
     burnScanJob.stop();

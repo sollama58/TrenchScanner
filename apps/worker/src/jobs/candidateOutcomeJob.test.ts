@@ -120,7 +120,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     const anchorAt = new Date(Date.now() - 61 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, {
       peak1hPriceUsd: 2.6,
-      hit2xAt: new Date(anchorAt.getTime() + 20 * MINUTE),
+      // Inside the 15-minute win window - that is what makes this a win at all.
+      hit2xAt: new Date(anchorAt.getTime() + 8 * MINUTE),
       lowBefore2xPriceUsd: 0.8,
       low1hPriceUsd: 0.8,
       peak24hPriceUsd: 2.6,
@@ -141,19 +142,62 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
 
     const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(updated.finalizedAt).not.toBeNull();
-    expect(updated.hit2xIn1h).toBe(true);
+    expect(updated.hit2xIn15m).toBe(true);
     expect(updated.disqualified).toBe(false);
     expect(updated.labelValue).toBeCloseTo(Math.log2(2.6));
     expect(updated.peak1hReturnPct).toBeCloseTo(160);
+    expect(updated.hit4xIn1h).toBe(false); // won, but short of the 4x goal
     expect(updated.extended24h).toBe(true);
     expect(updated.finalized24hAt).toBeNull(); // still on the 24h watch
 
-    // The 1h verdict was copied onto the feed row the moment the window closed - the badge must
+    // The verdict was copied onto the feed row the moment the window closed - the badge must
     // not wait out the 24h watch - but the outcome isn't stamped final until that watch ends.
     const updatedAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
-    expect(updatedAlert.hit2xIn1h).toBe(true);
+    expect(updatedAlert.hit2xIn15m).toBe(true);
     expect(updatedAlert.peak1hReturnPct).toBeCloseTo(160);
     expect(updatedAlert.outcomeFinalizedAt).toBeNull();
+  });
+
+  it("grades a slow 2x as a miss - the bar is 15 minutes, not the hour", async () => {
+    const token = await createToken("slow-double");
+    const anchorAt = new Date(Date.now() - 61 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      peak1hPriceUsd: 2.6,
+      hit2xAt: new Date(anchorAt.getTime() + 35 * MINUTE), // doubled, but far too late
+      lowBefore2xPriceUsd: 0.8,
+      low1hPriceUsd: 0.8,
+      peak24hPriceUsd: 2.6,
+    });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.4 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.hit2xIn15m).toBe(false);
+    expect(updated.hit2xIn1h).toBe(true); // recorded, but not what "won" means
+    expect(updated.labelValue).toBe(0);
+    // A miss never graduates to the 24h watch, so the row retires here.
+    expect(updated.extended24h).toBe(false);
+    expect(updated.finalized24hAt).not.toBeNull();
+  });
+
+  it("records the 4x goal for a fast win that kept running", async () => {
+    const token = await createToken("goal");
+    const anchorAt = new Date(Date.now() - 61 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      peak1hPriceUsd: 5.0,
+      hit2xAt: new Date(anchorAt.getTime() + 4 * MINUTE),
+      lowBefore2xPriceUsd: 0.9,
+      low1hPriceUsd: 0.9,
+      peak24hPriceUsd: 5.0,
+    });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 3.0 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.hit2xIn15m).toBe(true);
+    expect(updated.hit4xIn1h).toBe(true);
+    // Graded on the goal window's peak: a 5x is worth log2(5) doublings, not log2(2).
+    expect(updated.labelValue).toBeCloseTo(Math.log2(5));
   });
 
   it("finalizes a dud at the window edge and retires it in the same sweep", async () => {

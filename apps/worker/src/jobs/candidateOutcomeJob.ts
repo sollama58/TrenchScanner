@@ -5,7 +5,7 @@ import {
   buildCandidateFeatures,
   initialOutcomeAggregates,
   applyPriceTick,
-  computeOneHourLabels,
+  computeOutcomeLabels,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
   type Env,
@@ -18,8 +18,8 @@ import type { Prisma } from "@prisma/client";
 const logger = createLogger("candidate-outcome");
 
 /**
- * Cadence for rows past their 1h label window that are still being watched to 24h (winners and
- * curated alerts - see CandidateOutcome.extended24h). Coarser than the label window's cadence on
+ * Cadence for rows past their 1h goal window that are still being watched to 24h (winners and
+ * curated alerts - see CandidateOutcome.extended24h). Coarser than the goal window's cadence on
  * purpose: the 24h peak is a display number, not a training input, and the extended set is what
  * would otherwise dominate the job's DexScreener volume.
  */
@@ -94,8 +94,9 @@ export async function recordCandidateSample(
 
 /**
  * The watcher: price-checks every open CandidateOutcome row that's due, folds the tick into the
- * row's running aggregates (see curation/labels.ts for the math), closes 1h label windows, and
- * retires extended rows at 24h.
+ * row's running aggregates (see curation/labels.ts for the math), closes the 1h goal window (the
+ * moment labels are written - the 2x-in-15m verdict included, since a row keeps being measured
+ * to the hour for its peak), and retires extended rows at 24h.
  *
  * One batched DexScreener fetch per sweep covers every due row - the same 30-per-call endpoint
  * the scan itself uses - which is the whole reason this can run every minute. Tokens the fetch
@@ -147,14 +148,16 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
         ((merged.peak24hPriceUsd - row.anchorPriceUsd) / row.anchorPriceUsd) * 100;
 
       let extended = row.extended24h;
-      let closedLabels: ReturnType<typeof computeOneHourLabels> | null = null;
+      let closedLabels: ReturnType<typeof computeOutcomeLabels> | null = null;
       let finalPeak24hPct: number | null = null;
       if (row.finalizedAt === null && elapsedMs >= labelWindowMs) {
-        closedLabels = computeOneHourLabels(merged);
+        closedLabels = computeOutcomeLabels(merged);
         data.finalizedAt = tickAt;
         data.peak1hReturnPct = closedLabels.peak1hReturnPct;
         data.maxDrawdown1hPct = closedLabels.maxDrawdown1hPct;
+        data.hit2xIn15m = closedLabels.hit2xIn15m;
         data.hit2xIn1h = closedLabels.hit2xIn1h;
+        data.hit4xIn1h = closedLabels.hit4xIn1h;
         data.disqualified = closedLabels.disqualified;
         data.labelValue = closedLabels.labelValue;
         finalized += 1;
@@ -162,7 +165,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
         // Clean winners graduate to the 24h watch so the record shows how far they ultimately
         // ran. A disqualified 2x doesn't - it already trains as a loss, and its later path
         // teaches nothing a dud's would.
-        if (closedLabels.hit2xIn1h && !closedLabels.disqualified && !extended) {
+        if (closedLabels.hit2xIn15m && !closedLabels.disqualified && !extended) {
           extended = true;
           data.extended24h = true;
         }
@@ -200,7 +203,9 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
               ? {
                   peak1hReturnPct: closedLabels.peak1hReturnPct,
                   maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
+                  hit2xIn15m: closedLabels.hit2xIn15m,
                   hit2xIn1h: closedLabels.hit2xIn1h,
+                  hit4xIn1h: closedLabels.hit4xIn1h,
                   disqualified: closedLabels.disqualified,
                 }
               : {}),

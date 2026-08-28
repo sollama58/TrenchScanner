@@ -3,11 +3,10 @@ import {
   createLogger,
   refreshAndFilterToBand,
   buildScoredToken,
-  matchesFilter,
   runRugScreen,
+  passesLocalRugScreen,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
-  notifyMatchCreated,
   type Env,
   type DexScreenerClient,
   type PumpFunClient,
@@ -15,16 +14,14 @@ import {
   type RugCheckProfile,
   type HeliusClient,
   type MintAuthorityResult,
-  type MayhemModeResult,
   type OnChainProfile,
   type CandidateToken,
   type DiscoveredCoin,
   type WatchlistCandidate,
-  type UserFilter,
-  type TelegramLink,
 } from "@trenchscanner/core";
 import type { AlertBot } from "../telegram/bot.js";
-import { formatRealtimeAlert } from "../dispatch/alertDispatcher.js";
+import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
+import { snapshotDataFor } from "./snapshotData.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
@@ -35,9 +32,6 @@ import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import { maybeEmitCuratedAlert } from "./curatedAlerts.js";
 
 const logger = createLogger("scan-job");
-
-/** Once a user has been alerted for a token+filter, don't re-alert for it again within this window. */
-const ALERT_COOLDOWN_HOURS = 12;
 
 /**
  * Whether this process has already done one unbounded peak-recovery sweep. The first cycle after
@@ -51,8 +45,13 @@ let fullPeakSweepDone = false;
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
  *  run concurrently across candidates - each touches a different token's rows - and cheap now
  *  that every external API call has been hoisted out of the loop entirely (market data, rug
- *  profiles, mint authorities and wallet freshness are all resolved in batches beforehand). */
-const CANDIDATE_CONCURRENCY = 5;
+ *  profiles, mint authorities and wallet freshness are all resolved in batches beforehand).
+ *
+ *  Raised from 5, which was set when this loop still made network calls of its own: at 5, the
+ *  hundredth in-band candidate waits out twenty sequential rounds before anyone is alerted to
+ *  it. The work per candidate is now a handful of queries, so the practical ceiling is the
+ *  Postgres connection pool rather than any upstream's patience. */
+const CANDIDATE_CONCURRENCY = 15;
 
 export interface ScanDeps {
   pumpFun: PumpFunClient;
@@ -60,8 +59,6 @@ export interface ScanDeps {
   rugCheck: RugCheckClient;
   helius: HeliusClient;
 }
-
-type FilterWithUser = UserFilter & { user: { id: string; telegramLink: TelegramLink | null } };
 
 export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Promise<void> {
   const startedAt = Date.now();
@@ -89,14 +86,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   await addNewMintsToWatchlist(discovered);
   logger.info("discovery complete", { newlySeen: discovered.length });
 
-  // 2. Re-check every mint on the active watchlist against live market data, and keep only the
-  // ones currently sitting in (or near) the target band.
-  const cutoff = new Date(Date.now() - env.WATCHLIST_TTL_HOURS * 3_600_000);
-  const tracked = await prisma.token.findMany({
-    where: { firstSeenAt: { gt: cutoff } },
-    orderBy: { firstSeenAt: "desc" },
-    take: env.WATCHLIST_MAX_TRACKED,
-  });
+  // 2. Re-check the active watchlist against live market data, and keep only the mints currently
+  // sitting in (or near) the target band.
+  const { tracked, alive } = await selectWatchlist(env);
 
   if (tracked.length === 0) {
     logger.info("scan cycle complete (empty watchlist)", { durationMs: Date.now() - startedAt });
@@ -105,16 +97,31 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
 
   let candidates: CandidateToken[];
   try {
-    candidates = await refreshAndFilterToBand(
+    const refreshed = await refreshAndFilterToBand(
       deps.dexScreener,
       tracked.map((t) => t.mintAddress),
       { mcapMin: env.MCAP_FILTER_MIN, mcapMax: env.MCAP_FILTER_MAX },
     );
+    candidates = refreshed.inBand;
+    // The stamp the liveness-prioritized selection above runs on. Never worth failing a cycle
+    // over - a missed stamp just costs a mint one cycle of priority.
+    if (refreshed.liveMints.length > 0) {
+      await prisma.token
+        .updateMany({
+          where: { mintAddress: { in: refreshed.liveMints } },
+          data: { lastLiveAt: new Date() },
+        })
+        .catch((err) => logger.warn("failed to stamp lastLiveAt", { error: String(err) }));
+    }
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
     return;
   }
-  logger.info("refreshed watchlist", { tracked: tracked.length, inBand: candidates.length });
+  logger.info("refreshed watchlist", {
+    tracked: tracked.length,
+    alive,
+    inBand: candidates.length,
+  });
 
   // Tokens someone currently has open on a Live Feed page (see the comment on
   // Token.lastViewedAt) keep getting re-scanned regardless of mcap band, so "Now"/% change
@@ -139,27 +146,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     }
   }
 
-  // Roll every match's recorded peak forward from the snapshots and live pings already written -
-  // no network access, no upstream cost. This runs on the scan cadence rather than in the nightly
-  // outcome job because a once-a-day price sample simply cannot see a token that runs and retraces
-  // inside a single day, which is most of them. See recordMatchPeaks for the full reasoning.
-  // Placed before the early return below so it still runs on a cycle that finds nothing in band.
-  try {
-    // Scoped to tokens observed in the last few cycles, except on the first pass after start-up.
-    // That first full sweep is what retroactively recovers peaks from history already in the
-    // database (and what fills the Leaderboard on deploy); every pass after it only has to look
-    // at tokens something actually moved, so the per-cycle cost tracks how much was scanned rather
-    // than how much history has accumulated.
-    const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
-    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
-    fullPeakSweepDone = true;
-    await repairOutcomeBookkeeping(env.SNAPSHOT_RETENTION_DAYS);
-  } catch (err) {
-    // Bookkeeping over data already banked - never worth failing a scan cycle over.
-    logger.warn("failed to record match peaks", { error: String(err) });
-  }
-
   if (candidates.length === 0) {
+    // Still rolls peaks forward: nothing in band does not mean nothing moved, and this is the
+    // one thing in the cycle that has to happen whether or not there was anything to alert on.
+    await rollPeaksForward(env);
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
       durationMs: Date.now() - startedAt,
     });
@@ -176,8 +166,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   );
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
-  // do. Loaded before the on-chain work below because what users actually filter on decides how
-  // much of that work is worth doing at all.
+  // do.
   const activeFilters = (await prisma.userFilter.findMany({
     where: { isActive: true },
     include: { user: { select: { id: true, telegramLink: true } } },
@@ -188,44 +177,60 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   const needsAuthorityLookup = candidates
     .filter((c) => !rugProfiles.has(c.mintAddress))
     .map((c) => c.mintAddress);
-  const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius);
+  const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius, env);
 
-  // Mayhem Mode is a mandatory rejection (see rugScreen.ts), so unlike the authority fallback this
-  // is resolved for EVERY candidate, not just the ones RugCheck missed - RugCheck doesn't report
-  // it at all. Cached permanently per mint, so in steady state this only touches the network for
-  // mints first seen this cycle. Resolved before the profiles are assembled so that the rug-screen
-  // filter below (which decides whose wallets are worth looking up) already accounts for it.
-  const mayhemByMint = await resolveMayhemMode(
-    candidates.map((c) => c.mintAddress),
-    deps.helius,
+  // Profiles are assembled in two passes, because Mayhem Mode is the ONE rug-screen condition
+  // that costs a network call. The first pass leaves it unresolved and asks only what the
+  // already-fetched data can answer (authorities, LP - see passesLocalRugScreen); a candidate
+  // failing any of those is rejected whatever Mayhem would have said, so it never earns a
+  // lookup. On a Pump.fun-heavy watchlist that is most of them, and since Mayhem caches
+  // permanently, first-sight lookups ARE the recurring cost - the watchlist turns over daily.
+  const baseProfileByMint = new Map<string, OnChainProfile | null>(
+    candidates.map((c) => [c.mintAddress, buildOnChainProfile(c.mintAddress, rugProfiles, mintAuthorities)]),
   );
+  const mayhemCandidates = candidates
+    .filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress)))
+    .map((c) => c.mintAddress);
+  const mayhemByMint = await resolveMayhemMode(mayhemCandidates, deps.helius);
 
+  // Anything not looked up keeps isMayhemMode undefined, which the screen rejects - the same
+  // verdict its local conditions already reached, with the reason it actually failed on first.
   const onChainByMint = new Map<string, OnChainProfile | null>(
-    candidates.map((c) => [
-      c.mintAddress,
-      buildOnChainProfile(c.mintAddress, rugProfiles, mintAuthorities, mayhemByMint),
-    ]),
+    candidates.map((c) => {
+      const base = baseProfileByMint.get(c.mintAddress) ?? null;
+      const mayhem = mayhemByMint.get(c.mintAddress);
+      return [
+        c.mintAddress,
+        base && mayhem?.status === "found" ? { ...base, isMayhemMode: mayhem.isMayhemMode } : base,
+      ];
+    }),
   );
 
-  // Wallet freshness is by far the most expensive thing this job can do, so it's gated twice:
-  //   1. Nobody's filtering on it -> skip the entire pass. freshTop10WalletPct is a purely opt-in
-  //      criterion (maxFreshTop10WalletPct), so with no filter using it the answer changes
-  //      nothing about what anyone gets alerted to.
-  //   2. Only candidates that actually clear the mandatory rug screen are worth checking - one
-  //      that fails it can never produce a Match no matter how its holders look, so resolving
-  //      those wallets is spend with no possible payoff.
-  // `null` (rather than an empty map) marks "not computed this cycle", so a skipped pass records
-  // freshTop10WalletPct as unknown instead of a fabricated 0%.
-  const anyFilterNeedsFreshness = activeFilters.some((f) => f.maxFreshTop10WalletPct != null);
-  let earliestActivityByAddress: Map<string, Date | null> | null = null;
-  if (anyFilterNeedsFreshness) {
-    const eligibleAddresses = candidates
-      .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
-      .flatMap((c) => onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []);
-    earliestActivityByAddress = await resolveEarliestActivity(eligibleAddresses, deps.helius);
-  } else {
-    logger.info("skipping wallet-freshness pass - no active filter uses maxFreshTop10WalletPct");
-  }
+  // Wallet freshness runs every cycle, unconditionally - it used to be skipped whenever no user
+  // filter opted into maxFreshTop10WalletPct, which quietly meant the curated pipeline's
+  // strongest sniper signal (the curator's fresh-wallet risk cap, and the model's
+  // freshTop10WalletPct feature) was null in almost every banked training sample. Affordable
+  // always-on because wallet history is immutable (every resolved wallet caches forever, so the
+  // steady state only pays for genuinely-new wallets), and bounded even in the worst case by the
+  // per-cycle lookup budget (env WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE).
+  //
+  // Passed as one group per candidate, highest 24h churn first, because the freshness figure is
+  // all-or-nothing: nine of a candidate's ten wallets resolved is worth exactly as much as none,
+  // so the budget is spent completing whole candidates rather than smeared across many that all
+  // end up null anyway (see resolveEarliestActivity). Churn is the cheap stand-in for "likely to
+  // clear the curator's gate" available at this point - scoring hasn't run yet.
+  const walletGroups = candidates
+    .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
+    .map((c) => ({
+      addresses: onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? [],
+      churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
+    }))
+    .filter((g) => g.addresses.length > 0)
+    .sort((a, b) => b.churn - a.churn)
+    .map((g) => g.addresses);
+  const earliestActivityByAddress = await resolveEarliestActivity(walletGroups, deps.helius, {
+    maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
+  });
 
   // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
   // counter BEFORE the await and writes it after, so two candidates finishing close together can
@@ -251,12 +256,85 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   });
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
 
+  await rollPeaksForward(env);
+
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,
+    // Per-METHOD invocation counts, which is what a metered RPC plan actually bills on - batching
+    // collapses these into far fewer HTTP requests, so nothing else in this log reveals the real
+    // number. Reset each read, so this is the cycle's own spend.
+    rpcCalls: deps.helius.takeCallStats(),
   });
+}
+
+/**
+ * The mints this cycle will refresh, liveness-prioritized rather than newest-first: Pump.fun
+ * launches mints far faster than WATCHLIST_MAX_TRACKED can hold a day of, so a purely
+ * newest-first cap spans well under an hour of launches at busy times - which silently evicted
+ * exactly the tokens this watchlist exists for, the ones still climbing toward the band an hour
+ * or two after launch. Mints that have shown life (DexScreener returned market data for them -
+ * see Token.lastLiveAt) keep their full WATCHLIST_TTL_HOURS; never-live mints only get
+ * WATCHLIST_PROBATION_MINUTES before they stop costing refresh capacity, since the
+ * dead-on-arrival majority never trades at all. The same probation window doubles as the
+ * liveness staleness horizon: a mint whose market data stopped coming back that long ago is
+ * dead, not climbing.
+ */
+export async function selectWatchlist(
+  env: Env,
+): Promise<{ tracked: { id: string; mintAddress: string; firstSeenAt: Date }[]; alive: number }> {
+  const now = Date.now();
+  const ttlCutoff = new Date(now - env.WATCHLIST_TTL_HOURS * 3_600_000);
+  const probationCutoff = new Date(now - env.WATCHLIST_PROBATION_MINUTES * 60_000);
+
+  // Probation is selected FIRST, against a reserved share of the cap - see
+  // WATCHLIST_PROBATION_RESERVE_PCT for why giving it only the leftovers starves new launches
+  // outright. Whatever the reserve doesn't use flows back to the alive set, so the cap is never
+  // wasted on slots nothing is waiting for.
+  const probationReserve = Math.floor(
+    (env.WATCHLIST_MAX_TRACKED * env.WATCHLIST_PROBATION_RESERVE_PCT) / 100,
+  );
+  const probation = await prisma.token.findMany({
+    where: { firstSeenAt: { gt: probationCutoff }, lastLiveAt: null },
+    orderBy: { firstSeenAt: "desc" },
+    take: probationReserve,
+  });
+  const alive = await prisma.token.findMany({
+    where: { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } },
+    orderBy: { firstSeenAt: "desc" },
+    take: Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length),
+  });
+  return { tracked: [...alive, ...probation], alive: alive.length };
+}
+
+/**
+ * Rolls every match's recorded peak forward from the snapshots and live pings already written -
+ * no network access, no upstream cost. Runs on the scan cadence rather than in the nightly
+ * outcome job because a once-a-day price sample simply cannot see a token that runs and retraces
+ * inside a single day, which is most of them. See recordMatchPeaks for the full reasoning.
+ *
+ * Called at the END of a cycle, not before the matching: it is bookkeeping over data already
+ * banked, and it used to sit between the watchlist refresh and the candidate loop - so every
+ * alert waited on a sweep whose cost grows with the database rather than with anything the alert
+ * needs. Called on the nothing-in-band path too, since a quiet cycle still has peaks to record.
+ */
+async function rollPeaksForward(env: Env): Promise<void> {
+  try {
+    // Scoped to tokens observed in the last few cycles, except on the first pass after start-up.
+    // That first full sweep is what retroactively recovers peaks from history already in the
+    // database (and what fills the Leaderboard on deploy); every pass after it only has to look
+    // at tokens something actually moved, so the per-cycle cost tracks how much was scanned rather
+    // than how much history has accumulated.
+    const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
+    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
+    fullPeakSweepDone = true;
+    await repairOutcomeBookkeeping(env.SNAPSHOT_RETENTION_DAYS);
+  } catch (err) {
+    // Bookkeeping over data already banked - never worth failing a scan cycle over.
+    logger.warn("failed to record match peaks", { error: String(err) });
+  }
 }
 
 function toWatchlistCandidate(coin: DiscoveredCoin): WatchlistCandidate {
@@ -341,7 +419,7 @@ async function processCandidate(
   watchlistFirstSeenAt: Date | undefined,
   onChainProfile: OnChainProfile | null,
   activeFilters: FilterWithUser[],
-  earliestActivityByAddress: Map<string, Date | null> | null,
+  earliestActivityByAddress: Map<string, Date | null>,
   bot: AlertBot,
   env: Env,
 ): Promise<number> {
@@ -401,47 +479,27 @@ async function processCandidate(
     },
   });
 
-  const snapshot = await prisma.tokenSnapshot.create({
-    data: {
-      tokenId: token.id,
-      priceUsd: scored.priceUsd,
-      marketCapUsd: scored.marketCapUsd,
-      liquidityUsd: scored.liquidityUsd,
-      volume24hUsd: scored.volume24hUsd,
-      volumeToMcapRatio: scored.volumeToMcapRatio,
-      buys24h: scored.buys24h,
-      sells24h: scored.sells24h,
-      holderCount: scored.holderCount,
-      holderGrowthPct: scored.holderGrowthPct,
-      top10HolderPct: scored.top10HolderPct,
-      devWalletPct: scored.devWalletPct,
-      mintAuthorityActive: scored.mintAuthorityActive,
-      freezeAuthorityActive: scored.freezeAuthorityActive,
-      lpBurned: scored.lpBurned,
-      ageMinutes: scored.ageMinutes,
-      score: scored.score.total,
-      scoreMomentum: scored.score.momentum,
-      scoreHolderHealth: scored.score.holderHealth,
-      scoreAge: scored.score.age,
-      scoreNarrative: scored.score.narrative,
-      riskScore: scored.riskScore,
-      riskFlags: scored.riskFlags ?? [],
-      freshTop10WalletPct: scored.freshTop10WalletPct,
-      isMayhemMode: scored.isMayhemMode,
-      graduated: scored.graduated,
-      rugScreenPassed: scored.rugScreen.passed,
-      rugScreenReasons: scored.rugScreen.reasons,
-    },
-  });
+  const snapshot = await prisma.tokenSnapshot.create({ data: snapshotDataFor(token.id, scored) });
 
   if (!scored.rugScreen.passed) {
     return 0;
   }
 
+  // User matching first, and nothing slower in front of it: this is the product, and every
+  // millisecond here is a millisecond between the backend knowing about a token and the person
+  // who asked for it seeing it. The curated/training writes below are the product's homework -
+  // they used to run ahead of this, which put two or three DB writes in front of every alert.
+  const matchCount = await createMatchesForCandidate({
+    token,
+    snapshot,
+    scored,
+    activeFilters,
+    bot,
+  });
+
   // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample
   // for why it's every candidate and not just matched ones - then let the curator decide whether
-  // this moment goes on the public feed. Never worth failing the candidate over: user matching
-  // below is the product, this is the product's homework.
+  // this moment goes on the public feed. Never worth failing the candidate over.
   try {
     const sample = await recordCandidateSample(token.id, scored, env);
     await maybeEmitCuratedAlert(token, scored, sample, env, snapshot.id);
@@ -450,50 +508,6 @@ async function processCandidate(
       mint: candidate.mintAddress,
       error: String(err),
     });
-  }
-
-  let matchCount = 0;
-  for (const filter of activeFilters) {
-    if (!matchesFilter(scored, filter)) continue;
-
-    const recentlyAlerted = await prisma.match.findFirst({
-      where: {
-        userId: filter.userId,
-        tokenId: token.id,
-        filterId: filter.id,
-        matchedAt: { gt: new Date(Date.now() - ALERT_COOLDOWN_HOURS * 3_600_000) },
-      },
-    });
-    if (recentlyAlerted) continue;
-
-    const telegramLink = filter.user.telegramLink;
-    const shouldRealtimeAlert =
-      telegramLink?.chatId && (telegramLink.alertMode === "REALTIME" || telegramLink.alertMode === "BOTH");
-
-    // Send (if applicable) before persisting, so deliveredTelegram reflects what actually
-    // happened rather than what we merely intended - sendMessage swallows its own errors and
-    // reports success/failure via its return value, it never throws.
-    const delivered = shouldRealtimeAlert
-      ? await bot.sendMessage(telegramLink.chatId!, formatRealtimeAlert(token, snapshot, scored.score.total))
-      : false;
-
-    const match = await prisma.match.create({
-      data: {
-        userId: filter.userId,
-        filterId: filter.id,
-        tokenId: token.id,
-        snapshotId: snapshot.id,
-        score: scored.score.total,
-        deliveredDashboard: true,
-        deliveredTelegram: delivered,
-      },
-    });
-    // Nudges any API instance holding this user's dashboard open so the card appears now rather
-    // than on their next poll. After the create, never before: the row has to exist by the time a
-    // client acts on the notification. Swallows its own errors - the match is already committed
-    // and the client's fallback poll covers a missed nudge.
-    await notifyMatchCreated({ userId: filter.userId, matchId: match.id });
-    matchCount += 1;
   }
 
   return matchCount;
@@ -511,15 +525,12 @@ function buildOnChainProfile(
   mintAddress: string,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
-  mayhemByMint: Map<string, MayhemModeResult>,
 ): OnChainProfile | null {
-  // Left undefined (not false) when the check failed - the rug screen rejects an unverified mint,
-  // and defaulting to false here would quietly turn that rejection into a pass.
-  const mayhem = mayhemByMint.get(mintAddress);
-  const isMayhemMode = mayhem?.status === "found" ? mayhem.isMayhemMode : undefined;
-
+  // isMayhemMode is deliberately left unset here and filled in later for the candidates that
+  // earn a lookup (see the two-pass assembly in runScanCycle). Unset means unverified, which the
+  // rug screen rejects - so a candidate that never gets checked is never accidentally admitted.
   const rugProfile = rugProfiles.get(mintAddress);
-  if (rugProfile) return { ...rugProfile, isMayhemMode };
+  if (rugProfile) return rugProfile;
 
   const authorities = mintAuthorities.get(mintAddress);
   if (!authorities || authorities.status !== "found") return null;
@@ -529,23 +540,20 @@ function buildOnChainProfile(
     mintAuthorityActive: authorities.mintAuthorityActive,
     freezeAuthorityActive: authorities.freezeAuthorityActive,
     lpBurned: false,
-    isMayhemMode,
   };
 }
 
 /**
  * Fills in freshTop10WalletPct from the cycle's already-resolved earliest-activity map (see
  * resolveEarliestActivity in walletFreshness.ts) whenever the profile actually has a holder list
- * to check. Purely a synchronous lookup + percentage calc - no RPC call happens here.
- *
- * A null map means the freshness pass was skipped entirely this cycle (nobody filters on it), so
- * the field is left undefined - recording 0% would claim we checked and found none fresh.
+ * to check. Purely a synchronous lookup + percentage calc - no RPC call happens here. A holder
+ * the per-cycle lookup budget deferred makes computeFreshPct return null (unknown), which
+ * records as undefined rather than a percentage of a part-checked list.
  */
 function withFreshWalletPct(
   onChain: OnChainProfile | null,
-  earliestActivityByAddress: Map<string, Date | null> | null,
+  earliestActivityByAddress: Map<string, Date | null>,
 ): OnChainProfile | null {
-  if (!earliestActivityByAddress) return onChain;
   if (!onChain?.top10HolderAddresses?.length) return onChain;
   const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
   return { ...onChain, freshTop10WalletPct: freshTop10WalletPct ?? undefined };

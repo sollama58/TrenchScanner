@@ -11,6 +11,7 @@ export type HeartbeatJob =
   | "outcome-tracking"
   | "live-price"
   | "burn-scan"
+  | "fast-match"
   | "candidate-watch"
   | "curator-training";
 

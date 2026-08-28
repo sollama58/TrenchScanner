@@ -95,15 +95,19 @@ function alertRow(overrides: Record<string, unknown> = {}) {
       snapshots: [],
     },
     candidateOutcome: {
+      anchorAt: new Date(),
       anchorPriceUsd: 0.001,
       peak1hPriceUsd: 0.0018,
       low1hPriceUsd: 0.0009,
+      lowBefore2xPriceUsd: 0.0009,
       peak24hPriceUsd: 0.0018,
       hit2xAt: null,
       finalizedAt: null,
       peak1hReturnPct: null,
       maxDrawdown1hPct: null,
+      hit2xIn15m: null,
       hit2xIn1h: null,
+      hit4xIn1h: null,
       disqualified: null,
       peak24hReturnPct: null,
     },
@@ -166,15 +170,20 @@ function liveRow(
   overrides: Partial<NonNullable<Parameters<typeof resolveOutcome>[0]["candidateOutcome"]>> = {},
 ) {
   return {
+    // Anchored just now: inside the 15-minute win window, so the default row is still watching.
+    anchorAt: new Date(),
     anchorPriceUsd: 1,
     peak1hPriceUsd: 1.4,
     low1hPriceUsd: 0.9,
+    lowBefore2xPriceUsd: 0.9,
     peak24hPriceUsd: 1.4,
     hit2xAt: null,
     finalizedAt: null,
     peak1hReturnPct: null,
     maxDrawdown1hPct: null,
+    hit2xIn15m: null,
     hit2xIn1h: null,
+    hit4xIn1h: null,
     disqualified: null,
     peak24hReturnPct: null,
     ...overrides,
@@ -186,7 +195,9 @@ function alert(overrides: Partial<Parameters<typeof resolveOutcome>[0]> = {}) {
     createdAt: new Date(),
     peak1hReturnPct: null,
     maxDrawdown1hPct: null,
+    hit2xIn15m: null,
     hit2xIn1h: null,
+    hit4xIn1h: null,
     disqualified: null,
     peak24hReturnPct: null,
     outcomeFinalizedAt: null,
@@ -194,6 +205,8 @@ function alert(overrides: Partial<Parameters<typeof resolveOutcome>[0]> = {}) {
     ...overrides,
   };
 }
+
+const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
 
 describe("resolveOutcome", () => {
   it("shows a watching alert's running peaks from the live link", () => {
@@ -216,40 +229,106 @@ describe("resolveOutcome", () => {
     expect(view.peak1hReturnPct).toBeCloseTo(110);
   });
 
+  it("counts down the 15-minute win window, not the hour the row is measured over", () => {
+    const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(5) }) }));
+    expect(view.status).toBe("watching");
+    expect(view.minutesLeft).toBe(10);
+  });
+
+  it("calls a miss as soon as the win window closes, without waiting for the hour", () => {
+    // 20 minutes in: no 2x, so the verdict is already settled even though the row keeps being
+    // measured to the hour for its peak.
+    const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(20) }) }));
+    expect(view.status).toBe("missed");
+    expect(view.minutesLeft).toBeNull();
+    expect(view.finalized).toBe(false);
+  });
+
+  it("a 2x that lands after the win window is a miss, however far it later ran", () => {
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(45),
+          hit2xAt: minutesAgo(20), // 25 minutes after the anchor - too late
+          peak1hPriceUsd: 3.0,
+          peak24hPriceUsd: 3.0,
+        }),
+      }),
+    );
+    expect(view.status).toBe("missed");
+    expect(view.hit2x).toBe(false);
+  });
+
+  it("reports the 4x goal once the run clears it", () => {
+    const watching = resolveOutcome(
+      alert({ candidateOutcome: liveRow({ hit2xAt: new Date(), peak1hPriceUsd: 2.2 }) }),
+    );
+    expect(watching.hitGoal).toBeNull(); // still climbing - not a "no" yet
+
+    const reached = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({ hit2xAt: new Date(), peak1hPriceUsd: 4.5, peak24hPriceUsd: 4.5 }),
+      }),
+    );
+    expect(reached.hitGoal).toBe(true);
+  });
+
   it("reads the verdict from a finalized live row", () => {
     const view = resolveOutcome(
       alert({
         candidateOutcome: liveRow({
+          anchorAt: minutesAgo(70),
           finalizedAt: new Date(),
+          hit2xIn15m: true,
           hit2xIn1h: true,
+          hit4xIn1h: false,
           disqualified: false,
-          peak1hReturnPct: 160,
-          maxDrawdown1hPct: -12,
+          peak1hPriceUsd: 2.6,
           peak24hPriceUsd: 3.4,
         }),
       }),
     );
     expect(view.status).toBe("won");
-    expect(view.peak1hReturnPct).toBe(160);
+    expect(view.hitGoal).toBe(false);
+    expect(view.peak1hReturnPct).toBeCloseTo(160);
     // Winner still on its 24h watch: the 24h number is the running peak, and nothing is final.
     expect(view.peak24hReturnPct).toBeCloseTo(240);
     expect(view.finalized).toBe(false);
   });
 
-  it("labels a disqualified 2x as such, not as a win", () => {
-    const view = resolveOutcome(
+  it("labels a disqualified fast 2x as such, not as a win", () => {
+    const stored = resolveOutcome(
       alert({
-        candidateOutcome: liveRow({ finalizedAt: new Date(), hit2xIn1h: true, disqualified: true }),
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(70),
+          finalizedAt: new Date(),
+          hit2xIn15m: true,
+          disqualified: true,
+        }),
       }),
     );
-    expect(view.status).toBe("disqualified");
+    expect(stored.status).toBe("disqualified");
+
+    // And the same call, derived live from the aggregates before the row finalizes.
+    const live = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(20),
+          hit2xAt: minutesAgo(12),
+          lowBefore2xPriceUsd: 0.4,
+          peak1hPriceUsd: 2.2,
+        }),
+      }),
+    );
+    expect(live.status).toBe("disqualified");
   });
 
   it("falls back to the copied columns after the training row is pruned", () => {
     const view = resolveOutcome(
       alert({
         candidateOutcome: null,
-        hit2xIn1h: true,
+        hit2xIn15m: true,
+        hit4xIn1h: true,
         disqualified: false,
         peak1hReturnPct: 130,
         maxDrawdown1hPct: -8,
@@ -258,9 +337,25 @@ describe("resolveOutcome", () => {
       }),
     );
     expect(view.status).toBe("won");
+    expect(view.hitGoal).toBe(true);
     expect(view.peak1hReturnPct).toBe(130);
     expect(view.peak24hReturnPct).toBe(410);
     expect(view.finalized).toBe(true);
+  });
+
+  it("renders a pre-15m-bar alert from the only verdict it has", () => {
+    // Graded when the bar was 2x-in-1h and its training row has since been pruned, so no
+    // hit2xIn15m was ever written. Showing that historical win beats claiming "unknown".
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: null,
+        hit2xIn15m: null,
+        hit2xIn1h: true,
+        disqualified: false,
+        outcomeFinalizedAt: new Date(),
+      }),
+    );
+    expect(view.status).toBe("won");
   });
 
   it("admits ignorance when neither source exists, instead of guessing", () => {

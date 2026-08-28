@@ -11,6 +11,10 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   scan: 10 * 60_000,
   // Runs every minute, so a few missed passes is already a real signal - unlike the daily jobs.
   "live-price": 10 * 60_000,
+  // Every FAST_MATCH_INTERVAL_SECONDS (15s by default). This is the path users actually feel -
+  // while it is down alerts still arrive, but on the full cycle's minute rather than in seconds,
+  // so it is worth surfacing quickly.
+  "fast-match": 5 * 60_000,
   // Every few minutes. Worth surfacing promptly: while this is down, someone who burned and closed
   // the tab is locked out of what they paid for, and nothing else will notice.
   "burn-scan": 20 * 60_000,
@@ -20,7 +24,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   digest: 26 * 3_600_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
-  "curator-training": 26 * 3_600_000,
+  // Runs every CURATOR_TRAINING_INTERVAL_HOURS (4h by default), not daily - same "expected
+  // cadence + 2h" buffer as the daily jobs above, scaled to its own interval.
+  "curator-training": 6 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 const MAX_ERROR_LENGTH = 300;

@@ -17,6 +17,23 @@ export interface CandidateToken {
   volume24hUsd?: number;
   buys24h?: number;
   sells24h?: number;
+  /**
+   * Short-window market data, from the same DexScreener pair response the 24h figures come from.
+   * These carry the actual momentum signal for tokens whose whole life is measured in hours: a
+   * 24h aggregate on a 45-minute-old token is a lifetime total, and a token that pumped all
+   * morning but has been dumping for 15 minutes still shows a strong 24h buy ratio. Optional
+   * because DexScreener can omit any bucket.
+   */
+  priceChange5mPct?: number;
+  priceChange1hPct?: number;
+  priceChange6hPct?: number;
+  priceChange24hPct?: number;
+  volume5mUsd?: number;
+  volume1hUsd?: number;
+  buys5m?: number;
+  sells5m?: number;
+  buys1h?: number;
+  sells1h?: number;
   pairCreatedAt?: Date;
   hasTwitter?: boolean;
   hasTelegram?: boolean;

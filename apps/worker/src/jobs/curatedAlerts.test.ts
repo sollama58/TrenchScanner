@@ -1,7 +1,13 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { prisma, loadEnv, type ScoredToken } from "@trenchscanner/core";
+import {
+  prisma,
+  loadEnv,
+  CANDIDATE_FEATURE_NAMES,
+  CURATOR_MODEL_KIND,
+  type ScoredToken,
+} from "@trenchscanner/core";
 import { maybeEmitCuratedAlert, resetCuratorModelCache } from "./curatedAlerts.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
 
@@ -34,11 +40,12 @@ describe.skipIf(!dbAvailable)("maybeEmitCuratedAlert", () => {
   const env = loadEnv();
 
   beforeAll(async () => {
-    // These tests exercise the HEURISTIC path - an active trained model left over from anything
-    // else would silently take the decision instead. Files run serially (vitest.config.ts), so
-    // clearing here is sufficient, not just hopeful.
+    // These tests exercise the HEURISTIC path with no bench - an active trained model left over
+    // from anything else would silently take the live decision, and a leftover candidate would
+    // shadow it. Files run serially (vitest.config.ts), so clearing here is sufficient, not just
+    // hopeful.
     await prisma.curatorModel.updateMany({
-      where: { status: "active" },
+      where: { status: { in: ["active", "candidate"] } },
       data: { status: "retired", retiredAt: new Date() },
     });
     resetCuratorModelCache();
@@ -134,5 +141,159 @@ describe.skipIf(!dbAvailable)("maybeEmitCuratedAlert", () => {
     expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(0);
     // Only the cycle's own training sample exists - rejection created nothing.
     expect(await prisma.candidateOutcome.count({ where: { tokenId: token.id } })).toBe(1);
+  });
+});
+
+/**
+ * A trained-model params blob that says yes to everything: zero weights, a hugely positive bias
+ * (sigmoid(5) = 0.99), threshold 0.5. Enough to exercise who-decides-what without caring what a
+ * real model would think of the fixture.
+ */
+function alwaysYesParams() {
+  const n = CANDIDATE_FEATURE_NAMES.length;
+  return {
+    kind: CURATOR_MODEL_KIND,
+    featureNames: [...CANDIDATE_FEATURE_NAMES],
+    means: new Array(n).fill(0),
+    stdevs: new Array(n).fill(1),
+    weights: new Array(2 * n).fill(0),
+    bias: 5,
+    threshold: 0.5,
+  };
+}
+
+describe.skipIf(!dbAvailable)("shadow emissions", () => {
+  const env = loadEnv();
+  const modelIds: string[] = [];
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.curatorModel.deleteMany({ where: { id: { in: modelIds } } });
+    resetCuratorModelCache();
+  });
+
+  it("banks the bench model's pick while the heuristic curates live, sharing the alert's anchor", async () => {
+    await prisma.curatorModel.updateMany({
+      where: { status: { in: ["active", "candidate"] } },
+      data: { status: "retired", retiredAt: new Date() },
+    });
+    const candidateModel = await prisma.curatorModel.create({
+      data: {
+        kind: CURATOR_MODEL_KIND,
+        params: alwaysYesParams(),
+        trainingRows: 2_000,
+        trainingFrom: new Date(Date.now() - 30 * 86_400_000),
+        trainingTo: new Date(),
+        evalMetrics: {},
+        status: "candidate",
+      },
+    });
+    modelIds.push(candidateModel.id);
+    resetCuratorModelCache();
+
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-shadow-model` } });
+    const scored = curatableFixture(token.mintAddress);
+    const sample = await recordCandidateSample(token.id, scored, env);
+    expect(await maybeEmitCuratedAlert(token, scored, sample, env)).toBe(true);
+
+    // The live feed is still the heuristic's...
+    const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: token.id } });
+    expect(alert.source).toBe("heuristic-v1");
+    // ...and the bench model's would-be pick landed on its own ledger, graded from the very
+    // same anchor row the real alert grades from.
+    const shadow = await prisma.curatedShadowEmission.findFirstOrThrow({
+      where: { tokenId: token.id },
+    });
+    expect(shadow.source).toBe(candidateModel.id);
+    expect(shadow.candidateOutcomeId).toBe(sample!.id);
+
+    // Shadow cooldown is per token, same as the real feed: a second cycle adds nothing.
+    expect(await maybeEmitCuratedAlert(token, scored, null, env)).toBe(false);
+    expect(await prisma.curatedShadowEmission.count({ where: { tokenId: token.id } })).toBe(1);
+  });
+
+  it("the heuristic shadows the model once a model holds the job", async () => {
+    await prisma.curatorModel.updateMany({
+      where: { status: { in: ["active", "candidate"] } },
+      data: { status: "retired", retiredAt: new Date() },
+    });
+    const activeModel = await prisma.curatorModel.create({
+      data: {
+        kind: CURATOR_MODEL_KIND,
+        params: alwaysYesParams(),
+        trainingRows: 2_000,
+        trainingFrom: new Date(Date.now() - 30 * 86_400_000),
+        trainingTo: new Date(),
+        evalMetrics: {},
+        status: "active",
+        activatedAt: new Date(),
+      },
+    });
+    modelIds.push(activeModel.id);
+    resetCuratorModelCache();
+
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-shadow-heuristic` } });
+    const scored = curatableFixture(token.mintAddress);
+    const sample = await recordCandidateSample(token.id, scored, env);
+    expect(await maybeEmitCuratedAlert(token, scored, sample, env)).toBe(true);
+
+    const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: token.id } });
+    expect(alert.source).toBe(activeModel.id);
+    const shadow = await prisma.curatedShadowEmission.findFirstOrThrow({
+      where: { tokenId: token.id },
+    });
+    expect(shadow.source).toBe("heuristic-v1");
+
+    await prisma.curatorModel.update({
+      where: { id: activeModel.id },
+      data: { status: "retired", retiredAt: new Date() },
+    });
+    resetCuratorModelCache();
+  });
+
+  it("a shadow-only pick gets its own fresh anchor when the live side stayed quiet", async () => {
+    await prisma.curatorModel.updateMany({
+      where: { status: { in: ["active", "candidate"] } },
+      data: { status: "retired", retiredAt: new Date() },
+    });
+    const candidateModel = await prisma.curatorModel.create({
+      data: {
+        kind: CURATOR_MODEL_KIND,
+        params: alwaysYesParams(),
+        trainingRows: 2_000,
+        trainingFrom: new Date(Date.now() - 30 * 86_400_000),
+        trainingTo: new Date(),
+        evalMetrics: {},
+        status: "candidate",
+      },
+    });
+    modelIds.push(candidateModel.id);
+    resetCuratorModelCache();
+
+    // The heuristic rejects this (thin liquidity), the bench model would emit it - and the
+    // cycle's sample is a stale reuse, so the shadow row must NOT grade from the old anchor.
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-shadow-only` } });
+    const scored = curatableFixture(token.mintAddress, { liquidityUsd: 2_000 });
+    const first = await recordCandidateSample(token.id, scored, env);
+    await prisma.candidateOutcome.update({
+      where: { id: first!.id },
+      data: { anchorAt: new Date(Date.now() - 30 * 60_000), anchorPriceUsd: 0.00005 },
+    });
+    const reused = await recordCandidateSample(token.id, scored, env);
+    expect(reused).toEqual({ id: first!.id, created: false });
+
+    expect(await maybeEmitCuratedAlert(token, scored, reused, env)).toBe(false);
+    expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(0);
+
+    const shadow = await prisma.curatedShadowEmission.findFirstOrThrow({
+      where: { tokenId: token.id },
+    });
+    expect(shadow.candidateOutcomeId).not.toBe(first!.id);
+    const anchorRow = await prisma.candidateOutcome.findUniqueOrThrow({
+      where: { id: shadow.candidateOutcomeId! },
+    });
+    expect(anchorRow.anchorPriceUsd).toBe(0.0001);
+    expect(anchorRow.extended24h).toBe(false); // shadow grading needs the 1h labels alone
   });
 });

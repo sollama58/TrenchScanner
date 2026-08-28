@@ -18,58 +18,98 @@ import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutco
 const logger = createLogger("curated-alerts");
 
 /**
- * The active trained curator, cached briefly: emission runs per candidate per scan cycle, and
- * the active model changes at most once a night. The TTL is also the takeover latency after the
- * training job promotes - a few minutes of the old curator finishing its shift.
+ * The curator models in play, cached briefly: emission runs per candidate per scan cycle, and
+ * the roster changes at most once per training run. The TTL is also the takeover latency after
+ * the training job promotes - a few minutes of the old curator finishing its shift.
  */
 const MODEL_CACHE_TTL_MS = 5 * 60_000;
 
-interface ActiveModel {
+interface CuratorModelRef {
   id: string;
   params: TrainedCuratorParams;
 }
 
-let modelCache: { fetchedAt: number; model: ActiveModel | null } | null = null;
+interface CuratorRoster {
+  /** The promoted model currently holding the job, if any. */
+  active: CuratorModelRef | null;
+  /** The newest trained-but-not-promoted model - the bench side while the heuristic is live. */
+  newestCandidate: CuratorModelRef | null;
+}
 
-/** Test hook: forget the cached model so the next emission re-reads the table. */
+let modelCache: { fetchedAt: number; roster: CuratorRoster } | null = null;
+
+/** Test hook: forget the cached models so the next emission re-reads the table. */
 export function resetCuratorModelCache(): void {
   modelCache = null;
 }
 
-async function activeCuratorModel(): Promise<ActiveModel | null> {
+async function curatorRoster(): Promise<CuratorRoster> {
   if (modelCache && Date.now() - modelCache.fetchedAt < MODEL_CACHE_TTL_MS) {
-    return modelCache.model;
+    return modelCache.roster;
   }
   // Kind-filtered: a future model family this build doesn't understand must be ignored, not
   // half-applied through a params shape it happens to overlap with.
-  const row = await prisma.curatorModel.findFirst({
-    where: { status: "active", kind: CURATOR_MODEL_KIND },
-    orderBy: { activatedAt: "desc" },
-  });
+  const toRef = (row: { id: string; params: unknown } | null): CuratorModelRef | null =>
+    row ? { id: row.id, params: row.params as TrainedCuratorParams } : null;
+  const [active, newestCandidate] = await Promise.all([
+    prisma.curatorModel.findFirst({
+      where: { status: "active", kind: CURATOR_MODEL_KIND },
+      orderBy: { activatedAt: "desc" },
+    }),
+    prisma.curatorModel.findFirst({
+      where: { status: "candidate", kind: CURATOR_MODEL_KIND },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
   modelCache = {
     fetchedAt: Date.now(),
-    model: row ? { id: row.id, params: row.params as unknown as TrainedCuratorParams } : null,
+    roster: { active: toRef(active), newestCandidate: toRef(newestCandidate) },
   };
-  return modelCache.model;
+  return modelCache.roster;
 }
 
-/**
- * The curator decision, from whoever currently holds the job: the promoted model when one is
- * active, the hand-tuned heuristic otherwise. A model decision's source is the CuratorModel row
- * id, so every alert on the feed is traceable to the exact weights (and walk-forward evidence)
- * that emitted it.
- */
-async function decideCuration(scored: ScoredToken, env: Env): Promise<CurationDecision> {
-  const model = await activeCuratorModel();
-  if (!model) return evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE);
-
+function decideWithModel(
+  model: CuratorModelRef,
+  scored: ScoredToken,
+  opts: { withReasons: boolean },
+): CurationDecision {
   const features = buildCandidateFeatures(scored);
   const probability = scoreCandidateWithModel(model.params, features);
   return {
     curate: probability >= model.params.threshold,
     confidence: probability * 100,
-    reasons: topModelReasons(model.params, features),
+    // Reasons cost a full pass over the weights and only real alert cards show them - the
+    // shadow ledger stores none.
+    reasons: opts.withReasons ? topModelReasons(model.params, features) : [],
     source: model.id,
+  };
+}
+
+/**
+ * Both curator decisions for this candidate: the LIVE one from whoever currently holds the job
+ * (the promoted model when one is active, the hand-tuned heuristic otherwise), and the SHADOW
+ * one from the bench - the heuristic while a model is live, the newest candidate model while the
+ * heuristic is. The shadow side never reaches subscribers; it exists so both curators build a
+ * production track record simultaneously (see CuratedShadowEmission) instead of the bench only
+ * ever being judged in walk-forward backtests. A model decision's source is the CuratorModel row
+ * id, so every emission on either ledger is traceable to the exact weights that made it.
+ */
+async function decideCurations(
+  scored: ScoredToken,
+  env: Env,
+): Promise<{ live: CurationDecision; shadow: CurationDecision | null }> {
+  const roster = await curatorRoster();
+  if (roster.active) {
+    return {
+      live: decideWithModel(roster.active, scored, { withReasons: true }),
+      shadow: evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE),
+    };
+  }
+  return {
+    live: evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE),
+    shadow: roster.newestCandidate
+      ? decideWithModel(roster.newestCandidate, scored, { withReasons: false })
+      : null,
   };
 }
 
@@ -108,51 +148,117 @@ export async function maybeEmitCuratedAlert(
     return false;
   }
 
-  const decision = await decideCuration(scored, env);
-  if (!decision.curate) return false;
+  const { live, shadow } = await decideCurations(scored, env);
 
+  let liveAnchor: CandidateSampleRef | null = null;
+  let emitted = false;
+  if (live.curate) {
+    const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
+    const recentlyAlerted = await prisma.curatedAlert.findFirst({
+      where: { tokenId: token.id, createdAt: { gt: cooldownCutoff } },
+      select: { id: true },
+    });
+    if (!recentlyAlerted) {
+      // Anchor the alert's outcome tracking. A sample created THIS cycle is anchored seconds ago
+      // and serves as-is (just flipped onto the 24h watch); a reused older one gets a fresh row
+      // instead.
+      let anchor = cycleSample?.created ? cycleSample : null;
+      if (anchor) {
+        await prisma.candidateOutcome.update({ where: { id: anchor.id }, data: { extended24h: true } });
+      } else {
+        anchor = await recordCandidateSample(token.id, scored, env, {
+          bypassSpacing: true,
+          extended24h: true,
+        });
+      }
+      // A zero-price anchor is nothing an outcome could ever be measured from - skip emission.
+      if (anchor) {
+        liveAnchor = anchor;
+        const alert = await prisma.curatedAlert.create({
+          data: {
+            tokenId: token.id,
+            candidateOutcomeId: anchor.id,
+            snapshotId: snapshotId ?? null,
+            source: live.source,
+            confidence: live.confidence,
+            reasons: live.reasons,
+            anchorPriceUsd: scored.priceUsd,
+            anchorMcapUsd: scored.marketCapUsd,
+          },
+        });
+        // After the create, never before - same contract as notifyMatchCreated: the row must
+        // exist by the time a connected dashboard reacts to the nudge. Failure is its own logged
+        // non-event.
+        await notifyCuratedAlert({ alertId: alert.id });
+
+        logger.info("curated alert emitted", {
+          mint: token.mintAddress,
+          symbol: scored.symbol,
+          confidence: live.confidence,
+          mcap: scored.marketCapUsd,
+          reasons: live.reasons,
+        });
+        emitted = true;
+      }
+    }
+  }
+
+  // The bench curator's ledger, written whether or not the live side emitted. Bookkeeping only:
+  // a failure here must never cost a real alert, and nothing about it reaches subscribers.
+  if (shadow?.curate) {
+    try {
+      await recordShadowEmission(token, scored, shadow, liveAnchor ?? cycleSample, env);
+    } catch (err) {
+      logger.warn("failed to record shadow emission", { mint: token.mintAddress, error: String(err) });
+    }
+  }
+
+  return emitted;
+}
+
+/**
+ * Writes one CuratedShadowEmission row for a bench-curator pick, under the same per-token
+ * cooldown as the real feed so the two ledgers' emission rates stay comparable. Anchoring
+ * follows the real feed's discipline for the same reason its grades have to mean the same
+ * thing: a row anchored this cycle (the live alert's fresh anchor, or the cycle's own sample)
+ * is seconds old and serves as-is; anything staler gets a fresh anchor row, so a shadow pick's
+ * outcome is measured from the pick's own moment - never from wherever the hourly sampler last
+ * happened to anchor. No 24h extension: shadow grading needs the 1h labels alone.
+ */
+async function recordShadowEmission(
+  token: { id: string; mintAddress: string },
+  scored: ScoredToken,
+  decision: CurationDecision,
+  cycleAnchor: CandidateSampleRef | null,
+  env: Env,
+): Promise<void> {
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
-  const recentlyAlerted = await prisma.curatedAlert.findFirst({
+  const recent = await prisma.curatedShadowEmission.findFirst({
     where: { tokenId: token.id, createdAt: { gt: cooldownCutoff } },
     select: { id: true },
   });
-  if (recentlyAlerted) return false;
+  if (recent) return;
 
-  // Anchor the alert's outcome tracking. A sample created THIS cycle is anchored seconds ago and
-  // serves as-is (just flipped onto the 24h watch); a reused older one gets a fresh row instead.
-  let anchor = cycleSample?.created ? cycleSample : null;
-  if (anchor) {
-    await prisma.candidateOutcome.update({ where: { id: anchor.id }, data: { extended24h: true } });
-  } else {
-    anchor = await recordCandidateSample(token.id, scored, env, {
-      bypassSpacing: true,
-      extended24h: true,
-    });
+  let anchor = cycleAnchor?.created ? cycleAnchor : null;
+  if (!anchor) {
+    anchor = await recordCandidateSample(token.id, scored, env, { bypassSpacing: true });
   }
-  if (!anchor) return false; // zero-price anchor - nothing an outcome could ever be measured from
+  if (!anchor) return; // zero-price anchor - ungradeable, same as the real feed
 
-  const alert = await prisma.curatedAlert.create({
+  await prisma.curatedShadowEmission.create({
     data: {
       tokenId: token.id,
       candidateOutcomeId: anchor.id,
-      snapshotId: snapshotId ?? null,
       source: decision.source,
       confidence: decision.confidence,
-      reasons: decision.reasons,
       anchorPriceUsd: scored.priceUsd,
       anchorMcapUsd: scored.marketCapUsd,
     },
   });
-  // After the create, never before - same contract as notifyMatchCreated: the row must exist by
-  // the time a connected dashboard reacts to the nudge. Failure is its own logged non-event.
-  await notifyCuratedAlert({ alertId: alert.id });
 
-  logger.info("curated alert emitted", {
+  logger.info("shadow emission recorded", {
     mint: token.mintAddress,
-    symbol: scored.symbol,
+    source: decision.source,
     confidence: decision.confidence,
-    mcap: scored.marketCapUsd,
-    reasons: decision.reasons,
   });
-  return true;
 }
