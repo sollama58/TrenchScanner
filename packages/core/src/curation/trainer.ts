@@ -1,5 +1,5 @@
 import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, scoredFromFeatures } from "./features.js";
-import { evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator.js";
+import { curationRankScore, evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator.js";
 
 /**
  * The self-learning half of Curated Alerts: a weighted logistic regression trained on the
@@ -186,12 +186,13 @@ export function calibrateThreshold(
 
   // Twice the base rate, but never below an absolute floor: with a 0% base rate the relative
   // floor vanishes entirely, and an absurd target rate would then emit every row. The absolute
-  // floor is deliberately low - 2x-within-15-minutes is a much rarer event than the hour-long
-  // bar this pipeline started with, so predicted probabilities compress downward and a floor
-  // set for the old bar would quietly silence the feed. The RELATIVE floor is the real guard
-  // ("at least twice as likely as random"); this one only catches a degenerate market.
+  // floor stays low in absolute terms - 2x-within-15-minutes is a rare event, so predicted
+  // probabilities compress downward and a floor set for an hour-long bar would silence the feed
+  // - but 0.08 rather than the 0.04 it briefly sat at: the feed is a curated promise, and a call
+  // the model itself gives a one-in-twelve chance is not one. The RELATIVE floor is still the
+  // main guard ("at least twice as likely as random"); this one catches a degenerate market.
   const baseRate = rows.filter((r) => r.labelValue > 0).length / rows.length;
-  const floor = Math.max(0.04, Math.min(0.95, 2 * baseRate));
+  const floor = Math.max(0.08, Math.min(0.95, 2 * baseRate));
   return Math.max(byRate, floor);
 }
 
@@ -341,15 +342,30 @@ export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOption
       // letting them into meanLabelPerRow would raise the "beat blind chance" bar with wins
       // nobody was allowed to pick.
       const testEmittable = test.filter(inBand);
-      const modelEmitted = testEmittable.filter(
-        (r) => scoreCandidateWithModel(params, r.features) >= threshold,
+
+      // Both sides play the GOVERNED policy production actually runs (curation/governor.ts):
+      // clear your gate, then only the strongest targetPerHour x span picks make the feed,
+      // strongest conviction first. Grading all-above-threshold instead would score a firehose
+      // neither curator is allowed to be - and would flatter whichever side over-emits, since
+      // extra mediocre picks pad `emitted` while the governor would have cut exactly those.
+      const emissionBudget = Math.max(1, Math.round(opts.targetPerHour * spanHours));
+      const takeBest = (ranked: { row: TrainingRow; confidence: number }[]): TrainingRow[] =>
+        ranked
+          .sort((a, b) => b.confidence - a.confidence)
+          .slice(0, emissionBudget)
+          .map((x) => x.row);
+
+      const modelEmitted = takeBest(
+        testEmittable
+          .map((row) => ({ row, confidence: scoreCandidateWithModel(params, row.features) }))
+          .filter(({ confidence }) => confidence >= threshold),
       );
-      const heuristicEmitted = testEmittable.filter(
-        (r) =>
-          evaluateCandidateHeuristic(
-            scoredFromFeatures(r.features, r.anchorPriceUsd, r.anchorMcapUsd),
-            opts.heuristicMinScore,
-          ).curate,
+      const heuristicEmitted = takeBest(
+        testEmittable.flatMap((row) => {
+          const scored = scoredFromFeatures(row.features, row.anchorPriceUsd, row.anchorMcapUsd);
+          if (!evaluateCandidateHeuristic(scored, opts.heuristicMinScore).curate) return [];
+          return [{ row, confidence: curationRankScore(scored) }];
+        }),
       );
 
       folds.push({

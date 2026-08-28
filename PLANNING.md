@@ -113,10 +113,17 @@ Three shipping phases, each useful on its own:
   ultimate peak. Sampling is minutely, so intra-minute wicks are invisible - accepted; the label
   describes what a human at the same cadence could have traded.
 - **Phase B — the feed** (`CuratedAlert`, `/curated` routes, the Curated tab): a strict
-  quality-floor gate (see `curator.ts`) emits alerts - no quota, no forced picks; a dead hour
-  emits nothing. Every alert card publicly grades itself (watching / won / missed / disqualified,
-  peak returns), and the tab's learning panel shows the training-set size, the base win rate, and
-  the feed's own hit rate. Emission volume is steered by `CURATED_MIN_SCORE` (env) while young.
+  quality-floor gate (see `curator.ts`) nominates alerts, and an **emission governor**
+  (`curation/governor.ts`) paces them: the feed targets `CURATED_TARGET_PER_HOUR` (default 6 —
+  about one alert per ten minutes) as a ceiling, counted from the actual alerts table, with a
+  small burst allowance so a hot minute can put two out back-to-back. When a scan cycle brings
+  more gate-passing contenders than the pace allows, the strongest conviction wins the slot and
+  the rest re-contend next cycle; a dynamic quality bar (the conviction level the last day's
+  candidate flow says corresponds to the target rate) keeps quiet afternoons from trickling out
+  barely-over-the-floor picks. A ceiling, never a quota — a dead hour still emits nothing.
+  Every alert card publicly grades itself (watching / won / missed / disqualified, peak
+  returns), and the tab's learning panel shows the training-set size, the base win rate, the
+  feed's own hit rate, and the measured pace against the target.
 - **Phase C — the learner**: a job, run every `CURATOR_TRAINING_INTERVAL_HOURS`, trains a
   regularized model on the banked labels, evaluates it walk-forward against the heuristic on the
   same weeks of history, and promotes it to be the curator only when it wins repeatedly. Model

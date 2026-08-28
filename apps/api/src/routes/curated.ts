@@ -142,6 +142,7 @@ export async function registerCuratedRoutes(
    * model takes over when it beats this" is a promise subscribers can watch happen.
    */
   app.get("/stats", async () => {
+    const day1 = new Date(Date.now() - 86_400_000);
     const day7 = new Date(Date.now() - 7 * 86_400_000);
     const day30 = new Date(Date.now() - 30 * 86_400_000);
 
@@ -151,6 +152,7 @@ export async function registerCuratedRoutes(
       winners,
       alertsTotal,
       alerts7d,
+      alerts24h,
       graded,
       wins,
       goalHits,
@@ -165,6 +167,7 @@ export async function registerCuratedRoutes(
       prisma.candidateOutcome.count({ where: { labelValue: { gt: 0 } } }),
       prisma.curatedAlert.count(),
       prisma.curatedAlert.count({ where: { createdAt: { gte: day7 } } }),
+      prisma.curatedAlert.count({ where: { createdAt: { gte: day1 } } }),
       prisma.curatedAlert.count({ where: { hit2xIn15m: { not: null } } }),
       prisma.curatedAlert.count({ where: { hit2xIn15m: true, disqualified: false } }),
       prisma.curatedAlert.count({ where: { hit4xIn1h: true } }),
@@ -208,6 +211,15 @@ export async function registerCuratedRoutes(
       feed: {
         alertsTotal,
         alerts7d,
+        // The pace check: the emission governor holds the feed near pace.targetPerHour (see
+        // curation/governor.ts), and actualPerHour24h is the last day's measured rate - the
+        // panel shows the two side by side so "about one alert per ten minutes" is a promise
+        // subscribers can verify, not a slogan.
+        pace: {
+          targetPerHour: opts.env.CURATED_TARGET_PER_HOUR,
+          alerts24h,
+          actualPerHour24h: alerts24h / 24,
+        },
         graded,
         wins,
         hitRatePct: graded > 0 ? (wins / graded) * 100 : null,
