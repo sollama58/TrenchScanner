@@ -19,10 +19,11 @@ export const CANDIDATE_FEATURE_NAMES = [
   "buys24h",
   "sells24h",
   "buyRatio24h",
-  // Short-window momentum - the label is "2x within the NEXT hour", and these are the only
-  // features that can see what the price and flow were doing over the LAST one. All from the
-  // same DexScreener response the 24h figures come from; null on rows banked before they were
-  // captured (the trainer's missing-indicators absorb that cleanly).
+  // Short-window momentum - the label is "2x within the NEXT 15 minutes", and these are the only
+  // features that can see what the price and flow were doing over the minutes just before.
+  // Doubly load-bearing since the win window shrank: on a 15-minute question, a 24h aggregate is
+  // barely evidence. All from the same DexScreener response the 24h figures come from; null on
+  // rows banked before they were captured (the trainer's missing-indicators absorb that cleanly).
   "priceChange5mPct",
   "priceChange1hPct",
   "priceChange6hPct",

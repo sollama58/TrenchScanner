@@ -107,10 +107,10 @@ export async function registerCuratedRoutes(
     const [liveEmitted, liveGraded, liveWins, shadowEmitted, shadowGraded, shadowWins] = await Promise.all([
       prisma.curatedAlert.count({ where: { source: sourceFilter, createdAt: { gte: since } } }),
       prisma.curatedAlert.count({
-        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn1h: { not: null } },
+        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn15m: { not: null } },
       }),
       prisma.curatedAlert.count({
-        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn1h: true, disqualified: false },
+        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn15m: true, disqualified: false },
       }),
       prisma.curatedShadowEmission.count({
         where: { source: sourceFilter, createdAt: { gte: since } },
@@ -153,6 +153,7 @@ export async function registerCuratedRoutes(
       alerts7d,
       graded,
       wins,
+      goalHits,
       feedBest,
       activeModel,
       latestModel,
@@ -164,8 +165,9 @@ export async function registerCuratedRoutes(
       prisma.candidateOutcome.count({ where: { labelValue: { gt: 0 } } }),
       prisma.curatedAlert.count(),
       prisma.curatedAlert.count({ where: { createdAt: { gte: day7 } } }),
-      prisma.curatedAlert.count({ where: { hit2xIn1h: { not: null } } }),
-      prisma.curatedAlert.count({ where: { hit2xIn1h: true, disqualified: false } }),
+      prisma.curatedAlert.count({ where: { hit2xIn15m: { not: null } } }),
+      prisma.curatedAlert.count({ where: { hit2xIn15m: true, disqualified: false } }),
+      prisma.curatedAlert.count({ where: { hit4xIn1h: true } }),
       prisma.curatedAlert.aggregate({ _max: { peak24hReturnPct: true } }),
       prisma.curatorModel.findFirst({ where: { status: "active" }, orderBy: { activatedAt: "desc" } }),
       prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" } }),
@@ -209,6 +211,10 @@ export async function registerCuratedRoutes(
         graded,
         wins,
         hitRatePct: graded > 0 ? (wins / graded) * 100 : null,
+        // How often a win went on to reach the 4x goal within the hour - the ambition behind
+        // the bar, counted separately so it can't be mistaken for the hit rate itself.
+        goalHits,
+        goalRatePct: graded > 0 ? (goalHits / graded) * 100 : null,
         bestPeak24hReturnPct: feedBest._max.peak24hReturnPct,
       },
       // The two curators side by side on the last 30 days of PRODUCTION picks - each one's real

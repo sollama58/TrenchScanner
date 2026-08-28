@@ -153,7 +153,7 @@ export function trainCurator(
   return { kind: CURATOR_MODEL_KIND, featureNames, means, stdevs, weights, bias };
 }
 
-/** Predicted probability of a clean 2x-in-1h for one candidate's feature vector. */
+/** Predicted probability of a clean 2x-within-15-minutes for one candidate's feature vector. */
 export function scoreCandidateWithModel(
   params: Omit<TrainedCuratorParams, "threshold">,
   features: Record<string, number | null | undefined>,
@@ -184,11 +184,14 @@ export function calibrateThreshold(
   const allowed = Math.min(probs.length, Math.max(1, Math.round(targetPerHour * spanHours)));
   const byRate = probs[allowed - 1]!;
 
-  // Twice the base rate, but never below an absolute 10%: with a 0% base rate the relative floor
-  // vanishes entirely, and an absurd target rate would then emit every row. 10% predicted
-  // probability is already 2-5x the win rates this market actually produces.
+  // Twice the base rate, but never below an absolute floor: with a 0% base rate the relative
+  // floor vanishes entirely, and an absurd target rate would then emit every row. The absolute
+  // floor is deliberately low - 2x-within-15-minutes is a much rarer event than the hour-long
+  // bar this pipeline started with, so predicted probabilities compress downward and a floor
+  // set for the old bar would quietly silence the feed. The RELATIVE floor is the real guard
+  // ("at least twice as likely as random"); this one only catches a degenerate market.
   const baseRate = rows.filter((r) => r.labelValue > 0).length / rows.length;
-  const floor = Math.max(0.1, Math.min(0.95, 2 * baseRate));
+  const floor = Math.max(0.04, Math.min(0.95, 2 * baseRate));
   return Math.max(byRate, floor);
 }
 

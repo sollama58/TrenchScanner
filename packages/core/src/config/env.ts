@@ -101,8 +101,11 @@ const envSchema = z.object({
   // Curated-alerts training data (see apps/worker/src/jobs/candidateOutcomeJob.ts and
   // packages/core/src/curation/). Every rug-screen-passing candidate gets a CandidateOutcome row
   // at most once per CANDIDATE_SAMPLE_SPACING_MINUTES, and the watcher job price-checks open rows
-  // every CANDIDATE_WATCH_INTERVAL_MINUTES (the label is "2x within the hour", so the sampling
-  // cadence is also the label's resolution - stretching it coarsens every future label).
+  // every CANDIDATE_WATCH_INTERVAL_MINUTES. That cadence is the label's resolution, and it
+  // matters more since the win bar moved to "2x within 15 minutes": the decisive window is now
+  // only ~15 observations wide at the default, so a 2x that round-trips inside a minute is
+  // invisible. Shortening this sharpens every future label at a directly proportional cost in
+  // DexScreener calls; stretching it coarsens them.
   // CANDIDATE_WATCH_MAX_BATCH caps rows per sweep as DexScreener back-pressure; at the default
   // creation rate the whole open set fits in one sweep with room to spare.
   // Retention is deliberately much longer than SNAPSHOT_RETENTION_DAYS - these rows ARE the

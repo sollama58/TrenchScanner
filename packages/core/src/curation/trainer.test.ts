@@ -166,7 +166,7 @@ describe("calibrateThreshold", () => {
     const rows = syntheticRows(500).map((r) => ({ ...r, labelValue: 0 }));
     const params = trainCurator(rows);
     const threshold = calibrateThreshold(params, rows, 1_000_000);
-    expect(threshold).toBeGreaterThanOrEqual(0.1);
+    expect(threshold).toBeGreaterThanOrEqual(0.04);
     const emitted = rows.filter((r) => scoreCandidateWithModel(params, r.features) >= threshold);
     expect(emitted.length).toBe(0);
   });

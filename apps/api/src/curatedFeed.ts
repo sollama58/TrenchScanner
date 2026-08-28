@@ -1,4 +1,10 @@
 import type { Prisma } from "@prisma/client";
+import {
+  WIN_WINDOW_MINUTES,
+  GOAL_MULTIPLE,
+  hit2xInWinWindow,
+  disqualifiedByDrawdown,
+} from "@trenchscanner/core";
 
 /**
  * Turning a CuratedAlert into a feed card.
@@ -18,15 +24,19 @@ export const curatedAlertInclude = {
   snapshot: true,
   candidateOutcome: {
     select: {
+      anchorAt: true,
       anchorPriceUsd: true,
       peak1hPriceUsd: true,
       low1hPriceUsd: true,
+      lowBefore2xPriceUsd: true,
       peak24hPriceUsd: true,
       hit2xAt: true,
       finalizedAt: true,
       peak1hReturnPct: true,
       maxDrawdown1hPct: true,
+      hit2xIn15m: true,
       hit2xIn1h: true,
+      hit4xIn1h: true,
       disqualified: true,
       peak24hReturnPct: true,
     },
@@ -40,21 +50,23 @@ export type CuratedAlertWithRelations = Prisma.CuratedAlertGetPayload<{
 /** How one curated call is going / went, resolved from the freshest source available. */
 export interface OutcomeView {
   /**
-   * watching: the 1h label window is still open. won/missed/disqualified: the verdict.
+   * watching: the 15-minute win window is still open. won/missed/disqualified: the verdict.
    * unknown: the training row was pruned before its copies landed - surfaced honestly rather
    * than guessed at.
    */
   status: "watching" | "won" | "missed" | "disqualified" | "unknown";
-  /** True the moment a 2x is observed - the badge flips before the window formally closes. */
+  /** True the moment a 2x is observed inside the win window - the badge flips right then. */
   hit2x: boolean;
-  /** Final once the verdict lands; the running peak-so-far while still watching. */
+  /** Whether the run went on to clear the 4x goal within the hour. Null until it's knowable. */
+  hitGoal: boolean | null;
+  /** Final once the goal window closes; the running peak-so-far before that. */
   peak1hReturnPct: number | null;
   maxDrawdown1hPct: number | null;
   /** Keeps climbing for winners until their 24h watch ends. */
   peak24hReturnPct: number | null;
   /** The 24h book is closed - every number above is final. */
   finalized: boolean;
-  /** Minutes left in the 1h window, for the countdown badge. Null once it has closed. */
+  /** Minutes left in the WIN window, for the countdown badge. Null once it has closed. */
   minutesLeft: number | null;
 }
 
@@ -63,7 +75,9 @@ type OutcomeSources = Pick<
   | "createdAt"
   | "peak1hReturnPct"
   | "maxDrawdown1hPct"
+  | "hit2xIn15m"
   | "hit2xIn1h"
+  | "hit4xIn1h"
   | "disqualified"
   | "peak24hReturnPct"
   | "outcomeFinalizedAt"
@@ -73,53 +87,90 @@ type OutcomeSources = Pick<
  * Resolves an alert's outcome from the freshest source available: the live CandidateOutcome link
  * while it exists (updated every watcher tick), the columns copied onto the alert after the
  * training row has been pruned.
+ *
+ * The verdict lands as soon as the 15-minute win window closes, which is well before the row
+ * finalizes: the row keeps being measured to the hour for its peak (the 4x goal), but whether
+ * the alert WON was already settled, and making a card say "watching" for another 45 minutes
+ * over a question already answered would be its own kind of dishonest.
  */
 export function resolveOutcome(alert: OutcomeSources): OutcomeView {
   const live = alert.candidateOutcome;
   const pctFrom = (price: number, anchor: number) => ((price - anchor) / anchor) * 100;
 
-  // The 1h verdict, from whichever source has it. The live row wins ties - its copy is written
-  // in the same sweep, but the live row is what mid-window reads see.
-  const verdict =
+  const peaks = {
+    peak1hReturnPct: live ? pctFrom(live.peak1hPriceUsd, live.anchorPriceUsd) : alert.peak1hReturnPct,
+    maxDrawdown1hPct: live ? pctFrom(live.low1hPriceUsd, live.anchorPriceUsd) : alert.maxDrawdown1hPct,
+    peak24hReturnPct:
+      alert.peak24hReturnPct ??
+      live?.peak24hReturnPct ??
+      (live ? pctFrom(live.peak24hPriceUsd, live.anchorPriceUsd) : null),
+  };
+
+  // The stored verdict, from whichever source has it. `hit2xIn15m ?? hit2xIn1h` is the bridge for
+  // rows graded before the bar moved to 15 minutes: their old-bar verdict is the only one they
+  // have, and showing it beats rendering a historical win as "unknown".
+  const stored =
     live?.finalizedAt != null
-      ? { hit2xIn1h: live.hit2xIn1h, disqualified: live.disqualified }
-      : alert.hit2xIn1h != null
-        ? { hit2xIn1h: alert.hit2xIn1h, disqualified: alert.disqualified }
+      ? {
+          won: live.hit2xIn15m ?? live.hit2xIn1h,
+          disqualified: live.disqualified,
+          hitGoal: live.hit4xIn1h,
+        }
+      : alert.hit2xIn15m != null || alert.hit2xIn1h != null
+        ? {
+            won: alert.hit2xIn15m ?? alert.hit2xIn1h,
+            disqualified: alert.disqualified,
+            hitGoal: alert.hit4xIn1h,
+          }
         : null;
 
-  if (verdict) {
+  if (stored) {
     return {
-      status: verdict.disqualified ? "disqualified" : verdict.hit2xIn1h ? "won" : "missed",
-      hit2x: verdict.hit2xIn1h === true,
-      peak1hReturnPct: live?.peak1hReturnPct ?? alert.peak1hReturnPct,
-      maxDrawdown1hPct: live?.maxDrawdown1hPct ?? alert.maxDrawdown1hPct,
-      peak24hReturnPct:
-        alert.peak24hReturnPct ??
-        live?.peak24hReturnPct ??
-        (live ? pctFrom(live.peak24hPriceUsd, live.anchorPriceUsd) : null),
+      status: stored.disqualified ? "disqualified" : stored.won ? "won" : "missed",
+      hit2x: stored.won === true,
+      hitGoal: stored.hitGoal,
+      ...peaks,
       finalized: alert.outcomeFinalizedAt != null,
       minutesLeft: null,
     };
   }
 
   if (live) {
+    // Everything below is derived from the live aggregates rather than waiting on the row to
+    // finalize - same rules the watcher will apply, just applied now.
+    const hit2x = hit2xInWinWindow(live);
+    const hitGoal = live.peak1hPriceUsd >= live.anchorPriceUsd * GOAL_MULTIPLE;
+    const elapsedMin = (Date.now() - live.anchorAt.getTime()) / 60_000;
+
+    if (elapsedMin >= WIN_WINDOW_MINUTES) {
+      const disqualified = hit2x && disqualifiedByDrawdown(live);
+      return {
+        status: disqualified ? "disqualified" : hit2x ? "won" : "missed",
+        hit2x,
+        // Still climbing toward the goal until the hour closes, so a false here isn't final yet.
+        hitGoal: hitGoal ? true : elapsedMin >= 60 ? false : null,
+        ...peaks,
+        finalized: false,
+        minutesLeft: null,
+      };
+    }
+
     // Derived from the anchor rather than sent as a countdown the client has to keep in step -
     // the card renders it once and ticks it locally.
-    const elapsedMin = (Date.now() - alert.createdAt.getTime()) / 60_000;
     return {
       status: "watching",
-      hit2x: live.hit2xAt != null,
-      peak1hReturnPct: pctFrom(live.peak1hPriceUsd, live.anchorPriceUsd),
-      maxDrawdown1hPct: pctFrom(live.low1hPriceUsd, live.anchorPriceUsd),
-      peak24hReturnPct: pctFrom(live.peak24hPriceUsd, live.anchorPriceUsd),
+      hit2x,
+      hitGoal: hitGoal ? true : null,
+      ...peaks,
       finalized: false,
-      minutesLeft: Math.max(0, Math.round(60 - elapsedMin)),
+      minutesLeft: Math.max(0, Math.round(WIN_WINDOW_MINUTES - elapsedMin)),
     };
   }
 
   return {
     status: "unknown",
     hit2x: false,
+    hitGoal: null,
     peak1hReturnPct: null,
     maxDrawdown1hPct: null,
     peak24hReturnPct: null,

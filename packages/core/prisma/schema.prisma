@@ -207,12 +207,18 @@ model CuratedAlert {
   anchorPriceUsd Float
   anchorMcapUsd  Float
 
-  /// Outcome copies - written by the watcher when the linked row's 1h window (and, for winners,
-  /// its 24h watch) closes. Null until then; the API prefers the live candidateOutcome link
-  /// while it exists.
+  /// Outcome copies - written by the watcher when the linked row's goal window (and, for
+  /// winners, its 24h watch) closes. Null until then; the API prefers the live candidateOutcome
+  /// link while it exists.
   peak1hReturnPct    Float?
   maxDrawdown1hPct   Float?
+  /// THE verdict: doubled within the win window (15m) without first breaching the stop. Older
+  /// rows graded under the previous 1h bar have this null and hit2xIn1h set - see resolveOutcome.
+  hit2xIn15m         Boolean?
+  /// Doubled at some point inside the goal window - informational, not the verdict.
   hit2xIn1h          Boolean?
+  /// Cleared the 4x goal inside the goal window.
+  hit4xIn1h          Boolean?
   disqualified       Boolean?
   peak24hReturnPct   Float?
   outcomeFinalizedAt DateTime?
@@ -330,25 +336,34 @@ model CandidateOutcome {
   /// 2x the anchor. This is what decides disqualification: a token that dropped 50%+ and then
   /// "2x'd from the bottom" stopped out anyone who actually bought the alert.
   lowBefore2xPriceUsd Float
-  /// First tick at which price >= 2x anchor was observed (within the 1h window).
+  /// First tick at which price >= 2x anchor was observed, anywhere inside the goal window. The
+  /// WIN test is this timestamp landing inside the first 15 minutes - see curation/labels.ts.
   hit2xAt DateTime?
   /// Highest price seen over the whole watch (up to 24h for extended rows).
   peak24hPriceUsd Float
   peak24hAt       DateTime?
 
-  // ---- Labels, written once when the 1h window closes ----
+  // ---- Labels, written once when the goal window closes ----
   finalizedAt      DateTime?
   /// (peak1h - anchor) / anchor * 100.
   peak1hReturnPct  Float?
   /// (low1h - anchor) / anchor * 100 - zero or negative.
   maxDrawdown1hPct Float?
+  /// THE bar: doubled inside the 15-minute win window. This is what "won" means for the feed,
+  /// the stats, and (via labelValue) the learner - see curation/labels.ts.
+  hit2xIn15m       Boolean?
+  /// Doubled at some point inside the 1h goal window. Informational only, kept because it is
+  /// what the pipeline graded on before the bar moved to 15 minutes.
   hit2xIn1h        Boolean?
-  /// Hit 2x, but only after first dropping through the disqualifying drawdown - see
-  /// lowBefore2xPriceUsd. Disqualified rows train as losses.
+  /// Reached 4x inside the goal window - the ambition a win is trained to run toward.
+  hit4xIn1h        Boolean?
+  /// Hit 2x inside the win window, but only after first dropping through the disqualifying
+  /// drawdown - see lowBefore2xPriceUsd. Disqualified rows train as losses.
   disqualified     Boolean?
-  /// The training target: 0 for a miss or disqualified row, else log2 of the 1h peak multiple,
-  /// capped - a 2x is 1.0, a 4x is 2.0, so the learner prefers higher multiples exactly as much
-  /// as they're worth in doublings. See computeOneHourLabels in curation/labels.ts.
+  /// The training target: 0 unless the row cleared the win window's 2x, else log2 of the 1h
+  /// peak multiple, capped - a 2x is 1.0, the 4x goal is 2.0 - so the learner prefers bigger
+  /// runs exactly as much as they're worth in doublings, but only ever for candidates that
+  /// doubled fast first. See computeOutcomeLabels in curation/labels.ts.
   labelValue       Float?
   /// Set when the row is completely done (at 1h for non-extended rows, 24h for extended ones).
   finalized24hAt   DateTime?

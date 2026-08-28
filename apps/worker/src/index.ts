@@ -51,9 +51,10 @@ async function main() {
     env.LIVE_PRICE_INTERVAL_MINUTES,
   );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
-  // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution
-  // ("2x within the hour", sampled minutely), which is why it matches the live-price cadence
-  // rather than the scan's.
+  // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
+  // and the win bar is "2x within 15 minutes", so at the default it decides each verdict on
+  // about fifteen observations - which is why it matches the live-price cadence rather than the
+  // scan's, and why lowering it is the lever for sharper labels.
   const candidateWatchJob = scheduleInterval(
     "candidate-watch",
     () => runCandidateWatchJob(deps.dexScreener, env),

@@ -34,8 +34,8 @@ const MIN_LIQUIDITY_USD = 10_000;
 const MIN_VOLUME_MCAP_RATIO = 0.25;
 /**
  * Buys must be the clear majority of transactions - judged on the LAST HOUR's flow when
- * DexScreener reported it (the label is "2x within the next hour"; the last hour's flow is the
- * relevant evidence), falling back to the 24h window when it didn't (older banked rows replayed
+ * DexScreener reported it (the label is "2x within the next 15 minutes"; the last hour's flow is
+ * the closest evidence available), falling back to the 24h window when it didn't (older banked rows replayed
  * in the walk-forward exam predate the short-window capture, and grading them on a signal they
  * never carried would silently change what their heuristic verdicts mean).
  */
