@@ -166,7 +166,7 @@ describe("calibrateThreshold", () => {
     const rows = syntheticRows(500).map((r) => ({ ...r, labelValue: 0 }));
     const params = trainCurator(rows);
     const threshold = calibrateThreshold(params, rows, 1_000_000);
-    expect(threshold).toBeGreaterThanOrEqual(0.04);
+    expect(threshold).toBeGreaterThanOrEqual(0.08);
     const emitted = rows.filter((r) => scoreCandidateWithModel(params, r.features) >= threshold);
     expect(emitted.length).toBe(0);
   });
@@ -218,6 +218,28 @@ describe("walkForwardEvaluate", () => {
       minRowsToPromote: 1_500,
     });
     for (const fold of included.folds) expect(fold.model.emitted).toBeGreaterThan(0);
+  });
+
+  it("caps each fold's emissions at the governed budget, keeping only the strongest picks", () => {
+    // Production runs the governor: at most targetPerHour x span picks make the feed, best
+    // conviction first. The exam must play the same policy - an uncapped exam grades a firehose.
+    const rows = syntheticRows(3_000);
+    const target = 0.01; // ~5 allowed picks over each fold's ~500h span
+    const result = walkForwardEvaluate(rows, {
+      targetPerHour: target,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1_500,
+    });
+    expect(result.folds.length).toBeGreaterThanOrEqual(2);
+    for (const fold of result.folds) {
+      const spanHours = (new Date(fold.testTo).getTime() - new Date(fold.testFrom).getTime()) / HOUR;
+      const budget = Math.max(1, Math.round(target * spanHours));
+      expect(fold.model.emitted).toBeGreaterThan(0);
+      expect(fold.model.emitted).toBeLessThanOrEqual(budget);
+      // Best-first under a tight budget on a genuinely predictive signal: the handful of picks
+      // should be sharply better than the base rate, not merely above it.
+      expect(fold.model.precisionPct ?? 0).toBeGreaterThan(fold.baseWinRatePct);
+    }
   });
 
   it("refuses to judge on too little history", () => {

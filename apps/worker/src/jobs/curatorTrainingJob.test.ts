@@ -6,12 +6,18 @@ import {
   loadEnv,
   CURATOR_MODEL_KIND,
   CANDIDATE_FEATURE_NAMES,
+  type Env,
   type TrainedCuratorParams,
   type WalkForwardResult,
   type ScoredToken,
 } from "@trenchscanner/core";
 import { applyTrainingResult } from "./curatorTrainingJob.js";
-import { maybeEmitCuratedAlert, resetCuratorModelCache } from "./curatedAlerts.js";
+import {
+  collectCuratedContender,
+  emitCuratedCycle,
+  newCuratedCycle,
+  resetCuratorModelCache,
+} from "./curatedAlerts.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -47,6 +53,27 @@ const promoteVerdict = (promote: boolean): WalkForwardResult => ({
   folds: [],
   verdict: { promote, reason: promote ? "test-promote" : "test-hold" },
 });
+
+/**
+ * One candidate through both emission phases, with the governor's flow-derived bars disabled
+ * (they'd depend on whatever CandidateOutcome rows this shared dev database holds) and its
+ * budget freed first: earlier test files emit real alerts into the same trailing-hour windows
+ * the governor counts, and this file's subject is who decides, not the pace.
+ */
+async function collectAndEmit(
+  env: Env,
+  token: { id: string; mintAddress: string },
+  scored: ScoredToken,
+): Promise<boolean> {
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  await prisma.curatedAlert.updateMany({
+    where: { createdAt: { gt: hourAgo } },
+    data: { createdAt: new Date(Date.now() - 2 * 3_600_000) },
+  });
+  const cycle = newCuratedCycle();
+  await collectCuratedContender(cycle, token, scored, null, env);
+  return (await emitCuratedCycle(cycle, env, { bars: { live: null, shadow: null } })) > 0;
+}
 
 function scoredWithTotal(mintAddress: string, total: number): ScoredToken {
   return {
@@ -100,7 +127,7 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     // scoreTotal 90 -> probability ~0.9997, comfortably over the 0.9 threshold. Deliberately a
     // candidate the HEURISTIC would reject (no liquidity/volume/age data) - proof the model, not
     // the heuristic, made this call.
-    const emitted = await maybeEmitCuratedAlert(hot, scoredWithTotal(hot.mintAddress, 90), null, loadEnv());
+    const emitted = await collectAndEmit(loadEnv(), hot, scoredWithTotal(hot.mintAddress, 90));
     expect(emitted).toBe(true);
 
     const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: hot.id } });
@@ -115,7 +142,7 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
 
     const cold = await prisma.token.create({ data: { mintAddress: `${TAG}-model-cold` } });
     // scoreTotal 30 -> probability ~0.0003. The heuristic is not consulted at all.
-    const emitted = await maybeEmitCuratedAlert(cold, scoredWithTotal(cold.mintAddress, 30), null, loadEnv());
+    const emitted = await collectAndEmit(loadEnv(), cold, scoredWithTotal(cold.mintAddress, 30));
     expect(emitted).toBe(false);
     expect(await prisma.curatedAlert.count({ where: { tokenId: cold.id } })).toBe(0);
   });

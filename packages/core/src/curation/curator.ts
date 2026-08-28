@@ -27,11 +27,14 @@ import type { ScoredToken } from "../types.js";
  */
 const MIN_LIQUIDITY_USD = 10_000;
 /**
- * 24h volume at least a quarter of the mcap - the churn floor that separates "moving" from
- * "parked". Loosened from 0.5 (launch value) to let more genuinely-active candidates through
- * while the model gathers a wider slice of the market to learn from.
+ * 24h volume at least half the mcap - the churn floor that separates "moving" from "parked".
+ * Back at the 0.5 launch value after a spell at 0.25: the loosening was justified as feeding
+ * the learner a wider slice of the market, but training samples are banked for every
+ * rug-screen-passing candidate BEFORE this gate runs, so the looser floor never bought the
+ * learner a single row - it only put weaker calls on the public feed. The feed is a curated
+ * promise; the training set never needed it loose.
  */
-const MIN_VOLUME_MCAP_RATIO = 0.25;
+const MIN_VOLUME_MCAP_RATIO = 0.5;
 /**
  * Buys must be the clear majority of transactions - judged on the LAST HOUR's flow when
  * DexScreener reported it (the label is "2x within the next 15 minutes"; the last hour's flow is
@@ -61,7 +64,12 @@ export const HEURISTIC_CURATOR_SOURCE = "heuristic-v1";
 
 export interface CurationDecision {
   curate: boolean;
-  /** 0-100 conviction; for the heuristic this is the composite score itself. */
+  /**
+   * 0-100 conviction, in the deciding curator's own units: curationRankScore for the heuristic,
+   * calibrated probability x 100 for a trained model. The emission governor ranks contenders and
+   * holds its dynamic quality bar in these units, so what they MEAN can differ per curator as
+   * long as each curator is consistent with itself.
+   */
   confidence: number;
   /** Short human-readable strings: why it was curated - shown on the alert card. */
   reasons: string[];
@@ -119,10 +127,72 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
 
   return {
     curate: true,
-    confidence: scored.score.total,
+    confidence: curationRankScore(scored),
     reasons: buildReasons(scored, buyRatio),
     source: HEURISTIC_CURATOR_SOURCE,
   };
+}
+
+/**
+ * How the heuristic ORDERS the candidates it would curate - the conviction the emission governor
+ * ranks contenders by and holds its dynamic bar against. Deliberately not the composite score:
+ * the composite was built to rank user-filter matches, and its narrative and age components are
+ * near-constant across this band (nearly every launch has a Twitter and a theme; nearly every
+ * contender sits in the age sweet spot), which compresses the ranking exactly where curation
+ * needs it sharp. The label is "2x within the NEXT 15 minutes", so conviction leans on the
+ * short-window evidence closest to that question - what price and flow were doing over the last
+ * minutes - with the composite kept as a modest stabilizer for the texture (holder health, risk)
+ * the short window can't see.
+ *
+ * Each component maps its raw signal onto 0-100 and abstains (null) when unobserved; the blend
+ * renormalizes over what was present. No short-window data at all (rows banked before the
+ * short-window capture, or a DexScreener response without the m5/h1 blocks) falls back to the
+ * composite alone. Weights and breakpoints are v1 hand priors, judged the same way the scorer's
+ * were; the trained model replaces this entire ranking with its calibrated probability the
+ * moment it holds the job.
+ */
+export function curationRankScore(scored: ScoredToken): number {
+  const clamp = (v: number) => Math.max(0, Math.min(100, v));
+
+  // Ignition: the 5m candle. -5% or worse maps to 0, +25% to 100 - a small red candle is noise,
+  // a strong green one is exactly the shape a 15-minute doubling starts from.
+  const burst5m =
+    scored.priceChange5mPct !== undefined ? clamp(((scored.priceChange5mPct + 5) / 30) * 100) : null;
+  // The hour's trend: -10% maps to 0, +100% to 100.
+  const trend1h =
+    scored.priceChange1hPct !== undefined ? clamp(((scored.priceChange1hPct + 10) / 110) * 100) : null;
+  // The hour's flow: 50% buys maps to 0 (balanced is no signal), 80%+ to 100.
+  const totalTxns1h = (scored.buys1h ?? 0) + (scored.sells1h ?? 0);
+  const flow1h = totalTxns1h > 0 ? clamp((((scored.buys1h ?? 0) / totalTxns1h - 0.5) / 0.3) * 100) : null;
+  // The hour's churn relative to size: 1h volume at half the mcap maps to 100.
+  const churn1h =
+    scored.volume1hUsd !== undefined && scored.marketCapUsd > 0
+      ? clamp((scored.volume1hUsd / scored.marketCapUsd / 0.5) * 100)
+      : null;
+  // Acceleration: the last 5 minutes extrapolated to an hour's pace, over the actual hour.
+  // Steady pace (1x) maps to 40, 2.5x to 100, dying volume toward 0.
+  const accel =
+    scored.volume5mUsd !== undefined && scored.volume1hUsd !== undefined && scored.volume1hUsd > 0
+      ? clamp(((scored.volume5mUsd * 12) / scored.volume1hUsd / 2.5) * 100)
+      : null;
+
+  const parts: Array<[number | null, number]> = [
+    [burst5m, 0.3],
+    [trend1h, 0.15],
+    [flow1h, 0.2],
+    [churn1h, 0.2],
+    [accel, 0.15],
+  ];
+  let sum = 0;
+  let weight = 0;
+  for (const [value, w] of parts) {
+    if (value !== null) {
+      sum += value * w;
+      weight += w;
+    }
+  }
+  if (weight === 0) return scored.score.total;
+  return 0.65 * (sum / weight) + 0.35 * scored.score.total;
 }
 
 /** The standout signals, strongest first, phrased for the alert card - not a full criteria dump. */

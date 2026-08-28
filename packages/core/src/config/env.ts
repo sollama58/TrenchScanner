@@ -142,10 +142,11 @@ const envSchema = z.object({
   // production without a deploy while the pipeline is young. The cooldown stops one token from
   // being re-alerted every cycle it stays hot; a re-emission after the cooldown is a genuinely
   // new call on a token that survived a day.
-  // Lowered from the 55 launch value to 45: a deliberately looser floor (paired with the looser
-  // MIN_VOLUME_MCAP_RATIO in curator.ts) so more of the market reaches the feed and the training
-  // set while the self-learning half of this pipeline is still experimental and hungry for data.
-  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(45),
+  // Back at the 55 launch value after a spell at 45: the loosening was meant to feed the
+  // training set, but samples are banked before the curator gate runs (see scanJob), so it fed
+  // nothing - it only diluted the feed. This floor is the gate's ENTRY requirement; the emission
+  // governor's pace and dynamic quality bar (curation/governor.ts) sit on top of it.
+  CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
 
   // The curator-training job (apps/worker/src/jobs/curatorTrainingJob.ts): trains on the rolling

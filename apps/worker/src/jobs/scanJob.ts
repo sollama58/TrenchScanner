@@ -29,7 +29,12 @@ import { recordMatchPeaks } from "./matchPeaks.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { repairOutcomeBookkeeping } from "./outcomeTrackingJob.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
-import { maybeEmitCuratedAlert } from "./curatedAlerts.js";
+import {
+  collectCuratedContender,
+  emitCuratedCycle,
+  newCuratedCycle,
+  type CuratedCycle,
+} from "./curatedAlerts.js";
 
 const logger = createLogger("scan-job");
 
@@ -237,6 +242,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   // each add to the same stale base and lose an increment. Only a log line was ever wrong, but a
   // counter that undercounts under exactly the concurrency it was built for is not worth keeping.
   const perCandidateMatches: number[] = [];
+  const curatedCycle = newCuratedCycle();
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
     try {
       perCandidateMatches.push(
@@ -246,6 +252,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
           onChainByMint.get(candidate.mintAddress) ?? null,
           activeFilters,
           earliestActivityByAddress,
+          curatedCycle,
           bot,
           env,
         ),
@@ -256,6 +263,16 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   });
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
 
+  // The cycle's governor pass: of everything the curators would emit, the strongest contenders
+  // within the feed's paced budget actually go out - see emitCuratedCycle. After user matching
+  // (those alerts must never wait on this), before the peak bookkeeping.
+  let curatedEmitted = 0;
+  try {
+    curatedEmitted = await emitCuratedCycle(curatedCycle, env);
+  } catch (err) {
+    logger.error("curated emission pass failed", { error: String(err) });
+  }
+
   await rollPeaksForward(env);
 
   logger.info("scan cycle complete", {
@@ -263,6 +280,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,
+    curated: curatedEmitted,
     // Per-METHOD invocation counts, which is what a metered RPC plan actually bills on - batching
     // collapses these into far fewer HTTP requests, so nothing else in this log reveals the real
     // number. Reset each read, so this is the cycle's own spend.
@@ -420,6 +438,7 @@ async function processCandidate(
   onChainProfile: OnChainProfile | null,
   activeFilters: FilterWithUser[],
   earliestActivityByAddress: Map<string, Date | null>,
+  curatedCycle: CuratedCycle,
   bot: AlertBot,
   env: Env,
 ): Promise<number> {
@@ -498,13 +517,14 @@ async function processCandidate(
   });
 
   // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample
-  // for why it's every candidate and not just matched ones - then let the curator decide whether
-  // this moment goes on the public feed. Never worth failing the candidate over.
+  // for why it's every candidate and not just matched ones - then file anything the curators
+  // would emit as a contender for the cycle's governor pass (see emitCuratedCycle). Never worth
+  // failing the candidate over.
   try {
     const sample = await recordCandidateSample(token.id, scored, env);
-    await maybeEmitCuratedAlert(token, scored, sample, env, snapshot.id);
+    await collectCuratedContender(curatedCycle, token, scored, sample, env, snapshot.id);
   } catch (err) {
-    logger.warn("failed to record candidate outcome sample / curated alert", {
+    logger.warn("failed to record candidate outcome sample / curated contender", {
       mint: candidate.mintAddress,
       error: String(err),
     });
