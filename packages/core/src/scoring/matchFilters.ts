@@ -66,6 +66,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  if (
+    filter.maxEmptyTop10WalletPct != null &&
+    token.emptyTop10WalletPct !== undefined &&
+    token.emptyTop10WalletPct > filter.maxEmptyTop10WalletPct
+  ) {
+    return false;
+  }
+
   if (filter.minTokenAgeMinutes != null && (token.ageMinutes ?? 0) < filter.minTokenAgeMinutes) {
     return false;
   }

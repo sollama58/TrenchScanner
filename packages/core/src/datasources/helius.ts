@@ -126,6 +126,58 @@ const SIGNATURES_PAGE_LIMIT = 200;
  */
 const GTFA_FAILURE_LATCH_ROUNDS = 3;
 
+/**
+ * The mints that do NOT count as "other holdings": wrapped SOL and the two dollar stablecoins.
+ * A wallet holding only these is holding cash and its own gas - it tells us nothing about
+ * whether the owner actually trades this market, which is the whole question.
+ *
+ * Native (unwrapped) SOL needs no entry here: it lives in the account's lamports, not in a token
+ * account, so it never appears in a fungible-asset listing in the first place.
+ */
+export const CASH_EQUIVALENT_MINTS = new Set([
+  "So11111111111111111111111111111111111111112", // wrapped SOL
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+]);
+
+/**
+ * How many searchAssets calls to have in flight at once. DAS carries its OWN rate limit,
+ * separate from and far tighter than the standard RPC one (10 req/s against 50 on the tier this
+ * runs on), so this is deliberately below the batch concurrency used elsewhere in this client:
+ * at a few hundred milliseconds per call, three in flight sits under that ceiling with room for
+ * the occasional slow response.
+ */
+const DAS_CONCURRENCY = 3;
+
+/** searchAssets page size. 1000 is the documented maximum; see getOtherHoldingsUsdBatch. */
+const DAS_PAGE_LIMIT = 1000;
+
+/** Consecutive barren rounds before searchAssets is written off - same reasoning as the GTFA latch. */
+const DAS_FAILURE_LATCH_ROUNDS = 3;
+
+/** One item of a searchAssets fungible-token response. */
+interface DasFungibleItem {
+  id?: string;
+  token_info?: {
+    balance?: number;
+    decimals?: number;
+    price_info?: { total_price?: number; price_per_token?: number };
+  };
+}
+
+/**
+ * The USD value a wallet holds in tokens that are neither cash nor gas. Cases are distinct for
+ * the same reason EarliestActivityResult's are: only a real answer may be cached.
+ *
+ *  - "found": the wallet was listed successfully. `otherHoldingsUsd` is a FLOOR, not an exact
+ *    net worth - holdings the indexer has no price for contribute nothing (see the note in
+ *    getOtherHoldingsUsdBatch), so the number can only understate.
+ *  - "unsupported": this endpoint doesn't serve DAS at all (the public fallback, notably).
+ *  - "failed": transport error, rate limit, or RPC error - no answer, try again later.
+ */
+export type WalletHoldingsResult =
+  { status: "found"; otherHoldingsUsd: number } | { status: "unsupported" } | { status: "failed" };
+
 export class HeliusClient {
   private readonly rpcUrl: string;
   readonly usingHelius: boolean;
@@ -139,6 +191,13 @@ export class HeliusClient {
   private gtfaUnavailable = false;
   /** Consecutive rounds the Helius-only path produced nothing usable - see GTFA_FAILURE_LATCH_ROUNDS. */
   private gtfaBarrenRounds = 0;
+  /**
+   * Set once searchAssets is established as unusable - true for any non-Helius endpoint, and for
+   * a plan tier that doesn't serve DAS. Latches for the same reason gtfaUnavailable does.
+   */
+  private dasUnavailable = false;
+  /** Consecutive rounds searchAssets produced nothing usable - see DAS_FAILURE_LATCH_ROUNDS. */
+  private dasBarrenRounds = 0;
   /** RPC method invocations issued since the last takeCallStats() - the number a plan bills on. */
   private readonly callCounts = new Map<string, number>();
 
@@ -155,6 +214,8 @@ export class HeliusClient {
     }
     // Only Helius serves getTransactionsForAddress - don't even try it elsewhere.
     this.gtfaUnavailable = !this.usingHelius;
+    // Same for the DAS API, which is a Helius extension rather than standard Solana RPC.
+    this.dasUnavailable = !this.usingHelius;
   }
 
   /**
@@ -432,6 +493,122 @@ export class HeliusClient {
     }
 
     this.gtfaBarrenRounds = 0;
+    return out;
+  }
+
+  /** Whether DAS-backed holdings lookups are currently believed usable, for health/diagnostics. */
+  get holdingsLookupAvailable(): boolean {
+    return !this.dasUnavailable;
+  }
+
+  /**
+   * Sends ONE JSON-RPC call as its own POST. DAS methods take a single object parameter rather
+   * than the positional array standard RPC uses, and array-form batching is not part of their
+   * documented contract - so these go one request at a time rather than riding sendBatched.
+   */
+  private async sendSingle<T>(
+    method: string,
+    params: unknown,
+    timeoutMs: number,
+  ): Promise<RpcResponse<T> | null> {
+    this.callCounts.set(method, (this.callCounts.get(method) ?? 0) + 1);
+    try {
+      return await fetchJson<RpcResponse<T>>(this.rpcUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "1", method, params }),
+        timeoutMs,
+        retries: 1,
+      });
+    } catch (err) {
+      logger.warn("rpc single request failed", { method, error: String(err) });
+      return null;
+    }
+  }
+
+  /**
+   * The USD value each wallet holds in tokens that are neither cash nor gas - the "is this a real
+   * trader or a freshly-funded shell?" signal behind the empty-top-10-wallet filter.
+   *
+   * Uses the DAS searchAssets method, which returns a wallet's fungible holdings WITH per-asset
+   * USD valuations in a single call. The alternative, getTokenAccountsByOwner, returns balances
+   * but no prices, which would leave us pricing every distinct mint separately - far more calls,
+   * and a much heavier response (measured at ~535 bytes per token account, and wallets with
+   * thousands of accounts exist).
+   *
+   * The returned figure is a FLOOR. Assets the indexer carries no price for contribute zero,
+   * which is the conservative direction for this signal: an unpriced bag reads as "no holdings",
+   * so the filter errs toward calling a wallet empty rather than vouching for one it can't
+   * value. Illiquid brand-new memecoins are exactly the assets most likely to be unpriced, so
+   * this is a real effect, not a corner case - and it is why the threshold is a floor test
+   * ("holds at least $X of something") rather than an estimate of anyone's net worth.
+   */
+  async getOtherHoldingsUsdBatch(addresses: string[]): Promise<Map<string, WalletHoldingsResult>> {
+    const unique = [...new Set(addresses)];
+    const out = new Map<string, WalletHoldingsResult>();
+    if (unique.length === 0) return out;
+
+    if (this.dasUnavailable) {
+      for (const address of unique) out.set(address, { status: "unsupported" });
+      return out;
+    }
+
+    let methodMissing = false;
+    let usable = 0;
+
+    await forEachWithConcurrency(unique, DAS_CONCURRENCY, async (address) => {
+      const res = await this.sendSingle<{ items?: DasFungibleItem[] }>(
+        "searchAssets",
+        {
+          ownerAddress: address,
+          tokenType: "fungible",
+          page: 1,
+          limit: DAS_PAGE_LIMIT,
+          displayOptions: { showZeroBalance: false },
+        },
+        15_000,
+      );
+
+      if (!res) {
+        out.set(address, { status: "failed" });
+        return;
+      }
+      if (res.error) {
+        if (res.error.code === RPC_METHOD_NOT_FOUND) methodMissing = true;
+        out.set(address, { status: "failed" });
+        return;
+      }
+
+      // A successful call with no items is a real answer: this wallet holds nothing fungible.
+      const items = res.result?.items ?? [];
+      let total = 0;
+      for (const item of items) {
+        if (!item.id || CASH_EQUIVALENT_MINTS.has(item.id)) continue;
+        const price = item.token_info?.price_info?.total_price;
+        if (typeof price === "number" && Number.isFinite(price) && price > 0) total += price;
+      }
+      usable += 1;
+      out.set(address, { status: "found", otherHoldingsUsd: total });
+    });
+
+    // Same latch discipline as the getTransactionsForAddress path: an explicit "method not found"
+    // is final, while a wholly barren round is ambiguous (an outage looks identical) and only
+    // counts toward the latch.
+    if (methodMissing) {
+      this.dasUnavailable = true;
+      logger.warn("searchAssets not served by this endpoint - holdings lookups disabled");
+    } else if (usable === 0) {
+      this.dasBarrenRounds += 1;
+      if (this.dasBarrenRounds >= DAS_FAILURE_LATCH_ROUNDS) {
+        this.dasUnavailable = true;
+        logger.warn("searchAssets barren for too many rounds - holdings lookups disabled", {
+          rounds: this.dasBarrenRounds,
+        });
+      }
+    } else {
+      this.dasBarrenRounds = 0;
+    }
+
     return out;
   }
 }

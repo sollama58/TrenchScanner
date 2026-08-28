@@ -68,6 +68,7 @@ function profileFromSnapshot(
     riskScore: number | null;
     riskFlags: string[];
     freshTop10WalletPct: number | null;
+    emptyTop10WalletPct: number | null;
   },
 ): OnChainProfile | null {
   // The three the screen treats as hard requirements. Unknown means the snapshot predates the
@@ -92,6 +93,7 @@ function profileFromSnapshot(
     riskScore: snapshot.riskScore ?? undefined,
     riskFlags: snapshot.riskFlags,
     freshTop10WalletPct: snapshot.freshTop10WalletPct ?? undefined,
+    emptyTop10WalletPct: snapshot.emptyTop10WalletPct ?? undefined,
   };
 }
 

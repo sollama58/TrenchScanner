@@ -73,6 +73,25 @@ const envSchema = z.object({
   // flood of new tokens) so the pass can never blow through the Helius Dev tier. Wallets over
   // the cap simply stay unknown for a cycle and retry on the next.
   WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(50),
+
+  // The empty-top-10-wallet signal (apps/worker/src/jobs/walletHoldings.ts): how much a top-10
+  // holder must hold in tokens that are neither cash (USDC/USDT) nor gas (SOL) before it counts
+  // as a real wallet rather than a shell funded to hold this one launch.
+  // $25 is deliberately a low bar. It is not a wealth test - it separates "this wallet trades
+  // this market" from "this wallet was created for this token", and the measured value is a
+  // FLOOR (unpriced assets count as nothing), so a bar set high would misread illiquid-bag
+  // holders as empty.
+  WALLET_HOLDINGS_MIN_USD: z.coerce.number().positive().default(25),
+  // Cap on UNCACHED holdings lookups per scan cycle. Sized against the DAS rate limit rather
+  // than the RPC one - DAS is billed and throttled separately, and far more tightly (10 req/s
+  // against 50 on the tier this runs on), so this budget is the guard that keeps a busy cycle
+  // from spending the whole allowance in a few seconds.
+  WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(30),
+  // How long a holdings reading stays usable. Unlike wallet earliest-activity, this answer
+  // decays - a portfolio changes with every trade - so it carries a TTL instead of being cached
+  // forever. An hour keeps a wallet from being re-priced on every one of the ~60 cycles it might
+  // appear in, while staying current enough for a signal about whether a wallet is a shell.
+  WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(60),
   // How long a "mint/freeze authority still active" answer is trusted before being re-checked
   // (see the worker's mintAuthority.ts). Revocation is permanent and cached forever; this TTL
   // covers only the reversible direction, which used to be re-queried every single scan cycle

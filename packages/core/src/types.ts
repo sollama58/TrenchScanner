@@ -112,6 +112,15 @@ export interface OnChainProfile {
    */
   freshTop10WalletPct?: number;
   /**
+   * % of top10HolderAddresses holding less than WALLET_HOLDINGS_MIN_USD in tokens that are
+   * neither cash (USDC/USDT) nor gas (SOL) - wallets that look funded purely to hold this one
+   * launch. Like freshTop10WalletPct this is resolved separately (see the worker's
+   * walletHoldings.ts), not part of the RugCheck report, so it is undefined whenever the holder
+   * list was unavailable, the per-cycle lookup budget deferred it, or the RPC endpoint in use
+   * doesn't serve the DAS API.
+   */
+  emptyTop10WalletPct?: number;
+  /**
    * Whether this mint was launched in Pump.fun's Mayhem Mode - see mayhemStateAddress() in
    * solana.ts for how it's detected and why nothing cheaper works. `undefined` means the check
    * hasn't been run or failed, which the rug screen treats as a rejection rather than an
@@ -173,4 +182,5 @@ export interface FilterCriteria {
   minScore?: number | null;
   /** Max % of the top-10 holders whose wallet was funded <24h ago - a sniper/insider signal. */
   maxFreshTop10WalletPct?: number | null;
+  maxEmptyTop10WalletPct?: number | null;
 }

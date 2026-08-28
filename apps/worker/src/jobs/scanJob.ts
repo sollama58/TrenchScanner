@@ -23,6 +23,7 @@ import type { AlertBot } from "../telegram/bot.js";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
+import { resolveWalletHoldings, computeEmptyPct } from "./walletHoldings.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import { recordMatchPeaks } from "./matchPeaks.js";
@@ -233,9 +234,18 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     .filter((g) => g.addresses.length > 0)
     .sort((a, b) => b.churn - a.churn)
     .map((g) => g.addresses);
-  const earliestActivityByAddress = await resolveEarliestActivity(walletGroups, deps.helius, {
-    maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
-  });
+  // The two wallet signals are resolved together but independently: they ask different
+  // questions of different APIs (transaction history on standard RPC, holdings via DAS), which
+  // are metered and rate-limited separately, so they carry separate budgets and neither can
+  // starve the other. Run concurrently because one is not an input to the other.
+  const [earliestActivityByAddress, holdingsByAddress] = await Promise.all([
+    resolveEarliestActivity(walletGroups, deps.helius, {
+      maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
+    }),
+    resolveWalletHoldings(walletGroups, deps.helius, env, {
+      maxNewLookups: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
+    }),
+  ]);
 
   // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
   // counter BEFORE the await and writes it after, so two candidates finishing close together can
@@ -252,6 +262,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
           onChainByMint.get(candidate.mintAddress) ?? null,
           activeFilters,
           earliestActivityByAddress,
+          holdingsByAddress,
           curatedCycle,
           bot,
           env,
@@ -438,6 +449,7 @@ async function processCandidate(
   onChainProfile: OnChainProfile | null,
   activeFilters: FilterWithUser[],
   earliestActivityByAddress: Map<string, Date | null>,
+  holdingsByAddress: Map<string, number>,
   curatedCycle: CuratedCycle,
   bot: AlertBot,
   env: Env,
@@ -460,7 +472,7 @@ async function processCandidate(
       })
     : null;
 
-  const onChain = withFreshWalletPct(onChainProfile, earliestActivityByAddress);
+  const onChain = withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env);
   // Prefer the DEX pair's own creation time (accurate for tokens that already migrated off the
   // bonding curve); fall back to when we first added this mint to our watchlist.
   const createdAt = candidate.pairCreatedAt ?? watchlistFirstSeenAt ?? existingToken?.firstSeenAt;
@@ -537,7 +549,7 @@ async function processCandidate(
  * Prefers RugCheck's full risk profile. Falls back to a bare mint/freeze authority check when
  * RugCheck hasn't indexed the mint yet - this still won't pass the rug screen (lpBurned stays
  * unverified, which fails closed), but lets us record a more informative snapshot instead of
- * nothing at all. Note this fallback profile has no top10HolderAddresses, so withFreshWalletPct
+ * nothing at all. Note this fallback profile has no top10HolderAddresses, so withWalletSignals
  * is a no-op for it. A failed authority lookup yields null rather than a fabricated profile -
  * "we couldn't check" must not read as "nothing is active".
  */
@@ -564,17 +576,33 @@ function buildOnChainProfile(
 }
 
 /**
- * Fills in freshTop10WalletPct from the cycle's already-resolved earliest-activity map (see
- * resolveEarliestActivity in walletFreshness.ts) whenever the profile actually has a holder list
- * to check. Purely a synchronous lookup + percentage calc - no RPC call happens here. A holder
- * the per-cycle lookup budget deferred makes computeFreshPct return null (unknown), which
- * records as undefined rather than a percentage of a part-checked list.
+ * Fills in the two top-10 wallet signals from the cycle's already-resolved maps (see
+ * resolveEarliestActivity in walletFreshness.ts and resolveWalletHoldings in walletHoldings.ts)
+ * whenever the profile actually has a holder list to check. Purely synchronous lookups and
+ * percentage math - no RPC call happens here.
+ *
+ * The two are independent: a holder the per-cycle budget deferred on one side can still be
+ * resolved on the other, and each compute* returns null (unknown) rather than a percentage of a
+ * part-checked list, recorded as undefined. They answer complementary questions - freshness asks
+ * how OLD the wallets are, emptiness asks whether they hold anything BESIDES this launch - so a
+ * sniper farm that ages its wallets is still caught by the second, and vice versa.
  */
-function withFreshWalletPct(
+function withWalletSignals(
   onChain: OnChainProfile | null,
   earliestActivityByAddress: Map<string, Date | null>,
+  holdingsByAddress: Map<string, number>,
+  env: Env,
 ): OnChainProfile | null {
   if (!onChain?.top10HolderAddresses?.length) return onChain;
   const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
-  return { ...onChain, freshTop10WalletPct: freshTop10WalletPct ?? undefined };
+  const emptyTop10WalletPct = computeEmptyPct(
+    onChain.top10HolderAddresses,
+    holdingsByAddress,
+    env.WALLET_HOLDINGS_MIN_USD,
+  );
+  return {
+    ...onChain,
+    freshTop10WalletPct: freshTop10WalletPct ?? undefined,
+    emptyTop10WalletPct: emptyTop10WalletPct ?? undefined,
+  };
 }
