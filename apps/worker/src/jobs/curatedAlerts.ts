@@ -14,6 +14,7 @@ import {
   selectEmissions,
   CURATOR_MODEL_KIND,
   GOVERNOR_BURST_WINDOW_MINUTES,
+  HEURISTIC_CURATOR_SOURCE,
   type CurationDecision,
   type Env,
   type ScoredToken,
@@ -234,13 +235,45 @@ interface DynamicBars {
   shadow: number | null;
 }
 
-let barCache: ({ fetchedAt: number } & DynamicBars) | null = null;
+let barCache: ({ fetchedAt: number; curatorKey: string } & DynamicBars) | null = null;
+
+/**
+ * Identifies WHOSE conviction units the cached bars are expressed in. A bar is a percentile of
+ * one curator's score distribution, and the two curators' scales are nothing alike - the
+ * heuristic's rank score runs 40-80 for ordinary candidates while a model's calibrated
+ * probability x100 sits in the single digits for an event this rare. So a bar cached under one
+ * curator is not merely stale under another, it is the wrong scale: after a promotion, a
+ * heuristic-scale bar would sit far above every probability the new model produces and silence
+ * the feed completely until the cache expired. Keying the cache on the roster makes a handover
+ * invalidate it immediately.
+ */
+function rosterKey(roster: CuratorRoster): string {
+  return `${roster.active?.id ?? HEURISTIC_CURATOR_SOURCE}|${roster.newestCandidate?.id ?? "none"}`;
+}
+
+/**
+ * How many of the last 24h of candidate rows the bar is computed over. A cap, not a sample size
+ * to tune: the bar is a percentile, so it wants the whole population, and this only exists so an
+ * unexpectedly busy day cannot pull an unbounded result set into memory. Newest-first, so if it
+ * ever binds the bar describes the most recent slice of the window rather than a random one -
+ * and it is set far above any plausible day's flow (WATCHLIST_MAX_TRACKED is 900, sampled at
+ * most hourly per token), so binding it would itself be the anomaly worth noticing.
+ */
+const BAR_MAX_ROWS = 20_000;
 
 async function dynamicBars(env: Env): Promise<DynamicBars> {
-  if (barCache && Date.now() - barCache.fetchedAt < BAR_CACHE_TTL_MS) return barCache;
+  // The roster is read FIRST and cheaply (it carries its own cache) because it decides whether
+  // the cached bars are even in the right units - see rosterKey.
+  const roster = await curatorRoster();
+  const curatorKey = rosterKey(roster);
+  if (barCache && barCache.curatorKey === curatorKey && Date.now() - barCache.fetchedAt < BAR_CACHE_TTL_MS) {
+    return barCache;
+  }
 
   const rows = await prisma.candidateOutcome.findMany({
     where: { anchorAt: { gte: new Date(Date.now() - 24 * 3_600_000) } },
+    orderBy: { anchorAt: "desc" },
+    take: BAR_MAX_ROWS,
     select: { anchorAt: true, features: true, anchorPriceUsd: true, anchorMcapUsd: true },
   });
   const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
@@ -248,10 +281,17 @@ async function dynamicBars(env: Env): Promise<DynamicBars> {
 
   let result: DynamicBars = { live: null, shadow: null };
   if (inBand.length > 0) {
-    const spanMs =
-      Math.max(...inBand.map((r) => r.anchorAt.getTime())) -
-      Math.min(...inBand.map((r) => r.anchorAt.getTime()));
-    const spanHours = spanMs / 3_600_000;
+    // Folded rather than spread: Math.max(...array) passes every element as an argument and
+    // blows the call stack somewhere around a hundred thousand of them, which is a crash that
+    // would only ever appear on the busiest day this feed has seen.
+    let oldestMs = Infinity;
+    let newestMs = -Infinity;
+    for (const row of inBand) {
+      const t = row.anchorAt.getTime();
+      if (t < oldestMs) oldestMs = t;
+      if (t > newestMs) newestMs = t;
+    }
+    const spanHours = (newestMs - oldestMs) / 3_600_000;
 
     const heuristicScores = () =>
       inBand.map((r) =>
@@ -264,7 +304,6 @@ async function dynamicBars(env: Env): Promise<DynamicBars> {
         (r) => scoreCandidateWithModel(model.params, r.features as Record<string, number | null>) * 100,
       );
 
-    const roster = await curatorRoster();
     const liveScores = roster.active ? modelScores(roster.active) : heuristicScores();
     const shadowScores = roster.active
       ? heuristicScores()
@@ -278,7 +317,7 @@ async function dynamicBars(env: Env): Promise<DynamicBars> {
     };
   }
 
-  barCache = { fetchedAt: Date.now(), ...result };
+  barCache = { fetchedAt: Date.now(), curatorKey, ...result };
   return result;
 }
 

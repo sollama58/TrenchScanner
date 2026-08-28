@@ -90,6 +90,77 @@ describe("getOtherHoldingsUsdBatch", () => {
     );
   });
 
+  it("values a holding from a unit price when no total is given", async () => {
+    // Regression: the sum used to read total_price only, so a response carrying price_per_token
+    // and a balance - the same facts, one field apart - valued the wallet at nothing.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "1",
+          result: {
+            items: [
+              {
+                id: "MemeCoin1111111111111111111111111111111111",
+                token_info: {
+                  balance: 2_000_000_000_000,
+                  decimals: 6,
+                  price_info: { price_per_token: 0.00005 },
+                },
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const out = await client().getOtherHoldingsUsdBatch(["wallet-e"]);
+    // 2,000,000,000,000 raw at 6 decimals = 2,000,000 whole tokens x $0.00005 = $100.
+    expect(out.get("wallet-e")).toEqual({ status: "found", otherHoldingsUsd: 100 });
+  });
+
+  it("discards a batch where nothing at all could be priced, instead of calling every wallet empty", async () => {
+    // The silent-failure guard. If the price field moves or the feed goes down, every wallet
+    // reads $0, every holder list scores 100% empty, and the filter quietly rejects everything.
+    // A round with plenty of holdings and not one price is treated as a broken pipe: nothing is
+    // cached, the signal stays unknown, and unknown skips the filter.
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      id: `Unpriced${String(i).padStart(35, "0")}`,
+      token_info: { balance: 1_000_000 },
+    }));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result: { items: many } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const out = await client().getOtherHoldingsUsdBatch(["wallet-f"]);
+    expect(out.get("wallet-f")).toEqual({ status: "failed" });
+  });
+
+  it("still reports a lone unpriced bag honestly rather than tripping the guard", async () => {
+    // The other side of that tradeoff: a single shell wallet holding one unpriced memecoin is
+    // exactly what the filter hunts, and must not be mistaken for a broken price feed.
+    mockFetch([[item("Unpriced11111111111111111111111111111111111", undefined)]]);
+    const out = await client().getOtherHoldingsUsdBatch(["wallet-g"]);
+    expect(out.get("wallet-g")).toEqual({ status: "found", otherHoldingsUsd: 0 });
+  });
+
+  it("asks searchAssets for fungibles under the params shape it documents", async () => {
+    // Regression: showZeroBalance was sent as `displayOptions`, which is getAssetsByOwner's
+    // spelling - searchAssets nests it under `options`.
+    const spy = mockFetch([[]]);
+    await client().getOtherHoldingsUsdBatch(["wallet-h"]);
+    const body = JSON.parse((spy.mock.calls[0]![1] as { body: string }).body);
+    expect(body.method).toBe("searchAssets");
+    expect(body.params).toMatchObject({
+      ownerAddress: "wallet-h",
+      tokenType: "fungible",
+      options: { showZeroBalance: false },
+    });
+    expect(body.params.displayOptions).toBeUndefined();
+  });
+
   it("counts every call for the metered-plan spend log", async () => {
     mockFetch([[]]);
     const c = client();

@@ -178,6 +178,43 @@ interface DasFungibleItem {
 export type WalletHoldingsResult =
   { status: "found"; otherHoldingsUsd: number } | { status: "unsupported" } | { status: "failed" };
 
+/**
+ * How many non-cash holdings a batch must have seen before "not one of them had a price" is
+ * treated as a broken pipe rather than a genuinely worthless set of wallets. Low, because the
+ * batch spans many unrelated wallets - but not 1, so a single shell wallet holding one unpriced
+ * memecoin still reports honestly as $0.
+ */
+const MIN_ITEMS_FOR_PRICE_SANITY = 15;
+
+/**
+ * The USD value of one holding. Prefers the indexer's own total_price and falls back to
+ * balance x price_per_token, so a response that carries a unit price but no precomputed total
+ * still values correctly. Returns null when the asset simply has no price - an illiquid
+ * memecoin the indexer doesn't quote - which the caller counts as zero.
+ */
+function itemPriceUsd(item: DasFungibleItem): number | null {
+  const info = item.token_info;
+  const total = info?.price_info?.total_price;
+  if (typeof total === "number" && Number.isFinite(total) && total > 0) return total;
+
+  const unit = info?.price_info?.price_per_token;
+  const balance = info?.balance;
+  const decimals = info?.decimals;
+  if (
+    typeof unit === "number" &&
+    Number.isFinite(unit) &&
+    unit > 0 &&
+    typeof balance === "number" &&
+    Number.isFinite(balance) &&
+    balance > 0
+  ) {
+    const whole = typeof decimals === "number" && decimals > 0 ? balance / 10 ** decimals : balance;
+    const value = whole * unit;
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  return null;
+}
+
 export class HeliusClient {
   private readonly rpcUrl: string;
   readonly usingHelius: boolean;
@@ -555,6 +592,9 @@ export class HeliusClient {
 
     let methodMissing = false;
     let usable = 0;
+    // Batch-wide price coverage, for the guard below.
+    let itemsSeen = 0;
+    let pricedItems = 0;
 
     await forEachWithConcurrency(unique, DAS_CONCURRENCY, async (address) => {
       const res = await this.sendSingle<{ items?: DasFungibleItem[] }>(
@@ -564,7 +604,10 @@ export class HeliusClient {
           tokenType: "fungible",
           page: 1,
           limit: DAS_PAGE_LIMIT,
-          displayOptions: { showZeroBalance: false },
+          // params.options, NOT displayOptions - that spelling belongs to getAssetsByOwner, and
+          // searchAssets nests these under `options`. It is also already the default; sent
+          // explicitly so the intent (never pay for dust accounts) survives a reader.
+          options: { showZeroBalance: false },
         },
         15_000,
       );
@@ -584,12 +627,36 @@ export class HeliusClient {
       let total = 0;
       for (const item of items) {
         if (!item.id || CASH_EQUIVALENT_MINTS.has(item.id)) continue;
-        const price = item.token_info?.price_info?.total_price;
-        if (typeof price === "number" && Number.isFinite(price) && price > 0) total += price;
+        itemsSeen += 1;
+        const price = itemPriceUsd(item);
+        if (price !== null) {
+          pricedItems += 1;
+          total += price;
+        }
       }
       usable += 1;
       out.set(address, { status: "found", otherHoldingsUsd: total });
     });
+
+    // A whole batch of holdings with not one usable price is not a finding, it is a broken
+    // pipe: the response shape changed under us, or the price feed is down. Left alone it would
+    // be the worst kind of wrong - every wallet silently valued at $0, every top-10 list scored
+    // as 100% empty, and the filter rejecting every token it is applied to, with nothing in the
+    // logs to say why. So the round is discarded and retried instead of cached.
+    //
+    // The tradeoff is deliberate: a batch that genuinely holds only unpriced tokens gets thrown
+    // away too. That costs a retry (bounded by the caller's failure backoff) and leaves the
+    // signal unknown, which skips the filter - the safe direction. Across a batch drawn from
+    // several different tokens' holder lists, zero priced assets anywhere is far more likely to
+    // be the broken pipe than the coincidence.
+    if (itemsSeen >= MIN_ITEMS_FOR_PRICE_SANITY && pricedItems === 0) {
+      logger.warn("searchAssets returned no usable prices for an entire batch - discarding round", {
+        wallets: unique.length,
+        itemsSeen,
+      });
+      for (const address of unique) out.set(address, { status: "failed" });
+      return out;
+    }
 
     // Same latch discipline as the getTransactionsForAddress path: an explicit "method not found"
     // is final, while a wholly barren round is ambiguous (an outage looks identical) and only

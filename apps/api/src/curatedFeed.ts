@@ -235,6 +235,7 @@ export function serializeCuratedAlert(
     riskScore: null,
     riskFlags: [],
     freshTop10WalletPct: null,
+    emptyTop10WalletPct: null,
     isMayhemMode: null,
     graduated: null,
     mintAuthorityActive: null,
