@@ -13,18 +13,30 @@ import { issueLinkCode, redeemLinkCode, LINK_CODE_TTL_MS } from "../auth/deviceL
  * attached to a revocable device row - see auth/deviceLink.ts for why that indirection exists at
  * all (the JWT cannot be recalled, so the device row is the off switch).
  */
+/**
+ * The same reasoning as auth.ts's AUTH_ROUTE_RATE_LIMIT, and the same number: both link routes
+ * write a row per call, /link/redeem is reachable by anyone at all, and /link/code mints a
+ * credential. The global 300/minute is sized for reading the feed, which is not what these do.
+ * Pairing a phone takes one call; nobody legitimate comes close to this.
+ */
+const LINK_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+
 export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env: Env }) {
   /**
    * Mint a code. Authenticated: only a desktop that is already signed in may hand out something
    * that becomes a session, and it can only ever mint one for ITSELF - the user id comes from the
    * session, never from the request body.
    */
-  app.post("/link/code", { preHandler: app.authenticate }, async (request) => {
-    const { code, expiresAt } = await issueLinkCode(request.user!.userId);
-    request.log.info({ userId: request.user!.userId }, "issued a mobile link code");
-    // The raw code is returned exactly once, here. Nothing stores it - see hashCode.
-    return { code, expiresAt: expiresAt.toISOString(), ttlMs: LINK_CODE_TTL_MS };
-  });
+  app.post(
+    "/link/code",
+    { preHandler: app.authenticate, config: { rateLimit: LINK_ROUTE_RATE_LIMIT } },
+    async (request) => {
+      const { code, expiresAt } = await issueLinkCode(request.user!.userId);
+      request.log.info({ userId: request.user!.userId }, "issued a mobile link code");
+      // The raw code is returned exactly once, here. Nothing stores it - see hashCode.
+      return { code, expiresAt: expiresAt.toISOString(), ttlMs: LINK_CODE_TTL_MS };
+    },
+  );
 
   /**
    * Redeem a code from the phone. Deliberately UNauthenticated - the whole point is that the
@@ -33,7 +45,7 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
    * Every failure answers the same way: an attacker feeding this endpoint guesses learns only
    * "no", never whether a code was real but spent, or real but expired.
    */
-  app.post("/link/redeem", async (request, reply) => {
+  app.post("/link/redeem", { config: { rateLimit: LINK_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = z.object({ code: z.string() }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid" });
 

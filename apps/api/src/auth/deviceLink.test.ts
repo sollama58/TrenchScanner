@@ -1,7 +1,16 @@
 import "../bootstrap-env.js";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { issueLinkCode, redeemLinkCode, deviceIsActive, hashCode, LINK_CODE_TTL_MS } from "./deviceLink.js";
+import {
+  issueLinkCode,
+  redeemLinkCode,
+  deviceIsActive,
+  hashCode,
+  LINK_CODE_TTL_MS,
+  resetDeviceTouchThrottle,
+  touchDevice,
+  touchThrottleSize,
+} from "./deviceLink.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `devicelink-test-${Date.now()}`;
@@ -105,5 +114,62 @@ describe.skipIf(!dbAvailable)("mobile link codes", () => {
     if (!result.ok) throw new Error("expected the pairing to succeed");
     expect(result.userId).toBe(userId);
     expect(await prisma.linkedDevice.count({ where: { userId: other.id } })).toBe(0);
+  });
+});
+
+/**
+ * The "last seen" throttle is a plain Map on a process that runs for weeks, so the question worth
+ * asking is not whether it throttles - it obviously does - but whether it ever gives anything
+ * back. Without a sweep it holds one entry per device the API has ever served.
+ *
+ * No database needed: this is bookkeeping in front of a fire-and-forget write.
+ */
+describe("touchDevice throttle bookkeeping", () => {
+  beforeEach(() => {
+    resetDeviceTouchThrottle();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetDeviceTouchThrottle();
+  });
+
+  it("remembers a device it has just seen", () => {
+    touchDevice("device-a");
+    expect(touchThrottleSize()).toBe(1);
+  });
+
+  it("forgets devices that have gone quiet, rather than holding them for the life of the process", () => {
+    touchDevice("device-a");
+    touchDevice("device-b");
+    expect(touchThrottleSize()).toBe(2);
+
+    // Six minutes on: both entries are past the throttle window, so they say nothing the next
+    // write would not say anyway. Any touch at all is enough to trigger the sweep.
+    vi.advanceTimersByTime(6 * 60_000);
+    touchDevice("device-c");
+
+    expect(touchThrottleSize()).toBe(1);
+  });
+
+  it("keeps devices that are still inside their window", () => {
+    touchDevice("device-a");
+    // A minute is well inside the five-minute throttle, so nothing should be dropped and
+    // device-a should still be throttled rather than written again.
+    vi.advanceTimersByTime(60_000);
+    touchDevice("device-b");
+
+    expect(touchThrottleSize()).toBe(2);
+  });
+
+  it("lets a device through again once its window has passed", () => {
+    touchDevice("device-a");
+    vi.advanceTimersByTime(6 * 60_000);
+    // The sweep drops the stale entry and the write goes ahead - the device is re-remembered
+    // rather than lost, which is what keeps lastSeenAt moving for a long-lived phone.
+    touchDevice("device-a");
+
+    expect(touchThrottleSize()).toBe(1);
   });
 });

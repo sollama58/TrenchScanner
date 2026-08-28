@@ -17,6 +17,15 @@ const RPC_CACHE_RETENTION_DAYS = 90;
 const CURATOR_MODEL_RETENTION_DAYS = 90;
 
 /**
+ * How long a revoked LinkedDevice row is kept after somebody switches it off.
+ *
+ * Not zero, deliberately: "which phone did I disconnect, and when" is a question people ask
+ * shortly after doing it, usually because something stopped working. Revocation is already
+ * enforced by revokedAt rather than by the row's absence, so keeping it costs nothing but space.
+ */
+const REVOKED_DEVICE_RETENTION_DAYS = 30;
+
+/**
  * Both TokenSnapshot and Token would otherwise grow unbounded forever - every scan cycle writes
  * a snapshot for every in-band token, and every newly-discovered mint gets a bare Token row
  * whether or not it ever amounts to anything. Prunes:
@@ -33,6 +42,8 @@ const CURATOR_MODEL_RETENTION_DAYS = 90;
  *  4. Long-untouched RPC cache entries (see RPC_CACHE_RETENTION_DAYS) - these accumulate one row
  *     per distinct wallet/mint ever looked up, so without a horizon they'd outgrow everything
  *     else here despite being individually tiny.
+ *  5. Spent and expired Mobile Connect link codes, and long-revoked devices - one code row is
+ *     written per QR rendered, so this is the fastest-filling table of the lot per active user.
  */
 export async function runCleanupJob(env: Env): Promise<void> {
   const startedAt = Date.now();
@@ -82,6 +93,26 @@ export async function runCleanupJob(env: Env): Promise<void> {
     },
   });
 
+  /**
+   * Mobile Connect leaves two kinds of debris.
+   *
+   * MobileLinkCode rows are the bigger of the two: one is written every time a desktop renders a
+   * QR, they are useless the moment they are claimed or two minutes pass, and nothing ever read
+   * them again. Deleting spent and expired codes on sight is safe precisely because redemption
+   * checks `claimedAt` and `expiresAt` - a row this sweep removes could not have been redeemed
+   * anyway. An hour of slack keeps the sweep clear of codes still in flight.
+   *
+   * Revoked devices are the smaller kind, kept a month first - see above.
+   */
+  const [deletedLinkCodes, deletedRevokedDevices] = await Promise.all([
+    prisma.mobileLinkCode.deleteMany({
+      where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
+    }),
+    prisma.linkedDevice.deleteMany({
+      where: { revokedAt: { lt: new Date(startedAt - REVOKED_DEVICE_RETENTION_DAYS * DAY_MS) } },
+    }),
+  ]);
+
   const rpcCacheCutoff = new Date(startedAt - RPC_CACHE_RETENTION_DAYS * DAY_MS);
   const [deletedWalletCache, deletedMintAuthorityCache, deletedMayhemCache, deletedHoldingsCache] =
     await Promise.all([
@@ -105,6 +136,8 @@ export async function runCleanupJob(env: Env): Promise<void> {
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
     deletedCuratorModels: deletedCuratorModels.count,
+    deletedLinkCodes: deletedLinkCodes.count,
+    deletedRevokedDevices: deletedRevokedDevices.count,
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,
