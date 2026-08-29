@@ -22,8 +22,22 @@ const HEARTBEAT_MS = 25_000;
  * tab is; without a cap, a misbehaving or malicious client could pin file descriptors until the
  * API stops accepting connections at all. Over the cap the route falls back to telling the client
  * to poll, which is a degraded experience rather than a broken one.
+ *
+ * The default is sized from what a stream actually costs, measured rather than guessed: 1200 open
+ * streams moved the API's RSS by 75MB, so ~64KB each once the socket buffers are really in use.
+ * 2000 is therefore on the order of 130MB, which fits beside a ~100-190MB baseline on a 512MB
+ * instance. (A smaller sample suggests ~37KB; the larger, more pessimistic figure is the one to
+ * size against.)
+ *
+ * Capacity is why this moved at all. The old 500 was a hard ceiling at roughly 250 concurrent
+ * PumpTok readers, because a reader watching both sources opens two streams. Running out is
+ * silent from the user's side - they simply stop getting nudges and fall back to polling - so the
+ * ceiling wants to sit well above expected traffic rather than near it.
+ *
+ * Configurable because the right number depends on the instance: raise it on a larger plan, lower
+ * it if streams are ever found to be the thing exhausting memory.
  */
-const MAX_SUBSCRIBERS = 500;
+const MAX_SUBSCRIBERS = Math.max(1, Number(process.env.MAX_STREAM_SUBSCRIBERS ?? 2000) || 2000);
 
 /** Backoff between reconnection attempts for the LISTEN connection, capped. */
 const RECONNECT_BASE_MS = 1_000;
@@ -74,7 +88,14 @@ export class MatchStream {
   private reconnectDelay = RECONNECT_BASE_MS;
   private stopped = false;
 
-  constructor(private readonly databaseUrl: string) {}
+  /**
+   * `maxSubscribers` is injectable so the capacity behaviour can be tested at a small number
+   * rather than by opening two thousand sockets.
+   */
+  constructor(
+    private readonly databaseUrl: string,
+    private readonly maxSubscribers: number = MAX_SUBSCRIBERS,
+  ) {}
 
   get subscriberCount(): number {
     return this.subscribers.size;
@@ -199,10 +220,10 @@ export class MatchStream {
   /**
    * Registers a connected client. Returns a disposer the route must call when the request ends -
    * without it a closed tab would leave a dead subscriber accumulating heartbeat writes forever.
-   * Returns null when the process is already at MAX_SUBSCRIBERS.
+   * Returns null when the process is already at its subscriber ceiling.
    */
   subscribe(userId: string, sink: StreamSink): (() => void) | null {
-    if (this.subscribers.size >= MAX_SUBSCRIBERS) return null;
+    if (this.subscribers.size >= this.maxSubscribers) return null;
     const subscriber: Subscriber = { kind: "match", userId, sink };
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
@@ -210,7 +231,7 @@ export class MatchStream {
 
   /** Same contract as subscribe(), for the broadcast curated feed - shares the same capacity cap. */
   subscribeCurated(sink: StreamSink): (() => void) | null {
-    if (this.subscribers.size >= MAX_SUBSCRIBERS) return null;
+    if (this.subscribers.size >= this.maxSubscribers) return null;
     const subscriber: Subscriber = { kind: "curated", userId: "", sink };
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);

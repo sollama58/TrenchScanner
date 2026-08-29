@@ -5,6 +5,7 @@ import { prisma, corsOriginList, type Env, type DexScreenerClient } from "@trenc
 import { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { curatedAlertInclude, foldCuratedIntoPage, serializeCuratedAlert } from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
+import type { ViewStampBuffer } from "../viewStamps.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
@@ -58,7 +59,7 @@ export const listQuerySchema = z.object({
 
 export async function registerMatchRoutes(
   app: FastifyInstance,
-  opts: { env: Env; dexScreener: DexScreenerClient; matchStream: MatchStream },
+  opts: { env: Env; dexScreener: DexScreenerClient; matchStream: MatchStream; viewStamps: ViewStampBuffer },
 ) {
   // The feed itself, and the live stream that pushes to it. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
@@ -212,10 +213,10 @@ export async function registerMatchRoutes(
     // is unusual, but it's idempotent and lossy-tolerant (worst case a token's tracking lapses a
     // few minutes early), and piggybacking on the poll the dashboard already makes avoids a
     // second round trip just to say "I'm looking at these."
-    const tokenIds = [...new Set(cards.map((c) => c.tokenId))];
-    if (tokenIds.length > 0) {
-      await prisma.token.updateMany({ where: { id: { in: tokenIds } }, data: { lastViewedAt: new Date() } });
-    }
+    //
+    // Buffered rather than written here: the write used to cost this request a transaction, and
+    // concurrent readers of the same page all queued on the same rows. See ViewStampBuffer.
+    opts.viewStamps.record(cards.map((c) => c.tokenId));
 
     // Stamping lastViewedAt above is only half of it: the worker acts on that stamp once a minute,
     // so a page being opened - a first visit, or paging back to one seen earlier - would show

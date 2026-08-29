@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import compress from "@fastify/compress";
 import {
   type Env,
   corsOriginList,
@@ -12,7 +13,7 @@ import {
   SolanaRpc,
   resolveAccess,
 } from "@trenchscanner/core";
-import { createSessionSigner, SESSION_COOKIE_NAME } from "./auth/session.js";
+import { createSessionSigner, SESSION_COOKIE_NAME, type SessionPayload } from "./auth/session.js";
 import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerDeviceLinkRoutes } from "./routes/deviceLink.js";
@@ -27,6 +28,7 @@ import { registerConfigRoutes } from "./routes/config.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { MatchStream } from "./matchStream.js";
+import { ViewStampBuffer } from "./viewStamps.js";
 
 const logger = createLogger("api");
 
@@ -39,24 +41,85 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   });
   await app.register(cookie);
 
+  /**
+   * Compression. The feed responses are the reason: a page of twelve cards is ~33KB of JSON and
+   * ~2.7KB gzipped, so this is a ~92% cut in what a phone on a bad connection has to pull down
+   * before the dashboard can paint - and the dashboard re-fetches that page every 45 seconds.
+   *
+   * gzip only, deliberately. Brotli compresses these payloads a little smaller but costs several
+   * times the CPU per response, and the API is CPU-bound before it is bandwidth-bound at the
+   * concurrency this is sized for; spending cores to save a few hundred bytes is the wrong trade
+   * here. Every browser that speaks brotli speaks gzip.
+   *
+   * The 1KB threshold keeps small replies (errors, /config, /health) uncompressed, where the
+   * framing overhead can exceed the saving.
+   *
+   * Note this never touches the SSE endpoints: those call reply.hijack(), which skips Fastify's
+   * onSend hooks entirely, so the stream stays unbuffered and un-encoded - which is what an event
+   * stream needs.
+   */
+  await app.register(compress, {
+    global: true,
+    threshold: 1024,
+    encodings: ["gzip", "deflate"],
+  });
+
   // Pure JSON API - CSP/script-src directives don't apply to anything we serve, so they're
   // switched off to avoid meaningless header bloat. Everything else (nosniff, frame-deny, HSTS,
   // referrer-policy, ...) still applies.
   await app.register(helmet, { contentSecurityPolicy: false });
 
-  // Registered globally so every route gets a sane default; individual routes (see auth.ts's
-  // /nonce and /verify - the only unauthenticated, state-touching endpoints) tighten this further
-  // via their own `config.rateLimit`. Keyed by request.ip, which respects trustProxy above, so
-  // this reads the real client IP through Render's proxy rather than rate-limiting the proxy itself.
-  await app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
-
+  /**
+   * Registered globally so every route gets a sane default; individual routes (see auth.ts's
+   * /nonce and /verify - the only unauthenticated, state-touching endpoints) tighten this further
+   * via their own `config.rateLimit`.
+   *
+   * Keyed by session, falling back to IP. Keying purely by IP - which respects trustProxy above,
+   * so it reads the real client address rather than Render's proxy - punishes people for who
+   * their ISP is: a mobile carrier's CGNAT or an office egress puts many subscribers behind one
+   * address, and they then share one budget. The dashboard makes roughly two to four requests a
+   * minute per open tab, so a single IP could carry only a few dozen users before the rest
+   * started getting 429s for someone else's polling. A signed session cookie is the better
+   * identity here - it is per-user, it cannot be spoofed to somebody else's bucket, and it is
+   * already parsed further down the request.
+   *
+   * Unauthenticated traffic still falls back to IP, which is the only identity it has, and that
+   * is also the traffic the tighter per-route limits exist for.
+   */
   app.decorate("sessionSigner", createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS));
+
+  /**
+   * The JWT verification, memoised per request.
+   *
+   * Both the rate limiter's key and the auth hooks need to know who is calling, and verifying the
+   * same cookie twice per request is pure waste. Only the signature check is cached - the device
+   * revocation lookup in resolveSession deliberately is not, because that check IS the revocation
+   * and has to run every time.
+   */
+  const verifiedSessions = new WeakMap<FastifyRequest, SessionPayload | null>();
+  async function verifySession(request: FastifyRequest): Promise<SessionPayload | null> {
+    if (verifiedSessions.has(request)) return verifiedSessions.get(request) ?? null;
+    const token = request.cookies[SESSION_COOKIE_NAME];
+    const session = token ? await app.sessionSigner.verify(token) : null;
+    verifiedSessions.set(request, session);
+    return session;
+  }
+
+  await app.register(rateLimit, {
+    max: 300,
+    timeWindow: "1 minute",
+    keyGenerator: async (request) => {
+      // Verified, never merely present: an unverified cookie would let one client mint a fresh
+      // bucket per request simply by changing the value, which is no rate limit at all.
+      const session = await verifySession(request).catch(() => null);
+      return session ? `user:${session.userId}` : `ip:${request.ip}`;
+    },
+  });
 
   // Shared by authenticate and authenticateAdmin below so the cookie-read-and-verify step (and
   // any future change to it) only lives in one place.
   async function resolveSession(request: FastifyRequest) {
-    const token = request.cookies[SESSION_COOKIE_NAME];
-    const session = token ? await app.sessionSigner.verify(token) : null;
+    const session = await verifySession(request);
     if (!session) return null;
 
     // A paired-phone session is only as good as its device row. The JWT itself cannot be
@@ -153,6 +216,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     await matchStream.stop();
   });
 
+  // Batches the Token.lastViewedAt stamps both feeds make, so a page load no longer pays for a
+  // write transaction and concurrent readers of the same page stop queueing on the same rows.
+  // Flushed on shutdown so the last page anyone opened still counts. See viewStamps.ts.
+  const viewStamps = new ViewStampBuffer();
+  app.addHook("onClose", async () => {
+    await viewStamps.stop();
+  });
+
   await app.register(registerHealthRoutes, { prefix: "/health" });
   await app.register(registerConfigRoutes, { prefix: "/config", env });
 
@@ -160,8 +231,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   await app.register(registerDeviceLinkRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
-  await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener, matchStream });
-  await app.register(registerCuratedRoutes, { prefix: "/curated", env, dexScreener, matchStream });
+  await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener, matchStream, viewStamps });
+  await app.register(registerCuratedRoutes, {
+    prefix: "/curated",
+    env,
+    dexScreener,
+    matchStream,
+    viewStamps,
+  });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });

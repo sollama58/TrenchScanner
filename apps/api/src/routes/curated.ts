@@ -9,11 +9,29 @@ import {
 } from "@trenchscanner/core";
 import { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { currentMarketCap } from "./matches.js";
-import { curatedAlertInclude, serializeCuratedAlert } from "../curatedFeed.js";
+import {
+  curatedAlertInclude,
+  serializeCuratedAlert,
+  type CuratedAlertWithRelations,
+} from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
+import type { ViewStampBuffer } from "../viewStamps.js";
+import { SharedCache } from "../sharedCache.js";
 
 /** Same fixed page size as the Live Feed - the two tabs render the same card. */
 const PAGE_SIZE = 12;
+
+/** How long one page of curated rows is reused across readers. See pageCache below. */
+const FEED_CACHE_TTL_MS = 3_000;
+
+/** How many distinct page numbers keep a cache. Page 1 is what nearly every reader asks for. */
+const MAX_CACHED_PAGES = 8;
+
+/** What the cache holds: the database rows, not the rendered cards. */
+type CuratedPage = {
+  alerts: CuratedAlertWithRelations[];
+  totalCount: number;
+};
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -21,7 +39,7 @@ const listQuerySchema = z.object({
 
 export async function registerCuratedRoutes(
   app: FastifyInstance,
-  opts: { env: Env; dexScreener: DexScreenerClient; matchStream: MatchStream },
+  opts: { env: Env; dexScreener: DexScreenerClient; matchStream: MatchStream; viewStamps: ViewStampBuffer },
 ) {
   // Part of what the subscription buys - same gate as the Live Feed.
   app.addHook("preHandler", app.authenticateSubscriber);
@@ -30,6 +48,33 @@ export async function registerCuratedRoutes(
     maxAgeMs: opts.env.LIVE_PRICE_INTERVAL_MINUTES * 60_000,
     limit: PAGE_SIZE,
   });
+
+  /**
+   * One cache per page, because this feed is genuinely shared: every subscriber sees the same
+   * alerts in the same order, so re-running the query per reader bought nothing but load.
+   *
+   * Only the database rows are cached, never the serialized cards. A card carries a live
+   * countdown (OutcomeView.minutesLeft) and a status that flips when the win window closes, and
+   * caching the rendered card would freeze both. Rows are the expensive half anyway - six of a
+   * page's database round-trips, plus a count that grows with the table forever - while
+   * re-serializing them is cheap arithmetic against Date.now().
+   *
+   * Three seconds is chosen against the client, not plucked: the dashboard polls this every 30
+   * seconds and the SSE nudge is what makes new alerts feel instant, so the window is far too
+   * short for anyone to perceive, and long enough to collapse a burst of concurrent readers into
+   * one query.
+   */
+  const pageCache = new Map<number, SharedCache<CuratedPage>>();
+  const cacheForPage = (page: number) => {
+    let cache = pageCache.get(page);
+    if (!cache) {
+      cache = new SharedCache<CuratedPage>(FEED_CACHE_TTL_MS);
+      // Only the first few pages are worth holding: deep paging is rare and one-off, and an
+      // unbounded map here would be a slow leak driven by whatever page numbers get requested.
+      if (pageCache.size < MAX_CACHED_PAGES) pageCache.set(page, cache);
+    }
+    return cache;
+  };
 
   /**
    * SSE nudge on every curated emission - broadcast, unlike /matches/stream, because the feed is
@@ -70,25 +115,31 @@ export async function registerCuratedRoutes(
     }
     const { page } = parsed.data;
 
-    const [alerts, totalCount] = await Promise.all([
-      prisma.curatedAlert.findMany({
-        orderBy: { createdAt: "desc" },
-        skip: (page - 1) * PAGE_SIZE,
-        take: PAGE_SIZE,
-        include: curatedAlertInclude,
-      }),
-      prisma.curatedAlert.count(),
-    ]);
+    const { alerts, totalCount } = await cacheForPage(page).get(async () => {
+      const [rows, count] = await Promise.all([
+        prisma.curatedAlert.findMany({
+          orderBy: { createdAt: "desc" },
+          skip: (page - 1) * PAGE_SIZE,
+          take: PAGE_SIZE,
+          include: curatedAlertInclude,
+        }),
+        prisma.curatedAlert.count(),
+      ]);
+      return { alerts: rows, totalCount: count };
+    });
 
+    // Serialized per request, not per cache fill - see the note on pageCache: the countdown and
+    // the won/missed flip are computed from Date.now() and have to stay live.
     const cards = alerts.map((alert) => serializeCuratedAlert(alert, currentMarketCap));
 
     // Same side effect the Live Feed's list has, for the same reason: being on a page someone
     // fetched is what keeps a token's market cap refreshing (see Token.lastViewedAt), and
     // without it a curated card's "Now" would freeze the moment the token left the mcap band.
-    const tokenIds = [...new Set(cards.map((c) => c.tokenId))];
-    if (tokenIds.length > 0) {
-      await prisma.token.updateMany({ where: { id: { in: tokenIds } }, data: { lastViewedAt: new Date() } });
-    }
+    //
+    // This feed is where buffering matters most: it is the same twelve alerts for every
+    // subscriber, so writing here meant every concurrent reader contending for the same twelve
+    // rows. See ViewStampBuffer.
+    opts.viewStamps.record(cards.map((c) => c.tokenId));
     liveRefresher.request(cards.map((c) => c.token));
 
     return { alerts: cards, page, pageSize: PAGE_SIZE, totalCount };

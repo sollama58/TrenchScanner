@@ -131,12 +131,27 @@ describe("MatchStream.dispatch", () => {
 
 describe("MatchStream capacity", () => {
   it("refuses new subscribers past the cap instead of pinning unbounded sockets", () => {
-    const s = stream();
-    const accepted = [];
-    for (let i = 0; i < 500; i += 1) accepted.push(s.subscribe(`u${i}`, sink().sink));
+    // The cap is injected rather than read from the module constant, so this asserts the
+    // behaviour - refuse past the ceiling - and not whatever the ceiling currently happens to be.
+    const s = new MatchStream("postgresql://unused", 3);
+    const accepted = [
+      s.subscribe("a", sink().sink),
+      s.subscribe("b", sink().sink),
+      s.subscribe("c", sink().sink),
+    ];
 
     expect(accepted.every((d) => d !== null)).toBe(true);
     expect(s.subscribe("one-too-many", sink().sink)).toBe(null);
+  });
+
+  it("counts curated subscribers against the same ceiling as match subscribers", () => {
+    // They share one pool: a reader watching both sources holds two of these, which is exactly
+    // why the ceiling had to move.
+    const s = new MatchStream("postgresql://unused", 2);
+
+    expect(s.subscribe("a", sink().sink)).not.toBe(null);
+    expect(s.subscribeCurated(sink().sink)).not.toBe(null);
+    expect(s.subscribeCurated(sink().sink)).toBe(null);
   });
 });
 
