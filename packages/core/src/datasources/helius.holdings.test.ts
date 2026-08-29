@@ -22,6 +22,12 @@ function mockFetch(itemsByCall: unknown[][]) {
 
 const client = () => new HeliusClient({ rpcUrl: "https://mainnet.helius-rpc.com/?api-key=test" });
 
+const ok = (items: unknown[]) =>
+  new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result: { items } }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
 const LAUNCH = "LaunchMint1111111111111111111111111111111111";
 const OTHER = "OtherMint22222222222222222222222222222222222";
 
@@ -180,6 +186,89 @@ describe("getOtherHoldingsUsdBatch", () => {
     mockFetch([[item("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 10_000), item(OTHER, 60)]]);
     const out = await client().getOtherHoldingsUsdBatch(["w"], [LAUNCH]);
     expect(out.get("w")).toEqual({ status: "found", otherHoldingsUsd: 60, perMintUsd: { [LAUNCH]: 0 } });
+  });
+
+  it("does not disable itself for good because the network dropped", async () => {
+    // The bug this replaces: three consecutive unreachable rounds - seconds apart, on batches that
+    // can be a single wallet - permanently switched holdings lookups off, so every token reported
+    // its empty-wallet share as unknown until someone redeployed. An outage is not evidence that
+    // the endpoint fails to serve DAS.
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNRESET"));
+    const c = client();
+    for (let i = 0; i < 5; i += 1) await c.getOtherHoldingsUsdBatch([`w${i}`]);
+    expect(c.holdingsLookupAvailable).toBe(true);
+
+    // And once the network comes back it answers again, with no redeploy.
+    vi.restoreAllMocks();
+    mockFetch([[item(OTHER, 400)]]);
+    const out = await c.getOtherHoldingsUsdBatch(["recovered"], [LAUNCH]);
+    expect(out.get("recovered")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 400,
+      perMintUsd: { [LAUNCH]: 0 },
+    });
+  });
+
+  it("stands down after genuinely barren rounds, but only for a while", async () => {
+    // A reachable endpoint that answers and yields nothing usable is the ambiguous case: it might
+    // be a plan without DAS, it might be a bad afternoon. Backing off is right; never trying again
+    // is not.
+    // A fresh Response per call: a body can only be read once, and reusing one makes the second
+    // call look like a transport failure instead of the RPC error being tested.
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", error: { code: -32000, message: "busy" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const c = client();
+    for (let i = 0; i < 3; i += 1) await c.getOtherHoldingsUsdBatch([`w${i}`]);
+
+    // Stood down now...
+    expect(c.holdingsLookupAvailable).toBe(false);
+    // ...but temporarily. Ten minutes on, it is willing to look again.
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    expect(c.holdingsLookupAvailable).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("still switches off permanently when the endpoint says the method does not exist", async () => {
+    // The one answer that IS a fact about the endpoint rather than about today's network.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: "1", error: { code: -32601, message: "Method not found" } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const c = client();
+    await c.getOtherHoldingsUsdBatch(["w1"]);
+    expect(c.holdingsLookupAvailable).toBe(false);
+
+    // No stand-down expiry rescues this one.
+    vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+    expect(c.holdingsLookupAvailable).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("reads past the first page rather than truncating a large wallet", async () => {
+    // A full page means there may be more. Stopping there undervalued the wallet, which makes it
+    // look emptier than it is - the wrong direction for a signal that flags shells.
+    const full = Array.from({ length: 1000 }, (_, i) => item(`T${i}`, 1));
+    const tail = [item("TAIL", 250)];
+    let call = 0;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => ok(call++ === 0 ? full : tail));
+
+    const out = await client().getOtherHoldingsUsdBatch(["whale"]);
+
+    expect(spy.mock.calls.length).toBe(2);
+    expect(out.get("whale")).toMatchObject({ status: "found", otherHoldingsUsd: 1_250 });
+  });
+
+  it("stops at a short page instead of paging forever", async () => {
+    const spy = mockFetch([[item(OTHER, 10)]]);
+    await client().getOtherHoldingsUsdBatch(["ordinary"]);
+    expect(spy.mock.calls.length).toBe(1);
   });
 
   it("asks searchAssets for fungibles under the params shape it documents", async () => {

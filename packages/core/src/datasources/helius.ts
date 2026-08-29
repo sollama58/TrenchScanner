@@ -152,8 +152,33 @@ const DAS_CONCURRENCY = 3;
 /** searchAssets page size. 1000 is the documented maximum; see getOtherHoldingsUsdBatch. */
 const DAS_PAGE_LIMIT = 1000;
 
-/** Consecutive barren rounds before searchAssets is written off - same reasoning as the GTFA latch. */
+/** Consecutive barren rounds before searchAssets is stood down - see the note on dasBarrenRounds. */
 const DAS_FAILURE_LATCH_ROUNDS = 3;
+
+/**
+ * How long a barren latch stands searchAssets down before it is retried.
+ *
+ * The barren latch used to be permanent, which made a network blip indistinguishable from a plan
+ * that does not serve DAS: three consecutive unreachable rounds - seconds apart, on a batch that
+ * can be a single wallet - disabled holdings lookups for the entire life of the worker process.
+ * Every token then reported its empty-wallet share as unknown until someone redeployed, with one
+ * line in the log to say why.
+ *
+ * Only an explicit "method not found" is now permanent, because only that is actually a fact
+ * about the endpoint. Everything else stands down for this long and then re-probes.
+ */
+const DAS_STANDDOWN_MS = 10 * 60_000;
+
+/**
+ * Hard ceiling on searchAssets pages per wallet.
+ *
+ * One page is 1000 fungible holdings, which is far beyond any wallet this signal cares about -
+ * but stopping at exactly one page silently truncated the few that exceed it, undervaluing them
+ * and so overstating how empty they look. Paging past the first is rare enough to be free and
+ * removes the cliff; the cap stops a pathological account from spending an unbounded number of
+ * calls.
+ */
+const DAS_MAX_PAGES = 5;
 
 /** One item of a searchAssets fungible-token response. */
 interface DasFungibleItem {
@@ -249,10 +274,23 @@ export class HeliusClient {
   private gtfaBarrenRounds = 0;
   /**
    * Set once searchAssets is established as unusable - true for any non-Helius endpoint, and for
-   * a plan tier that doesn't serve DAS. Latches for the same reason gtfaUnavailable does.
+   * a plan tier that answers "method not found". Permanent, because both are facts about the
+   * endpoint rather than about today's network.
    */
   private dasUnavailable = false;
-  /** Consecutive rounds searchAssets produced nothing usable - see DAS_FAILURE_LATCH_ROUNDS. */
+  /**
+   * Set instead when searchAssets merely stopped answering - an outage, a rate-limit wall, a
+   * DNS hiccup. Temporary by design: see DAS_STANDDOWN_MS for why a permanent latch here was
+   * the wrong shape.
+   */
+  private dasStoodDownUntil = 0;
+  /**
+   * Consecutive rounds in which searchAssets was REACHED and still yielded nothing usable.
+   *
+   * Rounds we never got an answer from at all no longer count. Treating an unreachable endpoint
+   * as evidence that it does not serve DAS is what let three seconds of packet loss switch the
+   * signal off indefinitely.
+   */
   private dasBarrenRounds = 0;
   /** RPC method invocations issued since the last takeCallStats() - the number a plan bills on. */
   private readonly callCounts = new Map<string, number>();
@@ -552,9 +590,15 @@ export class HeliusClient {
     return out;
   }
 
-  /** Whether DAS-backed holdings lookups are currently believed usable, for health/diagnostics. */
+  /**
+   * Whether DAS-backed holdings lookups are currently believed usable, for health/diagnostics.
+   *
+   * False while stood down after an outage as well as when permanently unavailable - callers
+   * skip the pass either way - but the stand-down expires on its own, so this returns true again
+   * without a redeploy.
+   */
   get holdingsLookupAvailable(): boolean {
-    return !this.dasUnavailable;
+    return !this.dasUnavailable && Date.now() >= this.dasStoodDownUntil;
   }
 
   /**
@@ -608,45 +652,71 @@ export class HeliusClient {
     const out = new Map<string, WalletHoldingsResult>();
     if (unique.length === 0) return out;
 
-    if (this.dasUnavailable) {
+    if (!this.holdingsLookupAvailable) {
       for (const address of unique) out.set(address, { status: "unsupported" });
       return out;
     }
 
     let methodMissing = false;
     let usable = 0;
+    /** Rounds where the endpoint answered at all - the barren latch only judges these. */
+    let answered = 0;
     // Batch-wide price coverage, for the guard below.
     let itemsSeen = 0;
     let pricedItems = 0;
 
     await forEachWithConcurrency(unique, DAS_CONCURRENCY, async (address) => {
-      const res = await this.sendSingle<{ items?: DasFungibleItem[] }>(
-        "searchAssets",
-        {
-          ownerAddress: address,
-          tokenType: "fungible",
-          page: 1,
-          limit: DAS_PAGE_LIMIT,
-          // params.options, NOT displayOptions - that spelling belongs to getAssetsByOwner, and
-          // searchAssets nests these under `options`. It is also already the default; sent
-          // explicitly so the intent (never pay for dust accounts) survives a reader.
-          options: { showZeroBalance: false },
-        },
-        15_000,
-      );
+      // Paged rather than one shot: a wallet holding more than DAS_PAGE_LIMIT fungibles used to
+      // be silently cut off at the first page, which undervalues it and so overstates how empty
+      // it looks. Almost every wallet finishes on page one, so the loop costs nothing in practice.
+      const items: DasFungibleItem[] = [];
+      let truncated = false;
+      for (let page = 1; page <= DAS_MAX_PAGES; page += 1) {
+        const res = await this.sendSingle<{ items?: DasFungibleItem[] }>(
+          "searchAssets",
+          {
+            ownerAddress: address,
+            tokenType: "fungible",
+            page,
+            limit: DAS_PAGE_LIMIT,
+            // params.options, NOT displayOptions - that spelling belongs to getAssetsByOwner, and
+            // searchAssets nests these under `options`. It is also already the default; sent
+            // explicitly so the intent (never pay for dust accounts) survives a reader.
+            options: { showZeroBalance: false },
+          },
+          15_000,
+        );
 
-      if (!res) {
-        out.set(address, { status: "failed" });
-        return;
+        // No response at all: unreachable, timed out, or a transport error. A failure for this
+        // wallet, but deliberately NOT evidence about whether the endpoint serves DAS.
+        if (!res) {
+          out.set(address, { status: "failed" });
+          return;
+        }
+        if (page === 1) answered += 1;
+        if (res.error) {
+          if (res.error.code === RPC_METHOD_NOT_FOUND) methodMissing = true;
+          out.set(address, { status: "failed" });
+          return;
+        }
+
+        const pageItems = res.result?.items ?? [];
+        items.push(...pageItems);
+        // A short page is the last page. A full one means there may be more.
+        if (pageItems.length < DAS_PAGE_LIMIT) break;
+        if (page === DAS_MAX_PAGES) truncated = true;
       }
-      if (res.error) {
-        if (res.error.code === RPC_METHOD_NOT_FOUND) methodMissing = true;
-        out.set(address, { status: "failed" });
-        return;
+
+      // Past the page cap the total is a floor of a floor. Said out loud rather than left to look
+      // like a complete reading, since it can only make a wallet look emptier than it is.
+      if (truncated) {
+        logger.warn("searchAssets hit the page cap - wallet valued on a partial holding list", {
+          address,
+          pages: DAS_MAX_PAGES,
+        });
       }
 
       // A successful call with no items is a real answer: this wallet holds nothing fungible.
-      const items = res.result?.items ?? [];
       let total = 0;
       // Seeded with a zero for every requested mint, so "holds none of it" is recorded as a fact
       // rather than as a gap - see perMintUsd on WalletHoldingsResult.
@@ -687,18 +757,26 @@ export class HeliusClient {
       return out;
     }
 
-    // Same latch discipline as the getTransactionsForAddress path: an explicit "method not found"
-    // is final, while a wholly barren round is ambiguous (an outage looks identical) and only
-    // counts toward the latch.
+    // An explicit "method not found" is a fact about the endpoint and is final. A barren round is
+    // not: an outage looks exactly the same from here, which is why it now only stands the lookup
+    // down for a while instead of switching it off for the life of the process.
+    //
+    // A round nobody answered is not judged at all. Counting unreachable rounds toward the latch
+    // is what let a few seconds of packet loss disable holdings lookups until the next deploy.
     if (methodMissing) {
       this.dasUnavailable = true;
       logger.warn("searchAssets not served by this endpoint - holdings lookups disabled");
+    } else if (answered === 0) {
+      logger.warn("searchAssets unreachable this round - not counted against the latch", {
+        wallets: unique.length,
+      });
     } else if (usable === 0) {
       this.dasBarrenRounds += 1;
       if (this.dasBarrenRounds >= DAS_FAILURE_LATCH_ROUNDS) {
-        this.dasUnavailable = true;
-        logger.warn("searchAssets barren for too many rounds - holdings lookups disabled", {
-          rounds: this.dasBarrenRounds,
+        this.dasStoodDownUntil = Date.now() + DAS_STANDDOWN_MS;
+        this.dasBarrenRounds = 0;
+        logger.warn("searchAssets barren for too many rounds - standing down, will retry", {
+          standDownMinutes: Math.round(DAS_STANDDOWN_MS / 60_000),
         });
       }
     } else {
