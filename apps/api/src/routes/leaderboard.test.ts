@@ -25,6 +25,8 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
   let app: FastifyInstance;
   let cookie: string;
   let userId: string;
+  /** MID's best return. Depends on what was already in the table - see `base` in beforeAll. */
+  let midPct: number;
 
   beforeAll(async () => {
     const env = loadEnv();
@@ -38,15 +40,32 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
       data: { userId, name: TAG, mcapMin: 10_000, mcapMax: 1_000_000 },
     });
 
+    // The board is a global top-50 with no per-user scoping, so a fixture carrying ordinary
+    // returns is simply crowded out by whatever history the database already holds - and then
+    // every assertion below reads an empty list and fails for a reason that has nothing to do
+    // with ranking. That is a property of the endpoint, not something to work around by hoping
+    // the table is empty: it passes on CI's throwaway Postgres and fails against any database
+    // with real matches in it.
+    //
+    // So the fixture is lifted above the field. `base` is a clean thousand past the best return
+    // already recorded, which puts these three tokens at the top of the board whatever else is
+    // in there, without touching or deleting another row.
+    const { _max } = await prisma.match.aggregate({ _max: { peakReturnPct: true } });
+    const base = Math.ceil(Math.max(0, _max.peakReturnPct ?? 0) / 1_000) * 1_000 + 1_000;
+
     // Three tokens whose returns are deliberately awkward binary64 values, and one of them
     // carrying 80 near-duplicate matches - the shape that used to collapse the whole board to a
     // single entry when de-duplication happened after the row limit.
+    //
+    // UNDER deliberately does NOT get the offset: its entire job is to sit below +100% and be
+    // excluded, which lifting it would defeat.
     const specs = [
-      { symbol: "LOW", pct: 150.00000000000003, copies: 1 },
-      { symbol: "MID", pct: 333.33333333333337, copies: 80 },
-      { symbol: "TOP", pct: 755.5555555555557, copies: 1 },
+      { symbol: "LOW", pct: base + 150.00000000000003, copies: 1 },
+      { symbol: "MID", pct: base + 333.33333333333337, copies: 80 },
+      { symbol: "TOP", pct: base + 755.5555555555557, copies: 1 },
       { symbol: "UNDER", pct: 42, copies: 1 }, // below +100%, must never appear
     ];
+    midPct = specs[1]!.pct;
 
     for (const spec of specs) {
       const token = await prisma.token.create({
@@ -114,13 +133,16 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
 
   it("picks each token's best-returning match, not an arbitrary one", async () => {
     // The 80 copies of MID are all 1e-7 worse than the first, so which row was selected is
-    // observable. Compared with a tolerance rather than for equality on purpose: a Float does not
-    // survive the trip through the driver and JSON bit-identically (333.33333333333337 comes back
-    // as 333.3333333333334), which is harmless for a percentage on a card but is precisely why
-    // this endpoint selects the winning row directly instead of looking it back up by its value.
+    // observable: the threshold sits halfway between the best copy and the rest, and only the
+    // best clears it.
+    //
+    // A threshold rather than an equality check on purpose: a Float does not survive the trip
+    // through the driver and JSON bit-identically (333.33333333333337 comes back as
+    // 333.3333333333334), which is harmless for a percentage on a card but is precisely why this
+    // endpoint selects the winning row directly instead of looking it back up by its value.
     const mid = ours(await board()).find((e) => e.token.symbol === "MID");
-    expect(mid?.returnPct).toBeGreaterThan(333.3333333);
-    expect(mid?.returnPct).toBeCloseTo(333.3333333333, 9);
+    expect(mid?.returnPct).toBeGreaterThan(midPct - 5e-8);
+    expect(mid?.returnPct).toBeLessThan(midPct + 5e-8);
   });
 
   it("ranks by return, descending", async () => {
