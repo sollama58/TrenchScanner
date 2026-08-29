@@ -176,7 +176,26 @@ interface DasFungibleItem {
  *  - "failed": transport error, rate limit, or RPC error - no answer, try again later.
  */
 export type WalletHoldingsResult =
-  { status: "found"; otherHoldingsUsd: number } | { status: "unsupported" } | { status: "failed" };
+  | {
+      status: "found";
+      /** Non-cash, non-gas holdings. Still INCLUDES any mint of interest - see perMintUsd. */
+      otherHoldingsUsd: number;
+      /**
+       * What this wallet holds of each mint the caller named as "of interest", in USD.
+       *
+       * Every requested mint gets an entry, zero included, so a reader can tell "we checked and
+       * the wallet holds none of it" from "we never asked about that mint" - which is what makes
+       * a cached row safe to reuse for one candidate and not another.
+       *
+       * This exists because the empty-wallet signal asks whether a top-10 holder owns anything
+       * BESIDES the launch it is holding, and a top-10 holder owns that launch by definition. The
+       * caller subtracts the relevant mint; the total is kept whole so one cached reading serves
+       * every candidate the wallet holds.
+       */
+      perMintUsd: Record<string, number>;
+    }
+  | { status: "unsupported" }
+  | { status: "failed" };
 
 /**
  * How many non-cash holdings a batch must have seen before "not one of them had a price" is
@@ -580,8 +599,12 @@ export class HeliusClient {
    * this is a real effect, not a corner case - and it is why the threshold is a floor test
    * ("holds at least $X of something") rather than an estimate of anyone's net worth.
    */
-  async getOtherHoldingsUsdBatch(addresses: string[]): Promise<Map<string, WalletHoldingsResult>> {
+  async getOtherHoldingsUsdBatch(
+    addresses: string[],
+    mintsOfInterest: Iterable<string> = [],
+  ): Promise<Map<string, WalletHoldingsResult>> {
     const unique = [...new Set(addresses)];
+    const interesting = new Set(mintsOfInterest);
     const out = new Map<string, WalletHoldingsResult>();
     if (unique.length === 0) return out;
 
@@ -625,6 +648,11 @@ export class HeliusClient {
       // A successful call with no items is a real answer: this wallet holds nothing fungible.
       const items = res.result?.items ?? [];
       let total = 0;
+      // Seeded with a zero for every requested mint, so "holds none of it" is recorded as a fact
+      // rather than as a gap - see perMintUsd on WalletHoldingsResult.
+      const perMintUsd: Record<string, number> = {};
+      for (const mint of interesting) perMintUsd[mint] = 0;
+
       for (const item of items) {
         if (!item.id || CASH_EQUIVALENT_MINTS.has(item.id)) continue;
         itemsSeen += 1;
@@ -632,10 +660,11 @@ export class HeliusClient {
         if (price !== null) {
           pricedItems += 1;
           total += price;
+          if (interesting.has(item.id)) perMintUsd[item.id] = (perMintUsd[item.id] ?? 0) + price;
         }
       }
       usable += 1;
-      out.set(address, { status: "found", otherHoldingsUsd: total });
+      out.set(address, { status: "found", otherHoldingsUsd: total, perMintUsd });
     });
 
     // A whole batch of holdings with not one usable price is not a finding, it is a broken

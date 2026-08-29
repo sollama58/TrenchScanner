@@ -487,6 +487,11 @@ model TokenSnapshot {
   // cash nor gas. Null under exactly the same conditions as freshTop10WalletPct above, plus one
   // more: an endpoint that doesn't serve the DAS API can't answer it at all.
   emptyTop10WalletPct Float?
+  // How many holders the two percentages above were computed over. The list is "top 10" by
+  // intent, not by guarantee - pool and LP addresses are excluded from it - so a card that wants
+  // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots
+  // written before this column existed, and on any snapshot with no holder list at all.
+  top10WalletsChecked Int?
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
   // was screened out. Null means the check never ran or failed, which the screen also rejects.
@@ -616,8 +621,19 @@ model WalletHoldingsCache {
   /// A FLOOR on the wallet's non-cash holdings, in USD - assets the indexer had no price for
   /// contribute nothing. See getOtherHoldingsUsdBatch in datasources/helius.ts. Only ever
   /// written for a definitive answer; a failed lookup writes no row at all.
+  ///
+  /// Still INCLUDES whatever the wallet holds of any given launch: the per-launch subtraction
+  /// happens at read time out of perMintUsd, which is what lets one reading serve every candidate
+  /// this wallet holds instead of needing a row per (wallet, launch) pair.
   otherHoldingsUsd Float
-  checkedAt        DateTime @default(now())
+
+  /// { mint: usd } for the launches this wallet was checked against, zeroes included. A row can
+  /// only answer the empty-wallet question for a mint that appears here - see the note on
+  /// WalletHoldingsResult.perMintUsd. Empty object on rows written before this column existed,
+  /// which simply makes them a miss for every candidate rather than a wrong answer.
+  perMintUsd Json @default("{}")
+
+  checkedAt DateTime @default(now())
 
   /// Serves both the TTL sweep and the cleanup job's retention sweep.
   @@index([checkedAt])
