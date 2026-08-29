@@ -23,7 +23,7 @@ import type { AlertBot } from "../telegram/bot.js";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
-import { resolveWalletHoldings, computeEmptyPct } from "./walletHoldings.js";
+import { resolveWalletHoldings, computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import { recordMatchPeaks } from "./matchPeaks.js";
@@ -228,20 +228,25 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   const walletGroups = candidates
     .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
     .map((c) => ({
+      mintAddress: c.mintAddress,
       addresses: onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? [],
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
     .filter((g) => g.addresses.length > 0)
     .sort((a, b) => b.churn - a.churn)
-    .map((g) => g.addresses);
+    // The mint is carried through, not dropped: the holdings pass has to know which of a wallet's
+    // tokens IS this launch so it can take it back out - see computeEmptyPct.
+    .map((g) => ({ mintAddress: g.mintAddress, addresses: g.addresses }));
   // The two wallet signals are resolved together but independently: they ask different
   // questions of different APIs (transaction history on standard RPC, holdings via DAS), which
   // are metered and rate-limited separately, so they carry separate budgets and neither can
   // starve the other. Run concurrently because one is not an input to the other.
   const [earliestActivityByAddress, holdingsByAddress] = await Promise.all([
-    resolveEarliestActivity(walletGroups, deps.helius, {
-      maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
-    }),
+    resolveEarliestActivity(
+      walletGroups.map((g) => g.addresses),
+      deps.helius,
+      { maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE },
+    ),
     resolveWalletHoldings(walletGroups, deps.helius, env, {
       maxNewLookups: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
     }),
@@ -449,7 +454,7 @@ async function processCandidate(
   onChainProfile: OnChainProfile | null,
   activeFilters: FilterWithUser[],
   earliestActivityByAddress: Map<string, Date | null>,
-  holdingsByAddress: Map<string, number>,
+  holdingsByAddress: Map<string, WalletHoldings>,
   curatedCycle: CuratedCycle,
   bot: AlertBot,
   env: Env,
@@ -590,7 +595,7 @@ function buildOnChainProfile(
 function withWalletSignals(
   onChain: OnChainProfile | null,
   earliestActivityByAddress: Map<string, Date | null>,
-  holdingsByAddress: Map<string, number>,
+  holdingsByAddress: Map<string, WalletHoldings>,
   env: Env,
 ): OnChainProfile | null {
   if (!onChain?.top10HolderAddresses?.length) return onChain;
@@ -599,10 +604,14 @@ function withWalletSignals(
     onChain.top10HolderAddresses,
     holdingsByAddress,
     env.WALLET_HOLDINGS_MIN_USD,
+    onChain.mintAddress,
   );
   return {
     ...onChain,
     freshTop10WalletPct: freshTop10WalletPct ?? undefined,
     emptyTop10WalletPct: emptyTop10WalletPct ?? undefined,
+    // Recorded even when both percentages came back unknown: it describes the list that was
+    // available, which is what a card needs to say "4 of 9" rather than assuming ten.
+    top10WalletsChecked: onChain.top10HolderAddresses.length,
   };
 }

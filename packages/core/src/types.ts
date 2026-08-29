@@ -121,6 +121,12 @@ export interface OnChainProfile {
    */
   emptyTop10WalletPct?: number;
   /**
+   * How many holders the two percentages above were computed over - the length of
+   * top10HolderAddresses, which excludes pool and LP addresses and so is often fewer than ten.
+   * Undefined whenever there was no list to check.
+   */
+  top10WalletsChecked?: number;
+  /**
    * Whether this mint was launched in Pump.fun's Mayhem Mode - see mayhemStateAddress() in
    * solana.ts for how it's detected and why nothing cheaper works. `undefined` means the check
    * hasn't been run or failed, which the rug screen treats as a rejection rather than an
