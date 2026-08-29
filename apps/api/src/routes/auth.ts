@@ -1,7 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import bs58 from "bs58";
-import { prisma, adminWalletSet, claimHeldBurns, type Env, type User } from "@trenchscanner/core";
+import {
+  prisma,
+  adminWalletSet,
+  claimHeldBurns,
+  starterFilterInput,
+  type Env,
+  type User,
+} from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 
@@ -89,6 +96,30 @@ export function sessionCookieAttrs(requestHost: string, appDomain: string, proto
   };
 }
 
+/**
+ * Find the account for a wallet, or make one - reporting WHICH happened, which an upsert cannot.
+ *
+ * That distinction is the whole point: the starter filter must be created exactly once, on the
+ * first ever sign-in, and an upsert's return value looks identical either way.
+ *
+ * The create is allowed to lose a race. Two sign-ins for the same new wallet arriving together
+ * would both see no row; the loser's create fails on the unique constraint, and it then reads the
+ * winner's row and reports `created: false` - so the filter is seeded once, by whoever won, and
+ * not twice.
+ */
+async function findOrCreateUser(walletAddress: string): Promise<{ user: User; created: boolean }> {
+  const existing = await prisma.user.findUnique({ where: { walletAddress } });
+  if (existing) return { user: existing, created: false };
+
+  try {
+    return { user: await prisma.user.create({ data: { walletAddress } }), created: true };
+  } catch {
+    // Almost certainly the unique violation above. Anything else re-throws from here, since a
+    // wallet with neither a row nor a creatable one is not something to paper over.
+    return { user: await prisma.user.findUniqueOrThrow({ where: { walletAddress } }), created: false };
+  }
+}
+
 /** Shapes the public-facing user object - notably where isAdmin gets attached, since that's
  *  derived from config (ADMIN_WALLET_ADDRESSES) rather than stored on the User row itself. */
 function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
@@ -139,11 +170,25 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     }
 
     const { walletAddress } = body;
-    const user = await prisma.user.upsert({
-      where: { walletAddress },
-      create: { walletAddress },
-      update: {},
-    });
+    const { user, created } = await findOrCreateUser(walletAddress);
+
+    /**
+     * A brand-new account gets one working filter, so the Live Feed has something to show
+     * instead of an empty page that never explains you have to build something first.
+     *
+     * Gated on `created`, not on "has no filters": somebody who deliberately deletes every filter
+     * has said what they want, and quietly rebuilding one on their next sign-in would be the app
+     * arguing with them. Failure is logged and swallowed - an account without its starter filter
+     * is a worse first run, but refusing the login over it is worse still.
+     */
+    if (created) {
+      await prisma.userFilter
+        .create({ data: { userId: user.id, ...starterFilterInput(opts.env) } })
+        .then(() => request.log.info({ walletAddress }, "seeded the starter filter"))
+        .catch((err: unknown) =>
+          request.log.error({ err, walletAddress }, "could not seed the starter filter"),
+        );
+    }
 
     // Settle any burns this wallet made before it had an account here. Burning first and signing
     // in afterwards is a completely ordinary order of events - and the one a first-time user is
