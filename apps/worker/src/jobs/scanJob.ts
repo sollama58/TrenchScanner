@@ -39,15 +39,6 @@ import {
 
 const logger = createLogger("scan-job");
 
-/**
- * Whether this process has already done one unbounded peak-recovery sweep. The first cycle after
- * start-up does the expensive full pass (which is also what backfills history on a fresh deploy);
- * every cycle after it runs the cheap scoped version. Process-local on purpose - a restart
- * repeating the sweep once is harmless and idempotent, and it means no coordination is needed
- * between instances.
- */
-let fullPeakSweepDone = false;
-
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
  *  run concurrently across candidates - each touches a different token's rows - and cheap now
  *  that every external API call has been hoisted out of the loop entirely (market data, rug
@@ -394,14 +385,20 @@ export async function selectWatchlist(
  */
 async function rollPeaksForward(env: Env): Promise<void> {
   try {
-    // Scoped to tokens observed in the last few cycles, except on the first pass after start-up.
-    // That first full sweep is what retroactively recovers peaks from history already in the
-    // database (and what fills the Leaderboard on deploy); every pass after it only has to look
-    // at tokens something actually moved, so the per-cycle cost tracks how much was scanned rather
-    // than how much history has accumulated.
-    const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
-    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
-    fullPeakSweepDone = true;
+    // Always scoped to tokens observed in the last few cycles - this used to run unscoped
+    // (sinceMinutes: undefined) on a process's first cycle, to retroactively recover peaks from
+    // history already in the database. That "first cycle" flag was process-local in-memory state,
+    // so it re-armed on every restart, not just a genuinely fresh deploy - and at production's
+    // table size, the unscoped sweep runs for over an hour rather than the "cheap, near-instant on
+    // an empty table" case it was written for. Since it's awaited here as part of the scan cycle
+    // itself, that hour-plus query blocked the cycle from ever completing, which in turn blocked
+    // this job's heartbeat (recordHeartbeat only runs after the cycle returns) - so every restart
+    // silently wedged scanning again rather than recovering it, for as long as the sweep took.
+    // recordMatchPeaks(recordMatchPeaks.ts) is idempotent, so nothing here loses correctness by
+    // staying scoped: the unscoped backfill-from-history responsibility now belongs solely to
+    // runOutcomeTrackingJob's own daily sweep (outcomeTrackingJob.ts), which isn't in this
+    // request-serving path and can safely take as long as it needs.
+    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes: env.SCAN_INTERVAL_MINUTES * 3 });
     await repairOutcomeBookkeeping();
   } catch (err) {
     // Bookkeeping over data already banked - never worth failing a scan cycle over.
