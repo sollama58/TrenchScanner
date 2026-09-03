@@ -402,7 +402,7 @@ async function rollPeaksForward(env: Env): Promise<void> {
     const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
     await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
     fullPeakSweepDone = true;
-    await repairOutcomeBookkeeping(env.SNAPSHOT_RETENTION_DAYS);
+    await repairOutcomeBookkeeping();
   } catch (err) {
     // Bookkeeping over data already banked - never worth failing a scan cycle over.
     logger.warn("failed to record match peaks", { error: String(err) });

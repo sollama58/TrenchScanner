@@ -98,16 +98,67 @@ export function createBot(token: string): AlertBot {
   };
 }
 
+/**
+ * Failed link-code attempts per chat, so a wrong guess costs the guesser something.
+ *
+ * The code is six digits and a correct guess hijacks a stranger's pending link - their real-time
+ * alerts and digests start arriving in the attacker's chat, and because chatId is unique the
+ * victim cannot then link at all. Telegram's own flood limits make exhausting the space from one
+ * account impractical, which is why this is low-risk rather than no-risk, but the defence was
+ * entirely Telegram's and evaporates across many accounts. In-memory on purpose: the worker is a
+ * single process, and a restart clearing the counters costs an attacker a restart's worth of
+ * patience, not a bypass.
+ */
+const failedAttempts = new Map<string, { count: number; firstAt: number }>();
+const MAX_FAILED_ATTEMPTS = 5;
+const ATTEMPT_WINDOW_MS = 10 * 60_000;
+
+function recordFailure(chatId: string): void {
+  const now = Date.now();
+  const seen = failedAttempts.get(chatId);
+  if (!seen || now - seen.firstAt > ATTEMPT_WINDOW_MS) {
+    failedAttempts.set(chatId, { count: 1, firstAt: now });
+    return;
+  }
+  seen.count += 1;
+  // Bounded: one entry per chat that has guessed wrong recently, and the sweep below keeps even
+  // that from growing without limit.
+  if (failedAttempts.size > 10_000) {
+    for (const [key, value] of failedAttempts) {
+      if (now - value.firstAt > ATTEMPT_WINDOW_MS) failedAttempts.delete(key);
+    }
+  }
+}
+
+function isLockedOut(chatId: string): boolean {
+  const seen = failedAttempts.get(chatId);
+  if (!seen) return false;
+  if (Date.now() - seen.firstAt > ATTEMPT_WINDOW_MS) {
+    failedAttempts.delete(chatId);
+    return false;
+  }
+  return seen.count >= MAX_FAILED_ATTEMPTS;
+}
+
 async function handleLinkCode(chatId: string, code: string, reply: (text: string) => Promise<unknown>) {
+  if (isLockedOut(chatId)) {
+    await reply("Too many incorrect codes. Wait a few minutes, then generate a fresh one from Settings.");
+    return;
+  }
+
   const link = await prisma.telegramLink.findUnique({ where: { linkCode: code } });
   if (!link) {
+    recordFailure(chatId);
     await reply("That code doesn't look right. Generate a new one from the dashboard's Settings page.");
     return;
   }
   if (link.linkCodeExpiresAt && link.linkCodeExpiresAt.getTime() < Date.now()) {
+    recordFailure(chatId);
     await reply("That code has expired. Generate a new one from the dashboard's Settings page.");
     return;
   }
+
+  failedAttempts.delete(chatId);
 
   try {
     await prisma.telegramLink.update({

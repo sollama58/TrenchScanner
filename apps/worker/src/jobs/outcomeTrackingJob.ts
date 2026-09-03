@@ -170,7 +170,7 @@ export async function runOutcomeTrackingJob(
     }
   }
 
-  const repaired = await repairOutcomeBookkeeping(snapshotRetentionDays);
+  const repaired = await repairOutcomeBookkeeping();
 
   logger.info("outcome tracking job complete", {
     durationMs: Date.now() - startedAt,
@@ -203,7 +203,7 @@ export async function runOutcomeTrackingJob(
  * One statement rather than a batched loop: it only writes rows that genuinely differ, so in
  * steady state it updates nothing and there is nothing to page through.
  */
-export async function repairOutcomeBookkeeping(retentionDays: number): Promise<number> {
+export async function repairOutcomeBookkeeping(): Promise<number> {
   return prisma.$executeRaw`
     UPDATE "Match" m
     SET "peakReturnPct"   = d.pct,
@@ -223,8 +223,15 @@ export async function repairOutcomeBookkeeping(retentionDays: number): Promise<n
              END AS pct
       FROM "Match" m2
       JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
+      -- Deliberately unbounded in age. The comments above promise this repairs a row "at any
+      -- age", and the Leaderboard selects on hitHundredPctAt and ranks on peakReturnPct - so a
+      -- match whose peak was recorded but never derived (a row predating these columns, or one
+      -- that drifted during downtime and then aged out) stayed invisible there forever despite
+      -- holding a qualifying peak. Nothing makes the bound necessary: the alert-time snapshot a
+      -- Match points at is exempt from the snapshot sweep (see cleanupJob's matches-none guard), so
+      -- the join holds however old the match is, and the WHERE below writes only rows that
+      -- genuinely disagree - in steady state, none.
       WHERE m2."peakMcapUsd" IS NOT NULL
-        AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${retentionDays}::int)
     ) d
     WHERE m.id = d.id
       AND d.pct IS NOT NULL
