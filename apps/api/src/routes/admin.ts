@@ -75,9 +75,20 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
    * tokens that never surface anywhere else in the product - including *why* the rug screen
    * rejected one (rugScreenReasons).
    *
-   * `distinct: ["tokenId"]` combined with `orderBy: { takenAt: "desc" }` is Prisma's documented
-   * pattern for "most recent row per group" - verified directly against a real DB before relying
-   * on it (see the PR description).
+   * Served by a raw DISTINCT ON rather than Prisma's `distinct` + `orderBy` + `take`.
+   *
+   * That combination returns the right ROWS - it is Prisma's documented pattern for "most recent
+   * row per group" - but it applies `distinct` in memory (nativeDistinct is not enabled on this
+   * schema) and deliberately omits the LIMIT while doing so, since deduping has to happen before
+   * the cap can mean anything. The emitted SQL is `SELECT <every column> FROM "TokenSnapshot"
+   * ORDER BY "takenAt" DESC OFFSET $1` - the entire table, streamed into the API process on
+   * every load of this tab, on the smallest Postgres tier, against a table that grows by ~50-100
+   * wide rows a minute and is kept for 30 days. Confirmed by logging the emitted query.
+   *
+   * DISTINCT ON does the same job in the database and keeps the LIMIT: dedupe by tokenId taking
+   * the newest row of each, then re-sort that much smaller set by recency and cap it. The token
+   * join is a second query keyed by the ids that survived, which keeps the row shape identical to
+   * what the include produced.
    */
   app.get("/live-feed", async (request, reply) => {
     const parsed = liveFeedQuerySchema.safeParse(request.query);
@@ -85,20 +96,31 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
 
-    const [snapshots, watchlistOnlyCount] = await Promise.all([
-      prisma.tokenSnapshot.findMany({
-        orderBy: { takenAt: "desc" },
-        distinct: ["tokenId"],
-        take: parsed.data.limit,
-        include: { token: true },
-      }),
+    const [latestIds, watchlistOnlyCount] = await Promise.all([
+      prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM (
+          SELECT DISTINCT ON ("tokenId") id, "takenAt"
+          FROM "TokenSnapshot"
+          ORDER BY "tokenId", "takenAt" DESC
+        ) newest
+        ORDER BY "takenAt" DESC
+        LIMIT ${parsed.data.limit}
+      `,
       // Freshly-discovered mints that have never had a snapshot written at all - outside the mcap
       // band, or not yet re-checked this cycle. Reported as a count rather than bare rows in the
       // same feed, since there's no score/mcap/anything else to show for them yet.
       prisma.token.count({ where: { snapshots: { none: {} } } }),
     ]);
 
-    return { snapshots, watchlistOnlyCount };
+    // Ordered here rather than trusting the second query's own ordering: an `in` lookup makes no
+    // promise about row order, and this feed is read newest-first.
+    const rows = await prisma.tokenSnapshot.findMany({
+      where: { id: { in: latestIds.map((r) => r.id) } },
+      orderBy: { takenAt: "desc" },
+      include: { token: true },
+    });
+
+    return { snapshots: rows, watchlistOnlyCount };
   });
 
   /** All users, newest first, with enough context to moderate without a DB console. */
