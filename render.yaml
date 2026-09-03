@@ -23,6 +23,13 @@
 #         this repo has measured rejecting the batched calls the reconciler makes.
 #   - ADMIN_WALLET_ADDRESSES (api only)            your own wallet's base58 address, to reach /admin
 #
+# DATABASE_CONNECTION_LIMIT is set (not sync: false - it ships with a value) on both services
+# below. Verify the two values plus one LISTEN connection (the API's SSE push, held outside the
+# pool - see apps/api/src/matchStream.ts) against the actual connection ceiling on the Postgres
+# plan you deploy to (Render dashboard -> the database -> Info tab), and adjust downward if the
+# plan is smaller than `basic-256mb`, or if you scale either service to more than one instance -
+# every instance opens its own pool.
+#
 # See PLANNING.md and README.md for the full architecture and local dev setup.
 
 # Only plain, static key/value pairs can live in a shared env var group - Render's Blueprint
@@ -60,6 +67,19 @@ services:
         fromDatabase:
           name: trenchscanner-db
           property: connectionString
+      # Sized explicitly rather than left to Prisma's own `num_physical_cpus * 2 + 1` default,
+      # which on a `starter` instance's shared/constrained CPU allocation computed out to 9 for
+      # BOTH services regardless of what either actually needed - too tight here, where the Live
+      # Feed route alone (apps/api/src/routes/matches.ts) fans out up to four concurrent Prisma
+      # calls per request and is polled by every open tab every 45s. 12 covers a real burst of
+      # concurrent requests on a single `starter` instance with room to spare.
+      #
+      # Verify this against the ACTUAL number in Render's Postgres dashboard (Info tab) before
+      # raising it: this plus the worker's own limit below, plus the one dedicated LISTEN
+      # connection this service holds outside the pool (apps/api/src/matchStream.ts), all draw
+      # from the same ceiling.
+      - key: DATABASE_CONNECTION_LIMIT
+        value: "12"
       - key: HELIUS_API_KEY
         sync: false
       # The API needs this too, not just the worker: GET /telegram/status reports
@@ -121,6 +141,16 @@ services:
         fromDatabase:
           name: trenchscanner-db
           property: connectionString
+      # See the api service's DATABASE_CONNECTION_LIMIT above for why this is set explicitly at
+      # all. The worker's own number is sized differently: its scan cycle processes up to
+      # CANDIDATE_CONCURRENCY (apps/worker/src/jobs/scanJob.ts, 15 at the time of writing) tokens
+      # at once, each doing its own DB writes, and a limit below that would have the worker
+      # queue against its OWN concurrency rather than anything external - self-inflicted
+      # contention on every scan cycle, not just under unusual load. 18 clears that with margin;
+      # verify the api+worker total against the Postgres plan's real connection ceiling before
+      # raising either.
+      - key: DATABASE_CONNECTION_LIMIT
+        value: "18"
       - key: HELIUS_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN

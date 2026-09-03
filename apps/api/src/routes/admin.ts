@@ -191,6 +191,17 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       snapshotRetentionDays: env.SNAPSHOT_RETENTION_DAYS,
       staleTokenRetentionDays: env.STALE_TOKEN_RETENTION_DAYS,
       outcomeTrackingHourUtc: env.OUTCOME_TRACKING_HOUR_UTC,
+      // The two Prisma connection-pool knobs - see DATABASE_CONNECTION_LIMIT and
+      // DATABASE_POOL_TIMEOUT_SECONDS in config/env.ts. Worth reading back here specifically
+      // because a "Timed out fetching a new connection from the connection pool" error names
+      // both numbers, and this is the only place either is visible without opening the Render
+      // dashboard's raw env vars.
+      //
+      // databaseConnectionLimit is null (not a number) when it is unset, which is the honest
+      // answer for "left to Prisma's own CPU-derived default" - a number here would claim a
+      // deliberate choice that was never made.
+      databaseConnectionLimit: env.DATABASE_CONNECTION_LIMIT ?? null,
+      databasePoolTimeoutSeconds: env.DATABASE_POOL_TIMEOUT_SECONDS,
       telegramConfigured: Boolean(env.TELEGRAM_BOT_TOKEN),
     };
   });

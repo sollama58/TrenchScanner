@@ -8,6 +8,31 @@ import { z } from "zod";
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
+  // Prisma's own default pool size is `num_physical_cpus * 2 + 1`, computed from whatever the
+  // container reports - which on a shared/constrained host (Render's `starter` plan included)
+  // is routinely the HOST's core count, not the fraction actually allocated. That is how this
+  // came out to a flat 9 for both api and worker despite neither service being given anywhere
+  // near 9 cores' worth of CPU, and 9 is not sized to either service's real query shape: the
+  // API's own Live Feed route (apps/api/src/routes/matches.ts) fans out up to four concurrent
+  // Prisma calls per request and is polled by every open tab every 45s, while the worker's scan
+  // cycle processes up to CANDIDATE_CONCURRENCY candidates at once (apps/worker/src/jobs/
+  // scanJob.ts) - each with its own DB writes - so an unexamined shared default was too small
+  // for one service and too large relative to the other's real ceiling to reason about at all.
+  //
+  // Left optional and unset by default (undefined skips appending the param entirely) so local
+  // dev keeps Prisma's own behaviour unchanged; render.yaml sets an explicit, sized value per
+  // service - see the comment there for how those numbers were chosen and what to verify them
+  // against.
+  DATABASE_CONNECTION_LIMIT: z.coerce.number().int().positive().optional(),
+  // How long a query waits for a free connection before Prisma throws
+  // "Timed out fetching a new connection from the connection pool" - the exact failure this and
+  // DATABASE_CONNECTION_LIMIT exist to prevent. Raised from Prisma's own 10s default: ten seconds
+  // is aggressive for a pool a handful of concurrent requests can briefly saturate without
+  // anything actually being wrong, and a request that has to wait a few extra seconds behind a
+  // scan cycle's burst is a far better outcome than one that fails outright and forces the client
+  // to retry into the same contention.
+  DATABASE_POOL_TIMEOUT_SECONDS: z.coerce.number().positive().default(20),
+
   // Only apps/api actually uses this (to sign session JWTs) - apps/worker never touches it, but
   // both share this one schema. Rather than force every consumer to configure a secret it
   // doesn't need, this falls back to an obviously-insecure default and apps/api itself checks
