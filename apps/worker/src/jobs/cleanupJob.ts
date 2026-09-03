@@ -90,6 +90,17 @@ export async function runCleanupJob(env: Env): Promise<void> {
       // months (see above) - without this, purging a token whose snapshots aged out would
       // silently destroy its training samples with it.
       candidateOutcomes: { none: {} },
+      // Same cascade, and the one record that is supposed to be permanent. A curated alert is
+      // emitted independently of user filters, so a curated token that nobody's filter also
+      // caught holds no Match: its snapshots age out at 30 days, its outcome rows at 180, and on
+      // the first sweep after that the token itself qualified - taking the feed's public,
+      // self-grading track record with it. PLANNING 7b's "every alert card publicly grades
+      // itself" and the /curated/stats hit rate both read those rows, so the record was quietly
+      // shrinking from the far end while the numbers on the panel stayed plausible.
+      curatedAlerts: { none: {} },
+      // The bench curator's ledger is pruned on its own horizon above, but only by age - a row
+      // still inside it must not be destroyed sideways by a token sweep either.
+      curatedShadowEmissions: { none: {} },
     },
   });
 

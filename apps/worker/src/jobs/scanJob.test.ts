@@ -17,6 +17,10 @@ describe.skipIf(!dbAvailable)("selectWatchlist", () => {
   beforeEach(async () => {
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    // The liveness horizon widens by however long the worker was away (see scanDowntimeMs), so
+    // every case below states its own "we have been running all along" rather than inheriting
+    // whatever heartbeat another test left behind.
+    await setScanHeartbeat(new Date());
   });
 
   afterAll(async () => {
@@ -121,5 +125,55 @@ describe.skipIf(!dbAvailable)("selectWatchlist", () => {
     expect(positions.get(`${TAG}-priority-alive`)).toBeDefined();
     expect(positions.get(`${TAG}-priority-new`)).toBeDefined();
     expect(positions.get(`${TAG}-priority-alive`)!).toBeLessThan(positions.get(`${TAG}-priority-new`)!);
+  });
+
+  /** Pins what the watchlist believes about its own uptime. */
+  async function setScanHeartbeat(lastRunAt: Date) {
+    await prisma.systemHeartbeat.upsert({
+      where: { job: "scan" },
+      create: { job: "scan", lastRunAt, lastSuccessAt: lastRunAt },
+      update: { lastRunAt, lastSuccessAt: lastRunAt },
+    });
+  }
+
+  it("re-probes the established watchlist after an outage longer than probation", async () => {
+    // The permanent-eviction case. lastLiveAt is only ever stamped by this cycle, for tokens
+    // this cycle selected - so after a long gap every previously-alive token matched neither
+    // query (stamp too old for `alive`, non-null for `probation`) and nothing could ever stamp
+    // it again. A token still trading in-band was unmonitorable forever.
+    const now = Date.now();
+    const probationMs = env.WATCHLIST_PROBATION_MINUTES * MINUTE;
+    await prisma.token.create({
+      data: {
+        mintAddress: `${TAG}-outage-survivor`,
+        firstSeenAt: new Date(now - (env.WATCHLIST_TTL_HOURS / 2) * 3_600_000),
+        // Last seen alive just before the outage started, which is now well past probation.
+        lastLiveAt: new Date(now - probationMs - 60 * MINUTE),
+      },
+    });
+
+    // Nobody scanned for three hours.
+    await setScanHeartbeat(new Date(now - probationMs - 60 * MINUTE));
+
+    const { tracked } = await selectWatchlist(env);
+    expect(tracked.map((t) => t.mintAddress)).toContain(`${TAG}-outage-survivor`);
+  });
+
+  it("does not widen the horizon while the loop is keeping up", async () => {
+    // The other half of the contract: a token whose market data genuinely stopped coming back
+    // still ages out on schedule when the worker has been running all along.
+    const now = Date.now();
+    const probationMs = env.WATCHLIST_PROBATION_MINUTES * MINUTE;
+    await prisma.token.create({
+      data: {
+        mintAddress: `${TAG}-genuinely-dead`,
+        firstSeenAt: new Date(now - (env.WATCHLIST_TTL_HOURS / 2) * 3_600_000),
+        lastLiveAt: new Date(now - probationMs - 60 * MINUTE),
+      },
+    });
+    await setScanHeartbeat(new Date());
+
+    const { tracked } = await selectWatchlist(env);
+    expect(tracked.map((t) => t.mintAddress)).not.toContain(`${TAG}-genuinely-dead`);
   });
 });

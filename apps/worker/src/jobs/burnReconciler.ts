@@ -17,8 +17,9 @@ const PAGE_SIZE = 1000;
  * Most pages one pass will walk.
  *
  * A bound, not a target: without it, a cold start on a busy mint could sit in this loop for a very
- * long time on the first run. Whatever it doesn't reach this pass, it reaches on the next one,
- * because the cursor only advances over signatures actually processed.
+ * long time on the first run. Whatever it doesn't reach this pass it reaches on the next, which
+ * is what BurnScanCursor.backfillBefore is for - the cap is roughly half the default cold-start
+ * window, so a first pass genuinely does stop short and something has to remember where.
  */
 const MAX_PAGES_PER_PASS = 10;
 
@@ -74,60 +75,149 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
     create: { id: "burn-scan", scanFloor: new Date(Date.now() - env.BURN_SCAN_COLD_START_DAYS * 86_400_000) },
   });
 
-  // Walk backwards from the tip, collecting everything newer than where we stopped last time.
-  // Newest-first is the only order the RPC offers, so the pages are gathered first and processed
-  // oldest-first below - which matters, because the cursor may only advance over a contiguous
-  // run of fully-processed signatures.
-  const pending: { signature: string; blockTime?: number | null }[] = [];
-  let before: string | undefined;
   const floor = cursor.scanFloor ?? new Date(Date.now() - env.BURN_SCAN_COLD_START_DAYS * 86_400_000);
 
-  // Set when a cold start reaches back past its floor. Has to stop the paging loop, not just the
-  // loop over the current page - breaking only the inner loop would leave the outer one happily
-  // fetching the next page and walking the mint's entire history, which is the exact thing the
-  // floor exists to prevent.
+  // Pass one: everything newer than where we stopped last time. On a fresh install there is no
+  // `until`, so this is the cold start's first bite - bounded by the page cap, and by the floor
+  // if it gets that far.
+  const forward = await collectSignatures(rpc, {
+    until: cursor.lastSignature ?? undefined,
+    stopAtFloor: cursor.lastSignature ? null : floor,
+  });
+
+  if (forward.pages > 0 || forward.pending.length > 0) {
+    const { lastProcessed, completed } = await processSignatures(forward.pending, rpc, result);
+    if (lastProcessed) {
+      // The cold start clears its floor only once the backfill has actually reached it - see
+      // below. Advancing lastSignature here is what keeps ordinary forward passes cheap.
+      await prisma.burnScanCursor.update({
+        where: { id: "burn-scan" },
+        data: {
+          lastSignature: lastProcessed,
+          // A first pass that stopped on the page cap rather than the floor leaves the rest of
+          // the window to the backfill, and records where to resume from. One that reached the
+          // floor (or ran out of history) is done: no backfill, no floor.
+          ...(cursor.lastSignature
+            ? {}
+            : forward.reachedFloor || forward.exhausted
+              ? { scanFloor: null, backfillBefore: null }
+              : { backfillBefore: completed ? forward.oldestSeen : null }),
+        },
+      });
+    }
+  }
+
+  // Pass two: the rest of the cold-start window, a page-cap's worth at a time, continuing
+  // backwards from wherever the last pass stopped. Skipped entirely once the floor is reached,
+  // which is the normal steady state.
+  const backfillFrom = cursor.backfillBefore;
+  if (backfillFrom && cursor.scanFloor) {
+    const older = await collectSignatures(rpc, { before: backfillFrom, stopAtFloor: cursor.scanFloor });
+    const { completed } = await processSignatures(older.pending, rpc, result);
+
+    if (completed) {
+      const done = older.reachedFloor || older.exhausted;
+      await prisma.burnScanCursor.update({
+        where: { id: "burn-scan" },
+        data: done
+          ? { backfillBefore: null, scanFloor: null }
+          : { backfillBefore: older.oldestSeen ?? backfillFrom },
+      });
+      if (done) logger.info("burn backfill reached the cold-start floor");
+    }
+    // A pass that stopped early leaves the resume point untouched: re-walking the same range is
+    // idempotent (crediting is guarded by the signature's unique constraint, and already-stored
+    // signatures are not re-fetched), whereas advancing over unprocessed ground loses burns.
+  }
+
+  if (result.burnsFound > 0 || result.scanned > 0) {
+    logger.info("reconcile pass complete", { ...result });
+  }
+  return result;
+}
+
+/** One backwards walk over the mint's signatures, bounded by the page cap and optionally a floor. */
+async function collectSignatures(
+  rpc: SolanaRpc,
+  opts: { until?: string; before?: string; stopAtFloor: Date | null },
+): Promise<{
+  pending: { signature: string; blockTime?: number | null }[];
+  oldestSeen: string | null;
+  reachedFloor: boolean;
+  exhausted: boolean;
+  pages: number;
+}> {
+  const pending: { signature: string; blockTime?: number | null }[] = [];
+  let before = opts.before;
+  let oldestSeen: string | null = null;
   let reachedFloor = false;
+  let exhausted = false;
+  let pages = 0;
 
   for (let page = 0; page < MAX_PAGES_PER_PASS && !reachedFloor; page += 1) {
     const batch = await rpc.getSignaturesForAddress(SUBSCRIPTION_MINT, {
       limit: PAGE_SIZE,
       before,
-      ...(cursor.lastSignature ? { until: cursor.lastSignature } : {}),
+      ...(opts.until ? { until: opts.until } : {}),
     });
 
-    // An RPC failure must not look like "no burns". Returning what we have without advancing the
+    // An RPC failure must not look like "no burns". Returning what we have without advancing any
     // cursor means the next pass re-walks the same ground rather than skipping over it.
     if (batch === null) {
       logger.warn("signature fetch failed - leaving the cursor where it is");
-      return result;
+      return { pending: [], oldestSeen: null, reachedFloor: false, exhausted: false, pages };
     }
-    if (batch.length === 0) break;
+    pages += 1;
+    if (batch.length === 0) {
+      exhausted = true;
+      break;
+    }
 
     for (const entry of batch) {
-      // On a cold start, stop at the floor rather than paging through all history. Checked before
-      // the error filter so a run of failed transactions can't carry the scan past it.
-      if (!cursor.lastSignature && entry.blockTime && entry.blockTime * 1000 < floor.getTime()) {
+      // Stop at the floor rather than paging through all history. Checked before the error filter
+      // so a run of failed transactions can't carry the scan past it.
+      if (opts.stopAtFloor && entry.blockTime && entry.blockTime * 1000 < opts.stopAtFloor.getTime()) {
         reachedFloor = true;
         break;
       }
+      oldestSeen = entry.signature;
       // A transaction that failed on-chain burned nothing; no reason to fetch it in full.
       if (entry.err) continue;
       pending.push({ signature: entry.signature, blockTime: entry.blockTime });
     }
 
-    if (reachedFloor || batch.length < PAGE_SIZE) break;
+    if (reachedFloor) break;
+    if (batch.length < PAGE_SIZE) {
+      exhausted = true;
+      break;
+    }
     before = batch[batch.length - 1]?.signature;
-    if (!before) break;
+    if (!before) {
+      exhausted = true;
+      break;
+    }
   }
 
-  if (pending.length === 0) {
-    logger.debug("no new transactions since the last pass");
-    return result;
-  }
+  return { pending, oldestSeen, reachedFloor, exhausted, pages };
+}
 
-  // Oldest first, so a failure part-way leaves the cursor on a contiguous prefix and the next pass
-  // resumes exactly where this one stopped.
-  pending.reverse();
+/**
+ * Fetches and credits a collected run of signatures, oldest first.
+ *
+ * `completed` reports whether the whole run was processed: a fetch that comes back empty stops
+ * the pass where it stands, and every cursor decision above keys off that rather than advancing
+ * over ground nothing has looked at.
+ */
+async function processSignatures(
+  collected: { signature: string; blockTime?: number | null }[],
+  rpc: SolanaRpc,
+  result: ReconcileResult,
+): Promise<{ lastProcessed: string | null; completed: boolean }> {
+  if (collected.length === 0) return { lastProcessed: null, completed: true };
+
+  // Oldest first, so a failure part-way leaves the cursor on a contiguous prefix and the next
+  // pass resumes exactly where this one stopped.
+  const pending = [...collected].reverse();
 
   // Which of these we have already stored, so a re-walk after an RPC failure doesn't re-fetch
   // every transaction it already knows about.
@@ -141,9 +231,10 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
   );
 
   let lastProcessed: string | null = null;
+  let completed = true;
 
   // Fetched a batch at a time. At this mint's measured rate (~53 transactions a day) a routine
-  // pass has nothing to fetch at all, but a cold start has a month of them, and one POST per
+  // pass has nothing to fetch at all, but a cold start has months of them, and one POST per
   // transaction is how you get rate-limited off a public RPC on your first run.
   outer: for (let start = 0; start < pending.length; start += FETCH_BATCH_SIZE) {
     const batch = pending.slice(start, start + FETCH_BATCH_SIZE).map((p) => p.signature);
@@ -166,6 +257,7 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
         // Either way, stop advancing the cursor here: everything after this point stays
         // unprocessed and gets picked up next pass. Skipping it would mean a burn silently lost.
         logger.warn("could not fetch transaction - stopping this pass here", { signature });
+        completed = false;
         break outer;
       }
 
@@ -198,17 +290,5 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
     }
   }
 
-  // Advance only over what was actually processed. `scanFloor` is cleared once a cursor exists -
-  // it only ever governed the cold start.
-  if (lastProcessed) {
-    await prisma.burnScanCursor.update({
-      where: { id: "burn-scan" },
-      data: { lastSignature: lastProcessed, scanFloor: null },
-    });
-  }
-
-  if (result.burnsFound > 0 || result.scanned > 0) {
-    logger.info("reconcile pass complete", { ...result });
-  }
-  return result;
+  return { lastProcessed, completed };
 }

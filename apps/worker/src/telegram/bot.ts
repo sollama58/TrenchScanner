@@ -55,9 +55,14 @@ export function createBot(token: string): AlertBot {
     logger.error("grammy error", { error: String(err.error) });
   });
 
+  // Flipped when long polling dies for good (see start below). Alerts then no-op the way the
+  // unconfigured bot does, instead of queueing sends against a bot that is not listening.
+  let pollingStopped = false;
+
   return {
     enabled: true,
     async sendMessage(chatId, text) {
+      if (pollingStopped) return false;
       try {
         await bot.api.sendMessage(chatId, text, {
           parse_mode: "HTML",
@@ -70,7 +75,22 @@ export function createBot(token: string): AlertBot {
       }
     },
     start() {
-      bot.start({ onStart: () => logger.info("telegram bot started (long polling)") });
+      // bot.start() resolves only when polling ends, so it cannot be awaited here - but it was
+      // also not CAUGHT, and that is the difference between a degraded Telegram and a dead
+      // worker. A revoked token (401), or a second process polling the same token (409 - an
+      // overlapping deploy, or a developer running locally against the production token),
+      // rejects this promise; an unhandled rejection takes the whole process down, and Render
+      // restarts it straight back into the same conflict. The scan loop, live prices, outcome
+      // tracking and burn reconciliation all die with it, for a failure in the one subsystem
+      // this codebase everywhere else treats as optional.
+      void bot
+        .start({ onStart: () => logger.info("telegram bot started (long polling)") })
+        .catch((err: unknown) => {
+          pollingStopped = true;
+          logger.error("telegram polling stopped - alerts disabled, worker continues", {
+            error: String(err),
+          });
+        });
     },
     async stop() {
       await bot.stop();

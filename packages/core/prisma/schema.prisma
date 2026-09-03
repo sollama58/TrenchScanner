@@ -832,7 +832,19 @@ model BurnScanCursor {
   /// reaches this, then stops. Null on a fresh install, which triggers a bounded first scan.
   lastSignature String?
   /// How far back a cold start is allowed to look, so a fresh deploy doesn't walk all history.
+  /// Held until the backfill below has actually reached it, then cleared.
   scanFloor     DateTime?
+
+  /// Where the cold-start backfill has walked back to, when one pass could not reach scanFloor.
+  ///
+  /// A pass is capped at MAX_PAGES_PER_PASS pages, and the default 400-day floor is roughly twice
+  /// that many signatures at this mint's measured rate - so the first pass stops short. It used
+  /// to stop short and then set lastSignature to the tip, which pointed every later pass at only
+  /// what was NEWER: the older half of the window was jumped over and never visited again, and a
+  /// burn sitting in it could not be credited by anything. This is the resume point that makes
+  /// the documented "walks across a few passes" true - each pass continues backwards from here
+  /// until the floor is reached, then both this and scanFloor are cleared.
+  backfillBefore String?
 
   updatedAt DateTime @updatedAt
 }
