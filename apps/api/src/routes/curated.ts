@@ -65,6 +65,22 @@ export async function registerCuratedRoutes(
    * one query.
    */
   const pageCache = new Map<number, SharedCache<CuratedPage>>();
+
+  /**
+   * Drop every cached page the instant a new alert exists.
+   *
+   * The TTL alone made the SSE nudge decorative: clients refetch within milliseconds of the
+   * push, and any page filled in the preceding few seconds answered them with the pre-alert
+   * rows - so the new card only appeared on the client's own 30-second fallback poll, which is
+   * exactly the latency the stream is for. With several subscribers polling, the cache is warm
+   * nearly all the time, so this was the usual outcome rather than an unlucky one. The API
+   * already holds the LISTEN connection that feeds the nudge, so it can simply invalidate first.
+   */
+  const stopListening = opts.matchStream.onCuratedAlert(() => {
+    for (const cache of pageCache.values()) cache.clear();
+  });
+  app.addHook("onClose", async () => stopListening());
+
   const cacheForPage = (page: number) => {
     let cache = pageCache.get(page);
     if (!cache) {
