@@ -7,13 +7,16 @@ const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
 const WINDOW = 6 * 3_600_000;
 
 /** Serialized feed cards, as the route builds them before folding. */
-const matchCard = (tokenId: string, minutes: number) => ({
+let cardSeq = 0;
+const matchCard = (tokenId: string, minutes: number, id?: string) => ({
+  id: id ?? `m-${tokenId}-${minutes}-${++cardSeq}`,
   kind: "match" as const,
   tokenId,
   matchedAt: at(minutes),
   curated: null as { alertId: string } | null,
 });
 const curatedCard = (tokenId: string, minutes: number, alertId = `a-${tokenId}-${minutes}`) => ({
+  id: alertId,
   kind: "curated" as const,
   tokenId,
   matchedAt: at(minutes),
@@ -21,6 +24,19 @@ const curatedCard = (tokenId: string, minutes: number, alertId = `a-${tokenId}-$
 });
 
 describe("foldCuratedIntoPage", () => {
+  it("absorbs into exactly one of two matches sharing a token and a timestamp", () => {
+    // Two of a user's filters catching the same token in one scan cycle produce two Match rows
+    // whose matchedAt can be identical to the millisecond. Keyed on tokenId + timestamp, the
+    // badge landed on BOTH while the standalone curated card was removed - one alert rendering
+    // as two curated cards.
+    const out = foldCuratedIntoPage(
+      [matchCard("tokenA", 0, "m-1"), matchCard("tokenA", 0, "m-2"), curatedCard("tokenA", 0)],
+      WINDOW,
+    );
+    expect(out).toHaveLength(2);
+    expect(out.filter((c) => c.curated !== null)).toHaveLength(1);
+  });
+
   it("folds a curated card into the user's own match for the same token", () => {
     const out = foldCuratedIntoPage([matchCard("tokenA", 0), curatedCard("tokenA", 30)], WINDOW);
     expect(out).toHaveLength(1);

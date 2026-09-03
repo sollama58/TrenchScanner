@@ -41,14 +41,18 @@ async function seedVetted(suffix: string, overrides: Record<string, unknown> = {
   const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${suffix}` } });
   await prisma.tokenSnapshot.create({
     data: {
-      ...snapshotDataFor(token.id, {
-        mintAddress: token.mintAddress,
-        priceUsd: 0.0001,
-        marketCapUsd: 120_000,
-        narrativeTags: [],
-        rugScreen: { passed: true, reasons: [] },
-        score: { momentum: 80, holderHealth: 70, age: 100, narrative: 20, total: 75 },
-      }),
+      ...snapshotDataFor(
+        token.id,
+        {
+          mintAddress: token.mintAddress,
+          priceUsd: 0.0001,
+          marketCapUsd: 120_000,
+          narrativeTags: [],
+          rugScreen: { passed: true, reasons: [] },
+          score: { momentum: 80, holderHealth: 70, age: 100, narrative: 20, total: 75 },
+        },
+        "scan",
+      ),
       mintAuthorityActive: false,
       freezeAuthorityActive: false,
       lpBurned: true,
@@ -69,7 +73,11 @@ async function seedSubscriber(suffix: string) {
 }
 
 describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
-  const env = loadEnv();
+  // Lazy: vitest runs a describe callback during collection even when skipIf will skip every
+  // test inside it, so calling loadEnv() here directly threw on a machine with no DATABASE_URL -
+  // turning the intended graceful skip into a hard suite failure, which is the opposite of what
+  // the guard above and this file's own header promise.
+  const env = dbAvailable ? loadEnv() : (undefined as never);
 
   afterEach(async () => {
     if (!dbAvailable) return;
@@ -118,6 +126,89 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
 
     await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
+  });
+
+  it("stops alerting once a NEWER scan snapshot fails the screen", async () => {
+    // The exact shape the gate exists to stop: a token vetted clean, then re-checked by the full
+    // cycle and found to have had its LP unlocked. The older passing row is still inside the
+    // vetting window, and selecting the newest PASSING row rather than the newest row would keep
+    // alerting from underneath the rejection for the rest of that window.
+    const token = await seedVetted("flipped");
+    await seedSubscriber("sub-flipped");
+    await prisma.tokenSnapshot.create({
+      data: {
+        ...snapshotDataFor(
+          token.id,
+          {
+            mintAddress: token.mintAddress,
+            priceUsd: 0.0001,
+            marketCapUsd: 120_000,
+            narrativeTags: [],
+            rugScreen: { passed: false, reasons: ["LP not burned or locked"] },
+            score: { momentum: 80, holderHealth: 70, age: 100, narrative: 20, total: 75 },
+          },
+          "scan",
+        ),
+        mintAuthorityActive: false,
+        freezeAuthorityActive: false,
+        lpBurned: false,
+        isMayhemMode: false,
+        rugScreenPassed: false,
+      },
+    });
+
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
+  });
+
+  it("does not treat its own fast-pass snapshots as having vetted a token", async () => {
+    // The pass carries the on-chain half forward instead of re-resolving it, so its own rows
+    // restate a verdict rather than establishing one. If they counted as vetting, a token could
+    // hold its vetting window open indefinitely off its own restatements - long after the last
+    // real on-chain check aged out.
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-fastonly` } });
+    await prisma.tokenSnapshot.create({
+      data: {
+        ...snapshotDataFor(
+          token.id,
+          {
+            mintAddress: token.mintAddress,
+            priceUsd: 0.0001,
+            marketCapUsd: 120_000,
+            narrativeTags: [],
+            rugScreen: { passed: true, reasons: [] },
+            score: { momentum: 80, holderHealth: 70, age: 100, narrative: 20, total: 75 },
+          },
+          "fast",
+        ),
+        mintAuthorityActive: false,
+        freezeAuthorityActive: false,
+        lpBurned: true,
+        isMayhemMode: false,
+        rugScreenPassed: true,
+      },
+    });
+    await seedSubscriber("sub-fastonly");
+
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
+  });
+
+  it("writes no snapshot for a token whose every match is already on cooldown", async () => {
+    // Matching is not enough to justify a write: a hot token keeps matching the same filter for
+    // hours after its 12-hour cooldown started. Writing on a match rather than on an alert meant
+    // four unreferenced rows a minute for exactly the tokens that stay interesting longest.
+    const token = await seedVetted("cooling");
+    const user = await seedSubscriber("sub-cooling");
+
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    expect(await prisma.match.count({ where: { tokenId: token.id, userId: user.id } })).toBe(1);
+
+    const afterFirst = await prisma.tokenSnapshot.count({ where: { tokenId: token.id } });
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+
+    expect(await prisma.match.count({ where: { tokenId: token.id, userId: user.id } })).toBe(1);
+    expect(await prisma.tokenSnapshot.count({ where: { tokenId: token.id } })).toBe(afterFirst);
   });
 
   it("re-runs the screen on the carried-forward profile - an unverified Mayhem check still fails", async () => {

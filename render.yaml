@@ -13,8 +13,14 @@
 # After the first deploy, fill in the envVars marked `sync: false` below
 # from the Render dashboard (Environment tab on each service):
 #   - HELIUS_API_KEY (both api + worker)          https://dev.helius.xyz
-#   - TELEGRAM_BOT_TOKEN (worker only)             via @BotFather
+#   - TELEGRAM_BOT_TOKEN (both api + worker)       via @BotFather
+#         The worker polls with it; the API only checks whether it is set, which is what decides
+#         whether the dashboard offers Telegram linking at all. Set it on one and not the other
+#         and the bot runs while no user can reach it.
 #   - TELEGRAM_BOT_USERNAME (both api + worker)    the bot's @username, no leading @
+#   - SOLANA_RPC_URL (both api + worker)           the same paid RPC as HELIUS_API_KEY
+#         Verifies and reconciles burns. Left empty it falls back to the public endpoint, which
+#         this repo has measured rejecting the batched calls the reconciler makes.
 #   - ADMIN_WALLET_ADDRESSES (api only)            your own wallet's base58 address, to reach /admin
 #
 # See PLANNING.md and README.md for the full architecture and local dev setup.
@@ -56,7 +62,23 @@ services:
           property: connectionString
       - key: HELIUS_API_KEY
         sync: false
+      # The API needs this too, not just the worker: GET /telegram/status reports
+      # `enabled: Boolean(env.TELEGRAM_BOT_TOKEN)`, and the dashboard's Settings page hides the
+      # whole Link Telegram flow while that is false - deliberately, so nobody is handed a code
+      # no bot is listening for. Set on the worker alone, that check was answered by an API that
+      # had never heard of the token, so a fully-running bot was unreachable for every user.
+      # Same value on both services.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
       - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      # Verifies burns for /subscription/claim and mints the blockhash the burn is signed
+      # against. Undeclared, this fell back to the schema's empty default, which means the
+      # public endpoint - and the comment on SolanaRpc's batch latch records that endpoint
+      # answering batched getTransaction calls with a flat HTTP 400. This is the path that takes
+      # users' money, so it should point at the same paid Helius RPC the rest of the deployment
+      # uses. Declaring it here is also what makes Render prompt for it at all.
+      - key: SOLANA_RPC_URL
         sync: false
       - key: JWT_SECRET
         generateValue: true
@@ -104,6 +126,11 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      # The burn reconciler's endpoint - see the note on this var on the API above. Empty means
+      # the public RPC, which this repo has measured rejecting the batched calls the reconciler
+      # makes, so a burn nobody claimed in the browser would sit uncredited.
+      - key: SOLANA_RPC_URL
         sync: false
       # One minute, so a new alert reaches the dashboard within ~a minute of the token qualifying.
       # Affordable only because RUGCHECK_CACHE_TTL_MINUTES below decouples this cadence from

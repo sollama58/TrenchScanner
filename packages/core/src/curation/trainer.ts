@@ -46,6 +46,19 @@ export interface TrainedCuratorParams {
 
 const LEARNING_RATE = 0.5;
 const ITERATIONS = 400;
+
+/**
+ * How many gradient iterations run before handing the event loop back.
+ *
+ * Small enough that no single stretch of CPU outlasts a scan tick, large enough that the yields
+ * themselves are noise against the work between them.
+ */
+const YIELD_EVERY_ITERATIONS = 25;
+
+/** Lets pending timers and I/O run - see the note in the gradient loop. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 const L2_LAMBDA = 0.01;
 
 function sigmoid(z: number): number {
@@ -113,10 +126,10 @@ export interface TrainOptions {
  * rotates in weeks, and an equal-weighted long window spends a third of its gradient learning a
  * regime that no longer exists.
  */
-export function trainCurator(
+export async function trainCurator(
   rows: TrainingRow[],
   opts: TrainOptions = {},
-): Omit<TrainedCuratorParams, "threshold"> {
+): Promise<Omit<TrainedCuratorParams, "threshold">> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const featureNames = [...CANDIDATE_FEATURE_NAMES];
   const n = featureNames.length;
@@ -152,9 +165,17 @@ export function trainCurator(
   const weights = new Array<number>(dim).fill(0);
   let bias = 0;
 
-  // Full-batch gradient descent - at this scale each pass is microseconds, so no need for the
-  // extra machinery (and nondeterminism) of stochastic methods.
+  // Full-batch gradient descent, yielding to the event loop periodically.
+  //
+  // A pass is O(rows x 2 x features), and at the row counts this window is sized for - 60 days
+  // of hourly samples across hundreds of tokens - 400 of them is seconds of solid CPU, times the
+  // four models a training run fits (three walk-forward folds plus the deployable one). Run
+  // straight through, that blocks the worker's whole event loop: the minutely scan does not
+  // scan, and the candidate watcher misses ticks inside the very 15-minute windows whose
+  // resolution the labels and the public grades depend on. Training would degrade the data it
+  // trains on. Yielding costs a fraction of the runtime and keeps both on cadence.
   for (let iter = 0; iter < ITERATIONS; iter++) {
+    if (iter > 0 && iter % YIELD_EVERY_ITERATIONS === 0) await yieldToEventLoop();
     const grad = new Array<number>(dim).fill(0);
     let gradBias = 0;
     for (let i = 0; i < xs.length; i++) {
@@ -318,7 +339,10 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
  * split - these are time series, and a random split lets the model peek at the future's price
  * regime and grade itself on the past's.
  */
-export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOptions): WalkForwardResult {
+export async function walkForwardEvaluate(
+  rows: TrainingRow[],
+  opts: WalkForwardOptions,
+): Promise<WalkForwardResult> {
   const foldCount = opts.folds ?? 3;
   const minTrainRows = opts.minTrainRows ?? 300;
   const minTestRows = opts.minTestRows ?? 50;
@@ -344,7 +368,7 @@ export function walkForwardEvaluate(rows: TrainingRow[], opts: WalkForwardOption
 
       const inBand = (r: TrainingRow) => !opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand);
 
-      const params = trainCurator(train, { recencyHalfLifeDays: opts.recencyHalfLifeDays });
+      const params = await trainCurator(train, { recencyHalfLifeDays: opts.recencyHalfLifeDays });
       // Calibrated on the band-filtered train slice, exactly as the training job calibrates the
       // deployable threshold - a fold whose threshold is ranked against unemittable rows grades
       // a model production never ships. Training itself stays full-window (mcap is a feature).

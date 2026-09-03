@@ -143,16 +143,28 @@ export async function creditBurn(
  * the ledger holding a row nobody ever looks at.
  */
 export async function claimHeldBurns(userId: string, walletAddress: string): Promise<number> {
-  const held = await prisma.burnEvent.findMany({
-    where: { burnerWallet: walletAddress, creditedAt: null },
-    select: { id: true, monthsCredited: true },
-  });
-  if (held.length === 0) return 0;
+  // Everything - the read, the sum, the extension and the marking - happens inside one
+  // transaction under a per-user lock.
+  //
+  // The API calls this from two places that run close together BY DESIGN: POST /auth/verify on
+  // every sign-in, and POST /subscription/claim, which the dashboard fires immediately after
+  // signing in. Reading the held rows outside the transaction let both calls see the same
+  // uncredited burns and both extend the subscription by them - the same tokens paying for two
+  // months. The lock is transaction-scoped, so it releases on commit or rollback with no cleanup
+  // path to get wrong, and re-reading inside it means the second caller correctly finds nothing
+  // left to claim.
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
 
-  const months = held.reduce((sum, burn) => sum + burn.monthsCredited, 0);
-  if (months === 0) return 0;
+    const held = await tx.burnEvent.findMany({
+      where: { burnerWallet: walletAddress, creditedAt: null },
+      select: { id: true, monthsCredited: true },
+    });
+    if (held.length === 0) return 0;
 
-  await prisma.$transaction(async (tx) => {
+    const months = held.reduce((sum, burn) => sum + burn.monthsCredited, 0);
+    if (months === 0) return 0;
+
     const existing = await tx.subscription.findUnique({ where: { userId }, select: { expiresAt: true } });
     const expiresAt = extendedExpiry(existing?.expiresAt ?? null, months);
     await tx.subscription.upsert({
@@ -160,11 +172,13 @@ export async function claimHeldBurns(userId: string, walletAddress: string): Pro
       update: { expiresAt, source: AccessSource.BURN },
       create: { userId, expiresAt, source: AccessSource.BURN },
     });
+    // Guarded on creditedAt as well as id: belt and braces against any future caller that reaches
+    // this without the lock.
     await tx.burnEvent.updateMany({
-      where: { id: { in: held.map((b) => b.id) } },
+      where: { id: { in: held.map((b) => b.id) }, creditedAt: null },
       data: { userId, creditedAt: new Date() },
     });
-  });
 
-  return months;
+    return months;
+  });
 }

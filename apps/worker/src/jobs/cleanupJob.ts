@@ -90,6 +90,17 @@ export async function runCleanupJob(env: Env): Promise<void> {
       // months (see above) - without this, purging a token whose snapshots aged out would
       // silently destroy its training samples with it.
       candidateOutcomes: { none: {} },
+      // Same cascade, and the one record that is supposed to be permanent. A curated alert is
+      // emitted independently of user filters, so a curated token that nobody's filter also
+      // caught holds no Match: its snapshots age out at 30 days, its outcome rows at 180, and on
+      // the first sweep after that the token itself qualified - taking the feed's public,
+      // self-grading track record with it. PLANNING 7b's "every alert card publicly grades
+      // itself" and the /curated/stats hit rate both read those rows, so the record was quietly
+      // shrinking from the far end while the numbers on the panel stayed plausible.
+      curatedAlerts: { none: {} },
+      // The bench curator's ledger is pruned on its own horizon above, but only by age - a row
+      // still inside it must not be destroyed sideways by a token sweep either.
+      curatedShadowEmissions: { none: {} },
     },
   });
 
@@ -104,12 +115,22 @@ export async function runCleanupJob(env: Env): Promise<void> {
    *
    * Revoked devices are the smaller kind, kept a month first - see above.
    */
-  const [deletedLinkCodes, deletedRevokedDevices] = await Promise.all([
+  const [deletedLinkCodes, deletedRevokedDevices, deletedNonces] = await Promise.all([
     prisma.mobileLinkCode.deleteMany({
       where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
     }),
     prisma.linkedDevice.deleteMany({
       where: { revokedAt: { lt: new Date(startedAt - REVOKED_DEVICE_RETENTION_DAYS * DAY_MS) } },
+    }),
+    // Sign-in nonces, which had no sweep at all. GET /auth/nonce is unauthenticated and writes a
+    // row per call - every sign-in, every abandoned wallet-connect, and every bot that sends a
+    // syntactically valid address - and they expired logically after five minutes but physically
+    // never. One IP at the permitted rate adds tens of thousands of rows a day, forever, on the
+    // same 256MB instance that holds the feed. Safe on sight for the same reason a spent link
+    // code is: findValidNonce refuses anything past expiresAt, so a row this removes could not
+    // have been used anyway. An hour of slack keeps it clear of nonces still in flight.
+    prisma.authNonce.deleteMany({
+      where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
     }),
   ]);
 
@@ -138,6 +159,7 @@ export async function runCleanupJob(env: Env): Promise<void> {
     deletedCuratorModels: deletedCuratorModels.count,
     deletedLinkCodes: deletedLinkCodes.count,
     deletedRevokedDevices: deletedRevokedDevices.count,
+    deletedNonces: deletedNonces.count,
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,

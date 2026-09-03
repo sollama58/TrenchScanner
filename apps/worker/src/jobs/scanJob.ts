@@ -316,12 +316,50 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
  * liveness staleness horizon: a mint whose market data stopped coming back that long ago is
  * dead, not climbing.
  */
+/**
+ * How long this worker was NOT scanning, beyond one ordinary interval.
+ *
+ * Read from the scan job's own heartbeat, which the scheduler advances on every run: the gap
+ * between the last recorded run and now, minus the interval that gap is supposed to contain.
+ * Zero on a first-ever run (no heartbeat yet) and zero whenever the loop is keeping up, so the
+ * horizon it widens is unchanged in normal operation.
+ */
+async function scanDowntimeMs(env: Env, now: number): Promise<number> {
+  try {
+    const heartbeat = await prisma.systemHeartbeat.findUnique({ where: { job: "scan" } });
+    if (!heartbeat) return 0;
+    const expectedMs = env.SCAN_INTERVAL_MINUTES * 60_000;
+    return Math.max(0, now - heartbeat.lastRunAt.getTime() - expectedMs);
+  } catch (err) {
+    // The horizon is a heuristic, not a correctness boundary - a failed read just means the
+    // ordinary cutoff applies this cycle.
+    logger.warn("could not read scan heartbeat for liveness horizon", { error: String(err) });
+    return 0;
+  }
+}
+
 export async function selectWatchlist(
   env: Env,
 ): Promise<{ tracked: { id: string; mintAddress: string; firstSeenAt: Date }[]; alive: number }> {
   const now = Date.now();
   const ttlCutoff = new Date(now - env.WATCHLIST_TTL_HOURS * 3_600_000);
-  const probationCutoff = new Date(now - env.WATCHLIST_PROBATION_MINUTES * 60_000);
+  // The liveness horizon is measured in observations, not bare wall-clock.
+  //
+  // `lastLiveAt` is only ever stamped by this cycle, and only for tokens this cycle selected -
+  // so a stale one means "we have not looked recently", which is not the same claim as "it
+  // stopped trading", though the query cannot tell them apart. Any gap longer than
+  // WATCHLIST_PROBATION_MINUTES therefore used to evict the entire established watchlist
+  // PERMANENTLY: after a two-hour outage every previously-alive token matched neither query -
+  // not `alive` (its stamp had aged out) and not `probation` (its stamp is non-null) - and since
+  // only selected tokens are ever refreshed, nothing could ever stamp it again. A token still
+  // trading in-band became unmonitorable forever, and the feed saw only mints discovered after
+  // the restart.
+  //
+  // Extending the cutoff by however long we were actually away costs one cycle of re-probing
+  // and settles by itself: a token still trading gets re-stamped on this pass and rejoins the
+  // normal horizon, one that genuinely died ages out on the next.
+  const downtimeMs = await scanDowntimeMs(env, now);
+  const probationCutoff = new Date(now - env.WATCHLIST_PROBATION_MINUTES * 60_000 - downtimeMs);
 
   // Probation is selected FIRST, against a reserved share of the cap - see
   // WATCHLIST_PROBATION_RESERVE_PCT for why giving it only the leftovers starves new launches
@@ -364,7 +402,7 @@ async function rollPeaksForward(env: Env): Promise<void> {
     const sinceMinutes = fullPeakSweepDone ? env.SCAN_INTERVAL_MINUTES * 3 : undefined;
     await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes });
     fullPeakSweepDone = true;
-    await repairOutcomeBookkeeping(env.SNAPSHOT_RETENTION_DAYS);
+    await repairOutcomeBookkeeping();
   } catch (err) {
     // Bookkeeping over data already banked - never worth failing a scan cycle over.
     logger.warn("failed to record match peaks", { error: String(err) });
@@ -508,14 +546,22 @@ async function processCandidate(
       // assigning candidate.imageUrl unconditionally on re-scan would blank the Pump.fun image
       // that discovery already recorded.
       ...(candidate.imageUrl ? { imageUrl: candidate.imageUrl } : {}),
-      hasTwitter: candidate.hasTwitter ?? false,
-      hasTelegram: candidate.hasTelegram ?? false,
-      hasWebsite: candidate.hasWebsite ?? false,
+      // Sticky, for exactly the reason the image above is: a re-scan's candidate comes from
+      // DexScreener, which reports socials for almost nothing in this band, while discovery read
+      // them from Pump.fun's own metadata. Overwriting with `?? false` therefore erased real
+      // knowledge on the first re-scan - the badges vanished from the card and the scoring's
+      // social component silently lost its input. A link a token once had it still has, so these
+      // only ever go from false to true.
+      ...(candidate.hasTwitter ? { hasTwitter: true } : {}),
+      ...(candidate.hasTelegram ? { hasTelegram: true } : {}),
+      ...(candidate.hasWebsite ? { hasWebsite: true } : {}),
       narrativeTags: scored.narrativeTags,
     },
   });
 
-  const snapshot = await prisma.tokenSnapshot.create({ data: snapshotDataFor(token.id, scored) });
+  const snapshot = await prisma.tokenSnapshot.create({
+    data: snapshotDataFor(token.id, scored, "scan"),
+  });
 
   if (!scored.rugScreen.passed) {
     return 0;

@@ -1,0 +1,11 @@
+-- Resume point for the burn reconciler's cold-start backfill.
+--
+-- A pass is capped at 10 pages of 1000 signatures; the default 400-day cold-start floor is about
+-- 21k signatures at this mint's measured rate, so the first pass stops roughly half way. It then
+-- set lastSignature to the tip and cleared scanFloor, which pointed every later pass at only what
+-- was newer - the older half of the documented window was skipped permanently, and a burn sitting
+-- in it could never be credited by the reconciler.
+--
+-- Existing deployments pick the backfill up from wherever they are: this starts null, and a
+-- cursor that already has lastSignature keeps its forward behaviour unchanged.
+ALTER TABLE "BurnScanCursor" ADD COLUMN "backfillBefore" TEXT;

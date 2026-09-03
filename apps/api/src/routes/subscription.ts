@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import bs58 from "bs58";
 import { z } from "zod";
 import {
   adminWalletSet,
@@ -25,6 +26,39 @@ const sendSchema = z.object({
   // at the RPC on our credentials.
   transaction: z.string().min(1).max(4000),
 });
+
+/**
+ * What /send is willing to relay, per session.
+ *
+ * Buying access is a handful of transactions in a lifetime, so anything above this is not a
+ * subscriber. The route relays through SOLANA_RPC_URL - in production a paid endpoint on the
+ * operator's key - and signing in costs nothing, so without a bound any wallet could push its
+ * traffic through here and have it billed to, and attributed to, us.
+ */
+const SEND_ROUTE_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
+
+/** The mint's raw 32 bytes, for the payload check below. Decoded once. */
+const SUBSCRIPTION_MINT_BYTES = Buffer.from(bs58.decode(SUBSCRIPTION_MINT));
+
+/**
+ * Whether a serialized transaction so much as mentions the subscription mint.
+ *
+ * Not a parse - the API deliberately carries no web3.js - but it is the specific thing that makes
+ * this endpoint a burn relay rather than an open one. Every account a transaction touches appears
+ * in its message as a raw 32-byte public key, so a burn of this mint necessarily contains these
+ * bytes and an unrelated swap, transfer or bot submission does not. Anything that fails this was
+ * never a subscription payment, whatever else it might be.
+ *
+ * The burn itself is still verified properly after the fact, on-chain, by /claim and the
+ * reconciler; this only decides what we are willing to put our RPC credentials behind.
+ */
+function mentionsSubscriptionMint(base64Transaction: string): boolean {
+  try {
+    return Buffer.from(base64Transaction, "base64").includes(SUBSCRIPTION_MINT_BYTES);
+  } catch {
+    return false;
+  }
+}
 
 export interface SubscriptionRouteOptions {
   env: Env;
@@ -96,10 +130,20 @@ export async function registerSubscriptionRoutes(
    * the burn is still ours to find, because we knew about it before the client did. The client's
    * later /claim call is then an optimisation, not the mechanism.
    */
-  app.post("/send", async (request, reply) => {
+  app.post("/send", { config: { rateLimit: SEND_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = sendSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+
+    // This endpoint exists to relay ONE kind of transaction. Nothing here previously required the
+    // payload to have anything to do with the subscription - not the mint, not the caller's own
+    // wallet - so any signed-in wallet (and signing in is free) could push arbitrary transactions
+    // through the operator's paid RPC key, at the global rate limit, with the traffic attributed
+    // to us. See mentionsSubscriptionMint for what this check is and is not.
+    if (!mentionsSubscriptionMint(parsed.data.transaction)) {
+      request.log.warn({ wallet: request.user!.walletAddress }, "refused to relay a non-burn transaction");
+      return reply.code(400).send({ error: "That transaction doesn't burn $ASDFASDFA. Nothing was sent." });
     }
 
     const result = await rpc.sendRawTransaction(parsed.data.transaction);

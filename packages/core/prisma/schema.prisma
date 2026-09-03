@@ -523,11 +523,29 @@ model TokenSnapshot {
   rugScreenPassed  Boolean  @default(false)
   rugScreenReasons String[] @default([])
 
+  /// Which job wrote this row: "scan" for the full enrichment cycle, "fast" for the 15-second
+  /// match pass (see apps/worker/src/jobs/fastMatchJob.ts).
+  ///
+  /// Load-bearing, not bookkeeping. The fast pass carries the on-chain half of a token's profile
+  /// FORWARD from the last scan rather than re-resolving it, so its rows restate a verdict rather
+  /// than establishing one. When "has this token been vetted recently" was answered from all
+  /// snapshots, every fast-pass write re-armed that window: a token whose scan verdict had since
+  /// flipped to failing stayed alertable indefinitely, because its own fast rows kept looking
+  /// fresh. Only "scan" rows count as vetting, so the window can only be extended by a pass that
+  /// actually re-checked the chain.
+  ///
+  /// Defaults to "scan" so existing rows - all written before this column, the vast majority by
+  /// the full cycle - keep their meaning.
+  source String @default("scan")
+
   matches       Match[]
   curatedAlerts CuratedAlert[]
 
   @@index([tokenId, takenAt])
   @@index([marketCapUsd])
+  /// Serves the fast pass's candidate query: newest scan-authored row per token inside the
+  /// vetting window.
+  @@index([source, takenAt])
 }
 
 /// A token that matched a specific user's filter on a specific scan cycle.
@@ -814,7 +832,19 @@ model BurnScanCursor {
   /// reaches this, then stops. Null on a fresh install, which triggers a bounded first scan.
   lastSignature String?
   /// How far back a cold start is allowed to look, so a fresh deploy doesn't walk all history.
+  /// Held until the backfill below has actually reached it, then cleared.
   scanFloor     DateTime?
+
+  /// Where the cold-start backfill has walked back to, when one pass could not reach scanFloor.
+  ///
+  /// A pass is capped at MAX_PAGES_PER_PASS pages, and the default 400-day floor is roughly twice
+  /// that many signatures at this mint's measured rate - so the first pass stops short. It used
+  /// to stop short and then set lastSignature to the tip, which pointed every later pass at only
+  /// what was NEWER: the older half of the window was jumped over and never visited again, and a
+  /// burn sitting in it could not be credited by anything. This is the resume point that makes
+  /// the documented "walks across a few passes" true - each pass continues backwards from here
+  /// until the floor is reached, then both this and scanFloor are cleared.
+  backfillBefore String?
 
   updatedAt DateTime @updatedAt
 }

@@ -54,9 +54,9 @@ function syntheticRows(count: number, seed = 42): TrainingRow[] {
 }
 
 describe("trainCurator", () => {
-  it("learns a genuinely predictive feature and ranks by it", () => {
+  it("learns a genuinely predictive feature and ranks by it", async () => {
     const rows = syntheticRows(2_000);
-    const params = trainCurator(rows);
+    const params = await trainCurator(rows);
 
     const hot = scoreCandidateWithModel(params, {
       volumeToMcapRatio: 2.8,
@@ -81,7 +81,7 @@ describe("trainCurator", () => {
     expect(cold).toBeLessThan(0.2);
   });
 
-  it("learns from missingness itself via the indicator inputs", () => {
+  it("learns from missingness itself via the indicator inputs", async () => {
     // Here the VALUE carries nothing (always 1 when present) but presence itself predicts wins.
     const rand = rng(7);
     const rows: TrainingRow[] = [];
@@ -96,17 +96,17 @@ describe("trainCurator", () => {
         anchorMcapUsd: 100_000,
       });
     }
-    const params = trainCurator(rows);
+    const params = await trainCurator(rows);
     const withSignal = scoreCandidateWithModel(params, { freshTop10WalletPct: 1, scoreTotal: 40 });
     const withoutSignal = scoreCandidateWithModel(params, { freshTop10WalletPct: null, scoreTotal: 40 });
     expect(withSignal).toBeGreaterThan(withoutSignal + 0.2);
   });
 
-  it("refuses to train on nothing", () => {
-    expect(() => trainCurator([])).toThrow();
+  it("refuses to train on nothing", async () => {
+    await expect(trainCurator([])).rejects.toThrow();
   });
 
-  it("recency decay sides with the current regime when a signal's meaning flips", () => {
+  it("recency decay sides with the current regime when a signal's meaning flips", async () => {
     // A meta shift mid-history: for the older 70% of rows high volumeToMcapRatio predicts
     // winning, for the newest 30% it predicts LOSING (the crowd caught on; hot churn is now
     // exit liquidity). Equal weighting sides with the bigger, older regime; a one-week
@@ -133,12 +133,12 @@ describe("trainCurator", () => {
     const hotCandidate = { volumeToMcapRatio: 2.8, scoreTotal: 40 };
     const coldCandidate = { volumeToMcapRatio: 0.3, scoreTotal: 40 };
 
-    const equalWeighted = trainCurator(rows);
+    const equalWeighted = await trainCurator(rows);
     expect(scoreCandidateWithModel(equalWeighted, hotCandidate)).toBeGreaterThan(
       scoreCandidateWithModel(equalWeighted, coldCandidate),
     );
 
-    const recencyWeighted = trainCurator(rows, { recencyHalfLifeDays: 7 });
+    const recencyWeighted = await trainCurator(rows, { recencyHalfLifeDays: 7 });
     expect(scoreCandidateWithModel(recencyWeighted, coldCandidate)).toBeGreaterThan(
       scoreCandidateWithModel(recencyWeighted, hotCandidate),
     );
@@ -146,9 +146,9 @@ describe("trainCurator", () => {
 });
 
 describe("calibrateThreshold", () => {
-  it("matches the target emission rate over the calibration span", () => {
+  it("matches the target emission rate over the calibration span", async () => {
     const rows = syntheticRows(1_000);
-    const params = trainCurator(rows);
+    const params = await trainCurator(rows);
     const threshold = calibrateThreshold(params, rows, 2); // 2/hour over ~100h span
     const emitted = rows.filter((r) => scoreCandidateWithModel(params, r.features) >= threshold).length;
     const spanHours =
@@ -160,11 +160,11 @@ describe("calibrateThreshold", () => {
     expect(emitted).toBeGreaterThan(0);
   });
 
-  it("floors the threshold so a market where nothing wins emits nothing", () => {
+  it("floors the threshold so a market where nothing wins emits nothing", async () => {
     // Nothing ever wins: the by-rate threshold alone would emit everything under an absurd
     // target; the absolute floor is what keeps the feed silent instead of least-bad.
     const rows = syntheticRows(500).map((r) => ({ ...r, labelValue: 0 }));
-    const params = trainCurator(rows);
+    const params = await trainCurator(rows);
     const threshold = calibrateThreshold(params, rows, 1_000_000);
     expect(threshold).toBeGreaterThanOrEqual(0.08);
     const emitted = rows.filter((r) => scoreCandidateWithModel(params, r.features) >= threshold);
@@ -173,9 +173,9 @@ describe("calibrateThreshold", () => {
 });
 
 describe("walkForwardEvaluate", () => {
-  it("produces time-ordered folds where a real signal beats the (here-blind) heuristic", () => {
+  it("produces time-ordered folds where a real signal beats the (here-blind) heuristic", async () => {
     const rows = syntheticRows(3_000);
-    const result = walkForwardEvaluate(rows, {
+    const result = await walkForwardEvaluate(rows, {
       targetPerHour: 5,
       heuristicMinScore: 55,
       minRowsToPromote: 1_500,
@@ -192,11 +192,11 @@ describe("walkForwardEvaluate", () => {
     expect(result.verdict.promote).toBe(true);
   });
 
-  it("keeps out-of-band rows out of both sides' emissions, matching production", () => {
+  it("keeps out-of-band rows out of both sides' emissions, matching production", async () => {
     // Every row is far above the band ceiling: with the band passed (as the training job passes
     // it), neither curator may emit a single one, however strong the model's signal is.
     const rows = syntheticRows(3_000).map((r) => ({ ...r, anchorMcapUsd: 5_000_000 }));
-    const excluded = walkForwardEvaluate(rows, {
+    const excluded = await walkForwardEvaluate(rows, {
       targetPerHour: 5,
       heuristicMinScore: 55,
       mcapBand: { min: 50_000, max: 500_000 },
@@ -211,7 +211,7 @@ describe("walkForwardEvaluate", () => {
     // The companion direction: the SAME rows under a band that contains them must emit - this is
     // what catches an inverted (always-false) band predicate, which the assertions above would
     // wave straight through.
-    const included = walkForwardEvaluate(rows, {
+    const included = await walkForwardEvaluate(rows, {
       targetPerHour: 5,
       heuristicMinScore: 55,
       mcapBand: { min: 1, max: 10_000_000 },
@@ -220,12 +220,12 @@ describe("walkForwardEvaluate", () => {
     for (const fold of included.folds) expect(fold.model.emitted).toBeGreaterThan(0);
   });
 
-  it("caps each fold's emissions at the governed budget, keeping only the strongest picks", () => {
+  it("caps each fold's emissions at the governed budget, keeping only the strongest picks", async () => {
     // Production runs the governor: at most targetPerHour x span picks make the feed, best
     // conviction first. The exam must play the same policy - an uncapped exam grades a firehose.
     const rows = syntheticRows(3_000);
     const target = 0.01; // ~5 allowed picks over each fold's ~500h span
-    const result = walkForwardEvaluate(rows, {
+    const result = await walkForwardEvaluate(rows, {
       targetPerHour: target,
       heuristicMinScore: 55,
       minRowsToPromote: 1_500,
@@ -242,8 +242,8 @@ describe("walkForwardEvaluate", () => {
     }
   });
 
-  it("refuses to judge on too little history", () => {
-    const result = walkForwardEvaluate(syntheticRows(100), {
+  it("refuses to judge on too little history", async () => {
+    const result = await walkForwardEvaluate(syntheticRows(100), {
       targetPerHour: 5,
       heuristicMinScore: 55,
     });

@@ -22,11 +22,22 @@ export function formatRealtimeAlert(token: Token, snapshot: TokenSnapshot, score
   return lines.join("\n");
 }
 
-export function formatDigest(entries: { token: Token; snapshot: TokenSnapshot; score: number }[]): string {
+/**
+ * `total` is how many matches the digest is actually reporting on, which is not `entries.length`
+ * once the 25-row cap bites: a user with a busy filter was told "25 matches" on a day with three
+ * hundred, and the header is the only number most readers take from the message.
+ */
+export function formatDigest(
+  entries: { token: Token; snapshot: TokenSnapshot; score: number }[],
+  total = entries.length,
+): string {
   if (entries.length === 0) {
-    return "No new matches in the last 24h. TrenchScanner is still watching.";
+    return "No new matches since your last digest. TrenchScanner is still watching.";
   }
-  const header = `📋 <b>Daily digest — ${entries.length} match${entries.length === 1 ? "" : "es"} in the last 24h</b>\n`;
+  const header =
+    total > entries.length
+      ? `📋 <b>Daily digest — top ${entries.length} of ${total} matches</b>\n`
+      : `📋 <b>Daily digest — ${total} match${total === 1 ? "" : "es"}</b>\n`;
   const rows = entries
     .sort((a, b) => b.score - a.score)
     .map((e) => {

@@ -59,7 +59,11 @@ async function createToken(suffix: string) {
 }
 
 describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
-  const env = loadEnv();
+  // Lazy: vitest runs a describe callback during collection even when skipIf will skip every
+  // test inside it, so calling loadEnv() here directly threw on a machine with no DATABASE_URL -
+  // turning the intended graceful skip into a hard suite failure, which is the opposite of what
+  // the guard above and this file's own header promise.
+  const env = dbAvailable ? loadEnv() : (undefined as never);
 
   afterAll(async () => {
     if (!dbAvailable) return;

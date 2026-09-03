@@ -299,6 +299,7 @@ export function serializeCuratedAlert(
  */
 export function foldCuratedIntoPage<
   T extends {
+    id: string;
     kind: "match" | "curated";
     tokenId: string;
     matchedAt: Date;
@@ -306,6 +307,11 @@ export function foldCuratedIntoPage<
   },
 >(cards: T[], windowMs: number): T[] {
   const absorbed = new Set<string>();
+  // Keyed by the match card's own id, not tokenId + timestamp. Two of a user's filters catching
+  // the same token in one scan cycle produce two Match rows whose matchedAt can be identical to
+  // the millisecond - so that composite key was not unique, and the map lookup below then
+  // stamped the curated badge onto BOTH cards while the standalone curated card was removed:
+  // one alert rendered as two curated-badged cards, against the documented one-absorption rule.
   const folded = new Map<string, T["curated"]>();
 
   for (const card of cards) {
@@ -314,19 +320,19 @@ export function foldCuratedIntoPage<
       (m) =>
         m.kind === "match" &&
         m.tokenId === card.tokenId &&
-        !folded.has(m.tokenId + m.matchedAt.toISOString()) &&
+        !folded.has(m.id) &&
         m.curated === null &&
         Math.abs(m.matchedAt.getTime() - card.matchedAt.getTime()) <= windowMs,
     );
     if (!twin) continue;
-    folded.set(twin.tokenId + twin.matchedAt.toISOString(), card.curated);
+    folded.set(twin.id, card.curated);
     absorbed.add(card.curated.alertId);
   }
 
   return cards
     .filter((c) => !(c.kind === "curated" && c.curated && absorbed.has(c.curated.alertId)))
     .map((c) => {
-      const meta = folded.get(c.tokenId + c.matchedAt.toISOString());
+      const meta = folded.get(c.id);
       return meta && c.kind === "match" ? { ...c, curated: meta } : c;
     });
 }

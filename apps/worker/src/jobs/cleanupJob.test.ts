@@ -98,3 +98,70 @@ describe.skipIf(!dbAvailable)("runCleanupJob: Mobile Connect debris", () => {
     expect(left).not.toContain(longRevoked.id);
   });
 });
+
+/**
+ * The stale-token sweep, and the one record it must never take with it.
+ *
+ * Token -> CuratedAlert is onDelete: Cascade, so anything that deletes a token deletes the
+ * feed's public history for it too.
+ */
+describe.skipIf(!dbAvailable)("runCleanupJob: stale tokens vs the curated record", () => {
+  const TAG = "CleanupCuratedTest";
+
+  // Everything else off; only the token sweep is under test.
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 3650,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 90,
+  } as never;
+
+  beforeEach(async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  afterAll(async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  it("keeps a curated alert's token however old and unmatched it is", async () => {
+    // A curated alert is emitted independently of user filters, so a curated token nobody's
+    // filter also caught holds no Match. Its snapshots age out at 30 days and its outcome rows
+    // at 180 - and on the first sweep after that the token itself qualified as stale, cascading
+    // away the feed's public track record for it. The scoreboard's history was shrinking from
+    // the far end while its numbers stayed plausible.
+    const old = new Date(Date.now() - 400 * 86_400_000);
+    const token = await prisma.token.create({
+      data: { mintAddress: `${TAG}-curated-ancient`, firstSeenAt: old },
+    });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        createdAt: old,
+        source: "heuristic-v1",
+        confidence: 0.9,
+        reasons: [],
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 100_000,
+      },
+    });
+
+    await runCleanupJob(env);
+
+    expect(await prisma.token.findUnique({ where: { id: token.id } })).not.toBeNull();
+    expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(1);
+  });
+
+  it("still sweeps an equally old token nothing references", async () => {
+    // The other half: the sweep has to keep doing its job, or the guard above is just a leak.
+    const token = await prisma.token.create({
+      data: {
+        mintAddress: `${TAG}-plain-ancient`,
+        firstSeenAt: new Date(Date.now() - 400 * 86_400_000),
+      },
+    });
+
+    await runCleanupJob(env);
+
+    expect(await prisma.token.findUnique({ where: { id: token.id } })).toBeNull();
+  });
+});

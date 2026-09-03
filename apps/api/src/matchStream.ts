@@ -82,6 +82,8 @@ interface Subscriber {
  */
 export class MatchStream {
   private readonly subscribers = new Set<Subscriber>();
+  /** Work to run on this instance when a curated alert is announced - see onCuratedAlert. */
+  private readonly curatedListeners = new Set<() => void>();
   private client: Client | undefined;
   private heartbeat: NodeJS.Timeout | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
@@ -140,6 +142,15 @@ export class MatchStream {
       await client.connect();
       await client.query(`LISTEN ${MATCH_CHANNEL}`);
       await client.query(`LISTEN ${CURATED_CHANNEL}`);
+      // stop() may have run while those awaits were outstanding - a window seconds wide when the
+      // database is slow or briefly unreachable at boot, which is exactly when a shutdown is
+      // likely. Without this the process ends up stopped with a fully open, LISTENing connection
+      // in hand and nothing left that would close it: stop() has already run, the reconnect path
+      // no-ops once stopped, and Fastify's onClose hook has already been awaited.
+      if (this.stopped) {
+        await client.end().catch(() => {});
+        return;
+      }
       this.client = client;
       this.reconnectDelay = RECONNECT_BASE_MS;
       logger.info("listening for match + curated notifications", {
@@ -210,6 +221,20 @@ export class MatchStream {
     }
     if (!notification?.alertId) return;
 
+    // Before the nudge goes out, not after: the clients this wakes will refetch within
+    // milliseconds, and this instance holds a few seconds of cached feed pages. Serving those
+    // the pre-alert rows made the push pointless - the new card then waited out the client's
+    // 30-second fallback poll, which is the latency the stream exists to remove. Under
+    // continuous polling by several subscribers the cache is warm nearly all the time, so this
+    // was the common case rather than a rare one.
+    for (const listener of this.curatedListeners) {
+      try {
+        listener();
+      } catch (err) {
+        logger.warn("curated notification listener failed", { error: String(err) });
+      }
+    }
+
     const frame = `event: curated\ndata: ${JSON.stringify({ alertId: notification.alertId })}\n\n`;
     for (const subscriber of this.subscribers) {
       if (subscriber.kind !== "curated") continue;
@@ -227,6 +252,19 @@ export class MatchStream {
     const subscriber: Subscriber = { kind: "match", userId, sink };
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
+  }
+
+  /**
+   * Runs `listener` whenever a curated alert is announced, before the SSE frames go out.
+   *
+   * For work that has to happen on this instance the moment a new alert exists rather than on a
+   * client's schedule - the feed's page cache invalidating itself is the motivating case. Kept
+   * separate from subscribe() because these are not stream clients: nothing is written to them
+   * and they are not subject to the subscriber cap.
+   */
+  onCuratedAlert(listener: () => void): () => void {
+    this.curatedListeners.add(listener);
+    return () => this.curatedListeners.delete(listener);
   }
 
   /** Same contract as subscribe(), for the broadcast curated feed - shares the same capacity cap. */

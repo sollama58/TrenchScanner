@@ -190,35 +190,49 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
         data.nextCheckAt = new Date(tickAt.getTime() + stepMinutes * 60_000);
       }
 
-      await prisma.candidateOutcome.update({ where: { id: row.id }, data });
-
       // A closing window is also the feed's moment of truth: copy the verdict onto any curated
       // alert anchored to this row. Copies (not just the live relation) because the training row
       // itself is pruned on CANDIDATE_OUTCOME_RETENTION_DAYS while the feed's track record isn't.
-      if (row.curatedAlerts.length > 0 && (closedLabels !== null || finalPeak24hPct !== null)) {
-        await prisma.curatedAlert.updateMany({
-          where: { candidateOutcomeId: row.id },
-          data: {
-            ...(closedLabels !== null
-              ? {
-                  peak1hReturnPct: closedLabels.peak1hReturnPct,
-                  maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
-                  hit2xIn15m: closedLabels.hit2xIn15m,
-                  hit2xIn1h: closedLabels.hit2xIn1h,
-                  hit4xIn1h: closedLabels.hit4xIn1h,
-                  disqualified: closedLabels.disqualified,
-                }
-              : {}),
-            ...(finalPeak24hPct !== null
-              ? { peak24hReturnPct: finalPeak24hPct, outcomeFinalizedAt: tickAt }
-              : {}),
-          },
-        });
-      }
+      //
+      // Both writes go in ONE transaction. Split, a crash or a transient error between them left
+      // the outcome finalized and the alert's verdict columns null forever - and once the
+      // training row was pruned there was nothing left to recompute them from, so the card
+      // degraded to "unknown" and dropped out of the hit-rate counters permanently. Match rows
+      // got exactly this repair (repairOutcomeBookkeeping); curated alerts never did, so the
+      // one ledger the product describes as permanent was the one with no safety net.
+      const copyVerdict = row.curatedAlerts.length > 0 && (closedLabels !== null || finalPeak24hPct !== null);
+
+      await prisma.$transaction([
+        prisma.candidateOutcome.update({ where: { id: row.id }, data }),
+        ...(copyVerdict
+          ? [
+              prisma.curatedAlert.updateMany({
+                where: { candidateOutcomeId: row.id },
+                data: {
+                  ...(closedLabels !== null
+                    ? {
+                        peak1hReturnPct: closedLabels.peak1hReturnPct,
+                        maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
+                        hit2xIn15m: closedLabels.hit2xIn15m,
+                        hit2xIn1h: closedLabels.hit2xIn1h,
+                        hit4xIn1h: closedLabels.hit4xIn1h,
+                        disqualified: closedLabels.disqualified,
+                      }
+                    : {}),
+                  ...(finalPeak24hPct !== null
+                    ? { peak24hReturnPct: finalPeak24hPct, outcomeFinalizedAt: tickAt }
+                    : {}),
+                },
+              }),
+            ]
+          : []),
+      ]);
     } catch (err) {
       logger.error("failed to update candidate outcome", { id: row.id, error: String(err) });
     }
   });
+
+  const repaired = await repairCuratedVerdicts();
 
   logger.info("candidate watch sweep complete", {
     durationMs: Date.now() - startedAt,
@@ -226,5 +240,69 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
     pricesFound: priceByMint.size,
     finalized,
     retired,
+    ...(repaired > 0 ? { repaired } : {}),
   });
+}
+
+/**
+ * Backfills verdict columns onto curated alerts whose outcome row is finalized but whose copies
+ * never landed.
+ *
+ * The copy is written in the same transaction as the finalization now, so nothing new should
+ * arrive here - but rows stranded by the old split-write path are still out there, and a repair
+ * that only exists for future bugs is not much of a repair. Cheap: the filter matches nothing in
+ * the steady state, and the work is bounded by whatever it does find.
+ *
+ * Only alerts whose training row still exists can be repaired. Once that row is pruned the
+ * numbers are genuinely gone, which is exactly why the copy has to be atomic in the first place.
+ */
+async function repairCuratedVerdicts(): Promise<number> {
+  const stranded = await prisma.curatedAlert.findMany({
+    where: {
+      hit2xIn15m: null,
+      candidateOutcome: { is: { finalizedAt: { not: null } } },
+    },
+    select: {
+      id: true,
+      candidateOutcome: {
+        select: {
+          peak1hReturnPct: true,
+          maxDrawdown1hPct: true,
+          hit2xIn15m: true,
+          hit2xIn1h: true,
+          hit4xIn1h: true,
+          disqualified: true,
+          peak24hReturnPct: true,
+          finalized24hAt: true,
+        },
+      },
+    },
+    take: 200,
+  });
+  if (stranded.length === 0) return 0;
+
+  let repaired = 0;
+  for (const alert of stranded) {
+    const outcome = alert.candidateOutcome;
+    if (!outcome) continue;
+    try {
+      await prisma.curatedAlert.update({
+        where: { id: alert.id },
+        data: {
+          peak1hReturnPct: outcome.peak1hReturnPct,
+          maxDrawdown1hPct: outcome.maxDrawdown1hPct,
+          hit2xIn15m: outcome.hit2xIn15m,
+          hit2xIn1h: outcome.hit2xIn1h,
+          hit4xIn1h: outcome.hit4xIn1h,
+          disqualified: outcome.disqualified,
+          ...(outcome.peak24hReturnPct !== null ? { peak24hReturnPct: outcome.peak24hReturnPct } : {}),
+          ...(outcome.finalized24hAt !== null ? { outcomeFinalizedAt: outcome.finalized24hAt } : {}),
+        },
+      });
+      repaired += 1;
+    } catch (err) {
+      logger.warn("failed to repair curated verdict", { id: alert.id, error: String(err) });
+    }
+  }
+  return repaired;
 }
