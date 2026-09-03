@@ -35,6 +35,7 @@ const EXPECTED: Partial<Record<keyof Env, string>> = {
   SNAPSHOT_RETENTION_DAYS: "snapshotRetentionDays",
   STALE_TOKEN_RETENTION_DAYS: "staleTokenRetentionDays",
   OUTCOME_TRACKING_HOUR_UTC: "outcomeTrackingHourUtc",
+  DATABASE_POOL_TIMEOUT_SECONDS: "databasePoolTimeoutSeconds",
 };
 
 /** Never allowed out of this endpoint, whatever else changes. */
@@ -82,6 +83,18 @@ describe("GET /admin/config", () => {
   it("reports whether Telegram is configured without leaking the token", async () => {
     const payload = await fetchConfig();
     expect(typeof payload.telegramConfigured).toBe("boolean");
+  });
+
+  it("reports the connection-pool tuning - null when the limit is left to Prisma's own default", async () => {
+    // Regression target: the exact incident this pair of fields exists to make diagnosable
+    // without opening the Render dashboard is "Timed out fetching a new connection from the
+    // connection pool (connection limit: 9)" - both numbers the error names should be readable
+    // from here. DATABASE_CONNECTION_LIMIT is optional and unset in this test's environment, so
+    // the honest answer is null (a real number would claim a deliberate choice nobody made) -
+    // covered separately from the EXPECTED map above because the mapping isn't a bare equality.
+    const payload = await fetchConfig();
+    expect(payload.databaseConnectionLimit).toBeNull();
+    expect(typeof payload.databasePoolTimeoutSeconds).toBe("number");
   });
 
   it("never returns a secret, under any key", async () => {
