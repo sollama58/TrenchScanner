@@ -9,7 +9,11 @@ const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() =
 const TAG = `watchlist-test-${Date.now()}`;
 
 describe.skipIf(!dbAvailable)("selectWatchlist", () => {
-  const env = loadEnv();
+  // Lazy: vitest runs a describe callback during collection even when skipIf will skip every
+  // test inside it, so calling loadEnv() here directly threw on a machine with no DATABASE_URL -
+  // turning the intended graceful skip into a hard suite failure, which is the opposite of what
+  // the guard above and this file's own header promise.
+  const env = dbAvailable ? loadEnv() : (undefined as never);
   const MINUTE = 60_000;
 
   // selectWatchlist reads the whole Token table, so each case has to own its universe - one

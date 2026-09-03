@@ -142,6 +142,15 @@ export class MatchStream {
       await client.connect();
       await client.query(`LISTEN ${MATCH_CHANNEL}`);
       await client.query(`LISTEN ${CURATED_CHANNEL}`);
+      // stop() may have run while those awaits were outstanding - a window seconds wide when the
+      // database is slow or briefly unreachable at boot, which is exactly when a shutdown is
+      // likely. Without this the process ends up stopped with a fully open, LISTENing connection
+      // in hand and nothing left that would close it: stop() has already run, the reconnect path
+      // no-ops once stopped, and Fastify's onClose hook has already been awaited.
+      if (this.stopped) {
+        await client.end().catch(() => {});
+        return;
+      }
       this.client = client;
       this.reconnectDelay = RECONNECT_BASE_MS;
       logger.info("listening for match + curated notifications", {
