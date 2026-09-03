@@ -131,6 +131,34 @@ describe.skipIf(!dbAvailable)("burn crediting", () => {
     expect(await claimHeldBurns(user.id, NO_ACCOUNT_WALLET)).toBe(0);
   });
 
+  it("credits a held burn once when sign-in and claim settle it concurrently", async () => {
+    // The API calls claimHeldBurns from two places that run close together by design: sign-in,
+    // and the /subscription/claim the dashboard fires straight after. Reading the held rows
+    // outside the transaction let both see the same uncredited burn and both extend the
+    // subscription by it - one burn, two months.
+    const wallet = `ConcurrentClaim${RUN}`.padEnd(43, "1");
+    await creditBurn(
+      `sig-${RUN}-race`,
+      credit({ burnerWallet: wallet, months: 1 }),
+      SUBSCRIPTION_MINT,
+      "reconciler",
+    );
+    const user = await prisma.user.create({ data: { walletAddress: wallet } });
+
+    const results = await Promise.all(Array.from({ length: 8 }, () => claimHeldBurns(user.id, wallet)));
+
+    // Exactly one call does the crediting; every other finds nothing left to claim.
+    expect(results.filter((m) => m > 0)).toEqual([1]);
+
+    const sub = await prisma.subscription.findUniqueOrThrow({ where: { userId: user.id } });
+    const daysGranted = (sub.expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+    expect(daysGranted).toBeLessThan(SUBSCRIPTION_DAYS + 1);
+
+    await prisma.burnEvent.deleteMany({ where: { burnerWallet: wallet } });
+    await prisma.subscription.deleteMany({ where: { userId: user.id } });
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
   it("denies access once the window has lapsed", async () => {
     await prisma.subscription.create({
       data: { userId, expiresAt: new Date(Date.now() - 1000), source: "BURN" },
