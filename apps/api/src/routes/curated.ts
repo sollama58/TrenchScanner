@@ -27,6 +27,15 @@ const FEED_CACHE_TTL_MS = 3_000;
 /** How many distinct page numbers keep a cache. Page 1 is what nearly every reader asks for. */
 const MAX_CACHED_PAGES = 8;
 
+/**
+ * How long the learning panel's figures are reused across readers.
+ *
+ * Longer than the feed's three seconds because nothing here moves faster: outcomes finalize on
+ * the hour, training runs every CURATOR_TRAINING_INTERVAL_HOURS, and the alert counts move by
+ * single digits. The panel polls once a minute, so this collapses every open tab onto one pass.
+ */
+const STATS_CACHE_TTL_MS = 30_000;
+
 /** What the cache holds: the database rows, not the rendered cards. */
 type CuratedPage = {
   alerts: CuratedAlertWithRelations[];
@@ -208,7 +217,16 @@ export async function registerCuratedRoutes(
    * are scoring. Shown inside the tab on purpose - the feed grades itself in public, and "the
    * model takes over when it beats this" is a promise subscribers can watch happen.
    */
-  app.get("/stats", async () => {
+  /**
+   * The stats body, shared across readers like the feed pages above.
+   *
+   * Identical for every subscriber, refetched once a minute per open tab, and about two dozen
+   * aggregates per call - including counts over the largest table in the schema, whose own route
+   * comment notes it "grows with the table forever". The list endpoint was given a SharedCache
+   * for exactly this reason; the heavier endpoint next to it had none. A minute of staleness is
+   * invisible here: labels close hourly and training runs every few hours.
+   */
+  const buildStats = async () => {
     const day1 = new Date(Date.now() - 86_400_000);
     const day7 = new Date(Date.now() - 7 * 86_400_000);
     const day30 = new Date(Date.now() - 30 * 86_400_000);
@@ -305,5 +323,9 @@ export async function registerCuratedRoutes(
         model: model30d,
       },
     };
-  });
+  };
+
+  const statsCache = new SharedCache<Awaited<ReturnType<typeof buildStats>>>(STATS_CACHE_TTL_MS);
+
+  app.get("/stats", async () => statsCache.get(buildStats));
 }

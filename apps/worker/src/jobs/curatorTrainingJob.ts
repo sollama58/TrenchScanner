@@ -62,7 +62,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   }));
 
   const mcapBand = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
-  const evaluation = walkForwardEvaluate(trainingRows, {
+  const evaluation = await walkForwardEvaluate(trainingRows, {
     targetPerHour: env.CURATED_TARGET_PER_HOUR,
     heuristicMinScore: env.CURATED_MIN_SCORE,
     // Emission enforces the band before either curator runs (see maybeEmitCuratedAlert), so the
@@ -77,7 +77,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   // Out-of-band samples still teach (mcap is a feature), but the emission threshold is
   // calibrated on in-band rows only: those are the only candidates it will ever be applied to,
   // and letting unemittable rows into the rate math would skew it quiet.
-  const trained = trainCurator(trainingRows, {
+  const trained = await trainCurator(trainingRows, {
     recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
   });
   const inBandRows = trainingRows.filter((r) => inMcapBand(r.anchorMcapUsd, mcapBand));

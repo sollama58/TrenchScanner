@@ -546,9 +546,15 @@ async function processCandidate(
       // assigning candidate.imageUrl unconditionally on re-scan would blank the Pump.fun image
       // that discovery already recorded.
       ...(candidate.imageUrl ? { imageUrl: candidate.imageUrl } : {}),
-      hasTwitter: candidate.hasTwitter ?? false,
-      hasTelegram: candidate.hasTelegram ?? false,
-      hasWebsite: candidate.hasWebsite ?? false,
+      // Sticky, for exactly the reason the image above is: a re-scan's candidate comes from
+      // DexScreener, which reports socials for almost nothing in this band, while discovery read
+      // them from Pump.fun's own metadata. Overwriting with `?? false` therefore erased real
+      // knowledge on the first re-scan - the badges vanished from the card and the scoring's
+      // social component silently lost its input. A link a token once had it still has, so these
+      // only ever go from false to true.
+      ...(candidate.hasTwitter ? { hasTwitter: true } : {}),
+      ...(candidate.hasTelegram ? { hasTelegram: true } : {}),
+      ...(candidate.hasWebsite ? { hasWebsite: true } : {}),
       narrativeTags: scored.narrativeTags,
     },
   });

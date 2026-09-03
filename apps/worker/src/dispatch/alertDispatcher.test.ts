@@ -127,4 +127,16 @@ describe("formatDigest", () => {
     ]);
     expect(text).toContain("2 matches");
   });
+
+  it("says it is showing the top N when the day held more than the cap", () => {
+    // The rows are capped at 25 but the header used to quote that cap as the day's total, so a
+    // user with 300 matches was told they had 25.
+    const entries = Array.from({ length: 25 }, () => ({
+      token: makeToken(),
+      snapshot: makeSnapshot(),
+      score: 50,
+    }));
+    const text = formatDigest(entries, 300);
+    expect(text).toContain("top 25 of 300");
+  });
 });
