@@ -10,7 +10,31 @@
 -- Existing rows default to "scan": they predate the fast pass's lazy writes being distinguishable,
 -- and the overwhelming majority were written by the full cycle. Treating them as vetting matches
 -- the behaviour those rows were created under.
+--
+-- Postgres 11+ handles ADD COLUMN with a constant DEFAULT as a metadata-only change - no table
+-- rewrite, near-instant regardless of row count - so this is safe to run against a live,
+-- actively-written TokenSnapshot.
 ALTER TABLE "TokenSnapshot" ADD COLUMN "source" TEXT NOT NULL DEFAULT 'scan';
 
--- Serves the fast pass's candidate query (newest scan row per token inside the vetting window).
-CREATE INDEX "TokenSnapshot_source_takenAt_idx" ON "TokenSnapshot"("source", "takenAt");
+-- The composite index this migration originally shipped with here (a plain, non-CONCURRENT
+-- CREATE INDEX) is what took production down: prisma migrate deploy runs an entire migration in
+-- one transaction, and a plain CREATE INDEX takes a SHARE lock for the whole build - which on a
+-- table the fast pass writes to every ~15 seconds and the scan cycle writes to every minute
+-- across up to CANDIDATE_CONCURRENCY candidates at once, collided with an in-flight writer and
+-- was killed by a lock/statement timeout. Because the whole migration is one transaction, that
+-- rolled back the ADD COLUMN too, and left `_prisma_migrations` recording this migration as
+-- failed - which blocks every later migration (P3009) until resolved.
+--
+-- CREATE INDEX CONCURRENTLY is Postgres's actual answer to this - it builds without blocking
+-- writers - but it cannot run inside ANY transaction block, and prisma migrate deploy always
+-- wraps a migration's statements in one on Postgres, so it cannot live in this file at all. The
+-- index itself now ships as its own tracked migration, 20260903020000_snapshot_source_index - a
+-- plain CREATE INDEX, correct as-is for any fresh install where the table starts empty. A
+-- database where it doesn't (production, reached after the table is already this large and
+-- live) gets it instead via
+-- packages/core/prisma/manual/20260903_create_snapshot_source_index_concurrently.sql, run once
+-- by hand outside of migrate deploy, with that later migration then marked resolved --applied so
+-- deploy never tries to run its blocking version there. The column above is what the code
+-- actually depends on for correctness; the index is a performance improvement for the fast
+-- pass's candidate query, and the app functions correctly - just via a sequential scan on that
+-- filter - until it exists.
