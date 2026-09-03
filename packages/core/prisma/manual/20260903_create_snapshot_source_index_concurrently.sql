@@ -1,0 +1,36 @@
+-- One-time, manual, non-transactional index build for TokenSnapshot(source, takenAt).
+--
+-- NOT under prisma/migrations/ on purpose: prisma migrate deploy wraps every migration in a
+-- single transaction on Postgres, and CREATE INDEX CONCURRENTLY is forbidden inside any
+-- transaction block - it needs to be run as its own, standalone statement. This file exists so
+-- the exact SQL is checked in and reviewable, not so Prisma runs it; migrate deploy never reads
+-- this directory.
+--
+-- Run this ONCE, directly against the database, outside of any deploy:
+--   psql "$DATABASE_URL" -f packages/core/prisma/manual/20260903_create_snapshot_source_index_concurrently.sql
+-- (Render's dashboard -> either service -> Shell already has DATABASE_URL set correctly, so
+-- there's no need to paste a connection string anywhere else.)
+--
+-- Safe to run at any time, including under live traffic - that is the entire point of
+-- CONCURRENTLY: it takes the weakest lock available (SHARE UPDATE EXCLUSIVE) and builds the
+-- index in the background without blocking concurrent reads or writes on the table. It costs two
+-- full table scans instead of one and takes longer wall-clock than a plain CREATE INDEX would,
+-- which is the trade this file exists to make deliberately.
+--
+-- Idempotent and safe to re-run: if a previous attempt was interrupted (a deploy restarted the
+-- container, the psql session dropped), Postgres can leave behind an INVALID index of the same
+-- name that a plain CREATE INDEX would then collide with - the DROP below clears that first.
+--
+-- Does NOT need to run before migrate deploy is unblocked - see the recovery runbook in this
+-- PR's description / README for the full, verified order. In short: `prisma migrate resolve
+-- --applied "20260903020000_snapshot_source_index"` is what stops migrate deploy from ever
+-- attempting that migration's own (plain, blocking) CREATE INDEX - it is pure bookkeeping and
+-- does not check whether the index actually exists yet, so resolving it can happen BEFORE this
+-- script runs, which is the faster path to getting deploys unblocked: resolve both migrations,
+-- redeploy immediately (the column-only migration is fast and safe under load; the index
+-- migration is skipped entirely), THEN run this script whenever convenient - even hours later -
+-- to make the index physically exist and match what the migration history already claims. The
+-- app is correct without the index the whole time, just slower on the fast pass's query.
+
+DROP INDEX CONCURRENTLY IF EXISTS "TokenSnapshot_source_takenAt_idx";
+CREATE INDEX CONCURRENTLY "TokenSnapshot_source_takenAt_idx" ON "TokenSnapshot"("source", "takenAt");

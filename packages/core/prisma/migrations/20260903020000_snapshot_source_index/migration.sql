@@ -1,0 +1,14 @@
+-- The index that 20260902040000_snapshot_source originally tried to build inline and took
+-- production down doing it - see the long comment there for why, and
+-- packages/core/prisma/manual/20260903_create_snapshot_source_index_concurrently.sql for how an
+-- already-populated, live database (production) gets this index instead: built CONCURRENTLY, by
+-- hand, out of band, with THIS migration then marked applied via
+--   npx prisma migrate resolve --applied "20260903020000_snapshot_source_index"
+-- so migrate deploy never tries to run the plain CREATE INDEX below against it.
+--
+-- A fresh install - CI, local dev, a brand new deployment - has an empty or small TokenSnapshot,
+-- where a plain CREATE INDEX is instant and this file applies exactly like any other migration.
+-- It only needs the CONCURRENTLY workaround on a database this migration reaches AFTER the table
+-- is already large and under live write traffic - which today means production, and production
+-- alone.
+CREATE INDEX "TokenSnapshot_source_takenAt_idx" ON "TokenSnapshot"("source", "takenAt");
