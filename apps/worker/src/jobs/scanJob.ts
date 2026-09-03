@@ -515,7 +515,9 @@ async function processCandidate(
     },
   });
 
-  const snapshot = await prisma.tokenSnapshot.create({ data: snapshotDataFor(token.id, scored) });
+  const snapshot = await prisma.tokenSnapshot.create({
+    data: snapshotDataFor(token.id, scored, "scan"),
+  });
 
   if (!scored.rugScreen.passed) {
     return 0;

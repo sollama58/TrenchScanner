@@ -29,6 +29,7 @@ function makeSnapshot(overrides: Partial<TokenSnapshot> = {}): TokenSnapshot {
     id: "snap-1",
     tokenId: "token-1",
     takenAt: new Date(),
+    source: "scan",
     priceUsd: 0.002,
     marketCapUsd: 180_000,
     liquidityUsd: 40_000,

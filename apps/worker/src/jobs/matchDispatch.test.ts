@@ -60,7 +60,7 @@ async function seedUserWithFilter(suffix: string, chatId?: string): Promise<Filt
 async function seedToken(suffix: string): Promise<{ token: Token; snapshot: TokenSnapshot }> {
   const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${suffix}` } });
   const snapshot = await prisma.tokenSnapshot.create({
-    data: snapshotDataFor(token.id, scoredFixture(token.mintAddress)),
+    data: snapshotDataFor(token.id, scoredFixture(token.mintAddress), "scan"),
   });
   return { token, snapshot };
 }

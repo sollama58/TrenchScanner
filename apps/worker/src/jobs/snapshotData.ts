@@ -2,6 +2,13 @@ import type { Prisma } from "@prisma/client";
 import type { ScoredToken } from "@trenchscanner/core";
 
 /**
+ * Which job is writing the row. See TokenSnapshot.source in schema.prisma for why this matters:
+ * only "scan" rows count as having vetted a token, because only the full cycle actually
+ * re-resolves the on-chain half that the rug screen judges.
+ */
+export type SnapshotSource = "scan" | "fast";
+
+/**
  * The TokenSnapshot column mapping for a scored token, in one place.
  *
  * Two jobs write snapshots - the full scan cycle and the fast match pass - and a snapshot is the
@@ -9,13 +16,19 @@ import type { ScoredToken } from "@trenchscanner/core";
  * both because the failure mode of a second copy is silent: a field added to one and forgotten
  * in the other leaves alerts from that path missing data that the card, the filters, or the
  * training features all assume is present.
+ *
+ * `source` is required rather than defaulted precisely because the two callers must disagree
+ * about it: a default would let a new writer silently claim to have vetted a token it only
+ * re-priced.
  */
 export function snapshotDataFor(
   tokenId: string,
   scored: ScoredToken,
+  source: SnapshotSource,
 ): Prisma.TokenSnapshotUncheckedCreateInput {
   return {
     tokenId,
+    source,
     priceUsd: scored.priceUsd,
     marketCapUsd: scored.marketCapUsd,
     liquidityUsd: scored.liquidityUsd,

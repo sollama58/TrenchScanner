@@ -2,13 +2,12 @@ import {
   prisma,
   createLogger,
   buildScoredToken,
-  matchesFilter,
   type Env,
   type DexScreenerClient,
   type OnChainProfile,
 } from "@trenchscanner/core";
 import type { AlertBot } from "../telegram/bot.js";
-import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
+import { createMatchesForTargets, resolveAlertTargets, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 
 const logger = createLogger("fast-match");
@@ -113,18 +112,29 @@ export async function runFastMatchCycle(
   if (activeFilters.length === 0) return;
 
   const vettedSince = new Date(startedAt - VETTED_WITHIN_MINUTES * 60_000);
-  // The candidate set: tokens whose most recent full-scan snapshot passed the rug screen. Taken
-  // newest-first so a flood can only ever cost us the least recently seen.
+  // The candidate set: tokens whose most recent full-scan snapshot passed the rug screen.
+  //
+  // Two things here are load-bearing, and this query had both wrong. It only considers rows the
+  // SCAN wrote (see TokenSnapshot.source): this pass carries the on-chain half forward rather
+  // than re-resolving it, so counting its own rows as vetting let a token re-arm its window
+  // every 15 seconds off restatements of a verdict the scan had since reversed. And the newest
+  // row per token is taken FIRST, with the screen applied after - filtering to passing rows
+  // inside the query made a newer failing snapshot invisible, so a token whose LP had just
+  // unlocked kept being alerted from the older passing row underneath it, for the full 12
+  // minutes. The screen is a hard gate; the freshest verdict is the only one that counts.
+  //
+  // Taken newest-first so a flood can only ever cost us the least recently seen.
   const recent = await prisma.tokenSnapshot.findMany({
-    where: { takenAt: { gt: vettedSince }, rugScreenPassed: true },
+    where: { takenAt: { gt: vettedSince }, source: "scan" },
     orderBy: { takenAt: "desc" },
     distinct: ["tokenId"],
     take: MAX_TRACKED,
     include: { token: true },
   });
-  if (recent.length === 0) return;
+  const vetted = recent.filter((snapshot) => snapshot.rugScreenPassed);
+  if (vetted.length === 0) return;
 
-  const byMint = new Map(recent.map((s) => [s.token.mintAddress, s]));
+  const byMint = new Map(vetted.map((s) => [s.token.mintAddress, s]));
   let fresh;
   try {
     fresh = await dexScreener.getTokensByAddresses([...byMint.keys()]);
@@ -183,15 +193,22 @@ export async function runFastMatchCycle(
  */
 async function alertForToken(
   token: { id: string; mintAddress: string },
-  scored: Parameters<typeof createMatchesForCandidate>[0]["scored"],
+  scored: Parameters<typeof createMatchesForTargets>[0]["scored"],
   activeFilters: FilterWithUser[],
   bot: AlertBot,
 ): Promise<number> {
-  if (!activeFilters.some((filter) => matchesFilter(scored, filter))) return 0;
+  // The cooldown is part of "is an alert about to exist", so it is resolved before the write and
+  // not after it. Matching alone is not enough: a hot token keeps matching the same filters for
+  // hours after their 12-hour cooldown started, and writing on a match meant four snapshots a
+  // minute per such token, every one of them unreferenced by any Match.
+  const toAlert = await resolveAlertTargets({ tokenId: token.id, scored, activeFilters });
+  if (toAlert.length === 0) return 0;
 
   const fullToken = await prisma.token.findUnique({ where: { id: token.id } });
   if (!fullToken) return 0;
 
-  const snapshot = await prisma.tokenSnapshot.create({ data: snapshotDataFor(token.id, scored) });
-  return createMatchesForCandidate({ token: fullToken, snapshot, scored, activeFilters, bot });
+  const snapshot = await prisma.tokenSnapshot.create({
+    data: snapshotDataFor(token.id, scored, "fast"),
+  });
+  return createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, bot });
 }
