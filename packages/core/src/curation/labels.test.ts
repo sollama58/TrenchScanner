@@ -47,18 +47,17 @@ describe("candidate outcome labels", () => {
     expect(agg.hit2xAt).toEqual(minutes(12));
   });
 
-  it("a 2x that only arrives after the win window is a miss, not a win", () => {
-    // The whole point of the shorter bar: a token that took 40 minutes to double is exactly the
-    // slow grind the 15-minute window exists to stop crediting.
+  it("a 2x that arrives after 15 minutes but inside the hour is still a win", () => {
+    // The bar is 2x within the hour - a 40-minute double is a win; hit2xIn15m just records speed.
     const agg = replay(1, [
       [1.4, 10],
       [2.5, 40],
     ]);
     const labels = computeOutcomeLabels(agg);
     expect(labels.hit2xIn15m).toBe(false);
-    expect(labels.hit2xIn1h).toBe(true); // still recorded, just not the verdict
-    expect(labels.disqualified).toBe(false); // a miss is a miss, never "stopped out"
-    expect(labels.labelValue).toBe(0);
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.disqualified).toBe(false);
+    expect(labels.labelValue).toBeCloseTo(Math.log2(2.5));
   });
 
   it("grades a win on how far it ran by the hour, so the 4x goal is worth double a 2x", () => {
@@ -76,12 +75,23 @@ describe("candidate outcome labels", () => {
     expect(ranOn.labelValue).toBeGreaterThan(stalled.labelValue);
   });
 
-  it("gives a 4x no credit at all unless it cleared the fast bar first", () => {
-    // Reaching the goal the slow way is still a miss: the alert never gave anyone a fast double.
+  it("credits a 4x that arrives late in the hour as the goal it is", () => {
     const agg = replay(1, [[4.0, 45]]);
     const labels = computeOutcomeLabels(agg);
     expect(labels.hit4xIn1h).toBe(true);
+    expect(labels.hit2xIn1h).toBe(true);
     expect(labels.hit2xIn15m).toBe(false);
+    expect(labels.labelValue).toBeCloseTo(2);
+  });
+
+  it("disqualifies a late 2x that first traded at or below half the anchor", () => {
+    const agg = replay(1, [
+      [0.4, 20],
+      [2.2, 50],
+    ]);
+    const labels = computeOutcomeLabels(agg);
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.disqualified).toBe(true);
     expect(labels.labelValue).toBe(0);
   });
 
@@ -123,6 +133,12 @@ describe("candidate outcome labels", () => {
   });
 
   it("treats the exact win-window boundary as inside the window", () => {
+    const labels = computeOutcomeLabels(replay(1, [[2.0, 60]]));
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.labelValue).toBeCloseTo(1);
+  });
+
+  it("treats the exact 15-minute boundary as a fast double", () => {
     const labels = computeOutcomeLabels(replay(1, [[2.0, 15]]));
     expect(labels.hit2xIn15m).toBe(true);
   });
@@ -137,7 +153,7 @@ describe("candidate outcome labels", () => {
     expect(agg.peak24hPriceUsd).toBe(3.0);
     expect(agg.peak24hAt).toEqual(minutes(90));
     const labels = computeOutcomeLabels(agg);
-    expect(labels.hit2xIn15m).toBe(false);
+    expect(labels.hit2xIn1h).toBe(false);
     expect(labels.hit4xIn1h).toBe(false);
   });
 

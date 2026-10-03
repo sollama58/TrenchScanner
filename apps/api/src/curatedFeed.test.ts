@@ -186,7 +186,7 @@ function liveRow(
   overrides: Partial<NonNullable<Parameters<typeof resolveOutcome>[0]["candidateOutcome"]>> = {},
 ) {
   return {
-    // Anchored just now: inside the 15-minute win window, so the default row is still watching.
+    // Anchored just now: inside the 1-hour win window, so the default row is still watching.
     anchorAt: new Date(),
     anchorPriceUsd: 1,
     peak1hPriceUsd: 1.4,
@@ -245,34 +245,38 @@ describe("resolveOutcome", () => {
     expect(view.peak1hReturnPct).toBeCloseTo(110);
   });
 
-  it("counts down the 15-minute win window, not the hour the row is measured over", () => {
+  it("counts down the 1-hour win window", () => {
     const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(5) }) }));
     expect(view.status).toBe("watching");
-    expect(view.minutesLeft).toBe(10);
+    expect(view.minutesLeft).toBe(55);
   });
 
-  it("calls a miss as soon as the win window closes, without waiting for the hour", () => {
-    // 20 minutes in: no 2x, so the verdict is already settled even though the row keeps being
-    // measured to the hour for its peak.
+  it("keeps watching past 15 minutes - the bar is the hour", () => {
     const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(20) }) }));
+    expect(view.status).toBe("watching");
+    expect(view.minutesLeft).toBe(40);
+  });
+
+  it("calls a miss once the hour closes, even before the watcher finalizes the row", () => {
+    const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(61) }) }));
     expect(view.status).toBe("missed");
     expect(view.minutesLeft).toBeNull();
     expect(view.finalized).toBe(false);
   });
 
-  it("a 2x that lands after the win window is a miss, however far it later ran", () => {
+  it("a 2x that lands after 15 minutes but inside the hour is a win", () => {
     const view = resolveOutcome(
       alert({
         candidateOutcome: liveRow({
-          anchorAt: minutesAgo(45),
-          hit2xAt: minutesAgo(20), // 25 minutes after the anchor - too late
+          anchorAt: minutesAgo(61),
+          hit2xAt: minutesAgo(21), // 40 minutes after the anchor
           peak1hPriceUsd: 3.0,
           peak24hPriceUsd: 3.0,
         }),
       }),
     );
-    expect(view.status).toBe("missed");
-    expect(view.hit2x).toBe(false);
+    expect(view.status).toBe("won");
+    expect(view.hit2x).toBe(true);
   });
 
   it("reports the 4x goal once the run clears it", () => {
@@ -312,13 +316,13 @@ describe("resolveOutcome", () => {
     expect(view.finalized).toBe(false);
   });
 
-  it("labels a disqualified fast 2x as such, not as a win", () => {
+  it("labels a disqualified 2x as such, not as a win", () => {
     const stored = resolveOutcome(
       alert({
         candidateOutcome: liveRow({
           anchorAt: minutesAgo(70),
           finalizedAt: new Date(),
-          hit2xIn15m: true,
+          hit2xIn1h: true,
           disqualified: true,
         }),
       }),
@@ -329,8 +333,8 @@ describe("resolveOutcome", () => {
     const live = resolveOutcome(
       alert({
         candidateOutcome: liveRow({
-          anchorAt: minutesAgo(20),
-          hit2xAt: minutesAgo(12),
+          anchorAt: minutesAgo(65),
+          hit2xAt: minutesAgo(30),
           lowBefore2xPriceUsd: 0.4,
           peak1hPriceUsd: 2.2,
         }),
@@ -343,7 +347,8 @@ describe("resolveOutcome", () => {
     const view = resolveOutcome(
       alert({
         candidateOutcome: null,
-        hit2xIn15m: true,
+        hit2xIn15m: false,
+        hit2xIn1h: true,
         hit4xIn1h: true,
         disqualified: false,
         peak1hReturnPct: 130,
@@ -359,9 +364,9 @@ describe("resolveOutcome", () => {
     expect(view.finalized).toBe(true);
   });
 
-  it("renders a pre-15m-bar alert from the only verdict it has", () => {
-    // Graded when the bar was 2x-in-1h and its training row has since been pruned, so no
-    // hit2xIn15m was ever written. Showing that historical win beats claiming "unknown".
+  it("renders an alert that predates the hit2xIn15m column from its 1h verdict", () => {
+    // Graded before hit2xIn15m existed and its training row has since been pruned - hit2xIn1h
+    // is the verdict either way.
     const view = resolveOutcome(
       alert({
         candidateOutcome: null,

@@ -162,12 +162,12 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updatedAlert.outcomeFinalizedAt).toBeNull();
   });
 
-  it("grades a slow 2x as a miss - the bar is 15 minutes, not the hour", async () => {
+  it("grades a 2x after 15 minutes but inside the hour as a win, and extends its watch", async () => {
     const token = await createToken("slow-double");
     const anchorAt = new Date(Date.now() - 61 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, {
       peak1hPriceUsd: 2.6,
-      hit2xAt: new Date(anchorAt.getTime() + 35 * MINUTE), // doubled, but far too late
+      hit2xAt: new Date(anchorAt.getTime() + 35 * MINUTE),
       lowBefore2xPriceUsd: 0.8,
       low1hPriceUsd: 0.8,
       peak24hPriceUsd: 2.6,
@@ -176,10 +176,29 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.4 }), env);
 
     const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
-    expect(updated.hit2xIn15m).toBe(false);
-    expect(updated.hit2xIn1h).toBe(true); // recorded, but not what "won" means
+    expect(updated.hit2xIn15m).toBe(false); // recorded as a speed signal only
+    expect(updated.hit2xIn1h).toBe(true);
+    expect(updated.labelValue).toBeCloseTo(Math.log2(2.6));
+    // A clean win graduates to the 24h watch like any other.
+    expect(updated.extended24h).toBe(true);
+    expect(updated.finalized24hAt).toBeNull();
+  });
+
+  it("retires a row that never doubled inside the hour", async () => {
+    const token = await createToken("no-double");
+    const anchorAt = new Date(Date.now() - 61 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      peak1hPriceUsd: 1.8,
+      lowBefore2xPriceUsd: 0.8,
+      low1hPriceUsd: 0.8,
+      peak24hPriceUsd: 1.8,
+    });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.4 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.hit2xIn1h).toBe(false);
     expect(updated.labelValue).toBe(0);
-    // A miss never graduates to the 24h watch, so the row retires here.
     expect(updated.extended24h).toBe(false);
     expect(updated.finalized24hAt).not.toBeNull();
   });

@@ -95,8 +95,7 @@ export async function recordCandidateSample(
 /**
  * The watcher: price-checks every open CandidateOutcome row that's due, folds the tick into the
  * row's running aggregates (see curation/labels.ts for the math), closes the 1h goal window (the
- * moment labels are written - the 2x-in-15m verdict included, since a row keeps being measured
- * to the hour for its peak), and retires extended rows at 24h.
+ * moment labels are written - the 2x-within-1h verdict included), and retires extended rows at 24h.
  *
  * One batched DexScreener fetch per sweep covers every due row - the same 30-per-call endpoint
  * the scan itself uses - which is the whole reason this can run every minute. Tokens the fetch
@@ -165,7 +164,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
         // Clean winners graduate to the 24h watch so the record shows how far they ultimately
         // ran. A disqualified 2x doesn't - it already trains as a loss, and its later path
         // teaches nothing a dud's would.
-        if (closedLabels.hit2xIn15m && !closedLabels.disqualified && !extended) {
+        if (closedLabels.hit2xIn1h && !closedLabels.disqualified && !extended) {
           extended = true;
           data.extended24h = true;
         }

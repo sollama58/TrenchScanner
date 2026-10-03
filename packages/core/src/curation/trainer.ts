@@ -171,7 +171,7 @@ export async function trainCurator(
   // of hourly samples across hundreds of tokens - 400 of them is seconds of solid CPU, times the
   // four models a training run fits (three walk-forward folds plus the deployable one). Run
   // straight through, that blocks the worker's whole event loop: the minutely scan does not
-  // scan, and the candidate watcher misses ticks inside the very 15-minute windows whose
+  // scan, and the candidate watcher misses ticks inside the very windows whose
   // resolution the labels and the public grades depend on. Training would degrade the data it
   // trains on. Yielding costs a fraction of the runtime and keeps both on cadence.
   for (let iter = 0; iter < ITERATIONS; iter++) {
@@ -197,7 +197,7 @@ export async function trainCurator(
   return { kind: CURATOR_MODEL_KIND, featureNames, means, stdevs, weights, bias };
 }
 
-/** Predicted probability of a clean 2x-within-15-minutes for one candidate's feature vector. */
+/** Predicted probability of a clean 2x-within-1-hour for one candidate's feature vector. */
 export function scoreCandidateWithModel(
   params: Omit<TrainedCuratorParams, "threshold">,
   features: Record<string, number | null | undefined>,
@@ -229,9 +229,8 @@ export function calibrateThreshold(
 
   // Twice the base rate, but never below an absolute floor: with a 0% base rate the relative
   // floor vanishes entirely, and an absurd target rate would then emit every row. The absolute
-  // floor stays low in absolute terms - 2x-within-15-minutes is a rare event, so predicted
-  // probabilities compress downward and a floor set for an hour-long bar would silence the feed
-  // - but 0.08 rather than the 0.04 it briefly sat at: the feed is a curated promise, and a call
+  // floor stays low in absolute terms - a clean 2x is a rare event, so predicted probabilities
+  // compress downward - but 0.08 rather than the 0.04 it briefly sat at: the feed is a curated promise, and a call
   // the model itself gives a one-in-twelve chance is not one. The RELATIVE floor is still the
   // main guard ("at least twice as likely as random"); this one catches a degenerate market.
   const baseRate = rows.filter((r) => r.labelValue > 0).length / rows.length;

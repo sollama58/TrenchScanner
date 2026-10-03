@@ -38,7 +38,7 @@ const MIN_LIQUIDITY_USD = 10_000;
 const MIN_VOLUME_MCAP_RATIO = 0.5;
 /**
  * Buys must be the clear majority of transactions - judged on the LAST HOUR's flow when
- * DexScreener reported it (the label is "2x within the next 15 minutes"; the last hour's flow is
+ * DexScreener reported it (the label is "2x within the next hour"; the last hour's flow is
  * the closest evidence available), falling back to the 24h window when it didn't (older banked rows replayed
  * in the walk-forward exam predate the short-window capture, and grading them on a signal they
  * never carried would silently change what their heuristic verdicts mean).
@@ -156,7 +156,7 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
  * the composite was built to rank user-filter matches, and its narrative and age components are
  * near-constant across this band (nearly every launch has a Twitter and a theme; nearly every
  * contender sits in the age sweet spot), which compresses the ranking exactly where curation
- * needs it sharp. The label is "2x within the NEXT 15 minutes", so conviction leans on the
+ * needs it sharp. The label is "2x within the NEXT hour", so conviction leans on the
  * short-window evidence closest to that question - what price and flow were doing over the last
  * minutes - with the composite kept as a modest stabilizer for the texture (holder health, risk)
  * the short window can't see.

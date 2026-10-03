@@ -8,31 +8,30 @@
  * The second clause is what makes the label honest: a token that dumped 60% and then "2x'd from
  * the bottom" stopped out anyone who actually bought the alert, so it trains as a loss.
  *
- * TWO horizons, on purpose - they encode the difference between the bar and the ambition:
- *   - the WIN window (15 minutes) is the bar. A trench runner that is going to double usually
- *     does it fast; giving it an hour to limp there rewards exactly the slow grinds that are
- *     hardest to actually trade, so the entry test is deliberately short and strict.
- *   - the GOAL window (1 hour) is what the run is graded ON. labelValue is log2 of the 1h peak
- *     multiple (a 2x = 1.0, a GOAL_MULTIPLE 4x = 2.0, an 8x = 3.0), capped at LABEL_LOG2_CAP
- *     (a 100x), and 0 for anything that missed the bar or was disqualified. So the learner is
- *     trained to find candidates that double within 15 minutes AND keep running toward a 4x by
- *     the hour - it prefers the bigger runs exactly as much as they're worth in doublings, but
- *     only ever gets credit for a run that cleared the fast bar first.
+ * ONE window, matching how the alerts are actually used: a subscriber sees the alert and trades
+ * it by hand, so the question is "did it double within the hour after the call?" (2026-10-03:
+ * moved from a 15-minute bar, which graded scalps nobody trading manually could catch).
+ *   - the WIN is a 2x inside WIN_WINDOW_MINUTES (1 hour), without first breaching the stop.
+ *   - the GOAL is a GOAL_MULTIPLE 4x inside the same hour, tracked and shown alongside.
+ *   - labelValue is log2 of the 1h peak multiple (a 2x = 1.0, a 4x = 2.0, an 8x = 3.0), capped
+ *     at LABEL_LOG2_CAP (a 100x), and 0 for anything that missed the 2x or was disqualified - so
+ *     the learner prefers bigger runs exactly as much as they're worth in doublings.
+ * hit2xIn15m is still recorded as an informational speed signal; it no longer decides anything.
  *
  * Granularity caveat: the watcher samples roughly once a minute, so intra-minute wicks - both
  * a momentary 2x and a momentary stop-run - are invisible. That cuts both ways and is accepted;
  * the label describes what a human watching the chart at the same cadence could have traded.
- * It bites harder on a 15-minute window than it did on an hour (15 observations, not 60), which
- * is the price of the faster bar: raise the watch cadence to sharpen it.
  */
 
 /**
- * How long a row is measured for - the goal window, and what the watcher waits out before
- * writing labels. Longer than the win window because the graded target is the 1h peak.
+ * How long a row is measured for - the win/goal window, and what the watcher waits out before
+ * writing labels.
  */
 export const CANDIDATE_WATCH_WINDOW_MINUTES = 60;
-/** How long the WIN has to land in - "2x within 15 minutes". */
-export const WIN_WINDOW_MINUTES = 15;
+/** How long the WIN has to land in - "2x within 1 hour". The same span as the watch window. */
+export const WIN_WINDOW_MINUTES = CANDIDATE_WATCH_WINDOW_MINUTES;
+/** The informational fast-double window behind hit2xIn15m - recorded, never the verdict. */
+export const FAST_2X_WINDOW_MINUTES = 15;
 /** How long extended rows (winners + curated alerts) keep being watched for their ultimate peak. */
 export const CANDIDATE_EXTENDED_WATCH_HOURS = 24;
 /** The multiple that counts as a win, inside the win window. */
@@ -119,9 +118,9 @@ export function applyPriceTick(
 export interface OutcomeLabels {
   peak1hReturnPct: number;
   maxDrawdown1hPct: number;
-  /** THE bar: doubled inside the win window. What "won" means everywhere downstream. */
+  /** Doubled inside the first 15 minutes - informational speed signal, NOT the win test. */
   hit2xIn15m: boolean;
-  /** Doubled at any point inside the goal window - informational, NOT the win test. */
+  /** THE bar: doubled inside the 1h win window. What "won" means everywhere downstream. */
   hit2xIn1h: boolean;
   /** Cleared GOAL_MULTIPLE by the end of the goal window - the ambition, tracked and shown. */
   hit4xIn1h: boolean;
@@ -145,22 +144,22 @@ export function disqualifiedByDrawdown(
 /** Computes the final labels from a row's aggregates, once the goal window has closed. */
 export function computeOutcomeLabels(agg: OutcomeAggregates): OutcomeLabels {
   const anchor = agg.anchorPriceUsd;
-  const hit2xIn15m = hit2xInWinWindow(agg);
+  const won = hit2xInWinWindow(agg);
   // Only a would-have-been win can be disqualified - a miss is already a 0 and its drawdown is
-  // still recorded in maxDrawdown1hPct for anyone studying near-misses. Judged against the WIN
-  // window: a 2x that only arrived at minute 40 is a miss regardless of how it got there.
-  const disqualified = hit2xIn15m && disqualifiedByDrawdown(agg);
+  // still recorded in maxDrawdown1hPct for anyone studying near-misses.
+  const disqualified = won && disqualifiedByDrawdown(agg);
 
-  // Graded on the GOAL window's peak, awarded only to rows that cleared the win window's bar -
-  // see the two-horizon note at the top of this file.
+  // Graded on the window's peak, awarded only to clean wins - see the note at the top of this file.
   const labelValue =
-    !hit2xIn15m || disqualified ? 0 : Math.min(Math.log2(agg.peak1hPriceUsd / anchor), LABEL_LOG2_CAP);
+    !won || disqualified ? 0 : Math.min(Math.log2(agg.peak1hPriceUsd / anchor), LABEL_LOG2_CAP);
 
   return {
     peak1hReturnPct: ((agg.peak1hPriceUsd - anchor) / anchor) * 100,
     maxDrawdown1hPct: ((agg.low1hPriceUsd - anchor) / anchor) * 100,
-    hit2xIn15m,
-    hit2xIn1h: agg.hit2xAt !== null,
+    hit2xIn15m:
+      agg.hit2xAt !== null &&
+      agg.hit2xAt.getTime() - agg.anchorAt.getTime() <= FAST_2X_WINDOW_MINUTES * 60_000,
+    hit2xIn1h: won,
     hit4xIn1h: agg.peak1hPriceUsd >= anchor * GOAL_MULTIPLE,
     disqualified,
     labelValue,

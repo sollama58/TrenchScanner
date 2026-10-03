@@ -50,7 +50,7 @@ export type CuratedAlertWithRelations = Prisma.CuratedAlertGetPayload<{
 /** How one curated call is going / went, resolved from the freshest source available. */
 export interface OutcomeView {
   /**
-   * watching: the 15-minute win window is still open. won/missed/disqualified: the verdict.
+   * watching: the 1-hour win window is still open. won/missed/disqualified: the verdict.
    * unknown: the training row was pruned before its copies landed - surfaced honestly rather
    * than guessed at.
    */
@@ -88,10 +88,8 @@ type OutcomeSources = Pick<
  * while it exists (updated every watcher tick), the columns copied onto the alert after the
  * training row has been pruned.
  *
- * The verdict lands as soon as the 15-minute win window closes, which is well before the row
- * finalizes: the row keeps being measured to the hour for its peak (the 4x goal), but whether
- * the alert WON was already settled, and making a card say "watching" for another 45 minutes
- * over a question already answered would be its own kind of dishonest.
+ * The verdict lands when the 1-hour win window closes; hit2x flips the moment a 2x is observed
+ * inside it, so the badge can show the win before the hour is up.
  */
 export function resolveOutcome(alert: OutcomeSources): OutcomeView {
   const live = alert.candidateOutcome;
@@ -106,19 +104,18 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
       (live ? pctFrom(live.peak24hPriceUsd, live.anchorPriceUsd) : null),
   };
 
-  // The stored verdict, from whichever source has it. `hit2xIn15m ?? hit2xIn1h` is the bridge for
-  // rows graded before the bar moved to 15 minutes: their old-bar verdict is the only one they
-  // have, and showing it beats rendering a historical win as "unknown".
+  // The stored verdict, from whichever source has it. hit2xIn1h is THE bar (2x within the hour),
+  // and every graded row carries it, including ones graded under the earlier 15-minute bar.
   const stored =
     live?.finalizedAt != null
       ? {
-          won: live.hit2xIn15m ?? live.hit2xIn1h,
+          won: live.hit2xIn1h,
           disqualified: live.disqualified,
           hitGoal: live.hit4xIn1h,
         }
-      : alert.hit2xIn15m != null || alert.hit2xIn1h != null
+      : alert.hit2xIn1h != null
         ? {
-            won: alert.hit2xIn15m ?? alert.hit2xIn1h,
+            won: alert.hit2xIn1h,
             disqualified: alert.disqualified,
             hitGoal: alert.hit4xIn1h,
           }
@@ -147,7 +144,6 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
       return {
         status: disqualified ? "disqualified" : hit2x ? "won" : "missed",
         hit2x,
-        // Still climbing toward the goal until the hour closes, so a false here isn't final yet.
         hitGoal: hitGoal ? true : elapsedMin >= 60 ? false : null,
         ...peaks,
         finalized: false,

@@ -183,10 +183,10 @@ export async function registerCuratedRoutes(
     const [liveEmitted, liveGraded, liveWins, shadowEmitted, shadowGraded, shadowWins] = await Promise.all([
       prisma.curatedAlert.count({ where: { source: sourceFilter, createdAt: { gte: since } } }),
       prisma.curatedAlert.count({
-        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn15m: { not: null } },
+        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn1h: { not: null } },
       }),
       prisma.curatedAlert.count({
-        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn15m: true, disqualified: false },
+        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn1h: true, disqualified: false },
       }),
       prisma.curatedShadowEmission.count({
         where: { source: sourceFilter, createdAt: { gte: since } },
@@ -253,8 +253,8 @@ export async function registerCuratedRoutes(
       prisma.curatedAlert.count(),
       prisma.curatedAlert.count({ where: { createdAt: { gte: day7 } } }),
       prisma.curatedAlert.count({ where: { createdAt: { gte: day1 } } }),
-      prisma.curatedAlert.count({ where: { hit2xIn15m: { not: null } } }),
-      prisma.curatedAlert.count({ where: { hit2xIn15m: true, disqualified: false } }),
+      prisma.curatedAlert.count({ where: { hit2xIn1h: { not: null } } }),
+      prisma.curatedAlert.count({ where: { hit2xIn1h: true, disqualified: false } }),
       prisma.curatedAlert.count({ where: { hit4xIn1h: true } }),
       prisma.curatedAlert.aggregate({ _max: { peak24hReturnPct: true } }),
       prisma.curatorModel.findFirst({ where: { status: "active" }, orderBy: { activatedAt: "desc" } }),
