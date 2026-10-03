@@ -53,6 +53,13 @@ describe("sessionCookieAttrs", () => {
     expect(sessionCookieAttrs("", "holdex.live").sameSite).toBe("none");
   });
 
+  it("treats a host under any listed dashboard as same-site", () => {
+    const domains = "holdex.live,trenchscanner-web.onrender.com";
+    expect(sessionCookieAttrs("api.holdex.live", domains).sameSite).toBe("lax");
+    // onrender.com is a public suffix: the API's own onrender host is NOT same-site with the web one.
+    expect(sessionCookieAttrs("trenchscanner-api.onrender.com", domains).sameSite).toBe("none");
+  });
+
   it("always sets path so set and clear agree", () => {
     expect(sessionCookieAttrs("api.holdex.live", "holdex.live").path).toBe("/");
   });

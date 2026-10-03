@@ -68,7 +68,7 @@ npm run dev:api               # http://localhost:4000
 npm run dev:worker             # runs the scan loop against live Pump.fun/DexScreener/RugCheck
 ```
 
-The dashboard is **not** in this repo - it lives in [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) as its `/trenches/` tab. To work on it, run that repo's dev server against the API above, and set `CORS_ORIGINS`/`PUBLIC_APP_DOMAIN` here to whatever host:port it serves on (`localhost:5173` by default).
+The dashboard lives in `apps/web` (React + Vite, deployed as the `trenchscanner-web` static site): a **Live** tab with the curated picks and your filter's catches, a **Model & AI** tab showing how the curator and the AI reviewer score against the 2x/4x targets, and a **Filters** tab. Run it with `npm run dev:web` (it talks to `VITE_API_URL`, default `http://localhost:4000`). The CultScreener/HolDEX site's `/trenches/` tab ([repo](https://github.com/sollama58/CultScreener)) is a second client of the same API. `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` here must list whatever host:port each dashboard serves on (`localhost:5173` by default).
 
 Both apps read from the **single root `.env`** - there's deliberately no per-package `.env` file (see the comment in `apps/*/src/bootstrap-env.ts` for why: Prisma auto-loads a `.env` colocated with `schema.prisma`, and that can silently shadow an app's real config if more than one `.env` exists in the tree).
 

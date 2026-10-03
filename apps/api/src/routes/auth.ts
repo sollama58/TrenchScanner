@@ -4,6 +4,7 @@ import bs58 from "bs58";
 import {
   prisma,
   adminWalletSet,
+  appDomainForOrigin,
   claimHeldBurns,
   starterFilterInput,
   type Env,
@@ -76,11 +77,14 @@ const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 // session cookie more restrictive than it needed to be.
 function isSameSiteAsDashboard(requestHost: string, appDomain: string): boolean {
   // Ports are irrelevant to what a browser considers a "site" - localhost:4000 and localhost:5173
-  // are the same site - and PUBLIC_APP_DOMAIN carries one in local dev.
+  // are the same site - and PUBLIC_APP_DOMAIN carries one in local dev. It may also list more
+  // than one dashboard (see appDomainList); being same-site with any of them is enough.
   const host = stripPort(requestHost);
-  const domain = stripPort(appDomain);
-  if (!host || !domain) return false;
-  return host === domain || host.endsWith(`.${domain}`);
+  if (!host) return false;
+  return appDomain.split(",").some((entry) => {
+    const domain = stripPort(entry);
+    return domain !== "" && (host === domain || host.endsWith(`.${domain}`));
+  });
 }
 
 function stripPort(value: string): string {
@@ -146,7 +150,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     }
     const { nonce, message, signInInput, expiresAt } = await issueNonce(
       parsed.data.wallet,
-      opts.env.PUBLIC_APP_DOMAIN,
+      appDomainForOrigin(opts.env, request.headers.origin),
     );
     return { nonce, message, signInInput, expiresAt };
   });
@@ -157,19 +161,21 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const body = parsed.data;
+    // The same choice /nonce made for this page, so the rebuilt message matches what was signed.
+    const domain = appDomainForOrigin(opts.env, request.headers.origin);
 
     const result =
       body.method === "signIn"
         ? await verifySignInAndConsumeNonce({
             walletAddress: body.walletAddress,
             nonce: body.nonce,
-            domain: opts.env.PUBLIC_APP_DOMAIN,
+            domain,
             output: body.output,
           })
         : await verifyAndConsumeNonce({
             walletAddress: body.walletAddress,
             nonce: body.nonce,
-            domain: opts.env.PUBLIC_APP_DOMAIN,
+            domain,
             signature: body.signature,
           });
 

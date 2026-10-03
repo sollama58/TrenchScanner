@@ -24,6 +24,7 @@
     "prisma:deploy": "dotenv -e .env -- prisma migrate deploy --schema packages/core/prisma/schema.prisma",
     "dev:api": "npm run dev -w @trenchscanner/api",
     "dev:worker": "npm run dev -w @trenchscanner/worker",
+    "dev:web": "npm run dev -w @trenchscanner/web",
     "prepare": "node .husky/install.mjs"
   },
   "lint-staged": {

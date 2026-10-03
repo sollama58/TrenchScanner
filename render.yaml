@@ -1,14 +1,14 @@
 # TrenchScanner Render Blueprint
 #
-# Three services, one Postgres database:
+# Four services, one Postgres database:
 #   - trenchscanner-api    Fastify REST API (SIWS auth, filters, matches)
 #   - trenchscanner-worker Background scanner (discovery, scoring, rug screen, alerts)
+#   - trenchscanner-web    Static dashboard (apps/web: Live, Model & AI, Filters)
 #   - trenchscanner-db     Managed Postgres
 #
-# The dashboard is NOT deployed from this repo. It lives in the CultScreener/HolDEX site
-# (https://github.com/sollama58/CultScreener) as the /trenches/ tab, and is built and served from
-# there - which is why CORS_ORIGINS/PUBLIC_APP_DOMAIN below point at holdex.live rather than at a
-# service in this blueprint.
+# Two dashboards talk to the API: this repo's own apps/web on trenchscanner-web, and the
+# CultScreener/HolDEX site's /trenches/ tab (https://github.com/sollama58/CultScreener) on
+# holdex.live. That is why CORS_ORIGINS and PUBLIC_APP_DOMAIN below list both.
 #
 # After the first deploy, fill in the envVars marked `sync: false` below
 # from the Render dashboard (Environment tab on each service):
@@ -91,14 +91,16 @@ services:
         generateValue: true
       - key: SESSION_TTL_HOURS
         value: "168"
-      # Both the apex and www hosts the dashboard is served from - the CultScreener/HolDEX site
-      # answers on both, and an origin missing here is silently blocked by the browser.
+      # Every host a dashboard is served from - the CultScreener/HolDEX site answers on both apex
+      # and www, plus this repo's trenchscanner-web. An origin missing here is silently blocked by
+      # the browser.
       - key: CORS_ORIGINS
-        value: https://holdex.live,https://www.holdex.live
-      # Anti-phishing anchor for Sign-In With Solana - must be the single canonical host the
-      # dashboard actually serves from, no protocol. A mismatch breaks sign-in outright: wallets
-      # refuse to sign a message claiming a domain that isn't the page they're on. See the comment
-      # on this var in packages/core/src/config/env.ts.
+        value: https://holdex.live,https://www.holdex.live,https://trenchscanner-web.onrender.com
+      # Anti-phishing anchor for Sign-In With Solana - the canonical host of each dashboard, no
+      # protocol, comma-separated. Each sign-in is bound to the listed host its request came from;
+      # anything else gets the first entry, which its wallet refuses to sign. A missing host breaks
+      # sign-in on that dashboard outright. See the comment on this var in
+      # packages/core/src/config/env.ts.
       #
       # Also decides the session cookie's SameSite: this API compares the host it was reached on
       # against this value per request. While it answers on trenchscanner-api.onrender.com that is
@@ -108,7 +110,7 @@ services:
       # automatically, with no code change, no env change and no redeploy. See the comment above
       # sessionCookieAttrs in apps/api/src/routes/auth.ts.
       - key: PUBLIC_APP_DOMAIN
-        value: holdex.live
+        value: holdex.live,trenchscanner-web.onrender.com
       # Comma-separated base58 wallet addresses allowed into the Admin Panel - set this to your
       # own wallet's address after the first deploy. Empty means the Admin Panel 403s everyone.
       - key: ADMIN_WALLET_ADDRESSES
@@ -187,6 +189,20 @@ services:
         value: "1"
       - key: LIVE_PRICE_MAX_TRACKED
         value: "150"
+
+  # The dashboard in apps/web. Served from onrender.com, which is a public suffix, so the API's
+  # session cookie is cross-site here (SameSite=None) - Safari and Brave block that, and sign-in
+  # works in Chrome, Firefox and Edge. Giving both services custom domains under one site (e.g.
+  # app.example.com and api.example.com) fixes it with no code change; see sessionCookieAttrs.
+  - type: web
+    runtime: static
+    name: trenchscanner-web
+    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/web
+    staticPublishPath: apps/web/dist
+    envVars:
+      # Update this if you rename the API service or attach a custom domain.
+      - key: VITE_API_URL
+        value: https://trenchscanner-api.onrender.com
 
 databases:
   - name: trenchscanner-db
