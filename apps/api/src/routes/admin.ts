@@ -343,22 +343,32 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
     }
     const { walletAddress, days } = parsed.data;
 
-    const user = await prisma.user.upsert({
-      where: { walletAddress },
-      update: {},
-      create: { walletAddress },
-      select: { id: true, subscription: { select: { expiresAt: true } } },
-    });
+    // Read-modify-write under the per-user lock burn credits take (see creditBurn), or a grant
+    // racing a burn credit could overwrite it with an expiry computed from the old value.
+    const expiresAt = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.upsert({
+        where: { walletAddress },
+        update: {},
+        create: { walletAddress },
+        select: { id: true },
+      });
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${user.id}))`;
+      const existing = await tx.subscription.findUnique({
+        where: { userId: user.id },
+        select: { expiresAt: true },
+      });
 
-    const current = user.subscription?.expiresAt ?? null;
-    const now = new Date();
-    const base = current !== null && current > now ? current : now;
-    const expiresAt = new Date(base.getTime() + days * 86_400_000);
+      const current = existing?.expiresAt ?? null;
+      const now = new Date();
+      const base = current !== null && current > now ? current : now;
+      const next = new Date(base.getTime() + days * 86_400_000);
 
-    await prisma.subscription.upsert({
-      where: { userId: user.id },
-      update: { expiresAt, source: AccessSource.ADMIN_GRANT },
-      create: { userId: user.id, expiresAt, source: AccessSource.ADMIN_GRANT },
+      await tx.subscription.upsert({
+        where: { userId: user.id },
+        update: { expiresAt: next, source: AccessSource.ADMIN_GRANT },
+        create: { userId: user.id, expiresAt: next, source: AccessSource.ADMIN_GRANT },
+      });
+      return next;
     });
 
     request.log.info({ walletAddress, days, by: request.user!.walletAddress }, "granted access by hand");

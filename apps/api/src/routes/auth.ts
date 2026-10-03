@@ -12,6 +12,13 @@ import {
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 
+// Length caps run before any base58 decode: bs58.decode is quadratic in input length, so an
+// uncapped field let one unauthenticated request (a ~1MB walletAddress) block the event loop for
+// minutes. A public key is at most 44 base58 chars, a 64-byte signature at most 88.
+const MAX_SIGNATURE_CHARS = 100;
+const MAX_SIGNED_MESSAGE_CHARS = 2048;
+const MAX_NONCE_CHARS = 128;
+
 const nonceQuerySchema = z.object({
   wallet: z.string().refine(isValidSolanaAddress, "wallet must be a valid base58 Solana public key"),
 });
@@ -27,18 +34,18 @@ const verifyBodySchema = z.discriminatedUnion("method", [
   z.object({
     method: z.literal("signIn"),
     walletAddress: walletAddressSchema,
-    nonce: z.string().min(1),
+    nonce: z.string().min(1).max(MAX_NONCE_CHARS),
     output: z.object({
-      publicKey: z.string().min(1),
-      signedMessage: z.string().min(1),
-      signature: z.string().min(1),
+      publicKey: z.string().min(1).max(44),
+      signedMessage: z.string().min(1).max(MAX_SIGNED_MESSAGE_CHARS),
+      signature: z.string().min(1).max(MAX_SIGNATURE_CHARS),
     }),
   }),
   z.object({
     method: z.literal("signMessage"),
     walletAddress: walletAddressSchema,
-    nonce: z.string().min(1),
-    signature: z.string().min(1),
+    nonce: z.string().min(1).max(MAX_NONCE_CHARS),
+    signature: z.string().min(1).max(MAX_SIGNATURE_CHARS),
   }),
 ]);
 
@@ -234,6 +241,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 }
 
 function isValidSolanaAddress(value: string): boolean {
+  if (value.length < 32 || value.length > 44) return false;
   try {
     return bs58.decode(value).length === 32;
   } catch {

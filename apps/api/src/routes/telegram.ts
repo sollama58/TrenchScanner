@@ -1,7 +1,7 @@
 import { randomInt } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, type Env } from "@trenchscanner/core";
+import { prisma, Prisma, type Env } from "@trenchscanner/core";
 
 const LINK_CODE_TTL_MINUTES = 15;
 
@@ -37,19 +37,30 @@ export async function registerTelegramRoutes(app: FastifyInstance, opts: { env: 
       return reply.code(400).send({ error: "Telegram alerts aren't configured on this deployment yet" });
     }
 
-    const linkCode = generateLinkCode();
     const linkCodeExpiresAt = new Date(Date.now() + LINK_CODE_TTL_MINUTES * 60_000);
 
-    const link = await prisma.telegramLink.upsert({
-      where: { userId: request.user!.userId },
-      create: {
-        userId: request.user!.userId,
-        linkCode,
-        linkCodeExpiresAt,
-        alertMode: "BOTH",
-      },
-      update: { linkCode, linkCodeExpiresAt },
-    });
+    // linkCode is @unique and only 6 digits, so a fresh code can collide with another user's
+    // pending one; that surfaced as a 500. Draw again instead.
+    let link;
+    for (let attempt = 0; ; attempt++) {
+      const linkCode = generateLinkCode();
+      try {
+        link = await prisma.telegramLink.upsert({
+          where: { userId: request.user!.userId },
+          create: {
+            userId: request.user!.userId,
+            linkCode,
+            linkCodeExpiresAt,
+            alertMode: "BOTH",
+          },
+          update: { linkCode, linkCodeExpiresAt },
+        });
+        break;
+      } catch (err) {
+        const collided = err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+        if (!collided || attempt >= 4) throw err;
+      }
+    }
 
     const botUsername = opts.env.TELEGRAM_BOT_USERNAME;
     return {

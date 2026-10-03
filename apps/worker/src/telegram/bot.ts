@@ -161,10 +161,16 @@ async function handleLinkCode(chatId: string, code: string, reply: (text: string
   failedAttempts.delete(chatId);
 
   try {
-    await prisma.telegramLink.update({
-      where: { id: link.id },
+    // Conditional on the code still being there: a findUnique-then-update let two chats redeem
+    // the same code at once, the last write silently taking the link.
+    const claimed = await prisma.telegramLink.updateMany({
+      where: { id: link.id, linkCode: code },
       data: { chatId, linkedAt: new Date(), linkCode: null, linkCodeExpiresAt: null },
     });
+    if (claimed.count === 0) {
+      await reply("That code was just used. Generate a new one from the dashboard's Settings page.");
+      return;
+    }
   } catch (err) {
     // chatId is @unique - this chat is already linked to a different TrenchScanner account.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {

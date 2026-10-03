@@ -21,7 +21,8 @@ function buildFilterInputSchema(env: Env) {
     // would make the field's own placeholder a lie.
     minTokenAgeMinutes: z.number().nonnegative().nullable().optional(),
     maxTokenAgeMinutes: z.number().nonnegative().nullable().optional(),
-    narrativeKeywords: z.array(z.string()).default([]),
+    // Capped: every active filter is evaluated against every token on each scan.
+    narrativeKeywords: z.array(z.string().max(40)).max(20).default([]),
     minScore: z.number().min(0).max(100).nullable().optional(),
     maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),

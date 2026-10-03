@@ -43,7 +43,7 @@ type CuratedPage = {
 };
 
 const listQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
 });
 
 export async function registerCuratedRoutes(
@@ -107,7 +107,7 @@ export async function registerCuratedRoutes(
    * expectation; see the long comments on /matches/stream for the header choreography.
    */
   app.get("/stream", (request, reply) => {
-    const dispose = opts.matchStream.subscribeCurated(reply.raw);
+    const dispose = opts.matchStream.subscribeCurated(request.user!.userId, reply.raw);
     if (!dispose) {
       return reply.code(503).send({ error: "stream capacity reached - fall back to polling" });
     }

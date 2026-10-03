@@ -46,7 +46,7 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
    * "no", never whether a code was real but spent, or real but expired.
    */
   app.post("/link/redeem", { config: { rateLimit: LINK_ROUTE_RATE_LIMIT } }, async (request, reply) => {
-    const parsed = z.object({ code: z.string() }).safeParse(request.body);
+    const parsed = z.object({ code: z.string().max(256) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid" });
 
     const result = await redeemLinkCode(parsed.data.code, request.headers["user-agent"]);
