@@ -165,7 +165,7 @@ export async function runFastMatchCycle(
     if (!scored.rugScreen.passed) continue;
 
     try {
-      matched += await alertForToken(snapshot.token, scored, activeFilters, bot);
+      matched += await alertForToken(snapshot.token, scored, activeFilters, bot, env);
     } catch (err) {
       logger.warn("fast match failed for token", { mint: candidate.mintAddress, error: String(err) });
     }
@@ -196,12 +196,18 @@ async function alertForToken(
   scored: Parameters<typeof createMatchesForTargets>[0]["scored"],
   activeFilters: FilterWithUser[],
   bot: AlertBot,
+  env: Env,
 ): Promise<number> {
   // The cooldown is part of "is an alert about to exist", so it is resolved before the write and
   // not after it. Matching alone is not enough: a hot token keeps matching the same filters for
   // hours after their 12-hour cooldown started, and writing on a match meant four snapshots a
   // minute per such token, every one of them unreferenced by any Match.
-  const toAlert = await resolveAlertTargets({ tokenId: token.id, scored, activeFilters });
+  const toAlert = await resolveAlertTargets({
+    tokenId: token.id,
+    scored,
+    activeFilters,
+    guard: env.MATCH_ALERT_GUARD,
+  });
   if (toAlert.length === 0) return 0;
 
   const fullToken = await prisma.token.findUnique({ where: { id: token.id } });
@@ -210,5 +216,5 @@ async function alertForToken(
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "fast"),
   });
-  return createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, bot });
+  return createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, bot, env });
 }

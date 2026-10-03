@@ -47,10 +47,17 @@ export interface CandidateSampleRef {
 
 /**
  * How a row was sampled - see CandidateOutcome.sampleKind. "emission" rows are always fresh
- * (they bypass spacing); "event" and "hourly" rows each dedup against their own kind, so an
- * hourly sample never stops the token's looks-ready moment from being banked, or vice versa.
+ * (they bypass spacing); "event", "hourly" and "match" rows each dedup against their own kind, so
+ * an hourly sample never stops the token's looks-ready moment from being banked, or vice versa.
  */
-export type CandidateSampleKind = "hourly" | "event" | "emission";
+export type CandidateSampleKind = "hourly" | "event" | "emission" | "match";
+
+/**
+ * How long one "match" anchor is shared. Several users' filters catching the same token a minute
+ * apart are graded from one anchor rather than one row each; much longer and a later match would
+ * be graded from a price its user never saw.
+ */
+export const MATCH_SAMPLE_SPACING_MINUTES = 2;
 
 export async function recordCandidateSample(
   tokenId: string,
@@ -75,7 +82,11 @@ export async function recordCandidateSample(
   const kind: CandidateSampleKind = opts.kind ?? (opts.bypassSpacing ? "emission" : "hourly");
   if (!opts.bypassSpacing) {
     const spacingMinutes =
-      kind === "event" ? env.CANDIDATE_EVENT_SPACING_MINUTES : env.CANDIDATE_SAMPLE_SPACING_MINUTES;
+      kind === "event"
+        ? env.CANDIDATE_EVENT_SPACING_MINUTES
+        : kind === "match"
+          ? MATCH_SAMPLE_SPACING_MINUTES
+          : env.CANDIDATE_SAMPLE_SPACING_MINUTES;
     const spacingCutoff = new Date(Date.now() - spacingMinutes * 60_000);
     const recent = await prisma.candidateOutcome.findFirst({
       where: { tokenId, sampleKind: kind, anchorAt: { gt: spacingCutoff } },
@@ -101,6 +112,7 @@ export async function recordCandidateSample(
       low1hPriceUsd: agg.low1hPriceUsd,
       lowBefore2xPriceUsd: agg.lowBefore2xPriceUsd,
       peak24hPriceUsd: agg.peak24hPriceUsd,
+      peakBeforeStopPriceUsd: agg.peakBeforeStopPriceUsd,
     },
   });
   return { id: row.id, created: true };
@@ -232,6 +244,10 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       // got exactly this repair (repairOutcomeBookkeeping); curated alerts never did, so the
       // one ledger the product describes as permanent was the one with no safety net.
       const copyVerdict = row.curatedAlerts.length > 0 && (closedLabels !== null || finalPeak24hPct !== null);
+      // User-filter alerts anchored here get the same verdict, under the same all-or-nothing
+      // rule. Found through the token (Match.tokenId is indexed; candidateOutcomeId deliberately
+      // isn't - see schema.prisma).
+      const copyToMatches = row.sampleKind === "match" && closedLabels !== null;
 
       await prisma.$transaction([
         prisma.candidateOutcome.update({ where: { id: row.id }, data }),
@@ -253,6 +269,20 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
                   ...(finalPeak24hPct !== null
                     ? { peak24hReturnPct: finalPeak24hPct, outcomeFinalizedAt: tickAt }
                     : {}),
+                },
+              }),
+            ]
+          : []),
+        ...(copyToMatches && closedLabels !== null
+          ? [
+              prisma.match.updateMany({
+                where: { tokenId: row.tokenId, candidateOutcomeId: row.id },
+                data: {
+                  peak1hReturnPct: closedLabels.peak1hReturnPct,
+                  maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
+                  hit2xIn1h: closedLabels.hit2xIn1h,
+                  hit4xIn1h: closedLabels.hit4xIn1h,
+                  disqualified: closedLabels.disqualified,
                 },
               }),
             ]

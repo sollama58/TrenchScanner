@@ -61,9 +61,14 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   const windowStart = new Date(startedAt - env.CURATOR_TRAINING_WINDOW_DAYS * 86_400_000);
 
   const rows = await prisma.candidateOutcome.findMany({
-    // Emission rows exist because a curator picked them; training on them would feed the
-    // curators' own choices back into the next model (see CandidateOutcome.sampleKind).
-    where: { finalizedAt: { not: null }, anchorAt: { gte: windowStart }, sampleKind: { not: "emission" } },
+    // Emission rows exist because a curator picked them, and match rows because a user's filter
+    // did; training on either would teach the model someone's selection rather than the market
+    // (see CandidateOutcome.sampleKind). Listed positively so a new kind stays out by default.
+    where: {
+      finalizedAt: { not: null },
+      anchorAt: { gte: windowStart },
+      sampleKind: { in: ["hourly", "event"] },
+    },
     select: {
       tokenId: true,
       anchorAt: true,

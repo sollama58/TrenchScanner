@@ -81,6 +81,16 @@ export interface OutcomeAggregates {
   hit2xAt: Date | null;
   peak24hPriceUsd: number;
   peak24hAt: Date | null;
+  /**
+   * The highest price seen inside the 1h window before the price first fell to the stop
+   * (DISQUALIFYING_DRAWDOWN_FRACTION of the base) - frozen once it does. The 4x and labelValue
+   * are graded on this, so a run that doubled, fell through the stop and only then reached 4x is
+   * not a 4x: its buyer was stopped out on the way. Null on rows from before it was tracked,
+   * which fall back to peak1hPriceUsd.
+   */
+  peakBeforeStopPriceUsd?: number | null;
+  /** When the price first fell to the stop inside the window; null while it hasn't. */
+  stoppedAt?: Date | null;
 }
 
 /** What a fresh row starts from: every extreme is the anchor itself, nothing observed yet. */
@@ -97,6 +107,8 @@ export function initialOutcomeAggregates(anchorPriceUsd: number, anchorAt: Date)
     hit2xAt: null,
     peak24hPriceUsd: anchorPriceUsd,
     peak24hAt: null,
+    peakBeforeStopPriceUsd: anchorPriceUsd,
+    stoppedAt: null,
   };
 }
 
@@ -133,6 +145,8 @@ export function applyPriceTick(
       hit2xAt: null,
       peak24hPriceUsd: priceUsd,
       peak24hAt: at,
+      peakBeforeStopPriceUsd: priceUsd,
+      stoppedAt: priceUsd <= base * DISQUALIFYING_DRAWDOWN_FRACTION ? at : null,
     };
   }
 
@@ -144,6 +158,11 @@ export function applyPriceTick(
       // participates: if it IS the 2x, min() can't lower anything (it's the highest yet seen).
       if (priceUsd < agg.lowBefore2xPriceUsd) updates.lowBefore2xPriceUsd = priceUsd;
       if (priceUsd >= WIN_MULTIPLE * agg.anchorPriceUsd) updates.hit2xAt = at;
+    }
+    // Tracked only on rows that carry it (null = a row from before it existed).
+    if (agg.peakBeforeStopPriceUsd != null && agg.stoppedAt == null) {
+      if (priceUsd <= agg.anchorPriceUsd * DISQUALIFYING_DRAWDOWN_FRACTION) updates.stoppedAt = at;
+      else if (priceUsd > agg.peakBeforeStopPriceUsd) updates.peakBeforeStopPriceUsd = priceUsd;
     }
     if (priceUsd < agg.low1hPriceUsd) updates.low1hPriceUsd = priceUsd;
     if (priceUsd > agg.peak1hPriceUsd) {
@@ -190,6 +209,16 @@ export function disqualifiedByDrawdown(
   return agg.lowBefore2xPriceUsd <= agg.anchorPriceUsd * DISQUALIFYING_DRAWDOWN_FRACTION;
 }
 
+/**
+ * The highest price inside the window that a buyer holding to the stop was still in for: the
+ * peak before the stop when the row tracks it, the window's peak on older rows.
+ */
+export function cleanPeakPriceUsd(
+  agg: Pick<OutcomeAggregates, "peak1hPriceUsd" | "peakBeforeStopPriceUsd">,
+): number {
+  return agg.peakBeforeStopPriceUsd ?? agg.peak1hPriceUsd;
+}
+
 /** Computes the final labels from a row's aggregates, once the goal window has closed. */
 export function computeOutcomeLabels(agg: OutcomeAggregates): OutcomeLabels {
   const anchor = agg.anchorPriceUsd;
@@ -198,9 +227,10 @@ export function computeOutcomeLabels(agg: OutcomeAggregates): OutcomeLabels {
   // still recorded in maxDrawdown1hPct for anyone studying near-misses.
   const disqualified = won && disqualifiedByDrawdown(agg);
 
-  // Graded on the window's peak, awarded only to clean wins - see the note at the top of this file.
-  const labelValue =
-    !won || disqualified ? 0 : Math.min(Math.log2(agg.peak1hPriceUsd / anchor), LABEL_LOG2_CAP);
+  // Graded on the peak a buyer still holding could have seen - the window's peak before the
+  // stop - and awarded only to clean wins. See the note at the top of this file.
+  const cleanPeak = cleanPeakPriceUsd(agg);
+  const labelValue = !won || disqualified ? 0 : Math.min(Math.log2(cleanPeak / anchor), LABEL_LOG2_CAP);
 
   return {
     peak1hReturnPct: ((agg.peak1hPriceUsd - anchor) / anchor) * 100,
@@ -209,7 +239,7 @@ export function computeOutcomeLabels(agg: OutcomeAggregates): OutcomeLabels {
       agg.hit2xAt !== null &&
       agg.hit2xAt.getTime() - agg.anchorAt.getTime() <= FAST_2X_WINDOW_MINUTES * 60_000,
     hit2xIn1h: won,
-    hit4xIn1h: won && !disqualified && agg.peak1hPriceUsd >= anchor * GOAL_MULTIPLE,
+    hit4xIn1h: won && !disqualified && cleanPeak >= anchor * GOAL_MULTIPLE,
     disqualified,
     labelValue,
   };

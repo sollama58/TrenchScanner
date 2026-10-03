@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDigest, formatRealtimeAlert } from "./alertDispatcher.js";
+import { formatDigest, formatRealtimeAlert, formatTrackRecord } from "./alertDispatcher.js";
 import type { Token, TokenSnapshot } from "@trenchscanner/core";
 
 function makeToken(overrides: Partial<Token> = {}): Token {
@@ -106,6 +106,41 @@ describe("formatRealtimeAlert", () => {
   it("falls back to the mint prefix when no name or symbol is set", () => {
     const text = formatRealtimeAlert(makeToken({ name: null, symbol: null }), makeSnapshot(), 50);
     expect(text).toContain("MintAddr");
+  });
+});
+
+describe("formatRealtimeAlert trading context", () => {
+  it("shows the short-window moves, flow, venue, age and sniper checks", () => {
+    const text = formatRealtimeAlert(
+      makeToken(),
+      makeSnapshot({ priceChange5mPct: 12.4, priceChange1hPct: -8, buys1h: 75, sells1h: 25 }),
+      72,
+    );
+    expect(text).toContain("5m +12%");
+    expect(text).toContain("1h -8%");
+    expect(text).toContain("buys 75% of 1h txns");
+    expect(text).toContain("Graduated");
+    expect(text).toContain("1.5h old");
+    expect(text).toContain("fresh wallets 0%");
+  });
+
+  it("names the filter and quotes its track record when given", () => {
+    const text = formatRealtimeAlert(makeToken(), makeSnapshot(), 72, {
+      filterName: "Early <runners>",
+      trackRecord: { graded: 40, won2x: 14, won4x: 6 },
+    });
+    expect(text).toContain("Filter: Early &lt;runners&gt;");
+    expect(text).toContain("35% hit 2x, 15% hit 4x within 1h (40 graded)");
+  });
+});
+
+describe("formatTrackRecord", () => {
+  it("says so when nothing is graded yet", () => {
+    expect(formatTrackRecord({ graded: 0, won2x: 0, won4x: 0 })).toMatch(/no graded alerts yet/);
+  });
+
+  it("shows counts, not a percentage, on a small sample", () => {
+    expect(formatTrackRecord({ graded: 4, won2x: 1, won4x: 0 })).toContain("1 of 4 graded alerts");
   });
 });
 

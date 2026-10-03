@@ -4,6 +4,7 @@ import {
   GOAL_MULTIPLE,
   hit2xInWinWindow,
   disqualifiedByDrawdown,
+  cleanPeakPriceUsd,
 } from "@trenchscanner/core";
 
 /**
@@ -30,6 +31,7 @@ export const curatedAlertInclude = {
       low1hPriceUsd: true,
       lowBefore2xPriceUsd: true,
       peak24hPriceUsd: true,
+      peakBeforeStopPriceUsd: true,
       hit2xAt: true,
       finalizedAt: true,
       peak1hReturnPct: true,
@@ -137,8 +139,11 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
     // finalize - same rules the watcher will apply, just applied now.
     const hit2x = hit2xInWinWindow(live);
     // Held to the same stop as the 2x - a run that breached -50% first stopped its buyer out.
+    // Judged on the peak before the stop, as the watcher does (see cleanPeakPriceUsd).
     const hitGoal =
-      live.peak1hPriceUsd >= live.anchorPriceUsd * GOAL_MULTIPLE && !(hit2x && disqualifiedByDrawdown(live));
+      hit2x &&
+      !disqualifiedByDrawdown(live) &&
+      cleanPeakPriceUsd(live) >= live.anchorPriceUsd * GOAL_MULTIPLE;
     const elapsedMin = (Date.now() - live.anchorAt.getTime()) / 60_000;
 
     if (elapsedMin >= WIN_WINDOW_MINUTES) {

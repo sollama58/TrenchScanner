@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { prisma, type ScoredToken } from "@trenchscanner/core";
+import { prisma, loadEnv, loadFilterTrackRecords, type ScoredToken } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
 import { createMatchesForCandidate, ALERT_COOLDOWN_HOURS, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
@@ -181,5 +181,53 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
       }),
     ).toBe(0);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
+  });
+
+  it("holds a match back while the token is flushing, without starting the cooldown", async () => {
+    const env = { ...loadEnv(), MATCH_ALERT_GUARD: "flush" as const };
+    const { token, snapshot } = await seedToken("flush");
+    const filter = await seedUserWithFilter("h");
+    const flushing = { ...scoredFixture(token.mintAddress), priceChange5mPct: -40 };
+    const args = { token, snapshot, activeFilters: [filter], bot: recordingBot([]), env };
+
+    expect(await createMatchesForCandidate({ ...args, scored: flushing })).toBe(0);
+    expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
+
+    // Once it stops flushing it alerts at once - the held-back match never started a cooldown.
+    const recovered = { ...scoredFixture(token.mintAddress), priceChange5mPct: 3 };
+    expect(await createMatchesForCandidate({ ...args, scored: recovered })).toBe(1);
+  });
+
+  it("anchors one graded outcome for every match of the token, and reports filter records", async () => {
+    const env = loadEnv();
+    const { token, snapshot } = await seedToken("graded");
+    const filters = [await seedUserWithFilter("i"), await seedUserWithFilter("j")];
+    const scored = scoredFixture(token.mintAddress);
+
+    expect(
+      await createMatchesForCandidate({
+        token,
+        snapshot,
+        scored,
+        activeFilters: filters,
+        bot: recordingBot([]),
+        env,
+      }),
+    ).toBe(2);
+    const matches = await prisma.match.findMany({ where: { tokenId: token.id } });
+    const outcomeIds = new Set(matches.map((m) => m.candidateOutcomeId));
+    expect(outcomeIds.size).toBe(1);
+    const outcome = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: [...outcomeIds][0]! } });
+    expect(outcome.sampleKind).toBe("match");
+    expect(outcome.anchorPriceUsd).toBe(scored.priceUsd);
+
+    // Graded later by the watcher; here the verdict is written directly to check the tally.
+    await prisma.match.update({
+      where: { id: matches.find((m) => m.filterId === filters[0]!.id)!.id },
+      data: { hit2xIn1h: true, hit4xIn1h: true, disqualified: false },
+    });
+    const records = await loadFilterTrackRecords(filters);
+    expect(records.get(filters[0]!.id)).toEqual({ graded: 1, won2x: 1, won4x: 1 });
+    expect(records.get(filters[1]!.id)).toEqual({ graded: 0, won2x: 0, won4x: 0 });
   });
 });

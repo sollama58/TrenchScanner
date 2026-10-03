@@ -9,6 +9,7 @@ import {
   buildCandidateFeatures,
   nearestOutcomes,
   inMcapBand,
+  DISQUALIFYING_DRAWDOWN_FRACTION,
   clampProbability,
   type ComparableOutcome,
   type GradedRow,
@@ -93,6 +94,7 @@ async function comparablePool(env: Env): Promise<GradedRow[]> {
       labelValue: true,
       disqualified: true,
       peak1hReturnPct: true,
+      maxDrawdown1hPct: true,
       anchorMcapUsd: true,
     },
   });
@@ -102,7 +104,13 @@ async function comparablePool(env: Env): Promise<GradedRow[]> {
     .map((r) => ({
       features: r.features as Record<string, number | null>,
       labelValue: r.labelValue ?? 0,
-      disqualified: r.disqualified ?? false,
+      // Every stop-out, not just the disqualified wins: a row that fell through -50% and never
+      // doubled stopped its buyer out too, and the brief's "hit the stop first" share counts it.
+      disqualified:
+        (r.disqualified ?? false) ||
+        ((r.labelValue ?? 0) === 0 &&
+          r.maxDrawdown1hPct !== null &&
+          r.maxDrawdown1hPct <= -(1 - DISQUALIFYING_DRAWDOWN_FRACTION) * 100),
       peak1hReturnPct: r.peak1hReturnPct,
     }));
   poolCache = { fetchedAt: Date.now(), rows: graded };

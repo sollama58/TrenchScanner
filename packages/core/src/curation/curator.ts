@@ -50,14 +50,14 @@ const MIN_VOLUME_1H_MCAP_RATIO = 0.25;
  * in the walk-forward exam predate the short-window capture, and grading them on a signal they
  * never carried would silently change what their heuristic verdicts mean).
  */
-const MIN_BUY_RATIO = 0.55;
+export const MIN_BUY_RATIO = 0.55;
 /**
  * Skip-if-unknown risk cap: a token down more than this in the last five minutes is mid-flush,
  * and an alert into a flush is exactly the shape the label's 50%-drawdown clause disqualifies -
  * the entry gets stopped out even when the chart later "wins". Lenient on purpose (normal
  * memecoin chop swings +/-10% in five minutes without meaning anything).
  */
-const MAX_5M_DUMP_PCT = -25;
+export const MAX_5M_DUMP_PCT = -25;
 /** Younger than this, one wallet can still paint the whole chart; the label window needs a market. */
 const MIN_AGE_MINUTES = 5;
 /** Older than this, the fast 50k->multi-million move this feed hunts has usually already happened. */
