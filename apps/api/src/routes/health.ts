@@ -83,11 +83,12 @@ export async function registerHealthRoutes(app: FastifyInstance) {
 }
 
 /** The timing fields of a heartbeat's meta, and nothing else it might carry. */
-function lastRunSummary(meta: unknown): { durationMs?: number; stagesMs?: Record<string, number> } | null {
+function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
   const m = meta as Record<string, unknown>;
-  const out: { durationMs?: number; stagesMs?: Record<string, number> } = {};
-  if (typeof m.durationMs === "number") out.durationMs = m.durationMs;
+  const out: { durationMs?: number; stagesMs?: Record<string, number>; [count: string]: unknown } = {};
+  // Every top-level number the job reported (duration, and counts such as tracked/inBand).
+  for (const [key, value] of Object.entries(m)) if (typeof value === "number") out[key] = value;
   if (typeof m.stagesMs === "object" && m.stagesMs !== null && !Array.isArray(m.stagesMs)) {
     out.stagesMs = Object.fromEntries(
       Object.entries(m.stagesMs as Record<string, unknown>).filter(

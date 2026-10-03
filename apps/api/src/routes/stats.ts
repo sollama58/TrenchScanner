@@ -162,6 +162,17 @@ export async function registerStatsRoutes(app: FastifyInstance, opts: { env: Env
       return buildHitRateReport(since, until, targets, opts.env);
     },
   );
+  /**
+   * What the database is busy with right now, and how big the hot tables are - the half of the
+   * worker's performance that /health/worker's stage timings can't explain on their own (a stage
+   * that is slow because its query is slow, or because the database is saturated by something
+   * else). Same token guard as the report above. Statement text is Prisma's parameterized SQL, so
+   * it carries placeholders, never bound values.
+   */
+  app.get("/db", { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard }, async (_request, reply) => {
+    reply.header("cache-control", "no-store");
+    return buildDbReport();
+  });
 }
 
 /** Exported for the route test; the route above is the only caller in production. */
@@ -354,5 +365,78 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
     samples: {
       byKind: samples.map((r) => ({ kind: r.kind, ...rated(toCounts(r)) })),
     },
+  };
+}
+
+/** Tables the worker reads and writes on every cycle. */
+const HOT_TABLES = ["Token", "TokenSnapshot", "Match", "CandidateOutcome", "RugCheckCache", "UserFilter"];
+
+/** Exported for the route test. Read-only catalog queries - cheap whatever the table sizes. */
+export async function buildDbReport() {
+  const [activity, tables, indexes, locks] = await Promise.all([
+    prisma.$queryRaw<
+      {
+        pid: number;
+        state: string | null;
+        wait_event_type: string | null;
+        wait_event: string | null;
+        running_ms: number | null;
+        query: string | null;
+      }[]
+    >`
+      SELECT pid, state, wait_event_type, wait_event,
+             (EXTRACT(EPOCH FROM (now() - query_start)) * 1000)::float8 AS running_ms,
+             LEFT(query, 400) AS query
+      FROM pg_stat_activity
+      WHERE datname = current_database() AND pid <> pg_backend_pid() AND state IS DISTINCT FROM 'idle'
+      ORDER BY query_start ASC NULLS LAST
+      LIMIT 40`,
+    prisma.$queryRaw<
+      {
+        table: string;
+        live_rows: bigint;
+        dead_rows: bigint;
+        total_bytes: bigint;
+        seq_scans: bigint;
+        idx_scans: bigint | null;
+        last_autovacuum: Date | null;
+        last_autoanalyze: Date | null;
+      }[]
+    >`
+      SELECT relname AS table, n_live_tup AS live_rows, n_dead_tup AS dead_rows,
+             pg_total_relation_size(relid) AS total_bytes, seq_scan AS seq_scans,
+             idx_scan AS idx_scans, last_autovacuum, last_autoanalyze
+      FROM pg_stat_user_tables
+      WHERE relname = ANY(${HOT_TABLES})
+      ORDER BY pg_total_relation_size(relid) DESC`,
+    prisma.$queryRaw<{ table: string; index: string; valid: boolean; bytes: bigint; scans: bigint }[]>`
+      SELECT t.relname AS table, i.relname AS index, x.indisvalid AS valid,
+             pg_relation_size(i.oid) AS bytes, COALESCE(s.idx_scan, 0) AS scans
+      FROM pg_index x
+      JOIN pg_class i ON i.oid = x.indexrelid
+      JOIN pg_class t ON t.oid = x.indrelid
+      LEFT JOIN pg_stat_user_indexes s ON s.indexrelid = x.indexrelid
+      WHERE t.relname = ANY(${HOT_TABLES})
+      ORDER BY t.relname, i.relname`,
+    prisma.$queryRaw<{ waiting: bigint }[]>`SELECT count(*) AS waiting FROM pg_locks WHERE NOT granted`,
+  ]);
+  return {
+    activity,
+    tables: tables.map((t) => ({
+      ...t,
+      live_rows: Number(t.live_rows),
+      dead_rows: Number(t.dead_rows),
+      total_mb: Math.round(Number(t.total_bytes) / 1_048_576),
+      total_bytes: undefined,
+      seq_scans: Number(t.seq_scans),
+      idx_scans: t.idx_scans === null ? null : Number(t.idx_scans),
+    })),
+    indexes: indexes.map((i) => ({
+      ...i,
+      mb: Math.round(Number(i.bytes) / 1_048_576),
+      bytes: undefined,
+      scans: Number(i.scans),
+    })),
+    locksWaiting: Number(locks[0]?.waiting ?? 0),
   };
 }

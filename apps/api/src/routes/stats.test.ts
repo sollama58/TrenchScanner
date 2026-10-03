@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
-import { bearerMatches, withRates } from "./stats.js";
+import { bearerMatches, buildDbReport, withRates } from "./stats.js";
 
 const TOKEN = "stats-test-token-0123456789abcdef0123456789";
 const TARGETS = { hitRate2xPct: 75, hitRate4xPct: 50 };
@@ -280,5 +280,17 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe.skipIf(!dbAvailable)("buildDbReport", () => {
+  it("reports activity, hot-table sizes and index validity as plain JSON", async () => {
+    const report = await buildDbReport();
+    expect(Array.isArray(report.activity)).toBe(true);
+    expect(report.tables.map((t) => t.table)).toContain("TokenSnapshot");
+    expect(report.indexes.some((i) => i.index === "Token_firstSeenAt_idx" && i.valid)).toBe(true);
+    expect(typeof report.locksWaiting).toBe("number");
+    // No BigInt left anywhere - it would make the route's JSON serialization throw.
+    expect(() => JSON.stringify(report)).not.toThrow();
   });
 });
