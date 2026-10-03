@@ -11,7 +11,8 @@ import {
 } from "@trenchscanner/core";
 import { runScanCycle } from "./jobs/scanJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
-import { runOutcomeTrackingJob } from "./jobs/outcomeTrackingJob.js";
+import { runOutcomeTrackingJob, repairOutcomeBookkeeping } from "./jobs/outcomeTrackingJob.js";
+import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
 import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
@@ -80,6 +81,10 @@ async function main() {
     async () => void (await reconcileBurns(env, rpc)),
     env.BURN_SCAN_INTERVAL_MINUTES,
   );
+  // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
+  // purpose: see createMatchPeaksRunner.
+  const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping);
+  const matchPeaksJob = scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES);
   const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC);
   const outcomeTrackingJob = scheduleDailyAt(
     "outcome-tracking",
@@ -119,6 +124,7 @@ async function main() {
     livePriceJob.stop();
     candidateWatchJob.stop();
     burnScanJob.stop();
+    matchPeaksJob.stop();
     cleanupJob.stop();
     outcomeTrackingJob.stop();
     curatorTrainingJob.stop();

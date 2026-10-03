@@ -21,6 +21,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every minute, and while it's down every open training row's label window is silently
   // recording nothing - an hour of downtime is an hour of alerts whose outcomes read "flat".
   "candidate-watch": 10 * 60_000,
+  // Every MATCH_PEAKS_INTERVAL_MINUTES (2 by default). Nothing time-critical waits on it -
+  // peaks feed the leaderboard and outcome figures - so a generous margin.
+  "match-peaks": 20 * 60_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
   // Runs every CURATOR_TRAINING_INTERVAL_HOURS (4h by default), not daily - same "expected
