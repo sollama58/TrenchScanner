@@ -346,6 +346,56 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(entryRuleFor({}, env).delayMs).toBe(env.CANDIDATE_ENTRY_DELAY_SECONDS * 1000);
   });
 
+  it("copies a match row's verdict onto the filter alerts anchored to it, and only those", async () => {
+    const token = await createToken("match-verdict");
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-match-user` } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id, name: "f" } });
+    const snapshot = await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 1, marketCapUsd: 100_000, rugScreenPassed: true },
+    });
+    const anchorAt = new Date(Date.now() - 61 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      sampleKind: "match",
+      peak1hPriceUsd: 4.4,
+      peakBeforeStopPriceUsd: 4.4,
+      hit2xAt: new Date(anchorAt.getTime() + 20 * MINUTE),
+      lowBefore2xPriceUsd: 0.9,
+      low1hPriceUsd: 0.9,
+      peak24hPriceUsd: 4.4,
+    });
+    const linked = await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        score: 60,
+        candidateOutcomeId: row.id,
+      },
+    });
+    const other = await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        score: 60,
+        matchedAt: new Date(Date.now() - 5 * MINUTE),
+      },
+    });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 3 }), env);
+
+    const graded = await prisma.match.findUniqueOrThrow({ where: { id: linked.id } });
+    expect(graded.hit2xIn1h).toBe(true);
+    expect(graded.hit4xIn1h).toBe(true);
+    expect(graded.disqualified).toBe(false);
+    expect(graded.peak1hReturnPct).toBeCloseTo(340);
+    const untouched = await prisma.match.findUniqueOrThrow({ where: { id: other.id } });
+    expect(untouched.hit2xIn1h).toBeNull();
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
   it("advances a row DexScreener knows nothing about, instead of hot-looping it", async () => {
     const token = await createToken("dead-pair");
     const anchorAt = new Date(Date.now() - 5 * MINUTE);

@@ -95,6 +95,28 @@ describe("candidate outcome labels", () => {
     expect(labels.hit4xIn1h).toBe(false);
   });
 
+  it("does not count a 4x reached only after a post-2x fall through the stop", () => {
+    // Doubled cleanly, then fell to 45% of the fill (a stop-out), then ran to 4.2x. Still a 2x
+    // win - the double came first - but the 4x is not one a buyer holding to the stop traded.
+    const labels = computeOutcomeLabels(
+      replay(1, [
+        [2.1, 10],
+        [0.45, 20],
+        [4.2, 50],
+      ]),
+    );
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.disqualified).toBe(false);
+    expect(labels.hit4xIn1h).toBe(false);
+    expect(labels.labelValue).toBeCloseTo(Math.log2(2.1));
+    expect(labels.peak1hReturnPct).toBeCloseTo(320); // the raw peak is still recorded
+  });
+
+  it("falls back to the window peak on rows that predate the stop-aware peak", () => {
+    const agg = { ...replay(1, [[4.5, 30]]), peakBeforeStopPriceUsd: null, stoppedAt: null };
+    expect(computeOutcomeLabels(agg).hit4xIn1h).toBe(true);
+  });
+
   it("disqualifies a late 2x that first traded at or below half the anchor", () => {
     const agg = replay(1, [
       [0.4, 20],

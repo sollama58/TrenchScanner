@@ -120,6 +120,32 @@ describe.skipIf(!dbAvailable)("curated alert emission", () => {
     expect(anchorRow.extended24h).toBe(true); // curated alerts always track the 24h peak
   });
 
+  it("moves an unfilled fresh anchor to the moment the alert goes out", async () => {
+    // The fill is "the first price at least the entry delay after the alert"; counting it from
+    // the scan moment let a slow cycle or AI review eat into that delay.
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-anchor-moves` } });
+    const scored = curatableFixture(token.mintAddress);
+    const sample = await recordCandidateSample(token.id, scored, env);
+    const scanMoment = new Date(Date.now() - 45_000);
+    await prisma.candidateOutcome.update({ where: { id: sample!.id }, data: { anchorAt: scanMoment } });
+
+    const before = Date.now();
+    expect(await collectAndEmit(env, token, scored, sample)).toBe(true);
+    const anchorRow = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: sample!.id } });
+    expect(anchorRow.anchorAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("gives the alert a fresh anchor when the cycle's sample already took its fill", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-prefilled` } });
+    const scored = curatableFixture(token.mintAddress);
+    const sample = await recordCandidateSample(token.id, scored, env);
+    await prisma.candidateOutcome.update({ where: { id: sample!.id }, data: { entryAt: new Date() } });
+
+    expect(await collectAndEmit(env, token, scored, sample)).toBe(true);
+    const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: token.id } });
+    expect(alert.candidateOutcomeId).not.toBe(sample!.id);
+  });
+
   it("creates its own fresh anchor when the cycle's sample was a stale reuse", async () => {
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-stale` } });
     const scored = curatableFixture(token.mintAddress);

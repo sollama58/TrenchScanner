@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { type Env, prisma, scanBand } from "@trenchscanner/core";
+import { type Env, prisma, scanBand, loadFilterTrackRecords } from "@trenchscanner/core";
 
 // A factory (rather than a module-level constant) so mcapMin/mcapMax default to this deployment's
 // own MCAP_FILTER_MIN/MAX instead of a hardcoded literal that could drift out of sync with them -
@@ -51,10 +51,14 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
   }
 
   app.get("/", async (request) => {
-    return prisma.userFilter.findMany({
+    const filters = await prisma.userFilter.findMany({
       where: { userId: request.user!.userId },
       orderBy: { createdAt: "asc" },
     });
+    // Each filter's last-30-day record on the curated feed's verdict (2x within 1h of a realistic
+    // fill, a 50% drop first is a loss) - additive, so an older dashboard simply ignores it.
+    const records = await loadFilterTrackRecords(filters).catch(() => new Map());
+    return filters.map((f) => ({ ...f, trackRecord: records.get(f.id) ?? null }));
   });
 
   app.post("/", async (request, reply) => {

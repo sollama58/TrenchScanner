@@ -738,6 +738,7 @@ async function processCandidate(
     scored,
     activeFilters,
     bot,
+    env,
   });
 
   // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample

@@ -153,6 +153,11 @@ const envSchema = z.object({
   // one minute it left an average half-minute between a token becoming matchable and anyone
   // hearing about it. Seconds, not minutes, because that is the unit the answer belongs in.
   FAST_MATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(15),
+  // The platform's floor under every user-filter alert, both lanes (see scoring/alertGuard.ts):
+  // "flush" (default) holds a match back while the price is down 25%+ over five minutes; "ready"
+  // also requires buyers to hold the last hour's flow and the last five minutes not to be red;
+  // "off" alerts on any match. A held-back match doesn't start the filter's cooldown.
+  MATCH_ALERT_GUARD: z.enum(["off", "flush", "ready"]).default("flush"),
   LIVE_PRICE_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
   LIVE_PRICE_MAX_TRACKED: z.coerce.number().int().positive().default(150),
 

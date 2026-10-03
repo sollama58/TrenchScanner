@@ -247,9 +247,11 @@ export async function registerCuratedRoutes(
       heuristic30d,
       model30d,
     ] = await Promise.all([
-      prisma.candidateOutcome.count({ where: { finalizedAt: { not: null } } }),
+      // The base rate a pick has to beat is the population curators decide on: event moments.
+      // Emission, AI-veto and filter-match anchors are someone's selection, not the base.
+      prisma.candidateOutcome.count({ where: { finalizedAt: { not: null }, sampleKind: "event" } }),
       prisma.candidateOutcome.count({ where: { anchorAt: { gte: day7 } } }),
-      prisma.candidateOutcome.count({ where: { labelValue: { gt: 0 } } }),
+      prisma.candidateOutcome.count({ where: { labelValue: { gt: 0 }, sampleKind: "event" } }),
       prisma.curatedAlert.count(),
       prisma.curatedAlert.count({ where: { createdAt: { gte: day7 } } }),
       prisma.curatedAlert.count({ where: { createdAt: { gte: day1 } } }),

@@ -2,8 +2,13 @@ import {
   prisma,
   createLogger,
   matchesFilter,
+  alertGuardBlocks,
   forEachWithConcurrency,
   notifyMatchCreated,
+  loadFilterTrackRecords,
+  type FilterTrackRecord,
+  type Env,
+  type MatchAlertGuardMode,
   type ScoredToken,
   type UserFilter,
   type TelegramLink,
@@ -11,6 +16,7 @@ import {
 import type { Token, TokenSnapshot } from "@prisma/client";
 import type { AlertBot } from "../telegram/bot.js";
 import { formatRealtimeAlert } from "../dispatch/alertDispatcher.js";
+import { recordCandidateSample } from "./candidateOutcomeJob.js";
 
 const logger = createLogger("match-dispatch");
 
@@ -43,13 +49,20 @@ export async function createMatchesForCandidate(opts: {
   scored: ScoredToken;
   activeFilters: FilterWithUser[];
   bot: AlertBot;
+  /** The worker's env: turns on the alert guard (MATCH_ALERT_GUARD) and outcome grading. */
+  env?: Env;
 }): Promise<number> {
-  const { token, snapshot, scored, activeFilters, bot } = opts;
+  const { token, snapshot, scored, activeFilters, bot, env } = opts;
 
-  const toAlert = await resolveAlertTargets({ tokenId: token.id, scored, activeFilters });
+  const toAlert = await resolveAlertTargets({
+    tokenId: token.id,
+    scored,
+    activeFilters,
+    guard: env?.MATCH_ALERT_GUARD,
+  });
   if (toAlert.length === 0) return 0;
 
-  return createMatchesForTargets({ token, snapshot, scored, toAlert, bot });
+  return createMatchesForTargets({ token, snapshot, scored, toAlert, bot, env });
 }
 
 /**
@@ -66,11 +79,17 @@ export async function resolveAlertTargets(opts: {
   tokenId: string;
   scored: ScoredToken;
   activeFilters: FilterWithUser[];
+  /** MATCH_ALERT_GUARD - see scoring/alertGuard.ts. Omitted means "off". */
+  guard?: MatchAlertGuardMode;
 }): Promise<FilterWithUser[]> {
   const { tokenId, scored, activeFilters } = opts;
 
   const matching = activeFilters.filter((filter) => matchesFilter(scored, filter));
   if (matching.length === 0) return [];
+
+  // Before the cooldown read, and returning nothing rather than a reason: a held-back match must
+  // not start the cooldown, so the token can still be alerted the moment it stops flushing.
+  if (alertGuardBlocks(scored, opts.guard ?? "off") !== null) return [];
 
   // One round trip for every cooldown on this token, instead of one per matching filter. The
   // cooldown is per (user, filter, token), so the pair is what has to be compared - two of a
@@ -101,8 +120,10 @@ export async function createMatchesForTargets(opts: {
   scored: ScoredToken;
   toAlert: FilterWithUser[];
   bot: AlertBot;
+  /** When given, the alert is graded on the curated verdict - see anchorMatchOutcome. */
+  env?: Env;
 }): Promise<number> {
-  const { token, snapshot, scored, toAlert, bot } = opts;
+  const { token, snapshot, scored, toAlert, bot, env } = opts;
   if (toAlert.length === 0) return 0;
 
   // The cooldown is re-checked here, inside a lock, rather than trusted from the caller.
@@ -167,8 +188,70 @@ export async function createMatchesForTargets(opts: {
     alerted.map(({ match, filter }) => notifyMatchCreated({ userId: filter.userId, matchId: match.id })),
   );
 
-  await sendTelegramAlerts({ token, snapshot, scored, alerted, bot });
+  // Both after every dashboard push, and side by side: neither is an input to the other.
+  await Promise.all([
+    sendTelegramAlerts({ token, snapshot, scored, alerted, bot }),
+    env
+      ? anchorMatchOutcome(
+          token.id,
+          scored,
+          env,
+          created.map((m) => m.id),
+        )
+      : Promise.resolve(),
+  ]);
   return created.length;
+}
+
+/**
+ * Grades these alerts the way curated alerts are graded: a "match" CandidateOutcome row anchored
+ * now, at the price the alert was raised on, which the candidate watcher fills (first price at
+ * least CANDIDATE_ENTRY_DELAY_SECONDS later, plus slippage), watches for an hour, and closes with
+ * the 2x / 4x / 50%-stop verdict - copied onto these Match rows (candidateOutcomeJob.ts). That
+ * is what lets a filter's track record be stated in the same terms as the curated feed's.
+ *
+ * Never worth failing the alert over: the match is committed and delivered by now.
+ */
+async function anchorMatchOutcome(tokenId: string, scored: ScoredToken, env: Env, matchIds: string[]) {
+  try {
+    const sample = await recordCandidateSample(tokenId, scored, env, { kind: "match" });
+    if (!sample) return;
+    await prisma.match.updateMany({
+      where: { id: { in: matchIds } },
+      data: { candidateOutcomeId: sample.id },
+    });
+  } catch (err) {
+    logger.warn("failed to anchor match outcome", { tokenId, error: String(err) });
+  }
+}
+
+/** Track records are quoted on the card, so they're cached briefly rather than queried per send. */
+const TRACK_RECORD_TTL_MS = 10 * 60_000;
+const trackRecordCache = new Map<string, { at: number; record: FilterTrackRecord }>();
+
+async function cachedTrackRecords(
+  filters: { id: string; userId: string }[],
+): Promise<Map<string, FilterTrackRecord>> {
+  const now = Date.now();
+  const out = new Map<string, FilterTrackRecord>();
+  const missing = [];
+  for (const f of filters) {
+    const hit = trackRecordCache.get(f.id);
+    if (hit && now - hit.at < TRACK_RECORD_TTL_MS) out.set(f.id, hit.record);
+    else missing.push(f);
+  }
+  if (missing.length > 0) {
+    try {
+      for (const [id, record] of await loadFilterTrackRecords(missing)) {
+        trackRecordCache.set(id, { at: now, record });
+        out.set(id, record);
+      }
+    } catch (err) {
+      // The card goes out without the line rather than not at all.
+      logger.warn("failed to load filter track records", { error: String(err) });
+    }
+  }
+  return out;
 }
 
 /** The slow half, run once every dashboard has already been pushed to. */
@@ -189,10 +272,15 @@ async function sendTelegramAlerts(opts: {
     });
   if (recipients.length === 0) return;
 
-  // Formatted once - it is identical for every recipient of this token.
-  const text = formatRealtimeAlert(token, snapshot, scored.score.total);
+  // One card per filter: it names the filter that caught the token and quotes that filter's own
+  // graded record, so a reader can weigh the alert by how that filter's alerts have done.
+  const records = await cachedTrackRecords(recipients.map(({ filter }) => filter));
   const deliveredMatchIds: string[] = [];
   await forEachWithConcurrency(recipients, TELEGRAM_CONCURRENCY, async ({ filter, matchId }) => {
+    const text = formatRealtimeAlert(token, snapshot, scored.score.total, {
+      filterName: filter.name,
+      trackRecord: records.get(filter.id),
+    });
     // sendMessage swallows its own errors and reports via its return value; it never throws.
     const ok = await bot.sendMessage(filter.user.telegramLink!.chatId!, text);
     if (ok) deliveredMatchIds.push(matchId);

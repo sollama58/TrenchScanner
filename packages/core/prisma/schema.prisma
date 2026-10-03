@@ -435,6 +435,9 @@ model CandidateOutcome {
   ///    these rows are exactly the distribution live picks come from.
   ///  - "emission": a fresh anchor made for an alert or shadow pick. Chosen by a curator, so
   ///    kept out of training (a model learning from its own picks feeds back on itself).
+  ///  - "match": the anchor a user-filter alert (Match.candidateOutcomeId) is graded from, shared
+  ///    by every match of the token within MATCH_SAMPLE_SPACING_MINUTES. Chosen by users'
+  ///    filters, so kept out of training too.
   sampleKind     String    @default("hourly")
 
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
@@ -476,6 +479,11 @@ model CandidateOutcome {
   /// Highest price seen over the whole watch (up to 24h for extended rows).
   peak24hPriceUsd     Float
   peak24hAt           DateTime?
+  /// The 1h window's highest price before it first fell to the stop, frozen at that moment -
+  /// what the 4x and labelValue are graded on (see cleanPeakPriceUsd in curation/labels.ts). Null
+  /// on rows from before it was tracked.
+  peakBeforeStopPriceUsd Float?
+  stoppedAt              DateTime?
 
   // ---- Labels, written once when the goal window closes ----
   finalizedAt      DateTime?
@@ -669,6 +677,26 @@ model Match {
   // run that noticed. Marks this match as eligible for the public Leaderboard; indexed so that
   // query never scans every Match - see apps/api/src/routes/leaderboard.ts.
   hitHundredPctAt DateTime?
+
+  // The curated feed's verdict, applied to this alert: graded by the CandidateOutcome row
+  // (sampleKind "match") anchored when the match was created - the realistic fill, the 1h win
+  // window and the 50%-drop stop, exactly as curated alerts are graded. Copied over when that
+  // row's window closes, in the same transaction, because outcome rows are pruned on
+  // CANDIDATE_OUTCOME_RETENTION_DAYS. All null until then, and on matches from before this
+  // existed.
+  //
+  // candidateOutcomeId is a plain column, not a relation, on purpose: an FK would make every
+  // outcome-row prune look up Match by this column, and Match is the one table too large to
+  // index online in a migration (see 20260903020000_snapshot_source_index). The watcher finds a
+  // row's matches through the token, which IS indexed.
+  candidateOutcomeId String?
+  peak1hReturnPct    Float?
+  maxDrawdown1hPct   Float?
+  hit2xIn1h          Boolean?
+  /// 4x inside the hour without the stop - false whenever disqualified.
+  hit4xIn1h          Boolean?
+  /// Hit 2x only after first falling through the 50% stop: a loss.
+  disqualified       Boolean?
 
   @@unique([userId, tokenId, filterId, matchedAt])
   @@index([userId, matchedAt])

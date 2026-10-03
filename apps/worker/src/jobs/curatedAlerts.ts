@@ -386,8 +386,24 @@ async function emitCuratedAlert(
 
   let anchor = pick.cycleSample?.created ? pick.cycleSample : null;
   if (anchor) {
-    await prisma.candidateOutcome.update({ where: { id: anchor.id }, data: { extended24h: true } });
-  } else {
+    // The fill is "the first price at least CANDIDATE_ENTRY_DELAY_SECONDS after the alert", and
+    // the alert is going out now - after the rest of the scan cycle, the governor and (in gate
+    // mode) the AI review, which can take most of a minute. Counting the delay from the scan
+    // moment let the fill land seconds after a subscriber first saw the card, so the anchor
+    // moves to now. Only while no fill has been taken: once one has, it predates the alert, and
+    // the alert gets a fresh row like a stale sample would.
+    const now = new Date();
+    const moved = await prisma.candidateOutcome.updateMany({
+      where: { id: anchor.id, entryAt: null },
+      data: {
+        extended24h: true,
+        anchorAt: now,
+        nextCheckAt: new Date(now.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
+      },
+    });
+    if (moved.count === 0) anchor = null;
+  }
+  if (!anchor) {
     anchor = await recordCandidateSample(token.id, scored, env, {
       bypassSpacing: true,
       extended24h: true,
