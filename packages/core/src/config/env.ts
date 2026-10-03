@@ -213,6 +213,14 @@ const envSchema = z.object({
   CURATOR_RECENCY_HALF_LIFE_DAYS: z.coerce.number().positive().default(14),
   CURATED_TARGET_PER_HOUR: z.coerce.number().positive().default(6),
   CURATOR_MIN_TRAINING_ROWS: z.coerce.number().int().positive().default(1500),
+  // The hit rates the trained model's alerts are held to: of the alerts sent, the share that
+  // doubled within the hour (WIN) and the share that reached 4x (GOAL). The model's emission
+  // cutoff is the lowest confidence whose out-of-sample calls met both on at least
+  // CURATED_MIN_CALIBRATION_ALERTS alerts; when no cutoff does, the model sends nothing and is
+  // never promoted (see calibrateThresholdForPrecision). CURATED_TARGET_PER_HOUR stays a ceiling.
+  CURATED_TARGET_WIN_RATE_PCT: z.coerce.number().min(0).max(100).default(75),
+  CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
+  CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(30),
 
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   // Used only to build the "tap to open Telegram" deep link on the dashboard - not required

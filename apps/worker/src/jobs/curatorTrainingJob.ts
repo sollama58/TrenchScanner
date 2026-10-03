@@ -2,13 +2,16 @@ import {
   prisma,
   createLogger,
   trainCurator,
-  calibrateThreshold,
+  calibrateThresholdForPrecision,
+  precisionCurve,
   walkForwardEvaluate,
-  inMcapBand,
   CURATOR_MODEL_KIND,
   type Env,
   type TrainingRow,
   type TrainedCuratorParams,
+  type PrecisionCalibration,
+  type PrecisionCurvePoint,
+  type PrecisionTargets,
   type WalkForwardResult,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
@@ -22,6 +25,22 @@ const logger = createLogger("curator-training");
  * the job trains and records candidate models whose evaluations are visible but powerless.
  */
 const MIN_ROWS_TO_TRAIN = 300;
+
+/**
+ * The threshold a model gets when no cutoff met the hit-rate targets: above any probability the
+ * sigmoid can produce, so it sends nothing. A finite number on purpose - params are stored as
+ * JSON, and Infinity would round-trip as null.
+ */
+export const NEVER_EMIT_THRESHOLD = 1.01;
+
+/** What the training job stores as CuratorModel.evalMetrics: the exam plus the hit-rate evidence. */
+export interface StoredEvalMetrics {
+  folds: WalkForwardResult["folds"];
+  verdict: WalkForwardResult["verdict"];
+  targets: PrecisionTargets;
+  precisionCalibration: PrecisionCalibration;
+  precisionCurve: PrecisionCurvePoint[];
+}
 
 /**
  * The learner, run every CURATOR_TRAINING_INTERVAL_HOURS. Loads the rolling window of finalized
@@ -74,30 +93,50 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
 
   // The deployable model trains on the FULL window - the walk-forward folds were the exam, this
   // is the model that actually ships, with strictly more (and newer) data than any fold saw.
-  // Out-of-band samples still teach (mcap is a feature), but the emission threshold is
-  // calibrated on in-band rows only: those are the only candidates it will ever be applied to,
-  // and letting unemittable rows into the rate math would skew it quiet.
+  // Out-of-band samples still teach (mcap is a feature).
   const trained = await trainCurator(trainingRows, {
     recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
   });
-  const inBandRows = trainingRows.filter((r) => inMcapBand(r.anchorMcapUsd, mcapBand));
+
+  // Its cutoff is set by HIT RATE, from the exam's out-of-sample calls (in-band only - the only
+  // rows it will ever be applied to): the lowest confidence at which those calls met the targets.
+  // When none did, the model sends nothing and cannot take the job - a model that can't reach
+  // the bar on history it never saw has no business vouching for live tokens.
+  const targets: PrecisionTargets = {
+    winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
+    goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
+    minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
+  };
+  const precisionCalibration = calibrateThresholdForPrecision(evaluation.outOfSample, targets);
   const params: TrainedCuratorParams = {
     ...trained,
-    threshold: calibrateThreshold(
-      trained,
-      inBandRows.length > 0 ? inBandRows : trainingRows,
-      env.CURATED_TARGET_PER_HOUR,
-    ),
+    threshold: precisionCalibration.threshold ?? NEVER_EMIT_THRESHOLD,
+  };
+  const verdict =
+    evaluation.verdict.promote && precisionCalibration.threshold === null
+      ? {
+          promote: false,
+          reason: `${evaluation.verdict.reason.replace(" - promoting", "")}, but no cutoff reached ${env.CURATED_TARGET_WIN_RATE_PCT}% at 2x and ${env.CURATED_TARGET_GOAL_RATE_PCT}% at 4x - keeping current curator`,
+        }
+      : evaluation.verdict;
+  const metrics: StoredEvalMetrics = {
+    folds: evaluation.folds,
+    verdict,
+    targets,
+    precisionCalibration,
+    precisionCurve: precisionCurve(evaluation.outOfSample),
   };
 
-  const modelId = await applyTrainingResult(evaluation, params, trainingRows.length, windowStart);
+  const modelId = await applyTrainingResult(metrics, params, trainingRows.length, windowStart);
 
   logger.info("curator training complete", {
     durationMs: Date.now() - startedAt,
     rows: trainingRows.length,
     folds: evaluation.folds.length,
-    promoted: evaluation.verdict.promote,
-    verdict: evaluation.verdict.reason,
+    promoted: verdict.promote,
+    verdict: verdict.reason,
+    threshold: params.threshold,
+    calibration: precisionCalibration,
     modelId,
   });
 }
@@ -113,12 +152,15 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
  *    the heuristic, which never rots because it never changes.
  */
 export async function applyTrainingResult(
-  evaluation: WalkForwardResult,
+  evaluation: Pick<StoredEvalMetrics, "folds" | "verdict"> & Partial<StoredEvalMetrics>,
   params: TrainedCuratorParams,
   trainingRows: number,
   trainingFrom: Date,
 ): Promise<string> {
   const now = new Date();
+  // The raw per-row exam evidence never goes into the row - it is one entry per training sample.
+  const stored: Record<string, unknown> = { ...evaluation };
+  delete stored.outOfSample;
   return prisma.$transaction(async (tx) => {
     await tx.curatorModel.updateMany({
       where: { status: "active" },
@@ -131,7 +173,7 @@ export async function applyTrainingResult(
         trainingRows,
         trainingFrom,
         trainingTo: now,
-        evalMetrics: evaluation as unknown as Prisma.InputJsonValue,
+        evalMetrics: stored as Prisma.InputJsonValue,
         status: evaluation.verdict.promote ? "active" : "candidate",
         activatedAt: evaluation.verdict.promote ? now : null,
       },

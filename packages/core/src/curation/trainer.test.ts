@@ -3,6 +3,8 @@ import {
   trainCurator,
   scoreCandidateWithModel,
   calibrateThreshold,
+  calibrateThresholdForPrecision,
+  precisionCurve,
   walkForwardEvaluate,
   decidePromotion,
   type TrainingRow,
@@ -260,24 +262,45 @@ describe("decidePromotion", () => {
     testRows: 200,
     baseWinRatePct: 5,
     meanLabelPerRow: 0.1,
-    model: { emitted: 10, perHour: 0.5, precisionPct: 30, avgLabel: 0.5, ...model },
-    heuristic: { emitted: 10, perHour: 0.5, precisionPct: 20, avgLabel: 0.3, ...heuristic },
+    model: { emitted: 10, perHour: 0.5, precisionPct: 30, goalPrecisionPct: 10, avgLabel: 0.5, ...model },
+    heuristic: {
+      emitted: 10,
+      perHour: 0.5,
+      precisionPct: 20,
+      goalPrecisionPct: 5,
+      avgLabel: 0.3,
+      ...heuristic,
+    },
   });
 
-  it("promotes on a majority including the newest fold", () => {
+  it("promotes on a majority of hit-rate wins including the newest fold", () => {
     const folds = [
-      fold({ avgLabel: 0.6 }, { avgLabel: 0.3 }),
-      fold({ avgLabel: 0.2 }, { avgLabel: 0.4 }),
-      fold({ avgLabel: 0.7 }, { avgLabel: 0.3 }),
+      fold({ precisionPct: 60 }, { precisionPct: 30 }),
+      fold({ precisionPct: 20 }, { precisionPct: 40 }),
+      fold({ precisionPct: 70 }, { precisionPct: 30 }),
     ];
     expect(decidePromotion(folds, 5_000, 1_500).promote).toBe(true);
   });
 
+  it("judges on hit rate, not on average doublings", () => {
+    // Bigger average runs, but fewer of its alerts doubled - the feed is held to the hit rate.
+    const folds = [
+      fold({ precisionPct: 30, avgLabel: 1.5 }, { precisionPct: 50, avgLabel: 0.6 }),
+      fold({ precisionPct: 30, avgLabel: 1.5 }, { precisionPct: 50, avgLabel: 0.6 }),
+    ];
+    expect(decidePromotion(folds, 5_000, 1_500).promote).toBe(false);
+  });
+
+  it("breaks an exact hit-rate tie on average doublings", () => {
+    const tie = fold({ precisionPct: 40, avgLabel: 0.9 }, { precisionPct: 40, avgLabel: 0.5 });
+    expect(decidePromotion([tie, tie], 5_000, 1_500).promote).toBe(true);
+  });
+
   it("refuses a model that lost the newest fold, whatever its record", () => {
     const folds = [
-      fold({ avgLabel: 0.9 }, { avgLabel: 0.1 }),
-      fold({ avgLabel: 0.9 }, { avgLabel: 0.1 }),
-      fold({ avgLabel: 0.1 }, { avgLabel: 0.9 }),
+      fold({ precisionPct: 90 }, { precisionPct: 10 }),
+      fold({ precisionPct: 90 }, { precisionPct: 10 }),
+      fold({ precisionPct: 10 }, { precisionPct: 90 }),
     ];
     const verdict = decidePromotion(folds, 5_000, 1_500);
     expect(verdict.promote).toBe(false);
@@ -288,32 +311,90 @@ describe("decidePromotion", () => {
     expect(decidePromotion([fold({}, {}), fold({}, {})], 800, 1_500).promote).toBe(false);
   });
 
-  it("scores a heuristic-silent fold against blind chance, in doublings", () => {
-    // meanLabelPerRow is 0.1: random emission earns 0.1 doublings per alert, so the bar is 0.2.
-    const silent = fold({ avgLabel: 0.3 }, { emitted: 0, precisionPct: null, avgLabel: null });
+  it("scores a heuristic-silent fold against blind chance", () => {
+    // baseWinRatePct is 5: random emission doubles 5% of the time, so the bar is 10%.
+    const silent = fold({ precisionPct: 12 }, { emitted: 0, precisionPct: null, avgLabel: null });
     expect(decidePromotion([silent, silent], 5_000, 1_500).promote).toBe(true);
-    const weak = fold({ avgLabel: 0.15 }, { emitted: 0, precisionPct: null, avgLabel: null });
+    const weak = fold({ precisionPct: 8 }, { emitted: 0, precisionPct: null, avgLabel: null });
     expect(decidePromotion([weak, weak], 5_000, 1_500).promote).toBe(false);
   });
 
   it("never promotes a model that emits nothing", () => {
-    const mute = fold({ emitted: 0, precisionPct: null, avgLabel: null }, { emitted: 5, avgLabel: 0.2 });
+    const mute = fold({ emitted: 0, precisionPct: null, avgLabel: null }, { emitted: 5, precisionPct: 20 });
     expect(decidePromotion([mute, mute, mute], 5_000, 1_500).promote).toBe(false);
   });
 
-  it("a handful of lucky picks is not a fold win, however high their average", () => {
-    // Three emissions, one fluke 4x: a stellar avgLabel over a sample too small to mean
-    // anything, against a steady fifty-pick heuristic. Without the emissions floor this "wins"
-    // every fold - including the newest, the promotion rule's whole recency guard.
-    const lucky = fold({ emitted: 3, avgLabel: 1.5 }, { emitted: 50, avgLabel: 0.4 });
+  it("a handful of lucky picks is not a fold win, however high their hit rate", () => {
+    const lucky = fold({ emitted: 3, precisionPct: 100 }, { emitted: 50, precisionPct: 30 });
     expect(decidePromotion([lucky, lucky, lucky], 5_000, 1_500).promote).toBe(false);
   });
 
   it("treats a heuristic under the emissions floor as silent - the bar becomes blind chance", () => {
-    // meanLabelPerRow 0.1: the model must earn over 0.2 per pick, on a real sample of its own.
-    const thinHeuristic = fold({ emitted: 20, avgLabel: 0.3 }, { emitted: 2, avgLabel: 5 });
+    const thinHeuristic = fold({ emitted: 20, precisionPct: 15 }, { emitted: 2, precisionPct: 100 });
     expect(decidePromotion([thinHeuristic, thinHeuristic], 5_000, 1_500).promote).toBe(true);
-    const thinBoth = fold({ emitted: 20, avgLabel: 0.15 }, { emitted: 2, avgLabel: 5 });
+    const thinBoth = fold({ emitted: 20, precisionPct: 8 }, { emitted: 2, precisionPct: 100 });
     expect(decidePromotion([thinBoth, thinBoth], 5_000, 1_500).promote).toBe(false);
+  });
+});
+
+describe("calibrateThresholdForPrecision", () => {
+  /** n calls at descending probabilities; `outcome(i)` gives the i-th (most confident first) label. */
+  const calls = (n: number, outcome: (i: number) => number) =>
+    Array.from({ length: n }, (_, i) => ({ probability: 1 - i / (n + 1), labelValue: outcome(i) }));
+  const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 10 };
+
+  it("picks the lowest cutoff whose calls still meet both targets", () => {
+    // Top 20 calls: all 4x (label 2). The next 80: misses. Including calls 21..26 keeps both
+    // rates at or above target (20/26 = 77% won, 77% hit 4x); the 27th drops below 75%.
+    const set = calls(100, (i) => (i < 20 ? 2 : 0));
+    const result = calibrateThresholdForPrecision(set, targets);
+    expect(result.support).toBe(26);
+    expect(result.threshold).toBeCloseTo(set[25]!.probability);
+    expect(result.winRatePct).toBeGreaterThanOrEqual(75);
+    expect(result.goalRatePct).toBeGreaterThanOrEqual(50);
+  });
+
+  it("holds out for the 4x target too, not just the 2x one", () => {
+    // Every top call doubles but none reaches 4x: the 2x target is met everywhere, the 4x never.
+    const result = calibrateThresholdForPrecision(
+      calls(100, (i) => (i < 50 ? 1 : 0)),
+      targets,
+    );
+    expect(result.threshold).toBeNull();
+    expect(result.winRatePct).toBe(100);
+    expect(result.goalRatePct).toBe(0);
+  });
+
+  it("will not call a target met on fewer alerts than the support floor", () => {
+    // Only the top 5 win - a perfect record, but too thin to trust at a 10-alert floor.
+    const result = calibrateThresholdForPrecision(
+      calls(100, (i) => (i < 5 ? 2 : 0)),
+      targets,
+    );
+    expect(result.threshold).toBeNull();
+  });
+
+  it("never splits a tie in probability", () => {
+    // 20 calls share one probability; half of them win - no cutoff can take only the winners.
+    const tied = Array.from({ length: 20 }, (_, i) => ({ probability: 0.5, labelValue: i % 2 ? 2 : 0 }));
+    const result = calibrateThresholdForPrecision(tied, targets);
+    expect(result.threshold).toBeNull();
+    expect(result.support).toBe(20);
+  });
+});
+
+describe("precisionCurve", () => {
+  it("reports hit rates for the most confident slices of calls", () => {
+    const set = Array.from({ length: 200 }, (_, i) => ({
+      probability: 1 - i / 201,
+      labelValue: i < 10 ? 2 : i < 40 ? 1 : 0,
+    }));
+    const curve = precisionCurve(set);
+    const top5 = curve.find((p) => p.alerts === 10)!;
+    expect(top5.winRatePct).toBe(100);
+    expect(top5.goalRatePct).toBe(100);
+    const top20 = curve.find((p) => p.alerts === 40)!;
+    expect(top20.winRatePct).toBe(100);
+    expect(top20.goalRatePct).toBe(25);
   });
 });

@@ -52,6 +52,7 @@ function handParams(threshold: number): TrainedCuratorParams {
 const promoteVerdict = (promote: boolean): WalkForwardResult => ({
   folds: [],
   verdict: { promote, reason: promote ? "test-promote" : "test-hold" },
+  outOfSample: [],
 });
 
 /**

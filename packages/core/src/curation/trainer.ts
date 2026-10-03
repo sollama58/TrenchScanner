@@ -1,5 +1,6 @@
 import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, scoredFromFeatures } from "./features.js";
 import { curationRankScore, evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator.js";
+import { GOAL_MULTIPLE } from "./labels.js";
 
 /**
  * The self-learning half of Curated Alerts: a weighted logistic regression trained on the
@@ -238,6 +239,108 @@ export function calibrateThreshold(
   return Math.max(byRate, floor);
 }
 
+/** One out-of-sample call: what a model trained strictly before this row predicted for it. */
+export interface ScoredOutcome {
+  probability: number;
+  labelValue: number;
+}
+
+/**
+ * The hit-rate targets the feed is held to: of the alerts sent, the share that doubled (win) and
+ * the share that reached GOAL_MULTIPLE (goal) within the win window - both as fractions (0.75 =
+ * 75%). minSupport is how many alerts a cutoff must have produced in the evidence before its hit
+ * rate counts as a measurement rather than a lucky streak.
+ */
+export interface PrecisionTargets {
+  winRate: number;
+  goalRate: number;
+  minSupport: number;
+}
+
+/** labelValue is log2 of the peak multiple for clean wins, so the goal is labelValue >= log2(4). */
+const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
+
+export interface PrecisionCalibration {
+  /** The lowest probability whose calls met BOTH targets, or null when no cutoff did. */
+  threshold: number | null;
+  /** Alerts the chosen cutoff (or, when unreachable, the best-scoring one) produced. */
+  support: number;
+  winRatePct: number | null;
+  goalRatePct: number | null;
+}
+
+/**
+ * Picks the emission threshold by HIT RATE rather than pace: walking down the calls from most to
+ * least confident, the lowest cutoff at which the calls above it still met both targets on at
+ * least minSupport alerts. "Lowest" because every alert that still meets the bar is one more
+ * tradeable call. Null when no cutoff meets the bar - the honest answer is then to send nothing
+ * rather than to send whatever is least bad.
+ *
+ * Fed OUT-OF-SAMPLE predictions (walk-forward test rows scored by a model that never saw them):
+ * an in-sample hit rate is what a model believes about data it memorized, and it reliably
+ * overstates the rate the feed will actually achieve.
+ */
+export function calibrateThresholdForPrecision(
+  calls: ScoredOutcome[],
+  targets: PrecisionTargets,
+): PrecisionCalibration {
+  const sorted = [...calls].sort((a, b) => b.probability - a.probability);
+  let wins = 0;
+  let goals = 0;
+  let chosen: PrecisionCalibration | null = null;
+  let best: PrecisionCalibration = { threshold: null, support: 0, winRatePct: null, goalRatePct: null };
+  for (let i = 0; i < sorted.length; i++) {
+    const call = sorted[i]!;
+    if (call.labelValue > 0) wins += 1;
+    if (call.labelValue >= GOAL_LABEL) goals += 1;
+    // Only judge at a boundary between distinct probabilities - a cutoff can't split a tie.
+    const next = sorted[i + 1];
+    if (next !== undefined && next.probability === call.probability) continue;
+    const n = i + 1;
+    if (n < targets.minSupport) continue;
+    const winRate = wins / n;
+    const goalRate = goals / n;
+    const point = { support: n, winRatePct: winRate * 100, goalRatePct: goalRate * 100 };
+    if (winRate >= targets.winRate && goalRate >= targets.goalRate) {
+      chosen = { threshold: call.probability, ...point };
+    } else if (chosen === null && (best.winRatePct === null || winRate * 100 > best.winRatePct)) {
+      best = { threshold: null, ...point };
+    }
+  }
+  return chosen ?? best;
+}
+
+/** One point on the hit-rate curve: what sending everything at or above `minProbability` earned. */
+export interface PrecisionCurvePoint {
+  minProbability: number;
+  alerts: number;
+  winRatePct: number;
+  goalRatePct: number;
+}
+
+/**
+ * The trade-off the targets sit on, as a short table: for the top 1%, 2%, 5%, 10%, 20% and 50% of
+ * calls by confidence, how often they doubled and how often they reached the goal. Stored with
+ * every trained model so "how close is the feed to 75%, and at what volume" can be read off the
+ * record instead of re-derived.
+ */
+export function precisionCurve(calls: ScoredOutcome[]): PrecisionCurvePoint[] {
+  const sorted = [...calls].sort((a, b) => b.probability - a.probability);
+  const points: PrecisionCurvePoint[] = [];
+  for (const fraction of [0.01, 0.02, 0.05, 0.1, 0.2, 0.5]) {
+    const n = Math.round(sorted.length * fraction);
+    if (n < 1) continue;
+    const top = sorted.slice(0, n);
+    points.push({
+      minProbability: top[n - 1]!.probability,
+      alerts: n,
+      winRatePct: (top.filter((c) => c.labelValue > 0).length / n) * 100,
+      goalRatePct: (top.filter((c) => c.labelValue >= GOAL_LABEL).length / n) * 100,
+    });
+  }
+  return points;
+}
+
 /**
  * The signals that pushed THIS candidate over the model's line, strongest first - the model-side
  * equivalent of the heuristic's reasons, from the same inspectable weights that made the
@@ -270,6 +373,8 @@ export interface FoldSide {
   perHour: number;
   /** % of emissions that were clean wins; null when nothing was emitted. */
   precisionPct: number | null;
+  /** % of emissions that reached the 4x goal; null when nothing was emitted. */
+  goalPrecisionPct: number | null;
   /** Mean labelValue (doublings) per emission; null when nothing was emitted. */
   avgLabel: number | null;
 }
@@ -294,6 +399,12 @@ export interface PromotionVerdict {
 export interface WalkForwardResult {
   folds: EvalFold[];
   verdict: PromotionVerdict;
+  /**
+   * Every emittable test row across the folds, scored by the fold model that never saw it - the
+   * evidence calibrateThresholdForPrecision picks the deployable cutoff from. Not stored with the
+   * model (it is one entry per row); summarize it first.
+   */
+  outOfSample: ScoredOutcome[];
 }
 
 export interface WalkForwardOptions {
@@ -324,10 +435,12 @@ export interface WalkForwardOptions {
 function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
   const emitted = emittedRows.length;
   const wins = emittedRows.filter((r) => r.labelValue > 0).length;
+  const goals = emittedRows.filter((r) => r.labelValue >= GOAL_LABEL).length;
   return {
     emitted,
     perHour: emitted / spanHours,
     precisionPct: emitted > 0 ? (wins / emitted) * 100 : null,
+    goalPrecisionPct: emitted > 0 ? (goals / emitted) * 100 : null,
     avgLabel: emitted > 0 ? emittedRows.reduce((s, r) => s + r.labelValue, 0) / emitted : null,
   };
 }
@@ -349,6 +462,7 @@ export async function walkForwardEvaluate(
 
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
   const folds: EvalFold[] = [];
+  const outOfSample: ScoredOutcome[] = [];
 
   if (sorted.length >= minTrainRows + minTestRows) {
     // Test folds tile the newest 50% of history; the oldest 50% is the first fold's training
@@ -400,11 +514,14 @@ export async function walkForwardEvaluate(
           .slice(0, emissionBudget)
           .map((x) => x.row);
 
-      const modelEmitted = takeBest(
-        testEmittable
-          .map((row) => ({ row, confidence: scoreCandidateWithModel(params, row.features) }))
-          .filter(({ confidence }) => confidence >= threshold),
-      );
+      const modelScored = testEmittable.map((row) => ({
+        row,
+        confidence: scoreCandidateWithModel(params, row.features),
+      }));
+      for (const { row, confidence } of modelScored) {
+        outOfSample.push({ probability: confidence, labelValue: row.labelValue });
+      }
+      const modelEmitted = takeBest(modelScored.filter(({ confidence }) => confidence >= threshold));
       const heuristicEmitted = takeBest(
         testEmittable.flatMap((row) => {
           const scored = scoredFromFeatures(row.features, row.anchorPriceUsd, row.anchorMcapUsd);
@@ -435,6 +552,7 @@ export async function walkForwardEvaluate(
   return {
     folds,
     verdict: decidePromotion(folds, rows.length, minRowsToPromote, opts.minEmissionsToWin),
+    outOfSample,
   };
 }
 
@@ -450,12 +568,12 @@ const MIN_FOLD_EMISSIONS_TO_WIN = 5;
  * The promotion rule, spelled out so the learning panel can show WHY:
  *  - refuse outright below the training-rows floor or with fewer than 2 scoreable folds;
  *  - a fold is scoreable when at least one side emitted;
- *  - the model wins a fold by a higher avgLabel (expected doublings per alert); when the
- *    heuristic emitted too few to judge (under minEmissionsToWin), the model instead has to beat
- *    BLIND CHANCE convincingly - an avgLabel over twice the fold's per-row mean label, i.e. its
- *    picks earn at least double what random emission would have - and it loses outright when its
- *    own emissions are under that same floor (an average over a handful of picks is luck, not a
- *    record);
+ *  - the model wins a fold by a higher HIT RATE (share of its alerts that doubled - the number
+ *    the feed is held to), with avgLabel (expected doublings per alert) breaking an exact tie;
+ *    when the heuristic emitted too few to judge (under minEmissionsToWin), the model instead
+ *    has to beat BLIND CHANCE convincingly - a hit rate over twice the fold's base win rate -
+ *    and it loses outright when its own emissions are under that same floor (a rate over a
+ *    handful of picks is luck, not a record);
  *  - promote when the model wins a strict majority of scoreable folds INCLUDING the newest one.
  *    The newest-fold requirement is the recency guard: a model that used to be good and just
  *    stopped being good must not take over on its record.
@@ -480,7 +598,10 @@ export function decidePromotion(
 
   const modelWon = (f: EvalFold): boolean => {
     if (f.model.emitted < minEmissionsToWin) return false;
-    if (f.heuristic.emitted < minEmissionsToWin) return (f.model.avgLabel ?? 0) > 2 * f.meanLabelPerRow;
+    const modelRate = f.model.precisionPct ?? 0;
+    if (f.heuristic.emitted < minEmissionsToWin) return modelRate > 2 * f.baseWinRatePct;
+    const heuristicRate = f.heuristic.precisionPct ?? 0;
+    if (modelRate !== heuristicRate) return modelRate > heuristicRate;
     return (f.model.avgLabel ?? 0) > (f.heuristic.avgLabel ?? 0);
   };
 
