@@ -2,9 +2,13 @@ import {
   prisma,
   createLogger,
   refreshAndFilterToBand,
+  scanBand,
   buildScoredToken,
   runRugScreen,
   passesLocalRugScreen,
+  passesEventPreGate,
+  walletChecksKnown,
+  deriveGraduated,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
   type Env,
@@ -30,6 +34,7 @@ import { recordMatchPeaks } from "./matchPeaks.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { repairOutcomeBookkeeping } from "./outcomeTrackingJob.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
+import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
   collectCuratedContender,
   emitCuratedCycle,
@@ -55,6 +60,8 @@ export interface ScanDeps {
   dexScreener: DexScreenerClient;
   rugCheck: RugCheckClient;
   helius: HeliusClient;
+  /** The live PumpPortal launch/graduation feed, drained once per cycle. Optional: off when unset. */
+  stream?: { drain(): StreamEvent[] };
 }
 
 export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Promise<void> {
@@ -63,25 +70,66 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
 
   // 1. Grow the watchlist from every discovery source, regardless of a mint's current mcap - see
   // PumpFunClient.discoverNewMints for why filtering at discovery time doesn't work. This is what
-  // lets us catch a token as it later climbs into the target band. Two independent sources
-  // (Pump.fun's newest-mints feed, DexScreener's trending/boosted-tokens feed): each is wrapped
-  // separately so one source's outage doesn't also take down the other's contribution - Pump.fun
-  // in particular is an unofficial, undocumented API that could change or block us at any time.
-  const discovered: WatchlistCandidate[] = [];
-  try {
-    const pumpFunMints = await deps.pumpFun.discoverNewMints();
-    discovered.push(...pumpFunMints.map(toWatchlistCandidate));
-  } catch (err) {
-    logger.error("pump.fun discovery failed", { error: String(err) });
-  }
-  try {
-    const trending = await deps.dexScreener.discoverTrendingMints();
-    discovered.push(...trending);
-  } catch (err) {
-    logger.error("dexscreener trending discovery failed", { error: String(err) });
-  }
+  // lets us catch a token as it later climbs into the target band. The sources run concurrently
+  // and are each failure-isolated, so one source's outage never takes down another's
+  // contribution - Pump.fun in particular is an unofficial, undocumented API that could change or
+  // block us at any time:
+  //  - Pump.fun's newest-mints feed and the live PumpPortal stream: brand-new launches.
+  //  - DexScreener's profile/boost feeds: tokens launched off Pump.fun, plus who paid for a boost.
+  //  - Pump.fun's recently-traded list and its king of the hill: tokens of ANY age that are
+  //    moving right now. Mostly mints the watchlist already knows - which is the point: they are
+  //    revived (see reviveMovingMints) so a slow climber that fell off the launch-ordered list
+  //    is back in front of the scan the moment it starts trading again.
+  const [newMints, trending, active, koth] = await Promise.all([
+    deps.pumpFun.discoverNewMints().catch((err) => {
+      logger.error("pump.fun discovery failed", { error: String(err) });
+      return [];
+    }),
+    deps.dexScreener.discoverTrendingMints().catch((err) => {
+      logger.error("dexscreener trending discovery failed", { error: String(err) });
+      return [];
+    }),
+    deps.pumpFun.discoverActiveMints().catch((err) => {
+      logger.warn("pump.fun active-mints discovery failed", { error: String(err) });
+      return [];
+    }),
+    deps.pumpFun.kingOfTheHill().catch(() => null),
+  ]);
+  const streamed = deps.stream?.drain() ?? [];
+
+  const discovered: WatchlistCandidate[] = [
+    ...newMints.map((c) => toWatchlistCandidate(c, "pumpfun")),
+    ...streamed
+      .filter((e) => e.kind === "create")
+      .map((e) => ({
+        mintAddress: e.mintAddress,
+        symbol: e.symbol,
+        name: e.name,
+        discoverySource: "pumpportal",
+      })),
+    ...trending,
+    ...active.map((c) => toWatchlistCandidate(c, "pumpfun-active")),
+    ...(koth ? [toWatchlistCandidate(koth, "pumpfun-koth")] : []),
+  ];
   await addNewMintsToWatchlist(discovered);
-  logger.info("discovery complete", { newlySeen: discovered.length });
+
+  // Moving mints jump the watchlist queue: Pump.fun's own market cap for the recently-traded and
+  // king-of-the-hill coins, and the near-band floor for a graduation (a mint that just bonded is
+  // near the band by construction; the refresh below replaces the placeholder with the real cap).
+  const moving = [
+    ...[...active, ...(koth ? [koth] : [])].flatMap((c) =>
+      c.marketCapUsd !== undefined ? [{ mintAddress: c.mintAddress, marketCapUsd: c.marketCapUsd }] : [],
+    ),
+    ...streamed
+      .filter((e) => e.kind === "migrate")
+      .map((e) => ({ mintAddress: e.mintAddress, marketCapUsd: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD })),
+  ];
+  const revived = await reviveMovingMints(moving, env);
+  logger.info("discovery complete", {
+    newlySeen: discovered.length,
+    streamed: streamed.length,
+    revived,
+  });
 
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
   // sitting in (or near) the target band.
@@ -102,13 +150,20 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     candidates = refreshed.inBand;
     // The stamp the liveness-prioritized selection above runs on. Never worth failing a cycle
     // over - a missed stamp just costs a mint one cycle of priority.
-    if (refreshed.liveMints.length > 0) {
-      await prisma.token
-        .updateMany({
-          where: { mintAddress: { in: refreshed.liveMints } },
-          data: { lastLiveAt: new Date() },
-        })
-        .catch((err) => logger.warn("failed to stamp lastLiveAt", { error: String(err) }));
+    // Stamped with the market cap each mint was seen at, which is what the next selection ranks
+    // on. One statement for the whole batch - the values differ per row, so updateMany can't.
+    if (refreshed.liveMarketCaps.length > 0) {
+      const mints = refreshed.liveMarketCaps.map((m) => m.mintAddress);
+      const mcaps = refreshed.liveMarketCaps.map((m) =>
+        Number.isFinite(m.marketCapUsd) ? m.marketCapUsd : null,
+      );
+      await prisma.$executeRaw`
+        UPDATE "Token" AS t
+        SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
+        FROM unnest(${mints}::text[], ${mcaps}::float8[]) AS v(mint, mcap)
+        WHERE t."mintAddress" = v.mint`.catch((err) =>
+        logger.warn("failed to stamp lastLiveAt", { error: String(err) }),
+      );
     }
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
@@ -183,7 +238,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   // lookup. On a Pump.fun-heavy watchlist that is most of them, and since Mayhem caches
   // permanently, first-sight lookups ARE the recurring cost - the watchlist turns over daily.
   const baseProfileByMint = new Map<string, OnChainProfile | null>(
-    candidates.map((c) => [c.mintAddress, buildOnChainProfile(c.mintAddress, rugProfiles, mintAuthorities)]),
+    candidates.map((c) => [c.mintAddress, buildOnChainProfile(c, rugProfiles, mintAuthorities)]),
   );
   const mayhemCandidates = candidates
     .filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress)))
@@ -214,17 +269,21 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   // Passed as one group per candidate, highest 24h churn first, because the freshness figure is
   // all-or-nothing: nine of a candidate's ten wallets resolved is worth exactly as much as none,
   // so the budget is spent completing whole candidates rather than smeared across many that all
-  // end up null anyway (see resolveEarliestActivity). Churn is the cheap stand-in for "likely to
-  // clear the curator's gate" available at this point - scoring hasn't run yet.
+  // end up null anyway (see resolveEarliestActivity). Candidates that already pass the curators'
+  // "looks ready" pre-gate go first: they are the ones about to be decided on, and with
+  // CURATED_REQUIRE_WALLET_CHECKS on they can't be until both checks are known. Churn orders
+  // the rest - the cheap stand-in for "likely to get there" available before scoring runs.
+  const curatedBand = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
   const walletGroups = candidates
     .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
     .map((c) => ({
       mintAddress: c.mintAddress,
       addresses: onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? [],
+      contender: passesEventPreGate(c, curatedBand),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
     .filter((g) => g.addresses.length > 0)
-    .sort((a, b) => b.churn - a.churn)
+    .sort((a, b) => Number(b.contender) - Number(a.contender) || b.churn - a.churn)
     // The mint is carried through, not dropped: the holdings pass has to know which of a wallet's
     // tokens IS this launch so it can take it back out - see computeEmptyPct.
     .map((g) => ({ mintAddress: g.mintAddress, addresses: g.addresses }));
@@ -364,11 +423,35 @@ export async function selectWatchlist(
     orderBy: { firstSeenAt: "desc" },
     take: probationReserve,
   });
-  const alive = await prisma.token.findMany({
-    where: { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } },
+  // The alive set in two tiers. Near-band first: mints last seen between
+  // WATCHLIST_NEAR_BAND_MIN_MCAP_USD and the padded band ceiling are the ones that can become a
+  // match or a curated pick, so they keep their slot for the whole TTL whatever their age. The
+  // launch-level rest fill what's left newest-first, which is how a mint gets its first chance
+  // to climb (and how one whose market cap was never recorded gets stamped).
+  const aliveSlots = Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length);
+  const bandCeiling = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
+  const aliveWhere = { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } };
+  const nearBand = await prisma.token.findMany({
+    where: { ...aliveWhere, lastMcapUsd: { gte: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD, lte: bandCeiling } },
     orderBy: { firstSeenAt: "desc" },
-    take: Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length),
+    take: aliveSlots,
   });
+  const rest =
+    aliveSlots > nearBand.length
+      ? await prisma.token.findMany({
+          where: {
+            ...aliveWhere,
+            OR: [
+              { lastMcapUsd: null },
+              { lastMcapUsd: { lt: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD } },
+              { lastMcapUsd: { gt: bandCeiling } },
+            ],
+          },
+          orderBy: { firstSeenAt: "desc" },
+          take: aliveSlots - nearBand.length,
+        })
+      : [];
+  const alive = [...nearBand, ...rest];
   return { tracked: [...alive, ...probation], alive: alive.length };
 }
 
@@ -406,7 +489,7 @@ async function rollPeaksForward(env: Env): Promise<void> {
   }
 }
 
-function toWatchlistCandidate(coin: DiscoveredCoin): WatchlistCandidate {
+function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): WatchlistCandidate {
   return {
     mintAddress: coin.mintAddress,
     symbol: coin.symbol,
@@ -416,7 +499,40 @@ function toWatchlistCandidate(coin: DiscoveredCoin): WatchlistCandidate {
     hasTwitter: coin.hasTwitter,
     hasTelegram: coin.hasTelegram,
     hasWebsite: coin.hasWebsite,
+    // Kept even when empty: on a Pump.fun launch an empty description is a known "none", which
+    // the hasDescription feature distinguishes from "this source never had one".
+    description: coin.description ?? "",
+    discoverySource,
   };
+}
+
+/**
+ * Puts mints that are moving right now back at the front of the watchlist, whatever their age:
+ * stamps lastLiveAt (so they count as alive) and lastMcapUsd (what the near-band tier of
+ * selectWatchlist ranks on) for those already known. Only mints at or above the near-band floor
+ * are worth a slot - below it they'd be stamped into the launch-level tier and change nothing.
+ * Mints not yet in the table are left to addNewMintsToWatchlist. Returns how many rows changed.
+ */
+export async function reviveMovingMints(
+  moving: { mintAddress: string; marketCapUsd: number }[],
+  env: Env,
+): Promise<number> {
+  const byMint = new Map<string, number>();
+  for (const m of moving) {
+    if (!Number.isFinite(m.marketCapUsd) || m.marketCapUsd < env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD) continue;
+    byMint.set(m.mintAddress, Math.max(byMint.get(m.mintAddress) ?? 0, m.marketCapUsd));
+  }
+  if (byMint.size === 0) return 0;
+  const mints = [...byMint.keys()];
+  const mcaps = [...byMint.values()];
+  return prisma.$executeRaw`
+    UPDATE "Token" AS t
+    SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
+    FROM unnest(${mints}::text[], ${mcaps}::float8[]) AS v(mint, mcap)
+    WHERE t."mintAddress" = v.mint`.catch((err) => {
+    logger.warn("failed to revive moving mints", { error: String(err) });
+    return 0;
+  });
 }
 
 /**
@@ -429,9 +545,15 @@ function toWatchlistCandidate(coin: DiscoveredCoin): WatchlistCandidate {
  * trusted inputs in the system, and everything downstream (RugCheck/Helius/DexScreener lookups,
  * Token.mintAddress) assumes it's dealing with a real address from here on.
  */
-async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): Promise<void> {
+export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): Promise<void> {
   if (discovered.length === 0) return;
-  const uniqueByMint = new Map(discovered.map((c) => [c.mintAddress, c]));
+  // The first source to report a mint is the one recorded (sources are listed newest-launch
+  // first in runScanCycle); a boost flag from any of them sticks.
+  const uniqueByMint = new Map<string, WatchlistCandidate>();
+  for (const c of discovered) {
+    const first = uniqueByMint.get(c.mintAddress);
+    uniqueByMint.set(c.mintAddress, first ? { ...first, boosted: first.boosted || c.boosted } : c);
+  }
 
   const valid: WatchlistCandidate[] = [];
   let dropped = 0;
@@ -457,9 +579,21 @@ async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): Promise
       hasTwitter: coin.hasTwitter ?? false,
       hasTelegram: coin.hasTelegram ?? false,
       hasWebsite: coin.hasWebsite ?? false,
+      description: coin.description?.slice(0, 2_000),
+      discoverySource: coin.discoverySource,
+      dexBoosted: coin.boosted ?? false,
     })),
     skipDuplicates: true,
   });
+
+  // Sticky boost flag for mints already on the table - a paid boost bought after discovery is
+  // still a boost. Settles to zero rows once every boosted mint is marked.
+  const boosted = valid.filter((c) => c.boosted).map((c) => c.mintAddress);
+  if (boosted.length > 0) {
+    await prisma.token
+      .updateMany({ where: { mintAddress: { in: boosted }, dexBoosted: false }, data: { dexBoosted: true } })
+      .catch((err) => logger.warn("failed to mark boosted mints", { error: String(err) }));
+  }
 
   // createMany with skipDuplicates leaves existing rows alone, so every token discovered before
   // images existed would keep a null one forever. Backfilling here costs nothing - the URL is
@@ -517,10 +651,38 @@ async function processCandidate(
   // bonding curve); fall back to when we first added this mint to our watchlist.
   const createdAt = candidate.pairCreatedAt ?? watchlistFirstSeenAt ?? existingToken?.firstSeenAt;
 
-  const scored = buildScoredToken(candidate, onChain, {
-    createdAt,
-    previousHolderCount: growthBaseline?.holderCount ?? undefined,
-  });
+  // The short-window sibling of the growth baseline above: the newest snapshot at least 10
+  // minutes old, so a token younger than HOLDER_GROWTH_WINDOW_MINUTES still has a growth figure
+  // (see EnrichedToken.holderGrowth10mPct).
+  const growthBaseline10m = existingToken
+    ? await prisma.tokenSnapshot.findFirst({
+        where: { tokenId: existingToken.id, takenAt: { lte: new Date(Date.now() - 10 * 60_000) } },
+        orderBy: { takenAt: "desc" },
+        select: { holderCount: true },
+      })
+    : null;
+
+  // First sighting inside the curated band, stamped once and kept - the anchor for the
+  // minutesSinceFirstInBand feature.
+  const inCuratedBand =
+    candidate.marketCapUsd >= env.MCAP_FILTER_MIN && candidate.marketCapUsd <= env.MCAP_FILTER_MAX;
+  const firstInBandAt = existingToken?.firstInBandAt ?? (inCuratedBand ? new Date() : undefined);
+
+  const scored = buildScoredToken(
+    {
+      ...candidate,
+      // Re-scans come from DexScreener, which carries neither of these; discovery stored them.
+      description: candidate.description ?? existingToken?.description ?? undefined,
+      dexBoosted: existingToken ? existingToken.dexBoosted : undefined,
+    },
+    onChain,
+    {
+      createdAt,
+      previousHolderCount: growthBaseline?.holderCount ?? undefined,
+      previousHolderCount10m: growthBaseline10m?.holderCount ?? undefined,
+      firstInBandAt,
+    },
+  );
 
   const token = await prisma.token.upsert({
     where: { mintAddress: candidate.mintAddress },
@@ -533,6 +695,7 @@ async function processCandidate(
       hasTwitter: candidate.hasTwitter ?? false,
       hasTelegram: candidate.hasTelegram ?? false,
       hasWebsite: candidate.hasWebsite ?? false,
+      firstInBandAt,
       narrativeTags: scored.narrativeTags,
     },
     update: {
@@ -552,6 +715,7 @@ async function processCandidate(
       ...(candidate.hasTwitter ? { hasTwitter: true } : {}),
       ...(candidate.hasTelegram ? { hasTelegram: true } : {}),
       ...(candidate.hasWebsite ? { hasWebsite: true } : {}),
+      ...(firstInBandAt && !existingToken?.firstInBandAt ? { firstInBandAt } : {}),
       narrativeTags: scored.narrativeTags,
     },
   });
@@ -577,12 +741,26 @@ async function processCandidate(
   });
 
   // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample
-  // for why it's every candidate and not just matched ones - then file anything the curators
-  // would emit as a contender for the cycle's governor pass (see emitCuratedCycle). Never worth
-  // failing the candidate over.
+  // for why it's every candidate and not just matched ones. Then, if this is the token's first
+  // "looks ready" moment in its event window, bank that too and let the curators decide on it,
+  // filing anything they'd emit as a contender for the cycle's governor pass (see
+  // emitCuratedCycle). Curators decide ONLY at event moments: those are the rows the trainer
+  // calibrates the cutoff on, so a live pick is always drawn from the population its hit rate was
+  // measured on - never from the best-looking minute of an hour the model only saw one random
+  // minute of. Never worth failing the candidate over.
   try {
-    const sample = await recordCandidateSample(token.id, scored, env);
-    await collectCuratedContender(curatedCycle, token, scored, sample, env, snapshot.id);
+    await recordCandidateSample(token.id, scored, env);
+    const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
+    // An event waits for the sniper checks when they're required: deciding without them would
+    // skip the curator's wallet caps, and an event spent now can't be reopened until the
+    // spacing window passes. The contender-first wallet ordering above resolves them quickly.
+    const walletReady = !env.CURATED_REQUIRE_WALLET_CHECKS || walletChecksKnown(scored);
+    if (walletReady && passesEventPreGate(scored, band)) {
+      const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
+      if (event?.created) {
+        await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id);
+      }
+    }
   } catch (err) {
     logger.warn("failed to record candidate outcome sample / curated contender", {
       mint: candidate.mintAddress,
@@ -595,20 +773,27 @@ async function processCandidate(
 
 /**
  * Prefers RugCheck's full risk profile. Falls back to a bare mint/freeze authority check when
- * RugCheck hasn't indexed the mint yet - this still won't pass the rug screen (lpBurned stays
- * unverified, which fails closed), but lets us record a more informative snapshot instead of
- * nothing at all. Note this fallback profile has no top10HolderAddresses, so withWalletSignals
- * is a no-op for it. A failed authority lookup yields null rather than a fabricated profile -
- * "we couldn't check" must not read as "nothing is active".
+ * RugCheck hasn't indexed the mint yet. A failed authority lookup yields null rather than a
+ * fabricated profile - "we couldn't check" must not read as "nothing is active".
+ *
+ * What the fallback says about liquidity depends on the venue. A mint still on its Pump.fun
+ * bonding curve (DexScreener dexId "pumpfun") has no pool to pull: the curve is a program
+ * account nobody holds LP for, so with authorities verified on chain it can pass the screen
+ * without waiting for RugCheck - which matters because that wait lands exactly in the first
+ * minutes of a launch. A graduated mint's pool is a real rug vector, so its LP stays unverified
+ * (lpBurned: false, failing closed) until RugCheck reports it. The fallback has no
+ * top10HolderAddresses either, so the wallet checks can't run on it: user filters can match it
+ * early, while curated calls (CURATED_REQUIRE_WALLET_CHECKS) still wait for the RugCheck report.
  */
-function buildOnChainProfile(
-  mintAddress: string,
+export function buildOnChainProfile(
+  candidate: Pick<CandidateToken, "mintAddress" | "dexId">,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
 ): OnChainProfile | null {
   // isMayhemMode is deliberately left unset here and filled in later for the candidates that
   // earn a lookup (see the two-pass assembly in runScanCycle). Unset means unverified, which the
   // rug screen rejects - so a candidate that never gets checked is never accidentally admitted.
+  const { mintAddress } = candidate;
   const rugProfile = rugProfiles.get(mintAddress);
   if (rugProfile) return rugProfile;
 
@@ -619,7 +804,7 @@ function buildOnChainProfile(
     mintAddress,
     mintAuthorityActive: authorities.mintAuthorityActive,
     freezeAuthorityActive: authorities.freezeAuthorityActive,
-    lpBurned: false,
+    lpBurned: deriveGraduated(candidate.dexId) === false,
   };
 }
 

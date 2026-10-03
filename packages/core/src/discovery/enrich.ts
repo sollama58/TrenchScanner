@@ -8,6 +8,10 @@ export interface EnrichOptions {
   createdAt?: Date;
   /** Holder count from the previous snapshot of this token, if any, used to derive growth %. */
   previousHolderCount?: number;
+  /** Holder count from the newest snapshot at least 10 minutes old - see holderGrowth10mPct. */
+  previousHolderCount10m?: number;
+  /** When the scan first saw this token inside the curated band (Token.firstInBandAt). */
+  firstInBandAt?: Date;
 }
 
 /** Combines a market-data candidate with its on-chain profile into a fully derived, scorable token. */
@@ -31,10 +35,15 @@ export function enrichToken(
       ? candidate.volume24hUsd / candidate.marketCapUsd
       : undefined;
 
-  const holderGrowthPct =
-    options.previousHolderCount && options.previousHolderCount > 0 && onChain?.holderCount !== undefined
-      ? ((onChain.holderCount - options.previousHolderCount) / options.previousHolderCount) * 100
+  const growthFrom = (previous: number | undefined): number | undefined =>
+    previous && previous > 0 && onChain?.holderCount !== undefined
+      ? ((onChain.holderCount - previous) / previous) * 100
       : undefined;
+  const holderGrowthPct = growthFrom(options.previousHolderCount);
+  const holderGrowth10mPct = growthFrom(options.previousHolderCount10m);
+  const minutesSinceFirstInBand = options.firstInBandAt
+    ? Math.max(0, Math.round(((now.getTime() - options.firstInBandAt.getTime()) / 60_000) * 100) / 100)
+    : undefined;
 
   const narrativeTags = extractNarrativeTags({
     name: candidate.name,
@@ -48,6 +57,8 @@ export function enrichToken(
     ageMinutes,
     volumeToMcapRatio,
     holderGrowthPct,
+    holderGrowth10mPct,
+    minutesSinceFirstInBand,
     narrativeTags,
     graduated: deriveGraduated(candidate.dexId),
   };

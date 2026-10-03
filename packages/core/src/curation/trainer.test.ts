@@ -3,8 +3,11 @@ import {
   trainCurator,
   scoreCandidateWithModel,
   calibrateThreshold,
+  calibrateThresholdForPrecision,
+  precisionCurve,
   walkForwardEvaluate,
   decidePromotion,
+  transformFeature,
   type TrainingRow,
   type EvalFold,
 } from "./trainer.js";
@@ -77,7 +80,10 @@ describe("trainCurator", () => {
       graduated: 0,
     });
     expect(hot).toBeGreaterThan(cold + 0.3);
-    expect(hot).toBeGreaterThan(0.5);
+    // The hot band's true win rate is 60%. Rows are no longer weighted by how far they ran, so
+    // the model's probability is an honest (if smoothed - one linear slope across a step) read
+    // of that rate rather than one inflated toward the winners.
+    expect(hot).toBeGreaterThan(0.3);
     expect(cold).toBeLessThan(0.2);
   });
 
@@ -220,6 +226,32 @@ describe("walkForwardEvaluate", () => {
     for (const fold of included.folds) expect(fold.model.emitted).toBeGreaterThan(0);
   });
 
+  it("grades and calibrates only on event rows when asked, while still training on hourly ones", async () => {
+    // Every third row is an event moment; the rest are hourly background samples.
+    const rows = syntheticRows(3_000).map((r, i) => ({ ...r, sampleKind: i % 3 === 0 ? "event" : "hourly" }));
+    const result = await walkForwardEvaluate(rows, {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1_500,
+      decisionRowsOnly: true,
+    });
+    const eventTestRows = rows.slice(1_500).filter((r) => r.sampleKind === "event").length;
+    // Out-of-sample calls (what sets the cutoff) are event rows only.
+    expect(result.outOfSample.length).toBe(eventTestRows);
+    expect(result.folds.length).toBeGreaterThanOrEqual(2);
+
+    // With no event rows at all there is nothing to judge on: no emissions, no promotion.
+    const hourlyOnly = rows.map((r) => ({ ...r, sampleKind: "hourly" }));
+    const silent = await walkForwardEvaluate(hourlyOnly, {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1_500,
+      decisionRowsOnly: true,
+    });
+    expect(silent.outOfSample).toHaveLength(0);
+    expect(silent.verdict.promote).toBe(false);
+  });
+
   it("caps each fold's emissions at the governed budget, keeping only the strongest picks", async () => {
     // Production runs the governor: at most targetPerHour x span picks make the feed, best
     // conviction first. The exam must play the same policy - an uncapped exam grades a firehose.
@@ -260,24 +292,45 @@ describe("decidePromotion", () => {
     testRows: 200,
     baseWinRatePct: 5,
     meanLabelPerRow: 0.1,
-    model: { emitted: 10, perHour: 0.5, precisionPct: 30, avgLabel: 0.5, ...model },
-    heuristic: { emitted: 10, perHour: 0.5, precisionPct: 20, avgLabel: 0.3, ...heuristic },
+    model: { emitted: 10, perHour: 0.5, precisionPct: 30, goalPrecisionPct: 10, avgLabel: 0.5, ...model },
+    heuristic: {
+      emitted: 10,
+      perHour: 0.5,
+      precisionPct: 20,
+      goalPrecisionPct: 5,
+      avgLabel: 0.3,
+      ...heuristic,
+    },
   });
 
-  it("promotes on a majority including the newest fold", () => {
+  it("promotes on a majority of hit-rate wins including the newest fold", () => {
     const folds = [
-      fold({ avgLabel: 0.6 }, { avgLabel: 0.3 }),
-      fold({ avgLabel: 0.2 }, { avgLabel: 0.4 }),
-      fold({ avgLabel: 0.7 }, { avgLabel: 0.3 }),
+      fold({ precisionPct: 60 }, { precisionPct: 30 }),
+      fold({ precisionPct: 20 }, { precisionPct: 40 }),
+      fold({ precisionPct: 70 }, { precisionPct: 30 }),
     ];
     expect(decidePromotion(folds, 5_000, 1_500).promote).toBe(true);
   });
 
+  it("judges on hit rate, not on average doublings", () => {
+    // Bigger average runs, but fewer of its alerts doubled - the feed is held to the hit rate.
+    const folds = [
+      fold({ precisionPct: 30, avgLabel: 1.5 }, { precisionPct: 50, avgLabel: 0.6 }),
+      fold({ precisionPct: 30, avgLabel: 1.5 }, { precisionPct: 50, avgLabel: 0.6 }),
+    ];
+    expect(decidePromotion(folds, 5_000, 1_500).promote).toBe(false);
+  });
+
+  it("breaks an exact hit-rate tie on average doublings", () => {
+    const tie = fold({ precisionPct: 40, avgLabel: 0.9 }, { precisionPct: 40, avgLabel: 0.5 });
+    expect(decidePromotion([tie, tie], 5_000, 1_500).promote).toBe(true);
+  });
+
   it("refuses a model that lost the newest fold, whatever its record", () => {
     const folds = [
-      fold({ avgLabel: 0.9 }, { avgLabel: 0.1 }),
-      fold({ avgLabel: 0.9 }, { avgLabel: 0.1 }),
-      fold({ avgLabel: 0.1 }, { avgLabel: 0.9 }),
+      fold({ precisionPct: 90 }, { precisionPct: 10 }),
+      fold({ precisionPct: 90 }, { precisionPct: 10 }),
+      fold({ precisionPct: 10 }, { precisionPct: 90 }),
     ];
     const verdict = decidePromotion(folds, 5_000, 1_500);
     expect(verdict.promote).toBe(false);
@@ -288,32 +341,194 @@ describe("decidePromotion", () => {
     expect(decidePromotion([fold({}, {}), fold({}, {})], 800, 1_500).promote).toBe(false);
   });
 
-  it("scores a heuristic-silent fold against blind chance, in doublings", () => {
-    // meanLabelPerRow is 0.1: random emission earns 0.1 doublings per alert, so the bar is 0.2.
-    const silent = fold({ avgLabel: 0.3 }, { emitted: 0, precisionPct: null, avgLabel: null });
+  it("scores a heuristic-silent fold against blind chance", () => {
+    // baseWinRatePct is 5: random emission doubles 5% of the time, so the bar is 10%.
+    const silent = fold({ precisionPct: 12 }, { emitted: 0, precisionPct: null, avgLabel: null });
     expect(decidePromotion([silent, silent], 5_000, 1_500).promote).toBe(true);
-    const weak = fold({ avgLabel: 0.15 }, { emitted: 0, precisionPct: null, avgLabel: null });
+    const weak = fold({ precisionPct: 8 }, { emitted: 0, precisionPct: null, avgLabel: null });
     expect(decidePromotion([weak, weak], 5_000, 1_500).promote).toBe(false);
   });
 
   it("never promotes a model that emits nothing", () => {
-    const mute = fold({ emitted: 0, precisionPct: null, avgLabel: null }, { emitted: 5, avgLabel: 0.2 });
+    const mute = fold({ emitted: 0, precisionPct: null, avgLabel: null }, { emitted: 5, precisionPct: 20 });
     expect(decidePromotion([mute, mute, mute], 5_000, 1_500).promote).toBe(false);
   });
 
-  it("a handful of lucky picks is not a fold win, however high their average", () => {
-    // Three emissions, one fluke 4x: a stellar avgLabel over a sample too small to mean
-    // anything, against a steady fifty-pick heuristic. Without the emissions floor this "wins"
-    // every fold - including the newest, the promotion rule's whole recency guard.
-    const lucky = fold({ emitted: 3, avgLabel: 1.5 }, { emitted: 50, avgLabel: 0.4 });
+  it("a handful of lucky picks is not a fold win, however high their hit rate", () => {
+    const lucky = fold({ emitted: 3, precisionPct: 100 }, { emitted: 50, precisionPct: 30 });
     expect(decidePromotion([lucky, lucky, lucky], 5_000, 1_500).promote).toBe(false);
   });
 
   it("treats a heuristic under the emissions floor as silent - the bar becomes blind chance", () => {
-    // meanLabelPerRow 0.1: the model must earn over 0.2 per pick, on a real sample of its own.
-    const thinHeuristic = fold({ emitted: 20, avgLabel: 0.3 }, { emitted: 2, avgLabel: 5 });
+    const thinHeuristic = fold({ emitted: 20, precisionPct: 15 }, { emitted: 2, precisionPct: 100 });
     expect(decidePromotion([thinHeuristic, thinHeuristic], 5_000, 1_500).promote).toBe(true);
-    const thinBoth = fold({ emitted: 20, avgLabel: 0.15 }, { emitted: 2, avgLabel: 5 });
+    const thinBoth = fold({ emitted: 20, precisionPct: 8 }, { emitted: 2, precisionPct: 100 });
     expect(decidePromotion([thinBoth, thinBoth], 5_000, 1_500).promote).toBe(false);
+  });
+});
+
+describe("calibrateThresholdForPrecision", () => {
+  /** n calls at descending probabilities; `outcome(i)` gives the i-th (most confident first) label. */
+  const calls = (n: number, outcome: (i: number) => number) =>
+    Array.from({ length: n }, (_, i) => ({ probability: 1 - i / (n + 1), labelValue: outcome(i) }));
+  const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 10 };
+
+  it("picks the lowest cutoff whose calls still meet both targets", () => {
+    // Top 20 calls: all 4x (label 2). The next 80: misses. Including calls 21..26 keeps both
+    // rates at or above target (20/26 = 77% won, 77% hit 4x); the 27th drops below 75%.
+    const set = calls(100, (i) => (i < 20 ? 2 : 0));
+    const result = calibrateThresholdForPrecision(set, targets);
+    expect(result.support).toBe(26);
+    expect(result.threshold).toBeCloseTo(set[25]!.probability);
+    expect(result.winRatePct).toBeGreaterThanOrEqual(75);
+    expect(result.goalRatePct).toBeGreaterThanOrEqual(50);
+  });
+
+  it("holds out for the 4x target too, not just the 2x one", () => {
+    // Every top call doubles but none reaches 4x: the 2x target is met everywhere, the 4x never.
+    const result = calibrateThresholdForPrecision(
+      calls(100, (i) => (i < 50 ? 1 : 0)),
+      targets,
+    );
+    expect(result.threshold).toBeNull();
+    expect(result.winRatePct).toBe(100);
+    expect(result.goalRatePct).toBe(0);
+  });
+
+  it("will not call a target met on fewer alerts than the support floor", () => {
+    // Only the top 5 win - a perfect record, but too thin to trust at a 10-alert floor.
+    const result = calibrateThresholdForPrecision(
+      calls(100, (i) => (i < 5 ? 2 : 0)),
+      targets,
+    );
+    expect(result.threshold).toBeNull();
+  });
+
+  it("never splits a tie in probability", () => {
+    // 20 calls share one probability; half of them win - no cutoff can take only the winners.
+    const tied = Array.from({ length: 20 }, (_, i) => ({ probability: 0.5, labelValue: i % 2 ? 2 : 0 }));
+    const result = calibrateThresholdForPrecision(tied, targets);
+    expect(result.threshold).toBeNull();
+    expect(result.support).toBe(20);
+  });
+});
+
+describe("calibrateThresholdForPrecision with the alert cooldown", () => {
+  const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 10 };
+  const DAY = 24 * HOUR;
+
+  it("counts one hot token once per cooldown, not once per hourly sample", () => {
+    // One token, sampled hourly for a day at high probability, wins every time; ten other tokens
+    // sampled once each, all losers. Without the cooldown the hot token's 24 samples look like
+    // a 24/34 = 71%-accurate cutoff on plenty of support; with it, the feed would have sent the
+    // hot token once and ten losers - nowhere near the bar.
+    const hot = Array.from({ length: 24 }, (_, i) => ({
+      probability: 0.9,
+      labelValue: 2,
+      tokenId: "hot",
+      anchorAt: new Date(T0 + i * HOUR),
+    }));
+    const cold = Array.from({ length: 10 }, (_, i) => ({
+      probability: 0.8,
+      labelValue: 0,
+      tokenId: `cold-${i}`,
+      anchorAt: new Date(T0 + i * HOUR),
+    }));
+    const withCooldown = calibrateThresholdForPrecision([...hot, ...cold], targets, { cooldownMs: DAY });
+    expect(withCooldown.threshold).toBeNull();
+    expect(withCooldown.support).toBe(11);
+  });
+
+  it("finds the same cutoff as the plain walk when every call is a different token", () => {
+    const set = Array.from({ length: 100 }, (_, i) => ({
+      probability: 1 - i / 101,
+      labelValue: i < 20 ? 2 : 0,
+      tokenId: `t-${i}`,
+      anchorAt: new Date(T0 + i * HOUR),
+    }));
+    const plain = calibrateThresholdForPrecision(set, targets);
+    const replayed = calibrateThresholdForPrecision(set, targets, { cooldownMs: DAY });
+    expect(replayed.threshold).toBeCloseTo(plain.threshold!);
+    expect(replayed.support).toBe(plain.support);
+  });
+});
+
+describe("walkForwardEvaluate leak guards", () => {
+  it("never trains a fold on a token it tests, nor on rows whose label resolved inside the fold", async () => {
+    // Every row is the same token - so token grouping must leave each fold with no training
+    // rows at all, and the exam must produce no folds rather than grade the model on memory.
+    const rows = syntheticRows(1_000).map((r) => ({ ...r, tokenId: "only-token" }));
+    const result = await walkForwardEvaluate(rows, { targetPerHour: 6, heuristicMinScore: 0 });
+    expect(result.folds).toEqual([]);
+  });
+
+  it("purges training rows anchored within the label window of the fold's start", async () => {
+    // Rows every 10 minutes, each its own token: the purge removes the 5 rows anchored less than
+    // an hour before each fold boundary (the row exactly an hour before has a closed label).
+    const rows = syntheticRows(1_000).map((r, i) => ({
+      ...r,
+      tokenId: `t-${i}`,
+      anchorAt: new Date(T0 + i * 10 * 60_000),
+    }));
+    const result = await walkForwardEvaluate(rows, { targetPerHour: 6, heuristicMinScore: 0 });
+    expect(result.folds.length).toBeGreaterThan(0);
+    const firstTestIndex = 500;
+    expect(result.folds[0]!.trainRows).toBe(firstTestIndex - 5);
+  });
+
+  it("collects the heuristic's out-of-sample calls in its own rank-score units", async () => {
+    const result = await walkForwardEvaluate(syntheticRows(1_000), {
+      targetPerHour: 6,
+      heuristicMinScore: 0,
+    });
+    // syntheticRows carry no short-window data, so the heuristic gate (which needs a buy ratio
+    // and a known venue) may pass few or none - but whatever it records is in 0-100 units.
+    for (const call of result.heuristicOutOfSample) {
+      expect(call.probability).toBeGreaterThanOrEqual(0);
+      expect(call.probability).toBeLessThanOrEqual(100);
+    }
+  });
+});
+
+describe("feature transform", () => {
+  it("log-scales heavy-tailed features, keeping sign", () => {
+    expect(transformFeature("volume24hUsd", 0, "signed-log1p-v1")).toBe(0);
+    expect(transformFeature("volume24hUsd", Math.E - 1, "signed-log1p-v1")).toBeCloseTo(1);
+    expect(transformFeature("priceChange5mPct", -(Math.E - 1), "signed-log1p-v1")).toBeCloseTo(-1);
+  });
+
+  it("leaves bounded features and pre-transform models alone", () => {
+    expect(transformFeature("top10HolderPct", 40, "signed-log1p-v1")).toBe(40);
+    expect(transformFeature("volume24hUsd", 1_000_000, undefined)).toBe(1_000_000);
+  });
+
+  it("a trained model records its transform and scores with it", async () => {
+    const params = await trainCurator(syntheticRows(500));
+    expect(params.transform).toBe("signed-log1p-v1");
+    // Old models without the field keep scoring on raw values - both paths must produce a
+    // valid probability.
+    const { transform: _drop, ...legacy } = params;
+    void _drop;
+    const features = syntheticRows(1)[0]!.features;
+    for (const p of [scoreCandidateWithModel(params, features), scoreCandidateWithModel(legacy, features)]) {
+      expect(p).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe("precisionCurve", () => {
+  it("reports hit rates for the most confident slices of calls", () => {
+    const set = Array.from({ length: 200 }, (_, i) => ({
+      probability: 1 - i / 201,
+      labelValue: i < 10 ? 2 : i < 40 ? 1 : 0,
+    }));
+    const curve = precisionCurve(set);
+    const top5 = curve.find((p) => p.alerts === 10)!;
+    expect(top5.winRatePct).toBe(100);
+    expect(top5.goalRatePct).toBe(100);
+    const top20 = curve.find((p) => p.alerts === 40)!;
+    expect(top20.winRatePct).toBe(100);
+    expect(top20.goalRatePct).toBe(25);
   });
 });

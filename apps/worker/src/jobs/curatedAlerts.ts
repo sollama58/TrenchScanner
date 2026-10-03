@@ -2,25 +2,22 @@ import {
   prisma,
   createLogger,
   evaluateCandidateHeuristic,
-  curationRankScore,
   inMcapBand,
   notifyCuratedAlert,
   buildCandidateFeatures,
-  scoredFromFeatures,
   scoreCandidateWithModel,
   topModelReasons,
   governorCapacity,
-  computeDynamicBar,
   selectEmissions,
   CURATOR_MODEL_KIND,
   GOVERNOR_BURST_WINDOW_MINUTES,
-  HEURISTIC_CURATOR_SOURCE,
   type CurationDecision,
   type Env,
   type ScoredToken,
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
+import { aiGateQualified, aiReviewEnabled, reviewPick, type AiReviewResult } from "../ai/reviewer.js";
 
 const logger = createLogger("curated-alerts");
 
@@ -41,6 +38,13 @@ interface CuratorRoster {
   active: CuratorModelRef | null;
   /** The newest trained-but-not-promoted model - the bench side while the heuristic is live. */
   newestCandidate: CuratorModelRef | null;
+  /**
+   * The heuristic's hit-rate cutoff from the newest training run (in rank-score units):
+   * undefined when no run has produced one yet (the heuristic then sends on its gate alone),
+   * null when the run found no cutoff that met the targets (the heuristic then sends nothing),
+   * a number otherwise. See curatorTrainingJob.ts and heuristicGate below.
+   */
+  heuristicCutoff: number | null | undefined;
 }
 
 let modelCache: { fetchedAt: number; roster: CuratorRoster } | null = null;
@@ -48,7 +52,6 @@ let modelCache: { fetchedAt: number; roster: CuratorRoster } | null = null;
 /** Test hook: forget the cached models so the next emission re-reads the table. */
 export function resetCuratorModelCache(): void {
   modelCache = null;
-  barCache = null; // the bar is computed in the roster's units - a stale one is the wrong scale
 }
 
 async function curatorRoster(): Promise<CuratorRoster> {
@@ -59,7 +62,7 @@ async function curatorRoster(): Promise<CuratorRoster> {
   // half-applied through a params shape it happens to overlap with.
   const toRef = (row: { id: string; params: unknown } | null): CuratorModelRef | null =>
     row ? { id: row.id, params: row.params as TrainedCuratorParams } : null;
-  const [active, newestCandidate] = await Promise.all([
+  const [active, newestCandidate, newestRun] = await Promise.all([
     prisma.curatorModel.findFirst({
       where: { status: "active", kind: CURATOR_MODEL_KIND },
       orderBy: { activatedAt: "desc" },
@@ -68,12 +71,43 @@ async function curatorRoster(): Promise<CuratorRoster> {
       where: { status: "candidate", kind: CURATOR_MODEL_KIND },
       orderBy: { createdAt: "desc" },
     }),
+    prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" }, select: { evalMetrics: true } }),
   ]);
   modelCache = {
     fetchedAt: Date.now(),
-    roster: { active: toRef(active), newestCandidate: toRef(newestCandidate) },
+    roster: {
+      active: toRef(active),
+      newestCandidate: toRef(newestCandidate),
+      heuristicCutoff: readHeuristicCutoff(newestRun?.evalMetrics),
+    },
   };
   return modelCache.roster;
+}
+
+/** Pulls heuristicCalibration.threshold out of a stored evalMetrics blob - see CuratorRoster. */
+function readHeuristicCutoff(evalMetrics: unknown): number | null | undefined {
+  if (typeof evalMetrics !== "object" || evalMetrics === null) return undefined;
+  const calibration = (evalMetrics as { heuristicCalibration?: { threshold?: unknown } })
+    .heuristicCalibration;
+  if (calibration === undefined || calibration === null) return undefined;
+  return typeof calibration.threshold === "number" ? calibration.threshold : null;
+}
+
+/**
+ * The heuristic held to the feed's hit-rate targets: its gate decides "worth alerting", and the
+ * cutoff its own out-of-sample record earned decides "at a conviction where calls like this have
+ * hit 75%". Without a training run yet there is no record and the gate stands alone; with one
+ * that found no qualifying cutoff, the heuristic sends nothing - a quiet feed is the honest
+ * answer to "nothing here meets the bar". CURATED_HEURISTIC_PRECISION_GATE=false restores the
+ * gate-only behaviour.
+ */
+function heuristicGate(scored: ScoredToken, roster: CuratorRoster, env: Env): CurationDecision {
+  const decision = evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE);
+  if (!decision.curate || !env.CURATED_HEURISTIC_PRECISION_GATE || roster.heuristicCutoff === undefined) {
+    return decision;
+  }
+  const cutoff = roster.heuristicCutoff;
+  return cutoff !== null && decision.confidence >= cutoff ? decision : { ...decision, curate: false };
 }
 
 function decideWithModel(
@@ -110,11 +144,11 @@ async function decideCurations(
   if (roster.active) {
     return {
       live: decideWithModel(roster.active, scored, { withReasons: true }),
-      shadow: evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE),
+      shadow: heuristicGate(scored, roster, env),
     };
   }
   return {
-    live: evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE),
+    live: heuristicGate(scored, roster, env),
     shadow: roster.newestCandidate
       ? decideWithModel(roster.newestCandidate, scored, { withReasons: false })
       : null,
@@ -221,125 +255,20 @@ export async function collectCuratedContender(
 }
 
 /**
- * The dynamic quality bars, in the live and bench curators' own conviction units, cached
- * briefly (the flow they're computed from moves over hours, not minutes). Computed from the
- * last day of banked CandidateOutcome rows - the same hourly-per-token sampling of the eligible
- * flow that calibrateThreshold ranks against - scored with each curator's own conviction
- * function and cut at the level that admits CURATED_TARGET_PER_HOUR (see computeDynamicBar).
- * Durable across worker restarts by construction, since the flow record is the database's.
- */
-const BAR_CACHE_TTL_MS = 10 * 60_000;
-
-interface DynamicBars {
-  live: number | null;
-  shadow: number | null;
-}
-
-let barCache: ({ fetchedAt: number; curatorKey: string } & DynamicBars) | null = null;
-
-/**
- * Identifies WHOSE conviction units the cached bars are expressed in. A bar is a percentile of
- * one curator's score distribution, and the two curators' scales are nothing alike - the
- * heuristic's rank score runs 40-80 for ordinary candidates while a model's calibrated
- * probability x100 sits in the single digits for an event this rare. So a bar cached under one
- * curator is not merely stale under another, it is the wrong scale: after a promotion, a
- * heuristic-scale bar would sit far above every probability the new model produces and silence
- * the feed completely until the cache expired. Keying the cache on the roster makes a handover
- * invalidate it immediately.
- */
-function rosterKey(roster: CuratorRoster): string {
-  return `${roster.active?.id ?? HEURISTIC_CURATOR_SOURCE}|${roster.newestCandidate?.id ?? "none"}`;
-}
-
-/**
- * How many of the last 24h of candidate rows the bar is computed over. A cap, not a sample size
- * to tune: the bar is a percentile, so it wants the whole population, and this only exists so an
- * unexpectedly busy day cannot pull an unbounded result set into memory. Newest-first, so if it
- * ever binds the bar describes the most recent slice of the window rather than a random one -
- * and it is set far above any plausible day's flow (WATCHLIST_MAX_TRACKED is 900, sampled at
- * most hourly per token), so binding it would itself be the anomaly worth noticing.
- */
-const BAR_MAX_ROWS = 20_000;
-
-async function dynamicBars(env: Env): Promise<DynamicBars> {
-  // The roster is read FIRST and cheaply (it carries its own cache) because it decides whether
-  // the cached bars are even in the right units - see rosterKey.
-  const roster = await curatorRoster();
-  const curatorKey = rosterKey(roster);
-  if (barCache && barCache.curatorKey === curatorKey && Date.now() - barCache.fetchedAt < BAR_CACHE_TTL_MS) {
-    return barCache;
-  }
-
-  const rows = await prisma.candidateOutcome.findMany({
-    where: { anchorAt: { gte: new Date(Date.now() - 24 * 3_600_000) } },
-    orderBy: { anchorAt: "desc" },
-    take: BAR_MAX_ROWS,
-    select: { anchorAt: true, features: true, anchorPriceUsd: true, anchorMcapUsd: true },
-  });
-  const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
-  const inBand = rows.filter((r) => inMcapBand(r.anchorMcapUsd, band));
-
-  let result: DynamicBars = { live: null, shadow: null };
-  if (inBand.length > 0) {
-    // Folded rather than spread: Math.max(...array) passes every element as an argument and
-    // blows the call stack somewhere around a hundred thousand of them, which is a crash that
-    // would only ever appear on the busiest day this feed has seen.
-    let oldestMs = Infinity;
-    let newestMs = -Infinity;
-    for (const row of inBand) {
-      const t = row.anchorAt.getTime();
-      if (t < oldestMs) oldestMs = t;
-      if (t > newestMs) newestMs = t;
-    }
-    const spanHours = (newestMs - oldestMs) / 3_600_000;
-
-    const heuristicScores = () =>
-      inBand.map((r) =>
-        curationRankScore(
-          scoredFromFeatures(r.features as Record<string, number | null>, r.anchorPriceUsd, r.anchorMcapUsd),
-        ),
-      );
-    const modelScores = (model: CuratorModelRef) =>
-      inBand.map(
-        (r) => scoreCandidateWithModel(model.params, r.features as Record<string, number | null>) * 100,
-      );
-
-    const liveScores = roster.active ? modelScores(roster.active) : heuristicScores();
-    const shadowScores = roster.active
-      ? heuristicScores()
-      : roster.newestCandidate
-        ? modelScores(roster.newestCandidate)
-        : null;
-
-    result = {
-      live: computeDynamicBar(liveScores, spanHours, env.CURATED_TARGET_PER_HOUR),
-      shadow: shadowScores ? computeDynamicBar(shadowScores, spanHours, env.CURATED_TARGET_PER_HOUR) : null,
-    };
-  }
-
-  barCache = { fetchedAt: Date.now(), curatorKey, ...result };
-  return result;
-}
-
-/**
  * Phase two, called once per scan cycle after every candidate has been collected: the governor
  * pass. Each ledger independently counts its own actual trailing emissions, takes its capacity
  * (see governorCapacity - the hourly target and the burst cap), and emits its strongest
- * contenders above its dynamic bar, best first. This - not the gate - is what pins the feed to
- * roughly one alert per ten minutes at the default target: the gate says "worth alerting", the
- * governor says "and these are today's best of that, at the promised pace".
+ * contenders, best first. Quality is the curators' job - each holds its picks to the hit-rate
+ * cutoff its own out-of-sample record earned - so the governor's pace is a CEILING only: a hot
+ * minute can't flood the feed, and a quiet hour stays quiet. (A flow-derived "dynamic bar" used
+ * to sit here too, admitting whatever conviction produced CURATED_TARGET_PER_HOUR; it tied
+ * quality to pace, which is exactly what the hit-rate targets replaced.)
  *
  * Returns the number of real (live-ledger) alerts emitted.
  */
-export async function emitCuratedCycle(
-  cycle: CuratedCycle,
-  env: Env,
-  /** Test hook: fixed bars instead of the flow-derived ones (null = no bar). */
-  opts: { bars?: DynamicBars } = {},
-): Promise<number> {
+export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<number> {
   if (cycle.live.length === 0 && cycle.shadow.length === 0) return 0;
 
-  const bars = opts.bars ?? (await dynamicBars(env));
   const now = Date.now();
   const hourAgo = new Date(now - 3_600_000);
   const burstAgo = new Date(now - GOVERNOR_BURST_WINDOW_MINUTES * 60_000);
@@ -355,13 +284,58 @@ export async function emitCuratedCycle(
       prisma.curatedAlert.count({ where: { createdAt: { gt: burstAgo } } }),
     ]);
     const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
-    const picks = selectEmissions(cycle.live, capacity, bars.live);
+    const reviewing = aiReviewEnabled(env);
+    // Gate mode only once the reviewer's graded "buy" record meets the feed's targets; until then
+    // a gate-mode reviewer runs as shadow (see aiGateQualified).
+    const gating = reviewing && env.AI_REVIEW_MODE === "gate" && (await aiGateQualified(env));
+    // A token the reviewer just passed on doesn't contend again until its veto cools down -
+    // otherwise it would win the same slot and buy the same review every minute.
+    const contenders = gating ? await withoutRecentVetoes(cycle.live, env) : cycle.live;
+    const picks = selectEmissions(contenders, capacity);
 
-    for (const pick of picks) {
-      const anchor = await emitCuratedAlert(pick, env);
-      if (anchor) {
-        liveAnchors.set(pick.token.id, anchor);
-        emitted += 1;
+    // Gate mode asks before sending (in parallel - the governor allows at most a burst's worth
+    // per cycle). A failed review fails OPEN: an outage at the reviewer must not silence a feed
+    // the curator already vouched for, and the error is recorded against the pick.
+    const gateReviews: (AiReviewResult | null)[] = gating
+      ? await Promise.all(picks.map((p) => reviewPick(p.scored, p.decision, env)))
+      : picks.map(() => null);
+
+    for (const [i, pick] of picks.entries()) {
+      const review = gateReviews[i] ?? null;
+      if (review?.verdict?.decision === "no_buy") {
+        await recordAiReview(pick, review, "gate", null, null, env).catch((err) =>
+          logger.warn("failed to record ai veto", { error: String(err) }),
+        );
+        logger.info("curated pick vetoed by ai reviewer", {
+          mint: pick.token.mintAddress,
+          reasoning: review.verdict.reasoning,
+        });
+        continue;
+      }
+      const sent = review?.verdict
+        ? {
+            ...pick,
+            decision: {
+              ...pick.decision,
+              reasons: [`AI: ${review.verdict.reasoning}`, ...pick.decision.reasons].slice(0, 5),
+            },
+          }
+        : pick;
+      const result = await emitCuratedAlert(sent, env);
+      if (!result) continue;
+      liveAnchors.set(pick.token.id, result.anchor);
+      emitted += 1;
+
+      if (review) {
+        await recordAiReview(pick, review, "gate", result.anchor, result.alertId, env).catch((err) =>
+          logger.warn("failed to record ai review", { error: String(err) }),
+        );
+      } else if (reviewing) {
+        // Shadow mode: the alert is already out; the review is bookkeeping and must never hold
+        // up the scan cycle, so it runs detached.
+        void reviewPick(pick.scored, pick.decision, env)
+          .then((r) => recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env))
+          .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) }));
       }
     }
 
@@ -370,7 +344,6 @@ export async function emitCuratedCycle(
     logger.info("curated governor", {
       contenders: cycle.live.length,
       capacity,
-      bar: bars.live,
       emitted,
       lastHour,
     });
@@ -385,7 +358,7 @@ export async function emitCuratedCycle(
         prisma.curatedShadowEmission.count({ where: { createdAt: { gt: burstAgo } } }),
       ]);
       const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
-      const picks = selectEmissions(cycle.shadow, capacity, bars.shadow);
+      const picks = selectEmissions(cycle.shadow, capacity);
       for (const pick of picks) {
         await recordShadowEmission(pick, liveAnchors.get(pick.token.id) ?? pick.cycleSample, env);
       }
@@ -405,7 +378,10 @@ export async function emitCuratedCycle(
  * hourly sampler last anchored this token. Returns the anchor used, or null when no anchor
  * could be made (a zero-price moment is nothing an outcome could ever be measured from).
  */
-async function emitCuratedAlert(pick: CuratedContender, env: Env): Promise<CandidateSampleRef | null> {
+async function emitCuratedAlert(
+  pick: CuratedContender,
+  env: Env,
+): Promise<{ anchor: CandidateSampleRef; alertId: string } | null> {
   const { token, scored, decision } = pick;
 
   let anchor = pick.cycleSample?.created ? pick.cycleSample : null;
@@ -442,7 +418,63 @@ async function emitCuratedAlert(pick: CuratedContender, env: Env): Promise<Candi
     mcap: scored.marketCapUsd,
     reasons: decision.reasons,
   });
-  return anchor;
+  return { anchor, alertId: alert.id };
+}
+
+/** Drops contenders the gate-mode reviewer said "no_buy" to within AI_REVIEW_VETO_COOLDOWN_MINUTES. */
+async function withoutRecentVetoes(contenders: CuratedContender[], env: Env): Promise<CuratedContender[]> {
+  if (contenders.length === 0) return contenders;
+  const vetoed = await prisma.aiReview.findMany({
+    where: {
+      tokenId: { in: contenders.map((c) => c.token.id) },
+      decision: "no_buy",
+      mode: "gate",
+      createdAt: { gt: new Date(Date.now() - env.AI_REVIEW_VETO_COOLDOWN_MINUTES * 60_000) },
+    },
+    select: { tokenId: true },
+  });
+  const blocked = new Set(vetoed.map((v) => v.tokenId));
+  return contenders.filter((c) => !blocked.has(c.token.id));
+}
+
+/**
+ * Writes one AiReview row. Anchored like everything else graded from this feed: the alert's own
+ * anchor when one was sent, otherwise (a gate-mode veto) the cycle's fresh sample or a new one,
+ * so a veto's outcome is measured from the moment it was made - that is what shows whether the
+ * reviewer's no's were right.
+ */
+async function recordAiReview(
+  pick: CuratedContender,
+  review: AiReviewResult,
+  mode: "shadow" | "gate",
+  sentAnchor: CandidateSampleRef | null,
+  curatedAlertId: string | null,
+  env: Env,
+): Promise<void> {
+  let anchor = sentAnchor ?? (pick.cycleSample?.created ? pick.cycleSample : null);
+  if (!anchor) {
+    anchor = await recordCandidateSample(pick.token.id, pick.scored, env, { bypassSpacing: true });
+  }
+  await prisma.aiReview.create({
+    data: {
+      tokenId: pick.token.id,
+      candidateOutcomeId: anchor?.id ?? null,
+      curatedAlertId,
+      mode,
+      model: review.model,
+      decision: review.verdict?.decision ?? null,
+      probability2x: review.verdict?.probability2x ?? null,
+      probability4x: review.verdict?.probability4x ?? null,
+      reasoning: review.verdict?.reasoning ?? null,
+      risks: review.verdict?.risks ?? [],
+      error: review.error,
+      latencyMs: review.latencyMs,
+      inputTokens: review.inputTokens,
+      outputTokens: review.outputTokens,
+      anchorPriceUsd: pick.scored.priceUsd,
+      anchorMcapUsd: pick.scored.marketCapUsd,
+    },
+  });
 }
 
 /**

@@ -52,6 +52,8 @@ function handParams(threshold: number): TrainedCuratorParams {
 const promoteVerdict = (promote: boolean): WalkForwardResult => ({
   folds: [],
   verdict: { promote, reason: promote ? "test-promote" : "test-hold" },
+  outOfSample: [],
+  heuristicOutOfSample: [],
 });
 
 /**
@@ -72,7 +74,7 @@ async function collectAndEmit(
   });
   const cycle = newCuratedCycle();
   await collectCuratedContender(cycle, token, scored, null, env);
-  return (await emitCuratedCycle(cycle, env, { bars: { live: null, shadow: null } })) > 0;
+  return (await emitCuratedCycle(cycle, env)) > 0;
 }
 
 function scoredWithTotal(mintAddress: string, total: number): ScoredToken {

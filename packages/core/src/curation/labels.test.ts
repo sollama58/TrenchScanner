@@ -47,18 +47,17 @@ describe("candidate outcome labels", () => {
     expect(agg.hit2xAt).toEqual(minutes(12));
   });
 
-  it("a 2x that only arrives after the win window is a miss, not a win", () => {
-    // The whole point of the shorter bar: a token that took 40 minutes to double is exactly the
-    // slow grind the 15-minute window exists to stop crediting.
+  it("a 2x that arrives after 15 minutes but inside the hour is still a win", () => {
+    // The bar is 2x within the hour - a 40-minute double is a win; hit2xIn15m just records speed.
     const agg = replay(1, [
       [1.4, 10],
       [2.5, 40],
     ]);
     const labels = computeOutcomeLabels(agg);
     expect(labels.hit2xIn15m).toBe(false);
-    expect(labels.hit2xIn1h).toBe(true); // still recorded, just not the verdict
-    expect(labels.disqualified).toBe(false); // a miss is a miss, never "stopped out"
-    expect(labels.labelValue).toBe(0);
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.disqualified).toBe(false);
+    expect(labels.labelValue).toBeCloseTo(Math.log2(2.5));
   });
 
   it("grades a win on how far it ran by the hour, so the 4x goal is worth double a 2x", () => {
@@ -76,12 +75,34 @@ describe("candidate outcome labels", () => {
     expect(ranOn.labelValue).toBeGreaterThan(stalled.labelValue);
   });
 
-  it("gives a 4x no credit at all unless it cleared the fast bar first", () => {
-    // Reaching the goal the slow way is still a miss: the alert never gave anyone a fast double.
+  it("credits a 4x that arrives late in the hour as the goal it is", () => {
     const agg = replay(1, [[4.0, 45]]);
     const labels = computeOutcomeLabels(agg);
     expect(labels.hit4xIn1h).toBe(true);
+    expect(labels.hit2xIn1h).toBe(true);
     expect(labels.hit2xIn15m).toBe(false);
+    expect(labels.labelValue).toBeCloseTo(2);
+  });
+
+  it("does not count a 4x that first breached the stop", () => {
+    const labels = computeOutcomeLabels(
+      replay(1, [
+        [0.45, 5],
+        [4.5, 40],
+      ]),
+    );
+    expect(labels.disqualified).toBe(true);
+    expect(labels.hit4xIn1h).toBe(false);
+  });
+
+  it("disqualifies a late 2x that first traded at or below half the anchor", () => {
+    const agg = replay(1, [
+      [0.4, 20],
+      [2.2, 50],
+    ]);
+    const labels = computeOutcomeLabels(agg);
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.disqualified).toBe(true);
     expect(labels.labelValue).toBe(0);
   });
 
@@ -123,6 +144,12 @@ describe("candidate outcome labels", () => {
   });
 
   it("treats the exact win-window boundary as inside the window", () => {
+    const labels = computeOutcomeLabels(replay(1, [[2.0, 60]]));
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.labelValue).toBeCloseTo(1);
+  });
+
+  it("treats the exact 15-minute boundary as a fast double", () => {
     const labels = computeOutcomeLabels(replay(1, [[2.0, 15]]));
     expect(labels.hit2xIn15m).toBe(true);
   });
@@ -137,7 +164,7 @@ describe("candidate outcome labels", () => {
     expect(agg.peak24hPriceUsd).toBe(3.0);
     expect(agg.peak24hAt).toEqual(minutes(90));
     const labels = computeOutcomeLabels(agg);
-    expect(labels.hit2xIn15m).toBe(false);
+    expect(labels.hit2xIn1h).toBe(false);
     expect(labels.hit4xIn1h).toBe(false);
   });
 
@@ -156,5 +183,71 @@ describe("candidate outcome labels", () => {
     expect(labels.labelValue).toBe(0);
     expect(labels.peak1hReturnPct).toBe(0);
     expect(labels.maxDrawdown1hPct).toBe(0);
+  });
+});
+
+describe("fill-price grading", () => {
+  const rule = { delayMs: 60_000, slippageFraction: 0.03 };
+
+  /** Like replay, but through the entry rule - ticks are [price, seconds]. */
+  function replayWithEntry(anchorPrice: number, ticks: [price: number, second: number][]): OutcomeAggregates {
+    let agg = initialOutcomeAggregates(anchorPrice, T0);
+    for (const [price, second] of ticks) {
+      agg = { ...agg, ...applyPriceTick(agg, price, new Date(T0.getTime() + second * 1000), rule) };
+    }
+    return agg;
+  }
+
+  it("ignores ticks before the fill, so an instant spike nobody could buy isn't a win", () => {
+    const agg = replayWithEntry(1, [
+      [2.2, 30], // a 2x inside the first half-minute - before anyone acting on the alert holds it
+      [1.3, 70], // the fill
+      [1.5, 600],
+    ]);
+    expect(agg.entryAt).toEqual(new Date(T0.getTime() + 70_000));
+    expect(agg.signalPriceUsd).toBe(1);
+    expect(agg.anchorPriceUsd).toBeCloseTo(1.3 * 1.03);
+    expect(computeOutcomeLabels(agg).hit2xIn1h).toBe(false);
+  });
+
+  it("grades the double from the fill plus slippage, not the signal price", () => {
+    // 2.4 is a 2.4x from the signal but only 1.79x from a 1.3 fill with 3% slippage.
+    const missed = computeOutcomeLabels(
+      replayWithEntry(1, [
+        [1.3, 65],
+        [2.4, 900],
+      ]),
+    );
+    expect(missed.hit2xIn1h).toBe(false);
+    const won = computeOutcomeLabels(
+      replayWithEntry(1, [
+        [1.3, 65],
+        [2.8, 900],
+      ]),
+    );
+    expect(won.hit2xIn1h).toBe(true);
+  });
+
+  it("never grades from below the signal price, even when the fill tick is cheaper", () => {
+    const agg = replayWithEntry(1, [[0.8, 61]]);
+    expect(agg.anchorPriceUsd).toBeCloseTo(1.03);
+  });
+
+  it("measures the stop from the fill base", () => {
+    const labels = computeOutcomeLabels(
+      replayWithEntry(1, [
+        [1.0, 61],
+        [0.5, 300], // below half of the 1.03 base
+        [2.5, 1200],
+      ]),
+    );
+    expect(labels.disqualified).toBe(true);
+    expect(labels.labelValue).toBe(0);
+  });
+
+  it("a row that never got a tick past the delay grades as a miss", () => {
+    const labels = computeOutcomeLabels(replayWithEntry(1, [[3, 20]]));
+    expect(labels.hit2xIn1h).toBe(false);
+    expect(labels.labelValue).toBe(0);
   });
 });

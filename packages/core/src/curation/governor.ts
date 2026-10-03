@@ -16,14 +16,13 @@
  *    allows, the strongest conviction wins the slot and the weakest waits. A contender that
  *    loses a contested minute is not lost: it re-contends next cycle for as long as it keeps
  *    clearing the gate.
- *  - a DYNAMIC QUALITY BAR - the conviction level that the last day's candidate flow says
- *    corresponds to the target rate. Without it, a slow afternoon would trickle out barely-
- *    over-the-floor picks just because budget was available; with it, "curated" keeps meaning
- *    "top-of-flow", whatever the market's tempo. The bar is a ceiling-shaper, never a quota:
- *    a dead hour still emits nothing.
  *
- * All pure math here - the worker owns the IO (counting the ledgers, loading the day's flow)
- * so every rule is unit-testable without a database.
+ * The pace is a CEILING, not a target to fill: what clears the curator's hit-rate cutoff goes
+ * out up to the budget, and a quiet hour emits nothing. (A "dynamic quality bar" derived from
+ * the day's flow used to live here; it set quality by pace, which the hit-rate cutoffs replaced.)
+ *
+ * All pure math here - the worker owns the IO (counting the ledgers) so every rule is
+ * unit-testable without a database.
  */
 
 /** The short window the burst cap is counted over. */
@@ -58,42 +57,11 @@ export function governorCapacity(counts: EmissionWindowCounts, targetPerHour: nu
 }
 
 /**
- * Below these, the day's flow is too thin to define a percentile worth trusting and the bar
- * abstains (null) - the static gate floors carry quality alone. Warm-up after a fresh deploy
- * lands here too, since the flow record lives in the database, not in process memory.
+ * The governor's decision for one cycle: the strongest `capacity` contenders win emission,
+ * strongest first. Ties keep input order (stable sort), so two equal convictions resolve to
+ * whichever was scanned first - arbitrary, but deterministic.
  */
-export const DYNAMIC_BAR_MIN_SAMPLES = 50;
-export const DYNAMIC_BAR_MIN_SPAN_HOURS = 6;
-
-/**
- * The conviction level that would have admitted `targetPerHour` picks over the observed flow:
- * the k-th highest score where k = target x span. Emitting only above it means emitting only
- * candidates that rank in the day's top-target-per-hour - the same idea as the trainer's
- * calibrateThreshold, but computed from live production flow and applied to WHICHEVER curator
- * currently holds the job, in that curator's own conviction units.
- *
- * Returns null (no bar) when the flow is too thin to rank against - including when the whole
- * flow is at or below the target rate, where a bar could not bind anyway.
- */
-export function computeDynamicBar(scores: number[], spanHours: number, targetPerHour: number): number | null {
-  if (scores.length < DYNAMIC_BAR_MIN_SAMPLES || spanHours < DYNAMIC_BAR_MIN_SPAN_HOURS) return null;
-  const k = Math.round(targetPerHour * spanHours);
-  if (k < 1 || scores.length <= k) return null;
-  const sorted = [...scores].sort((a, b) => b - a);
-  return sorted[k - 1]!;
-}
-
-/**
- * The governor's decision for one cycle: of the contenders that clear the dynamic bar, the
- * strongest `capacity` win emission, strongest first. Ties keep input order (stable sort), so
- * two equal convictions resolve to whichever was scanned first - arbitrary, but deterministic.
- */
-export function selectEmissions<T extends { confidence: number }>(
-  contenders: T[],
-  capacity: number,
-  bar: number | null,
-): T[] {
+export function selectEmissions<T extends { confidence: number }>(contenders: T[], capacity: number): T[] {
   if (capacity <= 0) return [];
-  const eligible = bar === null ? [...contenders] : contenders.filter((c) => c.confidence >= bar);
-  return eligible.sort((a, b) => b.confidence - a.confidence).slice(0, capacity);
+  return [...contenders].sort((a, b) => b.confidence - a.confidence).slice(0, capacity);
 }

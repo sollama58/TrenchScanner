@@ -44,7 +44,7 @@ export interface PumpFunClientOptions {
   baseUrl?: string;
 }
 
-type SortField = "market_cap" | "created_timestamp";
+type SortField = "market_cap" | "created_timestamp" | "last_trade_timestamp";
 type SortOrder = "ASC" | "DESC";
 
 export class PumpFunClient {
@@ -89,6 +89,50 @@ export class PumpFunClient {
       }
     }
     return [...seen.values()];
+  }
+
+  /**
+   * The mints traded most recently, whatever their age - Pump.fun's "currently live" ordering.
+   * The newest-mints feed only ever shows launches from the last few minutes; this one surfaces
+   * a two-hour-old token the moment it starts trading again, which is exactly the slow climber
+   * a launch-ordered watchlist loses. Each entry carries Pump.fun's own current market cap, so
+   * the caller can put an already-known mint back in front of the scan without waiting for a
+   * DexScreener refresh to notice it. Same failure posture as discoverNewMints: a failed page is
+   * just fewer results.
+   */
+  async discoverActiveMints(opts: { pages?: number; limit?: number } = {}): Promise<DiscoveredCoin[]> {
+    const { pages = 2, limit = 100 } = opts;
+    const settled = await Promise.allSettled(
+      Array.from({ length: pages }, (_, page) =>
+        this.listCoins({ offset: page * limit, limit, sort: "last_trade_timestamp", order: "DESC" }),
+      ),
+    );
+    const seen = new Map<string, DiscoveredCoin>();
+    for (const result of settled) {
+      if (result.status !== "fulfilled") continue;
+      for (const coin of result.value) {
+        if (coin.mint) seen.set(coin.mint, toDiscoveredCoin(coin));
+      }
+    }
+    return [...seen.values()];
+  }
+
+  /**
+   * Pump.fun's "king of the hill": the bonding-curve token currently closest to graduating. One
+   * coin, refreshed by Pump.fun as the race changes - the strongest single "about to bond"
+   * signal the site publishes. Null when the endpoint fails or returns nothing usable.
+   */
+  async kingOfTheHill(): Promise<DiscoveredCoin | null> {
+    try {
+      const coin = await fetchJson<PumpFunCoin | null>(
+        `${this.baseUrl}/coins/king-of-the-hill?includeNsfw=false`,
+        { timeoutMs: 8000, retries: 1 },
+      );
+      return coin?.mint ? toDiscoveredCoin(coin) : null;
+    } catch (err) {
+      logger.warn("king-of-the-hill failed", { error: String(err) });
+      return null;
+    }
   }
 
   private async listCoins(params: {

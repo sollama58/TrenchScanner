@@ -47,6 +47,10 @@ const envSchema = z.object({
   HELIUS_API_KEY: z.string().optional().default(""),
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api-v3.pump.fun"),
+  // PumpPortal's public data websocket: Pump.fun launches and graduations as they land on chain
+  // (apps/worker/src/discovery/pumpPortalStream.ts). Empty disables the stream; discovery then
+  // relies on polling alone. Needs a runtime with a global WebSocket (Node 22+).
+  PUMPPORTAL_WS_URL: z.string().default("wss://pumpportal.fun/api/data"),
 
   // One minute. Not a performance figure - a full cycle takes ~10 seconds - but a rate-limit one:
   // RugCheck is called once per in-band candidate per cycle, so this interval used to multiply its
@@ -91,6 +95,13 @@ const envSchema = z.object({
   // which is the one thing it exists to do. DexScreener returns market data for essentially any
   // Pump.fun mint (the bonding curve IS a pair), so the alive set saturates readily.
   WATCHLIST_PROBATION_RESERVE_PCT: z.coerce.number().min(0).max(100).default(35),
+  // Alive mints whose last market cap is at least this (and no higher than the padded band
+  // ceiling) are refreshed ahead of everything else, however long ago they launched. Set just
+  // above a fresh Pump.fun launch's market cap, so it separates "someone is buying this" from the
+  // launch-level majority. Without it the alive set was newest-first, and at Pump.fun's launch
+  // rate that kept only the last 30-60 minutes of launches - a token that took two hours to
+  // climb into the band was evicted before it got there.
+  WATCHLIST_NEAR_BAND_MIN_MCAP_USD: z.coerce.number().nonnegative().default(7_000),
   // Cap on UNCACHED wallet earliest-activity lookups per scan cycle - the Helius budget guard
   // for the always-on fresh-wallet pass (see the worker's walletFreshness.ts). Wallet history is
   // immutable, so every resolved wallet is cached forever and the steady-state cost is only the
@@ -166,17 +177,26 @@ const envSchema = z.object({
   // Curated-alerts training data (see apps/worker/src/jobs/candidateOutcomeJob.ts and
   // packages/core/src/curation/). Every rug-screen-passing candidate gets a CandidateOutcome row
   // at most once per CANDIDATE_SAMPLE_SPACING_MINUTES, and the watcher job price-checks open rows
-  // every CANDIDATE_WATCH_INTERVAL_MINUTES. That cadence is the label's resolution, and it
-  // matters more since the win bar moved to "2x within 15 minutes": the decisive window is now
-  // only ~15 observations wide at the default, so a 2x that round-trips inside a minute is
-  // invisible. Shortening this sharpens every future label at a directly proportional cost in
-  // DexScreener calls; stretching it coarsens them.
+  // every CANDIDATE_WATCH_INTERVAL_MINUTES. That cadence is the label's resolution: the win bar
+  // is "2x within 1 hour", ~60 observations at the default, and a 2x that round-trips inside a
+  // minute is invisible. Shortening this sharpens every future label at a directly proportional
+  // cost in DexScreener calls; stretching it coarsens them.
   // CANDIDATE_WATCH_MAX_BATCH caps rows per sweep as DexScreener back-pressure; at the default
   // creation rate the whole open set fits in one sweep with room to spare.
   // Retention is deliberately much longer than SNAPSHOT_RETENTION_DAYS - these rows ARE the
   // training set, they carry their own copy of the features precisely so snapshots can be pruned
   // on the normal horizon, and 180 days is enough history to ride out a full meta-shift.
   CANDIDATE_SAMPLE_SPACING_MINUTES: z.coerce.number().positive().default(60),
+  // The "looks ready" sample (CandidateOutcome.sampleKind = "event"): at most one per token per
+  // this window, taken the first scan the token passes passesEventPreGate. The curators decide
+  // only at these moments, so the training rows and the live picks share one distribution.
+  CANDIDATE_EVENT_SPACING_MINUTES: z.coerce.number().positive().default(60),
+  // The fill every row is graded from (see EntryRule in curation/labels.ts): the first price at
+  // least this long after the alert, plus slippage - more on the thin pre-bond bonding curve
+  // than on a graduated pool.
+  CANDIDATE_ENTRY_DELAY_SECONDS: z.coerce.number().nonnegative().default(60),
+  CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND: z.coerce.number().min(0).max(50).default(3),
+  CANDIDATE_ENTRY_SLIPPAGE_PCT_GRADUATED: z.coerce.number().min(0).max(50).default(1),
   CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
   CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(600),
   CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(180),
@@ -189,7 +209,7 @@ const envSchema = z.object({
   // Back at the 55 launch value after a spell at 45: the loosening was meant to feed the
   // training set, but samples are banked before the curator gate runs (see scanJob), so it fed
   // nothing - it only diluted the feed. This floor is the gate's ENTRY requirement; the emission
-  // governor's pace and dynamic quality bar (curation/governor.ts) sit on top of it.
+  // governor's pace ceiling (curation/governor.ts) and the hit-rate cutoff sit on top of it.
   CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
 
@@ -214,6 +234,49 @@ const envSchema = z.object({
   CURATOR_RECENCY_HALF_LIFE_DAYS: z.coerce.number().positive().default(14),
   CURATED_TARGET_PER_HOUR: z.coerce.number().positive().default(6),
   CURATOR_MIN_TRAINING_ROWS: z.coerce.number().int().positive().default(1500),
+  // The hit rates the trained model's alerts are held to: of the alerts sent, the share that
+  // doubled within the hour (WIN) and the share that reached 4x (GOAL). The model's emission
+  // cutoff is the lowest confidence whose out-of-sample calls met both on at least
+  // CURATED_MIN_CALIBRATION_ALERTS alerts; when no cutoff does, the model sends nothing and is
+  // never promoted (see calibrateThresholdForPrecision). CURATED_TARGET_PER_HOUR stays a ceiling.
+  CURATED_TARGET_WIN_RATE_PCT: z.coerce.number().min(0).max(100).default(75),
+  CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
+  CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(30),
+  // Holds the hand-tuned heuristic to the same targets while it is the live curator: it only
+  // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned
+  // in the newest training run, and sends nothing when no cutoff met the targets. Before the
+  // first training run there is no record, and the heuristic's gate stands alone. "false"
+  // restores gate-only emission.
+  // Curated calls require both top-10 wallet checks (fresh-wallet and empty-wallet share) to have
+  // been measured: a token's event moment - the only time curators decide - waits until they
+  // are, and the scan spends its wallet lookup budget on looks-ready candidates first. User
+  // filters are unaffected (their wallet criteria still skip when unknown). "false" lets
+  // curators decide without them, with the caps skipped as before.
+  CURATED_REQUIRE_WALLET_CHECKS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  CURATED_HEURISTIC_PRECISION_GATE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+
+  // The AI reviewer (apps/worker/src/ai/reviewer.ts): a buy/no-buy second opinion from Claude on
+  // every curated pick the governor selects. "shadow" (the default) asks and records the answer
+  // without changing what is sent, so its calls get graded by the same labels before they are
+  // trusted; "gate" only sends alerts it says to buy; "off" never calls it. Without
+  // ANTHROPIC_API_KEY it is off whatever the mode says. A pick it passes on is not re-asked for
+  // AI_REVIEW_VETO_COOLDOWN_MINUTES, so one token can't buy a review every scan cycle.
+  AI_REVIEW_MODE: z.enum(["off", "shadow", "gate"]).default("shadow"),
+  ANTHROPIC_API_KEY: z.string().optional().default(""),
+  AI_REVIEW_MODEL: z.string().default("claude-opus-5-5"),
+  AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
+  AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  AI_REVIEW_VETO_COOLDOWN_MINUTES: z.coerce.number().positive().default(30),
+  // Gate mode has to be EARNED: until at least this many of the reviewer's "buy" calls are
+  // graded and they meet CURATED_TARGET_WIN_RATE_PCT / CURATED_TARGET_GOAL_RATE_PCT, "gate"
+  // behaves as "shadow" (see aiGateQualified in apps/worker/src/ai/reviewer.ts).
+  AI_REVIEW_MIN_GRADED_BUYS: z.coerce.number().int().positive().default(50),
 
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   // Used only to build the "tap to open Telegram" deep link on the dashboard - not required

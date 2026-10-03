@@ -131,6 +131,34 @@ describe.skipIf(!dbAvailable)("selectWatchlist", () => {
     expect(positions.get(`${TAG}-priority-alive`)!).toBeLessThan(positions.get(`${TAG}-priority-new`)!);
   });
 
+  it("keeps an old near-band climber over a saturated set of newer launch-level mints", async () => {
+    // The audit's watchlist finding: at real launch rates the newest WATCHLIST_MAX_TRACKED alive
+    // mints span well under an hour, so a token that took hours to climb toward the band was
+    // evicted by age just as it became interesting. Its last market cap now keeps its slot.
+    const now = Date.now();
+    const cap = env.WATCHLIST_MAX_TRACKED;
+    await prisma.token.createMany({
+      data: Array.from({ length: cap + 20 }, (_, i) => ({
+        mintAddress: `${TAG}-launch-${i}`,
+        firstSeenAt: new Date(now - 10 * MINUTE),
+        lastLiveAt: new Date(now - MINUTE),
+        lastMcapUsd: 4_500,
+      })),
+    });
+    await prisma.token.create({
+      data: {
+        mintAddress: `${TAG}-climber`,
+        firstSeenAt: new Date(now - 5 * 3_600_000),
+        lastLiveAt: new Date(now - MINUTE),
+        lastMcapUsd: Math.max(env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD, env.MCAP_FILTER_MIN),
+      },
+    });
+
+    const { tracked } = await selectWatchlist(env);
+    expect(tracked.length).toBeLessThanOrEqual(cap);
+    expect(tracked[0]!.mintAddress).toBe(`${TAG}-climber`);
+  });
+
   /** Pins what the watchlist believes about its own uptime. */
   async function setScanHeartbeat(lastRunAt: Date) {
     await prisma.systemHeartbeat.upsert({

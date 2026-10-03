@@ -32,3 +32,4 @@ export * from "./curation/labels.js";
 export * from "./curation/curator.js";
 export * from "./curation/governor.js";
 export * from "./curation/trainer.js";
+export * from "./curation/aiReview.js";

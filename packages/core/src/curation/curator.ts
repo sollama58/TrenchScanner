@@ -37,8 +37,15 @@ const MIN_LIQUIDITY_USD = 10_000;
  */
 const MIN_VOLUME_MCAP_RATIO = 0.5;
 /**
+ * The same churn floor on the LAST HOUR's volume, used whenever DexScreener reported it. For a
+ * token under a day old the 24h figure is its lifetime volume, which clears 0.5x for almost any
+ * Pump.fun launch that ever traded - so it separated nothing. A quarter of the market cap
+ * changing hands in the last hour is "moving now".
+ */
+const MIN_VOLUME_1H_MCAP_RATIO = 0.25;
+/**
  * Buys must be the clear majority of transactions - judged on the LAST HOUR's flow when
- * DexScreener reported it (the label is "2x within the next 15 minutes"; the last hour's flow is
+ * DexScreener reported it (the label is "2x within the next hour"; the last hour's flow is
  * the closest evidence available), falling back to the 24h window when it didn't (older banked rows replayed
  * in the walk-forward exam predate the short-window capture, and grading them on a signal they
  * never carried would silently change what their heuristic verdicts mean).
@@ -81,7 +88,7 @@ export interface CurationDecision {
   /**
    * 0-100 conviction, in the deciding curator's own units: curationRankScore for the heuristic,
    * calibrated probability x 100 for a trained model. The emission governor ranks contenders and
-   * holds its dynamic quality bar in these units, so what they MEAN can differ per curator as
+   * calibrates its hit-rate cutoff in these units, so what they MEAN can differ per curator as
    * long as each curator is consistent with itself.
    */
   confidence: number;
@@ -110,8 +117,13 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
   if (scored.graduated && !(scored.liquidityUsd !== undefined && scored.liquidityUsd >= MIN_LIQUIDITY_USD)) {
     return no;
   }
-  if (!(scored.volumeToMcapRatio !== undefined && scored.volumeToMcapRatio >= MIN_VOLUME_MCAP_RATIO))
-    return no;
+  // Churn on the last hour's volume when DexScreener reported it, the 24h window otherwise (older
+  // replayed rows) - see MIN_VOLUME_1H_MCAP_RATIO.
+  const churnOk =
+    scored.volume1hUsd !== undefined && scored.marketCapUsd > 0
+      ? scored.volume1hUsd / scored.marketCapUsd >= MIN_VOLUME_1H_MCAP_RATIO
+      : scored.volumeToMcapRatio !== undefined && scored.volumeToMcapRatio >= MIN_VOLUME_MCAP_RATIO;
+  if (!churnOk) return no;
   // The 1h window when it saw trades, the 24h window otherwise - see MIN_BUY_RATIO.
   const totalTxns1h = (scored.buys1h ?? 0) + (scored.sells1h ?? 0);
   const totalTxns24h = (scored.buys24h ?? 0) + (scored.sells24h ?? 0);
@@ -152,11 +164,11 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
 
 /**
  * How the heuristic ORDERS the candidates it would curate - the conviction the emission governor
- * ranks contenders by and holds its dynamic bar against. Deliberately not the composite score:
+ * ranks contenders by and calibrates its hit-rate cutoff in. Deliberately not the composite score:
  * the composite was built to rank user-filter matches, and its narrative and age components are
  * near-constant across this band (nearly every launch has a Twitter and a theme; nearly every
  * contender sits in the age sweet spot), which compresses the ranking exactly where curation
- * needs it sharp. The label is "2x within the NEXT 15 minutes", so conviction leans on the
+ * needs it sharp. The label is "2x within the NEXT hour", so conviction leans on the
  * short-window evidence closest to that question - what price and flow were doing over the last
  * minutes - with the composite kept as a modest stabilizer for the texture (holder health, risk)
  * the short window can't see.
@@ -257,4 +269,36 @@ export interface McapBand {
  */
 export function inMcapBand(mcapUsd: number, band: McapBand): boolean {
   return mcapUsd >= band.min && mcapUsd <= band.max;
+}
+
+/**
+ * Whether both top-10 wallet checks (fresh-wallet and empty-wallet share) were actually measured.
+ * The curator's sniper caps skip when a figure is unknown, which is right for a user filter but
+ * not for a curated call that vouches for the token: with CURATED_REQUIRE_WALLET_CHECKS on, the
+ * scan does not open an event moment for a token until both are known (see scanJob.ts), so every
+ * curated decision - and every row its cutoff is calibrated on - had the sniper checks applied.
+ */
+export function walletChecksKnown(
+  scored: Pick<ScoredToken, "freshTop10WalletPct" | "emptyTop10WalletPct">,
+): boolean {
+  return scored.freshTop10WalletPct !== undefined && scored.emptyTop10WalletPct !== undefined;
+}
+
+/**
+ * The cheap "looks ready" test that marks an EVENT moment (CandidateOutcome.sampleKind = "event"):
+ * in the band, buyers in control of the hour's flow, and the last five minutes not falling.
+ * Curators decide only at the first such moment per token per CANDIDATE_EVENT_SPACING_MINUTES, and
+ * the trainer calibrates on exactly those rows, so the model is examined on the same moments it is
+ * asked about live - not on an hourly sample of everything in the band, which is a different and
+ * much duller population. Looser than the heuristic's gate on purpose: it only picks the moment;
+ * the curators still pick the token.
+ */
+export function passesEventPreGate(
+  scored: Pick<ScoredToken, "marketCapUsd" | "buys1h" | "sells1h" | "priceChange5mPct">,
+  band: McapBand,
+): boolean {
+  if (!inMcapBand(scored.marketCapUsd, band)) return false;
+  const totalTxns1h = (scored.buys1h ?? 0) + (scored.sells1h ?? 0);
+  if (!(totalTxns1h > 0 && (scored.buys1h ?? 0) / totalTxns1h >= MIN_BUY_RATIO)) return false;
+  return scored.priceChange5mPct === undefined || scored.priceChange5mPct >= 0;
 }

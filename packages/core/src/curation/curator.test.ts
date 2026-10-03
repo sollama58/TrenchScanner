@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { curationRankScore, evaluateCandidateHeuristic, HEURISTIC_CURATOR_SOURCE } from "./curator.js";
+import {
+  curationRankScore,
+  evaluateCandidateHeuristic,
+  HEURISTIC_CURATOR_SOURCE,
+  passesEventPreGate,
+  walletChecksKnown,
+} from "./curator.js";
 import type { ScoredToken } from "../types.js";
 
 const MIN_SCORE = 70;
@@ -29,6 +35,28 @@ function strongCandidate(overrides: Partial<ScoredToken> = {}): ScoredToken {
     ...overrides,
   };
 }
+
+describe("evaluateCandidateHeuristic - churn on the last hour", () => {
+  it("judges churn on 1h volume when it was reported, ignoring a lifetime 24h figure", () => {
+    // 24h volume 1.3x the mcap would pass the 24h floor, but the last hour is nearly dead.
+    expect(evaluateCandidateHeuristic(strongCandidate({ volume1hUsd: 15_000 }), MIN_SCORE).curate).toBe(
+      false,
+    );
+    // A quarter of the 150k mcap traded in the last hour clears it, whatever the 24h ratio.
+    expect(
+      evaluateCandidateHeuristic(strongCandidate({ volume1hUsd: 40_000, volumeToMcapRatio: 0.3 }), MIN_SCORE)
+        .curate,
+    ).toBe(true);
+  });
+});
+
+describe("walletChecksKnown", () => {
+  it("is true only when both top-10 wallet figures were measured", () => {
+    expect(walletChecksKnown({ freshTop10WalletPct: 0, emptyTop10WalletPct: 10 })).toBe(true);
+    expect(walletChecksKnown({ freshTop10WalletPct: 0 })).toBe(false);
+    expect(walletChecksKnown({ emptyTop10WalletPct: 0 })).toBe(false);
+  });
+});
 
 describe("evaluateCandidateHeuristic", () => {
   it("curates a strong candidate with reasons and the rank score as confidence", () => {
@@ -185,5 +213,24 @@ describe("curationRankScore", () => {
       volume5mUsd: 0,
     });
     expect(curationRankScore(rug)).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("passesEventPreGate", () => {
+  const band = { min: 100_000, max: 500_000 };
+  const ready = (overrides: Partial<ScoredToken> = {}) =>
+    strongCandidate({ buys1h: 60, sells1h: 40, priceChange5mPct: 4, ...overrides });
+
+  it("marks an in-band token with buyers in control and a rising last five minutes", () => {
+    expect(passesEventPreGate(ready(), band)).toBe(true);
+    // An unobserved 5m candle is not a reason to skip the moment.
+    expect(passesEventPreGate(ready({ priceChange5mPct: undefined }), band)).toBe(true);
+  });
+
+  it("skips out-of-band, sell-dominated, tradeless-hour and falling moments", () => {
+    expect(passesEventPreGate(ready({ marketCapUsd: 50_000 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ buys1h: 40, sells1h: 60 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ priceChange5mPct: -2 }), band)).toBe(false);
   });
 });

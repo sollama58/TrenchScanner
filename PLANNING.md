@@ -100,14 +100,13 @@ hand-tuned heuristic and eventually by a model trained on the system's own recor
 Three shipping phases, each useful on its own:
 
 - **Phase A — labels** (`CandidateOutcome`, `packages/core/src/curation/`): every rug-screen-passing
-  candidate gets sampled (at most hourly per token) and its price watched for an hour. Two
-  horizons, deliberately different: the **win** is reaching **2x within 15 minutes without first
-  trading at/below 50% of the anchor** (the drawdown clause makes the label mean "tradeable win",
-  not "eventually printed a green candle"; the short window keeps credit away from slow grinds
-  that are hard to trade), while the **goal** is a **4x by the hour**. The training target is
-  graded on the goal window - log2 of the 1h peak multiple, capped at a 100x, awarded only to
-  rows that cleared the 15-minute bar - so the learner hunts candidates that double fast and keep
-  running, preferring bigger runs exactly in proportion to their doublings. Labels are recorded for ALL candidates, not just curated/matched ones:
+  candidate gets sampled (at most hourly per token) and its price watched for an hour. The
+  **win** is reaching **2x within 1 hour without first trading at/below 50% of the anchor** (the
+  drawdown clause makes the label mean "tradeable win", not "eventually printed a green candle");
+  the **goal** is a **4x within the same hour**. The window was 15 minutes until 2026-10-03; it
+  moved to an hour because alerts are traded by hand. The training target is log2 of the 1h peak
+  multiple, capped at a 100x, awarded only to clean wins, so the learner prefers bigger runs exactly in proportion to
+  their doublings. Labels are recorded for ALL candidates, not just curated/matched ones:
   full-population outcomes are what let any future gate be evaluated offline, and they remove the
   explore/exploit problem entirely. Winners (and curated picks) stay watched to 24h for their
   ultimate peak. Sampling is minutely, so intra-minute wicks are invisible - accepted; the label
@@ -118,9 +117,9 @@ Three shipping phases, each useful on its own:
   about one alert per ten minutes) as a ceiling, counted from the actual alerts table, with a
   small burst allowance so a hot minute can put two out back-to-back. When a scan cycle brings
   more gate-passing contenders than the pace allows, the strongest conviction wins the slot and
-  the rest re-contend next cycle; a dynamic quality bar (the conviction level the last day's
-  candidate flow says corresponds to the target rate) keeps quiet afternoons from trickling out
-  barely-over-the-floor picks. A ceiling, never a quota — a dead hour still emits nothing.
+  the rest re-contend next cycle. Quality comes from each curator's hit-rate cutoff (the
+  conviction at which its out-of-sample calls met 75% at 2x and 50% at 4x), not from the pace.
+  A ceiling, never a quota — a dead hour still emits nothing.
   Every alert card publicly grades itself (watching / won / missed / disqualified, peak
   returns), and the tab's learning panel shows the training-set size, the base win rate, the
   feed's own hit rate, and the measured pace against the target.

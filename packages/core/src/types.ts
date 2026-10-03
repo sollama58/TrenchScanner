@@ -63,6 +63,8 @@ export interface CandidateToken {
    * though it's already present on every DexScreener response we fetch.
    */
   dexId?: string;
+  /** Whether the mint has ever appeared on DexScreener's paid-boost feed (Token.dexBoosted). */
+  dexBoosted?: boolean;
 }
 
 /**
@@ -82,6 +84,12 @@ export interface WatchlistCandidate {
   hasTwitter?: boolean;
   hasTelegram?: boolean;
   hasWebsite?: boolean;
+  /** The launcher-written description, when the source has one (Pump.fun does). */
+  description?: string;
+  /** Which discovery source produced this entry - recorded as Token.discoverySource. */
+  discoverySource?: string;
+  /** Seen on DexScreener's paid-boost feed - recorded (stickily) as Token.dexBoosted. */
+  boosted?: boolean;
 }
 
 export interface OnChainProfile {
@@ -140,6 +148,15 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   ageMinutes?: number;
   volumeToMcapRatio?: number;
   holderGrowthPct?: number;
+  /**
+   * Holder growth over the last 10 minutes - the short-window sibling of holderGrowthPct, which
+   * needs a snapshot 30 minutes old and so is unknown for every token younger than that, exactly
+   * the age where the fastest runs happen. 10 is the floor: holder counts come from a RugCheck
+   * report cached for 5 minutes.
+   */
+  holderGrowth10mPct?: number;
+  /** Minutes since the scan first saw this token inside the curated mcap band (Token.firstInBandAt). */
+  minutesSinceFirstInBand?: number;
   narrativeTags: string[];
   /** Derived from dexId, not the on-chain profile - see the comment on CandidateToken.dexId.
    *  Undefined only if dexId itself is (shouldn't happen for anything that reached scoring). */

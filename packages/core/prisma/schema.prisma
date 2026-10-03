@@ -81,13 +81,13 @@ model LinkedDevice {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
   /// Throttled, not written per request - see touchDevice.
-  lastSeenAt DateTime @default(now())
+  lastSeenAt DateTime  @default(now())
   /// Whatever the phone reported when it redeemed, so the list is recognisable ("iPhone, Safari")
   /// rather than a row of identical cuids. Untrusted client text: rendered, never interpreted.
-  userAgent String?
-  revokedAt DateTime?
+  userAgent  String?
+  revokedAt  DateTime?
 
   @@index([userId])
 }
@@ -171,21 +171,36 @@ model TelegramLink {
 
 /// A distinct Solana token being tracked.
 model Token {
-  id            String   @id @default(cuid())
-  mintAddress   String   @unique
-  symbol        String?
-  name          String?
-  pairAddress   String? // primary DexScreener pair used for pricing
+  id              String    @id @default(cuid())
+  mintAddress     String    @unique
+  symbol          String?
+  name            String?
+  pairAddress     String? // primary DexScreener pair used for pricing
   /// The token's logo, as hosted by DexScreener. Read from the pair response the scan already
   /// fetches rather than derived from the mint address: CDN URL shapes are undocumented and
   /// change, and a guessed one 404s silently for every mint that has no artwork - which is a lot
   /// of them. Null means DexScreener has no image, not that we failed to look.
-  imageUrl      String?
-  firstSeenAt   DateTime @default(now())
-  hasTwitter    Boolean  @default(false)
-  hasTelegram   Boolean  @default(false)
-  hasWebsite    Boolean  @default(false)
-  narrativeTags String[] @default([])
+  imageUrl        String?
+  firstSeenAt     DateTime  @default(now())
+  hasTwitter      Boolean   @default(false)
+  hasTelegram     Boolean   @default(false)
+  hasWebsite      Boolean   @default(false)
+  narrativeTags   String[]  @default([])
+  /// The launcher-written description from Pump.fun, captured at discovery. Re-scans come from
+  /// DexScreener, which has none, so this is the only copy - it feeds narrative tags and the AI
+  /// reviewer's brief.
+  description     String?
+  /// Which discovery source first added the mint: "pumpfun", "pumpfun-active" (the
+  /// recently-traded list), "pumpfun-koth" (king of the hill), "pumpportal" (live new-token
+  /// stream) or "dexscreener". Null for rows added before this was recorded.
+  discoverySource String?
+  /// Whether the mint has ever appeared on DexScreener's paid-boost feed. Sticky (false -> true
+  /// only); a model feature, so the learner can say whether a paid boost helps or hurts.
+  dexBoosted      Boolean   @default(false)
+  /// The first scan that saw the mint inside the curated mcap band. Feeds the
+  /// minutesSinceFirstInBand feature: a token that entered the band hours ago and is still
+  /// there is a different bet from one arriving now.
+  firstInBandAt   DateTime?
 
   // Stamped by GET /matches (see apps/api/src/routes/matches.ts) whenever this token appears on
   // a page someone actually fetched - not per-user, just "is anyone currently looking at this."
@@ -215,13 +230,19 @@ model Token {
   // Without this split, eviction was purely newest-first, and at real Pump.fun launch rates the
   // newest WATCHLIST_MAX_TRACKED mints span well under an hour - so a token that took two hours
   // to climb into the band silently fell off the radar. Null = never seen live by DexScreener.
-  lastLiveAt DateTime?
+  lastLiveAt  DateTime?
+  /// The market cap DexScreener reported the last time this mint was refreshed (stamped with
+  /// lastLiveAt). What the watchlist ranks on: a mint near or inside the mcap band keeps its
+  /// refresh slot however old it is, while launch-level mints compete newest-first for what's
+  /// left - see selectWatchlist.
+  lastMcapUsd Float?
 
-  snapshots TokenSnapshot[]
-  matches   Match[]
-  candidateOutcomes CandidateOutcome[]
-  curatedAlerts     CuratedAlert[]
+  snapshots              TokenSnapshot[]
+  matches                Match[]
+  candidateOutcomes      CandidateOutcome[]
+  curatedAlerts          CuratedAlert[]
   curatedShadowEmissions CuratedShadowEmission[]
+  aiReviews              AiReview[]
 
   @@index([lastViewedAt])
 }
@@ -250,7 +271,7 @@ model CuratedAlert {
   snapshotId String?
   snapshot   TokenSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
   /// Which decision-maker emitted it - "heuristic-v1", or a CuratorModel id once the learner
   /// takes over (Phase C). Shown in the feed's learning panel, and what lets the panel compare
   /// the two on their own emissions.
@@ -258,7 +279,7 @@ model CuratedAlert {
   /// The curator's conviction at emission, 0-100.
   confidence Float
   /// Why, as short human-readable strings - the top contributing signals at emission time.
-  reasons String[] @default([])
+  reasons    String[] @default([])
 
   anchorPriceUsd Float
   anchorMcapUsd  Float
@@ -268,16 +289,18 @@ model CuratedAlert {
   /// link while it exists.
   peak1hReturnPct    Float?
   maxDrawdown1hPct   Float?
-  /// THE verdict: doubled within the win window (15m) without first breaching the stop. Older
-  /// rows graded under the previous 1h bar have this null and hit2xIn1h set - see resolveOutcome.
+  /// Doubled within the first 15 minutes - informational speed signal, not the verdict.
   hit2xIn15m         Boolean?
-  /// Doubled at some point inside the goal window - informational, not the verdict.
+  /// THE verdict: doubled within the 1h win window (without first breaching the stop - see
+  /// `disqualified`).
   hit2xIn1h          Boolean?
   /// Cleared the 4x goal inside the goal window.
   hit4xIn1h          Boolean?
   disqualified       Boolean?
   peak24hReturnPct   Float?
   outcomeFinalizedAt DateTime?
+
+  aiReviews AiReview[]
 
   @@index([createdAt])
   @@index([tokenId, createdAt])
@@ -300,7 +323,7 @@ model CuratedShadowEmission {
   candidateOutcomeId String?
   candidateOutcome   CandidateOutcome? @relation(fields: [candidateOutcomeId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
   /// Which bench curator made the call - "heuristic-v1" or a CuratorModel id.
   source     String
   confidence Float
@@ -318,26 +341,65 @@ model CuratedShadowEmission {
 /// weights, the feature scaling, the emission threshold, and the walk-forward evidence all live
 /// in this row, so promotion is auditable and rollback is "flip status back". At most one row is
 /// ACTIVE at a time; while none is, the hand-tuned heuristic curates (curation/curator.ts).
+/// One AI reviewer call on a curated pick (apps/worker/src/ai/reviewer.ts): Claude's buy/no-buy
+/// verdict, graded by the same CandidateOutcome labels as the alerts, so its record can be
+/// checked before it is trusted to gate the feed (AI_REVIEW_MODE). In gate mode a "no_buy" pick
+/// is never sent, but its review row still anchors an outcome - that is what shows whether the
+/// vetoes were right.
+model AiReview {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  candidateOutcomeId String?
+  candidateOutcome   CandidateOutcome? @relation(fields: [candidateOutcomeId], references: [id], onDelete: SetNull)
+  /// The alert that was sent for this pick, if one was (null for a gate-mode veto).
+  curatedAlertId     String?
+  curatedAlert       CuratedAlert?     @relation(fields: [curatedAlertId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime @default(now())
+  /// "shadow" or "gate" - which mode the reviewer ran in for this call.
+  mode          String
+  model         String
+  /// "buy" or "no_buy"; null when the call failed (see error).
+  decision      String?
+  probability2x Float?
+  probability4x Float?
+  reasoning     String?
+  risks         String[] @default([])
+  error         String?
+  latencyMs     Int
+  inputTokens   Int?
+  outputTokens  Int?
+
+  anchorPriceUsd Float
+  anchorMcapUsd  Float
+
+  @@index([createdAt])
+  @@index([tokenId, createdAt])
+  @@index([decision, createdAt])
+}
+
 model CuratorModel {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
   /// Model family + featurization version, e.g. "weighted-logistic-v1". A reader that doesn't
   /// recognize the kind must ignore the row rather than guess at params.
-  kind String
+  kind         String
   /// Everything needed to score a candidate: feature names, standardization stats, weights,
   /// bias, emission threshold. Shape is owned by packages/core/src/curation/trainer.ts.
-  params Json
+  params       Json
   trainingRows Int
   trainingFrom DateTime
   trainingTo   DateTime
   /// The walk-forward folds this model was judged on, plus the promotion verdict - the public
   /// evidence behind "the model took over" (or didn't).
-  evalMetrics Json
+  evalMetrics  Json
   /// candidate: trained + evaluated, not curating. active: the current curator. retired: was
   /// active once.
-  status      String
-  activatedAt DateTime?
-  retiredAt   DateTime?
+  status       String
+  activatedAt  DateTime?
+  retiredAt    DateTime?
 
   @@index([status, createdAt])
 }
@@ -355,9 +417,25 @@ model CandidateOutcome {
   token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
 
   /// The moment the label is measured FROM - "if the curator had alerted right now".
-  anchorAt       DateTime @default(now())
+  anchorAt       DateTime  @default(now())
+  /// The base every label is graded from: the scan price at creation, then - once the watcher
+  /// takes the fill (entryAt) - the higher of the scan price and the first tick at least
+  /// CANDIDATE_ENTRY_DELAY_SECONDS later, plus slippage. See EntryRule in curation/labels.ts.
   anchorPriceUsd Float
   anchorMcapUsd  Float
+  /// When the fill was taken. Null until then; rows created before fills existed were stamped
+  /// with anchorAt by the migration (graded from the scan price, as they always were).
+  entryAt        DateTime?
+  /// The scan price, kept once anchorPriceUsd has moved to the fill.
+  signalPriceUsd Float?
+  /// How the row came to be sampled - the trainer and the cutoff calibration care which:
+  ///  - "hourly": the background sample, at most once per CANDIDATE_SAMPLE_SPACING_MINUTES.
+  ///  - "event": the first scan in each CANDIDATE_EVENT_SPACING_MINUTES window where the token
+  ///    looked ready (passesEventPreGate). The live curators decide ONLY at these moments, so
+  ///    these rows are exactly the distribution live picks come from.
+  ///  - "emission": a fresh anchor made for an alert or shadow pick. Chosen by a curator, so
+  ///    kept out of training (a model learning from its own picks feeds back on itself).
+  sampleKind     String    @default("hourly")
 
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
   /// snapshot knew, NOT a snapshot reference, so training data outlives the 30-day
@@ -367,7 +445,7 @@ model CandidateOutcome {
   features Json
   /// The heuristic composite score at anchor. Also inside `features`; duplicated as a real
   /// column so stats queries can aggregate on it without unpacking JSON.
-  score Float?
+  score    Float?
 
   // ---- Watch state (driven by apps/worker/src/jobs/candidateOutcomeJob.ts) ----
   /// When the watcher should next price-check this row. Advances every tick whether or not
@@ -380,24 +458,24 @@ model CandidateOutcome {
   /// at (their public outcome badge shows the 24h peak). Everything else stops at 1h: the
   /// extended watch is 3x the API volume of the label window, and a dud's 24h peak teaches
   /// nothing the 1h window didn't.
-  extended24h Boolean @default(false)
+  extended24h   Boolean   @default(false)
 
   // ---- Running aggregates, initialized to the anchor price at creation ----
   /// Highest price seen within the 1h label window.
-  peak1hPriceUsd Float
-  peak1hAt       DateTime?
+  peak1hPriceUsd      Float
+  peak1hAt            DateTime?
   /// Lowest price seen within the 1h window - the worst drawdown a buyer at the anchor endured.
-  low1hPriceUsd Float
+  low1hPriceUsd       Float
   /// Lowest price seen BEFORE the first observed 2x - frozen the tick the price first reaches
   /// 2x the anchor. This is what decides disqualification: a token that dropped 50%+ and then
   /// "2x'd from the bottom" stopped out anyone who actually bought the alert.
   lowBefore2xPriceUsd Float
-  /// First tick at which price >= 2x anchor was observed, anywhere inside the goal window. The
-  /// WIN test is this timestamp landing inside the first 15 minutes - see curation/labels.ts.
-  hit2xAt DateTime?
+  /// First tick at which price >= 2x anchor was observed, anywhere inside the 1h window - the
+  /// WIN test (see curation/labels.ts).
+  hit2xAt             DateTime?
   /// Highest price seen over the whole watch (up to 24h for extended rows).
-  peak24hPriceUsd Float
-  peak24hAt       DateTime?
+  peak24hPriceUsd     Float
+  peak24hAt           DateTime?
 
   // ---- Labels, written once when the goal window closes ----
   finalizedAt      DateTime?
@@ -405,21 +483,20 @@ model CandidateOutcome {
   peak1hReturnPct  Float?
   /// (low1h - anchor) / anchor * 100 - zero or negative.
   maxDrawdown1hPct Float?
-  /// THE bar: doubled inside the 15-minute win window. This is what "won" means for the feed,
-  /// the stats, and (via labelValue) the learner - see curation/labels.ts.
+  /// Doubled inside the first 15 minutes. Informational speed signal only since 2026-10-03.
   hit2xIn15m       Boolean?
-  /// Doubled at some point inside the 1h goal window. Informational only, kept because it is
-  /// what the pipeline graded on before the bar moved to 15 minutes.
+  /// THE bar: doubled inside the 1h win window. This is what "won" means for the feed, the
+  /// stats, and (via labelValue) the learner - see curation/labels.ts.
   hit2xIn1h        Boolean?
   /// Reached 4x inside the goal window - the ambition a win is trained to run toward.
   hit4xIn1h        Boolean?
-  /// Hit 2x inside the win window, but only after first dropping through the disqualifying
+  /// Hit 2x inside the 1h win window, but only after first dropping through the disqualifying
   /// drawdown - see lowBefore2xPriceUsd. Disqualified rows train as losses.
   disqualified     Boolean?
-  /// The training target: 0 unless the row cleared the win window's 2x, else log2 of the 1h
+  /// The training target: 0 unless the row cleanly doubled within the hour, else log2 of the 1h
   /// peak multiple, capped - a 2x is 1.0, the 4x goal is 2.0 - so the learner prefers bigger
-  /// runs exactly as much as they're worth in doublings, but only ever for candidates that
-  /// doubled fast first. See computeOutcomeLabels in curation/labels.ts.
+  /// runs exactly as much as they're worth in doublings. See computeOutcomeLabels in
+  /// curation/labels.ts.
   labelValue       Float?
   /// Set when the row is completely done (at 1h for non-extended rows, 24h for extended ones).
   finalized24hAt   DateTime?
@@ -427,8 +504,10 @@ model CandidateOutcome {
 
   curatedAlerts   CuratedAlert[]
   shadowEmissions CuratedShadowEmission[]
+  aiReviews       AiReview[]
 
   @@index([tokenId, anchorAt])
+  @@index([tokenId, sampleKind, anchorAt])
   @@index([finalized24hAt, nextCheckAt])
   @@index([anchorAt])
   @@index([finalizedAt])
