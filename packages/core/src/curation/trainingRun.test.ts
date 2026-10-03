@@ -17,11 +17,11 @@ const family = (
 ): FamilyResult => ({
   learner,
   verdict: { promote, reason: "" },
-  precisionCalibration: { threshold, support, winRatePct, goalRatePct: 50 },
+  precisionCalibration: { threshold, meetsTargets: threshold !== null, support, winRatePct, goalRatePct: 50 },
 });
 
 describe("pickCuratorFamily", () => {
-  it("prefers a family that found a qualifying cutoff", () => {
+  it("prefers a family whose cutoff met the targets", () => {
     expect(pickCuratorFamily([family("logistic", null, 80, 70), family("gbdt", 0.9, 30, 76)])).toBe(1);
   });
   it("then the one whose exam earned promotion", () => {
@@ -55,15 +55,18 @@ describe("calibrateThresholdForPrecision with confidenceZ", () => {
   }));
   const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 30 };
   it("accepts the thin record on observed rates", () => {
-    expect(calibrateThresholdForPrecision(calls, targets).threshold).not.toBeNull();
+    expect(calibrateThresholdForPrecision(calls, targets).meetsTargets).toBe(true);
   });
   it("rejects it once the lower bound has to clear the bar", () => {
-    expect(calibrateThresholdForPrecision(calls, { ...targets, confidenceZ: 1 }).threshold).toBeNull();
+    const strict = calibrateThresholdForPrecision(calls, { ...targets, confidenceZ: 1 });
+    expect(strict.meetsTargets).toBe(false);
+    // Missing the bar never stops the feed: there is still a cutoff to send at.
+    expect(strict.threshold).not.toBeNull();
   });
 });
 
 describe("runCuratorTraining", () => {
-  it("examines every family, records them all, and never emits on noise", async () => {
+  it("examines every family, records them all, and never promotes on noise", async () => {
     const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "noise", seed: 4 });
     const run = await runCuratorTraining(rows, {
       targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
@@ -76,7 +79,8 @@ describe("runCuratorTraining", () => {
       learners: ["logistic", "gbdt"],
     });
     expect(run.metrics.familyComparison?.map((f) => f.learner)).toEqual(["logistic", "gbdt"]);
-    expect(run.params.threshold).toBe(NEVER_EMIT_THRESHOLD);
+    expect(run.metrics.precisionCalibration.meetsTargets).toBe(false);
+    expect(run.params.threshold).not.toBe(NEVER_EMIT_THRESHOLD);
     expect(run.metrics.verdict.promote).toBe(false);
   });
 });

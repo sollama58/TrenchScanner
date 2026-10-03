@@ -23,9 +23,10 @@ import {
  */
 
 /**
- * The threshold a model gets when no cutoff met the hit-rate targets: above any probability
- * either family can produce, so it sends nothing. A finite number on purpose - params are stored
- * as JSON, and Infinity would round-trip as null.
+ * The threshold a model gets when its exam had no evidence to set a cutoff from (no cutoff with
+ * minSupport calls): above any probability either family can produce, so it sends nothing. Such
+ * a model is never promoted, so this only ever applies to a shadow candidate. A finite number on
+ * purpose - params are stored as JSON, and Infinity would round-trip as null.
  */
 export const NEVER_EMIT_THRESHOLD = 1.01;
 
@@ -84,13 +85,11 @@ export interface CuratorTrainingOutcome {
 
 /**
  * Picks the family to ship from the exam results, best first:
- *  1. one that found a cutoff meeting the targets beats one that didn't (it can send alerts at
- *     all);
+ *  1. one whose cutoff met the targets beats one whose cutoff is a best-effort miss;
  *  2. then one whose exam earned promotion (it beat the heuristic fold by fold);
- *  3. then the one whose qualifying cutoff sends more alerts - both met the bar, so more of them
- *     is strictly more tradeable calls;
- *  4. then the higher hit rate at that cutoff (when neither qualified: the better best-effort
- *     record, so the stored candidate is the closer miss);
+ *  3. when both met the targets, the one whose cutoff sends more alerts - more of them is
+ *     strictly more tradeable calls;
+ *  4. then the higher 2x rate at the cutoff (when neither met the targets: the closer miss);
  *  5. then the earlier family in the configured order (logistic first: simpler, so it keeps the
  *     job on an exact tie).
  * Choosing between two families on the same evidence is itself a (small) best-of-two search;
@@ -99,9 +98,9 @@ export interface CuratorTrainingOutcome {
 export function pickCuratorFamily(results: FamilyResult[]): number {
   let best = 0;
   const key = (r: FamilyResult) => [
-    r.precisionCalibration.threshold !== null ? 1 : 0,
+    r.precisionCalibration.meetsTargets === true ? 1 : 0,
     r.verdict.promote ? 1 : 0,
-    r.precisionCalibration.threshold !== null ? r.precisionCalibration.support : 0,
+    r.precisionCalibration.meetsTargets === true ? r.precisionCalibration.support : 0,
     r.precisionCalibration.winRatePct ?? -1,
   ];
   for (let i = 1; i < results.length; i++) {
@@ -163,13 +162,14 @@ export async function runCuratorTraining(
   // The deployable model trains on the FULL window - the folds were the exam, this is the model
   // that ships, with strictly more (and newer) data than any fold saw.
   const trained = await trainCuratorModel(rows, { recencyHalfLifeDays: cfg.recencyHalfLifeDays, learner });
-  // When no cutoff met the targets the model sends nothing and cannot take the job - a model
-  // that can't reach the bar on history it never saw has no business vouching for live tokens.
+  // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
+  // at its best-effort cutoff (see chooseCutoff) and still competes for the job on its exam.
+  // Only an exam with no judgeable cutoff at all leaves it without one.
   const deployedThreshold =
     precisionCalibration.threshold === null
       ? null
       : thresholdAtRank(trained, evaluation.decisionReference, precisionCalibration.threshold);
-  // The hand-tuned heuristic is held to the same bar while it holds the job. Its calls do not
+  // The hand-tuned heuristic gets its cutoff the same way while it holds the job. Its calls do not
   // depend on the model family, so any family's exam carries the same heuristic record.
   const heuristicCalibration = calibrateThresholdForPrecision(
     evaluation.heuristicOutOfSample,
@@ -177,12 +177,11 @@ export async function runCuratorTraining(
     cooldown,
   );
   const params = { ...trained, threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD } as TrainedCuratorParams;
-  const targetPct = (rate: number) => Math.round(rate * 100);
   const verdict =
     evaluation.verdict.promote && deployedThreshold === null
       ? {
           promote: false,
-          reason: `${evaluation.verdict.reason.replace(" - promoting", "")}, but no cutoff reached ${targetPct(cfg.targets.winRate)}% at 2x and ${targetPct(cfg.targets.goalRate)}% at 4x - keeping current curator`,
+          reason: `${evaluation.verdict.reason.replace(" - promoting", "")}, but too few out-of-sample calls to set a cutoff - keeping current curator`,
         }
       : evaluation.verdict;
   const metrics: StoredEvalMetrics = {
@@ -193,12 +192,9 @@ export async function runCuratorTraining(
     familyComparison: exams.map((e) => e.result),
     precisionCalibration,
     precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
-    // Stored only when there was evidence to judge on - some cutoff produced at least
-    // minSupport calls. Without it the heuristic keeps sending on its gate alone (see
-    // heuristicGate in curatedAlerts.ts) rather than being silenced by an empty exam.
-    ...(heuristicCalibration.threshold !== null || heuristicCalibration.support > 0
-      ? { heuristicCalibration }
-      : {}),
+    // Stored only when there was evidence to set a cutoff from. Without it the heuristic keeps
+    // sending on its gate alone (see heuristicGate in curatedAlerts.ts).
+    ...(heuristicCalibration.threshold !== null ? { heuristicCalibration } : {}),
     heuristicPrecisionCurve: precisionCurve(evaluation.heuristicOutOfSample),
   };
   return { params, metrics, evaluation };

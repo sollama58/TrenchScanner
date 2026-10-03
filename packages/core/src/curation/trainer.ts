@@ -332,7 +332,8 @@ export interface PrecisionTargets {
    * the lowest of hundreds of candidate cutoffs that happens to show 75% on the evidence is a
    * best-of-many search, and it favours cutoffs that got lucky - 23 of 30 is 77%, but the same
    * pick could easily run at 60% live. A bound shrinks a thin record toward caution and lets a
-   * well-supported one through. 0 or omitted = judge the observed rates (the old rule).
+   * well-supported one through. 0 or omitted = judge the observed rates. Missing the targets
+   * never silences the feed - see chooseCutoff.
    */
   confidenceZ?: number;
 }
@@ -361,20 +362,76 @@ function meetsTargets(wins: number, goals: number, n: number, targets: Precision
 const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
 export interface PrecisionCalibration {
-  /** The lowest probability whose calls met BOTH targets, or null when no cutoff did. */
+  /**
+   * The cutoff to send at: the lowest one whose calls met BOTH targets when any did, otherwise
+   * the best-effort cutoff (see calibrateThresholdForPrecision). Null only when no cutoff had
+   * minSupport calls to judge - there is no evidence to set one from.
+   */
   threshold: number | null;
-  /** Alerts the chosen cutoff (or, when unreachable, the best-scoring one) produced. */
+  /** Whether the chosen cutoff's record met the targets. Absent on rows stored before 2026-10-03. */
+  meetsTargets?: boolean;
+  /** Alerts the chosen cutoff produced in the evidence. */
   support: number;
   winRatePct: number | null;
   goalRatePct: number | null;
 }
 
+/** One candidate cutoff's record in the evidence. */
+interface CutoffRecord {
+  cutoff: number;
+  n: number;
+  wins: number;
+  goals: number;
+}
+
 /**
- * Picks the emission threshold by HIT RATE rather than pace: walking down the calls from most to
- * least confident, the lowest cutoff at which the calls above it still met both targets on at
- * least minSupport alerts. "Lowest" because every alert that still meets the bar is one more
- * tradeable call. Null when no cutoff meets the bar - the honest answer is then to send nothing
- * rather than to send whatever is least bad.
+ * The cutoff rule. The targets are what the feed aims for, not a gate: alerts are never held
+ * back just because nothing has reached them yet.
+ *  - When some cutoffs met the targets on at least minSupport alerts: the LOWEST of them, since
+ *    every alert that still meets the bar is one more tradeable call.
+ *  - Otherwise: the cutoff with the best hit-rate record - the highest Wilson lower bound of its
+ *    2x rate (z = max(1, confidenceZ)), 4x rate breaking ties. The bound, rather than the raw
+ *    rate, keeps "best" from meaning "the luckiest 30 calls": it favours a strong rate on many
+ *    alerts over a slightly stronger one on barely enough. The feed then sends its best calls,
+ *    and the stored record shows how far they are from the targets.
+ */
+function chooseCutoff(records: CutoffRecord[], targets: PrecisionTargets): PrecisionCalibration {
+  const point = (r: CutoffRecord, meets: boolean): PrecisionCalibration => ({
+    threshold: r.cutoff,
+    meetsTargets: meets,
+    support: r.n,
+    winRatePct: (r.wins / r.n) * 100,
+    goalRatePct: (r.goals / r.n) * 100,
+  });
+  const judged = records.filter((r) => r.n >= targets.minSupport);
+  if (judged.length === 0) {
+    return { threshold: null, meetsTargets: false, support: 0, winRatePct: null, goalRatePct: null };
+  }
+  let lowestQualifying: CutoffRecord | null = null;
+  for (const r of judged) {
+    if (
+      meetsTargets(r.wins, r.goals, r.n, targets) &&
+      (lowestQualifying === null || r.cutoff < lowestQualifying.cutoff)
+    )
+      lowestQualifying = r;
+  }
+  if (lowestQualifying !== null) return point(lowestQualifying, true);
+
+  const z = Math.max(1, targets.confidenceZ ?? 0);
+  let best = judged[0]!;
+  let bestScore = [wilsonLowerBound(best.wins, best.n, z), wilsonLowerBound(best.goals, best.n, z)];
+  for (const r of judged.slice(1)) {
+    const score = [wilsonLowerBound(r.wins, r.n, z), wilsonLowerBound(r.goals, r.n, z)];
+    if (score[0]! > bestScore[0]! || (score[0] === bestScore[0] && score[1]! > bestScore[1]!)) {
+      best = r;
+      bestScore = score;
+    }
+  }
+  return point(best, false);
+}
+
+/**
+ * Picks the emission threshold by HIT RATE rather than pace - see chooseCutoff for the rule.
  *
  * Fed OUT-OF-SAMPLE predictions (walk-forward test rows scored by a model that never saw them):
  * an in-sample hit rate is what a model believes about data it memorized, and it reliably
@@ -393,10 +450,9 @@ export function calibrateThresholdForPrecision(
     return calibrateWithCooldown(calls, targets, opts.cooldownMs);
   }
   const sorted = [...calls].sort((a, b) => b.probability - a.probability);
+  const records: CutoffRecord[] = [];
   let wins = 0;
   let goals = 0;
-  let chosen: PrecisionCalibration | null = null;
-  let best: PrecisionCalibration = { threshold: null, support: 0, winRatePct: null, goalRatePct: null };
   for (let i = 0; i < sorted.length; i++) {
     const call = sorted[i]!;
     if (call.labelValue > 0) wins += 1;
@@ -404,18 +460,9 @@ export function calibrateThresholdForPrecision(
     // Only judge at a boundary between distinct probabilities - a cutoff can't split a tie.
     const next = sorted[i + 1];
     if (next !== undefined && next.probability === call.probability) continue;
-    const n = i + 1;
-    if (n < targets.minSupport) continue;
-    const winRate = wins / n;
-    const goalRate = goals / n;
-    const point = { support: n, winRatePct: winRate * 100, goalRatePct: goalRate * 100 };
-    if (meetsTargets(wins, goals, n, targets)) {
-      chosen = { threshold: call.probability, ...point };
-    } else if (chosen === null && (best.winRatePct === null || winRate * 100 > best.winRatePct)) {
-      best = { threshold: null, ...point };
-    }
+    records.push({ cutoff: call.probability, n: i + 1, wins, goals });
   }
-  return chosen ?? best;
+  return chooseCutoff(records, targets);
 }
 
 /** How many candidate cutoffs the cooldown-aware calibration evaluates at most. */
@@ -446,8 +493,7 @@ function calibrateWithCooldown(
   if (cutoffs[cutoffs.length - 1] !== distinct[distinct.length - 1])
     cutoffs.push(distinct[distinct.length - 1]!);
 
-  let chosen: PrecisionCalibration | null = null;
-  let best: PrecisionCalibration = { threshold: null, support: 0, winRatePct: null, goalRatePct: null };
+  const records: CutoffRecord[] = [];
   for (const cutoff of cutoffs) {
     const lastSent = new Map<string, number>();
     let n = 0;
@@ -463,17 +509,9 @@ function calibrateWithCooldown(
       if (call.labelValue > 0) wins += 1;
       if (call.labelValue >= GOAL_LABEL) goals += 1;
     }
-    if (n < targets.minSupport) continue;
-    const winRate = wins / n;
-    const goalRate = goals / n;
-    const point = { support: n, winRatePct: winRate * 100, goalRatePct: goalRate * 100 };
-    if (meetsTargets(wins, goals, n, targets)) {
-      chosen = { threshold: cutoff, ...point };
-    } else if (chosen === null && (best.winRatePct === null || winRate * 100 > best.winRatePct)) {
-      best = { threshold: null, ...point };
-    }
+    records.push({ cutoff, n, wins, goals });
   }
-  return chosen ?? best;
+  return chooseCutoff(records, targets);
 }
 
 /** One point on the hit-rate curve: what sending everything at or above `minProbability` earned. */
@@ -814,14 +852,12 @@ export async function walkForwardEvaluate(
       const heuristicCalibration = calibrate(
         others.flatMap((o) => o.heuristic.map((h) => call(h.row, h.confidence))),
       );
-      // Same rule as production (heuristicGate in curatedAlerts.ts): no evidence at all leaves
-      // the gate alone; evidence with no qualifying cutoff silences the heuristic.
-      const gated = (opts.heuristicPrecisionGate ?? true) && heuristicCalibration.support > 0;
+      // Same rule as production (heuristicGate in curatedAlerts.ts): no cutoff (no evidence)
+      // leaves the gate alone; otherwise the heuristic sends at its calibrated cutoff.
       const heuristicCutoff = heuristicCalibration.threshold;
-      heuristicCalls = !gated
-        ? fold.heuristic
-        : heuristicCutoff === null
-          ? []
+      heuristicCalls =
+        !(opts.heuristicPrecisionGate ?? true) || heuristicCutoff === null
+          ? fold.heuristic
           : fold.heuristic.filter((h) => h.confidence >= heuristicCutoff);
     } else {
       modelCalls = fold.model.filter((m) => m.confidence >= fold.paceThreshold);

@@ -39,12 +39,11 @@ interface CuratorRoster {
   /** The newest trained-but-not-promoted model - the bench side while the heuristic is live. */
   newestCandidate: CuratorModelRef | null;
   /**
-   * The heuristic's hit-rate cutoff from the newest training run (in rank-score units):
-   * undefined when no run has produced one yet (the heuristic then sends on its gate alone),
-   * null when the run found no cutoff that met the targets (the heuristic then sends nothing),
-   * a number otherwise. See curatorTrainingJob.ts and heuristicGate below.
+   * The heuristic's hit-rate cutoff from the newest training run (in rank-score units), or
+   * undefined when no run has produced one (the heuristic then sends on its gate alone). See
+   * curatorTrainingJob.ts and heuristicGate below.
    */
-  heuristicCutoff: number | null | undefined;
+  heuristicCutoff: number | undefined;
 }
 
 let modelCache: { fetchedAt: number; roster: CuratorRoster } | null = null;
@@ -85,29 +84,28 @@ async function curatorRoster(): Promise<CuratorRoster> {
 }
 
 /** Pulls heuristicCalibration.threshold out of a stored evalMetrics blob - see CuratorRoster. */
-function readHeuristicCutoff(evalMetrics: unknown): number | null | undefined {
+function readHeuristicCutoff(evalMetrics: unknown): number | undefined {
   if (typeof evalMetrics !== "object" || evalMetrics === null) return undefined;
   const calibration = (evalMetrics as { heuristicCalibration?: { threshold?: unknown } })
     .heuristicCalibration;
   if (calibration === undefined || calibration === null) return undefined;
-  return typeof calibration.threshold === "number" ? calibration.threshold : null;
+  // A null threshold is a run from before missed targets stopped silencing the feed: treat it as
+  // no cutoff (gate alone), never as "send nothing".
+  return typeof calibration.threshold === "number" ? calibration.threshold : undefined;
 }
 
 /**
- * The heuristic held to the feed's hit-rate targets: its gate decides "worth alerting", and the
- * cutoff its own out-of-sample record earned decides "at a conviction where calls like this have
- * hit 75%". Without a training run yet there is no record and the gate stands alone; with one
- * that found no qualifying cutoff, the heuristic sends nothing - a quiet feed is the honest
- * answer to "nothing here meets the bar". CURATED_HEURISTIC_PRECISION_GATE=false restores the
- * gate-only behaviour.
+ * The heuristic steered by the feed's hit-rate targets: its gate decides "worth alerting", and the
+ * cutoff its own out-of-sample record earned decides the conviction it sends at - where its calls
+ * met the targets, or its best record when none did. Without a cutoff the gate stands alone.
+ * CURATED_HEURISTIC_PRECISION_GATE=false restores the gate-only behaviour.
  */
 function heuristicGate(scored: ScoredToken, roster: CuratorRoster, env: Env): CurationDecision {
   const decision = evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE);
   if (!decision.curate || !env.CURATED_HEURISTIC_PRECISION_GATE || roster.heuristicCutoff === undefined) {
     return decision;
   }
-  const cutoff = roster.heuristicCutoff;
-  return cutoff !== null && decision.confidence >= cutoff ? decision : { ...decision, curate: false };
+  return decision.confidence >= roster.heuristicCutoff ? decision : { ...decision, curate: false };
 }
 
 function decideWithModel(

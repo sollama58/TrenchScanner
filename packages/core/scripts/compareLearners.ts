@@ -105,7 +105,7 @@ for (const truth of truths) {
         auc: t.auc + a / seeds,
       });
       console.log(
-        `  seed ${seed} ${c.label} [${run.metrics.learner}] AUC ${fmt(a, 3)} | exam cutoff ${run.metrics.precisionCalibration.threshold === null ? "none" : `${run.metrics.precisionCalibration.support} alerts @ ${fmt(run.metrics.precisionCalibration.winRatePct)}%`} | future: ${live.sent} alerts, 2x ${fmt(live.sent ? (live.wins / live.sent) * 100 : null)}%, 4x ${fmt(live.sent ? (live.goals / live.sent) * 100 : null)}%`,
+        `  seed ${seed} ${c.label} [${run.metrics.learner}] AUC ${fmt(a, 3)} | exam cutoff ${run.metrics.precisionCalibration.threshold === null ? "none" : `${run.metrics.precisionCalibration.meetsTargets ? "met" : "best effort"}, ${run.metrics.precisionCalibration.support} alerts @ ${fmt(run.metrics.precisionCalibration.winRatePct)}%`} | future: ${live.sent} alerts, 2x ${fmt(live.sent ? (live.wins / live.sent) * 100 : null)}%, 4x ${fmt(live.sent ? (live.goals / live.sent) * 100 : null)}%`,
       );
     }
   }
