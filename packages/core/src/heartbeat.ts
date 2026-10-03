@@ -47,3 +47,26 @@ export async function recordHeartbeat(job: HeartbeatJob, result: HeartbeatResult
     },
   });
 }
+
+/**
+ * Stamps `runningSince` onto a job's heartbeat row as a run begins, leaving lastRunAt alone. The
+ * end-of-run recordHeartbeat replaces meta and so clears it - a row that still carries one long
+ * after its job's interval is a run that has not returned, which is otherwise indistinguishable
+ * from a worker that is not running at all. No row yet (a job's first-ever run) means nothing to
+ * stamp, which is fine: the run's own heartbeat creates it.
+ */
+export async function recordRunStart(job: HeartbeatJob, at: Date = new Date()): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "SystemHeartbeat"
+    SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('runningSince', ${at.toISOString()}::text)
+    WHERE job = ${job}`;
+}
+
+/** When the run in flight started, read back from a heartbeat row's meta - see recordRunStart. */
+export function runningSinceFrom(meta: unknown): Date | null {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const raw = (meta as Record<string, unknown>).runningSince;
+  if (typeof raw !== "string") return null;
+  const at = new Date(raw);
+  return Number.isNaN(at.getTime()) ? null : at;
+}

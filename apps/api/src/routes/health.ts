@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { prisma } from "@trenchscanner/core";
+import { prisma, runningSinceFrom } from "@trenchscanner/core";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
@@ -56,13 +56,42 @@ export async function registerHealthRoutes(app: FastifyInstance) {
     const now = Date.now();
 
     return {
-      jobs: heartbeats.map((h) => ({
-        job: h.job,
-        lastRunAt: h.lastRunAt,
-        lastSuccessAt: h.lastSuccessAt,
-        lastError: h.lastError ? h.lastError.slice(0, MAX_ERROR_LENGTH) : null,
-        stale: now - h.lastRunAt.getTime() > (STALE_THRESHOLD_MS[h.job] ?? DEFAULT_STALE_THRESHOLD_MS),
-      })),
+      jobs: heartbeats.map((h) => {
+        const threshold = STALE_THRESHOLD_MS[h.job] ?? DEFAULT_STALE_THRESHOLD_MS;
+        // A run in flight for longer than the stale threshold is a hung run, not a slow one -
+        // reported separately because "last finished Sep 21, running since 20:33" and "last
+        // finished Sep 21, nothing running" call for different fixes.
+        const runningSince = runningSinceFrom(h.meta);
+        const runningForMs = runningSince ? now - runningSince.getTime() : null;
+        return {
+          job: h.job,
+          lastRunAt: h.lastRunAt,
+          lastSuccessAt: h.lastSuccessAt,
+          lastError: h.lastError ? h.lastError.slice(0, MAX_ERROR_LENGTH) : null,
+          stale: now - h.lastRunAt.getTime() > threshold,
+          runningForMs,
+          hung: runningForMs !== null && runningForMs > threshold,
+          // How long the last run took, and for the scan cycle where that time went - timings
+          // only, nothing about tokens or users.
+          lastRun: lastRunSummary(h.meta),
+        };
+      }),
     };
   });
+}
+
+/** The timing fields of a heartbeat's meta, and nothing else it might carry. */
+function lastRunSummary(meta: unknown): { durationMs?: number; stagesMs?: Record<string, number> } | null {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const m = meta as Record<string, unknown>;
+  const out: { durationMs?: number; stagesMs?: Record<string, number> } = {};
+  if (typeof m.durationMs === "number") out.durationMs = m.durationMs;
+  if (typeof m.stagesMs === "object" && m.stagesMs !== null && !Array.isArray(m.stagesMs)) {
+    out.stagesMs = Object.fromEntries(
+      Object.entries(m.stagesMs as Record<string, unknown>).filter(
+        (e): e is [string, number] => typeof e[1] === "number",
+      ),
+    );
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
