@@ -265,6 +265,12 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // How long a curated pick that lost its slot to the governor (a full hour or burst window, or
+  // stronger contenders) keeps re-contending. Curators decide only at a token's event moment,
+  // and the event is spent for CANDIDATE_EVENT_SPACING_MINUTES, so without this a pick that
+  // lost one busy minute was gone for the hour. A retry re-runs the curator on the token's
+  // current numbers, so it only goes out if it still clears the cutoff. 0 disables retries.
+  CURATED_CONTENDER_RETRY_MINUTES: z.coerce.number().min(0).default(15),
 
   // The AI reviewer (apps/worker/src/ai/reviewer.ts): a buy/no-buy second opinion from Claude on
   // every curated pick the governor selects. "shadow" (the default) asks and records the answer

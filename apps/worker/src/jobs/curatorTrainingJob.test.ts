@@ -54,6 +54,8 @@ const promoteVerdict = (promote: boolean): WalkForwardResult => ({
   verdict: { promote, reason: promote ? "test-promote" : "test-hold" },
   outOfSample: [],
   heuristicOutOfSample: [],
+  outOfSampleRanks: [],
+  decisionReference: [],
 });
 
 /**

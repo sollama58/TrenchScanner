@@ -547,6 +547,21 @@ export interface WalkForwardResult {
    * rank score as the "probability" - what the heuristic's own hit-rate cutoff is set from.
    */
   heuristicOutOfSample: ScoredOutcome[];
+  /**
+   * outOfSample again, with each call's probability replaced by its CONFIDENCE RANK inside its
+   * own fold (see confidenceRanks): the share of that fold's emittable test rows its fold model
+   * scored strictly lower. Each fold model has its own probability scale, and the model that
+   * ships (trained on the full window) has yet another, so a raw probability cutoff learned from
+   * the folds means something different on the shipped model. A rank cutoff - "the top 3% of
+   * decision moments" - carries over: calibrate on this, then translate the rank to the shipped
+   * model's probability with thresholdAtRank over decisionReference.
+   */
+  outOfSampleRanks: ScoredOutcome[];
+  /**
+   * The rows the ranks were measured against: every emittable test row of every judged fold
+   * (the newest half of the history). thresholdAtRank scores these with the shipped model.
+   */
+  decisionReference: TrainingRow[];
 }
 
 export interface WalkForwardOptions {
@@ -587,6 +602,20 @@ export interface WalkForwardOptions {
    * deduplicated. Omitted = no cooldown (tests).
    */
   cooldownHours?: number;
+  /**
+   * The feed's hit-rate targets. When set, each side is graded at the cutoff production
+   * actually applies to it - the model at its hit-rate rank cutoff, the heuristic at its
+   * hit-rate rank-score cutoff (see heuristicPrecisionGate) - each calibrated on the OTHER
+   * folds' out-of-sample calls, so no fold is graded with a cutoff chosen from its own outcomes.
+   * Omitted = the older policy: the model at the pace cutoff (calibrateThreshold), the heuristic
+   * on its gate alone.
+   */
+  targets?: PrecisionTargets;
+  /**
+   * Mirrors CURATED_HEURISTIC_PRECISION_GATE: whether the heuristic is held to its hit-rate
+   * cutoff (only meaningful with targets). Default true.
+   */
+  heuristicPrecisionGate?: boolean;
 }
 
 /** Whether a row is a moment a live curator decides on - see WalkForwardOptions.decisionRowsOnly. */
@@ -623,11 +652,26 @@ export async function walkForwardEvaluate(
   const minRowsToPromote = opts.minRowsToPromote ?? 1_500;
 
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
-  const folds: EvalFold[] = [];
-  const outOfSample: ScoredOutcome[] = [];
-  const heuristicOutOfSample: ScoredOutcome[] = [];
   const cooldownMs = opts.cooldownHours !== undefined ? opts.cooldownHours * 3_600_000 : undefined;
   const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+  const inBand = (r: TrainingRow) =>
+    (!opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand)) &&
+    (!opts.decisionRowsOnly || isDecisionRow(r));
+
+  // Pass one: train each fold's model and score its test slice. Pass two (below) grades the
+  // folds - it runs after all of them are scored because, with targets, a fold's cutoffs are
+  // calibrated on the other folds' out-of-sample calls.
+  interface ScoredFold {
+    test: TrainingRow[];
+    trainRows: number;
+    testEmittable: TrainingRow[];
+    spanHours: number;
+    /** The pace cutoff, used only without targets. */
+    paceThreshold: number;
+    model: { row: TrainingRow; confidence: number; rank: number }[];
+    heuristic: { row: TrainingRow; confidence: number }[];
+  }
+  const scoredFolds: ScoredFold[] = [];
 
   if (sorted.length >= minTrainRows + minTestRows) {
     // Test folds tile the newest 50% of history; the oldest 50% is the first fold's training
@@ -658,23 +702,16 @@ export async function walkForwardEvaluate(
         );
       if (train.length < minTrainRows || test.length < minTestRows) continue;
 
-      const inBand = (r: TrainingRow) =>
-        (!opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand)) &&
-        (!opts.decisionRowsOnly || isDecisionRow(r));
-
       const params = await trainCurator(train, { recencyHalfLifeDays: opts.recencyHalfLifeDays });
-      // Calibrated on the band-filtered train slice, exactly as the training job calibrates the
-      // deployable threshold - a fold whose threshold is ranked against unemittable rows grades
-      // a model production never ships. Training itself stays full-window (mcap is a feature).
-      const trainEmittable = train.filter(inBand);
-      const threshold = calibrateThreshold(
-        params,
-        trainEmittable.length > 0 ? trainEmittable : train,
-        opts.targetPerHour,
-      );
+      // Without targets the model plays the pace cutoff, calibrated on the band-filtered train
+      // slice - a threshold ranked against unemittable rows grades a model production never
+      // ships. Training itself stays full-window (mcap is a feature).
+      const trainEmittable = opts.targets ? [] : train.filter(inBand);
+      const paceThreshold = opts.targets
+        ? 0
+        : calibrateThreshold(params, trainEmittable.length > 0 ? trainEmittable : train, opts.targetPerHour);
 
       const spanMs = test[test.length - 1]!.anchorAt.getTime() - test[0]!.anchorAt.getTime();
-      const spanHours = Math.max(1, spanMs / 3_600_000);
 
       // Everything a fold judges - emissions AND the blind-chance baselines - is measured over
       // the rows either curator could actually emit. Out-of-band test rows skew high (they're
@@ -682,74 +719,152 @@ export async function walkForwardEvaluate(
       // letting them into meanLabelPerRow would raise the "beat blind chance" bar with wins
       // nobody was allowed to pick.
       const testEmittable = test.filter(inBand);
-
-      // Both sides play the GOVERNED policy production actually runs (curation/governor.ts):
-      // clear your gate, then only the strongest targetPerHour x span picks make the feed,
-      // strongest conviction first. Grading all-above-threshold instead would score a firehose
-      // neither curator is allowed to be - and would flatter whichever side over-emits, since
-      // extra mediocre picks pad `emitted` while the governor would have cut exactly those.
-      const emissionBudget = Math.max(1, Math.round(opts.targetPerHour * spanHours));
-      const takeBest = (ranked: { row: TrainingRow; confidence: number }[]): TrainingRow[] =>
-        applyCooldown(ranked, cooldownMs)
-          .sort((a, b) => b.confidence - a.confidence)
-          .slice(0, emissionBudget)
-          .map((x) => x.row);
-
-      const modelScored = testEmittable.map((row) => ({
-        row,
-        confidence: scoreCandidateWithModel(params, row.features),
-      }));
-      for (const { row, confidence } of modelScored) {
-        outOfSample.push({
-          probability: confidence,
-          labelValue: row.labelValue,
-          tokenId: row.tokenId,
-          anchorAt: row.anchorAt,
-        });
-      }
-      const modelEmitted = takeBest(modelScored.filter(({ confidence }) => confidence >= threshold));
-      const heuristicScored = testEmittable.flatMap((row) => {
-        const scored = scoredFromFeatures(row.features, row.anchorPriceUsd, row.anchorMcapUsd);
-        if (!evaluateCandidateHeuristic(scored, opts.heuristicMinScore).curate) return [];
-        return [{ row, confidence: curationRankScore(scored) }];
-      });
-      // The heuristic's own out-of-sample record, in its own conviction units (rank score) -
-      // what its hit-rate cutoff is calibrated from, exactly as the model's is from outOfSample.
-      for (const { row, confidence } of heuristicScored) {
-        heuristicOutOfSample.push({
-          probability: confidence,
-          labelValue: row.labelValue,
-          tokenId: row.tokenId,
-          anchorAt: row.anchorAt,
-        });
-      }
-      const heuristicEmitted = takeBest(heuristicScored);
-
-      folds.push({
-        testFrom: test[0]!.anchorAt.toISOString(),
-        testTo: test[test.length - 1]!.anchorAt.toISOString(),
+      const probabilities = testEmittable.map((row) => scoreCandidateWithModel(params, row.features));
+      const ranks = confidenceRanks(probabilities);
+      scoredFolds.push({
+        test,
         trainRows: train.length,
-        testRows: test.length,
-        baseWinRatePct:
-          testEmittable.length > 0
-            ? (testEmittable.filter((r) => r.labelValue > 0).length / testEmittable.length) * 100
-            : 0,
-        meanLabelPerRow:
-          testEmittable.length > 0
-            ? testEmittable.reduce((s, r) => s + r.labelValue, 0) / testEmittable.length
-            : 0,
-        model: sideMetrics(modelEmitted, spanHours),
-        heuristic: sideMetrics(heuristicEmitted, spanHours),
+        testEmittable,
+        spanHours: Math.max(1, spanMs / 3_600_000),
+        paceThreshold,
+        model: testEmittable.map((row, i) => ({ row, confidence: probabilities[i]!, rank: ranks[i]! })),
+        heuristic: testEmittable.flatMap((row) => {
+          const scored = scoredFromFeatures(row.features, row.anchorPriceUsd, row.anchorMcapUsd);
+          if (!evaluateCandidateHeuristic(scored, opts.heuristicMinScore).curate) return [];
+          return [{ row, confidence: curationRankScore(scored) }];
+        }),
       });
     }
   }
+
+  const call = (row: TrainingRow, probability: number): ScoredOutcome => ({
+    probability,
+    labelValue: row.labelValue,
+    tokenId: row.tokenId,
+    anchorAt: row.anchorAt,
+  });
+  const outOfSample = scoredFolds.flatMap((f) => f.model.map((m) => call(m.row, m.confidence)));
+  const outOfSampleRanks = scoredFolds.flatMap((f) => f.model.map((m) => call(m.row, m.rank)));
+  // The heuristic's own out-of-sample record, in its own conviction units (rank score) - what its
+  // hit-rate cutoff is calibrated from, exactly as the model's is from outOfSampleRanks.
+  const heuristicOutOfSample = scoredFolds.flatMap((f) => f.heuristic.map((h) => call(h.row, h.confidence)));
+
+  const folds: EvalFold[] = scoredFolds.map((fold, f) => {
+    // Both sides play the GOVERNED policy production actually runs (curation/governor.ts):
+    // clear your cutoff, then only the strongest targetPerHour x span picks make the feed,
+    // strongest conviction first. Grading all-above-cutoff instead would score a firehose
+    // neither curator is allowed to be - and would flatter whichever side over-emits, since
+    // extra mediocre picks pad `emitted` while the governor would have cut exactly those.
+    const emissionBudget = Math.max(1, Math.round(opts.targetPerHour * fold.spanHours));
+    const takeBest = (ranked: { row: TrainingRow; confidence: number }[]): TrainingRow[] =>
+      applyCooldown(ranked, cooldownMs)
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, emissionBudget)
+        .map((x) => x.row);
+
+    let modelCalls: { row: TrainingRow; confidence: number }[];
+    let heuristicCalls: { row: TrainingRow; confidence: number }[];
+    if (opts.targets) {
+      // Production's cutoffs, calibrated the way the training job calibrates them - but on the
+      // other folds' calls only, so this fold is graded on outcomes its cutoff never saw.
+      const others = scoredFolds.filter((_, g) => g !== f);
+      const calibrate = (calls: ScoredOutcome[]) =>
+        calibrateThresholdForPrecision(calls, opts.targets!, { cooldownMs });
+      const modelCutoff = calibrate(others.flatMap((o) => o.model.map((m) => call(m.row, m.rank)))).threshold;
+      modelCalls = modelCutoff === null ? [] : fold.model.filter((m) => m.rank >= modelCutoff);
+      const heuristicCalibration = calibrate(
+        others.flatMap((o) => o.heuristic.map((h) => call(h.row, h.confidence))),
+      );
+      // Same rule as production (heuristicGate in curatedAlerts.ts): no evidence at all leaves
+      // the gate alone; evidence with no qualifying cutoff silences the heuristic.
+      const gated = (opts.heuristicPrecisionGate ?? true) && heuristicCalibration.support > 0;
+      const heuristicCutoff = heuristicCalibration.threshold;
+      heuristicCalls = !gated
+        ? fold.heuristic
+        : heuristicCutoff === null
+          ? []
+          : fold.heuristic.filter((h) => h.confidence >= heuristicCutoff);
+    } else {
+      modelCalls = fold.model.filter((m) => m.confidence >= fold.paceThreshold);
+      heuristicCalls = fold.heuristic;
+    }
+
+    const { test, testEmittable } = fold;
+    return {
+      testFrom: test[0]!.anchorAt.toISOString(),
+      testTo: test[test.length - 1]!.anchorAt.toISOString(),
+      trainRows: fold.trainRows,
+      testRows: test.length,
+      baseWinRatePct:
+        testEmittable.length > 0
+          ? (testEmittable.filter((r) => r.labelValue > 0).length / testEmittable.length) * 100
+          : 0,
+      meanLabelPerRow:
+        testEmittable.length > 0
+          ? testEmittable.reduce((s, r) => s + r.labelValue, 0) / testEmittable.length
+          : 0,
+      model: sideMetrics(takeBest(modelCalls), fold.spanHours),
+      heuristic: sideMetrics(takeBest(heuristicCalls), fold.spanHours),
+    };
+  });
 
   return {
     folds,
     verdict: decidePromotion(folds, rows.length, minRowsToPromote, opts.minEmissionsToWin),
     outOfSample,
     heuristicOutOfSample,
+    outOfSampleRanks,
+    decisionReference: scoredFolds.flatMap((f) => f.testEmittable),
   };
+}
+
+/**
+ * Each probability's confidence rank within its own set: the share of the set scored strictly
+ * lower, in [0, 1). Ties share a rank, so a cutoff can never split them.
+ */
+export function confidenceRanks(probabilities: number[]): number[] {
+  const n = probabilities.length;
+  if (n === 0) return [];
+  const ascending = [...probabilities].sort((a, b) => a - b);
+  return probabilities.map((p) => lowerBound(ascending, p) / n);
+}
+
+/** Index of the first element >= value in an ascending array. */
+function lowerBound(ascending: number[], value: number): number {
+  let lo = 0;
+  let hi = ascending.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (ascending[mid]! < value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Translates a rank cutoff (from calibrating outOfSampleRanks) into a probability cutoff for the
+ * model that actually ships: score the reference rows with it and take the lowest probability
+ * whose rank there clears the cutoff. The shipped model then passes the same share of decision
+ * moments that met the hit-rate targets in the exam, ranked by its own (better-informed) scale.
+ * A cutoff above every reference rank falls back to the reference's best score. With no
+ * reference rows there is nothing to translate against - null, and the model sends nothing.
+ */
+export function thresholdAtRank(
+  params: Omit<TrainedCuratorParams, "threshold">,
+  referenceRows: TrainingRow[],
+  rankCutoff: number,
+): number | null {
+  if (referenceRows.length === 0) return null;
+  const probabilities = referenceRows.map((r) => scoreCandidateWithModel(params, r.features));
+  const ranks = confidenceRanks(probabilities);
+  let cutoff: number | null = null;
+  let best = -Infinity;
+  for (let i = 0; i < probabilities.length; i++) {
+    if (probabilities[i]! > best) best = probabilities[i]!;
+    if (ranks[i]! >= rankCutoff && (cutoff === null || probabilities[i]! < cutoff))
+      cutoff = probabilities[i]!;
+  }
+  return cutoff ?? best;
 }
 
 /**

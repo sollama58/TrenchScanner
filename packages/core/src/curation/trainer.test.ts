@@ -7,6 +7,8 @@ import {
   precisionCurve,
   walkForwardEvaluate,
   decidePromotion,
+  confidenceRanks,
+  thresholdAtRank,
   transformFeature,
   type TrainingRow,
   type EvalFold,
@@ -487,6 +489,120 @@ describe("walkForwardEvaluate leak guards", () => {
       expect(call.probability).toBeGreaterThanOrEqual(0);
       expect(call.probability).toBeLessThanOrEqual(100);
     }
+  });
+});
+
+describe("rank-space cutoffs", () => {
+  it("ranks by the share of the set scored strictly lower, sharing ranks on ties", () => {
+    expect(confidenceRanks([0.2, 0.9, 0.5, 0.5])).toEqual([0, 0.75, 0.25, 0.25]);
+    expect(confidenceRanks([])).toEqual([]);
+  });
+
+  it("translates a rank cutoff to the same rows whatever the shipped model's probability scale", async () => {
+    // The bug this guards: a cutoff learned on fold models' probabilities was applied raw to
+    // the full-window model, whose scale differs. Two models with identical rankings but very
+    // different probabilities must pass exactly the same rows at the same rank cutoff.
+    const rows = syntheticRows(1_000);
+    const params = await trainCurator(rows);
+    const shifted = { ...params, bias: params.bias + 2 }; // same order, every probability higher
+    const passing = (p: typeof params, cutoff: number) =>
+      rows.filter((r) => scoreCandidateWithModel(p, r.features) >= cutoff).length;
+
+    const original = thresholdAtRank(params, rows, 0.9)!;
+    const moved = thresholdAtRank(shifted, rows, 0.9)!;
+    expect(moved).toBeGreaterThan(original);
+    expect(passing(params, original)).toBe(passing(shifted, moved));
+    expect(passing(params, original)).toBeGreaterThanOrEqual(95);
+    expect(passing(params, original)).toBeLessThanOrEqual(105);
+  });
+
+  it("falls back to the best reference score above every rank, and to null with no reference", async () => {
+    const rows = syntheticRows(200);
+    const params = await trainCurator(rows);
+    const best = Math.max(...rows.map((r) => scoreCandidateWithModel(params, r.features)));
+    expect(thresholdAtRank(params, rows, 1)).toBe(best);
+    expect(thresholdAtRank(params, [], 0.5)).toBeNull();
+  });
+
+  it("returns per-fold ranks alongside the raw out-of-sample calls, and the rows they rank", async () => {
+    const result = await walkForwardEvaluate(syntheticRows(3_000), {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+    });
+    expect(result.outOfSampleRanks).toHaveLength(result.outOfSample.length);
+    expect(result.decisionReference).toHaveLength(result.outOfSample.length);
+    for (const call of result.outOfSampleRanks) {
+      expect(call.probability).toBeGreaterThanOrEqual(0);
+      expect(call.probability).toBeLessThan(1);
+    }
+  });
+});
+
+describe("walkForwardEvaluate at the hit-rate cutoffs", () => {
+  // The hot ~20% of synthetic rows win 60% of the time, so a 50% target is reachable.
+  const reachable = { winRate: 0.5, goalRate: 0, minSupport: 10 };
+  const impossible = { winRate: 0.99, goalRate: 0.99, minSupport: 10 };
+
+  it("grades the model at the cutoff calibrated on the other folds", async () => {
+    const result = await walkForwardEvaluate(syntheticRows(3_000), {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1_500,
+      targets: reachable,
+    });
+    expect(result.folds.length).toBeGreaterThanOrEqual(2);
+    for (const fold of result.folds) {
+      expect(fold.model.emitted).toBeGreaterThan(0);
+      expect(fold.model.precisionPct ?? 0).toBeGreaterThan(fold.baseWinRatePct * 1.5);
+    }
+    expect(result.verdict.promote).toBe(true);
+  });
+
+  it("sends nothing from a model whose other folds never met the targets, and never promotes it", async () => {
+    const result = await walkForwardEvaluate(syntheticRows(3_000), {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1_500,
+      targets: impossible,
+    });
+    for (const fold of result.folds) expect(fold.model.emitted).toBe(0);
+    expect(result.verdict.promote).toBe(false);
+  });
+
+  it("holds the heuristic to its cutoff the way production does", async () => {
+    // A heuristic that passes its gate on every row: give every row the numbers the gate wants.
+    const rows = syntheticRows(3_000).map((r) => ({
+      ...r,
+      features: {
+        ...r.features,
+        scoreTotal: 90,
+        buys24h: 700,
+        sells24h: 300,
+        volumeToMcapRatio: 1 + (r.features.volumeToMcapRatio as number),
+        ageMinutes: 120,
+        liquidityUsd: 40_000,
+        graduated: 1,
+        top10HolderPct: 20,
+        riskScore: 1,
+      },
+    }));
+    const opts = { targetPerHour: 5, heuristicMinScore: 55, minRowsToPromote: 1_500 };
+    const gateOnly = await walkForwardEvaluate(rows, opts);
+    expect(gateOnly.heuristicOutOfSample.length).toBeGreaterThan(30);
+    expect(gateOnly.folds.some((f) => f.heuristic.emitted > 0)).toBe(true);
+
+    // Evidence with no qualifying cutoff silences it, exactly as heuristicGate does live...
+    const silenced = await walkForwardEvaluate(rows, { ...opts, targets: impossible });
+    for (const fold of silenced.folds) expect(fold.heuristic.emitted).toBe(0);
+    // ...unless the precision gate is switched off.
+    const ungated = await walkForwardEvaluate(rows, {
+      ...opts,
+      targets: impossible,
+      heuristicPrecisionGate: false,
+    });
+    expect(ungated.folds.map((f) => f.heuristic.emitted)).toEqual(
+      gateOnly.folds.map((f) => f.heuristic.emitted),
+    );
   });
 });
 

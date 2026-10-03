@@ -15,6 +15,8 @@ import {
   emitCuratedCycle,
   newCuratedCycle,
   resetCuratorModelCache,
+  resetDeferredContenders,
+  takeContenderRetry,
 } from "./curatedAlerts.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
 
@@ -281,6 +283,65 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
     expect(await emitCuratedCycle(cycle, env)).toBe(1);
     expect(await prisma.curatedAlert.count({ where: { tokenId: best.id } })).toBe(1);
     expect(await prisma.curatedAlert.count({ where: { tokenId: weak.id } })).toBe(0);
+  });
+
+  it("lets a pick that lost its slot re-contend in a later cycle, though its event is spent", async () => {
+    resetDeferredContenders();
+    await fillHourlyBudget(Math.ceil(env.CURATED_TARGET_PER_HOUR) - 1, "gov-retry");
+
+    const cycle = newCuratedCycle();
+    const loser = await prisma.token.create({ data: { mintAddress: `${TAG}-gov-retry-loser` } });
+    const loserScored = curatableFixture(loser.mintAddress, {
+      score: { momentum: 60, holderHealth: 60, age: 100, narrative: 40, total: 62 },
+    });
+    await collectCuratedContender(cycle, loser, loserScored, null, env);
+    const winner = await prisma.token.create({ data: { mintAddress: `${TAG}-gov-retry-winner` } });
+    await collectCuratedContender(cycle, winner, curatableFixture(winner.mintAddress), null, env);
+    expect(await emitCuratedCycle(cycle, env)).toBe(1);
+    // The winner was sent, so it has nothing to retry; the loser does, on the live ledger.
+    expect(takeContenderRetry(winner.id)).toBeNull();
+    const retry = takeContenderRetry(loser.id);
+    expect(retry?.live).toBe(true);
+
+    // A later cycle with room: the scan finds the loser's event already spent and hands the
+    // retry in instead. It still has to clear its curator, and then it goes out.
+    await freeGovernorBudget();
+    const later = newCuratedCycle();
+    const spentEvent = await recordCandidateSample(loser.id, loserScored, env, { kind: "event" });
+    await collectCuratedContender(
+      later,
+      loser,
+      loserScored,
+      { id: spentEvent!.id, created: false },
+      env,
+      undefined,
+      retry!,
+    );
+    expect(later.live).toHaveLength(1);
+    expect(await emitCuratedCycle(later, env)).toBe(1);
+    expect(await prisma.curatedAlert.count({ where: { tokenId: loser.id } })).toBe(1);
+  });
+
+  it("files a retry only on the ledger it lost, and only until it expires", async () => {
+    resetDeferredContenders();
+    await fillHourlyBudget(Math.ceil(env.CURATED_TARGET_PER_HOUR), "gov-expire");
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-gov-expire` } });
+    const scored = curatableFixture(token.mintAddress);
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, null, env);
+    expect(await emitCuratedCycle(cycle, env)).toBe(0);
+
+    const later = Date.now() + (env.CURATED_CONTENDER_RETRY_MINUTES + 1) * 60_000;
+    expect(takeContenderRetry(token.id, later)).toBeNull();
+
+    // A retry for the shadow ledger alone never files a live contender.
+    const shadowOnly = newCuratedCycle();
+    await collectCuratedContender(shadowOnly, token, scored, null, env, undefined, {
+      live: false,
+      shadow: true,
+      until: Date.now() + 60_000,
+    });
+    expect(shadowOnly.live).toHaveLength(0);
   });
 });
 
