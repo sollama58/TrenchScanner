@@ -308,6 +308,12 @@ const envSchema = z.object({
   // which means the Admin Panel is unreachable (every request 403s) until explicitly configured.
   ADMIN_WALLET_ADDRESSES: z.string().optional().default(""),
 
+  // Bearer token for GET /stats/hit-rates (apps/api/src/routes/stats.ts) - the read-only hit-rate
+  // report scripts and cloud sessions use to see how production alerts actually grade, since
+  // they can't reach the database. Empty (the default) or shorter than STATS_TOKEN_MIN_LENGTH
+  // switches the endpoint off: it answers 404 as if it didn't exist.
+  STATS_API_TOKEN: z.string().optional().default(""),
+
   // Where the burn reconciler and the claim endpoint read the chain.
   //
   // Set this. The default is the public mainnet RPC, and measurement against the real endpoints

@@ -37,6 +37,16 @@ The Curated tab is one global feed of high-conviction calls (see `PLANNING.md` s
 
 Every pick the governor selects can also get a buy/no-buy second opinion from Claude (`apps/worker/src/ai/reviewer.ts`). Set `ANTHROPIC_API_KEY` on the worker to turn it on. Each brief includes the 20 most similar graded past calls and how they turned out, so the reviewer judges against real outcomes. `AI_REVIEW_MODE=shadow` (the default) records each verdict in `AiReview` without changing what is sent, so the reviewer builds a graded record first; `gate` sends only the picks it says to buy (failing open if the API is down), but only once at least `AI_REVIEW_MIN_GRADED_BUYS` (50) of its buy calls are graded and meet the 75%/50% targets; until then gate runs as shadow; `off` never calls it.
 
+### Hit-rate report
+
+`GET /stats/hit-rates` reports how production calls actually graded under the rules above (2x/4x within 1 hour of the fill, 50% stop): curated alerts and shadow picks by curator, curator confidence bands, the AI reviewer's buy/no-buy record and probability calibration, user-filter matches (with the Telegram-delivered subset), and the base rate of every sampled moment. Each group shows calls, graded, wins, rates and a verdict against the targets (withheld below 30 graded calls; the reviewer's buys need `AI_REVIEW_MIN_GRADED_BUYS`).
+
+It is for scripts and cloud sessions that can reach the API but not the database, so it is guarded by a bearer token rather than a session. Set `STATS_API_TOKEN` on the API service to a random string of at least 32 characters (`openssl rand -hex 32`); without one the route answers 404. Query with `days` (default 30, max 180) or an explicit `since`/`until` (ISO dates):
+
+```sh
+curl -H "Authorization: Bearer $STATS_API_TOKEN" "$TRENCHSCANNER_API_URL/stats/hit-rates?days=7"
+```
+
 ## Admin Panel
 
 A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; empty by default) sees an extra **Admin** tab in the dashboard, backed by `GET`/`POST /admin/*` on the API (every route 403s anyone else - see `apps/api/src/routes/admin.ts`). Admin status is config, not a DB column, so promoting/demoting an admin is a one-line env change rather than a manual DB write. It covers:

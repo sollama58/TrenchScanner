@@ -1,0 +1,365 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
+import { prisma, createLogger, HEURISTIC_CURATOR_SOURCE, type Env } from "@trenchscanner/core";
+
+const logger = createLogger("stats");
+
+const DAY_MS = 86_400_000;
+
+/** A token shorter than this switches the endpoint off rather than guarding it weakly. */
+export const STATS_TOKEN_MIN_LENGTH = 32;
+
+/** Below this many graded calls a rate is reported but not held against the targets. */
+export const MIN_GRADED_FOR_VERDICT = 30;
+
+/** Tight: this is a script's endpoint, and every call runs a dozen aggregates. */
+const STATS_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
+
+const querySchema = z
+  .object({
+    days: z.coerce.number().int().min(1).max(180).default(30),
+    since: z.coerce.date().optional(),
+    until: z.coerce.date().optional(),
+  })
+  .refine((q) => !q.since || !q.until || q.since < q.until, { message: "since must be before until" });
+
+/** One group of graded calls - the shape every section of the report is built from. */
+export interface GradedCounts {
+  /** Calls made in the window. */
+  calls: number;
+  /** Calls whose 1h verdict is in (the rest are still inside their hour, or lost their anchor). */
+  graded: number;
+  /** Doubled within the hour from the fill without first falling through the 50% stop. */
+  won2x: number;
+  /** Reached 4x within the hour from the fill, stop respected. */
+  won4x: number;
+  /** Doubled only after first falling through the stop - counted as losses. */
+  doubledAfterStop: number;
+}
+
+export interface GradedRates extends GradedCounts {
+  pending: number;
+  hitRate2xPct: number | null;
+  hitRate4xPct: number | null;
+  /**
+   * Held against CURATED_TARGET_WIN_RATE_PCT / CURATED_TARGET_GOAL_RATE_PCT. "insufficient-data"
+   * below MIN_GRADED_FOR_VERDICT graded calls - a 3-for-4 start says nothing yet.
+   */
+  verdict: "meets-targets" | "below-targets" | "insufficient-data";
+}
+
+export interface Targets {
+  hitRate2xPct: number;
+  hitRate4xPct: number;
+}
+
+function pct(n: number, d: number): number | null {
+  return d > 0 ? Math.round((n / d) * 1000) / 10 : null;
+}
+
+/** Turns raw counts into the rates and target verdict the report shows. */
+export function withRates(
+  c: GradedCounts,
+  targets: Targets,
+  minGraded = MIN_GRADED_FOR_VERDICT,
+): GradedRates {
+  const hitRate2xPct = pct(c.won2x, c.graded);
+  const hitRate4xPct = pct(c.won4x, c.graded);
+  let verdict: GradedRates["verdict"] = "insufficient-data";
+  if (c.graded >= minGraded) {
+    verdict =
+      (hitRate2xPct ?? 0) >= targets.hitRate2xPct && (hitRate4xPct ?? 0) >= targets.hitRate4xPct
+        ? "meets-targets"
+        : "below-targets";
+  }
+  return { ...c, pending: c.calls - c.graded, hitRate2xPct, hitRate4xPct, verdict };
+}
+
+/** Sums groups into one - for the totals line above a breakdown. */
+export function sumCounts(rows: GradedCounts[]): GradedCounts {
+  return rows.reduce<GradedCounts>(
+    (acc, r) => ({
+      calls: acc.calls + r.calls,
+      graded: acc.graded + r.graded,
+      won2x: acc.won2x + r.won2x,
+      won4x: acc.won4x + r.won4x,
+      doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
+    }),
+    { calls: 0, graded: 0, won2x: 0, won4x: 0, doubledAfterStop: 0 },
+  );
+}
+
+/**
+ * Constant-time bearer check. Both sides are hashed first so the comparison length never depends
+ * on the guess, and timingSafeEqual never throws on a length mismatch.
+ */
+export function bearerMatches(header: string | undefined, token: string): boolean {
+  if (!header || !token) return false;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  if (!match) return false;
+  const a = createHash("sha256").update(match[1]!).digest();
+  const b = createHash("sha256").update(token).digest();
+  return timingSafeEqual(a, b);
+}
+
+/** Postgres returns count(*) as bigint; every column of a counts row comes back through here. */
+type RawCounts = { calls: bigint; graded: bigint; won2x: bigint; won4x: bigint; doubled_after_stop: bigint };
+
+function toCounts(r: RawCounts): GradedCounts {
+  return {
+    calls: Number(r.calls),
+    graded: Number(r.graded),
+    won2x: Number(r.won2x),
+    won4x: Number(r.won4x),
+    doubledAfterStop: Number(r.doubled_after_stop),
+  };
+}
+
+/**
+ * The read-only hit-rate report: how production alerts grade under the current rules - a win is
+ * 2x (goal 4x) within one hour of a realistic fill, and a 50% drop before the double is a loss
+ * (see curation/labels.ts). Every figure comes from the same CandidateOutcome labels the feed's
+ * own stats use; nothing here grades anything itself.
+ *
+ * Not behind a session: it exists for scripts and cloud sessions that can reach the API over
+ * HTTPS but not the database. Guarded by STATS_API_TOKEN instead, and absent (404) without one.
+ */
+export async function registerStatsRoutes(app: FastifyInstance, opts: { env: Env }) {
+  const token = opts.env.STATS_API_TOKEN;
+  const enabled = token.length >= STATS_TOKEN_MIN_LENGTH;
+  if (token && !enabled) {
+    logger.warn(`STATS_API_TOKEN is shorter than ${STATS_TOKEN_MIN_LENGTH} characters - /stats is disabled`);
+  }
+
+  const targets: Targets = {
+    hitRate2xPct: opts.env.CURATED_TARGET_WIN_RATE_PCT,
+    hitRate4xPct: opts.env.CURATED_TARGET_GOAL_RATE_PCT,
+  };
+
+  async function guard(request: FastifyRequest, reply: FastifyReply) {
+    if (!enabled) {
+      reply.code(404).send({ error: "not_found" });
+      return;
+    }
+    if (!bearerMatches(request.headers.authorization, token)) {
+      reply.code(401).send({ error: "unauthorized" });
+    }
+  }
+
+  app.get(
+    "/hit-rates",
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    async (request, reply) => {
+      const parsed = querySchema.safeParse(request.query);
+      if (!parsed.success) {
+        reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten() });
+        return;
+      }
+      const until = parsed.data.until ?? new Date();
+      const since = parsed.data.since ?? new Date(until.getTime() - parsed.data.days * DAY_MS);
+      reply.header("cache-control", "no-store");
+      return buildHitRateReport(since, until, targets, opts.env);
+    },
+  );
+}
+
+/** Exported for the route test; the route above is the only caller in production. */
+export async function buildHitRateReport(since: Date, until: Date, targets: Targets, env: Env) {
+  // A curated alert carries outcome copies once its window closes; until the copy lands (or after
+  // its training row is pruned) the linked row is the other source. Either way the same label.
+  const curatedRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
+    SELECT a."source" AS source,
+           count(*) AS calls,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
+                              AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
+           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop
+    FROM "CuratedAlert" a
+    LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+    GROUP BY a."source"
+    ORDER BY calls DESC`;
+
+  const shadowRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
+    SELECT s."source" AS source,
+           count(*) AS calls,
+           count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
+    FROM "CuratedShadowEmission" s
+    LEFT JOIN "CandidateOutcome" co ON co."id" = s."candidateOutcomeId"
+    WHERE s."createdAt" >= ${since} AND s."createdAt" < ${until}
+    GROUP BY s."source"
+    ORDER BY calls DESC`;
+
+  // Confidence bands across both curators' live and shadow calls - where a cutoff would have to
+  // sit for the calls above it to reach the targets.
+  const confidenceRows = prisma.$queryRaw<(RawCounts & { side: string; band: number })[]>`
+    WITH calls AS (
+      SELECT a."source", a."confidence",
+             COALESCE(a."hit2xIn1h", co."hit2xIn1h") AS hit2x,
+             COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
+             COALESCE(a."disqualified", co."disqualified") AS dq
+      FROM "CuratedAlert" a
+      LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+      UNION ALL
+      SELECT s."source", s."confidence", co."hit2xIn1h", co."hit4xIn1h", co."disqualified"
+      FROM "CuratedShadowEmission" s
+      LEFT JOIN "CandidateOutcome" co ON co."id" = s."candidateOutcomeId"
+      WHERE s."createdAt" >= ${since} AND s."createdAt" < ${until}
+    )
+    SELECT CASE WHEN "source" = ${HEURISTIC_CURATOR_SOURCE} THEN 'heuristic' ELSE 'model' END AS side,
+           (LEAST(GREATEST(floor("confidence" / 10), 0), 9) * 10)::int AS band,
+           count(*) AS calls,
+           count(*) FILTER (WHERE hit2x IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE hit2x AND NOT COALESCE(dq, false)) AS won2x,
+           count(*) FILTER (WHERE hit4x) AS won4x,
+           count(*) FILTER (WHERE dq) AS doubled_after_stop
+    FROM calls
+    GROUP BY 1, 2
+    ORDER BY 1, 2`;
+
+  const aiRows = prisma.$queryRaw<(RawCounts & { mode: string; decision: string })[]>`
+    SELECT r."mode" AS mode,
+           COALESCE(r."decision", 'error') AS decision,
+           count(*) AS calls,
+           count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
+    FROM "AiReview" r
+    LEFT JOIN "CandidateOutcome" co ON co."id" = r."candidateOutcomeId"
+    WHERE r."createdAt" >= ${since} AND r."createdAt" < ${until}
+    GROUP BY 1, 2
+    ORDER BY 1, 2`;
+
+  // The reviewer's stated 2x probability against what happened - is it calibrated?
+  const aiProbabilityRows = prisma.$queryRaw<(RawCounts & { band: number })[]>`
+    SELECT (LEAST(GREATEST(floor(r."probability2x" * 10), 0), 9) * 10)::int AS band,
+           count(*) AS calls,
+           count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
+    FROM "AiReview" r
+    LEFT JOIN "CandidateOutcome" co ON co."id" = r."candidateOutcomeId"
+    WHERE r."createdAt" >= ${since} AND r."createdAt" < ${until} AND r."probability2x" IS NOT NULL
+    GROUP BY 1
+    ORDER BY 1`;
+
+  // Match is the one table too large to scan by time alone; its (userId, matchedAt) index is the
+  // way in, and User is small enough to list. Same route loadFilterTrackRecords takes.
+  const matchRows = prisma.user.findMany({ select: { id: true } }).then((users) => {
+    const userIds = users.map((u) => u.id);
+    if (userIds.length === 0) return [];
+    return prisma.$queryRaw<(RawCounts & { filterId: string; name: string; telegram: boolean })[]>`
+      SELECT m."filterId" AS "filterId",
+             f."name" AS name,
+             m."deliveredTelegram" AS telegram,
+             count(*) AS calls,
+             count(*) FILTER (WHERE m."hit2xIn1h" IS NOT NULL) AS graded,
+             count(*) FILTER (WHERE m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)) AS won2x,
+             count(*) FILTER (WHERE m."hit4xIn1h") AS won4x,
+             count(*) FILTER (WHERE m."disqualified") AS doubled_after_stop
+      FROM "Match" m
+      JOIN "UserFilter" f ON f."id" = m."filterId"
+      WHERE m."userId" = ANY(${userIds}) AND m."matchedAt" >= ${since} AND m."matchedAt" < ${until}
+      GROUP BY 1, 2, 3`;
+  });
+
+  // Every sampled moment by kind. "event" rows are the population curators choose from, so their
+  // rate is the base a pick has to beat; "match" rows are filter alerts deduplicated per token.
+  const sampleRows = prisma.$queryRaw<(RawCounts & { kind: string })[]>`
+    SELECT co."sampleKind" AS kind,
+           count(*) AS calls,
+           count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
+    FROM "CandidateOutcome" co
+    WHERE co."anchorAt" >= ${since} AND co."anchorAt" < ${until}
+    GROUP BY 1
+    ORDER BY 1`;
+
+  const [curated, shadow, confidence, ai, aiProbability, matches, samples] = await Promise.all([
+    curatedRows,
+    shadowRows,
+    confidenceRows,
+    aiRows,
+    aiProbabilityRows,
+    matchRows,
+    sampleRows,
+  ]);
+
+  const rated = (c: GradedCounts, min?: number) => withRates(c, targets, min);
+
+  const curatedCounts = curated.map((r) => ({ source: r.source, ...toCounts(r) }));
+  const shadowCounts = shadow.map((r) => ({ source: r.source, ...toCounts(r) }));
+  const aiCounts = ai.map((r) => ({ mode: r.mode, decision: r.decision, ...toCounts(r) }));
+  const buys = sumCounts(aiCounts.filter((r) => r.decision === "buy"));
+  const allReviewed = sumCounts(aiCounts.filter((r) => r.decision !== "error"));
+
+  // Per filter, with the Telegram-delivered subset broken out (MATCH_ALERT_GUARD only touches
+  // those), largest first and capped so one heavy user can't bloat the reply.
+  const byFilter = new Map<string, { name: string; all: GradedCounts[]; telegram: GradedCounts[] }>();
+  for (const r of matches) {
+    const entry = byFilter.get(r.filterId) ?? { name: r.name, all: [], telegram: [] };
+    const counts = toCounts(r);
+    entry.all.push(counts);
+    if (r.telegram) entry.telegram.push(counts);
+    byFilter.set(r.filterId, entry);
+  }
+  const filterList = [...byFilter.entries()]
+    .map(([filterId, f]) => ({
+      filterId,
+      name: f.name,
+      ...rated(sumCounts(f.all)),
+      telegram: rated(sumCounts(f.telegram)),
+    }))
+    .sort((a, b) => b.graded - a.graded || b.calls - a.calls);
+  const allMatchCounts = matches.map(toCounts);
+  const telegramMatchCounts = matches.filter((r) => r.telegram).map(toCounts);
+
+  return {
+    window: { since, until },
+    rules: {
+      win: "2x within 1 hour of the fill, without first falling 50% below it",
+      goal: "4x within 1 hour of the fill, same stop",
+      fill: `first price at least ${env.CANDIDATE_ENTRY_DELAY_SECONDS}s after the alert, plus slippage`,
+      note: "Rows anchored before the fill rule shipped were graded from the scan price.",
+    },
+    targets,
+    minGradedForVerdict: MIN_GRADED_FOR_VERDICT,
+    curatedAlerts: {
+      total: rated(sumCounts(curatedCounts)),
+      bySource: curatedCounts.map((r) => ({ ...r, ...rated(r) })),
+    },
+    shadowEmissions: {
+      total: rated(sumCounts(shadowCounts)),
+      bySource: shadowCounts.map((r) => ({ ...r, ...rated(r) })),
+    },
+    // Live and shadow calls together, bucketed by curator confidence (0-100, bands of 10).
+    curatorConfidenceBands: confidence.map((r) => ({ side: r.side, band: r.band, ...rated(toCounts(r)) })),
+    aiReviewer: {
+      mode: env.AI_REVIEW_MODE,
+      // Gate mode needs AI_REVIEW_MIN_GRADED_BUYS graded buys meeting both targets.
+      buys: rated(buys, env.AI_REVIEW_MIN_GRADED_BUYS),
+      allReviewed: rated(allReviewed),
+      byDecision: aiCounts.map((r) => ({ ...r, ...rated(r) })),
+      probability2xBands: aiProbability.map((r) => ({ band: r.band, ...rated(toCounts(r)) })),
+    },
+    filterMatches: {
+      total: rated(sumCounts(allMatchCounts)),
+      telegram: rated(sumCounts(telegramMatchCounts)),
+      filterCount: filterList.length,
+      byFilter: filterList.slice(0, 50),
+    },
+    samples: {
+      byKind: samples.map((r) => ({ kind: r.kind, ...rated(toCounts(r)) })),
+    },
+  };
+}
