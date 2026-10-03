@@ -58,4 +58,35 @@ describe.skipIf(!dbAvailable)("browser session revocation", () => {
     const { sessionVersion } = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(sessionVersion).toBe(1);
   });
+
+  it("refuses a state-changing request from an origin outside CORS_ORIGINS", async () => {
+    const { sessionVersion } = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const cookie = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion });
+    const forged = await app.inject({
+      method: "POST",
+      url: "/auth/logout",
+      headers: { origin: "https://evil.example" },
+      cookies: { [SESSION_COOKIE_NAME]: cookie },
+    });
+    expect(forged.statusCode).toBe(403);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).sessionVersion).toBe(
+      sessionVersion,
+    );
+
+    const allowedOrigin = env.CORS_ORIGINS.split(",")[0]!.trim();
+    const read = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      headers: { origin: "https://evil.example" },
+      cookies: { [SESSION_COOKIE_NAME]: cookie },
+    });
+    expect(read.statusCode).toBe(200);
+    const own = await app.inject({
+      method: "POST",
+      url: "/auth/logout",
+      headers: { origin: allowedOrigin },
+      cookies: { [SESSION_COOKIE_NAME]: cookie },
+    });
+    expect(own.statusCode).toBe(200);
+  });
 });

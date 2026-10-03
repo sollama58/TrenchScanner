@@ -267,7 +267,7 @@ async function processSignatures(
         break outer;
       }
 
-      const verdict = parseBurnTransaction(tx);
+      const verdict = parseBurnTransaction(tx, signature);
       if (!verdict.ok) {
         // The overwhelmingly common case: a swap or transfer that mentions the mint. Not an error.
         lastProcessed = signature;

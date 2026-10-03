@@ -206,7 +206,7 @@ export async function registerSubscriptionRoutes(
       });
     }
 
-    const verdict = parseBurnTransaction(tx);
+    const verdict = parseBurnTransaction(tx, signature);
     if (!verdict.ok) {
       return reply.code(400).send({ status: "rejected", error: describeRejection(verdict.reason) });
     }

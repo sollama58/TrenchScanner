@@ -103,6 +103,15 @@ describe.skipIf(!dbAvailable)("mobile link codes", () => {
     expect(await deviceIsActive(result.deviceId)).toBe(false);
   });
 
+  it("refuses a live device presented under a different user", async () => {
+    const { code } = await issueLinkCode(userId);
+    const result = await redeemLinkCode(code);
+    if (!result.ok) throw new Error("expected the pairing to succeed");
+
+    expect(await deviceIsActive(result.deviceId, userId)).toBe(true);
+    expect(await deviceIsActive(result.deviceId, "clsomeoneelse000000000000")).toBe(false);
+  });
+
   it("treats a device that no longer exists as inactive", async () => {
     expect(await deviceIsActive("clnonexistent0000000000000")).toBe(false);
   });

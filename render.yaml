@@ -199,6 +199,18 @@ services:
     name: trenchscanner-web
     buildCommand: npm install --include=dev && npm run build -w @trenchscanner/web
     staticPublishPath: apps/web/dist
+    # Clickjacking and sniffing guards for the dashboard. frame-ancestors still lets the HolDEX site
+    # frame it, in case its /trenches/ tab ever embeds this page rather than calling the API.
+    headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: "frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
     envVars:
       # Update this if you rename the API service or attach a custom domain.
       - key: VITE_API_URL

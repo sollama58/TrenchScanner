@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { backoffDelay, fetchJson, redactUrl } from "./httpClient.js";
+import { backoffDelay, fetchJson, MAX_RESPONSE_BYTES, redactUrl } from "./httpClient.js";
 
 describe("redactUrl", () => {
   it("redacts Helius's own api-key query param", () => {
@@ -27,12 +27,41 @@ describe("redactUrl", () => {
     expect(redactUrl(url)).toBe(url);
   });
 
+  it("redacts a key carried in the path or the userinfo", () => {
+    const quicknode = redactUrl("https://x.solana-mainnet.quiknode.pro/0123456789abcdef0123456789abcdef/");
+    expect(quicknode).not.toContain("0123456789abcdef0123456789abcdef");
+    expect(redactUrl("https://solana-mainnet.g.alchemy.com/v2/AbCdEfGhIjKlMnOpQrStUvWxYz")).toBe(
+      "https://solana-mainnet.g.alchemy.com/v2/REDACTED",
+    );
+    expect(redactUrl("https://user:hunter2@rpc.example.com/")).not.toContain("hunter2");
+  });
+
   it("falls back to returning the input unchanged if it isn't a parseable absolute URL", () => {
     expect(redactUrl("not a url at all")).toBe("not a url at all");
   });
 });
 
 describe("fetchJson", () => {
+  it("refuses a response body larger than MAX_RESPONSE_BYTES", async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      const chunk = Buffer.alloc(1024 * 1024, 0x20);
+      for (let i = 0; i <= MAX_RESPONSE_BYTES / chunk.length; i++) res.write(chunk);
+      res.end("{}");
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as { port: number };
+    try {
+      await expect(fetchJson(`http://127.0.0.1:${port}/`, { retries: 0 })).rejects.toMatchObject({
+        status: 413,
+      });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("times out a response whose body stalls after the headers arrive", async () => {
     const { createServer } = await import("node:http");
     const server = createServer((_req, res) => {

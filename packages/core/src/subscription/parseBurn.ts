@@ -43,7 +43,12 @@ export interface BurnCredit {
 }
 
 export type BurnRejection =
-  "transaction_failed" | "no_burn_instruction" | "wrong_mint" | "insufficient_amount" | "no_authority";
+  | "transaction_failed"
+  | "no_burn_instruction"
+  | "wrong_mint"
+  | "insufficient_amount"
+  | "no_authority"
+  | "signature_mismatch";
 
 export type ParseBurnResult = { ok: true; credit: BurnCredit } | { ok: false; reason: BurnRejection };
 
@@ -121,7 +126,15 @@ function isSubscriptionBurn(ix: ParsedInstruction): boolean {
  * transactions: that turns a simple "did this pay" question into a running-balance system, and the
  * first thing anyone would ask of it is a refund.
  */
-export function parseBurnTransaction(tx: ParsedTransaction): ParseBurnResult {
+export function parseBurnTransaction(tx: ParsedTransaction, signature?: string): ParseBurnResult {
+  // The ledger is keyed by the signature we asked for, so it must be THE transaction's id - its
+  // first signature. A co-signer's signature names the same transaction, and if any RPC ever
+  // resolved one, the same burn could be credited once under each signer's signature.
+  const id = tx.transaction?.signatures?.[0];
+  if (signature !== undefined && id !== undefined && id !== signature) {
+    return { ok: false, reason: "signature_mismatch" };
+  }
+
   // A transaction that landed but reverted still has instructions in it. Nothing was burned.
   if (tx.meta?.err) return { ok: false, reason: "transaction_failed" };
 
@@ -183,5 +196,7 @@ export function describeRejection(reason: BurnRejection): string {
       return "That burn was for less than one month's worth of tokens.";
     case "no_authority":
       return "Couldn't tell which wallet authorised that burn.";
+    case "signature_mismatch":
+      return "Use the transaction's own signature (the first one) to claim it.";
   }
 }

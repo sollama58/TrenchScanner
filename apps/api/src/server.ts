@@ -44,6 +44,25 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(cookie);
 
   /**
+   * Cross-site request forgery guard for anything that changes state.
+   *
+   * The session cookie is SameSite=None while the API answers on onrender.com (see
+   * sessionCookieAttrs), so a page on any site can make the browser attach it. CORS stops that
+   * page READING the response, not the request running: a plain form POST still executes. Today
+   * every write either takes a JSON body (which a form cannot send) or is harmless, but that is a
+   * property of each route rather than a guarantee. Browsers always send Origin on a cross-site
+   * POST/PUT/PATCH/DELETE, so refusing one from an origin outside CORS_ORIGINS closes the class.
+   * Requests with no Origin (scripts, curl, server-to-server) are not browser CSRF and pass.
+   */
+  const allowedOrigins = new Set(corsOriginList(env));
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
+    const origin = request.headers.origin;
+    if (origin === undefined || allowedOrigins.has(origin)) return;
+    reply.code(403).send({ error: "origin_not_allowed" });
+  });
+
+  /**
    * Compression. The feed responses are the reason: a page of twelve cards is ~33KB of JSON and
    * ~2.7KB gzipped, so this is a ~92% cut in what a phone on a bad connection has to pull down
    * before the dashboard can paint - and the dashboard re-fetches that page every 45 seconds.
@@ -129,7 +148,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     // next request from that phone fails here. Desktop sessions carry no deviceId and skip it
     // entirely, so the ordinary path costs nothing.
     if (session.deviceId) {
-      if (!(await deviceIsActive(session.deviceId))) return null;
+      if (!(await deviceIsActive(session.deviceId, session.userId))) return null;
       touchDevice(session.deviceId);
       return session;
     }

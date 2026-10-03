@@ -41,6 +41,14 @@ function tx(instructions: ParsedInstruction[], over: Partial<ParsedTransaction> 
 }
 
 describe("parseBurnTransaction", () => {
+  it("refuses a signature that is not the transaction's own first signature", () => {
+    expect(parseBurnTransaction(tx([burnIx()]), "sig").ok).toBe(true);
+    expect(parseBurnTransaction(tx([burnIx()]), "cosigner")).toEqual({
+      ok: false,
+      reason: "signature_mismatch",
+    });
+  });
+
   it("credits a burn of exactly one month's price", () => {
     const result = parseBurnTransaction(tx([burnIx()]));
     expect(result.ok).toBe(true);
