@@ -122,7 +122,11 @@ export interface OutcomeLabels {
   hit2xIn15m: boolean;
   /** THE bar: doubled inside the 1h win window. What "won" means everywhere downstream. */
   hit2xIn1h: boolean;
-  /** Cleared GOAL_MULTIPLE by the end of the goal window - the ambition, tracked and shown. */
+  /**
+   * Cleanly cleared GOAL_MULTIPLE inside the window - the ambition, tracked and shown. Held to
+   * the same stop as the 2x: a run that fell through -50% first stopped its buyer out before the
+   * 4x, so it is not a 4x anyone traded.
+   */
   hit4xIn1h: boolean;
   disqualified: boolean;
   labelValue: number;
@@ -160,7 +164,7 @@ export function computeOutcomeLabels(agg: OutcomeAggregates): OutcomeLabels {
       agg.hit2xAt !== null &&
       agg.hit2xAt.getTime() - agg.anchorAt.getTime() <= FAST_2X_WINDOW_MINUTES * 60_000,
     hit2xIn1h: won,
-    hit4xIn1h: agg.peak1hPriceUsd >= anchor * GOAL_MULTIPLE,
+    hit4xIn1h: won && !disqualified && agg.peak1hPriceUsd >= anchor * GOAL_MULTIPLE,
     disqualified,
     labelValue,
   };

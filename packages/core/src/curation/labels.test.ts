@@ -84,6 +84,17 @@ describe("candidate outcome labels", () => {
     expect(labels.labelValue).toBeCloseTo(2);
   });
 
+  it("does not count a 4x that first breached the stop", () => {
+    const labels = computeOutcomeLabels(
+      replay(1, [
+        [0.45, 5],
+        [4.5, 40],
+      ]),
+    );
+    expect(labels.disqualified).toBe(true);
+    expect(labels.hit4xIn1h).toBe(false);
+  });
+
   it("disqualifies a late 2x that first traded at or below half the anchor", () => {
     const agg = replay(1, [
       [0.4, 20],

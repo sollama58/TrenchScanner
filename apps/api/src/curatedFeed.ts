@@ -136,7 +136,9 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
     // Everything below is derived from the live aggregates rather than waiting on the row to
     // finalize - same rules the watcher will apply, just applied now.
     const hit2x = hit2xInWinWindow(live);
-    const hitGoal = live.peak1hPriceUsd >= live.anchorPriceUsd * GOAL_MULTIPLE;
+    // Held to the same stop as the 2x - a run that breached -50% first stopped its buyer out.
+    const hitGoal =
+      live.peak1hPriceUsd >= live.anchorPriceUsd * GOAL_MULTIPLE && !(hit2x && disqualifiedByDrawdown(live));
     const elapsedMin = (Date.now() - live.anchorAt.getTime()) / 60_000;
 
     if (elapsedMin >= WIN_WINDOW_MINUTES) {
