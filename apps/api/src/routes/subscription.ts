@@ -36,6 +36,9 @@ const sendSchema = z.object({
  * traffic through here and have it billed to, and attributed to, us.
  */
 const SEND_ROUTE_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
+// /blockhash and /claim each spend a paid RPC call (getTransaction retries on top) and need only a
+// free sign-in, so they get their own limit instead of the global 300/min.
+const RPC_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 
 /** The mint's raw 32 bytes, for the payload check below. Decoded once. */
 const SUBSCRIPTION_MINT_BYTES = Buffer.from(bs58.decode(SUBSCRIPTION_MINT));
@@ -112,7 +115,7 @@ export async function registerSubscriptionRoutes(
    * point: a burn is irreversible, so finding out the backend is down AFTER destroying the tokens
    * is the one failure this whole feature is meant to avoid. Cheap pre-flight, no downside.
    */
-  app.get("/blockhash", async (_request, reply) => {
+  app.get("/blockhash", { config: { rateLimit: RPC_ROUTE_RATE_LIMIT } }, async (_request, reply) => {
     const result = await rpc.getLatestBlockhash();
     if (!result) {
       return reply
@@ -174,7 +177,7 @@ export async function registerSubscriptionRoutes(
    * few minutes, which turns "I burned, then my laptop slept" into tokens destroyed and a claim
    * endpoint that refuses forever. The unique constraint - not a clock - is what stops replay.
    */
-  app.post("/claim", async (request, reply) => {
+  app.post("/claim", { config: { rateLimit: RPC_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = claimSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });

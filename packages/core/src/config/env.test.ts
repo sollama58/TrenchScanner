@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminWalletSet, corsOriginList } from "./env.js";
+import { adminWalletSet, corsOriginList, loadEnv, resetEnvCacheForTests } from "./env.js";
 import type { Env } from "./env.js";
 
 function baseEnv(overrides: Partial<Env> = {}): Env {
@@ -41,5 +41,19 @@ describe("corsOriginList", () => {
       "https://a.example",
       "https://b.example",
     ]);
+  });
+});
+
+describe("loadEnv", () => {
+  it("treats a blank numeric var as unset, not 0", () => {
+    resetEnvCacheForTests();
+    const env = loadEnv({
+      DATABASE_URL: "postgres://x",
+      CURATED_CONTENDER_RETRY_MINUTES: "",
+      MCAP_FILTER_MIN: "  ",
+    });
+    expect(env.CURATED_CONTENDER_RETRY_MINUTES).toBeGreaterThan(0);
+    expect(env.MCAP_FILTER_MIN).toBeGreaterThan(0);
+    resetEnvCacheForTests();
   });
 });

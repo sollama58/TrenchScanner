@@ -314,15 +314,24 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
   });
 });
 
+/** Answers every getMultipleAccounts call by mapping each requested key through `account`. */
+function gmaServer(account: (key: string) => unknown) {
+  return startServer((calls) =>
+    calls.map((c) => ({
+      jsonrpc: "2.0",
+      id: c.id,
+      result: { context: { slot: 1 }, value: (c.params[0] as string[]).map(account) },
+    })),
+  );
+}
+
 describe("HeliusClient.getMintAuthorityStatusBatch", () => {
-  function accountInfoResponse(mintAuthority: string | null, freezeAuthority: string | null) {
-    return { value: { data: { parsed: { info: { mintAuthority, freezeAuthority } } } } };
+  function mintAccount(mintAuthority: string | null, freezeAuthority: string | null) {
+    return { data: { parsed: { info: { mintAuthority, freezeAuthority } } } };
   }
 
-  it("reports both authorities from a batched getAccountInfo", async () => {
-    const { url } = await startServer((calls) =>
-      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: accountInfoResponse("someAuthority", null) })),
-    );
+  it("reports both authorities from one getMultipleAccounts call at confirmed", async () => {
+    const { url, requests } = await gmaServer(() => mintAccount("someAuthority", null));
     const client = new HeliusClient({ rpcUrl: url });
 
     expect((await client.getMintAuthorityStatusBatch(["m"])).get("m")).toEqual({
@@ -330,12 +339,13 @@ describe("HeliusClient.getMintAuthorityStatusBatch", () => {
       mintAuthorityActive: true,
       freezeAuthorityActive: false,
     });
+    const call = (requests[0]!.body as { method: string; params: [string[], { commitment: string }] }[])[0]!;
+    expect(call.method).toBe("getMultipleAccounts");
+    expect(call.params[1].commitment).toBe("confirmed");
   });
 
   it("reports revoked authorities as inactive", async () => {
-    const { url } = await startServer((calls) =>
-      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: accountInfoResponse(null, null) })),
-    );
+    const { url } = await gmaServer(() => mintAccount(null, null));
     const client = new HeliusClient({ rpcUrl: url });
 
     expect((await client.getMintAuthorityStatusBatch(["m"])).get("m")).toEqual({
@@ -345,28 +355,45 @@ describe("HeliusClient.getMintAuthorityStatusBatch", () => {
     });
   });
 
-  it("reports failed - never a fabricated all-clear - for an unparseable account", async () => {
+  it("reports failed - never a fabricated all-clear - for a missing or unparseable account", async () => {
+    const { url } = await gmaServer((key) => (key === "gone" ? null : { data: ["", "base64"] }));
+    const client = new HeliusClient({ rpcUrl: url });
+    const result = await client.getMintAuthorityStatusBatch(["gone", "raw"]);
+
+    expect(result.get("gone")).toEqual({ status: "failed" });
+    expect(result.get("raw")).toEqual({ status: "failed" });
+  });
+
+  it("bills one call per 100 mints instead of one per mint", async () => {
+    const { url } = await gmaServer(() => mintAccount(null, null));
+    const client = new HeliusClient({ rpcUrl: url });
+    const result = await client.getMintAuthorityStatusBatch(Array.from({ length: 150 }, (_, i) => `m${i}`));
+
+    expect(result.size).toBe(150);
+    expect([...result.values()].every((r) => r.status === "found")).toBe(true);
+    expect(client.takeCallStats()).toEqual({ getMultipleAccounts: 2 });
+  });
+
+  it("fails the whole chunk when the reply's value array doesn't line up with the keys", async () => {
     const { url } = await startServer((calls) =>
-      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { value: null } })),
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { value: [mintAccount(null, null)] } })),
     );
     const client = new HeliusClient({ rpcUrl: url });
+    const result = await client.getMintAuthorityStatusBatch(["a", "b"]);
 
-    expect((await client.getMintAuthorityStatusBatch(["m"])).get("m")).toEqual({ status: "failed" });
+    expect(result.get("a")).toEqual({ status: "failed" });
+    expect(result.get("b")).toEqual({ status: "failed" });
   });
 });
 
 describe("HeliusClient.getMayhemModeBatch", () => {
   const MAYHEM_MINT = "GuYxhafeew241DThgKquTXEEBpt8FRPdRq6xfstdpump";
+  const MAYHEM_PDA = "HmT6rHQvnpx8nk6WqtZbzeThLmSwhsZQUJeVoEdWJWTr";
   const OTHER_MINT = "3jNd8LdRvzCKBdWevmaqdDfqGk7op8GqkXnb3qVBpump";
+  const exists = { data: ["", "base64"], owner: "x" };
 
   it("reports isMayhemMode when the mayhem-state PDA exists", async () => {
-    const { url } = await startServer((calls) =>
-      calls.map((c) => ({
-        jsonrpc: "2.0",
-        id: c.id,
-        result: { value: { data: ["", "base64"], owner: "x" } },
-      })),
-    );
+    const { url } = await gmaServer(() => exists);
     const client = new HeliusClient({ rpcUrl: url });
 
     expect((await client.getMayhemModeBatch([MAYHEM_MINT])).get(MAYHEM_MINT)).toEqual({
@@ -375,10 +402,8 @@ describe("HeliusClient.getMayhemModeBatch", () => {
     });
   });
 
-  it("reports NOT mayhem when the account does not exist", async () => {
-    const { url } = await startServer((calls) =>
-      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { value: null } })),
-    );
+  it("reports NOT mayhem when the mint exists but its PDA does not", async () => {
+    const { url } = await gmaServer((key) => (key === OTHER_MINT ? exists : null));
     const client = new HeliusClient({ rpcUrl: url });
 
     expect((await client.getMayhemModeBatch([OTHER_MINT])).get(OTHER_MINT)).toEqual({
@@ -387,16 +412,22 @@ describe("HeliusClient.getMayhemModeBatch", () => {
     });
   });
 
-  it("queries the derived mayhem-state PDA, not the mint itself", async () => {
-    const { url, requests } = await startServer((calls) =>
-      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { value: null } })),
-    );
+  it("reports failed - not a cacheable false - when the mint itself isn't visible yet", async () => {
+    const { url } = await gmaServer(() => null);
+    const client = new HeliusClient({ rpcUrl: url });
+
+    expect((await client.getMayhemModeBatch([OTHER_MINT])).get(OTHER_MINT)).toEqual({ status: "failed" });
+  });
+
+  it("queries the mint and its derived PDA in one call, without account data", async () => {
+    const { url, requests } = await gmaServer(() => null);
     const client = new HeliusClient({ rpcUrl: url });
     await client.getMayhemModeBatch([MAYHEM_MINT]);
 
-    const calls = requests[0]!.body as { id: string; params: [string, unknown] }[];
-    expect(calls[0]!.id).toBe(MAYHEM_MINT); // response keyed back to the mint
-    expect(calls[0]!.params[0]).toBe("HmT6rHQvnpx8nk6WqtZbzeThLmSwhsZQUJeVoEdWJWTr"); // but queried by PDA
+    const calls = requests[0]!.body as { params: [string[], { dataSlice: unknown }] }[];
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params[0]).toEqual([MAYHEM_MINT, MAYHEM_PDA]);
+    expect(calls[0]!.params[1].dataSlice).toEqual({ offset: 0, length: 0 });
   });
 
   it("reports failed - never a false all-clear - when the lookup errors", async () => {
@@ -408,15 +439,22 @@ describe("HeliusClient.getMayhemModeBatch", () => {
     expect((await client.getMayhemModeBatch([MAYHEM_MINT])).get(MAYHEM_MINT)).toEqual({ status: "failed" });
   });
 
-  it("batches every mint into one POST and dedupes", async () => {
-    const { url, requests } = await startServer((calls) =>
-      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { value: null } })),
+  it("reports failed for a reply with no value array", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: {} })),
     );
+    const client = new HeliusClient({ rpcUrl: url });
+
+    expect((await client.getMayhemModeBatch([MAYHEM_MINT])).get(MAYHEM_MINT)).toEqual({ status: "failed" });
+  });
+
+  it("dedupes mints and spends a single call", async () => {
+    const { url, requests } = await gmaServer(() => null);
     const client = new HeliusClient({ rpcUrl: url });
     const result = await client.getMayhemModeBatch([MAYHEM_MINT, OTHER_MINT, MAYHEM_MINT]);
 
     expect(requests).toHaveLength(1);
-    expect((requests[0]!.body as unknown[]).length).toBe(2);
+    expect(client.takeCallStats()).toEqual({ getMultipleAccounts: 1 });
     expect(result.size).toBe(2);
   });
 });

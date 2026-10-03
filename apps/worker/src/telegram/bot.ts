@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, GrammyError } from "grammy";
 import { Prisma, prisma, createLogger } from "@trenchscanner/core";
 
 const logger = createLogger("telegram-bot");
@@ -55,48 +55,84 @@ export function createBot(token: string): AlertBot {
     logger.error("grammy error", { error: String(err.error) });
   });
 
-  // Flipped when long polling dies for good (see start below). Alerts then no-op the way the
-  // unconfigured bot does, instead of queueing sends against a bot that is not listening.
-  let pollingStopped = false;
+  let stopped = false;
+  let restartTimer: NodeJS.Timeout | undefined;
+  let restartDelayMs = POLL_RESTART_BASE_MS;
+
+  const send = (chatId: string, text: string) =>
+    bot.api.sendMessage(chatId, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+
+  const startPolling = () => {
+    // bot.start() resolves only when polling ends, so it cannot be awaited here - but it must be
+    // CAUGHT: a revoked token (401) or a second process polling the same token (409 - an
+    // overlapping deploy, or a developer running locally against the production token) rejects
+    // it, and an unhandled rejection takes the whole worker down for a failure in the one
+    // subsystem this codebase everywhere else treats as optional.
+    //
+    // Polling only serves /start link codes. Outgoing alerts go through bot.api and never needed
+    // it, so a polling failure no longer switches sends off: that turned a deploy's brief 409
+    // overlap into every alert and digest silently dropped until the next restart. Polling is
+    // retried with backoff instead, so linking comes back once the other poller is gone.
+    void bot
+      .start({
+        onStart: () => {
+          restartDelayMs = POLL_RESTART_BASE_MS;
+          logger.info("telegram bot started (long polling)");
+        },
+      })
+      .catch((err: unknown) => {
+        if (stopped) return;
+        logger.error("telegram polling stopped - alerts still send, retrying polling", {
+          error: String(err),
+          retryInMs: restartDelayMs,
+        });
+        restartTimer = setTimeout(startPolling, restartDelayMs);
+        restartDelayMs = Math.min(restartDelayMs * 2, POLL_RESTART_MAX_MS);
+      });
+  };
 
   return {
     enabled: true,
     async sendMessage(chatId, text) {
-      if (pollingStopped) return false;
       try {
-        await bot.api.sendMessage(chatId, text, {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-        });
+        await send(chatId, text);
         return true;
-      } catch (err) {
+      } catch (firstErr) {
+        let err = firstErr;
+        // Telegram's flood control says exactly how long to wait; one patient retry turns a burst
+        // of alerts into a short delay rather than lost messages.
+        const retryAfter = err instanceof GrammyError ? err.parameters.retry_after : undefined;
+        if (retryAfter !== undefined && retryAfter <= MAX_RETRY_AFTER_SECONDS) {
+          await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+          try {
+            await send(chatId, text);
+            return true;
+          } catch (retryErr) {
+            err = retryErr;
+          }
+        }
         logger.warn("failed to send telegram message", { chatId, error: String(err) });
         return false;
       }
     },
     start() {
-      // bot.start() resolves only when polling ends, so it cannot be awaited here - but it was
-      // also not CAUGHT, and that is the difference between a degraded Telegram and a dead
-      // worker. A revoked token (401), or a second process polling the same token (409 - an
-      // overlapping deploy, or a developer running locally against the production token),
-      // rejects this promise; an unhandled rejection takes the whole process down, and Render
-      // restarts it straight back into the same conflict. The scan loop, live prices, outcome
-      // tracking and burn reconciliation all die with it, for a failure in the one subsystem
-      // this codebase everywhere else treats as optional.
-      void bot
-        .start({ onStart: () => logger.info("telegram bot started (long polling)") })
-        .catch((err: unknown) => {
-          pollingStopped = true;
-          logger.error("telegram polling stopped - alerts disabled, worker continues", {
-            error: String(err),
-          });
-        });
+      startPolling();
     },
     async stop() {
+      stopped = true;
+      if (restartTimer) clearTimeout(restartTimer);
       await bot.stop();
     },
   };
 }
+
+const POLL_RESTART_BASE_MS = 30_000;
+const POLL_RESTART_MAX_MS = 10 * 60_000;
+/** Longest flood-control wait a single send will sit out before giving up on that message. */
+const MAX_RETRY_AFTER_SECONDS = 30;
 
 /**
  * Failed link-code attempts per chat, so a wrong guess costs the guesser something.
@@ -161,10 +197,16 @@ async function handleLinkCode(chatId: string, code: string, reply: (text: string
   failedAttempts.delete(chatId);
 
   try {
-    await prisma.telegramLink.update({
-      where: { id: link.id },
+    // Conditional on the code still being there: a findUnique-then-update let two chats redeem
+    // the same code at once, the last write silently taking the link.
+    const claimed = await prisma.telegramLink.updateMany({
+      where: { id: link.id, linkCode: code },
       data: { chatId, linkedAt: new Date(), linkCode: null, linkCodeExpiresAt: null },
     });
+    if (claimed.count === 0) {
+      await reply("That code was just used. Generate a new one from the dashboard's Settings page.");
+      return;
+    }
   } catch (err) {
     // chatId is @unique - this chat is already linked to a different TrenchScanner account.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {

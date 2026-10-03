@@ -38,6 +38,11 @@ const HEARTBEAT_MS = 25_000;
  * it if streams are ever found to be the thing exhausting memory.
  */
 const MAX_SUBSCRIBERS = Math.max(1, Number(process.env.MAX_STREAM_SUBSCRIBERS ?? 2000) || 2000);
+/**
+ * Open streams one user may hold across both kinds - a few tabs and devices. Without it, one
+ * account could open the whole process-wide ceiling and push everyone else onto polling.
+ */
+const MAX_STREAMS_PER_USER = 8;
 
 /** Backoff between reconnection attempts for the LISTEN connection, capped. */
 const RECONNECT_BASE_MS = 1_000;
@@ -248,7 +253,7 @@ export class MatchStream {
    * Returns null when the process is already at its subscriber ceiling.
    */
   subscribe(userId: string, sink: StreamSink): (() => void) | null {
-    if (this.subscribers.size >= this.maxSubscribers) return null;
+    if (!this.hasRoomFor(userId)) return null;
     const subscriber: Subscriber = { kind: "match", userId, sink };
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
@@ -268,11 +273,18 @@ export class MatchStream {
   }
 
   /** Same contract as subscribe(), for the broadcast curated feed - shares the same capacity cap. */
-  subscribeCurated(sink: StreamSink): (() => void) | null {
-    if (this.subscribers.size >= this.maxSubscribers) return null;
-    const subscriber: Subscriber = { kind: "curated", userId: "", sink };
+  subscribeCurated(userId: string, sink: StreamSink): (() => void) | null {
+    if (!this.hasRoomFor(userId)) return null;
+    const subscriber: Subscriber = { kind: "curated", userId, sink };
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
+  }
+
+  private hasRoomFor(userId: string): boolean {
+    if (this.subscribers.size >= this.maxSubscribers) return false;
+    let mine = 0;
+    for (const subscriber of this.subscribers) if (subscriber.userId === userId) mine += 1;
+    return mine < MAX_STREAMS_PER_USER;
   }
 
   /** Exposed alongside dispatch so the dead-connection sweep can be exercised without waiting 25s. */

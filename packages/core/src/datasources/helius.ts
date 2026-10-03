@@ -98,6 +98,8 @@ const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
 /** How many JSON-RPC calls to put in one HTTP POST. Conservative enough that no provider rejects
  *  the payload, large enough that a full cycle's wallet lookups collapse into a handful of trips. */
 const RPC_BATCH_SIZE = 50;
+/** getMultipleAccounts' per-call key limit. */
+const GMA_MAX_KEYS = 100;
 /** How many of those batched POSTs to have in flight at once. */
 const BATCH_CONCURRENCY = 3;
 
@@ -387,6 +389,45 @@ export class HeliusClient {
   }
 
   /**
+   * Fetches many accounts with getMultipleAccounts - one billed call per GMA_MAX_KEYS addresses,
+   * where a getAccountInfo per address billed one each (batching those only saved latency, see
+   * the note at the top of this file). Reads at "confirmed": the default "finalized" lags ~13s,
+   * and a mint seconds old can be missing there, which the Mayhem check would otherwise read -
+   * and cache for good - as "no Mayhem state account".
+   *
+   * Per address: the account value (null when nothing exists there), or "failed" when its chunk
+   * got no usable answer.
+   */
+  private async getMultipleAccounts<T>(
+    addresses: string[],
+    config: Record<string, unknown>,
+  ): Promise<Map<string, { value: T | null } | "failed">> {
+    const chunks: string[][] = [];
+    for (let i = 0; i < addresses.length; i += GMA_MAX_KEYS)
+      chunks.push(addresses.slice(i, i + GMA_MAX_KEYS));
+    const calls: RpcCall[] = chunks.map((chunk, i) => ({
+      id: `gma-${i}`,
+      method: "getMultipleAccounts",
+      params: [chunk, { commitment: "confirmed", ...config }],
+    }));
+    const responses = await this.sendBatched<{ value?: (T | null)[] }>(calls, 10_000);
+
+    const out = new Map<string, { value: T | null } | "failed">();
+    chunks.forEach((chunk, i) => {
+      const res = responses.get(`gma-${i}`);
+      const values = res?.result?.value;
+      if (!res || res.error || !Array.isArray(values) || values.length !== chunk.length) {
+        if (res?.error)
+          logger.warn("rpc error on getMultipleAccounts", { keys: chunk.length, error: res.error });
+        for (const address of chunk) out.set(address, "failed");
+        return;
+      }
+      chunk.forEach((address, j) => out.set(address, { value: values[j] ?? null }));
+    });
+    return out;
+  }
+
+  /**
    * Reads mint/freeze authority straight from the mint accounts (jsonParsed), batched. A mint the
    * RPC doesn't recognise at all comes back as "failed" rather than a bogus all-clear - callers
    * must not treat a missing answer as "authorities are revoked".
@@ -396,18 +437,11 @@ export class HeliusClient {
     const out = new Map<string, MintAuthorityResult>();
     if (unique.length === 0) return out;
 
-    const calls: RpcCall[] = unique.map((mint) => ({
-      id: mint,
-      method: "getAccountInfo",
-      params: [mint, { encoding: "jsonParsed" }],
-    }));
-    const responses = await this.sendBatched<{ value?: MintAccountValue | null }>(calls, 10_000);
-
+    const accounts = await this.getMultipleAccounts<MintAccountValue>(unique, { encoding: "jsonParsed" });
     for (const mint of unique) {
-      const res = responses.get(mint);
-      const info = res?.result?.value?.data?.parsed?.info;
-      if (!res || res.error || !info) {
-        if (res?.error) logger.warn("rpc error on getAccountInfo", { mint, error: res.error });
+      const account = accounts.get(mint);
+      const info = account && account !== "failed" ? account.value?.data?.parsed?.info : undefined;
+      if (!info) {
         out.set(mint, { status: "failed" });
         continue;
       }
@@ -509,23 +543,29 @@ export class HeliusClient {
     // the response can be mapped back without re-deriving.
     const pdaByMint = new Map(unique.map((mint) => [mint, mayhemStateAddress(mint)]));
 
-    const calls: RpcCall[] = unique.map((mint) => ({
-      id: mint,
-      method: "getAccountInfo",
-      params: [pdaByMint.get(mint)!, { encoding: "base64" }],
-    }));
-    const responses = await this.sendBatched<{ value?: unknown | null }>(calls, 10_000);
+    // The mint itself rides along in the same call: the Mayhem state account is created with the
+    // mint, so if the mint is visible and the PDA isn't, the mint really wasn't launched in Mayhem
+    // Mode - but if the mint isn't visible yet either, "no PDA" proves nothing and must not be
+    // cached as a definitive false. Zero-length dataSlice: only existence matters.
+    const accounts = await this.getMultipleAccounts<unknown>([...unique, ...pdaByMint.values()], {
+      encoding: "base64",
+      dataSlice: { offset: 0, length: 0 },
+    });
 
     for (const mint of unique) {
-      const res = responses.get(mint);
-      if (!res || res.error) {
-        if (res?.error) logger.warn("rpc error checking mayhem-state", { mint, error: res.error });
+      const mintAccount = accounts.get(mint);
+      const pdaAccount = accounts.get(pdaByMint.get(mint)!);
+      if (
+        !mintAccount ||
+        mintAccount === "failed" ||
+        !pdaAccount ||
+        pdaAccount === "failed" ||
+        mintAccount.value === null
+      ) {
         out.set(mint, { status: "failed" });
         continue;
       }
-      // getAccountInfo returns a null `value` for an address nothing has ever been created at,
-      // which for this PDA means the mint simply was not launched in Mayhem Mode.
-      out.set(mint, { status: "found", isMayhemMode: res.result?.value != null });
+      out.set(mint, { status: "found", isMayhemMode: pdaAccount.value !== null });
     }
     return out;
   }

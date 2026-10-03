@@ -96,8 +96,12 @@ export async function creditBurn(
     return await prisma.$transaction(async (tx) => {
       const user = await tx.user.findUnique({
         where: { walletAddress: credit.burnerWallet },
-        select: { id: true, subscription: { select: { expiresAt: true } } },
+        select: { id: true },
       });
+      // Same per-user lock as claimHeldBurns and the admin grant, taken before expiresAt is read:
+      // two credits for one user landing together (the reconciler and a /claim, say) otherwise
+      // both extend from the same old expiry and one of them is silently lost.
+      if (user) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${user.id}))`;
 
       await tx.burnEvent.create({
         data: {
@@ -118,7 +122,11 @@ export async function creditBurn(
       // settles it the moment they sign in - so burning before you have an account is safe.
       if (!user) return { status: "held" as const };
 
-      const expiresAt = extendedExpiry(user.subscription?.expiresAt ?? null, credit.months);
+      const existing = await tx.subscription.findUnique({
+        where: { userId: user.id },
+        select: { expiresAt: true },
+      });
+      const expiresAt = extendedExpiry(existing?.expiresAt ?? null, credit.months);
       await tx.subscription.upsert({
         where: { userId: user.id },
         update: { expiresAt, source: AccessSource.BURN },

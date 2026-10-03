@@ -150,8 +150,19 @@ describe("MatchStream capacity", () => {
     const s = new MatchStream("postgresql://unused", 2);
 
     expect(s.subscribe("a", sink().sink)).not.toBe(null);
-    expect(s.subscribeCurated(sink().sink)).not.toBe(null);
-    expect(s.subscribeCurated(sink().sink)).toBe(null);
+    expect(s.subscribeCurated("u", sink().sink)).not.toBe(null);
+    expect(s.subscribeCurated("u", sink().sink)).toBe(null);
+  });
+
+  it("caps how many streams one user can hold, across both kinds", () => {
+    const s = new MatchStream("postgresql://unused", 100);
+    for (let i = 0; i < 4; i++) {
+      expect(s.subscribe("greedy", sink().sink)).not.toBe(null);
+      expect(s.subscribeCurated("greedy", sink().sink)).not.toBe(null);
+    }
+    expect(s.subscribe("greedy", sink().sink)).toBe(null);
+    expect(s.subscribeCurated("greedy", sink().sink)).toBe(null);
+    expect(s.subscribe("someone-else", sink().sink)).not.toBe(null);
   });
 });
 
@@ -195,8 +206,8 @@ describe("MatchStream.dispatchCurated", () => {
     const curatedA = sink();
     const curatedB = sink();
     const matchSub = sink();
-    s.subscribeCurated(curatedA.sink);
-    s.subscribeCurated(curatedB.sink);
+    s.subscribeCurated("u", curatedA.sink);
+    s.subscribeCurated("u", curatedB.sink);
     s.subscribe("alice", matchSub.sink);
 
     s.dispatchCurated(JSON.stringify({ alertId: "alert-1" }));
@@ -212,7 +223,7 @@ describe("MatchStream.dispatchCurated", () => {
   it("keeps match traffic off curated streams", () => {
     const s = stream();
     const curated = sink();
-    s.subscribeCurated(curated.sink);
+    s.subscribeCurated("u", curated.sink);
 
     s.dispatch(notification("alice", "match-1"));
 
@@ -222,7 +233,7 @@ describe("MatchStream.dispatchCurated", () => {
   it("ignores unparseable and id-less curated payloads", () => {
     const s = stream();
     const curated = sink();
-    s.subscribeCurated(curated.sink);
+    s.subscribeCurated("u", curated.sink);
 
     s.dispatchCurated("{not json");
     s.dispatchCurated(JSON.stringify({}));
@@ -233,7 +244,7 @@ describe("MatchStream.dispatchCurated", () => {
   it("disposes a curated subscriber cleanly", () => {
     const s = stream();
     const curated = sink();
-    const dispose = s.subscribeCurated(curated.sink)!;
+    const dispose = s.subscribeCurated("u", curated.sink)!;
     dispose();
 
     s.dispatchCurated(JSON.stringify({ alertId: "alert-1" }));

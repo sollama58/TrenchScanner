@@ -86,7 +86,7 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
   });
 
   if (forward.pages > 0 || forward.pending.length > 0) {
-    const { lastProcessed, completed } = await processSignatures(forward.pending, rpc, result);
+    const { lastProcessed } = await processSignatures(forward.pending, rpc, result);
     if (lastProcessed) {
       // The cold start clears its floor only once the backfill has actually reached it - see
       // below. Advancing lastSignature here is what keeps ordinary forward passes cheap.
@@ -97,11 +97,17 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
           // A first pass that stopped on the page cap rather than the floor leaves the rest of
           // the window to the backfill, and records where to resume from. One that reached the
           // floor (or ran out of history) is done: no backfill, no floor.
+          //
+          // The resume point is recorded even when processing stopped early: signatures are
+          // processed oldest-first, so everything up to lastProcessed is done and the unprocessed
+          // newer part is re-walked by the next forward pass (until = lastProcessed). Leaving
+          // backfillBefore null there meant pass two never ran, and every burn older than the
+          // first page-cap's worth was never credited.
           ...(cursor.lastSignature
             ? {}
             : forward.reachedFloor || forward.exhausted
               ? { scanFloor: null, backfillBefore: null }
-              : { backfillBefore: completed ? forward.oldestSeen : null }),
+              : { backfillBefore: forward.oldestSeen }),
         },
       });
     }

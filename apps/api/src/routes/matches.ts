@@ -40,7 +40,9 @@ const matchInclude = {
 } satisfies Prisma.MatchInclude;
 
 export const listQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  // Capped: the merge below reads page * PAGE_SIZE rows of each source, so an unbounded page was
+  // an unbounded query (and past 2^53 a Prisma error).
+  page: z.coerce.number().int().min(1).max(500).default(1),
   /**
    * Whether to interleave the curated feed into this user's own matches. Opt-in, and defaulted
    * OFF here rather than in the client: the Live Feed's promise is "what YOUR filters caught",

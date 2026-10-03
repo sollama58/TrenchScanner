@@ -304,6 +304,10 @@ model CuratedAlert {
 
   @@index([createdAt])
   @@index([tokenId, createdAt])
+  // Foreign keys with ON DELETE SET NULL: without these, every TokenSnapshot / CandidateOutcome
+  // the nightly cleanup deletes scans this table to null its references.
+  @@index([snapshotId])
+  @@index([candidateOutcomeId])
 }
 
 /// What the BENCH curator would have emitted - the newest candidate model while the heuristic
@@ -334,6 +338,7 @@ model CuratedShadowEmission {
   @@index([createdAt])
   @@index([tokenId, createdAt])
   @@index([source, createdAt])
+  @@index([candidateOutcomeId])
 }
 
 /// One trained curator - the output of a training run (apps/worker/src/jobs/
@@ -378,6 +383,8 @@ model AiReview {
   @@index([createdAt])
   @@index([tokenId, createdAt])
   @@index([decision, createdAt])
+  @@index([candidateOutcomeId])
+  @@index([curatedAlertId])
 }
 
 model CuratorModel {
@@ -701,6 +708,10 @@ model Match {
   @@unique([userId, tokenId, filterId, matchedAt])
   @@index([userId, matchedAt])
   @@index([tokenId])
+  // Cascade foreign keys: deleting a filter, or the nightly snapshot cleanup, scanned all of Match
+  // per deleted row without these.
+  @@index([filterId])
+  @@index([snapshotId])
   @@index([hitHundredPctAt, peakReturnPct])
 }
 

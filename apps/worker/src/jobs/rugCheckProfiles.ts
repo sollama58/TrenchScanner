@@ -18,7 +18,7 @@ const cachedProfileSchema = z
     mintAuthorityActive: z.boolean(),
     freezeAuthorityActive: z.boolean(),
     lpBurned: z.boolean(),
-    riskScore: z.number(),
+    riskScore: z.number().optional(),
     riskFlags: z.array(z.string()),
     top10HolderAddresses: z.array(z.string()).optional(),
     // passthrough, not strip: zod drops unknown keys by default, so a field added to toProfile()

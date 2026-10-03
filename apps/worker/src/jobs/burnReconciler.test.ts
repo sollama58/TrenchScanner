@@ -120,6 +120,32 @@ describe.skipIf(!dbAvailable)("reconcileBurns: cold-start backfill", () => {
     expect(cursor.scanFloor).not.toBeNull();
   });
 
+  it("a capped cold start that stops early still records where the backfill resumes", async () => {
+    // More signatures than one pass's page cap, all inside the floor, so the rest is owed to the
+    // backfill. A transaction near the old end then fails to fetch, stopping processing early.
+    const signatures = Array.from({ length: 10_500 }, (_, i) => ({
+      signature: `sig-${i}`,
+      ageDays: i * 0.03,
+    }));
+    const { rpc } = stubRpc(signatures);
+    const failing = "sig-9997";
+    const getParsed = rpc.getParsedTransactions.bind(rpc);
+    rpc.getParsedTransactions = async (sigs: string[]) => {
+      const fetched = await getParsed(sigs);
+      if (fetched.has(failing)) fetched.set(failing, null as never);
+      return fetched;
+    };
+
+    await reconcileBurns(env, rpc);
+
+    const cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
+    // Processed oldest-first up to the failure; the newer part is re-walked by the next forward pass.
+    expect(cursor.lastSignature).toBe("sig-9998");
+    // And the older part of the window is still owed, from the oldest signature this pass saw.
+    expect(cursor.backfillBefore).toBe("sig-9999");
+    expect(cursor.scanFloor).not.toBeNull();
+  });
+
   it("a cold start that reaches the floor in one pass owes no backfill", async () => {
     const { rpc } = stubRpc([
       { signature: "sig-new", ageDays: 2 },
