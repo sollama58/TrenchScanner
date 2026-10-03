@@ -12,8 +12,11 @@ import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import type { AiReviewResult } from "../ai/reviewer.js";
 
 const reviewPick = vi.fn<() => Promise<AiReviewResult>>();
+/** Whether the reviewer has earned gate mode - true unless a test says otherwise. */
+const gateQualified = vi.fn(async () => true);
 vi.mock("../ai/reviewer.js", () => ({
   aiReviewEnabled: (env: Env) => env.AI_REVIEW_MODE !== "off" && env.ANTHROPIC_API_KEY !== "",
+  aiGateQualified: () => gateQualified(),
   reviewPick: () => reviewPick(),
 }));
 
@@ -146,6 +149,18 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
       const review = await prisma.aiReview.findFirstOrThrow({ where: { tokenId: token.id } });
       expect(review.mode).toBe("shadow");
       expect(review.decision).toBe("no_buy");
+    });
+  });
+
+  it("gate mode runs as shadow until the reviewer's graded record qualifies it", async () => {
+    gateQualified.mockResolvedValueOnce(false);
+    reviewPick.mockResolvedValue(verdict("no_buy"));
+    const { token, emitted } = await run(gate, "unqualified");
+    // A no_buy from an unproven reviewer cannot hold the alert back.
+    expect(emitted).toBe(1);
+    await vi.waitFor(async () => {
+      const review = await prisma.aiReview.findFirstOrThrow({ where: { tokenId: token.id } });
+      expect(review.mode).toBe("shadow");
     });
   });
 

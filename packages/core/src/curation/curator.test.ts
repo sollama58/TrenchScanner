@@ -4,6 +4,7 @@ import {
   evaluateCandidateHeuristic,
   HEURISTIC_CURATOR_SOURCE,
   passesEventPreGate,
+  walletChecksKnown,
 } from "./curator.js";
 import type { ScoredToken } from "../types.js";
 
@@ -34,6 +35,28 @@ function strongCandidate(overrides: Partial<ScoredToken> = {}): ScoredToken {
     ...overrides,
   };
 }
+
+describe("evaluateCandidateHeuristic - churn on the last hour", () => {
+  it("judges churn on 1h volume when it was reported, ignoring a lifetime 24h figure", () => {
+    // 24h volume 1.3x the mcap would pass the 24h floor, but the last hour is nearly dead.
+    expect(evaluateCandidateHeuristic(strongCandidate({ volume1hUsd: 15_000 }), MIN_SCORE).curate).toBe(
+      false,
+    );
+    // A quarter of the 150k mcap traded in the last hour clears it, whatever the 24h ratio.
+    expect(
+      evaluateCandidateHeuristic(strongCandidate({ volume1hUsd: 40_000, volumeToMcapRatio: 0.3 }), MIN_SCORE)
+        .curate,
+    ).toBe(true);
+  });
+});
+
+describe("walletChecksKnown", () => {
+  it("is true only when both top-10 wallet figures were measured", () => {
+    expect(walletChecksKnown({ freshTop10WalletPct: 0, emptyTop10WalletPct: 10 })).toBe(true);
+    expect(walletChecksKnown({ freshTop10WalletPct: 0 })).toBe(false);
+    expect(walletChecksKnown({ emptyTop10WalletPct: 0 })).toBe(false);
+  });
+});
 
 describe("evaluateCandidateHeuristic", () => {
   it("curates a strong candidate with reasons and the rank score as confidence", () => {

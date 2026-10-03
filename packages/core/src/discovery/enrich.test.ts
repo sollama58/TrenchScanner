@@ -90,4 +90,16 @@ describe("enrichToken", () => {
     const enriched = enrichToken(candidate, onChain);
     expect(enriched.graduated).toBeUndefined();
   });
+
+  it("computes 10-minute holder growth and time in the band when their baselines are given", () => {
+    const now = new Date("2026-01-01T01:00:00Z");
+    const enriched = enrichToken(candidate, onChain, {
+      now,
+      previousHolderCount10m: 176,
+      firstInBandAt: new Date("2026-01-01T00:15:00Z"),
+    });
+    expect(enriched.holderGrowth10mPct).toBeCloseTo(25);
+    expect(enriched.minutesSinceFirstInBand).toBe(45);
+    expect(enrichToken(candidate, onChain).holderGrowth10mPct).toBeUndefined();
+  });
 });

@@ -17,7 +17,7 @@ import {
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
-import { aiReviewEnabled, reviewPick, type AiReviewResult } from "../ai/reviewer.js";
+import { aiGateQualified, aiReviewEnabled, reviewPick, type AiReviewResult } from "../ai/reviewer.js";
 
 const logger = createLogger("curated-alerts");
 
@@ -285,7 +285,9 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
     ]);
     const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
     const reviewing = aiReviewEnabled(env);
-    const gating = reviewing && env.AI_REVIEW_MODE === "gate";
+    // Gate mode only once the reviewer's graded "buy" record meets the feed's targets; until then
+    // a gate-mode reviewer runs as shadow (see aiGateQualified).
+    const gating = reviewing && env.AI_REVIEW_MODE === "gate" && (await aiGateQualified(env));
     // A token the reviewer just passed on doesn't contend again until its veto cools down -
     // otherwise it would win the same slot and buy the same review every minute.
     const contenders = gating ? await withoutRecentVetoes(cycle.live, env) : cycle.live;

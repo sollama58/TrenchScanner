@@ -107,6 +107,9 @@ export class DexScreenerClient {
       this.fetchDiscoveryEndpoint("/token-boosts/latest/v1"),
     ]);
 
+    // Boosts are paid placements; which mints bought one is recorded (Token.dexBoosted) so the
+    // learner can find out whether a paid boost helps or hurts a call.
+    const boosted = new Set(boosts.filter((b) => b.chainId === SOLANA_CHAIN_ID).map((b) => b.tokenAddress));
     const byMint = new Map<string, WatchlistCandidate>();
     for (const entry of [...profiles, ...boosts]) {
       if (entry.chainId !== SOLANA_CHAIN_ID || !entry.tokenAddress) continue;
@@ -116,6 +119,8 @@ export class DexScreenerClient {
         hasTwitter: links.some((l) => l.type === "twitter"),
         hasTelegram: links.some((l) => l.type === "telegram"),
         hasWebsite: links.some((l) => !l.type || l.type === "website"),
+        discoverySource: "dexscreener",
+        boosted: boosted.has(entry.tokenAddress),
       });
     }
     return [...byMint.values()];

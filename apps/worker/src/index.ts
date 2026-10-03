@@ -20,17 +20,23 @@ import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
 import { runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { scheduleInterval, scheduleDailyAt } from "./scheduler.js";
+import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 
 const logger = createLogger("worker");
 
 async function main() {
   const env = loadEnv();
 
+  // Live launch/graduation feed, drained by every scan cycle - see PumpPortalStream.
+  const stream = env.PUMPPORTAL_WS_URL ? new PumpPortalStream(env.PUMPPORTAL_WS_URL) : undefined;
+  stream?.start();
+
   const deps = {
     pumpFun: new PumpFunClient({ baseUrl: env.PUMPFUN_BASE_URL }),
     dexScreener: new DexScreenerClient({ baseUrl: env.DEXSCREENER_BASE_URL }),
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
+    stream,
   };
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because
@@ -125,6 +131,7 @@ async function main() {
     cleanupJob.stop();
     outcomeTrackingJob.stop();
     curatorTrainingJob.stop();
+    stream?.stop();
     await bot.stop();
     await prisma.$disconnect();
     process.exit(0);

@@ -40,8 +40,11 @@ export interface StoredEvalMetrics {
   targets: PrecisionTargets;
   precisionCalibration: PrecisionCalibration;
   precisionCurve: PrecisionCurvePoint[];
-  /** The heuristic's hit-rate cutoff, in rank-score units - see heuristicCutoff in curatedAlerts.ts. */
-  heuristicCalibration: PrecisionCalibration;
+  /**
+   * The heuristic's hit-rate cutoff, in rank-score units - see heuristicCutoff in curatedAlerts.ts.
+   * Absent when the exam had too few heuristic calls to judge any cutoff.
+   */
+  heuristicCalibration?: PrecisionCalibration;
   heuristicPrecisionCurve: PrecisionCurvePoint[];
 }
 
@@ -150,7 +153,12 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     targets,
     precisionCalibration,
     precisionCurve: precisionCurve(evaluation.outOfSample),
-    heuristicCalibration,
+    // Stored only when there was evidence to judge on - some cutoff produced at least
+    // CURATED_MIN_CALIBRATION_ALERTS calls. Without it the heuristic keeps sending on its gate
+    // alone (see heuristicGate in curatedAlerts.ts) rather than being silenced by an empty exam.
+    ...(heuristicCalibration.threshold !== null || heuristicCalibration.support > 0
+      ? { heuristicCalibration }
+      : {}),
     heuristicPrecisionCurve: precisionCurve(evaluation.heuristicOutOfSample),
   };
 

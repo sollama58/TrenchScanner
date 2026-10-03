@@ -52,6 +52,15 @@ export const CANDIDATE_FEATURE_NAMES = [
   "scoreAge",
   "scoreNarrative",
   "scoreTotal",
+  // Added 2026-10-03 (pipeline audit). Ratios a linear model can't build from its inputs, the
+  // short-window holder growth young tokens otherwise lack, how long the token has already sat
+  // in the band, and discovery metadata.
+  "liquidityToMcapRatio",
+  "volume5mToMcapRatio",
+  "holderGrowth10mPct",
+  "minutesSinceFirstInBand",
+  "dexBoosted",
+  "hasDescription",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -96,6 +105,12 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   scoreAge: "age score",
   scoreNarrative: "narrative score",
   scoreTotal: "composite score",
+  liquidityToMcapRatio: "liquidity vs market cap",
+  volume5mToMcapRatio: "5m volume vs market cap",
+  holderGrowth10mPct: "10m holder growth",
+  minutesSinceFirstInBand: "time in the band",
+  dexBoosted: "paid DexScreener boost",
+  hasDescription: "has a description",
 };
 
 /**
@@ -137,6 +152,9 @@ export function scoredFromFeatures(
     sells1h: num("sells1h"),
     holderCount: num("holderCount"),
     holderGrowthPct: num("holderGrowthPct"),
+    holderGrowth10mPct: num("holderGrowth10mPct"),
+    minutesSinceFirstInBand: num("minutesSinceFirstInBand"),
+    dexBoosted: bool("dexBoosted"),
     top10HolderPct: num("top10HolderPct"),
     devWalletPct: num("devWalletPct"),
     riskScore: num("riskScore"),
@@ -216,6 +234,7 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
     volumeAccel,
     holderCount: scored.holderCount ?? null,
     holderGrowthPct: scored.holderGrowthPct ?? null,
+    holderGrowth10mPct: scored.holderGrowth10mPct ?? null,
     top10HolderPct: scored.top10HolderPct ?? null,
     devWalletPct: scored.devWalletPct ?? null,
     riskScore: scored.riskScore ?? null,
@@ -232,5 +251,18 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
     scoreAge: scored.score.age,
     scoreNarrative: scored.score.narrative,
     scoreTotal: scored.score.total,
+    liquidityToMcapRatio:
+      scored.marketCapUsd > 0 && scored.liquidityUsd !== undefined
+        ? scored.liquidityUsd / scored.marketCapUsd
+        : null,
+    volume5mToMcapRatio:
+      scored.marketCapUsd > 0 && scored.volume5mUsd !== undefined
+        ? scored.volume5mUsd / scored.marketCapUsd
+        : null,
+    minutesSinceFirstInBand: scored.minutesSinceFirstInBand ?? null,
+    dexBoosted: scored.dexBoosted === undefined ? null : scored.dexBoosted ? 1 : 0,
+    // Known whenever the source could have had one; a Pump.fun description is the launcher's
+    // pitch, and its absence on a Pump.fun launch is itself a (weak) tell.
+    hasDescription: scored.description === undefined ? null : scored.description.trim() !== "" ? 1 : 0,
   };
 }

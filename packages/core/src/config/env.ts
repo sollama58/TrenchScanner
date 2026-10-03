@@ -47,6 +47,10 @@ const envSchema = z.object({
   HELIUS_API_KEY: z.string().optional().default(""),
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api-v3.pump.fun"),
+  // PumpPortal's public data websocket: Pump.fun launches and graduations as they land on chain
+  // (apps/worker/src/discovery/pumpPortalStream.ts). Empty disables the stream; discovery then
+  // relies on polling alone. Needs a runtime with a global WebSocket (Node 22+).
+  PUMPPORTAL_WS_URL: z.string().default("wss://pumpportal.fun/api/data"),
 
   // One minute. Not a performance figure - a full cycle takes ~10 seconds - but a rate-limit one:
   // RugCheck is called once per in-band candidate per cycle, so this interval used to multiply its
@@ -243,6 +247,15 @@ const envSchema = z.object({
   // in the newest training run, and sends nothing when no cutoff met the targets. Before the
   // first training run there is no record, and the heuristic's gate stands alone. "false"
   // restores gate-only emission.
+  // Curated calls require both top-10 wallet checks (fresh-wallet and empty-wallet share) to have
+  // been measured: a token's event moment - the only time curators decide - waits until they
+  // are, and the scan spends its wallet lookup budget on looks-ready candidates first. User
+  // filters are unaffected (their wallet criteria still skip when unknown). "false" lets
+  // curators decide without them, with the caps skipped as before.
+  CURATED_REQUIRE_WALLET_CHECKS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   CURATED_HEURISTIC_PRECISION_GATE: z
     .enum(["true", "false"])
     .default("true")
@@ -260,6 +273,10 @@ const envSchema = z.object({
   AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   AI_REVIEW_VETO_COOLDOWN_MINUTES: z.coerce.number().positive().default(30),
+  // Gate mode has to be EARNED: until at least this many of the reviewer's "buy" calls are
+  // graded and they meet CURATED_TARGET_WIN_RATE_PCT / CURATED_TARGET_GOAL_RATE_PCT, "gate"
+  // behaves as "shadow" (see aiGateQualified in apps/worker/src/ai/reviewer.ts).
+  AI_REVIEW_MIN_GRADED_BUYS: z.coerce.number().int().positive().default(50),
 
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   // Used only to build the "tap to open Telegram" deep link on the dashboard - not required

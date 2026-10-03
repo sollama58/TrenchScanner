@@ -93,3 +93,39 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(replayed.buys24h).toBe(700);
   });
 });
+
+describe("buildCandidateFeatures - audit additions", () => {
+  const base = {
+    mintAddress: "m",
+    priceUsd: 1,
+    marketCapUsd: 100_000,
+    narrativeTags: [],
+    rugScreen: { passed: true, reasons: [] },
+    score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
+  };
+
+  it("derives the size ratios and discovery flags", () => {
+    const f = buildCandidateFeatures({
+      ...base,
+      liquidityUsd: 20_000,
+      volume5mUsd: 5_000,
+      dexBoosted: true,
+      description: "  ",
+      holderGrowth10mPct: 12,
+      minutesSinceFirstInBand: 30,
+    });
+    expect(f.liquidityToMcapRatio).toBeCloseTo(0.2);
+    expect(f.volume5mToMcapRatio).toBeCloseTo(0.05);
+    expect(f.dexBoosted).toBe(1);
+    expect(f.hasDescription).toBe(0);
+    expect(f.holderGrowth10mPct).toBe(12);
+    expect(f.minutesSinceFirstInBand).toBe(30);
+  });
+
+  it("leaves them null when the inputs were never seen", () => {
+    const f = buildCandidateFeatures(base);
+    expect(f.liquidityToMcapRatio).toBeNull();
+    expect(f.dexBoosted).toBeNull();
+    expect(f.hasDescription).toBeNull();
+  });
+});

@@ -171,21 +171,36 @@ model TelegramLink {
 
 /// A distinct Solana token being tracked.
 model Token {
-  id            String   @id @default(cuid())
-  mintAddress   String   @unique
-  symbol        String?
-  name          String?
-  pairAddress   String? // primary DexScreener pair used for pricing
+  id              String    @id @default(cuid())
+  mintAddress     String    @unique
+  symbol          String?
+  name            String?
+  pairAddress     String? // primary DexScreener pair used for pricing
   /// The token's logo, as hosted by DexScreener. Read from the pair response the scan already
   /// fetches rather than derived from the mint address: CDN URL shapes are undocumented and
   /// change, and a guessed one 404s silently for every mint that has no artwork - which is a lot
   /// of them. Null means DexScreener has no image, not that we failed to look.
-  imageUrl      String?
-  firstSeenAt   DateTime @default(now())
-  hasTwitter    Boolean  @default(false)
-  hasTelegram   Boolean  @default(false)
-  hasWebsite    Boolean  @default(false)
-  narrativeTags String[] @default([])
+  imageUrl        String?
+  firstSeenAt     DateTime  @default(now())
+  hasTwitter      Boolean   @default(false)
+  hasTelegram     Boolean   @default(false)
+  hasWebsite      Boolean   @default(false)
+  narrativeTags   String[]  @default([])
+  /// The launcher-written description from Pump.fun, captured at discovery. Re-scans come from
+  /// DexScreener, which has none, so this is the only copy - it feeds narrative tags and the AI
+  /// reviewer's brief.
+  description     String?
+  /// Which discovery source first added the mint: "pumpfun", "pumpfun-active" (the
+  /// recently-traded list), "pumpfun-koth" (king of the hill), "pumpportal" (live new-token
+  /// stream) or "dexscreener". Null for rows added before this was recorded.
+  discoverySource String?
+  /// Whether the mint has ever appeared on DexScreener's paid-boost feed. Sticky (false -> true
+  /// only); a model feature, so the learner can say whether a paid boost helps or hurts.
+  dexBoosted      Boolean   @default(false)
+  /// The first scan that saw the mint inside the curated mcap band. Feeds the
+  /// minutesSinceFirstInBand feature: a token that entered the band hours ago and is still
+  /// there is a different bet from one arriving now.
+  firstInBandAt   DateTime?
 
   // Stamped by GET /matches (see apps/api/src/routes/matches.ts) whenever this token appears on
   // a page someone actually fetched - not per-user, just "is anyone currently looking at this."
