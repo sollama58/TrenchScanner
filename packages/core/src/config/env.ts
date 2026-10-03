@@ -322,8 +322,12 @@ const envSchema = z.object({
   // Wallet-Standard-compliant wallets (Phantom, Solflare) cross-check against the page's actual
   // origin before signing - a phishing site simply cannot get a wallet to sign a message claiming
   // this domain while running on a different one. Must be updated if the dashboard's real domain
-  // changes (same caveat CORS_ORIGINS already has). The dashboard is served by the CultScreener/
-  // HolDEX site (its /trenches/ tab), not from this repo's own Render blueprint.
+  // changes (same caveat CORS_ORIGINS already has).
+  //
+  // May be a comma-separated list when more than one dashboard is live at once - the
+  // CultScreener/HolDEX /trenches/ tab and this repo's own apps/web on trenchscanner-web. Each
+  // sign-in is bound to the listed host its request came from (see appDomainForOrigin); a request
+  // from anywhere else is bound to the FIRST entry, which a wallet on that other page will refuse.
   PUBLIC_APP_DOMAIN: z.string().default("localhost:5173"),
 
   // Comma-separated base58 wallet addresses allowed into the Admin Panel (GET/POST /admin/*) -
@@ -422,6 +426,34 @@ export function corsOriginList(env: Env): string[] {
   return env.CORS_ORIGINS.split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/** PUBLIC_APP_DOMAIN as a list of host[:port] entries, lowercased, first entry first. */
+export function appDomainList(env: Pick<Env, "PUBLIC_APP_DOMAIN">): string[] {
+  return env.PUBLIC_APP_DOMAIN.split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * The sign-in domain for a request carrying this Origin header: the listed domain the origin's
+ * host[:port] is, or the first listed domain when it is none of them (or absent).
+ *
+ * Only ever picks from the configured list, so the anti-phishing property holds: a page on an
+ * unlisted host still gets a message naming a listed domain, which its wallet refuses to sign.
+ * Origin is set by the browser and cannot be forged by page script.
+ */
+export function appDomainForOrigin(env: Pick<Env, "PUBLIC_APP_DOMAIN">, origin: string | undefined): string {
+  const domains = appDomainList(env);
+  const fallback = domains[0] ?? env.PUBLIC_APP_DOMAIN;
+  if (!origin) return fallback;
+  let host: string;
+  try {
+    host = new URL(origin).host.toLowerCase();
+  } catch {
+    return fallback;
+  }
+  return domains.includes(host) ? host : fallback;
 }
 
 /** Parses ADMIN_WALLET_ADDRESSES into a lookup set. Same comma-separated-list shape as CORS_ORIGINS. */

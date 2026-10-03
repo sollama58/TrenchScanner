@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { adminWalletSet, corsOriginList, loadEnv, resetEnvCacheForTests } from "./env.js";
+import {
+  adminWalletSet,
+  appDomainForOrigin,
+  appDomainList,
+  corsOriginList,
+  loadEnv,
+  resetEnvCacheForTests,
+} from "./env.js";
 import type { Env } from "./env.js";
 
 function baseEnv(overrides: Partial<Env> = {}): Env {
@@ -41,6 +48,33 @@ describe("corsOriginList", () => {
       "https://a.example",
       "https://b.example",
     ]);
+  });
+});
+
+describe("appDomainForOrigin", () => {
+  const env = baseEnv({ PUBLIC_APP_DOMAIN: "holdex.live, trenchscanner-web.onrender.com" });
+
+  it("lists every configured dashboard, first one first", () => {
+    expect(appDomainList(env)).toEqual(["holdex.live", "trenchscanner-web.onrender.com"]);
+  });
+
+  it("binds a sign-in to the listed dashboard it came from", () => {
+    expect(appDomainForOrigin(env, "https://trenchscanner-web.onrender.com")).toBe(
+      "trenchscanner-web.onrender.com",
+    );
+    expect(appDomainForOrigin(env, "https://holdex.live")).toBe("holdex.live");
+  });
+
+  it("falls back to the first listed domain for an unlisted, missing or malformed origin", () => {
+    expect(appDomainForOrigin(env, "https://evil.example")).toBe("holdex.live");
+    expect(appDomainForOrigin(env, undefined)).toBe("holdex.live");
+    expect(appDomainForOrigin(env, "not a url")).toBe("holdex.live");
+  });
+
+  it("keeps the port, which is part of the SIWS domain", () => {
+    const local = baseEnv({ PUBLIC_APP_DOMAIN: "localhost:5173" });
+    expect(appDomainForOrigin(local, "http://localhost:5173")).toBe("localhost:5173");
+    expect(appDomainForOrigin(local, "http://localhost:4000")).toBe("localhost:5173");
   });
 });
 

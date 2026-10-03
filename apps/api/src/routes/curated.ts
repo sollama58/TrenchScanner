@@ -18,6 +18,7 @@ import {
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
+import { buildModelInsights, type ModelInsights } from "../modelInsights.js";
 
 /** Same fixed page size as the Live Feed - the two tabs render the same card. */
 const PAGE_SIZE = 12;
@@ -42,6 +43,16 @@ type CuratedPage = {
   alerts: CuratedAlertWithRelations[];
   totalCount: number;
 };
+
+/**
+ * How long the Model tab's report is reused. It runs the hit-rate report's aggregates, which
+ * move hourly at most (outcomes finalize on the hour, training every few hours).
+ */
+const INSIGHTS_CACHE_TTL_MS = 60_000;
+
+const insightsQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(90).default(30),
+});
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(10_000).default(1),
@@ -332,4 +343,27 @@ export async function registerCuratedRoutes(
   const statsCache = new SharedCache<Awaited<ReturnType<typeof buildStats>>>(STATS_CACHE_TTL_MS);
 
   app.get("/stats", async () => statsCache.get(buildStats));
+
+  /**
+   * The Model tab: training runs (logistic vs GBDT exam, hit-rate curves, cutoff), what the live
+   * model leans on, and how curated, shadow and AI reviewer calls scored against the targets.
+   * Cached per window and audience - admins also get the reviewer's reasoning, which never
+   * reaches anyone else's response.
+   */
+  const insightsCache = new Map<string, SharedCache<ModelInsights>>();
+  app.get("/insights", async (request, reply) => {
+    const parsed = insightsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const isAdmin = request.access?.reason === "admin";
+    const key = `${parsed.data.days}:${isAdmin ? "admin" : "subscriber"}`;
+    let cache = insightsCache.get(key);
+    if (!cache) {
+      cache = new SharedCache<ModelInsights>(INSIGHTS_CACHE_TTL_MS);
+      // Bounded by the schema: 90 windows x 2 audiences at most, and in practice the UI's three.
+      insightsCache.set(key, cache);
+    }
+    return cache.get(() => buildModelInsights(opts.env, parsed.data.days, isAdmin));
+  });
 }
