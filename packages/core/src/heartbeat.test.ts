@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "./db.js";
-import { recordHeartbeat, recordRunStart, runningSinceFrom } from "./heartbeat.js";
+import { recordHeartbeat, recordRunStart, runningSinceFrom, type HeartbeatJob } from "./heartbeat.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -18,7 +18,7 @@ describe("runningSinceFrom", () => {
 
 describe.skipIf(!dbAvailable)("recordRunStart", () => {
   // A job name the worker never uses, so the suite can't disturb a real row.
-  const job = "digest" as const;
+  const job = "heartbeat-test" as HeartbeatJob;
 
   afterAll(async () => {
     await prisma.systemHeartbeat.deleteMany({ where: { job } });
