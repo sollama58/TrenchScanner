@@ -4,6 +4,7 @@ import {
   trainCurator,
   calibrateThresholdForPrecision,
   precisionCurve,
+  thresholdAtRank,
   walkForwardEvaluate,
   CURATOR_MODEL_KIND,
   type Env,
@@ -38,7 +39,13 @@ export interface StoredEvalMetrics {
   folds: WalkForwardResult["folds"];
   verdict: WalkForwardResult["verdict"];
   targets: PrecisionTargets;
+  /**
+   * The model's hit-rate cutoff in CONFIDENCE-RANK units (share of decision moments scored lower
+   * - see WalkForwardResult.outOfSampleRanks), with the hit rate it earned out of sample. The
+   * shipped model's probability cutoff translated from it is params.threshold.
+   */
   precisionCalibration: PrecisionCalibration;
+  /** The model's hit-rate curve, also in rank units. */
   precisionCurve: PrecisionCurvePoint[];
   /**
    * The heuristic's hit-rate cutoff, in rank-score units - see heuristicCutoff in curatedAlerts.ts.
@@ -99,6 +106,11 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     sampleKind: r.sampleKind,
   }));
 
+  const targets: PrecisionTargets = {
+    winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
+    goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
+    minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
+  };
   const mcapBand = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
   const evaluation = await walkForwardEvaluate(trainingRows, {
     targetPerHour: env.CURATED_TARGET_PER_HOUR,
@@ -111,6 +123,9 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     // Graded and calibrated on event rows only - the moments live curators actually decide on.
     decisionRowsOnly: true,
     cooldownHours: env.CURATED_ALERT_COOLDOWN_HOURS,
+    // Both sides are graded at the hit-rate cutoffs production holds them to, not at a pace.
+    targets,
+    heuristicPrecisionGate: env.CURATED_HEURISTIC_PRECISION_GATE,
   });
 
   // The deployable model trains on the FULL window - the walk-forward folds were the exam, this
@@ -124,18 +139,24 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   // rows it will ever be applied to): the lowest confidence at which those calls met the targets.
   // When none did, the model sends nothing and cannot take the job - a model that can't reach
   // the bar on history it never saw has no business vouching for live tokens.
-  const targets: PrecisionTargets = {
-    winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
-    goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
-    minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
-  };
-  // Both cutoffs replay the per-token cooldown, so their support counts alerts the feed would
+  //
+  // Calibrated in RANK units, then translated: each fold model and the shipped model put
+  // probabilities on their own scales, so a raw probability that hit 75% on the fold models
+  // says nothing about the same number on this one. "The top r of decision moments" does carry
+  // over - thresholdAtRank finds the shipped model's probability for it.
+  //
+  // Both cutoffs replay the per-token alert cooldown, so their support counts alerts the feed would
   // actually have sent rather than every hourly sample of a token that stayed hot.
   const cooldown = { cooldownMs: env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000 };
-  const precisionCalibration = calibrateThresholdForPrecision(evaluation.outOfSample, targets, cooldown);
+  const precisionCalibration = calibrateThresholdForPrecision(evaluation.outOfSampleRanks, targets, cooldown);
+  const deployedThreshold =
+    precisionCalibration.threshold === null
+      ? null
+      : thresholdAtRank(trained, evaluation.decisionReference, precisionCalibration.threshold);
   // The hand-tuned heuristic is held to the same bar while it holds the job: its rank-score
   // cutoff comes from its own out-of-sample record (see heuristicOutOfSample). Read at emission
-  // time by curatedAlerts.ts from the newest CuratorModel row's evalMetrics.
+  // time by curatedAlerts.ts from the newest CuratorModel row's evalMetrics. Its rank score is
+  // a fixed formula, so its cutoff needs no translation.
   const heuristicCalibration = calibrateThresholdForPrecision(
     evaluation.heuristicOutOfSample,
     targets,
@@ -143,10 +164,10 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   );
   const params: TrainedCuratorParams = {
     ...trained,
-    threshold: precisionCalibration.threshold ?? NEVER_EMIT_THRESHOLD,
+    threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD,
   };
   const verdict =
-    evaluation.verdict.promote && precisionCalibration.threshold === null
+    evaluation.verdict.promote && deployedThreshold === null
       ? {
           promote: false,
           reason: `${evaluation.verdict.reason.replace(" - promoting", "")}, but no cutoff reached ${env.CURATED_TARGET_WIN_RATE_PCT}% at 2x and ${env.CURATED_TARGET_GOAL_RATE_PCT}% at 4x - keeping current curator`,
@@ -157,7 +178,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     verdict,
     targets,
     precisionCalibration,
-    precisionCurve: precisionCurve(evaluation.outOfSample),
+    precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
     // Stored only when there was evidence to judge on - some cutoff produced at least
     // CURATED_MIN_CALIBRATION_ALERTS calls. Without it the heuristic keeps sending on its gate
     // alone (see heuristicGate in curatedAlerts.ts) rather than being silenced by an empty exam.
@@ -176,6 +197,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     promoted: verdict.promote,
     verdict: verdict.reason,
     threshold: params.threshold,
+    rankCutoff: precisionCalibration.threshold,
     calibration: precisionCalibration,
     heuristicCalibration,
     modelId,
@@ -203,6 +225,8 @@ export async function applyTrainingResult(
   const stored: Record<string, unknown> = { ...evaluation };
   delete stored.outOfSample;
   delete stored.heuristicOutOfSample;
+  delete stored.outOfSampleRanks;
+  delete stored.decisionReference;
   return prisma.$transaction(async (tx) => {
     await tx.curatorModel.updateMany({
       where: { status: "active" },

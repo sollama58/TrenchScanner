@@ -167,6 +167,59 @@ export interface CuratedContender {
   snapshotId?: string;
   decision: CurationDecision;
   confidence: number;
+  /** Set on a retry: when the original deferral expires (see deferContender). */
+  retryUntil?: number;
+}
+
+/** Which ledgers a deferred token is still contending for, and until when. */
+export interface ContenderRetry {
+  live: boolean;
+  shadow: boolean;
+  until: number;
+}
+
+/**
+ * Picks that cleared their curator at the token's event moment but lost the governor pass,
+ * keyed by token id. The scan spends a token's event for CANDIDATE_EVENT_SPACING_MINUTES, so
+ * these are what let such a pick re-contend in later cycles (see takeContenderRetry). In-process
+ * on purpose: a restart drops at most CURATED_CONTENDER_RETRY_MINUTES of retries.
+ */
+const deferredContenders = new Map<string, ContenderRetry>();
+
+/** Test hook: forget every deferred contender. */
+export function resetDeferredContenders(): void {
+  deferredContenders.clear();
+}
+
+/**
+ * Removes and returns the token's pending retry, or null when it has none or it has expired.
+ * The scan calls this whenever a token is looks-ready again but its event moment is already
+ * spent; the retry is re-filed by emitCuratedCycle if it loses again.
+ */
+export function takeContenderRetry(tokenId: string, now = Date.now()): ContenderRetry | null {
+  const retry = deferredContenders.get(tokenId);
+  if (retry === undefined) return null;
+  deferredContenders.delete(tokenId);
+  return retry.until > now ? retry : null;
+}
+
+/** Files a contender that lost its slot for retry, keeping a retry's original expiry. */
+function deferContender(contender: CuratedContender, side: "live" | "shadow", env: Env, now: number): void {
+  const until = contender.retryUntil ?? now + env.CURATED_CONTENDER_RETRY_MINUTES * 60_000;
+  if (until <= now) return;
+  const existing = deferredContenders.get(contender.token.id);
+  deferredContenders.set(contender.token.id, {
+    live: side === "live" || (existing?.live ?? false),
+    shadow: side === "shadow" || (existing?.shadow ?? false),
+    until: Math.max(until, existing?.until ?? 0),
+  });
+}
+
+/** Drops expired retries for tokens that never came back. */
+function pruneDeferredContenders(now: number): void {
+  for (const [tokenId, retry] of deferredContenders) {
+    if (retry.until <= now) deferredContenders.delete(tokenId);
+  }
 }
 
 /**
@@ -211,6 +264,12 @@ export async function collectCuratedContender(
    * still emits - the card then falls back to the anchor figures.
    */
   snapshotId?: string,
+  /**
+   * Set when this is a retry of a pick that lost an earlier governor pass (see
+   * takeContenderRetry): only the ledgers it lost on may file it, so a retry never lets a curator
+   * that said no at the event moment pick the token at a later, better-looking one.
+   */
+  retry?: ContenderRetry,
 ): Promise<void> {
   if (!inMcapBand(scored.marketCapUsd, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX })) {
     return;
@@ -218,8 +277,9 @@ export async function collectCuratedContender(
 
   const { live, shadow } = await decideCurations(scored, env);
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
+  const retryUntil = retry?.until;
 
-  if (live.curate) {
+  if (live.curate && (retry === undefined || retry.live)) {
     const recentlyAlerted = await prisma.curatedAlert.findFirst({
       where: { tokenId: token.id, createdAt: { gt: cooldownCutoff } },
       select: { id: true },
@@ -232,11 +292,12 @@ export async function collectCuratedContender(
         snapshotId,
         decision: live,
         confidence: live.confidence,
+        retryUntil,
       });
     }
   }
 
-  if (shadow?.curate) {
+  if (shadow?.curate && (retry === undefined || retry.shadow)) {
     const recentShadow = await prisma.curatedShadowEmission.findFirst({
       where: { tokenId: token.id, createdAt: { gt: cooldownCutoff } },
       select: { id: true },
@@ -249,6 +310,7 @@ export async function collectCuratedContender(
         snapshotId,
         decision: shadow,
         confidence: shadow.confidence,
+        retryUntil,
       });
     }
   }
@@ -258,7 +320,8 @@ export async function collectCuratedContender(
  * Phase two, called once per scan cycle after every candidate has been collected: the governor
  * pass. Each ledger independently counts its own actual trailing emissions, takes its capacity
  * (see governorCapacity - the hourly target and the burst cap), and emits its strongest
- * contenders, best first. Quality is the curators' job - each holds its picks to the hit-rate
+ * contenders, best first. A contender that loses its slot is filed for retry (see
+ * deferContender), so a busy minute delays a pick rather than dropping it. Quality is the curators' job - each holds its picks to the hit-rate
  * cutoff its own out-of-sample record earned - so the governor's pace is a CEILING only: a hot
  * minute can't flood the feed, and a quiet hour stays quiet. (A flow-derived "dynamic bar" used
  * to sit here too, admitting whatever conviction produced CURATED_TARGET_PER_HOUR; it tied
@@ -270,6 +333,7 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
   if (cycle.live.length === 0 && cycle.shadow.length === 0) return 0;
 
   const now = Date.now();
+  pruneDeferredContenders(now);
   const hourAgo = new Date(now - 3_600_000);
   const burstAgo = new Date(now - GOVERNOR_BURST_WINDOW_MINUTES * 60_000);
 
@@ -292,6 +356,12 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
     // otherwise it would win the same slot and buy the same review every minute.
     const contenders = gating ? await withoutRecentVetoes(cycle.live, env) : cycle.live;
     const picks = selectEmissions(contenders, capacity);
+    // Lost on capacity alone - the curator still vouches for these, so they try again next
+    // cycle. (Vetoed tokens are out of `contenders` already, and a pick vetoed below isn't here.)
+    const picked = new Set(picks);
+    for (const contender of contenders) {
+      if (!picked.has(contender)) deferContender(contender, "live", env, now);
+    }
 
     // Gate mode asks before sending (in parallel - the governor allows at most a burst's worth
     // per cycle). A failed review fails OPEN: an outage at the reviewer must not silence a feed
@@ -359,6 +429,10 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
       ]);
       const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
       const picks = selectEmissions(cycle.shadow, capacity);
+      const picked = new Set(picks);
+      for (const contender of cycle.shadow) {
+        if (!picked.has(contender)) deferContender(contender, "shadow", env, now);
+      }
       for (const pick of picks) {
         await recordShadowEmission(pick, liveAnchors.get(pick.token.id) ?? pick.cycleSample, env);
       }

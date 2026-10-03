@@ -37,6 +37,7 @@ import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
   collectCuratedContender,
+  takeContenderRetry,
   emitCuratedCycle,
   newCuratedCycle,
   type CuratedCycle,
@@ -758,8 +759,13 @@ async function processCandidate(
     const walletReady = !env.CURATED_REQUIRE_WALLET_CHECKS || walletChecksKnown(scored);
     if (walletReady && passesEventPreGate(scored, band)) {
       const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
+      // A pick that lost an earlier governor pass re-contends while its event is spent - see
+      // takeContenderRetry. A fresh event decides from scratch and supersedes any retry.
+      const retry = takeContenderRetry(token.id);
       if (event?.created) {
         await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id);
+      } else if (event && retry) {
+        await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id, retry);
       }
     }
   } catch (err) {
