@@ -81,13 +81,13 @@ model LinkedDevice {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
   /// Throttled, not written per request - see touchDevice.
-  lastSeenAt DateTime @default(now())
+  lastSeenAt DateTime  @default(now())
   /// Whatever the phone reported when it redeemed, so the list is recognisable ("iPhone, Safari")
   /// rather than a row of identical cuids. Untrusted client text: rendered, never interpreted.
-  userAgent String?
-  revokedAt DateTime?
+  userAgent  String?
+  revokedAt  DateTime?
 
   @@index([userId])
 }
@@ -217,11 +217,12 @@ model Token {
   // to climb into the band silently fell off the radar. Null = never seen live by DexScreener.
   lastLiveAt DateTime?
 
-  snapshots TokenSnapshot[]
-  matches   Match[]
-  candidateOutcomes CandidateOutcome[]
-  curatedAlerts     CuratedAlert[]
+  snapshots              TokenSnapshot[]
+  matches                Match[]
+  candidateOutcomes      CandidateOutcome[]
+  curatedAlerts          CuratedAlert[]
   curatedShadowEmissions CuratedShadowEmission[]
+  aiReviews              AiReview[]
 
   @@index([lastViewedAt])
 }
@@ -250,7 +251,7 @@ model CuratedAlert {
   snapshotId String?
   snapshot   TokenSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
   /// Which decision-maker emitted it - "heuristic-v1", or a CuratorModel id once the learner
   /// takes over (Phase C). Shown in the feed's learning panel, and what lets the panel compare
   /// the two on their own emissions.
@@ -258,7 +259,7 @@ model CuratedAlert {
   /// The curator's conviction at emission, 0-100.
   confidence Float
   /// Why, as short human-readable strings - the top contributing signals at emission time.
-  reasons String[] @default([])
+  reasons    String[] @default([])
 
   anchorPriceUsd Float
   anchorMcapUsd  Float
@@ -278,6 +279,8 @@ model CuratedAlert {
   disqualified       Boolean?
   peak24hReturnPct   Float?
   outcomeFinalizedAt DateTime?
+
+  aiReviews AiReview[]
 
   @@index([createdAt])
   @@index([tokenId, createdAt])
@@ -300,7 +303,7 @@ model CuratedShadowEmission {
   candidateOutcomeId String?
   candidateOutcome   CandidateOutcome? @relation(fields: [candidateOutcomeId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
   /// Which bench curator made the call - "heuristic-v1" or a CuratorModel id.
   source     String
   confidence Float
@@ -318,26 +321,65 @@ model CuratedShadowEmission {
 /// weights, the feature scaling, the emission threshold, and the walk-forward evidence all live
 /// in this row, so promotion is auditable and rollback is "flip status back". At most one row is
 /// ACTIVE at a time; while none is, the hand-tuned heuristic curates (curation/curator.ts).
+/// One AI reviewer call on a curated pick (apps/worker/src/ai/reviewer.ts): Claude's buy/no-buy
+/// verdict, graded by the same CandidateOutcome labels as the alerts, so its record can be
+/// checked before it is trusted to gate the feed (AI_REVIEW_MODE). In gate mode a "no_buy" pick
+/// is never sent, but its review row still anchors an outcome - that is what shows whether the
+/// vetoes were right.
+model AiReview {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  candidateOutcomeId String?
+  candidateOutcome   CandidateOutcome? @relation(fields: [candidateOutcomeId], references: [id], onDelete: SetNull)
+  /// The alert that was sent for this pick, if one was (null for a gate-mode veto).
+  curatedAlertId     String?
+  curatedAlert       CuratedAlert?     @relation(fields: [curatedAlertId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime @default(now())
+  /// "shadow" or "gate" - which mode the reviewer ran in for this call.
+  mode          String
+  model         String
+  /// "buy" or "no_buy"; null when the call failed (see error).
+  decision      String?
+  probability2x Float?
+  probability4x Float?
+  reasoning     String?
+  risks         String[] @default([])
+  error         String?
+  latencyMs     Int
+  inputTokens   Int?
+  outputTokens  Int?
+
+  anchorPriceUsd Float
+  anchorMcapUsd  Float
+
+  @@index([createdAt])
+  @@index([tokenId, createdAt])
+  @@index([decision, createdAt])
+}
+
 model CuratorModel {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
   /// Model family + featurization version, e.g. "weighted-logistic-v1". A reader that doesn't
   /// recognize the kind must ignore the row rather than guess at params.
-  kind String
+  kind         String
   /// Everything needed to score a candidate: feature names, standardization stats, weights,
   /// bias, emission threshold. Shape is owned by packages/core/src/curation/trainer.ts.
-  params Json
+  params       Json
   trainingRows Int
   trainingFrom DateTime
   trainingTo   DateTime
   /// The walk-forward folds this model was judged on, plus the promotion verdict - the public
   /// evidence behind "the model took over" (or didn't).
-  evalMetrics Json
+  evalMetrics  Json
   /// candidate: trained + evaluated, not curating. active: the current curator. retired: was
   /// active once.
-  status      String
-  activatedAt DateTime?
-  retiredAt   DateTime?
+  status       String
+  activatedAt  DateTime?
+  retiredAt    DateTime?
 
   @@index([status, createdAt])
 }
@@ -367,7 +409,7 @@ model CandidateOutcome {
   features Json
   /// The heuristic composite score at anchor. Also inside `features`; duplicated as a real
   /// column so stats queries can aggregate on it without unpacking JSON.
-  score Float?
+  score    Float?
 
   // ---- Watch state (driven by apps/worker/src/jobs/candidateOutcomeJob.ts) ----
   /// When the watcher should next price-check this row. Advances every tick whether or not
@@ -380,24 +422,24 @@ model CandidateOutcome {
   /// at (their public outcome badge shows the 24h peak). Everything else stops at 1h: the
   /// extended watch is 3x the API volume of the label window, and a dud's 24h peak teaches
   /// nothing the 1h window didn't.
-  extended24h Boolean @default(false)
+  extended24h   Boolean   @default(false)
 
   // ---- Running aggregates, initialized to the anchor price at creation ----
   /// Highest price seen within the 1h label window.
-  peak1hPriceUsd Float
-  peak1hAt       DateTime?
+  peak1hPriceUsd      Float
+  peak1hAt            DateTime?
   /// Lowest price seen within the 1h window - the worst drawdown a buyer at the anchor endured.
-  low1hPriceUsd Float
+  low1hPriceUsd       Float
   /// Lowest price seen BEFORE the first observed 2x - frozen the tick the price first reaches
   /// 2x the anchor. This is what decides disqualification: a token that dropped 50%+ and then
   /// "2x'd from the bottom" stopped out anyone who actually bought the alert.
   lowBefore2xPriceUsd Float
   /// First tick at which price >= 2x anchor was observed, anywhere inside the 1h window - the
   /// WIN test (see curation/labels.ts).
-  hit2xAt DateTime?
+  hit2xAt             DateTime?
   /// Highest price seen over the whole watch (up to 24h for extended rows).
-  peak24hPriceUsd Float
-  peak24hAt       DateTime?
+  peak24hPriceUsd     Float
+  peak24hAt           DateTime?
 
   // ---- Labels, written once when the goal window closes ----
   finalizedAt      DateTime?
@@ -426,6 +468,7 @@ model CandidateOutcome {
 
   curatedAlerts   CuratedAlert[]
   shadowEmissions CuratedShadowEmission[]
+  aiReviews       AiReview[]
 
   @@index([tokenId, anchorAt])
   @@index([finalized24hAt, nextCheckAt])

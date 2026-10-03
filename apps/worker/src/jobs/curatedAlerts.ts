@@ -21,6 +21,7 @@ import {
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
+import { aiReviewEnabled, reviewPick, type AiReviewResult } from "../ai/reviewer.js";
 
 const logger = createLogger("curated-alerts");
 
@@ -355,13 +356,56 @@ export async function emitCuratedCycle(
       prisma.curatedAlert.count({ where: { createdAt: { gt: burstAgo } } }),
     ]);
     const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
-    const picks = selectEmissions(cycle.live, capacity, bars.live);
+    const reviewing = aiReviewEnabled(env);
+    const gating = reviewing && env.AI_REVIEW_MODE === "gate";
+    // A token the reviewer just passed on doesn't contend again until its veto cools down -
+    // otherwise it would win the same slot and buy the same review every minute.
+    const contenders = gating ? await withoutRecentVetoes(cycle.live, env) : cycle.live;
+    const picks = selectEmissions(contenders, capacity, bars.live);
 
-    for (const pick of picks) {
-      const anchor = await emitCuratedAlert(pick, env);
-      if (anchor) {
-        liveAnchors.set(pick.token.id, anchor);
-        emitted += 1;
+    // Gate mode asks before sending (in parallel - the governor allows at most a burst's worth
+    // per cycle). A failed review fails OPEN: an outage at the reviewer must not silence a feed
+    // the curator already vouched for, and the error is recorded against the pick.
+    const gateReviews: (AiReviewResult | null)[] = gating
+      ? await Promise.all(picks.map((p) => reviewPick(p.scored, p.decision, env)))
+      : picks.map(() => null);
+
+    for (const [i, pick] of picks.entries()) {
+      const review = gateReviews[i] ?? null;
+      if (review?.verdict?.decision === "no_buy") {
+        await recordAiReview(pick, review, "gate", null, null, env).catch((err) =>
+          logger.warn("failed to record ai veto", { error: String(err) }),
+        );
+        logger.info("curated pick vetoed by ai reviewer", {
+          mint: pick.token.mintAddress,
+          reasoning: review.verdict.reasoning,
+        });
+        continue;
+      }
+      const sent = review?.verdict
+        ? {
+            ...pick,
+            decision: {
+              ...pick.decision,
+              reasons: [`AI: ${review.verdict.reasoning}`, ...pick.decision.reasons].slice(0, 5),
+            },
+          }
+        : pick;
+      const result = await emitCuratedAlert(sent, env);
+      if (!result) continue;
+      liveAnchors.set(pick.token.id, result.anchor);
+      emitted += 1;
+
+      if (review) {
+        await recordAiReview(pick, review, "gate", result.anchor, result.alertId, env).catch((err) =>
+          logger.warn("failed to record ai review", { error: String(err) }),
+        );
+      } else if (reviewing) {
+        // Shadow mode: the alert is already out; the review is bookkeeping and must never hold
+        // up the scan cycle, so it runs detached.
+        void reviewPick(pick.scored, pick.decision, env)
+          .then((r) => recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env))
+          .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) }));
       }
     }
 
@@ -405,7 +449,10 @@ export async function emitCuratedCycle(
  * hourly sampler last anchored this token. Returns the anchor used, or null when no anchor
  * could be made (a zero-price moment is nothing an outcome could ever be measured from).
  */
-async function emitCuratedAlert(pick: CuratedContender, env: Env): Promise<CandidateSampleRef | null> {
+async function emitCuratedAlert(
+  pick: CuratedContender,
+  env: Env,
+): Promise<{ anchor: CandidateSampleRef; alertId: string } | null> {
   const { token, scored, decision } = pick;
 
   let anchor = pick.cycleSample?.created ? pick.cycleSample : null;
@@ -442,7 +489,63 @@ async function emitCuratedAlert(pick: CuratedContender, env: Env): Promise<Candi
     mcap: scored.marketCapUsd,
     reasons: decision.reasons,
   });
-  return anchor;
+  return { anchor, alertId: alert.id };
+}
+
+/** Drops contenders the gate-mode reviewer said "no_buy" to within AI_REVIEW_VETO_COOLDOWN_MINUTES. */
+async function withoutRecentVetoes(contenders: CuratedContender[], env: Env): Promise<CuratedContender[]> {
+  if (contenders.length === 0) return contenders;
+  const vetoed = await prisma.aiReview.findMany({
+    where: {
+      tokenId: { in: contenders.map((c) => c.token.id) },
+      decision: "no_buy",
+      mode: "gate",
+      createdAt: { gt: new Date(Date.now() - env.AI_REVIEW_VETO_COOLDOWN_MINUTES * 60_000) },
+    },
+    select: { tokenId: true },
+  });
+  const blocked = new Set(vetoed.map((v) => v.tokenId));
+  return contenders.filter((c) => !blocked.has(c.token.id));
+}
+
+/**
+ * Writes one AiReview row. Anchored like everything else graded from this feed: the alert's own
+ * anchor when one was sent, otherwise (a gate-mode veto) the cycle's fresh sample or a new one,
+ * so a veto's outcome is measured from the moment it was made - that is what shows whether the
+ * reviewer's no's were right.
+ */
+async function recordAiReview(
+  pick: CuratedContender,
+  review: AiReviewResult,
+  mode: "shadow" | "gate",
+  sentAnchor: CandidateSampleRef | null,
+  curatedAlertId: string | null,
+  env: Env,
+): Promise<void> {
+  let anchor = sentAnchor ?? (pick.cycleSample?.created ? pick.cycleSample : null);
+  if (!anchor) {
+    anchor = await recordCandidateSample(pick.token.id, pick.scored, env, { bypassSpacing: true });
+  }
+  await prisma.aiReview.create({
+    data: {
+      tokenId: pick.token.id,
+      candidateOutcomeId: anchor?.id ?? null,
+      curatedAlertId,
+      mode,
+      model: review.model,
+      decision: review.verdict?.decision ?? null,
+      probability2x: review.verdict?.probability2x ?? null,
+      probability4x: review.verdict?.probability4x ?? null,
+      reasoning: review.verdict?.reasoning ?? null,
+      risks: review.verdict?.risks ?? [],
+      error: review.error,
+      latencyMs: review.latencyMs,
+      inputTokens: review.inputTokens,
+      outputTokens: review.outputTokens,
+      anchorPriceUsd: pick.scored.priceUsd,
+      anchorMcapUsd: pick.scored.marketCapUsd,
+    },
+  });
 }
 
 /**

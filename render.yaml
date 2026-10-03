@@ -18,6 +18,9 @@
 #         whether the dashboard offers Telegram linking at all. Set it on one and not the other
 #         and the bot runs while no user can reach it.
 #   - TELEGRAM_BOT_USERNAME (both api + worker)    the bot's @username, no leading @
+#   - ANTHROPIC_API_KEY (worker only)               https://console.anthropic.com
+#         Turns on the AI buy/no-buy reviewer (AI_REVIEW_MODE, shadow by default). Left empty the
+#         reviewer is off and alerts flow exactly as before.
 #   - SOLANA_RPC_URL (both api + worker)           the same paid RPC as HELIUS_API_KEY
 #         Verifies and reconciles burns. Left empty it falls back to the public endpoint, which
 #         this repo has measured rejecting the batched calls the reconciler makes.
@@ -151,6 +154,8 @@ services:
       # raising either.
       - key: DATABASE_CONNECTION_LIMIT
         value: "18"
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: HELIUS_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN

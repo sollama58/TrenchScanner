@@ -222,6 +222,19 @@ const envSchema = z.object({
   CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
   CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(30),
 
+  // The AI reviewer (apps/worker/src/ai/reviewer.ts): a buy/no-buy second opinion from Claude on
+  // every curated pick the governor selects. "shadow" (the default) asks and records the answer
+  // without changing what is sent, so its calls get graded by the same labels before they are
+  // trusted; "gate" only sends alerts it says to buy; "off" never calls it. Without
+  // ANTHROPIC_API_KEY it is off whatever the mode says. A pick it passes on is not re-asked for
+  // AI_REVIEW_VETO_COOLDOWN_MINUTES, so one token can't buy a review every scan cycle.
+  AI_REVIEW_MODE: z.enum(["off", "shadow", "gate"]).default("shadow"),
+  ANTHROPIC_API_KEY: z.string().optional().default(""),
+  AI_REVIEW_MODEL: z.string().default("claude-opus-5-5"),
+  AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
+  AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  AI_REVIEW_VETO_COOLDOWN_MINUTES: z.coerce.number().positive().default(30),
+
   TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
   // Used only to build the "tap to open Telegram" deep link on the dashboard - not required
   // for the bot itself to function, but without it users have to type /start <code> manually.
