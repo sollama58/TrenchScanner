@@ -49,10 +49,31 @@ export const DISQUALIFYING_DRAWDOWN_FRACTION = 0.5;
 const LABEL_CAP_MULTIPLE = 100;
 export const LABEL_LOG2_CAP = Math.log2(LABEL_CAP_MULTIPLE);
 
+/**
+ * How a row's FILL is taken - the price a trader acting on the alert by hand could actually have
+ * bought at. The first tick at least `delayMs` after the anchor becomes the entry; the base every
+ * label is graded from is the higher of the signal price and that tick, plus `slippageFraction`
+ * for the spread and impact of a real buy on a thin market. Grading from the signal price itself
+ * credited fills no one gets: the ranking leans on the last 5-minute candle, so picks are usually
+ * mid-move, and a 2x from the signal can be a 1.5x from a real fill.
+ */
+export interface EntryRule {
+  delayMs: number;
+  slippageFraction: number;
+}
+
 /** The running aggregates a CandidateOutcome row carries between price ticks. */
 export interface OutcomeAggregates {
   anchorAt: Date;
+  /**
+   * The base labels are graded from. The signal (scan) price until the entry is taken, then the
+   * fill - see EntryRule. The signal price itself is preserved in signalPriceUsd.
+   */
   anchorPriceUsd: number;
+  /** When the fill was taken; null until then (and on rows that predate fills - see migration). */
+  entryAt: Date | null;
+  /** The scan price the alert was made at, kept once the base moves to the fill. */
+  signalPriceUsd: number | null;
   peak1hPriceUsd: number;
   peak1hAt: Date | null;
   low1hPriceUsd: number;
@@ -67,6 +88,8 @@ export function initialOutcomeAggregates(anchorPriceUsd: number, anchorAt: Date)
   return {
     anchorAt,
     anchorPriceUsd,
+    entryAt: null,
+    signalPriceUsd: null,
     peak1hPriceUsd: anchorPriceUsd,
     peak1hAt: null,
     low1hPriceUsd: anchorPriceUsd,
@@ -82,14 +105,36 @@ export function initialOutcomeAggregates(anchorPriceUsd: number, anchorAt: Date)
  * for a Prisma update). Ticks after the 1h window still move the 24h peak but never the 1h
  * aggregates - the boundary is judged by the tick's own timestamp, so a sweep that runs late
  * can't smuggle an hour-old-plus price into the label window.
+ *
+ * With an entry rule, ticks before the fill are ignored outright (no trader holds the token yet,
+ * so neither a 2x nor a stop-out has happened to them), and the first tick at or past the delay
+ * takes the fill: the base moves to it and every aggregate restarts from that tick.
  */
 export function applyPriceTick(
   agg: OutcomeAggregates,
   priceUsd: number,
   at: Date,
+  entry?: EntryRule,
 ): Partial<OutcomeAggregates> {
   const updates: Partial<OutcomeAggregates> = {};
   if (!Number.isFinite(priceUsd) || priceUsd <= 0) return updates;
+
+  if (entry && agg.entryAt === null) {
+    if (at.getTime() - agg.anchorAt.getTime() < entry.delayMs) return updates;
+    const base = Math.max(agg.anchorPriceUsd, priceUsd) * (1 + entry.slippageFraction);
+    return {
+      entryAt: at,
+      signalPriceUsd: agg.anchorPriceUsd,
+      anchorPriceUsd: base,
+      peak1hPriceUsd: priceUsd,
+      peak1hAt: at,
+      low1hPriceUsd: priceUsd,
+      lowBefore2xPriceUsd: priceUsd,
+      hit2xAt: null,
+      peak24hPriceUsd: priceUsd,
+      peak24hAt: at,
+    };
+  }
 
   const withinLabelWindow = at.getTime() - agg.anchorAt.getTime() <= CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
 

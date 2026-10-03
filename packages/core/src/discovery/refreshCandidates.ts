@@ -38,6 +38,8 @@ export interface BandRefreshResult {
    * Token.lastLiveAt, which is what the watchlist's liveness-prioritized selection runs on.
    */
   liveMints: string[];
+  /** The same mints with the market cap each one was just seen at - see Token.lastMcapUsd. */
+  liveMarketCaps: { mintAddress: string; marketCapUsd: number }[];
 }
 
 /**
@@ -53,7 +55,7 @@ export async function refreshAndFilterToBand(
   mintAddresses: string[],
   options: BandFilterOptions,
 ): Promise<BandRefreshResult> {
-  if (mintAddresses.length === 0) return { inBand: [], liveMints: [] };
+  if (mintAddresses.length === 0) return { inBand: [], liveMints: [], liveMarketCaps: [] };
 
   const { mcapMin, mcapMax, bandPaddingRatio } = options;
   const { min: lowerBound, max: upperBound } = scanBand(mcapMin, mcapMax, bandPaddingRatio);
@@ -62,5 +64,6 @@ export async function refreshAndFilterToBand(
   return {
     inBand: marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound),
     liveMints: marketData.map((t) => t.mintAddress),
+    liveMarketCaps: marketData.map((t) => ({ mintAddress: t.mintAddress, marketCapUsd: t.marketCapUsd })),
   };
 }

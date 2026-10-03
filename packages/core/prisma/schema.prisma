@@ -215,7 +215,12 @@ model Token {
   // Without this split, eviction was purely newest-first, and at real Pump.fun launch rates the
   // newest WATCHLIST_MAX_TRACKED mints span well under an hour - so a token that took two hours
   // to climb into the band silently fell off the radar. Null = never seen live by DexScreener.
-  lastLiveAt DateTime?
+  lastLiveAt  DateTime?
+  /// The market cap DexScreener reported the last time this mint was refreshed (stamped with
+  /// lastLiveAt). What the watchlist ranks on: a mint near or inside the mcap band keeps its
+  /// refresh slot however old it is, while launch-level mints compete newest-first for what's
+  /// left - see selectWatchlist.
+  lastMcapUsd Float?
 
   snapshots              TokenSnapshot[]
   matches                Match[]
@@ -397,9 +402,25 @@ model CandidateOutcome {
   token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
 
   /// The moment the label is measured FROM - "if the curator had alerted right now".
-  anchorAt       DateTime @default(now())
+  anchorAt       DateTime  @default(now())
+  /// The base every label is graded from: the scan price at creation, then - once the watcher
+  /// takes the fill (entryAt) - the higher of the scan price and the first tick at least
+  /// CANDIDATE_ENTRY_DELAY_SECONDS later, plus slippage. See EntryRule in curation/labels.ts.
   anchorPriceUsd Float
   anchorMcapUsd  Float
+  /// When the fill was taken. Null until then; rows created before fills existed were stamped
+  /// with anchorAt by the migration (graded from the scan price, as they always were).
+  entryAt        DateTime?
+  /// The scan price, kept once anchorPriceUsd has moved to the fill.
+  signalPriceUsd Float?
+  /// How the row came to be sampled - the trainer and the cutoff calibration care which:
+  ///  - "hourly": the background sample, at most once per CANDIDATE_SAMPLE_SPACING_MINUTES.
+  ///  - "event": the first scan in each CANDIDATE_EVENT_SPACING_MINUTES window where the token
+  ///    looked ready (passesEventPreGate). The live curators decide ONLY at these moments, so
+  ///    these rows are exactly the distribution live picks come from.
+  ///  - "emission": a fresh anchor made for an alert or shadow pick. Chosen by a curator, so
+  ///    kept out of training (a model learning from its own picks feeds back on itself).
+  sampleKind     String    @default("hourly")
 
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
   /// snapshot knew, NOT a snapshot reference, so training data outlives the 30-day
@@ -471,6 +492,7 @@ model CandidateOutcome {
   aiReviews       AiReview[]
 
   @@index([tokenId, anchorAt])
+  @@index([tokenId, sampleKind, anchorAt])
   @@index([finalized24hAt, nextCheckAt])
   @@index([anchorAt])
   @@index([finalizedAt])

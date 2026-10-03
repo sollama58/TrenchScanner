@@ -2,9 +2,11 @@ import {
   prisma,
   createLogger,
   refreshAndFilterToBand,
+  scanBand,
   buildScoredToken,
   runRugScreen,
   passesLocalRugScreen,
+  passesEventPreGate,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
   type Env,
@@ -102,13 +104,20 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     candidates = refreshed.inBand;
     // The stamp the liveness-prioritized selection above runs on. Never worth failing a cycle
     // over - a missed stamp just costs a mint one cycle of priority.
-    if (refreshed.liveMints.length > 0) {
-      await prisma.token
-        .updateMany({
-          where: { mintAddress: { in: refreshed.liveMints } },
-          data: { lastLiveAt: new Date() },
-        })
-        .catch((err) => logger.warn("failed to stamp lastLiveAt", { error: String(err) }));
+    // Stamped with the market cap each mint was seen at, which is what the next selection ranks
+    // on. One statement for the whole batch - the values differ per row, so updateMany can't.
+    if (refreshed.liveMarketCaps.length > 0) {
+      const mints = refreshed.liveMarketCaps.map((m) => m.mintAddress);
+      const mcaps = refreshed.liveMarketCaps.map((m) =>
+        Number.isFinite(m.marketCapUsd) ? m.marketCapUsd : null,
+      );
+      await prisma.$executeRaw`
+        UPDATE "Token" AS t
+        SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
+        FROM unnest(${mints}::text[], ${mcaps}::float8[]) AS v(mint, mcap)
+        WHERE t."mintAddress" = v.mint`.catch((err) =>
+        logger.warn("failed to stamp lastLiveAt", { error: String(err) }),
+      );
     }
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
@@ -364,11 +373,35 @@ export async function selectWatchlist(
     orderBy: { firstSeenAt: "desc" },
     take: probationReserve,
   });
-  const alive = await prisma.token.findMany({
-    where: { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } },
+  // The alive set in two tiers. Near-band first: mints last seen between
+  // WATCHLIST_NEAR_BAND_MIN_MCAP_USD and the padded band ceiling are the ones that can become a
+  // match or a curated pick, so they keep their slot for the whole TTL whatever their age. The
+  // launch-level rest fill what's left newest-first, which is how a mint gets its first chance
+  // to climb (and how one whose market cap was never recorded gets stamped).
+  const aliveSlots = Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length);
+  const bandCeiling = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
+  const aliveWhere = { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } };
+  const nearBand = await prisma.token.findMany({
+    where: { ...aliveWhere, lastMcapUsd: { gte: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD, lte: bandCeiling } },
     orderBy: { firstSeenAt: "desc" },
-    take: Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length),
+    take: aliveSlots,
   });
+  const rest =
+    aliveSlots > nearBand.length
+      ? await prisma.token.findMany({
+          where: {
+            ...aliveWhere,
+            OR: [
+              { lastMcapUsd: null },
+              { lastMcapUsd: { lt: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD } },
+              { lastMcapUsd: { gt: bandCeiling } },
+            ],
+          },
+          orderBy: { firstSeenAt: "desc" },
+          take: aliveSlots - nearBand.length,
+        })
+      : [];
+  const alive = [...nearBand, ...rest];
   return { tracked: [...alive, ...probation], alive: alive.length };
 }
 
@@ -577,12 +610,22 @@ async function processCandidate(
   });
 
   // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample
-  // for why it's every candidate and not just matched ones - then file anything the curators
-  // would emit as a contender for the cycle's governor pass (see emitCuratedCycle). Never worth
-  // failing the candidate over.
+  // for why it's every candidate and not just matched ones. Then, if this is the token's first
+  // "looks ready" moment in its event window, bank that too and let the curators decide on it,
+  // filing anything they'd emit as a contender for the cycle's governor pass (see
+  // emitCuratedCycle). Curators decide ONLY at event moments: those are the rows the trainer
+  // calibrates the cutoff on, so a live pick is always drawn from the population its hit rate was
+  // measured on - never from the best-looking minute of an hour the model only saw one random
+  // minute of. Never worth failing the candidate over.
   try {
-    const sample = await recordCandidateSample(token.id, scored, env);
-    await collectCuratedContender(curatedCycle, token, scored, sample, env, snapshot.id);
+    await recordCandidateSample(token.id, scored, env);
+    const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
+    if (passesEventPreGate(scored, band)) {
+      const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
+      if (event?.created) {
+        await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id);
+      }
+    }
   } catch (err) {
     logger.warn("failed to record candidate outcome sample / curated contender", {
       mint: candidate.mintAddress,

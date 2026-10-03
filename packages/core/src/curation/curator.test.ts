@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { curationRankScore, evaluateCandidateHeuristic, HEURISTIC_CURATOR_SOURCE } from "./curator.js";
+import {
+  curationRankScore,
+  evaluateCandidateHeuristic,
+  HEURISTIC_CURATOR_SOURCE,
+  passesEventPreGate,
+} from "./curator.js";
 import type { ScoredToken } from "../types.js";
 
 const MIN_SCORE = 70;
@@ -185,5 +190,24 @@ describe("curationRankScore", () => {
       volume5mUsd: 0,
     });
     expect(curationRankScore(rug)).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("passesEventPreGate", () => {
+  const band = { min: 100_000, max: 500_000 };
+  const ready = (overrides: Partial<ScoredToken> = {}) =>
+    strongCandidate({ buys1h: 60, sells1h: 40, priceChange5mPct: 4, ...overrides });
+
+  it("marks an in-band token with buyers in control and a rising last five minutes", () => {
+    expect(passesEventPreGate(ready(), band)).toBe(true);
+    // An unobserved 5m candle is not a reason to skip the moment.
+    expect(passesEventPreGate(ready({ priceChange5mPct: undefined }), band)).toBe(true);
+  });
+
+  it("skips out-of-band, sell-dominated, tradeless-hour and falling moments", () => {
+    expect(passesEventPreGate(ready({ marketCapUsd: 50_000 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ buys1h: 40, sells1h: 60 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ priceChange5mPct: -2 }), band)).toBe(false);
   });
 });

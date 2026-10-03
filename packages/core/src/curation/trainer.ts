@@ -23,6 +23,12 @@ export interface TrainingRow {
   labelValue: number;
   anchorPriceUsd: number;
   anchorMcapUsd: number;
+  /**
+   * How the row was sampled (CandidateOutcome.sampleKind). Only "event" rows are moments a live
+   * curator actually decides on - see WalkForwardOptions.decisionRowsOnly. Omitted = treated as a
+   * decision moment (tests, and callers with no sampling distinction).
+   */
+  sampleKind?: string;
 }
 
 export const CURATOR_MODEL_KIND = "weighted-logistic-v1";
@@ -430,6 +436,18 @@ export interface WalkForwardOptions {
   recencyHalfLifeDays?: number;
   /** Emissions a side needs in a fold before its average means anything - see decidePromotion. */
   minEmissionsToWin?: number;
+  /**
+   * Judge and calibrate on "event" rows only (rows whose sampleKind is set and isn't "event" are
+   * still trained on, but never graded or used to set a cutoff). Production's curators decide only
+   * at event moments, so a hit rate measured on hourly background samples describes a population
+   * the feed never picks from.
+   */
+  decisionRowsOnly?: boolean;
+}
+
+/** Whether a row is a moment a live curator decides on - see WalkForwardOptions.decisionRowsOnly. */
+export function isDecisionRow(row: TrainingRow): boolean {
+  return row.sampleKind === undefined || row.sampleKind === "event";
 }
 
 function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
@@ -479,7 +497,9 @@ export async function walkForwardEvaluate(
       const test = sorted.slice(start, end);
       if (train.length < minTrainRows || test.length < minTestRows) continue;
 
-      const inBand = (r: TrainingRow) => !opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand);
+      const inBand = (r: TrainingRow) =>
+        (!opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand)) &&
+        (!opts.decisionRowsOnly || isDecisionRow(r));
 
       const params = await trainCurator(train, { recencyHalfLifeDays: opts.recencyHalfLifeDays });
       // Calibrated on the band-filtered train slice, exactly as the training job calibrates the

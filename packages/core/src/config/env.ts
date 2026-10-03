@@ -91,6 +91,13 @@ const envSchema = z.object({
   // which is the one thing it exists to do. DexScreener returns market data for essentially any
   // Pump.fun mint (the bonding curve IS a pair), so the alive set saturates readily.
   WATCHLIST_PROBATION_RESERVE_PCT: z.coerce.number().min(0).max(100).default(35),
+  // Alive mints whose last market cap is at least this (and no higher than the padded band
+  // ceiling) are refreshed ahead of everything else, however long ago they launched. Set just
+  // above a fresh Pump.fun launch's market cap, so it separates "someone is buying this" from the
+  // launch-level majority. Without it the alive set was newest-first, and at Pump.fun's launch
+  // rate that kept only the last 30-60 minutes of launches - a token that took two hours to
+  // climb into the band was evicted before it got there.
+  WATCHLIST_NEAR_BAND_MIN_MCAP_USD: z.coerce.number().nonnegative().default(7_000),
   // Cap on UNCACHED wallet earliest-activity lookups per scan cycle - the Helius budget guard
   // for the always-on fresh-wallet pass (see the worker's walletFreshness.ts). Wallet history is
   // immutable, so every resolved wallet is cached forever and the steady-state cost is only the
@@ -176,6 +183,16 @@ const envSchema = z.object({
   // training set, they carry their own copy of the features precisely so snapshots can be pruned
   // on the normal horizon, and 180 days is enough history to ride out a full meta-shift.
   CANDIDATE_SAMPLE_SPACING_MINUTES: z.coerce.number().positive().default(60),
+  // The "looks ready" sample (CandidateOutcome.sampleKind = "event"): at most one per token per
+  // this window, taken the first scan the token passes passesEventPreGate. The curators decide
+  // only at these moments, so the training rows and the live picks share one distribution.
+  CANDIDATE_EVENT_SPACING_MINUTES: z.coerce.number().positive().default(60),
+  // The fill every row is graded from (see EntryRule in curation/labels.ts): the first price at
+  // least this long after the alert, plus slippage - more on the thin pre-bond bonding curve
+  // than on a graduated pool.
+  CANDIDATE_ENTRY_DELAY_SECONDS: z.coerce.number().nonnegative().default(60),
+  CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND: z.coerce.number().min(0).max(50).default(3),
+  CANDIDATE_ENTRY_SLIPPAGE_PCT_GRADUATED: z.coerce.number().min(0).max(50).default(1),
   CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
   CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(600),
   CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(180),

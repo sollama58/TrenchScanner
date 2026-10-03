@@ -222,6 +222,32 @@ describe("walkForwardEvaluate", () => {
     for (const fold of included.folds) expect(fold.model.emitted).toBeGreaterThan(0);
   });
 
+  it("grades and calibrates only on event rows when asked, while still training on hourly ones", async () => {
+    // Every third row is an event moment; the rest are hourly background samples.
+    const rows = syntheticRows(3_000).map((r, i) => ({ ...r, sampleKind: i % 3 === 0 ? "event" : "hourly" }));
+    const result = await walkForwardEvaluate(rows, {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1_500,
+      decisionRowsOnly: true,
+    });
+    const eventTestRows = rows.slice(1_500).filter((r) => r.sampleKind === "event").length;
+    // Out-of-sample calls (what sets the cutoff) are event rows only.
+    expect(result.outOfSample.length).toBe(eventTestRows);
+    expect(result.folds.length).toBeGreaterThanOrEqual(2);
+
+    // With no event rows at all there is nothing to judge on: no emissions, no promotion.
+    const hourlyOnly = rows.map((r) => ({ ...r, sampleKind: "hourly" }));
+    const silent = await walkForwardEvaluate(hourlyOnly, {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1_500,
+      decisionRowsOnly: true,
+    });
+    expect(silent.outOfSample).toHaveLength(0);
+    expect(silent.verdict.promote).toBe(false);
+  });
+
   it("caps each fold's emissions at the governed budget, keeping only the strongest picks", async () => {
     // Production runs the governor: at most targetPerHour x span picks make the feed, best
     // conviction first. The exam must play the same policy - an uncapped exam grades a firehose.

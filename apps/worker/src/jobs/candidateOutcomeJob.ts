@@ -12,6 +12,7 @@ import {
   type DexScreenerClient,
   type ScoredToken,
   type OutcomeAggregates,
+  type EntryRule,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 
@@ -44,6 +45,13 @@ export interface CandidateSampleRef {
   created: boolean;
 }
 
+/**
+ * How a row was sampled - see CandidateOutcome.sampleKind. "emission" rows are always fresh
+ * (they bypass spacing); "event" and "hourly" rows each dedup against their own kind, so an
+ * hourly sample never stops the token's looks-ready moment from being banked, or vice versa.
+ */
+export type CandidateSampleKind = "hourly" | "event" | "emission";
+
 export async function recordCandidateSample(
   tokenId: string,
   scored: ScoredToken,
@@ -57,15 +65,20 @@ export async function recordCandidateSample(
     bypassSpacing?: boolean;
     /** Create the row already on the 24h extended watch (curated alerts want the ultimate peak). */
     extended24h?: boolean;
+    /** Defaults to "emission" with bypassSpacing, else "hourly". */
+    kind?: CandidateSampleKind;
   } = {},
 ): Promise<CandidateSampleRef | null> {
   // A label is "did the price multiply from the anchor" - a zero/absent anchor has no multiples.
   if (!Number.isFinite(scored.priceUsd) || scored.priceUsd <= 0) return null;
 
+  const kind: CandidateSampleKind = opts.kind ?? (opts.bypassSpacing ? "emission" : "hourly");
   if (!opts.bypassSpacing) {
-    const spacingCutoff = new Date(Date.now() - env.CANDIDATE_SAMPLE_SPACING_MINUTES * 60_000);
+    const spacingMinutes =
+      kind === "event" ? env.CANDIDATE_EVENT_SPACING_MINUTES : env.CANDIDATE_SAMPLE_SPACING_MINUTES;
+    const spacingCutoff = new Date(Date.now() - spacingMinutes * 60_000);
     const recent = await prisma.candidateOutcome.findFirst({
-      where: { tokenId, anchorAt: { gt: spacingCutoff } },
+      where: { tokenId, sampleKind: kind, anchorAt: { gt: spacingCutoff } },
       select: { id: true },
     });
     if (recent) return { id: recent.id, created: false };
@@ -79,6 +92,7 @@ export async function recordCandidateSample(
       anchorAt,
       anchorPriceUsd: scored.priceUsd,
       anchorMcapUsd: scored.marketCapUsd,
+      sampleKind: kind,
       features: buildCandidateFeatures(scored) as Prisma.InputJsonValue,
       score: scored.score.total,
       nextCheckAt: new Date(anchorAt.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
@@ -90,6 +104,22 @@ export async function recordCandidateSample(
     },
   });
   return { id: row.id, created: true };
+}
+
+/**
+ * The fill rule for one row: the configured delay, and slippage by venue - the pre-bond bonding
+ * curve is thin and moves against a buyer far more than a graduated pool. An unknown venue gets
+ * the pre-bond (worse) figure.
+ */
+export function entryRuleFor(features: unknown, env: Env): EntryRule {
+  const graduated =
+    typeof features === "object" &&
+    features !== null &&
+    (features as Record<string, unknown>).graduated === 1;
+  const slippagePct = graduated
+    ? env.CANDIDATE_ENTRY_SLIPPAGE_PCT_GRADUATED
+    : env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND;
+  return { delayMs: env.CANDIDATE_ENTRY_DELAY_SECONDS * 1_000, slippageFraction: slippagePct / 100 };
 }
 
 /**
@@ -134,7 +164,9 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       const price = priceByMint.get(row.token.mintAddress);
 
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
-      const aggUpdates = price !== undefined ? applyPriceTick(row, price, tickAt) : {};
+      // Until the fill is taken, every tick goes through the entry rule (see EntryRule).
+      const aggUpdates =
+        price !== undefined ? applyPriceTick(row, price, tickAt, entryRuleFor(row.features, env)) : {};
       const merged: OutcomeAggregates = { ...row, ...aggUpdates };
 
       const data: Prisma.CandidateOutcomeUpdateInput = { ...aggUpdates, lastCheckedAt: tickAt };
@@ -144,7 +176,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
       const extendedWindowMs = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
       const peak24hReturnPct = () =>
-        ((merged.peak24hPriceUsd - row.anchorPriceUsd) / row.anchorPriceUsd) * 100;
+        ((merged.peak24hPriceUsd - merged.anchorPriceUsd) / merged.anchorPriceUsd) * 100;
 
       let extended = row.extended24h;
       let closedLabels: ReturnType<typeof computeOutcomeLabels> | null = null;

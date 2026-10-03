@@ -272,10 +272,17 @@ async function dynamicBars(env: Env): Promise<DynamicBars> {
   }
 
   const rows = await prisma.candidateOutcome.findMany({
-    where: { anchorAt: { gte: new Date(Date.now() - 24 * 3_600_000) } },
+    // Event rows: the moments the curators actually decide on, so the bar paces real decisions.
+    where: { anchorAt: { gte: new Date(Date.now() - 24 * 3_600_000) }, sampleKind: "event" },
     orderBy: { anchorAt: "desc" },
     take: BAR_MAX_ROWS,
-    select: { anchorAt: true, features: true, anchorPriceUsd: true, anchorMcapUsd: true },
+    select: {
+      anchorAt: true,
+      features: true,
+      anchorPriceUsd: true,
+      signalPriceUsd: true,
+      anchorMcapUsd: true,
+    },
   });
   const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
   const inBand = rows.filter((r) => inMcapBand(r.anchorMcapUsd, band));
@@ -297,7 +304,11 @@ async function dynamicBars(env: Env): Promise<DynamicBars> {
     const heuristicScores = () =>
       inBand.map((r) =>
         curationRankScore(
-          scoredFromFeatures(r.features as Record<string, number | null>, r.anchorPriceUsd, r.anchorMcapUsd),
+          scoredFromFeatures(
+            r.features as Record<string, number | null>,
+            r.signalPriceUsd ?? r.anchorPriceUsd,
+            r.anchorMcapUsd,
+          ),
         ),
       );
     const modelScores = (model: CuratorModelRef) =>

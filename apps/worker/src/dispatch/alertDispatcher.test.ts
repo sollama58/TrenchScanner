@@ -17,6 +17,7 @@ function makeToken(overrides: Partial<Token> = {}): Token {
     narrativeTags: ["dog"],
     lastViewedAt: null,
     lastLiveAt: null,
+    lastMcapUsd: null,
     liveMarketCapUsd: null,
     livePriceUsd: null,
     liveDataAt: null,

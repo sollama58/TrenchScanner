@@ -55,13 +55,17 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   const windowStart = new Date(startedAt - env.CURATOR_TRAINING_WINDOW_DAYS * 86_400_000);
 
   const rows = await prisma.candidateOutcome.findMany({
-    where: { finalizedAt: { not: null }, anchorAt: { gte: windowStart } },
+    // Emission rows exist because a curator picked them; training on them would feed the
+    // curators' own choices back into the next model (see CandidateOutcome.sampleKind).
+    where: { finalizedAt: { not: null }, anchorAt: { gte: windowStart }, sampleKind: { not: "emission" } },
     select: {
       anchorAt: true,
       features: true,
       labelValue: true,
       anchorPriceUsd: true,
+      signalPriceUsd: true,
       anchorMcapUsd: true,
+      sampleKind: true,
     },
   });
   if (rows.length < MIN_ROWS_TO_TRAIN) {
@@ -76,8 +80,10 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     anchorAt: r.anchorAt,
     features: r.features as Record<string, number | null>,
     labelValue: r.labelValue ?? 0,
-    anchorPriceUsd: r.anchorPriceUsd,
+    // The price the features were observed at - the fill the label is graded from comes later.
+    anchorPriceUsd: r.signalPriceUsd ?? r.anchorPriceUsd,
     anchorMcapUsd: r.anchorMcapUsd,
+    sampleKind: r.sampleKind,
   }));
 
   const mcapBand = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
@@ -89,6 +95,8 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     mcapBand,
     minRowsToPromote: env.CURATOR_MIN_TRAINING_ROWS,
     recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
+    // Graded and calibrated on event rows only - the moments live curators actually decide on.
+    decisionRowsOnly: true,
   });
 
   // The deployable model trains on the FULL window - the walk-forward folds were the exam, this

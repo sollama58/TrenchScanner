@@ -9,7 +9,7 @@ import {
   type DexScreenerClient,
   type ScoredToken,
 } from "@trenchscanner/core";
-import { recordCandidateSample, runCandidateWatchJob } from "./candidateOutcomeJob.js";
+import { entryRuleFor, recordCandidateSample, runCandidateWatchJob } from "./candidateOutcomeJob.js";
 
 /**
  * Same posture as outcomeBookkeeping.test.ts: this logic IS row bookkeeping, so it's tested
@@ -281,6 +281,71 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updatedAlert.outcomeFinalizedAt).not.toBeNull();
   });
 
+  it("tags sample kinds and spaces event and hourly samples independently", async () => {
+    const token = await createToken("kinds");
+    const scored = scoredFixture(token.mintAddress, 0.002);
+    const hourly = await recordCandidateSample(token.id, scored, env);
+    const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
+    expect(event).toMatchObject({ created: true });
+    expect(event!.id).not.toBe(hourly!.id);
+    // A second looks-ready scan inside the event window reuses the first event row.
+    expect(await recordCandidateSample(token.id, scored, env, { kind: "event" })).toEqual({
+      id: event!.id,
+      created: false,
+    });
+    const emission = await recordCandidateSample(token.id, scored, env, { bypassSpacing: true });
+
+    const kinds = Object.fromEntries(
+      (await prisma.candidateOutcome.findMany({ where: { tokenId: token.id } })).map((r) => [
+        r.id,
+        r.sampleKind,
+      ]),
+    );
+    expect(kinds).toEqual({ [hourly!.id]: "hourly", [event!.id]: "event", [emission!.id]: "emission" });
+  });
+
+  it("takes the fill on the first tick past the entry delay and grades from it", async () => {
+    const token = await createToken("fill");
+    const anchorAt = new Date(Date.now() - 2 * MINUTE);
+    // Graduated: the 1% slippage applies.
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+      features: { graduated: 1 },
+    });
+
+    // The token ran 50% between the scan and the fill: a buyer pays 1.5 plus slippage.
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.5 }), env);
+    const filled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(filled.entryAt).not.toBeNull();
+    expect(filled.signalPriceUsd).toBe(1.0);
+    expect(filled.anchorPriceUsd).toBeCloseTo(1.515, 6);
+    expect(filled.hit2xAt).toBeNull();
+
+    // 2.2 doubles the scan price but not the fill - no win.
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.2 }), env);
+    const after = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(after.hit2xAt).toBeNull();
+    expect(after.peak1hPriceUsd).toBe(2.2);
+  });
+
+  it("charges pre-bond and unknown venues the larger slippage", () => {
+    expect(entryRuleFor({ graduated: 1 }, env).slippageFraction).toBeCloseTo(
+      env.CANDIDATE_ENTRY_SLIPPAGE_PCT_GRADUATED / 100,
+    );
+    expect(entryRuleFor({ graduated: 0 }, env).slippageFraction).toBeCloseTo(
+      env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND / 100,
+    );
+    expect(entryRuleFor({}, env).slippageFraction).toBeCloseTo(
+      env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND / 100,
+    );
+    expect(entryRuleFor({}, env).delayMs).toBe(env.CANDIDATE_ENTRY_DELAY_SECONDS * 1000);
+  });
+
   it("advances a row DexScreener knows nothing about, instead of hot-looping it", async () => {
     const token = await createToken("dead-pair");
     const anchorAt = new Date(Date.now() - 5 * MINUTE);
@@ -313,6 +378,10 @@ async function seedRow(
       anchorMcapUsd: 100_000,
       features: {},
       score: 50,
+      // Already filled at the anchor (as grandfathered rows are) unless a test says otherwise, so
+      // the grading tests below see exactly the base they seed.
+      entryAt: anchorAt,
+      signalPriceUsd: anchorPriceUsd,
       nextCheckAt: new Date(Date.now() - 1000),
       peak1hPriceUsd: agg.peak1hPriceUsd,
       low1hPriceUsd: agg.low1hPriceUsd,

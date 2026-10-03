@@ -52,6 +52,7 @@ describe("refreshAndFilterToBand", () => {
     expect(await refreshAndFilterToBand(dexScreener, [], { mcapMin: 1, mcapMax: 2 })).toEqual({
       inBand: [],
       liveMints: [],
+      liveMarketCaps: [],
     });
   });
 });

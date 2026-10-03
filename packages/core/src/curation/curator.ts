@@ -258,3 +258,19 @@ export interface McapBand {
 export function inMcapBand(mcapUsd: number, band: McapBand): boolean {
   return mcapUsd >= band.min && mcapUsd <= band.max;
 }
+
+/**
+ * The cheap "looks ready" test that marks an EVENT moment (CandidateOutcome.sampleKind = "event"):
+ * in the band, buyers in control of the hour's flow, and the last five minutes not falling.
+ * Curators decide only at the first such moment per token per CANDIDATE_EVENT_SPACING_MINUTES, and
+ * the trainer calibrates on exactly those rows, so the model is examined on the same moments it is
+ * asked about live - not on an hourly sample of everything in the band, which is a different and
+ * much duller population. Looser than the heuristic's gate on purpose: it only picks the moment;
+ * the curators still pick the token.
+ */
+export function passesEventPreGate(scored: ScoredToken, band: McapBand): boolean {
+  if (!inMcapBand(scored.marketCapUsd, band)) return false;
+  const totalTxns1h = (scored.buys1h ?? 0) + (scored.sells1h ?? 0);
+  if (!(totalTxns1h > 0 && (scored.buys1h ?? 0) / totalTxns1h >= MIN_BUY_RATIO)) return false;
+  return scored.priceChange5mPct === undefined || scored.priceChange5mPct >= 0;
+}

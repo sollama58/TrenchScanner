@@ -185,3 +185,69 @@ describe("candidate outcome labels", () => {
     expect(labels.maxDrawdown1hPct).toBe(0);
   });
 });
+
+describe("fill-price grading", () => {
+  const rule = { delayMs: 60_000, slippageFraction: 0.03 };
+
+  /** Like replay, but through the entry rule - ticks are [price, seconds]. */
+  function replayWithEntry(anchorPrice: number, ticks: [price: number, second: number][]): OutcomeAggregates {
+    let agg = initialOutcomeAggregates(anchorPrice, T0);
+    for (const [price, second] of ticks) {
+      agg = { ...agg, ...applyPriceTick(agg, price, new Date(T0.getTime() + second * 1000), rule) };
+    }
+    return agg;
+  }
+
+  it("ignores ticks before the fill, so an instant spike nobody could buy isn't a win", () => {
+    const agg = replayWithEntry(1, [
+      [2.2, 30], // a 2x inside the first half-minute - before anyone acting on the alert holds it
+      [1.3, 70], // the fill
+      [1.5, 600],
+    ]);
+    expect(agg.entryAt).toEqual(new Date(T0.getTime() + 70_000));
+    expect(agg.signalPriceUsd).toBe(1);
+    expect(agg.anchorPriceUsd).toBeCloseTo(1.3 * 1.03);
+    expect(computeOutcomeLabels(agg).hit2xIn1h).toBe(false);
+  });
+
+  it("grades the double from the fill plus slippage, not the signal price", () => {
+    // 2.4 is a 2.4x from the signal but only 1.79x from a 1.3 fill with 3% slippage.
+    const missed = computeOutcomeLabels(
+      replayWithEntry(1, [
+        [1.3, 65],
+        [2.4, 900],
+      ]),
+    );
+    expect(missed.hit2xIn1h).toBe(false);
+    const won = computeOutcomeLabels(
+      replayWithEntry(1, [
+        [1.3, 65],
+        [2.8, 900],
+      ]),
+    );
+    expect(won.hit2xIn1h).toBe(true);
+  });
+
+  it("never grades from below the signal price, even when the fill tick is cheaper", () => {
+    const agg = replayWithEntry(1, [[0.8, 61]]);
+    expect(agg.anchorPriceUsd).toBeCloseTo(1.03);
+  });
+
+  it("measures the stop from the fill base", () => {
+    const labels = computeOutcomeLabels(
+      replayWithEntry(1, [
+        [1.0, 61],
+        [0.5, 300], // below half of the 1.03 base
+        [2.5, 1200],
+      ]),
+    );
+    expect(labels.disqualified).toBe(true);
+    expect(labels.labelValue).toBe(0);
+  });
+
+  it("a row that never got a tick past the delay grades as a miss", () => {
+    const labels = computeOutcomeLabels(replayWithEntry(1, [[3, 20]]));
+    expect(labels.hit2xIn1h).toBe(false);
+    expect(labels.labelValue).toBe(0);
+  });
+});
