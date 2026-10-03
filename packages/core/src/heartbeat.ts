@@ -12,7 +12,8 @@ export type HeartbeatJob =
   | "burn-scan"
   | "fast-match"
   | "candidate-watch"
-  | "curator-training";
+  | "curator-training"
+  | "match-peaks";
 
 export interface HeartbeatResult {
   success: boolean;

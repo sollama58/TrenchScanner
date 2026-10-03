@@ -29,9 +29,7 @@ import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveWalletHoldings, computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
-import { recordMatchPeaks } from "./matchPeaks.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
-import { repairOutcomeBookkeeping } from "./outcomeTrackingJob.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
@@ -220,9 +218,6 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   }
 
   if (candidates.length === 0) {
-    // Still rolls peaks forward: nothing in band does not mean nothing moved, and this is the
-    // one thing in the cycle that has to happen whether or not there was anything to alert on.
-    await rollPeaksForward(env);
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
       durationMs: Date.now() - startedAt,
     });
@@ -362,9 +357,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     logger.error("curated emission pass failed", { error: String(err) });
   }
   lap("curated");
-
-  await rollPeaksForward(env);
-  lap("peaks");
+  // Match peaks are no longer rolled forward here - they have their own job (createMatchPeaksRunner)
+  // so they stop holding up the next cycle.
 
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
@@ -480,40 +474,6 @@ export async function selectWatchlist(
       : [];
   const alive = [...nearBand, ...rest];
   return { tracked: [...alive, ...probation], alive: alive.length };
-}
-
-/**
- * Rolls every match's recorded peak forward from the snapshots and live pings already written -
- * no network access, no upstream cost. Runs on the scan cadence rather than in the nightly
- * outcome job because a once-a-day price sample simply cannot see a token that runs and retraces
- * inside a single day, which is most of them. See recordMatchPeaks for the full reasoning.
- *
- * Called at the END of a cycle, not before the matching: it is bookkeeping over data already
- * banked, and it used to sit between the watchlist refresh and the candidate loop - so every
- * alert waited on a sweep whose cost grows with the database rather than with anything the alert
- * needs. Called on the nothing-in-band path too, since a quiet cycle still has peaks to record.
- */
-async function rollPeaksForward(env: Env): Promise<void> {
-  try {
-    // Always scoped to tokens observed in the last few cycles - this used to run unscoped
-    // (sinceMinutes: undefined) on a process's first cycle, to retroactively recover peaks from
-    // history already in the database. That "first cycle" flag was process-local in-memory state,
-    // so it re-armed on every restart, not just a genuinely fresh deploy - and at production's
-    // table size, the unscoped sweep runs for over an hour rather than the "cheap, near-instant on
-    // an empty table" case it was written for. Since it's awaited here as part of the scan cycle
-    // itself, that hour-plus query blocked the cycle from ever completing, which in turn blocked
-    // this job's heartbeat (recordHeartbeat only runs after the cycle returns) - so every restart
-    // silently wedged scanning again rather than recovering it, for as long as the sweep took.
-    // recordMatchPeaks(recordMatchPeaks.ts) is idempotent, so nothing here loses correctness by
-    // staying scoped: the unscoped backfill-from-history responsibility now belongs solely to
-    // runOutcomeTrackingJob's own daily sweep (outcomeTrackingJob.ts), which isn't in this
-    // request-serving path and can safely take as long as it needs.
-    await recordMatchPeaks(env.SNAPSHOT_RETENTION_DAYS, { sinceMinutes: env.SCAN_INTERVAL_MINUTES * 3 });
-    await repairOutcomeBookkeeping();
-  } catch (err) {
-    // Bookkeeping over data already banked - never worth failing a scan cycle over.
-    logger.warn("failed to record match peaks", { error: String(err) });
-  }
 }
 
 function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): WatchlistCandidate {

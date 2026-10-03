@@ -220,6 +220,10 @@ model Token {
   curatedShadowEmissions CuratedShadowEmission[]
   aiReviews              AiReview[]
 
+  // The watchlist selection (selectWatchlist in apps/worker/src/jobs/scanJob.ts) ranges and orders
+  // on this every scan cycle. Without it all three of its queries scanned and sorted the whole
+  // table - every mint ever discovered - which was 20s of each production cycle on 2026-10-03.
+  @@index([firstSeenAt])
   @@index([lastViewedAt])
 }
 

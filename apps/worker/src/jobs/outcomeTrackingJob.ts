@@ -213,7 +213,36 @@ export async function runOutcomeTrackingJob(
  * One statement rather than a batched loop: it only writes rows that genuinely differ, so in
  * steady state it updates nothing and there is nothing to page through.
  */
-export async function repairOutcomeBookkeeping(): Promise<number> {
+export async function repairOutcomeBookkeeping(options: { sinceMinutes?: number } = {}): Promise<number> {
+  // The frequent pass only needs the rows whose peak it may just have moved (a recorded peak is
+  // dated to the reading that set it); everything else is the nightly sweep's, unbounded below.
+  if (options.sinceMinutes !== undefined) {
+    return prisma.$executeRaw`
+    UPDATE "Match" m
+    SET "peakReturnPct"   = d.pct,
+        "hitHundredPctAt" = COALESCE(
+          m."hitHundredPctAt",
+          CASE WHEN d.pct >= ${LEADERBOARD_QUALIFYING_RETURN_PCT} THEN COALESCE(m."peakMcapAt", NOW()) END
+        )
+    FROM (
+      SELECT m2.id,
+             CASE
+               WHEN alert."marketCapUsd" > 0
+               THEN (m2."peakMcapUsd" - alert."marketCapUsd") / alert."marketCapUsd" * 100
+             END AS pct
+      FROM "Match" m2
+      JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
+      WHERE m2."peakMcapUsd" IS NOT NULL
+        AND m2."peakMcapAt" > NOW() - MAKE_INTERVAL(mins => ${options.sinceMinutes}::int)
+    ) d
+    WHERE m.id = d.id
+      AND d.pct IS NOT NULL
+      AND (
+        m."peakReturnPct" IS DISTINCT FROM d.pct
+        OR (d.pct >= ${LEADERBOARD_QUALIFYING_RETURN_PCT} AND m."hitHundredPctAt" IS NULL)
+      )
+  `;
+  }
   return prisma.$executeRaw`
     UPDATE "Match" m
     SET "peakReturnPct"   = d.pct,
