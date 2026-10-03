@@ -65,9 +65,27 @@ export interface ScanDeps {
   stream?: { drain(): StreamEvent[] };
 }
 
-export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Promise<void> {
+/**
+ * Where a cycle's time went, stage by stage, in milliseconds - returned to the scheduler, which
+ * stores it on the scan heartbeat (served by GET /health/worker). A token that enters the band is
+ * alerted on only after every stage before "candidates" has finished for the WHOLE watchlist, so
+ * this breakdown is what says which stage the alert latency is actually spent in.
+ */
+export interface ScanCycleMeta {
+  [key: string]: number | Record<string, number>;
+  stagesMs: Record<string, number>;
+}
+
+export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Promise<ScanCycleMeta> {
   const startedAt = Date.now();
   logger.info("scan cycle starting");
+  const stagesMs: Record<string, number> = {};
+  let lapStartedAt = startedAt;
+  const lap = (stage: string) => {
+    const now = Date.now();
+    stagesMs[stage] = now - lapStartedAt;
+    lapStartedAt = now;
+  };
 
   // 1. Grow the watchlist from every discovery source, regardless of a mint's current mcap - see
   // PumpFunClient.discoverNewMints for why filtering at discovery time doesn't work. This is what
@@ -126,6 +144,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
       .map((e) => ({ mintAddress: e.mintAddress, marketCapUsd: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD })),
   ];
   const revived = await reviveMovingMints(moving, env);
+  lap("discovery");
   logger.info("discovery complete", {
     newlySeen: discovered.length,
     streamed: streamed.length,
@@ -135,10 +154,11 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
   // sitting in (or near) the target band.
   const { tracked, alive } = await selectWatchlist(env);
+  lap("watchlist");
 
   if (tracked.length === 0) {
     logger.info("scan cycle complete (empty watchlist)", { durationMs: Date.now() - startedAt });
-    return;
+    return { stagesMs };
   }
 
   let candidates: CandidateToken[];
@@ -168,8 +188,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     }
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
-    return;
+    return { stagesMs };
   }
+  lap("marketRefresh");
   logger.info("refreshed watchlist", {
     tracked: tracked.length,
     alive,
@@ -206,8 +227,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
       durationMs: Date.now() - startedAt,
     });
-    return;
+    return { stagesMs };
   }
+  lap("viewedRefresh");
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
   // Cached with a short TTL so the scan cadence and RugCheck's request rate are independent -
@@ -217,6 +239,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     deps.rugCheck,
     env.RUGCHECK_CACHE_TTL_MINUTES,
   );
+  lap("rugCheck");
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
   // do.
@@ -231,6 +254,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     .filter((c) => !rugProfiles.has(c.mintAddress))
     .map((c) => c.mintAddress);
   const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius, env);
+  lap("mintAuthority");
 
   // Profiles are assembled in two passes, because Mayhem Mode is the ONE rug-screen condition
   // that costs a network call. The first pass leaves it unresolved and asks only what the
@@ -245,6 +269,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     .filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress)))
     .map((c) => c.mintAddress);
   const mayhemByMint = await resolveMayhemMode(mayhemCandidates, deps.helius);
+  lap("mayhem");
 
   // Anything not looked up keeps isMayhemMode undefined, which the screen rejects - the same
   // verdict its local conditions already reached, with the reason it actually failed on first.
@@ -302,6 +327,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
       maxNewLookups: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
     }),
   ]);
+  lap("wallets");
 
   // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
   // counter BEFORE the await and writes it after, so two candidates finishing close together can
@@ -329,6 +355,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     }
   });
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
+  lap("candidates");
 
   // The cycle's governor pass: of everything the curators would emit, the strongest contenders
   // within the feed's paced budget actually go out - see emitCuratedCycle. After user matching
@@ -339,8 +366,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
   } catch (err) {
     logger.error("curated emission pass failed", { error: String(err) });
   }
+  lap("curated");
 
   await rollPeaksForward(env);
+  lap("peaks");
 
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
@@ -352,7 +381,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
     // collapses these into far fewer HTTP requests, so nothing else in this log reveals the real
     // number. Reset each read, so this is the cycle's own spend.
     rpcCalls: deps.helius.takeCallStats(),
+    stagesMs,
   });
+  return { stagesMs, tracked: tracked.length, inBand: candidates.length, matches: matchCount };
 }
 
 /**

@@ -2,6 +2,7 @@ import {
   prisma,
   createLogger,
   buildScoredToken,
+  forEachWithConcurrency,
   type Env,
   type DexScreenerClient,
   type OnChainProfile,
@@ -45,6 +46,16 @@ const VETTED_WITHIN_MINUTES = 12;
 /** Safety cap on how many tokens one pass re-prices, so a busy market can't turn a 15-second
  *  job into a DexScreener hammer. At 30 mints per batched call this is a handful of requests. */
 const MAX_TRACKED = 300;
+
+/**
+ * How many priced tokens are matched at once. Each is a handful of queries (the cooldown read,
+ * and only on a real alert the snapshot and match writes), and they touch different tokens' rows -
+ * the one cross-lane race, the scan cycle alerting the same token at the same moment, is already
+ * serialized per token by createMatchesForTargets' advisory lock. One at a time put every query
+ * for the first tokens in front of the last token's alert; this stays well inside the worker's
+ * connection pool, which the scan cycle shares.
+ */
+const MATCH_CONCURRENCY = 4;
 
 /**
  * Rebuilds the on-chain half of a candidate from its last full-scan snapshot.
@@ -100,8 +111,15 @@ export async function runFastMatchCycle(
   dexScreener: DexScreenerClient,
   env: Env,
   bot: AlertBot,
-): Promise<void> {
+): Promise<{ stagesMs: Record<string, number>; tracked?: number; matches?: number }> {
   const startedAt = Date.now();
+  const stagesMs: Record<string, number> = {};
+  let lapStartedAt = startedAt;
+  const lap = (stage: string) => {
+    const now = Date.now();
+    stagesMs[stage] = now - lapStartedAt;
+    lapStartedAt = now;
+  };
 
   // Nothing to be fast about if nobody is filtering. Checked first because it is the cheapest
   // question and it short-circuits the whole pass on a deployment with no active users.
@@ -109,7 +127,7 @@ export async function runFastMatchCycle(
     where: { isActive: true },
     include: { user: { select: { id: true, telegramLink: true } } },
   })) as FilterWithUser[];
-  if (activeFilters.length === 0) return;
+  if (activeFilters.length === 0) return { stagesMs };
 
   const vettedSince = new Date(startedAt - VETTED_WITHIN_MINUTES * 60_000);
   // The candidate set: tokens whose most recent full-scan snapshot passed the rug screen.
@@ -138,13 +156,14 @@ export async function runFastMatchCycle(
     ) newest
     ORDER BY "takenAt" DESC
     LIMIT ${MAX_TRACKED}`;
-  if (newestIds.length === 0) return;
+  if (newestIds.length === 0) return { stagesMs };
   const recent = await prisma.tokenSnapshot.findMany({
     where: { id: { in: newestIds.map((r) => r.id) } },
     include: { token: { select: { id: true, mintAddress: true, firstSeenAt: true } } },
   });
   const vetted = recent.filter((snapshot) => snapshot.rugScreenPassed);
-  if (vetted.length === 0) return;
+  lap("select");
+  if (vetted.length === 0) return { stagesMs };
 
   const byMint = new Map(vetted.map((s) => [s.token.mintAddress, s]));
   let fresh;
@@ -154,17 +173,18 @@ export async function runFastMatchCycle(
     // The full cycle is still running underneath this; a failed fast pass costs latency, never
     // an alert.
     logger.warn("fast match price fetch failed", { error: String(err) });
-    return;
+    return { stagesMs };
   }
+  lap("price");
 
   let matched = 0;
   let evaluated = 0;
-  for (const candidate of fresh) {
+  await forEachWithConcurrency(fresh, MATCH_CONCURRENCY, async (candidate) => {
     const snapshot = byMint.get(candidate.mintAddress);
-    if (!snapshot) continue;
+    if (!snapshot) return;
 
     const onChain = profileFromSnapshot(candidate.mintAddress, snapshot);
-    if (!onChain) continue;
+    if (!onChain) return;
 
     const scored = buildScoredToken(candidate, onChain, {
       createdAt: candidate.pairCreatedAt ?? snapshot.token.firstSeenAt,
@@ -174,14 +194,17 @@ export async function runFastMatchCycle(
       // did not actually evaluate.
     });
     evaluated += 1;
-    if (!scored.rugScreen.passed) continue;
+    if (!scored.rugScreen.passed) return;
 
     try {
-      matched += await alertForToken(snapshot.token, scored, activeFilters, bot, env);
+      // Read-after-await, so the increment can't be lost between two tokens finishing together.
+      const created = await alertForToken(snapshot.token, scored, activeFilters, bot, env);
+      matched += created;
     } catch (err) {
       logger.warn("fast match failed for token", { mint: candidate.mintAddress, error: String(err) });
     }
-  }
+  });
+  lap("match");
 
   if (matched > 0) {
     logger.info("fast match pass alerted", {
@@ -189,8 +212,10 @@ export async function runFastMatchCycle(
       tracked: byMint.size,
       evaluated,
       matches: matched,
+      stagesMs,
     });
   }
+  return { stagesMs, tracked: byMint.size, matches: matched };
 }
 
 /**
