@@ -3,7 +3,7 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { recordMatchPeaks } from "./matchPeaks.js";
+import { createMatchPeaksRunner, recordMatchPeaks } from "./matchPeaks.js";
 
 const MIN = 60_000;
 const HOUR = 3_600_000;
@@ -142,5 +142,84 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
 
     expect(second.peakMcapUsd).toBe(first.peakMcapUsd);
     expect(second.peakMcapAt?.getTime()).toBe(first.peakMcapAt?.getTime());
+  });
+
+  describe("incremental pass (sinceMinutes)", () => {
+    async function snapshotAt(tokenId: string, mcap: number, minutesAgo: number) {
+      await prisma.tokenSnapshot.create({
+        data: {
+          tokenId,
+          takenAt: new Date(Date.now() - minutesAgo * MIN),
+          priceUsd: mcap / 1e9,
+          marketCapUsd: mcap,
+          score: 70,
+        },
+      });
+    }
+
+    it("folds in the readings inside the window and nothing older", async () => {
+      // Old history (30h back) and a high 30 minutes ago are outside a 10-minute window; only
+      // the reading a minute ago counts. Anything older is an earlier pass's (or the nightly
+      // sweep's) to have recorded.
+      const { token, match } = await seedMatch("windowed", 80_000, [600_000]);
+      await snapshotAt(token.id, 700_000, 30);
+      await snapshotAt(token.id, 200_000, 1);
+
+      await recordMatchPeaks(RETENTION_DAYS, { sinceMinutes: 10 });
+      expect((await reload(match.id)).peakMcapUsd).toBe(200_000);
+
+      // Never lowers what an earlier pass recorded.
+      await recordMatchPeaks(RETENTION_DAYS);
+      expect((await reload(match.id)).peakMcapUsd).toBe(700_000);
+      await snapshotAt(token.id, 300_000, 0);
+      await recordMatchPeaks(RETENTION_DAYS, { sinceMinutes: 10 });
+      expect((await reload(match.id)).peakMcapUsd).toBe(700_000);
+    });
+
+    it("ignores a recent reading from before a match made inside the window", async () => {
+      const token = await prisma.token.create({
+        data: { mintAddress: `${TAG}-fresh-match`, symbol: "fm", name: "fm" },
+      });
+      await snapshotAt(token.id, 900_000, 5);
+      const alert = await prisma.tokenSnapshot.create({
+        data: {
+          tokenId: token.id,
+          takenAt: new Date(Date.now() - 3 * MIN),
+          priceUsd: 0,
+          marketCapUsd: 80_000,
+          score: 70,
+        },
+      });
+      const match = await prisma.match.create({
+        data: {
+          userId,
+          filterId,
+          tokenId: token.id,
+          snapshotId: alert.id,
+          matchedAt: new Date(Date.now() - 3 * MIN),
+          score: 70,
+        },
+      });
+      await snapshotAt(token.id, 120_000, 1);
+
+      await recordMatchPeaks(RETENTION_DAYS, { sinceMinutes: 10 });
+      expect((await reload(match.id)).peakMcapUsd).toBe(120_000);
+    });
+  });
+
+  describe("createMatchPeaksRunner", () => {
+    it("looks back an hour first, then over the gap since its previous pass", async () => {
+      const windows: number[] = [];
+      const run = createMatchPeaksRunner(RETENTION_DAYS, async ({ sinceMinutes }) => {
+        windows.push(sinceMinutes);
+        return 0;
+      });
+      const first = await run();
+      const second = await run();
+      expect(first.windowMinutes).toBe(60);
+      // Under a minute since the first pass started, plus the slack.
+      expect(second.windowMinutes).toBe(3);
+      expect(windows).toEqual([60, 3]);
+    });
   });
 });

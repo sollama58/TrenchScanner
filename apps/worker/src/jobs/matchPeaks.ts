@@ -34,8 +34,10 @@ export interface PeakRecordingResult {
  */
 export interface RecordMatchPeaksOptions {
   /**
-   * Only consider matches whose token has been observed within this many minutes - i.e. only the
-   * tokens that could possibly have set a new high since the previous pass.
+   * Only fold in readings taken within the last this-many minutes - the snapshots and live pings
+   * that can have set a new high since the previous pass. The caller owns making the window
+   * reach back to that pass (see runMatchPeaksJob); a reading that falls outside every window,
+   * after downtime, is recovered by the nightly full sweep.
    *
    * Without it, every pass re-derives the peak for every match in the retention window, whether or
    * not anything about that token moved. Measured at 8k matches / 80k snapshots that was ~207ms
@@ -82,7 +84,14 @@ export async function recordMatchPeaks(
     ) p
     WHERE m.id = p.id
   `
-      : await prisma.$executeRaw`
+      : // The incremental pass reads only the snapshots taken inside the window - anything older
+        // was already folded in by an earlier pass, which is what makes the window enough. It used
+        // to re-scan each matching token's ENTIRE post-match history (every match with any fresh
+        // snapshot, every snapshot since its alert, sorted by mcap), so its cost grew with how
+        // long the hot tokens had been trading: 118 of a 183-second scan cycle in production on
+        // 2026-10-03. Bounded to the window, each lateral is a short range scan on
+        // (tokenId, takenAt), and the token set comes from the (source, takenAt) index.
+        await prisma.$executeRaw`
     UPDATE "Match" m
     SET "peakMcapUsd" = p.peak_mcap,
         "peakMcapAt"  = p.peak_at
@@ -96,16 +105,17 @@ export async function recordMatchPeaks(
         SELECT s."marketCapUsd", s."takenAt"
         FROM "TokenSnapshot" s
         WHERE s."tokenId" = m2."tokenId"
+          AND s."takenAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
           AND s."takenAt" >= m2."matchedAt"
         ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
         LIMIT 1
       ) best ON TRUE
-      WHERE m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
-        AND EXISTS (
-          SELECT 1 FROM "TokenSnapshot" fresh
-          WHERE fresh."tokenId" = m2."tokenId"
+      WHERE m2."tokenId" IN (
+          SELECT DISTINCT fresh."tokenId" FROM "TokenSnapshot" fresh
+          WHERE fresh.source IN ('scan', 'fast')
             AND fresh."takenAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
         )
+        AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
         AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
     ) p
     WHERE m.id = p.id
@@ -152,3 +162,39 @@ export async function recordMatchPeaks(
   }
   return { fromSnapshots, fromLivePings };
 }
+
+/**
+ * The frequent peak pass, on its own timer instead of at the end of every scan cycle.
+ *
+ * It used to run inside the scan cycle, after the matching, so it never delayed an alert in the
+ * cycle that ran it - but it delayed the NEXT cycle, and that is the same thing: a token that
+ * enters the band is only noticed by the next scan. At production's table sizes it was most of
+ * every cycle. Out here it costs the scan nothing, and a slow pass only makes peaks a little
+ * later, which nothing time-critical reads.
+ *
+ * Returns a runner that remembers when its previous pass started, so each window reaches back
+ * over the gap however long the previous pass (or a restart) took, plus slack for snapshots
+ * committed while that pass was running. The first pass after a boot looks back an hour; anything
+ * older is the nightly full sweep's.
+ */
+export function createMatchPeaksRunner(
+  snapshotRetentionDays: number,
+  repair: (options: { sinceMinutes: number }) => Promise<number>,
+) {
+  let previousStartedAt: number | undefined;
+  return async () => {
+    const startedAt = Date.now();
+    const windowMinutes =
+      previousStartedAt === undefined
+        ? FIRST_PASS_WINDOW_MINUTES
+        : Math.ceil((startedAt - previousStartedAt) / 60_000) + WINDOW_SLACK_MINUTES;
+    const recorded = await recordMatchPeaks(snapshotRetentionDays, { sinceMinutes: windowMinutes });
+    const repaired = await repair({ sinceMinutes: windowMinutes });
+    // Only advanced once the pass succeeded: a failed pass leaves the next window covering both.
+    previousStartedAt = startedAt;
+    return { ...recorded, repaired, windowMinutes };
+  };
+}
+
+const FIRST_PASS_WINDOW_MINUTES = 60;
+const WINDOW_SLACK_MINUTES = 2;

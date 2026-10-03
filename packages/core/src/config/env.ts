@@ -158,6 +158,10 @@ const envSchema = z.object({
   // "off" alerts on any match. A held-back match doesn't start the filter's cooldown.
   MATCH_ALERT_GUARD: z.enum(["off", "flush", "ready"]).default("flush"),
   LIVE_PRICE_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
+  // How often match peaks are rolled forward from the snapshots and live pings already banked
+  // (apps/worker/src/jobs/matchPeaks.ts). Its own timer rather than part of the scan cycle, which
+  // it used to slow down; peaks feed the leaderboard and outcome figures, nothing time-critical.
+  MATCH_PEAKS_INTERVAL_MINUTES: z.coerce.number().positive().default(2),
   LIVE_PRICE_MAX_TRACKED: z.coerce.number().int().positive().default(150),
 
   // Daily cleanup job (see apps/worker/src/jobs/cleanupJob.ts) - prunes TokenSnapshot rows older
