@@ -129,6 +129,10 @@ services:
       # own wallet's address after the first deploy. Empty means the Admin Panel 403s everyone.
       - key: ADMIN_WALLET_ADDRESSES
         sync: false
+      # Bearer token for GET /stats/hit-rates, the read-only hit-rate report (see README). At
+      # least 32 characters; empty leaves the route switched off (404).
+      - key: STATS_API_TOKEN
+        sync: false
 
   - type: worker
     name: trenchscanner-worker

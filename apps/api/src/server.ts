@@ -27,6 +27,7 @@ import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/a
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
+import { registerStatsRoutes } from "./routes/stats.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 
@@ -243,6 +244,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
+  // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
+  await app.register(registerStatsRoutes, { prefix: "/stats", env });
   await app.register(registerAdminRoutes, { prefix: "/admin", env });
   // Same /admin prefix and the same authenticateAdmin gate, registered separately only to keep
   // the subscription surface in its own readable block - see routes/admin.ts.
