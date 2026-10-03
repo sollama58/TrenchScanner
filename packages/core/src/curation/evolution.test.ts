@@ -1,0 +1,169 @@
+import { describe, expect, it } from "vitest";
+import { CONTESTANTS, enabledContestants, CONTESTANT_IDS, type CuratorRecipe } from "./contestants.js";
+import {
+  breedChallengers,
+  chooseReplacement,
+  describeRecipe,
+  foundingLanes,
+  mutateRecipe,
+  normalizeRecipe,
+  seededRng,
+  traitName,
+  withLanes,
+  type Lane,
+  type LaneFitness,
+} from "./evolution.js";
+import { CANDIDATE_FEATURE_NAMES } from "./features.js";
+
+const BASE_HL = 14;
+const t0 = new Date("2026-10-01T00:00:00Z");
+
+function lane(slot: string, recipe: CuratorRecipe, bornAt = t0, name = slot): Lane {
+  return { slot, name, description: "", recipe, generation: 0, parentName: null, bornAt };
+}
+
+describe("mutateRecipe", () => {
+  it("always changes something and stays inside the search space", () => {
+    const rng = seededRng(7);
+    const parents: CuratorRecipe[] = CONTESTANTS.filter((c) => c.recipe).map((c) => c.recipe!);
+    for (let i = 0; i < 400; i++) {
+      const parent = parents[i % parents.length]!;
+      const child = mutateRecipe(parent, rng, { baseHalfLifeDays: BASE_HL });
+      expect(JSON.stringify(child)).not.toBe(JSON.stringify(normalizeRecipe(parent, BASE_HL)));
+      expect(child.recencyHalfLifeDays).toBeGreaterThanOrEqual(1);
+      expect(child.recencyHalfLifeDays).toBeLessThanOrEqual(60);
+      if (child.learner === "gbdt") {
+        const b = child.boosting!;
+        expect(b.maxDepth).toBeGreaterThanOrEqual(2);
+        expect(b.maxDepth).toBeLessThanOrEqual(6);
+        expect(b.maxTrees).toBeLessThanOrEqual(400);
+        expect(b.learningRate).toBeGreaterThanOrEqual(0.02);
+        expect(b.rowSample).toBeLessThanOrEqual(1);
+      } else if (child.featureNames) {
+        expect(child.featureNames.length).toBeGreaterThanOrEqual(8);
+        expect(child.featureNames.length).toBeLessThan(CANDIDATE_FEATURE_NAMES.length);
+        for (const f of child.featureNames) expect(CANDIDATE_FEATURE_NAMES).toContain(f);
+      }
+    }
+  });
+
+  it("is deterministic for a seed", () => {
+    const a = mutateRecipe({ learner: "gbdt" }, seededRng(42), { baseHalfLifeDays: BASE_HL });
+    const b = mutateRecipe({ learner: "gbdt" }, seededRng(42), { baseHalfLifeDays: BASE_HL });
+    expect(a).toEqual(b);
+  });
+});
+
+describe("names", () => {
+  it("names a recipe by family, depth, signals and memory", () => {
+    expect(traitName({ learner: "logistic" }, BASE_HL)).toBe("Linear");
+    expect(traitName({ learner: "gbdt", recencyHalfLifeDays: 3 }, BASE_HL)).toBe("Trees Recent");
+    expect(traitName({ learner: "gbdt", boosting: { maxDepth: 5 } }, BASE_HL)).toBe("Deep Trees");
+    const orderFlow = CONTESTANTS.find((c) => c.id === "order-flow")!.recipe!;
+    expect(traitName(orderFlow, BASE_HL)).toBe("Order Flow");
+    expect(
+      traitName({ learner: "logistic", featureNames: ["mcapUsd"], recencyHalfLifeDays: 40 }, BASE_HL),
+    ).toBe("Lean Linear Patient");
+    expect(describeRecipe({ learner: "logistic" }, BASE_HL, "Linear")).toContain("Bred from Linear.");
+  });
+});
+
+describe("breedChallengers", () => {
+  const lanes = foundingLanes(enabledContestants(CONTESTANT_IDS), t0);
+  const fitness: LaneFitness[] = lanes.map((l, i) => ({ lane: l, composite: 60 - i * 10 }));
+
+  it("breeds unique, uniquely named challengers from the top half", () => {
+    const bred = breedChallengers(fitness, 4, seededRng(3), {
+      baseHalfLifeDays: BASE_HL,
+      nextGeneration: 10,
+    });
+    expect(bred).toHaveLength(4);
+    expect(bred.map((b) => b.generation)).toEqual([10, 11, 12, 13]);
+    expect(new Set(bred.map((b) => b.name)).size).toBe(4);
+    expect(bred.every((b) => b.name.endsWith(`#${b.generation}`))).toBe(true);
+    const topNames = new Set(fitness.slice(0, Math.ceil(fitness.length / 2)).map((f) => f.lane.name));
+    for (const b of bred) {
+      for (const parent of b.parentName.split(" × ")) expect(topNames.has(parent)).toBe(true);
+    }
+    const onRoster = new Set(lanes.map((l) => JSON.stringify(normalizeRecipe(l.recipe, BASE_HL))));
+    for (const b of bred) expect(onRoster.has(JSON.stringify(b.recipe))).toBe(false);
+  });
+
+  it("breeds nothing when asked for none", () => {
+    expect(
+      breedChallengers(fitness, 0, seededRng(1), { baseHalfLifeDays: BASE_HL, nextGeneration: 1 }),
+    ).toEqual([]);
+  });
+});
+
+describe("chooseReplacement", () => {
+  const now = new Date(t0.getTime() + 48 * 3_600_000);
+  const seasoned = (slot: string, composite: number | null, examScore: number | null) => ({
+    lane: lane(slot, { learner: "logistic" }),
+    composite,
+    examScore,
+  });
+
+  it("gives the weakest seasoned seat to the best challenger that clears the margin", () => {
+    const r = chooseReplacement({
+      lanes: [seasoned("a", 50, 48), seasoned("b", 20, 30), seasoned("c", 35, 40)],
+      challengerScores: [31, 36, null],
+      now,
+      minAgeMs: 12 * 3_600_000,
+      margin: 3,
+    });
+    expect(r).toMatchObject({ slot: "b", challenger: 1 });
+  });
+
+  it("keeps the seat when no challenger beats its exam by the margin", () => {
+    const r = chooseReplacement({
+      lanes: [seasoned("a", 50, 48), seasoned("b", 20, 30)],
+      challengerScores: [32],
+      now,
+      minAgeMs: 0,
+      margin: 3,
+    });
+    expect(r).toBeNull();
+  });
+
+  it("never replaces a seat younger than the minimum age, and treats unscored seats as weakest", () => {
+    const young = {
+      lane: lane("young", { learner: "gbdt" }, new Date(now.getTime() - 3_600_000)),
+      composite: 1,
+      examScore: 1,
+    };
+    const r = chooseReplacement({
+      lanes: [young, seasoned("old", 70, 60), seasoned("silent", null, null)],
+      challengerScores: [10],
+      now,
+      minAgeMs: 12 * 3_600_000,
+      margin: 3,
+    });
+    expect(r?.slot).toBe("silent");
+    expect(
+      chooseReplacement({ lanes: [young], challengerScores: [99], now, minAgeMs: 12 * 3_600_000, margin: 0 }),
+    ).toBeNull();
+  });
+});
+
+describe("withLanes", () => {
+  it("swaps a learner seat's name, description and recipe for its lane's, leaving others alone", () => {
+    const specs = enabledContestants(CONTESTANT_IDS);
+    const bred: Lane = {
+      slot: "linear",
+      name: "Trees Recent #4",
+      description: "bred",
+      recipe: { learner: "gbdt", recencyHalfLifeDays: 2 },
+      generation: 4,
+      parentName: "Trees",
+      bornAt: t0,
+    };
+    const out = withLanes(specs, [bred]);
+    expect(out.find((s) => s.id === "linear")).toMatchObject({
+      name: "Trees Recent #4",
+      recipe: bred.recipe,
+    });
+    expect(out.find((s) => s.id === "trees")?.name).toBe("Trees");
+    expect(out.map((s) => s.id)).toEqual(specs.map((s) => s.id));
+  });
+});

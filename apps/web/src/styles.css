@@ -1862,3 +1862,44 @@ button.small-btn {
     width: 100%;
   }
 }
+
+/* Evolution panel */
+.lineage {
+  display: block;
+  margin-top: 2px;
+}
+.evo-best {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.evo-best strong {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+.evo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.evo-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.evo-list li.retired {
+  opacity: 0.7;
+}
+.evo-list .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}

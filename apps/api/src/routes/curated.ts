@@ -219,7 +219,7 @@ export async function registerCuratedRoutes(
       page,
       pageSize: PAGE_SIZE,
       totalCount,
-      model: { ...modelLabel(model), isDefault: model === state.defaultModel },
+      model: { ...modelLabel(state, model), isDefault: model === state.defaultModel },
     };
   });
 
@@ -390,7 +390,7 @@ export async function registerCuratedRoutes(
       curator: {
         // The default feed's contestant: the consensus once it can call, Rules until then.
         active: model,
-        activeName: modelLabel(model).name,
+        activeName: modelLabel(state, model).name,
         phase: activeModel && model !== RULES_CONTESTANT ? "model-live" : "collecting-training-data",
         modelTrainedAt: activeModel?.trainedAt ?? null,
         latestEvaluation: latestModel

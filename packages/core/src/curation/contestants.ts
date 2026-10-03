@@ -49,14 +49,14 @@ export const CONSENSUS_CONTESTANT = "consensus";
 export const RULES_CONTESTANT = "rules";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
-const RECENT_HALF_LIFE_DAYS = 3;
+export const RECENT_HALF_LIFE_DAYS = 3;
 
 /**
  * Order flow and short-window momentum only - what the last minutes of trading say, blind to
  * holder structure, socials and the heuristic's own scores. Deliberately partial: a member that
  * sees the market through one lens disagrees with the others in ways the consensus can use.
  */
-const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = [
+export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = [
   "mcapUsd",
   "liquidityToMcapRatio",
   "priceChange5mPct",

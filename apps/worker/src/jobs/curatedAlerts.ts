@@ -10,7 +10,8 @@ import {
   governorCapacity,
   selectEmissions,
   enabledContestants,
-  contestantSpec,
+  loadCurrentLanes,
+  withLanes,
   defaultContestant,
   rankFromQuantiles,
   rulesSignal,
@@ -81,7 +82,8 @@ async function curatorRoster(env: Env): Promise<CuratorRoster> {
   if (modelCache && modelCache.key === key && Date.now() - modelCache.fetchedAt < MODEL_CACHE_TTL_MS) {
     return modelCache.roster;
   }
-  const specs = enabledContestants(env.CURATOR_CONTESTANTS);
+  // Learner seats show and score as their current lane (curation/evolution.ts).
+  const specs = withLanes(enabledContestants(env.CURATOR_CONTESTANTS), await loadCurrentLanes());
   // The newest active row per contestant. A kind this build doesn't understand is ignored rather
   // than half-applied through a params shape it happens to overlap with.
   const rows = await prisma.curatorModel.findMany({
@@ -193,6 +195,7 @@ function decideCurations(
   const decisions = new Map<string, CurationDecision>();
   const probabilities = new Map<string, number>();
   const learners = new Map<string, ModelRef<TrainedCuratorParams>>();
+  const names = new Map(roster.entries.map((e) => [e.spec.id, e.spec.name]));
 
   for (const entry of roster.entries) {
     if (entry.role === "rules") {
@@ -226,10 +229,8 @@ function decideCurations(
           rank: rankFromQuantiles(m.quantiles, probabilities.get(m.contestant) ?? -Infinity),
         }))
         .sort((a, b) => b.rank - a.rank);
-      const backers = ranked
-        .filter((r) => r.rank >= BACKING_RANK)
-        .map((r) => contestantSpec(r.m.contestant)?.name);
-      if (decisions.get(RULES_CONTESTANT)?.curate) backers.push(contestantSpec(RULES_CONTESTANT)?.name);
+      const backers = ranked.filter((r) => r.rank >= BACKING_RANK).map((r) => names.get(r.m.contestant));
+      if (decisions.get(RULES_CONTESTANT)?.curate) backers.push(names.get(RULES_CONTESTANT));
       const named = backers.filter((b): b is string => b !== undefined);
       if (named.length > 0) reasons.push(`backed by ${named.join(", ")}`);
       const strongest = ranked[0] ? learners.get(ranked[0].m.contestant) : undefined;
@@ -423,7 +424,12 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
     if (!contendersIn || contendersIn.length === 0) continue;
     const isDefault = model === roster.defaultModel;
     try {
-      emitted += await emitForModel(model, contendersIn, isDefault, anchors, env, { now, hourAgo, burstAgo });
+      const modelName = roster.entries.find((e) => e.spec.id === model)?.spec.name ?? null;
+      emitted += await emitForModel(model, modelName, contendersIn, isDefault, anchors, env, {
+        now,
+        hourAgo,
+        burstAgo,
+      });
     } catch (err) {
       // One ledger's failure must not cost the others their calls.
       logger.warn("failed to emit a contestant's calls", { model, error: String(err) });
@@ -434,6 +440,8 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
 
 async function emitForModel(
   model: string,
+  /** The name the model calls under right now - stored on each call (CuratedAlert.modelName). */
+  modelName: string | null,
   contendersIn: CuratedContender[],
   isDefault: boolean,
   anchors: Map<string, CandidateSampleRef>,
@@ -493,7 +501,7 @@ async function emitForModel(
     // down with it. The failed pick tries again next cycle.
     let result: Awaited<ReturnType<typeof emitCuratedAlert>>;
     try {
-      result = await emitCuratedAlert(pick, model, anchors.get(pick.token.id) ?? null, env);
+      result = await emitCuratedAlert(pick, model, modelName, anchors.get(pick.token.id) ?? null, env);
     } catch (err) {
       logger.warn("failed to emit curated pick - deferring it", {
         model,
@@ -537,6 +545,7 @@ async function emitForModel(
 async function emitCuratedAlert(
   pick: CuratedContender,
   model: string,
+  modelName: string | null,
   /** An anchor another ledger's call on this token made in this same pass - reused as-is. */
   sharedAnchor: CandidateSampleRef | null,
   env: Env,
@@ -576,6 +585,7 @@ async function emitCuratedAlert(
       candidateOutcomeId: anchor.id,
       snapshotId: pick.snapshotId ?? null,
       model,
+      modelName,
       source: decision.source,
       confidence: decision.confidence,
       reasons: decision.reasons,

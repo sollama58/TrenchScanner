@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { CONTESTANTS, CONTESTANT_IDS, enabledContestants } from "./contestants.js";
-import { defaultContestant, NEVER_EMIT_THRESHOLD, runContestTraining } from "./trainingRun.js";
+import {
+  defaultContestant,
+  NEVER_EMIT_THRESHOLD,
+  runContestTraining,
+  runEvolvingContest,
+} from "./trainingRun.js";
 import { syntheticMarket } from "./syntheticMarket.js";
 import type { StackedCuratorParams } from "./stacking.js";
 
@@ -54,5 +59,49 @@ describe("runContestTraining", () => {
     const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
     expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "order-flow", "trees"]);
     expect(consensus.members.every((m) => m.quantiles.length > 0)).toBe(true);
+  }, 60_000);
+});
+
+describe("runEvolvingContest", () => {
+  it("swaps a winning challenger into its seat before the consensus is stacked", async () => {
+    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 12 });
+    const bred = {
+      recipe: { learner: "gbdt" as const, recencyHalfLifeDays: 10, boosting: { maxDepth: 4 } },
+      name: "Trees #1",
+      description: "test",
+      generation: 1,
+      parentName: "Trees",
+    };
+    let seen: Map<string, number | null> | null = null;
+    const outcome = await runEvolvingContest(
+      rows,
+      {
+        targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+        targetPerHour: 6,
+        heuristicMinScore: 55,
+        minRowsToPromote: 1500,
+        recencyHalfLifeDays: 14,
+        cooldownHours: 24,
+        heuristicPrecisionGate: true,
+        contestants: enabledContestants(["consensus", "linear", "order-flow"]),
+      },
+      {
+        challengers: [bred],
+        decide: (laneScores, challengerScores) => {
+          seen = laneScores;
+          return challengerScores[0] === null ? null : { slot: "order-flow", challenger: 0, reason: "test" };
+        },
+      },
+    );
+    expect([...seen!.keys()]).toEqual(["linear", "order-flow"]);
+    expect(outcome.challengerScores).toHaveLength(1);
+    expect(outcome.challengerScores[0]).not.toBeNull();
+    expect(outcome.replacement).toMatchObject({ slot: "order-flow", bred: { name: "Trees #1" } });
+    const seat = outcome.results.find((r) => r.contestant === "order-flow")!;
+    expect(seat.params.kind).toBe("gbdt-v1");
+    expect(seat.metrics).toMatchObject({ contestant: "order-flow", contestantName: "Trees #1" });
+    const consensus = outcome.results.find((r) => r.contestant === "consensus")!
+      .params as StackedCuratorParams;
+    expect(consensus.members.map((m) => m.contestant).sort()).toEqual(["linear", "order-flow"]);
   }, 60_000);
 });

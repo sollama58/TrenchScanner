@@ -279,6 +279,16 @@ const envSchema = z.object({
         .filter((s) => s.length > 0),
     )
     .pipe(z.array(z.string().refine(isContestantId, "unknown contestant id")).min(1)),
+  // Evolution (curation/evolution.ts): each training run breeds this many challengers - mutated
+  // copies of the top lanes' recipes - and sits them in the same exam. The best one takes over
+  // the weakest learner seat when its exam beats that seat's by CURATOR_EVOLUTION_MARGIN points,
+  // at most one takeover per run. Each challenger costs one more exam of run time (memory stays
+  // flat). 0 freezes the field.
+  CURATOR_EVOLUTION_CHALLENGERS: z.coerce.number().int().min(0).max(6).default(2),
+  // A seat's recipe holds it at least this long before it can be replaced - time to build a live
+  // record the leaderboard can judge it on.
+  CURATOR_EVOLUTION_MIN_AGE_HOURS: z.coerce.number().min(0).default(12),
+  CURATOR_EVOLUTION_MARGIN: z.coerce.number().min(0).max(50).default(3),
   // Holds the hand-tuned heuristic to the same cutoff rule while it is the live curator: it only
   // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned in
   // the newest training run (the target-meeting one, else the best one). Without a record the
