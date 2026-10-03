@@ -31,6 +31,9 @@ model User {
   /// which revokes every browser session the user holds - a JWT can't be withdrawn on its own.
   /// Paired phones are revoked per device instead (LinkedDevice.revokedAt).
   sessionVersion Int     @default(0)
+  /// The curator contestant whose calls this user's Curated feed shows (curation/contestants.ts);
+  /// null = the default (the consensus, or Rules until the consensus can call).
+  curatedModel   String?
 
   filters      UserFilter[]
   matches      Match[]
@@ -252,10 +255,13 @@ model CuratedAlert {
   snapshot   TokenSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
 
   createdAt  DateTime @default(now())
-  /// Which decision-maker emitted it - "heuristic-v1", or a CuratorModel id once the learner
-  /// takes over (Phase C). Shown in the feed's learning panel, and what lets the panel compare
-  /// the two on their own emissions.
+  /// Which decision-maker emitted it - "heuristic-v1", or the CuratorModel id whose weights made
+  /// the call - so every call is traceable to the exact model generation.
   source     String
+  /// The contestant whose ledger this call is on (curation/contestants.ts): every contestant calls
+  /// on its own feed, governed and graded separately - the leaderboard is built from these.
+  /// Null only on rows written before the contest existed (the migration backfilled those).
+  model      String?
   /// The curator's conviction at emission, 0-100.
   confidence Float
   /// Why, as short human-readable strings - the top contributing signals at emission time.
@@ -288,6 +294,7 @@ model CuratedAlert {
   // the nightly cleanup deletes scans this table to null its references.
   @@index([snapshotId])
   @@index([candidateOutcomeId])
+  @@index([model, createdAt])
 }
 
 /// What the BENCH curator would have emitted - the newest candidate model while the heuristic
@@ -370,6 +377,9 @@ model AiReview {
 model CuratorModel {
   id           String    @id @default(cuid())
   createdAt    DateTime  @default(now())
+  /// The contestant this model plays as (curation/contestants.ts). Null on rows from before the
+  /// contest, when one model at a time held the job.
+  contestant   String?
   /// Model family + featurization version, e.g. "weighted-logistic-v1". A reader that doesn't
   /// recognize the kind must ignore the row rather than guess at params.
   kind         String
@@ -382,13 +392,15 @@ model CuratorModel {
   /// The walk-forward folds this model was judged on, plus the promotion verdict - the public
   /// evidence behind "the model took over" (or didn't).
   evalMetrics  Json
-  /// candidate: trained + evaluated, not curating. active: the current curator. retired: was
-  /// active once.
+  /// active: the contestant's current model, calling on its ledger (one per contestant; before
+  /// the contest, the one model holding the job). candidate: a pre-contest model that was
+  /// evaluated but not promoted. retired: superseded by a newer run.
   status       String
   activatedAt  DateTime?
   retiredAt    DateTime?
 
   @@index([status, createdAt])
+  @@index([contestant, status, createdAt])
 }
 
 /// One training sample for the curated-alerts learner: a rug-screen-passing candidate at a

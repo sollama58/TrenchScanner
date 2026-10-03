@@ -12,8 +12,20 @@ import {
   type PromotionVerdict,
   type TrainedCuratorParams,
   type TrainingRow,
+  type UnthresholdedCuratorParams,
   type WalkForwardResult,
+  type EvalFold,
+  type ScoredOutcome,
+  scoreCandidateWithModel,
 } from "./trainer.js";
+import {
+  CONSENSUS_CONTESTANT,
+  RULES_CONTESTANT,
+  type ContestantSpec,
+  type CuratorRecipe,
+} from "./contestants.js";
+import { emptyRecord, type CallRecord } from "./leaderboard.js";
+import { trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
 
 /**
  * One training run, minus the IO: examine every enabled model family on the same walk-forward
@@ -74,6 +86,10 @@ export interface StoredEvalMetrics {
    */
   heuristicCalibration?: PrecisionCalibration;
   heuristicPrecisionCurve: PrecisionCurvePoint[];
+  /** The contestant this row belongs to (contest runs only). */
+  contestant?: string;
+  /** The exam's governed call record - what the leaderboard scores before live calls exist. */
+  exam?: CallRecord;
 }
 
 export interface CuratorTrainingOutcome {
@@ -116,6 +132,96 @@ export function pickCuratorFamily(results: FamilyResult[]): number {
   return best;
 }
 
+/** One model recipe's exam and its deployable model - the shared core of every training run. */
+interface RecipeExam {
+  evaluation: WalkForwardResult;
+  result: FamilyResult;
+  trained: UnthresholdedCuratorParams;
+  /** The shipped model's probability cutoff, or null when the exam could not set one. */
+  deployedThreshold: number | null;
+}
+
+async function examineRecipe(
+  rows: TrainingRow[],
+  cfg: Omit<CuratorTrainingConfig, "learners">,
+  recipe: CuratorRecipe,
+): Promise<RecipeExam> {
+  const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
+  const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? cfg.recencyHalfLifeDays;
+  const evaluation = await walkForwardEvaluate(rows, {
+    targetPerHour: cfg.targetPerHour,
+    heuristicMinScore: cfg.heuristicMinScore,
+    // Emission enforces the band before either curator runs (see maybeEmitCuratedAlert), so
+    // the exam has to as well - otherwise it grades emissions production never makes.
+    mcapBand: cfg.mcapBand,
+    minRowsToPromote: cfg.minRowsToPromote,
+    recencyHalfLifeDays,
+    // Graded and calibrated on event rows only - the moments live curators actually decide on.
+    decisionRowsOnly: true,
+    cooldownHours: cfg.cooldownHours,
+    // Both sides are graded at the hit-rate cutoffs production holds them to, not at a pace.
+    targets: cfg.targets,
+    heuristicPrecisionGate: cfg.heuristicPrecisionGate,
+    learner: recipe.learner,
+    featureNames: recipe.featureNames,
+    boosting: recipe.boosting,
+  });
+  // Calibrated in RANK units: each fold model and the shipped model put probabilities on their
+  // own scales, so a raw probability that hit 75% on the fold models says nothing about the
+  // same number on the shipped one. "The top r of decision moments" does carry over.
+  const precisionCalibration = calibrateThresholdForPrecision(
+    evaluation.outOfSampleRanks,
+    cfg.targets,
+    cooldown,
+  );
+  // The deployable model trains on the FULL window - the folds were the exam, this is the model
+  // that ships, with strictly more (and newer) data than any fold saw.
+  const trained = await trainCuratorModel(rows, {
+    recencyHalfLifeDays,
+    learner: recipe.learner,
+    featureNames: recipe.featureNames,
+    boosting: recipe.boosting,
+  });
+  // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
+  // at its best-effort cutoff (see chooseCutoff) and still competes on its exam. Only an exam
+  // with no judgeable cutoff at all leaves it without one.
+  const deployedThreshold =
+    precisionCalibration.threshold === null
+      ? null
+      : thresholdAtRank(trained, evaluation.decisionReference, precisionCalibration.threshold);
+  return {
+    evaluation,
+    result: { learner: recipe.learner, verdict: evaluation.verdict, precisionCalibration },
+    trained,
+    deployedThreshold,
+  };
+}
+
+/** A verdict that promotes needs a cutoff to promote at. */
+function verdictWithCutoff(exam: RecipeExam): PromotionVerdict {
+  const { verdict } = exam.evaluation;
+  return verdict.promote && exam.deployedThreshold === null
+    ? {
+        promote: false,
+        reason: `${verdict.reason.replace(" - promoting", "")}, but too few out-of-sample calls to set a cutoff - keeping current curator`,
+      }
+    : verdict;
+}
+
+/** One side of the walk-forward folds, summed into a call record. */
+function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord {
+  const record = emptyRecord();
+  for (const fold of folds) {
+    const s = fold[side];
+    record.calls += s.emitted;
+    record.graded += s.emitted;
+    record.wins += Math.round(((s.precisionPct ?? 0) * s.emitted) / 100);
+    record.goals += Math.round(((s.goalPrecisionPct ?? 0) * s.emitted) / 100);
+    record.sumLabel += (s.avgLabel ?? 0) * s.emitted;
+  }
+  return record;
+}
+
 export async function runCuratorTraining(
   rows: TrainingRow[],
   cfg: CuratorTrainingConfig,
@@ -123,52 +229,12 @@ export async function runCuratorTraining(
   if (cfg.learners.length === 0) throw new Error("no curator model families enabled");
   const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
 
-  const exams: { learner: CuratorLearner; evaluation: WalkForwardResult; result: FamilyResult }[] = [];
-  for (const learner of cfg.learners) {
-    const evaluation = await walkForwardEvaluate(rows, {
-      targetPerHour: cfg.targetPerHour,
-      heuristicMinScore: cfg.heuristicMinScore,
-      // Emission enforces the band before either curator runs (see maybeEmitCuratedAlert), so
-      // the exam has to as well - otherwise it grades emissions production never makes.
-      mcapBand: cfg.mcapBand,
-      minRowsToPromote: cfg.minRowsToPromote,
-      recencyHalfLifeDays: cfg.recencyHalfLifeDays,
-      // Graded and calibrated on event rows only - the moments live curators actually decide on.
-      decisionRowsOnly: true,
-      cooldownHours: cfg.cooldownHours,
-      // Both sides are graded at the hit-rate cutoffs production holds them to, not at a pace.
-      targets: cfg.targets,
-      heuristicPrecisionGate: cfg.heuristicPrecisionGate,
-      learner,
-    });
-    // Calibrated in RANK units: each fold model and the shipped model put probabilities on their
-    // own scales, so a raw probability that hit 75% on the fold models says nothing about the
-    // same number on the shipped one. "The top r of decision moments" does carry over.
-    const precisionCalibration = calibrateThresholdForPrecision(
-      evaluation.outOfSampleRanks,
-      cfg.targets,
-      cooldown,
-    );
-    exams.push({
-      learner,
-      evaluation,
-      result: { learner, verdict: evaluation.verdict, precisionCalibration },
-    });
-  }
+  const exams: RecipeExam[] = [];
+  for (const learner of cfg.learners) exams.push(await examineRecipe(rows, cfg, { learner }));
   const chosen = exams[pickCuratorFamily(exams.map((e) => e.result))]!;
-  const { evaluation, learner } = chosen;
-  const precisionCalibration = chosen.result.precisionCalibration;
+  const { evaluation, trained, deployedThreshold } = chosen;
+  const { learner, precisionCalibration } = chosen.result;
 
-  // The deployable model trains on the FULL window - the folds were the exam, this is the model
-  // that ships, with strictly more (and newer) data than any fold saw.
-  const trained = await trainCuratorModel(rows, { recencyHalfLifeDays: cfg.recencyHalfLifeDays, learner });
-  // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
-  // at its best-effort cutoff (see chooseCutoff) and still competes for the job on its exam.
-  // Only an exam with no judgeable cutoff at all leaves it without one.
-  const deployedThreshold =
-    precisionCalibration.threshold === null
-      ? null
-      : thresholdAtRank(trained, evaluation.decisionReference, precisionCalibration.threshold);
   // The hand-tuned heuristic gets its cutoff the same way while it holds the job. Its calls do not
   // depend on the model family, so any family's exam carries the same heuristic record.
   const heuristicCalibration = calibrateThresholdForPrecision(
@@ -177,13 +243,7 @@ export async function runCuratorTraining(
     cooldown,
   );
   const params = { ...trained, threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD } as TrainedCuratorParams;
-  const verdict =
-    evaluation.verdict.promote && deployedThreshold === null
-      ? {
-          promote: false,
-          reason: `${evaluation.verdict.reason.replace(" - promoting", "")}, but too few out-of-sample calls to set a cutoff - keeping current curator`,
-        }
-      : evaluation.verdict;
+  const verdict = verdictWithCutoff(chosen);
   const metrics: StoredEvalMetrics = {
     folds: evaluation.folds,
     verdict: exams.length > 1 ? { ...verdict, reason: `${learner}: ${verdict.reason}` } : verdict,
@@ -198,4 +258,171 @@ export async function runCuratorTraining(
     heuristicPrecisionCurve: precisionCurve(evaluation.heuristicOutOfSample),
   };
   return { params, metrics, evaluation };
+}
+
+/** The rules contestant's stored "model": just the hit-rate cutoff its exam earned. */
+export const RULES_MODEL_KIND = "rules-v1";
+
+export interface RulesCuratorParams {
+  kind: typeof RULES_MODEL_KIND;
+  minScore: number;
+  /** Rank-score cutoff, or null when the exam had no evidence for one (the gate stands alone). */
+  rankCutoff: number | null;
+}
+
+export type ContestantParams = TrainedCuratorParams | StackedCuratorParams | RulesCuratorParams;
+
+export interface ContestantTrainingResult {
+  contestant: string;
+  params: ContestantParams;
+  metrics: StoredEvalMetrics;
+}
+
+export interface ContestTrainingConfig extends Omit<CuratorTrainingConfig, "learners"> {
+  /** The enabled roster (enabledContestants). */
+  contestants: readonly ContestantSpec[];
+}
+
+/**
+ * One contest training run, minus the IO: every learner contestant sits the same walk-forward
+ * exam and ships its own model at its own hit-rate cutoff; the rules contestant gets its cutoff
+ * from the same exam; then the consensus is stacked on the learners' out-of-sample calls. Results
+ * come back in roster order, one per enabled contestant that had anything to train.
+ *
+ * Learners train one after another and only their rank arrays are kept between them, so peak
+ * memory is one model's working set however many contestants run; time grows linearly.
+ */
+export async function runContestTraining(
+  rows: TrainingRow[],
+  cfg: ContestTrainingConfig,
+): Promise<ContestantTrainingResult[]> {
+  const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
+  const results: ContestantTrainingResult[] = [];
+  const foldRanks = new Map<string, Float64Array>();
+  const shippedProbabilities = new Map<string, Float64Array>();
+  let reference: TrainingRow[] | null = null;
+  let rulesEvidence: { folds: EvalFold[]; heuristicOutOfSample: ScoredOutcome[] } | null = null;
+
+  for (const spec of cfg.contestants) {
+    if (spec.role !== "learner" || !spec.recipe) continue;
+    const exam = await examineRecipe(rows, cfg, spec.recipe);
+    const { evaluation, trained, deployedThreshold } = exam;
+    const verdict = verdictWithCutoff(exam);
+    results.push({
+      contestant: spec.id,
+      params: { ...trained, threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD } as TrainedCuratorParams,
+      metrics: {
+        contestant: spec.id,
+        folds: evaluation.folds,
+        verdict: { ...verdict, reason: `${spec.name}: ${verdict.reason}` },
+        targets: cfg.targets,
+        learner: spec.recipe.learner,
+        precisionCalibration: exam.result.precisionCalibration,
+        precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
+        heuristicPrecisionCurve: [],
+        exam: foldsRecord(evaluation.folds, "model"),
+      },
+    });
+
+    // Every learner's exam cuts the same rows into the same folds, so their reference rows (and
+    // so their rank arrays) line up one to one; checked rather than assumed.
+    if (reference === null) {
+      reference = evaluation.decisionReference;
+      rulesEvidence = { folds: evaluation.folds, heuristicOutOfSample: evaluation.heuristicOutOfSample };
+    }
+    const aligned =
+      evaluation.decisionReference.length === reference.length &&
+      evaluation.decisionReference.every((r, i) => r === reference![i]);
+    if (aligned && reference.length > 0) {
+      foldRanks.set(
+        spec.id,
+        Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability),
+      );
+      shippedProbabilities.set(
+        spec.id,
+        Float64Array.from(reference, (r) => scoreCandidateWithModel(trained, r.features)),
+      );
+    }
+  }
+
+  const rulesSpec = cfg.contestants.find((c) => c.role === "rules");
+  if (rulesSpec && rulesEvidence) {
+    const calibration = calibrateThresholdForPrecision(
+      rulesEvidence.heuristicOutOfSample,
+      cfg.targets,
+      cooldown,
+    );
+    const curve = precisionCurve(rulesEvidence.heuristicOutOfSample);
+    results.push({
+      contestant: rulesSpec.id,
+      params: {
+        kind: RULES_MODEL_KIND,
+        minScore: cfg.heuristicMinScore,
+        rankCutoff: cfg.heuristicPrecisionGate ? calibration.threshold : null,
+      },
+      metrics: {
+        contestant: rulesSpec.id,
+        folds: rulesEvidence.folds,
+        verdict: { promote: false, reason: `${rulesSpec.name}: the hand-tuned gate, held to its own cutoff` },
+        targets: cfg.targets,
+        precisionCalibration: calibration,
+        precisionCurve: curve,
+        ...(calibration.threshold !== null ? { heuristicCalibration: calibration } : {}),
+        heuristicPrecisionCurve: curve,
+        exam: foldsRecord(rulesEvidence.folds, "heuristic"),
+      },
+    });
+  }
+
+  const stackedSpec = cfg.contestants.find((c) => c.role === "stacked");
+  if (stackedSpec && reference !== null && foldRanks.size >= 2) {
+    const stacked = await trainStackedCurator(
+      {
+        reference,
+        memberFoldRanks: foldRanks,
+        memberShippedProbabilities: shippedProbabilities,
+        heuristicMinScore: cfg.heuristicMinScore,
+        targets: cfg.targets,
+        cooldownHours: cfg.cooldownHours,
+        targetPerHour: cfg.targetPerHour,
+        recencyHalfLifeDays: cfg.recencyHalfLifeDays,
+      },
+      NEVER_EMIT_THRESHOLD,
+    );
+    if (stacked) {
+      results.push({
+        contestant: stackedSpec.id,
+        params: stacked.params,
+        metrics: {
+          contestant: stackedSpec.id,
+          folds: [],
+          verdict: {
+            promote: false,
+            reason: `${stackedSpec.name}: stacked on ${stacked.params.members.length} models, judged on ${stacked.examChunks} later chunk(s) of their out-of-sample calls`,
+          },
+          targets: cfg.targets,
+          precisionCalibration: stacked.precisionCalibration,
+          precisionCurve: stacked.precisionCurve,
+          heuristicPrecisionCurve: [],
+          exam: stacked.exam,
+        },
+      });
+    }
+  }
+
+  // Roster order, so storage and logs read the same way the leaderboard lists them.
+  const order = new Map(cfg.contestants.map((c, i) => [c.id, i]));
+  return results.sort((a, b) => order.get(a.contestant)! - order.get(b.contestant)!);
+}
+
+/**
+ * The feed a subscriber sees until they pick a model: the consensus once its latest run gave it
+ * a cutoff to call at, else Rules (no consensus yet, or an exam with nothing to set a cutoff
+ * from - a default feed that can never send would be no feed at all). The worker and the API
+ * both decide with this, so "default" means the same model on both sides.
+ */
+export function defaultContestant(consensusThreshold: number | null | undefined): string {
+  return typeof consensusThreshold === "number" && consensusThreshold < NEVER_EMIT_THRESHOLD
+    ? CONSENSUS_CONTESTANT
+    : RULES_CONTESTANT;
 }

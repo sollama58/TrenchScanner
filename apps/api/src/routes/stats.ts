@@ -193,6 +193,21 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
     GROUP BY a."source"
     ORDER BY calls DESC`;
 
+  // The same calls by contestant ledger (CuratedAlert.model) - the curator contest's live records.
+  const modelRows = prisma.$queryRaw<(RawCounts & { model: string })[]>`
+    SELECT COALESCE(a."model", 'unassigned') AS model,
+           count(*) AS calls,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
+                              AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
+           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop
+    FROM "CuratedAlert" a
+    LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+    GROUP BY 1
+    ORDER BY calls DESC`;
+
   const shadowRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
     SELECT s."source" AS source,
            count(*) AS calls,
@@ -295,8 +310,9 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
     GROUP BY 1
     ORDER BY 1`;
 
-  const [curated, shadow, confidence, ai, aiProbability, matches, samples] = await Promise.all([
+  const [curated, byModel, shadow, confidence, ai, aiProbability, matches, samples] = await Promise.all([
     curatedRows,
+    modelRows,
     shadowRows,
     confidenceRows,
     aiRows,
@@ -342,6 +358,10 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
     curatedAlerts: {
       total: rated(sumCounts(curatedCounts)),
       bySource: curatedCounts.map((r) => ({ ...r, ...rated(r) })),
+      byModel: byModel.map((r) => {
+        const counts = toCounts(r);
+        return { model: r.model, ...counts, ...rated(counts) };
+      }),
     },
     shadowEmissions: {
       total: rated(sumCounts(shadowCounts)),

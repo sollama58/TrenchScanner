@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONTESTANT_IDS, isContestantId } from "../curation/contestants.js";
 
 /**
  * Central env schema shared by the api and worker apps. Each app calls
@@ -263,19 +264,21 @@ const envSchema = z.object({
   // discounts a thin record. 0 = judge the observed rates. Either way, alerts still go out at
   // the best cutoff when none qualifies.
   CURATED_CALIBRATION_CONFIDENCE_Z: z.coerce.number().min(0).max(4).default(1),
-  // Model families each training run examines, comma-separated: "logistic" (weighted logistic
-  // regression) and/or "gbdt" (gradient-boosted trees). All sit the same walk-forward exam and
-  // the one with the better out-of-sample hit-rate record ships (see pickCuratorFamily).
-  CURATOR_MODEL_FAMILIES: z
+  // The curator contest's roster, comma-separated contestant ids (curation/contestants.ts):
+  // each trains every run and makes calls on its own feed, and the consensus stacks the learners.
+  // Default: all of them. Trim it if a training run gets too slow for the worker - memory stays
+  // flat (learners train one at a time), time grows by one exam per learner. "rules" is always
+  // on; the consensus needs at least two learners.
+  CURATOR_CONTESTANTS: z
     .string()
-    .default("logistic,gbdt")
+    .default(CONTESTANT_IDS.join(","))
     .transform((v) =>
       v
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s.length > 0),
     )
-    .pipe(z.array(z.enum(["logistic", "gbdt"])).min(1)),
+    .pipe(z.array(z.string().refine(isContestantId, "unknown contestant id")).min(1)),
   // Holds the hand-tuned heuristic to the same cutoff rule while it is the live curator: it only
   // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned in
   // the newest training run (the target-meeting one, else the best one). Without a record the

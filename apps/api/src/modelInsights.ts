@@ -4,6 +4,7 @@ import {
   CURATOR_MODEL_KIND,
   FRIENDLY_FEATURE_LABELS,
   HEURISTIC_CURATOR_SOURCE,
+  contestantSpec,
   type Env,
   type BoostedCuratorParams,
   type LogisticCuratorParams,
@@ -18,7 +19,7 @@ import { buildHitRateReport, type Targets } from "./routes/stats.js";
  */
 
 /** How many recent training runs the history table shows. */
-const MODEL_HISTORY_LIMIT = 12;
+const MODEL_HISTORY_LIMIT = 24;
 
 /** How many recent AI reviewer calls the tab lists. */
 const RECENT_AI_REVIEWS_LIMIT = 25;
@@ -96,6 +97,7 @@ function asMetrics(value: unknown): Partial<StoredEvalMetrics> {
 /** One training run as the history table shows it - the exam, not the weights. */
 function summarizeRun(row: {
   id: string;
+  contestant: string | null;
   createdAt: Date;
   kind: string;
   status: string;
@@ -110,6 +112,8 @@ function summarizeRun(row: {
   const folds = Array.isArray(m.folds) ? m.folds : [];
   return {
     id: row.id,
+    contestant: row.contestant,
+    contestantName: row.contestant ? (contestantSpec(row.contestant)?.name ?? row.contestant) : null,
     createdAt: row.createdAt,
     kind: row.kind,
     // Rows from before families existed were all logistic.
@@ -148,6 +152,7 @@ function summarizeRun(row: {
 
 const runSelect = {
   id: true,
+  contestant: true,
   createdAt: true,
   kind: true,
   status: true,
@@ -190,9 +195,11 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
       take: MODEL_HISTORY_LIMIT,
       select: runSelect,
     }),
+    // Importance is a weights-level view, so it comes from a learner (the consensus's inputs are
+    // other models' ranks, not features): the newest active one.
     prisma.curatorModel.findFirst({
-      where: { status: "active" },
-      orderBy: { activatedAt: "desc" },
+      where: { status: "active", kind: { in: [CURATOR_MODEL_KIND, BOOSTED_MODEL_KIND] } },
+      orderBy: { createdAt: "desc" },
       select: { id: true, params: true },
     }),
     prisma.aiReview.findMany({

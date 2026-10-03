@@ -43,6 +43,8 @@ export const post = <T>(path: string, body?: unknown) =>
   api<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 export const patch = <T>(path: string, body: unknown) =>
   api<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+export const put = <T>(path: string, body: unknown) =>
+  api<T>(path, { method: "PUT", body: JSON.stringify(body) });
 export const del = <T>(path: string) => api<T>(path, { method: "DELETE" });
 
 // ---- Shapes the API returns (only the fields this UI reads) ----
@@ -114,6 +116,9 @@ export interface AdminAiReview {
 export interface CuratedMeta {
   alertId: string;
   source: string;
+  /** The contestant whose call this is, and its display name (null on pre-contest rows). */
+  model?: string | null;
+  modelName?: string | null;
   confidence: number;
   reasons: string[];
   alertedAt: string;
@@ -146,6 +151,8 @@ export interface CuratedPage {
   page: number;
   pageSize: number;
   totalCount: number;
+  /** Whose calls these are. */
+  model: { id: string; name: string; isDefault: boolean };
 }
 
 export interface MatchPage {
@@ -200,6 +207,8 @@ export interface Calibration {
 
 export interface ModelRun {
   id: string;
+  contestant: string | null;
+  contestantName: string | null;
   createdAt: string;
   kind: string;
   learner: "logistic" | "gbdt";
@@ -263,7 +272,11 @@ export interface ModelInsights {
     features: { feature: string; label: string; sharePct: number; direction: 1 | -1 | null }[];
   } | null;
   runs: ModelRun[];
-  curatedAlerts: { total: GradedRates; bySource: (GradedRates & { source: string })[] };
+  curatedAlerts: {
+    total: GradedRates;
+    bySource: (GradedRates & { source: string })[];
+    byModel: (GradedRates & { model: string })[];
+  };
   shadowEmissions: { total: GradedRates; bySource: (GradedRates & { source: string })[] };
   curatorConfidenceBands: (GradedRates & { side: "heuristic" | "model"; band: number })[];
   aiReviewer: {
@@ -318,4 +331,46 @@ export interface WorkerHealth {
     stale: boolean;
     hung: boolean;
   }[];
+}
+
+// ---- The curator contest (/curated/models) ----
+
+export interface RecordSummary {
+  calls: number;
+  graded: number;
+  winRatePct: number | null;
+  goalRatePct: number | null;
+  /** Average doublings per graded call: a 2x is 1, a 4x is 2, a miss 0. */
+  avgReturnDoublings: number | null;
+  score: number | null;
+}
+
+export type ContestantRole = "rules" | "learner" | "stacked";
+
+export interface LeaderboardEntry {
+  rank: number;
+  id: string;
+  name: string;
+  description: string;
+  role: ContestantRole;
+  isDefault: boolean;
+  status: "calling" | "silent" | "untrained";
+  composite: { score: number | null; liveWeight: number; live: RecordSummary; exam: RecordSummary };
+  model: { id: string; trainedAt: string; trainingRows: number; cutoffMeetsTargets: boolean | null } | null;
+}
+
+export interface Leaderboard {
+  window: { days: number; since: string };
+  targets: { hitRate2xPct: number; hitRate4xPct: number };
+  scoring: {
+    weights: { winRate: number; goalRate: number; avgReturn: number };
+    livePivotCalls: number;
+    summary: string;
+  };
+  defaultModel: string;
+  /** The model this user's feed shows. */
+  selectedModel: string;
+  /** True when the user hasn't picked one (their feed follows the default). */
+  followsDefault: boolean;
+  entries: LeaderboardEntry[];
 }

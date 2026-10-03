@@ -16,6 +16,9 @@ const RPC_CACHE_RETENTION_DAYS = 90;
 /** How long retired/candidate CuratorModel rows are kept - see the sweep below. */
 const CURATOR_MODEL_RETENTION_DAYS = 90;
 
+/** How long a retired CuratorModel keeps its weights before the sweep stubs them out. */
+const CURATOR_MODEL_PARAMS_RETENTION_DAYS = 7;
+
 /**
  * How long a revoked LinkedDevice row is kept after somebody switches it off.
  *
@@ -79,6 +82,18 @@ export async function runCleanupJob(env: Env): Promise<void> {
   const deletedCuratorModels = await prisma.curatorModel.deleteMany({
     where: { status: { not: "active" }, createdAt: { lt: curatorModelCutoff } },
   });
+  // A contest run stores a model per contestant, and a boosted forest's params run to a few
+  // hundred KB - at several runs a day, 90 days of weights would be most of a gigabyte nobody
+  // reads. A retired row's exam (evalMetrics) is the history; its weights stop mattering a week
+  // after it retires, so they are dropped to a stub that keeps the kind.
+  const paramsCutoff = new Date(startedAt - CURATOR_MODEL_PARAMS_RETENTION_DAYS * DAY_MS);
+  const strippedCuratorModels = await prisma.$executeRaw`
+    UPDATE "CuratorModel"
+    SET "params" = jsonb_build_object('kind', "kind", 'pruned', true)
+    WHERE "status" = 'retired'
+      AND "retiredAt" < ${paramsCutoff}
+      AND NOT ("params" ? 'pruned')
+  `;
 
   const tokenCutoff = new Date(startedAt - env.STALE_TOKEN_RETENTION_DAYS * DAY_MS);
   const deletedTokens = await prisma.token.deleteMany({
@@ -162,6 +177,7 @@ export async function runCleanupJob(env: Env): Promise<void> {
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
     deletedCuratorModels: deletedCuratorModels.count,
+    strippedCuratorModels,
     deletedLinkCodes: deletedLinkCodes.count,
     deletedRevokedDevices: deletedRevokedDevices.count,
     deletedNonces: deletedNonces.count,

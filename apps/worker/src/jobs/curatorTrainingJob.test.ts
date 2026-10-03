@@ -7,11 +7,14 @@ import {
   CURATOR_MODEL_KIND,
   CANDIDATE_FEATURE_NAMES,
   type Env,
+  RULES_MODEL_KIND,
+  STACKED_MODEL_KIND,
+  type ContestantTrainingResult,
+  type StackedCuratorParams,
   type TrainedCuratorParams,
-  type WalkForwardResult,
   type ScoredToken,
 } from "@trenchscanner/core";
-import { applyTrainingResult, loadTrainingRows } from "./curatorTrainingJob.js";
+import { applyContestResults, loadTrainingRows } from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
   emitCuratedCycle,
@@ -49,14 +52,22 @@ function handParams(threshold: number): TrainedCuratorParams {
   };
 }
 
-const promoteVerdict = (promote: boolean): WalkForwardResult => ({
-  folds: [],
-  verdict: { promote, reason: promote ? "test-promote" : "test-hold" },
-  outOfSample: [],
-  heuristicOutOfSample: [],
-  outOfSampleRanks: [],
-  decisionReference: [],
-});
+/** One contest-run result for a contestant, with an empty exam. */
+function result(contestant: string, params: ContestantTrainingResult["params"]): ContestantTrainingResult {
+  return {
+    contestant,
+    params,
+    metrics: {
+      folds: [],
+      verdict: { promote: false, reason: "test" },
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30 },
+      precisionCalibration: { threshold: null, support: 0, winRatePct: null, goalRatePct: null },
+      precisionCurve: [],
+      heuristicPrecisionCurve: [],
+      contestant,
+    },
+  };
+}
 
 /**
  * One candidate through both emission phases, with the governor's flow-derived bars disabled
@@ -103,28 +114,54 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
 
-  it("activates a promoted model and retires the incumbent", async () => {
-    const first = await applyTrainingResult(promoteVerdict(true), handParams(0.5), 2_000, new Date());
-    const second = await applyTrainingResult(promoteVerdict(true), handParams(0.5), 2_500, new Date());
+  it("stores one active row per contestant and retires the previous generation", async () => {
+    const first = await applyContestResults(
+      [
+        result("linear", handParams(0.5)),
+        result("rules", { kind: RULES_MODEL_KIND, minScore: 55, rankCutoff: 80 }),
+      ],
+      2_000,
+      new Date(),
+    );
+    const second = await applyContestResults([result("linear", handParams(0.5))], 2_500, new Date());
 
-    const firstRow = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first } });
-    const secondRow = await prisma.curatorModel.findUniqueOrThrow({ where: { id: second } });
-    expect(firstRow.status).toBe("retired");
-    expect(firstRow.retiredAt).not.toBeNull();
-    expect(secondRow.status).toBe("active");
-    expect(secondRow.activatedAt).not.toBeNull();
+    const firstLinear = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first.get("linear")! } });
+    const firstRules = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first.get("rules")! } });
+    const secondLinear = await prisma.curatorModel.findUniqueOrThrow({
+      where: { id: second.get("linear")! },
+    });
+    expect(firstLinear.status).toBe("retired");
+    expect(firstRules.status).toBe("retired");
+    expect(secondLinear).toMatchObject({ status: "active", contestant: "linear", kind: CURATOR_MODEL_KIND });
+    expect(secondLinear.activatedAt).not.toBeNull();
   });
 
-  it("on a losing evaluation, stores a candidate AND retires the incumbent - heuristic resumes", async () => {
-    await applyTrainingResult(promoteVerdict(true), handParams(0.5), 2_000, new Date());
-    const losing = await applyTrainingResult(promoteVerdict(false), handParams(0.5), 2_500, new Date());
-
-    expect((await prisma.curatorModel.findUniqueOrThrow({ where: { id: losing } })).status).toBe("candidate");
-    expect(await prisma.curatorModel.count({ where: { status: "active" } })).toBe(0);
+  it("writes the consensus after its members, pointing at their new rows", async () => {
+    const stacked: StackedCuratorParams = {
+      kind: STACKED_MODEL_KIND,
+      members: [
+        { contestant: "linear", modelId: "", quantiles: [0.5] },
+        { contestant: "trees", modelId: "", quantiles: [0.5] },
+      ],
+      rules: { quantiles: [50], minScore: 55 },
+      meta: { kind: CURATOR_MODEL_KIND, featureNames: [], means: [], stdevs: [], weights: [], bias: 0 },
+      threshold: 0.5,
+    };
+    // Roster order puts the consensus first; storage must not.
+    const ids = await applyContestResults(
+      [result("consensus", stacked), result("linear", handParams(0.5)), result("trees", handParams(0.5))],
+      2_000,
+      new Date(),
+    );
+    const row = await prisma.curatorModel.findUniqueOrThrow({ where: { id: ids.get("consensus")! } });
+    const members = (row.params as unknown as StackedCuratorParams).members;
+    expect(members.map((m) => m.modelId)).toEqual([ids.get("linear"), ids.get("trees")]);
   });
 
-  it("an active model curates: emits above its threshold with the model row as source", async () => {
-    const modelId = await applyTrainingResult(promoteVerdict(true), handParams(0.9), 2_000, new Date());
+  it("a learner curates on its own ledger: emits above its threshold with the model row as source", async () => {
+    const modelId = (await applyContestResults([result("linear", handParams(0.9))], 2_000, new Date())).get(
+      "linear",
+    )!;
     resetCuratorModelCache();
 
     const hot = await prisma.token.create({ data: { mintAddress: `${TAG}-model-hot` } });
@@ -136,12 +173,13 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
 
     const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: hot.id } });
     expect(alert.source).toBe(modelId);
+    expect(alert.model).toBe("linear");
     expect(alert.confidence).toBeGreaterThan(99);
     expect(alert.reasons.some((r) => r.includes("model signal"))).toBe(true);
   });
 
-  it("an active model also vetoes: nothing emits below its threshold", async () => {
-    await applyTrainingResult(promoteVerdict(true), handParams(0.9), 2_000, new Date());
+  it("a learner also vetoes: nothing emits below its threshold", async () => {
+    await applyContestResults([result("linear", handParams(0.9))], 2_000, new Date());
     resetCuratorModelCache();
 
     const cold = await prisma.token.create({ data: { mintAddress: `${TAG}-model-cold` } });

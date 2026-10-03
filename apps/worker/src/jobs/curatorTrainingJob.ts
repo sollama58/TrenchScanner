@@ -1,11 +1,14 @@
 import {
   prisma,
   createLogger,
-  runCuratorTraining,
+  enabledContestants,
+  runContestTraining,
   NEVER_EMIT_THRESHOLD,
+  STACKED_MODEL_KIND,
+  type ContestantTrainingResult,
+  type StackedCuratorParams,
   type Env,
   type TrainingRow,
-  type TrainedCuratorParams,
   type PrecisionTargets,
   type StoredEvalMetrics,
 } from "@trenchscanner/core";
@@ -16,8 +19,7 @@ const logger = createLogger("curator-training");
 /**
  * Below this many finalized rows there is nothing worth even evaluating - the job logs the count
  * (so the learning panel's "collecting data" phase has a number behind it) and comes back
- * tomorrow. Distinct from CURATOR_MIN_TRAINING_ROWS, which gates PROMOTION - between the two,
- * the job trains and records candidate models whose evaluations are visible but powerless.
+ * at the next run.
  */
 const MIN_ROWS_TO_TRAIN = 300;
 
@@ -25,12 +27,10 @@ const MIN_ROWS_TO_TRAIN = 300;
 export { NEVER_EMIT_THRESHOLD, type StoredEvalMetrics };
 
 /**
- * The learner, run every CURATOR_TRAINING_INTERVAL_HOURS. Loads the rolling window of finalized
- * training rows, walk-forward evaluates the model family against the live heuristic on that same
- * history, trains the deployable model on the full window, and stores it all as one CuratorModel
- * row - active if the evaluation earned promotion, candidate otherwise. See applyTrainingResult
- * for how activation and fallback work; see packages/core/src/curation/trainer.ts for every piece
- * of math.
+ * The curator contest's training run, every CURATOR_TRAINING_INTERVAL_HOURS. Loads the rolling
+ * window of finalized training rows, walk-forward examines every learner contestant on that same
+ * history, trains each one's deployable model on the full window, stacks the consensus on their
+ * out-of-sample calls, and stores one CuratorModel row per contestant (see applyContestResults).
  */
 export async function runCuratorTrainingJob(env: Env): Promise<void> {
   const startedAt = Date.now();
@@ -57,10 +57,10 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
-  // Every enabled model family sits the same walk-forward exam; the one with the better
-  // out-of-sample hit-rate record is trained on the full window and stored (see
-  // runCuratorTraining in packages/core/src/curation/trainingRun.ts for all the math).
-  const { params, metrics, evaluation } = await runCuratorTraining(trainingRows, {
+  // Every learner contestant sits the same walk-forward exam and ships its own model at its own
+  // cutoff; the consensus is stacked on their out-of-sample calls (see runContestTraining in
+  // packages/core/src/curation/trainingRun.ts for all the math).
+  const results = await runContestTraining(trainingRows, {
     targets,
     targetPerHour: env.CURATED_TARGET_PER_HOUR,
     heuristicMinScore: env.CURATED_MIN_SCORE,
@@ -69,38 +69,79 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
     cooldownHours: env.CURATED_ALERT_COOLDOWN_HOURS,
     heuristicPrecisionGate: env.CURATED_HEURISTIC_PRECISION_GATE,
-    learners: env.CURATOR_MODEL_FAMILIES,
+    contestants: enabledContestants(env.CURATOR_CONTESTANTS),
   });
-  const { verdict, precisionCalibration } = metrics;
+  if (results.length === 0) {
+    logger.info("contest training produced nothing to store", { rows: trainingRows.length });
+    return;
+  }
 
-  const modelId = await applyTrainingResult(metrics, params, trainingRows.length, windowStart);
+  const modelIds = await applyContestResults(results, trainingRows.length, windowStart);
 
-  logger.info("curator training complete", {
+  logger.info("curator contest training complete", {
     durationMs: Date.now() - startedAt,
     rows: trainingRows.length,
-    folds: evaluation.folds.length,
-    promoted: verdict.promote,
-    verdict: verdict.reason,
-    threshold: params.threshold,
-    rankCutoff: precisionCalibration.threshold,
-    calibration: precisionCalibration,
-    heuristicCalibration: metrics.heuristicCalibration,
-    learner: metrics.learner,
-    families: metrics.familyComparison,
-    modelId,
+    contestants: results.map((r) => ({
+      contestant: r.contestant,
+      modelId: modelIds.get(r.contestant),
+      threshold: "threshold" in r.params ? r.params.threshold : null,
+      calibration: r.metrics.precisionCalibration,
+      exam: r.metrics.exam,
+    })),
   });
 }
 
 /**
- * Records the trained model and applies the verdict, atomically:
- *  - promote: any currently active model retires, the new one activates. The curator changes
- *    hands between two scan cycles, and the retired row remains as the audit trail.
- *  - no promote: the new model is stored as a candidate AND any currently active model retires
- *    too. That second part is deliberate: tonight's evaluation is the freshest evidence about
- *    this model family on this market, and it just said "does not beat the heuristic" - an old
- *    model staying live against newer contrary evidence is how feeds quietly rot. Fallback is
- *    the heuristic, which never rots because it never changes.
+ * Stores one run's contestants atomically: every currently active or candidate model retires
+ * (whatever generation - single-curator rows from before the contest too) and the run's rows go
+ * live, one per contestant. The consensus row is written last, with its members' new row ids, so
+ * the roster can check it is reading the generation it was stacked on. Returns contestant -> id.
  */
+export async function applyContestResults(
+  results: ContestantTrainingResult[],
+  trainingRows: number,
+  trainingFrom: Date,
+): Promise<Map<string, string>> {
+  const now = new Date();
+  // The consensus references its members, so it goes after them.
+  const ordered = [...results].sort(
+    (a, b) => Number(a.params.kind === STACKED_MODEL_KIND) - Number(b.params.kind === STACKED_MODEL_KIND),
+  );
+  return prisma.$transaction(async (tx) => {
+    await tx.curatorModel.updateMany({
+      where: { status: { in: ["active", "candidate"] } },
+      data: { status: "retired", retiredAt: now },
+    });
+    const ids = new Map<string, string>();
+    for (const result of ordered) {
+      let params = result.params;
+      if (params.kind === STACKED_MODEL_KIND) {
+        const stacked = params as StackedCuratorParams;
+        params = {
+          ...stacked,
+          members: stacked.members.map((m) => ({ ...m, modelId: ids.get(m.contestant) ?? "" })),
+        };
+      }
+      const created = await tx.curatorModel.create({
+        data: {
+          contestant: result.contestant,
+          kind: params.kind,
+          params: params as unknown as Prisma.InputJsonValue,
+          trainingRows,
+          trainingFrom,
+          trainingTo: now,
+          evalMetrics: result.metrics as unknown as Prisma.InputJsonValue,
+          status: "active",
+          activatedAt: now,
+        },
+        select: { id: true },
+      });
+      ids.set(result.contestant, created.id);
+    }
+    return ids;
+  });
+}
+
 /** Rows fetched per query - keeps the driver's raw result for any one page small. */
 const LOAD_PAGE_ROWS = 5_000;
 
@@ -156,38 +197,4 @@ export async function loadTrainingRows(
     cursor = page[page.length - 1]!.id;
   }
   return out;
-}
-
-export async function applyTrainingResult(
-  evaluation: Pick<StoredEvalMetrics, "folds" | "verdict"> & Partial<StoredEvalMetrics>,
-  params: TrainedCuratorParams,
-  trainingRows: number,
-  trainingFrom: Date,
-): Promise<string> {
-  const now = new Date();
-  // The raw per-row exam evidence never goes into the row - it is one entry per training sample.
-  const stored: Record<string, unknown> = { ...evaluation };
-  delete stored.outOfSample;
-  delete stored.heuristicOutOfSample;
-  delete stored.outOfSampleRanks;
-  delete stored.decisionReference;
-  return prisma.$transaction(async (tx) => {
-    await tx.curatorModel.updateMany({
-      where: { status: "active" },
-      data: { status: "retired", retiredAt: now },
-    });
-    const created = await tx.curatorModel.create({
-      data: {
-        kind: params.kind,
-        params: params as unknown as Prisma.InputJsonValue,
-        trainingRows,
-        trainingFrom,
-        trainingTo: now,
-        evalMetrics: stored as Prisma.InputJsonValue,
-        status: evaluation.verdict.promote ? "active" : "candidate",
-        activatedAt: evaluation.verdict.promote ? now : null,
-      },
-    });
-    return created.id;
-  });
 }
