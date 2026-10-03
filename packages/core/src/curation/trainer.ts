@@ -1,6 +1,16 @@
 import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, scoredFromFeatures } from "./features.js";
 import { curationRankScore, evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator.js";
 import { CANDIDATE_WATCH_WINDOW_MINUTES, GOAL_MULTIPLE } from "./labels.js";
+import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
+import {
+  BOOSTED_MODEL_KIND,
+  boostedContributions,
+  scoreBoosted,
+  trainBoostedCurator,
+  type BoostedCuratorParams,
+} from "./boosting.js";
+
+export { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform };
 
 /**
  * The self-learning half of Curated Alerts: a weighted logistic regression trained on the
@@ -46,7 +56,7 @@ export const CURATOR_MODEL_KIND = "weighted-logistic-v1";
  * information), and indicators let the model learn that signal instead of having fake zeros
  * quietly poison the real ones. weights has length 2n: [values..., indicators...].
  */
-export interface TrainedCuratorParams {
+export interface LogisticCuratorParams {
   kind: typeof CURATOR_MODEL_KIND;
   featureNames: string[];
   means: number[];
@@ -64,44 +74,33 @@ export interface TrainedCuratorParams {
 }
 
 /**
- * "signed-log1p-v1": heavy-tailed features (dollar amounts, counts, ratios, % moves) go through
- * sign(x) * log(1 + |x|) before standardization. A linear model on raw values lets one $5M
- * volume print or a +4000% candle dominate every coefficient it touches; on a log scale a 10x
- * difference is one step whatever the magnitude.
+ * A stored curator model of either family. Readers switch on `kind`; a kind not listed in
+ * SUPPORTED_CURATOR_MODEL_KINDS must be ignored, never half-applied.
  */
-export type FeatureTransform = "signed-log1p-v1";
-export const CURRENT_FEATURE_TRANSFORM: FeatureTransform = "signed-log1p-v1";
+export type TrainedCuratorParams = LogisticCuratorParams | BoostedCuratorParams;
+
+/** A model before its emission cutoff is set (Omit over each family - Omit on a union would merge them). */
+export type UnthresholdedCuratorParams =
+  Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;
+
+export const SUPPORTED_CURATOR_MODEL_KINDS: readonly string[] = [CURATOR_MODEL_KIND, BOOSTED_MODEL_KIND];
 
 /**
- * Features left on their raw scale under the log transform: already bounded (0-100 scores and
- * shares, 0/1 flags) or small counts where a log adds nothing.
+ * The model families the training job can fit: "logistic" (trainCurator below) and "gbdt"
+ * (boosting.ts). Each run examines every enabled family and ships the one with the better
+ * out-of-sample hit rate - see pickCuratorFamily.
  */
-const UNTRANSFORMED_FEATURES = new Set([
-  "buyRatio24h",
-  "buyRatio1h",
-  "top10HolderPct",
-  "devWalletPct",
-  "riskScore",
-  "freshTop10WalletPct",
-  "emptyTop10WalletPct",
-  "graduated",
-  "hasTwitter",
-  "hasTelegram",
-  "hasWebsite",
-  "hasDescription",
-  "dexBoosted",
-  "narrativeTagCount",
-  "scoreMomentum",
-  "scoreHolderHealth",
-  "scoreAge",
-  "scoreNarrative",
-  "scoreTotal",
-]);
+export type CuratorLearner = "logistic" | "gbdt";
+export const CURATOR_LEARNERS: readonly CuratorLearner[] = ["logistic", "gbdt"];
 
-/** Applies a model's feature transform to one raw value. */
-export function transformFeature(name: string, raw: number, transform: FeatureTransform | undefined): number {
-  if (transform === undefined || UNTRANSFORMED_FEATURES.has(name)) return raw;
-  return Math.sign(raw) * Math.log1p(Math.abs(raw));
+/** Trains one model of the given family. */
+export async function trainCuratorModel(
+  rows: TrainingRow[],
+  opts: TrainOptions & { learner?: CuratorLearner } = {},
+): Promise<UnthresholdedCuratorParams> {
+  return opts.learner === "gbdt"
+    ? trainBoostedCurator(rows, { recencyHalfLifeDays: opts.recencyHalfLifeDays })
+    : trainCurator(rows, opts);
 }
 
 const LEARNING_RATE = 0.5;
@@ -193,7 +192,7 @@ export interface TrainOptions {
 export async function trainCurator(
   rows: TrainingRow[],
   opts: TrainOptions = {},
-): Promise<Omit<TrainedCuratorParams, "threshold">> {
+): Promise<Omit<LogisticCuratorParams, "threshold">> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const featureNames = [...CANDIDATE_FEATURE_NAMES];
   const n = featureNames.length;
@@ -265,9 +264,10 @@ export async function trainCurator(
 
 /** Predicted probability of a clean 2x-within-1-hour for one candidate's feature vector. */
 export function scoreCandidateWithModel(
-  params: Omit<TrainedCuratorParams, "threshold">,
+  params: UnthresholdedCuratorParams,
   features: Record<string, number | null | undefined>,
 ): number {
+  if (params.kind === BOOSTED_MODEL_KIND) return scoreBoosted(params, features);
   const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
   let z = params.bias;
   for (let j = 0; j < x.length; j++) z += params.weights[j]! * x[j]!;
@@ -282,7 +282,7 @@ export function scoreCandidateWithModel(
  * production cooldown enforces.
  */
 export function calibrateThreshold(
-  params: Omit<TrainedCuratorParams, "threshold">,
+  params: UnthresholdedCuratorParams,
   rows: TrainingRow[],
   targetPerHour: number,
 ): number {
@@ -326,6 +326,35 @@ export interface PrecisionTargets {
   winRate: number;
   goalRate: number;
   minSupport: number;
+  /**
+   * How sure a cutoff's record must make us, as a normal z-score: a cutoff qualifies only when
+   * the Wilson lower bound of its hit rates (not the rates themselves) meets the targets. Picking
+   * the lowest of hundreds of candidate cutoffs that happens to show 75% on the evidence is a
+   * best-of-many search, and it favours cutoffs that got lucky - 23 of 30 is 77%, but the same
+   * pick could easily run at 60% live. A bound shrinks a thin record toward caution and lets a
+   * well-supported one through. 0 or omitted = judge the observed rates (the old rule).
+   */
+  confidenceZ?: number;
+}
+
+/**
+ * Wilson score lower bound for a hit rate of `hits` out of `n` at normal z-score `z`. Unlike
+ * hits/n minus a fixed margin, it stays inside [0, 1] and is honest at small n and rates near 1.
+ */
+export function wilsonLowerBound(hits: number, n: number, z: number): number {
+  if (n === 0) return 0;
+  const p = hits / n;
+  if (z <= 0) return p;
+  const z2 = z * z;
+  const centre = p + z2 / (2 * n);
+  const margin = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
+  return Math.max(0, (centre - margin) / (1 + z2 / n));
+}
+
+/** Whether a cutoff's record (wins and goals of n alerts) meets the targets - see confidenceZ. */
+function meetsTargets(wins: number, goals: number, n: number, targets: PrecisionTargets): boolean {
+  const z = targets.confidenceZ ?? 0;
+  return wilsonLowerBound(wins, n, z) >= targets.winRate && wilsonLowerBound(goals, n, z) >= targets.goalRate;
 }
 
 /** labelValue is log2 of the peak multiple for clean wins, so the goal is labelValue >= log2(4). */
@@ -380,7 +409,7 @@ export function calibrateThresholdForPrecision(
     const winRate = wins / n;
     const goalRate = goals / n;
     const point = { support: n, winRatePct: winRate * 100, goalRatePct: goalRate * 100 };
-    if (winRate >= targets.winRate && goalRate >= targets.goalRate) {
+    if (meetsTargets(wins, goals, n, targets)) {
       chosen = { threshold: call.probability, ...point };
     } else if (chosen === null && (best.winRatePct === null || winRate * 100 > best.winRatePct)) {
       best = { threshold: null, ...point };
@@ -438,7 +467,7 @@ function calibrateWithCooldown(
     const winRate = wins / n;
     const goalRate = goals / n;
     const point = { support: n, winRatePct: winRate * 100, goalRatePct: goalRate * 100 };
-    if (winRate >= targets.winRate && goalRate >= targets.goalRate) {
+    if (meetsTargets(wins, goals, n, targets)) {
       chosen = { threshold: cutoff, ...point };
     } else if (chosen === null && (best.winRatePct === null || winRate * 100 > best.winRatePct)) {
       best = { threshold: null, ...point };
@@ -485,16 +514,21 @@ export function precisionCurve(calls: ScoredOutcome[]): PrecisionCurvePoint[] {
  * input), positive ones only.
  */
 export function topModelReasons(
-  params: Omit<TrainedCuratorParams, "threshold">,
+  params: UnthresholdedCuratorParams,
   features: Record<string, number | null | undefined>,
   limit = 4,
 ): string[] {
-  const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
-  const n = params.featureNames.length;
-  const contributions = params.featureNames.map((name, j) => ({
-    name,
-    value: params.weights[j]! * x[j]! + params.weights[n + j]! * x[n + j]!,
-  }));
+  let contributions: { name: string; value: number }[];
+  if (params.kind === BOOSTED_MODEL_KIND) {
+    contributions = [...boostedContributions(params, features)].map(([name, value]) => ({ name, value }));
+  } else {
+    const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
+    const n = params.featureNames.length;
+    contributions = params.featureNames.map((name, j) => ({
+      name,
+      value: params.weights[j]! * x[j]! + params.weights[n + j]! * x[n + j]!,
+    }));
+  }
   return contributions
     .filter((c) => c.value > 0)
     .sort((a, b) => b.value - a.value)
@@ -616,6 +650,8 @@ export interface WalkForwardOptions {
    * cutoff (only meaningful with targets). Default true.
    */
   heuristicPrecisionGate?: boolean;
+  /** Which model family the folds train. Default "logistic". */
+  learner?: CuratorLearner;
 }
 
 /** Whether a row is a moment a live curator decides on - see WalkForwardOptions.decisionRowsOnly. */
@@ -702,7 +738,10 @@ export async function walkForwardEvaluate(
         );
       if (train.length < minTrainRows || test.length < minTestRows) continue;
 
-      const params = await trainCurator(train, { recencyHalfLifeDays: opts.recencyHalfLifeDays });
+      const params = await trainCuratorModel(train, {
+        recencyHalfLifeDays: opts.recencyHalfLifeDays,
+        learner: opts.learner,
+      });
       // Without targets the model plays the pace cutoff, calibrated on the band-filtered train
       // slice - a threshold ranked against unemittable rows grades a model production never
       // ships. Training itself stays full-window (mcap is a feature).
@@ -850,7 +889,7 @@ function lowerBound(ascending: number[], value: number): number {
  * reference rows there is nothing to translate against - null, and the model sends nothing.
  */
 export function thresholdAtRank(
-  params: Omit<TrainedCuratorParams, "threshold">,
+  params: UnthresholdedCuratorParams,
   referenceRows: TrainingRow[],
   rankCutoff: number,
 ): number | null {

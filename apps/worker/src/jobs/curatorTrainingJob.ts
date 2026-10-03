@@ -1,19 +1,13 @@
 import {
   prisma,
   createLogger,
-  trainCurator,
-  calibrateThresholdForPrecision,
-  precisionCurve,
-  thresholdAtRank,
-  walkForwardEvaluate,
-  CURATOR_MODEL_KIND,
+  runCuratorTraining,
+  NEVER_EMIT_THRESHOLD,
   type Env,
   type TrainingRow,
   type TrainedCuratorParams,
-  type PrecisionCalibration,
-  type PrecisionCurvePoint,
   type PrecisionTargets,
-  type WalkForwardResult,
+  type StoredEvalMetrics,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 
@@ -27,33 +21,8 @@ const logger = createLogger("curator-training");
  */
 const MIN_ROWS_TO_TRAIN = 300;
 
-/**
- * The threshold a model gets when no cutoff met the hit-rate targets: above any probability the
- * sigmoid can produce, so it sends nothing. A finite number on purpose - params are stored as
- * JSON, and Infinity would round-trip as null.
- */
-export const NEVER_EMIT_THRESHOLD = 1.01;
-
-/** What the training job stores as CuratorModel.evalMetrics: the exam plus the hit-rate evidence. */
-export interface StoredEvalMetrics {
-  folds: WalkForwardResult["folds"];
-  verdict: WalkForwardResult["verdict"];
-  targets: PrecisionTargets;
-  /**
-   * The model's hit-rate cutoff in CONFIDENCE-RANK units (share of decision moments scored lower
-   * - see WalkForwardResult.outOfSampleRanks), with the hit rate it earned out of sample. The
-   * shipped model's probability cutoff translated from it is params.threshold.
-   */
-  precisionCalibration: PrecisionCalibration;
-  /** The model's hit-rate curve, also in rank units. */
-  precisionCurve: PrecisionCurvePoint[];
-  /**
-   * The heuristic's hit-rate cutoff, in rank-score units - see heuristicCutoff in curatedAlerts.ts.
-   * Absent when the exam had too few heuristic calls to judge any cutoff.
-   */
-  heuristicCalibration?: PrecisionCalibration;
-  heuristicPrecisionCurve: PrecisionCurvePoint[];
-}
+// Moved to core (curation/trainingRun.ts) with the run logic; re-exported for existing callers.
+export { NEVER_EMIT_THRESHOLD, type StoredEvalMetrics };
 
 /**
  * The learner, run every CURATOR_TRAINING_INTERVAL_HOURS. Loads the rolling window of finalized
@@ -110,83 +79,23 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
     goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
     minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
+    confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
-  const mcapBand = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
-  const evaluation = await walkForwardEvaluate(trainingRows, {
+  // Every enabled model family sits the same walk-forward exam; the one with the better
+  // out-of-sample hit-rate record is trained on the full window and stored (see
+  // runCuratorTraining in packages/core/src/curation/trainingRun.ts for all the math).
+  const { params, metrics, evaluation } = await runCuratorTraining(trainingRows, {
+    targets,
     targetPerHour: env.CURATED_TARGET_PER_HOUR,
     heuristicMinScore: env.CURATED_MIN_SCORE,
-    // Emission enforces the band before either curator runs (see maybeEmitCuratedAlert), so the
-    // exam has to as well - otherwise it grades emissions production never makes.
-    mcapBand,
+    mcapBand: { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX },
     minRowsToPromote: env.CURATOR_MIN_TRAINING_ROWS,
     recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
-    // Graded and calibrated on event rows only - the moments live curators actually decide on.
-    decisionRowsOnly: true,
     cooldownHours: env.CURATED_ALERT_COOLDOWN_HOURS,
-    // Both sides are graded at the hit-rate cutoffs production holds them to, not at a pace.
-    targets,
     heuristicPrecisionGate: env.CURATED_HEURISTIC_PRECISION_GATE,
+    learners: env.CURATOR_MODEL_FAMILIES,
   });
-
-  // The deployable model trains on the FULL window - the walk-forward folds were the exam, this
-  // is the model that actually ships, with strictly more (and newer) data than any fold saw.
-  // Out-of-band samples still teach (mcap is a feature).
-  const trained = await trainCurator(trainingRows, {
-    recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
-  });
-
-  // Its cutoff is set by HIT RATE, from the exam's out-of-sample calls (in-band only - the only
-  // rows it will ever be applied to): the lowest confidence at which those calls met the targets.
-  // When none did, the model sends nothing and cannot take the job - a model that can't reach
-  // the bar on history it never saw has no business vouching for live tokens.
-  //
-  // Calibrated in RANK units, then translated: each fold model and the shipped model put
-  // probabilities on their own scales, so a raw probability that hit 75% on the fold models
-  // says nothing about the same number on this one. "The top r of decision moments" does carry
-  // over - thresholdAtRank finds the shipped model's probability for it.
-  //
-  // Both cutoffs replay the per-token alert cooldown, so their support counts alerts the feed would
-  // actually have sent rather than every hourly sample of a token that stayed hot.
-  const cooldown = { cooldownMs: env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000 };
-  const precisionCalibration = calibrateThresholdForPrecision(evaluation.outOfSampleRanks, targets, cooldown);
-  const deployedThreshold =
-    precisionCalibration.threshold === null
-      ? null
-      : thresholdAtRank(trained, evaluation.decisionReference, precisionCalibration.threshold);
-  // The hand-tuned heuristic is held to the same bar while it holds the job: its rank-score
-  // cutoff comes from its own out-of-sample record (see heuristicOutOfSample). Read at emission
-  // time by curatedAlerts.ts from the newest CuratorModel row's evalMetrics. Its rank score is
-  // a fixed formula, so its cutoff needs no translation.
-  const heuristicCalibration = calibrateThresholdForPrecision(
-    evaluation.heuristicOutOfSample,
-    targets,
-    cooldown,
-  );
-  const params: TrainedCuratorParams = {
-    ...trained,
-    threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD,
-  };
-  const verdict =
-    evaluation.verdict.promote && deployedThreshold === null
-      ? {
-          promote: false,
-          reason: `${evaluation.verdict.reason.replace(" - promoting", "")}, but no cutoff reached ${env.CURATED_TARGET_WIN_RATE_PCT}% at 2x and ${env.CURATED_TARGET_GOAL_RATE_PCT}% at 4x - keeping current curator`,
-        }
-      : evaluation.verdict;
-  const metrics: StoredEvalMetrics = {
-    folds: evaluation.folds,
-    verdict,
-    targets,
-    precisionCalibration,
-    precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
-    // Stored only when there was evidence to judge on - some cutoff produced at least
-    // CURATED_MIN_CALIBRATION_ALERTS calls. Without it the heuristic keeps sending on its gate
-    // alone (see heuristicGate in curatedAlerts.ts) rather than being silenced by an empty exam.
-    ...(heuristicCalibration.threshold !== null || heuristicCalibration.support > 0
-      ? { heuristicCalibration }
-      : {}),
-    heuristicPrecisionCurve: precisionCurve(evaluation.heuristicOutOfSample),
-  };
+  const { verdict, precisionCalibration } = metrics;
 
   const modelId = await applyTrainingResult(metrics, params, trainingRows.length, windowStart);
 
@@ -199,7 +108,9 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     threshold: params.threshold,
     rankCutoff: precisionCalibration.threshold,
     calibration: precisionCalibration,
-    heuristicCalibration,
+    heuristicCalibration: metrics.heuristicCalibration,
+    learner: metrics.learner,
+    families: metrics.familyComparison,
     modelId,
   });
 }
@@ -234,7 +145,7 @@ export async function applyTrainingResult(
     });
     const created = await tx.curatorModel.create({
       data: {
-        kind: CURATOR_MODEL_KIND,
+        kind: params.kind,
         params: params as unknown as Prisma.InputJsonValue,
         trainingRows,
         trainingFrom,

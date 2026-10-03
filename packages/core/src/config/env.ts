@@ -247,6 +247,24 @@ const envSchema = z.object({
   CURATED_TARGET_WIN_RATE_PCT: z.coerce.number().min(0).max(100).default(75),
   CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
   CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(30),
+  // How sure a cutoff's out-of-sample record must make us, as a normal z-score: the cutoff only
+  // qualifies when the Wilson LOWER BOUND of its hit rates meets the targets above. Choosing the
+  // lowest of hundreds of cutoffs that shows 75% favours lucky ones; the bound discounts a thin
+  // record and lets a well-supported one through. 0 = judge the observed rates (the old rule).
+  CURATED_CALIBRATION_CONFIDENCE_Z: z.coerce.number().min(0).max(4).default(1),
+  // Model families each training run examines, comma-separated: "logistic" (weighted logistic
+  // regression) and/or "gbdt" (gradient-boosted trees). All sit the same walk-forward exam and
+  // the one with the better out-of-sample hit-rate record ships (see pickCuratorFamily).
+  CURATOR_MODEL_FAMILIES: z
+    .string()
+    .default("logistic,gbdt")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    )
+    .pipe(z.array(z.enum(["logistic", "gbdt"])).min(1)),
   // Holds the hand-tuned heuristic to the same targets while it is the live curator: it only
   // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned
   // in the newest training run, and sends nothing when no cutoff met the targets. Before the

@@ -9,7 +9,7 @@ import {
   topModelReasons,
   governorCapacity,
   selectEmissions,
-  CURATOR_MODEL_KIND,
+  SUPPORTED_CURATOR_MODEL_KINDS,
   GOVERNOR_BURST_WINDOW_MINUTES,
   type CurationDecision,
   type Env,
@@ -64,11 +64,11 @@ async function curatorRoster(): Promise<CuratorRoster> {
     row ? { id: row.id, params: row.params as TrainedCuratorParams } : null;
   const [active, newestCandidate, newestRun] = await Promise.all([
     prisma.curatorModel.findFirst({
-      where: { status: "active", kind: CURATOR_MODEL_KIND },
+      where: { status: "active", kind: { in: [...SUPPORTED_CURATOR_MODEL_KINDS] } },
       orderBy: { activatedAt: "desc" },
     }),
     prisma.curatorModel.findFirst({
-      where: { status: "candidate", kind: CURATOR_MODEL_KIND },
+      where: { status: "candidate", kind: { in: [...SUPPORTED_CURATOR_MODEL_KINDS] } },
       orderBy: { createdAt: "desc" },
     }),
     prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" }, select: { evalMetrics: true } }),
