@@ -1,6 +1,6 @@
 import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, scoredFromFeatures } from "./features.js";
 import { curationRankScore, evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator.js";
-import { GOAL_MULTIPLE } from "./labels.js";
+import { CANDIDATE_WATCH_WINDOW_MINUTES, GOAL_MULTIPLE } from "./labels.js";
 
 /**
  * The self-learning half of Curated Alerts: a weighted logistic regression trained on the
@@ -29,6 +29,12 @@ export interface TrainingRow {
    * decision moment (tests, and callers with no sampling distinction).
    */
   sampleKind?: string;
+  /**
+   * Which token the row samples. Optional so pure tests can omit it; when present the
+   * walk-forward exam keeps a token out of the training slice of any fold it is tested in, and
+   * replays the per-token alert cooldown production enforces.
+   */
+  tokenId?: string;
 }
 
 export const CURATOR_MODEL_KIND = "weighted-logistic-v1";
@@ -49,6 +55,53 @@ export interface TrainedCuratorParams {
   bias: number;
   /** Emit when predicted probability >= this - calibrated by calibrateThreshold. */
   threshold: number;
+  /**
+   * How raw feature values are reshaped before standardization - see transformFeature. Absent
+   * on models trained before transforms existed, which keep scoring on raw values exactly as
+   * they were trained.
+   */
+  transform?: FeatureTransform;
+}
+
+/**
+ * "signed-log1p-v1": heavy-tailed features (dollar amounts, counts, ratios, % moves) go through
+ * sign(x) * log(1 + |x|) before standardization. A linear model on raw values lets one $5M
+ * volume print or a +4000% candle dominate every coefficient it touches; on a log scale a 10x
+ * difference is one step whatever the magnitude.
+ */
+export type FeatureTransform = "signed-log1p-v1";
+export const CURRENT_FEATURE_TRANSFORM: FeatureTransform = "signed-log1p-v1";
+
+/**
+ * Features left on their raw scale under the log transform: already bounded (0-100 scores and
+ * shares, 0/1 flags) or small counts where a log adds nothing.
+ */
+const UNTRANSFORMED_FEATURES = new Set([
+  "buyRatio24h",
+  "buyRatio1h",
+  "top10HolderPct",
+  "devWalletPct",
+  "riskScore",
+  "freshTop10WalletPct",
+  "emptyTop10WalletPct",
+  "graduated",
+  "hasTwitter",
+  "hasTelegram",
+  "hasWebsite",
+  "hasDescription",
+  "dexBoosted",
+  "narrativeTagCount",
+  "scoreMomentum",
+  "scoreHolderHealth",
+  "scoreAge",
+  "scoreNarrative",
+  "scoreTotal",
+]);
+
+/** Applies a model's feature transform to one raw value. */
+export function transformFeature(name: string, raw: number, transform: FeatureTransform | undefined): number {
+  if (transform === undefined || UNTRANSFORMED_FEATURES.has(name)) return raw;
+  return Math.sign(raw) * Math.log1p(Math.abs(raw));
 }
 
 const LEARNING_RATE = 0.5;
@@ -78,6 +131,7 @@ function vectorize(
   featureNames: string[],
   means: number[],
   stdevs: number[],
+  transform: FeatureTransform | undefined,
 ): number[] {
   const n = featureNames.length;
   const x = new Array<number>(2 * n).fill(0);
@@ -86,7 +140,7 @@ function vectorize(
     if (raw === null || raw === undefined || !Number.isFinite(raw)) {
       x[n + j] = 1;
     } else {
-      x[j] = (raw - means[j]!) / stdevs[j]!;
+      x[j] = (transformFeature(featureNames[j]!, raw, transform) - means[j]!) / stdevs[j]!;
     }
   }
   return x;
@@ -126,12 +180,15 @@ export interface TrainOptions {
 }
 
 /**
- * Trains the model on labeled rows. Sample weights encode the "prefer higher multiples" choice:
- * a loss weighs 1, a winner weighs 1 + labelValue - so a clean 16x (label 4) pulls the boundary
- * five times as hard as any single loss, exactly its worth in doublings. On top of that,
- * recencyHalfLifeDays (when set) decays every weight by the row's age: this market's meta
+ * Trains the model on labeled rows. Every row weighs the same: the output is used as a
+ * probability (the cutoff is set by hit rate), and weighting winners by how far they ran - as
+ * this once did, 1 + labelValue - inflates every predicted probability toward the big runs.
+ * recencyHalfLifeDays (when set) decays each weight by the row's age: this market's meta
  * rotates in weeks, and an equal-weighted long window spends a third of its gradient learning a
  * regime that no longer exists.
+ *
+ * Features go through CURRENT_FEATURE_TRANSFORM before standardization, and the model records
+ * which transform it was trained with so scoring applies the same one.
  */
 export async function trainCurator(
   rows: TrainingRow[],
@@ -140,6 +197,7 @@ export async function trainCurator(
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const featureNames = [...CANDIDATE_FEATURE_NAMES];
   const n = featureNames.length;
+  const transform = CURRENT_FEATURE_TRANSFORM;
 
   // Standardization stats over PRESENT values only - missing values are represented by the
   // indicator half of the vector, never imputed into the mean.
@@ -148,7 +206,8 @@ export async function trainCurator(
   for (let j = 0; j < n; j++) {
     const present = rows
       .map((r) => r.features[featureNames[j]!])
-      .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+      .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v))
+      .map((v) => transformFeature(featureNames[j]!, v, transform));
     if (present.length === 0) continue;
     const mean = present.reduce((s, v) => s + v, 0) / present.length;
     const variance = present.reduce((s, v) => s + (v - mean) ** 2, 0) / present.length;
@@ -156,9 +215,9 @@ export async function trainCurator(
     stdevs[j] = variance > 0 ? Math.sqrt(variance) : 1;
   }
 
-  const xs = rows.map((r) => vectorize(r.features, featureNames, means, stdevs));
+  const xs = rows.map((r) => vectorize(r.features, featureNames, means, stdevs, transform));
   const ys = rows.map((r) => (r.labelValue > 0 ? 1 : 0));
-  const sampleWeights = rows.map((r) => 1 + Math.max(0, r.labelValue));
+  const sampleWeights = rows.map(() => 1);
   if (opts.recencyHalfLifeDays !== undefined && opts.recencyHalfLifeDays > 0) {
     const newestMs = maxAnchorMs(rows);
     const halfLifeMs = opts.recencyHalfLifeDays * 86_400_000;
@@ -201,7 +260,7 @@ export async function trainCurator(
     bias -= lr * (gradBias / totalWeight);
   }
 
-  return { kind: CURATOR_MODEL_KIND, featureNames, means, stdevs, weights, bias };
+  return { kind: CURATOR_MODEL_KIND, featureNames, means, stdevs, weights, bias, transform };
 }
 
 /** Predicted probability of a clean 2x-within-1-hour for one candidate's feature vector. */
@@ -209,7 +268,7 @@ export function scoreCandidateWithModel(
   params: Omit<TrainedCuratorParams, "threshold">,
   features: Record<string, number | null | undefined>,
 ): number {
-  const x = vectorize(features, params.featureNames, params.means, params.stdevs);
+  const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
   let z = params.bias;
   for (let j = 0; j < x.length; j++) z += params.weights[j]! * x[j]!;
   return sigmoid(z);
@@ -249,6 +308,12 @@ export function calibrateThreshold(
 export interface ScoredOutcome {
   probability: number;
   labelValue: number;
+  /**
+   * The row's token and moment. When both are present on every call and a cooldown is given,
+   * calibration replays production's per-token alert cooldown (see calibrateThresholdForPrecision).
+   */
+  tokenId?: string;
+  anchorAt?: Date;
 }
 
 /**
@@ -289,7 +354,15 @@ export interface PrecisionCalibration {
 export function calibrateThresholdForPrecision(
   calls: ScoredOutcome[],
   targets: PrecisionTargets,
+  opts: { cooldownMs?: number } = {},
 ): PrecisionCalibration {
+  if (
+    opts.cooldownMs !== undefined &&
+    calls.length > 0 &&
+    calls.every((c) => c.tokenId !== undefined && c.anchorAt !== undefined)
+  ) {
+    return calibrateWithCooldown(calls, targets, opts.cooldownMs);
+  }
   const sorted = [...calls].sort((a, b) => b.probability - a.probability);
   let wins = 0;
   let goals = 0;
@@ -309,6 +382,64 @@ export function calibrateThresholdForPrecision(
     const point = { support: n, winRatePct: winRate * 100, goalRatePct: goalRate * 100 };
     if (winRate >= targets.winRate && goalRate >= targets.goalRate) {
       chosen = { threshold: call.probability, ...point };
+    } else if (chosen === null && (best.winRatePct === null || winRate * 100 > best.winRatePct)) {
+      best = { threshold: null, ...point };
+    }
+  }
+  return chosen ?? best;
+}
+
+/** How many candidate cutoffs the cooldown-aware calibration evaluates at most. */
+const COOLDOWN_CALIBRATION_GRID = 400;
+
+/**
+ * The cutoff search, replaying the per-token alert cooldown. In production a token is alerted
+ * the FIRST time it clears the cutoff and then not again for the cooldown, so the calls a cutoff
+ * really sends are not "every row above it" - hourly samples of one hot token would otherwise
+ * count many times and make a cutoff look better supported (and usually more accurate) than the
+ * feed it produces. For each candidate cutoff the calls are walked in time order and a token's
+ * call only counts when it is the first above the cutoff since that token's last counted call
+ * plus the cooldown.
+ *
+ * That makes each cutoff a full pass, so cutoffs are taken from a grid over the distinct
+ * probabilities (at most COOLDOWN_CALIBRATION_GRID of them) rather than all of them.
+ */
+function calibrateWithCooldown(
+  calls: ScoredOutcome[],
+  targets: PrecisionTargets,
+  cooldownMs: number,
+): PrecisionCalibration {
+  const byTime = [...calls].sort((a, b) => a.anchorAt!.getTime() - b.anchorAt!.getTime());
+  const distinct = [...new Set(calls.map((c) => c.probability))].sort((a, b) => b - a);
+  const step = Math.max(1, Math.floor(distinct.length / COOLDOWN_CALIBRATION_GRID));
+  const cutoffs: number[] = [];
+  for (let i = step - 1; i < distinct.length; i += step) cutoffs.push(distinct[i]!);
+  if (cutoffs[cutoffs.length - 1] !== distinct[distinct.length - 1])
+    cutoffs.push(distinct[distinct.length - 1]!);
+
+  let chosen: PrecisionCalibration | null = null;
+  let best: PrecisionCalibration = { threshold: null, support: 0, winRatePct: null, goalRatePct: null };
+  for (const cutoff of cutoffs) {
+    const lastSent = new Map<string, number>();
+    let n = 0;
+    let wins = 0;
+    let goals = 0;
+    for (const call of byTime) {
+      if (call.probability < cutoff) continue;
+      const t = call.anchorAt!.getTime();
+      const last = lastSent.get(call.tokenId!);
+      if (last !== undefined && t - last < cooldownMs) continue;
+      lastSent.set(call.tokenId!, t);
+      n += 1;
+      if (call.labelValue > 0) wins += 1;
+      if (call.labelValue >= GOAL_LABEL) goals += 1;
+    }
+    if (n < targets.minSupport) continue;
+    const winRate = wins / n;
+    const goalRate = goals / n;
+    const point = { support: n, winRatePct: winRate * 100, goalRatePct: goalRate * 100 };
+    if (winRate >= targets.winRate && goalRate >= targets.goalRate) {
+      chosen = { threshold: cutoff, ...point };
     } else if (chosen === null && (best.winRatePct === null || winRate * 100 > best.winRatePct)) {
       best = { threshold: null, ...point };
     }
@@ -358,7 +489,7 @@ export function topModelReasons(
   features: Record<string, number | null | undefined>,
   limit = 4,
 ): string[] {
-  const x = vectorize(features, params.featureNames, params.means, params.stdevs);
+  const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
   const n = params.featureNames.length;
   const contributions = params.featureNames.map((name, j) => ({
     name,
@@ -411,6 +542,11 @@ export interface WalkForwardResult {
    * model (it is one entry per row); summarize it first.
    */
   outOfSample: ScoredOutcome[];
+  /**
+   * The same evidence for the heuristic: every emittable test row that cleared its gate, with its
+   * rank score as the "probability" - what the heuristic's own hit-rate cutoff is set from.
+   */
+  heuristicOutOfSample: ScoredOutcome[];
 }
 
 export interface WalkForwardOptions {
@@ -443,6 +579,14 @@ export interface WalkForwardOptions {
    * the feed never picks from.
    */
   decisionRowsOnly?: boolean;
+  /**
+   * Production's per-token alert cooldown (env CURATED_ALERT_COOLDOWN_HOURS). When set, each
+   * side's emissions in a fold replay it - a token is picked the first time it clears the gate
+   * and not again inside the cooldown - so one hot token sampled hourly can't fill a fold's
+   * record the way it never could fill the real feed. Rows without a tokenId are never
+   * deduplicated. Omitted = no cooldown (tests).
+   */
+  cooldownHours?: number;
 }
 
 /** Whether a row is a moment a live curator decides on - see WalkForwardOptions.decisionRowsOnly. */
@@ -481,6 +625,9 @@ export async function walkForwardEvaluate(
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
   const folds: EvalFold[] = [];
   const outOfSample: ScoredOutcome[] = [];
+  const heuristicOutOfSample: ScoredOutcome[] = [];
+  const cooldownMs = opts.cooldownHours !== undefined ? opts.cooldownHours * 3_600_000 : undefined;
+  const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
 
   if (sorted.length >= minTrainRows + minTestRows) {
     // Test folds tile the newest 50% of history; the oldest 50% is the first fold's training
@@ -493,8 +640,22 @@ export async function walkForwardEvaluate(
     for (let f = 0; f < foldCount; f++) {
       const start = testStartIndex + f * perFold;
       const end = f === foldCount - 1 ? sorted.length : start + perFold;
-      const train = sorted.slice(0, start);
       const test = sorted.slice(start, end);
+      if (test.length === 0) continue;
+      // Two leaks closed before training. A row's label is only known once its watch window
+      // closes, so a training row anchored within that window of the fold's start was graded
+      // on prices from inside the fold - it is purged. And a token tested in this fold never
+      // trains it: hourly samples of one token are near-duplicates, and letting the model see
+      // a token's earlier hours grades its memory of that token rather than its judgment.
+      const testStartMs = test[0]!.anchorAt.getTime();
+      const testTokens = new Set(test.flatMap((r) => (r.tokenId === undefined ? [] : [r.tokenId])));
+      const train = sorted
+        .slice(0, start)
+        .filter(
+          (r) =>
+            r.anchorAt.getTime() + labelWindowMs <= testStartMs &&
+            (r.tokenId === undefined || !testTokens.has(r.tokenId)),
+        );
       if (train.length < minTrainRows || test.length < minTestRows) continue;
 
       const inBand = (r: TrainingRow) =>
@@ -529,7 +690,7 @@ export async function walkForwardEvaluate(
       // extra mediocre picks pad `emitted` while the governor would have cut exactly those.
       const emissionBudget = Math.max(1, Math.round(opts.targetPerHour * spanHours));
       const takeBest = (ranked: { row: TrainingRow; confidence: number }[]): TrainingRow[] =>
-        ranked
+        applyCooldown(ranked, cooldownMs)
           .sort((a, b) => b.confidence - a.confidence)
           .slice(0, emissionBudget)
           .map((x) => x.row);
@@ -539,16 +700,30 @@ export async function walkForwardEvaluate(
         confidence: scoreCandidateWithModel(params, row.features),
       }));
       for (const { row, confidence } of modelScored) {
-        outOfSample.push({ probability: confidence, labelValue: row.labelValue });
+        outOfSample.push({
+          probability: confidence,
+          labelValue: row.labelValue,
+          tokenId: row.tokenId,
+          anchorAt: row.anchorAt,
+        });
       }
       const modelEmitted = takeBest(modelScored.filter(({ confidence }) => confidence >= threshold));
-      const heuristicEmitted = takeBest(
-        testEmittable.flatMap((row) => {
-          const scored = scoredFromFeatures(row.features, row.anchorPriceUsd, row.anchorMcapUsd);
-          if (!evaluateCandidateHeuristic(scored, opts.heuristicMinScore).curate) return [];
-          return [{ row, confidence: curationRankScore(scored) }];
-        }),
-      );
+      const heuristicScored = testEmittable.flatMap((row) => {
+        const scored = scoredFromFeatures(row.features, row.anchorPriceUsd, row.anchorMcapUsd);
+        if (!evaluateCandidateHeuristic(scored, opts.heuristicMinScore).curate) return [];
+        return [{ row, confidence: curationRankScore(scored) }];
+      });
+      // The heuristic's own out-of-sample record, in its own conviction units (rank score) -
+      // what its hit-rate cutoff is calibrated from, exactly as the model's is from outOfSample.
+      for (const { row, confidence } of heuristicScored) {
+        heuristicOutOfSample.push({
+          probability: confidence,
+          labelValue: row.labelValue,
+          tokenId: row.tokenId,
+          anchorAt: row.anchorAt,
+        });
+      }
+      const heuristicEmitted = takeBest(heuristicScored);
 
       folds.push({
         testFrom: test[0]!.anchorAt.toISOString(),
@@ -573,7 +748,33 @@ export async function walkForwardEvaluate(
     folds,
     verdict: decidePromotion(folds, rows.length, minRowsToPromote, opts.minEmissionsToWin),
     outOfSample,
+    heuristicOutOfSample,
   };
+}
+
+/**
+ * Replays the per-token alert cooldown over a fold's gate-passing calls: in time order, a token's
+ * call survives only when it is that token's first since its last surviving call plus the
+ * cooldown. No cooldown, or a row with no tokenId, passes through untouched.
+ */
+function applyCooldown<T extends { row: TrainingRow }>(calls: T[], cooldownMs: number | undefined): T[] {
+  if (cooldownMs === undefined) return [...calls];
+  const byTime = [...calls].sort((a, b) => a.row.anchorAt.getTime() - b.row.anchorAt.getTime());
+  const lastSent = new Map<string, number>();
+  const kept: T[] = [];
+  for (const call of byTime) {
+    const tokenId = call.row.tokenId;
+    if (tokenId === undefined) {
+      kept.push(call);
+      continue;
+    }
+    const t = call.row.anchorAt.getTime();
+    const last = lastSent.get(tokenId);
+    if (last !== undefined && t - last < cooldownMs) continue;
+    lastSent.set(tokenId, t);
+    kept.push(call);
+  }
+  return kept;
 }
 
 /**

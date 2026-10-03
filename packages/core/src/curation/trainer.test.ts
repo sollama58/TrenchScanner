@@ -7,6 +7,7 @@ import {
   precisionCurve,
   walkForwardEvaluate,
   decidePromotion,
+  transformFeature,
   type TrainingRow,
   type EvalFold,
 } from "./trainer.js";
@@ -79,7 +80,10 @@ describe("trainCurator", () => {
       graduated: 0,
     });
     expect(hot).toBeGreaterThan(cold + 0.3);
-    expect(hot).toBeGreaterThan(0.5);
+    // The hot band's true win rate is 60%. Rows are no longer weighted by how far they ran, so
+    // the model's probability is an honest (if smoothed - one linear slope across a step) read
+    // of that rate rather than one inflated toward the winners.
+    expect(hot).toBeGreaterThan(0.3);
     expect(cold).toBeLessThan(0.2);
   });
 
@@ -406,6 +410,110 @@ describe("calibrateThresholdForPrecision", () => {
     const result = calibrateThresholdForPrecision(tied, targets);
     expect(result.threshold).toBeNull();
     expect(result.support).toBe(20);
+  });
+});
+
+describe("calibrateThresholdForPrecision with the alert cooldown", () => {
+  const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 10 };
+  const DAY = 24 * HOUR;
+
+  it("counts one hot token once per cooldown, not once per hourly sample", () => {
+    // One token, sampled hourly for a day at high probability, wins every time; ten other tokens
+    // sampled once each, all losers. Without the cooldown the hot token's 24 samples look like
+    // a 24/34 = 71%-accurate cutoff on plenty of support; with it, the feed would have sent the
+    // hot token once and ten losers - nowhere near the bar.
+    const hot = Array.from({ length: 24 }, (_, i) => ({
+      probability: 0.9,
+      labelValue: 2,
+      tokenId: "hot",
+      anchorAt: new Date(T0 + i * HOUR),
+    }));
+    const cold = Array.from({ length: 10 }, (_, i) => ({
+      probability: 0.8,
+      labelValue: 0,
+      tokenId: `cold-${i}`,
+      anchorAt: new Date(T0 + i * HOUR),
+    }));
+    const withCooldown = calibrateThresholdForPrecision([...hot, ...cold], targets, { cooldownMs: DAY });
+    expect(withCooldown.threshold).toBeNull();
+    expect(withCooldown.support).toBe(11);
+  });
+
+  it("finds the same cutoff as the plain walk when every call is a different token", () => {
+    const set = Array.from({ length: 100 }, (_, i) => ({
+      probability: 1 - i / 101,
+      labelValue: i < 20 ? 2 : 0,
+      tokenId: `t-${i}`,
+      anchorAt: new Date(T0 + i * HOUR),
+    }));
+    const plain = calibrateThresholdForPrecision(set, targets);
+    const replayed = calibrateThresholdForPrecision(set, targets, { cooldownMs: DAY });
+    expect(replayed.threshold).toBeCloseTo(plain.threshold!);
+    expect(replayed.support).toBe(plain.support);
+  });
+});
+
+describe("walkForwardEvaluate leak guards", () => {
+  it("never trains a fold on a token it tests, nor on rows whose label resolved inside the fold", async () => {
+    // Every row is the same token - so token grouping must leave each fold with no training
+    // rows at all, and the exam must produce no folds rather than grade the model on memory.
+    const rows = syntheticRows(1_000).map((r) => ({ ...r, tokenId: "only-token" }));
+    const result = await walkForwardEvaluate(rows, { targetPerHour: 6, heuristicMinScore: 0 });
+    expect(result.folds).toEqual([]);
+  });
+
+  it("purges training rows anchored within the label window of the fold's start", async () => {
+    // Rows every 10 minutes, each its own token: the purge removes the 5 rows anchored less than
+    // an hour before each fold boundary (the row exactly an hour before has a closed label).
+    const rows = syntheticRows(1_000).map((r, i) => ({
+      ...r,
+      tokenId: `t-${i}`,
+      anchorAt: new Date(T0 + i * 10 * 60_000),
+    }));
+    const result = await walkForwardEvaluate(rows, { targetPerHour: 6, heuristicMinScore: 0 });
+    expect(result.folds.length).toBeGreaterThan(0);
+    const firstTestIndex = 500;
+    expect(result.folds[0]!.trainRows).toBe(firstTestIndex - 5);
+  });
+
+  it("collects the heuristic's out-of-sample calls in its own rank-score units", async () => {
+    const result = await walkForwardEvaluate(syntheticRows(1_000), {
+      targetPerHour: 6,
+      heuristicMinScore: 0,
+    });
+    // syntheticRows carry no short-window data, so the heuristic gate (which needs a buy ratio
+    // and a known venue) may pass few or none - but whatever it records is in 0-100 units.
+    for (const call of result.heuristicOutOfSample) {
+      expect(call.probability).toBeGreaterThanOrEqual(0);
+      expect(call.probability).toBeLessThanOrEqual(100);
+    }
+  });
+});
+
+describe("feature transform", () => {
+  it("log-scales heavy-tailed features, keeping sign", () => {
+    expect(transformFeature("volume24hUsd", 0, "signed-log1p-v1")).toBe(0);
+    expect(transformFeature("volume24hUsd", Math.E - 1, "signed-log1p-v1")).toBeCloseTo(1);
+    expect(transformFeature("priceChange5mPct", -(Math.E - 1), "signed-log1p-v1")).toBeCloseTo(-1);
+  });
+
+  it("leaves bounded features and pre-transform models alone", () => {
+    expect(transformFeature("top10HolderPct", 40, "signed-log1p-v1")).toBe(40);
+    expect(transformFeature("volume24hUsd", 1_000_000, undefined)).toBe(1_000_000);
+  });
+
+  it("a trained model records its transform and scores with it", async () => {
+    const params = await trainCurator(syntheticRows(500));
+    expect(params.transform).toBe("signed-log1p-v1");
+    // Old models without the field keep scoring on raw values - both paths must produce a
+    // valid probability.
+    const { transform: _drop, ...legacy } = params;
+    void _drop;
+    const features = syntheticRows(1)[0]!.features;
+    for (const p of [scoreCandidateWithModel(params, features), scoreCandidateWithModel(legacy, features)]) {
+      expect(p).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThanOrEqual(1);
+    }
   });
 });
 

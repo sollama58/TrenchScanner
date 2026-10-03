@@ -40,6 +40,9 @@ export interface StoredEvalMetrics {
   targets: PrecisionTargets;
   precisionCalibration: PrecisionCalibration;
   precisionCurve: PrecisionCurvePoint[];
+  /** The heuristic's hit-rate cutoff, in rank-score units - see heuristicCutoff in curatedAlerts.ts. */
+  heuristicCalibration: PrecisionCalibration;
+  heuristicPrecisionCurve: PrecisionCurvePoint[];
 }
 
 /**
@@ -59,6 +62,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     // curators' own choices back into the next model (see CandidateOutcome.sampleKind).
     where: { finalizedAt: { not: null }, anchorAt: { gte: windowStart }, sampleKind: { not: "emission" } },
     select: {
+      tokenId: true,
       anchorAt: true,
       features: true,
       labelValue: true,
@@ -77,6 +81,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   }
 
   const trainingRows: TrainingRow[] = rows.map((r) => ({
+    tokenId: r.tokenId,
     anchorAt: r.anchorAt,
     features: r.features as Record<string, number | null>,
     labelValue: r.labelValue ?? 0,
@@ -97,6 +102,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
     // Graded and calibrated on event rows only - the moments live curators actually decide on.
     decisionRowsOnly: true,
+    cooldownHours: env.CURATED_ALERT_COOLDOWN_HOURS,
   });
 
   // The deployable model trains on the FULL window - the walk-forward folds were the exam, this
@@ -115,7 +121,18 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
     minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
   };
-  const precisionCalibration = calibrateThresholdForPrecision(evaluation.outOfSample, targets);
+  // Both cutoffs replay the per-token cooldown, so their support counts alerts the feed would
+  // actually have sent rather than every hourly sample of a token that stayed hot.
+  const cooldown = { cooldownMs: env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000 };
+  const precisionCalibration = calibrateThresholdForPrecision(evaluation.outOfSample, targets, cooldown);
+  // The hand-tuned heuristic is held to the same bar while it holds the job: its rank-score
+  // cutoff comes from its own out-of-sample record (see heuristicOutOfSample). Read at emission
+  // time by curatedAlerts.ts from the newest CuratorModel row's evalMetrics.
+  const heuristicCalibration = calibrateThresholdForPrecision(
+    evaluation.heuristicOutOfSample,
+    targets,
+    cooldown,
+  );
   const params: TrainedCuratorParams = {
     ...trained,
     threshold: precisionCalibration.threshold ?? NEVER_EMIT_THRESHOLD,
@@ -133,6 +150,8 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     targets,
     precisionCalibration,
     precisionCurve: precisionCurve(evaluation.outOfSample),
+    heuristicCalibration,
+    heuristicPrecisionCurve: precisionCurve(evaluation.heuristicOutOfSample),
   };
 
   const modelId = await applyTrainingResult(metrics, params, trainingRows.length, windowStart);
@@ -145,6 +164,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     verdict: verdict.reason,
     threshold: params.threshold,
     calibration: precisionCalibration,
+    heuristicCalibration,
     modelId,
   });
 }
@@ -169,6 +189,7 @@ export async function applyTrainingResult(
   // The raw per-row exam evidence never goes into the row - it is one entry per training sample.
   const stored: Record<string, unknown> = { ...evaluation };
   delete stored.outOfSample;
+  delete stored.heuristicOutOfSample;
   return prisma.$transaction(async (tx) => {
     await tx.curatorModel.updateMany({
       where: { status: "active" },

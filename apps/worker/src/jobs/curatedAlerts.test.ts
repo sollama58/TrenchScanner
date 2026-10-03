@@ -1,6 +1,6 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   prisma,
   loadEnv,
@@ -21,10 +21,6 @@ import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutco
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
 const TAG = `curated-alerts-test-${Date.now()}`;
-
-/** Every test drives the governor with explicit bars - the flow-derived ones would depend on
- * whatever CandidateOutcome rows this shared dev database happens to hold. */
-const NO_BARS = { bars: { live: null, shadow: null } };
 
 function curatableFixture(mintAddress: string, overrides: Partial<ScoredToken> = {}): ScoredToken {
   return {
@@ -57,7 +53,7 @@ async function collectAndEmit(
 ): Promise<boolean> {
   const cycle = newCuratedCycle();
   await collectCuratedContender(cycle, token, scored, sample, env);
-  return (await emitCuratedCycle(cycle, env, NO_BARS)) > 0;
+  return (await emitCuratedCycle(cycle, env)) > 0;
 }
 
 /**
@@ -256,25 +252,9 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
     await collectCuratedContender(cycle, best, bestScored, null, env);
     expect(cycle.live.length).toBe(2);
 
-    expect(await emitCuratedCycle(cycle, env, NO_BARS)).toBe(1);
+    expect(await emitCuratedCycle(cycle, env)).toBe(1);
     expect(await prisma.curatedAlert.count({ where: { tokenId: best.id } })).toBe(1);
     expect(await prisma.curatedAlert.count({ where: { tokenId: weak.id } })).toBe(0);
-  });
-
-  it("the dynamic bar keeps sub-bar contenders off the feed even with budget to spare", async () => {
-    const cycle = newCuratedCycle();
-    const strong = await prisma.token.create({ data: { mintAddress: `${TAG}-bar-strong` } });
-    await collectCuratedContender(cycle, strong, curatableFixture(strong.mintAddress), null, env);
-    const meh = await prisma.token.create({ data: { mintAddress: `${TAG}-bar-meh` } });
-    const mehScored = curatableFixture(meh.mintAddress, {
-      score: { momentum: 60, holderHealth: 60, age: 100, narrative: 40, total: 62 },
-    });
-    await collectCuratedContender(cycle, meh, mehScored, null, env);
-
-    // The fixture confidences are their composites (95 and 62); the bar sits between them.
-    expect(await emitCuratedCycle(cycle, env, { bars: { live: 80, shadow: null } })).toBe(1);
-    expect(await prisma.curatedAlert.count({ where: { tokenId: strong.id } })).toBe(1);
-    expect(await prisma.curatedAlert.count({ where: { tokenId: meh.id } })).toBe(0);
   });
 });
 
@@ -293,24 +273,6 @@ function alwaysYesParams() {
     weights: new Array(2 * n).fill(0),
     bias: 5,
     threshold: 0.5,
-  };
-}
-
-/**
- * Zero weights and a bias of logit(0.15): every candidate scores a 0.15 probability - confidence
- * 15 - which clears the 0.10 threshold and so still curates. Deliberately low, to sit far below
- * the heuristic's rank-score scale.
- */
-function lowConfidenceParams() {
-  const n = CANDIDATE_FEATURE_NAMES.length;
-  return {
-    kind: CURATOR_MODEL_KIND,
-    featureNames: [...CANDIDATE_FEATURE_NAMES],
-    means: new Array(n).fill(0),
-    stdevs: new Array(n).fill(1),
-    weights: new Array(2 * n).fill(0),
-    bias: Math.log(0.15 / 0.85),
-    threshold: 0.1,
   };
 }
 
@@ -497,116 +459,65 @@ describe.skipIf(!dbAvailable)("shadow emissions", () => {
 });
 
 /**
- * The governor's dynamic bar is a percentile of ONE curator's score distribution, and the two
- * curators score on scales that are nothing alike: the heuristic's rank score runs 40-95 for an
- * ordinary candidate, while a model's calibrated probability x100 sits in the single digits for
- * an event as rare as a 15-minute double. So the cached bar has to be invalidated when the job
- * changes hands - not merely aged out - or a promotion leaves a heuristic-scale bar sitting
- * above every probability the new model can produce, and the feed goes silent until the cache
- * happens to expire.
+ * The heuristic held to the hit-rate targets: its rank-score cutoff comes from the newest
+ * training run's evalMetrics.heuristicCalibration. The fixture's confidence is 95.
  */
-describe.skipIf(!dbAvailable)("dynamic bar across a curator handover", () => {
+describe.skipIf(!dbAvailable)("heuristic hit-rate cutoff", () => {
   const env = dbAvailable ? loadEnv() : (undefined as never);
   const modelIds: string[] = [];
-  let flowTokenId: string | null = null;
 
-  /**
-   * A day of candidate flow rich enough for computeDynamicBar to actually return a bar (it
-   * abstains under 50 rows or a span under 6h). Every row scores 95 on the composite and carries
-   * no short-window data, so the HEURISTIC's rank score for all of them is exactly 95 - which
-   * makes the heuristic-scale bar 95, far above any probability a model reports.
-   */
-  async function seedFlow(): Promise<void> {
-    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-flow` } });
-    flowTokenId = token.id;
-    const now = Date.now();
-    await prisma.candidateOutcome.createMany({
-      data: Array.from({ length: 200 }, (_, i) => ({
-        tokenId: token.id,
-        // Spread across 12 hours, comfortably over the 6h minimum span.
-        anchorAt: new Date(now - (i * 12 * 60 * 60_000) / 200),
-        anchorPriceUsd: 0.0001,
-        anchorMcapUsd: 150_000,
-        features: { scoreTotal: 95 },
-        score: 95,
-        nextCheckAt: new Date(now + 60_000),
-        peak1hPriceUsd: 0.0001,
-        low1hPriceUsd: 0.0001,
-        lowBefore2xPriceUsd: 0.0001,
-        peak24hPriceUsd: 0.0001,
-      })),
+  async function newestRunWithCutoff(threshold: number | null): Promise<void> {
+    const row = await prisma.curatorModel.create({
+      data: {
+        kind: CURATOR_MODEL_KIND,
+        params: alwaysYesParams(),
+        trainingRows: 2_000,
+        trainingFrom: new Date(Date.now() - 30 * 86_400_000),
+        trainingTo: new Date(),
+        evalMetrics: { heuristicCalibration: { threshold, support: 40, winRatePct: 80, goalRatePct: 55 } },
+        status: "retired",
+        retiredAt: new Date(),
+      },
     });
+    modelIds.push(row.id);
+    resetCuratorModelCache();
   }
+
+  beforeAll(async () => {
+    await prisma.curatorModel.updateMany({
+      where: { status: { in: ["active", "candidate"] } },
+      data: { status: "retired", retiredAt: new Date() },
+    });
+  });
 
   beforeEach(freeGovernorBudget);
 
   afterAll(async () => {
     if (!dbAvailable) return;
-    if (flowTokenId) await prisma.candidateOutcome.deleteMany({ where: { tokenId: flowTokenId } });
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.curatorModel.deleteMany({ where: { id: { in: modelIds } } });
     resetCuratorModelCache();
   });
 
-  it("recomputes the bar in the new curator's units when the job changes hands", async () => {
-    await prisma.curatorModel.updateMany({
-      where: { status: { in: ["active", "candidate"] } },
-      data: { status: "retired", retiredAt: new Date() },
-    });
-    resetCuratorModelCache();
-    await seedFlow();
+  async function emitsFor(suffix: string): Promise<number> {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-cutoff-${suffix}` } });
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, curatableFixture(token.mintAddress), null, env);
+    return emitCuratedCycle(cycle, env);
+  }
 
-    // 1. Warm the bar cache while the HEURISTIC holds the job. Every seeded row ranks 95, so the
-    //    cached bar is 95 - in rank-score units.
-    const warm = await prisma.token.create({ data: { mintAddress: `${TAG}-handover-warm` } });
-    const cycleA = newCuratedCycle();
-    await collectCuratedContender(cycleA, warm, curatableFixture(warm.mintAddress), null, env);
-    expect(await emitCuratedCycle(cycleA, env)).toBe(1); // real bars, not the test hook
+  it("sends a gate-passing pick whose rank score clears the earned cutoff", async () => {
+    await newestRunWithCutoff(90);
+    expect(await emitsFor("above")).toBe(1);
+  });
 
-    // 2. A model takes over - one that is confident ENOUGH to curate (probability 0.15 clears its
-    //    own 0.10 threshold) but whose 15-point confidence is nowhere near the heuristic's
-    //    95-point scale. This is the direction that breaks: judged against a stale heuristic bar
-    //    the model can never emit anything, and the feed goes dark.
-    const activeModel = await prisma.curatorModel.create({
-      data: {
-        kind: CURATOR_MODEL_KIND,
-        params: lowConfidenceParams(),
-        trainingRows: 2_000,
-        trainingFrom: new Date(Date.now() - 30 * 86_400_000),
-        trainingTo: new Date(),
-        evalMetrics: {},
-        status: "active",
-        activatedAt: new Date(),
-      },
-    });
-    modelIds.push(activeModel.id);
+  it("holds back a gate-passing pick below the earned cutoff", async () => {
+    await newestRunWithCutoff(99);
+    expect(await emitsFor("below")).toBe(0);
+  });
 
-    // 3. Reproduce the production handover EXACTLY: the roster cache (5 min) expires and picks
-    //    up the new model, while the bar cache (10 min) is still within its own TTL. Only
-    //    Date.now is shifted - the two caches are the only things that read it here, and real
-    //    timers are left alone so Prisma is unaffected. Calling resetCuratorModelCache() instead
-    //    would clear BOTH caches and quietly hide the very bug this test exists for.
-    const realNow = Date.now;
-    vi.spyOn(Date, "now").mockImplementation(() => realNow() + 6 * 60_000);
-    try {
-      await freeGovernorBudget();
-
-      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-handover-model` } });
-      const cycleB = newCuratedCycle();
-      await collectCuratedContender(cycleB, token, curatableFixture(token.mintAddress), null, env);
-      expect(await emitCuratedCycle(cycleB, env)).toBe(1);
-
-      const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: token.id } });
-      expect(alert.source).toBe(activeModel.id);
-      expect(alert.confidence).toBeLessThan(20); // model units, not the heuristic's
-    } finally {
-      vi.restoreAllMocks();
-    }
-
-    await prisma.curatorModel.update({
-      where: { id: activeModel.id },
-      data: { status: "retired", retiredAt: new Date() },
-    });
-    resetCuratorModelCache();
+  it("sends nothing when the newest run found no cutoff that met the targets", async () => {
+    await newestRunWithCutoff(null);
+    expect(await emitsFor("unreachable")).toBe(0);
   });
 });

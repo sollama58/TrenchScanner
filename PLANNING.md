@@ -117,9 +117,9 @@ Three shipping phases, each useful on its own:
   about one alert per ten minutes) as a ceiling, counted from the actual alerts table, with a
   small burst allowance so a hot minute can put two out back-to-back. When a scan cycle brings
   more gate-passing contenders than the pace allows, the strongest conviction wins the slot and
-  the rest re-contend next cycle; a dynamic quality bar (the conviction level the last day's
-  candidate flow says corresponds to the target rate) keeps quiet afternoons from trickling out
-  barely-over-the-floor picks. A ceiling, never a quota — a dead hour still emits nothing.
+  the rest re-contend next cycle. Quality comes from each curator's hit-rate cutoff (the
+  conviction at which its out-of-sample calls met 75% at 2x and 50% at 4x), not from the pace.
+  A ceiling, never a quota — a dead hour still emits nothing.
   Every alert card publicly grades itself (watching / won / missed / disqualified, peak
   returns), and the tab's learning panel shows the training-set size, the base win rate, the
   feed's own hit rate, and the measured pace against the target.

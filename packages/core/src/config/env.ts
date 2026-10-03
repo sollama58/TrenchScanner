@@ -205,7 +205,7 @@ const envSchema = z.object({
   // Back at the 55 launch value after a spell at 45: the loosening was meant to feed the
   // training set, but samples are banked before the curator gate runs (see scanJob), so it fed
   // nothing - it only diluted the feed. This floor is the gate's ENTRY requirement; the emission
-  // governor's pace and dynamic quality bar (curation/governor.ts) sit on top of it.
+  // governor's pace ceiling (curation/governor.ts) and the hit-rate cutoff sit on top of it.
   CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
 
@@ -238,6 +238,15 @@ const envSchema = z.object({
   CURATED_TARGET_WIN_RATE_PCT: z.coerce.number().min(0).max(100).default(75),
   CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
   CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(30),
+  // Holds the hand-tuned heuristic to the same targets while it is the live curator: it only
+  // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned
+  // in the newest training run, and sends nothing when no cutoff met the targets. Before the
+  // first training run there is no record, and the heuristic's gate stands alone. "false"
+  // restores gate-only emission.
+  CURATED_HEURISTIC_PRECISION_GATE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 
   // The AI reviewer (apps/worker/src/ai/reviewer.ts): a buy/no-buy second opinion from Claude on
   // every curated pick the governor selects. "shadow" (the default) asks and records the answer

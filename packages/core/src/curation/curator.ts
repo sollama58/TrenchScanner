@@ -81,7 +81,7 @@ export interface CurationDecision {
   /**
    * 0-100 conviction, in the deciding curator's own units: curationRankScore for the heuristic,
    * calibrated probability x 100 for a trained model. The emission governor ranks contenders and
-   * holds its dynamic quality bar in these units, so what they MEAN can differ per curator as
+   * calibrates its hit-rate cutoff in these units, so what they MEAN can differ per curator as
    * long as each curator is consistent with itself.
    */
   confidence: number;
@@ -152,7 +152,7 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
 
 /**
  * How the heuristic ORDERS the candidates it would curate - the conviction the emission governor
- * ranks contenders by and holds its dynamic bar against. Deliberately not the composite score:
+ * ranks contenders by and calibrates its hit-rate cutoff in. Deliberately not the composite score:
  * the composite was built to rank user-filter matches, and its narrative and age components are
  * near-constant across this band (nearly every launch has a Twitter and a theme; nearly every
  * contender sits in the age sweet spot), which compresses the ranking exactly where curation

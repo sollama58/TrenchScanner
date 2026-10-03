@@ -19,7 +19,6 @@ vi.mock("../ai/reviewer.js", () => ({
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `ai-review-test-${Date.now()}`;
-const NO_BARS = { bars: { live: null, shadow: null } };
 
 function fixture(mintAddress: string): ScoredToken {
   return {
@@ -69,7 +68,7 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
     const sample = await recordCandidateSample(token.id, scored, env);
     const cycle = newCuratedCycle();
     await collectCuratedContender(cycle, token, scored, sample, env);
-    const emitted = await emitCuratedCycle(cycle, env, NO_BARS);
+    const emitted = await emitCuratedCycle(cycle, env);
     return { token, emitted, cycle };
   }
 
@@ -115,7 +114,7 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
     const scored = fixture(token.mintAddress);
     const cycle = newCuratedCycle();
     await collectCuratedContender(cycle, token, scored, null, gate);
-    expect(await emitCuratedCycle(cycle, gate, NO_BARS)).toBe(0);
+    expect(await emitCuratedCycle(cycle, gate)).toBe(0);
     expect(reviewPick).not.toHaveBeenCalled();
   });
 
