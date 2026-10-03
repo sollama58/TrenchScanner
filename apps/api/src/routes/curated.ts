@@ -5,6 +5,7 @@ import {
   corsOriginList,
   HEURISTIC_CURATOR_SOURCE,
   type Env,
+  RULES_CONTESTANT,
   type DexScreenerClient,
 } from "@trenchscanner/core";
 import { OnDemandLiveRefresher } from "../liveRefresh.js";
@@ -19,6 +20,14 @@ import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { buildModelInsights, type ModelInsights } from "../modelInsights.js";
+import {
+  buildLeaderboard,
+  contestState,
+  modelLabel,
+  resolveFeedModel,
+  savedFeedModel,
+  type Leaderboard,
+} from "../contest.js";
 
 /** Same fixed page size as the Live Feed - the two tabs render the same card. */
 const PAGE_SIZE = 12;
@@ -56,6 +65,19 @@ const insightsQuerySchema = z.object({
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(10_000).default(1),
+  /** A contestant id (curation/contestants.ts); omitted = the user's saved pick, else the default. */
+  model: z.string().max(64).optional(),
+});
+
+const leaderboardQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(90).default(30),
+});
+
+const LEADERBOARD_CACHE_TTL_MS = 60_000;
+
+const chooseModelSchema = z.object({
+  /** A contestant id, or null to follow the default. */
+  model: z.string().max(64).nullable(),
 });
 
 export async function registerCuratedRoutes(
@@ -85,7 +107,7 @@ export async function registerCuratedRoutes(
    * short for anyone to perceive, and long enough to collapse a burst of concurrent readers into
    * one query.
    */
-  const pageCache = new Map<number, SharedCache<CuratedPage>>();
+  const pageCache = new Map<string, SharedCache<CuratedPage>>();
 
   /**
    * Drop every cached page the instant a new alert exists.
@@ -102,13 +124,16 @@ export async function registerCuratedRoutes(
   });
   app.addHook("onClose", async () => stopListening());
 
-  const cacheForPage = (page: number) => {
-    let cache = pageCache.get(page);
+  // Keyed by ledger and page: every contestant's feed is shared by everyone reading it.
+  const cacheForPage = (model: string, page: number) => {
+    const key = `${model}:${page}`;
+    let cache = pageCache.get(key);
     if (!cache) {
       cache = new SharedCache<CuratedPage>(FEED_CACHE_TTL_MS);
-      // Only the first few pages are worth holding: deep paging is rare and one-off, and an
-      // unbounded map here would be a slow leak driven by whatever page numbers get requested.
-      if (pageCache.size < MAX_CACHED_PAGES) pageCache.set(page, cache);
+      // Only the first few pages per ledger are worth holding: deep paging is rare and one-off,
+      // and an unbounded map here would be a slow leak driven by whatever page numbers get
+      // requested. The model id is validated against the roster before it gets here.
+      if (page <= MAX_CACHED_PAGES) pageCache.set(key, cache);
     }
     return cache;
   };
@@ -144,23 +169,29 @@ export async function registerCuratedRoutes(
     request.raw.on("error", dispose);
   });
 
-  /** The feed: every curated alert, newest first - the same list for every subscriber. */
+  /**
+   * The feed: one contestant's calls, newest first - the model in `?model=`, else the one this
+   * user picked (PUT /curated/model), else the default (the consensus once it can call).
+   */
   app.get("/", async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const { page } = parsed.data;
+    const [state, saved] = await Promise.all([contestState(opts.env), savedFeedModel(request.user!.userId)]);
+    const model = resolveFeedModel(state, parsed.data.model, saved);
 
-    const { alerts, totalCount } = await cacheForPage(page).get(async () => {
+    const { alerts, totalCount } = await cacheForPage(model, page).get(async () => {
       const [rows, count] = await Promise.all([
         prisma.curatedAlert.findMany({
+          where: { model },
           orderBy: { createdAt: "desc" },
           skip: (page - 1) * PAGE_SIZE,
           take: PAGE_SIZE,
           include: curatedAlertInclude,
         }),
-        prisma.curatedAlert.count(),
+        prisma.curatedAlert.count({ where: { model } }),
       ]);
       return { alerts: rows, totalCount: count };
     });
@@ -180,7 +211,58 @@ export async function registerCuratedRoutes(
     liveRefresher.request(cards.map((c) => c.token));
 
     const isAdmin = request.access?.reason === "admin";
-    return { alerts: await attachAiReviewsForAdmin(cards, isAdmin), page, pageSize: PAGE_SIZE, totalCount };
+    return {
+      alerts: await attachAiReviewsForAdmin(cards, isAdmin),
+      page,
+      pageSize: PAGE_SIZE,
+      totalCount,
+      model: { ...modelLabel(model), isDefault: model === state.defaultModel },
+    };
+  });
+
+  /**
+   * The contest's leaderboard: every contestant ranked by its composite score (backtest blended
+   * with its live calls), with the same ids and names the model selector uses. `selectedModel`
+   * is the ledger this user's feed shows.
+   */
+  const leaderboardCache = new Map<number, SharedCache<Leaderboard>>();
+  app.get("/models", async (request, reply) => {
+    const parsed = leaderboardQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { days } = parsed.data;
+    let cache = leaderboardCache.get(days);
+    if (!cache) {
+      cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS);
+      // Bounded by the schema: at most 90 windows, and in practice the UI's few.
+      leaderboardCache.set(days, cache);
+    }
+    const [board, state, saved] = await Promise.all([
+      cache.get(() => buildLeaderboard(opts.env, days)),
+      contestState(opts.env),
+      savedFeedModel(request.user!.userId),
+    ]);
+    return {
+      ...board,
+      selectedModel: resolveFeedModel(state, undefined, saved),
+      followsDefault: saved === null || resolveFeedModel(state, undefined, saved) !== saved,
+    };
+  });
+
+  /** Picks whose calls this user's feed shows; null goes back to following the default. */
+  app.put("/model", async (request, reply) => {
+    const parsed = chooseModelSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const state = await contestState(opts.env);
+    const { model } = parsed.data;
+    if (model !== null && !state.roster.some((c) => c.id === model)) {
+      return reply.code(400).send({ error: "unknown model" });
+    }
+    await prisma.user.update({ where: { id: request.user!.userId }, data: { curatedModel: model } });
+    return { selectedModel: resolveFeedModel(state, undefined, model), followsDefault: model === null };
   });
 
   /**
@@ -243,6 +325,11 @@ export async function registerCuratedRoutes(
     const day1 = new Date(Date.now() - 86_400_000);
     const day7 = new Date(Date.now() - 7 * 86_400_000);
     const day30 = new Date(Date.now() - 30 * 86_400_000);
+    // The feed figures describe the default feed - what a subscriber who hasn't picked sees. The
+    // contest's per-model records are the leaderboard's (/curated/models).
+    const state = await contestState(opts.env);
+    const model = state.defaultModel;
+    const defaultRow = state.current.get(model) ?? null;
 
     const [
       finalizedSamples,
@@ -265,15 +352,17 @@ export async function registerCuratedRoutes(
       prisma.candidateOutcome.count({ where: { finalizedAt: { not: null }, sampleKind: "event" } }),
       prisma.candidateOutcome.count({ where: { anchorAt: { gte: day7 } } }),
       prisma.candidateOutcome.count({ where: { labelValue: { gt: 0 }, sampleKind: "event" } }),
-      prisma.curatedAlert.count(),
-      prisma.curatedAlert.count({ where: { createdAt: { gte: day7 } } }),
-      prisma.curatedAlert.count({ where: { createdAt: { gte: day1 } } }),
-      prisma.curatedAlert.count({ where: { hit2xIn1h: { not: null } } }),
-      prisma.curatedAlert.count({ where: { hit2xIn1h: true, disqualified: false } }),
-      prisma.curatedAlert.count({ where: { hit4xIn1h: true } }),
-      prisma.curatedAlert.aggregate({ _max: { peak24hReturnPct: true } }),
-      prisma.curatorModel.findFirst({ where: { status: "active" }, orderBy: { activatedAt: "desc" } }),
-      prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" } }),
+      prisma.curatedAlert.count({ where: { model } }),
+      prisma.curatedAlert.count({ where: { model, createdAt: { gte: day7 } } }),
+      prisma.curatedAlert.count({ where: { model, createdAt: { gte: day1 } } }),
+      prisma.curatedAlert.count({ where: { model, hit2xIn1h: { not: null } } }),
+      prisma.curatedAlert.count({ where: { model, hit2xIn1h: true, disqualified: false } }),
+      prisma.curatedAlert.count({ where: { model, hit4xIn1h: true } }),
+      prisma.curatedAlert.aggregate({ where: { model }, _max: { peak24hReturnPct: true } }),
+      defaultRow,
+      defaultRow
+        ? prisma.curatorModel.findUnique({ where: { id: defaultRow.id } })
+        : prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" } }),
       curatorRecord30d("heuristic", day30),
       curatorRecord30d("model", day30),
     ]);
@@ -287,11 +376,11 @@ export async function registerCuratedRoutes(
 
     return {
       curator: {
-        // The promoted model when one has won the walk-forward backtest; the hand-tuned
-        // heuristic until then - and again if a later evaluation retires the model.
-        active: activeModel?.id ?? HEURISTIC_CURATOR_SOURCE,
-        phase: activeModel ? "model-live" : "collecting-training-data",
-        modelTrainedAt: activeModel?.trainingTo ?? null,
+        // The default feed's contestant: the consensus once it can call, Rules until then.
+        active: model,
+        activeName: modelLabel(model).name,
+        phase: activeModel && model !== RULES_CONTESTANT ? "model-live" : "collecting-training-data",
+        modelTrainedAt: activeModel?.trainedAt ?? null,
         latestEvaluation: latestModel
           ? {
               at: latestModel.createdAt,

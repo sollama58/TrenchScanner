@@ -6,7 +6,12 @@ import {
   loadEnv,
   CANDIDATE_FEATURE_NAMES,
   CURATOR_MODEL_KIND,
+  CONSENSUS_CONTESTANT,
   HEURISTIC_CURATOR_SOURCE,
+  RULES_CONTESTANT,
+  RULES_MODEL_KIND,
+  STACKED_MODEL_KIND,
+  stackedFeatureNames,
   type Env,
   type ScoredToken,
 } from "@trenchscanner/core";
@@ -246,6 +251,7 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
     await prisma.curatedAlert.createMany({
       data: fillers.map((f) => ({
         tokenId: f.id,
+        model: RULES_CONTESTANT,
         source: HEURISTIC_CURATOR_SOURCE,
         confidence: 90,
         anchorPriceUsd: 1,
@@ -278,7 +284,7 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
     const best = await prisma.token.create({ data: { mintAddress: `${TAG}-gov-best` } });
     const bestScored = curatableFixture(best.mintAddress);
     await collectCuratedContender(cycle, best, bestScored, null, env);
-    expect(cycle.live.length).toBe(2);
+    expect(cycle.byModel.get(RULES_CONTESTANT)).toHaveLength(2);
 
     expect(await emitCuratedCycle(cycle, env)).toBe(1);
     expect(await prisma.curatedAlert.count({ where: { tokenId: best.id } })).toBe(1);
@@ -298,10 +304,10 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
     const winner = await prisma.token.create({ data: { mintAddress: `${TAG}-gov-retry-winner` } });
     await collectCuratedContender(cycle, winner, curatableFixture(winner.mintAddress), null, env);
     expect(await emitCuratedCycle(cycle, env)).toBe(1);
-    // The winner was sent, so it has nothing to retry; the loser does, on the live ledger.
+    // The winner was sent, so it has nothing to retry; the loser does, on the ledger it lost.
     expect(takeContenderRetry(winner.id)).toBeNull();
     const retry = takeContenderRetry(loser.id);
-    expect(retry?.live).toBe(true);
+    expect(retry?.models).toEqual([RULES_CONTESTANT]);
 
     // A later cycle with room: the scan finds the loser's event already spent and hands the
     // retry in instead. It still has to clear its curator, and then it goes out.
@@ -317,7 +323,7 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
       undefined,
       retry!,
     );
-    expect(later.live).toHaveLength(1);
+    expect(later.byModel.get(RULES_CONTESTANT)).toHaveLength(1);
     expect(await emitCuratedCycle(later, env)).toBe(1);
     expect(await prisma.curatedAlert.count({ where: { tokenId: loser.id } })).toBe(1);
   });
@@ -334,14 +340,13 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
     const later = Date.now() + (env.CURATED_CONTENDER_RETRY_MINUTES + 1) * 60_000;
     expect(takeContenderRetry(token.id, later)).toBeNull();
 
-    // A retry for the shadow ledger alone never files a live contender.
-    const shadowOnly = newCuratedCycle();
-    await collectCuratedContender(shadowOnly, token, scored, null, env, undefined, {
-      live: false,
-      shadow: true,
+    // A retry for another contestant's ledger never files a contender on this one.
+    const otherLedger = newCuratedCycle();
+    await collectCuratedContender(otherLedger, token, scored, null, env, undefined, {
+      models: ["linear"],
       until: Date.now() + 60_000,
     });
-    expect(shadowOnly.live).toHaveLength(0);
+    expect(otherLedger.byModel.size).toBe(0);
   });
 });
 
@@ -363,68 +368,22 @@ function alwaysYesParams() {
   };
 }
 
-describe.skipIf(!dbAvailable)("shadow emissions", () => {
+describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
   const env = dbAvailable ? loadEnv() : (undefined as never);
-  const modelIds: string[] = [];
 
-  beforeEach(freeGovernorBudget);
-
-  afterAll(async () => {
-    if (!dbAvailable) return;
-    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
-    await prisma.curatorModel.deleteMany({ where: { id: { in: modelIds } } });
-    resetCuratorModelCache();
-  });
-
-  it("banks the bench model's pick while the heuristic curates live, sharing the alert's anchor", async () => {
+  async function retireAll(): Promise<void> {
     await prisma.curatorModel.updateMany({
       where: { status: { in: ["active", "candidate"] } },
       data: { status: "retired", retiredAt: new Date() },
     });
-    const candidateModel = await prisma.curatorModel.create({
+  }
+
+  async function activeModel(contestant: string, kind: string, params: object): Promise<string> {
+    const row = await prisma.curatorModel.create({
       data: {
-        kind: CURATOR_MODEL_KIND,
-        params: alwaysYesParams(),
-        trainingRows: 2_000,
-        trainingFrom: new Date(Date.now() - 30 * 86_400_000),
-        trainingTo: new Date(),
-        evalMetrics: {},
-        status: "candidate",
-      },
-    });
-    modelIds.push(candidateModel.id);
-    resetCuratorModelCache();
-
-    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-shadow-model` } });
-    const scored = curatableFixture(token.mintAddress);
-    const sample = await recordCandidateSample(token.id, scored, env);
-    expect(await collectAndEmit(env, token, scored, sample)).toBe(true);
-
-    // The live feed is still the heuristic's...
-    const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: token.id } });
-    expect(alert.source).toBe(HEURISTIC_CURATOR_SOURCE);
-    // ...and the bench model's would-be pick landed on its own ledger, graded from the very
-    // same anchor row the real alert grades from.
-    const shadow = await prisma.curatedShadowEmission.findFirstOrThrow({
-      where: { tokenId: token.id },
-    });
-    expect(shadow.source).toBe(candidateModel.id);
-    expect(shadow.candidateOutcomeId).toBe(sample!.id);
-
-    // Shadow cooldown is per token, same as the real feed: a second cycle adds nothing.
-    expect(await collectAndEmit(env, token, scored, null)).toBe(false);
-    expect(await prisma.curatedShadowEmission.count({ where: { tokenId: token.id } })).toBe(1);
-  });
-
-  it("the heuristic shadows the model once a model holds the job", async () => {
-    await prisma.curatorModel.updateMany({
-      where: { status: { in: ["active", "candidate"] } },
-      data: { status: "retired", retiredAt: new Date() },
-    });
-    const activeModel = await prisma.curatorModel.create({
-      data: {
-        kind: CURATOR_MODEL_KIND,
-        params: alwaysYesParams(),
+        contestant,
+        kind,
+        params,
         trainingRows: 2_000,
         trainingFrom: new Date(Date.now() - 30 * 86_400_000),
         trainingTo: new Date(),
@@ -433,102 +392,67 @@ describe.skipIf(!dbAvailable)("shadow emissions", () => {
         activatedAt: new Date(),
       },
     });
-    modelIds.push(activeModel.id);
-    resetCuratorModelCache();
+    return row.id;
+  }
 
-    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-shadow-heuristic` } });
+  beforeEach(async () => {
+    await retireAll();
+    resetCuratorModelCache();
+    resetDeferredContenders();
+    await freeGovernorBudget();
+  });
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await retireAll();
+    resetCuratorModelCache();
+  });
+
+  it("every contestant calls on its own ledger, all graded from one shared anchor", async () => {
+    const linearId = await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-ledgers` } });
     const scored = curatableFixture(token.mintAddress);
     const sample = await recordCandidateSample(token.id, scored, env);
-    expect(await collectAndEmit(env, token, scored, sample)).toBe(true);
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, sample, env);
+    expect(await emitCuratedCycle(cycle, env)).toBe(2);
 
-    const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: token.id } });
-    expect(alert.source).toBe(activeModel.id);
-    const shadow = await prisma.curatedShadowEmission.findFirstOrThrow({
-      where: { tokenId: token.id },
-    });
-    expect(shadow.source).toBe(HEURISTIC_CURATOR_SOURCE);
-
-    await prisma.curatorModel.update({
-      where: { id: activeModel.id },
-      data: { status: "retired", retiredAt: new Date() },
-    });
-    resetCuratorModelCache();
+    const alerts = await prisma.curatedAlert.findMany({ where: { tokenId: token.id } });
+    const byModel = new Map(alerts.map((a) => [a.model, a]));
+    expect(byModel.get(RULES_CONTESTANT)?.source).toBe(HEURISTIC_CURATOR_SOURCE);
+    expect(byModel.get("linear")?.source).toBe(linearId);
+    expect(new Set(alerts.map((a) => a.candidateOutcomeId))).toEqual(new Set([sample!.id]));
   });
 
-  it("a shadow-only pick gets its own fresh anchor when the live side stayed quiet", async () => {
-    await prisma.curatorModel.updateMany({
-      where: { status: { in: ["active", "candidate"] } },
-      data: { status: "retired", retiredAt: new Date() },
-    });
-    const candidateModel = await prisma.curatorModel.create({
-      data: {
-        kind: CURATOR_MODEL_KIND,
-        params: alwaysYesParams(),
-        trainingRows: 2_000,
-        trainingFrom: new Date(Date.now() - 30 * 86_400_000),
-        trainingTo: new Date(),
-        evalMetrics: {},
-        status: "candidate",
-      },
-    });
-    modelIds.push(candidateModel.id);
+  it("holds the cooldown per ledger: one contestant's call doesn't block another's", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-ledger-cooldown` } });
+    const scored = curatableFixture(token.mintAddress);
+    // Rules calls it first, alone.
+    expect(await collectAndEmit(env, token, scored, null)).toBe(true);
+    // A learner arrives: Rules is cooling down on this token, the learner is not.
+    await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
     resetCuratorModelCache();
-
-    // The heuristic rejects this (thin liquidity), the bench model would emit it - and the
-    // cycle's sample is a stale reuse, so the shadow row must NOT grade from the old anchor.
-    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-shadow-only` } });
-    const scored = curatableFixture(token.mintAddress, { liquidityUsd: 2_000 });
-    const first = await recordCandidateSample(token.id, scored, env);
-    await prisma.candidateOutcome.update({
-      where: { id: first!.id },
-      data: { anchorAt: new Date(Date.now() - 30 * 60_000), anchorPriceUsd: 0.00005 },
-    });
-    const reused = await recordCandidateSample(token.id, scored, env);
-    expect(reused).toEqual({ id: first!.id, created: false });
-
-    expect(await collectAndEmit(env, token, scored, reused)).toBe(false);
-    expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(0);
-
-    const shadow = await prisma.curatedShadowEmission.findFirstOrThrow({
-      where: { tokenId: token.id },
-    });
-    expect(shadow.candidateOutcomeId).not.toBe(first!.id);
-    const anchorRow = await prisma.candidateOutcome.findUniqueOrThrow({
-      where: { id: shadow.candidateOutcomeId! },
-    });
-    expect(anchorRow.anchorPriceUsd).toBe(0.0001);
-    expect(anchorRow.extended24h).toBe(false); // shadow grading needs the 1h labels alone
+    await freeGovernorBudget();
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, null, env);
+    expect([...cycle.byModel.keys()]).toEqual(["linear"]);
+    expect(await emitCuratedCycle(cycle, env)).toBe(1);
   });
 
-  it("the shadow ledger is governed against its own budget, independently of the live feed", async () => {
-    await prisma.curatorModel.updateMany({
-      where: { status: { in: ["active", "candidate"] } },
-      data: { status: "retired", retiredAt: new Date() },
-    });
-    const candidateModel = await prisma.curatorModel.create({
-      data: {
-        kind: CURATOR_MODEL_KIND,
-        params: alwaysYesParams(),
-        trainingRows: 2_000,
-        trainingFrom: new Date(Date.now() - 30 * 86_400_000),
-        trainingTo: new Date(),
-        evalMetrics: {},
-        status: "candidate",
-      },
-    });
-    modelIds.push(candidateModel.id);
-    resetCuratorModelCache();
-
-    // Fill the SHADOW ledger's trailing hour to target on unrelated tokens.
+  it("governs each ledger against its own budget", async () => {
+    await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
     const fillers = await Promise.all(
       Array.from({ length: Math.ceil(env.CURATED_TARGET_PER_HOUR) }, (_, i) =>
-        prisma.token.create({ data: { mintAddress: `${TAG}-shadow-fill-${i}` } }),
+        prisma.token.create({ data: { mintAddress: `${TAG}-ledger-fill-${i}` } }),
       ),
     );
-    await prisma.curatedShadowEmission.createMany({
+    await prisma.curatedAlert.createMany({
       data: fillers.map((f) => ({
         tokenId: f.id,
-        source: candidateModel.id,
+        model: RULES_CONTESTANT,
+        source: HEURISTIC_CURATOR_SOURCE,
         confidence: 90,
         anchorPriceUsd: 1,
         anchorMcapUsd: 100_000,
@@ -536,12 +460,69 @@ describe.skipIf(!dbAvailable)("shadow emissions", () => {
       })),
     });
 
-    // A live-worthy candidate: the LIVE ledger (its own budget clean) must still emit, while the
-    // bench pick has to wait out the shadow ledger's spent hour.
-    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-shadow-governed` } });
-    const scored = curatableFixture(token.mintAddress);
-    expect(await collectAndEmit(env, token, scored, null)).toBe(true);
-    expect(await prisma.curatedShadowEmission.count({ where: { tokenId: token.id } })).toBe(0);
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-ledger-governed` } });
+    expect(await collectAndEmit(env, token, curatableFixture(token.mintAddress), null)).toBe(true);
+    const alerts = await prisma.curatedAlert.findMany({ where: { tokenId: token.id } });
+    expect(alerts.map((a) => a.model)).toEqual(["linear"]);
+  });
+
+  /** Two always-yes members and a consensus over them that also always says yes. */
+  async function seedConsensus(): Promise<{ linearId: string; treesId: string }> {
+    const linearId = await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    const treesId = await activeModel("trees", CURATOR_MODEL_KIND, alwaysYesParams());
+    const members = [
+      { contestant: "linear", modelId: linearId, quantiles: [0.2, 0.5, 0.8] },
+      { contestant: "trees", modelId: treesId, quantiles: [0.2, 0.5, 0.8] },
+    ];
+    const featureNames = stackedFeatureNames(members);
+    await activeModel(CONSENSUS_CONTESTANT, STACKED_MODEL_KIND, {
+      kind: STACKED_MODEL_KIND,
+      members,
+      rules: { quantiles: [10, 50, 90], minScore: 55 },
+      meta: {
+        kind: CURATOR_MODEL_KIND,
+        featureNames,
+        means: featureNames.map(() => 0),
+        stdevs: featureNames.map(() => 1),
+        weights: [...featureNames, ...featureNames].map(() => 0),
+        bias: 5,
+      },
+      threshold: 0.5,
+    });
+    return { linearId, treesId };
+  }
+
+  it("the consensus calls on its own ledger, naming the members behind the call", async () => {
+    await seedConsensus();
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-consensus` } });
+    expect(await collectAndEmit(env, token, curatableFixture(token.mintAddress), null)).toBe(true);
+    const consensus = await prisma.curatedAlert.findFirstOrThrow({
+      where: { tokenId: token.id, model: CONSENSUS_CONTESTANT },
+    });
+    expect(consensus.confidence).toBeGreaterThan(99);
+    expect(consensus.reasons[0]).toBe("backed by Linear, Trees, Rules");
+  });
+
+  it("the consensus sits out when a member is a different generation than it was stacked on", async () => {
+    await seedConsensus();
+    // A newer Trees row its quantile tables don't describe.
+    await activeModel("trees", CURATOR_MODEL_KIND, alwaysYesParams());
+    resetCuratorModelCache();
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-consensus-stale` } });
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, curatableFixture(token.mintAddress), null, env);
+    expect(cycle.byModel.has(CONSENSUS_CONTESTANT)).toBe(false);
+    expect(cycle.byModel.has("trees")).toBe(true);
+  });
+
+  it("the rules ledger reads its cutoff from its own contest row", async () => {
+    await activeModel(RULES_CONTESTANT, RULES_MODEL_KIND, {
+      kind: RULES_MODEL_KIND,
+      minScore: 55,
+      rankCutoff: 99,
+    });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-rules-row` } });
+    expect(await collectAndEmit(env, token, curatableFixture(token.mintAddress), null)).toBe(false);
   });
 });
 

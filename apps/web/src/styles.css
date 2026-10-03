@@ -1737,3 +1737,128 @@ legend {
     transition: none !important;
   }
 }
+
+/* ---------- Curator contest: model picker, leaderboard ---------- */
+select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 7px 10px;
+  max-width: 100%;
+}
+select:focus {
+  outline: none;
+  border-color: var(--brand-b);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-b) 25%, transparent);
+}
+.feed-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.model-picker select {
+  min-width: 180px;
+}
+.leaderboard tr.selected {
+  background: color-mix(in srgb, var(--brand-a) 9%, transparent);
+}
+.leaderboard tr.selected:hover {
+  background: color-mix(in srgb, var(--brand-a) 13%, transparent);
+}
+.model-cell {
+  white-space: normal;
+  min-width: 220px;
+}
+.model-cell .row {
+  gap: 6px;
+  align-items: center;
+}
+.model-cell small {
+  display: block;
+  max-width: 360px;
+  line-height: 1.35;
+}
+.score-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+}
+.score-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.score-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+}
+.score-bar .num {
+  font-weight: 650;
+  min-width: 2ch;
+  text-align: right;
+}
+button.small-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.run-picker {
+  height: fit-content;
+}
+.steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+  color: var(--ink-2);
+}
+.steps strong {
+  color: var(--ink);
+}
+.panel.secondary {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+.panel.secondary summary {
+  cursor: pointer;
+  list-style: none;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.panel.secondary summary::-webkit-details-marker {
+  display: none;
+}
+.panel.secondary summary .row {
+  gap: 8px;
+  align-items: center;
+}
+.panel.secondary details[open] summary {
+  margin-bottom: 10px;
+}
+@media (max-width: 640px) {
+  .section-head:has(.feed-controls) {
+    flex-wrap: wrap;
+  }
+  .feed-controls {
+    justify-content: flex-start;
+    width: 100%;
+  }
+  .model-picker select {
+    min-width: 0;
+    width: 100%;
+  }
+}

@@ -22,7 +22,7 @@ type Tab = "live" | "model" | "filters";
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
-  { id: "model", label: "Model & AI", Icon: BrainIcon },
+  { id: "model", label: "Models", Icon: BrainIcon },
   { id: "filters", label: "Filters", Icon: SlidersIcon },
 ];
 

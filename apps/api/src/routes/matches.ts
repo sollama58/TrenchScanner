@@ -11,6 +11,7 @@ import {
 } from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
+import { contestState, resolveFeedModel, savedFeedModel } from "../contest.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
@@ -172,14 +173,20 @@ export async function registerMatchRoutes(
       prisma.match.count({ where }),
     ]);
 
-    const [curatedAlerts, curatedTotal] = interleave
+    // The curated calls interleaved are the ledger this user's Curated tab shows (their picked
+    // model, else the default), so the two tabs never disagree about what "curated" means.
+    const curatedModel = interleave
+      ? resolveFeedModel(await contestState(opts.env), undefined, await savedFeedModel(request.user!.userId))
+      : null;
+    const [curatedAlerts, curatedTotal] = curatedModel
       ? await Promise.all([
           prisma.curatedAlert.findMany({
+            where: { model: curatedModel },
             orderBy: { createdAt: "desc" },
             take: mergeDepth,
             include: curatedAlertInclude,
           }),
-          prisma.curatedAlert.count(),
+          prisma.curatedAlert.count({ where: { model: curatedModel } }),
         ])
       : [[], 0];
 

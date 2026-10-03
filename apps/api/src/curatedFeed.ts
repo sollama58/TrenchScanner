@@ -6,6 +6,7 @@ import {
   hit2xInWinWindow,
   disqualifiedByDrawdown,
   cleanPeakPriceUsd,
+  contestantSpec,
 } from "@trenchscanner/core";
 
 /**
@@ -189,6 +190,9 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
     alertId: alert.id,
     /** "heuristic-v1", or the id of the trained model that emitted it. */
     source: alert.source,
+    /** The contestant whose call this is (curation/contestants.ts), with its display name. */
+    model: alert.model,
+    modelName: alert.model ? (contestantSpec(alert.model)?.name ?? alert.model) : null,
     confidence: alert.confidence,
     // An "AI: ..." line was how a gate-mode reviewer's reasoning reached public cards; that is now
     // admin-only (see attachAiReviewsForAdmin), so any such line already stored is held back too.

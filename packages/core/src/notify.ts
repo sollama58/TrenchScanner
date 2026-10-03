@@ -39,6 +39,8 @@ export const CURATED_CHANNEL = "trenchscanner_curated";
 
 export interface CuratedAlertNotification {
   alertId: string;
+  /** The contestant whose ledger the call is on (CuratedAlert.model). */
+  model?: string;
 }
 
 /** Same contract and caveats as notifyMatchCreated, for the broadcast curated feed. */

@@ -8,6 +8,7 @@ import {
   scoreBoosted,
   trainBoostedCurator,
   type BoostedCuratorParams,
+  type BoostingOptions,
 } from "./boosting.js";
 
 export { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform };
@@ -96,10 +97,10 @@ export const CURATOR_LEARNERS: readonly CuratorLearner[] = ["logistic", "gbdt"];
 /** Trains one model of the given family. */
 export async function trainCuratorModel(
   rows: TrainingRow[],
-  opts: TrainOptions & { learner?: CuratorLearner } = {},
+  opts: TrainOptions & { learner?: CuratorLearner; boosting?: BoostingOptions } = {},
 ): Promise<UnthresholdedCuratorParams> {
   return opts.learner === "gbdt"
-    ? trainBoostedCurator(rows, { recencyHalfLifeDays: opts.recencyHalfLifeDays })
+    ? trainBoostedCurator(rows, { ...opts.boosting, recencyHalfLifeDays: opts.recencyHalfLifeDays })
     : trainCurator(rows, opts);
 }
 
@@ -176,6 +177,17 @@ export interface TrainOptions {
    * whenever it's trained. Omitted = no decay (every row weighs its label-worth alone).
    */
   recencyHalfLifeDays?: number;
+  /**
+   * The features the model reads, in vector order. Default: every CANDIDATE_FEATURE_NAMES entry.
+   * A subset is how one contestant specializes (see curation/contestants.ts); the stacked model
+   * passes its own member-signal names here.
+   */
+  featureNames?: readonly string[];
+  /**
+   * The feature transform to train under. Default CURRENT_FEATURE_TRANSFORM; null trains on raw
+   * values (the stacked model's inputs are already ranks in [0, 1]).
+   */
+  transform?: FeatureTransform | null;
 }
 
 /**
@@ -194,9 +206,9 @@ export async function trainCurator(
   opts: TrainOptions = {},
 ): Promise<Omit<LogisticCuratorParams, "threshold">> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
-  const featureNames = [...CANDIDATE_FEATURE_NAMES];
+  const featureNames: string[] = [...(opts.featureNames ?? CANDIDATE_FEATURE_NAMES)];
   const n = featureNames.length;
-  const transform = CURRENT_FEATURE_TRANSFORM;
+  const transform = opts.transform === null ? undefined : (opts.transform ?? CURRENT_FEATURE_TRANSFORM);
 
   // Standardization stats over PRESENT values only - missing values are represented by the
   // indicator half of the vector, never imputed into the mean.
@@ -259,7 +271,15 @@ export async function trainCurator(
     bias -= lr * (gradBias / totalWeight);
   }
 
-  return { kind: CURATOR_MODEL_KIND, featureNames, means, stdevs, weights, bias, transform };
+  return {
+    kind: CURATOR_MODEL_KIND,
+    featureNames,
+    means,
+    stdevs,
+    weights,
+    bias,
+    ...(transform !== undefined ? { transform } : {}),
+  };
 }
 
 /** Predicted probability of a clean 2x-within-1-hour for one candidate's feature vector. */
@@ -690,6 +710,10 @@ export interface WalkForwardOptions {
   heuristicPrecisionGate?: boolean;
   /** Which model family the folds train. Default "logistic". */
   learner?: CuratorLearner;
+  /** The logistic family's feature subset - see TrainOptions.featureNames. */
+  featureNames?: readonly string[];
+  /** The boosted family's hyperparameters (defaults: DEFAULT_BOOSTING_OPTIONS). */
+  boosting?: BoostingOptions;
 }
 
 /** Whether a row is a moment a live curator decides on - see WalkForwardOptions.decisionRowsOnly. */
@@ -779,6 +803,8 @@ export async function walkForwardEvaluate(
       const params = await trainCuratorModel(train, {
         recencyHalfLifeDays: opts.recencyHalfLifeDays,
         learner: opts.learner,
+        featureNames: opts.featureNames,
+        boosting: opts.boosting,
       });
       // Without targets the model plays the pace cutoff, calibrated on the band-filtered train
       // slice - a threshold ranked against unemittable rows grades a model production never
@@ -947,7 +973,10 @@ export function thresholdAtRank(
  * call survives only when it is that token's first since its last surviving call plus the
  * cooldown. No cooldown, or a row with no tokenId, passes through untouched.
  */
-function applyCooldown<T extends { row: TrainingRow }>(calls: T[], cooldownMs: number | undefined): T[] {
+export function applyCooldown<T extends { row: TrainingRow }>(
+  calls: T[],
+  cooldownMs: number | undefined,
+): T[] {
   if (cooldownMs === undefined) return [...calls];
   const byTime = [...calls].sort((a, b) => a.row.anchorAt.getTime() - b.row.anchorAt.getTime());
   const lastSent = new Map<string, number>();

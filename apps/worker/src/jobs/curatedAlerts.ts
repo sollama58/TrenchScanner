@@ -9,11 +9,23 @@ import {
   topModelReasons,
   governorCapacity,
   selectEmissions,
+  enabledContestants,
+  contestantSpec,
+  defaultContestant,
+  rankFromQuantiles,
+  rulesSignal,
+  scoreStacked,
+  RULES_CONTESTANT,
+  RULES_MODEL_KIND,
+  STACKED_MODEL_KIND,
   SUPPORTED_CURATOR_MODEL_KINDS,
   GOVERNOR_BURST_WINDOW_MINUTES,
+  type ContestantSpec,
   type CurationDecision,
   type Env,
+  type RulesCuratorParams,
   type ScoredToken,
+  type StackedCuratorParams,
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
@@ -22,68 +34,124 @@ import { aiGateQualified, aiReviewEnabled, reviewPick, type AiReviewResult } fro
 const logger = createLogger("curated-alerts");
 
 /**
- * The curator models in play, cached briefly: emission runs per candidate per scan cycle, and
- * the roster changes at most once per training run. The TTL is also the takeover latency after
- * the training job promotes - a few minutes of the old curator finishing its shift.
+ * The curator contest's roster, cached briefly: emission runs per candidate per scan cycle, and
+ * the roster changes at most once per training run. The TTL is also how long a fresh training
+ * run waits to take over - a few minutes of the previous generation finishing its shift.
  */
 const MODEL_CACHE_TTL_MS = 5 * 60_000;
 
-interface CuratorModelRef {
+interface ModelRef<P> {
   id: string;
-  params: TrainedCuratorParams;
+  params: P;
 }
+
+/**
+ * One contestant ready to decide. Every contestant calls on its own ledger (CuratedAlert.model);
+ * see curation/contestants.ts for who they are.
+ */
+type RosterEntry =
+  | {
+      role: "rules";
+      spec: ContestantSpec;
+      /**
+       * The rules' hit-rate cutoff (rank-score units) from the newest training run, or undefined
+       * when no run produced one - the gate then sends on its own. See heuristicGate below.
+       */
+      rankCutoff: number | undefined;
+    }
+  | { role: "learner"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
+  | { role: "stacked"; spec: ContestantSpec; model: ModelRef<StackedCuratorParams> };
 
 interface CuratorRoster {
-  /** The promoted model currently holding the job, if any. */
-  active: CuratorModelRef | null;
-  /** The newest trained-but-not-promoted model - the bench side while the heuristic is live. */
-  newestCandidate: CuratorModelRef | null;
-  /**
-   * The heuristic's hit-rate cutoff from the newest training run (in rank-score units), or
-   * undefined when no run has produced one (the heuristic then sends on its gate alone). See
-   * curatorTrainingJob.ts and heuristicGate below.
-   */
-  heuristicCutoff: number | undefined;
+  /** Enabled contestants that have what they need to decide, in roster order. */
+  entries: RosterEntry[];
+  /** The contestant whose calls are the default feed - see defaultContestant. */
+  defaultModel: string;
 }
 
-let modelCache: { fetchedAt: number; roster: CuratorRoster } | null = null;
+let modelCache: { fetchedAt: number; key: string; roster: CuratorRoster } | null = null;
 
 /** Test hook: forget the cached models so the next emission re-reads the table. */
 export function resetCuratorModelCache(): void {
   modelCache = null;
 }
 
-async function curatorRoster(): Promise<CuratorRoster> {
-  if (modelCache && Date.now() - modelCache.fetchedAt < MODEL_CACHE_TTL_MS) {
+async function curatorRoster(env: Env): Promise<CuratorRoster> {
+  const key = env.CURATOR_CONTESTANTS.join(",");
+  if (modelCache && modelCache.key === key && Date.now() - modelCache.fetchedAt < MODEL_CACHE_TTL_MS) {
     return modelCache.roster;
   }
-  // Kind-filtered: a future model family this build doesn't understand must be ignored, not
-  // half-applied through a params shape it happens to overlap with.
-  const toRef = (row: { id: string; params: unknown } | null): CuratorModelRef | null =>
-    row ? { id: row.id, params: row.params as TrainedCuratorParams } : null;
-  const [active, newestCandidate, newestRun] = await Promise.all([
-    prisma.curatorModel.findFirst({
-      where: { status: "active", kind: { in: [...SUPPORTED_CURATOR_MODEL_KINDS] } },
-      orderBy: { activatedAt: "desc" },
-    }),
-    prisma.curatorModel.findFirst({
-      where: { status: "candidate", kind: { in: [...SUPPORTED_CURATOR_MODEL_KINDS] } },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" }, select: { evalMetrics: true } }),
-  ]);
-  modelCache = {
-    fetchedAt: Date.now(),
-    roster: {
-      active: toRef(active),
-      newestCandidate: toRef(newestCandidate),
-      heuristicCutoff: readHeuristicCutoff(newestRun?.evalMetrics),
-    },
+  const specs = enabledContestants(env.CURATOR_CONTESTANTS);
+  // The newest active row per contestant. A kind this build doesn't understand is ignored rather
+  // than half-applied through a params shape it happens to overlap with.
+  const rows = await prisma.curatorModel.findMany({
+    where: { status: "active", contestant: { in: specs.map((s) => s.id) } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, contestant: true, kind: true, params: true },
+  });
+  const newest = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) if (row.contestant && !newest.has(row.contestant)) newest.set(row.contestant, row);
+
+  const entries: RosterEntry[] = [];
+  for (const spec of specs) {
+    const row = newest.get(spec.id);
+    if (spec.role === "rules") {
+      const params = row?.kind === RULES_MODEL_KIND ? (row.params as unknown as RulesCuratorParams) : null;
+      entries.push({
+        role: "rules",
+        spec,
+        rankCutoff: params !== null ? (params.rankCutoff ?? undefined) : await legacyHeuristicCutoff(),
+      });
+    } else if (spec.role === "learner") {
+      if (row && SUPPORTED_CURATOR_MODEL_KINDS.includes(row.kind)) {
+        entries.push({
+          role: "learner",
+          spec,
+          model: { id: row.id, params: row.params as unknown as TrainedCuratorParams },
+        });
+      }
+    } else if (row?.kind === STACKED_MODEL_KIND) {
+      entries.push({
+        role: "stacked",
+        spec,
+        model: { id: row.id, params: row.params as unknown as StackedCuratorParams },
+      });
+    }
+  }
+
+  // The consensus reads its members' probabilities through quantile tables built from exactly
+  // the models it was trained beside. If a member's current model is a different generation (or
+  // missing), those tables describe the wrong scale - it sits out until the next run.
+  const learnerIds = new Map(
+    entries.flatMap((e) => (e.role === "learner" ? [[e.spec.id, e.model.id] as const] : [])),
+  );
+  const usable = entries.filter(
+    (e) =>
+      e.role !== "stacked" || e.model.params.members.every((m) => learnerIds.get(m.contestant) === m.modelId),
+  );
+  const consensus = usable.find((e) => e.role === "stacked");
+  const roster: CuratorRoster = {
+    entries: usable,
+    defaultModel: defaultContestant(consensus?.role === "stacked" ? consensus.model.params.threshold : null),
   };
-  return modelCache.roster;
+  modelCache = { fetchedAt: Date.now(), key, roster };
+  return roster;
 }
 
-/** Pulls heuristicCalibration.threshold out of a stored evalMetrics blob - see CuratorRoster. */
+/**
+ * Before the first contest run there is no rules row; the newest single-curator run's heuristic
+ * cutoff still applies, so the switch-over never changes what the rules feed sends.
+ */
+async function legacyHeuristicCutoff(): Promise<number | undefined> {
+  const newestRun = await prisma.curatorModel.findFirst({
+    where: { contestant: null },
+    orderBy: { createdAt: "desc" },
+    select: { evalMetrics: true },
+  });
+  return readHeuristicCutoff(newestRun?.evalMetrics);
+}
+
+/** Pulls heuristicCalibration.threshold out of a stored evalMetrics blob. */
 function readHeuristicCutoff(evalMetrics: unknown): number | undefined {
   if (typeof evalMetrics !== "object" || evalMetrics === null) return undefined;
   const calibration = (evalMetrics as { heuristicCalibration?: { threshold?: unknown } })
@@ -100,57 +168,76 @@ function readHeuristicCutoff(evalMetrics: unknown): number | undefined {
  * met the targets, or its best record when none did. Without a cutoff the gate stands alone.
  * CURATED_HEURISTIC_PRECISION_GATE=false restores the gate-only behaviour.
  */
-function heuristicGate(scored: ScoredToken, roster: CuratorRoster, env: Env): CurationDecision {
+function heuristicGate(scored: ScoredToken, rankCutoff: number | undefined, env: Env): CurationDecision {
   const decision = evaluateCandidateHeuristic(scored, env.CURATED_MIN_SCORE);
-  if (!decision.curate || !env.CURATED_HEURISTIC_PRECISION_GATE || roster.heuristicCutoff === undefined) {
+  if (!decision.curate || !env.CURATED_HEURISTIC_PRECISION_GATE || rankCutoff === undefined) {
     return decision;
   }
-  return decision.confidence >= roster.heuristicCutoff ? decision : { ...decision, curate: false };
+  return decision.confidence >= rankCutoff ? decision : { ...decision, curate: false };
 }
 
-function decideWithModel(
-  model: CuratorModelRef,
-  scored: ScoredToken,
-  opts: { withReasons: boolean },
-): CurationDecision {
-  const features = buildCandidateFeatures(scored);
-  const probability = scoreCandidateWithModel(model.params, features);
-  return {
-    curate: probability >= model.params.threshold,
-    confidence: probability * 100,
-    // Reasons cost a full pass over the weights and only real alert cards show them - the
-    // shadow ledger stores none.
-    reasons: opts.withReasons ? topModelReasons(model.params, features) : [],
-    source: model.id,
-  };
-}
+/** Share of the decision moments a consensus member must outrank to count as backing a call. */
+const BACKING_RANK = 0.9;
 
 /**
- * Both curator decisions for this candidate: the LIVE one from whoever currently holds the job
- * (the promoted model when one is active, the hand-tuned heuristic otherwise), and the SHADOW
- * one from the bench - the heuristic while a model is live, the newest candidate model while the
- * heuristic is. The shadow side never reaches subscribers; it exists so both curators build a
- * production track record simultaneously (see CuratedShadowEmission) instead of the bench only
- * ever being judged in walk-forward backtests. A model decision's source is the CuratorModel row
- * id, so every emission on either ledger is traceable to the exact weights that made it.
+ * Every contestant's decision on this candidate, keyed by contestant id. A model decision's
+ * source is its CuratorModel row id, so every call is traceable to the exact weights that made
+ * it. Reasons are computed only for calls (they cost a pass over the model).
  */
-async function decideCurations(
+function decideCurations(
   scored: ScoredToken,
+  roster: CuratorRoster,
   env: Env,
-): Promise<{ live: CurationDecision; shadow: CurationDecision | null }> {
-  const roster = await curatorRoster();
-  if (roster.active) {
-    return {
-      live: decideWithModel(roster.active, scored, { withReasons: true }),
-      shadow: heuristicGate(scored, roster, env),
-    };
+): Map<string, CurationDecision> {
+  const features = buildCandidateFeatures(scored);
+  const decisions = new Map<string, CurationDecision>();
+  const probabilities = new Map<string, number>();
+  const learners = new Map<string, ModelRef<TrainedCuratorParams>>();
+
+  for (const entry of roster.entries) {
+    if (entry.role === "rules") {
+      decisions.set(entry.spec.id, heuristicGate(scored, entry.rankCutoff, env));
+    } else if (entry.role === "learner") {
+      const { params, id } = entry.model;
+      const probability = scoreCandidateWithModel(params, features);
+      probabilities.set(entry.spec.id, probability);
+      learners.set(entry.spec.id, entry.model);
+      const curate = probability >= params.threshold;
+      decisions.set(entry.spec.id, {
+        curate,
+        confidence: probability * 100,
+        reasons: curate ? topModelReasons(params, features) : [],
+        source: id,
+      });
+    }
   }
-  return {
-    live: heuristicGate(scored, roster, env),
-    shadow: roster.newestCandidate
-      ? decideWithModel(roster.newestCandidate, scored, { withReasons: false })
-      : null,
-  };
+
+  for (const entry of roster.entries) {
+    if (entry.role !== "stacked") continue;
+    const { params, id } = entry.model;
+    const probability = scoreStacked(params, probabilities, rulesSignal(scored, params.rules.minScore));
+    const curate = probability >= params.threshold;
+    let reasons: string[] = [];
+    if (curate) {
+      // Who is behind the call, then what the most convinced of them sees.
+      const ranked = params.members
+        .map((m) => ({
+          m,
+          rank: rankFromQuantiles(m.quantiles, probabilities.get(m.contestant) ?? -Infinity),
+        }))
+        .sort((a, b) => b.rank - a.rank);
+      const backers = ranked
+        .filter((r) => r.rank >= BACKING_RANK)
+        .map((r) => contestantSpec(r.m.contestant)?.name);
+      if (decisions.get(RULES_CONTESTANT)?.curate) backers.push(contestantSpec(RULES_CONTESTANT)?.name);
+      const named = backers.filter((b): b is string => b !== undefined);
+      if (named.length > 0) reasons.push(`backed by ${named.join(", ")}`);
+      const strongest = ranked[0] ? learners.get(ranked[0].m.contestant) : undefined;
+      if (strongest) reasons = [...reasons, ...topModelReasons(strongest.params, features, 3)];
+    }
+    decisions.set(entry.spec.id, { curate, confidence: probability * 100, reasons, source: id });
+  }
+  return decisions;
 }
 
 /**
@@ -169,10 +256,9 @@ export interface CuratedContender {
   retryUntil?: number;
 }
 
-/** Which ledgers a deferred token is still contending for, and until when. */
+/** Which contestants' ledgers a deferred token is still contending for, and until when. */
 export interface ContenderRetry {
-  live: boolean;
-  shadow: boolean;
+  models: string[];
   until: number;
 }
 
@@ -201,14 +287,13 @@ export function takeContenderRetry(tokenId: string, now = Date.now()): Contender
   return retry.until > now ? retry : null;
 }
 
-/** Files a contender that lost its slot for retry, keeping a retry's original expiry. */
-function deferContender(contender: CuratedContender, side: "live" | "shadow", env: Env, now: number): void {
+/** Files a contender that lost its slot on `model`'s ledger, keeping a retry's original expiry. */
+function deferContender(contender: CuratedContender, model: string, env: Env, now: number): void {
   const until = contender.retryUntil ?? now + env.CURATED_CONTENDER_RETRY_MINUTES * 60_000;
   if (until <= now) return;
   const existing = deferredContenders.get(contender.token.id);
   deferredContenders.set(contender.token.id, {
-    live: side === "live" || (existing?.live ?? false),
-    shadow: side === "shadow" || (existing?.shadow ?? false),
+    models: [...new Set([...(existing?.models ?? []), model])],
     until: Math.max(until, existing?.until ?? 0),
   });
 }
@@ -221,33 +306,29 @@ function pruneDeferredContenders(now: number): void {
 }
 
 /**
- * One scan cycle's curation state: the candidates each curator would put on its ledger, waiting
- * for the end-of-cycle governor pass to decide which actually go. Two independent lists because
- * the two ledgers are governed independently - each side's record must mean "my best picks at
- * the same budget", or comparing them is meaningless.
+ * One scan cycle's curation state: per contestant, the candidates it would call, waiting for the
+ * end-of-cycle governor pass to decide which actually go. Each ledger is governed independently,
+ * so every contestant's record means "my best calls at the same budget" - the only way comparing
+ * them on the leaderboard means anything.
  */
 export interface CuratedCycle {
-  live: CuratedContender[];
-  shadow: CuratedContender[];
+  byModel: Map<string, CuratedContender[]>;
 }
 
 export function newCuratedCycle(): CuratedCycle {
-  return { live: [], shadow: [] };
+  return { byModel: new Map() };
 }
 
 /**
  * Phase one, called from the scan cycle for every rug-screen-passing candidate right after its
- * training sample is banked: runs both curators and files anything they'd emit as a contender
- * for the end-of-cycle governor pass (emitCuratedCycle). Nothing is written here - only the
- * cooldown reads happen, so a candidate that can't emit anyway (already alerted, or clearing no
- * gate) never costs a ranking slot or a wasted anchor row.
+ * training sample is banked: runs every contestant and files each call as a contender for the
+ * end-of-cycle governor pass (emitCuratedCycle). Nothing is written here - only the cooldown read
+ * happens, so a candidate that can't emit anyway never costs a ranking slot or a wasted anchor.
  *
- * The mcap band is enforced before either curator runs: the scan deliberately keeps re-scanning
+ * The mcap band is enforced before any curator runs: the scan deliberately keeps re-scanning
  * actively-viewed tokens after they leave the band (see scanJob's lastViewedAt path), and the
  * band refresh has a near-band tolerance - both right for user filters, which carry their own
- * mcap bounds, but a curated alert has no user filter behind it. Without this check, a $5M
- * breakout someone happens to have open could end up curated, whatever the gate thinks of its
- * other numbers.
+ * mcap bounds, but a curated call has no user filter behind it.
  */
 export async function collectCuratedContender(
   cycle: CuratedCycle,
@@ -258,8 +339,7 @@ export async function collectCuratedContender(
   /**
    * The scan snapshot this candidate was evaluated from. Recorded on the alert so the feed can
    * render a curated call with the same statistics a Live Feed card carries (see
-   * CuratedAlert.snapshotId) rather than a market cap alone. Optional so a caller without one
-   * still emits - the card then falls back to the anchor figures.
+   * CuratedAlert.snapshotId) rather than a market cap alone.
    */
   snapshotId?: string,
   /**
@@ -273,184 +353,176 @@ export async function collectCuratedContender(
     return;
   }
 
-  const { live, shadow } = await decideCurations(scored, env);
+  const roster = await curatorRoster(env);
+  const decisions = decideCurations(scored, roster, env);
+  const calling = [...decisions.entries()].filter(
+    ([model, d]) => d.curate && (retry === undefined || retry.models.includes(model)),
+  );
+  if (calling.length === 0) return;
+
+  // The per-token cooldown is per ledger: one contestant having called this token says nothing
+  // about whether another may.
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
-  const retryUntil = retry?.until;
+  const recent = await prisma.curatedAlert.findMany({
+    where: { tokenId: token.id, createdAt: { gt: cooldownCutoff }, model: { in: calling.map(([m]) => m) } },
+    select: { model: true },
+  });
+  const cooling = new Set(recent.map((r) => r.model));
 
-  if (live.curate && (retry === undefined || retry.live)) {
-    const recentlyAlerted = await prisma.curatedAlert.findFirst({
-      where: { tokenId: token.id, createdAt: { gt: cooldownCutoff } },
-      select: { id: true },
+  for (const [model, decision] of calling) {
+    if (cooling.has(model)) continue;
+    let list = cycle.byModel.get(model);
+    if (!list) cycle.byModel.set(model, (list = []));
+    list.push({
+      token,
+      scored,
+      cycleSample,
+      snapshotId,
+      decision,
+      confidence: decision.confidence,
+      retryUntil: retry?.until,
     });
-    if (!recentlyAlerted) {
-      cycle.live.push({
-        token,
-        scored,
-        cycleSample,
-        snapshotId,
-        decision: live,
-        confidence: live.confidence,
-        retryUntil,
-      });
-    }
-  }
-
-  if (shadow?.curate && (retry === undefined || retry.shadow)) {
-    const recentShadow = await prisma.curatedShadowEmission.findFirst({
-      where: { tokenId: token.id, createdAt: { gt: cooldownCutoff } },
-      select: { id: true },
-    });
-    if (!recentShadow) {
-      cycle.shadow.push({
-        token,
-        scored,
-        cycleSample,
-        snapshotId,
-        decision: shadow,
-        confidence: shadow.confidence,
-        retryUntil,
-      });
-    }
   }
 }
 
 /**
  * Phase two, called once per scan cycle after every candidate has been collected: the governor
- * pass. Each ledger independently counts its own actual trailing emissions, takes its capacity
- * (see governorCapacity - the hourly target and the burst cap), and emits its strongest
+ * pass. Each contestant's ledger independently counts its own trailing calls, takes its capacity
+ * (see governorCapacity - the hourly target and the burst cap), and sends its strongest
  * contenders, best first. A contender that loses its slot is filed for retry (see
- * deferContender), so a busy minute delays a pick rather than dropping it. Quality is the curators' job - each holds its picks to the hit-rate
- * cutoff its own out-of-sample record earned - so the governor's pace is a CEILING only: a hot
- * minute can't flood the feed, and a quiet hour stays quiet. (A flow-derived "dynamic bar" used
- * to sit here too, admitting whatever conviction produced CURATED_TARGET_PER_HOUR; it tied
- * quality to pace, which is exactly what the hit-rate targets replaced.)
+ * deferContender), so a busy minute delays a pick rather than dropping it. Quality is each
+ * curator's job - each holds its picks to the hit-rate cutoff its own out-of-sample record
+ * earned - so the governor's pace is a ceiling only.
  *
- * Returns the number of real (live-ledger) alerts emitted.
+ * The default feed's contestant goes first: it is the one the AI reviewer checks (and, in gate
+ * mode, can veto). Every other ledger's calls go out without a review. Contestants calling the
+ * same token in the same pass share one anchor, so their grades are measured from the same fill.
+ *
+ * Returns the number of calls sent across every ledger.
  */
 export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<number> {
-  if (cycle.live.length === 0 && cycle.shadow.length === 0) return 0;
+  if (cycle.byModel.size === 0) return 0;
 
   const now = Date.now();
   pruneDeferredContenders(now);
   const hourAgo = new Date(now - 3_600_000);
   const burstAgo = new Date(now - GOVERNOR_BURST_WINDOW_MINUTES * 60_000);
+  const roster = await curatorRoster(env);
+  const order = [
+    roster.defaultModel,
+    ...roster.entries.map((e) => e.spec.id).filter((m) => m !== roster.defaultModel),
+  ];
 
-  // Fresh anchors created by live emissions this pass, so a shadow pick of the same token grades
-  // from the identical moment instead of minting a duplicate row.
-  const liveAnchors = new Map<string, CandidateSampleRef>();
+  // Anchors created by calls this pass, so another ledger's call on the same token grades from
+  // the identical moment instead of minting a duplicate row.
+  const anchors = new Map<string, CandidateSampleRef>();
 
   let emitted = 0;
-  if (cycle.live.length > 0) {
-    const [lastHour, lastBurstWindow] = await Promise.all([
-      prisma.curatedAlert.count({ where: { createdAt: { gt: hourAgo } } }),
-      prisma.curatedAlert.count({ where: { createdAt: { gt: burstAgo } } }),
-    ]);
-    const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
-    const reviewing = aiReviewEnabled(env);
-    // Gate mode only once the reviewer's graded "buy" record meets the feed's targets; until then
-    // a gate-mode reviewer runs as shadow (see aiGateQualified).
-    const gating = reviewing && env.AI_REVIEW_MODE === "gate" && (await aiGateQualified(env));
-    // A token the reviewer just passed on doesn't contend again until its veto cools down -
-    // otherwise it would win the same slot and buy the same review every minute.
-    const contenders = gating ? await withoutRecentVetoes(cycle.live, env) : cycle.live;
-    const picks = selectEmissions(contenders, capacity);
-    // Lost on capacity alone - the curator still vouches for these, so they try again next
-    // cycle. (Vetoed tokens are out of `contenders` already, and a pick vetoed below isn't here.)
-    const picked = new Set(picks);
-    for (const contender of contenders) {
-      if (!picked.has(contender)) deferContender(contender, "live", env, now);
-    }
-
-    // Gate mode asks before sending (in parallel - the governor allows at most a burst's worth
-    // per cycle). A failed review fails OPEN: an outage at the reviewer must not silence a feed
-    // the curator already vouched for, and the error is recorded against the pick.
-    const gateReviews: (AiReviewResult | null)[] = gating
-      ? await Promise.all(picks.map((p) => reviewPick(p.scored, p.decision, env)))
-      : picks.map(() => null);
-
-    for (const [i, pick] of picks.entries()) {
-      const review = gateReviews[i] ?? null;
-      if (review?.verdict?.decision === "no_buy") {
-        await recordAiReview(pick, review, "gate", null, null, env).catch((err) =>
-          logger.warn("failed to record ai veto", { error: String(err) }),
-        );
-        logger.info("curated pick vetoed by ai reviewer", {
-          mint: pick.token.mintAddress,
-          reasoning: review.verdict.reasoning,
-        });
-        continue;
-      }
-      // The reviewer's reasoning is logged and stored on its AiReview row, where admins see it
-      // (attachAiReviewsForAdmin in the API) - never put on the public card. It is model output
-      // over launcher-written token text.
-      if (review?.verdict) {
-        logger.info("curated pick approved by ai reviewer", {
-          mint: pick.token.mintAddress,
-          reasoning: review.verdict.reasoning,
-        });
-      }
-      // One pick's write failing (a pool timeout, say) must not take the rest of the cycle's picks
-      // and the shadow ledger down with it. The failed pick tries again next cycle.
-      let result: Awaited<ReturnType<typeof emitCuratedAlert>>;
-      try {
-        result = await emitCuratedAlert(pick, env);
-      } catch (err) {
-        logger.warn("failed to emit curated pick - deferring it", {
-          mint: pick.token.mintAddress,
-          error: String(err),
-        });
-        deferContender(pick, "live", env, now);
-        continue;
-      }
-      if (!result) continue;
-      liveAnchors.set(pick.token.id, result.anchor);
-      emitted += 1;
-
-      if (review) {
-        await recordAiReview(pick, review, "gate", result.anchor, result.alertId, env).catch((err) =>
-          logger.warn("failed to record ai review", { error: String(err) }),
-        );
-      } else if (reviewing) {
-        // Shadow mode: the alert is already out; the review is bookkeeping and must never hold
-        // up the scan cycle, so it runs detached.
-        void reviewPick(pick.scored, pick.decision, env)
-          .then((r) => recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env))
-          .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) }));
-      }
-    }
-
-    // The feed's pace is a promise now; this line is how a log reader checks it's being kept -
-    // and how a contested minute (contenders > emitted) stays visible after the fact.
-    logger.info("curated governor", {
-      contenders: cycle.live.length,
-      capacity,
-      emitted,
-      lastHour,
-    });
-  }
-
-  // The bench curator's ledger, governed identically against its own table so the two records
-  // stay rate-comparable. Bookkeeping only: a failure here must never cost a real alert.
-  if (cycle.shadow.length > 0) {
+  for (const model of order) {
+    const contendersIn = cycle.byModel.get(model);
+    if (!contendersIn || contendersIn.length === 0) continue;
+    const isDefault = model === roster.defaultModel;
     try {
-      const [lastHour, lastBurstWindow] = await Promise.all([
-        prisma.curatedShadowEmission.count({ where: { createdAt: { gt: hourAgo } } }),
-        prisma.curatedShadowEmission.count({ where: { createdAt: { gt: burstAgo } } }),
-      ]);
-      const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
-      const picks = selectEmissions(cycle.shadow, capacity);
-      const picked = new Set(picks);
-      for (const contender of cycle.shadow) {
-        if (!picked.has(contender)) deferContender(contender, "shadow", env, now);
-      }
-      for (const pick of picks) {
-        await recordShadowEmission(pick, liveAnchors.get(pick.token.id) ?? pick.cycleSample, env);
-      }
+      emitted += await emitForModel(model, contendersIn, isDefault, anchors, env, { now, hourAgo, burstAgo });
     } catch (err) {
-      logger.warn("failed to record shadow emissions", { error: String(err) });
+      // One ledger's failure must not cost the others their calls.
+      logger.warn("failed to emit a contestant's calls", { model, error: String(err) });
+    }
+  }
+  return emitted;
+}
+
+async function emitForModel(
+  model: string,
+  contendersIn: CuratedContender[],
+  isDefault: boolean,
+  anchors: Map<string, CandidateSampleRef>,
+  env: Env,
+  clock: { now: number; hourAgo: Date; burstAgo: Date },
+): Promise<number> {
+  const [lastHour, lastBurstWindow] = await Promise.all([
+    prisma.curatedAlert.count({ where: { model, createdAt: { gt: clock.hourAgo } } }),
+    prisma.curatedAlert.count({ where: { model, createdAt: { gt: clock.burstAgo } } }),
+  ]);
+  const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
+  const reviewing = isDefault && aiReviewEnabled(env);
+  // Gate mode only once the reviewer's graded "buy" record meets the feed's targets; until then
+  // a gate-mode reviewer runs as shadow (see aiGateQualified).
+  const gating = reviewing && env.AI_REVIEW_MODE === "gate" && (await aiGateQualified(env));
+  // A token the reviewer just passed on doesn't contend again until its veto cools down -
+  // otherwise it would win the same slot and buy the same review every minute.
+  const contenders = gating ? await withoutRecentVetoes(contendersIn, env) : contendersIn;
+  const picks = selectEmissions(contenders, capacity);
+  // Lost on capacity alone - the curator still vouches for these, so they try again next
+  // cycle. (Vetoed tokens are out of `contenders` already, and a pick vetoed below isn't here.)
+  const picked = new Set(picks);
+  for (const contender of contenders) {
+    if (!picked.has(contender)) deferContender(contender, model, env, clock.now);
+  }
+
+  // Gate mode asks before sending (in parallel - the governor allows at most a burst's worth
+  // per cycle). A failed review fails OPEN: an outage at the reviewer must not silence a feed
+  // the curator already vouched for, and the error is recorded against the pick.
+  const gateReviews: (AiReviewResult | null)[] = gating
+    ? await Promise.all(picks.map((p) => reviewPick(p.scored, p.decision, env)))
+    : picks.map(() => null);
+
+  let emitted = 0;
+  for (const [i, pick] of picks.entries()) {
+    const review = gateReviews[i] ?? null;
+    if (review?.verdict?.decision === "no_buy") {
+      await recordAiReview(pick, review, "gate", null, null, env).catch((err) =>
+        logger.warn("failed to record ai veto", { error: String(err) }),
+      );
+      logger.info("curated pick vetoed by ai reviewer", {
+        mint: pick.token.mintAddress,
+        reasoning: review.verdict.reasoning,
+      });
+      continue;
+    }
+    // The reviewer's reasoning is logged and stored on its AiReview row, where admins see it
+    // (attachAiReviewsForAdmin in the API) - never put on the public card. It is model output
+    // over launcher-written token text.
+    if (review?.verdict) {
+      logger.info("curated pick approved by ai reviewer", {
+        mint: pick.token.mintAddress,
+        reasoning: review.verdict.reasoning,
+      });
+    }
+    // One pick's write failing (a pool timeout, say) must not take the rest of the cycle's picks
+    // down with it. The failed pick tries again next cycle.
+    let result: Awaited<ReturnType<typeof emitCuratedAlert>>;
+    try {
+      result = await emitCuratedAlert(pick, model, anchors.get(pick.token.id) ?? null, env);
+    } catch (err) {
+      logger.warn("failed to emit curated pick - deferring it", {
+        model,
+        mint: pick.token.mintAddress,
+        error: String(err),
+      });
+      deferContender(pick, model, env, clock.now);
+      continue;
+    }
+    if (!result) continue;
+    anchors.set(pick.token.id, result.anchor);
+    emitted += 1;
+
+    if (review) {
+      await recordAiReview(pick, review, "gate", result.anchor, result.alertId, env).catch((err) =>
+        logger.warn("failed to record ai review", { error: String(err) }),
+      );
+    } else if (reviewing) {
+      // Shadow mode: the alert is already out; the review is bookkeeping and must never hold
+      // up the scan cycle, so it runs detached.
+      void reviewPick(pick.scored, pick.decision, env)
+        .then((r) => recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env))
+        .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) }));
     }
   }
 
+  // The pace is a promise per ledger; this line is how a log reader checks it's being kept - and
+  // how a contested minute (contenders > emitted) stays visible after the fact.
+  logger.info("curated governor", { model, contenders: contendersIn.length, capacity, emitted, lastHour });
   return emitted;
 }
 
@@ -464,12 +536,15 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
  */
 async function emitCuratedAlert(
   pick: CuratedContender,
+  model: string,
+  /** An anchor another ledger's call on this token made in this same pass - reused as-is. */
+  sharedAnchor: CandidateSampleRef | null,
   env: Env,
 ): Promise<{ anchor: CandidateSampleRef; alertId: string } | null> {
   const { token, scored, decision } = pick;
 
-  let anchor = pick.cycleSample?.created ? pick.cycleSample : null;
-  if (anchor) {
+  let anchor = sharedAnchor ?? (pick.cycleSample?.created ? pick.cycleSample : null);
+  if (anchor && !sharedAnchor) {
     // The fill is "the first price at least CANDIDATE_ENTRY_DELAY_SECONDS after the alert", and
     // the alert is going out now - after the rest of the scan cycle, the governor and (in gate
     // mode) the AI review, which can take most of a minute. Counting the delay from the scan
@@ -500,6 +575,7 @@ async function emitCuratedAlert(
       tokenId: token.id,
       candidateOutcomeId: anchor.id,
       snapshotId: pick.snapshotId ?? null,
+      model,
       source: decision.source,
       confidence: decision.confidence,
       reasons: decision.reasons,
@@ -509,9 +585,10 @@ async function emitCuratedAlert(
   });
   // After the create, never before - same contract as notifyMatchCreated: the row must exist by
   // the time a connected dashboard reacts to the nudge. Failure is its own logged non-event.
-  await notifyCuratedAlert({ alertId: alert.id });
+  await notifyCuratedAlert({ alertId: alert.id, model });
 
   logger.info("curated alert emitted", {
+    model,
     mint: token.mintAddress,
     symbol: scored.symbol,
     confidence: decision.confidence,
@@ -574,44 +651,5 @@ async function recordAiReview(
       anchorPriceUsd: pick.scored.priceUsd,
       anchorMcapUsd: pick.scored.marketCapUsd,
     },
-  });
-}
-
-/**
- * Writes one CuratedShadowEmission row for a bench-curator pick. Anchoring follows the real
- * feed's discipline for the same reason its grades have to mean the same thing: a row anchored
- * this cycle (the live alert's fresh anchor, or the cycle's own sample) is seconds old and
- * serves as-is; anything staler gets a fresh anchor row, so a shadow pick's outcome is measured
- * from the pick's own moment - never from wherever the hourly sampler last happened to anchor.
- * No 24h extension: shadow grading needs the 1h labels alone.
- */
-async function recordShadowEmission(
-  pick: CuratedContender,
-  cycleAnchor: CandidateSampleRef | null,
-  env: Env,
-): Promise<void> {
-  const { token, scored, decision } = pick;
-
-  let anchor = cycleAnchor?.created ? cycleAnchor : null;
-  if (!anchor) {
-    anchor = await recordCandidateSample(token.id, scored, env, { bypassSpacing: true });
-  }
-  if (!anchor) return; // zero-price anchor - ungradeable, same as the real feed
-
-  await prisma.curatedShadowEmission.create({
-    data: {
-      tokenId: token.id,
-      candidateOutcomeId: anchor.id,
-      source: decision.source,
-      confidence: decision.confidence,
-      anchorPriceUsd: scored.priceUsd,
-      anchorMcapUsd: scored.marketCapUsd,
-    },
-  });
-
-  logger.info("shadow emission recorded", {
-    mint: token.mintAddress,
-    source: decision.source,
-    confidence: decision.confidence,
   });
 }

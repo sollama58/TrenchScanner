@@ -115,7 +115,7 @@ export function AlertCard({
                 title="Curator confidence, 0-100"
               >
                 {isModel && <BrainIcon size={12} />}
-                {isModel ? "Model" : "Heuristic"} · {curated.confidence.toFixed(0)}
+                {curated.modelName ?? (isModel ? "Model" : "Heuristic")} · {curated.confidence.toFixed(0)}
               </span>
             )}
             {showFilter && card.kind === "match" && card.filter && (
