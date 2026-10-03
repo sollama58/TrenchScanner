@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, type GradedRates, type ModelInsights, type ModelRun } from "../api";
-import { HBarChart, TargetBars } from "../components/Charts";
+import { HBarChart, Skeleton, TargetBars } from "../components/Charts";
+import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
 import { usePolling, useNow } from "../hooks";
 import { ago, pct, tokenLabel, usd } from "../format";
 
@@ -19,7 +20,17 @@ export function ModelTab() {
   );
 
   if (error && !data) return <p className="error">Couldn't load model data: {error.message}</p>;
-  if (!data) return <p className="muted">Loading model data…</p>;
+  if (!data)
+    return (
+      <div className="stack">
+        <div className="panel">
+          <Skeleton lines={4} height={18} />
+        </div>
+        <div className="panel">
+          <Skeleton lines={6} />
+        </div>
+      </div>
+    );
 
   const t = data.targets;
   const latest = data.runs[0] ?? null;
@@ -30,37 +41,82 @@ export function ModelTab() {
   return (
     <div className="stack">
       <section className="panel hero">
-        <div>
-          <h2>
-            {data.curator.phase === "model-live" ? "A trained model is picking" : "The heuristic is picking"}
-          </h2>
-          <p className="muted">
-            {data.curator.phase === "model-live"
-              ? "The learner beat the hand-tuned heuristic on its walk-forward exam and took over."
-              : "The learner retrains every few hours and takes over once it beats the heuristic out of sample."}{" "}
-            Every pick then goes to the AI reviewer, which is in <strong>{data.curator.aiReviewMode}</strong>{" "}
-            mode
-            {data.curator.aiReviewMode === "shadow"
-              ? ": it records a buy / no-buy call on each pick without blocking any."
-              : data.curator.aiReviewMode === "gate"
-                ? `: once ${data.curator.aiReviewMinGradedBuys} of its buys are graded and meet both targets, it blocks its no-buys.`
-                : "."}
-          </p>
-          <p className="faint small">
-            Win: {data.rules.win}. Goal: {data.rules.goal}. Fill: {data.rules.fill}.
-          </p>
+        <div className="hero-top">
+          <div>
+            <span className="eyebrow">
+              <BrainIcon size={13} /> Who's picking
+            </span>
+            <h2 className="hero-title">
+              {data.curator.phase === "model-live" ? (
+                <>
+                  A <span className="grad">trained model</span> is picking
+                </>
+              ) : (
+                <>
+                  The <span className="grad">heuristic</span> is picking
+                </>
+              )}
+            </h2>
+            <p className="muted">
+              {data.curator.phase === "model-live"
+                ? "The learner beat the hand-tuned heuristic on its walk-forward exam and took over."
+                : "The learner retrains every few hours and takes over once it beats the heuristic out of sample."}{" "}
+              Every pick then goes to the AI reviewer, in <strong>{data.curator.aiReviewMode}</strong> mode
+              {data.curator.aiReviewMode === "shadow"
+                ? ": it records a buy / no-buy call on each pick without blocking any."
+                : data.curator.aiReviewMode === "gate"
+                  ? `: once ${data.curator.aiReviewMinGradedBuys} of its buys are graded and meet both targets, it blocks its no-buys.`
+                  : "."}
+            </p>
+          </div>
+          <div className="segmented" role="tablist" aria-label="Window">
+            {WINDOWS.map((w) => (
+              <button key={w} className={w === days ? "on" : ""} onClick={() => setDays(w)}>
+                {w}d
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="segmented" role="tablist" aria-label="Window">
-          {WINDOWS.map((w) => (
-            <button key={w} className={w === days ? "on" : ""} onClick={() => setDays(w)}>
-              {w}d
-            </button>
-          ))}
-        </div>
+
+        <ol className="pipeline" aria-label="How a pick is made">
+          <PipelineStage
+            Icon={RadarIcon}
+            title="Scanner"
+            caption="decision moments"
+            count={base?.calls}
+            rate={base?.hitRate2xPct}
+          />
+          <PipelineStage
+            Icon={BrainIcon}
+            title={data.curator.phase === "model-live" ? "Model curator" : "Heuristic curator"}
+            caption="picks sent"
+            count={data.curatedAlerts.total.calls}
+            rate={data.curatedAlerts.total.hitRate2xPct}
+          />
+          <PipelineStage
+            Icon={RobotIcon}
+            title="AI reviewer"
+            caption="buy calls"
+            count={data.aiReviewer.buys.calls}
+            rate={data.aiReviewer.buys.hitRate2xPct}
+          />
+          <li className="stage goal">
+            <span className="stage-icon">
+              <TargetIcon size={16} />
+            </span>
+            <span className="stage-title">Goal</span>
+            <span className="stage-rate num">{t.hitRate2xPct}%</span>
+            <span className="stage-caption">hit 2x · {t.hitRate4xPct}% hit 4x</span>
+          </li>
+        </ol>
+        <p className="faint small">
+          2x rate over the last {days} days at each step. Win: {data.rules.win}. Fill: {data.rules.fill}.
+        </p>
       </section>
 
       <section className="panel">
-        <h3>Scoreboard, last {days} days</h3>
+        <span className="eyebrow">Scoreboard</span>
+        <h3>How each set of calls scored, last {days} days</h3>
         <p className="muted small">
           Each row is a set of calls graded the same way. The base rate is what picking at random from the
           moments the curator considers would earn; every other row has to beat it.
@@ -114,6 +170,7 @@ export function ModelTab() {
 
       <div className="columns even">
         <section className="panel">
+          <span className="eyebrow">Signals</span>
           <h3>What the model looks at</h3>
           {data.importance && data.importance.features.length > 0 ? (
             <>
@@ -137,7 +194,8 @@ export function ModelTab() {
         </section>
 
         <section className="panel">
-          <h3>Is the AI reviewer calibrated?</h3>
+          <span className="eyebrow">AI reviewer</span>
+          <h3>Do its odds hold up?</h3>
           <p className="muted small">
             Its stated chance of a 2x, bucketed, against what those tokens actually did. A calibrated
             reviewer's 70-80% bucket wins about three times in four.
@@ -164,7 +222,8 @@ export function ModelTab() {
       <ConfidenceBands data={data} />
 
       <section className="panel">
-        <h3>Latest AI reviewer calls</h3>
+        <span className="eyebrow">AI reviewer</span>
+        <h3>Latest buy / no-buy calls</h3>
         {data.recentAiReviews.length === 0 ? (
           <p className="empty">None yet.</p>
         ) : (
@@ -219,7 +278,8 @@ export function ModelTab() {
       </section>
 
       <section className="panel">
-        <h3>Training history</h3>
+        <span className="eyebrow">History</span>
+        <h3>Training runs</h3>
         <div className="table-wrap">
           <table>
             <thead>
@@ -303,6 +363,7 @@ function LatestRun({ run, targets, now }: { run: ModelRun; targets: ModelInsight
     <section className="panel">
       <header className="section-head">
         <div>
+          <span className="eyebrow">Training</span>
           <h3>Latest training run</h3>
           <p className="muted small">
             {ago(run.createdAt, now)} on {run.trainingRows.toLocaleString()} graded moments. Shipped{" "}
@@ -437,7 +498,10 @@ function ConfidenceBands({ data }: { data: ModelInsights }) {
   return (
     <section className="panel">
       <div className="row between wrap">
-        <h3>Hit rate by curator confidence, live and shadow</h3>
+        <div>
+          <span className="eyebrow">Confidence</span>
+          <h3>Hit rate by curator confidence, live and shadow</h3>
+        </div>
         {sides.length > 1 && (
           <div className="segmented small">
             {sides.map((s) => (
@@ -462,5 +526,33 @@ function ConfidenceBands({ data }: { data: ModelInsights }) {
         }))}
       />
     </section>
+  );
+}
+
+function PipelineStage({
+  Icon,
+  title,
+  caption,
+  count,
+  rate,
+}: {
+  Icon: typeof RadarIcon;
+  title: string;
+  caption: string;
+  count: number | undefined;
+  rate: number | null | undefined;
+}) {
+  return (
+    <li className="stage">
+      <span className="stage-icon">
+        <Icon size={16} />
+      </span>
+      <span className="stage-title">{title}</span>
+      <span className="stage-rate num">{pct(rate, 1)}</span>
+      <span className="stage-caption">
+        {count === undefined ? "–" : count.toLocaleString()} {caption}
+      </span>
+      <ArrowRightIcon size={16} className="stage-arrow" />
+    </li>
   );
 }

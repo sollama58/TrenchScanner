@@ -183,45 +183,97 @@ function barPath(x: number, top: number, w: number, base: number): string {
 }
 
 /**
- * One rate against its target: the bar is the measured rate, the tick is the target. Status is
- * spelled out in words beside it, never left to color alone.
+ * One hit rate against its target, as a ring: the arc is the measured rate, the notch is the
+ * target. The verdict is spelled out under it in words, never left to color alone.
  */
-export function TargetMeter({
+export function RingGauge({
   label,
   value,
   target,
   graded,
   minGraded,
+  series = 1,
 }: {
   label: string;
   value: number | null;
   target: number;
   graded: number;
   minGraded: number;
+  series?: 1 | 2;
 }) {
   const enough = graded >= minGraded;
   const met = value !== null && value >= target;
   const state = !enough ? "early" : met ? "met" : "below";
+  const r = 38;
+  const c = 2 * Math.PI * r;
+  const frac = Math.min(1, Math.max(0, (value ?? 0) / 100));
+  // The notch sits on the ring at the target's angle, measured clockwise from 12 o'clock.
+  const a = (target / 100) * 2 * Math.PI - Math.PI / 2;
+  const notch = (rr: number) => [50 + rr * Math.cos(a), 50 + rr * Math.sin(a)] as const;
+  const [x1, y1] = notch(r - 9);
+  const [x2, y2] = notch(r + 9);
   return (
-    <div className="meter">
-      <div className="meter-head">
-        <span>{label}</span>
-        <span className="meter-value">{value === null ? "–" : `${value.toFixed(0)}%`}</span>
-      </div>
-      <div className="meter-track">
-        <span className={`meter-fill ${state}`} style={{ width: `${Math.min(100, value ?? 0)}%` }} />
-        <span className="meter-target" style={{ left: `${target}%` }} title={`Target ${target}%`} />
-      </div>
-      <div className="meter-foot">
-        <span>target {target}%</span>
+    <div className="ring">
+      <svg
+        viewBox="0 0 100 100"
+        className="ring-svg"
+        role="img"
+        aria-label={`${label}: ${value === null ? "no data" : `${value.toFixed(0)}%`}, target ${target}%`}
+      >
+        <circle cx="50" cy="50" r={r} className="ring-track" />
+        <circle
+          cx="50"
+          cy="50"
+          r={r}
+          className={`ring-arc s${series}`}
+          strokeDasharray={`${c * frac} ${c}`}
+          transform="rotate(-90 50 50)"
+        />
+        <line x1={x1} y1={y1} x2={x2} y2={y2} className="ring-notch" />
+        <text x="50" y="49" className="ring-value" textAnchor="middle">
+          {value === null ? "–" : `${value.toFixed(0)}%`}
+        </text>
+        <text x="50" y="63" className="ring-sub" textAnchor="middle">
+          target {target}%
+        </text>
+      </svg>
+      <div className="ring-text">
+        <span className="ring-label">{label}</span>
         <span className={`state ${state}`}>
           {state === "early"
-            ? `early: ${graded}/${minGraded} graded`
+            ? `Early · ${graded}/${minGraded} graded`
             : met
-              ? "✓ on target"
-              : "▼ below target"}
+              ? "✓ On target"
+              : "▼ Below target"}
         </span>
       </div>
+    </div>
+  );
+}
+
+/** Placeholder blocks with a shimmer, shaped like what is loading. */
+export function Skeleton({ lines = 3, height = 14 }: { lines?: number; height?: number }) {
+  return (
+    <div className="skeleton-group" aria-busy="true" aria-label="Loading">
+      {Array.from({ length: lines }, (_, i) => (
+        <span key={i} className="skeleton" style={{ height, width: `${100 - ((i * 17) % 40)}%` }} />
+      ))}
+    </div>
+  );
+}
+
+export function SkeletonCards({ count = 4 }: { count?: number }) {
+  return (
+    <div className="cards">
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="card card-skeleton">
+          <div className="row gap-s">
+            <span className="skeleton round" style={{ width: 40, height: 40 }} />
+            <Skeleton lines={2} />
+          </div>
+          <Skeleton lines={3} height={18} />
+        </div>
+      ))}
     </div>
   );
 }

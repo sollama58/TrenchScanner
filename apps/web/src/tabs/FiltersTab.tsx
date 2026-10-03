@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, del, patch, post, ApiError, type AppConfig, type Filter, type FilterInput } from "../api";
 import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
+import { EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
 
 /** Mirrors MAX_FILTERS_PER_USER in apps/api/src/routes/filters.ts. */
 const MAX_FILTERS = 10;
@@ -140,7 +141,8 @@ export function FiltersTab() {
       <section className="panel">
         <header className="section-head">
           <div>
-            <h2>Your filters</h2>
+            <span className="eyebrow">Filters</span>
+            <h2>Your saved filters</h2>
             <p className="muted">
               {list.length} of {MAX_FILTERS} saved. Only the active one alerts; switch whenever you like.
             </p>
@@ -151,7 +153,7 @@ export function FiltersTab() {
             title={full ? "Delete a filter to add another" : undefined}
             onClick={() => setEditing({ id: null, draft: blankFilter(config.data, list.length) })}
           >
-            + New filter
+            <PlusIcon size={15} /> New filter
           </button>
         </header>
         {message && <p className="notice">{message}</p>}
@@ -159,7 +161,10 @@ export function FiltersTab() {
           <p className="error">Couldn't load filters: {filters.error.message}</p>
         )}
         {list.length === 0 && filters.data && (
-          <p className="empty">No filters yet. Create one to get your own alerts.</p>
+          <div className="empty-state">
+            <SlidersIcon size={28} />
+            <p>No filters yet. Create one to get your own alerts.</p>
+          </div>
         )}
         <ul className="filter-list">
           {list.map((f) => {
@@ -181,7 +186,7 @@ export function FiltersTab() {
                   />
                   <span>
                     <strong>{f.name}</strong>
-                    {f.isActive && <span className="chip chip-model">active</span>}
+                    {f.isActive && <span className="pill pill-model">Active</span>}
                     <small className="muted block">
                       {usd(f.mcapMin)}–{usd(f.mcapMax)}
                       {f.narrativeKeywords.length > 0 && ` · ${f.narrativeKeywords.slice(0, 3).join(", ")}`}
@@ -199,19 +204,27 @@ export function FiltersTab() {
                     <small className="muted">no graded alerts yet</small>
                   )}
                 </div>
-                <div className="row gap-s">
-                  <button onClick={() => setEditing({ id: f.id, draft: toInput(f) })} disabled={busy}>
-                    Edit
+                <div className="row gap-xs">
+                  <button
+                    className="icon-btn"
+                    title="Edit"
+                    aria-label={`Edit ${f.name}`}
+                    onClick={() => setEditing({ id: f.id, draft: toInput(f) })}
+                    disabled={busy}
+                  >
+                    <EditIcon size={15} />
                   </button>
                   <button
-                    className="danger"
+                    className="icon-btn danger"
+                    title="Delete"
+                    aria-label={`Delete ${f.name}`}
                     disabled={busy}
                     onClick={() => {
                       if (window.confirm(`Delete “${f.name}”?`))
                         void run(() => del(`/filters/${f.id}`), "Filter deleted.");
                     }}
                   >
-                    Delete
+                    <TrashIcon size={15} />
                   </button>
                 </div>
               </li>
@@ -233,6 +246,9 @@ export function FiltersTab() {
           />
         ) : (
           <div className="editor-empty">
+            <span className="feature-icon big">
+              <SlidersIcon size={22} />
+            </span>
             <h3>Build a filter</h3>
             <p className="muted">
               A filter is your own screen over everything the scanner sees. Pick one to edit, or start a new
