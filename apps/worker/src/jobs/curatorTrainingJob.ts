@@ -36,44 +36,20 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   const startedAt = Date.now();
   const windowStart = new Date(startedAt - env.CURATOR_TRAINING_WINDOW_DAYS * 86_400_000);
 
-  const rows = await prisma.candidateOutcome.findMany({
-    // Emission rows exist because a curator picked them, and match rows because a user's filter
-    // did; training on either would teach the model someone's selection rather than the market
-    // (see CandidateOutcome.sampleKind). Listed positively so a new kind stays out by default.
-    where: {
-      finalizedAt: { not: null },
-      anchorAt: { gte: windowStart },
-      sampleKind: { in: ["hourly", "event"] },
-    },
-    select: {
-      tokenId: true,
-      anchorAt: true,
-      features: true,
-      labelValue: true,
-      anchorPriceUsd: true,
-      signalPriceUsd: true,
-      anchorMcapUsd: true,
-      sampleKind: true,
-    },
-  });
-  if (rows.length < MIN_ROWS_TO_TRAIN) {
+  const trainingRows = await loadTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS);
+  if (trainingRows.length < MIN_ROWS_TO_TRAIN) {
     logger.info("not enough finalized samples to train yet", {
-      rows: rows.length,
+      rows: trainingRows.length,
       needed: MIN_ROWS_TO_TRAIN,
     });
     return;
   }
-
-  const trainingRows: TrainingRow[] = rows.map((r) => ({
-    tokenId: r.tokenId,
-    anchorAt: r.anchorAt,
-    features: r.features as Record<string, number | null>,
-    labelValue: r.labelValue ?? 0,
-    // The price the features were observed at - the fill the label is graded from comes later.
-    anchorPriceUsd: r.signalPriceUsd ?? r.anchorPriceUsd,
-    anchorMcapUsd: r.anchorMcapUsd,
-    sampleKind: r.sampleKind,
-  }));
+  if (trainingRows.length >= env.CURATOR_TRAINING_MAX_ROWS) {
+    logger.info("training on the newest samples only", {
+      rows: trainingRows.length,
+      oldestAnchorAt: trainingRows[trainingRows.length - 1]!.anchorAt,
+    });
+  }
 
   const targets: PrecisionTargets = {
     winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
@@ -125,6 +101,63 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
  *    model staying live against newer contrary evidence is how feeds quietly rot. Fallback is
  *    the heuristic, which never rots because it never changes.
  */
+/** Rows fetched per query - keeps the driver's raw result for any one page small. */
+const LOAD_PAGE_ROWS = 5_000;
+
+/**
+ * The newest `maxRows` finalized training rows in the window, newest first. Paged, so the
+ * query engine's raw result is never the whole window at once - only the mapped rows accumulate.
+ */
+export async function loadTrainingRows(
+  windowStart: Date,
+  maxRows: number,
+  pageRows = LOAD_PAGE_ROWS,
+): Promise<TrainingRow[]> {
+  const out: TrainingRow[] = [];
+  let cursor: string | undefined;
+  while (out.length < maxRows) {
+    const page = await prisma.candidateOutcome.findMany({
+      // Emission rows exist because a curator picked them, and match rows because a user's filter
+      // did; training on either would teach the model someone's selection rather than the market
+      // (see CandidateOutcome.sampleKind). Listed positively so a new kind stays out by default.
+      where: {
+        finalizedAt: { not: null },
+        anchorAt: { gte: windowStart },
+        sampleKind: { in: ["hourly", "event"] },
+      },
+      orderBy: [{ anchorAt: "desc" }, { id: "desc" }],
+      take: Math.min(pageRows, maxRows - out.length),
+      ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: {
+        id: true,
+        tokenId: true,
+        anchorAt: true,
+        features: true,
+        labelValue: true,
+        anchorPriceUsd: true,
+        signalPriceUsd: true,
+        anchorMcapUsd: true,
+        sampleKind: true,
+      },
+    });
+    for (const r of page) {
+      out.push({
+        tokenId: r.tokenId,
+        anchorAt: r.anchorAt,
+        features: r.features as Record<string, number | null>,
+        labelValue: r.labelValue ?? 0,
+        // The price the features were observed at - the fill the label is graded from comes later.
+        anchorPriceUsd: r.signalPriceUsd ?? r.anchorPriceUsd,
+        anchorMcapUsd: r.anchorMcapUsd,
+        sampleKind: r.sampleKind,
+      });
+    }
+    if (page.length < pageRows) break;
+    cursor = page[page.length - 1]!.id;
+  }
+  return out;
+}
+
 export async function applyTrainingResult(
   evaluation: Pick<StoredEvalMetrics, "folds" | "verdict"> & Partial<StoredEvalMetrics>,
   params: TrainedCuratorParams,

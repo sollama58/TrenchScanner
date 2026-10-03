@@ -130,7 +130,17 @@ export async function runOutcomeTrackingJob(
   const cutoff = new Date(startedAt - OUTCOME_TRACKING_WINDOW_DAYS * 86_400_000);
   const matches = await prisma.match.findMany({
     where: { matchedAt: { gt: cutoff } },
-    include: { token: true, snapshot: true },
+    // Only what the reconcile reads - full token and snapshot rows for 30 days of matches is a
+    // lot of memory for one daily pass to hold at once.
+    select: {
+      id: true,
+      peakMcapUsd: true,
+      peakMcapAt: true,
+      peakReturnPct: true,
+      hitHundredPctAt: true,
+      token: { select: { mintAddress: true } },
+      snapshot: { select: { marketCapUsd: true } },
+    },
   });
 
   const now = new Date();
