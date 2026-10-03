@@ -23,6 +23,9 @@ import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 
 const logger = createLogger("worker");
 
+/** A day plus slack: a daily job whose last run is older than this missed its slot. */
+const DAILY_CATCH_UP_AFTER_HOURS = 26;
+
 async function main() {
   const env = loadEnv();
 
@@ -86,10 +89,14 @@ async function main() {
   const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping);
   const matchPeaksJob = scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES);
   const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC);
+  // Catches up on boot when overdue - see scheduleDailyAt. Cleanup deliberately doesn't (yet): its
+  // deletes are unbatched, and after a long gap a boot-time run would be one very large delete
+  // racing the first scan cycles.
   const outcomeTrackingJob = scheduleDailyAt(
     "outcome-tracking",
     () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
     env.OUTCOME_TRACKING_HOUR_UTC,
+    { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS },
   );
   // The self-learning half of Curated Alerts: walk-forward evaluation every
   // CURATOR_TRAINING_INTERVAL_HOURS, and the curator changes hands only on a win - see

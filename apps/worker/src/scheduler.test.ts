@@ -11,9 +11,10 @@ vi.mock("@trenchscanner/core", () => ({
   recordRunStart: async (job: string) => {
     starts.push(job);
   },
+  lastHeartbeatAt: async () => null,
 }));
 
-const { scheduleInterval } = await import("./scheduler.js");
+const { scheduleInterval, scheduleDailyAt } = await import("./scheduler.js");
 
 /** A job whose every run takes `ms` of (fake) time. */
 function jobTaking(ms: number, runs: number[]) {
@@ -112,5 +113,90 @@ describe("scheduleInterval", () => {
     job.stop();
     await vi.advanceTimersByTimeAsync(300_000);
     expect(runs).toEqual([0]);
+  });
+});
+
+describe("scheduleDailyAt", () => {
+  const HOUR = 3_600_000;
+  // 2026-10-03 10:00 UTC
+  const T0 = Date.UTC(2026, 9, 3, 10, 0, 0);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    heartbeats.length = 0;
+    starts.length = 0;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("waits for its hour when the last run is recent", async () => {
+    const runs: number[] = [];
+    const job = scheduleDailyAt("cleanup", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => new Date(T0 - 6 * HOUR),
+    });
+    await vi.advanceTimersByTimeAsync(17 * HOUR + 1_000);
+    expect(runs).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2 * HOUR);
+    job.stop();
+    expect(runs).toEqual([Date.UTC(2026, 9, 4, 4, 0, 0)]);
+  });
+
+  it("runs straight away when overdue, then settles onto its hour", async () => {
+    const runs: number[] = [];
+    const job = scheduleDailyAt("cleanup", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => new Date(T0 - 13 * 24 * HOUR),
+    });
+    await vi.advanceTimersByTimeAsync(19 * HOUR);
+    job.stop();
+    expect(runs).toEqual([T0, Date.UTC(2026, 9, 4, 4, 0, 0)]);
+  });
+
+  it("catches up a job that has never run", async () => {
+    const runs: number[] = [];
+    const job = scheduleDailyAt("cleanup", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => null,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    job.stop();
+    expect(runs).toEqual([T0]);
+  });
+
+  it("keeps the ordinary schedule when the last run can't be read", async () => {
+    const runs: number[] = [];
+    const job = scheduleDailyAt("cleanup", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => {
+        throw new Error("db down");
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    job.stop();
+    expect(runs).toEqual([]);
+  });
+
+  it("never stacks a run that overruns its day - the next one takes the following slot", async () => {
+    const runs: number[] = [];
+    const job = scheduleDailyAt(
+      "outcome-tracking",
+      async () => {
+        runs.push(Date.now());
+        await new Promise((resolve) => setTimeout(resolve, 30 * HOUR));
+      },
+      5,
+    );
+    // First slot 2026-10-04 05:00, runs until 10-05 11:00; next slot is 10-06 05:00.
+    await vi.advanceTimersByTimeAsync(3 * 24 * HOUR);
+    job.stop();
+    expect(runs).toEqual([Date.UTC(2026, 9, 4, 5, 0, 0), Date.UTC(2026, 9, 6, 5, 0, 0)]);
+    expect(heartbeats[0]).toMatchObject({
+      job: "outcome-tracking",
+      success: true,
+      meta: { durationMs: 30 * HOUR },
+    });
   });
 });
