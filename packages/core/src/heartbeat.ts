@@ -70,3 +70,9 @@ export function runningSinceFrom(meta: unknown): Date | null {
   const at = new Date(raw);
   return Number.isNaN(at.getTime()) ? null : at;
 }
+
+/** When a job last finished a run (successfully or not), or null if it never has. */
+export async function lastHeartbeatAt(job: HeartbeatJob): Promise<Date | null> {
+  const row = await prisma.systemHeartbeat.findUnique({ where: { job }, select: { lastRunAt: true } });
+  return row?.lastRunAt ?? null;
+}

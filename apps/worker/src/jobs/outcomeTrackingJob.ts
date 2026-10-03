@@ -1,5 +1,5 @@
 import { prisma, createLogger, type DexScreenerClient } from "@trenchscanner/core";
-import { recordMatchPeaks } from "./matchPeaks.js";
+import { recordMatchPeaksFullSweep } from "./matchPeaks.js";
 
 const logger = createLogger("outcome-tracking-job");
 
@@ -125,7 +125,7 @@ export async function runOutcomeTrackingJob(
   // moved recently, which is right for a one-minute cadence but means a token whose history was
   // written before this deploy - or during a stretch when the worker was down - is never revisited
   // by it. This is the safety net for exactly those rows.
-  const swept = await recordMatchPeaks(snapshotRetentionDays);
+  const swept = await recordMatchPeaksFullSweep(snapshotRetentionDays);
 
   const cutoff = new Date(startedAt - OUTCOME_TRACKING_WINDOW_DAYS * 86_400_000);
   const matches = await prisma.match.findMany({
@@ -151,7 +151,9 @@ export async function runOutcomeTrackingJob(
   if (matches.length > 0) {
     const mints = [...new Set(matches.map((m) => m.token.mintAddress))];
     uniqueMints = mints.length;
-    const live = await dexScreener.getTokensByAddresses(mints);
+    // One request at a time: this is thousands of mints, and DexScreener's rate limit is shared
+    // with the fast-match and scan lanes that alerts actually wait on.
+    const live = await dexScreener.getTokensByAddresses(mints, 1);
     const mcapByMint = new Map(live.map((c) => [c.mintAddress, c.marketCapUsd]));
 
     for (const match of matches) {

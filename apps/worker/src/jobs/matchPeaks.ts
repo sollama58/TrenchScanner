@@ -198,3 +198,92 @@ export function createMatchPeaksRunner(
 
 const FIRST_PASS_WINDOW_MINUTES = 60;
 const WINDOW_SLACK_MINUTES = 2;
+
+/** Tokens per statement in the nightly full sweep - see recordMatchPeaksFullSweep. */
+const FULL_SWEEP_TOKENS_PER_BATCH = 100;
+
+/**
+ * The nightly full sweep - every match in the retention window against its whole post-match
+ * history - run a batch of tokens at a time instead of as one statement.
+ *
+ * As one statement it ran for hours at production's table size (the 2026-09-03 run took 3h44m
+ * and then died on a deadlock), holding row locks on every Match it touched the whole time, so it
+ * deadlocked against the frequent pass and the candidate watcher. A run that dies that way never
+ * records its heartbeat, and the daily outcome job hadn't completed since. Batched, each
+ * statement holds its locks for one batch, a deadlock costs one batch (retried once), and the
+ * rest of the sweep still lands.
+ */
+export async function recordMatchPeaksFullSweep(snapshotRetentionDays: number): Promise<PeakRecordingResult> {
+  const tokens = await prisma.$queryRaw<{ tokenId: string }[]>`
+    SELECT DISTINCT "tokenId" FROM "Match"
+    WHERE "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+    ORDER BY "tokenId"`;
+  const total: PeakRecordingResult = { fromSnapshots: 0, fromLivePings: 0 };
+  for (let i = 0; i < tokens.length; i += FULL_SWEEP_TOKENS_PER_BATCH) {
+    const tokenIds = tokens.slice(i, i + FULL_SWEEP_TOKENS_PER_BATCH).map((t) => t.tokenId);
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const batch = await recordMatchPeaksForTokens(snapshotRetentionDays, tokenIds);
+        total.fromSnapshots += batch.fromSnapshots;
+        total.fromLivePings += batch.fromLivePings;
+        break;
+      } catch (err) {
+        if (attempt >= 2) {
+          logger.warn("full peak sweep batch failed, moving on", {
+            tokens: tokenIds.length,
+            error: String(err),
+          });
+          break;
+        }
+      }
+    }
+  }
+  logger.info("full peak sweep complete", { tokens: tokens.length, ...total });
+  return total;
+}
+
+/** The unscoped statements of recordMatchPeaks, limited to these tokens. */
+async function recordMatchPeaksForTokens(
+  snapshotRetentionDays: number,
+  tokenIds: string[],
+): Promise<PeakRecordingResult> {
+  const fromSnapshots = await prisma.$executeRaw`
+    UPDATE "Match" m
+    SET "peakMcapUsd" = p.peak_mcap,
+        "peakMcapAt"  = p.peak_at
+    FROM (
+      SELECT m2.id,
+             best."marketCapUsd" AS peak_mcap,
+             best."takenAt"      AS peak_at
+      FROM "Match" m2
+      JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
+      JOIN LATERAL (
+        SELECT s."marketCapUsd", s."takenAt"
+        FROM "TokenSnapshot" s
+        WHERE s."tokenId" = m2."tokenId"
+          AND s."takenAt" >= m2."matchedAt"
+        ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
+        LIMIT 1
+      ) best ON TRUE
+      WHERE m2."tokenId" = ANY(${tokenIds})
+        AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
+    ) p
+    WHERE m.id = p.id
+  `;
+  const fromLivePings = await prisma.$executeRaw`
+    UPDATE "Match" m
+    SET "peakMcapUsd" = t."liveMarketCapUsd",
+        "peakMcapAt"  = t."liveDataAt"
+    FROM "Token" t, "TokenSnapshot" alert
+    WHERE t.id = m."tokenId"
+      AND alert.id = m."snapshotId"
+      AND m."tokenId" = ANY(${tokenIds})
+      AND m."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+      AND t."liveMarketCapUsd" IS NOT NULL
+      AND t."liveDataAt" IS NOT NULL
+      AND t."liveDataAt" >= m."matchedAt"
+      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")
+  `;
+  return { fromSnapshots, fromLivePings };
+}

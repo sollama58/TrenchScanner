@@ -1,4 +1,10 @@
-import { createLogger, recordHeartbeat, recordRunStart, type HeartbeatJob } from "@trenchscanner/core";
+import {
+  createLogger,
+  lastHeartbeatAt,
+  recordHeartbeat,
+  recordRunStart,
+  type HeartbeatJob,
+} from "@trenchscanner/core";
 
 const logger = createLogger("scheduler");
 
@@ -98,46 +104,87 @@ export function scheduleInterval(
   };
 }
 
-/** Runs `fn` once daily at `hourUtc:00 UTC`, then every 24h from that point on. */
-export function scheduleDailyAt(name: HeartbeatJob, fn: () => Promise<void>, hourUtc: number): ScheduledJob {
-  const msUntilNext = msUntilNextHour(hourUtc);
-  logger.info("daily job scheduled", {
-    job: name,
-    hourUtc,
-    firstRunInMinutes: Math.round(msUntilNext / 60_000),
-  });
-
-  // Checked before the interval is created, not just in stop(): stop() can be called while the
-  // first run is still awaiting inside the timeout callback, and without this the callback would
-  // then create an interval that nothing ever clears - a stopped job that quietly keeps running
-  // every 24h.
+/**
+ * Runs `fn` once daily at `hourUtc:00 UTC`.
+ *
+ * The next run is scheduled when the previous one RETURNS, for the next `hourUtc` slot after
+ * that - so a run that overruns a day skips to the following slot instead of stacking, and a run
+ * that never returns is visible (runningSince on the heartbeat, a logged stall) instead of quietly
+ * meaning the job never runs again, which is how outcome-tracking went from 2026-09-03 to
+ * 2026-10-03 without completing.
+ *
+ * `catchUpAfterHours`: on startup, if the job's last recorded run is older than this (or it has
+ * never run), run it now rather than waiting for the next slot. A daily job only ever fired when
+ * the worker happened to be up at that hour, so a worker restarting more often than daily - an
+ * out-of-memory loop, a run of deploys - could go weeks without cleanup at all.
+ */
+export function scheduleDailyAt(
+  name: HeartbeatJob,
+  fn: () => Promise<void>,
+  hourUtc: number,
+  opts: { catchUpAfterHours?: number; lastRunAt?: (job: HeartbeatJob) => Promise<Date | null> } = {},
+): ScheduledJob {
   let stopped = false;
-  let interval: NodeJS.Timeout | undefined;
+  let next: NodeJS.Timeout | undefined;
 
-  const timeout = setTimeout(async () => {
-    await runSafely(name, fn);
+  const scheduleNext = () => {
     if (stopped) return;
-    interval = setInterval(() => void runSafely(name, fn), 24 * 3_600_000);
-  }, msUntilNext);
+    const delay = msUntilNextHour(hourUtc);
+    logger.info("daily job scheduled", { job: name, hourUtc, nextRunInMinutes: Math.round(delay / 60_000) });
+    next = setTimeout(() => void run(), delay);
+  };
+
+  const run = async () => {
+    const startedAt = Date.now();
+    const watchdog = setInterval(() => {
+      logger.error("daily job run has not returned", { job: name, runningForMs: Date.now() - startedAt });
+    }, DAILY_STALL_MS);
+    watchdog.unref?.();
+    try {
+      await recordRunStart(name, new Date(startedAt)).catch(() => {});
+      await fn();
+      await recordHeartbeat(name, { success: true, meta: { durationMs: Date.now() - startedAt } });
+    } catch (err) {
+      logger.error("job threw an unhandled error", { job: name, error: String(err) });
+      await recordHeartbeat(name, {
+        success: false,
+        error: String(err),
+        meta: { durationMs: Date.now() - startedAt },
+      }).catch(() => {});
+    } finally {
+      clearInterval(watchdog);
+      scheduleNext();
+    }
+  };
+
+  const start = async () => {
+    const { catchUpAfterHours, lastRunAt = lastHeartbeatAt } = opts;
+    if (catchUpAfterHours !== undefined) {
+      const last = await lastRunAt(name).catch(() => undefined);
+      // undefined = the read failed: don't guess, keep the ordinary schedule.
+      if (
+        last !== undefined &&
+        (last === null || Date.now() - last.getTime() > catchUpAfterHours * 3_600_000)
+      ) {
+        logger.info("daily job overdue, running now", { job: name, lastRunAt: last });
+        if (!stopped) void run();
+        return;
+      }
+    }
+    scheduleNext();
+  };
+  void start();
 
   return {
     stop: () => {
       stopped = true;
-      clearTimeout(timeout);
-      if (interval) clearInterval(interval);
+      if (next) clearTimeout(next);
     },
   };
 }
 
-async function runSafely(name: HeartbeatJob, fn: () => Promise<void>) {
-  try {
-    await fn();
-    await recordHeartbeat(name, { success: true });
-  } catch (err) {
-    logger.error("job threw an unhandled error", { job: name, error: String(err) });
-    await recordHeartbeat(name, { success: false, error: String(err) }).catch(() => {});
-  }
-}
+/** A daily run going this long is logged as stalled, and again each time this much more passes. */
+const DAILY_STALL_MS = 2 * 3_600_000;
 
 function msUntilNextHour(hourUtc: number): number {
   const now = new Date();

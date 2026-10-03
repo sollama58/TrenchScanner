@@ -3,7 +3,7 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { createMatchPeaksRunner, recordMatchPeaks } from "./matchPeaks.js";
+import { createMatchPeaksRunner, recordMatchPeaks, recordMatchPeaksFullSweep } from "./matchPeaks.js";
 
 const MIN = 60_000;
 const HOUR = 3_600_000;
@@ -205,6 +205,17 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
       await recordMatchPeaks(RETENTION_DAYS, { sinceMinutes: 10 });
       expect((await reload(match.id)).peakMcapUsd).toBe(120_000);
     });
+  });
+
+  it("the batched nightly sweep recovers the same full-history peaks", async () => {
+    const { token, match } = await seedMatch("swept", 80_000, [150_000, 640_000, 90_000]);
+    await prisma.token.update({
+      where: { id: token.id },
+      data: { liveMarketCapUsd: 100_000, liveDataAt: new Date() },
+    });
+    const result = await recordMatchPeaksFullSweep(RETENTION_DAYS);
+    expect(result.fromSnapshots).toBeGreaterThanOrEqual(1);
+    expect((await reload(match.id)).peakMcapUsd).toBe(640_000);
   });
 
   describe("createMatchPeaksRunner", () => {
