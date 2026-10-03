@@ -239,19 +239,38 @@ const envSchema = z.object({
   CURATOR_RECENCY_HALF_LIFE_DAYS: z.coerce.number().positive().default(14),
   CURATED_TARGET_PER_HOUR: z.coerce.number().positive().default(6),
   CURATOR_MIN_TRAINING_ROWS: z.coerce.number().int().positive().default(1500),
-  // The hit rates the trained model's alerts are held to: of the alerts sent, the share that
-  // doubled within the hour (WIN) and the share that reached 4x (GOAL). The model's emission
-  // cutoff is the lowest confidence whose out-of-sample calls met both on at least
-  // CURATED_MIN_CALIBRATION_ALERTS alerts; when no cutoff does, the model sends nothing and is
-  // never promoted (see calibrateThresholdForPrecision). CURATED_TARGET_PER_HOUR stays a ceiling.
+  // The hit rates the curated feed AIMS for: of the alerts sent, the share that doubled within the
+  // hour (WIN) and the share that reached 4x (GOAL). A curator's emission cutoff is the lowest
+  // confidence whose out-of-sample calls met both on at least CURATED_MIN_CALIBRATION_ALERTS
+  // alerts; when no cutoff does, it is the cutoff with the best hit-rate record instead - the
+  // targets steer the cutoff, they never stop the feed (see chooseCutoff in trainer.ts).
+  // CURATED_TARGET_PER_HOUR stays a ceiling.
   CURATED_TARGET_WIN_RATE_PCT: z.coerce.number().min(0).max(100).default(75),
   CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
   CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(30),
-  // Holds the hand-tuned heuristic to the same targets while it is the live curator: it only
-  // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned
-  // in the newest training run, and sends nothing when no cutoff met the targets. Before the
-  // first training run there is no record, and the heuristic's gate stands alone. "false"
-  // restores gate-only emission.
+  // How sure a cutoff's out-of-sample record must make us that it meets the targets, as a normal
+  // z-score: a cutoff counts as meeting them when the Wilson LOWER BOUND of its hit rates does.
+  // Choosing the lowest of hundreds of cutoffs that shows 75% favours lucky ones; the bound
+  // discounts a thin record. 0 = judge the observed rates. Either way, alerts still go out at
+  // the best cutoff when none qualifies.
+  CURATED_CALIBRATION_CONFIDENCE_Z: z.coerce.number().min(0).max(4).default(1),
+  // Model families each training run examines, comma-separated: "logistic" (weighted logistic
+  // regression) and/or "gbdt" (gradient-boosted trees). All sit the same walk-forward exam and
+  // the one with the better out-of-sample hit-rate record ships (see pickCuratorFamily).
+  CURATOR_MODEL_FAMILIES: z
+    .string()
+    .default("logistic,gbdt")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    )
+    .pipe(z.array(z.enum(["logistic", "gbdt"])).min(1)),
+  // Holds the hand-tuned heuristic to the same cutoff rule while it is the live curator: it only
+  // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned in
+  // the newest training run (the target-meeting one, else the best one). Without a record the
+  // heuristic's gate stands alone. "false" restores gate-only emission.
   // Curated calls require both top-10 wallet checks (fresh-wallet and empty-wallet share) to have
   // been measured: a token's event moment - the only time curators decide - waits until they
   // are, and the scan spends its wallet lookup budget on looks-ready candidates first. User

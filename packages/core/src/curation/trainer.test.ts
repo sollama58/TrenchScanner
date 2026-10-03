@@ -382,35 +382,58 @@ describe("calibrateThresholdForPrecision", () => {
     const result = calibrateThresholdForPrecision(set, targets);
     expect(result.support).toBe(26);
     expect(result.threshold).toBeCloseTo(set[25]!.probability);
+    expect(result.meetsTargets).toBe(true);
     expect(result.winRatePct).toBeGreaterThanOrEqual(75);
     expect(result.goalRatePct).toBeGreaterThanOrEqual(50);
   });
 
   it("holds out for the 4x target too, not just the 2x one", () => {
     // Every top call doubles but none reaches 4x: the 2x target is met everywhere, the 4x never.
-    const result = calibrateThresholdForPrecision(
-      calls(100, (i) => (i < 50 ? 1 : 0)),
-      targets,
-    );
-    expect(result.threshold).toBeNull();
+    // The targets are missed, so the cutoff is the best-effort one: all 50 sure doublers.
+    const set = calls(100, (i) => (i < 50 ? 1 : 0));
+    const result = calibrateThresholdForPrecision(set, targets);
+    expect(result.meetsTargets).toBe(false);
+    expect(result.threshold).toBeCloseTo(set[49]!.probability);
+    expect(result.support).toBe(50);
     expect(result.winRatePct).toBe(100);
     expect(result.goalRatePct).toBe(0);
   });
 
   it("will not call a target met on fewer alerts than the support floor", () => {
-    // Only the top 5 win - a perfect record, but too thin to trust at a 10-alert floor.
+    // Only the top 5 win - a perfect record, but too thin to trust at a 10-alert floor. The
+    // feed still gets a cutoff: the best record among cutoffs with enough alerts to judge.
+    const set = calls(100, (i) => (i < 5 ? 2 : 0));
+    const result = calibrateThresholdForPrecision(set, targets);
+    expect(result.meetsTargets).toBe(false);
+    expect(result.support).toBe(10);
+    expect(result.threshold).toBeCloseTo(set[9]!.probability);
+  });
+
+  it("has no cutoff only when nothing had enough alerts to judge", () => {
     const result = calibrateThresholdForPrecision(
-      calls(100, (i) => (i < 5 ? 2 : 0)),
+      calls(5, () => 2),
       targets,
     );
     expect(result.threshold).toBeNull();
+    expect(result.support).toBe(0);
+  });
+
+  it("never stops the feed for missing the targets: the best record wins, not the luckiest", () => {
+    // Top 10 calls: 6 wins (60%). Top 60: 39 wins (65%). A 65% record over 60 alerts beats a
+    // 60% one over 10 - the bound rewards the larger, better-supported record.
+    const set = calls(200, (i) => (i < 10 ? (i < 6 ? 2 : 0) : i < 60 ? (i % 3 === 0 ? 0 : 2) : 0));
+    const result = calibrateThresholdForPrecision(set, targets);
+    expect(result.meetsTargets).toBe(false);
+    expect(result.threshold).not.toBeNull();
+    expect(result.support).toBeGreaterThanOrEqual(50);
   });
 
   it("never splits a tie in probability", () => {
     // 20 calls share one probability; half of them win - no cutoff can take only the winners.
     const tied = Array.from({ length: 20 }, (_, i) => ({ probability: 0.5, labelValue: i % 2 ? 2 : 0 }));
     const result = calibrateThresholdForPrecision(tied, targets);
-    expect(result.threshold).toBeNull();
+    expect(result.meetsTargets).toBe(false);
+    expect(result.threshold).toBe(0.5);
     expect(result.support).toBe(20);
   });
 });
@@ -437,7 +460,7 @@ describe("calibrateThresholdForPrecision with the alert cooldown", () => {
       anchorAt: new Date(T0 + i * HOUR),
     }));
     const withCooldown = calibrateThresholdForPrecision([...hot, ...cold], targets, { cooldownMs: DAY });
-    expect(withCooldown.threshold).toBeNull();
+    expect(withCooldown.meetsTargets).toBe(false);
     expect(withCooldown.support).toBe(11);
   });
 
@@ -558,15 +581,18 @@ describe("walkForwardEvaluate at the hit-rate cutoffs", () => {
     expect(result.verdict.promote).toBe(true);
   });
 
-  it("sends nothing from a model whose other folds never met the targets, and never promotes it", async () => {
+  it("still grades a model whose other folds never met the targets, at its best cutoff", async () => {
     const result = await walkForwardEvaluate(syntheticRows(3_000), {
       targetPerHour: 5,
       heuristicMinScore: 55,
       minRowsToPromote: 1_500,
       targets: impossible,
     });
-    for (const fold of result.folds) expect(fold.model.emitted).toBe(0);
-    expect(result.verdict.promote).toBe(false);
+    expect(result.folds.length).toBeGreaterThanOrEqual(2);
+    for (const fold of result.folds) {
+      expect(fold.model.emitted).toBeGreaterThan(0);
+      expect(fold.model.precisionPct ?? 0).toBeGreaterThan(fold.baseWinRatePct * 1.5);
+    }
   });
 
   it("holds the heuristic to its cutoff the way production does", async () => {
@@ -591,9 +617,10 @@ describe("walkForwardEvaluate at the hit-rate cutoffs", () => {
     expect(gateOnly.heuristicOutOfSample.length).toBeGreaterThan(30);
     expect(gateOnly.folds.some((f) => f.heuristic.emitted > 0)).toBe(true);
 
-    // Evidence with no qualifying cutoff silences it, exactly as heuristicGate does live...
-    const silenced = await walkForwardEvaluate(rows, { ...opts, targets: impossible });
-    for (const fold of silenced.folds) expect(fold.heuristic.emitted).toBe(0);
+    // Evidence with no qualifying cutoff still leaves it sending, at its best cutoff, exactly as
+    // heuristicGate does live...
+    const bestEffort = await walkForwardEvaluate(rows, { ...opts, targets: impossible });
+    expect(bestEffort.folds.some((f) => f.heuristic.emitted > 0)).toBe(true);
     // ...unless the precision gate is switched off.
     const ungated = await walkForwardEvaluate(rows, {
       ...opts,

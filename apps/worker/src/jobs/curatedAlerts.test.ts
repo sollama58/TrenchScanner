@@ -603,8 +603,9 @@ describe.skipIf(!dbAvailable)("heuristic hit-rate cutoff", () => {
     expect(await emitsFor("below")).toBe(0);
   });
 
-  it("sends nothing when the newest run found no cutoff that met the targets", async () => {
+  it("falls back to the gate alone when a stored run has no cutoff, never silencing the feed", async () => {
+    // Runs from before missed targets stopped silencing the feed stored a null cutoff.
     await newestRunWithCutoff(null);
-    expect(await emitsFor("unreachable")).toBe(0);
+    expect(await emitsFor("unreachable")).toBe(1);
   });
 });
