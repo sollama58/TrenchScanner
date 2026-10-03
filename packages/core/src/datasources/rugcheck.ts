@@ -20,7 +20,8 @@ export interface RugCheckReport {
 }
 
 export interface RugCheckProfile extends OnChainProfile {
-  riskScore: number; // 0-100, higher = riskier (rugcheck's score_normalised)
+  /** 0-100, higher = riskier (rugcheck's score_normalised). Undefined when the report has none - unknown, not safe. */
+  riskScore?: number;
   riskFlags: string[];
 }
 
@@ -130,7 +131,11 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   // two would reject the common, benign case. (b) is surfaced as a critical risk flag instead of
   // via devWalletPct itself, since a bare `undefined` can't carry that distinction - see
   // CRITICAL_RISK_FLAGS in rugScreen.ts.
-  const devHolder = realHolders.find((h) => h.owner === report.creator || h.address === report.creator);
+  // Guarded: with no creator, `h.owner === report.creator` matched any holder lacking an owner
+  // (undefined === undefined) and reported that holder's bag as the dev's.
+  const devHolder = report.creator
+    ? realHolders.find((h) => h.owner === report.creator || h.address === report.creator)
+    : undefined;
   const riskFlags = (report.risks ?? []).map((r) => r.name);
   if (!report.creator) {
     riskFlags.push("Creator identity unknown");
@@ -151,7 +156,7 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     mintAuthorityActive: Boolean(report.token?.mintAuthority),
     freezeAuthorityActive: Boolean(report.token?.freezeAuthority),
     lpBurned,
-    riskScore: report.score_normalised ?? 0,
+    riskScore: report.score_normalised,
     riskFlags,
     // Feeds the worker's wallet-freshness check (apps/worker/src/jobs/walletFreshness.ts) - a
     // wallet address per top-10 holder, already pool-excluded above. Falls back to `address` for

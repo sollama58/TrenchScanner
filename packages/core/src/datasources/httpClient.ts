@@ -61,15 +61,18 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, { ...init, signal: controller.signal });
-      clearTimeout(timer);
 
+      // The timer stays armed through the body read: clearing it once headers arrived left
+      // res.json() with no deadline, so a provider stalling mid-body hung the calling job forever
+      // (and the scheduler's overlap guard then skipped every later tick of it).
       if (res.ok) {
         return (await res.json()) as T;
       }
+      void res.body?.cancel().catch(() => {});
 
       const retryable = res.status === 429 || res.status >= 500;
       if (retryable && attempt < retries) {
-        const delay = retryDelayMs * 2 ** attempt;
+        const delay = backoffDelay(retryDelayMs, attempt, res.headers.get("retry-after"));
         logger.warn("retrying after non-2xx response", { url: safeUrl, status: res.status, attempt, delay });
         await sleep(delay);
         attempt += 1;
@@ -77,10 +80,9 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       }
       throw new HttpError(res.status, safeUrl);
     } catch (err) {
-      clearTimeout(timer);
       const isAbort = err instanceof Error && err.name === "AbortError";
       if (isAbort && attempt < retries) {
-        const delay = retryDelayMs * 2 ** attempt;
+        const delay = backoffDelay(retryDelayMs, attempt, null);
         logger.warn("retrying after timeout", { url: safeUrl, attempt, delay });
         await sleep(delay);
         attempt += 1;
@@ -89,8 +91,25 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       if (err instanceof HttpError) throw err;
       if (isAbort) throw new HttpError(408, safeUrl, `Timed out after ${timeoutMs}ms`);
       throw err;
+    } finally {
+      clearTimeout(timer);
     }
   }
+}
+
+/** Longest Retry-After we'll sit out inside one call; beyond this the caller is better off failing. */
+const MAX_RETRY_AFTER_MS = 10_000;
+
+/**
+ * Exponential backoff with jitter, or the server's own Retry-After (seconds form) when it sent
+ * one. Without jitter, every chunk of a concurrent batch that hit the same 429 retried in lockstep
+ * and hit it again.
+ */
+export function backoffDelay(baseMs: number, attempt: number, retryAfter: string | null): number {
+  const seconds = retryAfter === null ? NaN : Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+  const exp = baseMs * 2 ** attempt;
+  return Math.round(exp / 2 + Math.random() * exp);
 }
 
 function sleep(ms: number): Promise<void> {

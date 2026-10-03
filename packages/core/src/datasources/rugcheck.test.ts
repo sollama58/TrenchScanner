@@ -72,6 +72,15 @@ describe("toProfile", () => {
     expect(profile.riskFlags).toContain("Creator identity unknown");
   });
 
+  it("does not attribute an owner-less holder's bag to a missing creator", () => {
+    const report = baseReport({ creator: undefined, topHolders: [{ address: "acct-a", pct: 35 }] });
+    expect(toProfile(MINT, report).devWalletPct).toBeUndefined();
+  });
+
+  it("leaves riskScore unknown, not a perfect 0, when the report has no score", () => {
+    expect(toProfile(MINT, baseReport({ score_normalised: undefined })).riskScore).toBeUndefined();
+  });
+
   it("passes through RugCheck's own risk score and flags", () => {
     const profile = toProfile(MINT, baseReport());
     expect(profile.riskScore).toBe(43);

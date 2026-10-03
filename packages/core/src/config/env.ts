@@ -403,7 +403,12 @@ let cached: Env | undefined;
 /** Parses `process.env` once and caches the result. Throws with a readable message on failure. */
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (cached) return cached;
-  const parsed = validatedEnvSchema.safeParse(source);
+  // An empty value means unset. Otherwise z.coerce.number() reads `FOO=` as 0 (Number("") === 0)
+  // and silently replaces the default - e.g. a blank CURATED_CONTENDER_RETRY_MINUTES disables retries.
+  const nonEmpty = Object.fromEntries(
+    Object.entries(source).filter(([, v]) => v !== undefined && v.trim() !== ""),
+  );
+  const parsed = validatedEnvSchema.safeParse(nonEmpty);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`)

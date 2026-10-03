@@ -82,7 +82,7 @@ export class DexScreenerClient {
         const pairs = await fetchJson<DexScreenerPair[]>(
           `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
         );
-        results.push(...this.selectCanonicalPairs(pairs ?? []));
+        results.push(...this.selectCanonicalPairs(pairs ?? [], new Set(chunk)));
       } catch (err) {
         logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
       }
@@ -151,22 +151,46 @@ export class DexScreenerClient {
     }
   }
 
-  /** Collapses multiple pairs-per-mint down to one CandidateToken, preferring the deepest liquidity pair. */
-  private selectCanonicalPairs(pairs: DexScreenerPair[]): CandidateToken[] {
-    const bestByMint = new Map<string, DexScreenerPair>();
+  /**
+   * Collapses multiple pairs-per-mint down to one CandidateToken. When `requested` is given, only
+   * pairs whose base token is one of those mints count - DexScreener also returns pairs where a
+   * requested mint is the quote token, and those carry the other token's price and mcap.
+   */
+  private selectCanonicalPairs(pairs: DexScreenerPair[], requested?: Set<string>): CandidateToken[] {
+    const byMint = new Map<string, DexScreenerPair[]>();
     for (const pair of pairs) {
       if (pair.chainId !== SOLANA_CHAIN_ID) continue;
       const mint = pair.baseToken?.address;
-      if (!mint) continue;
-      const existing = bestByMint.get(mint);
-      const liq = pair.liquidity?.usd ?? 0;
-      if (!existing || liq > (existing.liquidity?.usd ?? 0)) {
-        bestByMint.set(mint, pair);
-      }
+      if (!mint || (requested && !requested.has(mint))) continue;
+      const list = byMint.get(mint);
+      if (list) list.push(pair);
+      else byMint.set(mint, [pair]);
     }
-
-    return [...bestByMint.values()].map(toCandidateToken);
+    return [...byMint.values()].map((list) => toCandidateToken(pickCanonicalPair(list)));
   }
+}
+
+/** Below this, a non-curve pool is too thin to be a trustworthy price source. */
+const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;
+
+/**
+ * The pair a mint's market data is read from. A pre-bond Pump.fun curve pair reports no
+ * liquidity object at all, so "deepest liquidity" alone let any $1 side pool someone opened for
+ * the mint outrank the curve - mispricing it and flipping deriveGraduated to true. So the
+ * eligible pairs are the curve plus pools with real liquidity, ranked by last-hour volume (where
+ * the trading actually is: the curve right up to graduation, the AMM pool right after), then
+ * liquidity. Only when nothing is eligible does the deepest pair win, as before.
+ */
+export function pickCanonicalPair<P extends Pick<DexScreenerPair, "dexId" | "liquidity" | "volume">>(
+  pairs: P[],
+): P {
+  const liq = (p: P) => p.liquidity?.usd ?? 0;
+  const eligible = pairs.filter((p) => p.dexId === "pumpfun" || liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
+  if (eligible.length === 0) return pairs.reduce((best, p) => (liq(p) > liq(best) ? p : best));
+  const h1 = (p: P) => p.volume?.h1 ?? 0;
+  return eligible.reduce((best, p) =>
+    h1(p) > h1(best) || (h1(p) === h1(best) && liq(p) > liq(best)) ? p : best,
+  );
 }
 
 function toCandidateToken(pair: DexScreenerPair): CandidateToken {
