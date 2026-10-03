@@ -124,12 +124,24 @@ export async function runFastMatchCycle(
   // minutes. The screen is a hard gate; the freshest verdict is the only one that counts.
   //
   // Taken newest-first so a flood can only ever cost us the least recently seen.
+  //
+  // The newest row per token is picked in SQL. Prisma's `distinct` is applied in memory after
+  // the query, with no LIMIT on the SQL, so it used to pull every scan snapshot of the last 12
+  // minutes - one per watched token per cycle, thousands of full rows - four times a minute,
+  // which is a large share of what pushed the worker past its memory limit.
+  const newestIds = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM (
+      SELECT DISTINCT ON ("tokenId") id, "takenAt"
+      FROM "TokenSnapshot"
+      WHERE "takenAt" > ${vettedSince} AND source = 'scan'
+      ORDER BY "tokenId", "takenAt" DESC
+    ) newest
+    ORDER BY "takenAt" DESC
+    LIMIT ${MAX_TRACKED}`;
+  if (newestIds.length === 0) return;
   const recent = await prisma.tokenSnapshot.findMany({
-    where: { takenAt: { gt: vettedSince }, source: "scan" },
-    orderBy: { takenAt: "desc" },
-    distinct: ["tokenId"],
-    take: MAX_TRACKED,
-    include: { token: true },
+    where: { id: { in: newestIds.map((r) => r.id) } },
+    include: { token: { select: { id: true, mintAddress: true, firstSeenAt: true } } },
   });
   const vetted = recent.filter((snapshot) => snapshot.rugScreenPassed);
   if (vetted.length === 0) return;

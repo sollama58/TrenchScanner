@@ -11,7 +11,7 @@ import {
   type WalkForwardResult,
   type ScoredToken,
 } from "@trenchscanner/core";
-import { applyTrainingResult } from "./curatorTrainingJob.js";
+import { applyTrainingResult, loadTrainingRows } from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
   emitCuratedCycle,
@@ -149,5 +149,63 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     const emitted = await collectAndEmit(loadEnv(), cold, scoredWithTotal(cold.mintAddress, 30));
     expect(emitted).toBe(false);
     expect(await prisma.curatedAlert.count({ where: { tokenId: cold.id } })).toBe(0);
+  });
+});
+
+describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: `${TAG}-load` } } });
+  });
+
+  it("pages through the window newest first and stops at the row cap", async () => {
+    // Anchored far in the future so no other test's rows fall inside this window.
+    const windowStart = new Date("2099-01-01T00:00:00Z");
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load` } });
+    const base = {
+      tokenId: token.id,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 50_000,
+      features: {},
+      score: 50,
+      nextCheckAt: windowStart,
+      labelValue: 1,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+    };
+    const anchors = Array.from({ length: 7 }, (_, i) => new Date(windowStart.getTime() + (i + 1) * 60_000));
+    await prisma.candidateOutcome.createMany({
+      data: [
+        ...anchors.map((anchorAt, i) => ({
+          ...base,
+          anchorAt,
+          finalizedAt: anchorAt,
+          sampleKind: i % 2 === 0 ? "hourly" : "event",
+        })),
+        // Out of the training set: not finalized, and a selection-biased kind.
+        { ...base, anchorAt: anchors[6]!, sampleKind: "hourly" },
+        { ...base, anchorAt: anchors[6]!, finalizedAt: anchors[6]!, sampleKind: "emission" },
+        // Before the window.
+        {
+          ...base,
+          anchorAt: new Date(windowStart.getTime() - 60_000),
+          finalizedAt: windowStart,
+          sampleKind: "hourly",
+        },
+      ],
+    });
+
+    const all = await loadTrainingRows(windowStart, 100, 2);
+    expect(all.map((r) => r.anchorAt.getTime())).toEqual([...anchors].reverse().map((a) => a.getTime()));
+
+    const capped = await loadTrainingRows(windowStart, 5, 2);
+    expect(capped.map((r) => r.anchorAt.getTime())).toEqual(
+      [...anchors]
+        .reverse()
+        .slice(0, 5)
+        .map((a) => a.getTime()),
+    );
   });
 });

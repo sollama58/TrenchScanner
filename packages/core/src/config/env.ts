@@ -230,6 +230,12 @@ const envSchema = z.object({
   // evaluation (the learning panel shows progress) but never lets the model take over.
   CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().positive().default(4),
   CURATOR_TRAINING_WINDOW_DAYS: z.coerce.number().positive().default(60),
+  // Ceiling on the samples one training run loads: the newest this many from the window. A run
+  // holds every sample (features included) in memory at once, and the walk-forward exam and both
+  // model families multiply that several times over - at ~60k rows a run peaked near 200MB of
+  // heap on its own, which on a 512MB worker is what crashed it once enough history had built
+  // up. The window still bounds how OLD a sample can be; this bounds how many there are.
+  CURATOR_TRAINING_MAX_ROWS: z.coerce.number().int().positive().default(40_000),
   // Half-life for the trainer's recency decay: a sample this many days older than the newest one
   // counts half as much in the loss. The meta this market trades on rotates in weeks, and an
   // equal-weighted 60-day window means a third of the gradient comes from a regime that no
