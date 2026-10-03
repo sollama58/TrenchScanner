@@ -90,8 +90,15 @@ export function AlertCard({
       )}
       <header className="card-head">
         <div className={`avatar-wrap tone-${badge.tone}`}>
-          {card.token.imageUrl ? (
-            <img className="avatar" src={card.token.imageUrl} alt="" loading="lazy" />
+          {card.token.imageUrl?.startsWith("https://") ? (
+            // Launcher-supplied URL: https only, and no referrer sent to whoever hosts it.
+            <img
+              className="avatar"
+              src={card.token.imageUrl}
+              alt=""
+              loading="lazy"
+              referrerPolicy="no-referrer"
+            />
           ) : (
             <span className="avatar placeholder">{(card.token.symbol ?? "?").slice(0, 2)}</span>
           )}

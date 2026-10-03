@@ -85,13 +85,18 @@ export async function redeemLinkCode(code: string, userAgent?: string): Promise<
 /**
  * Whether a device session is still allowed, called on every request that carries one.
  * A revoked or deleted device fails closed - that IS the revocation.
+ *
+ * When `userId` is given, the device must also belong to that user. A token only ever pairs its
+ * own user with its own device, so this changes nothing for real sessions - it stops a token that
+ * names someone else's live device (a leaked signing secret, say) from riding that device's row.
  */
-export async function deviceIsActive(deviceId: string): Promise<boolean> {
+export async function deviceIsActive(deviceId: string, userId?: string): Promise<boolean> {
   const device = await prisma.linkedDevice.findUnique({
     where: { id: deviceId },
-    select: { revokedAt: true },
+    select: { revokedAt: true, userId: true },
   });
-  return device !== null && device.revokedAt === null;
+  if (device === null || device.revokedAt !== null) return false;
+  return userId === undefined || device.userId === userId;
 }
 
 /**

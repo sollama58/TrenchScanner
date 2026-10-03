@@ -25,6 +25,13 @@ export interface FetchJsonOptions extends RequestInit {
 // message, so a flaky/rate-limited provider never leaks its own auth key into our logs.
 const SENSITIVE_QUERY_PARAMS = ["api-key", "apikey", "api_key", "key", "token", "secret"];
 
+/** Path segments at least this long are treated as possible credentials by redactUrl. */
+const LONG_PATH_SEGMENT = 24;
+
+/** Largest response body fetchJson will buffer. The biggest real payloads (a batched RPC read, a
+ *  DexScreener page) are a few hundred KB; anything near this is a broken or hostile upstream. */
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
 /** Replaces any sensitive query param's value with a fixed placeholder. Falls back to returning
  *  the input unchanged if it isn't a parseable absolute URL - every caller in this codebase only
  *  ever passes one, but failing safe here beats throwing out of a logging path. */
@@ -33,6 +40,17 @@ export function redactUrl(rawUrl: string): string {
     const parsed = new URL(rawUrl);
     for (const param of SENSITIVE_QUERY_PARAMS) {
       if (parsed.searchParams.has(param)) parsed.searchParams.set(param, "REDACTED");
+    }
+    // Some paid RPCs put the key in the path instead (QuickNode `/<name>/<token>/`, Alchemy
+    // `/v2/<key>`). A long opaque path segment is redacted too - no public endpoint we call
+    // carries one except a mint or wallet address, and losing those from a log line is harmless.
+    parsed.pathname = parsed.pathname
+      .split("/")
+      .map((segment) => (segment.length >= LONG_PATH_SEGMENT ? "REDACTED" : segment))
+      .join("/");
+    if (parsed.username || parsed.password) {
+      parsed.username = "REDACTED";
+      parsed.password = "";
     }
     return parsed.toString();
   } catch {
@@ -66,7 +84,7 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       // res.json() with no deadline, so a provider stalling mid-body hung the calling job forever
       // (and the scheduler's overlap guard then skipped every later tick of it).
       if (res.ok) {
-        return (await res.json()) as T;
+        return JSON.parse(await readCappedText(res, safeUrl)) as T;
       }
       void res.body?.cancel().catch(() => {});
 
@@ -95,6 +113,34 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * The body as text, refusing more than MAX_RESPONSE_BYTES. Public upstreams (DexScreener,
+ * Pump.fun, RugCheck) are outside our control, and res.json() would buffer whatever they stream
+ * until the timeout - enough, at line rate, to take the worker down.
+ */
+async function readCappedText(res: Response, safeUrl: string): Promise<string> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    void res.body?.cancel().catch(() => {});
+    throw new HttpError(413, safeUrl, `Response too large (${declared} bytes) from ${safeUrl}`);
+  }
+  if (!res.body) return res.text();
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      void reader.cancel().catch(() => {});
+      throw new HttpError(413, safeUrl, `Response over ${MAX_RESPONSE_BYTES} bytes from ${safeUrl}`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /** Longest Retry-After we'll sit out inside one call; beyond this the caller is better off failing. */
