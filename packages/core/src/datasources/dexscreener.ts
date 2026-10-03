@@ -176,21 +176,23 @@ const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;
 /**
  * The pair a mint's market data is read from. A pre-bond Pump.fun curve pair reports no
  * liquidity object at all, so "deepest liquidity" alone let any $1 side pool someone opened for
- * the mint outrank the curve - mispricing it and flipping deriveGraduated to true. So the
- * eligible pairs are the curve plus pools with real liquidity, ranked by last-hour volume (where
- * the trading actually is: the curve right up to graduation, the AMM pool right after), then
- * liquidity. Only when nothing is eligible does the deepest pair win, as before.
+ * the mint outrank the curve - mispricing it and flipping deriveGraduated to true. So:
+ *  - a funded pumpswap pool (Pump.fun's graduation target) means the mint has graduated, and the
+ *    deepest real pool is canonical;
+ *  - otherwise a curve that is still trading is canonical, whatever side pools exist;
+ *  - otherwise (a non-Pump.fun token, or an older Raydium graduation) the deepest real pool,
+ *    falling back to the deepest pair of any size.
  */
 export function pickCanonicalPair<P extends Pick<DexScreenerPair, "dexId" | "liquidity" | "volume">>(
   pairs: P[],
 ): P {
   const liq = (p: P) => p.liquidity?.usd ?? 0;
-  const eligible = pairs.filter((p) => p.dexId === "pumpfun" || liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
-  if (eligible.length === 0) return pairs.reduce((best, p) => (liq(p) > liq(best) ? p : best));
-  const h1 = (p: P) => p.volume?.h1 ?? 0;
-  return eligible.reduce((best, p) =>
-    h1(p) > h1(best) || (h1(p) === h1(best) && liq(p) > liq(best)) ? p : best,
-  );
+  const deepest = (list: P[]) => list.reduce((best, p) => (liq(p) > liq(best) ? p : best));
+  const pools = pairs.filter((p) => p.dexId !== "pumpfun" && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
+  if (pools.some((p) => p.dexId === "pumpswap")) return deepest(pools);
+  const curve = pairs.find((p) => p.dexId === "pumpfun" && (p.volume?.h1 ?? 0) > 0);
+  if (curve) return curve;
+  return deepest(pools.length > 0 ? pools : pairs);
 }
 
 function toCandidateToken(pair: DexScreenerPair): CandidateToken {
