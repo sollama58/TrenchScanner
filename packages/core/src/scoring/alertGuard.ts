@@ -2,7 +2,7 @@ import type { ScoredToken } from "../types.js";
 import { MAX_5M_DUMP_PCT, MIN_BUY_RATIO } from "../curation/curator.js";
 
 /**
- * The platform's own floor under user-filter alerts (dashboard and Telegram alike), applied after
+ * The platform's own floor under user-filter alerts, applied after
  * a token matches a filter and before the match is created - env MATCH_ALERT_GUARD.
  *
  *  - "off":   a match is alerted whatever the market is doing at that moment.

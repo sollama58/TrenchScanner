@@ -71,7 +71,6 @@ const envSchema = z.object({
   // RUGCHECK_CACHE_TTL_MINUTES, or a cached holder count on both sides of the comparison would
   // make growth read 0 rather than "unmeasured".
   HOLDER_GROWTH_WINDOW_MINUTES: z.coerce.number().positive().default(30),
-  DIGEST_HOUR_UTC: z.coerce.number().min(0).max(23).default(13),
   MCAP_FILTER_MIN: z.coerce.number().nonnegative().default(10_000),
   MCAP_FILTER_MAX: z.coerce.number().positive().default(1_000_000),
   // How long a discovered mint stays on the active watchlist (re-checked every scan cycle) before
@@ -313,11 +312,6 @@ const envSchema = z.object({
   // graded and they meet CURATED_TARGET_WIN_RATE_PCT / CURATED_TARGET_GOAL_RATE_PCT, "gate"
   // behaves as "shadow" (see aiGateQualified in apps/worker/src/ai/reviewer.ts).
   AI_REVIEW_MIN_GRADED_BUYS: z.coerce.number().int().positive().default(50),
-
-  TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
-  // Used only to build the "tap to open Telegram" deep link on the dashboard - not required
-  // for the bot itself to function, but without it users have to type /start <code> manually.
-  TELEGRAM_BOT_USERNAME: z.string().optional().default(""),
 
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),

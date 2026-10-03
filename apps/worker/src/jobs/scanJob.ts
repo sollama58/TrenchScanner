@@ -23,7 +23,6 @@ import {
   type DiscoveredCoin,
   type WatchlistCandidate,
 } from "@trenchscanner/core";
-import type { AlertBot } from "../telegram/bot.js";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
@@ -76,7 +75,7 @@ export interface ScanCycleMeta {
   stagesMs: Record<string, number>;
 }
 
-export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Promise<ScanCycleMeta> {
+export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
   const startedAt = Date.now();
   logger.info("scan cycle starting");
   const stagesMs: Record<string, number> = {};
@@ -243,10 +242,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
   // do.
-  const activeFilters = (await prisma.userFilter.findMany({
-    where: { isActive: true },
-    include: { user: { select: { id: true, telegramLink: true } } },
-  })) as FilterWithUser[];
+  const activeFilters: FilterWithUser[] = await prisma.userFilter.findMany({ where: { isActive: true } });
 
   // Batched fallback for mints RugCheck has no report for - resolved up front for the whole cycle
   // rather than one un-batched call at a time from inside the candidate loop.
@@ -346,7 +342,6 @@ export async function runScanCycle(deps: ScanDeps, env: Env, bot: AlertBot): Pro
           earliestActivityByAddress,
           holdingsByAddress,
           curatedCycle,
-          bot,
           env,
         ),
       );
@@ -657,7 +652,6 @@ async function processCandidate(
   earliestActivityByAddress: Map<string, Date | null>,
   holdingsByAddress: Map<string, WalletHoldings>,
   curatedCycle: CuratedCycle,
-  bot: AlertBot,
   env: Env,
 ): Promise<number> {
   const existingToken = await prisma.token.findUnique({ where: { mintAddress: candidate.mintAddress } });
@@ -769,7 +763,6 @@ async function processCandidate(
     snapshot,
     scored,
     activeFilters,
-    bot,
     env,
   });
 

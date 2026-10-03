@@ -1,7 +1,7 @@
 # TrenchScanner Render Blueprint
 #
 # Three services, one Postgres database:
-#   - trenchscanner-api    Fastify REST API (SIWS auth, filters, matches, telegram)
+#   - trenchscanner-api    Fastify REST API (SIWS auth, filters, matches)
 #   - trenchscanner-worker Background scanner (discovery, scoring, rug screen, alerts)
 #   - trenchscanner-db     Managed Postgres
 #
@@ -13,11 +13,6 @@
 # After the first deploy, fill in the envVars marked `sync: false` below
 # from the Render dashboard (Environment tab on each service):
 #   - HELIUS_API_KEY (both api + worker)          https://dev.helius.xyz
-#   - TELEGRAM_BOT_TOKEN (both api + worker)       via @BotFather
-#         The worker polls with it; the API only checks whether it is set, which is what decides
-#         whether the dashboard offers Telegram linking at all. Set it on one and not the other
-#         and the bot runs while no user can reach it.
-#   - TELEGRAM_BOT_USERNAME (both api + worker)    the bot's @username, no leading @
 #   - ANTHROPIC_API_KEY (worker only)               https://console.anthropic.com
 #         Turns on the AI buy/no-buy reviewer (AI_REVIEW_MODE, shadow by default). Left empty the
 #         reviewer is off and alerts flow exactly as before.
@@ -37,8 +32,7 @@
 
 # Only plain, static key/value pairs can live in a shared env var group - Render's Blueprint
 # schema doesn't allow a group's envVars to use fromDatabase (references another resource) or
-# sync: false (a per-service manual-entry placeholder). DATABASE_URL/HELIUS_API_KEY/
-# TELEGRAM_BOT_TOKEN/TELEGRAM_BOT_USERNAME need one of those, so they're declared directly on
+# sync: false (a per-service manual-entry placeholder). DATABASE_URL/HELIUS_API_KEY need one of those, so they're declared directly on
 # each service that needs them below instead of here.
 envVarGroups:
   - name: trenchscanner-shared
@@ -84,16 +78,6 @@ services:
       - key: DATABASE_CONNECTION_LIMIT
         value: "12"
       - key: HELIUS_API_KEY
-        sync: false
-      # The API needs this too, not just the worker: GET /telegram/status reports
-      # `enabled: Boolean(env.TELEGRAM_BOT_TOKEN)`, and the dashboard's Settings page hides the
-      # whole Link Telegram flow while that is false - deliberately, so nobody is handed a code
-      # no bot is listening for. Set on the worker alone, that check was answered by an API that
-      # had never heard of the token, so a fully-running bot was unreachable for every user.
-      # Same value on both services.
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_BOT_USERNAME
         sync: false
       # Verifies burns for /subscription/claim and mints the blockhash the burn is signed
       # against. Undeclared, this fell back to the schema's empty default, which means the
@@ -162,10 +146,6 @@ services:
         sync: false
       - key: HELIUS_API_KEY
         sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_BOT_USERNAME
-        sync: false
       # The burn reconciler's endpoint - see the note on this var on the API above. Empty means
       # the public RPC, which this repo has measured rejecting the batched calls the reconciler
       # makes, so a burn nobody claimed in the browser would sit uncredited.
@@ -182,8 +162,6 @@ services:
       # cadence above so shortening it doesn't silently redefine every user's threshold.
       - key: HOLDER_GROWTH_WINDOW_MINUTES
         value: "30"
-      - key: DIGEST_HOUR_UTC
-        value: "13"
       - key: MCAP_FILTER_MIN
         value: "10000"
       - key: MCAP_FILTER_MAX

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import bs58 from "bs58";
 import nacl from "tweetnacl";
-import { verifySignIn } from "@solana/wallet-standard-util";
+import { createSignInMessageText, verifySignIn } from "@solana/wallet-standard-util";
 import type { SolanaSignInInput, SolanaSignInOutput } from "@solana/wallet-standard-features";
 import type { WalletAccount } from "@wallet-standard/base";
 import { prisma, createLogger } from "@trenchscanner/core";
@@ -9,8 +9,6 @@ import { prisma, createLogger } from "@trenchscanner/core";
 const logger = createLogger("siws");
 
 const NONCE_TTL_MINUTES = 5;
-/** Legacy plain-text flow only - see buildSignInMessage(). The signIn flow uses `domain` instead (a real host, not a brand name). */
-const APP_DOMAIN = "TrenchScanner";
 const SIWS_STATEMENT =
   "Sign in to view and manage your token filters. This request will not trigger a blockchain transaction or cost any fees.";
 const SIWS_VERSION = "1";
@@ -41,22 +39,31 @@ export async function issueNonce(walletAddress: string, domain: string): Promise
   return {
     nonce,
     expiresAt,
-    message: buildSignInMessage(walletAddress, nonce, issuedAt),
+    message: buildSignInMessage(walletAddress, nonce, issuedAt, domain),
     signInInput: buildSignInInput(walletAddress, nonce, issuedAt, domain),
   };
 }
 
-/** The exact message the wallet must sign - must match what the client displays/signs, byte for byte. */
-export function buildSignInMessage(walletAddress: string, nonce: string, issuedAt: Date): string {
-  return [
-    `${APP_DOMAIN} wants you to sign in with your Solana account:`,
-    walletAddress,
-    "",
-    SIWS_STATEMENT,
-    "",
-    `Nonce: ${nonce}`,
-    `Issued At: ${issuedAt.toISOString()}`,
-  ].join("\n");
+/**
+ * The exact message the legacy signMessage() flow signs - the client signs this text as the API
+ * returned it, byte for byte.
+ *
+ * It is the standard Sign-In-With-Solana text for the same input wallet.signIn() gets: our real
+ * domain and URI, not a brand name. It used to read "TrenchScanner wants you to sign in", which
+ * named no site at all - so a phishing page could show it, collect the signature, and post it to
+ * /auth/verify as the victim, and the domain-bound signIn path protected nobody because the
+ * attacker simply chose this one. Wallets that recognise SIWS text in a signMessage request
+ * (Phantom, Solflare) now check the domain against the requesting page and warn on a mismatch.
+ */
+export function buildSignInMessage(
+  walletAddress: string,
+  nonce: string,
+  issuedAt: Date,
+  domain: string,
+): string {
+  return createSignInMessageText(
+    buildSignInInput(walletAddress, nonce, issuedAt, domain) as Parameters<typeof createSignInMessageText>[0],
+  );
 }
 
 /**
@@ -117,14 +124,15 @@ async function findValidNonce(
 export async function verifyAndConsumeNonce(params: {
   walletAddress: string;
   nonce: string;
+  domain: string;
   signature: string;
 }): Promise<VerifyResult> {
-  const { walletAddress, nonce, signature } = params;
+  const { walletAddress, nonce, domain, signature } = params;
 
   const lookup = await findValidNonce(nonce, walletAddress);
   if (!lookup.ok) return lookup;
 
-  const message = buildSignInMessage(walletAddress, nonce, lookup.record.createdAt);
+  const message = buildSignInMessage(walletAddress, nonce, lookup.record.createdAt, domain);
   const valid = verifySignature(walletAddress, message, signature);
   if (!valid) {
     return { ok: false, reason: "bad_signature" };

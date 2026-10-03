@@ -169,6 +169,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
         : await verifyAndConsumeNonce({
             walletAddress: body.walletAddress,
             nonce: body.nonce,
+            domain: opts.env.PUBLIC_APP_DOMAIN,
             signature: body.signature,
           });
 
@@ -211,7 +212,11 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       request.log.info({ walletAddress, months: heldMonths }, "settled burns made before sign-up");
     }
 
-    const token = await app.sessionSigner.sign({ userId: user.id, walletAddress: user.walletAddress });
+    const token = await app.sessionSigner.sign({
+      userId: user.id,
+      walletAddress: user.walletAddress,
+      sessionVersion: user.sessionVersion,
+    });
     reply.setCookie(SESSION_COOKIE_NAME, token, {
       httpOnly: true,
       ...sessionCookieAttrs(request.hostname, opts.env.PUBLIC_APP_DOMAIN, request.protocol),
@@ -224,6 +229,18 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
   });
 
   app.post("/logout", async (request, reply) => {
+    // Revoke, not just forget: clearing the cookie alone left a copied token valid for the rest
+    // of SESSION_TTL_HOURS. Bumping sessionVersion invalidates every browser session this user
+    // holds. Only for a verified, current browser session - a paired phone is revoked per device.
+    const token = request.cookies[SESSION_COOKIE_NAME];
+    const session = token ? await app.sessionSigner.verify(token) : null;
+    if (session && !session.deviceId) {
+      await prisma.user.updateMany({
+        where: { id: session.userId, sessionVersion: session.sessionVersion ?? 0 },
+        data: { sessionVersion: { increment: 1 } },
+      });
+    }
+
     // Same attributes as when it was set. Browsers key a cookie's identity on name+domain+path
     // rather than on these, but matching them avoids relying on that rather than confirming it
     // per browser.

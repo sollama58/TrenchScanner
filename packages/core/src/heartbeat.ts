@@ -6,7 +6,6 @@ import { Prisma, prisma } from "./db.js";
  */
 export type HeartbeatJob =
   | "scan"
-  | "digest"
   | "cleanup"
   | "outcome-tracking"
   | "live-price"

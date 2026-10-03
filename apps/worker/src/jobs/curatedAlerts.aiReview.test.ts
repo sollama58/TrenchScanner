@@ -121,13 +121,14 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
     expect(reviewPick).not.toHaveBeenCalled();
   });
 
-  it("gate mode: a buy is sent with the reviewer's reason on the card, and linked to its review", async () => {
+  it("gate mode: a buy is sent without the reviewer's reasoning on the public card, and linked to its review", async () => {
     reviewPick.mockResolvedValue(verdict("buy"));
     const { token, emitted } = await run(gate, "buy");
     expect(emitted).toBe(1);
     const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: token.id } });
-    expect(alert.reasons[0]).toBe("AI: said buy");
+    expect(alert.reasons.some((r) => r.startsWith("AI: "))).toBe(false);
     const review = await prisma.aiReview.findFirstOrThrow({ where: { tokenId: token.id } });
+    expect(review.reasoning).toBe("said buy");
     expect(review.curatedAlertId).toBe(alert.id);
     expect(review.candidateOutcomeId).toBe(alert.candidateOutcomeId);
   });

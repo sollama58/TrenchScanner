@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { describe, expect, it } from "vitest";
-import { loadEnv, type Env } from "@trenchscanner/core";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 
@@ -26,7 +26,6 @@ const EXPECTED: Partial<Record<keyof Env, string>> = {
   RUGCHECK_CACHE_TTL_MINUTES: "rugCheckCacheTtlMinutes",
   HOLDER_GROWTH_WINDOW_MINUTES: "holderGrowthWindowMinutes",
   PUBLIC_APP_DOMAIN: "publicAppDomain",
-  DIGEST_HOUR_UTC: "digestHourUtc",
   MCAP_FILTER_MIN: "mcapFilterMin",
   MCAP_FILTER_MAX: "mcapFilterMax",
   WATCHLIST_TTL_HOURS: "watchlistTtlHours",
@@ -39,21 +38,22 @@ const EXPECTED: Partial<Record<keyof Env, string>> = {
 };
 
 /** Never allowed out of this endpoint, whatever else changes. */
-const SECRETS: (keyof Env)[] = ["JWT_SECRET", "HELIUS_API_KEY", "DATABASE_URL", "TELEGRAM_BOT_TOKEN"];
+const SECRETS: (keyof Env)[] = ["JWT_SECRET", "HELIUS_API_KEY", "DATABASE_URL"];
 
 const ADMIN_WALLET = "AdminWallet11111111111111111111111111111111";
 
-/**
- * Calls the real route. Neither authenticateAdmin nor the /config handler touches the database -
- * the admin allow-list is config, not a table - so this needs no Postgres, which keeps it running
- * everywhere rather than skipping on a machine without one.
- */
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+const TAG = `admin-config-test-${Date.now()}`;
+/** Real user rows: a browser session is checked against its user's sessionVersion. */
+const userIds: Record<"admin" | "other", string> = { admin: "", other: "" };
+
+/** Calls the real route, signed in as the admin wallet. */
 async function fetchConfig(): Promise<Record<string, unknown>> {
   const env: Env = { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET };
   const app = await buildServer(env);
   try {
     const cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
-      userId: "admin-test",
+      userId: userIds.admin,
       walletAddress: ADMIN_WALLET,
     });
     const res = await app.inject({
@@ -68,7 +68,16 @@ async function fetchConfig(): Promise<Record<string, unknown>> {
   }
 }
 
-describe("GET /admin/config", () => {
+describe.skipIf(!dbAvailable)("GET /admin/config", () => {
+  beforeAll(async () => {
+    userIds.admin = (await prisma.user.create({ data: { walletAddress: `${TAG}-admin` } })).id;
+    userIds.other = (await prisma.user.create({ data: { walletAddress: `${TAG}-other` } })).id;
+  });
+
+  afterAll(async () => {
+    if (dbAvailable) await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
+  });
+
   it("returns every key the Admin Config tab is meant to show", async () => {
     // The regression this guards: RUGCHECK_CACHE_TTL_MINUTES and HOLDER_GROWTH_WINDOW_MINUTES were
     // added to the schema and never surfaced here. Nothing failed - the page just rendered one
@@ -78,11 +87,6 @@ describe("GET /admin/config", () => {
     for (const [envKey, jsonKey] of Object.entries(EXPECTED)) {
       expect(payload[jsonKey], `${jsonKey} missing from /admin/config`).toBe(env[envKey as keyof Env]);
     }
-  });
-
-  it("reports whether Telegram is configured without leaking the token", async () => {
-    const payload = await fetchConfig();
-    expect(typeof payload.telegramConfigured).toBe("boolean");
   });
 
   it("reports the connection-pool tuning - null when the limit is left to Prisma's own default", async () => {
@@ -114,7 +118,7 @@ describe("GET /admin/config", () => {
     const app = await buildServer(env);
     try {
       const cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
-        userId: "someone-else",
+        userId: userIds.other,
         walletAddress: "NotAnAdmin111111111111111111111111111111111",
       });
       const res = await app.inject({

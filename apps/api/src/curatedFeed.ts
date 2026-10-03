@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import {
+  prisma,
   WIN_WINDOW_MINUTES,
   GOAL_MULTIPLE,
   hit2xInWinWindow,
@@ -189,7 +190,9 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
     /** "heuristic-v1", or the id of the trained model that emitted it. */
     source: alert.source,
     confidence: alert.confidence,
-    reasons: alert.reasons,
+    // An "AI: ..." line was how a gate-mode reviewer's reasoning reached public cards; that is now
+    // admin-only (see attachAiReviewsForAdmin), so any such line already stored is held back too.
+    reasons: alert.reasons.filter((r) => !r.startsWith("AI: ")),
     alertedAt: alert.createdAt,
     outcome: resolveOutcome(alert),
   };
@@ -270,8 +273,6 @@ export function serializeCuratedAlert(
     matchedAt: alert.createdAt,
     score: alert.confidence,
     deliveredDashboard: true,
-    deliveredTelegram: false,
-    digestSentAt: null,
     peakMcapUsd,
     peakMcapAt: null,
     peakReturnPct: peakMcapUsd !== null ? peakPct : null,
@@ -338,4 +339,52 @@ export function foldCuratedIntoPage<
       const meta = folded.get(c.id);
       return meta && c.kind === "match" ? { ...c, curated: meta } : c;
     });
+}
+
+/** The AI reviewer's verdict on a curated alert, as only admins see it. */
+export interface AdminAiReview {
+  mode: string;
+  decision: string | null;
+  probability2x: number | null;
+  probability4x: number | null;
+  reasoning: string | null;
+  risks: string[];
+  error: string | null;
+}
+
+/**
+ * Adds the AI reviewer's verdict and reasoning to each curated card - for admin wallets only.
+ *
+ * The reasoning is model output over launcher-written token text, so it never goes on the public
+ * card; it stays in the AiReview table and is shown here to the people who tune the reviewer.
+ * One query per page, run after the shared page cache so cached rows never carry it.
+ */
+export async function attachAiReviewsForAdmin<T extends { curated: { alertId: string } | null }>(
+  cards: T[],
+  isAdmin: boolean,
+): Promise<(T & { curated: (NonNullable<T["curated"]> & { aiReview?: AdminAiReview }) | null })[]> {
+  const alertIds = cards.flatMap((c) => (c.curated ? [c.curated.alertId] : []));
+  if (!isAdmin || alertIds.length === 0) return cards as never;
+  const reviews = await prisma.aiReview.findMany({
+    where: { curatedAlertId: { in: alertIds } },
+    orderBy: { createdAt: "desc" },
+    select: {
+      curatedAlertId: true,
+      mode: true,
+      decision: true,
+      probability2x: true,
+      probability4x: true,
+      reasoning: true,
+      risks: true,
+      error: true,
+    },
+  });
+  const byAlert = new Map<string, AdminAiReview>();
+  for (const { curatedAlertId, ...review } of reviews) {
+    if (curatedAlertId && !byAlert.has(curatedAlertId)) byAlert.set(curatedAlertId, review);
+  }
+  return cards.map((card) => {
+    const review = card.curated ? byAlert.get(card.curated.alertId) : undefined;
+    return review ? { ...card, curated: { ...card.curated!, aiReview: review } } : card;
+  }) as never;
 }

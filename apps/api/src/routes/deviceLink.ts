@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 import { sessionCookieAttrs } from "./auth.js";
+import { clientIp } from "../clientIp.js";
 import { issueLinkCode, redeemLinkCode, LINK_CODE_TTL_MS } from "../auth/deviceLink.js";
 
 /**
@@ -51,7 +52,7 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
 
     const result = await redeemLinkCode(parsed.data.code, request.headers["user-agent"]);
     if (!result.ok) {
-      request.log.warn({ ip: request.ip }, "rejected a mobile link redemption");
+      request.log.warn({ ip: clientIp(request) }, "rejected a mobile link redemption");
       return reply.code(400).send({ error: "invalid_or_expired" });
     }
 

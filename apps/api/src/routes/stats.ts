@@ -256,10 +256,9 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
   const matchRows = prisma.user.findMany({ select: { id: true } }).then((users) => {
     const userIds = users.map((u) => u.id);
     if (userIds.length === 0) return [];
-    return prisma.$queryRaw<(RawCounts & { filterId: string; name: string; telegram: boolean })[]>`
+    return prisma.$queryRaw<(RawCounts & { filterId: string; name: string })[]>`
       SELECT m."filterId" AS "filterId",
              f."name" AS name,
-             m."deliveredTelegram" AS telegram,
              count(*) AS calls,
              count(*) FILTER (WHERE m."hit2xIn1h" IS NOT NULL) AS graded,
              count(*) FILTER (WHERE m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)) AS won2x,
@@ -268,7 +267,7 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
       FROM "Match" m
       JOIN "UserFilter" f ON f."id" = m."filterId"
       WHERE m."userId" = ANY(${userIds}) AND m."matchedAt" >= ${since} AND m."matchedAt" < ${until}
-      GROUP BY 1, 2, 3`;
+      GROUP BY 1, 2`;
   });
 
   // Every sampled moment by kind. "event" rows are the population curators choose from, so their
@@ -303,14 +302,11 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
   const buys = sumCounts(aiCounts.filter((r) => r.decision === "buy"));
   const allReviewed = sumCounts(aiCounts.filter((r) => r.decision !== "error"));
 
-  // Per filter, with the Telegram-delivered subset broken out (MATCH_ALERT_GUARD only touches
-  // those), largest first and capped so one heavy user can't bloat the reply.
-  const byFilter = new Map<string, { name: string; all: GradedCounts[]; telegram: GradedCounts[] }>();
+  // Per filter, largest first and capped so one heavy user can't bloat the reply.
+  const byFilter = new Map<string, { name: string; all: GradedCounts[] }>();
   for (const r of matches) {
-    const entry = byFilter.get(r.filterId) ?? { name: r.name, all: [], telegram: [] };
-    const counts = toCounts(r);
-    entry.all.push(counts);
-    if (r.telegram) entry.telegram.push(counts);
+    const entry = byFilter.get(r.filterId) ?? { name: r.name, all: [] };
+    entry.all.push(toCounts(r));
     byFilter.set(r.filterId, entry);
   }
   const filterList = [...byFilter.entries()]
@@ -318,11 +314,9 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
       filterId,
       name: f.name,
       ...rated(sumCounts(f.all)),
-      telegram: rated(sumCounts(f.telegram)),
     }))
     .sort((a, b) => b.graded - a.graded || b.calls - a.calls);
   const allMatchCounts = matches.map(toCounts);
-  const telegramMatchCounts = matches.filter((r) => r.telegram).map(toCounts);
 
   return {
     window: { since, until },
@@ -354,7 +348,6 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
     },
     filterMatches: {
       total: rated(sumCounts(allMatchCounts)),
-      telegram: rated(sumCounts(telegramMatchCounts)),
       filterCount: filterList.length,
       byFilter: filterList.slice(0, 50),
     },
