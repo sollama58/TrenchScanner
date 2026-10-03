@@ -28,6 +28,92 @@ const CURATOR_MODEL_PARAMS_RETENTION_DAYS = 7;
  */
 const REVOKED_DEVICE_RETENTION_DAYS = 30;
 
+export interface CleanupOptions {
+  /** Rows per DELETE statement. */
+  rowsPerBatch?: number;
+  /** Tokens whose expired snapshots are collected per pass - see deleteExpiredSnapshots. */
+  tokensPerBatch?: number;
+  /** Pause between statements, so the scan's own writes get the database in between. */
+  pauseMs?: number;
+}
+
+const DEFAULT_BATCH: Required<CleanupOptions> = { rowsPerBatch: 5_000, tokensPerBatch: 200, pauseMs: 50 };
+
+const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+
+/**
+ * Deletes every row `selectSql` (which must select only the key column, and may use $1..$n from
+ * `params`) picks, at most `rowsPerBatch` per statement, until a statement deletes fewer than
+ * that. Each DELETE is its own short transaction. Table and column names are constants from this
+ * file, never input.
+ */
+async function deleteInBatches(
+  selectSql: string,
+  table: string,
+  params: unknown[],
+  opts: Required<CleanupOptions>,
+  key = "id",
+): Promise<number> {
+  const limitParam = `$${params.length + 1}`;
+  const sql = `DELETE FROM "${table}" WHERE "${key}" IN (${selectSql} LIMIT ${limitParam})`;
+  let total = 0;
+  for (;;) {
+    const n = await prisma.$executeRawUnsafe(sql, ...params, opts.rowsPerBatch);
+    total += n;
+    if (n < opts.rowsPerBatch) return total;
+    await sleep(opts.pauseMs);
+  }
+}
+
+/**
+ * TokenSnapshot rows older than the cutoff that no Match references (Match -> TokenSnapshot is
+ * onDelete: Cascade, so deleting one a Match points to would destroy real match history).
+ *
+ * TokenSnapshot has no index on takenAt alone - only (tokenId, takenAt) - and at ~3GB it is far
+ * too big to seq-scan in batches: every batch would re-read the pages the previous ones emptied
+ * (dead rows stay put until vacuum), which is quadratic over a large backlog. So this walks the
+ * tokens old enough to own expired snapshots, in keyset order on Token(firstSeenAt), and deletes
+ * per group of tokens through the (tokenId, takenAt) index. A token first seen after the cutoff
+ * cannot own a snapshot taken before it.
+ */
+async function deleteExpiredSnapshots(cutoff: Date, opts: Required<CleanupOptions>): Promise<number> {
+  const sql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
+      SELECT s."id" FROM "TokenSnapshot" s
+       WHERE s."tokenId" = ANY($1::text[]) AND s."takenAt" < $2
+         AND NOT EXISTS (SELECT 1 FROM "Match" m WHERE m."snapshotId" = s."id")
+       LIMIT $3)`;
+  let total = 0;
+  let after: { firstSeenAt: Date; id: string } | null = null;
+  for (;;) {
+    const tokens: { id: string; firstSeenAt: Date }[] = await prisma.token.findMany({
+      where: {
+        firstSeenAt: { lt: cutoff },
+        ...(after
+          ? {
+              OR: [
+                { firstSeenAt: { gt: after.firstSeenAt } },
+                { firstSeenAt: after.firstSeenAt, id: { gt: after.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ firstSeenAt: "asc" }, { id: "asc" }],
+      select: { id: true, firstSeenAt: true },
+      take: opts.tokensPerBatch,
+    });
+    if (tokens.length === 0) return total;
+    const ids = tokens.map((t) => t.id);
+    for (;;) {
+      const n = await prisma.$executeRawUnsafe(sql, ids, cutoff, opts.rowsPerBatch);
+      total += n;
+      if (n > 0) await sleep(opts.pauseMs);
+      if (n < opts.rowsPerBatch) break;
+    }
+    if (tokens.length < opts.tokensPerBatch) return total;
+    after = tokens[tokens.length - 1]!;
+  }
+}
+
 /**
  * Both TokenSnapshot and Token would otherwise grow unbounded forever - every scan cycle writes
  * a snapshot for every in-band token, and every newly-discovered mint gets a bare Token row
@@ -35,11 +121,10 @@ const REVOKED_DEVICE_RETENTION_DAYS = 30;
  *
  *  1. TokenSnapshot rows older than SNAPSHOT_RETENTION_DAYS that no Match references. Match's
  *     relation to TokenSnapshot is onDelete: Cascade, so deleting a snapshot a Match still points
- *     to would silently destroy real match history - `matches: { none: {} }` excludes those.
+ *     to would silently destroy real match history.
  *  2. CandidateOutcome rows older than CANDIDATE_OUTCOME_RETENTION_DAYS - the curated-alerts
  *     training set, on its own deliberately-long horizon (see env.ts).
- *  3. Token rows older than STALE_TOKEN_RETENTION_DAYS with zero snapshots, zero matches and zero
- *     candidate outcomes ever - mints that were added to the watchlist, never did anything
+ *  3. Token rows older than STALE_TOKEN_RETENTION_DAYS with nothing referencing them - mints that were added to the watchlist, never did anything
  *     interesting, and have long since aged off it (WATCHLIST_TTL_HOURS is much shorter than
  *     this). Safe to forget entirely.
  *  4. Long-untouched RPC cache entries (see RPC_CACHE_RETENTION_DAYS) - these accumulate one row
@@ -48,32 +133,43 @@ const REVOKED_DEVICE_RETENTION_DAYS = 30;
  *  5. Spent and expired Mobile Connect link codes, and long-revoked devices - one code row is
  *     written per QR rendered, so this is the fastest-filling table of the lot per active user.
  */
-export async function runCleanupJob(env: Env): Promise<void> {
+export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promise<void> {
   const startedAt = Date.now();
+  const batch = { ...DEFAULT_BATCH, ...opts };
   logger.info("cleanup job starting");
 
+  // Every big sweep below deletes in bounded batches rather than one statement. On the 256MB
+  // production database a single DELETE over weeks of backlog (the worker was down for most of
+  // September, so the first sweep after it came back is exactly that) holds one transaction open
+  // for minutes, takes row locks the scan's own writes then queue behind, and leaves autovacuum
+  // nothing it can reclaim until the whole thing commits.
   const snapshotCutoff = new Date(startedAt - env.SNAPSHOT_RETENTION_DAYS * DAY_MS);
-  const deletedSnapshots = await prisma.tokenSnapshot.deleteMany({
-    where: {
-      takenAt: { lt: snapshotCutoff },
-      matches: { none: {} },
-    },
-  });
+  const deletedSnapshots = { count: await deleteExpiredSnapshots(snapshotCutoff, batch) };
 
   // The training set for curated alerts, on its own (much longer) horizon - see
   // CANDIDATE_OUTCOME_RETENTION_DAYS in env.ts. Deleted by age alone: rows this old are long
   // finalized, and they carry their own copy of the features, so nothing else references them.
   const candidateOutcomeCutoff = new Date(startedAt - env.CANDIDATE_OUTCOME_RETENTION_DAYS * DAY_MS);
-  const deletedCandidateOutcomes = await prisma.candidateOutcome.deleteMany({
-    where: { anchorAt: { lt: candidateOutcomeCutoff } },
-  });
+  const deletedCandidateOutcomes = {
+    count: await deleteInBatches(
+      `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
+      "CandidateOutcome",
+      [candidateOutcomeCutoff],
+      batch,
+    ),
+  };
 
   // The bench curator's ledger (see CuratedShadowEmission), on the same horizon as the training
   // set it grades against: unlike CuratedAlert rows these are evaluation data, not a public
   // track record, and a shadow row whose outcome link has been pruned can't be graded anyway.
-  const deletedShadowEmissions = await prisma.curatedShadowEmission.deleteMany({
-    where: { createdAt: { lt: candidateOutcomeCutoff } },
-  });
+  const deletedShadowEmissions = {
+    count: await deleteInBatches(
+      `SELECT "id" FROM "CuratedShadowEmission" WHERE "createdAt" < $1`,
+      "CuratedShadowEmission",
+      [candidateOutcomeCutoff],
+      batch,
+    ),
+  };
 
   // Old non-active curator models: one is minted every CURATOR_TRAINING_INTERVAL_HOURS (several a
   // day), so keep the recent history (which the learning panel and any postmortem want) and drop
@@ -95,29 +191,35 @@ export async function runCleanupJob(env: Env): Promise<void> {
       AND NOT ("params" ? 'pruned')
   `;
 
+  // Tokens older than STALE_TOKEN_RETENTION_DAYS that nothing references any more. Every relation
+  // on Token is onDelete: Cascade, so each NOT EXISTS below is a record this sweep would otherwise
+  // destroy sideways:
+  //  - CandidateOutcome: outcome rows outlive snapshots by months (see above) - without this,
+  //    purging a token whose snapshots aged out would silently destroy its training samples.
+  //  - CuratedAlert: the one record that is supposed to be permanent. A curated token nobody's
+  //    filter also caught holds no Match: its snapshots age out at 30 days, its outcome rows at
+  //    180, and on the first sweep after that the token itself qualified - taking the feed's
+  //    public, self-grading track record (PLANNING 7b, /curated/stats) with it.
+  //  - CuratedShadowEmission: pruned on its own horizon above, but only by age - a row still
+  //    inside it must not be destroyed by a token sweep either.
+  //  - AiReview: the reviewer's ledger has no horizon of its own, and a "no buy" on a token no
+  //    curator alerted is held by nothing else once the token's outcome row ages out.
   const tokenCutoff = new Date(startedAt - env.STALE_TOKEN_RETENTION_DAYS * DAY_MS);
-  const deletedTokens = await prisma.token.deleteMany({
-    where: {
-      firstSeenAt: { lt: tokenCutoff },
-      snapshots: { none: {} },
-      matches: { none: {} },
-      // Token -> CandidateOutcome is onDelete: Cascade, and outcome rows outlive snapshots by
-      // months (see above) - without this, purging a token whose snapshots aged out would
-      // silently destroy its training samples with it.
-      candidateOutcomes: { none: {} },
-      // Same cascade, and the one record that is supposed to be permanent. A curated alert is
-      // emitted independently of user filters, so a curated token that nobody's filter also
-      // caught holds no Match: its snapshots age out at 30 days, its outcome rows at 180, and on
-      // the first sweep after that the token itself qualified - taking the feed's public,
-      // self-grading track record with it. PLANNING 7b's "every alert card publicly grades
-      // itself" and the /curated/stats hit rate both read those rows, so the record was quietly
-      // shrinking from the far end while the numbers on the panel stayed plausible.
-      curatedAlerts: { none: {} },
-      // The bench curator's ledger is pruned on its own horizon above, but only by age - a row
-      // still inside it must not be destroyed sideways by a token sweep either.
-      curatedShadowEmissions: { none: {} },
-    },
-  });
+  const deletedTokens = {
+    count: await deleteInBatches(
+      `SELECT t."id" FROM "Token" t
+        WHERE t."firstSeenAt" < $1
+          AND NOT EXISTS (SELECT 1 FROM "TokenSnapshot" x WHERE x."tokenId" = t."id")
+          AND NOT EXISTS (SELECT 1 FROM "Match" x WHERE x."tokenId" = t."id")
+          AND NOT EXISTS (SELECT 1 FROM "CandidateOutcome" x WHERE x."tokenId" = t."id")
+          AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."tokenId" = t."id")
+          AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."tokenId" = t."id")
+          AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."tokenId" = t."id")`,
+      "Token",
+      [tokenCutoff],
+      batch,
+    ),
+  };
 
   /**
    * Mobile Connect leaves two kinds of debris.
@@ -149,26 +251,29 @@ export async function runCleanupJob(env: Env): Promise<void> {
     }),
   ]);
 
+  // One row per distinct wallet/mint ever looked up, so these can be large; same batching.
   const rpcCacheCutoff = new Date(startedAt - RPC_CACHE_RETENTION_DAYS * DAY_MS);
-  const [
-    deletedWalletCache,
-    deletedHoldingsCache,
-    deletedMintAuthorityCache,
-    deletedMayhemCache,
-    deletedRugCheckCache,
-  ] = await Promise.all([
-    prisma.walletActivityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-    // Same horizon, but this one is already a TTL cache during normal operation (see
-    // WALLET_HOLDINGS_CACHE_TTL_MINUTES): a row in continuous use is rewritten in place, so this
-    // sweep only collects wallets that stopped appearing as top holders entirely.
-    prisma.walletHoldingsCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-    prisma.mintAuthorityCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-    prisma.mayhemModeCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-    // RugCheckCache is a TTL cache (RUGCHECK_CACHE_TTL_MINUTES), so its rows go stale within
-    // minutes - but a stale row is still *kept*, and rewritten in place, for as long as the mint
-    // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
-    prisma.rugCheckCache.deleteMany({ where: { checkedAt: { lt: rpcCacheCutoff } } }),
-  ]);
+  const sweepCache = async (table: string, key: string) => ({
+    count: await deleteInBatches(
+      `SELECT "${key}" FROM "${table}" WHERE "checkedAt" < $1`,
+      table,
+      [rpcCacheCutoff],
+      batch,
+      key,
+    ),
+  });
+  // Sequential on purpose: five concurrent sweeps would be five long-running deleters at once.
+  const deletedWalletCache = await sweepCache("WalletActivityCache", "address");
+  // Same horizon, but this one is already a TTL cache during normal operation (see
+  // WALLET_HOLDINGS_CACHE_TTL_MINUTES): a row in continuous use is rewritten in place, so this
+  // sweep only collects wallets that stopped appearing as top holders entirely.
+  const deletedHoldingsCache = await sweepCache("WalletHoldingsCache", "address");
+  const deletedMintAuthorityCache = await sweepCache("MintAuthorityCache", "mintAddress");
+  const deletedMayhemCache = await sweepCache("MayhemModeCache", "mintAddress");
+  // RugCheckCache is a TTL cache (RUGCHECK_CACHE_TTL_MINUTES), so its rows go stale within
+  // minutes - but a stale row is still *kept*, and rewritten in place, for as long as the mint
+  // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
+  const deletedRugCheckCache = await sweepCache("RugCheckCache", "mintAddress");
 
   logger.info("cleanup job complete", {
     durationMs: Date.now() - startedAt,

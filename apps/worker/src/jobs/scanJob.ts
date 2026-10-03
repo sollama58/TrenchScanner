@@ -631,6 +631,8 @@ async function processCandidate(
           takenAt: { lte: new Date(Date.now() - env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000) },
         },
         orderBy: { takenAt: "desc" },
+        // Only the holder count is read - not the whole ~50-column row, ~200 times a minute.
+        select: { holderCount: true },
       })
     : null;
 

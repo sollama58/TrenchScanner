@@ -177,8 +177,21 @@ export async function runOutcomeTrackingJob(
       );
       if (!update) continue;
 
-      await prisma.match.update({ where: { id: match.id }, data: update });
-      updated += 1;
+      // The live prices above take minutes to fetch, and match-peaks keeps raising peaks the whole
+      // time - so a new high from this run only lands if it is still higher than what is on the
+      // row now. Overwriting unconditionally lost peaks seen only by the live-price pings for
+      // good. The derived columns this skips are recomputed by repairOutcomeBookkeeping below.
+      const write =
+        update.peakMcapUsd !== undefined
+          ? await prisma.match.updateMany({
+              where: {
+                id: match.id,
+                OR: [{ peakMcapUsd: null }, { peakMcapUsd: { lt: update.peakMcapUsd } }],
+              },
+              data: update,
+            })
+          : await prisma.match.updateMany({ where: { id: match.id }, data: update });
+      updated += write.count;
     }
   }
 

@@ -90,4 +90,19 @@ describe("SharedCache", () => {
     await expect(cache.get(async () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
     await expect(cache.get(async () => "recovered")).resolves.toBe("recovered");
   });
+
+  it("does not store or share a fill that was already running when clear() was called", async () => {
+    // A new alert's NOTIFY clears the cache while a fill that read the database just before the
+    // alert is still running. That fill must not be cached, and readers arriving after the clear
+    // must get a fresh read rather than joining the stale one.
+    const cache = new SharedCache<string>(60_000);
+    let release!: (v: string) => void;
+    const stale = cache.get(() => new Promise<string>((r) => (release = r)));
+    cache.clear();
+    const fresh = cache.get(async () => "after-alert");
+    release("before-alert");
+    expect(await stale).toBe("before-alert");
+    expect(await fresh).toBe("after-alert");
+    expect(await cache.get(async () => "unused")).toBe("after-alert");
+  });
 });

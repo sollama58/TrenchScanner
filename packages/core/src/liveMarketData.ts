@@ -32,32 +32,36 @@ export async function refreshLiveMarketData(
 
   const live = await dexScreener.getTokensByAddresses(tokens.map((t) => t.mintAddress));
   const byMint = new Map(live.map((c) => [c.mintAddress, c]));
-  const now = new Date();
-  let updated = 0;
+  // Not in the response (delisted, liquidity pulled, DexScreener hasn't indexed it) - leave
+  // whatever was last recorded rather than blanking it, exactly as outcomeTrackingJob does.
+  const rows = tokens
+    .flatMap((t) => {
+      const data = byMint.get(t.mintAddress);
+      return data ? [{ id: t.id, mcap: data.marketCapUsd, price: data.priceUsd }] : [];
+    })
+    // A stable order, so two overlapping refreshes take their row locks in the same sequence.
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (rows.length === 0) return { requested: tokens.length, updated: 0 };
 
-  await Promise.all(
-    tokens.map(async (token) => {
-      const data = byMint.get(token.mintAddress);
-      // Not in the response (delisted, liquidity pulled, DexScreener hasn't indexed it) - leave
-      // whatever was last recorded rather than blanking it, exactly as outcomeTrackingJob does.
-      if (!data) return;
-      try {
-        await prisma.token.update({
-          where: { id: token.id },
-          data: {
-            liveMarketCapUsd: data.marketCapUsd,
-            livePriceUsd: data.priceUsd,
-            liveDataAt: now,
-          },
-        });
-        updated += 1;
-      } catch (err) {
-        // Almost always the token being deleted by the cleanup job mid-refresh. Not worth failing
-        // the whole pass over.
-        logger.warn("failed to persist live market data", { mint: token.mintAddress, error: String(err) });
-      }
-    }),
-  );
+  const finite = (n: number) => (Number.isFinite(n) ? n : null);
+  let updated = 0;
+  try {
+    // One statement for the whole batch. This used to be one UPDATE per token, all in flight at
+    // once - up to 150 from the worker every minute and 12 per API page load, each its own pool
+    // checkout, which on the API's 12-connection pool queued every other request behind them. A
+    // token deleted mid-refresh simply matches no row.
+    updated = await prisma.$executeRaw`
+      UPDATE "Token" AS t
+      SET "liveMarketCapUsd" = v.mcap, "livePriceUsd" = v.price, "liveDataAt" = now()
+      FROM unnest(
+        ${rows.map((r) => r.id)}::text[],
+        ${rows.map((r) => finite(r.mcap))}::float8[],
+        ${rows.map((r) => finite(r.price))}::float8[]
+      ) AS v(id, mcap, price)
+      WHERE t.id = v.id`;
+  } catch (err) {
+    logger.warn("failed to persist live market data", { count: rows.length, error: String(err) });
+  }
 
   return { requested: tokens.length, updated };
 }

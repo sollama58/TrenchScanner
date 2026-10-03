@@ -82,7 +82,11 @@ export async function recordMatchPeaks(
       WHERE m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
         AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
     ) p
+    -- Re-checked on the row being updated, not just on the m2 copy above: if another pass raised
+    -- this match's peak while this statement waited on its row lock, Postgres re-evaluates only
+    -- this outer WHERE, and without this line a smaller windowed peak overwrote the larger one.
     WHERE m.id = p.id
+      AND p.peak_mcap > COALESCE(m."peakMcapUsd", 0)
   `
       : // The incremental pass reads only the snapshots taken inside the window - anything older
         // was already folded in by an earlier pass, which is what makes the window enough. It used
@@ -111,18 +115,30 @@ export async function recordMatchPeaks(
         LIMIT 1
       ) best ON TRUE
       -- A per-token probe on (tokenId, takenAt) rather than "every token with a fresh snapshot":
-      -- that set needs a (source, takenAt) index production doesn't have, so it was a scan of the
-      -- table's newest pages on every pass.
-      WHERE EXISTS (
-          SELECT 1 FROM "TokenSnapshot" fresh
-          WHERE fresh."tokenId" = m2."tokenId"
-            AND fresh."takenAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
-            AND fresh.source IN ('scan', 'fast')
+      -- that set has no index to come from (no (source, takenAt) index exists), so it was a scan
+      -- of the table's newest pages on every pass. Probed once per distinct matched token, not
+      -- once per Match row - a token alerted to many filters used to be probed once per match.
+      WHERE m2."tokenId" IN (
+          SELECT mt."tokenId"
+          FROM (
+            SELECT DISTINCT "tokenId" FROM "Match"
+            WHERE "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+          ) mt
+          WHERE EXISTS (
+            SELECT 1 FROM "TokenSnapshot" fresh
+            WHERE fresh."tokenId" = mt."tokenId"
+              AND fresh."takenAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
+              AND fresh.source IN ('scan', 'fast')
+          )
         )
         AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
         AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
     ) p
+    -- Re-checked on the row being updated, not just on the m2 copy above: if another pass raised
+    -- this match's peak while this statement waited on its row lock, Postgres re-evaluates only
+    -- this outer WHERE, and without this line a smaller windowed peak overwrote the larger one.
     WHERE m.id = p.id
+      AND p.peak_mcap > COALESCE(m."peakMcapUsd", 0)
   `;
 
   // The live ping is a real observation too, and a much finer-grained one - every minute, for
@@ -273,7 +289,11 @@ async function recordMatchPeaksForTokens(
         AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
         AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
     ) p
+    -- Re-checked on the row being updated, not just on the m2 copy above: if another pass raised
+    -- this match's peak while this statement waited on its row lock, Postgres re-evaluates only
+    -- this outer WHERE, and without this line a smaller windowed peak overwrote the larger one.
     WHERE m.id = p.id
+      AND p.peak_mcap > COALESCE(m."peakMcapUsd", 0)
   `;
   const fromLivePings = await prisma.$executeRaw`
     UPDATE "Match" m

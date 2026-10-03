@@ -116,37 +116,43 @@ export async function createMatchesForTargets(opts: {
   // token rather than per (user, filter) pair because both lanes contend over exactly one token
   // at a time - one lock instead of a dozen.
   const cooldownCutoff = new Date(Date.now() - ALERT_COOLDOWN_HOURS * 3_600_000);
-  const created = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${token.id}))`;
+  const created = await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${token.id}))`;
 
-    const recent = await tx.match.findMany({
-      where: {
-        tokenId: token.id,
-        matchedAt: { gt: cooldownCutoff },
-        filterId: { in: toAlert.map((f) => f.id) },
-      },
-      select: { userId: true, filterId: true },
-    });
-    const onCooldown = new Set(recent.map((r) => `${r.userId}:${r.filterId}`));
-    const confirmed = toAlert.filter((f) => !onCooldown.has(`${f.userId}:${f.id}`));
+      const recent = await tx.match.findMany({
+        where: {
+          tokenId: token.id,
+          matchedAt: { gt: cooldownCutoff },
+          filterId: { in: toAlert.map((f) => f.id) },
+        },
+        select: { userId: true, filterId: true },
+      });
+      const onCooldown = new Set(recent.map((r) => `${r.userId}:${r.filterId}`));
+      const confirmed = toAlert.filter((f) => !onCooldown.has(`${f.userId}:${f.id}`));
 
-    const rows = [];
-    for (const filter of confirmed) {
-      rows.push(
-        await tx.match.create({
-          data: {
-            userId: filter.userId,
-            filterId: filter.id,
-            tokenId: token.id,
-            snapshotId: snapshot.id,
-            score: scored.score.total,
-            deliveredDashboard: true,
-          },
-        }),
-      );
-    }
-    return rows;
-  });
+      const rows = [];
+      for (const filter of confirmed) {
+        rows.push(
+          await tx.match.create({
+            data: {
+              userId: filter.userId,
+              filterId: filter.id,
+              tokenId: token.id,
+              snapshotId: snapshot.id,
+              score: scored.score.total,
+              deliveredDashboard: true,
+            },
+          }),
+        );
+      }
+      return rows;
+    },
+    // Prisma's default is to give up after 2s waiting for a connection. This runs while the scan's
+    // candidate fan-out holds most of the worker's pool, and a timeout here drops the alert until
+    // the next cycle - the one write in the worker that is worth waiting for.
+    { maxWait: 10_000 },
+  );
   if (created.length === 0) return 0;
 
   // Whoever actually got a row is who gets pushed to - the lock above may have dropped filters

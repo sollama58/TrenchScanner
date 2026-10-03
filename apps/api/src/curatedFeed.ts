@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma, TokenSnapshot } from "@prisma/client";
 import {
   prisma,
   WIN_WINDOW_MINUTES,
@@ -21,9 +21,42 @@ import {
  * showing different numbers for the same alert.
  */
 
-/** Everything a curated card needs, in one Prisma include. */
+/**
+ * Attaches each row's token's newest snapshot as `token.snapshots` (zero or one element).
+ *
+ * Not a nested `snapshots: { orderBy, take: 1 }` include: for a list of parents Prisma sends that
+ * as one `WHERE "tokenId" IN (...) ORDER BY "takenAt" DESC` with NO limit and applies the
+ * take-1 per parent in memory - so every feed page pulled every snapshot of every token on it
+ * (up to ~1,400 a day per token, 30 days kept) out of the largest table in the database, on
+ * every poll. This asks for one row per token through the (tokenId, takenAt) index instead.
+ */
+export async function withLatestSnapshots<T extends { token: { id: string } }>(
+  rows: T[],
+): Promise<(T & { token: T["token"] & { snapshots: TokenSnapshot[] } })[]> {
+  const tokenIds = [...new Set(rows.map((r) => r.token.id))];
+  const latestIds =
+    tokenIds.length === 0
+      ? []
+      : await prisma.$queryRaw<{ id: string }[]>`
+          SELECT s.id
+          FROM unnest(${tokenIds}::text[]) AS t(id)
+          CROSS JOIN LATERAL (
+            SELECT id FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
+          ) s`;
+  const snapshots =
+    latestIds.length === 0
+      ? []
+      : await prisma.tokenSnapshot.findMany({ where: { id: { in: latestIds.map((r) => r.id) } } });
+  const byToken = new Map(snapshots.map((s) => [s.tokenId, s]));
+  return rows.map((r) => {
+    const latest = byToken.get(r.token.id);
+    return { ...r, token: { ...r.token, snapshots: latest ? [latest] : [] } };
+  });
+}
+
+/** Everything a curated card needs, in one Prisma include - plus withLatestSnapshots. */
 export const curatedAlertInclude = {
-  token: { include: { snapshots: { orderBy: { takenAt: "desc" }, take: 1 } } },
+  token: true,
   snapshot: true,
   candidateOutcome: {
     select: {
@@ -47,9 +80,11 @@ export const curatedAlertInclude = {
   },
 } satisfies Prisma.CuratedAlertInclude;
 
-export type CuratedAlertWithRelations = Prisma.CuratedAlertGetPayload<{
-  include: typeof curatedAlertInclude;
-}>;
+export type CuratedAlertWithRelations = Awaited<
+  ReturnType<
+    typeof withLatestSnapshots<Prisma.CuratedAlertGetPayload<{ include: typeof curatedAlertInclude }>>
+  >
+>[number];
 
 /** How one curated call is going / went, resolved from the freshest source available. */
 export interface OutcomeView {

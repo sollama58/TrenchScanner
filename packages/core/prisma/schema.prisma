@@ -627,11 +627,10 @@ model TokenSnapshot {
   matches       Match[]
   curatedAlerts CuratedAlert[]
 
+  // The only index the reads need: every query on this table is per token, newest first. There
+  // is deliberately no index on takenAt or (source, takenAt) - the table is ~3GB and write-heavy,
+  // so time-ranged work (cleanup, the fast-match fallback) walks Token first instead.
   @@index([tokenId, takenAt])
-  @@index([marketCapUsd])
-  /// Serves the fast pass's candidate query: newest scan-authored row per token inside the
-  /// vetting window.
-  @@index([source, takenAt])
 }
 
 /// A token that matched a specific user's filter on a specific scan cycle.

@@ -13,6 +13,7 @@ import { currentMarketCap } from "./matches.js";
 import {
   attachAiReviewsForAdmin,
   curatedAlertInclude,
+  withLatestSnapshots,
   serializeCuratedAlert,
   type CuratedAlertWithRelations,
 } from "../curatedFeed.js";
@@ -184,13 +185,15 @@ export async function registerCuratedRoutes(
 
     const { alerts, totalCount } = await cacheForPage(model, page).get(async () => {
       const [rows, count] = await Promise.all([
-        prisma.curatedAlert.findMany({
-          where: { model },
-          orderBy: { createdAt: "desc" },
-          skip: (page - 1) * PAGE_SIZE,
-          take: PAGE_SIZE,
-          include: curatedAlertInclude,
-        }),
+        prisma.curatedAlert
+          .findMany({
+            where: { model },
+            orderBy: { createdAt: "desc" },
+            skip: (page - 1) * PAGE_SIZE,
+            take: PAGE_SIZE,
+            include: curatedAlertInclude,
+          })
+          .then(withLatestSnapshots),
         prisma.curatedAlert.count({ where: { model } }),
       ]);
       return { alerts: rows, totalCount: count };
@@ -321,6 +324,14 @@ export async function registerCuratedRoutes(
    * for exactly this reason; the heavier endpoint next to it had none. A minute of staleness is
    * invisible here: labels close hourly and training runs every few hours.
    */
+  /** The fields the stats panel reads off a model row - not params, which hold its weights. */
+  const LATEST_MODEL_SELECT = {
+    createdAt: true,
+    trainingRows: true,
+    status: true,
+    evalMetrics: true,
+  } as const;
+
   const buildStats = async () => {
     const day1 = new Date(Date.now() - 86_400_000);
     const day7 = new Date(Date.now() - 7 * 86_400_000);
@@ -331,27 +342,32 @@ export async function registerCuratedRoutes(
     const model = state.defaultModel;
     const defaultRow = state.current.get(model) ?? null;
 
-    const [
-      finalizedSamples,
-      samples7d,
-      winners,
-      alertsTotal,
-      alerts7d,
-      alerts24h,
-      graded,
-      wins,
-      goalHits,
-      feedBest,
-      activeModel,
-      latestModel,
-      heuristic30d,
-      model30d,
-    ] = await Promise.all([
+    // In small groups, not one Promise.all: this used to be ~24 queries at once against a
+    // 12-connection pool, so every cache fill held the whole pool and queued every other request
+    // behind it (auth lookups included) for as long as the slowest count took.
+    const activeModel = defaultRow;
+    const [eventSamples, samples7d, latestModel] = await Promise.all([
       // The base rate a pick has to beat is the population curators decide on: event moments.
-      // Emission, AI-veto and filter-match anchors are someone's selection, not the base.
-      prisma.candidateOutcome.count({ where: { finalizedAt: { not: null }, sampleKind: "event" } }),
+      // Emission, AI-veto and filter-match anchors are someone's selection, not the base. Both
+      // counts in one pass - no index leads with sampleKind, so each was its own full scan of
+      // CandidateOutcome.
+      prisma.$queryRaw<{ finalized: bigint; winners: bigint }[]>`
+        SELECT count(*) FILTER (WHERE "finalizedAt" IS NOT NULL) AS finalized,
+               count(*) FILTER (WHERE "labelValue" > 0) AS winners
+        FROM "CandidateOutcome"
+        WHERE "sampleKind" = 'event'`,
       prisma.candidateOutcome.count({ where: { anchorAt: { gte: day7 } } }),
-      prisma.candidateOutcome.count({ where: { labelValue: { gt: 0 }, sampleKind: "event" } }),
+      defaultRow
+        ? prisma.curatorModel.findUnique({
+            where: { id: defaultRow.id },
+            // Selected, not whole rows: params holds the model's weights.
+            select: LATEST_MODEL_SELECT,
+          })
+        : prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" }, select: LATEST_MODEL_SELECT }),
+    ]);
+    const finalizedSamples = Number(eventSamples[0]?.finalized ?? 0);
+    const winners = Number(eventSamples[0]?.winners ?? 0);
+    const [alertsTotal, alerts7d, alerts24h, graded, wins, goalHits, feedBest] = await Promise.all([
       prisma.curatedAlert.count({ where: { model } }),
       prisma.curatedAlert.count({ where: { model, createdAt: { gte: day7 } } }),
       prisma.curatedAlert.count({ where: { model, createdAt: { gte: day1 } } }),
@@ -359,13 +375,9 @@ export async function registerCuratedRoutes(
       prisma.curatedAlert.count({ where: { model, hit2xIn1h: true, disqualified: false } }),
       prisma.curatedAlert.count({ where: { model, hit4xIn1h: true } }),
       prisma.curatedAlert.aggregate({ where: { model }, _max: { peak24hReturnPct: true } }),
-      defaultRow,
-      defaultRow
-        ? prisma.curatorModel.findUnique({ where: { id: defaultRow.id } })
-        : prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" } }),
-      curatorRecord30d("heuristic", day30),
-      curatorRecord30d("model", day30),
     ]);
+    const heuristic30d = await curatorRecord30d("heuristic", day30);
+    const model30d = await curatorRecord30d("model", day30);
 
     // The training job stores its walk-forward verdict inside evalMetrics; surface just the
     // verdict here - the panel shows WHY the model is or isn't live, not every fold number.
