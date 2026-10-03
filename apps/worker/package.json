@@ -15,7 +15,6 @@
     "@anthropic-ai/sdk": "^0.131.0",
     "@trenchscanner/core": "*",
     "dotenv": "^16.4.5",
-    "grammy": "^1.30.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

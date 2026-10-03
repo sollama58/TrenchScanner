@@ -9,9 +9,7 @@ import {
   HeliusClient,
   SolanaRpc,
 } from "@trenchscanner/core";
-import { createBot } from "./telegram/bot.js";
 import { runScanCycle } from "./jobs/scanJob.js";
-import { runDigestJob } from "./jobs/digestJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob } from "./jobs/outcomeTrackingJob.js";
 import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
@@ -46,10 +44,7 @@ async function main() {
     apiKey: env.HELIUS_API_KEY || undefined,
   });
 
-  const bot = createBot(env.TELEGRAM_BOT_TOKEN);
-  bot.start();
-
-  const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env, bot), env.SCAN_INTERVAL_MINUTES);
+  const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES);
   // Runs far more often than the scan cycle, but only touches tokens someone currently has open
   // and only fetches market data - see runLivePriceJob's own comment.
   const livePriceJob = scheduleInterval(
@@ -64,7 +59,7 @@ async function main() {
   // the person who asked for it hearing about it.
   const fastMatchJob = scheduleInterval(
     "fast-match",
-    () => runFastMatchCycle(deps.dexScreener, env, bot),
+    () => runFastMatchCycle(deps.dexScreener, env),
     env.FAST_MATCH_INTERVAL_SECONDS / 60,
   );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
@@ -85,7 +80,6 @@ async function main() {
     async () => void (await reconcileBurns(env, rpc)),
     env.BURN_SCAN_INTERVAL_MINUTES,
   );
-  const digestJob = scheduleDailyAt("digest", () => runDigestJob(bot), env.DIGEST_HOUR_UTC);
   const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC);
   const outcomeTrackingJob = scheduleDailyAt(
     "outcome-tracking",
@@ -107,10 +101,8 @@ async function main() {
     scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
     fastMatchIntervalSeconds: env.FAST_MATCH_INTERVAL_SECONDS,
     livePriceIntervalMinutes: env.LIVE_PRICE_INTERVAL_MINUTES,
-    digestHourUtc: env.DIGEST_HOUR_UTC,
     cleanupHourUtc: env.CLEANUP_HOUR_UTC,
     outcomeTrackingHourUtc: env.OUTCOME_TRACKING_HOUR_UTC,
-    telegramEnabled: bot.enabled,
     usingHeliusRpc: deps.helius.usingHelius,
     // Which method is answering wallet-freshness lookups. Worth logging because the two differ
     // in both cost and precision, and a silent downgrade to the signatures path (an endpoint
@@ -127,12 +119,10 @@ async function main() {
     livePriceJob.stop();
     candidateWatchJob.stop();
     burnScanJob.stop();
-    digestJob.stop();
     cleanupJob.stop();
     outcomeTrackingJob.stop();
     curatorTrainingJob.stop();
     stream?.stop();
-    await bot.stop();
     await prisma.$disconnect();
     process.exit(0);
   };

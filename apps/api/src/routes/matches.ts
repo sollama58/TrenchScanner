@@ -3,7 +3,12 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma, corsOriginList, type Env, type DexScreenerClient } from "@trenchscanner/core";
 import { OnDemandLiveRefresher } from "../liveRefresh.js";
-import { curatedAlertInclude, foldCuratedIntoPage, serializeCuratedAlert } from "../curatedFeed.js";
+import {
+  attachAiReviewsForAdmin,
+  curatedAlertInclude,
+  foldCuratedIntoPage,
+  serializeCuratedAlert,
+} from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 
@@ -231,7 +236,7 @@ export async function registerMatchRoutes(
     return {
       // Still `matches`, and every entry still Match-shaped, so a bundle deployed before this
       // change renders curated cards as ordinary ones instead of breaking on an unknown key.
-      matches: cards,
+      matches: await attachAiReviewsForAdmin(cards, request.access?.reason === "admin"),
       page,
       pageSize: PAGE_SIZE,
       totalCount,

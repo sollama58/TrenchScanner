@@ -12,6 +12,7 @@ import {
   DexScreenerClient,
   SolanaRpc,
   resolveAccess,
+  prisma,
 } from "@trenchscanner/core";
 import { createSessionSigner, SESSION_COOKIE_NAME, type SessionPayload } from "./auth/session.js";
 import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
@@ -21,7 +22,6 @@ import { registerFilterRoutes } from "./routes/filters.js";
 import { registerMatchRoutes } from "./routes/matches.js";
 import { registerCuratedRoutes } from "./routes/curated.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
-import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
 import { registerConfigRoutes } from "./routes/config.js";
@@ -30,6 +30,7 @@ import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
+import { clientIp } from "./clientIp.js";
 
 const logger = createLogger("api");
 
@@ -113,7 +114,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       // Verified, never merely present: an unverified cookie would let one client mint a fresh
       // bucket per request simply by changing the value, which is no rate limit at all.
       const session = await verifySession(request).catch(() => null);
-      return session ? `user:${session.userId}` : `ip:${request.ip}`;
+      return session ? `user:${session.userId}` : `ip:${clientIp(request)}`;
     },
   });
 
@@ -130,7 +131,16 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     if (session.deviceId) {
       if (!(await deviceIsActive(session.deviceId))) return null;
       touchDevice(session.deviceId);
+      return session;
     }
+
+    // A browser session is only as good as the user's current sessionVersion: signing out bumps
+    // it, so a copied cookie stops working everywhere at once instead of living out its TTL.
+    const user = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { sessionVersion: true },
+    });
+    if (!user || user.sessionVersion !== (session.sessionVersion ?? 0)) return null;
     return session;
   }
 
@@ -243,7 +253,6 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
-  await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env });
   await app.register(registerAdminRoutes, { prefix: "/admin", env });

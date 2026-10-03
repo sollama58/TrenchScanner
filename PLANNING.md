@@ -1,5 +1,7 @@
 # TrenchScanner — Planning Document
 
+> **Note (2026-10-03):** Telegram alerts and the daily digest described below were removed from the product. The dashboard feed is now the only alert surface; this document is kept as the original plan.
+
 _Last updated: 2026-08-15_
 
 ## 1. Goal

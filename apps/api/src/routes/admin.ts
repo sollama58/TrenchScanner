@@ -33,8 +33,7 @@ const grantSchema = z.object({
 /**
  * Everything behind ADMIN_WALLET_ADDRESSES (see authenticateAdmin in server.ts). Nothing here
  * writes anything the worker depends on, and there's no cross-process way to reach into the
- * worker from the API anyway (Render background workers have no inbound HTTP - see
- * apps/worker/src/telegram/bot.ts) - these are read/moderate-only tools, not remote job control.
+ * worker from the API anyway (Render background workers have no inbound HTTP) - these are read/moderate-only tools, not remote job control.
  */
 export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.addHook("preHandler", app.authenticateAdmin);
@@ -42,20 +41,12 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
   /** Top-line counts for the admin overview. */
   app.get("/stats", async () => {
     const dayAgo = new Date(Date.now() - DAY_MS);
-    const [
-      totalUsers,
-      totalActiveFilters,
-      totalTrackedTokens,
-      totalMatches,
-      matches24h,
-      telegramLinkedUsers,
-    ] = await Promise.all([
+    const [totalUsers, totalActiveFilters, totalTrackedTokens, totalMatches, matches24h] = await Promise.all([
       prisma.user.count(),
       prisma.userFilter.count({ where: { isActive: true } }),
       prisma.token.count(),
       prisma.match.count(),
       prisma.match.count({ where: { matchedAt: { gt: dayAgo } } }),
-      prisma.telegramLink.count({ where: { chatId: { not: null } } }),
     ]);
     return {
       totalUsers,
@@ -63,7 +54,6 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       totalTrackedTokens,
       totalMatches,
       matches24h,
-      telegramLinkedUsers,
     };
   });
 
@@ -135,7 +125,6 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       take: parsed.data.limit,
       include: {
         _count: { select: { filters: true, matches: true } },
-        telegramLink: { select: { chatId: true, alertMode: true } },
       },
     });
 
@@ -145,21 +134,12 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       createdAt: u.createdAt,
       filterCount: u._count.filters,
       matchCount: u._count.matches,
-      telegramLinked: Boolean(u.telegramLink?.chatId),
-      alertMode: u.telegramLink?.alertMode ?? null,
     }));
-  });
-
-  /** Moderation action: force-unlink a user's Telegram (e.g. abuse, a stuck/duplicate link). */
-  app.post("/users/:id/unlink-telegram", async (request) => {
-    const { id } = request.params as { id: string };
-    const result = await prisma.telegramLink.deleteMany({ where: { userId: id } });
-    return { ok: true, unlinked: result.count > 0 };
   });
 
   /**
    * The non-secret half of the shared env schema - scan cadence, mcap band, retention windows,
-   * etc. Secrets (DATABASE_URL, JWT_SECRET, HELIUS_API_KEY, TELEGRAM_BOT_TOKEN) are deliberately
+   * etc. Secrets (DATABASE_URL, JWT_SECRET, HELIUS_API_KEY) are deliberately
    * left out; this exists so an admin can see what's actually configured on this deployment
    * without digging through the Render dashboard, not to expose credentials over the API.
    */
@@ -182,7 +162,6 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       // session cookie's SameSite - the two things most likely to be behind "sign-in doesn't work
       // in this browser", and otherwise only visible in the Render dashboard.
       publicAppDomain: env.PUBLIC_APP_DOMAIN,
-      digestHourUtc: env.DIGEST_HOUR_UTC,
       mcapFilterMin: env.MCAP_FILTER_MIN,
       mcapFilterMax: env.MCAP_FILTER_MAX,
       watchlistTtlHours: env.WATCHLIST_TTL_HOURS,
@@ -202,7 +181,6 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       // deliberate choice that was never made.
       databaseConnectionLimit: env.DATABASE_CONNECTION_LIMIT ?? null,
       databasePoolTimeoutSeconds: env.DATABASE_POOL_TIMEOUT_SECONDS,
-      telegramConfigured: Boolean(env.TELEGRAM_BOT_TOKEN),
     };
   });
 }

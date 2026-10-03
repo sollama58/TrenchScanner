@@ -12,7 +12,7 @@ describe("buildSignInMessage", () => {
   const issuedAt = new Date("2026-01-01T00:00:00.000Z");
 
   it("includes the wallet address, nonce, and ISO timestamp", () => {
-    const message = buildSignInMessage(wallet, nonce, issuedAt);
+    const message = buildSignInMessage(wallet, nonce, issuedAt, "holdex.live");
     expect(message).toContain(wallet);
     expect(message).toContain(`Nonce: ${nonce}`);
     expect(message).toContain("Issued At: 2026-01-01T00:00:00.000Z");
@@ -22,14 +22,28 @@ describe("buildSignInMessage", () => {
     // Critical property: verification reconstructs this exact string server-side and compares
     // the signature against it - any nondeterminism here (e.g. Date.now() instead of the passed
     // issuedAt) breaks every sign-in. See the bug this guards against in siws.ts's issueNonce().
-    const a = buildSignInMessage(wallet, nonce, issuedAt);
-    const b = buildSignInMessage(wallet, nonce, issuedAt);
+    const a = buildSignInMessage(wallet, nonce, issuedAt, "holdex.live");
+    const b = buildSignInMessage(wallet, nonce, issuedAt, "holdex.live");
     expect(a).toBe(b);
   });
 
+  it("names the real domain and URI in the standard SIWS text, so wallets can check the origin", () => {
+    const message = buildSignInMessage(wallet, nonce, issuedAt, "holdex.live");
+    expect(message.startsWith("holdex.live wants you to sign in with your Solana account:\n")).toBe(true);
+    expect(message).toContain("URI: https://holdex.live");
+    // Byte-identical to what wallet.signIn() would sign for the same input.
+    expect(message).toBe(
+      new TextDecoder().decode(
+        createSignInMessage(
+          buildSignInInput(wallet, nonce, issuedAt, "holdex.live") as SolanaSignInInputWithRequiredFields,
+        ),
+      ),
+    );
+  });
+
   it("produces a different message for a different nonce", () => {
-    const a = buildSignInMessage(wallet, nonce, issuedAt);
-    const b = buildSignInMessage(wallet, "different-nonce", issuedAt);
+    const a = buildSignInMessage(wallet, nonce, issuedAt, "holdex.live");
+    const b = buildSignInMessage(wallet, "different-nonce", issuedAt, "holdex.live");
     expect(a).not.toBe(b);
   });
 });

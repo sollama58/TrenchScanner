@@ -3,7 +3,7 @@ import { prisma, runningSinceFrom } from "@trenchscanner/core";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
- * expected cadence (scan runs every few minutes, digest/cleanup/outcome-tracking daily). Falls
+ * expected cadence (scan runs every few minutes, cleanup/outcome-tracking daily). Falls
  * back to 30 minutes for any job name not listed here.
  */
 const STALE_THRESHOLD_MS: Record<string, number> = {
@@ -21,7 +21,6 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every minute, and while it's down every open training row's label window is silently
   // recording nothing - an hour of downtime is an hour of alerts whose outcomes read "flat".
   "candidate-watch": 10 * 60_000,
-  digest: 26 * 3_600_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
   // Runs every CURATOR_TRAINING_INTERVAL_HOURS (4h by default), not daily - same "expected

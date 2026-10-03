@@ -3,19 +3,13 @@ import {
   createLogger,
   matchesFilter,
   alertGuardBlocks,
-  forEachWithConcurrency,
   notifyMatchCreated,
-  loadFilterTrackRecords,
-  type FilterTrackRecord,
   type Env,
   type MatchAlertGuardMode,
   type ScoredToken,
   type UserFilter,
-  type TelegramLink,
 } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
-import type { AlertBot } from "../telegram/bot.js";
-import { formatRealtimeAlert } from "../dispatch/alertDispatcher.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
 
 const logger = createLogger("match-dispatch");
@@ -23,36 +17,21 @@ const logger = createLogger("match-dispatch");
 /** Once a user has been alerted for a token+filter, don't re-alert for it again within this window. */
 export const ALERT_COOLDOWN_HOURS = 12;
 
-/** How many Telegram sends are in flight at once. Telegram's own ceiling is ~30 messages/second;
- *  this stays well under it while still collapsing a busy token's sends into one short burst. */
-const TELEGRAM_CONCURRENCY = 6;
-
-export type FilterWithUser = UserFilter & { user: { id: string; telegramLink: TelegramLink | null } };
+export type FilterWithUser = UserFilter;
 
 /**
- * Turns one scored token into every alert it owes, for every user whose filter it matches.
- *
- * The ordering here is the whole point, and it is deliberate: the dashboard push goes out FIRST,
- * before anything slower. It used to run one filter at a time, and inside that loop a Telegram
- * HTTP round trip sat between the match row and the next user's turn - so with twenty users
- * matching a hot token, the twentieth dashboard got its nudge only after nineteen Telegram calls
- * had completed, plus whatever backoff Telegram's rate limiter imposed along the way. The
- * dashboard is the primary surface; it should not queue behind the secondary one.
- *
- * So: one query for every cooldown, the match rows created together, every NOTIFY out, and only
- * then the Telegram sends - bounded, concurrent, and with deliveredTelegram written afterwards
- * from what actually happened rather than from what was intended.
+ * Turns one scored token into every alert it owes, for every user whose filter it matches: one
+ * query for every cooldown, the match rows created together, then every dashboard NOTIFY.
  */
 export async function createMatchesForCandidate(opts: {
   token: Token;
   snapshot: TokenSnapshot;
   scored: ScoredToken;
   activeFilters: FilterWithUser[];
-  bot: AlertBot;
   /** The worker's env: turns on the alert guard (MATCH_ALERT_GUARD) and outcome grading. */
   env?: Env;
 }): Promise<number> {
-  const { token, snapshot, scored, activeFilters, bot, env } = opts;
+  const { token, snapshot, scored, activeFilters, env } = opts;
 
   const toAlert = await resolveAlertTargets({
     tokenId: token.id,
@@ -62,7 +41,7 @@ export async function createMatchesForCandidate(opts: {
   });
   if (toAlert.length === 0) return 0;
 
-  return createMatchesForTargets({ token, snapshot, scored, toAlert, bot, env });
+  return createMatchesForTargets({ token, snapshot, scored, toAlert, env });
 }
 
 /**
@@ -108,8 +87,7 @@ export async function resolveAlertTargets(opts: {
 }
 
 /**
- * Creates the match rows for targets already resolved above, pushes every dashboard, then sends
- * Telegram.
+ * Creates the match rows for targets already resolved above, then pushes every dashboard.
  *
  * `resolveAlertTargets` reads and this writes, so the cooldown is re-checked here under a
  * per-token advisory lock rather than trusted from the caller - see the note inside.
@@ -119,11 +97,10 @@ export async function createMatchesForTargets(opts: {
   snapshot: TokenSnapshot;
   scored: ScoredToken;
   toAlert: FilterWithUser[];
-  bot: AlertBot;
   /** When given, the alert is graded on the curated verdict - see anchorMatchOutcome. */
   env?: Env;
 }): Promise<number> {
-  const { token, snapshot, scored, toAlert, bot, env } = opts;
+  const { token, snapshot, scored, toAlert, env } = opts;
   if (toAlert.length === 0) return 0;
 
   // The cooldown is re-checked here, inside a lock, rather than trusted from the caller.
@@ -132,13 +109,12 @@ export async function createMatchesForTargets(opts: {
   // becoming matchable between full cycles is precisely what the fast lane exists for, so the
   // two evaluating the same token at the same moment is the expected case, not a rare one. Both
   // would read an empty cooldown set in the few milliseconds before either inserted, and both
-  // would insert: two cards, two SSE nudges, and two identical Telegram messages for one event.
+  // would insert: two cards and two SSE nudges for one event.
   //
   // A per-token advisory lock serializes just those two attempts. It is transaction-scoped, so
   // it releases on commit or rollback with no cleanup path to get wrong, and it is taken on the
   // token rather than per (user, filter) pair because both lanes contend over exactly one token
-  // at a time - one lock instead of a dozen. `deliveredTelegram` starts false and is corrected
-  // after the sends resolve.
+  // at a time - one lock instead of a dozen.
   const cooldownCutoff = new Date(Date.now() - ALERT_COOLDOWN_HOURS * 3_600_000);
   const created = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${token.id}))`;
@@ -165,7 +141,6 @@ export async function createMatchesForTargets(opts: {
             snapshotId: snapshot.id,
             score: scored.score.total,
             deliveredDashboard: true,
-            deliveredTelegram: false,
           },
         }),
       );
@@ -188,18 +163,14 @@ export async function createMatchesForTargets(opts: {
     alerted.map(({ match, filter }) => notifyMatchCreated({ userId: filter.userId, matchId: match.id })),
   );
 
-  // Both after every dashboard push, and side by side: neither is an input to the other.
-  await Promise.all([
-    sendTelegramAlerts({ token, snapshot, scored, alerted, bot }),
-    env
-      ? anchorMatchOutcome(
-          token.id,
-          scored,
-          env,
-          created.map((m) => m.id),
-        )
-      : Promise.resolve(),
-  ]);
+  if (env) {
+    await anchorMatchOutcome(
+      token.id,
+      scored,
+      env,
+      created.map((m) => m.id),
+    );
+  }
   return created.length;
 }
 
@@ -222,73 +193,5 @@ async function anchorMatchOutcome(tokenId: string, scored: ScoredToken, env: Env
     });
   } catch (err) {
     logger.warn("failed to anchor match outcome", { tokenId, error: String(err) });
-  }
-}
-
-/** Track records are quoted on the card, so they're cached briefly rather than queried per send. */
-const TRACK_RECORD_TTL_MS = 10 * 60_000;
-const trackRecordCache = new Map<string, { at: number; record: FilterTrackRecord }>();
-
-async function cachedTrackRecords(
-  filters: { id: string; userId: string }[],
-): Promise<Map<string, FilterTrackRecord>> {
-  const now = Date.now();
-  const out = new Map<string, FilterTrackRecord>();
-  const missing = [];
-  for (const f of filters) {
-    const hit = trackRecordCache.get(f.id);
-    if (hit && now - hit.at < TRACK_RECORD_TTL_MS) out.set(f.id, hit.record);
-    else missing.push(f);
-  }
-  if (missing.length > 0) {
-    try {
-      for (const [id, record] of await loadFilterTrackRecords(missing)) {
-        trackRecordCache.set(id, { at: now, record });
-        out.set(id, record);
-      }
-    } catch (err) {
-      // The card goes out without the line rather than not at all.
-      logger.warn("failed to load filter track records", { error: String(err) });
-    }
-  }
-  return out;
-}
-
-/** The slow half, run once every dashboard has already been pushed to. */
-async function sendTelegramAlerts(opts: {
-  token: Token;
-  snapshot: TokenSnapshot;
-  scored: ScoredToken;
-  alerted: { match: { id: string }; filter: FilterWithUser }[];
-  bot: AlertBot;
-}): Promise<void> {
-  const { token, snapshot, scored, alerted, bot } = opts;
-
-  const recipients = alerted
-    .map(({ filter, match }) => ({ filter, matchId: match.id }))
-    .filter(({ filter }) => {
-      const link = filter.user.telegramLink;
-      return Boolean(link?.chatId) && (link!.alertMode === "REALTIME" || link!.alertMode === "BOTH");
-    });
-  if (recipients.length === 0) return;
-
-  // One card per filter: it names the filter that caught the token and quotes that filter's own
-  // graded record, so a reader can weigh the alert by how that filter's alerts have done.
-  const records = await cachedTrackRecords(recipients.map(({ filter }) => filter));
-  const deliveredMatchIds: string[] = [];
-  await forEachWithConcurrency(recipients, TELEGRAM_CONCURRENCY, async ({ filter, matchId }) => {
-    const text = formatRealtimeAlert(token, snapshot, scored.score.total, {
-      filterName: filter.name,
-      trackRecord: records.get(filter.id),
-    });
-    // sendMessage swallows its own errors and reports via its return value; it never throws.
-    const ok = await bot.sendMessage(filter.user.telegramLink!.chatId!, text);
-    if (ok) deliveredMatchIds.push(matchId);
-  });
-
-  if (deliveredMatchIds.length > 0) {
-    await prisma.match
-      .updateMany({ where: { id: { in: deliveredMatchIds } }, data: { deliveredTelegram: true } })
-      .catch((err) => logger.warn("failed to record telegram delivery", { error: String(err) }));
   }
 }

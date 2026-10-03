@@ -187,7 +187,7 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
       });
     }
 
-    // Filter matches: one Telegram-delivered win, one dashboard-only loss.
+    // Filter matches: one win, one loss.
     const user = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet` } });
     userId = user.id;
     const filter = await prisma.userFilter.create({ data: { userId, name: `${TAG}-filter` } });
@@ -203,7 +203,6 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
           snapshotId: snapshot.id,
           matchedAt: at(30 + i),
           score: 60,
-          deliveredTelegram: won,
           hit2xIn1h: won,
           hit4xIn1h: false,
           disqualified: false,
@@ -262,7 +261,6 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     expect(body.aiReviewer.probability2xBands.map((b: { band: number }) => b.band)).toEqual([20, 70, 80]);
 
     expect(body.filterMatches.total).toMatchObject({ calls: 2, graded: 2, won2x: 1 });
-    expect(body.filterMatches.telegram).toMatchObject({ calls: 1, won2x: 1, hitRate2xPct: 100 });
     expect(body.filterMatches.byFilter).toEqual([
       expect.objectContaining({ name: `${TAG}-filter`, calls: 2 }),
     ]);

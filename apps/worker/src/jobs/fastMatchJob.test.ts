@@ -4,19 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv, type CandidateToken, type DexScreenerClient } from "@trenchscanner/core";
 import { runFastMatchCycle } from "./fastMatchJob.js";
 import { snapshotDataFor } from "./snapshotData.js";
-import type { AlertBot } from "../telegram/bot.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
 const TAG = `fast-match-test-${Date.now()}`;
-const silentBot: AlertBot = {
-  enabled: false,
-  async sendMessage() {
-    return false;
-  },
-  start() {},
-  async stop() {},
-};
 
 function stubDexScreener(byMint: Record<string, Partial<CandidateToken>>): DexScreenerClient {
   return {
@@ -89,7 +80,7 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
     const token = await seedVetted("hot");
     const user = await seedSubscriber("sub");
 
-    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
 
     // Scoped to this test's own subscriber: the pass legitimately alerts every filter that
     // matches, and this database carries other tests' filters too.
@@ -108,11 +99,7 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
     const before = await prisma.tokenSnapshot.count({ where: { tokenId: token.id } });
 
     // Far outside the filter's band, so there is nothing to alert on.
-    await runFastMatchCycle(
-      stubDexScreener({ [token.mintAddress]: { marketCapUsd: 90_000_000 } }),
-      env,
-      silentBot,
-    );
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: { marketCapUsd: 90_000_000 } }), env);
 
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
     // Crucially, no speculative snapshot either - this pass runs four times a minute over
@@ -124,7 +111,7 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
     const token = await seedVetted("rugged", { rugScreenPassed: false, lpBurned: false });
     await seedSubscriber("sub3");
 
-    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
   });
 
@@ -157,7 +144,7 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
       },
     });
 
-    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
   });
 
@@ -190,7 +177,7 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
     });
     await seedSubscriber("sub-fastonly");
 
-    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
   });
 
@@ -201,11 +188,11 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
     const token = await seedVetted("cooling");
     const user = await seedSubscriber("sub-cooling");
 
-    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
     expect(await prisma.match.count({ where: { tokenId: token.id, userId: user.id } })).toBe(1);
 
     const afterFirst = await prisma.tokenSnapshot.count({ where: { tokenId: token.id } });
-    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
 
     expect(await prisma.match.count({ where: { tokenId: token.id, userId: user.id } })).toBe(1);
     expect(await prisma.tokenSnapshot.count({ where: { tokenId: token.id } })).toBe(afterFirst);
@@ -218,7 +205,7 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
     const token = await seedVetted("unverified", { isMayhemMode: null });
     await seedSubscriber("sub4");
 
-    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
   });
 
@@ -226,7 +213,7 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
     const token = await seedVetted("unknown-authority", { lpBurned: null });
     await seedSubscriber("sub5");
 
-    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env, silentBot);
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
   });
 });

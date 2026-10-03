@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/sollama58/TrenchScanner/actions/workflows/ci.yml/badge.svg)](https://github.com/sollama58/TrenchScanner/actions/workflows/ci.yml)
 
-A user-friendly tool to scan the trenches for runners before they happen. Get Telegram alerts and daily updates for your review. Don't FOMO, be the candle that makes them FOMO.
+A user-friendly tool to scan the trenches for runners before they happen. Get alerts on a live dashboard for your review. Don't FOMO, be the candle that makes them FOMO.
 
-TrenchScanner watches the Solana memecoin ecosystem for tokens sitting in the **$10k–$1M market cap** band, screens out likely scams, scores what's left for breakout potential, and surfaces matches on a live dashboard (with optional Telegram alerts) against filters you define.
+TrenchScanner watches the Solana memecoin ecosystem for tokens sitting in the **$10k–$1M market cap** band, screens out likely scams, scores what's left for breakout potential, and surfaces matches on a live dashboard against filters you define.
 
 See [`PLANNING.md`](./PLANNING.md) for the full architecture writeup and the product decisions behind it.
 
@@ -16,16 +16,13 @@ Pump.fun (discovery) ──┐
 DexScreener (pricing) ──┤        (scan loop,                        (SIWS auth,          (dashboard, lives in
                         │       rug screen,                          filters, matches)     the CultScreener repo)
 RugCheck (on-chain) ────┘      scoring, alerts)
-                                    │
-                                    ▼
-                              Telegram bot
 ```
 
 - **Discovery**: the worker maintains a persistent watchlist of every mint Pump.fun shows it, re-checking each one's live market cap via DexScreener every cycle - this is what catches a token as it climbs from launch into the target band, not just a point-in-time snapshot. Sources: Pump.fun's newest mints, PumpPortal's live launch/graduation stream, DexScreener's profile and boost feeds, and Pump.fun's recently-traded list and king of the hill. The last two (and graduations) revive mints of any age that start moving again.
 - **Rug screen**: a hard, non-optional gate (mint/freeze authority, LP lock status, and Pump.fun Mayhem Mode) that a token must pass before it's ever shown to anyone - the signals where "unverifiable or bad" has one universally-correct answer regardless of risk tolerance. Mayhem Mode tokens are excluded outright in both bonding-curve and graduated state: Pump.fun's own AI agents mint an extra 1B supply and trade it for the token's first 24h, so the volume, buy pressure and holder growth this app scores on are manufactured rather than organic. Holder concentration, dev wallet %, RugCheck's own risk score, and its named risk flags (e.g. a creator's history of rugging) are opt-in filter criteria instead, since different users legitimately want different thresholds there.
 - **Cadence**: the scan cycle runs **every minute**, so a token that qualifies is alerted within about a minute of doing so. A full cycle takes ~1-3.5s; what actually set this interval was RugCheck, the one upstream called once per in-band candidate per cycle. `RugCheckCache` (a short TTL, since holder distribution and risk scores genuinely move) decouples the two: measured against live data, a cold cycle fetched 57 profiles and the next cycle fetched 0. Holder growth is measured over a fixed 30-minute wall-clock window rather than "since the last scan", so the cadence can change without silently redefining what every user's `minHolderGrowthPct` threshold is asking for.
 - **Scoring**: a 0–100 composite (momentum, holder health, age, narrative) used to rank what passes.
-- **Matching**: each user's saved filter is checked against every scored token; matches land on the dashboard and, if linked, Telegram.
+- **Matching**: each user's active filter is checked against every scored token, and matches land on the dashboard. A user can save up to 10 filters and switch between them, but only one is active at a time (`POST /filters/:id/activate`).
 - **Freshness**: a card shows three market caps on three different cadences - **"Alerted at"** is frozen at match time and never moves; **"Now"** refreshes about every minute for tokens someone currently has open (a market-data-only job, see `apps/worker/src/jobs/livePriceJob.ts`) and otherwise on the ~1-minute scan cycle; **"All-Time High"** updates once a day. The API resolves which reading is actually freshest and returns it as `currentMarketCapUsd`/`currentMarketCapAt`, so clients don't reimplement that comparison. Opening a page (including paging _back_ to one visited earlier) also asks for that page's tokens to be refreshed straight away rather than waiting out the next tick - see `apps/api/src/liveRefresh.ts`. That's the only outbound call the API ever makes, and it's triple-throttled: skipped for anything already current, de-duplicated across concurrent requests, and rate-limited per _attempt_ rather than per success, so a token DexScreener has no data for isn't retried on every poll. Upstream cost therefore stays bounded by how many distinct tokens are being viewed, not by how many people are viewing them.
 - **Outcome tracking**: every scan cycle records the highest market cap each match's token has reached _since the alert_ (`Match.peakMcapUsd`/`peakReturnPct`), mined from the snapshot and live-ping history already sitting in Postgres - no extra API call (`apps/worker/src/jobs/matchPeaks.ts`). The cadence is the whole point: a token that runs 6x and retraces inside one afternoon is invisible to anything that samples the price once a day, and those are exactly the runs worth recording. A nightly job (`outcomeTrackingJob.ts`) covers the long tail - a token that has dropped out of the band stops being snapshotted, so only an explicit price fetch will notice if it later runs. Any match whose recorded peak is +100% or better becomes eligible for the **Leaderboard**, which is ranked on that stored figure, one entry per token, so a token a dozen overlapping filters all matched gets one row rather than a dozen.
 - **Push**: `GET /matches/stream` is a Server-Sent Events endpoint that fires the instant a match is created for the signed-in user, so an alert doesn't wait out the client's poll. The worker announces it with a Postgres `NOTIFY` and the API holds a dedicated `LISTEN` connection - no broker, no extra service, since both processes are already connected to the database (`apps/api/src/matchStream.ts`). Each event carries only `{ matchId }`; the client refetches to render it, which keeps one definition of the match payload rather than a second one that could drift. **Clients must keep a slow fallback poll**: `NOTIFY` is not durable, so a client disconnected at the moment of publication misses that event, and some proxies break long-lived responses outright. A missed nudge should cost seconds, never an alert. `GET /health/stream` reports whether this instance's `LISTEN` connection is up and how many clients it's serving - a dead one is otherwise completely silent.
@@ -39,7 +36,7 @@ Every pick the governor selects can also get a buy/no-buy second opinion from Cl
 
 ### Hit-rate report
 
-`GET /stats/hit-rates` reports how production calls actually graded under the rules above (2x/4x within 1 hour of the fill, 50% stop): curated alerts and shadow picks by curator, curator confidence bands, the AI reviewer's buy/no-buy record and probability calibration, user-filter matches (with the Telegram-delivered subset), and the base rate of every sampled moment. Each group shows calls, graded, wins, rates and a verdict against the targets (withheld below 30 graded calls; the reviewer's buys need `AI_REVIEW_MIN_GRADED_BUYS`).
+`GET /stats/hit-rates` reports how production calls actually graded under the rules above (2x/4x within 1 hour of the fill, 50% stop): curated alerts and shadow picks by curator, curator confidence bands, the AI reviewer's buy/no-buy record and probability calibration, user-filter matches, and the base rate of every sampled moment. Each group shows calls, graded, wins, rates and a verdict against the targets (withheld below 30 graded calls; the reviewer's buys need `AI_REVIEW_MIN_GRADED_BUYS`).
 
 It is for scripts and cloud sessions that can reach the API but not the database, so it is guarded by a bearer token rather than a session. Set `STATS_API_TOKEN` on the API service to a random string of at least 32 characters (`openssl rand -hex 32`); without one the route answers 404. Query with `days` (default 30, max 180) or an explicit `since`/`until` (ISO dates):
 
@@ -52,9 +49,9 @@ curl -H "Authorization: Bearer $STATS_API_TOKEN" "$TRENCHSCANNER_API_URL/stats/h
 A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; empty by default) sees an extra **Admin** tab in the dashboard, backed by `GET`/`POST /admin/*` on the API (every route 403s anyone else - see `apps/api/src/routes/admin.ts`). Admin status is config, not a DB column, so promoting/demoting an admin is a one-line env change rather than a manual DB write. It covers:
 
 - **Overview** - user/filter/token/match counts at a glance.
-- **Monitoring** - every worker job's heartbeat (scan/live-price/digest/cleanup/outcome-tracking), not just the single-job dot in the navbar's `HealthBadge`.
+- **Monitoring** - every worker job's heartbeat (scan/live-price/cleanup/outcome-tracking), not just the single-job dot in the navbar's `HealthBadge`.
 - **Live Feed** - every tracked token's latest snapshot, unfiltered: upstream of both the rug screen and per-user filter matching, so a token that failed the rug screen (with its reasons) or never matched anyone's filter is visible here even though it never produces a `Match` row anywhere else in the product.
-- **Users** - wallet, join date, filter/match counts, Telegram link status, and a force-unlink action for moderation.
+- **Users** - wallet, join date, filter/match counts.
 - **Config** - the non-secret half of the shared env schema (mcap band, scan cadence, RugCheck cache TTL, holder-growth window, retention windows, `PUBLIC_APP_DOMAIN`, ...), so you can see what's actually running without opening the Render dashboard. `apps/api/src/routes/admin.config.test.ts` asserts the endpoint still returns every one of them and no secret - the tab fails silently otherwise, by simply rendering one fewer row.
 
 ## Local development
@@ -77,8 +74,6 @@ Both apps read from the **single root `.env`** - there's deliberately no per-pac
 
 The worker runs against the real, live Pump.fun/DexScreener/RugCheck APIs even in local dev - there's no sandbox/mock mode. It's safe to run: everything it does is read-only against those APIs (writes only go to your own Postgres).
 
-Telegram is optional locally - leave `TELEGRAM_BOT_TOKEN` blank and the worker logs a warning and no-ops instead of failing. The dashboard's Settings page checks the same thing through the API and hides the "Link Telegram" flow entirely while it's unset, rather than handing out a link code no bot is listening for. Add the token (and `TELEGRAM_BOT_USERNAME`) whenever you're ready and both sides pick it up with no code changes.
-
 ### Useful scripts
 
 | Command                   | What it does                                                                       |
@@ -98,8 +93,6 @@ This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) 
 2. Render reads `render.yaml` and shows you the three services it's about to create. Deploy.
 3. Once the first deploy finishes, set the secrets that can't be auto-generated (Render will prompt for these since they're marked `sync: false` in the blueprint):
    - **`HELIUS_API_KEY`** on both `trenchscanner-api` and `trenchscanner-worker` - get one free at [dev.helius.xyz](https://dev.helius.xyz).
-   - **`TELEGRAM_BOT_TOKEN`** on `trenchscanner-worker` - create a bot via [@BotFather](https://t.me/BotFather) on Telegram (`/newbot`), then paste the token it gives you. Leave blank to run without Telegram alerts.
-   - **`TELEGRAM_BOT_USERNAME`** on both services - the bot's `@username` (no `@`), used to build the "tap to open Telegram" link on the dashboard.
 4. `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` (on the API) point at wherever the dashboard is actually served from - `https://holdex.live,https://www.holdex.live` and `holdex.live` respectively. The dashboard is **not** deployed from this repo: it lives in [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) as the `/trenches/` tab, and that repo's build sets its own API base URL. If the dashboard's domain ever changes, update both to match - `PUBLIC_APP_DOMAIN` especially, since a mismatch there breaks sign-in entirely (wallets refuse to sign a message claiming a domain that doesn't match the page they're actually on).
 
 ### Cookie policy and the API's domain (do this before promoting the dashboard)

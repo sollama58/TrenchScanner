@@ -10,14 +10,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum AlertMode {
-  REALTIME
-  DIGEST
-  BOTH
-  OFF
-}
-
-/// One row per background job (scan, digest, cleanup, ...), updated on every run whether it
+/// One row per background job (scan, cleanup, ...), updated on every run whether it
 /// succeeds or fails. This is what lets the API/dashboard answer "is the worker actually alive"
 /// without needing a separate monitoring service - see packages/core/src/heartbeat.ts.
 model SystemHeartbeat {
@@ -34,9 +27,12 @@ model User {
   id            String   @id @default(cuid())
   walletAddress String   @unique
   createdAt     DateTime @default(now())
+  /// Stamped into every browser session's JWT and checked on each request. Signing out bumps it,
+  /// which revokes every browser session the user holds - a JWT can't be withdrawn on its own.
+  /// Paired phones are revoked per device instead (LinkedDevice.revokedAt).
+  sessionVersion Int     @default(0)
 
   filters      UserFilter[]
-  telegramLink TelegramLink?
   matches      Match[]
   subscription Subscription?
   burns        BurnEvent[]
@@ -147,26 +143,6 @@ model UserFilter {
   matches Match[]
 
   @@index([userId])
-}
-
-/// A user's linked Telegram chat for alerts. Linking is a two-step flow: the API issues a
-/// short-lived linkCode, the user sends "/start <linkCode>" to the bot (long-polled by the
-/// worker - Render background workers have no inbound HTTP, so webhooks aren't an option),
-/// and the worker fills in chatId/linkedAt and clears the code.
-model TelegramLink {
-  id     String @id @default(cuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  chatId    String?   @unique
-  alertMode AlertMode @default(BOTH)
-
-  linkCode          String?   @unique
-  linkCodeExpiresAt DateTime?
-  linkedAt          DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 /// A distinct Solana token being tracked.
@@ -660,9 +636,7 @@ model Match {
   matchedAt DateTime @default(now())
   score     Float
 
-  deliveredDashboard Boolean   @default(true)
-  deliveredTelegram  Boolean   @default(false)
-  digestSentAt       DateTime?
+  deliveredDashboard Boolean @default(true)
 
   // Backtesting data: the highest market cap observed for this token since the match, tracked by
   // the outcome-tracking job (apps/worker/src/jobs/outcomeTrackingJob.ts). Both null until that

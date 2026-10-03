@@ -11,6 +11,12 @@ export interface SessionPayload {
    * withdrawn once signed, so resolveSession looks the device up and refuses a revoked one.
    */
   deviceId?: string;
+  /**
+   * Browser sessions only: the User.sessionVersion this token was issued under. Signing out bumps
+   * the user's version, and resolveSession refuses any token carrying an older one. Tokens issued
+   * before this claim existed read as 0, the column's starting value.
+   */
+  sessionVersion?: number;
 }
 
 /**
@@ -27,8 +33,9 @@ export function createSessionSigner(jwtSecret: string, ttlHours: number) {
 
   return {
     async sign(payload: SessionPayload): Promise<string> {
-      const claims: Record<string, string> = { walletAddress: payload.walletAddress };
+      const claims: Record<string, string | number> = { walletAddress: payload.walletAddress };
       if (payload.deviceId) claims.deviceId = payload.deviceId;
+      else claims.sv = payload.sessionVersion ?? 0;
       return new SignJWT(claims)
         .setProtectedHeader({ alg: "HS256" })
         .setSubject(payload.userId)
@@ -47,6 +54,7 @@ export function createSessionSigner(jwtSecret: string, ttlHours: number) {
           userId: payload.sub,
           walletAddress: payload.walletAddress,
           deviceId: typeof payload.deviceId === "string" ? payload.deviceId : undefined,
+          sessionVersion: typeof payload.sv === "number" ? payload.sv : 0,
         };
       } catch {
         return null;

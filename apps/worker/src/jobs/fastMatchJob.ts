@@ -7,7 +7,6 @@ import {
   type DexScreenerClient,
   type OnChainProfile,
 } from "@trenchscanner/core";
-import type { AlertBot } from "../telegram/bot.js";
 import { createMatchesForTargets, resolveAlertTargets, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 
@@ -110,7 +109,6 @@ function profileFromSnapshot(
 export async function runFastMatchCycle(
   dexScreener: DexScreenerClient,
   env: Env,
-  bot: AlertBot,
 ): Promise<{ stagesMs: Record<string, number>; tracked?: number; matches?: number }> {
   const startedAt = Date.now();
   const stagesMs: Record<string, number> = {};
@@ -123,10 +121,7 @@ export async function runFastMatchCycle(
 
   // Nothing to be fast about if nobody is filtering. Checked first because it is the cheapest
   // question and it short-circuits the whole pass on a deployment with no active users.
-  const activeFilters = (await prisma.userFilter.findMany({
-    where: { isActive: true },
-    include: { user: { select: { id: true, telegramLink: true } } },
-  })) as FilterWithUser[];
+  const activeFilters: FilterWithUser[] = await prisma.userFilter.findMany({ where: { isActive: true } });
   if (activeFilters.length === 0) return { stagesMs };
 
   const vettedSince = new Date(startedAt - VETTED_WITHIN_MINUTES * 60_000);
@@ -198,7 +193,7 @@ export async function runFastMatchCycle(
 
     try {
       // Read-after-await, so the increment can't be lost between two tokens finishing together.
-      const created = await alertForToken(snapshot.token, scored, activeFilters, bot, env);
+      const created = await alertForToken(snapshot.token, scored, activeFilters, env);
       matched += created;
     } catch (err) {
       logger.warn("fast match failed for token", { mint: candidate.mintAddress, error: String(err) });
@@ -232,7 +227,6 @@ async function alertForToken(
   token: { id: string; mintAddress: string },
   scored: Parameters<typeof createMatchesForTargets>[0]["scored"],
   activeFilters: FilterWithUser[],
-  bot: AlertBot,
   env: Env,
 ): Promise<number> {
   // The cooldown is part of "is an alert about to exist", so it is resolved before the write and
@@ -253,5 +247,5 @@ async function alertForToken(
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "fast"),
   });
-  return createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, bot, env });
+  return createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, env });
 }

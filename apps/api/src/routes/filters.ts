@@ -71,10 +71,34 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     if (rangeError) {
       return reply.code(400).send({ error: rangeError });
     }
-    const filter = await prisma.userFilter.create({
-      data: { ...parsed.data, userId: request.user!.userId },
+    const userId = request.user!.userId;
+    const created = await prisma.$transaction(async (tx) => {
+      await lockUserFilters(tx, userId);
+      if ((await tx.userFilter.count({ where: { userId } })) >= MAX_FILTERS_PER_USER) return null;
+      if (parsed.data.isActive) await deactivateOthers(tx, userId, null);
+      return tx.userFilter.create({ data: { ...parsed.data, userId } });
     });
-    return reply.code(201).send(filter);
+    if (!created) {
+      return reply
+        .code(409)
+        .send({ error: `You can save up to ${MAX_FILTERS_PER_USER} filters. Delete one to add another.` });
+    }
+    return reply.code(201).send(created);
+  });
+
+  /** Makes this the user's one active filter, switching off whichever was active before. */
+  app.post("/:id/activate", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const userId = request.user!.userId;
+    const activated = await prisma.$transaction(async (tx) => {
+      await lockUserFilters(tx, userId);
+      const existing = await tx.userFilter.findUnique({ where: { id } });
+      if (!existing || existing.userId !== userId) return null;
+      await deactivateOthers(tx, userId, id);
+      return tx.userFilter.update({ where: { id }, data: { isActive: true } });
+    });
+    if (!activated) return reply.code(404).send({ error: "filter not found" });
+    return activated;
   });
 
   app.patch("/:id", async (request, reply) => {
@@ -95,7 +119,13 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       return reply.code(400).send({ error: rangeError });
     }
 
-    const updated = await prisma.userFilter.update({ where: { id }, data: parsed.data });
+    const userId = request.user!.userId;
+    const updated = await prisma.$transaction(async (tx) => {
+      await lockUserFilters(tx, userId);
+      // Turning one filter on turns the user's other filters off: one active filter at a time.
+      if (parsed.data.isActive) await deactivateOthers(tx, userId, id);
+      return tx.userFilter.update({ where: { id }, data: parsed.data });
+    });
     return updated;
   });
 
@@ -107,5 +137,27 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     }
     await prisma.userFilter.delete({ where: { id } });
     return reply.code(204).send();
+  });
+}
+
+/**
+ * How many filters a user can save. Only one is active at a time (see deactivateOthers): the rest
+ * are saved setups to switch between, and every active filter is evaluated against every token on
+ * each scan, which is why both limits exist.
+ */
+export const MAX_FILTERS_PER_USER = 10;
+
+type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+/** Serialises one user's filter writes, so two tabs can't both create the 11th or both activate. */
+async function lockUserFilters(tx: Tx, userId: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"filters:" + userId}))`;
+}
+
+/** Switches off every active filter of this user except `keepId`. */
+async function deactivateOthers(tx: Tx, userId: string, keepId: string | null): Promise<void> {
+  await tx.userFilter.updateMany({
+    where: { userId, isActive: true, ...(keepId ? { id: { not: keepId } } : {}) },
+    data: { isActive: false },
   });
 }

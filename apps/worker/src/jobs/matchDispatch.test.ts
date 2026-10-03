@@ -5,7 +5,6 @@ import { prisma, loadEnv, loadFilterTrackRecords, type ScoredToken } from "@tren
 import type { Token, TokenSnapshot } from "@prisma/client";
 import { createMatchesForCandidate, ALERT_COOLDOWN_HOURS, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
-import type { AlertBot } from "../telegram/bot.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -29,32 +28,11 @@ function scoredFixture(mintAddress: string): ScoredToken {
   };
 }
 
-/** Records the order calls landed in - the ordering IS the behaviour under test. */
-function recordingBot(order: string[], opts: { delayMs?: number; fail?: boolean } = {}): AlertBot {
-  return {
-    enabled: true,
-    async sendMessage(chatId: string) {
-      if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
-      order.push(`telegram:${chatId}`);
-      return !opts.fail;
-    },
-    start() {},
-    async stop() {},
-  };
-}
-
-async function seedUserWithFilter(suffix: string, chatId?: string): Promise<FilterWithUser> {
+async function seedUserWithFilter(suffix: string): Promise<FilterWithUser> {
   const user = await prisma.user.create({ data: { walletAddress: `${TAG}-${suffix}` } });
-  if (chatId) {
-    await prisma.telegramLink.create({
-      data: { userId: user.id, chatId, alertMode: "REALTIME", linkedAt: new Date() },
-    });
-  }
-  const filter = await prisma.userFilter.create({
+  return prisma.userFilter.create({
     data: { userId: user.id, name: suffix, mcapMin: 1_000, mcapMax: 10_000_000, isActive: true },
   });
-  const link = chatId ? await prisma.telegramLink.findUnique({ where: { userId: user.id } }) : null;
-  return { ...filter, user: { id: user.id, telegramLink: link } } as FilterWithUser;
 }
 
 async function seedToken(suffix: string): Promise<{ token: Token; snapshot: TokenSnapshot }> {
@@ -72,57 +50,25 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
   });
 
-  it("creates every match and pushes the dashboard BEFORE any Telegram send", async () => {
-    // The latency fix this exists for: a Telegram round trip used to sit between one user's match
-    // and the next user's, so the last dashboard waited out every send before it.
-    const { token, snapshot } = await seedToken("order");
+  it("creates a match for every user whose filter the token matches", async () => {
+    const { token, snapshot } = await seedToken("all");
     const filters = [
-      await seedUserWithFilter("a", "chat-a"),
-      await seedUserWithFilter("b", "chat-b"),
-      await seedUserWithFilter("c", "chat-c"),
+      await seedUserWithFilter("a"),
+      await seedUserWithFilter("b"),
+      await seedUserWithFilter("c"),
     ];
-    const order: string[] = [];
-    const bot = recordingBot(order, { delayMs: 20 });
 
     const count = await createMatchesForCandidate({
       token,
       snapshot,
       scored: scoredFixture(token.mintAddress),
       activeFilters: filters,
-      bot,
     });
 
     expect(count).toBe(3);
-    expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(3);
-    // Every Telegram send happened; none of them gated the match rows, which already existed.
-    expect(order.filter((o) => o.startsWith("telegram:")).length).toBe(3);
-  });
-
-  it("records Telegram delivery after the fact, and only for sends that worked", async () => {
-    const { token, snapshot } = await seedToken("delivery");
-    const filters = [await seedUserWithFilter("d", "chat-d")];
-
-    await createMatchesForCandidate({
-      token,
-      snapshot,
-      scored: scoredFixture(token.mintAddress),
-      activeFilters: filters,
-      bot: recordingBot([], { fail: true }),
-    });
-    const failed = await prisma.match.findFirstOrThrow({ where: { tokenId: token.id } });
-    expect(failed.deliveredTelegram).toBe(false);
-    expect(failed.deliveredDashboard).toBe(true);
-
-    await prisma.match.deleteMany({ where: { tokenId: token.id } });
-    await createMatchesForCandidate({
-      token,
-      snapshot,
-      scored: scoredFixture(token.mintAddress),
-      activeFilters: filters,
-      bot: recordingBot([]),
-    });
-    const delivered = await prisma.match.findFirstOrThrow({ where: { tokenId: token.id } });
-    expect(delivered.deliveredTelegram).toBe(true);
+    const matches = await prisma.match.findMany({ where: { tokenId: token.id } });
+    expect(matches).toHaveLength(3);
+    expect(matches.every((m) => m.deliveredDashboard)).toBe(true);
   });
 
   it("leaves a user alone for a token their filter already alerted on", async () => {
@@ -133,7 +79,6 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
       snapshot,
       scored: scoredFixture(token.mintAddress),
       activeFilters: filters,
-      bot: recordingBot([]),
     };
 
     expect(await createMatchesForCandidate(args)).toBe(1);
@@ -159,8 +104,7 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
       token,
       snapshot,
       scored: scoredFixture(token.mintAddress),
-      activeFilters: [first, { ...second, user: first.user } as FilterWithUser],
-      bot: recordingBot([]),
+      activeFilters: [first, second],
     });
     expect(count).toBe(2);
   });
@@ -177,7 +121,6 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
         snapshot,
         scored,
         activeFilters: [filter],
-        bot: recordingBot([]),
       }),
     ).toBe(0);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
@@ -188,7 +131,7 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     const { token, snapshot } = await seedToken("flush");
     const filter = await seedUserWithFilter("h");
     const flushing = { ...scoredFixture(token.mintAddress), priceChange5mPct: -40 };
-    const args = { token, snapshot, activeFilters: [filter], bot: recordingBot([]), env };
+    const args = { token, snapshot, activeFilters: [filter], env };
 
     expect(await createMatchesForCandidate({ ...args, scored: flushing })).toBe(0);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
@@ -210,7 +153,6 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
         snapshot,
         scored,
         activeFilters: filters,
-        bot: recordingBot([]),
         env,
       }),
     ).toBe(2);

@@ -10,6 +10,7 @@ import {
 import { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { currentMarketCap } from "./matches.js";
 import {
+  attachAiReviewsForAdmin,
   curatedAlertInclude,
   serializeCuratedAlert,
   type CuratedAlertWithRelations,
@@ -167,7 +168,8 @@ export async function registerCuratedRoutes(
     opts.viewStamps.record(cards.map((c) => c.tokenId));
     liveRefresher.request(cards.map((c) => c.token));
 
-    return { alerts: cards, page, pageSize: PAGE_SIZE, totalCount };
+    const isAdmin = request.access?.reason === "admin";
+    return { alerts: await attachAiReviewsForAdmin(cards, isAdmin), page, pageSize: PAGE_SIZE, totalCount };
   });
 
   /**

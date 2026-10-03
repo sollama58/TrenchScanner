@@ -380,20 +380,20 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
         });
         continue;
       }
-      const sent = review?.verdict
-        ? {
-            ...pick,
-            decision: {
-              ...pick.decision,
-              reasons: [`AI: ${review.verdict.reasoning}`, ...pick.decision.reasons].slice(0, 5),
-            },
-          }
-        : pick;
+      // The reviewer's reasoning is logged and stored on its AiReview row, where admins see it
+      // (attachAiReviewsForAdmin in the API) - never put on the public card. It is model output
+      // over launcher-written token text.
+      if (review?.verdict) {
+        logger.info("curated pick approved by ai reviewer", {
+          mint: pick.token.mintAddress,
+          reasoning: review.verdict.reasoning,
+        });
+      }
       // One pick's write failing (a pool timeout, say) must not take the rest of the cycle's picks
       // and the shadow ledger down with it. The failed pick tries again next cycle.
       let result: Awaited<ReturnType<typeof emitCuratedAlert>>;
       try {
-        result = await emitCuratedAlert(sent, env);
+        result = await emitCuratedAlert(pick, env);
       } catch (err) {
         logger.warn("failed to emit curated pick - deferring it", {
           mint: pick.token.mintAddress,
