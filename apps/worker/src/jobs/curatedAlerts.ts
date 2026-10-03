@@ -389,7 +389,19 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
             },
           }
         : pick;
-      const result = await emitCuratedAlert(sent, env);
+      // One pick's write failing (a pool timeout, say) must not take the rest of the cycle's picks
+      // and the shadow ledger down with it. The failed pick tries again next cycle.
+      let result: Awaited<ReturnType<typeof emitCuratedAlert>>;
+      try {
+        result = await emitCuratedAlert(sent, env);
+      } catch (err) {
+        logger.warn("failed to emit curated pick - deferring it", {
+          mint: pick.token.mintAddress,
+          error: String(err),
+        });
+        deferContender(pick, "live", env, now);
+        continue;
+      }
       if (!result) continue;
       liveAnchors.set(pick.token.id, result.anchor);
       emitted += 1;

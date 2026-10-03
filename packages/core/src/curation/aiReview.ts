@@ -56,9 +56,16 @@ const fmtPct = (v: number | undefined) => (v === undefined ? "unknown" : `${v.to
 const fmtNum = (v: number | undefined) => (v === undefined ? "unknown" : String(v));
 const fmtBool = (v: boolean | undefined) => (v === undefined ? "unknown" : v ? "yes" : "no");
 
-/** Caps launcher-written text so one token can't flood the request. */
-const clip = (s: string | undefined, max: number) =>
-  s === undefined ? "none" : s.length > max ? `${s.slice(0, max)}...` : s;
+/**
+ * Caps launcher-written text so one token can't flood the request, and flattens it onto one line
+ * with no angle brackets: the launcher controls it, and a description carrying `</token>` plus
+ * newlines could otherwise close the data block and append sections that read as the scanner's own.
+ */
+export const clip = (s: string | undefined, max: number) => {
+  if (s === undefined) return "none";
+  const flat = s.replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}...` : flat;
+};
 
 /** The per-alert brief - plain labeled lines, every unknown spelled out as "unknown". */
 export function buildAiReviewBrief(
