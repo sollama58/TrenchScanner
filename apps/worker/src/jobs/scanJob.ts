@@ -25,6 +25,7 @@ import {
 } from "@trenchscanner/core";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
+import { markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveWalletHoldings, computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
@@ -345,6 +346,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     }
   });
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
+  markScanVerdictsPopulated();
   lap("candidates");
 
   // The cycle's governor pass: of everything the curators would emit, the strongest contenders
@@ -708,6 +710,11 @@ async function processCandidate(
 
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "scan"),
+  });
+  // Passing or failing - the fast-match lane goes by the newest verdict. See vettedTokens.ts.
+  recordScanVerdict({
+    token: { id: token.id, mintAddress: token.mintAddress, firstSeenAt: token.firstSeenAt },
+    snapshot,
   });
 
   if (!scored.rugScreen.passed) {

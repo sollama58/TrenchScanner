@@ -9,6 +9,7 @@ import {
 } from "@trenchscanner/core";
 import { createMatchesForTargets, resolveAlertTargets, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
+import { recentScanVerdicts, type VettedEntry } from "./vettedTokens.js";
 
 const logger = createLogger("fast-match");
 
@@ -142,25 +143,15 @@ export async function runFastMatchCycle(
   // the query, with no LIMIT on the SQL, so it used to pull every scan snapshot of the last 12
   // minutes - one per watched token per cycle, thousands of full rows - four times a minute,
   // which is a large share of what pushed the worker past its memory limit.
-  const newestIds = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT id FROM (
-      SELECT DISTINCT ON ("tokenId") id, "takenAt"
-      FROM "TokenSnapshot"
-      WHERE "takenAt" > ${vettedSince} AND source = 'scan'
-      ORDER BY "tokenId", "takenAt" DESC
-    ) newest
-    ORDER BY "takenAt" DESC
-    LIMIT ${MAX_TRACKED}`;
-  if (newestIds.length === 0) return { stagesMs };
-  const recent = await prisma.tokenSnapshot.findMany({
-    where: { id: { in: newestIds.map((r) => r.id) } },
-    include: { token: { select: { id: true, mintAddress: true, firstSeenAt: true } } },
-  });
-  const vetted = recent.filter((snapshot) => snapshot.rugScreenPassed);
+  // From the scan cycle's own in-memory record (vettedTokens.ts); the database only until the
+  // first cycle after a restart has filled it.
+  const recent =
+    recentScanVerdicts(vettedSince, MAX_TRACKED) ?? (await newestScanVerdictsFromDb(vettedSince));
+  const vetted = recent.filter((v) => v.snapshot.rugScreenPassed);
   lap("select");
   if (vetted.length === 0) return { stagesMs };
 
-  const byMint = new Map(vetted.map((s) => [s.token.mintAddress, s]));
+  const byMint = new Map(vetted.map((v) => [v.token.mintAddress, v]));
   let fresh;
   try {
     fresh = await dexScreener.getTokensByAddresses([...byMint.keys()]);
@@ -175,14 +166,14 @@ export async function runFastMatchCycle(
   let matched = 0;
   let evaluated = 0;
   await forEachWithConcurrency(fresh, MATCH_CONCURRENCY, async (candidate) => {
-    const snapshot = byMint.get(candidate.mintAddress);
-    if (!snapshot) return;
+    const entry = byMint.get(candidate.mintAddress);
+    if (!entry) return;
 
-    const onChain = profileFromSnapshot(candidate.mintAddress, snapshot);
+    const onChain = profileFromSnapshot(candidate.mintAddress, entry.snapshot);
     if (!onChain) return;
 
     const scored = buildScoredToken(candidate, onChain, {
-      createdAt: candidate.pairCreatedAt ?? snapshot.token.firstSeenAt,
+      createdAt: candidate.pairCreatedAt ?? entry.token.firstSeenAt,
       // Holder growth needs a baseline the full cycle owns; leaving it unset records "not
       // measured" rather than a fabricated 0, and matchesFilter treats an unknown growth as
       // failing a minHolderGrowthPct filter - so this pass can never alert on a criterion it
@@ -193,7 +184,7 @@ export async function runFastMatchCycle(
 
     try {
       // Read-after-await, so the increment can't be lost between two tokens finishing together.
-      const created = await alertForToken(snapshot.token, scored, activeFilters, env);
+      const created = await alertForToken(entry.token, scored, activeFilters, env);
       matched += created;
     } catch (err) {
       logger.warn("fast match failed for token", { mint: candidate.mintAddress, error: String(err) });
@@ -211,6 +202,29 @@ export async function runFastMatchCycle(
     });
   }
   return { stagesMs, tracked: byMint.size, matches: matched };
+}
+
+/**
+ * The same answer as recentScanVerdicts, from the database: the newest scan snapshot per token
+ * since `since`. Only used until the first scan cycle in this process has filled the in-memory
+ * record - it is the slow query that record exists to avoid.
+ */
+async function newestScanVerdictsFromDb(since: Date): Promise<VettedEntry[]> {
+  const newestIds = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM (
+      SELECT DISTINCT ON ("tokenId") id, "takenAt"
+      FROM "TokenSnapshot"
+      WHERE "takenAt" > ${since} AND source = 'scan'
+      ORDER BY "tokenId", "takenAt" DESC
+    ) newest
+    ORDER BY "takenAt" DESC
+    LIMIT ${MAX_TRACKED}`;
+  if (newestIds.length === 0) return [];
+  const rows = await prisma.tokenSnapshot.findMany({
+    where: { id: { in: newestIds.map((r) => r.id) } },
+    include: { token: { select: { id: true, mintAddress: true, firstSeenAt: true } } },
+  });
+  return rows.map(({ token, ...snapshot }) => ({ token, snapshot }));
 }
 
 /**

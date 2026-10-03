@@ -110,10 +110,14 @@ export async function recordMatchPeaks(
         ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
         LIMIT 1
       ) best ON TRUE
-      WHERE m2."tokenId" IN (
-          SELECT DISTINCT fresh."tokenId" FROM "TokenSnapshot" fresh
-          WHERE fresh.source IN ('scan', 'fast')
+      -- A per-token probe on (tokenId, takenAt) rather than "every token with a fresh snapshot":
+      -- that set needs a (source, takenAt) index production doesn't have, so it was a scan of the
+      -- table's newest pages on every pass.
+      WHERE EXISTS (
+          SELECT 1 FROM "TokenSnapshot" fresh
+          WHERE fresh."tokenId" = m2."tokenId"
             AND fresh."takenAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
+            AND fresh.source IN ('scan', 'fast')
         )
         AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
         AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
