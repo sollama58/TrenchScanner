@@ -24,6 +24,8 @@ const logger = createLogger("shared-cache");
 export class SharedCache<T> {
   private value: { data: T; expiresAt: number } | undefined;
   private inFlight: Promise<T> | undefined;
+  /** Bumped by clear(): a fill that started before the bump must not store its (older) result. */
+  private generation = 0;
 
   constructor(private readonly ttlMs: number) {}
 
@@ -36,9 +38,10 @@ export class SharedCache<T> {
     if (this.value && this.value.expiresAt > now) return this.value.data;
     if (this.inFlight) return this.inFlight;
 
-    this.inFlight = produce()
+    const generation = this.generation;
+    const fill: Promise<T> = produce()
       .then((data) => {
-        this.value = { data, expiresAt: Date.now() + this.ttlMs };
+        if (generation === this.generation) this.value = { data, expiresAt: Date.now() + this.ttlMs };
         return data;
       })
       .catch((err: unknown) => {
@@ -55,20 +58,25 @@ export class SharedCache<T> {
       // unhandled rejection here.
       .then(
         (data) => {
-          this.inFlight = undefined;
+          if (this.inFlight === fill) this.inFlight = undefined;
           return data;
         },
         (err: unknown) => {
-          this.inFlight = undefined;
+          if (this.inFlight === fill) this.inFlight = undefined;
           throw err;
         },
       );
-
-    return this.inFlight;
+    this.inFlight = fill;
+    return fill;
   }
 
   /** Test seam: forget everything, as if the process had just started. */
   clear(): void {
     this.value = undefined;
+    // Also forget a fill already in flight: it read the database before whatever prompted this
+    // clear, so storing it - or handing it to readers who arrive now - would serve the old rows
+    // for a full TTL. That is exactly the case clear() exists for (a new curated alert's NOTIFY).
+    this.generation += 1;
+    this.inFlight = undefined;
   }
 }

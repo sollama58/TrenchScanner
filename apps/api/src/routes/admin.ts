@@ -41,13 +41,27 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
   /** Top-line counts for the admin overview. */
   app.get("/stats", async () => {
     const dayAgo = new Date(Date.now() - DAY_MS);
-    const [totalUsers, totalActiveFilters, totalTrackedTokens, totalMatches, matches24h] = await Promise.all([
+    const [totalUsers, totalActiveFilters, estimates, matches24h] = await Promise.all([
       prisma.user.count(),
       prisma.userFilter.count({ where: { isActive: true } }),
-      prisma.token.count(),
-      prisma.match.count(),
-      prisma.match.count({ where: { matchedAt: { gt: dayAgo } } }),
+      // The planner's row estimates, not exact counts: an exact count(*) reads the whole table
+      // (Token is ~450MB in production), and an overview tile doesn't need the last digit.
+      prisma.$queryRaw<{ relname: string; rows: number }[]>`
+        SELECT relname, GREATEST(reltuples, 0)::float8 AS rows
+        FROM pg_class WHERE relname IN ('Token', 'Match') AND relkind = 'r'`,
+      // Through the (userId, matchedAt) index, one range per user - Match has no index on
+      // matchedAt alone, so a bare time filter scanned the table.
+      prisma.user.findMany({ select: { id: true } }).then((users) =>
+        users.length === 0
+          ? 0
+          : prisma.match.count({
+              where: { userId: { in: users.map((u) => u.id) }, matchedAt: { gt: dayAgo } },
+            }),
+      ),
     ]);
+    const estimate = (table: string) => Math.round(estimates.find((r) => r.relname === table)?.rows ?? 0);
+    const totalTrackedTokens = estimate("Token");
+    const totalMatches = estimate("Match");
     return {
       totalUsers,
       totalActiveFilters,
@@ -86,20 +100,32 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
 
+    // Bounded to the tokens the scan can be writing snapshots for - the watchlist (first seen
+    // inside WATCHLIST_TTL_HOURS) and anything viewed in the last hour - reached through Token's
+    // own indexes, with one (tokenId, takenAt) probe each. The unbounded DISTINCT ON read every
+    // row of TokenSnapshot (~3GB in production) on each load, evicting the whole buffer cache on
+    // the 256MB database; an older token's last snapshot is history, not the live feed.
+    const watchlistSince = new Date(Date.now() - opts.env.WATCHLIST_TTL_HOURS * 3_600_000);
+    const viewedSince = new Date(Date.now() - 3_600_000);
     const [latestIds, watchlistOnlyCount] = await Promise.all([
       prisma.$queryRaw<{ id: string }[]>`
-        SELECT id FROM (
-          SELECT DISTINCT ON ("tokenId") id, "takenAt"
-          FROM "TokenSnapshot"
-          ORDER BY "tokenId", "takenAt" DESC
-        ) newest
-        ORDER BY "takenAt" DESC
+        SELECT s.id
+        FROM "Token" t
+        CROSS JOIN LATERAL (
+          SELECT id, "takenAt" FROM "TokenSnapshot"
+          WHERE "tokenId" = t.id
+          ORDER BY "takenAt" DESC
+          LIMIT 1
+        ) s
+        WHERE t."firstSeenAt" > ${watchlistSince} OR t."lastViewedAt" > ${viewedSince}
+        ORDER BY s."takenAt" DESC
         LIMIT ${parsed.data.limit}
       `,
       // Freshly-discovered mints that have never had a snapshot written at all - outside the mcap
       // band, or not yet re-checked this cycle. Reported as a count rather than bare rows in the
-      // same feed, since there's no score/mcap/anything else to show for them yet.
-      prisma.token.count({ where: { snapshots: { none: {} } } }),
+      // same feed, since there's no score/mcap/anything else to show for them yet. Same watchlist
+      // bound: over every token ever discovered this was an anti-join across the whole table.
+      prisma.token.count({ where: { firstSeenAt: { gt: watchlistSince }, snapshots: { none: {} } } }),
     ]);
 
     // Ordered here rather than trusting the second query's own ordering: an `in` lookup makes no

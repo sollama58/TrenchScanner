@@ -151,6 +151,31 @@ describe.skipIf(!dbAvailable)("runCleanupJob: stale tokens vs the curated record
     expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(1);
   });
 
+  it("keeps a token the AI reviewer has a verdict on", async () => {
+    // Token -> AiReview is onDelete: Cascade too, and a "no buy" on a token no curator alerted is
+    // held by nothing else once its outcome row ages out.
+    const old = new Date(Date.now() - 400 * 86_400_000);
+    const token = await prisma.token.create({
+      data: { mintAddress: `${TAG}-reviewed-ancient`, firstSeenAt: old },
+    });
+    await prisma.aiReview.create({
+      data: {
+        tokenId: token.id,
+        createdAt: old,
+        mode: "shadow",
+        model: "test",
+        decision: "no_buy",
+        latencyMs: 1,
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 100_000,
+      },
+    });
+
+    await runCleanupJob(env);
+
+    expect(await prisma.aiReview.count({ where: { tokenId: token.id } })).toBe(1);
+  });
+
   it("still sweeps an equally old token nothing references", async () => {
     // The other half: the sweep has to keep doing its job, or the guard above is just a leak.
     const token = await prisma.token.create({
@@ -163,5 +188,81 @@ describe.skipIf(!dbAvailable)("runCleanupJob: stale tokens vs the curated record
     await runCleanupJob(env);
 
     expect(await prisma.token.findUnique({ where: { id: token.id } })).toBeNull();
+  });
+});
+
+/**
+ * The snapshot sweep runs in small batches (it walks tokens, then deletes through the
+ * (tokenId, takenAt) index). Batch sizes are shrunk here so every loop boundary is crossed.
+ */
+describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
+  const TAG = "CleanupSnapshotTest";
+  const WALLET = "CleanupSnapshotTestWallet111111111111111111";
+  const DAY = 86_400_000;
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 30,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 3650,
+  } as never;
+
+  const cleanUp = async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.user.deleteMany({ where: { walletAddress: WALLET } });
+  };
+  beforeEach(cleanUp);
+  afterAll(cleanUp);
+
+  it("deletes every expired snapshot across batches, keeping matched and recent ones", async () => {
+    const user = await prisma.user.create({ data: { walletAddress: WALLET } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+    const oldSeen = new Date(Date.now() - 60 * DAY);
+    const tokens = [];
+    for (let i = 0; i < 5; i++) {
+      tokens.push(
+        await prisma.token.create({
+          // Two share a firstSeenAt, so the keyset tie-break on id is exercised too.
+          data: {
+            mintAddress: `${TAG}-${i}`,
+            firstSeenAt: new Date(oldSeen.getTime() + Math.min(i, 3) * 1000),
+          },
+        }),
+      );
+    }
+    for (const t of tokens) {
+      await prisma.tokenSnapshot.createMany({
+        data: Array.from({ length: 7 }, (_, k) => ({
+          tokenId: t.id,
+          priceUsd: 1,
+          marketCapUsd: 100_000,
+          takenAt: new Date(Date.now() - (40 + k) * DAY),
+        })),
+      });
+      await prisma.tokenSnapshot.create({
+        data: { tokenId: t.id, priceUsd: 1, marketCapUsd: 100_000, takenAt: new Date(Date.now() - DAY) },
+      });
+    }
+    const matched = await prisma.tokenSnapshot.findFirstOrThrow({
+      where: { tokenId: tokens[2]!.id, takenAt: { lt: new Date(Date.now() - 30 * DAY) } },
+    });
+    await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: tokens[2]!.id,
+        snapshotId: matched.id,
+        score: 60,
+      },
+    });
+
+    await runCleanupJob(env, { rowsPerBatch: 3, tokensPerBatch: 2, pauseMs: 0 });
+
+    const left = await prisma.tokenSnapshot.findMany({
+      where: { tokenId: { in: tokens.map((t) => t.id) } },
+      select: { id: true, takenAt: true },
+    });
+    // One recent snapshot per token, plus the one a Match still points to.
+    expect(left).toHaveLength(tokens.length + 1);
+    expect(left.some((s) => s.id === matched.id)).toBe(true);
+    expect(left.filter((s) => s.takenAt.getTime() < Date.now() - 30 * DAY)).toHaveLength(1);
   });
 });

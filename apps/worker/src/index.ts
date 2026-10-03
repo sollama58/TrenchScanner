@@ -88,10 +88,12 @@ async function main() {
   // purpose: see createMatchPeaksRunner.
   const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping);
   const matchPeaksJob = scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES);
-  const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC);
-  // Catches up on boot when overdue - see scheduleDailyAt. Cleanup deliberately doesn't (yet): its
-  // deletes are unbatched, and after a long gap a boot-time run would be one very large delete
-  // racing the first scan cycles.
+  // Both daily jobs catch up on boot when overdue - see scheduleDailyAt. Cleanup's deletes are
+  // batched (see runCleanupJob), so a boot-time run after a long gap is many short statements,
+  // not one huge delete racing the first scan cycles.
+  const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC, {
+    catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS,
+  });
   const outcomeTrackingJob = scheduleDailyAt(
     "outcome-tracking",
     () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),

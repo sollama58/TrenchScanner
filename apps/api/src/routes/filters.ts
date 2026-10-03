@@ -108,25 +108,25 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
 
-    const existing = await prisma.userFilter.findUnique({ where: { id } });
-    if (!existing || existing.userId !== request.user!.userId) {
-      return reply.code(404).send({ error: "filter not found" });
-    }
-
-    const merged = { ...existing, ...parsed.data };
-    const rangeError = mcapRangeError(merged.mcapMin, merged.mcapMax);
-    if (rangeError) {
-      return reply.code(400).send({ error: rangeError });
-    }
-
     const userId = request.user!.userId;
-    const updated = await prisma.$transaction(async (tx) => {
+    // Read, validated and written under the user's filter lock. Validating outside it let two
+    // concurrent PATCHes (one moving only mcapMin, the other only mcapMax) each pass against the
+    // old row and together save mcapMin >= mcapMax; and a delete landing in between turned the
+    // update into a P2025 500 instead of a 404.
+    const result = await prisma.$transaction(async (tx) => {
       await lockUserFilters(tx, userId);
+      const existing = await tx.userFilter.findUnique({ where: { id } });
+      if (!existing || existing.userId !== userId) return { error: 404 as const };
+      const merged = { ...existing, ...parsed.data };
+      const rangeError = mcapRangeError(merged.mcapMin, merged.mcapMax);
+      if (rangeError) return { error: 400 as const, message: rangeError };
       // Turning one filter on turns the user's other filters off: one active filter at a time.
       if (parsed.data.isActive) await deactivateOthers(tx, userId, id);
-      return tx.userFilter.update({ where: { id }, data: parsed.data });
+      return { updated: await tx.userFilter.update({ where: { id }, data: parsed.data }) };
     });
-    return updated;
+    if ("updated" in result) return result.updated;
+    if (result.error === 404) return reply.code(404).send({ error: "filter not found" });
+    return reply.code(400).send({ error: result.message });
   });
 
   app.delete("/:id", async (request, reply) => {

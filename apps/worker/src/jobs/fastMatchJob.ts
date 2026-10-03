@@ -146,7 +146,7 @@ export async function runFastMatchCycle(
   // From the scan cycle's own in-memory record (vettedTokens.ts); the database only until the
   // first cycle after a restart has filled it.
   const recent =
-    recentScanVerdicts(vettedSince, MAX_TRACKED) ?? (await newestScanVerdictsFromDb(vettedSince));
+    recentScanVerdicts(vettedSince, MAX_TRACKED) ?? (await newestScanVerdictsFromDb(vettedSince, env));
   const vetted = recent.filter((v) => v.snapshot.rugScreenPassed);
   lap("select");
   if (vetted.length === 0) return { stagesMs };
@@ -208,16 +208,29 @@ export async function runFastMatchCycle(
  * The same answer as recentScanVerdicts, from the database: the newest scan snapshot per token
  * since `since`. Only used until the first scan cycle in this process has filled the in-memory
  * record - it is the slow query that record exists to avoid.
+ *
+ * Starts from the tokens the scan could have written a snapshot for - the watchlist (first seen
+ * inside WATCHLIST_TTL_HOURS) and the actively-viewed set - through Token's own indexes, then
+ * probes TokenSnapshot(tokenId, takenAt) once per token. Asking TokenSnapshot directly for "scan
+ * rows since X" has no index to use in production (no (source, takenAt) index was ever built
+ * there), so it was a full scan of the largest table in the database, four times a minute, for
+ * the first minute or two after every deploy.
  */
-async function newestScanVerdictsFromDb(since: Date): Promise<VettedEntry[]> {
+async function newestScanVerdictsFromDb(since: Date, env: Env): Promise<VettedEntry[]> {
+  const watchlistSince = new Date(Date.now() - env.WATCHLIST_TTL_HOURS * 3_600_000);
+  const viewedSince = new Date(since.getTime() - env.ACTIVE_VIEW_WINDOW_MINUTES * 60_000);
   const newestIds = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT id FROM (
-      SELECT DISTINCT ON ("tokenId") id, "takenAt"
+    SELECT s.id
+    FROM "Token" t
+    CROSS JOIN LATERAL (
+      SELECT id, "takenAt"
       FROM "TokenSnapshot"
-      WHERE "takenAt" > ${since} AND source = 'scan'
-      ORDER BY "tokenId", "takenAt" DESC
-    ) newest
-    ORDER BY "takenAt" DESC
+      WHERE "tokenId" = t.id AND "takenAt" > ${since} AND source = 'scan'
+      ORDER BY "takenAt" DESC
+      LIMIT 1
+    ) s
+    WHERE t."firstSeenAt" > ${watchlistSince} OR t."lastViewedAt" > ${viewedSince}
+    ORDER BY s."takenAt" DESC
     LIMIT ${MAX_TRACKED}`;
   if (newestIds.length === 0) return [];
   const rows = await prisma.tokenSnapshot.findMany({
