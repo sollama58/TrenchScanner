@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ApiError, api, del, post } from "../api";
+import { ApiError, api, del, downloadFile, patch, post } from "../api";
 import { Skeleton } from "../components/Charts";
 import { ShieldIcon } from "../components/Icons";
 import { usePolling, type Loadable } from "../hooks";
@@ -19,6 +19,7 @@ const SECTIONS = [
   { id: "users", label: "Users" },
   { id: "access", label: "Access" },
   { id: "ai", label: "AI" },
+  { id: "backups", label: "Backups" },
   { id: "database", label: "Database" },
   { id: "api", label: "API" },
   { id: "config", label: "Config" },
@@ -65,6 +66,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
       {section === "users" && <Users />}
       {section === "access" && <Access />}
       {section === "ai" && <Ai />}
+      {section === "backups" && <Backups />}
       {section === "database" && <Database />}
       {section === "api" && <ApiInstance />}
       {section === "config" && <Config />}
@@ -174,6 +176,215 @@ const when = (iso: string | null | undefined) =>
 const Tag = ({ tone, children }: { tone: "ok" | "warn" | "bad" | "muted"; children: ReactNode }) => (
   <span className={`admin-tag-${tone}`}>{children}</span>
 );
+
+// ---------- Backups ----------
+
+interface ModelBackupRow {
+  id: string;
+  createdAt: string;
+  kind: string;
+  note: string | null;
+  pinned: boolean;
+  modelCount: number;
+  sizeBytes: number;
+  offsiteKey: string | null;
+  offsiteAt: string | null;
+  offsiteError: string | null;
+  restoredAt: string | null;
+}
+
+interface ModelBackups {
+  backups: ModelBackupRow[];
+  keepWeeks: number;
+  offsiteConfigured: boolean | null;
+  lastCheckAt: string | null;
+  lastError: string | null;
+}
+
+const KIND_LABEL: Record<string, string> = {
+  weekly: "Weekly",
+  manual: "Manual",
+  "pre-restore": "Before a restore",
+  imported: "Imported",
+};
+
+const kb = (bytes: number) =>
+  bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
+
+/**
+ * Model backups (curation/modelBackup.ts): every running model's weights, cutoffs, calibration,
+ * recipe and record, snapshotted weekly by the trainer. Download one to keep it anywhere; import a
+ * downloaded file to bring it back after losing the database; restore puts it back in charge.
+ */
+function Backups() {
+  const q = usePolling<ModelBackups>("/admin/model-backups", 60_000);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const run = async (what: () => Promise<string>) => {
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await what());
+      q.reload();
+    } catch (e) {
+      setResult(`Failed: ${errorText(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const takeNow = () =>
+    run(async () => {
+      const b = await post<ModelBackupRow>("/admin/model-backups", {});
+      return `Backed up ${b.modelCount} models (${kb(b.sizeBytes)}).`;
+    });
+  const importFile = (file: File) =>
+    run(async () => {
+      const b = await api<ModelBackupRow>("/admin/model-backups/import", {
+        method: "POST",
+        body: file,
+        headers: { "content-type": "application/gzip" },
+      });
+      return `Imported ${b.modelCount} models. Restore it from the list below to put them back in charge.`;
+    });
+  const restore = (b: ModelBackupRow) => {
+    if (
+      !window.confirm(
+        `Restore the ${b.modelCount} models from ${new Date(b.createdAt).toLocaleString()}?\n\n` +
+          "They replace the running models straight away. What runs now is backed up first, so this can be undone. " +
+          "The next training run retrains the restored recipes on fresh data.",
+      )
+    )
+      return;
+    void run(async () => {
+      const r = await post<{ models: number; lanesRestored: number }>(
+        `/admin/model-backups/${b.id}/restore`,
+        {
+          confirm: true,
+        },
+      );
+      return `Restored ${r.models} models and ${r.lanesRestored} recipes. The previous models were backed up first.`;
+    });
+  };
+  return (
+    <div className="stack">
+      <Panel
+        title="Model backups"
+        note="Every running model, its recipe, cutoffs, calibration and record, backed up by the trainer once a week. Pinned backups are never deleted."
+        actions={
+          <div className="admin-form">
+            <button className="button primary" disabled={busy} onClick={() => void takeNow()}>
+              Back up now
+            </button>
+            <label className="button">
+              Import a file
+              <input
+                type="file"
+                accept=".gz,.json,application/gzip,application/json"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void importFile(file);
+                }}
+              />
+            </label>
+          </div>
+        }
+      >
+        {result && <p className="small muted">{result}</p>}
+        <Load q={q}>
+          {(d) => (
+            <div className="stack">
+              <p className="small muted">
+                Keeping the newest {d.keepWeeks} weekly backups. Off-site copies:{" "}
+                {d.offsiteConfigured === true ? (
+                  <Tag tone="ok">on</Tag>
+                ) : d.offsiteConfigured === false ? (
+                  <Tag tone="warn">off - backups live in the database only</Tag>
+                ) : (
+                  <Tag tone="muted">not reported yet</Tag>
+                )}{" "}
+                · last check {when(d.lastCheckAt)}
+                {d.lastError && (
+                  <>
+                    {" "}
+                    · <Tag tone="bad">{d.lastError}</Tag>
+                  </>
+                )}
+              </p>
+              <Table
+                head={["Taken", "Kind", "Models", "Size", "Off-site", "Note", ""]}
+                empty="No backups yet. The trainer takes the first one within an hour of deploying."
+                rows={d.backups.map((b) => [
+                  when(b.createdAt),
+                  <>
+                    {KIND_LABEL[b.kind] ?? b.kind}
+                    {b.pinned && (
+                      <>
+                        {" "}
+                        <Tag tone="ok">pinned</Tag>
+                      </>
+                    )}
+                    {b.restoredAt && (
+                      <>
+                        {" "}
+                        <Tag tone="muted">restored {ago(b.restoredAt)}</Tag>
+                      </>
+                    )}
+                  </>,
+                  n(b.modelCount),
+                  kb(b.sizeBytes),
+                  b.offsiteKey ? (
+                    <span title={b.offsiteKey}>{when(b.offsiteAt)}</span>
+                  ) : b.offsiteError ? (
+                    <Tag tone="bad">
+                      <span title={b.offsiteError}>failed</span>
+                    </Tag>
+                  ) : (
+                    <span className="faint">–</span>
+                  ),
+                  b.note ?? "–",
+                  <span className="admin-actions">
+                    <button
+                      className="ghost small"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(async () => {
+                          await downloadFile(
+                            `/admin/model-backups/${b.id}/download`,
+                            `model-backup-${b.id}.json.gz`,
+                          );
+                          return "Downloaded.";
+                        })
+                      }
+                    >
+                      Download
+                    </button>
+                    <button
+                      className="ghost small"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(async () => {
+                          await patch(`/admin/model-backups/${b.id}`, { pinned: !b.pinned });
+                          return b.pinned ? "Unpinned." : "Pinned: this backup is kept for good.";
+                        })
+                      }
+                    >
+                      {b.pinned ? "Unpin" : "Pin"}
+                    </button>
+                    <button className="ghost small" disabled={busy} onClick={() => restore(b)}>
+                      Restore
+                    </button>
+                  </span>,
+                ])}
+              />
+            </div>
+          )}
+        </Load>
+      </Panel>
+    </div>
+  );
+}
 
 // ---------- Overview ----------
 

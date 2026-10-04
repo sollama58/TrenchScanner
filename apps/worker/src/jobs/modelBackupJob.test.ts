@@ -1,0 +1,233 @@
+// Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
+import "../bootstrap-env.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { gunzipSync } from "node:zlib";
+import {
+  prisma,
+  loadEnv,
+  decodeBackup,
+  encodeBackup,
+  loadBackupData,
+  pruneModelBackups,
+  restoreModelBackup,
+  saveModelBackup,
+  uploadPendingBackups,
+  weeklyBackupDue,
+  CURATOR_MODEL_KIND,
+  STACKED_MODEL_KIND,
+  ModelBackupError,
+  type ContestantTrainingResult,
+  type StackedCuratorParams,
+  type TrainedCuratorParams,
+} from "@trenchscanner/core";
+import { applyContestResults } from "./curatorTrainingJob.js";
+import { runModelBackupJob } from "./modelBackupJob.js";
+
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+
+function learnerParams(bias: number): TrainedCuratorParams {
+  return {
+    kind: CURATOR_MODEL_KIND,
+    featureNames: ["scoreTotal"],
+    means: [50],
+    stdevs: [10],
+    weights: [2, 0],
+    bias,
+    threshold: 0.6,
+  };
+}
+
+function stacked(): StackedCuratorParams {
+  return {
+    kind: STACKED_MODEL_KIND,
+    members: [
+      { contestant: "linear", modelId: "", quantiles: [0.5] },
+      { contestant: "trees", modelId: "", quantiles: [0.5] },
+    ],
+    rules: { quantiles: [50], minScore: 55 },
+    meta: { kind: CURATOR_MODEL_KIND, featureNames: [], means: [], stdevs: [], weights: [], bias: 0 },
+    threshold: 0.5,
+  };
+}
+
+function result(contestant: string, params: ContestantTrainingResult["params"]): ContestantTrainingResult {
+  return {
+    contestant,
+    params,
+    metrics: {
+      folds: [],
+      verdict: { promote: false, reason: "test" },
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30 },
+      precisionCalibration: { threshold: null, support: 0, winRatePct: null, goalRatePct: null },
+      precisionCurve: [],
+      heuristicPrecisionCurve: [],
+      contestant,
+    },
+  };
+}
+
+const lane = (slot: string, name: string, generation: number, bornAt: Date) => ({
+  slot,
+  name,
+  description: name,
+  recipe: { learner: "logistic" as const },
+  generation,
+  parentName: null,
+  bornAt,
+});
+
+async function seedGeneration(bias: number, laneName: string) {
+  return applyContestResults(
+    [
+      result("consensus", stacked()),
+      result("linear", learnerParams(bias)),
+      result("trees", learnerParams(bias)),
+    ],
+    2_000,
+    new Date(Date.now() - 86_400_000),
+    {
+      founding: [
+        lane("linear", laneName, laneName === "Linear" ? 0 : 5, new Date(Date.now() - 3 * 86_400_000)),
+      ],
+    },
+  );
+}
+
+describe.skipIf(!dbAvailable)("model backups", () => {
+  afterEach(async () => {
+    await prisma.modelBackup.deleteMany({});
+    await prisma.curatorModel.deleteMany({});
+    await prisma.curatorLane.deleteMany({});
+  });
+
+  it("backs up nothing before any model exists", async () => {
+    expect(await saveModelBackup("manual")).toBeNull();
+  });
+
+  it("round-trips: a restore brings back the weights, cutoffs and recipe, with the consensus re-pointed", async () => {
+    await seedGeneration(0.25, "Linear");
+    const backup = (await saveModelBackup("weekly"))!;
+    expect(backup.modelCount).toBe(3);
+    const file = (await loadBackupData(backup.id))!;
+    const payload = decodeBackup(file.data);
+    expect(payload.lanes.map((l) => l.name)).toEqual(["Linear"]);
+    expect(payload.models.map((m) => m.contestant).sort()).toEqual(["consensus", "linear", "trees"]);
+
+    // A later generation, on a bred lane, replaces everything.
+    await prisma.curatorLane.updateMany({ where: { retiredAt: null }, data: { retiredAt: new Date() } });
+    await seedGeneration(-3, "Lean Linear #5");
+
+    const restored = await restoreModelBackup(backup.id, { actor: "test" });
+    expect(restored).toMatchObject({ models: 3, lanesRestored: 1 });
+    expect(restored.safetyBackupId).not.toBeNull();
+
+    const active = await prisma.curatorModel.findMany({ where: { status: "active" } });
+    expect(active).toHaveLength(3);
+    const linear = active.find((m) => m.contestant === "linear")!;
+    expect((linear.params as unknown as { bias: number }).bias).toBe(0.25);
+    const consensus = active.find((m) => m.contestant === "consensus")!;
+    const members = (consensus.params as unknown as StackedCuratorParams).members;
+    expect(members.map((m) => m.modelId).sort()).toEqual(
+      active
+        .filter((m) => m.contestant !== "consensus")
+        .map((m) => m.id)
+        .sort(),
+    );
+    const current = await prisma.curatorLane.findMany({ where: { slot: "linear", retiredAt: null } });
+    expect(current.map((l) => l.name)).toEqual(["Linear"]);
+    expect(current[0]!.bornAt.toISOString()).toBe(payload.lanes[0]!.bornAt);
+
+    // The pre-restore backup holds what was running, so the restore can itself be undone.
+    const safety = decodeBackup((await loadBackupData(restored.safetyBackupId!))!.data);
+    expect(safety.lanes[0]!.name).toBe("Lean Linear #5");
+    expect((await prisma.modelBackup.findUnique({ where: { id: backup.id } }))!.restoredAt).not.toBeNull();
+  });
+
+  it("a training run that started before a restore does not overwrite it", async () => {
+    await seedGeneration(0.25, "Linear");
+    const backup = (await saveModelBackup("manual"))!;
+    const runStarted = new Date();
+    await new Promise((r) => setTimeout(r, 5));
+    await restoreModelBackup(backup.id);
+    const stored = await applyContestResults(
+      [result("linear", learnerParams(9))],
+      2_000,
+      new Date(),
+      {},
+      {
+        startedAt: runStarted,
+      },
+    );
+    expect(stored).toBeNull();
+    const linear = await prisma.curatorModel.findFirstOrThrow({
+      where: { status: "active", contestant: "linear" },
+    });
+    expect((linear.params as unknown as { bias: number }).bias).toBe(0.25);
+  });
+
+  it("refuses a tampered or truncated file", async () => {
+    await seedGeneration(0.25, "Linear");
+    const backup = (await saveModelBackup("manual"))!;
+    const { data } = (await loadBackupData(backup.id))!;
+    const json = JSON.parse(gunzipSync(data).toString("utf8"));
+    json.models[0].params.threshold = 0.01;
+    expect(() => decodeBackup(Buffer.from(JSON.stringify(json)))).toThrow(ModelBackupError);
+    expect(() => decodeBackup(data.subarray(0, data.length - 20))).toThrow(ModelBackupError);
+    // Plain JSON of an untouched payload is fine (an unzipped download).
+    expect(decodeBackup(gunzipSync(data)).models).toHaveLength(3);
+    expect(encodeBackup(decodeBackup(data)).data.length).toBeGreaterThan(0);
+  });
+
+  it("the hourly pass takes a weekly backup once a week and keeps the newest N", async () => {
+    await seedGeneration(0.25, "Linear");
+    const env = loadEnv();
+    expect(await weeklyBackupDue()).toBe(true);
+    const first = await runModelBackupJob(env);
+    expect(first.created).not.toBeNull();
+    expect((await runModelBackupJob(env)).created).toBeNull();
+
+    // Twelve more weeks of history, one of them pinned.
+    for (let i = 1; i <= 12; i++) {
+      const b = (await saveModelBackup("weekly"))!;
+      await prisma.modelBackup.update({
+        where: { id: b.id },
+        data: { createdAt: new Date(Date.now() - i * 7 * 86_400_000), pinned: i === 12 },
+      });
+    }
+    const pruned = await pruneModelBackups(8);
+    expect(pruned).toBe(4);
+    expect(await prisma.modelBackup.count({ where: { kind: "weekly" } })).toBe(9);
+    expect(await prisma.modelBackup.count({ where: { pinned: true } })).toBe(1);
+  });
+
+  it("copies new backups off-site when a bucket is configured, and records a failure for retry", async () => {
+    await seedGeneration(0.25, "Linear");
+    const backup = (await saveModelBackup("manual"))!;
+    const env = {
+      ...loadEnv(),
+      MODEL_BACKUP_S3_ENDPOINT: "https://example.r2.cloudflarestorage.com",
+      MODEL_BACKUP_S3_BUCKET: "models",
+      MODEL_BACKUP_S3_ACCESS_KEY_ID: "id",
+      MODEL_BACKUP_S3_SECRET_ACCESS_KEY: "secret",
+    };
+    const failing = (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch;
+    expect(await uploadPendingBackups(env, { fetchImpl: failing })).toMatchObject({ uploaded: 0, failed: 1 });
+    expect((await prisma.modelBackup.findUnique({ where: { id: backup.id } }))!.offsiteError).toContain(
+      "500",
+    );
+
+    const puts: string[] = [];
+    const ok = (async (url: URL) => {
+      puts.push(url.toString());
+      return new Response("", { status: 200 });
+    }) as unknown as typeof fetch;
+    expect(await uploadPendingBackups(env, { fetchImpl: ok })).toMatchObject({ uploaded: 1, failed: 0 });
+    const row = (await prisma.modelBackup.findUnique({ where: { id: backup.id } }))!;
+    expect(row.offsiteKey).toMatch(
+      /^trenchscanner\/model-backups\/trenchscanner-models-.*-manual-.*\.json\.gz$/,
+    );
+    expect(row.offsiteError).toBeNull();
+    expect(puts[0]).toContain("/models/trenchscanner/model-backups/");
+    expect(await uploadPendingBackups(loadEnv())).toMatchObject({ configured: false });
+  });
+});

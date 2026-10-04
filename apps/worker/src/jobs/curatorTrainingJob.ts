@@ -12,7 +12,10 @@ import {
   seededRng,
   withLanes,
   NEVER_EMIT_THRESHOLD,
+  MODEL_WRITE_TX_OPTIONS,
   STACKED_MODEL_KIND,
+  assessTrainingRun,
+  lockCuratorModelWrites,
   BLEND_MODEL_KIND,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   type ContestRunOutcome,
@@ -51,7 +54,9 @@ export { NEVER_EMIT_THRESHOLD, type StoredEvalMetrics };
  * history, trains each one's deployable model on the full window, stacks the consensus on their
  * out-of-sample calls, and stores one CuratorModel row per contestant (see applyContestResults).
  */
-export async function runCuratorTrainingJob(env: Env): Promise<void> {
+export async function runCuratorTrainingJob(
+  env: Env,
+): Promise<{ stored: boolean; heldBack?: string } | void> {
   const startedAt = Date.now();
   const windowStart = new Date(startedAt - env.CURATOR_TRAINING_WINDOW_DAYS * 86_400_000);
 
@@ -125,10 +130,39 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     return;
   }
 
-  const modelIds = await applyContestResults(results, trainingRows.length, trainingFrom, {
-    founding,
-    replacement: outcome.replacement,
-  });
+  // The guard (curation/runGuard.ts): a plainly broken run - non-finite weights, a training set
+  // that lost half its rows, every calling seat gone silent - keeps the running models instead.
+  if (env.CURATOR_TRAINING_GUARD) {
+    const verdict = assessTrainingRun({
+      incumbents: await loadIncumbents(),
+      results: results.map((r) => ({ contestant: r.contestant, kind: r.params.kind, params: r.params })),
+      trainingRows: trainingRows.length,
+      maxRows: env.CURATOR_TRAINING_MAX_ROWS,
+      now: new Date(),
+      maxHoldMs: env.CURATOR_GUARD_MAX_HOLD_HOURS * 3_600_000,
+    });
+    if (!verdict.accept) {
+      logger.warn("training run held back - keeping the running models", {
+        reason: verdict.reason,
+        heldForHours: Math.round(verdict.heldSinceMs / 360_000) / 10,
+        rows: trainingRows.length,
+      });
+      return { stored: false, heldBack: verdict.reason };
+    }
+    if (verdict.reason) logger.warn("training run let through by the guard", { reason: verdict.reason });
+  }
+
+  const modelIds = await applyContestResults(
+    results,
+    trainingRows.length,
+    trainingFrom,
+    { founding, replacement: outcome.replacement },
+    { startedAt: new Date(startedAt) },
+  );
+  if (modelIds === null) {
+    logger.warn("models were replaced while this run trained (a restore) - its results were not stored");
+    return { stored: false, heldBack: "models were replaced while this run trained" };
+  }
 
   if (plan) {
     logger.info("curator evolution", {
@@ -186,6 +220,25 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
         }
       : null,
   });
+  return { stored: true };
+}
+
+/** The models running now, as the guard sees them. */
+async function loadIncumbents() {
+  const rows = await prisma.curatorModel.findMany({
+    where: { status: "active" },
+    select: { contestant: true, kind: true, params: true, trainingRows: true, activatedAt: true },
+  });
+  return rows.map((r) => {
+    const threshold = (r.params as { threshold?: unknown } | null)?.threshold;
+    return {
+      contestant: r.contestant,
+      kind: r.kind,
+      threshold: typeof threshold === "number" ? threshold : null,
+      trainingRows: r.trainingRows,
+      activatedAt: r.activatedAt,
+    };
+  });
 }
 
 /**
@@ -227,7 +280,13 @@ export async function applyContestResults(
   trainingRows: number,
   trainingFrom: Date,
   evolution: { founding?: Lane[]; replacement?: ContestRunOutcome["replacement"] } = {},
-): Promise<Map<string, string>> {
+  /**
+   * When the run started. Models activated after it (a restore from the Admin tab, or another
+   * run that got there first) win: this run's results are dropped and null is returned, rather
+   * than overwriting a restore with models trained on the lanes it just replaced.
+   */
+  opts: { startedAt?: Date } = {},
+): Promise<Map<string, string> | null> {
   const now = new Date();
   // The consensus and the blend reference their members, so they go after them.
   const dependent = (kind: string) => kind === STACKED_MODEL_KIND || kind === BLEND_MODEL_KIND;
@@ -235,6 +294,14 @@ export async function applyContestResults(
     (a, b) => Number(dependent(a.params.kind)) - Number(dependent(b.params.kind)),
   );
   return prisma.$transaction(async (tx) => {
+    // One writer of the active models at a time (see CURATOR_MODEL_WRITE_LOCK).
+    await lockCuratorModelWrites(tx);
+    if (opts.startedAt) {
+      const newer = await tx.curatorModel.count({
+        where: { status: "active", activatedAt: { gt: opts.startedAt } },
+      });
+      if (newer > 0) return null;
+    }
     // Lanes first: the seats' recipes as of this run, in the same transaction as the models they
     // trained, so a lane and its seat's active model always change together.
     for (const lane of evolution.founding ?? []) {
@@ -295,7 +362,7 @@ export async function applyContestResults(
       ids.set(result.contestant, created.id);
     }
     return ids;
-  });
+  }, MODEL_WRITE_TX_OPTIONS);
 }
 
 function laneData(lane: Lane, examScore: number | null): Prisma.CuratorLaneCreateInput {

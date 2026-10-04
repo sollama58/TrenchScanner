@@ -54,6 +54,22 @@ export const put = <T>(path: string, body: unknown) =>
   api<T>(path, { method: "PUT", body: JSON.stringify(body) });
 export const del = <T>(path: string) => api<T>(path, { method: "DELETE" });
 
+/** Fetches a file the API serves (signed in like any call) and hands it to the browser to save. */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const headers = authHeaders(new Headers());
+  const res = await fetch(`${API_URL}${path}`, { headers, credentials: "include" });
+  if (!res.ok) await parse(res);
+  const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 // ---- Shapes the API returns (only the fields this UI reads) ----
 
 export interface User {
