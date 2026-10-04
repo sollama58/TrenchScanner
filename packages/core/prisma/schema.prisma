@@ -603,6 +603,7 @@ model CandidateOutcome {
 
   @@index([tokenId, anchorAt])
   @@index([tokenId, sampleKind, anchorAt])
+  @@index([sampleKind, anchorAt])
   @@index([finalized24hAt, nextCheckAt])
   @@index([anchorAt])
   @@index([finalizedAt])

@@ -1356,6 +1356,24 @@ tr.muted td {
   stroke: var(--grid);
   stroke-width: 1;
 }
+.line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.line.s1,
+.dot.s1 {
+  stroke: var(--series-1);
+}
+.line.s2,
+.dot.s2 {
+  stroke: var(--series-2);
+}
+.dot {
+  fill: var(--surface-solid);
+  stroke-width: 2;
+}
 .axis {
   stroke: var(--axis);
   stroke-width: 1;
