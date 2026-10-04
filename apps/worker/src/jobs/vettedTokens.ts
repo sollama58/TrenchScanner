@@ -36,6 +36,14 @@ export function recordScanVerdict(entry: VettedEntry): void {
   }
 }
 
+/**
+ * Called by the scan cycle for a token it found failing but wrote no snapshot for - the same
+ * outcome for the fast lane as recording that failing verdict.
+ */
+export function dropScanVerdict(tokenId: string): void {
+  byTokenId.delete(tokenId);
+}
+
 /** Called by the scan cycle once a full cycle has recorded its verdicts. */
 export function markScanVerdictsPopulated(): void {
   populated = true;
