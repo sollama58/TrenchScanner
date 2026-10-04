@@ -162,3 +162,24 @@ describe("OnDemandLiveRefresher live tick", () => {
     expect(await refresher().refreshAndWait([fresh], { maxAgeMs: 8_000, timeoutMs: 50 })).toBe(false);
   });
 });
+
+describe("OnDemandLiveRefresher stats", () => {
+  it("counts lookups, tokens asked for, and what was served", async () => {
+    const r = new OnDemandLiveRefresher(
+      { getTokensByAddresses: async () => [] } as unknown as DexScreenerClient,
+      { maxAgeMs: MINUTE, limit: 12, callsPerMinute: 1 },
+    );
+    await r.refresh([token("A", null), token("B", null)]);
+    await r.refresh([token("C", null)]);
+    r.noteServed(4_000);
+    expect(r.stats()).toMatchObject({
+      lookups: 1,
+      tokens: 2,
+      updated: 0,
+      overBudget: 1,
+      callsLastMinute: 1,
+      lookupMs: { sample: 1 },
+      servedOldestAgeMs: { p50: 4_000, sample: 1 },
+    });
+  });
+});

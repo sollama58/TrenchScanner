@@ -60,7 +60,21 @@ export class OnDemandLiveRefresher {
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly attemptedAt = new Map<string, number>();
   private readonly calls: number[] = [];
-  private readonly counters = { lookups: 0, tokens: 0, failures: 0, overBudget: 0, since: new Date() };
+  /**
+   * Since start: lookups made, tokens asked for and how many came back with data (the gap is
+   * what DexScreener had nothing for, or a call that failed inside the client), lookups that
+   * threw, and refreshes skipped for budget.
+   */
+  private readonly counters = {
+    lookups: 0,
+    tokens: 0,
+    updated: 0,
+    failures: 0,
+    overBudget: 0,
+    since: new Date(),
+  };
+  /** Age (ms) of the oldest reading in each live tick answer, newest last - see noteServed. */
+  private readonly served: number[] = [];
   /** The latest lookups' durations (ms), newest last - for /stats/live. */
   private readonly durations: number[] = [];
 
@@ -125,14 +139,26 @@ export class OnDemandLiveRefresher {
     if (!this.takeBudget(Math.ceil(due.length / ADDRESSES_PER_CALL), now)) return null;
 
     for (const token of due) this.attemptedAt.set(token.mintAddress, now);
+    const startedAt = Date.now();
+    this.counters.lookups += 1;
+    this.counters.tokens += due.length;
     const lookup = refreshLiveMarketData(this.dexScreener, due, {
       peakWindowDays: this.options.peakWindowDays,
     })
-      .then((result) => {
-        logger.debug("on-demand live refresh", { requested: result.requested, updated: result.updated });
-        return result.requested;
-      })
+      .then(
+        (result) => {
+          this.counters.updated += result.updated;
+          logger.debug("on-demand live refresh", { requested: result.requested, updated: result.updated });
+          return result.requested;
+        },
+        (err: unknown) => {
+          this.counters.failures += 1;
+          throw err;
+        },
+      )
       .finally(() => {
+        this.durations.push(Date.now() - startedAt);
+        if (this.durations.length > MAX_DURATIONS) this.durations.shift();
         for (const token of due) {
           if (this.inFlight.get(token.mintAddress) === lookup) this.inFlight.delete(token.mintAddress);
         }
@@ -181,16 +207,23 @@ export class OnDemandLiveRefresher {
     return true;
   }
 
+  /**
+   * Records how old the stalest reading in one live tick answer was - what a reader actually saw,
+   * as opposed to how fast lookups are.
+   */
+  noteServed(oldestAgeMs: number): void {
+    this.served.push(oldestAgeMs);
+    if (this.served.length > MAX_DURATIONS) this.served.shift();
+  }
+
   /** What this process's refresher has done since it started - served on /stats/live. */
   stats() {
-    const sorted = [...this.durations].sort((a, b) => a - b);
-    const at = (q: number) =>
-      sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]! : null;
     return {
       ...this.counters,
       callsLastMinute: this.calls.filter((t) => Date.now() - t < BUDGET_WINDOW_MS).length,
       callsPerMinuteBudget: this.options.callsPerMinute ?? null,
-      lookupMs: { p50: at(0.5), p95: at(0.95), max: sorted.at(-1) ?? null, sample: sorted.length },
+      lookupMs: percentiles(this.durations),
+      servedOldestAgeMs: percentiles(this.served),
     };
   }
 
@@ -200,4 +233,12 @@ export class OnDemandLiveRefresher {
       if (now - at >= this.options.maxAgeMs) this.attemptedAt.delete(mint);
     }
   }
+}
+
+/** p50/p95/max of a sample, null when empty. */
+function percentiles(values: readonly number[]) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = (q: number) =>
+    sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]! : null;
+  return { p50: at(0.5), p95: at(0.95), max: sorted.at(-1) ?? null, sample: sorted.length };
 }
