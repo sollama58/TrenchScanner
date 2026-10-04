@@ -223,26 +223,31 @@ export async function registerStatsRoutes(
     { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
     async (_request, reply) => {
       reply.header("cache-control", "no-store");
-      const [ages] = await prisma.$queryRaw<
-        { viewed: bigint; withReading: bigint; p50: number | null; p95: number | null; max: number | null }[]
-      >`
-        SELECT count(*) AS viewed,
-               count("liveDataAt") AS "withReading",
-               percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM now() - "liveDataAt")) AS p50,
-               percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM now() - "liveDataAt")) AS p95,
-               max(extract(epoch FROM now() - "liveDataAt"))::float8 AS max
-        FROM "Token"
-        WHERE "lastViewedAt" > now() - interval '2 minutes'`;
-      const round = (v: number | null | undefined) =>
-        v === null || v === undefined ? null : Math.round(v * 10) / 10;
-      return {
-        viewedLast2Min: Number(ages?.viewed ?? 0),
-        withLiveReading: Number(ages?.withReading ?? 0),
-        readingAgeSeconds: { p50: round(ages?.p50), p95: round(ages?.p95), max: round(ages?.max) },
-        refresher: opts.liveRefresher?.stats() ?? null,
-      };
+      return buildLiveFreshnessReport(opts.liveRefresher);
     },
   );
+}
+
+/** The /stats/live report; the admin panel's API section shows the same figures. */
+export async function buildLiveFreshnessReport(liveRefresher?: OnDemandLiveRefresher) {
+  const [ages] = await prisma.$queryRaw<
+    { viewed: bigint; withReading: bigint; p50: number | null; p95: number | null; max: number | null }[]
+  >`
+    SELECT count(*) AS viewed,
+           count("liveDataAt") AS "withReading",
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM now() - "liveDataAt")) AS p50,
+           percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM now() - "liveDataAt")) AS p95,
+           max(extract(epoch FROM now() - "liveDataAt"))::float8 AS max
+    FROM "Token"
+    WHERE "lastViewedAt" > now() - interval '2 minutes'`;
+  const round = (v: number | null | undefined) =>
+    v === null || v === undefined ? null : Math.round(v * 10) / 10;
+  return {
+    viewedLast2Min: Number(ages?.viewed ?? 0),
+    withLiveReading: Number(ages?.withReading ?? 0),
+    readingAgeSeconds: { p50: round(ages?.p50), p95: round(ages?.p95), max: round(ages?.max) },
+    refresher: liveRefresher?.stats() ?? null,
+  };
 }
 
 /** Exported for the route test; the route above is the only caller in production. */

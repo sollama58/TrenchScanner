@@ -38,7 +38,14 @@ const EXPECTED: Partial<Record<keyof Env, string>> = {
 };
 
 /** Never allowed out of this endpoint, whatever else changes. */
-const SECRETS: (keyof Env)[] = ["JWT_SECRET", "HELIUS_API_KEY", "DATABASE_URL"];
+const SECRETS: (keyof Env)[] = [
+  "JWT_SECRET",
+  "HELIUS_API_KEY",
+  "DATABASE_URL",
+  "ANTHROPIC_API_KEY",
+  "STATS_API_TOKEN",
+  "SOLANA_RPC_URL",
+];
 
 const ADMIN_WALLET = "AdminWallet11111111111111111111111111111111";
 

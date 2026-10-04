@@ -207,6 +207,46 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       // deliberate choice that was never made.
       databaseConnectionLimit: env.DATABASE_CONNECTION_LIMIT ?? null,
       databasePoolTimeoutSeconds: env.DATABASE_POOL_TIMEOUT_SECONDS,
+      // The rest of what the admin panel's Config section shows: alert cadence, retention, the
+      // models' training and contest knobs, and the AI reviewer. Settings only, no credentials.
+      workerRole: env.WORKER_ROLE,
+      fastMatchIntervalSeconds: env.FAST_MATCH_INTERVAL_SECONDS,
+      matchAlertGuard: env.MATCH_ALERT_GUARD,
+      pumpPortalTradeFlow: env.PUMPPORTAL_TRADE_FLOW,
+      rugCheckMaxLookupsPerCycle: env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
+      walletFreshnessMaxLookupsPerCycle: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
+      walletHoldingsMaxLookupsPerCycle: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
+      walletHoldingsCacheTtlMinutes: env.WALLET_HOLDINGS_CACHE_TTL_MINUTES,
+      snapshotUntrackedRetentionHours: env.SNAPSHOT_UNTRACKED_RETENTION_HOURS,
+      snapshotDownsampleAfterDays: env.SNAPSHOT_DOWNSAMPLE_AFTER_DAYS,
+      walletHoldingsCacheRetentionHours: env.WALLET_HOLDINGS_CACHE_RETENTION_HOURS,
+      candidateOutcomeRetentionDays: env.CANDIDATE_OUTCOME_RETENTION_DAYS,
+      candidateEntryDelaySeconds: env.CANDIDATE_ENTRY_DELAY_SECONDS,
+      curatedTargetWinRatePct: env.CURATED_TARGET_WIN_RATE_PCT,
+      curatedTargetGoalRatePct: env.CURATED_TARGET_GOAL_RATE_PCT,
+      curatedTargetPerHour: env.CURATED_TARGET_PER_HOUR,
+      curatedAlertCooldownHours: env.CURATED_ALERT_COOLDOWN_HOURS,
+      curatorTrainingIntervalHours: env.CURATOR_TRAINING_INTERVAL_HOURS,
+      curatorTrainingWindowDays: env.CURATOR_TRAINING_WINDOW_DAYS,
+      curatorTrainingMaxRows: env.CURATOR_TRAINING_MAX_ROWS,
+      curatorContestants: env.CURATOR_CONTESTANTS,
+      curatorEvolutionChallengers: env.CURATOR_EVOLUTION_CHALLENGERS,
+      curatorChampionMinLiveGraded: env.CURATOR_CHAMPION_MIN_LIVE_GRADED,
+      aiReviewMode: env.AI_REVIEW_MODE,
+      aiReviewModel: env.AI_REVIEW_MODEL,
+      aiPlaybookEvolution: env.AI_PLAYBOOK_EVOLUTION,
+      aiTextFeatures: env.AI_TEXT_FEATURES,
+      aiTextMaxPerHour: env.AI_TEXT_MAX_PER_HOUR,
+      // Whether each credential is configured - never the value itself.
+      credentialsSet: {
+        heliusApiKey: env.HELIUS_API_KEY.length > 0,
+        anthropicApiKey: env.ANTHROPIC_API_KEY.length > 0,
+        statsApiToken: env.STATS_API_TOKEN.length > 0,
+        solanaRpcUrl: env.SOLANA_RPC_URL.length > 0,
+      },
+      adminWallets: env.ADMIN_WALLET_ADDRESSES.split(",")
+        .map((a) => a.trim())
+        .filter(Boolean),
     };
   });
 }

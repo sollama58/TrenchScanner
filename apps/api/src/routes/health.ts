@@ -73,35 +73,42 @@ export async function registerHealthRoutes(app: FastifyInstance) {
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
 
-    return {
-      jobs: heartbeats.map((h) => {
-        const threshold = STALE_THRESHOLD_MS[h.job] ?? DEFAULT_STALE_THRESHOLD_MS;
-        // A run in flight for longer than the stale threshold is a hung run, not a slow one -
-        // reported separately because "last finished Sep 21, running since 20:33" and "last
-        // finished Sep 21, nothing running" call for different fixes.
-        const runningSince = runningSinceFrom(h.meta);
-        const runningForMs = runningSince ? now - runningSince.getTime() : null;
-        return {
-          job: h.job,
-          // Which worker process owns the job (render.yaml runs a scanner and a trainer), so a
-          // stale row says which of the two to look at. Null for a job name this build no
-          // longer knows (a row left behind by an older worker).
-          role: HEARTBEAT_JOB_ROLE[h.job as HeartbeatJob] ?? null,
-          lastRunAt: h.lastRunAt,
-          lastSuccessAt: h.lastSuccessAt,
-          lastError: h.lastError ? h.lastError.slice(0, MAX_ERROR_LENGTH) : null,
-          stale: now - h.lastRunAt.getTime() > threshold,
-          runningForMs,
-          hung: runningForMs !== null && runningForMs > threshold,
-          // How long the last run took, and for the scan cycle where that time went - timings
-          // only, nothing about tokens or users.
-          lastRun: lastRunSummary(h.meta),
-          // While a run is in flight, the stages it has finished so far - see recordRunProgress.
-          runningStagesMs: runningSince ? stageTimings(h.meta, "runningStagesMs") : null,
-        };
-      }),
-    };
+    return { jobs: heartbeats.map((h) => summarizeHeartbeat(h, now)) };
   });
+}
+
+type HeartbeatRow = Awaited<ReturnType<typeof prisma.systemHeartbeat.findMany>>[number];
+
+/**
+ * One job's row as /health/worker reports it. The admin panel's /admin/worker passes
+ * `fullError` for the untruncated message - it is behind the admin gate, this route is public.
+ */
+export function summarizeHeartbeat(h: HeartbeatRow, now: number, opts: { fullError?: boolean } = {}) {
+  const threshold = STALE_THRESHOLD_MS[h.job] ?? DEFAULT_STALE_THRESHOLD_MS;
+  // A run in flight for longer than the stale threshold is a hung run, not a slow one -
+  // reported separately because "last finished Sep 21, running since 20:33" and "last
+  // finished Sep 21, nothing running" call for different fixes.
+  const runningSince = runningSinceFrom(h.meta);
+  const runningForMs = runningSince ? now - runningSince.getTime() : null;
+  return {
+    job: h.job,
+    // Which worker process owns the job (render.yaml runs a scanner and a trainer), so a
+    // stale row says which of the two to look at. Null for a job name this build no
+    // longer knows (a row left behind by an older worker).
+    role: HEARTBEAT_JOB_ROLE[h.job as HeartbeatJob] ?? null,
+    lastRunAt: h.lastRunAt,
+    lastSuccessAt: h.lastSuccessAt,
+    lastError: h.lastError ? (opts.fullError ? h.lastError : h.lastError.slice(0, MAX_ERROR_LENGTH)) : null,
+    stale: now - h.lastRunAt.getTime() > threshold,
+    staleAfterMs: threshold,
+    runningForMs,
+    hung: runningForMs !== null && runningForMs > threshold,
+    // How long the last run took, and for the scan cycle where that time went - timings
+    // only, nothing about tokens or users.
+    lastRun: lastRunSummary(h.meta),
+    // While a run is in flight, the stages it has finished so far - see recordRunProgress.
+    runningStagesMs: runningSince ? stageTimings(h.meta, "runningStagesMs") : null,
+  };
 }
 
 /** The timing and call-count fields of a heartbeat's meta, and nothing else it might carry. */

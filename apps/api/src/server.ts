@@ -26,6 +26,7 @@ import { registerCuratedRoutes } from "./routes/curated.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
+import { registerAdminOpsRoutes } from "./routes/adminOps.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
@@ -440,6 +441,15 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     async (instance) => {
       instance.addHook("preHandler", instance.authenticateAdmin);
       await registerAdminSubscriptionRoutes(instance);
+    },
+    { prefix: "/admin" },
+  );
+  // The dashboard Admin tab's operational reads (worker, hit rates, database, API, AI) - the
+  // /stats reports behind the admin wallet check instead of the script token. See routes/adminOps.ts.
+  await app.register(
+    async (instance) => {
+      instance.addHook("preHandler", instance.authenticateAdmin);
+      await registerAdminOpsRoutes(instance, { env, timings, liveRefresher });
     },
     { prefix: "/admin" },
   );
