@@ -24,7 +24,8 @@ import {
   type ContestantSpec,
   type CuratorRecipe,
 } from "./contestants.js";
-import { emptyRecord, type CallRecord } from "./leaderboard.js";
+import { emptyRecord, recordScore, type CallRecord } from "./leaderboard.js";
+import type { Challenger, Replacement } from "./evolution.js";
 import { trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
 
 /**
@@ -88,6 +89,8 @@ export interface StoredEvalMetrics {
   heuristicPrecisionCurve: PrecisionCurvePoint[];
   /** The contestant this row belongs to (contest runs only). */
   contestant?: string;
+  /** The name it trained under - an evolving seat's name changes with its recipe. */
+  contestantName?: string;
   /** The exam's governed call record - what the leaderboard scores before live calls exist. */
   exam?: CallRecord;
 }
@@ -283,65 +286,158 @@ export interface ContestTrainingConfig extends Omit<CuratorTrainingConfig, "lear
   contestants: readonly ContestantSpec[];
 }
 
+/** A learner's exam, packaged: its stored result plus the rank arrays the consensus stacks on. */
+interface LearnerExam {
+  result: ContestantTrainingResult;
+  examScore: number | null;
+  evaluation: WalkForwardResult;
+  /** Out-of-sample fold probabilities and the shipped model's probabilities, per reference row. */
+  foldRanks: Float64Array | null;
+  shipped: Float64Array | null;
+}
+
+async function examineLearner(
+  rows: TrainingRow[],
+  cfg: ContestTrainingConfig,
+  slot: string,
+  name: string,
+  recipe: CuratorRecipe,
+  reference: TrainingRow[] | null,
+): Promise<LearnerExam> {
+  const exam = await examineRecipe(rows, cfg, recipe);
+  const { evaluation, trained, deployedThreshold } = exam;
+  const verdict = verdictWithCutoff(exam);
+  const record = foldsRecord(evaluation.folds, "model");
+  const result: ContestantTrainingResult = {
+    contestant: slot,
+    params: { ...trained, threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD } as TrainedCuratorParams,
+    metrics: {
+      contestant: slot,
+      contestantName: name,
+      folds: evaluation.folds,
+      verdict: { ...verdict, reason: `${name}: ${verdict.reason}` },
+      targets: cfg.targets,
+      learner: recipe.learner,
+      precisionCalibration: exam.result.precisionCalibration,
+      precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
+      heuristicPrecisionCurve: [],
+      exam: record,
+    },
+  };
+  // Every learner's exam cuts the same rows into the same folds, so their reference rows (and
+  // so their rank arrays) line up one to one; checked rather than assumed.
+  const ref = reference ?? evaluation.decisionReference;
+  const aligned =
+    ref.length > 0 &&
+    evaluation.decisionReference.length === ref.length &&
+    evaluation.decisionReference.every((r, i) => r === ref[i]);
+  return {
+    result,
+    examScore: recordScore(record, cfg.targets),
+    evaluation,
+    foldRanks: aligned ? Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability) : null,
+    shipped: aligned ? Float64Array.from(ref, (r) => scoreCandidateWithModel(trained, r.features)) : null,
+  };
+}
+
+/**
+ * How a run evolves the field (curation/evolution.ts): the challengers bred for it, and the rule
+ * that picks a takeover once every exam is in.
+ */
+export interface EvolutionPlan {
+  challengers: readonly Challenger[];
+  decide: (
+    laneExamScores: Map<string, number | null>,
+    challengerScores: (number | null)[],
+  ) => Replacement | null;
+}
+
+export interface ContestRunOutcome {
+  /** One per contestant, in roster order - the takeover already applied to its seat. */
+  results: ContestantTrainingResult[];
+  challengerScores: (number | null)[];
+  /** The takeover this run made, if any. */
+  replacement: (Replacement & { bred: Challenger; examScore: number | null }) | null;
+}
+
 /**
  * One contest training run, minus the IO: every learner contestant sits the same walk-forward
  * exam and ships its own model at its own hit-rate cutoff; the rules contestant gets its cutoff
  * from the same exam; then the consensus is stacked on the learners' out-of-sample calls. Results
  * come back in roster order, one per enabled contestant that had anything to train.
  *
- * Learners train one after another and only their rank arrays are kept between them, so peak
- * memory is one model's working set however many contestants run; time grows linearly.
+ * With an evolution plan, the run's challengers sit the same exam after the lanes; a takeover
+ * swaps the winning challenger into its seat BEFORE the consensus is stacked, so the consensus
+ * always learns the lineup that will actually call.
+ *
+ * Learners train one after another and only their rank arrays (plus the best challenger so far)
+ * are kept between them, so peak memory is about two models' working sets however many
+ * contestants and challengers run; time grows linearly.
  */
-export async function runContestTraining(
+export async function runEvolvingContest(
   rows: TrainingRow[],
   cfg: ContestTrainingConfig,
-): Promise<ContestantTrainingResult[]> {
+  plan?: EvolutionPlan,
+): Promise<ContestRunOutcome> {
   const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
   const results: ContestantTrainingResult[] = [];
   const foldRanks = new Map<string, Float64Array>();
   const shippedProbabilities = new Map<string, Float64Array>();
+  const laneExamScores = new Map<string, number | null>();
   let reference: TrainingRow[] | null = null;
   let rulesEvidence: { folds: EvalFold[]; heuristicOutOfSample: ScoredOutcome[] } | null = null;
 
+  const keep = (slot: string, exam: LearnerExam) => {
+    if (exam.foldRanks && exam.shipped) {
+      foldRanks.set(slot, exam.foldRanks);
+      shippedProbabilities.set(slot, exam.shipped);
+    } else {
+      foldRanks.delete(slot);
+      shippedProbabilities.delete(slot);
+    }
+  };
+
   for (const spec of cfg.contestants) {
     if (spec.role !== "learner" || !spec.recipe) continue;
-    const exam = await examineRecipe(rows, cfg, spec.recipe);
-    const { evaluation, trained, deployedThreshold } = exam;
-    const verdict = verdictWithCutoff(exam);
-    results.push({
-      contestant: spec.id,
-      params: { ...trained, threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD } as TrainedCuratorParams,
-      metrics: {
-        contestant: spec.id,
-        folds: evaluation.folds,
-        verdict: { ...verdict, reason: `${spec.name}: ${verdict.reason}` },
-        targets: cfg.targets,
-        learner: spec.recipe.learner,
-        precisionCalibration: exam.result.precisionCalibration,
-        precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
-        heuristicPrecisionCurve: [],
-        exam: foldsRecord(evaluation.folds, "model"),
-      },
-    });
-
-    // Every learner's exam cuts the same rows into the same folds, so their reference rows (and
-    // so their rank arrays) line up one to one; checked rather than assumed.
+    const exam = await examineLearner(rows, cfg, spec.id, spec.name, spec.recipe, reference);
     if (reference === null) {
-      reference = evaluation.decisionReference;
-      rulesEvidence = { folds: evaluation.folds, heuristicOutOfSample: evaluation.heuristicOutOfSample };
+      reference = exam.evaluation.decisionReference;
+      rulesEvidence = {
+        folds: exam.evaluation.folds,
+        heuristicOutOfSample: exam.evaluation.heuristicOutOfSample,
+      };
     }
-    const aligned =
-      evaluation.decisionReference.length === reference.length &&
-      evaluation.decisionReference.every((r, i) => r === reference![i]);
-    if (aligned && reference.length > 0) {
-      foldRanks.set(
-        spec.id,
-        Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability),
-      );
-      shippedProbabilities.set(
-        spec.id,
-        Float64Array.from(reference, (r) => scoreCandidateWithModel(trained, r.features)),
-      );
+    results.push(exam.result);
+    laneExamScores.set(spec.id, exam.examScore);
+    keep(spec.id, exam);
+  }
+
+  const challengerScores: (number | null)[] = [];
+  let bestChallenger: { index: number; exam: LearnerExam } | null = null;
+  for (const [i, bred] of (plan?.challengers ?? []).entries()) {
+    const exam = await examineLearner(rows, cfg, "", bred.name, bred.recipe, reference);
+    challengerScores.push(exam.examScore);
+    if (
+      exam.examScore !== null &&
+      (bestChallenger === null || exam.examScore > bestChallenger.exam.examScore!)
+    ) {
+      bestChallenger = { index: i, exam };
+    }
+  }
+  let replacement: ContestRunOutcome["replacement"] = null;
+  const decided = plan && challengerScores.length > 0 ? plan.decide(laneExamScores, challengerScores) : null;
+  if (decided && bestChallenger && decided.challenger === bestChallenger.index) {
+    const { exam } = bestChallenger;
+    const slot = decided.slot;
+    const seat = results.findIndex((r) => r.contestant === slot);
+    if (seat !== -1) {
+      results[seat] = {
+        contestant: slot,
+        params: exam.result.params,
+        metrics: { ...exam.result.metrics, contestant: slot },
+      };
+      keep(slot, exam);
+      replacement = { ...decided, bred: plan!.challengers[decided.challenger]!, examScore: exam.examScore };
     }
   }
 
@@ -362,6 +458,7 @@ export async function runContestTraining(
       },
       metrics: {
         contestant: rulesSpec.id,
+        contestantName: rulesSpec.name,
         folds: rulesEvidence.folds,
         verdict: { promote: false, reason: `${rulesSpec.name}: the hand-tuned gate, held to its own cutoff` },
         targets: cfg.targets,
@@ -395,6 +492,7 @@ export async function runContestTraining(
         params: stacked.params,
         metrics: {
           contestant: stackedSpec.id,
+          contestantName: stackedSpec.name,
           folds: [],
           verdict: {
             promote: false,
@@ -412,7 +510,16 @@ export async function runContestTraining(
 
   // Roster order, so storage and logs read the same way the leaderboard lists them.
   const order = new Map(cfg.contestants.map((c, i) => [c.id, i]));
-  return results.sort((a, b) => order.get(a.contestant)! - order.get(b.contestant)!);
+  results.sort((a, b) => order.get(a.contestant)! - order.get(b.contestant)!);
+  return { results, challengerScores, replacement };
+}
+
+/** A contest run with a fixed field - no challengers (offline scripts, tests). */
+export async function runContestTraining(
+  rows: TrainingRow[],
+  cfg: ContestTrainingConfig,
+): Promise<ContestantTrainingResult[]> {
+  return (await runEvolvingContest(rows, cfg)).results;
 }
 
 /**

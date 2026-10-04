@@ -106,6 +106,7 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     // Every test leaves the registry empty - a leftover ACTIVE row would silently change what
     // the other emission tests (and a locally-running worker) curate with.
     await prisma.curatorModel.deleteMany({});
+    await prisma.curatorLane.deleteMany({});
     resetCuratorModelCache();
   });
 
@@ -134,6 +135,73 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     expect(firstRules.status).toBe("retired");
     expect(secondLinear).toMatchObject({ status: "active", contestant: "linear", kind: CURATOR_MODEL_KIND });
     expect(secondLinear.activatedAt).not.toBeNull();
+  });
+
+  it("seats founding lanes, and a takeover retires the seat's lane for the bred one", async () => {
+    const bornAt = new Date(Date.now() - 86_400_000);
+    await applyContestResults([result("linear", handParams(0.5))], 2_000, new Date(), {
+      founding: [
+        {
+          slot: "linear",
+          name: "Linear",
+          description: "founding",
+          recipe: { learner: "logistic" },
+          generation: 0,
+          parentName: null,
+          bornAt,
+        },
+      ],
+    });
+    await applyContestResults([result("linear", handParams(0.5))], 2_000, new Date(), {
+      replacement: {
+        slot: "linear",
+        challenger: 0,
+        reason: "exam 40 vs 30",
+        examScore: 40,
+        bred: {
+          recipe: { learner: "gbdt", recencyHalfLifeDays: 3 },
+          name: "Trees Recent #1",
+          description: "bred",
+          generation: 1,
+          parentName: "Trees",
+        },
+      },
+    });
+    const lanes = await prisma.curatorLane.findMany({
+      where: { slot: "linear" },
+      orderBy: { generation: "asc" },
+    });
+    expect(lanes).toHaveLength(2);
+    expect(lanes[0]).toMatchObject({ name: "Linear", generation: 0 });
+    expect(lanes[0]!.retiredAt).not.toBeNull();
+    expect(lanes[0]!.retiredReason).toContain("Replaced by Trees Recent #1");
+    expect(lanes[1]).toMatchObject({
+      name: "Trees Recent #1",
+      retiredAt: null,
+      examScore: 40,
+      parentName: "Trees",
+    });
+  });
+
+  it("stores the seat's current name on the calls it makes", async () => {
+    await applyContestResults([result("linear", handParams(0.9))], 2_000, new Date(), {
+      founding: [
+        {
+          slot: "linear",
+          name: "Lean Linear #7",
+          description: "bred",
+          recipe: { learner: "logistic" },
+          generation: 7,
+          parentName: "Linear",
+          bornAt: new Date(),
+        },
+      ],
+    });
+    resetCuratorModelCache();
+    const hot = await prisma.token.create({ data: { mintAddress: `${TAG}-lane-name` } });
+    expect(await collectAndEmit(loadEnv(), hot, scoredWithTotal(hot.mintAddress, 90))).toBe(true);
+    const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: hot.id } });
+    expect(alert).toMatchObject({ model: "linear", modelName: "Lean Linear #7" });
   });
 
   it("writes the consensus after its members, pointing at their new rows", async () => {

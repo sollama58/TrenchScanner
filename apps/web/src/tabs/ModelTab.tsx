@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   api,
   put,
+  type EvolutionEvent,
   type GradedRates,
   type Leaderboard,
   type LeaderboardEntry,
@@ -26,7 +27,8 @@ const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
 /**
  * The Model tab: the curator contest. Several models train on the same graded history, each calls
  * on its own feed, a leaderboard ranks them on one composite score, and the Consensus learns from
- * the rest. The AI reviewer sits at the bottom, collapsed - it is a later focus.
+ * the rest. The field evolves: each run breeds challengers from the leaders, and the best one
+ * takes the weakest seat when it clearly out-examines it. The AI reviewer sits at the bottom, collapsed - it is a later focus.
  */
 export function ModelTab() {
   const now = useNow(60_000);
@@ -87,9 +89,10 @@ export function ModelTab() {
             </h2>
             <p className="muted">
               Each one trains on the same graded history every few hours, makes its own calls on its own feed,
-              and is graded the same way: {data.rules.win}. The <strong>Consensus</strong> doesn't read the
-              market directly; it learns how far to trust each of the others. Your feed shows{" "}
-              <strong>{selected?.name ?? "–"}</strong>
+              and is graded the same way: {data.rules.win}. The field evolves: every run breeds new variants
+              of the leaders, and a variant that clearly beats the weakest model takes its seat. The{" "}
+              <strong>Consensus</strong> doesn't read the market directly; it learns how far to trust each of
+              the others. Your feed shows <strong>{selected?.name ?? "–"}</strong>
               {lb.followsDefault ? " (the default)" : ""}.
               {leader && leader.composite.score !== null && (
                 <>
@@ -145,7 +148,9 @@ export function ModelTab() {
         </p>
       </section>
 
-      <LeaderboardPanel board={lb} days={days} onUse={useModel} />
+      <LeaderboardPanel board={lb} days={days} onUse={useModel} now={now} />
+
+      <EvolutionPanel board={lb} now={now} />
 
       <HowItWorks board={lb} />
 
@@ -224,10 +229,12 @@ function LeaderboardPanel({
   board,
   days,
   onUse,
+  now,
 }: {
   board: Leaderboard;
   days: number;
   onUse: (id: string | null) => Promise<void>;
+  now: number;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const use = async (id: string | null) => {
@@ -287,6 +294,11 @@ function LeaderboardPanel({
                     <small className="muted">
                       {ROLE_LABEL[e.role]} · {e.description}
                     </small>
+                    {e.lane && e.lane.generation > 0 && (
+                      <small className="faint lineage">
+                        In this seat since {ago(e.lane.bornAt, now)}; live record counts from then
+                      </small>
+                    )}
                   </td>
                   <td>
                     <ScoreBar score={e.composite.score} liveWeight={e.composite.liveWeight} />
@@ -392,11 +404,77 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           {board.scoring.livePivotCalls}).
         </li>
         <li>
+          <strong>Evolve.</strong> Every run also breeds {board.evolution.challengersPerRun} challenger
+          {board.evolution.challengersPerRun === 1 ? "" : "s"}: copies of the top half's recipes with one or
+          two settings changed (memory, depth, learning rate, which signals it reads), sometimes crossed with
+          another leader. They sit the same exam. When the best one beats the weakest model's exam by{" "}
+          {board.evolution.margin} points, it takes that seat under a new name and starts a fresh live record.
+          A model holds its seat at least {board.evolution.minAgeHours} hours first.
+        </li>
+        <li>
           <strong>Consensus.</strong> A second-order model trained on the others' out-of-sample calls: it
           learns which models to trust and when they agree, and gets its own exam on later weeks than it
           trained on. It's the default feed once its exam gives it a cutoff; until then the default is Rules.
         </li>
       </ol>
+    </section>
+  );
+}
+
+function EvolutionPanel({ board, now }: { board: Leaderboard; now: number }) {
+  const ev = board.evolution;
+  const takeovers = ev.history.filter((h) => h.generation > 0);
+  const best = takeovers.reduce<EvolutionEvent | null>(
+    (b, h) => (h.examScore !== null && (b === null || h.examScore > (b.examScore ?? -1)) ? h : b),
+    null,
+  );
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">Evolution</span>
+          <h3>How the field is changing</h3>
+          <p className="muted small">
+            {ev.challengersPerRun === 0
+              ? "Evolution is paused: the field trains as it is."
+              : `Every ${ev.runEveryHours}h, ${ev.challengersPerRun} bred challenger${
+                  ev.challengersPerRun === 1 ? "" : "s"
+                } sit the exam. At most one takes a seat per run.`}
+          </p>
+        </div>
+        {best && (
+          <div className="evo-best">
+            <span className="faint small">Best bred exam</span>
+            <strong className="num">{best.examScore!.toFixed(0)}</strong>
+            <small className="muted">{best.name}</small>
+          </div>
+        )}
+      </header>
+      {takeovers.length === 0 ? (
+        <p className="muted small">
+          No takeovers yet. The founding models hold their seats for at least {ev.minAgeHours} hours, then the
+          weakest can be replaced by a challenger that beats its exam by {ev.margin} points.
+        </p>
+      ) : (
+        <ol className="evo-list">
+          {takeovers.map((h) => (
+            <li key={`${h.slot}:${h.generation}`} className={h.retiredAt ? "retired" : ""}>
+              <div className="row">
+                <strong>{h.name}</strong>
+                <span className={`chip ${h.retiredAt ? "" : "chip-model"}`}>
+                  {h.retiredAt ? `replaced ${ago(h.retiredAt, now)}` : "holding a seat"}
+                </span>
+                <span className="faint small">seated {ago(h.bornAt, now)}</span>
+                {h.examScore !== null && (
+                  <span className="faint small num">exam {h.examScore.toFixed(0)}</span>
+                )}
+              </div>
+              <small className="muted">{h.description}</small>
+              {h.retiredReason && <small className="faint">{h.retiredReason}</small>}
+            </li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }

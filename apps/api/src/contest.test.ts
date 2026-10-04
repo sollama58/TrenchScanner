@@ -43,6 +43,7 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.curatorModel.deleteMany({ where: { id: { in: modelIds } } });
+    await prisma.curatorLane.deleteMany({ where: { slot: "trees" } });
     resetContestStateCache();
   });
 
@@ -134,5 +135,66 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     expect(rules.composite.live).toMatchObject({ calls: 3, graded: 2, winRatePct: 50, goalRatePct: 50 });
     expect(rules.composite.live.avgReturnDoublings).toBe(1);
     expect(board.entries.map((e) => e.rank)).toEqual(board.entries.map((_, i) => i + 1));
+  });
+
+  it("shows an evolved seat under its lane's name, with a live record from its takeover on", async () => {
+    await retireAll();
+    await prisma.curatorLane.deleteMany({ where: { slot: "trees" } });
+    const takeover = new Date(Date.now() - 3_600_000);
+    await prisma.curatorLane.createMany({
+      data: [
+        {
+          slot: "trees",
+          name: "Trees",
+          description: "founding",
+          recipe: { learner: "gbdt" },
+          generation: 0,
+          bornAt: new Date(Date.now() - 5 * 86_400_000),
+          retiredAt: takeover,
+          retiredReason: "Replaced by Deep Trees #3: test",
+        },
+        {
+          slot: "trees",
+          name: "Deep Trees #3",
+          description: "bred",
+          recipe: { learner: "gbdt", boosting: { maxDepth: 5 } },
+          generation: 3,
+          parentName: "Trees",
+          examScore: 41,
+          bornAt: takeover,
+        },
+      ],
+    });
+    resetContestStateCache();
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-lane` } });
+    const base = {
+      tokenId: token.id,
+      model: "trees",
+      source: "x",
+      confidence: 90,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 100_000,
+      hit2xIn1h: true,
+      hit4xIn1h: false,
+      disqualified: false,
+      peak1hReturnPct: 120,
+    };
+    await prisma.curatedAlert.createMany({
+      data: [
+        // The founding recipe's call - not the new lane's record.
+        { ...base, createdAt: new Date(takeover.getTime() - 60_000) },
+        { ...base, hit2xIn1h: false, peak1hReturnPct: 10 },
+      ],
+    });
+
+    const state = await contestState(env);
+    expect(state.roster.find((c) => c.id === "trees")?.name).toBe("Deep Trees #3");
+    const board = await buildLeaderboard(env, 30);
+    const trees = board.entries.find((e) => e.id === "trees")!;
+    expect(trees).toMatchObject({ name: "Deep Trees #3", lane: { generation: 3, parentName: "Trees" } });
+    expect(trees.composite.live).toMatchObject({ calls: 1, graded: 1, winRatePct: 0 });
+    expect(board.evolution.history.map((h) => h.name)).toEqual(
+      expect.arrayContaining(["Deep Trees #3", "Trees"]),
+    );
   });
 });

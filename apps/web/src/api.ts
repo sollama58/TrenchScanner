@@ -357,6 +357,20 @@ export interface LeaderboardEntry {
   status: "calling" | "silent" | "untrained";
   composite: { score: number | null; liveWeight: number; live: RecordSummary; exam: RecordSummary };
   model: { id: string; trainedAt: string; trainingRows: number; cutoffMeetsTargets: boolean | null } | null;
+  /** Evolving seats: the recipe holding the seat now (generation 0 = a founding recipe). */
+  lane: { generation: number; parentName: string | null; bornAt: string } | null;
+}
+
+export interface EvolutionEvent {
+  slot: string;
+  name: string;
+  description: string;
+  generation: number;
+  parentName: string | null;
+  examScore: number | null;
+  bornAt: string;
+  retiredAt: string | null;
+  retiredReason: string | null;
 }
 
 export interface Leaderboard {
@@ -373,4 +387,11 @@ export interface Leaderboard {
   /** True when the user hasn't picked one (their feed follows the default). */
   followsDefault: boolean;
   entries: LeaderboardEntry[];
+  evolution: {
+    challengersPerRun: number;
+    minAgeHours: number;
+    margin: number;
+    runEveryHours: number;
+    history: EvolutionEvent[];
+  };
 }

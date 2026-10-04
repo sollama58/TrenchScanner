@@ -262,6 +262,9 @@ model CuratedAlert {
   /// on its own feed, governed and graded separately - the leaderboard is built from these.
   /// Null only on rows written before the contest existed (the migration backfilled those).
   model      String?
+  /// The name the model held when it made this call. Evolving seats change recipe and name
+  /// (CuratorLane), so the card keeps showing who actually called it.
+  modelName  String?
   /// The curator's conviction at emission, 0-100.
   confidence Float
   /// Why, as short human-readable strings - the top contributing signals at emission time.
@@ -401,6 +404,31 @@ model CuratorModel {
 
   @@index([status, createdAt])
   @@index([contestant, status, createdAt])
+}
+
+/// One recipe's tenure in a learner seat of the curator contest (curation/evolution.ts). The seat
+/// (`slot`, a contestant id) is the stable ledger key; the lane is what holds it: name, recipe,
+/// lineage. A lane is current while retiredAt is null - at most one per slot, kept so by the
+/// training job's transaction. Retired lanes stay as the evolution history.
+model CuratorLane {
+  id            String    @id @default(cuid())
+  slot          String
+  name          String
+  description   String
+  /// The CuratorRecipe it trains (curation/contestants.ts).
+  recipe        Json
+  /// 0 for the founding recipes; otherwise unique and increasing.
+  generation    Int
+  parentName    String?
+  /// Its exam score in the run that seated it.
+  examScore     Float?
+  bornAt        DateTime  @default(now())
+  retiredAt     DateTime?
+  /// Why it lost the seat (the takeover's evidence).
+  retiredReason String?
+
+  @@index([slot, retiredAt])
+  @@index([bornAt])
 }
 
 /// One training sample for the curated-alerts learner: a rug-screen-passing candidate at a

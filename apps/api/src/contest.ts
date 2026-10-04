@@ -4,17 +4,18 @@ import {
   defaultContestant,
   emptyRecord,
   enabledContestants,
+  liveCallRecords,
+  loadCurrentLanes,
   rankByComposite,
-  contestantSpec,
+  withLanes,
   CONSENSUS_CONTESTANT,
-  LABEL_LOG2_CAP,
   LIVE_EVIDENCE_PIVOT,
   COMPOSITE_WEIGHTS,
   NEVER_EMIT_THRESHOLD,
-  type CallRecord,
   type CompositeScore,
   type ContestantSpec,
   type Env,
+  type Lane,
   type PrecisionTargets,
   type StoredEvalMetrics,
 } from "@trenchscanner/core";
@@ -41,8 +42,10 @@ export interface ContestantModel {
 }
 
 export interface ContestState {
-  /** The enabled roster, in canonical order. */
+  /** The enabled roster, in canonical order - learner seats under their current lane's name. */
   roster: ContestantSpec[];
+  /** Each evolving seat's current lane. */
+  lanes: Lane[];
   /** Each contestant's current (active) model row, when it has one. */
   current: Map<string, ContestantModel>;
   /** Whose calls a user who hasn't picked sees. */
@@ -58,7 +61,8 @@ export function resetContestStateCache(): void {
 
 export function contestState(env: Env): Promise<ContestState> {
   return stateCache.get(async () => {
-    const roster = enabledContestants(env.CURATOR_CONTESTANTS);
+    const lanes = await loadCurrentLanes();
+    const roster = withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes);
     const rows = await prisma.curatorModel.findMany({
       where: { status: "active", contestant: { in: roster.map((c) => c.id) } },
       orderBy: { createdAt: "desc" },
@@ -91,6 +95,7 @@ export function contestState(env: Env): Promise<ContestState> {
     const consensusEnabled = roster.some((c) => c.id === CONSENSUS_CONTESTANT);
     return {
       roster,
+      lanes,
       current,
       defaultModel: defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
     };
@@ -120,60 +125,9 @@ export async function savedFeedModel(userId: string): Promise<string | null> {
 }
 
 /** The display block a feed response carries for the model it is showing. */
-export function modelLabel(id: string) {
-  const spec = contestantSpec(id);
+export function modelLabel(state: ContestState, id: string) {
+  const spec = state.roster.find((c) => c.id === id);
   return { id, name: spec?.name ?? id };
-}
-
-interface LiveRow {
-  model: string;
-  calls: bigint;
-  graded: bigint;
-  wins: bigint;
-  goals: bigint;
-  sum_label: number | null;
-}
-
-/**
- * Every contestant's live record over the window, graded exactly like the hit-rate report: the
- * alert's outcome copies when they've landed, else the linked training row. Returns in doublings
- * use the row's labelValue, or - once the row is pruned - the copied 1h peak, capped the same way.
- */
-async function liveRecords(since: Date): Promise<Map<string, CallRecord>> {
-  const rows = await prisma.$queryRaw<LiveRow[]>`
-    WITH calls AS (
-      SELECT a."model",
-             COALESCE(a."hit2xIn1h", co."hit2xIn1h") AS hit2x,
-             COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
-             COALESCE(a."disqualified", co."disqualified", false) AS dq,
-             co."labelValue" AS label,
-             a."peak1hReturnPct" AS peak
-      FROM "CuratedAlert" a
-      LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-      WHERE a."createdAt" >= ${since} AND a."model" IS NOT NULL
-    )
-    SELECT "model",
-           count(*) AS calls,
-           count(*) FILTER (WHERE hit2x IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE hit2x AND NOT dq) AS wins,
-           count(*) FILTER (WHERE hit4x AND NOT dq) AS goals,
-           sum(CASE WHEN hit2x AND NOT dq THEN
-                 COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
-               ELSE 0 END)::float8 AS sum_label
-    FROM calls
-    GROUP BY "model"`;
-  return new Map(
-    rows.map((r) => [
-      r.model,
-      {
-        calls: Number(r.calls),
-        graded: Number(r.graded),
-        wins: Number(r.wins),
-        goals: Number(r.goals),
-        sumLabel: r.sum_label ?? 0,
-      },
-    ]),
-  );
 }
 
 export interface LeaderboardEntry {
@@ -190,6 +144,8 @@ export interface LeaderboardEntry {
    */
   status: "calling" | "silent" | "untrained";
   composite: CompositeScore;
+  /** Evolving seats only: the recipe holding the seat now, and where it came from. */
+  lane: { generation: number; parentName: string | null; bornAt: Date } | null;
   model: {
     id: string;
     trainedAt: Date;
@@ -209,7 +165,29 @@ export interface Leaderboard {
   };
   defaultModel: string;
   entries: LeaderboardEntry[];
+  evolution: {
+    challengersPerRun: number;
+    minAgeHours: number;
+    margin: number;
+    runEveryHours: number;
+    /** Recent takeovers and founding seats, newest first. */
+    history: EvolutionEvent[];
+  };
 }
+
+export interface EvolutionEvent {
+  slot: string;
+  name: string;
+  description: string;
+  generation: number;
+  parentName: string | null;
+  examScore: number | null;
+  bornAt: Date;
+  retiredAt: Date | null;
+  retiredReason: string | null;
+}
+
+const EVOLUTION_HISTORY_LIMIT = 20;
 
 export async function buildLeaderboard(env: Env, days: number): Promise<Leaderboard> {
   const since = new Date(Date.now() - days * 86_400_000);
@@ -219,7 +197,30 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
-  const [state, live] = await Promise.all([contestState(env), liveRecords(since)]);
+  const state = await contestState(env);
+  const [live, history] = await Promise.all([
+    liveCallRecords(
+      state.roster.map((c) => c.id),
+      since,
+      state.lanes,
+    ),
+    prisma.curatorLane.findMany({
+      orderBy: { bornAt: "desc" },
+      take: EVOLUTION_HISTORY_LIMIT,
+      select: {
+        slot: true,
+        name: true,
+        description: true,
+        generation: true,
+        parentName: true,
+        examScore: true,
+        bornAt: true,
+        retiredAt: true,
+        retiredReason: true,
+      },
+    }),
+  ]);
+  const laneBySlot = new Map(state.lanes.map((l) => [l.slot, l]));
 
   const unranked = state.roster.map((spec) => {
     const model = state.current.get(spec.id) ?? null;
@@ -240,6 +241,12 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       isDefault: spec.id === state.defaultModel,
       status,
       composite: compositeScore(live.get(spec.id) ?? emptyRecord(), exam, targets),
+      lane: (() => {
+        const lane = laneBySlot.get(spec.id);
+        return lane
+          ? { generation: lane.generation, parentName: lane.parentName, bornAt: lane.bornAt }
+          : null;
+      })(),
       model: model
         ? {
             id: model.id,
@@ -266,5 +273,12 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     },
     defaultModel: state.defaultModel,
     entries: rankByComposite(unranked).map((entry, i) => ({ rank: i + 1, ...entry })),
+    evolution: {
+      challengersPerRun: env.CURATOR_EVOLUTION_CHALLENGERS,
+      minAgeHours: env.CURATOR_EVOLUTION_MIN_AGE_HOURS,
+      margin: env.CURATOR_EVOLUTION_MARGIN,
+      runEveryHours: env.CURATOR_TRAINING_INTERVAL_HOURS,
+      history,
+    },
   };
 }

@@ -113,7 +113,8 @@ function summarizeRun(row: {
   return {
     id: row.id,
     contestant: row.contestant,
-    contestantName: row.contestant ? (contestantSpec(row.contestant)?.name ?? row.contestant) : null,
+    contestantName:
+      m.contestantName ?? (row.contestant ? (contestantSpec(row.contestant)?.name ?? row.contestant) : null),
     createdAt: row.createdAt,
     kind: row.kind,
     // Rows from before families existed were all logistic.
