@@ -4,7 +4,7 @@ import { AlertCard } from "../components/AlertCard";
 import { RingGauge, SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
 import { ArrowRightIcon, BrainIcon, RadarIcon, SlidersIcon } from "../components/Icons";
-import { usePolling, useNow, useNudgeStream } from "../hooks";
+import { useLiveMarketCaps, usePolling, useNow, useNudgeStream } from "../hooks";
 import { ago, pct } from "../format";
 
 /** Graded calls below which a hit rate shows as "early" rather than as a verdict. */
@@ -26,6 +26,8 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const modelsOn = lb?.showModelAlerts ?? true;
   const curatedLive = useNudgeStream("/curated/stream", feedPage.reload, modelsOn);
   const matchesLive = useNudgeStream("/matches/stream", feedPage.reload);
+  // "Now" on each card, seconds old rather than as old as the last feed poll.
+  const cards = useLiveMarketCaps(feedPage.data?.matches);
 
   const t = lb?.targets ?? { hitRate2xPct: 75, hitRate4xPct: 50 };
   const chosen = lb ? lb.entries.filter((e) => lb.selectedModels.includes(e.id)) : [];
@@ -176,7 +178,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
           </div>
         )}
         <div className="cards">
-          {feedPage.data?.matches.map((card) => (
+          {cards?.map((card) => (
             <AlertCard key={card.id} card={card} now={now} labelSource />
           ))}
         </div>

@@ -44,7 +44,9 @@ export async function runLivePriceJob(dexScreener: DexScreenerClient, env: Env):
 
   let result;
   try {
-    result = await refreshLiveMarketData(dexScreener, viewed);
+    result = await refreshLiveMarketData(dexScreener, viewed, {
+      peakWindowDays: env.SNAPSHOT_RETENTION_DAYS,
+    });
   } catch (err) {
     logger.warn("live price refresh failed", { viewed: viewed.length, error: String(err) });
     return;

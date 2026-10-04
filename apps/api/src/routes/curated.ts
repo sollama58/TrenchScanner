@@ -6,9 +6,8 @@ import {
   HEURISTIC_CURATOR_SOURCE,
   type Env,
   RULES_CONTESTANT,
-  type DexScreenerClient,
 } from "@trenchscanner/core";
-import { OnDemandLiveRefresher } from "../liveRefresh.js";
+import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { currentMarketCap } from "./matches.js";
 import {
   attachAiReviewsForAdmin,
@@ -113,15 +112,15 @@ const feedSettingsSchema = z
 
 export async function registerCuratedRoutes(
   app: FastifyInstance,
-  opts: { env: Env; dexScreener: DexScreenerClient; matchStream: MatchStream; viewStamps: ViewStampBuffer },
+  opts: {
+    env: Env;
+    liveRefresher: OnDemandLiveRefresher;
+    matchStream: MatchStream;
+    viewStamps: ViewStampBuffer;
+  },
 ) {
   // Part of what the subscription buys - same gate as the Live Feed.
   app.addHook("preHandler", app.authenticateSubscriber);
-
-  const liveRefresher = new OnDemandLiveRefresher(opts.dexScreener, {
-    maxAgeMs: opts.env.LIVE_PRICE_INTERVAL_MINUTES * 60_000,
-    limit: PAGE_SIZE,
-  });
 
   /**
    * One cache per page, because this feed is genuinely shared: every subscriber sees the same
@@ -241,7 +240,7 @@ export async function registerCuratedRoutes(
     // subscriber, so writing here meant every concurrent reader contending for the same twelve
     // rows. See ViewStampBuffer.
     opts.viewStamps.record(cards.map((c) => c.tokenId));
-    liveRefresher.request(cards.map((c) => c.token));
+    opts.liveRefresher.request(cards.map((c) => c.token));
 
     const isAdmin = request.access?.reason === "admin";
     return {

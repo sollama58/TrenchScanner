@@ -86,3 +86,79 @@ describe("OnDemandLiveRefresher cooldown", () => {
     expect(await r.refresh([token("A", 5_000)], NOW)).toBe(0);
   });
 });
+
+describe("OnDemandLiveRefresher live tick", () => {
+  /** A client whose lookups resolve when the test says so, counting calls. */
+  function gatedClient() {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const client = {
+      calls: 0,
+      getTokensByAddresses: async () => {
+        client.calls += 1;
+        await gate;
+        return [];
+      },
+    };
+    return { client, release: () => release() };
+  }
+
+  it("asks for a tighter bound per call, never a looser one", () => {
+    const r = refresher();
+    expect(mints(r.selectDue([token("A", 10_000)], NOW, 8_000))).toEqual(["A"]);
+    expect(r.selectDue([token("A", 5_000)], NOW, 8_000)).toEqual([]);
+    // A per-call bound past the configured one is clamped to it.
+    expect(mints(r.selectDue([token("A", 90_000)], NOW, 10 * MINUTE))).toEqual(["A"]);
+  });
+
+  it("stops looking up once the per-minute call budget is spent", async () => {
+    const r = new OnDemandLiveRefresher(
+      { getTokensByAddresses: async () => [] } as unknown as DexScreenerClient,
+      { maxAgeMs: MINUTE, limit: 12, callsPerMinute: 2 },
+    );
+    expect(await r.refresh([token("A", null)], NOW)).toBe(1);
+    expect(await r.refresh([token("B", null)], NOW + 1)).toBe(1);
+    expect(await r.refresh([token("C", null)], NOW + 2)).toBe(0);
+    // A minute later the budget has room again.
+    expect(await r.refresh([token("C", null)], NOW + MINUTE + 2)).toBe(1);
+  });
+
+  it("waits on a lookup another request already started for the same token", async () => {
+    const { client, release } = gatedClient();
+    const r = new OnDemandLiveRefresher(client as unknown as DexScreenerClient, {
+      maxAgeMs: MINUTE,
+      limit: 12,
+    });
+    const pageLoad = r.refresh([token("A", null)]);
+    let waited = false;
+    const tick = r.refreshAndWait([token("A", null)], { maxAgeMs: 8_000, timeoutMs: 5_000 }).then((v) => {
+      waited = true;
+      return v;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(waited).toBe(false);
+    release();
+    expect(await tick).toBe(true);
+    await pageLoad;
+    // Shared, not repeated.
+    expect(client.calls).toBe(1);
+  });
+
+  it("answers after the wait budget even if the lookup hangs", async () => {
+    const { client, release } = gatedClient();
+    const r = new OnDemandLiveRefresher(client as unknown as DexScreenerClient, {
+      maxAgeMs: MINUTE,
+      limit: 12,
+    });
+    const started = Date.now();
+    expect(await r.refreshAndWait([token("A", null)], { maxAgeMs: 8_000, timeoutMs: 50 })).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    release();
+  });
+
+  it("reports nothing to re-read when everything is already fresh", async () => {
+    // refreshAndWait reads the clock itself, so this reading is dated against the real one.
+    const fresh = { id: "id-A", mintAddress: "A", liveDataAt: new Date(Date.now() - 1_000) };
+    expect(await refresher().refreshAndWait([fresh], { maxAgeMs: 8_000, timeoutMs: 50 })).toBe(false);
+  });
+});
