@@ -9,6 +9,9 @@ import {
   type BoostedCuratorParams,
   type LogisticCuratorParams,
   type StoredEvalMetrics,
+  type AiBlendMetrics,
+  type AiBlendParams,
+  type JudgeRecordSummary,
 } from "@trenchscanner/core";
 import { buildHitRateReport, type Targets } from "./routes/stats.js";
 
@@ -226,7 +229,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
   };
 
-  const [report, runs, active, recentReviews] = await Promise.all([
+  const [report, runs, active, recentReviews, aiJudge] = await Promise.all([
     buildHitRateReport(since, until, targets, env, { includeFilterMatches: false }),
     prisma.curatorModel.findMany({
       orderBy: { createdAt: "desc" },
@@ -261,6 +264,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
         },
       },
     }),
+    aiJudgeState(isAdmin),
   ]);
 
   // Importance is read from the model that is curating now, else the newest one examined.
@@ -287,6 +291,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     shadowEmissions: report.shadowEmissions,
     curatorConfidenceBands: report.curatorConfidenceBands,
     aiReviewer: report.aiReviewer,
+    aiJudge,
     samples: report.samples,
     recentAiReviews: recentReviews.map((r) => ({
       id: r.id,
@@ -302,6 +307,81 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
       // Model output over launcher-written text - admin wallets only, as on the feed cards.
       ...(isAdmin ? { reasoning: r.reasoning, risks: r.risks, error: r.error } : {}),
     })),
+  };
+}
+
+/** How many playbook versions and replay runs the Models tab lists. */
+const AI_JUDGE_HISTORY_LIMIT = 10;
+
+/**
+ * The AI reviewer's learning loop at a glance: its playbook versions and how each did on the
+ * replay that decided it, the recent replay runs, and the learned blend. Playbook text and the
+ * review's rationale are model output - admin wallets only, like the reviewer's reasoning.
+ */
+async function aiJudgeState(isAdmin: boolean) {
+  const [playbooks, replays, blend] = await Promise.all([
+    prisma.aiPlaybook.findMany({
+      orderBy: { createdAt: "desc" },
+      take: AI_JUDGE_HISTORY_LIMIT,
+      select: {
+        id: true,
+        version: true,
+        status: true,
+        createdAt: true,
+        decidedAt: true,
+        metrics: true,
+        text: true,
+        rationale: true,
+      },
+    }),
+    prisma.aiReplayRun.findMany({
+      orderBy: { createdAt: "desc" },
+      take: AI_JUDGE_HISTORY_LIMIT,
+      select: {
+        id: true,
+        purpose: true,
+        status: true,
+        createdAt: true,
+        scoredAt: true,
+        requestCount: true,
+        playbookIds: true,
+        metrics: true,
+        error: true,
+      },
+    }),
+    prisma.aiBlendModel.findFirst({
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true, params: true, metrics: true },
+    }),
+  ]);
+  const versionOf = new Map(playbooks.map((p) => [p.id, p.version]));
+  return {
+    playbooks: playbooks.map((p) => ({
+      id: p.id,
+      version: p.version,
+      status: p.status,
+      createdAt: p.createdAt,
+      decidedAt: p.decidedAt,
+      metrics: p.metrics as JudgeRecordSummary | null,
+      ...(isAdmin ? { text: p.text, rationale: p.rationale } : {}),
+    })),
+    replays: replays.map((r) => ({
+      id: r.id,
+      purpose: r.purpose,
+      status: r.status,
+      createdAt: r.createdAt,
+      scoredAt: r.scoredAt,
+      requestCount: r.requestCount,
+      playbookVersions: r.playbookIds.map((id) => versionOf.get(id) ?? null),
+      ...(isAdmin ? { error: r.error } : {}),
+    })),
+    blend: blend
+      ? {
+          createdAt: blend.createdAt,
+          usable: (blend.params as unknown as AiBlendParams).usable,
+          metrics: blend.metrics as unknown as AiBlendMetrics,
+        }
+      : null,
   };
 }
 

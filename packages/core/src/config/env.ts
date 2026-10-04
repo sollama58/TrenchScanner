@@ -336,6 +336,37 @@ const envSchema = z.object({
   // graded and they meet CURATED_TARGET_WIN_RATE_PCT / CURATED_TARGET_GOAL_RATE_PCT, "gate"
   // behaves as "shadow" (see aiGateQualified in apps/worker/src/ai/reviewer.ts).
   AI_REVIEW_MIN_GRADED_BUYS: z.coerce.number().int().positive().default(50),
+  // The AI judge's learning loop (apps/worker/src/jobs/aiJudgeJob.ts), all inert without
+  // ANTHROPIC_API_KEY. Every AI_PLAYBOOK_EVOLUTION_HOURS the reviewer's graded record is reviewed
+  // into two candidate playbooks, and each is replayed against the active one through the Message
+  // Batches API on the last AI_REPLAY_HOLDOUT_DAYS of graded alerts (at most AI_REPLAY_MAX_ROWS of
+  // them - the cost knob: one replay costs roughly rows x 3 reviewer calls at half price). A
+  // candidate takes over only when its replay composite beats the incumbent's by
+  // AI_PLAYBOOK_MIN_GAIN points on at least AI_PLAYBOOK_MIN_BUYS buy calls. "false" stops it.
+  AI_PLAYBOOK_EVOLUTION: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  AI_PLAYBOOK_EVOLUTION_HOURS: z.coerce.number().positive().default(24),
+  AI_PLAYBOOK_MIN_GAIN: z.coerce.number().min(0).default(3),
+  AI_PLAYBOOK_MIN_BUYS: z.coerce.number().int().positive().default(10),
+  AI_REPLAY_HOLDOUT_DAYS: z.coerce.number().positive().default(3),
+  AI_REPLAY_MAX_ROWS: z.coerce.number().int().positive().default(150),
+  // The learned blend of the default model's odds and the reviewer's (curation/aiBlend.ts), refit
+  // with the curator training cadence. It needs AI_BLEND_MIN_ROWS graded reviews; once its
+  // out-of-sample record beats the model alone, gate mode holds back picks the blend scores below
+  // its cutoff instead of using the reviewer's bare buy/no-buy.
+  AI_BLEND_MIN_ROWS: z.coerce.number().int().positive().default(150),
+  // Claude's read of each in-band mint's name and description (apps/worker/src/ai/textScorer.ts),
+  // scored once per mint and fed to the models as features. AI_TEXT_MAX_PER_HOUR caps the calls
+  // (the cost knob); "false" stops new reads.
+  AI_TEXT_FEATURES: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  AI_TEXT_MODEL: z.string().default("claude-opus-5-5"),
+  AI_TEXT_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
+  AI_TEXT_MAX_PER_HOUR: z.coerce.number().int().min(0).default(60),
 
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),

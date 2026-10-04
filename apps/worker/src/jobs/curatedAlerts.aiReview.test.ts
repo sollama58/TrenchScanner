@@ -10,6 +10,7 @@ import {
 } from "./curatedAlerts.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import type { AiReviewResult } from "../ai/reviewer.js";
+import { resetAiBlendCache } from "../ai/blend.js";
 
 const reviewPick = vi.fn<() => Promise<AiReviewResult>>();
 /** Whether the reviewer has earned gate mode - true unless a test says otherwise. */
@@ -163,6 +164,40 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
       const review = await prisma.aiReview.findFirstOrThrow({ where: { tokenId: token.id } });
       expect(review.mode).toBe("shadow");
     });
+  });
+
+  it("gate mode with a usable learned blend holds back what the blend scores below its cutoff", async () => {
+    // The blend trusts the reviewer's odds alone here: 2x odds of 0.2 fall below a 0.5 cutoff even
+    // though the reviewer said "buy"; odds of 0.8 clear it even on a "no_buy".
+    const blend = await prisma.aiBlendModel.create({
+      data: {
+        params: { kind: "ai-blend-v1", intercept: 0, wCurator: 0, wAi: 1, cutoff: 0.5, usable: true },
+        metrics: { rows: 200, reason: "test" },
+      },
+    });
+    resetAiBlendCache();
+    gateQualified.mockResolvedValue(false);
+    try {
+      const withOdds = (decision: "buy" | "no_buy", p: number): AiReviewResult => ({
+        ...verdict(decision),
+        verdict: { ...verdict(decision).verdict!, probability2x: p },
+        curatorProbability: 0.4,
+      });
+      reviewPick.mockResolvedValue(withOdds("buy", 0.2));
+      const held = await run(gate, "blend-held");
+      expect(held.emitted).toBe(0);
+      const review = await prisma.aiReview.findFirstOrThrow({ where: { tokenId: held.token.id } });
+      expect(review.mode).toBe("gate");
+      expect(review.curatorProbability).toBe(0.4);
+
+      reviewPick.mockResolvedValue(withOdds("no_buy", 0.8));
+      const sent = await run(gate, "blend-sent");
+      expect(sent.emitted).toBe(1);
+    } finally {
+      gateQualified.mockResolvedValue(true);
+      await prisma.aiBlendModel.delete({ where: { id: blend.id } });
+      resetAiBlendCache();
+    }
   });
 
   it("never calls the reviewer without a key", async () => {

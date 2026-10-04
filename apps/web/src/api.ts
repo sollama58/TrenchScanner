@@ -257,6 +257,59 @@ export interface AiReviewRow {
   error?: string | null;
 }
 
+/** A playbook's (or a replay's) record - curation/aiJudge.ts JudgeRecordSummary. */
+export interface JudgeRecordSummary {
+  reviewed: number;
+  buys: number;
+  buyWinRatePct: number | null;
+  buyGoalRatePct: number | null;
+  baseWinRatePct: number | null;
+  baseGoalRatePct: number | null;
+  liftPts: number | null;
+  missedWinnersPct: number | null;
+  brier: number | null;
+  curatorBrier: number | null;
+  score: number | null;
+}
+
+export interface AiJudgeState {
+  playbooks: {
+    id: string;
+    version: number;
+    status: "active" | "candidate" | "retired" | "rejected";
+    createdAt: string;
+    decidedAt: string | null;
+    metrics: JudgeRecordSummary | null;
+    text?: string;
+    rationale?: string | null;
+  }[];
+  replays: {
+    id: string;
+    purpose: "baseline" | "evolution";
+    status: "submitted" | "scored" | "failed";
+    createdAt: string;
+    scoredAt: string | null;
+    requestCount: number;
+    playbookVersions: (number | null)[];
+    error?: string | null;
+  }[];
+  blend: {
+    createdAt: string;
+    usable: boolean;
+    metrics: {
+      rows: number;
+      brierBlend: number | null;
+      brierCurator: number | null;
+      brierAi: number | null;
+      baseWinRatePct: number | null;
+      keptRows: number;
+      keptWinRatePct: number | null;
+      keptGoalRatePct: number | null;
+      reason: string;
+    };
+  } | null;
+}
+
 export interface ModelInsights {
   window: { days: number };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
@@ -287,9 +340,15 @@ export interface ModelInsights {
     mode: string;
     buys: GradedRates;
     allReviewed: GradedRates;
+    /** Its buys' 2x rate minus the rate of every pick it reviewed, in points. */
+    liftPts: number | null;
+    /** Mean squared error of its 2x odds (0.25 = a coin flip), and of the default model's own. */
+    brier: number | null;
+    curatorBrier: number | null;
     byDecision: (GradedRates & { mode: string; decision: string })[];
     probability2xBands: (GradedRates & { band: number })[];
   };
+  aiJudge: AiJudgeState;
   samples: { byKind: (GradedRates & { kind: string })[] };
   recentAiReviews: AiReviewRow[];
 }

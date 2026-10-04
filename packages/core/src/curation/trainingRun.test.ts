@@ -82,5 +82,6 @@ describe("runCuratorTraining", () => {
     expect(run.metrics.precisionCalibration.meetsTargets).toBe(false);
     expect(run.params.threshold).not.toBe(NEVER_EMIT_THRESHOLD);
     expect(run.metrics.verdict.promote).toBe(false);
-  });
+    // Two full walk-forward trainings on 2,500 tokens: seconds of CPU, more on a shared CI runner.
+  }, 30_000);
 });

@@ -285,6 +285,39 @@ export async function buildHitRateReport(
     GROUP BY 1
     ORDER BY 1`;
 
+  // Per playbook: the buy record, and how well both odds - the reviewer's and the default model's
+  // own - called the 2x (Brier: mean squared error against the outcome, 0.25 = a coin flip).
+  const aiPlaybookRows = prisma.$queryRaw<
+    (RawCounts & {
+      playbookId: string;
+      brier_sum: number | null;
+      brier_n: bigint;
+      curator_brier_sum: number | null;
+      curator_brier_n: bigint;
+    })[]
+  >`
+    WITH graded AS (
+      SELECT r."playbookId", r."decision", r."probability2x", r."curatorProbability",
+             co."hit2xIn1h", co."hit4xIn1h", co."disqualified",
+             CASE WHEN co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false) THEN 1 ELSE 0 END AS won
+      FROM "AiReview" r
+      LEFT JOIN "CandidateOutcome" co ON co."id" = r."candidateOutcomeId"
+      WHERE r."createdAt" >= ${since} AND r."createdAt" < ${until} AND r."decision" IS NOT NULL
+    )
+    SELECT COALESCE("playbookId", '') AS "playbookId",
+           count(*) FILTER (WHERE "decision" = 'buy') AS calls,
+           count(*) FILTER (WHERE "decision" = 'buy' AND "hit2xIn1h" IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE "decision" = 'buy' AND won = 1) AS won2x,
+           count(*) FILTER (WHERE "decision" = 'buy' AND "hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE "decision" = 'buy' AND "disqualified") AS doubled_after_stop,
+           sum(power("probability2x" - won, 2)) FILTER (WHERE "probability2x" IS NOT NULL AND "hit2xIn1h" IS NOT NULL) AS brier_sum,
+           count(*) FILTER (WHERE "probability2x" IS NOT NULL AND "hit2xIn1h" IS NOT NULL) AS brier_n,
+           sum(power("curatorProbability" - won, 2)) FILTER (WHERE "curatorProbability" IS NOT NULL AND "hit2xIn1h" IS NOT NULL) AS curator_brier_sum,
+           count(*) FILTER (WHERE "curatorProbability" IS NOT NULL AND "hit2xIn1h" IS NOT NULL) AS curator_brier_n
+    FROM graded
+    GROUP BY 1
+    ORDER BY 1`;
+
   // Match is the one table too large to scan by time alone; its (userId, matchedAt) index is the
   // way in, and User is small enough to list. Same route loadFilterTrackRecords takes.
   const matchRows = (
@@ -320,16 +353,18 @@ export async function buildHitRateReport(
     GROUP BY 1
     ORDER BY 1`;
 
-  const [curated, byModel, shadow, confidence, ai, aiProbability, matches, samples] = await Promise.all([
-    curatedRows,
-    modelRows,
-    shadowRows,
-    confidenceRows,
-    aiRows,
-    aiProbabilityRows,
-    matchRows,
-    sampleRows,
-  ]);
+  const [curated, byModel, shadow, confidence, ai, aiProbability, aiPlaybooks, matches, samples] =
+    await Promise.all([
+      curatedRows,
+      modelRows,
+      shadowRows,
+      confidenceRows,
+      aiRows,
+      aiProbabilityRows,
+      aiPlaybookRows,
+      matchRows,
+      sampleRows,
+    ]);
 
   const rated = (c: GradedCounts, min?: number) => withRates(c, targets, min);
 
@@ -338,6 +373,14 @@ export async function buildHitRateReport(
   const aiCounts = ai.map((r) => ({ mode: r.mode, decision: r.decision, ...toCounts(r) }));
   const buys = sumCounts(aiCounts.filter((r) => r.decision === "buy"));
   const allReviewed = sumCounts(aiCounts.filter((r) => r.decision !== "error"));
+  const brierOf = (sum: number | null, n: bigint) =>
+    Number(n) > 0 && sum !== null ? Math.round((Number(sum) / Number(n)) * 1000) / 1000 : null;
+  const sumBy = (key: "brier_sum" | "curator_brier_sum") =>
+    aiPlaybooks.reduce((acc, r) => acc + Number(r[key] ?? 0), 0);
+  const countBy = (key: "brier_n" | "curator_brier_n") =>
+    aiPlaybooks.reduce((acc, r) => acc + r[key], BigInt(0));
+  const buyRates = rated(buys, env.AI_REVIEW_MIN_GRADED_BUYS);
+  const allRates = rated(allReviewed);
 
   // Per filter, largest first and capped so one heavy user can't bloat the reply.
   const byFilter = new Map<string, { name: string; all: GradedCounts[] }>();
@@ -382,8 +425,21 @@ export async function buildHitRateReport(
     aiReviewer: {
       mode: env.AI_REVIEW_MODE,
       // Gate mode needs AI_REVIEW_MIN_GRADED_BUYS graded buys meeting both targets.
-      buys: rated(buys, env.AI_REVIEW_MIN_GRADED_BUYS),
-      allReviewed: rated(allReviewed),
+      buys: buyRates,
+      allReviewed: allRates,
+      // What the reviewer adds: its buys' 2x rate over the rate of every pick it reviewed, in points.
+      liftPts:
+        buyRates.hitRate2xPct !== null && allRates.hitRate2xPct !== null
+          ? Math.round((buyRates.hitRate2xPct - allRates.hitRate2xPct) * 10) / 10
+          : null,
+      brier: brierOf(sumBy("brier_sum"), countBy("brier_n")),
+      curatorBrier: brierOf(sumBy("curator_brier_sum"), countBy("curator_brier_n")),
+      byPlaybook: aiPlaybooks.map((r) => ({
+        playbookId: r.playbookId === "" ? null : r.playbookId,
+        buys: rated(toCounts(r)),
+        brier: brierOf(r.brier_sum, r.brier_n),
+        curatorBrier: brierOf(r.curator_brier_sum, r.curator_brier_n),
+      })),
       byDecision: aiCounts.map((r) => ({ ...r, ...rated(r) })),
       probability2xBands: aiProbability.map((r) => ({ band: r.band, ...rated(toCounts(r)) })),
     },

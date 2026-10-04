@@ -43,3 +43,6 @@ export * from "./curation/leaderboard.js";
 export * from "./curation/evolution.js";
 export * from "./curation/laneStore.js";
 export * from "./curation/tradeFlow.js";
+export * from "./curation/textFeatures.js";
+export * from "./curation/aiJudge.js";
+export * from "./curation/aiBlend.js";

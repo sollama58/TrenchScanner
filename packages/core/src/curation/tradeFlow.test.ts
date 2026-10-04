@@ -99,7 +99,10 @@ describe("TradeFlowBook", () => {
 describe("order-flow features in the vector", () => {
   it("are appended after every older feature and read from the token's tradeFlow", () => {
     const names = CANDIDATE_FEATURE_NAMES as readonly string[];
-    expect(names.slice(-TRADE_FLOW_FEATURES.length)).toEqual([...TRADE_FLOW_FEATURES]);
+    // After every feature that predates them; only the later text-read features follow.
+    const start = names.indexOf(TRADE_FLOW_FEATURES[0]);
+    expect(names.slice(start, start + TRADE_FLOW_FEATURES.length)).toEqual([...TRADE_FLOW_FEATURES]);
+    expect(names.slice(start + TRADE_FLOW_FEATURES.length).every((n) => n.startsWith("text"))).toBe(true);
     const scored = {
       mintAddress: MINT,
       priceUsd: 1,
