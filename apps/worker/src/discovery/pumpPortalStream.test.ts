@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parsePumpPortalMessage, PumpPortalStream } from "./pumpPortalStream.js";
 
 const MINT = "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
@@ -94,5 +94,44 @@ describe("PumpPortalStream trade flow", () => {
     off.handleMessage(JSON.stringify({ mint: MINT, txType: "create", traderPublicKey: "dev" }));
     expect(off.tradeFlow(MINT)).toBeUndefined();
     expect(off.drain()).toHaveLength(1);
+  });
+});
+
+describe("PumpPortalStream idle watchdog", () => {
+  /** A WebSocket stand-in that never opens, never sends and never closes - a half-open socket. */
+  class SilentSocket extends EventTarget {
+    static made = 0;
+    readyState = 0;
+    closed = false;
+    constructor() {
+      super();
+      SilentSocket.made += 1;
+    }
+    send() {}
+    close() {
+      this.closed = true;
+    }
+  }
+
+  it("replaces a connection that has gone silent, once, and ignores its late close", async () => {
+    vi.useFakeTimers();
+    try {
+      SilentSocket.made = 0;
+      const stream = new PumpPortalStream(
+        "wss://example.invalid",
+        SilentSocket as unknown as new (url: string) => WebSocket,
+        { tradeFlow: false },
+      );
+      stream.start();
+      expect(SilentSocket.made).toBe(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(SilentSocket.made).toBe(1);
+      // Past the idle timeout, then the reconnect backoff.
+      await vi.advanceTimersByTimeAsync(45_000 + 2_000);
+      expect(SilentSocket.made).toBe(2);
+      stream.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

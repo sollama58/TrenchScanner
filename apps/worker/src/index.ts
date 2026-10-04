@@ -8,6 +8,7 @@ import {
   RugCheckClient,
   HeliusClient,
   SolanaRpc,
+  lastHeartbeatAt,
 } from "@trenchscanner/core";
 import { runScanCycle } from "./jobs/scanJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
@@ -51,9 +52,10 @@ async function main() {
   });
 
   // Deadlines (see scheduleInterval): each is several times the slowest run production has
-  // recorded, so only a run that is never coming back reaches one. Curator training has none - a
-  // slow retrain on boot would otherwise restart the worker in a loop, and a stuck one holds up
-  // nothing but itself.
+  // recorded, so only a run that is never coming back reaches one. Curator training and burn-scan
+  // have none: a slow retrain, or a slow RPC provider under the reconciler's sequential pages,
+  // would otherwise restart the whole worker in a loop, and either one stuck holds up nothing
+  // but itself.
   const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
     deadlineMinutes: 20,
   });
@@ -94,7 +96,6 @@ async function main() {
     "burn-scan",
     async () => void (await reconcileBurns(env, rpc)),
     env.BURN_SCAN_INTERVAL_MINUTES,
-    { deadlineMinutes: 15 },
   );
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
   // purpose: see createMatchPeaksRunner.
@@ -125,6 +126,16 @@ async function main() {
     "curator-training",
     () => runCuratorTrainingJob(env),
     env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
+    {
+      // Not straight away on every boot: a retrain is minutes of the worker's CPU, and running
+      // one on each restart (several on 2026-10-04) landed it on top of the cold first scan
+      // cycles. The first run waits for the slot the last finished run set.
+      firstRunDelayMs: async () => {
+        const last = await lastHeartbeatAt("curator-training");
+        if (!last) return 0;
+        return last.getTime() + env.CURATOR_TRAINING_INTERVAL_HOURS * 3_600_000 - Date.now();
+      },
+    },
   );
 
   logger.info("worker started", {
@@ -157,6 +168,13 @@ async function main() {
     await prisma.$disconnect();
     process.exit(0);
   };
+  // Node 22 ends the process on an unhandled rejection. Every known fire-and-forget path catches
+  // its own, so one reaching here is a bug in a side path - logged, not worth every job over.
+  process.on("unhandledRejection", (reason) => {
+    logger.error("unhandled promise rejection", {
+      error: reason instanceof Error ? reason.stack : String(reason),
+    });
+  });
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
 }

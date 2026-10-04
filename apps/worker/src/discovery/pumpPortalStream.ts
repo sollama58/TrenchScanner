@@ -57,6 +57,9 @@ interface PumpPortalMessage {
 const SUBSCRIBE_CHUNK = 100;
 const FLUSH_INTERVAL_MS = 2_000;
 const EVICT_INTERVAL_MS = 60_000;
+/** Silence after which the connection is presumed dead - see checkIdle. */
+const IDLE_TIMEOUT_MS = 90_000;
+const IDLE_CHECK_INTERVAL_MS = 15_000;
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
@@ -132,6 +135,8 @@ export class PumpPortalStream {
   readonly book: TradeFlowBook | null;
   private pendingSubscribe = new Set<string>();
   private timers: ReturnType<typeof setInterval>[] = [];
+  /** When the current socket last opened or delivered a message - see checkIdle. */
+  private lastActivityAt = 0;
 
   constructor(
     private readonly url: string,
@@ -162,11 +167,12 @@ export class PumpPortalStream {
     }
     this.stopped = false;
     this.connect();
+    this.timers.push(setInterval(() => this.checkIdle(), IDLE_CHECK_INTERVAL_MS));
     if (this.book) {
       this.timers.push(setInterval(() => this.flushSubscriptions(), FLUSH_INTERVAL_MS));
       this.timers.push(setInterval(() => this.evict(), EVICT_INTERVAL_MS));
-      for (const t of this.timers) t.unref?.();
     }
+    for (const t of this.timers) t.unref?.();
   }
 
   stop(): void {
@@ -212,6 +218,26 @@ export class PumpPortalStream {
     this.buffer.set(event.mintAddress, event);
   }
 
+  /**
+   * Replaces a connection that has gone quiet. Reconnecting used to hang off the close event
+   * alone, and a half-open TCP connection (or a server that stops sending) never fires one - so
+   * discovery and trade flow went silently dead until the worker restarted. Launches arrive every
+   * few seconds, so this long with nothing, or a connect that never completes, is a dead socket.
+   * Visible for tests.
+   */
+  checkIdle(now: number = Date.now()): void {
+    const socket = this.socket;
+    if (!socket || this.stopped || now - this.lastActivityAt < IDLE_TIMEOUT_MS) return;
+    logger.warn("stream silent, reconnecting", { silentForMs: now - this.lastActivityAt });
+    this.socket = null;
+    try {
+      socket.close();
+    } catch {
+      // Already closing - it is being dropped either way.
+    }
+    this.scheduleReconnect();
+  }
+
   private connect(): void {
     let socket: WebSocket;
     try {
@@ -222,7 +248,9 @@ export class PumpPortalStream {
       return;
     }
     this.socket = socket;
+    this.lastActivityAt = Date.now();
     socket.addEventListener("open", () => {
+      this.lastActivityAt = Date.now();
       this.backoffMs = MIN_BACKOFF_MS;
       // One connection, both subscriptions - PumpPortal asks clients not to open one per topic.
       socket.send(JSON.stringify({ method: "subscribeNewToken" }));
@@ -232,13 +260,16 @@ export class PumpPortalStream {
       logger.info("stream connected");
     });
     socket.addEventListener("message", (event: MessageEvent) => {
+      if (this.socket === socket) this.lastActivityAt = Date.now();
       if (typeof event.data === "string") this.handleMessage(event.data);
     });
     socket.addEventListener("error", () => {
       // The close event that follows carries the reconnect; logging here would double up.
     });
     socket.addEventListener("close", () => {
-      if (this.socket === socket) this.socket = null;
+      // A socket checkIdle already replaced closing late must not start a second connection.
+      if (this.socket !== socket) return;
+      this.socket = null;
       if (!this.stopped) this.scheduleReconnect();
     });
   }

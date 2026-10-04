@@ -1,6 +1,7 @@
 import {
   prisma,
   createLogger,
+  forEachWithConcurrency,
   type Env,
   type HeliusClient,
   type MintAuthorityResult,
@@ -80,19 +81,18 @@ export async function resolveMintAuthorities(
     try {
       // upsert, not createMany: a still-active row has to be able to move to revoked, and its
       // checkedAt has to advance for the TTL above to mean anything.
-      await Promise.all(
-        toCache.map((row) =>
-          prisma.mintAuthorityCache.upsert({
-            where: { mintAddress: row.mintAddress },
-            create: row,
-            update: {
-              mintAuthorityActive: row.mintAuthorityActive,
-              freezeAuthorityActive: row.freezeAuthorityActive,
-              checkedAt: new Date(),
-            },
-          }),
-        ),
-      );
+      // A few at a time - firing hundreds at once took the whole connection pool.
+      await forEachWithConcurrency(toCache, 4, async (row) => {
+        await prisma.mintAuthorityCache.upsert({
+          where: { mintAddress: row.mintAddress },
+          create: row,
+          update: {
+            mintAuthorityActive: row.mintAuthorityActive,
+            freezeAuthorityActive: row.freezeAuthorityActive,
+            checkedAt: new Date(),
+          },
+        });
+      });
     } catch (err) {
       logger.warn("failed to persist mint authority cache", { count: toCache.length, error: String(err) });
     }

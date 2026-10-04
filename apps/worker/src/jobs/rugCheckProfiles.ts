@@ -1,5 +1,15 @@
 import { z } from "zod";
-import { prisma, createLogger, Prisma, type RugCheckClient, type RugCheckProfile } from "@trenchscanner/core";
+import {
+  prisma,
+  createLogger,
+  forEachWithConcurrency,
+  Prisma,
+  type RugCheckClient,
+  type RugCheckProfile,
+} from "@trenchscanner/core";
+
+/** Cache upserts in flight at once - see the write loop below. */
+const CACHE_WRITE_CONCURRENCY = 4;
 
 const logger = createLogger("rugcheck-cache");
 
@@ -33,7 +43,7 @@ export interface RugProfileResolution {
   profiles: Map<string, RugCheckProfile>;
   /** Mints RugCheck definitively has no report for - distinct from ones whose lookup failed. */
   absent: Set<string>;
-  stats: { requested: number; cached: number; fetched: number; failed: number };
+  stats: { requested: number; cached: number; fetched: number; failed: number; reused?: number };
 }
 
 /**
@@ -58,6 +68,8 @@ export async function resolveRugProfiles(
   mintAddresses: string[],
   rugCheck: RugCheckClient,
   ttlMinutes: number,
+  /** Most network lookups this call makes - see the budget note below. */
+  maxLookups: number = Infinity,
 ): Promise<RugProfileResolution> {
   const unique = [...new Set(mintAddresses)];
   const profiles = new Map<string, RugCheckProfile>();
@@ -66,12 +78,13 @@ export async function resolveRugProfiles(
     return { profiles, absent, stats: { requested: 0, cached: 0, fetched: 0, failed: 0 } };
   }
 
-  const fresh = await prisma.rugCheckCache.findMany({
-    where: {
-      mintAddress: { in: unique },
-      checkedAt: { gt: new Date(Date.now() - ttlMinutes * 60_000) },
-    },
-  });
+  // Every cached row, stale ones included: past the lookup budget a stale answer stands in.
+  const rows = await prisma.rugCheckCache.findMany({ where: { mintAddress: { in: unique } } });
+  const ttlCutoff = Date.now() - ttlMinutes * 60_000;
+  const fresh = rows.filter((r) => r.checkedAt.getTime() > ttlCutoff);
+  const staleRows = new Map(
+    rows.filter((r) => r.checkedAt.getTime() <= ttlCutoff).map((r) => [r.mintAddress, r]),
+  );
 
   const hit = new Set<string>();
   for (const row of fresh) {
@@ -91,7 +104,35 @@ export async function resolveRugProfiles(
     hit.add(row.mintAddress);
   }
 
-  const stale = unique.filter((mint) => !hit.has(mint));
+  // The lookup budget. In steady state the TTL keeps lookups to the candidates whose answer just
+  // aged out, well under it. After downtime every candidate is stale at once, and at RugCheck's
+  // pace (and its 429s) looking all of them up held a single scan cycle for many minutes - the
+  // "hung" scan of 2026-10-04 15:16 was 166s+ in this stage alone. So: never-checked mints first
+  // (they are the new arrivals the feed is waiting on), then the oldest answers; past the budget a
+  // mint keeps its last answer for one more cycle, and the next cycle refreshes it.
+  const needed = unique
+    .filter((mint) => !hit.has(mint))
+    .sort(
+      (a, b) =>
+        (staleRows.get(a)?.checkedAt.getTime() ?? -Infinity) -
+        (staleRows.get(b)?.checkedAt.getTime() ?? -Infinity),
+    );
+  const stale = needed.slice(0, maxLookups);
+  let reused = 0;
+  for (const mint of needed.slice(maxLookups)) {
+    const row = staleRows.get(mint);
+    if (!row) continue;
+    if (row.profile === null) {
+      absent.add(mint);
+      reused += 1;
+      continue;
+    }
+    const parsed = cachedProfileSchema.safeParse(row.profile);
+    if (parsed.success) {
+      profiles.set(mint, parsed.data as RugCheckProfile);
+      reused += 1;
+    }
+  }
   let failed = 0;
   if (stale.length > 0) {
     const results = await rugCheck.getProfileResults(stale);
@@ -112,28 +153,34 @@ export async function resolveRugProfiles(
     }
 
     const checkedAt = new Date();
-    await Promise.all(
-      writes.map((write) => {
-        // Prisma.DbNull is a SQL NULL in the column; a bare `null` on a nullable Json field is
-        // ambiguous with the JSON value `null`, so it has to be spelled out.
-        const profile =
-          write.profile === null ? Prisma.DbNull : (write.profile as unknown as Prisma.InputJsonObject);
-        return prisma.rugCheckCache
-          .upsert({
-            where: { mintAddress: write.mintAddress },
-            create: { mintAddress: write.mintAddress, profile, checkedAt },
-            update: { profile, checkedAt },
-          })
-          .catch((err: unknown) => {
-            // A cache write failing is not worth failing the scan over - the profile is already
-            // in hand and this cycle proceeds normally, just without the saving next cycle.
-            logger.warn("failed to cache rugcheck profile", { mint: write.mintAddress, error: String(err) });
-          });
-      }),
-    );
+    // A few at a time, not all at once: a cold cycle has hundreds of these, and firing them
+    // together took the whole connection pool from the scan's own candidates and fast-match.
+    await forEachWithConcurrency(writes, CACHE_WRITE_CONCURRENCY, async (write) => {
+      // Prisma.DbNull is a SQL NULL in the column; a bare `null` on a nullable Json field is
+      // ambiguous with the JSON value `null`, so it has to be spelled out.
+      const profile =
+        write.profile === null ? Prisma.DbNull : (write.profile as unknown as Prisma.InputJsonObject);
+      await prisma.rugCheckCache
+        .upsert({
+          where: { mintAddress: write.mintAddress },
+          create: { mintAddress: write.mintAddress, profile, checkedAt },
+          update: { profile, checkedAt },
+        })
+        .catch((err: unknown) => {
+          // A cache write failing is not worth failing the scan over - the profile is already
+          // in hand and this cycle proceeds normally, just without the saving next cycle.
+          logger.warn("failed to cache rugcheck profile", { mint: write.mintAddress, error: String(err) });
+        });
+    });
   }
 
-  const stats = { requested: unique.length, cached: hit.size, fetched: stale.length - failed, failed };
+  const stats = {
+    requested: unique.length,
+    cached: hit.size,
+    fetched: stale.length - failed,
+    failed,
+    reused,
+  };
   logger.info("resolved rugcheck profiles", stats);
   return { profiles, absent, stats };
 }
