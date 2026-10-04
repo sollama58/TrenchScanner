@@ -639,13 +639,11 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       select: { id: true, mintAddress: true },
     });
     const urlByMint = new Map(backfill.map((c) => [c.mintAddress, c.imageUrl!]));
-    await Promise.all(
-      missing.map((token) =>
-        prisma.token
-          .update({ where: { id: token.id }, data: { imageUrl: urlByMint.get(token.mintAddress) } })
-          .catch(() => undefined),
-      ),
-    );
+    await forEachWithConcurrency(missing, 4, async (token) => {
+      await prisma.token
+        .update({ where: { id: token.id }, data: { imageUrl: urlByMint.get(token.mintAddress) } })
+        .catch(() => undefined);
+    });
     if (missing.length > 0) logger.info("backfilled token images", { count: missing.length });
   }
 }

@@ -1,5 +1,15 @@
 import { z } from "zod";
-import { prisma, createLogger, Prisma, type RugCheckClient, type RugCheckProfile } from "@trenchscanner/core";
+import {
+  prisma,
+  createLogger,
+  forEachWithConcurrency,
+  Prisma,
+  type RugCheckClient,
+  type RugCheckProfile,
+} from "@trenchscanner/core";
+
+/** Cache upserts in flight at once - see the write loop below. */
+const CACHE_WRITE_CONCURRENCY = 4;
 
 const logger = createLogger("rugcheck-cache");
 
@@ -112,25 +122,25 @@ export async function resolveRugProfiles(
     }
 
     const checkedAt = new Date();
-    await Promise.all(
-      writes.map((write) => {
-        // Prisma.DbNull is a SQL NULL in the column; a bare `null` on a nullable Json field is
-        // ambiguous with the JSON value `null`, so it has to be spelled out.
-        const profile =
-          write.profile === null ? Prisma.DbNull : (write.profile as unknown as Prisma.InputJsonObject);
-        return prisma.rugCheckCache
-          .upsert({
-            where: { mintAddress: write.mintAddress },
-            create: { mintAddress: write.mintAddress, profile, checkedAt },
-            update: { profile, checkedAt },
-          })
-          .catch((err: unknown) => {
-            // A cache write failing is not worth failing the scan over - the profile is already
-            // in hand and this cycle proceeds normally, just without the saving next cycle.
-            logger.warn("failed to cache rugcheck profile", { mint: write.mintAddress, error: String(err) });
-          });
-      }),
-    );
+    // A few at a time, not all at once: a cold cycle has hundreds of these, and firing them
+    // together took the whole connection pool from the scan's own candidates and fast-match.
+    await forEachWithConcurrency(writes, CACHE_WRITE_CONCURRENCY, async (write) => {
+      // Prisma.DbNull is a SQL NULL in the column; a bare `null` on a nullable Json field is
+      // ambiguous with the JSON value `null`, so it has to be spelled out.
+      const profile =
+        write.profile === null ? Prisma.DbNull : (write.profile as unknown as Prisma.InputJsonObject);
+      await prisma.rugCheckCache
+        .upsert({
+          where: { mintAddress: write.mintAddress },
+          create: { mintAddress: write.mintAddress, profile, checkedAt },
+          update: { profile, checkedAt },
+        })
+        .catch((err: unknown) => {
+          // A cache write failing is not worth failing the scan over - the profile is already
+          // in hand and this cycle proceeds normally, just without the saving next cycle.
+          logger.warn("failed to cache rugcheck profile", { mint: write.mintAddress, error: String(err) });
+        });
+    });
   }
 
   const stats = { requested: unique.length, cached: hit.size, fetched: stale.length - failed, failed };

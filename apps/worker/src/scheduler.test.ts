@@ -140,6 +140,16 @@ describe("scheduleInterval", () => {
     expect(hits).toEqual([]);
   });
 
+  it("holds the first run for firstRunDelayMs, then keeps its cadence", async () => {
+    const runs: number[] = [];
+    const job = scheduleInterval("curator-training", jobTaking(1_000, runs), 10, {
+      firstRunDelayMs: async () => 300_000,
+    });
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    job.stop();
+    expect(runs).toEqual([300_000, 900_000]);
+  });
+
   it("stops scheduling once stopped", async () => {
     const runs: number[] = [];
     const job = scheduleInterval("scan", jobTaking(1_000, runs), 1);

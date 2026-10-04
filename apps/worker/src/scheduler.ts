@@ -51,7 +51,12 @@ export function scheduleInterval(
   name: HeartbeatJob,
   fn: () => Promise<JobRunMeta | void>,
   intervalMinutes: number,
-  opts: { deadlineMinutes?: number; onDeadline?: (job: HeartbeatJob, runningForMs: number) => void } = {},
+  opts: {
+    deadlineMinutes?: number;
+    onDeadline?: (job: HeartbeatJob, runningForMs: number) => void;
+    /** How long to hold the first run, in ms - by default none, it runs at once. */
+    firstRunDelayMs?: () => Promise<number>;
+  } = {},
 ): ScheduledJob {
   const intervalMs = intervalMinutes * 60_000;
   const stallMs = Math.max(STALL_FLOOR_MS, intervalMs * STALL_INTERVALS);
@@ -126,7 +131,16 @@ export function scheduleInterval(
     }
   };
 
-  void run();
+  if (opts.firstRunDelayMs) {
+    void opts
+      .firstRunDelayMs()
+      .catch(() => 0)
+      .then((delay) => {
+        if (!stopped) next = setTimeout(() => void run(), Math.max(0, delay));
+      });
+  } else {
+    void run();
+  }
   return {
     stop: () => {
       stopped = true;
