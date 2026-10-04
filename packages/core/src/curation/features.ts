@@ -1,4 +1,5 @@
 import type { ScoredToken } from "../types.js";
+import { EMPTY_TRADE_FLOW, type TradeFlowFeatures } from "./tradeFlow.js";
 
 /**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
@@ -61,9 +62,40 @@ export const CANDIDATE_FEATURE_NAMES = [
   "minutesSinceFirstInBand",
   "dexBoosted",
   "hasDescription",
+  // Added 2026-10-04: trade-by-trade order flow from the PumpPortal stream (curation/tradeFlow.ts)
+  // - who is buying, how big, and what the launch's snipers and the dev are doing with their bags.
+  // Null on rows banked before, and whenever the tracker didn't watch the token long enough.
+  "uniqueBuyers5m",
+  "buysPerBuyer5m",
+  "avgBuySol5m",
+  "topBuyerShare5m",
+  "newBuyerShare5m",
+  "netFlow5mToMcap",
+  "tradesPerMin5m",
+  "earlyBuyerCount",
+  "earlyBuyerHoldPct",
+  "earlyBuyerSoldShare",
+  "devInitialBuySol",
+  "devSoldShare",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
+
+/** The order-flow features, in vector order - each is a TradeFlowFeatures field of the same name. */
+export const TRADE_FLOW_FEATURES = [
+  "uniqueBuyers5m",
+  "buysPerBuyer5m",
+  "avgBuySol5m",
+  "topBuyerShare5m",
+  "newBuyerShare5m",
+  "netFlow5mToMcap",
+  "tradesPerMin5m",
+  "earlyBuyerCount",
+  "earlyBuyerHoldPct",
+  "earlyBuyerSoldShare",
+  "devInitialBuySol",
+  "devSoldShare",
+] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
 
 export type CandidateFeatures = Record<CandidateFeatureName, number | null>;
 
@@ -111,6 +143,18 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   minutesSinceFirstInBand: "time in the band",
   dexBoosted: "paid DexScreener boost",
   hasDescription: "has a description",
+  uniqueBuyers5m: "distinct 5m buyers",
+  buysPerBuyer5m: "buys per buyer",
+  avgBuySol5m: "average buy size",
+  topBuyerShare5m: "biggest buyer's share",
+  newBuyerShare5m: "new-buyer share",
+  netFlow5mToMcap: "5m net SOL flow",
+  tradesPerMin5m: "trades per minute",
+  earlyBuyerCount: "launch snipers",
+  earlyBuyerHoldPct: "sniper holdings",
+  earlyBuyerSoldShare: "snipers selling",
+  devInitialBuySol: "dev's launch buy",
+  devSoldShare: "dev selling",
 };
 
 /**
@@ -166,6 +210,9 @@ export function scoredFromFeatures(
     hasTelegram: bool("hasTelegram"),
     hasWebsite: bool("hasWebsite"),
     narrativeTags: (num("narrativeTagCount") ?? 0) > 0 ? ["(replayed)"] : [],
+    tradeFlow: Object.fromEntries(
+      TRADE_FLOW_FEATURES.map((k) => [k, num(k) ?? null]),
+    ) as unknown as TradeFlowFeatures,
     rugScreen: { passed: true, reasons: [] },
     score: {
       momentum: num("scoreMomentum") ?? 0,
@@ -264,5 +311,6 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
     // Known whenever the source could have had one; a Pump.fun description is the launcher's
     // pitch, and its absence on a Pump.fun launch is itself a (weak) tell.
     hasDescription: scored.description === undefined ? null : scored.description.trim() !== "" ? 1 : 0,
+    ...(scored.tradeFlow ?? EMPTY_TRADE_FLOW),
   };
 }

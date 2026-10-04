@@ -22,6 +22,7 @@ import {
   type CandidateToken,
   type DiscoveredCoin,
   type WatchlistCandidate,
+  type TradeFlowFeatures,
 } from "@trenchscanner/core";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
@@ -60,7 +61,13 @@ export interface ScanDeps {
   rugCheck: RugCheckClient;
   helius: HeliusClient;
   /** The live PumpPortal launch/graduation feed, drained once per cycle. Optional: off when unset. */
-  stream?: { drain(): StreamEvent[] };
+  stream?: {
+    drain(): StreamEvent[];
+    /** Follow these mints' trades (see PumpPortalStream.watch). */
+    watch?(mints: readonly string[]): void;
+    /** Their order-flow features right now, when trade flow is on. */
+    tradeFlow?(mint: string): TradeFlowFeatures | undefined;
+  };
 }
 
 /**
@@ -325,6 +332,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // counter BEFORE the await and writes it after, so two candidates finishing close together can
   // each add to the same stale base and lose an increment. Only a log line was ever wrong, but a
   // counter that undercounts under exactly the concurrency it was built for is not worth keeping.
+  // Every candidate's trades get followed from here on (a no-op for ones already tracked) - the
+  // order-flow features need a few minutes of watching before they say anything.
+  deps.stream?.watch?.(candidates.map((c) => c.mintAddress));
+
   const perCandidateMatches: number[] = [];
   const curatedCycle = newCuratedCycle();
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
@@ -339,6 +350,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           holdingsByAddress,
           curatedCycle,
           env,
+          deps.stream?.tradeFlow?.(candidate.mintAddress),
         ),
       );
     } catch (err) {
@@ -615,6 +627,7 @@ async function processCandidate(
   holdingsByAddress: Map<string, WalletHoldings>,
   curatedCycle: CuratedCycle,
   env: Env,
+  tradeFlow?: TradeFlowFeatures,
 ): Promise<number> {
   const existingToken = await prisma.token.findUnique({ where: { mintAddress: candidate.mintAddress } });
   // The baseline for holderGrowthPct is the newest snapshot at least HOLDER_GROWTH_WINDOW_MINUTES
@@ -673,6 +686,7 @@ async function processCandidate(
       firstInBandAt,
     },
   );
+  if (tradeFlow) scored.tradeFlow = tradeFlow;
 
   const token = await prisma.token.upsert({
     where: { mintAddress: candidate.mintAddress },

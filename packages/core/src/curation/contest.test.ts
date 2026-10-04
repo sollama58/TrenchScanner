@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONTESTANTS, CONTESTANT_IDS, enabledContestants } from "./contestants.js";
+import { CONTESTANTS, CONTESTANT_IDS, ORDER_FLOW_FEATURES, enabledContestants } from "./contestants.js";
 import {
   defaultContestant,
   NEVER_EMIT_THRESHOLD,
@@ -55,7 +55,7 @@ describe("runContestTraining", () => {
     const orderFlow = results.find((r) => r.contestant === "order-flow")!.params as {
       featureNames: string[];
     };
-    expect(orderFlow.featureNames.length).toBeLessThan(20);
+    expect(orderFlow.featureNames).toEqual([...ORDER_FLOW_FEATURES]);
     const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
     expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "order-flow", "trees"]);
     expect(consensus.members.every((m) => m.quantiles.length > 0)).toBe(true);

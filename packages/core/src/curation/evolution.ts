@@ -273,7 +273,10 @@ export function withLanes(specs: readonly ContestantSpec[], lanes: readonly Lane
   const bySlot = new Map(lanes.map((l) => [l.slot, l]));
   return specs.map((s) => {
     const lane = s.role === "learner" ? bySlot.get(s.id) : undefined;
-    return lane ? { ...s, name: lane.name, description: lane.description, recipe: lane.recipe } : s;
+    // A founding lane IS the roster spec: it follows the code (a new input added to Order Flow
+    // reaches it) rather than the copy stored when it was seated.
+    if (!lane || lane.generation === 0) return s;
+    return { ...s, name: lane.name, description: lane.description, recipe: lane.recipe };
   });
 }
 
