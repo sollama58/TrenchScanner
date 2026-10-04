@@ -43,8 +43,8 @@ const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       { key: "maxRiskScore", label: "Max RugCheck risk", hint: "0-100, lower is safer" },
       {
         key: "maxFreshTop10WalletPct",
-        label: "Max fresh-wallet snipers",
-        hint: "top-10 holders on brand-new wallets",
+        label: "Max fresh wallets",
+        hint: "top-10 holders on wallets under a day old",
         unit: "%",
       },
       {
@@ -52,6 +52,20 @@ const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         label: "Max empty holder wallets",
         hint: "top-10 holders with nothing else",
         unit: "%",
+      },
+      {
+        key: "minFirstBuyersHolding",
+        label: "Min first buyers holding",
+        hint: "of the first 25 buyers; tokens without a count are skipped",
+        unit: "of 25",
+        step: 1,
+      },
+      {
+        key: "maxFirstBuyersHolding",
+        label: "Max first buyers holding",
+        hint: "of the first 25 buyers, e.g. 10 = snipers mostly gone",
+        unit: "of 25",
+        step: 1,
       },
     ],
   },
@@ -88,6 +102,8 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     minScore: null,
     maxFreshTop10WalletPct: null,
     maxEmptyTop10WalletPct: null,
+    minFirstBuyersHolding: null,
+    maxFirstBuyersHolding: null,
     isActive: count === 0,
   };
 }

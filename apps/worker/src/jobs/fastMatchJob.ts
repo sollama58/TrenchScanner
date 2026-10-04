@@ -3,6 +3,7 @@ import {
   createLogger,
   buildScoredToken,
   forEachWithConcurrency,
+  EMPTY_TRADE_FLOW,
   type Env,
   type DexScreenerClient,
   type OnChainProfile,
@@ -180,6 +181,15 @@ export async function runFastMatchCycle(
       // failing a minHolderGrowthPct filter - so this pass can never alert on a criterion it
       // did not actually evaluate.
     });
+    // The first-buyers count comes from the scan's trade stream, carried forward like the
+    // on-chain half so a filter rule on it is applied here too and the alert's snapshot keeps it.
+    if (entry.snapshot.firstBuyersHolding !== null) {
+      scored.tradeFlow = {
+        ...EMPTY_TRADE_FLOW,
+        firstBuyersHolding: entry.snapshot.firstBuyersHolding,
+        firstBuyersSeen: entry.snapshot.firstBuyersSeen,
+      };
+    }
     evaluated += 1;
     if (!scored.rugScreen.passed) return;
 

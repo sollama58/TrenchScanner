@@ -105,6 +105,10 @@ export function AlertCard({
   const freshAtAlert = s.freshTop10WalletPct;
   const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
   const freshPct = freshAtAlert ?? freshLater;
+  // The same fallback for the first-buyers count, which needs the trade stream to have seen the launch.
+  const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
+  const firstHolding = buyersFrom?.firstBuyersHolding ?? null;
+  const firstSeen = buyersFrom?.firstBuyersSeen ?? null;
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -218,6 +222,18 @@ export function AlertCard({
           >
             <dt>Fresh wallets</dt>
             <dd className="num">{pct(freshPct)}</dd>
+          </div>
+          <div
+            title={
+              firstHolding === null
+                ? "First 25 buyers still holding: not tracked for this token (its launch wasn't seen)"
+                : `${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
+                    buyersFrom === s ? ", at alert time" : ", from a scan after the alert"
+                  }`
+            }
+          >
+            <dt>Snipers</dt>
+            <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
           </div>
           <div>
             <dt>Risk</dt>

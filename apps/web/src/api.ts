@@ -89,6 +89,9 @@ export interface Snapshot {
   devWalletPct: number | null;
   riskScore: number | null;
   freshTop10WalletPct: number | null;
+  /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
+  firstBuyersHolding?: number | null;
+  firstBuyersSeen?: number | null;
   ageMinutes: number | null;
   graduated: boolean | null;
   score: number;
@@ -388,6 +391,8 @@ export interface FilterInput {
   minScore: number | null;
   maxFreshTop10WalletPct: number | null;
   maxEmptyTop10WalletPct: number | null;
+  minFirstBuyersHolding: number | null;
+  maxFirstBuyersHolding: number | null;
   isActive: boolean;
 }
 
