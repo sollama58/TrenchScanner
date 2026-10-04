@@ -117,6 +117,9 @@ export function reconcileMatchOutcome(
 /** Match writes in flight at once in the nightly reconcile. */
 const OUTCOME_WRITE_CONCURRENCY = 4;
 
+/** The furthest back the nightly peak sweep reads once it has ever succeeded - see below. */
+const SWEEP_MAX_LOOKBACK_DAYS = 3;
+
 export async function runOutcomeTrackingJob(
   dexScreener: DexScreenerClient,
   snapshotRetentionDays: number,
@@ -130,11 +133,23 @@ export async function runOutcomeTrackingJob(
   // by it. This is the safety net for exactly those rows.
   // From a day before the last completed run on: everything earlier is already in the recorded
   // peaks (see recordMatchPeaksFullSweep), and the day of slack covers a run that overlapped it.
-  const lastRun = await prisma.systemHeartbeat
-    .findUnique({ where: { job: "outcome-tracking" }, select: { lastSuccessAt: true } })
-    .catch(() => null);
+  //
+  // Never further back than SWEEP_MAX_LOOKBACK_DAYS, though. A run that fails keeps lastSuccessAt
+  // where it was, so each failing night read a day more history than the last - and a batch that
+  // failed for being too big (the statement timeout) only got bigger, a loop with no way out.
+  // The frequent match-peaks pass covers the recent history regardless. A failed heartbeat read
+  // fails the run rather than falling back to the whole 30 days, which is the hours-long sweep.
+  const lastRun = await prisma.systemHeartbeat.findUnique({
+    where: { job: "outcome-tracking" },
+    select: { lastSuccessAt: true },
+  });
   const snapshotsSince = lastRun?.lastSuccessAt
-    ? new Date(lastRun.lastSuccessAt.getTime() - 86_400_000)
+    ? new Date(
+        Math.max(
+          lastRun.lastSuccessAt.getTime() - 86_400_000,
+          startedAt - SWEEP_MAX_LOOKBACK_DAYS * 86_400_000,
+        ),
+      )
     : undefined;
   const swept = await recordMatchPeaksFullSweep(snapshotRetentionDays, snapshotsSince);
 
@@ -154,7 +169,6 @@ export async function runOutcomeTrackingJob(
     },
   });
 
-  const now = new Date();
   let uniqueMints = 0;
   let updated = 0;
   let skipped = 0;
@@ -166,6 +180,8 @@ export async function runOutcomeTrackingJob(
     // with the fast-match and scan lanes that alerts actually wait on.
     const live = await dexScreener.getTokensByAddresses(mints, 1);
     const mcapByMint = new Map(live.map((c) => [c.mintAddress, c.marketCapUsd]));
+    // Read after the fetch, which takes minutes: a new high is dated to when it was seen.
+    const now = new Date();
 
     // Four writes in flight rather than one: thousands of matches, one round trip each, was a
     // large share of this job's runtime, and each write is a single-row update by primary key.
@@ -193,17 +209,19 @@ export async function runOutcomeTrackingJob(
       // The live prices above take minutes to fetch, and match-peaks keeps raising peaks the whole
       // time - so a new high from this run only lands if it is still higher than what is on the
       // row now. Overwriting unconditionally lost peaks seen only by the live-price pings for
-      // good. The derived columns this skips are recomputed by repairOutcomeBookkeeping below.
-      const write =
-        update.peakMcapUsd !== undefined
-          ? await prisma.match.updateMany({
-              where: {
-                id: match.id,
-                OR: [{ peakMcapUsd: null }, { peakMcapUsd: { lt: update.peakMcapUsd } }],
-              },
-              data: update,
-            })
-          : await prisma.match.updateMany({ where: { id: match.id }, data: update });
+      // good. Only the peak itself is written: the derived columns were worked out from the row as
+      // it was read minutes ago, so writing them lowered a peakReturnPct match-peaks had since
+      // raised and replaced a hitHundredPctAt it had since stamped (set once, shown on the
+      // Leaderboard) with this run's later date. repairOutcomeBookkeeping below derives both from
+      // the row as it is.
+      if (update.peakMcapUsd === undefined || update.peakMcapAt === undefined) return;
+      const write = await prisma.match.updateMany({
+        where: {
+          id: match.id,
+          OR: [{ peakMcapUsd: null }, { peakMcapUsd: { lt: update.peakMcapUsd } }],
+        },
+        data: { peakMcapUsd: update.peakMcapUsd, peakMcapAt: update.peakMcapAt },
+      });
       updated += write.count;
     });
   }
@@ -224,7 +242,7 @@ export async function runOutcomeTrackingJob(
   // failed here would never have its older snapshots read again. Failing the run keeps
   // lastSuccessAt where it was, and the next run reads far enough back to cover them.
   if (swept.failedBatches > 0) {
-    throw new Error(`full peak sweep: ${swept.failedBatches} batch(es) failed; next run re-reads them`);
+    throw new Error(`full peak sweep: ${swept.failedBatches} token(s) failed; next run re-reads them`);
   }
 }
 

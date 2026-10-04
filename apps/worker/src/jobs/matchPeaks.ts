@@ -352,7 +352,7 @@ const FULL_SWEEP_TOKENS_PER_BATCH = 100;
  * and then died on a deadlock), holding row locks on every Match it touched the whole time, so it
  * deadlocked against the frequent pass and the candidate watcher. A run that dies that way never
  * records its heartbeat, and the daily outcome job hadn't completed since. Batched, each
- * statement holds its locks for one batch, a deadlock costs one batch (retried once), and the
+ * statement holds its locks for one batch, a failed batch is retried a token at a time, and the
  * rest of the sweep still lands.
  */
 export async function recordMatchPeaksFullSweep(
@@ -370,22 +370,24 @@ export async function recordMatchPeaksFullSweep(
     WHERE "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
     ORDER BY "tokenId"`;
   const total = { fromSnapshots: 0, fromLivePings: 0, failedBatches: 0 };
+  const add = (batch: PeakRecordingResult) => {
+    total.fromSnapshots += batch.fromSnapshots;
+    total.fromLivePings += batch.fromLivePings;
+  };
   for (let i = 0; i < tokens.length; i += FULL_SWEEP_TOKENS_PER_BATCH) {
     const tokenIds = tokens.slice(i, i + FULL_SWEEP_TOKENS_PER_BATCH).map((t) => t.tokenId);
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        const batch = await recordMatchPeaksForTokens(snapshotRetentionDays, tokenIds, snapshotsSince);
-        total.fromSnapshots += batch.fromSnapshots;
-        total.fromLivePings += batch.fromLivePings;
-        break;
-      } catch (err) {
-        if (attempt >= 2) {
-          logger.warn("full peak sweep batch failed, moving on", {
-            tokens: tokenIds.length,
-            error: String(err),
-          });
+    try {
+      add(await recordMatchPeaksForTokens(snapshotRetentionDays, tokenIds, snapshotsSince));
+    } catch {
+      // A deadlock or a timeout - a batch holding a token with a long history can run past the
+      // statement timeout every night. One token at a time, so only the token that really cannot
+      // be read counts as failed, rather than the whole batch failing the run night after night.
+      for (const tokenId of tokenIds) {
+        try {
+          add(await recordMatchPeaksForTokens(snapshotRetentionDays, [tokenId], snapshotsSince));
+        } catch (err) {
+          logger.warn("full peak sweep failed for a token, moving on", { tokenId, error: String(err) });
           total.failedBatches += 1;
-          break;
         }
       }
     }

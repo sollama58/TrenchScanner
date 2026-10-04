@@ -396,6 +396,58 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     await prisma.user.delete({ where: { id: user.id } });
   });
 
+  it("retires a row that never got its fill ungraded, instead of grading a late price as a loss", async () => {
+    const token = await createToken("unobserved");
+    // The worker was down for the whole hour: the first price it sees is 90 minutes in.
+    const anchorAt = new Date(Date.now() - 90 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, { entryAt: null, signalPriceUsd: null });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: row.id,
+        confidence: 0.7,
+        anchorMcapUsd: 100_000,
+        anchorPriceUsd: 1.0,
+        source: "heuristic-v1",
+      },
+    });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.1 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.entryAt).toBeNull();
+    expect(updated.finalizedAt).toBeNull();
+    expect(updated.hit2xIn1h).toBeNull();
+    expect(updated.labelValue).toBeNull();
+    expect(updated.finalized24hAt).not.toBeNull();
+    const after = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(after.hit2xIn1h).toBeNull();
+  });
+
+  it("leaves a row alone when an alert moved its anchor after the sweep read it", async () => {
+    const token = await createToken("moved-anchor");
+    const anchorAt = new Date(Date.now() - 2 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, { entryAt: null, signalPriceUsd: null });
+    const movedTo = new Date();
+    // The alert goes out while the sweep is fetching prices.
+    const dex = {
+      getTokensByAddresses: async (mints: string[]) => {
+        await prisma.candidateOutcome.updateMany({
+          where: { id: row.id, entryAt: null },
+          data: { anchorAt: movedTo, nextCheckAt: new Date(movedTo.getTime() + MINUTE) },
+        });
+        return mints.map((mint) => ({ mintAddress: mint, priceUsd: 1.5, marketCapUsd: 100_000 }));
+      },
+    } as unknown as DexScreenerClient;
+
+    await runCandidateWatchJob(dex, env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.entryAt).toBeNull();
+    expect(updated.anchorAt.getTime()).toBe(movedTo.getTime());
+    expect(updated.nextCheckAt.getTime()).toBe(movedTo.getTime() + MINUTE);
+  });
+
   it("advances a row DexScreener knows nothing about, instead of hot-looping it", async () => {
     const token = await createToken("dead-pair");
     const anchorAt = new Date(Date.now() - 5 * MINUTE);

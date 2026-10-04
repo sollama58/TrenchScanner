@@ -798,6 +798,10 @@ model Match {
   @@index([filterId])
   @@index([snapshotId])
   @@index([hitHundredPctAt, peakReturnPct])
+  // The match-peaks pass repairs rows by "peak recorded in the last few minutes" every cycle, and
+  // the peak passes pick matches by matchedAt; both scanned all of Match, which is never pruned.
+  @@index([peakMcapAt])
+  @@index([matchedAt])
 }
 
 /// Caches a wallet's earliest-ever transaction timestamp, keyed by address - not scoped to any

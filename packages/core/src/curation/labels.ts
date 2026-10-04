@@ -120,7 +120,8 @@ export function initialOutcomeAggregates(anchorPriceUsd: number, anchorAt: Date)
  *
  * With an entry rule, ticks before the fill are ignored outright (no trader holds the token yet,
  * so neither a 2x nor a stop-out has happened to them), and the first tick at or past the delay
- * takes the fill: the base moves to it and every aggregate restarts from that tick.
+ * takes the fill: the base moves to it and every aggregate restarts from that tick. A tick past
+ * the label window never takes it.
  */
 export function applyPriceTick(
   agg: OutcomeAggregates,
@@ -132,7 +133,13 @@ export function applyPriceTick(
   if (!Number.isFinite(priceUsd) || priceUsd <= 0) return updates;
 
   if (entry && agg.entryAt === null) {
-    if (at.getTime() - agg.anchorAt.getTime() < entry.delayMs) return updates;
+    const sinceAnchorMs = at.getTime() - agg.anchorAt.getTime();
+    if (sinceAnchorMs < entry.delayMs) return updates;
+    // No fill once the label window has passed: the first price seen after an outage would become
+    // the base, every aggregate would restart from it, and the window would close on the same
+    // tick - a "loss" graded on nothing the row ever watched, whatever the token did in its hour.
+    // A row that never got its fill closes ungraded instead (see the candidate watcher).
+    if (sinceAnchorMs > CANDIDATE_WATCH_WINDOW_MINUTES * 60_000) return updates;
     const base = Math.max(agg.anchorPriceUsd, priceUsd) * (1 + entry.slippageFraction);
     return {
       entryAt: at,

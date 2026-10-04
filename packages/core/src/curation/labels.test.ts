@@ -232,6 +232,12 @@ describe("fill-price grading", () => {
     expect(computeOutcomeLabels(agg).hit2xIn1h).toBe(false);
   });
 
+  it("never takes the fill after the label window - an outage's first price is not an entry", () => {
+    const agg = replayWithEntry(1, [[1.1, 90 * 60]]);
+    expect(agg.entryAt).toBeNull();
+    expect(agg.anchorPriceUsd).toBe(1);
+  });
+
   it("grades the double from the fill plus slippage, not the signal price", () => {
     // 2.4 is a 2.4x from the signal but only 1.79x from a 1.3 fill with 3% slippage.
     const missed = computeOutcomeLabels(
