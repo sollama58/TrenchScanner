@@ -854,6 +854,11 @@ model WalletHoldingsCache {
   /// which simply makes them a miss for every candidate rather than a wrong answer.
   perMintUsd Json @default("{}")
 
+  /// perMintUsd lists every priced holding, so a launch absent from it is a known zero and the
+  /// row can answer for launches the wallet turns up on later - see
+  /// WalletHoldingsResult.complete. False on older rows and on wallets too big to list in full.
+  breakdownComplete Boolean @default(false)
+
   checkedAt DateTime @default(now())
 
   /// Serves both the TTL sweep and the cleanup job's retention sweep.

@@ -151,6 +151,13 @@ export const CASH_EQUIVALENT_MINTS = new Set([
  */
 const DAS_CONCURRENCY = 3;
 
+/**
+ * The most priced holdings a reading lists in full (see WalletHoldingsResult.complete). Top-10
+ * holders of a fresh launch rarely hold more than a few dozen priced tokens; the cap keeps a
+ * whale's portfolio from bloating its cache row, which then just falls back to per-launch entries.
+ */
+const COMPLETE_BREAKDOWN_MAX = 100;
+
 /** searchAssets page size. 1000 is the documented maximum; see getOtherHoldingsUsdBatch. */
 const DAS_PAGE_LIMIT = 1000;
 
@@ -220,6 +227,14 @@ export type WalletHoldingsResult =
        * every candidate the wallet holds.
        */
       perMintUsd: Record<string, number>;
+      /**
+       * True when perMintUsd also lists EVERY priced holding (not only the mints of interest), so
+       * a mint absent from it was worth nothing in otherHoldingsUsd. That lets a cached reading
+       * answer for a launch the wallet turns up on later without a fresh 10-credit lookup. False
+       * for a wallet past the page cap or holding more than COMPLETE_BREAKDOWN_MAX priced tokens,
+       * whose breakdown would be partial or too big to cache.
+       */
+      complete: boolean;
     }
   | { status: "unsupported" }
   | { status: "failed" };
@@ -806,6 +821,8 @@ export class HeliusClient {
       const perMintUsd: Record<string, number> = {};
       for (const mint of interesting) perMintUsd[mint] = 0;
 
+      // Every priced holding, kept apart so the full list is only used when it is small enough.
+      const pricedByMint: Record<string, number> = {};
       for (const item of items) {
         if (!item.id || CASH_EQUIVALENT_MINTS.has(item.id)) continue;
         itemsSeen += 1;
@@ -813,11 +830,15 @@ export class HeliusClient {
         if (price !== null) {
           pricedItems += 1;
           total += price;
-          if (interesting.has(item.id)) perMintUsd[item.id] = (perMintUsd[item.id] ?? 0) + price;
+          pricedByMint[item.id] = (pricedByMint[item.id] ?? 0) + price;
         }
       }
+      const complete = !truncated && Object.keys(pricedByMint).length <= COMPLETE_BREAKDOWN_MAX;
+      for (const [mint, usd] of Object.entries(pricedByMint)) {
+        if (complete || interesting.has(mint)) perMintUsd[mint] = usd;
+      }
       usable += 1;
-      out.set(address, { status: "found", otherHoldingsUsd: total, perMintUsd });
+      out.set(address, { status: "found", otherHoldingsUsd: total, perMintUsd, complete });
     });
 
     // A whole batch of holdings with not one usable price is not a finding, it is a broken
