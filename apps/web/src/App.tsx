@@ -169,6 +169,8 @@ function WorkerStatus() {
   const bad = !scan || scan.stale || scan.hung;
   return (
     <span
+      role="status"
+      aria-label={bad ? "Scanner lagging" : "Scanning"}
       className={`status-pill ${bad ? "warn" : "ok"}`}
       title={data.jobs.map((j) => `${j.job}: ${ago(j.lastSuccessAt)}`).join("\n")}
     >

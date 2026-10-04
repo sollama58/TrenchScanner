@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { del, patch, post, ApiError, type AppConfig, type Filter, type FilterInput } from "../api";
 import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
@@ -252,6 +252,7 @@ export function FiltersTab() {
       <section className="panel editor">
         {editing ? (
           <FilterEditor
+            key={editing.id ?? "new"}
             draft={editing.draft}
             isNew={editing.id === null}
             config={config.data}
@@ -302,9 +303,18 @@ function FilterEditor({
   const set = <K extends keyof FilterInput>(key: K, value: FilterInput[K]) =>
     onChange({ ...draft, [key]: value });
   const num = (v: string): number | null => (v.trim() === "" ? null : Number(v));
+  // On a phone the editor sits below the list, out of sight: bring it up when it opens.
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const el = formRef.current;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top;
+    if (top > window.innerHeight * 0.6 || top < 0) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   return (
     <form
+      ref={formRef}
       className="editor-form"
       onSubmit={(e) => {
         e.preventDefault();
@@ -328,6 +338,7 @@ function FilterEditor({
             <span>From ($)</span>
             <input
               type="number"
+              inputMode="decimal"
               min={config?.scanBandMin}
               step="any"
               required
@@ -339,6 +350,7 @@ function FilterEditor({
             <span>To ($)</span>
             <input
               type="number"
+              inputMode="decimal"
               max={config?.scanBandMax}
               step="any"
               required
@@ -362,6 +374,7 @@ function FilterEditor({
                 </span>
                 <input
                   type="number"
+                  inputMode="decimal"
                   step={f.step ?? "any"}
                   placeholder="any"
                   value={draft[f.key] ?? ""}

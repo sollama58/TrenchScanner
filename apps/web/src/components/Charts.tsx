@@ -51,6 +51,9 @@ export interface GroupDatum {
   b: number | null;
   /** Shown under the label, e.g. how many alerts the bucket holds. */
   sub?: string;
+  /** Shorter forms used when the buckets are too narrow for the full ones (phones). */
+  shortLabel?: string;
+  shortSub?: string;
 }
 
 /**
@@ -96,6 +99,11 @@ export function TargetBars({
   const group = plotW / Math.max(1, data.length);
   const barW = Math.max(4, Math.min(28, (group - 14) / 2));
   const hovered = hover !== null ? data[hover] : undefined;
+  // Under ~70px a bucket's two lines of text run into the next bucket's.
+  const narrow = group < 70;
+  // The tooltip is centered on its bucket but kept inside the chart, so it never runs off a phone screen.
+  const tipX =
+    hover === null ? 0 : Math.min(Math.max(padL + hover * group + group / 2, 90), Math.max(90, width - 90));
 
   return (
     <figure className="chart">
@@ -137,7 +145,7 @@ export function TargetBars({
                   <path className="bar s2" d={barPath(x0 + barW + 2, y(d.b), barW, padT + plotH)} />
                 )}
                 <text className="tick" x={padL + i * group + group / 2} y={height - 18} textAnchor="middle">
-                  {d.label}
+                  {narrow ? (d.shortLabel ?? d.label) : d.label}
                 </text>
                 {d.sub && (
                   <text
@@ -146,7 +154,7 @@ export function TargetBars({
                     y={height - 5}
                     textAnchor="middle"
                   >
-                    {d.sub}
+                    {narrow ? (d.shortSub ?? d.sub) : d.sub}
                   </text>
                 )}
               </g>
@@ -155,10 +163,7 @@ export function TargetBars({
           <line className="axis" x1={padL} x2={width - padR} y1={padT + plotH} y2={padT + plotH} />
         </svg>
         {hovered && (
-          <div
-            className="tooltip"
-            style={{ left: `${((padL + hover! * group + group / 2) / width) * 100}%` }}
-          >
+          <div className="tooltip" style={{ left: `${(tipX / width) * 100}%` }}>
             <strong>{hovered.label}</strong>
             <span>
               <i className="swatch s1" /> {aLabel}: {hovered.a === null ? "–" : `${hovered.a.toFixed(1)}%`}
