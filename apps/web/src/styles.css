@@ -628,6 +628,64 @@ input[type="checkbox"] {
 .window-note {
   margin: -8px 0 0 4px;
 }
+.window-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: -8px;
+}
+.window-row .window-note {
+  margin: 0 0 0 4px;
+}
+/* Market weather: informational, so a quiet pill rather than a banner. */
+.weather-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--ink-2);
+  cursor: help;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+.weather-chip .num {
+  font-weight: 500;
+  color: var(--muted);
+}
+.weather-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.weather-chip.hot {
+  color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 40%, transparent);
+  background: var(--good-wash);
+}
+.weather-chip.hot .weather-dot {
+  background: var(--good-ink);
+}
+.weather-chip.cold {
+  color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  background: var(--bad-wash);
+}
+.weather-chip.cold .weather-dot {
+  background: var(--bad-ink);
+}
+.weather-chip.normal .weather-dot {
+  background: var(--warn);
+}
 .kpi-ring {
   justify-content: center;
 }
