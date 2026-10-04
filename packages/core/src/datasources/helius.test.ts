@@ -325,6 +325,57 @@ function gmaServer(account: (key: string) => unknown) {
   );
 }
 
+describe("HeliusClient.getEarliestActivityBatch with boundSufficientBefore", () => {
+  it("settles what one signatures page can, and pays for getTransactionsForAddress only for the rest", async () => {
+    // getSignaturesForAddress is 1 credit, getTransactionsForAddress 10: a short history ("new")
+    // or a full page reaching past the cutoff ("old") needs nothing more; only a busy wallet whose
+    // full page sits entirely inside the window ("busy") does.
+    const cutoff = SECONDS;
+    const page = (blockTime: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({ signature: `s${i}`, blockTime }));
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => {
+        const address = c.params[0] as string;
+        if (c.method === "getTransactionsForAddress") {
+          return {
+            jsonrpc: "2.0",
+            id: c.id,
+            result: { data: [{ signature: "first", blockTime: cutoff - 5 }] },
+          };
+        }
+        const result =
+          address === "new"
+            ? page(cutoff + 60, 3)
+            : address === "old"
+              ? page(cutoff - 60, 200)
+              : page(cutoff + 60, 200);
+        return { jsonrpc: "2.0", id: c.id, result };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+
+    const result = await client.getEarliestActivityBatch(["new", "old", "busy"], {
+      boundSufficientBefore: new Date(cutoff * 1000),
+    });
+
+    const sent = requests.flatMap((r) =>
+      (r.body as { method: string; params: [string] }[]).map((c) => [c.method, c.params[0]]),
+    );
+    expect(sent.filter(([m]) => m === "getTransactionsForAddress")).toEqual([
+      ["getTransactionsForAddress", "busy"],
+    ]);
+    expect(result.get("new")).toEqual({
+      status: "found",
+      earliestActivityAt: new Date((cutoff + 60) * 1000),
+    });
+    expect(result.get("old")).toEqual({ status: "older-than", boundAt: new Date((cutoff - 60) * 1000) });
+    expect(result.get("busy")).toEqual({
+      status: "found",
+      earliestActivityAt: new Date((cutoff - 5) * 1000),
+    });
+  });
+});
+
 describe("HeliusClient.getMintAuthorityStatusBatch", () => {
   function mintAccount(mintAuthority: string | null, freezeAuthority: string | null) {
     return { data: { parsed: { info: { mintAuthority, freezeAuthority } } } };

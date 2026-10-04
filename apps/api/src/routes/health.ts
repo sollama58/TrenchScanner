@@ -86,7 +86,7 @@ export async function registerHealthRoutes(app: FastifyInstance) {
   });
 }
 
-/** The timing fields of a heartbeat's meta, and nothing else it might carry. */
+/** The timing and call-count fields of a heartbeat's meta, and nothing else it might carry. */
 function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
   const m = meta as Record<string, unknown>;
@@ -95,6 +95,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   for (const [key, value] of Object.entries(m)) if (typeof value === "number") out[key] = value;
   const stages = stageTimings(meta, "stagesMs");
   if (stages) out.stagesMs = stages;
+  // The scan's paid RPC calls per method ({ method: count }) - what the Helius plan bills on.
+  const rpcCalls = stageTimings(meta, "rpcCalls");
+  if (rpcCalls) out.rpcCalls = rpcCalls;
   return Object.keys(out).length > 0 ? out : null;
 }
 
