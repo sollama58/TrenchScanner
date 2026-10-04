@@ -46,9 +46,25 @@ describe("groupSameTokenCalls", () => {
       newestFirst([call("A", 0, "consensus"), call("A", 20, "trees"), call("B", 10, "trees")]),
       WINDOW,
     );
-    expect(groups.map((g) => g.lead.id)).toEqual(["trees-B-10", "consensus-A-0"]);
-    expect(groups[1]!.calls.map((c) => c.model)).toEqual(["consensus", "trees"]);
-    expect(groups[1]!.calls.map((c) => c.modelName)).toEqual(["CONSENSUS", "TREES"]);
+    // Each card sits at its latest call (A's at 20 minutes), but shows its first.
+    expect(groups.map((g) => g.lead.id)).toEqual(["consensus-A-0", "trees-B-10"]);
+    expect(groups.map((g) => g.newest.id)).toEqual(["trees-A-20", "trees-B-10"]);
+    expect(groups[0]!.calls.map((c) => c.model)).toEqual(["consensus", "trees"]);
+    expect(groups[0]!.calls.map((c) => c.modelName)).toEqual(["CONSENSUS", "TREES"]);
+  });
+
+  it("groups each call by what came after it, so a read cut short only loses older calls", () => {
+    const all = newestFirst([
+      call("A", 0, "consensus"),
+      call("A", 30, "trees"),
+      call("A", 60, "rules"),
+      call("B", 45, "trees"),
+    ]);
+    const full = groupSameTokenCalls(all, WINDOW);
+    // Cut the read after the newest two calls: the same cards, in the same places.
+    const cut = groupSameTokenCalls(all.slice(0, 2), WINDOW);
+    expect(cut.map((g) => g.newest.id)).toEqual(full.map((g) => g.newest.id));
+    expect(full[0]!.calls.map((c) => c.model)).toEqual(["consensus", "trees", "rules"]);
   });
 
   it("keeps a model's own repeat call as a new alert", () => {
