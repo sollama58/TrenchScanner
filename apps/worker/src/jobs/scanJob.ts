@@ -244,14 +244,14 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
 
   const discovered: WatchlistCandidate[] = [
     ...newMints.map((c) => toWatchlistCandidate(c, "pumpfun")),
-    ...streamed
-      .filter((e) => e.kind === "create")
-      .map((e) => ({
-        mintAddress: e.mintAddress,
-        symbol: e.symbol,
-        name: e.name,
-        discoverySource: "pumpportal",
-      })),
+    // Graduations too: a mint launched before this worker started, or that no Pump.fun page
+    // showed, is otherwise only "revived" below - an UPDATE that finds no row and drops it.
+    ...streamed.map((e) => ({
+      mintAddress: e.mintAddress,
+      symbol: e.symbol,
+      name: e.name,
+      discoverySource: "pumpportal",
+    })),
     ...trending,
     ...active.map((c) => toWatchlistCandidate(c, "pumpfun-active")),
     ...(koth ? [toWatchlistCandidate(koth, "pumpfun-koth")] : []),
@@ -285,6 +285,35 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     return { stagesMs };
   }
 
+  // Tokens someone currently has open on a Live Feed page (see the comment on
+  // Token.lastViewedAt) keep getting re-scanned regardless of mcap band, so "Now"/% change
+  // stays live for a genuine breakout winner instead of freezing the moment it leaves the
+  // MCAP_FILTER_MIN/MAX band. Every viewed token is asked for, since the refresh keeps only the
+  // in-band ones; those it already covers are dropped from the answer below.
+  //
+  // Looked up alongside the watchlist refresh, on the same tight timeouts and deadline: this
+  // lookup used to run after it on fetchJson's defaults (10s, two retries), and whenever
+  // DexScreener stalled it added another 20s to the cycle - every alert waiting on prices for
+  // tokens that are only being watched (2026-10-04: viewedRefresh 20.1s, a 30.6s cycle).
+  const viewCutoff = new Date(Date.now() - env.ACTIVE_VIEW_WINDOW_MINUTES * 60_000);
+  const activelyViewed = await prisma.token.findMany({
+    where: { lastViewedAt: { gt: viewCutoff } },
+    select: { mintAddress: true, firstSeenAt: true },
+  });
+  const viewedLookup =
+    activelyViewed.length > 0
+      ? deps.dexScreener
+          .getTokensByAddresses(
+            activelyViewed.map((t) => t.mintAddress),
+            5,
+            { timeoutMs: 5000, retries: 1, deadlineMs: 10_000 },
+          )
+          .catch((err: unknown) => {
+            logger.warn("failed to refresh actively-viewed out-of-band tokens", { error: String(err) });
+            return [] as CandidateToken[];
+          })
+      : Promise.resolve([] as CandidateToken[]);
+
   let candidates: CandidateToken[];
   try {
     const refreshed = await refreshAndFilterToBand(
@@ -306,28 +335,15 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     inBand: candidates.length,
   });
 
-  // Tokens someone currently has open on a Live Feed page (see the comment on
-  // Token.lastViewedAt) keep getting re-scanned regardless of mcap band, so "Now"/% change
-  // stays live for a genuine breakout winner instead of freezing the moment it leaves the
-  // MCAP_FILTER_MIN/MAX band. Only looks up ones the in-band refresh above didn't already cover.
   const alreadyCovered = new Set(candidates.map((c) => c.mintAddress));
-  const viewCutoff = new Date(Date.now() - env.ACTIVE_VIEW_WINDOW_MINUTES * 60_000);
-  const activelyViewed = await prisma.token.findMany({
-    where: { lastViewedAt: { gt: viewCutoff }, mintAddress: { notIn: [...alreadyCovered] } },
-  });
-  if (activelyViewed.length > 0) {
-    try {
-      const viewedMarketData = await deps.dexScreener.getTokensByAddresses(
-        activelyViewed.map((t) => t.mintAddress),
-      );
-      candidates.push(...viewedMarketData);
-      logger.info("kept scanning actively-viewed tokens outside the mcap band", {
-        count: viewedMarketData.length,
-      });
-    } catch (err) {
-      logger.warn("failed to refresh actively-viewed out-of-band tokens", { error: String(err) });
-    }
+  const viewedMarketData = (await viewedLookup).filter((c) => !alreadyCovered.has(c.mintAddress));
+  if (viewedMarketData.length > 0) {
+    candidates.push(...viewedMarketData);
+    logger.info("kept scanning actively-viewed tokens outside the mcap band", {
+      count: viewedMarketData.length,
+    });
   }
+  lap("viewedRefresh");
 
   if (candidates.length === 0) {
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
@@ -335,7 +351,6 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     });
     return { stagesMs };
   }
-  lap("viewedRefresh");
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
   // Cached with a short TTL so the scan cadence and RugCheck's request rate are independent -
@@ -550,6 +565,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       );
     } catch (err) {
       logger.error("failed to process candidate", { mint: candidate.mintAddress, error: String(err) });
+      // Whatever this cycle would have said is unknown, so the fast lane must not keep matching
+      // on the token's previous (possibly passing) verdict.
+      const tokenId = priors.get(candidate.mintAddress)?.token?.id;
+      if (tokenId) dropScanVerdict(tokenId);
     }
   });
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
@@ -1096,9 +1115,14 @@ async function processCandidate(
 ): Promise<number> {
   const existingToken = prior.token;
   const onChain = withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env);
-  // Prefer the DEX pair's own creation time (accurate for tokens that already migrated off the
-  // bonding curve); fall back to when we first added this mint to our watchlist.
-  const createdAt = candidate.pairCreatedAt ?? watchlistFirstSeenAt ?? existingToken?.firstSeenAt;
+  // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
+  // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
+  // whose creation time is the graduation, and age read from it restarted at zero - a six-hour
+  // old token matched a "max 30 minutes old" filter the moment it bonded.
+  const ageAnchors = [candidate.pairCreatedAt, watchlistFirstSeenAt, existingToken?.firstSeenAt]
+    .filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()))
+    .map((d) => d.getTime());
+  const createdAt = ageAnchors.length > 0 ? new Date(Math.min(...ageAnchors)) : undefined;
 
   // First sighting inside the curated band, stamped once and kept - the anchor for the
   // minutesSinceFirstInBand feature.
@@ -1227,7 +1251,9 @@ async function processCandidate(
       const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
       // A pick that lost an earlier governor pass re-contends while its event is spent - see
       // takeContenderRetry. A fresh event decides from scratch and supersedes any retry.
-      const retry = takeContenderRetry(token.id);
+      // Taken only once there is an event to contend on: with none (a zero-price moment, say)
+      // a pick that lost on capacity keeps its retry for the next cycle.
+      const retry = event ? takeContenderRetry(token.id) : null;
       if (event?.created) {
         await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id);
       } else if (event && retry) {

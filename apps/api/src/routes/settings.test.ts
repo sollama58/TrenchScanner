@@ -92,6 +92,24 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     expect((await call("user", "GET", "/settings")).json().alerts).toEqual(expected);
   });
 
+  it("keeps every change when several saves land at once", async () => {
+    const changes = [
+      { sound: "bell" },
+      { volume: 12 },
+      { soundEnabled: false },
+      { browserNotifications: true },
+    ];
+    const results = await Promise.all(changes.map((c) => call("user", "PUT", "/settings/alerts", c)));
+    expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200, 200]);
+    const alerts = (await call("user", "GET", "/settings")).json().alerts;
+    expect(alerts).toMatchObject({
+      sound: "bell",
+      volume: 12,
+      soundEnabled: false,
+      browserNotifications: true,
+    });
+  });
+
   it("rejects unknown sounds, out-of-range volume and unknown fields", async () => {
     expect((await call("user", "PUT", "/settings/alerts", { sound: "foghorn" })).statusCode).toBe(400);
     expect((await call("user", "PUT", "/settings/alerts", { volume: 101 })).statusCode).toBe(400);

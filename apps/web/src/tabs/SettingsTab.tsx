@@ -6,6 +6,7 @@ import {
   notificationState,
   previewAlert,
   requestNotifications,
+  sendTestAlert,
   saveAlertPrefs,
   useSettings,
   type NotificationState,
@@ -74,12 +75,48 @@ function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
   const [volume, setVolume] = useState(prefs.volume);
   const [permission, setPermission] = useState<NotificationState>(notificationState);
   useEffect(() => setVolume(prefs.volume), [prefs.volume]);
+  // What the last test did, shown under the button.
+  const [testResult, setTestResult] = useState<string | null>(null);
   useEffect(() => {
     // The permission can change in the browser's own site settings while this tab is open.
     const onFocus = () => setPermission(notificationState());
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
   }, []);
+
+  const test = async () => {
+    setTestResult(null);
+    let state = notificationState();
+    // A test is the obvious moment to ask, if the browser hasn't been asked yet.
+    if (state === "default") {
+      state = await requestNotifications();
+      setPermission(state);
+      if (state === "granted" && !prefs.browserNotifications) save({ browserNotifications: true });
+    }
+    const result = await sendTestAlert({ ...prefs, volume });
+    const sound = prefs.soundEnabled ? "Played your sound. " : "";
+    if (result === null) {
+      setTestResult(
+        state === "denied"
+          ? `${sound}No notification: this site is blocked in your browser's notification settings.`
+          : state === "unsupported"
+            ? `${sound}No notification: this browser can't show them from a web page.`
+            : `${sound}No notification: permission wasn't given.`,
+      );
+    } else if (!result.ok) {
+      setTestResult(`${sound}The browser refused the notification: ${result.reason}`);
+    } else {
+      setTestResult(
+        `${sound}Test notification sent. If nothing popped up, your computer is hiding it: check that ` +
+          "notifications are allowed for your browser in the system settings (macOS: System Settings › " +
+          "Notifications; Windows: Settings › System › Notifications) and that Focus / Do Not Disturb is off.",
+      );
+    }
+  };
 
   const save = (change: Parameters<typeof saveAlertPrefs>[0]) => {
     setError(null);
@@ -87,12 +124,12 @@ function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
   };
 
   const chooseSound = (sound: AlertSound) => {
-    previewAlert({ ...prefs, sound, volume }, false);
+    previewAlert({ ...prefs, sound, volume });
     if (sound !== prefs.sound) save({ sound });
   };
 
   const commitVolume = () => {
-    previewAlert({ ...prefs, volume }, false);
+    previewAlert({ ...prefs, volume });
     if (volume !== prefs.volume) save({ volume });
   };
 
@@ -121,11 +158,7 @@ function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
             it follows you to other devices.
           </p>
         </div>
-        <button
-          className="ghost"
-          disabled={saved === null}
-          onClick={() => previewAlert({ ...prefs, volume }, notifyLive)}
-        >
+        <button className="ghost" disabled={saved === null} onClick={() => void test()}>
           Send a test alert
         </button>
       </header>
@@ -197,7 +230,9 @@ function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
                   ? "Notifications are blocked for this site. Allow them in your browser's site settings, then come back."
                   : notifyLive
                     ? "On. Each new alert pops up with the token and who called it; click it to come back here."
-                    : "Your browser will ask for permission when you turn this on."}
+                    : permission === "granted"
+                      ? "Off. Allowed by your browser; turn this on to get one for each new alert."
+                      : "Your browser will ask for permission when you turn this on."}
             </p>
 
             <h4>Alert me for</h4>
@@ -219,6 +254,11 @@ function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
             </label>
           </fieldset>
         </div>
+      )}
+      {testResult && (
+        <p className="notice small" role="status">
+          {testResult}
+        </p>
       )}
       {error && <p className="error small">Couldn&apos;t save that: {error}</p>}
     </section>

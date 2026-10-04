@@ -21,7 +21,8 @@ export const FIRST_BUYERS = 25;
 /** A first buyer left holding under this share of what they bought counts as sold out (dust). */
 const HOLDING_DUST_SHARE = 0.01;
 
-const MAX_WINDOW_TRADES = 300;
+/** Trades kept per mint for the 5m window; a busier mint's figures cover the span kept - see features. */
+const MAX_WINDOW_TRADES = 1_000;
 const MAX_WALLETS_PER_MINT = 300;
 const MAX_EARLY_WALLETS = 100;
 
@@ -129,6 +130,8 @@ class MintFlow {
   /** wallet -> first trade time, insertion-ordered so the oldest go first when full. */
   readonly wallets = new Map<string, number>();
   window: WindowTrade[] = [];
+  /** When the newest trade dropped off a full window buffer was made, if any - see features. */
+  droppedThrough: number | null = null;
   lastTradeAt: number;
   lastMcapSol: number | null = null;
 
@@ -193,12 +196,13 @@ export class TradeFlowBook {
     const flow = this.ensure(l.mint, l.at);
     flow.launchAt = l.at;
     flow.observedSince = Math.min(flow.observedSince, l.at);
-    if (l.creator) {
+    // A repeated create message must not reset a bag that has since seen the dev sell.
+    if (l.creator && !flow.dev) {
       flow.creator = l.creator;
       flow.dev = { bought: l.initialBuyTokens ?? 0, sold: 0, balance: l.initialBuyTokens ?? null };
       flow.wallets.set(l.creator, l.at);
     }
-    flow.devInitialBuySol = l.initialBuySol ?? null;
+    flow.devInitialBuySol ??= l.initialBuySol ?? null;
     if (l.marketCapSol !== undefined) flow.lastMcapSol = l.marketCapSol;
     return fresh;
   }
@@ -263,7 +267,10 @@ export class TradeFlowBook {
     }
 
     flow.window.push({ at: t.at, buy: t.side === "buy", sol: t.sol, wallet: t.wallet, first });
-    if (flow.window.length > MAX_WINDOW_TRADES) flow.window.splice(0, flow.window.length - MAX_WINDOW_TRADES);
+    if (flow.window.length > MAX_WINDOW_TRADES) {
+      const dropped = flow.window.splice(0, flow.window.length - MAX_WINDOW_TRADES);
+      flow.droppedThrough = dropped[dropped.length - 1]!.at;
+    }
   }
 
   features(mint: string, now: number): TradeFlowFeatures {
@@ -276,7 +283,13 @@ export class TradeFlowBook {
     // A full five minutes watched, or the token's whole life when we saw it launch - otherwise a
     // half-watched window would read as a quiet one.
     if (flow.observedSince <= since || (flow.launchAt !== null && flow.launchAt <= flow.observedSince)) {
-      const span = Math.max(1, Math.min(FLOW_WINDOW_MS, now - flow.observedSince)) / 60_000;
+      // A full window buffer has dropped its oldest trades: the figures then cover the span from
+      // the oldest one kept, not five minutes - dividing by five minutes capped a busy mint's
+      // trade rate at MAX_WINDOW_TRADES / 5 a minute.
+      const truncated =
+        flow.droppedThrough !== null && flow.droppedThrough >= since && flow.window.length > 0;
+      const covered = truncated ? now - flow.window[0]!.at : FLOW_WINDOW_MS;
+      const span = Math.max(1, Math.min(covered, now - flow.observedSince)) / 60_000;
       const buys = flow.window.filter((w) => w.buy);
       const byWallet = new Map<string, number>();
       let buySol = 0;
