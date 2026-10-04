@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { MatchStream, type StreamSink } from "./matchStream.js";
+// Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
+import "./bootstrap-env.js";
+import { createServer, connect, type Socket } from "node:net";
+import { request as httpRequest } from "node:http";
+import { afterEach, describe, expect, it } from "vitest";
+import { Client } from "pg";
+import type { FastifyInstance } from "fastify";
+import { MATCH_CHANNEL, loadEnv, prisma } from "@trenchscanner/core";
+import { LISTEN_APPLICATION_NAME, MatchStream, type StreamSink } from "./matchStream.js";
+import { buildServer } from "./server.js";
+import { createSessionSigner, SESSION_COOKIE_NAME } from "./auth/session.js";
 
 /**
  * Collects what would have gone down the socket.
@@ -250,5 +259,161 @@ describe("MatchStream.dispatchCurated", () => {
     s.dispatchCurated(JSON.stringify({ alertId: "alert-1" }));
 
     expect(curated.written).toEqual([]);
+  });
+});
+
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+
+/** Polls until `check` holds, so the tests wait on the real reconnect rather than a fixed sleep. */
+async function until(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/**
+ * A TCP relay in front of Postgres that can go silent without closing anything - what a database
+ * host that vanished mid-connection looks like from this side: no FIN, no RST, just no replies.
+ */
+async function silentableRelay(databaseUrl: string) {
+  const target = new URL(databaseUrl);
+  const sockets: Socket[] = [];
+  const pairs: [Socket, Socket][] = [];
+  const server = createServer((downstream) => {
+    const upstream = connect(Number(target.port || 5432), target.hostname);
+    downstream.pipe(upstream);
+    upstream.pipe(downstream);
+    downstream.on("error", () => {});
+    upstream.on("error", () => {});
+    sockets.push(downstream, upstream);
+    pairs.push([downstream, upstream]);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const relayed = new URL(databaseUrl);
+  relayed.hostname = "127.0.0.1";
+  relayed.port = String((server.address() as { port: number }).port);
+  return {
+    url: relayed.toString(),
+    /** Stops forwarding on every connection open now; new connections still get through. */
+    silence() {
+      for (const [downstream, upstream] of pairs.splice(0)) {
+        downstream.unpipe(upstream);
+        upstream.unpipe(downstream);
+        downstream.pause();
+        upstream.pause();
+      }
+    },
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+describe.skipIf(!dbAvailable)("MatchStream LISTEN connection", () => {
+  const databaseUrl = process.env.DATABASE_URL!;
+  const cleanups: (() => Promise<unknown>)[] = [];
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  });
+
+  const notifyMatch = async (userId: string, matchId: string) => {
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+    await client.query("SELECT pg_notify($1, $2)", [MATCH_CHANNEL, JSON.stringify({ userId, matchId })]);
+    await client.end();
+  };
+
+  it("reconnects after the database drops the session, and delivers again", async () => {
+    // What a Postgres restart does to the session: the server ends it from its side.
+    const s = new MatchStream(databaseUrl);
+    cleanups.push(() => s.stop());
+    s.start();
+    await until(() => s.connected);
+
+    const admin = new Client({ connectionString: databaseUrl });
+    await admin.connect();
+    cleanups.push(() => admin.end());
+    await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1", [
+      LISTEN_APPLICATION_NAME,
+    ]);
+    await until(() => !s.connected);
+    await until(() => s.connected);
+
+    const alice = sink();
+    s.subscribe("alice", alice.sink);
+    await notifyMatch("alice", "after-restart");
+    await until(() => alice.written.length > 0);
+    expect(alice.written[0]).toContain("after-restart");
+  });
+
+  it("notices a connection that went silent without closing, and replaces it", async () => {
+    // Nothing errors on a half-open socket that only ever listens - before the liveness check,
+    // this stream reported connected forever and never received another notification.
+    const relay = await silentableRelay(databaseUrl);
+    cleanups.push(() => relay.close());
+    const s = new MatchStream(relay.url, undefined, 300);
+    cleanups.push(() => s.stop());
+    s.start();
+    await until(() => s.connected);
+
+    relay.silence();
+    await s.checkConnection();
+    expect(s.connected).toBe(false);
+    await until(() => s.connected);
+
+    const alice = sink();
+    s.subscribe("alice", alice.sink);
+    await notifyMatch("alice", "after-silence");
+    await until(() => alice.written.length > 0);
+  });
+});
+
+describe.skipIf(!dbAvailable)("server close with a stream open", () => {
+  const TAG = `match-stream-close-test-${Date.now()}`;
+  let app: FastifyInstance | undefined;
+
+  afterEach(async () => {
+    await prisma.whitelist.deleteMany({ where: { walletAddress: `${TAG}-wallet` } });
+    await prisma.user.deleteMany({ where: { walletAddress: `${TAG}-wallet` } });
+  });
+
+  it("finishes closing instead of waiting forever on the hijacked response", async () => {
+    const env = loadEnv();
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet` } });
+    await prisma.whitelist.create({ data: { walletAddress: `${TAG}-wallet`, addedBy: TAG } });
+    const cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
+      userId: user.id,
+      walletAddress: user.walletAddress,
+    });
+    app = await buildServer(env);
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as { port: number };
+
+    const streamEnded = new Promise<string>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          port,
+          host: "127.0.0.1",
+          path: "/matches/stream",
+          headers: { cookie: `${SESSION_COOKIE_NAME}=${cookie}` },
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => resolve(body));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    await until(() => app!.matchStream.subscriberCount === 1);
+
+    const closed = app.close().then(() => "closed");
+    const timedOut = new Promise((resolve) => setTimeout(() => resolve("hung"), 5_000));
+    expect(await Promise.race([closed, timedOut])).toBe("closed");
+    expect(await streamEnded).toContain("event: ready");
   });
 });

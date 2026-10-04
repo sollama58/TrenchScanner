@@ -67,9 +67,23 @@ type CuratedPage = {
  */
 const INSIGHTS_CACHE_TTL_MS = 5 * 60_000;
 
-const insightsQuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(90).default(30),
-});
+/**
+ * The windows the Model tab offers, and the only ones served. Each is its own cache entry, and
+ * a fill is a dozen aggregates over the largest tables; any day count from 1 to 90 used to be
+ * accepted, so walking `?days=` forced a fresh fill per request (180 of them per insights
+ * cache lifetime) and could hold most of the 12-connection pool doing it.
+ */
+const REPORT_WINDOWS_DAYS = [7, 30, 90] as const;
+
+const reportDaysSchema = z.coerce
+  .number()
+  .int()
+  .refine((d) => (REPORT_WINDOWS_DAYS as readonly number[]).includes(d), {
+    message: `days must be one of ${REPORT_WINDOWS_DAYS.join(", ")}`,
+  })
+  .default(30);
+
+const insightsQuerySchema = z.object({ days: reportDaysSchema });
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(10_000).default(1),
@@ -77,9 +91,7 @@ const listQuerySchema = z.object({
   model: z.string().max(64).optional(),
 });
 
-const leaderboardQuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(90).default(30),
-});
+const leaderboardQuerySchema = z.object({ days: reportDaysSchema });
 
 /** Live records move as outcomes finalize (hourly); the Model tab polls every two minutes. */
 const LEADERBOARD_CACHE_TTL_MS = 3 * 60_000;
@@ -246,7 +258,7 @@ export async function registerCuratedRoutes(
     let cache = leaderboardCache.get(days);
     if (!cache) {
       cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS);
-      // Bounded by the schema: at most 90 windows, and in practice the UI's few.
+      // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
       leaderboardCache.set(days, cache);
     }
     const [board, state, saved] = await Promise.all([
@@ -490,7 +502,7 @@ export async function registerCuratedRoutes(
     let cache = insightsCache.get(key);
     if (!cache) {
       cache = new SharedCache<ModelInsights>(INSIGHTS_CACHE_TTL_MS);
-      // Bounded by the schema: 90 windows x 2 audiences at most, and in practice the UI's three.
+      // Bounded by the schema: REPORT_WINDOWS_DAYS x 2 audiences.
       insightsCache.set(key, cache);
     }
     return cache.get(() => buildModelInsights(opts.env, parsed.data.days, isAdmin));

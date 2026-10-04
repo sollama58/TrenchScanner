@@ -4,6 +4,9 @@ import { buildServer } from "./server.js";
 
 const logger = createLogger("api");
 
+/** Under Render's default 30-second grace period between SIGTERM and SIGKILL. */
+const SHUTDOWN_DEADLINE_MS = 20_000;
+
 const INSECURE_DEFAULT_JWT_SECRET = "dev-insecure-default-jwt-secret-change-me";
 
 async function main() {
@@ -27,6 +30,30 @@ async function main() {
   const port = Number(process.env.PORT) || env.API_PORT;
   await app.listen({ port, host: "0.0.0.0" });
   logger.info("api listening", { port });
+
+  // Render stops an instance with SIGTERM on every deploy and restart, then kills it outright
+  // after its grace period. Node's default for SIGTERM is to exit on the spot, which cut every
+  // in-flight request and skipped the onClose hooks (the buffered view stamps never flushed).
+  // The deadline keeps a stuck hook from outliving that grace period.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info("shutting down", { signal });
+    setTimeout(() => {
+      logger.error("shutdown deadline passed - exiting anyway", { deadlineMs: SHUTDOWN_DEADLINE_MS });
+      process.exit(1);
+    }, SHUTDOWN_DEADLINE_MS).unref();
+    app.close().then(
+      () => process.exit(0),
+      (err: unknown) => {
+        logger.error("error during shutdown", { error: String(err) });
+        process.exit(1);
+      },
+    );
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
 }
 
 main().catch((err) => {

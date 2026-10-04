@@ -76,6 +76,8 @@ export async function registerHealthRoutes(app: FastifyInstance) {
           // How long the last run took, and for the scan cycle where that time went - timings
           // only, nothing about tokens or users.
           lastRun: lastRunSummary(h.meta),
+          // While a run is in flight, the stages it has finished so far - see recordRunProgress.
+          runningStagesMs: runningSince ? stageTimings(h.meta, "runningStagesMs") : null,
         };
       }),
     };
@@ -89,12 +91,19 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   const out: { durationMs?: number; stagesMs?: Record<string, number>; [count: string]: unknown } = {};
   // Every top-level number the job reported (duration, and counts such as tracked/inBand).
   for (const [key, value] of Object.entries(m)) if (typeof value === "number") out[key] = value;
-  if (typeof m.stagesMs === "object" && m.stagesMs !== null && !Array.isArray(m.stagesMs)) {
-    out.stagesMs = Object.fromEntries(
-      Object.entries(m.stagesMs as Record<string, unknown>).filter(
-        (e): e is [string, number] => typeof e[1] === "number",
-      ),
-    );
-  }
+  const stages = stageTimings(meta, "stagesMs");
+  if (stages) out.stagesMs = stages;
   return Object.keys(out).length > 0 ? out : null;
+}
+
+/** A `{ stage: ms }` object from a heartbeat's meta, numbers only, or null. */
+function stageTimings(meta: unknown, key: string): Record<string, number> | null {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const value = (meta as Record<string, unknown>)[key];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (e): e is [string, number] => typeof e[1] === "number",
+    ),
+  );
 }

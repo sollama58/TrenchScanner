@@ -31,15 +31,28 @@ describe("appendPoolParams", () => {
     expect(url.searchParams.has("connection_limit")).toBe(false);
   });
 
+  it("sets a socket timeout and a shorter server statement timeout by default", () => {
+    const url = new URL(appendPoolParams(BASE, {}));
+    expect(url.searchParams.get("socket_timeout")).toBe("180");
+    expect(url.searchParams.get("options")).toBe("-c statement_timeout=150000");
+    const tuned = new URL(appendPoolParams(BASE, { socketTimeoutSeconds: 30, statementTimeoutSeconds: 20 }));
+    expect(tuned.searchParams.get("socket_timeout")).toBe("30");
+    expect(tuned.searchParams.get("options")).toBe("-c statement_timeout=20000");
+  });
+
   it("never overrides a value the URL already specifies", () => {
     const url = new URL(
-      appendPoolParams(`${BASE}?connection_limit=3&pool_timeout=5`, {
+      appendPoolParams(`${BASE}?connection_limit=3&pool_timeout=5&socket_timeout=7&options=-c%20x%3D1`, {
         connectionLimit: 99,
         poolTimeoutSeconds: 99,
+        socketTimeoutSeconds: 99,
+        statementTimeoutSeconds: 99,
       }),
     );
     expect(url.searchParams.get("connection_limit")).toBe("3");
     expect(url.searchParams.get("pool_timeout")).toBe("5");
+    expect(url.searchParams.get("socket_timeout")).toBe("7");
+    expect(url.searchParams.get("options")).toBe("-c x=1");
   });
 
   it("preserves every other part of the URL untouched", () => {

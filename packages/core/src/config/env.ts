@@ -33,6 +33,10 @@ const envSchema = z.object({
   // scan cycle's burst is a far better outcome than one that fails outright and forces the client
   // to retry into the same contention.
   DATABASE_POOL_TIMEOUT_SECONDS: z.coerce.number().positive().default(20),
+  // Client socket timeout and server statement timeout for every query - see the defaults' notes
+  // in db.ts (180s and 150s), which reads both straight from process.env.
+  DATABASE_SOCKET_TIMEOUT_SECONDS: z.coerce.number().positive().optional(),
+  DATABASE_STATEMENT_TIMEOUT_SECONDS: z.coerce.number().positive().optional(),
 
   // Only apps/api actually uses this (to sign session JWTs) - apps/worker never touches it, but
   // both share this one schema. Rather than force every consumer to configure a secret it
