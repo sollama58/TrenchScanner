@@ -53,7 +53,16 @@ export interface ContestState {
   defaultModel: string;
 }
 
-const stateCache = new SharedCache<ContestState>(STATE_CACHE_TTL_MS);
+/**
+ * Every feed and panel request reads this first, so a reader must never wait out its refresh: a
+ * stale roster is served while the new one loads. It changes per training run (every few hours),
+ * so the one request answered from the old one costs nothing anyone could notice.
+ */
+const STATE_STALE_MS = 3_600_000;
+
+const stateCache = new SharedCache<ContestState>(STATE_CACHE_TTL_MS, {
+  staleWhileRevalidateMs: STATE_STALE_MS,
+});
 
 /** Test hook. */
 export function resetContestStateCache(): void {

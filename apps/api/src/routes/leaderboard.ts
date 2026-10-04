@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
+import { TOKEN_CARD_SELECT } from "../curatedFeed.js";
 
 /** How many entries the Leaderboard shows. */
 const LEADERBOARD_SIZE = 50;
@@ -10,6 +11,9 @@ const LEADERBOARD_SIZE = 50;
  * shared across readers for this long instead of re-sorting every Match hit per request.
  */
 const LEADERBOARD_CACHE_TTL_MS = 2 * 60_000;
+
+/** Past the TTL, answer from the old board while it refreshes - see SharedCacheOptions. */
+const LEADERBOARD_STALE_MS = 6 * 3_600_000;
 
 export async function registerLeaderboardRoutes(app: FastifyInstance) {
   // The leaderboard is built from the same paid pipeline as the feed. Behind the paywall - see authenticateSubscriber in server.ts.
@@ -24,7 +28,9 @@ export async function registerLeaderboardRoutes(app: FastifyInstance) {
    * best-returning alert), so a token several overlapping filters all matched doesn't crowd out
    * everything else with near-identical rows.
    */
-  const cache = new SharedCache<Awaited<ReturnType<typeof buildLeaderboard>>>(LEADERBOARD_CACHE_TTL_MS);
+  const cache = new SharedCache<Awaited<ReturnType<typeof buildLeaderboard>>>(LEADERBOARD_CACHE_TTL_MS, {
+    staleWhileRevalidateMs: LEADERBOARD_STALE_MS,
+  });
   app.get("/", async () => cache.get(buildLeaderboard));
 }
 
@@ -58,7 +64,7 @@ async function buildLeaderboard() {
 
   const rows = await prisma.match.findMany({
     where: { id: { in: ranked.map((r) => r.id) } },
-    include: { token: true, snapshot: true },
+    include: { token: { select: TOKEN_CARD_SELECT }, snapshot: { select: { marketCapUsd: true } } },
   });
   const byId = new Map(rows.map((row) => [row.id, row]));
 
