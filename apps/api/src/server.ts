@@ -37,6 +37,16 @@ const logger = createLogger("api");
 export async function buildServer(env: Env): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, trustProxy: true });
 
+  // Set before any route plugin is registered: Fastify hands each plugin the error handler in
+  // force when it is registered, so a handler set at the end only covered the root context and
+  // every routed 500 fell through to Fastify's default body - which carries the raw error
+  // message (for Prisma, the database hostname). Details stay in the log; clients get a code.
+  app.setErrorHandler((err: FastifyError, request, reply) => {
+    logger.error("unhandled route error", { url: request.url, error: err.message });
+    const status = err.statusCode ?? 500;
+    reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
+  });
+
   await app.register(cors, {
     origin: corsOriginList(env),
     credentials: true,
@@ -296,12 +306,6 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     },
     { prefix: "/admin" },
   );
-
-  app.setErrorHandler((err: FastifyError, request, reply) => {
-    logger.error("unhandled route error", { url: request.url, error: err.message });
-    const status = err.statusCode ?? 500;
-    reply.code(status).send({ error: status === 500 ? "internal_error" : err.message });
-  });
 
   return app;
 }
