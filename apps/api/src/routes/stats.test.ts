@@ -320,3 +320,25 @@ describe.skipIf(!dbAvailable)("buildDbReport", () => {
     expect(() => JSON.stringify(report)).not.toThrow();
   });
 });
+
+describe.skipIf(!dbAvailable)("GET /stats/live", () => {
+  it("reports live reading ages and the refresher's spend, behind the stats token", async () => {
+    const app = await buildServer({ ...loadEnv(), STATS_API_TOKEN: TOKEN });
+    try {
+      expect((await app.inject({ method: "GET", url: "/stats/live" })).statusCode).toBe(401);
+      const res = await app.inject({
+        method: "GET",
+        url: "/stats/live",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        viewedLast2Min: expect.any(Number),
+        readingAgeSeconds: expect.any(Object),
+        refresher: { lookups: 0, overBudget: 0, callsPerMinuteBudget: 120 },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+});

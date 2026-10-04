@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma, createLogger, HEURISTIC_CURATOR_SOURCE, type Env } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
+import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 
 const logger = createLogger("stats");
 
@@ -126,7 +127,10 @@ function toCounts(r: RawCounts): GradedCounts {
  * Not behind a session: it exists for scripts and cloud sessions that can reach the API over
  * HTTPS but not the database. Guarded by STATS_API_TOKEN instead, and absent (404) without one.
  */
-export async function registerStatsRoutes(app: FastifyInstance, opts: { env: Env; timings?: RouteTimings }) {
+export async function registerStatsRoutes(
+  app: FastifyInstance,
+  opts: { env: Env; timings?: RouteTimings; liveRefresher?: OnDemandLiveRefresher },
+) {
   const token = opts.env.STATS_API_TOKEN;
   const enabled = token.length >= STATS_TOKEN_MIN_LENGTH;
   if (token && !enabled) {
@@ -189,6 +193,37 @@ export async function registerStatsRoutes(app: FastifyInstance, opts: { env: Env
         since: opts.timings?.since ?? null,
         uptimeSeconds: Math.round(process.uptime()),
         routes: opts.timings?.summary() ?? [],
+      };
+    },
+  );
+
+  /**
+   * How fresh the market caps on open pages really are: the age of every live reading for tokens
+   * a page fetched in the last two minutes, and what this instance's live refresher has spent
+   * keeping them that way (see liveRefresh.ts and routes/live.ts).
+   */
+  app.get(
+    "/live",
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      const [ages] = await prisma.$queryRaw<
+        { viewed: bigint; withReading: bigint; p50: number | null; p95: number | null; max: number | null }[]
+      >`
+        SELECT count(*) AS viewed,
+               count("liveDataAt") AS "withReading",
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM now() - "liveDataAt")) AS p50,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM now() - "liveDataAt")) AS p95,
+               max(extract(epoch FROM now() - "liveDataAt"))::float8 AS max
+        FROM "Token"
+        WHERE "lastViewedAt" > now() - interval '2 minutes'`;
+      const round = (v: number | null | undefined) =>
+        v === null || v === undefined ? null : Math.round(v * 10) / 10;
+      return {
+        viewedLast2Min: Number(ages?.viewed ?? 0),
+        withLiveReading: Number(ages?.withReading ?? 0),
+        readingAgeSeconds: { p50: round(ages?.p50), p95: round(ages?.p95), max: round(ages?.max) },
+        refresher: opts.liveRefresher?.stats() ?? null,
       };
     },
   );

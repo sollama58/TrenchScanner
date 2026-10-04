@@ -416,7 +416,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
-  await app.register(registerStatsRoutes, { prefix: "/stats", env, timings });
+  await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
   await app.register(registerAdminRoutes, { prefix: "/admin", env });
   // Same /admin prefix and the same authenticateAdmin gate, registered separately only to keep
   // the subscription surface in its own readable block - see routes/admin.ts.
