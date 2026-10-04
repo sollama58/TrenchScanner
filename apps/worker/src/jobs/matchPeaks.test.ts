@@ -248,6 +248,15 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
     expect((await reload(match.id)).peakMcapUsd).toBe(640_000);
   });
 
+  it("the nightly sweep reads only snapshots from snapshotsSince on", async () => {
+    const { match } = await seedMatch("since", 80_000, [150_000, 640_000, 90_000]);
+    const later = await recordMatchPeaksFullSweep(RETENTION_DAYS, new Date(Date.now() + 60_000));
+    expect(later.fromSnapshots).toBe(0);
+    expect((await reload(match.id)).peakMcapUsd).toBeNull();
+    await recordMatchPeaksFullSweep(RETENTION_DAYS, new Date(0));
+    expect((await reload(match.id)).peakMcapUsd).toBe(640_000);
+  });
+
   describe("createMatchPeaksRunner", () => {
     it("looks back an hour first, then over the gap since its previous pass", async () => {
       const windows: number[] = [];

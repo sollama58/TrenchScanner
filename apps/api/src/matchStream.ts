@@ -44,9 +44,21 @@ const MAX_SUBSCRIBERS = Math.max(1, Number(process.env.MAX_STREAM_SUBSCRIBERS ??
  */
 const MAX_STREAMS_PER_USER = 8;
 
+/** Shown in pg_stat_activity for the LISTEN session. */
+export const LISTEN_APPLICATION_NAME = "trenchscanner-api-listen";
+
 /** Backoff between reconnection attempts for the LISTEN connection, capped. */
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+
+/**
+ * How long opening the LISTEN connection, or any query on it, may take before it is given up on.
+ *
+ * pg's default for both is "forever". A connect that never completes (a TLS handshake or startup
+ * to a database mid-restart) parked the stream with no client and no retry scheduled - the retry
+ * is only armed once the attempt fails - so pushes stayed off until the API itself restarted.
+ */
+const LISTEN_TIMEOUT_MS = 10_000;
 
 export interface StreamSink {
   write(chunk: string, callback?: (err?: Error | null) => void): boolean;
@@ -94,6 +106,7 @@ export class MatchStream {
   private reconnectTimer: NodeJS.Timeout | undefined;
   private reconnectDelay = RECONNECT_BASE_MS;
   private stopped = false;
+  private pinging = false;
 
   /**
    * `maxSubscribers` is injectable so the capacity behaviour can be tested at a small number
@@ -102,6 +115,8 @@ export class MatchStream {
   constructor(
     private readonly databaseUrl: string,
     private readonly maxSubscribers: number = MAX_SUBSCRIBERS,
+    /** Injectable for the same reason: so the dead-connection test needn't wait ten seconds. */
+    private readonly timeoutMs: number = LISTEN_TIMEOUT_MS,
   ) {}
 
   get subscriberCount(): number {
@@ -120,7 +135,10 @@ export class MatchStream {
    */
   start(): void {
     this.stopped = false;
-    this.heartbeat ??= setInterval(() => this.sendHeartbeat(), HEARTBEAT_MS);
+    this.heartbeat ??= setInterval(() => {
+      this.sendHeartbeat();
+      void this.checkConnection();
+    }, HEARTBEAT_MS);
     // Unref'd so an idle timer never by itself keeps the process alive during shutdown.
     this.heartbeat.unref?.();
     void this.connect();
@@ -128,7 +146,17 @@ export class MatchStream {
 
   private async connect(): Promise<void> {
     if (this.stopped || this.client) return;
-    const client = new Client({ connectionString: this.databaseUrl });
+    const client = new Client({
+      connectionString: this.databaseUrl,
+      connectionTimeoutMillis: this.timeoutMs,
+      query_timeout: this.timeoutMs,
+      // So a socket the liveness check below has already abandoned is also reaped by the OS
+      // instead of lingering for the kernel's two-hour default.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: HEARTBEAT_MS,
+      // Makes this session findable in pg_stat_activity (and lets the tests terminate it).
+      application_name: LISTEN_APPLICATION_NAME,
+    });
 
     client.on("notification", (msg) => {
       if (!msg.payload) return;
@@ -165,6 +193,29 @@ export class MatchStream {
       logger.warn("failed to open listen connection", { error: String(err) });
       await client.end().catch(() => {});
       this.scheduleReconnect();
+    }
+  }
+
+  /**
+   * Proves the LISTEN connection still reaches a live server; called on every heartbeat.
+   *
+   * A listening session only ever receives, so a connection that died without a FIN or RST - the
+   * database host restarted or moved, a NAT entry expired - raises no error and no "end": it
+   * just goes quiet, /health/stream keeps reporting connected, and every push is lost until the
+   * API restarts. A query is the only thing that notices, so one is sent on a schedule and its
+   * timeout is treated as the connection being gone.
+   */
+  async checkConnection(): Promise<void> {
+    const client = this.client;
+    if (!client || this.pinging) return;
+    this.pinging = true;
+    try {
+      await client.query("SELECT 1");
+    } catch (err) {
+      logger.warn("listen connection failed its liveness check", { error: String(err) });
+      this.handleDisconnect(client);
+    } finally {
+      this.pinging = false;
     }
   }
 
@@ -334,6 +385,13 @@ export class MatchStream {
 
     const client = this.client;
     this.client = undefined;
-    if (client) await client.end().catch(() => {});
+    // Bounded: end() waits for the server to close its side, which a dead peer never does, and
+    // shutdown has a deadline of its own to keep.
+    if (client) {
+      await Promise.race([
+        client.end().catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, this.timeoutMs).unref?.()),
+      ]);
+    }
   }
 }

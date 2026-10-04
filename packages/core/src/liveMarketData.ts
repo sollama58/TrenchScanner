@@ -1,4 +1,4 @@
-import { prisma } from "./db.js";
+import { floatArrayParam, prisma } from "./db.js";
 import { createLogger } from "./logger.js";
 import type { DexScreenerClient } from "./datasources/dexscreener.js";
 
@@ -43,7 +43,6 @@ export async function refreshLiveMarketData(
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   if (rows.length === 0) return { requested: tokens.length, updated: 0 };
 
-  const finite = (n: number) => (Number.isFinite(n) ? n : null);
   let updated = 0;
   try {
     // One statement for the whole batch. This used to be one UPDATE per token, all in flight at
@@ -55,8 +54,8 @@ export async function refreshLiveMarketData(
       SET "liveMarketCapUsd" = v.mcap, "livePriceUsd" = v.price, "liveDataAt" = now()
       FROM unnest(
         ${rows.map((r) => r.id)}::text[],
-        ${rows.map((r) => finite(r.mcap))}::float8[],
-        ${rows.map((r) => finite(r.price))}::float8[]
+        ${floatArrayParam(rows.map((r) => r.mcap))}::text[]::float8[],
+        ${floatArrayParam(rows.map((r) => r.price))}::text[]::float8[]
       ) AS v(id, mcap, price)
       WHERE t.id = v.id`;
   } catch (err) {

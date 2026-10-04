@@ -33,6 +33,10 @@ const envSchema = z.object({
   // scan cycle's burst is a far better outcome than one that fails outright and forces the client
   // to retry into the same contention.
   DATABASE_POOL_TIMEOUT_SECONDS: z.coerce.number().positive().default(20),
+  // Client socket timeout and server statement timeout for every query - see the defaults' notes
+  // in db.ts (180s and 150s), which reads both straight from process.env.
+  DATABASE_SOCKET_TIMEOUT_SECONDS: z.coerce.number().positive().optional(),
+  DATABASE_STATEMENT_TIMEOUT_SECONDS: z.coerce.number().positive().optional(),
 
   // Only apps/api actually uses this (to sign session JWTs) - apps/worker never touches it, but
   // both share this one schema. Rather than force every consumer to configure a secret it
@@ -72,6 +76,10 @@ const envSchema = z.object({
   // risk figures staler; it does not slow down how fast a *new* alert can appear, since a mint
   // that has never been screened is always a cache miss.
   RUGCHECK_CACHE_TTL_MINUTES: z.coerce.number().positive().default(5),
+  // RugCheck lookups one scan cycle may make; past it a mint reuses its last (stale) cached answer
+  // for a cycle - see resolveRugProfiles. Steady state needs far fewer; this bounds the cold cycle
+  // after downtime, when every candidate's answer has aged out at once.
+  RUGCHECK_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(150),
   // The wall-clock span holderGrowthPct is measured over: growth is compared against the newest
   // snapshot at least this old, rather than against whatever the previous snapshot happened to be.
   // Anchoring it this way is what keeps the number's meaning independent of SCAN_INTERVAL_MINUTES

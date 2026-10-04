@@ -28,6 +28,9 @@ const CURATOR_MODEL_PARAMS_RETENTION_DAYS = 7;
  */
 const REVOKED_DEVICE_RETENTION_DAYS = 30;
 
+/** The UTC weekday (0 = Sunday) the snapshot sweep walks every old token - see deleteExpiredSnapshots. */
+const FULL_SNAPSHOT_WALK_WEEKDAY = 0;
+
 export interface CleanupOptions {
   /** Rows per DELETE statement. */
   rowsPerBatch?: number;
@@ -35,9 +38,16 @@ export interface CleanupOptions {
   tokensPerBatch?: number;
   /** Pause between statements, so the scan's own writes get the database in between. */
   pauseMs?: number;
+  /** Walk every old token for snapshots, not only ones that can own them. Default: on Sundays. */
+  fullSnapshotWalk?: boolean;
 }
 
-const DEFAULT_BATCH: Required<CleanupOptions> = { rowsPerBatch: 5_000, tokensPerBatch: 200, pauseMs: 50 };
+const DEFAULT_BATCH: Required<Omit<CleanupOptions, "fullSnapshotWalk">> = {
+  rowsPerBatch: 5_000,
+  tokensPerBatch: 200,
+  pauseMs: 50,
+};
+type BatchOptions = typeof DEFAULT_BATCH;
 
 const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
@@ -51,7 +61,7 @@ async function deleteInBatches(
   selectSql: string,
   table: string,
   params: unknown[],
-  opts: Required<CleanupOptions>,
+  opts: BatchOptions,
   key = "id",
 ): Promise<number> {
   const limitParam = `$${params.length + 1}`;
@@ -61,6 +71,42 @@ async function deleteInBatches(
     const n = await prisma.$executeRawUnsafe(sql, ...params, opts.rowsPerBatch);
     total += n;
     if (n < opts.rowsPerBatch) return total;
+    await sleep(opts.pauseMs);
+  }
+}
+
+/**
+ * Tokens first seen before the cutoff that nothing references (see the sweep's call for why each
+ * NOT EXISTS is there), walked in id order with a cursor. Through deleteInBatches every batch
+ * restarted from the oldest token and re-checked every token kept so far against all six tables,
+ * so the work grew with the square of the tokens kept.
+ */
+async function deleteStaleTokens(cutoff: Date, opts: BatchOptions): Promise<number> {
+  let total = 0;
+  let after = "";
+  for (;;) {
+    // The page is the next rowsPerBatch old tokens by id, whatever they hold; the delete below
+    // takes the unreferenced ones among them. Paging on the candidates alone would move the cursor
+    // only as far as the last deletable token.
+    const page = await prisma.$queryRaw<{ id: string }[]>`
+      SELECT t."id" FROM "Token" t
+      WHERE t."id" > ${after} AND t."firstSeenAt" < ${cutoff}
+      ORDER BY t."id"
+      LIMIT ${opts.rowsPerBatch}`;
+    if (page.length === 0) return total;
+    const ids = page.map((r) => r.id);
+    const n = await prisma.$executeRaw`
+      DELETE FROM "Token" t
+      WHERE t."id" = ANY(${ids})
+        AND NOT EXISTS (SELECT 1 FROM "TokenSnapshot" x WHERE x."tokenId" = t."id")
+        AND NOT EXISTS (SELECT 1 FROM "Match" x WHERE x."tokenId" = t."id")
+        AND NOT EXISTS (SELECT 1 FROM "CandidateOutcome" x WHERE x."tokenId" = t."id")
+        AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."tokenId" = t."id")
+        AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."tokenId" = t."id")
+        AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."tokenId" = t."id")`;
+    total += n;
+    if (page.length < opts.rowsPerBatch) return total;
+    after = ids[ids.length - 1]!;
     await sleep(opts.pauseMs);
   }
 }
@@ -76,7 +122,7 @@ async function deleteInBatches(
  * per group of tokens through the (tokenId, takenAt) index. A token first seen after the cutoff
  * cannot own a snapshot taken before it.
  */
-async function deleteExpiredSnapshots(cutoff: Date, opts: Required<CleanupOptions>): Promise<number> {
+async function deleteExpiredSnapshots(cutoff: Date, opts: BatchOptions, fullWalk: boolean): Promise<number> {
   const sql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
       SELECT s."id" FROM "TokenSnapshot" s
        WHERE s."tokenId" = ANY($1::text[]) AND s."takenAt" < $2
@@ -88,6 +134,21 @@ async function deleteExpiredSnapshots(cutoff: Date, opts: Required<CleanupOption
     const tokens: { id: string; firstSeenAt: Date }[] = await prisma.token.findMany({
       where: {
         firstSeenAt: { lt: cutoff },
+        // Only tokens that can own a snapshot. One is written only for a scan candidate (every one
+        // of which came back from DexScreener and so carries lastLiveAt), a token someone had open
+        // (lastViewedAt), or a fast-match alert on a token the scan vetted - while nearly every
+        // old Token row is a launch that never traded and never had one. Probing all of them
+        // every night is what made this sweep take hours. The weekly full walk catches anything
+        // this misses.
+        ...(fullWalk
+          ? {}
+          : {
+              OR: [
+                { lastLiveAt: { not: null } },
+                { lastViewedAt: { not: null } },
+                { firstInBandAt: { not: null } },
+              ],
+            }),
         ...(after
           ? {
               OR: [
@@ -144,7 +205,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // for minutes, takes row locks the scan's own writes then queue behind, and leaves autovacuum
   // nothing it can reclaim until the whole thing commits.
   const snapshotCutoff = new Date(startedAt - env.SNAPSHOT_RETENTION_DAYS * DAY_MS);
-  const deletedSnapshots = { count: await deleteExpiredSnapshots(snapshotCutoff, batch) };
+  const fullWalk = opts.fullSnapshotWalk ?? new Date(startedAt).getUTCDay() === FULL_SNAPSHOT_WALK_WEEKDAY;
+  const deletedSnapshots = { count: await deleteExpiredSnapshots(snapshotCutoff, batch, fullWalk) };
 
   // The training set for curated alerts, on its own (much longer) horizon - see
   // CANDIDATE_OUTCOME_RETENTION_DAYS in env.ts. Deleted by age alone: rows this old are long
@@ -205,21 +267,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   //  - AiReview: the reviewer's ledger has no horizon of its own, and a "no buy" on a token no
   //    curator alerted is held by nothing else once the token's outcome row ages out.
   const tokenCutoff = new Date(startedAt - env.STALE_TOKEN_RETENTION_DAYS * DAY_MS);
-  const deletedTokens = {
-    count: await deleteInBatches(
-      `SELECT t."id" FROM "Token" t
-        WHERE t."firstSeenAt" < $1
-          AND NOT EXISTS (SELECT 1 FROM "TokenSnapshot" x WHERE x."tokenId" = t."id")
-          AND NOT EXISTS (SELECT 1 FROM "Match" x WHERE x."tokenId" = t."id")
-          AND NOT EXISTS (SELECT 1 FROM "CandidateOutcome" x WHERE x."tokenId" = t."id")
-          AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."tokenId" = t."id")
-          AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."tokenId" = t."id")
-          AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."tokenId" = t."id")`,
-      "Token",
-      [tokenCutoff],
-      batch,
-    ),
-  };
+  const deletedTokens = { count: await deleteStaleTokens(tokenCutoff, batch) };
 
   /**
    * Mobile Connect leaves two kinds of debris.

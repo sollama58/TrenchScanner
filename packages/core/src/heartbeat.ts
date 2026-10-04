@@ -63,6 +63,18 @@ export async function recordRunStart(job: HeartbeatJob, at: Date = new Date()): 
     WHERE job = ${job}`;
 }
 
+/**
+ * Stamps the stages a run in flight has finished so far onto its heartbeat row, next to
+ * runningSince - so a run that never returns says which stage it is stuck after, rather than only
+ * how long it has been going. Cleared with the rest of meta by the end-of-run heartbeat.
+ */
+export async function recordRunProgress(job: HeartbeatJob, stagesMs: Record<string, number>): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "SystemHeartbeat"
+    SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('runningStagesMs', ${JSON.stringify(stagesMs)}::jsonb)
+    WHERE job = ${job}`;
+}
+
 /** When the run in flight started, read back from a heartbeat row's meta - see recordRunStart. */
 export function runningSinceFrom(meta: unknown): Date | null {
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;

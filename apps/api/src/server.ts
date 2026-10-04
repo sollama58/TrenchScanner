@@ -14,6 +14,7 @@ import {
   resolveAccess,
   prisma,
 } from "@trenchscanner/core";
+import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
 import { createSessionSigner, SESSION_COOKIE_NAME, type SessionPayload } from "./auth/session.js";
 import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
 import { registerAuthRoutes } from "./routes/auth.js";
@@ -165,13 +166,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
     // A browser session is only as good as the user's current sessionVersion: signing out bumps
     // it, so a copied cookie stops working everywhere at once instead of living out its TTL.
-    // curatedModel rides along on the same row so the feeds don't look the user up again.
+    // The feed settings ride along on the same row so the feeds don't look the user up again.
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { sessionVersion: true, curatedModel: true },
+      select: { sessionVersion: true, ...SAVED_FEED_SELECT },
     });
     if (!user || user.sessionVersion !== (session.sessionVersion ?? 0)) return false;
-    request.savedFeedModel = user.curatedModel;
+    request.savedFeed = toSavedFeed(user);
     return true;
   }
 
@@ -255,8 +256,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   // Holds one Postgres LISTEN connection and pushes new matches to connected dashboards the moment
   // the worker records them - see matchStream.ts. Built here rather than in index.ts so a server
-  // constructed for a test gets a working stream too, and torn down via onClose so nothing leaks
+  // constructed for a test gets a working stream too, and torn down on close so nothing leaks
   // between test servers or blocks shutdown.
+  //
+  // preClose, not onClose: Fastify runs onClose only after the HTTP server has finished closing,
+  // and the server waits for every open connection - which a hijacked event stream never ends on
+  // its own. With one tab open, close() hung forever and the hook that would have ended the
+  // stream never ran.
   //
   // Declared before any route is registered, not after: Fastify creates a plugin's encapsulated
   // instance at register time, so a decoration added later only reaches it through the prototype
@@ -264,7 +270,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const matchStream = new MatchStream(env.DATABASE_URL);
   matchStream.start();
   app.decorate("matchStream", matchStream);
-  app.addHook("onClose", async () => {
+  app.addHook("preClose", async () => {
     await matchStream.stop();
   });
 

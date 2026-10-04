@@ -12,6 +12,9 @@ export interface Loadable<T> {
 /** A cached response younger than this is shown without refetching when a view mounts. */
 const FRESH_ON_MOUNT_MS = 10_000;
 
+/** After failures the poll stretches to `intervalMs` doubled per failure, up to this. */
+const MAX_BACKOFF_MS = 300_000;
+
 /**
  * GETs `path` on mount and whenever `path` or `key` changes, then every `intervalMs` while the tab
  * is visible. Bump `key` to force a refetch of the same path (e.g. after the user changes a
@@ -20,7 +23,8 @@ const FRESH_ON_MOUNT_MS = 10_000;
  * Starts from the shared cache (src/cache.ts), so a view that was open before, or whose request
  * main.tsx started at boot, paints at once. Keeps showing the last good data while a refetch is in
  * flight or fails. Reloads that arrive while a request is in flight (SSE nudges in a burst) are
- * coalesced into one follow-up request.
+ * coalesced into one follow-up request. While requests keep failing (API or database down), the
+ * timed poll backs off so every open tab doesn't keep hitting it at full rate.
  */
 export function usePolling<T>(path: string, intervalMs: number, key = ""): Loadable<T> {
   const [data, setData] = useState<T | null>(() => peek<T>(path)?.data ?? null);
@@ -31,6 +35,11 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   const seq = useRef(0);
   const busy = useRef(false);
   const again = useRef(false);
+  const intervalRef = useRef(intervalMs);
+  intervalRef.current = intervalMs;
+  const failures = useRef(0);
+  /** The timed poll skips ticks before this (ms), set while failing. */
+  const retryAt = useRef(0);
 
   const run = useCallback((maxAgeMs: number) => {
     const mine = ++seq.current;
@@ -39,11 +48,16 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     cachedGet<T>(pathRef.current, maxAgeMs)
       .then((d) => {
         if (mine !== seq.current) return;
+        failures.current = 0;
+        retryAt.current = 0;
         setData(d);
         setError(null);
       })
       .catch((e: unknown) => {
         if (mine !== seq.current) return;
+        const every = intervalRef.current;
+        const backoff = Math.max(every, Math.min(MAX_BACKOFF_MS, every * 2 ** failures.current++));
+        retryAt.current = Date.now() + backoff - every;
         setError(e instanceof Error ? e : new Error(String(e)));
       })
       .finally(() => {
@@ -73,7 +87,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     firstKey.current = key;
     run(forced ? -1 : FRESH_ON_MOUNT_MS);
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") reload();
+      if (document.visibilityState === "visible" && Date.now() >= retryAt.current) reload();
     }, intervalMs);
     // Coming back to the tab refreshes only what has gone stale while it was hidden.
     const onVisible = () => {
@@ -94,10 +108,19 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   return { data, error, loading, reload };
 }
 
+/** First wait before reopening a dropped nudge stream; doubles per failure up to the cap. */
+const STREAM_RETRY_MS = 5_000;
+const STREAM_RETRY_MAX_MS = 300_000;
+
 /**
  * Subscribes to one of the API's SSE nudge streams (/curated/stream, /matches/stream) and calls
  * `onEvent` on each message. The stream only says "something new" - the caller refetches. The
  * caller's polling stays on as the fallback, so a dropped stream only costs latency.
+ *
+ * The stream is closed while the browser tab is hidden (a hidden tab would refetch on every nudge
+ * and hold a server connection for nothing; polling's catch-up on return covers the gap). A dropped
+ * stream is reopened here with backoff and jitter, instead of the browser's own fixed-interval
+ * retry - which also gives up for good on any non-200, such as a 502 while the API restarts.
  */
 export function useNudgeStream(path: string, onEvent: () => void, enabled = true): boolean {
   const [live, setLive] = useState(false);
@@ -106,15 +129,46 @@ export function useNudgeStream(path: string, onEvent: () => void, enabled = true
 
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return;
-    const source = new EventSource(`${API_URL}${path}`, { withCredentials: true });
-    source.addEventListener("ready", () => setLive(true));
-    source.onmessage = () => callback.current();
-    source.addEventListener("match", () => callback.current());
-    source.addEventListener("curated", () => callback.current());
-    source.onerror = () => setLive(false);
-    return () => {
-      source.close();
+    let source: EventSource | null = null;
+    let retry: number | undefined;
+    let failures = 0;
+
+    const close = () => {
+      window.clearTimeout(retry);
+      retry = undefined;
+      source?.close();
+      source = null;
       setLive(false);
+    };
+    const open = () => {
+      close();
+      if (document.visibilityState !== "visible") return;
+      const es = new EventSource(`${API_URL}${path}`, { withCredentials: true });
+      source = es;
+      es.addEventListener("ready", () => {
+        failures = 0;
+        setLive(true);
+      });
+      es.onmessage = () => callback.current();
+      es.addEventListener("match", () => callback.current());
+      es.addEventListener("curated", () => callback.current());
+      es.onerror = () => {
+        close();
+        const wait = Math.min(STREAM_RETRY_MAX_MS, STREAM_RETRY_MS * 2 ** failures++);
+        retry = window.setTimeout(open, wait / 2 + Math.random() * (wait / 2));
+      };
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        if (!source && retry === undefined) open();
+      } else close();
+    };
+
+    open();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      close();
     };
   }, [path, enabled]);
 

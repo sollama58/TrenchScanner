@@ -24,6 +24,9 @@ export type JobRunMeta = Record<string, string | number | boolean | null | Recor
 const STALL_INTERVALS = 5;
 const STALL_FLOOR_MS = 5 * 60_000;
 
+/** How often a run's deadline is checked - see `deadlineMinutes`. */
+const DEADLINE_TICK_MS = 15_000;
+
 /**
  * Runs `fn` immediately, then again `intervalMinutes` after each run STARTED - or straight away
  * when a run took longer than that. Runs never overlap.
@@ -40,14 +43,24 @@ const STALL_FLOOR_MS = 5 * 60_000;
  * "still running, just erroring" apart from "stopped running entirely" - see
  * packages/core/src/heartbeat.ts. The row is also stamped when a run starts, so a run that never
  * returns shows up there as one running for an hour rather than as nothing at all.
+ *
+ * `deadlineMinutes`: a run still going after this long calls `onDeadline`, which by default exits
+ * the process so the platform restarts it - see the note inside.
  */
 export function scheduleInterval(
   name: HeartbeatJob,
   fn: () => Promise<JobRunMeta | void>,
   intervalMinutes: number,
+  opts: {
+    deadlineMinutes?: number;
+    onDeadline?: (job: HeartbeatJob, runningForMs: number) => void;
+    /** How long to hold the first run, in ms - by default none, it runs at once. */
+    firstRunDelayMs?: () => Promise<number>;
+  } = {},
 ): ScheduledJob {
   const intervalMs = intervalMinutes * 60_000;
   const stallMs = Math.max(STALL_FLOOR_MS, intervalMs * STALL_INTERVALS);
+  const { deadlineMinutes, onDeadline = exitForRestart } = opts;
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
 
@@ -62,6 +75,28 @@ export function scheduleInterval(
       });
     }, stallMs);
     watchdog.unref?.();
+    // Logging a hung run was not enough: on 2026-10-04 scan, fast-match and candidate-watch all
+    // hung at 05:10 on database connections that died under them and sat there for ten hours,
+    // logging, while the process stayed up and so was never restarted. A run past its deadline
+    // now ends the process, and Render starts a fresh one with a fresh connection pool.
+    //
+    // Counted in ticks of awake time, not wall clock: curator training holds the event loop for
+    // minutes at a stretch, and a plain timer firing straight after that would end a run that was
+    // only waiting its turn. A late tick counts for at most two ticks.
+    let awakeMs = 0;
+    let lastTick = startedAt;
+    const deadline =
+      deadlineMinutes === undefined
+        ? undefined
+        : setInterval(() => {
+            const now = Date.now();
+            awakeMs += Math.min(now - lastTick, 2 * DEADLINE_TICK_MS);
+            lastTick = now;
+            if (awakeMs < deadlineMinutes * 60_000) return;
+            clearInterval(deadline);
+            onDeadline(name, now - startedAt);
+          }, DEADLINE_TICK_MS);
+    deadline?.unref?.();
     try {
       await recordRunStart(name, new Date(startedAt)).catch(() => {
         // Visibility only - never worth not running the job over.
@@ -83,6 +118,7 @@ export function scheduleInterval(
       });
     } finally {
       clearInterval(watchdog);
+      if (deadline) clearInterval(deadline);
       const elapsed = Date.now() - startedAt;
       if (elapsed > intervalMs) {
         logger.warn("run took longer than its interval, starting the next one now", {
@@ -95,7 +131,16 @@ export function scheduleInterval(
     }
   };
 
-  void run();
+  if (opts.firstRunDelayMs) {
+    void opts
+      .firstRunDelayMs()
+      .catch(() => 0)
+      .then((delay) => {
+        if (!stopped) next = setTimeout(() => void run(), Math.max(0, delay));
+      });
+  } else {
+    void run();
+  }
   return {
     stop: () => {
       stopped = true;
@@ -213,6 +258,12 @@ export function scheduleDailyAt(
       if (next) clearTimeout(next);
     },
   };
+}
+
+/** The default deadline action: a run that will never return has wedged this process for good. */
+function exitForRestart(job: HeartbeatJob, runningForMs: number): void {
+  logger.error("job run passed its deadline - exiting so the worker restarts", { job, runningForMs });
+  process.exit(1);
 }
 
 /** A daily run going this long is logged as stalled, and again each time this much more passes. */

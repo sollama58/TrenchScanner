@@ -224,6 +224,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
           data: {
             mintAddress: `${TAG}-${i}`,
             firstSeenAt: new Date(oldSeen.getTime() + Math.min(i, 3) * 1000),
+            lastLiveAt: new Date(),
           },
         }),
       );
@@ -254,7 +255,19 @@ describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
       },
     });
 
-    await runCleanupJob(env, { rowsPerBatch: 3, tokensPerBatch: 2, pauseMs: 0 });
+    // A launch that never traded: the nightly sweep skips it, the weekly full walk doesn't.
+    const quiet = await prisma.token.create({ data: { mintAddress: `${TAG}-quiet`, firstSeenAt: oldSeen } });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: quiet.id,
+        priceUsd: 1,
+        marketCapUsd: 100_000,
+        takenAt: new Date(Date.now() - 40 * DAY),
+      },
+    });
+
+    await runCleanupJob(env, { rowsPerBatch: 3, tokensPerBatch: 2, pauseMs: 0, fullSnapshotWalk: false });
+    expect(await prisma.tokenSnapshot.count({ where: { tokenId: quiet.id } })).toBe(1);
 
     const left = await prisma.tokenSnapshot.findMany({
       where: { tokenId: { in: tokens.map((t) => t.id) } },
@@ -264,5 +277,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
     expect(left).toHaveLength(tokens.length + 1);
     expect(left.some((s) => s.id === matched.id)).toBe(true);
     expect(left.filter((s) => s.takenAt.getTime() < Date.now() - 30 * DAY)).toHaveLength(1);
+    await runCleanupJob(env, { rowsPerBatch: 3, tokensPerBatch: 2, pauseMs: 0, fullSnapshotWalk: true });
+    expect(await prisma.tokenSnapshot.count({ where: { tokenId: quiet.id } })).toBe(0);
   });
 });

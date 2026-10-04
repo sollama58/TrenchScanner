@@ -11,8 +11,27 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 const DEFAULT_POOL_TIMEOUT_SECONDS = 20;
 
 /**
- * Appends `connection_limit`/`pool_timeout` to a datasource URL, without disturbing anything the
- * URL already specifies.
+ * How long one query may go without an answer before Prisma gives up on its connection.
+ *
+ * Prisma sets no socket timeout of its own, so a query in flight when the database went away
+ * without closing the socket (a crash or restart of the host rather than of the postgres process)
+ * waits forever. On 2026-10-04 that froze the worker's scan, fast-match and candidate-watch jobs
+ * for ten hours after the 256MB database restarted under them. Past this, the query fails, the
+ * connection is dropped, and the pool opens a fresh one on the next query.
+ */
+const DEFAULT_SOCKET_TIMEOUT_SECONDS = 180;
+
+/**
+ * The server-side counterpart: Postgres cancels a statement running longer than this. Shorter than
+ * the socket timeout so a merely slow query is cancelled by the server (freeing its memory and
+ * locks) before the client walks away from it - a client-side timeout alone leaves the query
+ * running. Migrations run through the Prisma CLI on the raw DATABASE_URL and are not affected.
+ */
+const DEFAULT_STATEMENT_TIMEOUT_SECONDS = 150;
+
+/**
+ * Appends `connection_limit`/`pool_timeout` (and the socket/statement timeouts above) to a
+ * datasource URL, without disturbing anything the URL already specifies.
  *
  * Pure and easy to test in isolation on purpose: this is the part that actually decides what
  * Prisma connects with, and the params it sets are exactly the two numbers a
@@ -24,7 +43,12 @@ const DEFAULT_POOL_TIMEOUT_SECONDS = 20;
  */
 export function appendPoolParams(
   rawUrl: string,
-  opts: { connectionLimit?: number; poolTimeoutSeconds?: number },
+  opts: {
+    connectionLimit?: number;
+    poolTimeoutSeconds?: number;
+    socketTimeoutSeconds?: number;
+    statementTimeoutSeconds?: number;
+  },
 ): string {
   const url = new URL(rawUrl);
   if (opts.connectionLimit !== undefined && !url.searchParams.has("connection_limit")) {
@@ -32,6 +56,16 @@ export function appendPoolParams(
   }
   if (!url.searchParams.has("pool_timeout")) {
     url.searchParams.set("pool_timeout", String(opts.poolTimeoutSeconds ?? DEFAULT_POOL_TIMEOUT_SECONDS));
+  }
+  if (!url.searchParams.has("socket_timeout")) {
+    url.searchParams.set(
+      "socket_timeout",
+      String(opts.socketTimeoutSeconds ?? DEFAULT_SOCKET_TIMEOUT_SECONDS),
+    );
+  }
+  if (!url.searchParams.has("options")) {
+    const ms = Math.round((opts.statementTimeoutSeconds ?? DEFAULT_STATEMENT_TIMEOUT_SECONDS) * 1000);
+    url.searchParams.set("options", `-c statement_timeout=${ms}`);
   }
   return url.toString();
 }
@@ -57,12 +91,18 @@ function tunedDatasourceUrl(): string | null {
   const connectionLimit = rawLimit ? Number(rawLimit) : undefined;
   const rawTimeout = process.env.DATABASE_POOL_TIMEOUT_SECONDS;
   const poolTimeoutSeconds = rawTimeout ? Number(rawTimeout) : undefined;
+  const positive = (raw: string | undefined) => {
+    const n = raw ? Number(raw) : NaN;
+    return n > 0 ? n : undefined;
+  };
 
   try {
     return appendPoolParams(rawUrl, {
       connectionLimit: connectionLimit !== undefined && connectionLimit > 0 ? connectionLimit : undefined,
       poolTimeoutSeconds:
         poolTimeoutSeconds !== undefined && poolTimeoutSeconds > 0 ? poolTimeoutSeconds : undefined,
+      socketTimeoutSeconds: positive(process.env.DATABASE_SOCKET_TIMEOUT_SECONDS),
+      statementTimeoutSeconds: positive(process.env.DATABASE_STATEMENT_TIMEOUT_SECONDS),
     });
   } catch {
     return null;
@@ -80,6 +120,19 @@ export const prisma =
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
+}
+
+/**
+ * Binds a list of numbers for a raw query as `${floatArrayParam(xs)}::text[]::float8[]`.
+ *
+ * Passing a plain number[] with `::float8[]` fails intermittently with 22P03 "improper binary format
+ * in array element N": Prisma prepares the statement once per connection, fixing the element type it
+ * guessed from that first call's numbers (whole numbers and fractions encode differently), so a later
+ * batch of a different shape is sent in a format Postgres can't read. Text elements are always text
+ * and cast cleanly. Non-finite values become NULL.
+ */
+export function floatArrayParam(values: readonly (number | null | undefined)[]): (string | null)[] {
+  return values.map((n) => (typeof n === "number" && Number.isFinite(n) ? String(n) : null));
 }
 
 export type { PrismaClient } from "@prisma/client";

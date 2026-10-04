@@ -26,6 +26,8 @@ import {
   contestState,
   modelLabel,
   resolveFeedModel,
+  resolveFeedModels,
+  savedFeed,
   savedFeedModel,
   type Leaderboard,
 } from "../contest.js";
@@ -67,9 +69,23 @@ type CuratedPage = {
  */
 const INSIGHTS_CACHE_TTL_MS = 5 * 60_000;
 
-const insightsQuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(90).default(30),
-});
+/**
+ * The windows the Model tab offers, and the only ones served. Each is its own cache entry, and
+ * a fill is a dozen aggregates over the largest tables; any day count from 1 to 90 used to be
+ * accepted, so walking `?days=` forced a fresh fill per request (180 of them per insights
+ * cache lifetime) and could hold most of the 12-connection pool doing it.
+ */
+const REPORT_WINDOWS_DAYS = [7, 30, 90] as const;
+
+const reportDaysSchema = z.coerce
+  .number()
+  .int()
+  .refine((d) => (REPORT_WINDOWS_DAYS as readonly number[]).includes(d), {
+    message: `days must be one of ${REPORT_WINDOWS_DAYS.join(", ")}`,
+  })
+  .default(30);
+
+const insightsQuerySchema = z.object({ days: reportDaysSchema });
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(10_000).default(1),
@@ -77,9 +93,7 @@ const listQuerySchema = z.object({
   model: z.string().max(64).optional(),
 });
 
-const leaderboardQuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(90).default(30),
-});
+const leaderboardQuerySchema = z.object({ days: reportDaysSchema });
 
 /** Live records move as outcomes finalize (hourly); the Model tab polls every two minutes. */
 const LEADERBOARD_CACHE_TTL_MS = 3 * 60_000;
@@ -88,6 +102,14 @@ const chooseModelSchema = z.object({
   /** A contestant id, or null to follow the default. */
   model: z.string().max(64).nullable(),
 });
+
+const feedSettingsSchema = z
+  .object({
+    /** The combined feed's checked models; an empty list (or null) follows the default. */
+    models: z.array(z.string().max(64)).max(32).nullable().optional(),
+    showModelAlerts: z.boolean().optional(),
+  })
+  .refine((v) => v.models !== undefined || v.showModelAlerts !== undefined, "nothing to change");
 
 export async function registerCuratedRoutes(
   app: FastifyInstance,
@@ -246,18 +268,64 @@ export async function registerCuratedRoutes(
     let cache = leaderboardCache.get(days);
     if (!cache) {
       cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS);
-      // Bounded by the schema: at most 90 windows, and in practice the UI's few.
+      // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
       leaderboardCache.set(days, cache);
     }
     const [board, state, saved] = await Promise.all([
       cache.get(() => buildLeaderboard(opts.env, days)),
       contestState(opts.env),
-      savedFeedModel(request),
+      savedFeed(request),
     ]);
+    const feed = resolveFeedModels(state, saved);
     return {
       ...board,
-      selectedModel: resolveFeedModel(state, undefined, saved),
-      followsDefault: saved === null || resolveFeedModel(state, undefined, saved) !== saved,
+      // The single-ledger pick (/curated) - the first checked model.
+      selectedModel: feed.models[0],
+      // Every model whose calls the combined feed shows; the Live tab's checkboxes and the
+      // Models tab's both read and write this one list.
+      selectedModels: feed.models,
+      followsDefault: feed.followsDefault,
+      showModelAlerts: saved.showModelAlerts,
+    };
+  });
+
+  /**
+   * The combined feed's settings: which models' calls it shows (checkboxes) and whether it shows
+   * model calls at all. Either field alone may be sent.
+   */
+  app.put("/feed", async (request, reply) => {
+    const parsed = feedSettingsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const state = await contestState(opts.env);
+    const { models, showModelAlerts } = parsed.data;
+    const data: { feedModels?: string[]; curatedModel?: string | null; showModelAlerts?: boolean } = {};
+    if (models !== undefined) {
+      const wanted = new Set(models ?? []);
+      if ([...wanted].some((id) => !state.roster.some((c) => c.id === id))) {
+        return reply.code(400).send({ error: "unknown model" });
+      }
+      // Stored in roster order, so the first entry (the /curated pick) doesn't depend on click order.
+      const ordered = state.roster.filter((c) => wanted.has(c.id)).map((c) => c.id);
+      data.feedModels = ordered;
+      data.curatedModel = ordered[0] ?? null;
+    }
+    if (showModelAlerts !== undefined) data.showModelAlerts = showModelAlerts;
+    const user = await prisma.user.update({
+      where: { id: request.user!.userId },
+      data,
+      select: { curatedModel: true, feedModels: true, showModelAlerts: true },
+    });
+    const feed = resolveFeedModels(state, {
+      model: user.curatedModel,
+      models: user.feedModels,
+      showModelAlerts: user.showModelAlerts,
+    });
+    return {
+      selectedModels: feed.models,
+      followsDefault: feed.followsDefault,
+      showModelAlerts: user.showModelAlerts,
     };
   });
 
@@ -272,7 +340,11 @@ export async function registerCuratedRoutes(
     if (model !== null && !state.roster.some((c) => c.id === model)) {
       return reply.code(400).send({ error: "unknown model" });
     }
-    await prisma.user.update({ where: { id: request.user!.userId }, data: { curatedModel: model } });
+    // The combined feed's checkboxes follow a single pick too, so the two never disagree.
+    await prisma.user.update({
+      where: { id: request.user!.userId },
+      data: { curatedModel: model, feedModels: model === null ? [] : [model] },
+    });
     return { selectedModel: resolveFeedModel(state, undefined, model), followsDefault: model === null };
   });
 
@@ -490,7 +562,7 @@ export async function registerCuratedRoutes(
     let cache = insightsCache.get(key);
     if (!cache) {
       cache = new SharedCache<ModelInsights>(INSIGHTS_CACHE_TTL_MS);
-      // Bounded by the schema: 90 windows x 2 audiences at most, and in practice the UI's three.
+      // Bounded by the schema: REPORT_WINDOWS_DAYS x 2 audiences.
       insightsCache.set(key, cache);
     }
     return cache.get(() => buildModelInsights(opts.env, parsed.data.days, isAdmin));

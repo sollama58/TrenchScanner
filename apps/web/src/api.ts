@@ -128,6 +128,15 @@ export interface CuratedMeta {
   alertedAt: string;
   outcome: Outcome;
   aiReview?: AdminAiReview;
+  /** On the combined feed: every model that called this token, first call first. */
+  calledBy?: ModelCall[];
+}
+
+export interface ModelCall {
+  model: string | null;
+  modelName: string | null;
+  confidence: number;
+  alertedAt: string;
 }
 
 /** One feed card - a filter match or a curated alert, which the API serializes alike. */
@@ -164,6 +173,8 @@ export interface MatchPage {
   page: number;
   pageSize: number;
   totalCount: number;
+  /** Whether an older page has anything on it (the combined feed pages on this, not totalCount). */
+  hasMore?: boolean;
 }
 
 export interface CuratedStats {
@@ -445,10 +456,14 @@ export interface Leaderboard {
     summary: string;
   };
   defaultModel: string;
-  /** The model this user's feed shows. */
+  /** The first of selectedModels (the single-model feed other clients read). */
   selectedModel: string;
-  /** True when the user hasn't picked one (their feed follows the default). */
+  /** Every model whose calls this user's combined feed shows, in roster order. */
+  selectedModels: string[];
+  /** True when the user hasn't picked any (their feed follows the default). */
   followsDefault: boolean;
+  /** Whether model calls are mixed into the combined feed at all. */
+  showModelAlerts: boolean;
   entries: LeaderboardEntry[];
   evolution: {
     challengersPerRun: number;

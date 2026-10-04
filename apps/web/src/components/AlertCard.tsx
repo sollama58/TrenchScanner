@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Card, Outcome } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
-import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon } from "./Icons";
+import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
 
 /** The 1-hour win window every alert is graded over. */
 const WIN_WINDOW_MIN = 60;
@@ -51,11 +51,14 @@ export function AlertCard({
   now,
   showFilter = false,
   compact = false,
+  labelSource = false,
 }: {
   card: Card;
   now: number;
   showFilter?: boolean;
   compact?: boolean;
+  /** Label every card with where it came from (your filter, or which models) - the combined feed. */
+  labelSource?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -67,6 +70,7 @@ export function AlertCard({
   const outcome = curated?.outcome ?? matchOutcome(card);
   const badge = outcomeBadge(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");
+  const calls = curated?.calledBy ?? [];
   const peak = curated?.outcome.peak24hReturnPct ?? card.peakReturnPct;
   const ai = curated?.aiReview;
   const mint = card.token.mintAddress;
@@ -82,7 +86,9 @@ export function AlertCard({
   };
 
   return (
-    <article className={`card tone-${badge.tone}${compact ? " compact" : ""}`}>
+    <article
+      className={`card tone-${badge.tone}${compact ? " compact" : ""}${labelSource ? (card.kind === "match" ? " src-mine" : " src-model") : ""}`}
+    >
       {watching && (
         <div className="countdown" title={`${outcome.minutesLeft}m left in the 1h win window`}>
           <span style={{ width: `${elapsedPct}%` }} />
@@ -98,16 +104,31 @@ export function AlertCard({
             {card.token.name && card.token.symbol && <span className="token-name">{card.token.name}</span>}
           </div>
           <div className="meta-row">
-            {curated && (
-              <span
-                className={`pill ${isModel ? "pill-model" : "pill-heur"}`}
-                title="Curator confidence, 0-100"
-              >
-                {isModel && <BrainIcon size={12} />}
-                {curated.modelName ?? (isModel ? "Model" : "Heuristic")} · {curated.confidence.toFixed(0)}
+            {labelSource && card.kind === "match" && (
+              <span className="pill pill-mine" title="Caught by your own filter">
+                <SlidersIcon size={12} />
+                <span className="pill-text">Your alert{card.filter ? ` · ${card.filter.name}` : ""}</span>
               </span>
             )}
-            {showFilter && card.kind === "match" && card.filter && (
+            {curated && (
+              <span
+                className={`pill ${isModel || labelSource ? "pill-model" : "pill-heur"}`}
+                title={
+                  calls.length > 1
+                    ? calls.map((c) => `${c.modelName ?? "Model"}: ${c.confidence.toFixed(0)}`).join("\n")
+                    : "Model confidence, 0-100"
+                }
+              >
+                <BrainIcon size={12} />
+                <span className="pill-text">
+                  {labelSource && "Model · "}
+                  {calls.length > 1
+                    ? calls.map((c) => c.modelName ?? "Model").join(" + ")
+                    : `${curated.modelName ?? (isModel ? "Model" : "Heuristic")} · ${curated.confidence.toFixed(0)}`}
+                </span>
+              </span>
+            )}
+            {showFilter && !labelSource && card.kind === "match" && card.filter && (
               <span className="pill">{card.filter.name}</span>
             )}
             <span className="when">{ago(card.matchedAt, now)}</span>

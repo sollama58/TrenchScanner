@@ -1,6 +1,7 @@
 import type { SessionSigner, SessionPayload } from "./auth/session.js";
 import type { MatchStream } from "./matchStream.js";
 import type { AccessState } from "@trenchscanner/core";
+import type { SavedFeed } from "./contest.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -21,9 +22,9 @@ declare module "fastify" {
     /** Set by `authenticateSubscriber` - why this request was let through, and until when. */
     access?: AccessState;
     /**
-     * The user's saved feed model, read alongside the sessionVersion check for browser sessions.
-     * Undefined when it wasn't loaded (device sessions) - see savedFeedModel() in contest.ts.
+     * The user's saved feed settings, read alongside the sessionVersion check for browser sessions.
+     * Undefined when they weren't loaded (device sessions) - see savedFeed() in contest.ts.
      */
-    savedFeedModel?: string | null;
+    savedFeed?: SavedFeed;
   }
 }

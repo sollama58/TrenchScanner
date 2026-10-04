@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { foldCuratedIntoPage, resolveOutcome, serializeCuratedAlert } from "./curatedFeed.js";
+import {
+  foldCuratedIntoPage,
+  groupSameTokenCalls,
+  resolveOutcome,
+  serializeCuratedAlert,
+} from "./curatedFeed.js";
 import { currentMarketCap } from "./routes/matches.js";
 
 const T0 = new Date("2026-08-27T12:00:00Z");
@@ -21,6 +26,60 @@ const curatedCard = (tokenId: string, minutes: number, alertId = `a-${tokenId}-$
   tokenId,
   matchedAt: at(minutes),
   curated: { alertId } as { alertId: string } | null,
+});
+
+/** Raw CuratedAlert rows as the combined feed reads them. */
+const call = (tokenId: string, minutes: number, model: string) => ({
+  id: `${model}-${tokenId}-${minutes}`,
+  tokenId,
+  createdAt: at(minutes),
+  model,
+  modelName: model.toUpperCase(),
+  confidence: 70,
+});
+const newestFirst = <T extends { createdAt: Date }>(rows: T[]) =>
+  [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+describe("groupSameTokenCalls", () => {
+  it("shows a token several models called once, as the first call, listing every model", () => {
+    const groups = groupSameTokenCalls(
+      newestFirst([call("A", 0, "consensus"), call("A", 20, "trees"), call("B", 10, "trees")]),
+      WINDOW,
+    );
+    // Each card sits at its latest call (A's at 20 minutes), but shows its first.
+    expect(groups.map((g) => g.lead.id)).toEqual(["consensus-A-0", "trees-B-10"]);
+    expect(groups.map((g) => g.newest.id)).toEqual(["trees-A-20", "trees-B-10"]);
+    expect(groups[0]!.calls.map((c) => c.model)).toEqual(["consensus", "trees"]);
+    expect(groups[0]!.calls.map((c) => c.modelName)).toEqual(["CONSENSUS", "TREES"]);
+  });
+
+  it("groups each call by what came after it, so a read cut short only loses older calls", () => {
+    const all = newestFirst([
+      call("A", 0, "consensus"),
+      call("A", 30, "trees"),
+      call("A", 60, "rules"),
+      call("B", 45, "trees"),
+    ]);
+    const full = groupSameTokenCalls(all, WINDOW);
+    // Cut the read after the newest two calls: the same cards, in the same places.
+    const cut = groupSameTokenCalls(all.slice(0, 2), WINDOW);
+    expect(cut.map((g) => g.newest.id)).toEqual(full.map((g) => g.newest.id));
+    expect(full[0]!.calls.map((c) => c.model)).toEqual(["consensus", "trees", "rules"]);
+  });
+
+  it("keeps a model's own repeat call as a new alert", () => {
+    const groups = groupSameTokenCalls(newestFirst([call("A", 0, "trees"), call("A", 120, "trees")]), WINDOW);
+    expect(groups).toHaveLength(2);
+  });
+
+  it("starts a new card once the first call is older than the window", () => {
+    const groups = groupSameTokenCalls(
+      newestFirst([call("A", 0, "consensus"), call("A", 7 * 60, "trees")]),
+      WINDOW,
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.calls.length)).toEqual([1, 1]);
+  });
 });
 
 describe("foldCuratedIntoPage", () => {

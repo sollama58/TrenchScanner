@@ -8,6 +8,7 @@ import {
   RugCheckClient,
   HeliusClient,
   SolanaRpc,
+  lastHeartbeatAt,
 } from "@trenchscanner/core";
 import { runScanCycle } from "./jobs/scanJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
@@ -53,13 +54,21 @@ async function main() {
     apiKey: env.HELIUS_API_KEY || undefined,
   });
 
-  const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES);
+  // Deadlines (see scheduleInterval): each is several times the slowest run production has
+  // recorded, so only a run that is never coming back reaches one. Curator training and burn-scan
+  // have none: a slow retrain, or a slow RPC provider under the reconciler's sequential pages,
+  // would otherwise restart the whole worker in a loop, and either one stuck holds up nothing
+  // but itself.
+  const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
+    deadlineMinutes: 20,
+  });
   // Runs far more often than the scan cycle, but only touches tokens someone currently has open
   // and only fetches market data - see runLivePriceJob's own comment.
   const livePriceJob = scheduleInterval(
     "live-price",
     () => runLivePriceJob(deps.dexScreener, env),
     env.LIVE_PRICE_INTERVAL_MINUTES,
+    { deadlineMinutes: 10 },
   );
   // The path a subscriber actually feels. Re-prices tokens the scan cycle has recently vetted and
   // alerts on user filters, four times a minute, without any of the discovery or enrichment that
@@ -70,6 +79,7 @@ async function main() {
     "fast-match",
     () => runFastMatchCycle(deps.dexScreener, env),
     env.FAST_MATCH_INTERVAL_SECONDS / 60,
+    { deadlineMinutes: 10 },
   );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
   // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
@@ -79,6 +89,7 @@ async function main() {
     "candidate-watch",
     () => runCandidateWatchJob(deps.dexScreener, env),
     env.CANDIDATE_WATCH_INTERVAL_MINUTES,
+    { deadlineMinutes: 15 },
   );
   // The backstop that makes the paywall's promise true: it finds burns whose owners never told us
   // about them - a closed tab, a flat battery, or someone who burned from a wallet UI and has not
@@ -94,7 +105,9 @@ async function main() {
   const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping, {
     viewWindowMinutes: env.ACTIVE_VIEW_WINDOW_MINUTES,
   });
-  const matchPeaksJob = scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES);
+  const matchPeaksJob = scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES, {
+    deadlineMinutes: 15,
+  });
   // Both daily jobs catch up on boot when overdue - see scheduleDailyAt. Cleanup's deletes are
   // batched (see runCleanupJob), so a boot-time run after a long gap is many short statements,
   // not one huge delete racing the first scan cycles.
@@ -116,6 +129,16 @@ async function main() {
     "curator-training",
     () => runCuratorTrainingJob(env),
     env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
+    {
+      // Not straight away on every boot: a retrain is minutes of the worker's CPU, and running
+      // one on each restart (several on 2026-10-04) landed it on top of the cold first scan
+      // cycles. The first run waits for the slot the last finished run set.
+      firstRunDelayMs: async () => {
+        const last = await lastHeartbeatAt("curator-training");
+        if (!last) return 0;
+        return last.getTime() + env.CURATOR_TRAINING_INTERVAL_HOURS * 3_600_000 - Date.now();
+      },
+    },
   );
   // The AI reviewer's learning loop: collects replay batches, runs playbook evolution and refits
   // the AI blend - see runAiJudgeJob. Inert without ANTHROPIC_API_KEY.
@@ -152,6 +175,13 @@ async function main() {
     await prisma.$disconnect();
     process.exit(0);
   };
+  // Node 22 ends the process on an unhandled rejection. Every known fire-and-forget path catches
+  // its own, so one reaching here is a bug in a side path - logged, not worth every job over.
+  process.on("unhandledRejection", (reason) => {
+    logger.error("unhandled promise rejection", {
+      error: reason instanceof Error ? reason.stack : String(reason),
+    });
+  });
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
 }
