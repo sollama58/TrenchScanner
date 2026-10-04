@@ -10,6 +10,7 @@ import {
 import { createMatchesForTargets, resolveAlertTargets, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { recentScanVerdicts, type VettedEntry } from "./vettedTokens.js";
+import { noteFreshMarketData } from "./matchPeaks.js";
 
 const logger = createLogger("fast-match");
 
@@ -274,5 +275,6 @@ async function alertForToken(
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "fast"),
   });
+  noteFreshMarketData([token.id]);
   return createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, env });
 }

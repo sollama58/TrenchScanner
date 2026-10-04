@@ -24,6 +24,7 @@ import {
   type WatchlistCandidate,
   type TradeFlowFeatures,
 } from "@trenchscanner/core";
+import type { Token } from "@prisma/client";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
@@ -33,6 +34,7 @@ import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
+import { noteFreshMarketData } from "./matchPeaks.js";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
   collectCuratedContender,
@@ -316,6 +318,17 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // questions of different APIs (transaction history on standard RPC, holdings via DAS), which
   // are metered and rate-limited separately, so they carry separate budgets and neither can
   // starve the other. Run concurrently because one is not an input to the other.
+  // What every candidate's write path reads from the database, loaded for the whole cycle in
+  // three queries and started now so it overlaps the wallet stage's RPC waits (see
+  // loadCandidatePriors). Caught here and rethrown at the await so an early failure isn't an
+  // unhandled rejection while the wallet stage runs.
+  const priorsPromise = loadCandidatePriors(
+    candidates.map((c) => c.mintAddress),
+    env,
+  ).then(
+    (priors) => ({ priors }),
+    (error: unknown) => ({ error }),
+  );
   const [earliestActivityByAddress, holdingsByAddress] = await Promise.all([
     resolveEarliestActivity(
       walletGroups.map((g) => g.addresses),
@@ -336,6 +349,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // order-flow features need a few minutes of watching before they say anything.
   deps.stream?.watch?.(candidates.map((c) => c.mintAddress));
 
+  const loaded = await priorsPromise;
+  if ("error" in loaded) throw loaded.error;
+  const { priors } = loaded;
+
   const perCandidateMatches: number[] = [];
   const curatedCycle = newCuratedCycle();
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
@@ -343,6 +360,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       perCandidateMatches.push(
         await processCandidate(
           candidate,
+          priors.get(candidate.mintAddress) ?? NO_PRIORS,
           firstSeenByMint.get(candidate.mintAddress),
           onChainByMint.get(candidate.mintAddress) ?? null,
           activeFilters,
@@ -453,24 +471,34 @@ export async function selectWatchlist(
   const probationReserve = Math.floor(
     (env.WATCHLIST_MAX_TRACKED * env.WATCHLIST_PROBATION_RESERVE_PCT) / 100,
   );
-  const probation = await prisma.token.findMany({
-    where: { firstSeenAt: { gt: probationCutoff }, lastLiveAt: null },
-    orderBy: { firstSeenAt: "desc" },
-    take: probationReserve,
-  });
-  // The alive set in two tiers. Near-band first: mints last seen between
-  // WATCHLIST_NEAR_BAND_MIN_MCAP_USD and the padded band ceiling are the ones that can become a
-  // match or a curated pick, so they keep their slot for the whole TTL whatever their age. The
-  // launch-level rest fill what's left newest-first, which is how a mint gets its first chance
-  // to climb (and how one whose market cap was never recorded gets stamped).
-  const aliveSlots = Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length);
+  // Only the three columns the cycle reads: these are up to WATCHLIST_MAX_TRACKED rows a minute,
+  // and a whole Token row carries the description and every sticky flag.
+  const select = { id: true, mintAddress: true, firstSeenAt: true } as const;
   const bandCeiling = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
   const aliveWhere = { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } };
-  const nearBand = await prisma.token.findMany({
-    where: { ...aliveWhere, lastMcapUsd: { gte: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD, lte: bandCeiling } },
-    orderBy: { firstSeenAt: "desc" },
-    take: aliveSlots,
-  });
+  // Probation and the near-band tier side by side: near-band's share depends on how many probation
+  // takes, so it is fetched at the full cap and trimmed - a few hundred narrow rows at most.
+  const [probation, nearBandAll] = await Promise.all([
+    prisma.token.findMany({
+      where: { firstSeenAt: { gt: probationCutoff }, lastLiveAt: null },
+      orderBy: { firstSeenAt: "desc" },
+      take: probationReserve,
+      select,
+    }),
+    // The alive set in two tiers. Near-band first: mints last seen between
+    // WATCHLIST_NEAR_BAND_MIN_MCAP_USD and the padded band ceiling are the ones that can become a
+    // match or a curated pick, so they keep their slot for the whole TTL whatever their age. The
+    // launch-level rest fill what's left newest-first, which is how a mint gets its first chance
+    // to climb (and how one whose market cap was never recorded gets stamped).
+    prisma.token.findMany({
+      where: { ...aliveWhere, lastMcapUsd: { gte: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD, lte: bandCeiling } },
+      orderBy: { firstSeenAt: "desc" },
+      take: env.WATCHLIST_MAX_TRACKED,
+      select,
+    }),
+  ]);
+  const aliveSlots = Math.max(0, env.WATCHLIST_MAX_TRACKED - probation.length);
+  const nearBand = nearBandAll.slice(0, aliveSlots);
   const rest =
     aliveSlots > nearBand.length
       ? await prisma.token.findMany({
@@ -484,6 +512,7 @@ export async function selectWatchlist(
           },
           orderBy: { firstSeenAt: "desc" },
           take: aliveSlots - nearBand.length,
+          select,
         })
       : [];
   const alive = [...nearBand, ...rest];
@@ -618,8 +647,88 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
   }
 }
 
+export interface CandidatePrior {
+  token: Token | null;
+  /**
+   * holderCount of the newest snapshot at least HOLDER_GROWTH_WINDOW_MINUTES old - the baseline
+   * for holderGrowthPct. NOT simply the previous snapshot: "growth since the last scan" would
+   * make the figure's meaning silently track SCAN_INTERVAL_MINUTES, quietly redefining every
+   * user's minHolderGrowthPct whenever the cadence changed. Anchoring to wall clock keeps
+   * "% holder growth over the last N minutes" a fixed thing users can reason about.
+   */
+  holderCount: number | null;
+  /** The short-window sibling: newest snapshot at least 10 minutes old (holderGrowth10mPct). */
+  holderCount10m: number | null;
+  /** An hourly training sample already exists inside its spacing window. */
+  recentHourlySample: boolean;
+}
+
+const NO_PRIORS: CandidatePrior = {
+  token: null,
+  holderCount: null,
+  holderCount10m: null,
+  recentHourlySample: false,
+};
+
+/**
+ * Everything processCandidate reads before it writes, for the whole cycle at once.
+ *
+ * Done per candidate, this was four sequential round trips each (the token row, two baseline
+ * snapshot probes, the hourly-sample spacing check) for several hundred candidates a minute -
+ * most of the "candidates" stage. Here it is three queries: tokens by mint, then both baselines
+ * through one LATERAL probe per token on the (tokenId, takenAt) index (bounded by LIMIT 1, never
+ * a scan of the snapshot table), alongside the spacing check on (tokenId, sampleKind, anchorAt).
+ */
+export async function loadCandidatePriors(
+  mintAddresses: string[],
+  env: Env,
+  now: number = Date.now(),
+): Promise<Map<string, CandidatePrior>> {
+  const out = new Map<string, CandidatePrior>();
+  if (mintAddresses.length === 0) return out;
+  const tokens = await prisma.token.findMany({ where: { mintAddress: { in: mintAddresses } } });
+  if (tokens.length === 0) return out;
+  const ids = tokens.map((t) => t.id);
+  const growthCutoff = new Date(now - env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000);
+  const growth10mCutoff = new Date(now - 10 * 60_000);
+  const spacingCutoff = new Date(now - env.CANDIDATE_SAMPLE_SPACING_MINUTES * 60_000);
+  const [baselines, recentHourly] = await Promise.all([
+    prisma.$queryRaw<{ id: string; h: number | null; h10: number | null }[]>`
+      SELECT t.id, b."holderCount" AS h, b10."holderCount" AS h10
+      FROM unnest(${ids}::text[]) AS t(id)
+      LEFT JOIN LATERAL (
+        SELECT s."holderCount" FROM "TokenSnapshot" s
+        WHERE s."tokenId" = t.id AND s."takenAt" <= ${growthCutoff}
+        ORDER BY s."takenAt" DESC LIMIT 1
+      ) b ON true
+      LEFT JOIN LATERAL (
+        SELECT s."holderCount" FROM "TokenSnapshot" s
+        WHERE s."tokenId" = t.id AND s."takenAt" <= ${growth10mCutoff}
+        ORDER BY s."takenAt" DESC LIMIT 1
+      ) b10 ON true`,
+    prisma.$queryRaw<{ tokenId: string }[]>`
+      SELECT DISTINCT co."tokenId" FROM "CandidateOutcome" co
+      WHERE co."tokenId" = ANY(${ids}::text[])
+        AND co."sampleKind" = 'hourly'
+        AND co."anchorAt" > ${spacingCutoff}`,
+  ]);
+  const baselineById = new Map(baselines.map((b) => [b.id, b]));
+  const recent = new Set(recentHourly.map((r) => r.tokenId));
+  for (const token of tokens) {
+    const b = baselineById.get(token.id);
+    out.set(token.mintAddress, {
+      token,
+      holderCount: b?.h ?? null,
+      holderCount10m: b?.h10 ?? null,
+      recentHourlySample: recent.has(token.id),
+    });
+  }
+  return out;
+}
+
 async function processCandidate(
   candidate: CandidateToken,
+  prior: CandidatePrior,
   watchlistFirstSeenAt: Date | undefined,
   onChainProfile: OnChainProfile | null,
   activeFilters: FilterWithUser[],
@@ -629,41 +738,11 @@ async function processCandidate(
   env: Env,
   tradeFlow?: TradeFlowFeatures,
 ): Promise<number> {
-  const existingToken = await prisma.token.findUnique({ where: { mintAddress: candidate.mintAddress } });
-  // The baseline for holderGrowthPct is the newest snapshot at least HOLDER_GROWTH_WINDOW_MINUTES
-  // old, NOT simply the previous one. Using "the previous snapshot" made the number mean "growth
-  // since the last scan", so its meaning silently tracked SCAN_INTERVAL_MINUTES: shortening the
-  // scan interval would have quietly redefined every user's minHolderGrowthPct threshold to cover
-  // a shorter span, making it harder to clear and producing *fewer* alerts. Anchoring to wall
-  // clock keeps "% holder growth over the last N minutes" a fixed thing that a user can reason
-  // about, whatever cadence the worker happens to run at.
-  const growthBaseline = existingToken
-    ? await prisma.tokenSnapshot.findFirst({
-        where: {
-          tokenId: existingToken.id,
-          takenAt: { lte: new Date(Date.now() - env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000) },
-        },
-        orderBy: { takenAt: "desc" },
-        // Only the holder count is read - not the whole ~50-column row, ~200 times a minute.
-        select: { holderCount: true },
-      })
-    : null;
-
+  const existingToken = prior.token;
   const onChain = withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env);
   // Prefer the DEX pair's own creation time (accurate for tokens that already migrated off the
   // bonding curve); fall back to when we first added this mint to our watchlist.
   const createdAt = candidate.pairCreatedAt ?? watchlistFirstSeenAt ?? existingToken?.firstSeenAt;
-
-  // The short-window sibling of the growth baseline above: the newest snapshot at least 10
-  // minutes old, so a token younger than HOLDER_GROWTH_WINDOW_MINUTES still has a growth figure
-  // (see EnrichedToken.holderGrowth10mPct).
-  const growthBaseline10m = existingToken
-    ? await prisma.tokenSnapshot.findFirst({
-        where: { tokenId: existingToken.id, takenAt: { lte: new Date(Date.now() - 10 * 60_000) } },
-        orderBy: { takenAt: "desc" },
-        select: { holderCount: true },
-      })
-    : null;
 
   // First sighting inside the curated band, stamped once and kept - the anchor for the
   // minutesSinceFirstInBand feature.
@@ -681,8 +760,8 @@ async function processCandidate(
     onChain,
     {
       createdAt,
-      previousHolderCount: growthBaseline?.holderCount ?? undefined,
-      previousHolderCount10m: growthBaseline10m?.holderCount ?? undefined,
+      previousHolderCount: prior.holderCount ?? undefined,
+      previousHolderCount10m: prior.holderCount10m ?? undefined,
       firstInBandAt,
     },
   );
@@ -727,6 +806,7 @@ async function processCandidate(
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "scan"),
   });
+  noteFreshMarketData([token.id]);
   // Passing or failing - the fast-match lane goes by the newest verdict. See vettedTokens.ts.
   recordScanVerdict({
     token: { id: token.id, mintAddress: token.mintAddress, firstSeenAt: token.firstSeenAt },
@@ -758,7 +838,9 @@ async function processCandidate(
   // measured on - never from the best-looking minute of an hour the model only saw one random
   // minute of. Never worth failing the candidate over.
   try {
-    await recordCandidateSample(token.id, scored, env);
+    // Skipped outright when the cycle's prefetch already saw an hourly sample inside its spacing
+    // window - recordCandidateSample would only look that row up again and return it.
+    if (!prior.recentHourlySample) await recordCandidateSample(token.id, scored, env);
     const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
     // An event waits for the sniper checks when they're required: deciding without them would
     // skip the curator's wallet caps, and an event spent now can't be reopened until the

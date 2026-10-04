@@ -47,6 +47,13 @@ export interface RecordMatchPeaksOptions {
    * to reach rows nothing has touched recently.
    */
   sinceMinutes?: number;
+  /**
+   * With sinceMinutes: the tokens that can have new readings in the window, when the caller
+   * knows them (see noteFreshMarketData). Turns each pass from "every matched token in the
+   * retention window, probed against the snapshot table" into an index lookup per known token.
+   * Omitted, the pass finds them itself - the first pass after a boot, before anything is noted.
+   */
+  tokenIds?: { snapshots: string[]; livePings: string[] };
 }
 
 export async function recordMatchPeaks(
@@ -56,6 +63,9 @@ export async function recordMatchPeaks(
   // Prisma's tagged templates can't interpolate a whole SQL fragment, so the two shapes are
   // written out rather than assembled - it keeps each statement readable as the SQL it actually is.
   const since = options.sinceMinutes;
+  if (since !== undefined && options.tokenIds) {
+    return recordWindowedPeaksForTokens(snapshotRetentionDays, since, options.tokenIds);
+  }
   // Snapshots older than SNAPSHOT_RETENTION_DAYS are pruned by the cleanup job, so a match older
   // than that has no post-match snapshot history left to mine and this bound costs it nothing.
   // Without it the lateral join below runs once per Match row ever created.
@@ -200,6 +210,7 @@ export async function recordMatchPeaks(
 export function createMatchPeaksRunner(
   snapshotRetentionDays: number,
   repair: (options: { sinceMinutes: number }) => Promise<number>,
+  options: { viewWindowMinutes: number } = { viewWindowMinutes: 10 },
 ) {
   let previousStartedAt: number | undefined;
   return async () => {
@@ -208,12 +219,123 @@ export function createMatchPeaksRunner(
       previousStartedAt === undefined
         ? FIRST_PASS_WINDOW_MINUTES
         : Math.ceil((startedAt - previousStartedAt) / 60_000) + WINDOW_SLACK_MINUTES;
-    const recorded = await recordMatchPeaks(snapshotRetentionDays, { sinceMinutes: windowMinutes });
-    const repaired = await repair({ sinceMinutes: windowMinutes });
-    // Only advanced once the pass succeeded: a failed pass leaves the next window covering both.
-    previousStartedAt = startedAt;
-    return { ...recorded, repaired, windowMinutes };
+    // Taken before the pass reads anything, so a snapshot noted while it runs lands in the next
+    // pass's set. The first pass discards what it took: it finds its tokens the old way, which
+    // also covers whatever was written before this process started noting.
+    const noted = drainFreshMarketData();
+    try {
+      const tokenIds =
+        previousStartedAt === undefined
+          ? undefined
+          : {
+              snapshots: noted,
+              livePings: await recentlyViewedTokenIds(windowMinutes + options.viewWindowMinutes),
+            };
+      const recorded = await recordMatchPeaks(snapshotRetentionDays, {
+        sinceMinutes: windowMinutes,
+        tokenIds,
+      });
+      const repaired = await repair({ sinceMinutes: windowMinutes });
+      // Only advanced once the pass succeeded: a failed pass leaves the next window covering both.
+      previousStartedAt = startedAt;
+      return { ...recorded, repaired, windowMinutes, tokens: tokenIds?.snapshots.length ?? null };
+    } catch (err) {
+      // Same rule for the noted tokens: a failed pass hands them on to the next one.
+      noteFreshMarketData(noted);
+      throw err;
+    }
   };
+}
+
+/**
+ * Tokens the worker has written a scan or fast-match snapshot for since the last drain. Only this
+ * process writes those snapshots, so once it has been collecting for a full pass the set is
+ * complete - which is what lets the frequent pass skip finding them in the database.
+ */
+let freshMarketData = new Set<string>();
+
+export function noteFreshMarketData(tokenIds: Iterable<string>): void {
+  for (const id of tokenIds) freshMarketData.add(id);
+}
+
+function drainFreshMarketData(): string[] {
+  const ids = [...freshMarketData];
+  freshMarketData = new Set();
+  return ids;
+}
+
+/**
+ * Live pings (Token.liveDataAt) are written only for tokens someone is viewing: the worker's
+ * live-price job covers tokens viewed within ACTIVE_VIEW_WINDOW_MINUTES, and the API's on-demand
+ * refresh stamps lastViewedAt for the same page it refreshes. So every token pinged inside the
+ * window was viewed within the window plus the view window - an indexed read on lastViewedAt
+ * instead of joining every match in the retention window to its token.
+ */
+async function recentlyViewedTokenIds(minutes: number): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "Token"
+    WHERE "lastViewedAt" > NOW() - MAKE_INTERVAL(mins => ${minutes + 1}::int)`;
+  return rows.map((r) => r.id);
+}
+
+/** The windowed statements of recordMatchPeaks, driven from known tokens. */
+async function recordWindowedPeaksForTokens(
+  snapshotRetentionDays: number,
+  since: number,
+  tokenIds: { snapshots: string[]; livePings: string[] },
+): Promise<PeakRecordingResult> {
+  const fromSnapshots =
+    tokenIds.snapshots.length === 0
+      ? 0
+      : await prisma.$executeRaw`
+    UPDATE "Match" m
+    SET "peakMcapUsd" = p.peak_mcap,
+        "peakMcapAt"  = p.peak_at
+    FROM (
+      SELECT m2.id,
+             best."marketCapUsd" AS peak_mcap,
+             best."takenAt"      AS peak_at
+      FROM "Match" m2
+      JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
+      JOIN LATERAL (
+        SELECT s."marketCapUsd", s."takenAt"
+        FROM "TokenSnapshot" s
+        WHERE s."tokenId" = m2."tokenId"
+          AND s."takenAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
+          AND s."takenAt" >= m2."matchedAt"
+        ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
+        LIMIT 1
+      ) best ON TRUE
+      WHERE m2."tokenId" = ANY(${tokenIds.snapshots}::text[])
+        AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
+    ) p
+    -- Re-checked on the row being updated - see the same line in recordMatchPeaks.
+    WHERE m.id = p.id
+      AND p.peak_mcap > COALESCE(m."peakMcapUsd", 0)
+  `;
+  const fromLivePings =
+    tokenIds.livePings.length === 0
+      ? 0
+      : await prisma.$executeRaw`
+    UPDATE "Match" m
+    SET "peakMcapUsd" = t."liveMarketCapUsd",
+        "peakMcapAt"  = t."liveDataAt"
+    FROM "Token" t, "TokenSnapshot" alert
+    WHERE m."tokenId" = ANY(${tokenIds.livePings}::text[])
+      AND t.id = m."tokenId"
+      AND alert.id = m."snapshotId"
+      AND m."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+      AND t."liveMarketCapUsd" IS NOT NULL
+      AND t."liveDataAt" IS NOT NULL
+      AND t."liveDataAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
+      AND t."liveDataAt" >= m."matchedAt"
+      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")
+  `;
+  if (fromSnapshots > 0 || fromLivePings > 0) {
+    logger.info("recorded new match peaks", { fromSnapshots, fromLivePings });
+  }
+  return { fromSnapshots, fromLivePings };
 }
 
 const FIRST_PASS_WINDOW_MINUTES = 60;
