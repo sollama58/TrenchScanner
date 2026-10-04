@@ -100,8 +100,13 @@ export interface ScanCycleMeta {
   stagesMs: Record<string, number>;
 }
 
-/** How long a cycle waits on the wallet stage - see the note at its call. */
-const WALLET_STAGE_BUDGET_MS = 60_000;
+/**
+ * How long a cycle waits on the wallet stage - see the note at its call. A minute once; with the
+ * scan every 30 seconds, a contender whose lookups run long is better decided on the next cycle
+ * (the lookups carry on and cache what they find) than holding every other alert for a minute.
+ * On 2026-10-04 contender-only lookups still took 20-60s whenever Helius slowed.
+ */
+const WALLET_STAGE_BUDGET_MS = 15_000;
 
 /** The wallet stage's lookups while they are still running, possibly past a cycle's budget. */
 let walletStageInFlight: Promise<void> | null = null;
@@ -189,20 +194,51 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   //    moving right now. Mostly mints the watchlist already knows - which is the point: they are
   //    revived (see reviveMovingMints) so a slow climber that fell off the launch-ordered list
   //    is back in front of the scan the moment it starts trading again.
+  //
+  // Each source is time-boxed (see discoverWithin): one slow upstream used to hold the whole cycle
+  // - ~10s on most cycles of 2026-10-04 - and with it every alert. A late source's mints still
+  // join the watchlist the moment they land, in time for the next cycle.
   const [newMints, trending, active, koth] = await Promise.all([
-    deps.pumpFun.discoverNewMints().catch((err) => {
-      logger.error("pump.fun discovery failed", { error: String(err) });
-      return [];
-    }),
-    deps.dexScreener.discoverTrendingMints().catch((err) => {
-      logger.error("dexscreener trending discovery failed", { error: String(err) });
-      return [];
-    }),
-    deps.pumpFun.discoverActiveMints().catch((err) => {
-      logger.warn("pump.fun active-mints discovery failed", { error: String(err) });
-      return [];
-    }),
-    deps.pumpFun.kingOfTheHill().catch(() => null),
+    discoverWithin(
+      "pumpfun",
+      deps.pumpFun.discoverNewMints().catch((err) => {
+        logger.error("pump.fun discovery failed", { error: String(err) });
+        return [];
+      }),
+      [],
+      (coins) => addNewMintsToWatchlist(coins.map((c) => toWatchlistCandidate(c, "pumpfun"))),
+    ),
+    discoverWithin(
+      "dexscreener",
+      deps.dexScreener.discoverTrendingMints().catch((err) => {
+        logger.error("dexscreener trending discovery failed", { error: String(err) });
+        return [];
+      }),
+      [],
+      (found) => addNewMintsToWatchlist(found),
+    ),
+    discoverWithin(
+      "pumpfun-active",
+      deps.pumpFun.discoverActiveMints().catch((err) => {
+        logger.warn("pump.fun active-mints discovery failed", { error: String(err) });
+        return [];
+      }),
+      [],
+      async (coins) => {
+        await addNewMintsToWatchlist(coins.map((c) => toWatchlistCandidate(c, "pumpfun-active")));
+        await reviveMovingMints(movingCoins(coins), env);
+      },
+    ),
+    discoverWithin(
+      "pumpfun-koth",
+      deps.pumpFun.kingOfTheHill().catch(() => null),
+      null,
+      async (coin) => {
+        if (!coin) return;
+        await addNewMintsToWatchlist([toWatchlistCandidate(coin, "pumpfun-koth")]);
+        await reviveMovingMints(movingCoins([coin]), env);
+      },
+    ),
   ]);
   const streamed = deps.stream?.drain() ?? [];
 
@@ -226,9 +262,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // king-of-the-hill coins, and the near-band floor for a graduation (a mint that just bonded is
   // near the band by construction; the refresh below replaces the placeholder with the real cap).
   const moving = [
-    ...[...active, ...(koth ? [koth] : [])].flatMap((c) =>
-      c.marketCapUsd !== undefined ? [{ mintAddress: c.mintAddress, marketCapUsd: c.marketCapUsd }] : [],
-    ),
+    ...movingCoins([...active, ...(koth ? [koth] : [])]),
     ...streamed
       .filter((e) => e.kind === "migrate")
       .map((e) => ({ mintAddress: e.mintAddress, marketCapUsd: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD })),
@@ -408,9 +442,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   //
   // Time-boxed: both signals are enrichment, and a slow RPC provider held whole scan cycles for
   // minutes here on 2026-10-04 (burn-scan, on the same provider, stalled alongside). Past the
-  // budget the cycle goes on without them - every candidate's wallet figures read as unknown, as
-  // they would on a provider outage - and the lookups carry on in the background, filling the
-  // caches for the next cycle. A cycle that finds the previous lookups still running doesn't
+  // budget the cycle goes on with what the caches already hold - wallets not yet looked up read
+  // as unknown, as they would on a provider outage - and the lookups carry on in the background,
+  // filling the caches for the next cycle. A cycle that finds the previous lookups still running doesn't
   // start more on top of them.
   //
   // Only the contenders' lookups are waited on (unless a user filter needs them all - see
@@ -419,9 +453,22 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // figures are in the cache for the next one. Waiting on all of them held every alert, user
   // filter matches included, behind ~4-8s of Helius calls per cycle in production (2026-10-04)
   // for wallets that only a later cycle's decision could use.
-  let walletResults: [Map<string, Date | null>, Map<string, WalletHoldings>] | null = null;
+  let walletResults: [Map<string, Date | null>, Map<string, WalletHoldings>] | null;
+  // What the caches already know, with no lookups - used whenever this cycle's own lookups can't
+  // be waited on, so a slow provider costs only the wallets nobody has looked up yet rather than
+  // every candidate's wallet figures.
+  const fromCacheOnly = () =>
+    Promise.all([
+      resolveEarliestActivity(
+        walletGroups.map((g) => g.addresses),
+        deps.helius,
+        { lookupGroups: 0 },
+      ),
+      resolveWalletHoldings(walletGroups, deps.helius, env, { lookupGroups: 0 }),
+    ]);
   if (walletStageInFlight) {
-    logger.warn("previous wallet lookups still running - skipping wallet signals this cycle");
+    logger.warn("previous wallet lookups still running - this cycle reads wallet signals from cache");
+    walletResults = await fromCacheOnly();
   } else {
     let freshnessUsed = 0;
     let holdingsUsed = 0;
@@ -451,9 +498,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     });
     walletResults = await withinBudget(work, WALLET_STAGE_BUDGET_MS);
     if (!walletResults) {
-      logger.warn("wallet lookups over budget - continuing without wallet signals", {
+      logger.warn("wallet lookups over budget - continuing with cached wallet signals", {
         budgetMs: WALLET_STAGE_BUDGET_MS,
       });
+      walletResults = await fromCacheOnly();
     } else {
       startWalletBackfill(walletGroups, deps.helius, env, {
         freshness: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE - freshnessUsed,
@@ -666,6 +714,40 @@ export async function selectWatchlist(
       : [];
   const alive = [...nearBand, ...rest];
   return { tracked: [...alive, ...probation], alive: alive.length };
+}
+
+/** How long a cycle waits on any one discovery source - see discoverWithin. */
+const DISCOVERY_BUDGET_MS = 4_000;
+
+/**
+ * `work`'s result if it lands within DISCOVERY_BUDGET_MS, else `fallback` - and `late` is handed
+ * the result whenever it does land, to record it for the next cycle. `work` must not reject.
+ */
+async function discoverWithin<T>(
+  source: string,
+  work: Promise<T>,
+  fallback: T,
+  late: (value: T) => Promise<unknown>,
+): Promise<T> {
+  const result = await withinBudget(
+    work.then((value) => ({ value })),
+    DISCOVERY_BUDGET_MS,
+  );
+  if (result) return result.value;
+  logger.warn("discovery source over budget - its mints join the watchlist when it answers", { source });
+  void work
+    .then(late)
+    .catch((err: unknown) =>
+      logger.warn("late discovery results failed to save", { source, error: String(err) }),
+    );
+  return fallback;
+}
+
+/** The coins Pump.fun gave a market cap for, as reviveMovingMints takes them. */
+function movingCoins(coins: DiscoveredCoin[]): { mintAddress: string; marketCapUsd: number }[] {
+  return coins.flatMap((c) =>
+    c.marketCapUsd !== undefined ? [{ mintAddress: c.mintAddress, marketCapUsd: c.marketCapUsd }] : [],
+  );
 }
 
 function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): WatchlistCandidate {

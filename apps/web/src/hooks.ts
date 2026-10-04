@@ -131,65 +131,137 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
 const STREAM_RETRY_MS = 5_000;
 const STREAM_RETRY_MAX_MS = 300_000;
 
+interface StreamSubscriber {
+  onEvent: () => void;
+  onLive: (live: boolean) => void;
+  keepWhenHidden: boolean;
+}
+
+/**
+ * One EventSource per stream path for the whole page, shared by every view that wants it (the Live
+ * tab and the alert notifier both listen to the same two streams), so the page never holds two
+ * connections for one stream.
+ */
+class SharedStream {
+  private readonly subs = new Set<StreamSubscriber>();
+  private source: EventSource | null = null;
+  private retry: number | undefined;
+  private failures = 0;
+  private live = false;
+
+  constructor(private readonly path: string) {}
+
+  add(sub: StreamSubscriber): () => void {
+    this.subs.add(sub);
+    sub.onLive(this.live);
+    this.sync();
+    return () => {
+      this.subs.delete(sub);
+      this.sync();
+    };
+  }
+
+  /** Opens or closes to match who is listening and whether the browser tab is visible. */
+  sync(): void {
+    const visible = document.visibilityState === "visible";
+    const wanted = [...this.subs].some((s) => visible || s.keepWhenHidden);
+    if (!wanted) this.close();
+    else if (!this.source && this.retry === undefined) this.open();
+  }
+
+  private setLive(live: boolean) {
+    this.live = live;
+    for (const s of this.subs) s.onLive(live);
+  }
+
+  private close() {
+    window.clearTimeout(this.retry);
+    this.retry = undefined;
+    this.source?.close();
+    this.source = null;
+    this.setLive(false);
+  }
+
+  private open() {
+    this.close();
+    const es = new EventSource(`${API_URL}${this.path}`, { withCredentials: true });
+    this.source = es;
+    const fire = () => {
+      for (const s of [...this.subs]) s.onEvent();
+    };
+    es.addEventListener("ready", () => {
+      this.failures = 0;
+      this.setLive(true);
+    });
+    es.onmessage = fire;
+    es.addEventListener("match", fire);
+    es.addEventListener("curated", fire);
+    es.onerror = () => {
+      this.close();
+      const wait = Math.min(STREAM_RETRY_MAX_MS, STREAM_RETRY_MS * 2 ** this.failures++);
+      this.retry = window.setTimeout(
+        () => {
+          this.retry = undefined;
+          this.sync();
+        },
+        wait / 2 + Math.random() * (wait / 2),
+      );
+    };
+  }
+}
+
+const sharedStreams = new Map<string, SharedStream>();
+let visibilityHooked = false;
+
+function sharedStream(path: string): SharedStream {
+  let stream = sharedStreams.get(path);
+  if (!stream) {
+    stream = new SharedStream(path);
+    sharedStreams.set(path, stream);
+  }
+  if (!visibilityHooked) {
+    visibilityHooked = true;
+    document.addEventListener("visibilitychange", () => {
+      for (const s of sharedStreams.values()) s.sync();
+    });
+  }
+  return stream;
+}
+
 /**
  * Subscribes to one of the API's SSE nudge streams (/curated/stream, /matches/stream) and calls
  * `onEvent` on each message. The stream only says "something new" - the caller refetches. The
  * caller's polling stays on as the fallback, so a dropped stream only costs latency.
  *
  * The stream is closed while the browser tab is hidden (a hidden tab would refetch on every nudge
- * and hold a server connection for nothing; polling's catch-up on return covers the gap). A dropped
- * stream is reopened here with backoff and jitter, instead of the browser's own fixed-interval
- * retry - which also gives up for good on any non-200, such as a 502 while the API restarts.
+ * and hold a server connection for nothing; polling's catch-up on return covers the gap) unless a
+ * subscriber passes `keepWhenHidden` - the alert notifier does, so a background tab still pings.
+ * A dropped stream is reopened here with backoff and jitter, instead of the browser's own
+ * fixed-interval retry - which also gives up for good on any non-200, such as a 502 while the API
+ * restarts.
  */
-export function useNudgeStream(path: string, onEvent: () => void, enabled = true): boolean {
+export function useNudgeStream(
+  path: string,
+  onEvent: () => void,
+  enabled = true,
+  keepWhenHidden = false,
+): boolean {
   const [live, setLive] = useState(false);
   const callback = useRef(onEvent);
   callback.current = onEvent;
 
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return;
-    let source: EventSource | null = null;
-    let retry: number | undefined;
-    let failures = 0;
-
-    const close = () => {
-      window.clearTimeout(retry);
-      retry = undefined;
-      source?.close();
-      source = null;
+    const remove = sharedStream(path).add({
+      onEvent: () => callback.current(),
+      onLive: setLive,
+      keepWhenHidden,
+    });
+    return () => {
+      remove();
       setLive(false);
     };
-    const open = () => {
-      close();
-      if (document.visibilityState !== "visible") return;
-      const es = new EventSource(`${API_URL}${path}`, { withCredentials: true });
-      source = es;
-      es.addEventListener("ready", () => {
-        failures = 0;
-        setLive(true);
-      });
-      es.onmessage = () => callback.current();
-      es.addEventListener("match", () => callback.current());
-      es.addEventListener("curated", () => callback.current());
-      es.onerror = () => {
-        close();
-        const wait = Math.min(STREAM_RETRY_MAX_MS, STREAM_RETRY_MS * 2 ** failures++);
-        retry = window.setTimeout(open, wait / 2 + Math.random() * (wait / 2));
-      };
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        if (!source && retry === undefined) open();
-      } else close();
-    };
-
-    open();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      close();
-    };
-  }, [path, enabled]);
+  }, [path, enabled, keepWhenHidden]);
 
   return live;
 }

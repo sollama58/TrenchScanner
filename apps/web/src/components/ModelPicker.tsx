@@ -7,7 +7,12 @@ import { invalidate } from "../cache";
  * calls at all) to the user's account. The Live tab's checkboxes and the Models tab's both go
  * through here, so the two always show the same list.
  */
-export async function saveFeedSettings(change: { models?: string[] | null; showModelAlerts?: boolean }) {
+export async function saveFeedSettings(change: {
+  models?: string[] | null;
+  showModelAlerts?: boolean;
+  /** Follow the best performer; ticking models by hand turns it off. */
+  followBest?: boolean;
+}) {
   await put("/curated/feed", change);
   // Every cached feed and leaderboard answer was for the old settings. Stats and insights don't
   // depend on them, so they stay cached (the Models tab keeps painting at once).
@@ -72,8 +77,14 @@ export function ModelPicker({
     }
   };
 
-  const summary =
-    names.length === 0 ? "–" : names.length <= 2 ? names.join(", ") : `${names[0]} +${names.length - 1}`;
+  const following = board.followBest === true && pending === null;
+  const summary = following
+    ? `Best: ${names[0] ?? "–"}`
+    : names.length === 0
+      ? "–"
+      : names.length <= 2
+        ? names.join(", ")
+        : `${names[0]} +${names.length - 1}`;
 
   return (
     <div className={`model-picker${disabled ? " off" : ""}`}>
@@ -84,6 +95,11 @@ export function ModelPicker({
           <span className="chev">▾</span>
         </summary>
         <div className="checklist-menu" role="group" aria-label="Models in your feed">
+          {following && (
+            <p className="faint small checklist-note">
+              Following the best performer. Ticking a model switches to your own picks.
+            </p>
+          )}
           {board.entries.map((e) => {
             const on = checked.has(e.id);
             const last = on && checked.size === 1;
@@ -97,7 +113,7 @@ export function ModelPicker({
                 />
                 <span className="checklist-name">
                   <span className="faint num">#{e.rank}</span> {e.name}
-                  {e.isDefault && <span className="chip chip-model">default</span>}
+                  {e.isDefault && <span className="chip chip-model">best</span>}
                 </span>
                 <span className="num muted">
                   {e.composite.score === null ? "–" : e.composite.score.toFixed(0)}
@@ -105,9 +121,9 @@ export function ModelPicker({
               </label>
             );
           })}
-          {!board.followsDefault && (
+          {board.followBest === false && (
             <button className="ghost small-btn" disabled={saving} onClick={() => void save(null)}>
-              Back to the default
+              Follow the best performer
             </button>
           )}
         </div>

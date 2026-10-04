@@ -136,6 +136,7 @@ export function AlertCard({
           <div className="title-row">
             <strong className="symbol">{tokenLabel(card.token)}</strong>
             {card.token.name && card.token.symbol && <span className="token-name">{card.token.name}</span>}
+            <span className={`badge ${badge.tone}`}>{badge.text}</span>
           </div>
           <div className="meta-row">
             {labelSource && card.kind === "match" && (
@@ -181,7 +182,6 @@ export function AlertCard({
             <span className="when">{ago(card.matchedAt, now)}</span>
           </div>
         </div>
-        <span className={`badge ${badge.tone}`}>{badge.text}</span>
       </header>
 
       <div className="card-figures">

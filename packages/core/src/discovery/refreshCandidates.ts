@@ -63,10 +63,13 @@ export async function refreshAndFilterToBand(
   // Tighter than fetchJson's defaults (10s, two retries), which let one slow batch hold the whole
   // scan cycle for half a minute or more - 47s on 2026-10-04 - when a batch normally answers in
   // well under a second. A batch given up on costs its mints one cycle's reading, and the next
-  // cycle is seconds away.
+  // cycle is seconds away. The deadline bounds the whole refresh the same way: on 2026-10-04 a
+  // throttled DexScreener still held cycles for 20-50s at five seconds a batch. Callers pass the
+  // mints that matter most first (selectWatchlist puts the near-band tier ahead).
   const marketData = await dexScreener.getTokensByAddresses(mintAddresses, 5, {
     timeoutMs: 5000,
     retries: 1,
+    deadlineMs: 10_000,
   });
   return {
     inBand: marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound),

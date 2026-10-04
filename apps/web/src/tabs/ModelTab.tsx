@@ -91,7 +91,7 @@ export function ModelTab() {
               <strong>Consensus</strong> doesn't read the market directly; it learns how far to trust each of
               the others. Your feed shows calls from{" "}
               <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
-              {lb.followsDefault ? " (the default)" : ""}
+              {lb.followBest ? " (the best performer; you follow it automatically)" : ""}
               {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
               {leader && leader.composite.score !== null && (
                 <>
@@ -350,13 +350,13 @@ function LeaderboardPanel({
           <h3>Who's calling it best, last {days} days</h3>
           <p className="muted small">{board.scoring.summary}</p>
         </div>
-        {!board.followsDefault && (
+        {board.followBest === false && (
           <button
             className="ghost"
             disabled={busy !== null || refreshing}
             onClick={() => void use("default", null)}
           >
-            Back to the default
+            Follow the best performer
           </button>
         )}
       </header>
@@ -391,11 +391,16 @@ function LeaderboardPanel({
               const { live, exam } = e.composite;
               return (
                 <tr key={e.id} className={mine ? "selected" : ""}>
-                  <td className="r num">{e.rank}</td>
+                  <td className="r num lb-rank">{e.rank}</td>
                   <td className="model-cell">
                     <div className="row">
+                      <span className="rank-inline num">#{e.rank}</span>
                       <strong>{e.name}</strong>
-                      {e.isDefault && <span className="chip chip-model">default</span>}
+                      {e.isDefault && (
+                        <span className="chip chip-model" title="The best performer: the default feed">
+                          best
+                        </span>
+                      )}
                       {mine && <span className="chip">your feed</span>}
                     </div>
                     <small className="muted">
@@ -407,31 +412,34 @@ function LeaderboardPanel({
                       </small>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Score" className="lb-score">
                     <ScoreBar score={e.composite.score} liveWeight={e.composite.liveWeight} />
                   </td>
-                  <td className="r num">
+                  <td className="r num" data-label="Live calls">
                     {live.calls}
                     {live.calls > live.graded && <span className="faint"> ({live.graded} graded)</span>}
                   </td>
-                  <td className={`r num ${rateTone(live.winRatePct, t.hitRate2xPct)}`}>
+                  <td className={`r num ${rateTone(live.winRatePct, t.hitRate2xPct)}`} data-label="2x">
                     {pct(live.winRatePct)}
                   </td>
-                  <td className={`r num ${rateTone(live.goalRatePct, t.hitRate4xPct)}`}>
+                  <td className={`r num ${rateTone(live.goalRatePct, t.hitRate4xPct)}`} data-label="4x">
                     {pct(live.goalRatePct)}
                   </td>
-                  <td className="r num">{doublings(live.avgReturnDoublings)}</td>
-                  <td className="r num muted">
+                  <td className="r num" data-label="Avg doublings">
+                    {doublings(live.avgReturnDoublings)}
+                  </td>
+                  <td className="r num muted" data-label="Backtest">
                     {exam.graded > 0 ? `${pct(exam.winRatePct)} / ${pct(exam.goalRatePct)}` : "–"}
                     {exam.graded > 0 && <span className="faint"> · {exam.graded}</span>}
                   </td>
                   <td
                     className={`r num ${e.highConviction ? rateTone(e.highConviction.winRatePct, t.hitRate2xPct) : "muted"}`}
+                    data-label="High-conv 2x"
                   >
                     {e.highConviction ? pct(e.highConviction.winRatePct) : "–"}
                     {e.highConviction && <span className="faint"> · {e.highConviction.graded}</span>}
                   </td>
-                  <td>
+                  <td className="lb-status">
                     <span className={`badge ${STATUS_TEXT[e.status].tone}`}>
                       {STATUS_TEXT[e.status].text}
                     </span>
@@ -444,7 +452,7 @@ function LeaderboardPanel({
                       </span>
                     )}
                   </td>
-                  <td className="r">
+                  <td className="r lb-feed">
                     <label
                       className="in-feed"
                       title={
@@ -542,7 +550,13 @@ function HowItWorks({ board }: { board: Leaderboard }) {
         <li>
           <strong>Consensus.</strong> A second-order model trained on the others' out-of-sample calls: it
           learns which models to trust and when they agree, and gets its own exam on later weeks than it
-          trained on. It's the default feed once its exam gives it a cutoff; until then the default is Rules.
+          trained on.
+        </li>
+        <li>
+          <strong>The default.</strong> After each run the best performer on this board (with at least{" "}
+          {board.champion?.minLiveGraded ?? 10} graded live calls) becomes the default feed, and everyone who
+          follows the best switches to it. Until a model qualifies, the default is the Consensus when it can
+          call, else Rules.
         </li>
       </ol>
     </section>
@@ -683,9 +697,11 @@ function TrainingPanel({
               data={run.precisionCurve.map((p, i) => ({
                 // Slices too thin to hold one call are skipped from the front, so align from the end.
                 label: `Top ${CURVE_SLICES[CURVE_SLICES.length - run.precisionCurve.length + i] ?? "?"}`,
+                shortLabel: `${CURVE_SLICES[CURVE_SLICES.length - run.precisionCurve.length + i] ?? "?"}`,
                 a: p.winRatePct,
                 b: p.goalRatePct,
                 sub: `${p.alerts} calls`,
+                shortSub: `${p.alerts}`,
               }))}
             />
           ) : (
@@ -857,6 +873,7 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
                 a: b.hitRate2xPct,
                 b: b.hitRate4xPct,
                 sub: `${b.graded} graded`,
+                shortSub: `${b.graded}`,
               }))}
             />
           </>

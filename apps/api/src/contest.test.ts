@@ -1,7 +1,13 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "./bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE, STACKED_MODEL_KIND } from "@trenchscanner/core";
+import {
+  prisma,
+  loadEnv,
+  rechooseChampion,
+  HEURISTIC_CURATOR_SOURCE,
+  STACKED_MODEL_KIND,
+} from "@trenchscanner/core";
 import {
   buildLeaderboard,
   contestState,
@@ -50,6 +56,7 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.curatorModel.deleteMany({ where: { id: { in: modelIds } } });
     await prisma.curatorLane.deleteMany({ where: { slot: "trees" } });
+    await prisma.curatorChampion.deleteMany({});
     resetContestStateCache();
   });
 
@@ -84,6 +91,50 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     expect(feed([], "linear")).toEqual({ models: ["linear"], followsDefault: false });
     expect(feed([])).toEqual({ models: [state.defaultModel], followsDefault: true });
     expect(feed(["retired-model"])).toEqual({ models: [state.defaultModel], followsDefault: true });
+    // Following the best performer ignores the hand picks (they are kept for switching back).
+    expect(resolveFeedModels(state, { model: "linear", models: ["trees"], followBest: true })).toEqual({
+      models: [state.defaultModel],
+      followsDefault: true,
+    });
+  });
+
+  it("makes the stored best performer the default while it can call, and re-chooses it", async () => {
+    await retireAll();
+    await prisma.curatorChampion.deleteMany({});
+    await activeModel("consensus", STACKED_MODEL_KIND, 0.4);
+    await activeModel("trees", "gbdt-v1", 1.01);
+    await prisma.curatorChampion.create({ data: { contestant: "trees", name: "Trees", reason: "test" } });
+    resetContestStateCache();
+    // Trees is silent this generation: the default falls back rather than to a feed that can't send.
+    expect((await contestState(env)).defaultModel).toBe("consensus");
+
+    await retireAll();
+    await activeModel("consensus", STACKED_MODEL_KIND, 0.4);
+    await activeModel("trees", "gbdt-v1", 0.5);
+    resetContestStateCache();
+    const state = await contestState(env);
+    expect(state.defaultModel).toBe("trees");
+    const board = await buildLeaderboard(env, 30);
+    expect(board.champion).toMatchObject({ id: "trees", reason: "test" });
+
+    // No model has enough graded live calls here: re-choosing falls back to the consensus.
+    const lanes = state.lanes;
+    const result = await rechooseChampion({
+      roster: state.roster,
+      lanes,
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 10 },
+      rules: { minLiveGraded: 10_000, margin: 2 },
+    });
+    expect(result).toMatchObject({ changed: true, pick: { id: "consensus", qualified: false } });
+    const again = await rechooseChampion({
+      roster: state.roster,
+      lanes,
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 10 },
+      rules: { minLiveGraded: 10_000, margin: 2 },
+    });
+    expect(again.changed).toBe(false);
+    await prisma.curatorChampion.deleteMany({});
+    resetContestStateCache();
   });
 
   it("ranks the leaderboard on composite scores built from live calls and exams", async () => {

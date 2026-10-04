@@ -13,6 +13,9 @@ import {
   loadCurrentLanes,
   withLanes,
   defaultContestant,
+  loadChampion,
+  NEVER_EMIT_THRESHOLD,
+  resolveDefaultModel,
   rankFromQuantiles,
   rulesSignal,
   scoreStacked,
@@ -176,9 +179,20 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
     return false;
   });
   const consensus = usable.find((e) => e.role === "stacked");
+  // The default is the stored best performer (curation/champion.ts) while it can still send here;
+  // else the consensus once it can call, else Rules - the same answer the API gives.
+  const champion = await loadChampion();
+  const canCall = (id: string) =>
+    usable.some(
+      (e) => e.spec.id === id && (e.role === "rules" || e.model.params.threshold < NEVER_EMIT_THRESHOLD),
+    );
   const roster: CuratorRoster = {
     entries: usable,
-    defaultModel: defaultContestant(consensus?.role === "stacked" ? consensus.model.params.threshold : null),
+    defaultModel: resolveDefaultModel(
+      champion?.contestant ?? null,
+      canCall,
+      defaultContestant(consensus?.role === "stacked" ? consensus.model.params.threshold : null),
+    ),
   };
   modelCache = { fetchedAt: Date.now(), key, roster };
   return roster;
