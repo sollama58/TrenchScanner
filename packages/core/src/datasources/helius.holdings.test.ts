@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HeliusClient, CASH_EQUIVALENT_MINTS } from "./helius.js";
 
 /** One searchAssets item, shaped like the DAS response. */
+const MEME_1 = "MemeCoin1111111111111111111111111111111111";
+const MEME_2 = "MemeCoin2222222222222222222222222222222222";
+
 function item(mint: string, totalPrice: number | undefined) {
   return {
     id: mint,
@@ -45,13 +48,18 @@ describe("getOtherHoldingsUsdBatch", () => {
         item("So11111111111111111111111111111111111111112", 5_000), // wSOL - excluded
         item("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 900), // USDC - excluded
         item("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", 100), // USDT - excluded
-        item("MemeCoin1111111111111111111111111111111111", 30),
-        item("MemeCoin2222222222222222222222222222222222", 12.5),
+        item(MEME_1, 30),
+        item(MEME_2, 12.5),
       ],
     ]);
     const out = await client().getOtherHoldingsUsdBatch(["wallet-a"]);
     // A whale in SOL and stables with only $42.50 of actual tokens: cash is not conviction.
-    expect(out.get("wallet-a")).toEqual({ status: "found", otherHoldingsUsd: 42.5, perMintUsd: {} });
+    expect(out.get("wallet-a")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 42.5,
+      perMintUsd: { [MEME_1]: 30, [MEME_2]: 12.5 },
+      complete: true,
+    });
   });
 
   it("counts unpriced holdings as nothing, making the figure a floor", async () => {
@@ -59,7 +67,12 @@ describe("getOtherHoldingsUsdBatch", () => {
     // as $0, so the number can only understate - which makes a wallet look emptier, never richer.
     mockFetch([[item("Unpriced11111111111111111111111111111111111", undefined)]]);
     const out = await client().getOtherHoldingsUsdBatch(["wallet-b"]);
-    expect(out.get("wallet-b")).toEqual({ status: "found", otherHoldingsUsd: 0, perMintUsd: {} });
+    expect(out.get("wallet-b")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 0,
+      perMintUsd: {},
+      complete: true,
+    });
   });
 
   it("reports an empty wallet as a real answer, not a failure", async () => {
@@ -68,7 +81,12 @@ describe("getOtherHoldingsUsdBatch", () => {
     // Crucially "found" with 0, not "failed": this is the sniper-shell case the filter hunts,
     // and treating it as a failure would leave the signal permanently unknown for exactly the
     // wallets it most needs to flag.
-    expect(out.get("wallet-c")).toEqual({ status: "found", otherHoldingsUsd: 0, perMintUsd: {} });
+    expect(out.get("wallet-c")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 0,
+      perMintUsd: {},
+      complete: true,
+    });
   });
 
   it("never calls a non-Helius endpoint, which cannot serve DAS", async () => {
@@ -110,7 +128,7 @@ describe("getOtherHoldingsUsdBatch", () => {
           result: {
             items: [
               {
-                id: "MemeCoin1111111111111111111111111111111111",
+                id: MEME_1,
                 token_info: {
                   balance: 2_000_000_000_000,
                   decimals: 6,
@@ -125,7 +143,12 @@ describe("getOtherHoldingsUsdBatch", () => {
     );
     const out = await client().getOtherHoldingsUsdBatch(["wallet-e"]);
     // 2,000,000,000,000 raw at 6 decimals = 2,000,000 whole tokens x $0.00005 = $100.
-    expect(out.get("wallet-e")).toEqual({ status: "found", otherHoldingsUsd: 100, perMintUsd: {} });
+    expect(out.get("wallet-e")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 100,
+      perMintUsd: { [MEME_1]: 100 },
+      complete: true,
+    });
   });
 
   it("discards a batch where nothing at all could be priced, instead of calling every wallet empty", async () => {
@@ -152,7 +175,12 @@ describe("getOtherHoldingsUsdBatch", () => {
     // exactly what the filter hunts, and must not be mistaken for a broken price feed.
     mockFetch([[item("Unpriced11111111111111111111111111111111111", undefined)]]);
     const out = await client().getOtherHoldingsUsdBatch(["wallet-g"]);
-    expect(out.get("wallet-g")).toEqual({ status: "found", otherHoldingsUsd: 0, perMintUsd: {} });
+    expect(out.get("wallet-g")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 0,
+      perMintUsd: {},
+      complete: true,
+    });
   });
 
   it("reports what a wallet holds of each named mint, so the launch can be subtracted", async () => {
@@ -166,6 +194,7 @@ describe("getOtherHoldingsUsdBatch", () => {
       status: "found",
       otherHoldingsUsd: 3_000,
       perMintUsd: { [LAUNCH]: 3_000 },
+      complete: true,
     });
   });
 
@@ -178,6 +207,7 @@ describe("getOtherHoldingsUsdBatch", () => {
       status: "found",
       otherHoldingsUsd: 400,
       perMintUsd: { [LAUNCH]: 0, [OTHER]: 400 },
+      complete: true,
     });
   });
 
@@ -185,7 +215,39 @@ describe("getOtherHoldingsUsdBatch", () => {
     // Naming a cash mint should change nothing: it is excluded before either step.
     mockFetch([[item("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 10_000), item(OTHER, 60)]]);
     const out = await client().getOtherHoldingsUsdBatch(["w"], [LAUNCH]);
-    expect(out.get("w")).toEqual({ status: "found", otherHoldingsUsd: 60, perMintUsd: { [LAUNCH]: 0 } });
+    expect(out.get("w")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 60,
+      perMintUsd: { [LAUNCH]: 0, [OTHER]: 60 },
+      complete: true,
+    });
+  });
+
+  it("lists every priced holding, so a later launch absent from it is a known zero", async () => {
+    // What lets a cached reading answer for a launch the wallet turns up on next cycle without a
+    // fresh 10-credit lookup: anything not listed counted for nothing in the total.
+    mockFetch([
+      [item(OTHER, 400), item(MEME_1, 30), item("Unpriced11111111111111111111111111111111111", undefined)],
+    ]);
+    const out = await client().getOtherHoldingsUsdBatch(["w"], [LAUNCH]);
+    expect(out.get("w")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 430,
+      perMintUsd: { [LAUNCH]: 0, [OTHER]: 400, [MEME_1]: 30 },
+      complete: true,
+    });
+  });
+
+  it("keeps only the named mints for a wallet with too many priced holdings to list", async () => {
+    const many = Array.from({ length: 101 }, (_, i) => item(`Priced${String(i).padStart(37, "0")}`, 1));
+    mockFetch([[...many, item(LAUNCH, 50)]]);
+    const out = await client().getOtherHoldingsUsdBatch(["whale"], [LAUNCH]);
+    expect(out.get("whale")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 151,
+      perMintUsd: { [LAUNCH]: 50 },
+      complete: false,
+    });
   });
 
   it("does not disable itself for good because the network dropped", async () => {
@@ -205,7 +267,8 @@ describe("getOtherHoldingsUsdBatch", () => {
     expect(out.get("recovered")).toEqual({
       status: "found",
       otherHoldingsUsd: 400,
-      perMintUsd: { [LAUNCH]: 0 },
+      perMintUsd: { [LAUNCH]: 0, [OTHER]: 400 },
+      complete: true,
     });
   });
 

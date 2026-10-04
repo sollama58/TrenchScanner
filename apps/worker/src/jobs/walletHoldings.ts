@@ -106,13 +106,21 @@ export async function resolveWalletHoldings(
   const cached = await prisma.walletHoldingsCache.findMany({
     where: { address: { in: unique }, checkedAt: { gt: freshCutoff } },
   });
+  const ownMints = mintsByWallet(groups);
   for (const row of cached) {
     const perMintUsd = asPerMintUsd(row.perMintUsd);
-    // A row can only answer for launches it was actually checked against. One written before this
-    // wallet was seen holding today's candidate - or before the column existed at all - would
-    // otherwise be subtracted against nothing and report the wallet as richer than it is, which
-    // is the very bug this breakdown exists to fix. Re-fetch instead.
-    if (!coversEveryRelevantMint(row.address, perMintUsd, groups)) continue;
+    if (row.breakdownComplete) {
+      // Every priced holding is listed, so a launch missing from it counted for nothing in the
+      // total - a known zero. This is what spares a recurring wallet a fresh 10-credit lookup
+      // each time it turns up on another launch's holder list.
+      for (const mint of ownMints.get(row.address) ?? []) perMintUsd[mint] ??= 0;
+    } else if (!coversEveryRelevantMint(row.address, perMintUsd, groups)) {
+      // A row can only answer for launches it was actually checked against. One written before
+      // this wallet was seen holding today's candidate - or before the column existed at all -
+      // would otherwise be subtracted against nothing and report the wallet as richer than it
+      // is, which is the very bug this breakdown exists to fix. Re-fetch instead.
+      continue;
+    }
     result.set(row.address, { otherHoldingsUsd: row.otherHoldingsUsd, perMintUsd });
   }
 
@@ -151,11 +159,15 @@ export async function resolveWalletHoldings(
   }
 
   const fetched = await helius.getOtherHoldingsUsdBatch(toFetch, mintsOfInterest);
-  const ownMints = mintsByWallet(groups);
 
   // Only definitive answers are written. A failure is left uncached so a later cycle retries it,
   // and "unsupported" means the whole path is off - neither is a fact about the wallet.
-  const resolved: { address: string; otherHoldingsUsd: number; perMintUsd: Record<string, number> }[] = [];
+  const resolved: {
+    address: string;
+    otherHoldingsUsd: number;
+    perMintUsd: Record<string, number>;
+    breakdownComplete: boolean;
+  }[] = [];
   let failedCount = 0;
   let unsupported = 0;
   for (const address of toFetch) {
@@ -163,7 +175,12 @@ export async function resolveWalletHoldings(
     if (outcome.status === "found") {
       const perMintUsd = compactPerMint(outcome.perMintUsd, ownMints.get(address));
       result.set(address, { otherHoldingsUsd: outcome.otherHoldingsUsd, perMintUsd });
-      resolved.push({ address, otherHoldingsUsd: outcome.otherHoldingsUsd, perMintUsd });
+      resolved.push({
+        address,
+        otherHoldingsUsd: outcome.otherHoldingsUsd,
+        perMintUsd,
+        breakdownComplete: outcome.complete,
+      });
     } else if (outcome.status === "unsupported") {
       unsupported += 1;
     } else {
@@ -185,11 +202,13 @@ export async function resolveWalletHoldings(
               address: row.address,
               otherHoldingsUsd: row.otherHoldingsUsd,
               perMintUsd: row.perMintUsd,
+              breakdownComplete: row.breakdownComplete,
               checkedAt,
             },
             update: {
               otherHoldingsUsd: row.otherHoldingsUsd,
               perMintUsd: row.perMintUsd,
+              breakdownComplete: row.breakdownComplete,
               checkedAt,
             },
           }),
