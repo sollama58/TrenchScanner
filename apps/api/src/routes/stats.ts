@@ -176,7 +176,15 @@ export async function registerStatsRoutes(app: FastifyInstance, opts: { env: Env
 }
 
 /** Exported for the route test; the route above is the only caller in production. */
-export async function buildHitRateReport(since: Date, until: Date, targets: Targets, env: Env) {
+export async function buildHitRateReport(
+  since: Date,
+  until: Date,
+  targets: Targets,
+  env: Env,
+  // The Model tab never shows per-filter rows, and the Match aggregate is the report's heaviest
+  // read, so it asks for the report without them.
+  opts: { includeFilterMatches?: boolean } = {},
+) {
   // A curated alert carries outcome copies once its window closes; until the copy lands (or after
   // its training row is pruned) the linked row is the other source. Either way the same label.
   const curatedRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
@@ -279,7 +287,9 @@ export async function buildHitRateReport(since: Date, until: Date, targets: Targ
 
   // Match is the one table too large to scan by time alone; its (userId, matchedAt) index is the
   // way in, and User is small enough to list. Same route loadFilterTrackRecords takes.
-  const matchRows = prisma.user.findMany({ select: { id: true } }).then((users) => {
+  const matchRows = (
+    opts.includeFilterMatches === false ? Promise.resolve([]) : prisma.user.findMany({ select: { id: true } })
+  ).then((users) => {
     const userIds = users.map((u) => u.id);
     if (userIds.length === 0) return [];
     return prisma.$queryRaw<(RawCounts & { filterId: string; name: string })[]>`

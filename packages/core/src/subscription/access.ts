@@ -27,15 +27,19 @@ export async function resolveAccess(
 
   const now = new Date();
 
-  const whitelisted = await prisma.whitelist.findUnique({ where: { walletAddress } });
+  // Independent lookups, so they share one round trip instead of queueing: this runs in front
+  // of every gated request.
+  const [whitelisted, user] = await Promise.all([
+    prisma.whitelist.findUnique({ where: { walletAddress } }),
+    prisma.user.findUnique({
+      where: { walletAddress },
+      select: { subscription: { select: { expiresAt: true } } },
+    }),
+  ]);
   if (whitelisted && (whitelisted.expiresAt === null || whitelisted.expiresAt > now)) {
     return { hasAccess: true, expiresAt: whitelisted.expiresAt, reason: "whitelist" };
   }
 
-  const user = await prisma.user.findUnique({
-    where: { walletAddress },
-    select: { subscription: { select: { expiresAt: true } } },
-  });
   const expiresAt = user?.subscription?.expiresAt ?? null;
   if (expiresAt !== null && expiresAt > now) {
     return { hasAccess: true, expiresAt, reason: "subscription" };

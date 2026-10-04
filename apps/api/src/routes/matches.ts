@@ -163,38 +163,41 @@ export async function registerMatchRoutes(
     // is filtered out after the fact and the page count stays exact.
     const interleave = includeCurated && mergeDepth <= MAX_MERGE_DEPTH;
 
-    const [matches, matchTotal] = await Promise.all([
-      prisma.match
-        .findMany({
-          where,
-          orderBy: { matchedAt: "desc" },
-          // Interleaving needs the whole run up to this page (it slices the union itself);
-          // otherwise this IS the page.
-          ...(interleave ? { take: mergeDepth } : { skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE }),
-          include: matchInclude,
-        })
-        .then(withLatestSnapshots),
-      prisma.match.count({ where }),
-    ]);
-
     // The curated calls interleaved are the ledger this user's Curated tab shows (their picked
     // model, else the default), so the two tabs never disagree about what "curated" means.
-    const curatedModel = interleave
-      ? resolveFeedModel(await contestState(opts.env), undefined, await savedFeedModel(request.user!.userId))
-      : null;
-    const [curatedAlerts, curatedTotal] = curatedModel
-      ? await Promise.all([
-          prisma.curatedAlert
-            .findMany({
-              where: { model: curatedModel },
-              orderBy: { createdAt: "desc" },
-              take: mergeDepth,
-              include: curatedAlertInclude,
-            })
-            .then(withLatestSnapshots),
-          prisma.curatedAlert.count({ where: { model: curatedModel } }),
-        ])
-      : [[], 0];
+    // Fetched alongside the matches rather than after them: the two halves are independent.
+    const loadCurated = async () => {
+      const [state, saved] = await Promise.all([contestState(opts.env), savedFeedModel(request)]);
+      const curatedModel = resolveFeedModel(state, undefined, saved);
+      return Promise.all([
+        prisma.curatedAlert
+          .findMany({
+            where: { model: curatedModel },
+            orderBy: { createdAt: "desc" },
+            take: mergeDepth,
+            include: curatedAlertInclude,
+          })
+          .then(withLatestSnapshots),
+        prisma.curatedAlert.count({ where: { model: curatedModel } }),
+      ]);
+    };
+
+    const [[matches, matchTotal], [curatedAlerts, curatedTotal]] = await Promise.all([
+      Promise.all([
+        prisma.match
+          .findMany({
+            where,
+            orderBy: { matchedAt: "desc" },
+            // Interleaving needs the whole run up to this page (it slices the union itself);
+            // otherwise this IS the page.
+            ...(interleave ? { take: mergeDepth } : { skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE }),
+            include: matchInclude,
+          })
+          .then(withLatestSnapshots),
+        prisma.match.count({ where }),
+      ]),
+      interleave ? loadCurated() : Promise.resolve([[], 0] as const),
+    ]);
 
     const matchCards = matches.map((match) => {
       const { snapshots, ...token } = match.token;
