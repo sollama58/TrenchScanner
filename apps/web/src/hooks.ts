@@ -36,9 +36,10 @@ const MAX_BACKOFF_MS = 300_000;
 export function usePolling<T>(path: string, intervalMs: number, key = ""): Loadable<T> {
   const want = `${path}\n${key}`;
   // The data and the path+key it answers.
+  // An answer restored from an earlier visit shows as stale until this visit's own lands.
   const [held, setHeld] = useState<{ data: T; for: string } | null>(() => {
     const cached = peek<T>(path);
-    return cached ? { data: cached.data, for: want } : null;
+    return cached ? { data: cached.data, for: cached.restored ? "" : want } : null;
   });
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
@@ -99,7 +100,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     firstKey.current = key;
     // A new path shows its own cached data if any; otherwise the previous answer stays up as stale.
     const cached = forced ? null : peek<T>(path);
-    if (cached) setHeld({ data: cached.data, for: `${path}\n${key}` });
+    if (cached) setHeld({ data: cached.data, for: cached.restored ? "" : `${path}\n${key}` });
     setError(null);
     again.current = false;
     run(forced ? -1 : FRESH_ON_MOUNT_MS);

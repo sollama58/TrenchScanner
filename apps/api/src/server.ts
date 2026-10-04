@@ -51,6 +51,9 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(cors, {
     origin: corsOriginList(env),
     credentials: true,
+    // Lets browsers reuse a preflight for 2h (Chrome's cap) instead of their 5s default, so the
+    // dashboard's saves (feed settings, filters) don't each wait on an extra OPTIONS round trip.
+    maxAge: 7200,
   });
   await app.register(cookie);
 

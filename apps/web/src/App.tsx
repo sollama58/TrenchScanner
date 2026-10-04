@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { post, type Subscription, type User, type WorkerHealth } from "./api";
-import { cachedGet, invalidate, prefetch } from "./cache";
+import { ApiError, post, type Subscription, type User, type WorkerHealth } from "./api";
+import { cachedGet, invalidate, peek, prefetch } from "./cache";
 import { usePolling } from "./hooks";
 import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
@@ -22,14 +22,25 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
 type Session = { state: "loading" } | { state: "signed-out" } | { state: "signed-in"; user: User };
 
 export function App() {
-  const [session, setSession] = useState<Session>({ state: "loading" });
+  // A returning visitor starts signed in as last time (src/cache.ts keeps the answer), so their
+  // feed paints at once; the check below signs them out if the session has since ended.
+  const [session, setSession] = useState<Session>(() => {
+    const user = peek<User>("/auth/me")?.data;
+    return user ? { state: "signed-in", user } : { state: "loading" };
+  });
   const [tab, setTab] = useState<Tab>(tabFromHash);
 
   useEffect(() => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
     cachedGet<User>("/auth/me", 10_000)
       .then((user) => setSession({ state: "signed-in", user }))
-      .catch(() => setSession({ state: "signed-out" }));
+      .catch((e: unknown) => {
+        // Unreachable API with a remembered session: keep showing it (polling retries). A real
+        // "not signed in" answer ends it and clears what this device kept.
+        if (!(e instanceof ApiError) && peek<User>("/auth/me")) return;
+        invalidate();
+        setSession({ state: "signed-out" });
+      });
     const onHash = () => setTab(tabFromHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
