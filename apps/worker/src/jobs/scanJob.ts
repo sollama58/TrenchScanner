@@ -1,4 +1,5 @@
 import {
+  recordRunProgress,
   prisma,
   createLogger,
   refreshAndFilterToBand,
@@ -92,6 +93,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     const now = Date.now();
     stagesMs[stage] = now - lapStartedAt;
     lapStartedAt = now;
+    // Visibility only, never awaited: shows on /health/worker which stage a slow run is past.
+    void recordRunProgress("scan", stagesMs).catch(() => {});
   };
 
   // 1. Grow the watchlist from every discovery source, regardless of a mint's current mcap - see
