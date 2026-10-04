@@ -4,7 +4,7 @@ import { api, parse } from "./api";
  * A small in-memory cache for the dashboard's GET calls, keyed by path.
  *
  * It does three things for load speed: requests started at boot (before React has rendered, see
- * `prefetch` in main.tsx) are picked up by the components that need them instead of being sent
+ * index.html) are picked up by the components that need them instead of being sent
  * again; two views asking for the same path at once share one request; and a tab you come back to
  * paints its last data at once while it refreshes in the background.
  */
@@ -72,9 +72,12 @@ export function cachedGet<T>(path: string, maxAgeMs = 0): Promise<T> {
   return p;
 }
 
-/** Starts a GET now so a component mounting later finds it in flight or done. Never throws. */
+/**
+ * Starts a GET now so a component mounting later finds it in flight or done. Does nothing when
+ * `path` already has an answer (of any age) or a request in flight. Never throws.
+ */
 export function prefetch(path: string): void {
-  cachedGet(path, 10_000).catch(() => undefined);
+  cachedGet(path, Number.POSITIVE_INFINITY).catch(() => undefined);
 }
 
 /** Drops cached responses (all, or those whose path starts with `prefix`), e.g. on sign-out. */

@@ -1,16 +1,16 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { post, type Subscription, type User, type WorkerHealth } from "./api";
-import { cachedGet, invalidate } from "./cache";
+import { cachedGet, invalidate, prefetch } from "./cache";
 import { usePolling } from "./hooks";
 import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
 import { BrainIcon, LogoMark, LogoutIcon, PulseIcon, ShieldIcon, SlidersIcon } from "./components/Icons";
-import { loadFiltersTab, loadModelTab, loadSignIn, tabFromHash, type Tab } from "./routes";
+import { TAB_DATA, loadFiltersTab, loadModelTab, loadSignIn, loaded, tabFromHash, type Tab } from "./routes";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
-const ModelTab = lazy(() => loadModelTab().then((m) => ({ default: m.ModelTab })));
-const FiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
+const LazyModelTab = lazy(() => loadModelTab().then((m) => ({ default: m.ModelTab })));
+const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
 const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
@@ -48,6 +48,8 @@ export function App() {
   };
 
   const signedIn = session.state === "signed-in";
+  const ModelTab = loaded.model?.ModelTab ?? LazyModelTab;
+  const FiltersTab = loaded.filters?.FiltersTab ?? LazyFiltersTab;
 
   return (
     <div className="app">
@@ -146,6 +148,19 @@ function WorkerStatus() {
 /** Feed routes answer 402 without a subscription; show that instead of three broken tabs. */
 function AccessGate({ children }: { children: React.ReactNode }) {
   const { data, error } = usePolling<Subscription>("/subscription", 300_000);
+  const hasAccess = data?.hasAccess === true;
+  const warmed = useRef(false);
+  useEffect(() => {
+    if (!hasAccess || warmed.current) return;
+    warmed.current = true;
+    // Once the open tab has had its turn, fetch the other tabs' data too, so opening one paints
+    // straight away (and refreshes behind) instead of showing skeletons while its calls run.
+    const warm = () => {
+      for (const t of Object.keys(TAB_DATA) as Tab[]) for (const p of TAB_DATA[t]) prefetch(p);
+    };
+    if ("requestIdleCallback" in window) window.requestIdleCallback(warm, { timeout: 5000 });
+    else setTimeout(warm, 3000);
+  }, [hasAccess]);
   if (error && !data) {
     return <p className="error center">Couldn't check your access: {error.message}</p>;
   }

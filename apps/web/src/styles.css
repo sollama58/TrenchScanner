@@ -421,18 +421,13 @@ input[type="checkbox"] {
   height: 7px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 0 0 currentColor;
   animation: pulse 2s infinite;
 }
+/* Opacity only, so it runs on the compositor. An animated box-shadow repainted the blurred topbar
+   on every frame, for as long as the page was open. */
 @keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 60%, transparent);
-  }
-  70% {
-    box-shadow: 0 0 0 7px transparent;
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
+  50% {
+    opacity: 0.35;
   }
 }
 .wallet-pill {
@@ -475,6 +470,11 @@ input[type="checkbox"] {
 .tab-view {
   animation: rise 0.35s ease-out;
 }
+/* Data from before a page, window or settings change, shown until the new answer lands. */
+.stale {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
 @keyframes rise {
   from {
     opacity: 0;
@@ -504,8 +504,9 @@ input[type="checkbox"] {
   border-radius: var(--radius);
   padding: 20px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  /* No backdrop-filter here: blurring behind every panel re-ran on each scroll frame (the page
+     backdrop is fixed), which made scrolling the feed stutter on phones. --surface is nearly
+     opaque, so the look barely changes. */
 }
 .section-head {
   display: flex;

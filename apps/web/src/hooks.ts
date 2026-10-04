@@ -4,6 +4,11 @@ import { cachedGet, peek } from "./cache";
 
 export interface Loadable<T> {
   data: T | null;
+  /**
+   * `data` answers an earlier path or key (the previous page, the window before the switch, the
+   * feed before a settings change) and is shown only until the new answer lands.
+   */
+  stale: boolean;
   error: Error | null;
   loading: boolean;
   reload: () => void;
@@ -22,16 +27,25 @@ const MAX_BACKOFF_MS = 300_000;
  *
  * Starts from the shared cache (src/cache.ts), so a view that was open before, or whose request
  * main.tsx started at boot, paints at once. Keeps showing the last good data while a refetch is in
- * flight or fails. Reloads that arrive while a request is in flight (SSE nudges in a burst) are
+ * flight or fails. When `path` or `key` changes and the cache has nothing for it, the previous
+ * answer stays up, flagged `stale`, until the new one lands, so the view dims rather than blanking
+ * to a skeleton and collapsing. Reloads that arrive while a request is in flight (SSE nudges in a burst) are
  * coalesced into one follow-up request. While requests keep failing (API or database down), the
  * timed poll backs off so every open tab doesn't keep hitting it at full rate.
  */
 export function usePolling<T>(path: string, intervalMs: number, key = ""): Loadable<T> {
-  const [data, setData] = useState<T | null>(() => peek<T>(path)?.data ?? null);
+  const want = `${path}\n${key}`;
+  // The data and the path+key it answers.
+  const [held, setHeld] = useState<{ data: T; for: string } | null>(() => {
+    const cached = peek<T>(path);
+    return cached ? { data: cached.data, for: want } : null;
+  });
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
   const pathRef = useRef(path);
   pathRef.current = path;
+  const wantRef = useRef(want);
+  wantRef.current = want;
   const seq = useRef(0);
   const busy = useRef(false);
   const again = useRef(false);
@@ -50,7 +64,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
         if (mine !== seq.current) return;
         failures.current = 0;
         retryAt.current = 0;
-        setData(d);
+        setHeld({ data: d, for: wantRef.current });
         setError(null);
       })
       .catch((e: unknown) => {
@@ -58,6 +72,8 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
         const every = intervalRef.current;
         const backoff = Math.max(every, Math.min(MAX_BACKOFF_MS, every * 2 ** failures.current++));
         retryAt.current = Date.now() + backoff - every;
+        // An older path's data must not stand in for this one's error.
+        setHeld((h) => (h && h.for !== wantRef.current ? null : h));
         setError(e instanceof Error ? e : new Error(String(e)));
       })
       .finally(() => {
@@ -77,14 +93,15 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
 
   const firstKey = useRef(key);
   useEffect(() => {
-    // A new path shows its own cached data (or nothing), never the previous path's.
-    setData(peek<T>(path)?.data ?? null);
-    setError(null);
-    again.current = false;
     // A key bump means "the answer changed": skip the cache. Otherwise a fresh cached answer (or
     // the boot prefetch still in flight) is reused.
     const forced = key !== firstKey.current;
     firstKey.current = key;
+    // A new path shows its own cached data if any; otherwise the previous answer stays up as stale.
+    const cached = forced ? null : peek<T>(path);
+    if (cached) setHeld({ data: cached.data, for: `${path}\n${key}` });
+    setError(null);
+    again.current = false;
     run(forced ? -1 : FRESH_ON_MOUNT_MS);
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && Date.now() >= retryAt.current) reload();
@@ -105,7 +122,8 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     };
   }, [path, key, intervalMs, run, reload]);
 
-  return { data, error, loading, reload };
+  const data = held?.data ?? null;
+  return { data, stale: held !== null && held.for !== want, error, loading, reload };
 }
 
 /** First wait before reopening a dropped nudge stream; doubles per failure up to the cap. */

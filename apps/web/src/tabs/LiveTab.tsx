@@ -4,6 +4,7 @@ import { AlertCard } from "../components/AlertCard";
 import { RingGauge, SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
 import { ArrowRightIcon, BrainIcon, RadarIcon, SlidersIcon } from "../components/Icons";
+import { prefetch } from "../cache";
 import { usePolling, useNow, useNudgeStream } from "../hooks";
 import { ago, pct } from "../format";
 
@@ -19,7 +20,8 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
   // "saved": the API mixes in model calls per this user's own switch and checked models.
-  const feedPage = usePolling<MatchPage>(`/matches?page=${page}&includeCurated=saved`, 30_000, String(pick));
+  const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved`;
+  const feedPage = usePolling<MatchPage>(feedPath(page), 30_000, String(pick));
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
   const lb = board.data;
@@ -145,7 +147,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
               role="switch"
               aria-checked={modelsOn}
               className={`switch${modelsOn ? " on" : ""}`}
-              disabled={!lb || toggling}
+              disabled={!lb || toggling || board.stale}
               onClick={() => void toggleModels()}
             >
               <span className="switch-track">
@@ -175,7 +177,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
             </button>
           </div>
         )}
-        <div className="cards">
+        <div className={`cards${feedPage.stale ? " stale" : ""}`} aria-busy={feedPage.stale}>
           {feedPage.data?.matches.map((card) => (
             <AlertCard key={card.id} card={card} now={now} labelSource />
           ))}
@@ -189,7 +191,13 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
               ← Newer
             </button>
             <span className="muted small num">Page {page}</span>
-            <button disabled={!hasMore} onClick={() => setPage((p) => p + 1)}>
+            <button
+              disabled={!hasMore || feedPage.stale}
+              // Start the next page on hover/focus so the click usually finds it already here.
+              onPointerEnter={() => prefetch(feedPath(page + 1))}
+              onFocus={() => prefetch(feedPath(page + 1))}
+              onClick={() => setPage((p) => p + 1)}
+            >
               Older →
             </button>
           </nav>
