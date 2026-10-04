@@ -1,6 +1,13 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "./db.js";
-import { recordHeartbeat, recordRunStart, runningSinceFrom, type HeartbeatJob } from "./heartbeat.js";
+import {
+  HEARTBEAT_JOB_ROLE,
+  recordHeartbeat,
+  recordRunStart,
+  runningSinceFrom,
+  runsJob,
+  type HeartbeatJob,
+} from "./heartbeat.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -46,5 +53,22 @@ describe.skipIf(!dbAvailable)("recordRunStart", () => {
     await prisma.systemHeartbeat.deleteMany({ where: { job } });
     await recordRunStart(job);
     expect(await prisma.systemHeartbeat.findUnique({ where: { job } })).toBeNull();
+  });
+});
+
+describe("worker roles", () => {
+  it("gives every job to exactly one process, and 'all' runs them all", () => {
+    const jobs = Object.keys(HEARTBEAT_JOB_ROLE) as (keyof typeof HEARTBEAT_JOB_ROLE)[];
+    expect(jobs.length).toBeGreaterThan(0);
+    for (const job of jobs) {
+      expect(runsJob("all", job)).toBe(true);
+      expect(runsJob("scanner", job) !== runsJob("trainer", job)).toBe(true);
+    }
+    // The alert path stays with the scanner; the batch work goes to the trainer.
+    expect(runsJob("scanner", "scan")).toBe(true);
+    expect(runsJob("scanner", "candidate-watch")).toBe(true);
+    expect(runsJob("trainer", "curator-training")).toBe(true);
+    expect(runsJob("trainer", "champion-refresh")).toBe(true);
+    expect(runsJob("scanner", "curator-training")).toBe(false);
   });
 });

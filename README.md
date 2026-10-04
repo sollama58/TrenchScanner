@@ -13,6 +13,7 @@ See [`PLANNING.md`](./PLANNING.md) for the full architecture writeup and the pro
 ```
 Pump.fun (discovery) ──┐
                         ├─► trenchscanner-worker ──► Postgres ◄── trenchscanner-api ──► holdex.live/trenches
+                        └─► trenchscanner-trainer ─┘  (same build, WORKER_ROLE=trainer: model training, AI judge, nightly sweeps)
 DexScreener (pricing) ──┤        (scan loop,                        (SIWS auth,          (dashboard, lives in
                         │       rug screen,                          filters, matches)     the CultScreener repo)
 RugCheck (on-chain) ────┘      scoring, alerts)
@@ -89,7 +90,7 @@ The worker runs against the real, live Pump.fun/DexScreener/RugCheck APIs even i
 
 ## Deploying to Render
 
-This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) (`render.yaml`) that provisions all three backend pieces - the API, the worker, and a managed Postgres - in one shot. The dashboard is deployed separately from the [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) repo.
+This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) (`render.yaml`) that provisions all four backend pieces - the API, the scanner worker, the trainer worker (the same build with `WORKER_ROLE=trainer`, which runs model training, the AI judge's learning loop and the nightly sweeps off the alert path), and a managed Postgres - in one shot. The dashboard is deployed separately from the [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) repo.
 
 1. Push this repo to your own GitHub (or connect this one) and go to the Render dashboard → **New** → **Blueprint**, and select the repo.
 2. Render reads `render.yaml` and shows you the three services it's about to create. Deploy.

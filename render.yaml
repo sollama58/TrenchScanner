@@ -1,10 +1,18 @@
 # TrenchScanner Render Blueprint
 #
-# Four services, one Postgres database:
-#   - trenchscanner-api    Fastify REST API (SIWS auth, filters, matches)
-#   - trenchscanner-worker Background scanner (discovery, scoring, rug screen, alerts)
-#   - trenchscanner-web    Static dashboard (apps/web: Live, Model & AI, Filters)
-#   - trenchscanner-db     Managed Postgres
+# Five services, one Postgres database:
+#   - trenchscanner-api     Fastify REST API (SIWS auth, filters, matches)
+#   - trenchscanner-worker  Background scanner (discovery, scoring, rug screen, alerts, labels)
+#   - trenchscanner-trainer Model trainer (contest training, AI judge loop, nightly sweeps)
+#   - trenchscanner-web     Static dashboard (apps/web: Live, Model & AI, Filters)
+#   - trenchscanner-db      Managed Postgres
+#
+# The worker and the trainer are the same build with a different WORKER_ROLE (see
+# HEARTBEAT_JOB_ROLE in packages/core/src/heartbeat.ts). They were one process until 2026-10-05:
+# a training run is minutes of a full CPU on the same single core as the 30-second scan, the
+# training set's memory is what capped how much history the models could see, and a crashed
+# training run took the scanner down with it. GET /health/worker reports both, each job labelled
+# with the process that owns it.
 #
 # Two dashboards talk to the API: this repo's own apps/web on trenchscanner-web, and the
 # CultScreener/HolDEX site's /trenches/ tab (https://github.com/sollama58/CultScreener) on
@@ -13,7 +21,7 @@
 # After the first deploy, fill in the envVars marked `sync: false` below
 # from the Render dashboard (Environment tab on each service):
 #   - HELIUS_API_KEY (both api + worker)          https://dev.helius.xyz
-#   - ANTHROPIC_API_KEY (worker only)               https://console.anthropic.com
+#   - ANTHROPIC_API_KEY (worker + trainer)          https://console.anthropic.com
 #         Turns on the AI buy/no-buy reviewer (AI_REVIEW_MODE, shadow by default), its daily
 #         playbook evolution (AI_PLAYBOOK_EVOLUTION) and Claude's text features for the models
 #         (AI_TEXT_FEATURES). Left empty all three are off and alerts flow exactly as before.
@@ -145,6 +153,10 @@ services:
       # raising either.
       - key: DATABASE_CONNECTION_LIMIT
         value: "18"
+      # The alert path and label grading only; training and the nightly sweeps run on the
+      # trainer service below.
+      - key: WORKER_ROLE
+        value: scanner
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: HELIUS_API_KEY
@@ -200,6 +212,51 @@ services:
         value: "1"
       - key: LIVE_PRICE_MAX_TRACKED
         value: "150"
+
+  # The model trainer: the same worker build, running only the batch jobs (curator-training,
+  # champion-refresh, ai-judge, cleanup, outcome-tracking). Its own instance so that a training
+  # run - 5 to 6 minutes of a full core every CURATOR_TRAINING_INTERVAL_HOURS - never competes
+  # with the scan for the one CPU, the training set (CURATOR_TRAINING_MAX_ROWS, held twice while
+  # the training thread runs) has 2GB to itself, and a run that dies takes nothing on the alert
+  # path with it. Needs no Helius or RPC key: everything it reads is already in Postgres, plus
+  # DexScreener for the nightly outcome sweep.
+  - type: worker
+    name: trenchscanner-trainer
+    runtime: node
+    plan: standard
+    region: oregon
+    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
+    startCommand: npm run start -w @trenchscanner/worker
+    envVars:
+      - fromGroup: trenchscanner-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trenchscanner-db
+          property: connectionString
+      # Training pages its rows in one query at a time and the sweeps run batched statements, so
+      # a small pool is plenty. Count it with the api's and the worker's against the Postgres
+      # plan's connection ceiling (see the api service above).
+      - key: DATABASE_CONNECTION_LIMIT
+        value: "6"
+      - key: WORKER_ROLE
+        value: trainer
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # The settings the batch jobs read that the scanner also carries, kept identical: the
+      # curated band is what training grades decision moments inside, and the retention values
+      # are what cleanup enforces.
+      - key: MCAP_FILTER_MIN
+        value: "10000"
+      - key: MCAP_FILTER_MAX
+        value: "1000000"
+      - key: CLEANUP_HOUR_UTC
+        value: "4"
+      - key: SNAPSHOT_RETENTION_DAYS
+        value: "30"
+      - key: STALE_TOKEN_RETENTION_DAYS
+        value: "14"
+      - key: OUTCOME_TRACKING_HOUR_UTC
+        value: "5"
 
   # The dashboard in apps/web. Served from onrender.com, which is a public suffix, so the API's
   # session cookie is cross-site here (SameSite=None) - Safari and Brave block that, and sign-in
