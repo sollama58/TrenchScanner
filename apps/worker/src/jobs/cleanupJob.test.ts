@@ -284,3 +284,75 @@ describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
     expect(await prisma.tokenSnapshot.count({ where: { tokenId: quiet.id } })).toBe(0);
   });
 });
+
+describe.skipIf(!dbAvailable)("runCleanupJob: untracked snapshot horizon", () => {
+  const TAG = "CleanupUntrackedTest";
+  const HOUR = 3_600_000;
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 30,
+    SNAPSHOT_UNTRACKED_RETENTION_HOURS: 48,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 3650,
+  } as never;
+
+  const cleanUp = () => prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  beforeEach(cleanUp);
+  afterAll(cleanUp);
+
+  it("drops an untracked token's rows past the short horizon, and keeps a candidate's", async () => {
+    const seen = new Date(Date.now() - 10 * 24 * HOUR);
+    const make = (suffix: string) =>
+      prisma.token.create({
+        data: { mintAddress: `${TAG}-${suffix}`, firstSeenAt: seen, lastLiveAt: new Date() },
+      });
+    const untracked = await make("untracked");
+    const candidate = await make("candidate");
+    for (const t of [untracked, candidate]) {
+      await prisma.tokenSnapshot.createMany({
+        data: [72, 60, 50, 24, 1].map((h) => ({
+          tokenId: t.id,
+          priceUsd: 1,
+          marketCapUsd: 50_000,
+          takenAt: new Date(Date.now() - h * HOUR),
+        })),
+      });
+    }
+    await prisma.candidateOutcome.create({
+      data: {
+        tokenId: candidate.id,
+        anchorAt: new Date(Date.now() - 60 * HOUR),
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+        features: {},
+        nextCheckAt: new Date(),
+        peak1hPriceUsd: 1,
+        low1hPriceUsd: 1,
+        lowBefore2xPriceUsd: 1,
+        peak24hPriceUsd: 1,
+      },
+    });
+
+    await runCleanupJob(env, { rowsPerBatch: 2, tokensPerBatch: 1, pauseMs: 0, fullSnapshotWalk: false });
+
+    expect(await prisma.tokenSnapshot.count({ where: { tokenId: untracked.id } })).toBe(2);
+    expect(await prisma.tokenSnapshot.count({ where: { tokenId: candidate.id } })).toBe(5);
+  });
+
+  it("leaves untracked rows alone while the horizon is off", async () => {
+    const t = await prisma.token.create({
+      data: {
+        mintAddress: `${TAG}-off`,
+        firstSeenAt: new Date(Date.now() - 10 * 24 * HOUR),
+        lastLiveAt: new Date(),
+      },
+    });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: t.id, priceUsd: 1, marketCapUsd: 50_000, takenAt: new Date(Date.now() - 72 * HOUR) },
+    });
+    await runCleanupJob({ ...(env as object), SNAPSHOT_UNTRACKED_RETENTION_HOURS: 0 } as never, {
+      pauseMs: 0,
+      fullSnapshotWalk: false,
+    });
+    expect(await prisma.tokenSnapshot.count({ where: { tokenId: t.id } })).toBe(1);
+  });
+});

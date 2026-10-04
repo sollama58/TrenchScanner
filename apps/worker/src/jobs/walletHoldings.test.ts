@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
-import { computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
+import { compactPerMint, computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
 
 const MIN_USD = 25;
 const LAUNCH = "LaunchMint1111111111111111111111111111111111";
@@ -127,5 +127,15 @@ describe("computeEmptyPct", () => {
       ["a", { otherHoldingsUsd: 10, perMintUsd: { [LAUNCH]: 50 } }],
     ]);
     expect(computeEmptyPct(["a"], odd, MIN_USD, LAUNCH)).toBe(100);
+  });
+});
+
+describe("compactPerMint", () => {
+  it("keeps the wallet's own launches (zeroes too) and anything else it holds, and drops the rest", () => {
+    expect(compactPerMint({ own: 0, held: 12.5, other: 0, another: 0 }, new Set(["own"]))).toEqual({
+      own: 0,
+      held: 12.5,
+    });
+    expect(compactPerMint({ a: 0 }, undefined)).toEqual({});
   });
 });

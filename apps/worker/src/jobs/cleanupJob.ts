@@ -112,6 +112,25 @@ async function deleteStaleTokens(cutoff: Date, opts: BatchOptions): Promise<numb
 }
 
 /**
+ * The tokens among `ids` that nothing outside TokenSnapshot points at: no training or grading row
+ * (CandidateOutcome), no filter alert (Match), no curated or shadow call, no AI verdict. Nearly
+ * every such token is one that failed the rug screen on every scan it ever had, so its snapshots
+ * only ever served as the holder-count baseline for the next few minutes' scans - see
+ * SNAPSHOT_UNTRACKED_RETENTION_HOURS. A token that later becomes a candidate is tracked from then
+ * on, and whatever rows it still has fall under the normal horizon again.
+ */
+async function untrackedTokenIds(ids: string[]): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT t."id" FROM unnest(${ids}::text[]) AS t("id")
+    WHERE NOT EXISTS (SELECT 1 FROM "CandidateOutcome" x WHERE x."tokenId" = t."id")
+      AND NOT EXISTS (SELECT 1 FROM "Match" x WHERE x."tokenId" = t."id")
+      AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."tokenId" = t."id")
+      AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."tokenId" = t."id")
+      AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."tokenId" = t."id")`;
+  return rows.map((r) => r.id);
+}
+
+/**
  * TokenSnapshot rows older than the cutoff that no Match references (Match -> TokenSnapshot is
  * onDelete: Cascade, so deleting one a Match points to would destroy real match history).
  *
@@ -122,18 +141,32 @@ async function deleteStaleTokens(cutoff: Date, opts: BatchOptions): Promise<numb
  * per group of tokens through the (tokenId, takenAt) index. A token first seen after the cutoff
  * cannot own a snapshot taken before it.
  */
-async function deleteExpiredSnapshots(cutoff: Date, opts: BatchOptions, fullWalk: boolean): Promise<number> {
+async function deleteExpiredSnapshots(
+  cutoff: Date,
+  opts: BatchOptions,
+  fullWalk: boolean,
+  untrackedCutoff: Date | null = null,
+): Promise<{ expired: number; untracked: number }> {
   const sql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
       SELECT s."id" FROM "TokenSnapshot" s
        WHERE s."tokenId" = ANY($1::text[]) AND s."takenAt" < $2
          AND NOT EXISTS (SELECT 1 FROM "Match" m WHERE m."snapshotId" = s."id")
        LIMIT $3)`;
+  // The untracked tokens' rows go on the shorter horizon; nothing references them, so no Match
+  // check is needed (a Match on the token would have made it tracked).
+  const untrackedSql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
+      SELECT s."id" FROM "TokenSnapshot" s
+       WHERE s."tokenId" = ANY($1::text[]) AND s."takenAt" < $2
+       LIMIT $3)`;
+  // Walk every token old enough to own a row on either horizon.
+  const walkCutoff = untrackedCutoff && untrackedCutoff > cutoff ? untrackedCutoff : cutoff;
   let total = 0;
+  let untracked = 0;
   let after: { firstSeenAt: Date; id: string } | null = null;
   for (;;) {
     const tokens: { id: string; firstSeenAt: Date }[] = await prisma.token.findMany({
       where: {
-        firstSeenAt: { lt: cutoff },
+        firstSeenAt: { lt: walkCutoff },
         // Both conditions are ORs, so they go under AND: as two spread `OR` keys the cursor's
         // replaced the token filter on every page after the first.
         AND: [
@@ -166,7 +199,7 @@ async function deleteExpiredSnapshots(cutoff: Date, opts: BatchOptions, fullWalk
       select: { id: true, firstSeenAt: true },
       take: opts.tokensPerBatch,
     });
-    if (tokens.length === 0) return total;
+    if (tokens.length === 0) return { expired: total, untracked };
     const ids = tokens.map((t) => t.id);
     for (;;) {
       const n = await prisma.$executeRawUnsafe(sql, ids, cutoff, opts.rowsPerBatch);
@@ -174,7 +207,21 @@ async function deleteExpiredSnapshots(cutoff: Date, opts: BatchOptions, fullWalk
       if (n > 0) await sleep(opts.pauseMs);
       if (n < opts.rowsPerBatch) break;
     }
-    if (tokens.length < opts.tokensPerBatch) return total;
+    if (untrackedCutoff) {
+      const untrackedIds = await untrackedTokenIds(ids);
+      while (untrackedIds.length > 0) {
+        const n = await prisma.$executeRawUnsafe(
+          untrackedSql,
+          untrackedIds,
+          untrackedCutoff,
+          opts.rowsPerBatch,
+        );
+        untracked += n;
+        if (n > 0) await sleep(opts.pauseMs);
+        if (n < opts.rowsPerBatch) break;
+      }
+    }
+    if (tokens.length < opts.tokensPerBatch) return { expired: total, untracked };
     after = tokens[tokens.length - 1]!;
   }
 }
@@ -186,7 +233,8 @@ async function deleteExpiredSnapshots(cutoff: Date, opts: BatchOptions, fullWalk
  *
  *  1. TokenSnapshot rows older than SNAPSHOT_RETENTION_DAYS that no Match references. Match's
  *     relation to TokenSnapshot is onDelete: Cascade, so deleting a snapshot a Match still points
- *     to would silently destroy real match history.
+ *     to would silently destroy real match history. Rows of tokens nothing else points at (see
+ *     untrackedTokenIds) go on the much shorter SNAPSHOT_UNTRACKED_RETENTION_HOURS when it is set.
  *  2. CandidateOutcome rows older than CANDIDATE_OUTCOME_RETENTION_DAYS - the curated-alerts
  *     training set, on its own deliberately-long horizon (see env.ts).
  *  3. Token rows older than STALE_TOKEN_RETENTION_DAYS with nothing referencing them - mints that were added to the watchlist, never did anything
@@ -210,7 +258,12 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // nothing it can reclaim until the whole thing commits.
   const snapshotCutoff = new Date(startedAt - env.SNAPSHOT_RETENTION_DAYS * DAY_MS);
   const fullWalk = opts.fullSnapshotWalk ?? new Date(startedAt).getUTCDay() === FULL_SNAPSHOT_WALK_WEEKDAY;
-  const deletedSnapshots = { count: await deleteExpiredSnapshots(snapshotCutoff, batch, fullWalk) };
+  const untrackedCutoff =
+    env.SNAPSHOT_UNTRACKED_RETENTION_HOURS > 0
+      ? new Date(startedAt - env.SNAPSHOT_UNTRACKED_RETENTION_HOURS * 3_600_000)
+      : null;
+  const snapshotSweep = await deleteExpiredSnapshots(snapshotCutoff, batch, fullWalk, untrackedCutoff);
+  const deletedSnapshots = { count: snapshotSweep.expired };
 
   // The training set for curated alerts, on its own (much longer) horizon - see
   // CANDIDATE_OUTCOME_RETENTION_DAYS in env.ts. Deleted by age alone: rows this old are long
@@ -305,11 +358,11 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
 
   // One row per distinct wallet/mint ever looked up, so these can be large; same batching.
   const rpcCacheCutoff = new Date(startedAt - RPC_CACHE_RETENTION_DAYS * DAY_MS);
-  const sweepCache = async (table: string, key: string) => ({
+  const sweepCache = async (table: string, key: string, cutoff: Date = rpcCacheCutoff) => ({
     count: await deleteInBatches(
       `SELECT "${key}" FROM "${table}" WHERE "checkedAt" < $1`,
       table,
-      [rpcCacheCutoff],
+      [cutoff],
       batch,
       key,
     ),
@@ -319,7 +372,15 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // Same horizon, but this one is already a TTL cache during normal operation (see
   // WALLET_HOLDINGS_CACHE_TTL_MINUTES): a row in continuous use is rewritten in place, so this
   // sweep only collects wallets that stopped appearing as top holders entirely.
-  const deletedHoldingsCache = await sweepCache("WalletHoldingsCache", "address");
+  // WALLET_HOLDINGS_CACHE_RETENTION_HOURS, when set, sweeps rows past it instead: a row older than
+  // the TTL is never read again, and these are the widest rows of any cache.
+  const deletedHoldingsCache = await sweepCache(
+    "WalletHoldingsCache",
+    "address",
+    env.WALLET_HOLDINGS_CACHE_RETENTION_HOURS > 0
+      ? new Date(startedAt - env.WALLET_HOLDINGS_CACHE_RETENTION_HOURS * 3_600_000)
+      : rpcCacheCutoff,
+  );
   const deletedMintAuthorityCache = await sweepCache("MintAuthorityCache", "mintAddress");
   const deletedMayhemCache = await sweepCache("MayhemModeCache", "mintAddress");
   // RugCheckCache is a TTL cache (RUGCHECK_CACHE_TTL_MINUTES), so its rows go stale within
@@ -330,6 +391,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   logger.info("cleanup job complete", {
     durationMs: Date.now() - startedAt,
     deletedSnapshots: deletedSnapshots.count,
+    deletedUntrackedSnapshots: snapshotSweep.untracked,
     deletedCandidateOutcomes: deletedCandidateOutcomes.count,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,

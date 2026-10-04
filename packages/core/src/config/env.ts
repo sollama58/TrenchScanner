@@ -143,6 +143,9 @@ const envSchema = z.object({
   // forever. An hour keeps a wallet from being re-priced on every one of the ~60 cycles it might
   // appear in, while staying current enough for a signal about whether a wallet is a shell.
   WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(60),
+  // How long the cleanup job keeps a WalletHoldingsCache row. A row past the TTL above is never
+  // read again, so this only needs slack over it. 0 keeps rows the 90 days the other RPC caches get.
+  WALLET_HOLDINGS_CACHE_RETENTION_HOURS: z.coerce.number().nonnegative().default(0),
   // How long a "mint/freeze authority still active" answer is trusted before being re-checked
   // (see the worker's mintAuthority.ts). Revocation is permanent and cached forever; this TTL
   // covers only the reversible direction, which used to be re-queried every single scan cycle
@@ -191,6 +194,12 @@ const envSchema = z.object({
   CLEANUP_HOUR_UTC: z.coerce.number().min(0).max(23).default(4),
   SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
   STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(90),
+  // The short horizon for snapshots of tokens nothing else points at - no CandidateOutcome, Match,
+  // curated or shadow call, or AI verdict (see untrackedTokenIds in cleanupJob.ts). Those are
+  // almost all launches that failed the rug screen on every scan, and they write most of the
+  // table's rows; past the first few minutes nothing reads them. 0 keeps them for the full
+  // SNAPSHOT_RETENTION_DAYS.
+  SNAPSHOT_UNTRACKED_RETENTION_HOURS: z.coerce.number().nonnegative().default(0),
 
   // Daily outcome-tracking job (see apps/worker/src/jobs/outcomeTrackingJob.ts) - backtesting
   // data: re-checks recent Match rows against live market data and records the highest mcap seen

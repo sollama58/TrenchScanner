@@ -151,6 +151,7 @@ export async function resolveWalletHoldings(
   }
 
   const fetched = await helius.getOtherHoldingsUsdBatch(toFetch, mintsOfInterest);
+  const ownMints = mintsByWallet(groups);
 
   // Only definitive answers are written. A failure is left uncached so a later cycle retries it,
   // and "unsupported" means the whole path is off - neither is a fact about the wallet.
@@ -160,15 +161,9 @@ export async function resolveWalletHoldings(
   for (const address of toFetch) {
     const outcome = fetched.get(address) ?? { status: "failed" as const };
     if (outcome.status === "found") {
-      result.set(address, {
-        otherHoldingsUsd: outcome.otherHoldingsUsd,
-        perMintUsd: outcome.perMintUsd,
-      });
-      resolved.push({
-        address,
-        otherHoldingsUsd: outcome.otherHoldingsUsd,
-        perMintUsd: outcome.perMintUsd,
-      });
+      const perMintUsd = compactPerMint(outcome.perMintUsd, ownMints.get(address));
+      result.set(address, { otherHoldingsUsd: outcome.otherHoldingsUsd, perMintUsd });
+      resolved.push({ address, otherHoldingsUsd: outcome.otherHoldingsUsd, perMintUsd });
     } else if (outcome.status === "unsupported") {
       unsupported += 1;
     } else {
@@ -238,6 +233,38 @@ function asPerMintUsd(value: unknown): Record<string, number> {
  * has no figure to subtract for it, and subtracting nothing is exactly the overstatement the
  * breakdown exists to prevent.
  */
+/** The launches each wallet is a listed holder of this cycle. */
+function mintsByWallet(groups: WalletGroup[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const group of groups) {
+    for (const address of group.addresses) {
+      let mints = out.get(address);
+      if (!mints) out.set(address, (mints = new Set()));
+      mints.add(group.mintAddress);
+    }
+  }
+  return out;
+}
+
+/**
+ * Drops the zero entries for launches the wallet isn't a listed holder of. The lookup seeds a
+ * zero for every launch in the cycle (often 800+), and storing them all made each cache row tens
+ * of kilobytes: WalletHoldingsCache was 263MB for under 2,000 wallets on 2026-10-04. What a row
+ * needs is its own launches (zeroes included, so "holds none" stays a fact) and anything else it
+ * actually holds; a zero for some other launch only saved a re-fetch in the rare case the wallet
+ * later turns up on that launch's holder list without having bought any of it.
+ */
+export function compactPerMint(
+  perMintUsd: Record<string, number>,
+  own: Set<string> | undefined,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [mint, usd] of Object.entries(perMintUsd)) {
+    if (usd !== 0 || own?.has(mint)) out[mint] = usd;
+  }
+  return out;
+}
+
 function coversEveryRelevantMint(
   address: string,
   perMintUsd: Record<string, number>,
