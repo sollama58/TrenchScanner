@@ -146,7 +146,8 @@ async function deleteExpiredSnapshots(
   opts: BatchOptions,
   fullWalk: boolean,
   untrackedCutoff: Date | null = null,
-): Promise<{ expired: number; untracked: number }> {
+  downsample: { cutoff: Date; since: Date; bucketSeconds: number } | null = null,
+): Promise<{ expired: number; untracked: number; downsampled: number }> {
   const sql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
       SELECT s."id" FROM "TokenSnapshot" s
        WHERE s."tokenId" = ANY($1::text[]) AND s."takenAt" < $2
@@ -158,10 +159,29 @@ async function deleteExpiredSnapshots(
       SELECT s."id" FROM "TokenSnapshot" s
        WHERE s."tokenId" = ANY($1::text[]) AND s."takenAt" < $2
        LIMIT $3)`;
-  // Walk every token old enough to own a row on either horizon.
-  const walkCutoff = untrackedCutoff && untrackedCutoff > cutoff ? untrackedCutoff : cutoff;
+  // A tracked token's older history thinned to one row per bucket: the highest market cap in it
+  // (earliest on a tie), so peak recovery still finds every peak, plus any row a Match or curated
+  // alert points at. Rerunning it deletes nothing new - each bucket's keeper wins again.
+  const downsampleSql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
+      SELECT r."id" FROM (
+        SELECT s."id", row_number() OVER (
+                 PARTITION BY s."tokenId", floor(extract(epoch FROM s."takenAt") / $4)
+                 ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC) AS rn
+          FROM "TokenSnapshot" s
+         WHERE s."tokenId" = ANY($1::text[]) AND s."takenAt" < $2 AND s."takenAt" >= $3
+      ) r
+       WHERE r.rn > 1
+         AND NOT EXISTS (SELECT 1 FROM "Match" m WHERE m."snapshotId" = r."id")
+         AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" a WHERE a."snapshotId" = r."id")
+       LIMIT $5)`;
+  // Walk every token old enough to own a row on any horizon.
+  const walkCutoff = [untrackedCutoff, downsample?.cutoff].reduce<Date>(
+    (latest, d) => (d && d > latest ? d : latest),
+    cutoff,
+  );
   let total = 0;
   let untracked = 0;
+  let downsampled = 0;
   let after: { firstSeenAt: Date; id: string } | null = null;
   for (;;) {
     const tokens: { id: string; firstSeenAt: Date }[] = await prisma.token.findMany({
@@ -199,7 +219,7 @@ async function deleteExpiredSnapshots(
       select: { id: true, firstSeenAt: true },
       take: opts.tokensPerBatch,
     });
-    if (tokens.length === 0) return { expired: total, untracked };
+    if (tokens.length === 0) return { expired: total, untracked, downsampled };
     const ids = tokens.map((t) => t.id);
     for (;;) {
       const n = await prisma.$executeRawUnsafe(sql, ids, cutoff, opts.rowsPerBatch);
@@ -207,8 +227,8 @@ async function deleteExpiredSnapshots(
       if (n > 0) await sleep(opts.pauseMs);
       if (n < opts.rowsPerBatch) break;
     }
+    const untrackedIds = untrackedCutoff ? await untrackedTokenIds(ids) : [];
     if (untrackedCutoff) {
-      const untrackedIds = await untrackedTokenIds(ids);
       while (untrackedIds.length > 0) {
         const n = await prisma.$executeRawUnsafe(
           untrackedSql,
@@ -221,7 +241,25 @@ async function deleteExpiredSnapshots(
         if (n < opts.rowsPerBatch) break;
       }
     }
-    if (tokens.length < opts.tokensPerBatch) return { expired: total, untracked };
+    if (downsample) {
+      // Untracked tokens' rows are already down to their short horizon; thinning them is wasted work.
+      const skip = new Set(untrackedIds);
+      const trackedIds = ids.filter((id) => !skip.has(id));
+      while (trackedIds.length > 0) {
+        const n = await prisma.$executeRawUnsafe(
+          downsampleSql,
+          trackedIds,
+          downsample.cutoff,
+          downsample.since,
+          downsample.bucketSeconds,
+          opts.rowsPerBatch,
+        );
+        downsampled += n;
+        if (n > 0) await sleep(opts.pauseMs);
+        if (n < opts.rowsPerBatch) break;
+      }
+    }
+    if (tokens.length < opts.tokensPerBatch) return { expired: total, untracked, downsampled };
     after = tokens[tokens.length - 1]!;
   }
 }
@@ -262,7 +300,27 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     env.SNAPSHOT_UNTRACKED_RETENTION_HOURS > 0
       ? new Date(startedAt - env.SNAPSHOT_UNTRACKED_RETENTION_HOURS * 3_600_000)
       : null;
-  const snapshotSweep = await deleteExpiredSnapshots(snapshotCutoff, batch, fullWalk, untrackedCutoff);
+  // Nightly, only the last few days that newly crossed the line are thinned - re-sorting a token's
+  // whole already-thinned month every night would be most of the sweep's work for nothing. The
+  // weekly full walk covers the whole retained range, which also takes care of the first run.
+  const downsampleCutoff =
+    env.SNAPSHOT_DOWNSAMPLE_AFTER_DAYS > 0
+      ? new Date(startedAt - env.SNAPSHOT_DOWNSAMPLE_AFTER_DAYS * DAY_MS)
+      : null;
+  const downsample = downsampleCutoff
+    ? {
+        cutoff: downsampleCutoff,
+        since: fullWalk ? snapshotCutoff : new Date(downsampleCutoff.getTime() - 3 * DAY_MS),
+        bucketSeconds: env.SNAPSHOT_DOWNSAMPLE_BUCKET_MINUTES * 60,
+      }
+    : null;
+  const snapshotSweep = await deleteExpiredSnapshots(
+    snapshotCutoff,
+    batch,
+    fullWalk,
+    untrackedCutoff,
+    downsample,
+  );
   const deletedSnapshots = { count: snapshotSweep.expired };
 
   // The training set for curated alerts, on its own (much longer) horizon - see
@@ -392,6 +450,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     durationMs: Date.now() - startedAt,
     deletedSnapshots: deletedSnapshots.count,
     deletedUntrackedSnapshots: snapshotSweep.untracked,
+    downsampledSnapshots: snapshotSweep.downsampled,
     deletedCandidateOutcomes: deletedCandidateOutcomes.count,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,

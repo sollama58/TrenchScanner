@@ -356,3 +356,66 @@ describe.skipIf(!dbAvailable)("runCleanupJob: untracked snapshot horizon", () =>
     expect(await prisma.tokenSnapshot.count({ where: { tokenId: t.id } })).toBe(1);
   });
 });
+
+describe.skipIf(!dbAvailable)("runCleanupJob: tracked snapshot downsampling", () => {
+  const TAG = "CleanupDownsampleTest";
+  const WALLET = "CleanupDownsampleTestWallet1111111111111111";
+  const DAY = 86_400_000;
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 30,
+    SNAPSHOT_UNTRACKED_RETENTION_HOURS: 0,
+    SNAPSHOT_DOWNSAMPLE_AFTER_DAYS: 7,
+    SNAPSHOT_DOWNSAMPLE_BUCKET_MINUTES: 5,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 3650,
+  } as never;
+
+  const cleanUp = async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.user.deleteMany({ where: { walletAddress: WALLET } });
+  };
+  beforeEach(cleanUp);
+  afterAll(cleanUp);
+
+  it("keeps each old bucket's peak and every matched row, and leaves recent history whole", async () => {
+    const token = await prisma.token.create({
+      data: { mintAddress: `${TAG}-a`, firstSeenAt: new Date(Date.now() - 20 * DAY), lastLiveAt: new Date() },
+    });
+    // One old 5-minute bucket with four rows (peak in the middle), and three recent rows.
+    const bucketStart = Math.floor((Date.now() - 10 * DAY) / 300_000) * 300_000;
+    const old = [10, 30, 20, 15].map((mcap, i) => ({
+      tokenId: token.id,
+      priceUsd: 1,
+      marketCapUsd: mcap,
+      takenAt: new Date(bucketStart + i * 30_000),
+    }));
+    const recent = [1, 2, 3].map((i) => ({
+      tokenId: token.id,
+      priceUsd: 1,
+      marketCapUsd: 5,
+      takenAt: new Date(Date.now() - i * 60_000),
+    }));
+    await prisma.tokenSnapshot.createMany({ data: [...old, ...recent] });
+    const matchedRow = await prisma.tokenSnapshot.findFirstOrThrow({
+      where: { tokenId: token.id, marketCapUsd: 10 },
+    });
+    const user = await prisma.user.create({ data: { walletAddress: WALLET } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+    await prisma.match.create({
+      data: { userId: user.id, filterId: filter.id, tokenId: token.id, snapshotId: matchedRow.id, score: 50 },
+    });
+
+    for (let run = 0; run < 2; run++) {
+      await runCleanupJob(env, { rowsPerBatch: 1, tokensPerBatch: 5, pauseMs: 0, fullSnapshotWalk: true });
+    }
+
+    const left = await prisma.tokenSnapshot.findMany({ where: { tokenId: token.id } });
+    expect(
+      left
+        .filter((s) => s.takenAt.getTime() < Date.now() - 7 * DAY)
+        .map((s) => s.marketCapUsd)
+        .sort(),
+    ).toEqual([10, 30]);
+    expect(left.filter((s) => s.takenAt.getTime() > Date.now() - DAY)).toHaveLength(3);
+  });
+});

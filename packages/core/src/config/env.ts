@@ -200,6 +200,12 @@ const envSchema = z.object({
   // table's rows; past the first few minutes nothing reads them. 0 keeps them for the full
   // SNAPSHOT_RETENTION_DAYS.
   SNAPSHOT_UNTRACKED_RETENTION_HOURS: z.coerce.number().nonnegative().default(0),
+  // Tracked tokens' snapshots older than this many days are thinned to one per
+  // SNAPSHOT_DOWNSAMPLE_BUCKET_MINUTES (the highest market cap in each bucket, plus any row a Match
+  // or curated alert points at). The models read CandidateOutcome, not snapshot history, and peak
+  // recovery only needs each bucket's high. 0 keeps every row for SNAPSHOT_RETENTION_DAYS.
+  SNAPSHOT_DOWNSAMPLE_AFTER_DAYS: z.coerce.number().nonnegative().default(0),
+  SNAPSHOT_DOWNSAMPLE_BUCKET_MINUTES: z.coerce.number().positive().default(5),
 
   // Daily outcome-tracking job (see apps/worker/src/jobs/outcomeTrackingJob.ts) - backtesting
   // data: re-checks recent Match rows against live market data and records the highest mcap seen
