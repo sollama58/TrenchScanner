@@ -93,6 +93,51 @@ const WALLET_STAGE_BUDGET_MS = 60_000;
 /** The wallet stage's lookups while they are still running, possibly past a cycle's budget. */
 let walletStageInFlight: Promise<void> | null = null;
 
+/** The wallet lookups for non-contenders running behind a cycle, if any - see startWalletBackfill. */
+let walletBackfillInFlight: Promise<void> | null = null;
+
+/** Test hook: resolves once any wallet backfill has finished. */
+export async function settleWalletBackfill(): Promise<void> {
+  await walletBackfillInFlight;
+}
+
+/**
+ * Looks up the wallets of candidates that aren't about to be decided on, behind the cycle and on
+ * the budget the contenders left, so their figures are cached for the next cycle. Its results are
+ * not used directly - both resolvers cache everything they learn. One at a time: a backfill still
+ * running when the next cycle ends just means that cycle adds none.
+ */
+function startWalletBackfill(
+  groups: { mintAddress: string; addresses: string[] }[],
+  helius: HeliusClient,
+  env: Env,
+  budget: { freshness: number; holdings: number },
+): void {
+  if (walletBackfillInFlight || groups.length === 0) return;
+  const work: Promise<unknown>[] = [];
+  if (budget.freshness > 0) {
+    work.push(
+      resolveEarliestActivity(
+        groups.map((g) => g.addresses),
+        helius,
+        { maxNewLookups: budget.freshness },
+      ),
+    );
+  }
+  if (budget.holdings > 0) {
+    work.push(resolveWalletHoldings(groups, helius, env, { maxNewLookups: budget.holdings }));
+  }
+  if (work.length === 0) return;
+  const backfill = Promise.all(work).then(
+    () => undefined,
+    (err: unknown) => logger.warn("wallet backfill failed", { error: String(err) }),
+  );
+  walletBackfillInFlight = backfill;
+  void backfill.finally(() => {
+    if (walletBackfillInFlight === backfill) walletBackfillInFlight = null;
+  });
+}
+
 /** `work`'s result, or null if it has not settled within `ms`. Rejections propagate. */
 async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> {
   let timer: NodeJS.Timeout | undefined;
@@ -266,6 +311,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     deps.rugCheck,
     env.RUGCHECK_CACHE_TTL_MINUTES,
     env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
+    { refreshStaleInBackground: true },
   );
   lap("rugCheck");
 
@@ -334,10 +380,16 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
     .filter((g) => g.addresses.length > 0)
-    .sort((a, b) => Number(b.contender) - Number(a.contender) || b.churn - a.churn)
-    // The mint is carried through, not dropped: the holdings pass has to know which of a wallet's
-    // tokens IS this launch so it can take it back out - see computeEmptyPct.
-    .map((g) => ({ mintAddress: g.mintAddress, addresses: g.addresses }));
+    .sort((a, b) => Number(b.contender) - Number(a.contender) || b.churn - a.churn);
+  // A user filter with a wallet criterion lets an unknown figure through (see matchFilters), so
+  // while any is active every candidate's lookups are waited on, as they always were - otherwise
+  // a first-sight match would skip the very check that user asked for.
+  const walletFiltersActive = activeFilters.some(
+    (f) => f.maxFreshTop10WalletPct != null || f.maxEmptyTop10WalletPct != null,
+  );
+  const waitedGroups = walletFiltersActive
+    ? walletGroups.length
+    : walletGroups.filter((g) => g.contender).length;
   // The two wallet signals are resolved together but independently: they ask different
   // questions of different APIs (transaction history on standard RPC, holdings via DAS), which
   // are metered and rate-limited separately, so they carry separate budgets and neither can
@@ -360,18 +412,33 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // they would on a provider outage - and the lookups carry on in the background, filling the
   // caches for the next cycle. A cycle that finds the previous lookups still running doesn't
   // start more on top of them.
+  //
+  // Only the contenders' lookups are waited on (unless a user filter needs them all - see
+  // walletFiltersActive). Everyone else's wallets are read from the cache
+  // this cycle, and their lookups run behind it on whatever budget the contenders left, so their
+  // figures are in the cache for the next one. Waiting on all of them held every alert, user
+  // filter matches included, behind ~4-8s of Helius calls per cycle in production (2026-10-04)
+  // for wallets that only a later cycle's decision could use.
   let walletResults: [Map<string, Date | null>, Map<string, WalletHoldings>] | null = null;
   if (walletStageInFlight) {
     logger.warn("previous wallet lookups still running - skipping wallet signals this cycle");
   } else {
+    let freshnessUsed = 0;
+    let holdingsUsed = 0;
     const work = Promise.all([
       resolveEarliestActivity(
         walletGroups.map((g) => g.addresses),
         deps.helius,
-        { maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE },
+        {
+          maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
+          lookupGroups: waitedGroups,
+          onLookups: (n) => (freshnessUsed = n),
+        },
       ),
       resolveWalletHoldings(walletGroups, deps.helius, env, {
         maxNewLookups: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
+        lookupGroups: waitedGroups,
+        onLookups: (n) => (holdingsUsed = n),
       }),
     ]);
     const settled = work.then(
@@ -386,6 +453,11 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     if (!walletResults) {
       logger.warn("wallet lookups over budget - continuing without wallet signals", {
         budgetMs: WALLET_STAGE_BUDGET_MS,
+      });
+    } else {
+      startWalletBackfill(walletGroups, deps.helius, env, {
+        freshness: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE - freshnessUsed,
+        holdings: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE - holdingsUsed,
       });
     }
   }
