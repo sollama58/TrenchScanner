@@ -1,6 +1,7 @@
 import type { McapBand } from "./curator.js";
 import {
   calibrateThresholdForPrecision,
+  confidenceRanks,
   precisionCurve,
   probabilityAtRank,
   thresholdAtRank,
@@ -680,13 +681,17 @@ export async function runEvolvingContest(
       NEVER_EMIT_THRESHOLD,
     );
     if (blend) {
-      // Blend scores are already ranks (mean member rank), on one scale for folds and serving:
-      // a rank line translates to itself.
+      // Blend scores are mean member ranks, on one scale for folds and serving - but not
+      // uniform: they bunch around the middle. The tier line and the calibration both work in
+      // percentile units, so the scores become their own percentiles first, and a percentile
+      // line translates back to the blend score at that percentile.
+      const blendScores = blend.outOfSample.map((c) => c.probability);
+      const blendPercentiles = confidenceRanks(blendScores);
       const served = servedExtras(
         cfg,
-        blend.outOfSample,
-        blend.outOfSample.map((c) => c.probability),
-        (rank) => rank,
+        blend.outOfSample.map((c, i) => ({ ...c, probability: blendPercentiles[i]! })),
+        blendScores,
+        (rank) => probabilityAtRank(blendScores, rank),
       );
       results.push({
         contestant: blendSpec.id,

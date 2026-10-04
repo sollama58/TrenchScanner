@@ -296,7 +296,7 @@ export function scoredFromFeatures(
     dexBoosted: bool("dexBoosted"),
     top10HolderPct: num("top10HolderPct"),
     devWalletPct: num("devWalletPct"),
-    creatorHolding: num("devHolding") === null ? undefined : num("devHolding") === 1,
+    creatorHolding: num("devHolding") === undefined ? undefined : num("devHolding") === 1,
     riskScore: num("riskScore"),
     freshTop10WalletPct: num("freshTop10WalletPct"),
     emptyTop10WalletPct: num("emptyTop10WalletPct"),

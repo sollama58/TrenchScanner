@@ -67,7 +67,11 @@ export function pickChampion(
   const topScore = top.composite.score!;
   const held =
     incumbent !== null && incumbent !== top.id ? eligible.find((s) => s.id === incumbent) : undefined;
-  if (held && topScore - held.composite.score! < rules.margin) {
+  // The margin only guards against noise between models judged alike. A seasoned leader outranks
+  // a warming-up incumbent outright (the leaderboard ranks it first whatever the scores), or a
+  // champion picked on a mostly-backtest score could never be unseated by the board's #1.
+  const sameTier = held !== undefined && held.composite.warmingUp === top.composite.warmingUp;
+  if (held && sameTier && topScore - held.composite.score! < rules.margin) {
     return {
       id: held.id,
       qualified: true,

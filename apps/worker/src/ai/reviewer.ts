@@ -203,6 +203,11 @@ export async function reviewPick(
   scored: ScoredToken,
   decision: CurationDecision,
   env: Env,
+  /**
+   * Gate mode awaits the verdict inside the scan's emission cycle: no client retry there, so a
+   * slow call costs one timeout at most before the pick fails open, not two.
+   */
+  opts: { gate?: boolean } = {},
 ): Promise<AiReviewResult> {
   const startedAt = Date.now();
   const [comparables, playbook] = await Promise.all([comparablesFor(scored, env), activePlaybook()]);
@@ -216,21 +221,24 @@ export async function reviewPick(
     curatorProbability: curatorProbabilityOf(decision) ?? null,
   };
   try {
-    const response = await anthropicClient(env).beta.messages.parse({
-      model: env.AI_REVIEW_MODEL,
-      max_tokens: 16000,
-      // A declined request is re-run on a fallback model inside the same call rather than
-      // coming back empty - the verdict's `model` records which one actually answered.
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      // The system prompt (fixed instructions + playbook) is identical across calls until a
-      // playbook is promoted - the stable prefix worth caching.
-      system: [
-        { type: "text", text: aiReviewSystemPrompt(playbook?.text), cache_control: { type: "ephemeral" } },
-      ],
-      messages: [{ role: "user", content: brief }],
-      output_config: { effort: env.AI_REVIEW_EFFORT, format: betaZodOutputFormat(VerdictSchema) },
-    });
+    const response = await anthropicClient(env).beta.messages.parse(
+      {
+        model: env.AI_REVIEW_MODEL,
+        max_tokens: 16000,
+        // A declined request is re-run on a fallback model inside the same call rather than
+        // coming back empty - the verdict's `model` records which one actually answered.
+        betas: ["server-side-fallback-2026-07-01"],
+        fallbacks: "default",
+        // The system prompt (fixed instructions + playbook) is identical across calls until a
+        // playbook is promoted - the stable prefix worth caching.
+        system: [
+          { type: "text", text: aiReviewSystemPrompt(playbook?.text), cache_control: { type: "ephemeral" } },
+        ],
+        messages: [{ role: "user", content: brief }],
+        output_config: { effort: env.AI_REVIEW_EFFORT, format: betaZodOutputFormat(VerdictSchema) },
+      },
+      opts.gate ? { maxRetries: 0 } : undefined,
+    );
     const latencyMs = Date.now() - startedAt;
     const usage = {
       ...base,
