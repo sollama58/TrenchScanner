@@ -32,6 +32,7 @@ import { registerConfigRoutes } from "./routes/config.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
+import { registerStatsModelRoutes } from "./routes/statsModels.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
@@ -435,6 +436,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
+  await app.register(registerStatsModelRoutes, { prefix: "/stats", env });
   await app.register(registerAdminRoutes, { prefix: "/admin", env });
   // Same /admin prefix and the same authenticateAdmin gate, registered separately only to keep
   // the subscription surface in its own readable block - see routes/admin.ts.
