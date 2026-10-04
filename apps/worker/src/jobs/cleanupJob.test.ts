@@ -269,8 +269,27 @@ describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
       },
     });
 
+    // One that traded but has not been live since long before the horizon: its old rows were
+    // past every line on the nights it was still live, so the nightly sweep doesn't walk it.
+    const dormant = await prisma.token.create({
+      data: {
+        mintAddress: `${TAG}-dormant`,
+        firstSeenAt: new Date(oldSeen.getTime() + 120_000),
+        lastLiveAt: new Date(Date.now() - 40 * DAY),
+      },
+    });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: dormant.id,
+        priceUsd: 1,
+        marketCapUsd: 100_000,
+        takenAt: new Date(Date.now() - 40 * DAY),
+      },
+    });
+
     await runCleanupJob(env, { rowsPerBatch: 3, tokensPerBatch: 2, pauseMs: 0, fullSnapshotWalk: false });
     expect(await prisma.tokenSnapshot.count({ where: { tokenId: quiet.id } })).toBe(1);
+    expect(await prisma.tokenSnapshot.count({ where: { tokenId: dormant.id } })).toBe(1);
 
     const left = await prisma.tokenSnapshot.findMany({
       where: { tokenId: { in: tokens.map((t) => t.id) } },
@@ -282,6 +301,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
     expect(left.filter((s) => s.takenAt.getTime() < Date.now() - 30 * DAY)).toHaveLength(1);
     await runCleanupJob(env, { rowsPerBatch: 3, tokensPerBatch: 2, pauseMs: 0, fullSnapshotWalk: true });
     expect(await prisma.tokenSnapshot.count({ where: { tokenId: quiet.id } })).toBe(0);
+    expect(await prisma.tokenSnapshot.count({ where: { tokenId: dormant.id } })).toBe(0);
   });
 });
 

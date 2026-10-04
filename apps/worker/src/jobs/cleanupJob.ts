@@ -1,4 +1,5 @@
 import { prisma, createLogger, type Env } from "@trenchscanner/core";
+import type { JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("cleanup-job");
 const DAY_MS = 86_400_000;
@@ -27,6 +28,12 @@ const CURATOR_MODEL_PARAMS_RETENTION_DAYS = 7;
  * enforced by revokedAt rather than by the row's absence, so keeping it costs nothing but space.
  */
 const REVOKED_DEVICE_RETENTION_DAYS = 30;
+
+/**
+ * How far before the snapshot horizon a token's last sign of life may be and still be walked
+ * nightly - slack for nights the sweep missed. See deleteExpiredSnapshots.
+ */
+const ACTIVITY_SLACK_DAYS = 3;
 
 /** The UTC weekday (0 = Sunday) the snapshot sweep walks every old token - see deleteExpiredSnapshots. */
 const FULL_SNAPSHOT_WALK_WEEKDAY = 0;
@@ -130,6 +137,15 @@ async function untrackedTokenIds(ids: string[]): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
+/** The tokens among `ids` that hold any snapshot taken before `before`. */
+async function tokensWithSnapshotsBefore(ids: string[], before: Date): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT t."id" FROM unnest(${ids}::text[]) AS t("id")
+    WHERE EXISTS (SELECT 1 FROM "TokenSnapshot" s WHERE s."tokenId" = t."id" AND s."takenAt" < ${before})`;
+  return rows.map((r) => r.id);
+}
+
 /**
  * TokenSnapshot rows older than the cutoff that no Match references (Match -> TokenSnapshot is
  * onDelete: Cascade, so deleting one a Match points to would destroy real match history).
@@ -147,6 +163,7 @@ async function deleteExpiredSnapshots(
   fullWalk: boolean,
   untrackedCutoff: Date | null = null,
   downsample: { cutoff: Date; since: Date; bucketSeconds: number } | null = null,
+  activeSince: Date = new Date(cutoff.getTime() - ACTIVITY_SLACK_DAYS * DAY_MS),
 ): Promise<{ expired: number; untracked: number; downsampled: number }> {
   const sql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
       SELECT s."id" FROM "TokenSnapshot" s
@@ -190,20 +207,18 @@ async function deleteExpiredSnapshots(
         // Both conditions are ORs, so they go under AND: as two spread `OR` keys the cursor's
         // replaced the token filter on every page after the first.
         AND: [
-          // Only tokens that can own a snapshot. One is written only for a scan candidate (every
-          // one of which came back from DexScreener and so carries lastLiveAt), a token someone had
-          // open (lastViewedAt), or a fast-match alert on a token the scan vetted - while nearly
-          // every old Token row is a launch that never traded and never had one. Probing all of
-          // them every night is what made this sweep take hours. The weekly full walk catches
-          // anything this misses.
+          // Only tokens that can own a snapshot that crossed a line since the last few sweeps. One
+          // is written only for a scan candidate (every one of which came back from DexScreener and
+          // so had lastLiveAt stamped then), a token someone had open (lastViewedAt), or a
+          // fast-match alert on a token the scan vetted - while nearly every old Token row is a
+          // launch that never traded and never had one. A token not live or viewed since before
+          // the longest horizon (plus slack for a missed night) holds only rows past every line,
+          // which earlier sweeps already took. Probing all of them every night is what made this
+          // sweep take hours. The weekly full walk catches anything this misses.
           fullWalk
             ? {}
             : {
-                OR: [
-                  { lastLiveAt: { not: null } },
-                  { lastViewedAt: { not: null } },
-                  { firstInBandAt: { not: null } },
-                ],
+                OR: [{ lastLiveAt: { gte: activeSince } }, { lastViewedAt: { gte: activeSince } }],
               },
           after
             ? {
@@ -220,14 +235,22 @@ async function deleteExpiredSnapshots(
       take: opts.tokensPerBatch,
     });
     if (tokens.length === 0) return { expired: total, untracked, downsampled };
-    const ids = tokens.map((t) => t.id);
+    // Only the tokens still holding a row past the shortest line get the four statements below.
+    // After the first sweep that is a small share of them - an untracked token's rows go at 48
+    // hours, and the token itself a while later - and one index probe each is far cheaper than
+    // the reference checks and deletes for every token walked.
+    const ids = await tokensWithSnapshotsBefore(
+      tokens.map((t) => t.id),
+      walkCutoff,
+    );
     for (;;) {
+      if (ids.length === 0) break;
       const n = await prisma.$executeRawUnsafe(sql, ids, cutoff, opts.rowsPerBatch);
       total += n;
       if (n > 0) await sleep(opts.pauseMs);
       if (n < opts.rowsPerBatch) break;
     }
-    const untrackedIds = untrackedCutoff ? await untrackedTokenIds(ids) : [];
+    const untrackedIds = untrackedCutoff && ids.length > 0 ? await untrackedTokenIds(ids) : [];
     if (untrackedCutoff) {
       while (untrackedIds.length > 0) {
         const n = await prisma.$executeRawUnsafe(
@@ -284,7 +307,7 @@ async function deleteExpiredSnapshots(
  *  5. Spent and expired Mobile Connect link codes, and long-revoked devices - one code row is
  *     written per QR rendered, so this is the fastest-filling table of the lot per active user.
  */
-export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promise<void> {
+export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promise<JobRunMeta> {
   const startedAt = Date.now();
   const batch = { ...DEFAULT_BATCH, ...opts };
   logger.info("cleanup job starting");
@@ -446,8 +469,10 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
   const deletedRugCheckCache = await sweepCache("RugCheckCache", "mintAddress");
 
-  logger.info("cleanup job complete", {
-    durationMs: Date.now() - startedAt,
+  // Also the run's heartbeat meta, so GET /health/worker shows what the last sweep deleted - the
+  // one view of it that needs no log access.
+  const counts = {
+    fullSnapshotWalk: fullWalk,
     deletedSnapshots: deletedSnapshots.count,
     deletedUntrackedSnapshots: snapshotSweep.untracked,
     downsampledSnapshots: snapshotSweep.downsampled,
@@ -464,5 +489,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,
     deletedMayhemCache: deletedMayhemCache.count,
     deletedRugCheckCache: deletedRugCheckCache.count,
-  });
+  };
+  logger.info("cleanup job complete", { durationMs: Date.now() - startedAt, ...counts });
+  return counts;
 }

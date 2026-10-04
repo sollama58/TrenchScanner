@@ -47,6 +47,8 @@ export interface ReconcileResult {
   credited: number;
   held: number;
   alreadyCredited: number;
+  /** Whether a fetch failed and left part of this pass's ground for the next one - see index.ts. */
+  stoppedEarly: boolean;
 }
 
 /**
@@ -67,7 +69,14 @@ export interface ReconcileResult {
  * RPC calls.
  */
 export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<ReconcileResult> {
-  const result: ReconcileResult = { scanned: 0, burnsFound: 0, credited: 0, held: 0, alreadyCredited: 0 };
+  const result: ReconcileResult = {
+    scanned: 0,
+    burnsFound: 0,
+    credited: 0,
+    held: 0,
+    alreadyCredited: 0,
+    stoppedEarly: false,
+  };
 
   const cursor = await prisma.burnScanCursor.upsert({
     where: { id: "burn-scan" },
@@ -85,15 +94,29 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
     stopAtFloor: cursor.lastSignature ? null : floor,
   });
 
+  if (forward.failed) result.stoppedEarly = true;
+  // A forward walk that ran into the page cap before reaching lastSignature has a gap below it:
+  // everything between lastSignature and the oldest signature it collected. Moving lastSignature
+  // to the tip jumped that gap for good - a long worker outage or a trading spike on the mint was
+  // enough - so it is handed to the backfill instead, with a floor just under the time the old
+  // lastSignature was recorded (re-walking a little processed ground is harmless).
+  const gap =
+    cursor.lastSignature && forward.capped && forward.oldestSeen
+      ? {
+          backfillBefore: forward.oldestSeen,
+          scanFloor: earliest(cursor.scanFloor, new Date(cursor.updatedAt.getTime() - 86_400_000)),
+        }
+      : null;
+
   if (forward.pages > 0 || forward.pending.length > 0) {
     const { lastProcessed } = await processSignatures(forward.pending, rpc, result);
-    if (lastProcessed) {
+    if (lastProcessed || gap) {
       // The cold start clears its floor only once the backfill has actually reached it - see
       // below. Advancing lastSignature here is what keeps ordinary forward passes cheap.
       await prisma.burnScanCursor.update({
         where: { id: "burn-scan" },
         data: {
-          lastSignature: lastProcessed,
+          ...(lastProcessed ? { lastSignature: lastProcessed } : {}),
           // A first pass that stopped on the page cap rather than the floor leaves the rest of
           // the window to the backfill, and records where to resume from. One that reached the
           // floor (or ran out of history) is done: no backfill, no floor.
@@ -103,23 +126,33 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
           // newer part is re-walked by the next forward pass (until = lastProcessed). Leaving
           // backfillBefore null there meant pass two never ran, and every burn older than the
           // first page-cap's worth was never credited.
-          ...(cursor.lastSignature
-            ? {}
-            : forward.reachedFloor || forward.exhausted
-              ? { scanFloor: null, backfillBefore: null }
-              : { backfillBefore: forward.oldestSeen }),
+          ...(gap
+            ? gap
+            : cursor.lastSignature
+              ? {}
+              : forward.reachedFloor || forward.exhausted
+                ? { scanFloor: null, backfillBefore: null }
+                : { backfillBefore: forward.oldestSeen }),
         },
       });
+      if (gap) logger.warn("forward walk hit the page cap - backfilling the gap below it", gap);
     }
   }
 
   // Pass two: the rest of the cold-start window, a page-cap's worth at a time, continuing
   // backwards from wherever the last pass stopped. Skipped entirely once the floor is reached,
   // which is the normal steady state.
-  const backfillFrom = cursor.backfillBefore;
+  // A gap recorded just now waits for the next pass, which reads it back from the cursor.
+  const backfillFrom = gap ? null : cursor.backfillBefore;
   if (backfillFrom && cursor.scanFloor) {
     const older = await collectSignatures(rpc, { before: backfillFrom, stopAtFloor: cursor.scanFloor });
-    const { completed } = await processSignatures(older.pending, rpc, result);
+    if (older.failed) result.stoppedEarly = true;
+    // Newest first, unlike the forward pass: the backfill walks backwards, so a pass that stops
+    // early can still move its resume point down to the last signature it finished. Processed
+    // oldest-first, a stop anywhere left the resume point where it was, and the next pass
+    // re-fetched the same ten thousand transactions - on a rate-limited endpoint, every pass
+    // stopped somewhere, and the backfill never moved again.
+    const { lastProcessed, completed } = await processSignatures(older.pending, rpc, result, "newest-first");
 
     if (completed) {
       const done = older.reachedFloor || older.exhausted;
@@ -130,10 +163,13 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
           : { backfillBefore: older.oldestSeen ?? backfillFrom },
       });
       if (done) logger.info("burn backfill reached the cold-start floor");
+    } else if (lastProcessed) {
+      // Everything from backfillFrom down to lastProcessed is done; the rest is re-walked from there.
+      await prisma.burnScanCursor.update({
+        where: { id: "burn-scan" },
+        data: { backfillBefore: lastProcessed },
+      });
     }
-    // A pass that stopped early leaves the resume point untouched: re-walking the same range is
-    // idempotent (crediting is guarded by the signature's unique constraint, and already-stored
-    // signatures are not re-fetched), whereas advancing over unprocessed ground loses burns.
   }
 
   if (result.burnsFound > 0 || result.scanned > 0) {
@@ -152,6 +188,10 @@ async function collectSignatures(
   reachedFloor: boolean;
   exhausted: boolean;
   pages: number;
+  /** The signature fetch failed: nothing was collected, and no cursor may move. */
+  failed: boolean;
+  /** Stopped on the page cap, with more history (or the `until` signature) still below. */
+  capped: boolean;
 }> {
   const pending: { signature: string; blockTime?: number | null }[] = [];
   let before = opts.before;
@@ -171,7 +211,15 @@ async function collectSignatures(
     // cursor means the next pass re-walks the same ground rather than skipping over it.
     if (batch === null) {
       logger.warn("signature fetch failed - leaving the cursor where it is");
-      return { pending: [], oldestSeen: null, reachedFloor: false, exhausted: false, pages };
+      return {
+        pending: [],
+        oldestSeen: null,
+        reachedFloor: false,
+        exhausted: false,
+        pages,
+        failed: true,
+        capped: false,
+      };
     }
     pages += 1;
     if (batch.length === 0) {
@@ -204,7 +252,15 @@ async function collectSignatures(
     }
   }
 
-  return { pending, oldestSeen, reachedFloor, exhausted, pages };
+  return {
+    pending,
+    oldestSeen,
+    reachedFloor,
+    exhausted,
+    pages,
+    failed: false,
+    capped: !reachedFloor && !exhausted && pages >= MAX_PAGES_PER_PASS,
+  };
 }
 
 /**
@@ -218,12 +274,14 @@ async function processSignatures(
   collected: { signature: string; blockTime?: number | null }[],
   rpc: SolanaRpc,
   result: ReconcileResult,
+  order: "oldest-first" | "newest-first" = "oldest-first",
 ): Promise<{ lastProcessed: string | null; completed: boolean }> {
   if (collected.length === 0) return { lastProcessed: null, completed: true };
 
-  // Oldest first, so a failure part-way leaves the cursor on a contiguous prefix and the next
-  // pass resumes exactly where this one stopped.
-  const pending = [...collected].reverse();
+  // Oldest first by default, so a failure part-way leaves the forward cursor on a contiguous
+  // prefix and the next pass resumes exactly where this one stopped. The backfill goes the other
+  // way for the same reason - see reconcileBurns.
+  const pending = order === "oldest-first" ? [...collected].reverse() : collected;
 
   // Which of these we have already stored, so a re-walk after an RPC failure doesn't re-fetch
   // every transaction it already knows about.
@@ -264,6 +322,7 @@ async function processSignatures(
         // unprocessed and gets picked up next pass. Skipping it would mean a burn silently lost.
         logger.warn("could not fetch transaction - stopping this pass here", { signature });
         completed = false;
+        result.stoppedEarly = true;
         break outer;
       }
 
@@ -297,4 +356,8 @@ async function processSignatures(
   }
 
   return { lastProcessed, completed };
+}
+
+function earliest(a: Date | null, b: Date): Date {
+  return a && a < b ? a : b;
 }

@@ -89,3 +89,13 @@ export async function lastHeartbeatAt(job: HeartbeatJob): Promise<Date | null> {
   const row = await prisma.systemHeartbeat.findUnique({ where: { job }, select: { lastRunAt: true } });
   return row?.lastRunAt ?? null;
 }
+
+/**
+ * When a job last finished a run successfully, or null if it never has. What a daily job's boot
+ * catch-up goes by: lastRunAt advances on a failed run too, so a run that failed at its slot and
+ * then lost its retry timers to a restart looked like a fresh run, and the day was skipped.
+ */
+export async function lastSuccessfulRunAt(job: HeartbeatJob): Promise<Date | null> {
+  const row = await prisma.systemHeartbeat.findUnique({ where: { job }, select: { lastSuccessAt: true } });
+  return row?.lastSuccessAt ?? null;
+}

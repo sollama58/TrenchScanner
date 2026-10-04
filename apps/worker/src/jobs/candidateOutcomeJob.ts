@@ -173,7 +173,8 @@ export function entryRuleFor(features: unknown, env: Env): EntryRule {
  * the scan itself uses - which is the whole reason this can run every minute. Tokens the fetch
  * doesn't return (dead pair, delisted) still get their nextCheckAt advanced so they can't
  * hot-loop the sweep, and a row the worker missed entirely (downtime) self-heals: the first
- * sweep after restart finalizes it from whatever was already observed.
+ * sweep after restart finalizes it from whatever was already observed - or, when nothing was
+ * observed past the entry delay, retires it ungraded rather than inventing a loss.
  */
 export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: Env): Promise<void> {
   const startedAt = Date.now();
@@ -187,6 +188,11 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
   if (due.length === 0) return;
 
   const mints = [...new Set(due.map((row) => row.token.mintAddress))];
+  // When the prices were seen. The batched fetch below can take a while (hundreds of mints, a
+  // few at a time, with retries), and stamping each tick after it put prices observed before the
+  // entry delay past it - the fill is "the first price at least the delay after the alert" - and
+  // pushed prices seen just inside the hour out of the label window.
+  const observedAt = new Date();
   const priceByMint = new Map<string, number>();
   try {
     for (const candidate of await dexScreener.getTokensByAddresses(mints)) {
@@ -200,9 +206,10 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
 
   let finalized = 0;
   let retired = 0;
+  let unobserved = 0;
   await forEachWithConcurrency(due, UPDATE_CONCURRENCY, async (row) => {
     try {
-      const tickAt = new Date();
+      const tickAt = observedAt;
       const price = priceByMint.get(row.token.mintAddress);
 
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
@@ -223,7 +230,16 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       let extended = row.extended24h;
       let closedLabels: ReturnType<typeof computeOutcomeLabels> | null = null;
       let finalPeak24hPct: number | null = null;
-      if (row.finalizedAt === null && elapsedMs >= labelWindowMs) {
+      if (row.finalizedAt === null && elapsedMs >= labelWindowMs && merged.entryAt === null) {
+        // The window closed without a single price at or past the entry delay: the worker was
+        // down, or DexScreener had nothing for the mint all hour. There is no fill to grade from,
+        // so the row is retired ungraded - finalizedAt stays null, which keeps it out of training,
+        // the AI's graded record and every hit rate, and no verdict is copied to an alert. Graded,
+        // it read as a clean loss off the scan price with nothing observed, and every alert of an
+        // outage became a public loss.
+        data.finalized24hAt = tickAt;
+        unobserved += 1;
+      } else if (row.finalizedAt === null && elapsedMs >= labelWindowMs) {
         closedLabels = computeOutcomeLabels(merged);
         data.finalizedAt = tickAt;
         data.peak1hReturnPct = closedLabels.peak1hReturnPct;
@@ -279,45 +295,49 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       // isn't - see schema.prisma).
       const copyToMatches = row.sampleKind === "match" && closedLabels !== null;
 
-      await prisma.$transaction([
-        prisma.candidateOutcome.update({ where: { id: row.id }, data }),
-        ...(copyVerdict
-          ? [
-              prisma.curatedAlert.updateMany({
-                where: { candidateOutcomeId: row.id },
-                data: {
-                  ...(closedLabels !== null
-                    ? {
-                        peak1hReturnPct: closedLabels.peak1hReturnPct,
-                        maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
-                        hit2xIn15m: closedLabels.hit2xIn15m,
-                        hit2xIn1h: closedLabels.hit2xIn1h,
-                        hit4xIn1h: closedLabels.hit4xIn1h,
-                        disqualified: closedLabels.disqualified,
-                      }
-                    : {}),
-                  ...(finalPeak24hPct !== null
-                    ? { peak24hReturnPct: finalPeak24hPct, outcomeFinalizedAt: tickAt }
-                    : {}),
-                },
-              }),
-            ]
-          : []),
-        ...(copyToMatches && closedLabels !== null
-          ? [
-              prisma.match.updateMany({
-                where: { tokenId: row.tokenId, candidateOutcomeId: row.id },
-                data: {
-                  peak1hReturnPct: closedLabels.peak1hReturnPct,
-                  maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
-                  hit2xIn1h: closedLabels.hit2xIn1h,
-                  hit4xIn1h: closedLabels.hit4xIn1h,
-                  disqualified: closedLabels.disqualified,
-                },
-              }),
-            ]
-          : []),
-      ]);
+      await prisma.$transaction(async (tx) => {
+        // Only if the row is still anchored where this sweep read it. A curated alert going out
+        // moves a fresh row's anchor to the moment it is sent (emitCuratedAlert); a tick computed
+        // against the old anchor would take the fill seconds after the alert from a price seen
+        // before it, and overwrite the moved row's schedule. The next sweep picks it up instead.
+        const written = await tx.candidateOutcome.updateMany({
+          where: { id: row.id, anchorAt: row.anchorAt },
+          data: data as Prisma.CandidateOutcomeUpdateManyMutationInput,
+        });
+        if (written.count === 0) return;
+        if (copyVerdict) {
+          await tx.curatedAlert.updateMany({
+            where: { candidateOutcomeId: row.id },
+            data: {
+              ...(closedLabels !== null
+                ? {
+                    peak1hReturnPct: closedLabels.peak1hReturnPct,
+                    maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
+                    hit2xIn15m: closedLabels.hit2xIn15m,
+                    hit2xIn1h: closedLabels.hit2xIn1h,
+                    hit4xIn1h: closedLabels.hit4xIn1h,
+                    disqualified: closedLabels.disqualified,
+                  }
+                : {}),
+              ...(finalPeak24hPct !== null
+                ? { peak24hReturnPct: finalPeak24hPct, outcomeFinalizedAt: tickAt }
+                : {}),
+            },
+          });
+        }
+        if (copyToMatches && closedLabels !== null) {
+          await tx.match.updateMany({
+            where: { tokenId: row.tokenId, candidateOutcomeId: row.id },
+            data: {
+              peak1hReturnPct: closedLabels.peak1hReturnPct,
+              maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
+              hit2xIn1h: closedLabels.hit2xIn1h,
+              hit4xIn1h: closedLabels.hit4xIn1h,
+              disqualified: closedLabels.disqualified,
+            },
+          });
+        }
+      });
     } catch (err) {
       logger.error("failed to update candidate outcome", { id: row.id, error: String(err) });
     }
@@ -331,6 +351,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
     pricesFound: priceByMint.size,
     finalized,
     retired,
+    ...(unobserved > 0 ? { retiredUngraded: unobserved } : {}),
     ...(repaired > 0 ? { repaired } : {}),
   });
 }
