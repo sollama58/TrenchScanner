@@ -31,6 +31,7 @@ import {
 } from "@trenchscanner/core";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
 import { aiGateQualified, aiReviewEnabled, reviewPick, type AiReviewResult } from "../ai/reviewer.js";
+import { blendVetoes, usableAiBlend } from "../ai/blend.js";
 
 const logger = createLogger("curated-alerts");
 
@@ -473,9 +474,14 @@ async function emitForModel(
   ]);
   const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
   const reviewing = isDefault && aiReviewEnabled(env);
-  // Gate mode only once the reviewer's graded "buy" record meets the feed's targets; until then
-  // a gate-mode reviewer runs as shadow (see aiGateQualified).
-  const gating = reviewing && env.AI_REVIEW_MODE === "gate" && (await aiGateQualified(env));
+  // Gate mode only once the reviewer has earned it, one of two ways: a learned blend of its odds
+  // and the model's that beat the model alone out of sample (ai/blend.ts) - which then decides
+  // what is held back - or, before there is one, a graded "buy" record that meets the feed's
+  // targets (aiGateQualified), with its bare no_buy as the veto. Until then a gate-mode reviewer
+  // runs as shadow.
+  const blend = reviewing && env.AI_REVIEW_MODE === "gate" ? await usableAiBlend() : null;
+  const gating =
+    reviewing && env.AI_REVIEW_MODE === "gate" && (blend !== null || (await aiGateQualified(env)));
   // A token the reviewer just passed on doesn't contend again until its veto cools down -
   // otherwise it would win the same slot and buy the same review every minute.
   const contenders = gating ? await withoutRecentVetoes(contendersIn, env) : contendersIn;
@@ -497,13 +503,20 @@ async function emitForModel(
   let emitted = 0;
   for (const [i, pick] of picks.entries()) {
     const review = gateReviews[i] ?? null;
-    if (review?.verdict?.decision === "no_buy") {
+    const held =
+      review?.verdict !== undefined &&
+      review.verdict !== null &&
+      (blend !== null
+        ? blendVetoes(blend, review.curatorProbability, review.verdict.probability2x)
+        : review.verdict.decision === "no_buy");
+    if (review && held) {
       await recordAiReview(pick, review, "gate", null, null, env).catch((err) =>
         logger.warn("failed to record ai veto", { error: String(err) }),
       );
       logger.info("curated pick vetoed by ai reviewer", {
         mint: pick.token.mintAddress,
-        reasoning: review.verdict.reasoning,
+        reasoning: review.verdict?.reasoning,
+        byBlend: blend !== null,
       });
       continue;
     }
@@ -627,14 +640,18 @@ async function emitCuratedAlert(
   return { anchor, alertId: alert.id };
 }
 
-/** Drops contenders the gate-mode reviewer said "no_buy" to within AI_REVIEW_VETO_COOLDOWN_MINUTES. */
+/**
+ * Drops contenders gate mode held back within AI_REVIEW_VETO_COOLDOWN_MINUTES - a gate-mode
+ * review with no alert behind it (held back by the bare no_buy or by the blend).
+ */
 async function withoutRecentVetoes(contenders: CuratedContender[], env: Env): Promise<CuratedContender[]> {
   if (contenders.length === 0) return contenders;
   const vetoed = await prisma.aiReview.findMany({
     where: {
       tokenId: { in: contenders.map((c) => c.token.id) },
-      decision: "no_buy",
       mode: "gate",
+      curatedAlertId: null,
+      decision: { not: null },
       createdAt: { gt: new Date(Date.now() - env.AI_REVIEW_VETO_COOLDOWN_MINUTES * 60_000) },
     },
     select: { tokenId: true },
@@ -679,6 +696,9 @@ async function recordAiReview(
       outputTokens: review.outputTokens,
       anchorPriceUsd: pick.scored.priceUsd,
       anchorMcapUsd: pick.scored.marketCapUsd,
+      playbookId: review.playbookId ?? null,
+      brief: review.brief ?? null,
+      curatorProbability: review.curatorProbability ?? null,
     },
   });
 }

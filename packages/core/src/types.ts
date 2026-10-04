@@ -1,4 +1,5 @@
 import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
+import type { TextScores } from "./curation/textFeatures.js";
 /**
  * Domain types shared across data source clients, the scoring engine, the
  * API, and the worker. These are intentionally decoupled from the Prisma
@@ -164,6 +165,8 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   graduated?: boolean;
   /** Trade-by-trade order flow from the PumpPortal stream, when the worker is tracking it. */
   tradeFlow?: TradeFlowFeatures;
+  /** Claude's read of the launch's name and description (Token.aiTextScores), once it has one. */
+  textScores?: TextScores;
 }
 
 export interface RugScreenResult {

@@ -13,7 +13,8 @@ export type HeartbeatJob =
   | "fast-match"
   | "candidate-watch"
   | "curator-training"
-  | "match-peaks";
+  | "match-peaks"
+  | "ai-judge";
 
 export interface HeartbeatResult {
   success: boolean;

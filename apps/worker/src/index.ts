@@ -18,6 +18,7 @@ import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
 import { runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
+import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { scheduleInterval, scheduleDailyAt } from "./scheduler.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
@@ -26,6 +27,8 @@ const logger = createLogger("worker");
 
 /** A day plus slack: a daily job whose last run is older than this missed its slot. */
 const DAILY_CATCH_UP_AFTER_HOURS = 26;
+/** How often the AI judge job checks on replay batches and playbook rounds. */
+const AI_JUDGE_INTERVAL_MINUTES = 10;
 
 async function main() {
   const env = loadEnv();
@@ -137,6 +140,9 @@ async function main() {
       },
     },
   );
+  // The AI reviewer's learning loop: collects replay batches, runs playbook evolution and refits
+  // the AI blend - see runAiJudgeJob. Inert without ANTHROPIC_API_KEY.
+  const aiJudgeJob = scheduleInterval("ai-judge", () => runAiJudgeJob(env), AI_JUDGE_INTERVAL_MINUTES);
 
   logger.info("worker started", {
     scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
@@ -164,6 +170,7 @@ async function main() {
     cleanupJob.stop();
     outcomeTrackingJob.stop();
     curatorTrainingJob.stop();
+    aiJudgeJob.stop();
     stream?.stop();
     await prisma.$disconnect();
     process.exit(0);

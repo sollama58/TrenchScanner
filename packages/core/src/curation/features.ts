@@ -1,5 +1,6 @@
 import type { ScoredToken } from "../types.js";
 import { EMPTY_TRADE_FLOW, type TradeFlowFeatures } from "./tradeFlow.js";
+import type { TextScores } from "./textFeatures.js";
 
 /**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
@@ -77,6 +78,12 @@ export const CANDIDATE_FEATURE_NAMES = [
   "earlyBuyerSoldShare",
   "devInitialBuySol",
   "devSoldShare",
+  // Added 2026-10-04: Claude's read of the launch's own name and description, 0-1 each
+  // (curation/textFeatures.ts). Null until the mint has been read, and on rows banked before.
+  "textCopycatRisk",
+  "textNarrativeStrength",
+  "textMemeAppeal",
+  "textScamSignals",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -96,6 +103,14 @@ export const TRADE_FLOW_FEATURES = [
   "devInitialBuySol",
   "devSoldShare",
 ] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
+
+/** The text-read features, each a TextScores field - see curation/textFeatures.ts. */
+export const TEXT_FEATURES = {
+  textCopycatRisk: "copycatRisk",
+  textNarrativeStrength: "narrativeStrength",
+  textMemeAppeal: "memeAppeal",
+  textScamSignals: "scamSignals",
+} as const satisfies Partial<Record<CandidateFeatureName, keyof TextScores>>;
 
 export type CandidateFeatures = Record<CandidateFeatureName, number | null>;
 
@@ -155,6 +170,10 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   earlyBuyerSoldShare: "snipers selling",
   devInitialBuySol: "dev's launch buy",
   devSoldShare: "dev selling",
+  textCopycatRisk: "copycat name",
+  textNarrativeStrength: "narrative strength",
+  textMemeAppeal: "meme appeal",
+  textScamSignals: "scam wording",
 };
 
 /**
@@ -213,6 +232,7 @@ export function scoredFromFeatures(
     tradeFlow: Object.fromEntries(
       TRADE_FLOW_FEATURES.map((k) => [k, num(k) ?? null]),
     ) as unknown as TradeFlowFeatures,
+    textScores: textScoresFromFeatures(features),
     rugScreen: { passed: true, reasons: [] },
     score: {
       momentum: num("scoreMomentum") ?? 0,
@@ -224,7 +244,17 @@ export function scoredFromFeatures(
   };
 }
 
-/** Builds the feature vector for a scored candidate, at the moment it would be curated. */
+/** The text read carried in a feature vector, or undefined when the vector has none. */
+function textScoresFromFeatures(features: Record<string, number | null | undefined>): TextScores | undefined {
+  const out: Partial<TextScores> = {};
+  for (const [name, key] of Object.entries(TEXT_FEATURES)) {
+    const v = features[name];
+    if (v === null || v === undefined) return undefined;
+    out[key] = v;
+  }
+  return out as TextScores;
+}
+
 /**
  * buys/(buys+sells) with the same null discipline as buyRatio24h: null when both counts are
  * unknown OR there were no trades in the window - 0.5 would claim balanced flow where there was
@@ -235,6 +265,7 @@ function deriveBuyRatio(buys: number | null, sells: number | null): number | nul
   return buys === null && sells === null ? null : totalTxns === 0 ? null : (buys ?? 0) / totalTxns;
 }
 
+/** Builds the feature vector for a scored candidate, at the moment it would be curated. */
 export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
   const buys = scored.buys24h ?? null;
   const sells = scored.sells24h ?? null;
@@ -312,5 +343,9 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
     // pitch, and its absence on a Pump.fun launch is itself a (weak) tell.
     hasDescription: scored.description === undefined ? null : scored.description.trim() !== "" ? 1 : 0,
     ...(scored.tradeFlow ?? EMPTY_TRADE_FLOW),
+    textCopycatRisk: scored.textScores?.copycatRisk ?? null,
+    textNarrativeStrength: scored.textScores?.narrativeStrength ?? null,
+    textMemeAppeal: scored.textScores?.memeAppeal ?? null,
+    textScamSignals: scored.textScores?.scamSignals ?? null,
   };
 }

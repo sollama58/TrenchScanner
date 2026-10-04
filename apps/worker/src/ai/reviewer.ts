@@ -1,11 +1,11 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import * as z from "zod/v4";
 import {
   prisma,
   createLogger,
-  AI_REVIEW_SYSTEM_PROMPT,
+  aiReviewSystemPrompt,
   buildAiReviewBrief,
+  curatorProbabilityOf,
   buildCandidateFeatures,
   nearestOutcomes,
   inMcapBand,
@@ -18,6 +18,8 @@ import {
   type Env,
   type ScoredToken,
 } from "@trenchscanner/core";
+import { anthropicClient, describeAnthropicError } from "./client.js";
+import { activePlaybook } from "./playbookStore.js";
 
 const logger = createLogger("ai-reviewer");
 
@@ -27,7 +29,7 @@ const logger = createLogger("ai-reviewer");
  * (shadow vs gate) lives at the emission site in jobs/curatedAlerts.ts.
  */
 
-const VerdictSchema = z.object({
+export const VerdictSchema = z.object({
   decision: z.enum(["buy", "no_buy"]),
   probability2x: z.number(),
   probability4x: z.number(),
@@ -43,28 +45,30 @@ export interface AiReviewResult {
   latencyMs: number;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** The playbook (AiPlaybook) the call ran with; null when none could be loaded. */
+  playbookId?: string | null;
+  /** The exact brief sent - stored so the call can be audited and replayed. */
+  brief?: string | null;
+  /** The default model's own 2x probability for the pick, when it is a trained model. */
+  curatorProbability?: number | null;
 }
 
-let client: Anthropic | null = null;
-let clientKey = "";
-
-function getClient(env: Env): Anthropic {
-  if (!client || clientKey !== env.ANTHROPIC_API_KEY) {
-    client = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
-      timeout: env.AI_REVIEW_TIMEOUT_MS,
-      maxRetries: 1,
-    });
-    clientKey = env.ANTHROPIC_API_KEY;
-  }
-  return client;
+/** Turns a schema-valid model answer into the stored verdict: probabilities clamped, text capped. */
+export function verdictFromParsed(parsed: z.infer<typeof VerdictSchema>): AiReviewVerdict {
+  return {
+    decision: parsed.decision,
+    probability2x: clampProbability(parsed.probability2x),
+    probability4x: clampProbability(parsed.probability4x),
+    reasoning: parsed.reasoning.slice(0, 1_000),
+    risks: parsed.risks.slice(0, 8).map((r) => r.slice(0, 200)),
+  };
 }
 
 /** How many comparable past calls the brief summarizes - see formatComparables. */
-const COMPARABLES_K = 20;
+export const COMPARABLES_K = 20;
 /** The graded pool comparables are drawn from: recent finalized event rows in the band. */
-const COMPARABLE_POOL_DAYS = 30;
-const COMPARABLE_POOL_MAX_ROWS = 5_000;
+export const COMPARABLE_POOL_DAYS = 30;
+export const COMPARABLE_POOL_MAX_ROWS = 5_000;
 const POOL_CACHE_TTL_MS = 15 * 60_000;
 let poolCache: { fetchedAt: number; rows: GradedRow[] } | null = null;
 
@@ -74,22 +78,29 @@ export function resetComparablePoolCache(): void {
   qualificationCache = null;
 }
 
+/** A graded pool row with the moment it was anchored, so a replay can respect time. */
+export interface DatedGradedRow extends GradedRow {
+  anchorAt: Date;
+}
+
 /**
- * The graded moments a pick is compared against: finalized EVENT rows (the moments curators
- * decide on - see CandidateOutcome.sampleKind) inside the curated band from the last
- * COMPARABLE_POOL_DAYS, newest first, cached briefly since the pool moves over hours.
+ * Finalized EVENT rows (the moments curators decide on - see CandidateOutcome.sampleKind) inside
+ * the curated band, anchored in [from, to), newest first, at most `take` of them.
  */
-async function comparablePool(env: Env): Promise<GradedRow[]> {
-  if (poolCache && Date.now() - poolCache.fetchedAt < POOL_CACHE_TTL_MS) return poolCache.rows;
+export async function loadGradedPool(
+  env: Env,
+  range: { from: Date; to: Date; take: number },
+): Promise<DatedGradedRow[]> {
   const rows = await prisma.candidateOutcome.findMany({
     where: {
       finalizedAt: { not: null },
       sampleKind: "event",
-      anchorAt: { gte: new Date(Date.now() - COMPARABLE_POOL_DAYS * 86_400_000) },
+      anchorAt: { gte: range.from, lt: range.to },
     },
     orderBy: { anchorAt: "desc" },
-    take: COMPARABLE_POOL_MAX_ROWS,
+    take: range.take,
     select: {
+      anchorAt: true,
       features: true,
       labelValue: true,
       disqualified: true,
@@ -99,9 +110,10 @@ async function comparablePool(env: Env): Promise<GradedRow[]> {
     },
   });
   const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
-  const graded = rows
+  return rows
     .filter((r) => inMcapBand(r.anchorMcapUsd, band))
     .map((r) => ({
+      anchorAt: r.anchorAt,
       features: r.features as Record<string, number | null>,
       labelValue: r.labelValue ?? 0,
       // Every stop-out, not just the disqualified wins: a row that fell through -50% and never
@@ -113,8 +125,22 @@ async function comparablePool(env: Env): Promise<GradedRow[]> {
           r.maxDrawdown1hPct <= -(1 - DISQUALIFYING_DRAWDOWN_FRACTION) * 100),
       peak1hReturnPct: r.peak1hReturnPct,
     }));
-  poolCache = { fetchedAt: Date.now(), rows: graded };
-  return graded;
+}
+
+/**
+ * The graded moments a live pick is compared against: the last COMPARABLE_POOL_DAYS of
+ * loadGradedPool, cached briefly since the pool moves over hours.
+ */
+async function comparablePool(env: Env): Promise<GradedRow[]> {
+  if (poolCache && Date.now() - poolCache.fetchedAt < POOL_CACHE_TTL_MS) return poolCache.rows;
+  const now = Date.now();
+  const rows = await loadGradedPool(env, {
+    from: new Date(now - COMPARABLE_POOL_DAYS * 86_400_000),
+    to: new Date(now + 60_000),
+    take: COMPARABLE_POOL_MAX_ROWS,
+  });
+  poolCache = { fetchedAt: now, rows };
+  return rows;
 }
 
 /** The pick's nearest graded past calls, or undefined when the lookup fails (the brief then omits them). */
@@ -179,22 +205,35 @@ export async function reviewPick(
   env: Env,
 ): Promise<AiReviewResult> {
   const startedAt = Date.now();
-  const base = { model: env.AI_REVIEW_MODEL, inputTokens: null, outputTokens: null };
-  const comparables = await comparablesFor(scored, env);
+  const [comparables, playbook] = await Promise.all([comparablesFor(scored, env), activePlaybook()]);
+  const brief = buildAiReviewBrief(scored, decision, comparables);
+  const base = {
+    model: env.AI_REVIEW_MODEL,
+    inputTokens: null,
+    outputTokens: null,
+    playbookId: playbook?.id ?? null,
+    brief,
+    curatorProbability: curatorProbabilityOf(decision) ?? null,
+  };
   try {
-    const response = await getClient(env).beta.messages.parse({
+    const response = await anthropicClient(env).beta.messages.parse({
       model: env.AI_REVIEW_MODEL,
       max_tokens: 16000,
       // A declined request is re-run on a fallback model inside the same call rather than
       // coming back empty - the verdict's `model` records which one actually answered.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      system: AI_REVIEW_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: buildAiReviewBrief(scored, decision, comparables) }],
+      // The system prompt (fixed instructions + playbook) is identical across calls until a
+      // playbook is promoted - the stable prefix worth caching.
+      system: [
+        { type: "text", text: aiReviewSystemPrompt(playbook?.text), cache_control: { type: "ephemeral" } },
+      ],
+      messages: [{ role: "user", content: brief }],
       output_config: { effort: env.AI_REVIEW_EFFORT, format: betaZodOutputFormat(VerdictSchema) },
     });
     const latencyMs = Date.now() - startedAt;
     const usage = {
+      ...base,
       model: response.model,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
@@ -217,29 +256,11 @@ export async function reviewPick(
         latencyMs,
       };
     }
-    return {
-      ...usage,
-      verdict: {
-        decision: parsed.decision,
-        probability2x: clampProbability(parsed.probability2x),
-        probability4x: clampProbability(parsed.probability4x),
-        reasoning: parsed.reasoning.slice(0, 1_000),
-        risks: parsed.risks.slice(0, 8).map((r) => r.slice(0, 200)),
-      },
-      error: null,
-      latencyMs,
-    };
+    return { ...usage, verdict: verdictFromParsed(parsed), error: null, latencyMs };
   } catch (err) {
     const latencyMs = Date.now() - startedAt;
-    const message =
-      err instanceof Anthropic.RateLimitError
-        ? "rate limited"
-        : err instanceof Anthropic.AuthenticationError
-          ? "invalid ANTHROPIC_API_KEY"
-          : err instanceof Anthropic.APIError
-            ? `API error ${err.status ?? "?"}: ${err.message}`
-            : String(err);
+    const message = describeAnthropicError(err);
     logger.warn("ai review failed", { mint: scored.mintAddress, error: message });
-    return { ...base, verdict: null, error: message.slice(0, 500), latencyMs };
+    return { ...base, verdict: null, error: message, latencyMs };
   }
 }

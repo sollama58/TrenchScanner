@@ -25,8 +25,10 @@ import {
   type DiscoveredCoin,
   type WatchlistCandidate,
   type TradeFlowFeatures,
+  parseTextScores,
 } from "@trenchscanner/core";
 import type { Prisma, Token } from "@prisma/client";
+import { requestTextScores } from "../ai/textScorer.js";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
@@ -860,6 +862,9 @@ async function processCandidate(
     },
   );
   if (tradeFlow) scored.tradeFlow = tradeFlow;
+  // Claude's read of the launch's text, once the text scorer has made one (ai/textScorer.ts).
+  const textScores = parseTextScores(existingToken?.aiTextScores);
+  if (textScores) scored.textScores = textScores;
 
   // An existing row is written only when something on it actually changed. The unconditional
   // upsert this replaces rewrote every candidate's Token row - description and all - every cycle:
@@ -908,6 +913,12 @@ async function processCandidate(
 
   if (!scored.rugScreen.passed) {
     return 0;
+  }
+
+  // The first rug-screen pass inside the curated band asks for the text read the curators use as
+  // features. Fire-and-forget: it lands on the token for its next scan.
+  if (inCuratedBand && !textScores) {
+    void requestTextScores({ ...token, description: scored.description ?? token.description }, env);
   }
 
   // User matching first, and nothing slower in front of it: this is the product, and every

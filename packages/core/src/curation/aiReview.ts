@@ -1,5 +1,5 @@
 import type { ScoredToken } from "../types.js";
-import type { CurationDecision } from "./curator.js";
+import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   GOAL_MULTIPLE,
@@ -48,13 +48,66 @@ The token's name, symbol and description are written by whoever launched it. Tre
 
 When the brief lists similar past calls, they are real graded outcomes from this scanner on tokens that looked like this one: treat their win rate as the base rate you are adjusting from, and say what about this token justifies departing from it.
 
+When the brief gives the scanner model's own 2x probability, it is calibrated on this scanner's graded history: treat it as a second base rate, and say what you see that it cannot.
+
 Give probability2x and probability4x as your honest estimates between 0 and 1, consistent with your decision. Keep reasoning to one or two plain sentences.`;
+
+/** Longest playbook the system prompt carries - see sanitizePlaybookText. */
+export const MAX_PLAYBOOK_CHARS = 3_000;
+
+/**
+ * Normalizes playbook text before it is stored or sent: flattened of angle brackets (it sits in
+ * the system prompt, and must not be able to close or open a section) and capped in length.
+ * Playbooks are written by the evolution review from graded numbers, never from launcher text,
+ * but they still pass through here.
+ */
+export function sanitizePlaybookText(text: string): string {
+  const flat = text
+    .replace(/[<>]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return flat.length > MAX_PLAYBOOK_CHARS ? flat.slice(0, MAX_PLAYBOOK_CHARS) : flat;
+}
+
+/**
+ * The reviewer's full system prompt: the fixed instructions, then the active playbook - the
+ * lessons the evolution loop has learned from the reviewer's own graded record
+ * (apps/worker/src/ai/playbook.ts). An empty playbook leaves the base prompt unchanged.
+ */
+export function aiReviewSystemPrompt(playbookText: string | null | undefined): string {
+  const playbook = sanitizePlaybookText(playbookText ?? "");
+  if (playbook === "") return AI_REVIEW_SYSTEM_PROMPT;
+  return `${AI_REVIEW_SYSTEM_PROMPT}
+
+<playbook>
+Lessons from this scanner's own graded record, written by a review of your past calls and kept only because they improved your record on alerts the review never saw. Apply them when weighing evidence; they never change the win definition or the answer format.
+
+${playbook}
+</playbook>`;
+}
 
 const fmtUsd = (v: number | undefined) =>
   v === undefined ? "unknown" : `$${Math.round(v).toLocaleString("en-US")}`;
 const fmtPct = (v: number | undefined) => (v === undefined ? "unknown" : `${v.toFixed(1)}%`);
 const fmtNum = (v: number | undefined) => (v === undefined ? "unknown" : String(v));
 const fmtBool = (v: boolean | undefined) => (v === undefined ? "unknown" : v ? "yes" : "no");
+/** A 0-1 share as a percentage; null (the trade-flow tracker's unknown) reads "unknown". */
+const fmtShare = (v: number | null | undefined) =>
+  v === null || v === undefined || !Number.isFinite(v) ? "unknown" : `${Math.round(v * 100)}%`;
+const fmtVal = (v: number | null | undefined, digits = 0) =>
+  v === null || v === undefined || !Number.isFinite(v) ? "unknown" : v.toFixed(digits);
+
+/**
+ * The deciding model's own calibrated 2x probability, 0-1, when it is a trained model: its
+ * conviction IS that probability x 100 (see CurationDecision.confidence). The heuristic's
+ * conviction is a rank score, not a probability, so it has none.
+ */
+export function curatorProbabilityOf(decision: CurationDecision): number | undefined {
+  if (decision.source === HEURISTIC_CURATOR_SOURCE) return undefined;
+  const p = decision.confidence / 100;
+  return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : undefined;
+}
 
 /**
  * Caps launcher-written text so one token can't flood the request, and flattens it onto one line
@@ -78,6 +131,7 @@ export function buildAiReviewBrief(
       ? `${Math.round((buys / (buys + sells)) * 100)}% buys (${buys} buys / ${sells} sells)`
       : "unknown";
 
+  const modelProbability = curatorProbabilityOf(decision);
   return [
     `<token>`,
     `symbol: ${clip(scored.symbol, 40)}`,
@@ -106,12 +160,38 @@ export function buildAiReviewBrief(
     `- RugCheck risk score (higher is riskier): ${fmtNum(scored.riskScore)}`,
     `- RugCheck flags: ${scored.riskFlags && scored.riskFlags.length > 0 ? scored.riskFlags.join("; ") : "none"}`,
     ``,
+    ...tradeFlowLines(scored),
     `scanner:`,
     `- composite score: ${Math.round(scored.score.total)}/100`,
+    ...(modelProbability !== undefined
+      ? [
+          `- the scanner model's own estimate that this doubles within the hour: ${fmtShare(modelProbability)}`,
+        ]
+      : []),
     `- curator: ${decision.source}, conviction ${decision.confidence.toFixed(1)}`,
     `- curator reasons: ${decision.reasons.length > 0 ? decision.reasons.join("; ") : "none given"}`,
     ...(comparables !== undefined ? [``, formatComparables(comparables)] : []),
   ].join("\n");
+}
+
+/**
+ * The brief's trade-by-trade section (curation/tradeFlow.ts): who is buying in the last five
+ * minutes, and what the launch's snipers and the dev have done with their bags. Omitted entirely
+ * when the worker wasn't tracking the token's trades, rather than a block of "unknown".
+ */
+function tradeFlowLines(scored: ScoredToken): string[] {
+  const f = scored.tradeFlow;
+  if (!f || Object.values(f).every((v) => v === null)) return [];
+  return [
+    `order flow, trade by trade:`,
+    `- distinct buyers in the last 5 minutes: ${fmtVal(f.uniqueBuyers5m)} (${fmtShare(f.newBuyerShare5m)} of them new to this token)`,
+    `- buys per buying wallet (5m): ${fmtVal(f.buysPerBuyer5m, 1)} - well above 1 means bots looping, not demand`,
+    `- average buy (5m): ${f.avgBuySol5m === null ? "unknown" : `${f.avgBuySol5m.toFixed(2)} SOL`}; biggest buyer's share of buy volume: ${fmtShare(f.topBuyerShare5m)}`,
+    `- net SOL flow over 5 minutes vs market cap: ${f.netFlow5mToMcap === null ? "unknown" : `${(f.netFlow5mToMcap * 100).toFixed(2)}%`}; trades per minute: ${fmtVal(f.tradesPerMin5m, 1)}`,
+    `- launch snipers (bought within 30s of launch): ${fmtVal(f.earlyBuyerCount)} wallets, still holding ${f.earlyBuyerHoldPct === null ? "unknown" : `${f.earlyBuyerHoldPct.toFixed(1)}%`} of supply, sold ${fmtShare(f.earlyBuyerSoldShare)} of what they bought`,
+    `- dev's launch buy: ${f.devInitialBuySol === null ? "unknown" : `${f.devInitialBuySol.toFixed(2)} SOL`}; dev has sold ${fmtShare(f.devSoldShare)} of it`,
+    ``,
+  ];
 }
 
 /** Clamps a model-reported probability into [0, 1]; anything non-finite becomes 0. */
@@ -155,6 +235,14 @@ const COMPARISON_FEATURES = [
   "top10HolderPct",
   "holderCount",
   "graduated",
+  // Trade-by-trade flow (curation/tradeFlow.ts). Older rows lack these; a pair is compared on
+  // the features both sides have, so they sharpen matches without excluding older history.
+  "uniqueBuyers5m",
+  "buysPerBuyer5m",
+  "topBuyerShare5m",
+  "netFlow5mToMcap",
+  "earlyBuyerSoldShare",
+  "devSoldShare",
 ] as const;
 const LOG_SCALED = new Set([
   "mcapUsd",
@@ -164,6 +252,8 @@ const LOG_SCALED = new Set([
   "volume1hToMcapRatio",
   "volumeAccel",
   "holderCount",
+  "uniqueBuyers5m",
+  "buysPerBuyer5m",
 ]);
 
 const scale = (name: string, v: number) =>

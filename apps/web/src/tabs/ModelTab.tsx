@@ -6,6 +6,7 @@ import {
   type LeaderboardEntry,
   type ModelInsights,
   type ModelRun,
+  type AiJudgeState,
 } from "../api";
 import { HBarChart, Skeleton, TargetBars } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
@@ -706,6 +707,18 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
             </tbody>
           </table>
         </div>
+        <p className="muted small">
+          Lift over the picks it reviewed:{" "}
+          <strong>
+            {data.aiReviewer.liftPts === null
+              ? "–"
+              : `${data.aiReviewer.liftPts > 0 ? "+" : ""}${data.aiReviewer.liftPts} pts`}
+          </strong>
+          {" · "}odds error (Brier, lower is better, 0.25 is a coin):{" "}
+          <strong>{brier(data.aiReviewer.brier)}</strong> vs the model's own{" "}
+          <strong>{brier(data.aiReviewer.curatorBrier)}</strong>
+        </p>
+        <AiJudgeLoop judge={data.aiJudge} now={now} />
         {data.aiReviewer.probability2xBands.length > 0 && (
           <>
             <h4>Do its odds hold up?</h4>
@@ -769,6 +782,87 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
         )}
       </details>
     </section>
+  );
+}
+
+const brier = (v: number | null | undefined) => (v === null || v === undefined ? "–" : v.toFixed(3));
+
+const PLAYBOOK_STATUS: Record<AiJudgeState["playbooks"][number]["status"], string> = {
+  active: "in use",
+  candidate: "on test",
+  retired: "replaced",
+  rejected: "lost its test",
+};
+
+/**
+ * The reviewer's learning loop: playbook versions (lessons learned from its graded calls), each
+ * judged on a replay of recent alerts it never saw, and the learned blend gate mode can use.
+ */
+function AiJudgeLoop({ judge, now }: { judge: AiJudgeState; now: number }) {
+  if (judge.playbooks.length === 0 && judge.replays.length === 0 && judge.blend === null) return null;
+  const pending = judge.replays.find((r) => r.status === "submitted");
+  return (
+    <>
+      <h4>How it is learning</h4>
+      <p className="muted small">
+        Once a day Claude reviews its graded calls into new playbooks, and a new one takes over only if it
+        beats the current one on a replay of recent alerts it never saw.
+        {pending && ` A ${pending.purpose} replay is running (started ${ago(pending.createdAt, now)}).`}
+      </p>
+      {judge.playbooks.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Playbook</th>
+                <th>Status</th>
+                <th className="r">Replay buys</th>
+                <th className="r">2x</th>
+                <th className="r">4x</th>
+                <th className="r">Lift</th>
+                <th className="r">Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {judge.playbooks.map((p) => (
+                <tr key={p.id} title={p.rationale ?? undefined}>
+                  <td>v{p.version}</td>
+                  <td>
+                    <span
+                      className={`badge ${p.status === "active" ? "good" : p.status === "rejected" ? "bad" : "neutral"}`}
+                    >
+                      {PLAYBOOK_STATUS[p.status]}
+                    </span>
+                  </td>
+                  <td className="r num">{p.metrics ? p.metrics.buys : "–"}</td>
+                  <td className="r num">{pct(p.metrics?.buyWinRatePct, 1)}</td>
+                  <td className="r num">{pct(p.metrics?.buyGoalRatePct, 1)}</td>
+                  <td className="r num">
+                    {p.metrics?.liftPts === null || p.metrics?.liftPts === undefined
+                      ? "–"
+                      : `${p.metrics.liftPts > 0 ? "+" : ""}${p.metrics.liftPts.toFixed(1)}`}
+                  </td>
+                  <td className="r num">{p.metrics?.score ?? "–"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {judge.playbooks.find((p) => p.status === "active" && p.text) && (
+        <details>
+          <summary className="muted small">Current playbook (admins)</summary>
+          <pre className="small">{judge.playbooks.find((p) => p.status === "active")?.text || "(empty)"}</pre>
+        </details>
+      )}
+      {judge.blend && (
+        <p className="muted small">
+          Learned blend of its odds and the model's ({judge.blend.metrics.rows} graded reviews):{" "}
+          {judge.blend.usable ? <strong>in use for gate mode</strong> : <strong>not in use</strong>} -{" "}
+          {judge.blend.metrics.reason}.
+        </p>
+      )}
+    </>
   );
 }
 

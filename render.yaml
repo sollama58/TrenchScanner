@@ -14,8 +14,9 @@
 # from the Render dashboard (Environment tab on each service):
 #   - HELIUS_API_KEY (both api + worker)          https://dev.helius.xyz
 #   - ANTHROPIC_API_KEY (worker only)               https://console.anthropic.com
-#         Turns on the AI buy/no-buy reviewer (AI_REVIEW_MODE, shadow by default). Left empty the
-#         reviewer is off and alerts flow exactly as before.
+#         Turns on the AI buy/no-buy reviewer (AI_REVIEW_MODE, shadow by default), its daily
+#         playbook evolution (AI_PLAYBOOK_EVOLUTION) and Claude's text features for the models
+#         (AI_TEXT_FEATURES). Left empty all three are off and alerts flow exactly as before.
 #   - SOLANA_RPC_URL (both api + worker)           the same paid RPC as HELIUS_API_KEY
 #         Verifies and reconciles burns. Left empty it falls back to the public endpoint, which
 #         this repo has measured rejecting the batched calls the reconciler makes.

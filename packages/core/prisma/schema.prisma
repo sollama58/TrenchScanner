@@ -186,6 +186,11 @@ model Token {
   /// minutesSinceFirstInBand feature: a token that entered the band hours ago and is still
   /// there is a different bet from one arriving now.
   firstInBandAt   DateTime?
+  /// Claude's read of the launcher-written text (name, symbol, description), scored once per mint
+  /// by apps/worker/src/ai/textScorer.ts - a TextScores object (curation/textFeatures.ts). These
+  /// become model features, so the learners decide how much the read is worth. Null until scored.
+  aiTextScores    Json?
+  aiTextScoredAt  DateTime?
 
   // Stamped by GET /matches (see apps/api/src/routes/matches.ts) whenever this token appears on
   // a page someone actually fetched - not per-user, just "is anyone currently looking at this."
@@ -375,6 +380,15 @@ model AiReview {
 
   anchorPriceUsd Float
   anchorMcapUsd  Float
+
+  /// The playbook (AiPlaybook) the reviewer ran with - so every verdict is traceable to the exact
+  /// instructions that produced it. Null on rows from before playbooks existed.
+  playbookId         String?
+  /// The exact per-token brief the reviewer was shown, so a call can be audited and replayed.
+  brief              String?
+  /// The default model's own calibrated 2x probability for this pick (0-1), when it is a trained
+  /// model - the other input of the learned AI blend (curation/aiBlend.ts).
+  curatorProbability Float?
 
   @@index([createdAt])
   @@index([tokenId, createdAt])
@@ -988,4 +1002,86 @@ model BurnScanCursor {
   backfillBefore String?
 
   updatedAt DateTime @updatedAt
+}
+
+/// The AI reviewer's playbook: lessons learned from its own graded record, appended to the fixed
+/// system prompt. Exactly one is "active" (what the live reviewer runs with); evolution writes
+/// "candidate" rows from a review of graded calls, replays them against the active one on recent
+/// alerts the review never saw, and promotes a candidate only when it beats the incumbent
+/// (apps/worker/src/ai/playbook.ts). Old rows are kept, so every verdict's playbook stays readable.
+model AiPlaybook {
+  id         String    @id @default(cuid())
+  version    Int
+  /// "active" | "candidate" | "retired" | "rejected"
+  status     String
+  text       String
+  /// Why the review proposed this version - one or two sentences.
+  rationale  String?
+  parentId   String?
+  createdAt  DateTime  @default(now())
+  /// When it was promoted, retired or rejected.
+  decidedAt  DateTime?
+  /// Its record on the replay that decided it (JudgeRecordSummary), for the Models tab.
+  metrics    Json?
+
+  @@index([status, createdAt])
+}
+
+/// One offline replay of the AI reviewer over past graded alerts, sent through the Message
+/// Batches API: either a "baseline" run of the active playbook (to give it a record to learn
+/// from) or an "evolution" run that pits candidate playbooks against it on the same alerts.
+model AiReplayRun {
+  id           String    @id @default(cuid())
+  /// "baseline" | "evolution"
+  purpose      String
+  /// "submitted" | "scored" | "failed"
+  status       String
+  batchId      String?
+  model        String
+  /// The playbooks replayed, in custom_id order.
+  playbookIds  String[]
+  windowStart  DateTime
+  windowEnd    DateTime
+  requestCount Int
+  createdAt    DateTime  @default(now())
+  scoredAt     DateTime?
+  /// Per-playbook JudgeRecordSummary, keyed by playbook id.
+  metrics      Json?
+  error        String?
+
+  verdicts AiReplayVerdict[]
+
+  @@index([status])
+  @@index([purpose, createdAt])
+}
+
+/// One replayed verdict: what a playbook said about one past alert, graded by that alert's label.
+model AiReplayVerdict {
+  id                 String      @id @default(cuid())
+  runId              String
+  run                AiReplayRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  playbookId         String
+  candidateOutcomeId String
+  decision           String?
+  probability2x      Float?
+  probability4x      Float?
+  error              String?
+  inputTokens        Int?
+  outputTokens       Int?
+
+  @@index([runId])
+  @@index([playbookId])
+}
+
+/// The learned AI blend (curation/aiBlend.ts): how much to trust the reviewer's 2x odds next to the
+/// default model's own, fitted on graded reviews. The newest row is the one gate mode reads.
+model AiBlendModel {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  /// AiBlendParams - weights, cutoff, and whether it earned the gate.
+  params    Json
+  /// AiBlendMetrics - rows, out-of-sample Brier for the blend and each input alone.
+  metrics   Json
+
+  @@index([createdAt])
 }
