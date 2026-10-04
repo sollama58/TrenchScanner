@@ -11,9 +11,12 @@ import {
   rankByComposite,
   withLanes,
   CONSENSUS_CONTESTANT,
-  LIVE_EVIDENCE_PIVOT,
+  BACKTEST_EVIDENCE_CAP,
   MIN_LIVE_CALLS_TO_RANK,
   COMPOSITE_WEIGHTS,
+  PRIOR_CALLS,
+  SCORE_BANDS,
+  explainScore,
   NEVER_EMIT_THRESHOLD,
   summarizeRecord,
   type ChampionRecord,
@@ -247,6 +250,8 @@ export interface LeaderboardEntry {
    */
   status: "calling" | "silent" | "untrained";
   composite: CompositeScore;
+  /** The score in a sentence: what it proves, from how much evidence, and the points. */
+  scoreExplained: string;
   /** Its live record on high-conviction calls alone (CuratedAlert.tier = "high"); null with none graded. */
   highConviction: RecordSummary | null;
   /** Evolving seats only: the recipe holding the seat now, and where it came from. */
@@ -267,9 +272,14 @@ export interface Leaderboard {
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   scoring: {
     weights: typeof COMPOSITE_WEIGHTS;
+    /** Calls' worth of evidence the backtest counts for at most; live weighs the same at this many graded calls. */
     livePivotCalls: number;
+    /** Calls counted as misses on top of every record, so a short streak can't prove a high rate. */
+    priorCalls: number;
     /** Graded live calls a contestant needs before it is ranked on its score. */
     minLiveCallsToRank: number;
+    /** The plain-language bands a score falls in, highest first. */
+    bands: typeof SCORE_BANDS;
     summary: string;
   };
   defaultModel: string;
@@ -353,6 +363,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
   const unranked = state.roster.map((spec) => {
     const model = state.current.get(spec.id) ?? null;
     const exam = model?.metrics.exam ?? emptyRecord();
+    const composite = compositeScore(live.get(spec.id) ?? emptyRecord(), exam, targets);
     const status: LeaderboardEntry["status"] =
       spec.role === "rules"
         ? "calling"
@@ -368,7 +379,8 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       role: spec.role,
       isDefault: spec.id === state.defaultModel,
       status,
-      composite: compositeScore(live.get(spec.id) ?? emptyRecord(), exam, targets),
+      composite,
+      scoreExplained: explainScore(composite, targets),
       highConviction: (() => {
         const record = liveHigh.get(spec.id);
         return record && record.graded > 0 ? summarizeRecord(record, targets) : null;
@@ -399,11 +411,15 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     },
     scoring: {
       weights: COMPOSITE_WEIGHTS,
-      livePivotCalls: LIVE_EVIDENCE_PIVOT,
+      livePivotCalls: BACKTEST_EVIDENCE_CAP,
+      priorCalls: PRIOR_CALLS,
       minLiveCallsToRank: MIN_LIVE_CALLS_TO_RANK,
+      bands: SCORE_BANDS,
       summary:
-        "0-100: 45% the 2x hit rate vs target, 30% the 4x rate vs target (both as lower confidence bounds), " +
-        `25% average return per call. Blends the backtest with live calls; live counts half at ${LIVE_EVIDENCE_PIVOT} graded calls. ` +
+        `The score is how far a model has proven itself toward the goal, 0-100: ${Math.round(COMPOSITE_WEIGHTS.winRate * 100)} points ` +
+        `for its 2x rate against ${env.CURATED_TARGET_WIN_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.goalRate * 100)} for its 4x rate against ` +
+        `${env.CURATED_TARGET_GOAL_RATE_PCT}%. Rates are proven, not raw: ${PRIOR_CALLS} extra calls count as misses, so a short streak ` +
+        `can't score like a long record. The backtest counts for at most ${BACKTEST_EVIDENCE_CAP} calls' worth; live calls take over from there. ` +
         `Models with fewer than ${MIN_LIVE_CALLS_TO_RANK} graded live calls are still warming up and rank below the rest.`,
     },
     defaultModel: state.defaultModel,

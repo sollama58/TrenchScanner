@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { decidePlaybookPromotion, summarizeJudgeRecord, type JudgedCall } from "./aiJudge.js";
 import { trainBoostedCurator } from "./boosting.js";
 import { pickChampion, type ChampionStanding } from "./champion.js";
-import type { CompositeScore } from "./leaderboard.js";
+import { scoreBand, type CompositeScore } from "./leaderboard.js";
 import { scoreCandidateWithModel, trainCurator, type PrecisionTargets, type TrainingRow } from "./trainer.js";
 
 /** Fixes from the 2026-10-04 models-and-training bug audit. */
@@ -52,13 +52,17 @@ function standing(id: string, score: number, liveGraded: number): ChampionStandi
     graded: liveGraded,
     winRatePct: null,
     goalRatePct: null,
+    proven2xPct: null,
+    proven4xPct: null,
     avgReturnDoublings: null,
     score,
   };
   const composite: CompositeScore = {
     score,
+    band: scoreBand(score),
     liveWeight: 0.5,
     warmingUp: liveGraded < 50,
+    basis: null,
     live: summary,
     exam: summary,
   };

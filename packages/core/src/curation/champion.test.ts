@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pickChampion, resolveDefaultModel, type ChampionStanding } from "./champion.js";
-import type { CompositeScore } from "./leaderboard.js";
+import { scoreBand, type CompositeScore } from "./leaderboard.js";
 
 function standing(id: string, score: number | null, liveGraded: number, calling = true): ChampionStanding {
   const summary = {
@@ -8,13 +8,17 @@ function standing(id: string, score: number | null, liveGraded: number, calling 
     graded: liveGraded,
     winRatePct: null,
     goalRatePct: null,
+    proven2xPct: null,
+    proven4xPct: null,
     avgReturnDoublings: null,
     score,
   };
   const composite: CompositeScore = {
     score,
+    band: scoreBand(score),
     liveWeight: 0.5,
     warmingUp: liveGraded < 50,
+    basis: null,
     live: summary,
     exam: summary,
   };

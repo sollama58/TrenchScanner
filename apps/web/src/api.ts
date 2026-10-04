@@ -448,9 +448,34 @@ export interface RecordSummary {
   graded: number;
   winRatePct: number | null;
   goalRatePct: number | null;
+  /** The 2x / 4x rate this record proves (after the score's prior misses), in percent. Absent from older API builds. */
+  proven2xPct?: number | null;
+  proven4xPct?: number | null;
   /** Average doublings per graded call: a 2x is 1, a 4x is 2, a miss 0. */
   avgReturnDoublings: number | null;
   score: number | null;
+}
+
+export type ScoreBandId = "on-target" | "closing-in" | "getting-there" | "far-off";
+
+export interface ScoreBand {
+  id: ScoreBandId;
+  /** Scores at or above this are in the band. */
+  min: number;
+  label: string;
+  meaning: string;
+}
+
+/** How a score was earned: the proven rates, the points they made, and the evidence behind them. */
+export interface ScoreBasis {
+  points2x: number;
+  points4x: number;
+  proven2xPct: number;
+  proven4xPct: number;
+  /** Calls' worth of evidence: graded live calls plus the backtest's share. */
+  evidenceCalls: number;
+  backtestCalls: number;
+  liveCalls: number;
 }
 
 export type ContestantRole = "rules" | "learner" | "stacked" | "blend";
@@ -478,12 +503,18 @@ export interface LeaderboardEntry {
   status: "calling" | "silent" | "untrained";
   composite: {
     score: number | null;
+    /** The band the score falls in; null without a score. Absent from older API builds. */
+    band?: ScoreBand | null;
     liveWeight: number;
     /** Fewer graded live calls than the board's minLiveCallsToRank: shown, ranked behind the seasoned. */
     warmingUp?: boolean;
+    /** How the score was earned; null without a score. Absent from older API builds. */
+    basis?: ScoreBasis | null;
     live: RecordSummary;
     exam: RecordSummary;
   };
+  /** The score in a sentence. Absent from older API builds. */
+  scoreExplained?: string;
   /** Its live record on high-conviction calls alone; null with none graded. */
   highConviction?: RecordSummary | null;
   model: {
@@ -513,9 +544,14 @@ export interface Leaderboard {
   window: { days: number; since: string };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   scoring: {
-    weights: { winRate: number; goalRate: number; avgReturn: number };
+    weights: { winRate: number; goalRate: number; avgReturn?: number };
+    /** Calls' worth the backtest counts for at most; live weighs the same at this many graded calls. */
     livePivotCalls: number;
+    /** Calls counted as misses on top of every record (absent from older API builds). */
+    priorCalls?: number;
     minLiveCallsToRank?: number;
+    /** The score's plain-language bands, highest first (absent from older API builds). */
+    bands?: ScoreBand[];
     summary: string;
   };
   defaultModel: string;
