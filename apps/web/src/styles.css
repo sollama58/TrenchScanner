@@ -2280,6 +2280,9 @@ button.small-btn {
   }
   .facts {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
 /* ---------- Badge in the card's title row ---------- */
 /* A long symbol or name gives way to the badge: the name shrinks first, then the symbol. */
 .title-row .symbol {
@@ -2557,4 +2560,22 @@ button.small-btn {
     margin: -18px -16px 8px;
     padding: 14px 16px 10px;
   }
+}
+
+/* ---------- Settings tab on narrow screens ---------- */
+/* A long switch label wraps beside its track instead of running off the panel. */
+.switch {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+.switch-track {
+  flex: none;
+}
+.champion > div {
+  min-width: 0;
+  max-width: 100%;
+}
+.champion .row {
+  flex-wrap: wrap;
 }
