@@ -8,6 +8,12 @@ const logger = createLogger("solana-rpc");
 const PUBLIC_FALLBACK_RPC = "https://api.mainnet-beta.solana.com";
 
 /**
+ * Gap between one-at-a-time fetches. Keeps a run of them under a Helius plan's per-second cap
+ * (10 requests a second on the free tier), which counts each call inside a batch too.
+ */
+const SEQUENTIAL_PAUSE_MS = 120;
+
+/**
  * Free public endpoints. A SOLANA_RPC_URL pointing at one of these loses to the Helius key when
  * there is one: they rate-limit a shared host's IP into a stutter (Render's egress IPs are shared)
  * and some reject batches outright, and the burn scan stalled on exactly that in production.
@@ -79,6 +85,9 @@ export class SolanaRpc {
   /** RPC method invocations issued since the last takeCallStats() - what a metered plan bills on. */
   private readonly callCounts = new Map<string, number>();
 
+  /** The most recent failure, as the RPC described it (never the URL) - see takeLastError. */
+  private lastError: string | null = null;
+
   constructor(options: SolanaRpcOptions = {}) {
     this.rpcUrl = resolveSolanaRpcUrl(options);
   }
@@ -102,6 +111,13 @@ export class SolanaRpc {
     return stats;
   }
 
+  /** The last RPC failure since the previous read, then reset - for /health/worker. */
+  takeLastError(): string | null {
+    const error = this.lastError;
+    this.lastError = null;
+    return error;
+  }
+
   private count(method: string, n = 1): void {
     this.callCounts.set(method, (this.callCounts.get(method) ?? 0) + n);
   }
@@ -117,11 +133,13 @@ export class SolanaRpc {
       });
       if (body.error) {
         logger.warn("rpc error", { method, code: body.error.code, message: body.error.message });
+        this.lastError = `${method}: ${body.error.code} ${body.error.message}`;
         return null;
       }
       return body.result ?? null;
     } catch (err) {
       logger.warn("rpc call failed", { method, error: String(err) });
+      this.lastError = `${method}: ${String(err)}`;
       return null;
     }
   }
@@ -198,11 +216,29 @@ export class SolanaRpc {
         this.batchUnsupported = true;
         return this.fetchSequentially(signatures);
       }
+      const errored: string[] = [];
       for (const response of responses) {
         const index = Number(response.id);
         const signature = signatures[index];
         if (signature === undefined) continue;
-        out.set(signature, response.error ? null : (response.result ?? null));
+        if (response.error) {
+          // A per-call error is not "no such transaction" (that is a null result) - usually it is
+          // the plan's per-second cap, which counts each call in a batch. Asked again singly
+          // below, at a pace the cap allows.
+          this.lastError = `getTransaction (batch): ${response.error.code} ${response.error.message}`;
+          errored.push(signature);
+        } else {
+          out.set(signature, response.result ?? null);
+        }
+      }
+      if (errored.length > 0) {
+        logger.warn("some batched transaction fetches errored - retrying them one at a time", {
+          provider: this.provider,
+          errored: errored.length,
+          of: signatures.length,
+          error: this.lastError,
+        });
+        for (const [sig, tx] of await this.fetchSequentially(errored)) out.set(sig, tx);
       }
     } catch (err) {
       // A 4xx that isn't rate limiting means this endpoint doesn't do batching. Latch it and
@@ -215,7 +251,17 @@ export class SolanaRpc {
         this.batchUnsupported = true;
         return this.fetchSequentially(signatures);
       }
-      logger.warn("batched transaction fetch failed", { count: signatures.length, error: String(err) });
+      // Rate limited (429), a 5xx or a timeout, still failing after fetchJson's own retries. On
+      // Helius a 50-call batch can exceed the plan's per-second cap on its own, and before this
+      // every pass failed the same way and the burn scan never moved. Not latched - a busy moment
+      // says nothing about batching - but this set is fetched one at a time, paced.
+      this.lastError = `getTransaction (batch of ${signatures.length}): ${String(err)}`;
+      logger.warn("batched transaction fetch failed - retrying one at a time", {
+        provider: this.provider,
+        count: signatures.length,
+        error: String(err),
+      });
+      return this.fetchSequentially(signatures);
     }
 
     // Anything the RPC didn't answer for is explicitly unknown rather than absent, so a caller
@@ -227,9 +273,15 @@ export class SolanaRpc {
   /** The un-batched path, for endpoints that don't support batching. */
   private async fetchSequentially(signatures: string[]): Promise<Map<string, ParsedTransaction | null>> {
     const out = new Map<string, ParsedTransaction | null>();
-    for (const signature of signatures) {
-      out.set(signature, await this.getParsedTransaction(signature));
+    for (const [i, signature] of signatures.entries()) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, SEQUENTIAL_PAUSE_MS));
+      const tx = await this.getParsedTransaction(signature);
+      out.set(signature, tx);
+      // The reconciler stops at the first transaction it can't read, so there is no use fetching
+      // past one that failed - an unreachable endpoint would otherwise cost a call per signature.
+      if (tx === null) break;
     }
+    for (const sig of signatures) if (!out.has(sig)) out.set(sig, null);
     return out;
   }
 

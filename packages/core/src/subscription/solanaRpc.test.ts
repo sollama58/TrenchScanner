@@ -81,6 +81,59 @@ describe("SolanaRpc", () => {
     expect(rpc.takeCallStats()).toEqual({});
   });
 
+  it("retries a batch's errored calls one at a time and keeps the error for health", async () => {
+    const { url } = await startServer((body) =>
+      Array.isArray(body)
+        ? body.map((c: { id: string }) =>
+            c.id === "1"
+              ? { jsonrpc: "2.0", id: c.id, error: { code: -32429, message: "rate limited" } }
+              : { jsonrpc: "2.0", id: c.id, result: { slot: 1 } },
+          )
+        : { jsonrpc: "2.0", id: 1, result: { slot: 2 } },
+    );
+    const rpc = new SolanaRpc({ rpcUrl: url });
+    const out = await rpc.getParsedTransactions(["a", "b", "c"]);
+    expect(out.get("a")).toEqual({ slot: 1 });
+    expect(out.get("b")).toEqual({ slot: 2 });
+    expect(out.get("c")).toEqual({ slot: 1 });
+    expect(rpc.takeCallStats()).toEqual({ getTransaction: 4 });
+    expect(rpc.takeLastError()).toContain("rate limited");
+    expect(rpc.takeLastError()).toBeNull();
+  });
+
+  it("retries a rate-limited batch one at a time without latching", async () => {
+    let batches = 0;
+    server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        const body = JSON.parse(raw);
+        res.setHeader("content-type", "application/json");
+        if (Array.isArray(body)) {
+          batches += 1;
+          res.statusCode = 429;
+          res.setHeader("retry-after", "0");
+          res.end("{}");
+          return;
+        }
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { slot: 3 } }));
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as { port: number };
+    const rpc = new SolanaRpc({ rpcUrl: `http://127.0.0.1:${address.port}` });
+
+    const out = await rpc.getParsedTransactions(["a", "b"]);
+    expect(out.get("a")).toEqual({ slot: 3 });
+    expect(out.get("b")).toEqual({ slot: 3 });
+    expect(rpc.takeLastError()).toContain("429");
+
+    // Still tries a batch next time: a 429 says nothing about batching support.
+    const before = batches;
+    await rpc.getParsedTransactions(["c"]);
+    expect(batches).toBeGreaterThan(before);
+  });
+
   it("counts every call inside a working batch", async () => {
     const { url } = await startServer((body) =>
       Array.isArray(body)

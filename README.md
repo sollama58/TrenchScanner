@@ -166,8 +166,8 @@ is the public mainnet RPC, and measured against the real endpoints:
 The client copes with both - it falls back to unbatched fetching when a batch is refused, and it
 never advances its cursor over a transaction it failed to read, so nothing is silently skipped -
 but a throttled reconciler is a paying user waiting for access. Each burn-scan run on
-`/health/worker` shows the endpoint's host (`rpcProvider`) and its calls per method (`rpcCalls`),
-which on Helius is what the pass cost in credits.
+`/health/worker` shows the endpoint's host (`rpcProvider`), its calls per method (`rpcCalls`),
+which on Helius is what the pass cost in credits, and the last error the RPC returned (`rpcError`).
 
 ### Admin
 
