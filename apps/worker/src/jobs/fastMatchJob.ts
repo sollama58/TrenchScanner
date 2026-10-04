@@ -178,7 +178,12 @@ export async function runFastMatchCycle(
     if (!onChain) return;
 
     const scored = buildScoredToken(candidate, onChain, {
-      createdAt: candidate.pairCreatedAt ?? entry.token.firstSeenAt,
+      // The earlier of the two, as the scan does: a graduated token's canonical pair is its
+      // PumpSwap pool, created at graduation, not at launch.
+      createdAt:
+        candidate.pairCreatedAt && candidate.pairCreatedAt < entry.token.firstSeenAt
+          ? candidate.pairCreatedAt
+          : entry.token.firstSeenAt,
       // Holder growth needs a baseline the full cycle owns; leaving it unset records "not
       // measured" rather than a fabricated 0, and matchesFilter treats an unknown growth as
       // failing a minHolderGrowthPct filter - so this pass can never alert on a criterion it

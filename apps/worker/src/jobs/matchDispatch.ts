@@ -129,7 +129,20 @@ export async function createMatchesForTargets(opts: {
         select: { userId: true, filterId: true },
       });
       const onCooldown = new Set(recent.map((r) => `${r.userId}:${r.filterId}`));
-      const confirmed = toAlert.filter((f) => !onCooldown.has(`${f.userId}:${f.id}`));
+      // The callers' filter list was read at the start of their cycle. A filter deleted since
+      // would fail its insert on the foreign key and roll back every other user's alert for this
+      // token with it; one switched off since would still alert. Only filters still active now.
+      const stillActive = new Set(
+        (
+          await tx.userFilter.findMany({
+            where: { id: { in: toAlert.map((f) => f.id) }, isActive: true },
+            select: { id: true },
+          })
+        ).map((f) => f.id),
+      );
+      const confirmed = toAlert.filter(
+        (f) => stillActive.has(f.id) && !onCooldown.has(`${f.userId}:${f.id}`),
+      );
 
       const rows = [];
       for (const filter of confirmed) {

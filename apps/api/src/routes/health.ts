@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma, runningSinceFrom } from "@trenchscanner/core";
+import { SharedCache } from "../sharedCache.js";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
@@ -35,6 +36,13 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 const MAX_ERROR_LENGTH = 300;
 
+/**
+ * How long one read of the heartbeats answers /health/worker. The route is public and was a
+ * database query per call, so anyone could spend the API's twelve pool connections on it at the
+ * global rate limit; heartbeats move once a job finishes, so a few seconds hide nothing.
+ */
+const WORKER_HEALTH_CACHE_MS = 5_000;
+
 export async function registerHealthRoutes(app: FastifyInstance) {
   /** Plain liveness check - what Render's healthCheckPath hits. */
   app.get("/", async () => ({ ok: true }));
@@ -55,8 +63,12 @@ export async function registerHealthRoutes(app: FastifyInstance) {
    * dashboard check worker health without needing a session. Error messages are truncated as a
    * light defense-in-depth measure against dumping internal detail to an unauthenticated caller.
    */
+  const readHeartbeats = () => prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } });
+  const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
+
   app.get("/worker", async () => {
-    const heartbeats = await prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } });
+    const heartbeats = await heartbeatCache.get(readHeartbeats);
+    // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
 
     return {

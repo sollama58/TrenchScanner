@@ -71,6 +71,29 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     expect(matches.every((m) => m.deliveredDashboard)).toBe(true);
   });
 
+  it("still alerts everyone else when a filter was deleted or switched off mid-cycle", async () => {
+    const { token, snapshot } = await seedToken("stale-filters");
+    const [kept, deleted, switchedOff] = [
+      await seedUserWithFilter("kept"),
+      await seedUserWithFilter("deleted"),
+      await seedUserWithFilter("off"),
+    ];
+    // The cycle loaded all three as active; since then one was deleted and one switched off.
+    await prisma.userFilter.delete({ where: { id: deleted.id } });
+    await prisma.userFilter.update({ where: { id: switchedOff.id }, data: { isActive: false } });
+
+    const count = await createMatchesForCandidate({
+      token,
+      snapshot,
+      scored: scoredFixture(token.mintAddress),
+      activeFilters: [kept, deleted, switchedOff],
+    });
+
+    expect(count).toBe(1);
+    const matches = await prisma.match.findMany({ where: { tokenId: token.id } });
+    expect(matches.map((m) => m.filterId)).toEqual([kept.id]);
+  });
+
   it("leaves a user alone for a token their filter already alerted on", async () => {
     const { token, snapshot } = await seedToken("cooldown");
     const filters = [await seedUserWithFilter("e")];

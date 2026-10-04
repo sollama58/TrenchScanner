@@ -61,6 +61,69 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
     ).toBe(200);
   });
 
+  it("is not shadowed by a signed-out cookie that still verifies", async () => {
+    // Signed and unexpired, but behind the user's sessionVersion: dead, yet it verifies.
+    const signedOut = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: -1 });
+    const token = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
+    expect(
+      (await me({ authorization: `Bearer ${token}` }, { [SESSION_COOKIE_NAME]: signedOut })).statusCode,
+    ).toBe(200);
+  });
+
+  it("the paywall also falls through a signed-out cookie to a live header", async () => {
+    const wallet = `${TAG}-paid`;
+    const paid = await prisma.user.create({
+      data: {
+        walletAddress: wallet,
+        subscription: { create: { expiresAt: new Date(Date.now() + 86_400_000), source: "BURN" } },
+      },
+    });
+    const signedOut = await signer.sign({ userId: paid.id, walletAddress: wallet, sessionVersion: -1 });
+    const token = await signer.sign({ userId: paid.id, walletAddress: wallet, sessionVersion: 0 });
+    const res = await app.inject({
+      method: "GET",
+      url: "/filters",
+      headers: { authorization: `Bearer ${token}` },
+      cookies: { [SESSION_COOKIE_NAME]: signedOut },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("signing out on a paired phone switches its device off", async () => {
+    const device = await prisma.linkedDevice.create({ data: { userId } });
+    const token = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, deviceId: device.id });
+    expect((await me({ authorization: `Bearer ${token}` })).statusCode).toBe(200);
+    const out = await app.inject({
+      method: "POST",
+      url: "/auth/logout",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(out.statusCode).toBe(200);
+    expect((await me({ authorization: `Bearer ${token}` })).statusCode).toBe(401);
+    expect(
+      (await prisma.linkedDevice.findUniqueOrThrow({ where: { id: device.id } })).revokedAt,
+    ).not.toBeNull();
+  });
+
+  it("pairing a phone hands back the token for browsers that drop the cookie", async () => {
+    const code = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
+    const issued = await app.inject({
+      method: "POST",
+      url: "/auth/link/code",
+      headers: { authorization: `Bearer ${code}` },
+    });
+    expect(issued.statusCode).toBe(200);
+    const redeemed = await app.inject({
+      method: "POST",
+      url: "/auth/link/redeem",
+      payload: { code: issued.json().code },
+    });
+    expect(redeemed.statusCode).toBe(200);
+    const { sessionToken } = redeemed.json();
+    expect(typeof sessionToken).toBe("string");
+    expect((await me({ authorization: `Bearer ${sessionToken}` })).statusCode).toBe(200);
+  });
+
   it("refuses a token that isn't a session", async () => {
     expect((await me({ authorization: "Bearer not-a-jwt" })).statusCode).toBe(401);
   });
