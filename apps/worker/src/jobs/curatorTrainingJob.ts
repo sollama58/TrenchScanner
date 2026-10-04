@@ -81,7 +81,13 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   const roster = enabledContestants(env.CURATOR_CONTESTANTS);
   const storedSlots = new Set(stored.map((l) => l.slot));
   const founding = foundingLanes(roster, now).filter((l) => !storedSlots.has(l.slot));
-  const lanes = [...stored, ...founding].filter((l) => roster.some((s) => s.id === l.slot));
+  // Founding lanes breed from the roster's current recipe, not the copy stored when they were
+  // seated (see withLanes).
+  const lanes = [...stored, ...founding].flatMap((l) => {
+    const spec = roster.find((s) => s.id === l.slot);
+    if (!spec) return [];
+    return [l.generation === 0 && spec.recipe ? { ...l, recipe: spec.recipe } : l];
+  });
   const contestants = withLanes(roster, lanes);
 
   const plan = await evolutionPlan(env, lanes, targets, now);

@@ -30,7 +30,9 @@ async function main() {
   const env = loadEnv();
 
   // Live launch/graduation feed, drained by every scan cycle - see PumpPortalStream.
-  const stream = env.PUMPPORTAL_WS_URL ? new PumpPortalStream(env.PUMPPORTAL_WS_URL) : undefined;
+  const stream = env.PUMPPORTAL_WS_URL
+    ? new PumpPortalStream(env.PUMPPORTAL_WS_URL, undefined, { tradeFlow: env.PUMPPORTAL_TRADE_FLOW })
+    : undefined;
   stream?.start();
 
   const deps = {

@@ -52,6 +52,13 @@ const envSchema = z.object({
   // (apps/worker/src/discovery/pumpPortalStream.ts). Empty disables the stream; discovery then
   // relies on polling alone. Needs a runtime with a global WebSocket (Node 22+).
   PUMPPORTAL_WS_URL: z.string().default("wss://pumpportal.fun/api/data"),
+  // Follow every new launch's and every candidate's trades over the same connection, for the
+  // order-flow features (curation/tradeFlow.ts). Memory is capped (at most 600 mints, bounded per
+  // mint); "false" keeps the stream to launches and graduations only.
+  PUMPPORTAL_TRADE_FLOW: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 
   // One minute. Not a performance figure - a full cycle takes ~10 seconds - but a rate-limit one:
   // RugCheck is called once per in-band candidate per cycle, so this interval used to multiply its

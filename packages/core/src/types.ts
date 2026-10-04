@@ -1,3 +1,4 @@
+import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 /**
  * Domain types shared across data source clients, the scoring engine, the
  * API, and the worker. These are intentionally decoupled from the Prisma
@@ -161,6 +162,8 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   /** Derived from dexId, not the on-chain profile - see the comment on CandidateToken.dexId.
    *  Undefined only if dexId itself is (shouldn't happen for anything that reached scoring). */
   graduated?: boolean;
+  /** Trade-by-trade order flow from the PumpPortal stream, when the worker is tracking it. */
+  tradeFlow?: TradeFlowFeatures;
 }
 
 export interface RugScreenResult {

@@ -1,5 +1,5 @@
 import type { BoostingOptions } from "./boosting.js";
-import type { CandidateFeatureName } from "./features.js";
+import { TRADE_FLOW_FEATURES, type CandidateFeatureName } from "./features.js";
 import type { CuratorLearner } from "./trainer.js";
 
 /**
@@ -73,6 +73,8 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = [
   "holderGrowthPct",
   "ageMinutes",
   "minutesSinceFirstInBand",
+  // Who is doing the buying, trade by trade (curation/tradeFlow.ts).
+  ...TRADE_FLOW_FEATURES,
 ];
 
 export const CONTESTANTS: readonly ContestantSpec[] = [

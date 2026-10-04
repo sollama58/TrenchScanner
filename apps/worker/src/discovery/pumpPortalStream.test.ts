@@ -40,3 +40,59 @@ describe("PumpPortalStream buffer", () => {
     stream.stop();
   });
 });
+
+describe("PumpPortalStream trade flow", () => {
+  const OTHER = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
+
+  function fakeSocket() {
+    const sent: unknown[] = [];
+    return { sent, socket: { readyState: 1, send: (s: string) => sent.push(JSON.parse(s)) } };
+  }
+
+  it("follows a launch's trades into the flow book and subscribes it", () => {
+    const stream = new PumpPortalStream("wss://example.invalid", null);
+    const at = Date.now();
+    stream.handleMessage(
+      JSON.stringify({
+        mint: MINT,
+        txType: "create",
+        traderPublicKey: "dev",
+        solAmount: 1.2,
+        initialBuy: 4e7,
+      }),
+      at,
+    );
+    stream.handleMessage(
+      JSON.stringify({
+        mint: MINT,
+        txType: "buy",
+        traderPublicKey: "sniper",
+        solAmount: 1,
+        tokenAmount: 3e7,
+      }),
+      at + 1000,
+    );
+    expect(stream.drain().map((e) => e.kind)).toEqual(["create"]);
+    const flow = stream.tradeFlow(MINT)!;
+    expect(flow.devInitialBuySol).toBe(1.2);
+    expect(flow.earlyBuyerCount).toBe(1);
+
+    const { sent, socket } = fakeSocket();
+    (stream as unknown as { socket: unknown }).socket = socket;
+    stream.watch([OTHER]);
+    stream.flushSubscriptions();
+    expect(sent).toEqual([{ method: "subscribeTokenTrade", keys: [MINT, OTHER] }]);
+    stream.flushSubscriptions();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("ignores trades for mints it isn't following, and stays out of the book when flow is off", () => {
+    const stream = new PumpPortalStream("wss://example.invalid", null);
+    stream.handleMessage(JSON.stringify({ mint: MINT, txType: "buy", traderPublicKey: "w", solAmount: 1 }));
+    expect(stream.book?.has(MINT)).toBe(false);
+    const off = new PumpPortalStream("wss://example.invalid", null, { tradeFlow: false });
+    off.handleMessage(JSON.stringify({ mint: MINT, txType: "create", traderPublicKey: "dev" }));
+    expect(off.tradeFlow(MINT)).toBeUndefined();
+    expect(off.drain()).toHaveLength(1);
+  });
+});

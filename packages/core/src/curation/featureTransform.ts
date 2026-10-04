@@ -36,6 +36,10 @@ const UNTRANSFORMED_FEATURES = new Set([
   "scoreAge",
   "scoreNarrative",
   "scoreTotal",
+  "topBuyerShare5m",
+  "newBuyerShare5m",
+  "earlyBuyerSoldShare",
+  "devSoldShare",
 ]);
 
 /** Applies a model's feature transform to one raw value. */

@@ -1,4 +1,11 @@
-import { createLogger, looksLikeSolanaAddress } from "@trenchscanner/core";
+import {
+  createLogger,
+  looksLikeSolanaAddress,
+  TradeFlowBook,
+  type FlowLaunch,
+  type FlowTrade,
+  type TradeFlowFeatures,
+} from "@trenchscanner/core";
 
 const logger = createLogger("pumpportal-stream");
 
@@ -13,6 +20,10 @@ const logger = createLogger("pumpportal-stream");
  * mint back in front of the scan. Like every discovery source here it is best-effort - a dropped
  * connection reconnects with backoff, a malformed message is skipped, and nothing upstream of
  * the buffer can fail a scan.
+ *
+ * With trade flow on, it also follows the trades of every new launch and of every mint the scan
+ * asks about (watch), into a TradeFlowBook the scan reads features from (curation/tradeFlow.ts).
+ * Launches that never take off, and idle mints, are dropped and unsubscribed.
  */
 
 export interface StreamEvent {
@@ -34,6 +45,57 @@ interface PumpPortalMessage {
   txType?: unknown;
   name?: unknown;
   symbol?: unknown;
+  traderPublicKey?: unknown;
+  solAmount?: unknown;
+  tokenAmount?: unknown;
+  initialBuy?: unknown;
+  newTokenBalance?: unknown;
+  marketCapSol?: unknown;
+}
+
+/** Subscription batches - PumpPortal takes a key list per subscribe message. */
+const SUBSCRIBE_CHUNK = 100;
+const FLUSH_INTERVAL_MS = 2_000;
+const EVICT_INTERVAL_MS = 60_000;
+
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+/** A trade or launch for the flow book, from an already-parsed message; null for anything else. */
+export function parseFlowMessage(
+  msg: PumpPortalMessage,
+  at: number,
+): { trade: FlowTrade } | { launch: FlowLaunch } | null {
+  if (typeof msg.mint !== "string" || !looksLikeSolanaAddress(msg.mint)) return null;
+  const wallet = typeof msg.traderPublicKey === "string" ? msg.traderPublicKey : undefined;
+  if (msg.txType === "create") {
+    return {
+      launch: {
+        mint: msg.mint,
+        creator: wallet,
+        initialBuyTokens: num(msg.initialBuy),
+        initialBuySol: num(msg.solAmount),
+        marketCapSol: num(msg.marketCapSol),
+        at,
+      },
+    };
+  }
+  if ((msg.txType === "buy" || msg.txType === "sell") && wallet) {
+    const sol = num(msg.solAmount);
+    if (sol === undefined || sol < 0) return null;
+    return {
+      trade: {
+        mint: msg.mint,
+        wallet,
+        side: msg.txType,
+        sol,
+        tokenAmount: num(msg.tokenAmount),
+        newTokenBalance: num(msg.newTokenBalance),
+        marketCapSol: num(msg.marketCapSol),
+        at,
+      },
+    };
+  }
+  return null;
 }
 
 /** Turns one raw websocket message into an event, or null for anything that isn't one. */
@@ -66,13 +128,31 @@ export class PumpPortalStream {
   private backoffMs = MIN_BACKOFF_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
+  /** Null when trade flow is off. */
+  readonly book: TradeFlowBook | null;
+  private pendingSubscribe = new Set<string>();
+  private timers: ReturnType<typeof setInterval>[] = [];
 
   constructor(
     private readonly url: string,
     /** Null = no WebSocket available (the stream stays off). Defaults to the runtime's global. */
     private readonly ctor: WebSocketCtor | null = (globalThis as { WebSocket?: WebSocketCtor }).WebSocket ??
       null,
-  ) {}
+    opts: { tradeFlow?: boolean } = {},
+  ) {
+    this.book = opts.tradeFlow === false ? null : new TradeFlowBook();
+  }
+
+  /** The scan's interest: follow these mints' trades while it keeps asking. */
+  watch(mints: readonly string[]): void {
+    if (!this.book) return;
+    for (const mint of this.book.watch(mints, Date.now())) this.pendingSubscribe.add(mint);
+  }
+
+  /** The order-flow features for a mint right now, or undefined when trade flow is off. */
+  tradeFlow(mint: string): TradeFlowFeatures | undefined {
+    return this.book?.features(mint, Date.now());
+  }
 
   /** Opens the connection. A no-op (logged once) when the runtime has no WebSocket. */
   start(): void {
@@ -82,10 +162,17 @@ export class PumpPortalStream {
     }
     this.stopped = false;
     this.connect();
+    if (this.book) {
+      this.timers.push(setInterval(() => this.flushSubscriptions(), FLUSH_INTERVAL_MS));
+      this.timers.push(setInterval(() => this.evict(), EVICT_INTERVAL_MS));
+      for (const t of this.timers) t.unref?.();
+    }
   }
 
   stop(): void {
     this.stopped = true;
+    for (const t of this.timers) clearInterval(t);
+    this.timers = [];
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.socket?.close();
@@ -100,8 +187,23 @@ export class PumpPortalStream {
   }
 
   /** Visible for tests: what an incoming message does. */
-  handleMessage(raw: string): void {
-    const event = parsePumpPortalMessage(raw);
+  handleMessage(raw: string, at: number = Date.now()): void {
+    if (this.book) {
+      let msg: PumpPortalMessage;
+      try {
+        msg = JSON.parse(raw) as PumpPortalMessage;
+      } catch {
+        return;
+      }
+      const flow = typeof msg === "object" && msg !== null ? parseFlowMessage(msg, at) : null;
+      if (flow && "trade" in flow) {
+        this.book.trade(flow.trade);
+        return;
+      }
+      if (flow && "launch" in flow && this.book.launch(flow.launch))
+        this.pendingSubscribe.add(flow.launch.mint);
+    }
+    const event = parsePumpPortalMessage(raw, new Date(at));
     if (!event) return;
     // A graduation outranks a creation for the same mint - it's the newer, stronger signal.
     const existing = this.buffer.get(event.mintAddress);
@@ -125,6 +227,8 @@ export class PumpPortalStream {
       // One connection, both subscriptions - PumpPortal asks clients not to open one per topic.
       socket.send(JSON.stringify({ method: "subscribeNewToken" }));
       socket.send(JSON.stringify({ method: "subscribeMigration" }));
+      // A fresh connection has no trade subscriptions: everything tracked goes back on the list.
+      if (this.book) for (const mint of this.book.trackedMints()) this.pendingSubscribe.add(mint);
       logger.info("stream connected");
     });
     socket.addEventListener("message", (event: MessageEvent) => {
@@ -137,6 +241,32 @@ export class PumpPortalStream {
       if (this.socket === socket) this.socket = null;
       if (!this.stopped) this.scheduleReconnect();
     });
+  }
+
+  /** Sends queued trade subscriptions, in chunks. Kept queued while disconnected. */
+  flushSubscriptions(): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== 1 || this.pendingSubscribe.size === 0) return;
+    const keys = [...this.pendingSubscribe].filter((m) => this.book?.has(m));
+    this.pendingSubscribe.clear();
+    for (let i = 0; i < keys.length; i += SUBSCRIBE_CHUNK) {
+      socket.send(
+        JSON.stringify({ method: "subscribeTokenTrade", keys: keys.slice(i, i + SUBSCRIBE_CHUNK) }),
+      );
+    }
+  }
+
+  private evict(): void {
+    if (!this.book) return;
+    const dropped = this.book.evict(Date.now());
+    for (const m of dropped) this.pendingSubscribe.delete(m);
+    const socket = this.socket;
+    if (dropped.length === 0 || !socket || socket.readyState !== 1) return;
+    for (let i = 0; i < dropped.length; i += SUBSCRIBE_CHUNK) {
+      socket.send(
+        JSON.stringify({ method: "unsubscribeTokenTrade", keys: dropped.slice(i, i + SUBSCRIBE_CHUNK) }),
+      );
+    }
   }
 
   private scheduleReconnect(): void {
