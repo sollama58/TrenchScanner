@@ -22,7 +22,10 @@ function buildFilterInputSchema(env: Env) {
     minTokenAgeMinutes: z.number().nonnegative().nullable().optional(),
     maxTokenAgeMinutes: z.number().nonnegative().nullable().optional(),
     // Capped: every active filter is evaluated against every token on each scan.
-    narrativeKeywords: z.array(z.string().max(40)).max(20).default([]),
+    narrativeKeywords: z
+      .array(z.string().trim().min(1, "keywords can't be blank").max(40))
+      .max(20)
+      .default([]),
     minScore: z.number().min(0).max(100).nullable().optional(),
     maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
@@ -53,6 +56,32 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     return null;
   }
 
+  /**
+   * Every rule a whole filter has to satisfy, checked against the row as it will be saved (on a
+   * PATCH, the stored row with the change merged in). A min above its max can never match
+   * anything, and the filter would sit silent with nothing telling its owner why.
+   */
+  function filterError(f: {
+    mcapMin: number;
+    mcapMax: number;
+    minTokenAgeMinutes?: number | null;
+    maxTokenAgeMinutes?: number | null;
+    minFirstBuyersHolding?: number | null;
+    maxFirstBuyersHolding?: number | null;
+  }): string | null {
+    const mcap = mcapRangeError(f.mcapMin, f.mcapMax);
+    if (mcap) return mcap;
+    const above = (min: number | null | undefined, max: number | null | undefined) =>
+      min != null && max != null && min > max;
+    if (above(f.minTokenAgeMinutes, f.maxTokenAgeMinutes)) {
+      return "Minimum token age must not be above the maximum - the filter could never match";
+    }
+    if (above(f.minFirstBuyersHolding, f.maxFirstBuyersHolding)) {
+      return "Minimum first buyers holding must not be above the maximum - the filter could never match";
+    }
+    return null;
+  }
+
   app.get("/", async (request) => {
     const filters = await prisma.userFilter.findMany({
       where: { userId: request.user!.userId },
@@ -69,7 +98,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const rangeError = mcapRangeError(parsed.data.mcapMin, parsed.data.mcapMax);
+    const rangeError = filterError(parsed.data);
     if (rangeError) {
       return reply.code(400).send({ error: rangeError });
     }
@@ -120,7 +149,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       const existing = await tx.userFilter.findUnique({ where: { id } });
       if (!existing || existing.userId !== userId) return { error: 404 as const };
       const merged = { ...existing, ...parsed.data };
-      const rangeError = mcapRangeError(merged.mcapMin, merged.mcapMax);
+      const rangeError = filterError(merged);
       if (rangeError) return { error: 400 as const, message: rangeError };
       // Turning one filter on turns the user's other filters off: one active filter at a time.
       if (parsed.data.isActive) await deactivateOthers(tx, userId, id);
