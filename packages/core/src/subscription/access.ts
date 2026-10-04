@@ -21,30 +21,46 @@ export async function resolveAccess(
   walletAddress: string,
   admins: ReadonlySet<string>,
 ): Promise<AccessState> {
-  if (admins.has(walletAddress)) {
-    return { hasAccess: true, expiresAt: null, reason: "admin" };
-  }
-
-  const now = new Date();
+  if (admins.has(walletAddress)) return decideAccess(walletAddress, admins, null, null);
 
   // Independent lookups, so they share one round trip instead of queueing: this runs in front
   // of every gated request.
   const [whitelisted, user] = await Promise.all([
-    prisma.whitelist.findUnique({ where: { walletAddress } }),
+    prisma.whitelist.findUnique({ where: { walletAddress }, select: { expiresAt: true } }),
     prisma.user.findUnique({
       where: { walletAddress },
       select: { subscription: { select: { expiresAt: true } } },
     }),
   ]);
+  return decideAccess(walletAddress, admins, whitelisted, user?.subscription?.expiresAt ?? null);
+}
+
+/**
+ * The decision half of resolveAccess, for a caller that has already read the two rows - the API's
+ * auth hook reads them in the same statement as the session check, so the paywall costs no round
+ * trip of its own. Kept here, beside resolveAccess, so there is still exactly one definition of
+ * what counts as access.
+ *
+ * `whitelisted` is the wallet's Whitelist row (null when it has none); `subscriptionExpiresAt` is
+ * the expiry on the subscription of the user who owns this wallet.
+ */
+export function decideAccess(
+  walletAddress: string,
+  admins: ReadonlySet<string>,
+  whitelisted: { expiresAt: Date | null } | null,
+  subscriptionExpiresAt: Date | null,
+  now: Date = new Date(),
+): AccessState {
+  if (admins.has(walletAddress)) {
+    return { hasAccess: true, expiresAt: null, reason: "admin" };
+  }
   if (whitelisted && (whitelisted.expiresAt === null || whitelisted.expiresAt > now)) {
     return { hasAccess: true, expiresAt: whitelisted.expiresAt, reason: "whitelist" };
   }
-
-  const expiresAt = user?.subscription?.expiresAt ?? null;
+  const expiresAt = subscriptionExpiresAt;
   if (expiresAt !== null && expiresAt > now) {
     return { hasAccess: true, expiresAt, reason: "subscription" };
   }
-
   return { hasAccess: false, expiresAt, reason: "none" };
 }
 

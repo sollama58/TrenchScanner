@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   prisma,
   corsOriginList,
+  createLogger,
   HEURISTIC_CURATOR_SOURCE,
   type Env,
   RULES_CONTESTANT,
@@ -31,6 +32,8 @@ import {
   type Leaderboard,
 } from "../contest.js";
 
+const logger = createLogger("curated-routes");
+
 /** Same fixed page size as the Live Feed - the two tabs render the same card. */
 const PAGE_SIZE = 12;
 
@@ -55,6 +58,15 @@ const STATS_CACHE_TTL_MS = 5 * 60_000;
  * Cached on their own, much longer than the rest of the panel.
  */
 const BASE_RATE_CACHE_TTL_MS = 15 * 60_000;
+
+/**
+ * How long past its TTL a report cache (stats, insights, leaderboard) keeps answering at once
+ * while it refreshes behind the reader - see SharedCacheOptions.staleWhileRevalidateMs. Long on
+ * purpose: these figures move hourly, the panels re-poll within a minute or two, so the worst
+ * case is one poll showing an hour-old panel before the fresh one lands - against a reader
+ * waiting most of a second for a fill on every expiry.
+ */
+const REPORT_STALE_MS = 6 * 3_600_000;
 
 /** What the cache holds: the database rows, not the rendered cards. */
 type CuratedPage = {
@@ -117,6 +129,8 @@ export async function registerCuratedRoutes(
     liveRefresher: OnDemandLiveRefresher;
     matchStream: MatchStream;
     viewStamps: ViewStampBuffer;
+    /** Startup warm-ups: each one starts a report fill so the first reader after a deploy doesn't wait. */
+    warmers?: (() => void)[];
   },
 ) {
   // Part of what the subscription buys - same gate as the Live Feed.
@@ -258,20 +272,25 @@ export async function registerCuratedRoutes(
    * is the ledger this user's feed shows.
    */
   const leaderboardCache = new Map<number, SharedCache<Leaderboard>>();
+  const leaderboardFor = (days: number) => {
+    let cache = leaderboardCache.get(days);
+    if (!cache) {
+      cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS, {
+        staleWhileRevalidateMs: REPORT_STALE_MS,
+      });
+      // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
+      leaderboardCache.set(days, cache);
+    }
+    return cache;
+  };
   app.get("/models", async (request, reply) => {
     const parsed = leaderboardQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const { days } = parsed.data;
-    let cache = leaderboardCache.get(days);
-    if (!cache) {
-      cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS);
-      // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
-      leaderboardCache.set(days, cache);
-    }
     const [board, state, saved] = await Promise.all([
-      cache.get(() => buildLeaderboard(opts.env, days)),
+      leaderboardFor(days).get(() => buildLeaderboard(opts.env, days)),
       contestState(opts.env),
       savedFeed(request),
     ]);
@@ -409,7 +428,9 @@ export async function registerCuratedRoutes(
     evalMetrics: true,
   } as const;
 
-  const baseRateCache = new SharedCache<{ finalized: bigint; winners: bigint }[]>(BASE_RATE_CACHE_TTL_MS);
+  const baseRateCache = new SharedCache<{ finalized: bigint; winners: bigint }[]>(BASE_RATE_CACHE_TTL_MS, {
+    staleWhileRevalidateMs: REPORT_STALE_MS,
+  });
 
   const buildStats = async () => {
     const day1 = new Date(Date.now() - 86_400_000);
@@ -540,7 +561,9 @@ export async function registerCuratedRoutes(
     };
   };
 
-  const statsCache = new SharedCache<Awaited<ReturnType<typeof buildStats>>>(STATS_CACHE_TTL_MS);
+  const statsCache = new SharedCache<Awaited<ReturnType<typeof buildStats>>>(STATS_CACHE_TTL_MS, {
+    staleWhileRevalidateMs: REPORT_STALE_MS,
+  });
 
   app.get("/stats", async () => statsCache.get(buildStats));
 
@@ -551,19 +574,44 @@ export async function registerCuratedRoutes(
    * reaches anyone else's response.
    */
   const insightsCache = new Map<string, SharedCache<ModelInsights>>();
+  const insightsFor = (days: number, isAdmin: boolean) => {
+    const key = `${days}:${isAdmin ? "admin" : "subscriber"}`;
+    let cache = insightsCache.get(key);
+    if (!cache) {
+      cache = new SharedCache<ModelInsights>(INSIGHTS_CACHE_TTL_MS, {
+        staleWhileRevalidateMs: REPORT_STALE_MS,
+      });
+      // Bounded by the schema: REPORT_WINDOWS_DAYS x 2 audiences.
+      insightsCache.set(key, cache);
+    }
+    return cache;
+  };
   app.get("/insights", async (request, reply) => {
     const parsed = insightsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const isAdmin = request.access?.reason === "admin";
-    const key = `${parsed.data.days}:${isAdmin ? "admin" : "subscriber"}`;
-    let cache = insightsCache.get(key);
-    if (!cache) {
-      cache = new SharedCache<ModelInsights>(INSIGHTS_CACHE_TTL_MS);
-      // Bounded by the schema: REPORT_WINDOWS_DAYS x 2 audiences.
-      insightsCache.set(key, cache);
-    }
-    return cache.get(() => buildModelInsights(opts.env, parsed.data.days, isAdmin));
+    return insightsFor(parsed.data.days, isAdmin).get(() =>
+      buildModelInsights(opts.env, parsed.data.days, isAdmin),
+    );
+  });
+
+  // What the dashboard asks for first (index.html's boot list): the learning panel, and the Models
+  // tab at its default 30-day window. Run one after another, not together, so a fresh instance
+  // doesn't put a dozen aggregates on the pool at once just as its first readers arrive.
+  opts.warmers?.push(() => {
+    void (async () => {
+      const steps: [string, () => Promise<unknown>][] = [
+        ["stats", () => statsCache.get(buildStats)],
+        ["models", () => leaderboardFor(30).get(() => buildLeaderboard(opts.env, 30))],
+        ["insights", () => insightsFor(30, false).get(() => buildModelInsights(opts.env, 30, false))],
+      ];
+      for (const [name, step] of steps) {
+        await step().catch((err: unknown) =>
+          logger.warn("cache warm-up failed", { cache: name, err: String(err) }),
+        );
+      }
+    })();
   });
 }

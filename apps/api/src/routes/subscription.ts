@@ -82,9 +82,9 @@ export async function registerSubscriptionRoutes(
   /** What access this wallet has, and what it would cost to get some. */
   app.get("/", async (request) => {
     const wallet = request.user!.walletAddress;
-    const access = await resolveAccess(wallet, admins);
-
-    const [burnCount, lastBurn] = await Promise.all([
+    // All three are independent reads keyed on the signed wallet - one round trip, not two.
+    const [access, burnCount, lastBurn] = await Promise.all([
+      resolveAccess(wallet, admins),
       prisma.burnEvent.count({ where: { burnerWallet: wallet } }),
       prisma.burnEvent.findFirst({
         where: { burnerWallet: wallet },

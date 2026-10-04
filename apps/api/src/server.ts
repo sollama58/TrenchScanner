@@ -12,6 +12,7 @@ import {
   DexScreenerClient,
   SolanaRpc,
   resolveAccess,
+  decideAccess,
   prisma,
 } from "@trenchscanner/core";
 import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
@@ -34,6 +35,7 @@ import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
 import { registerLiveRoutes, LIVE_TICK_MAX_TOKENS } from "./routes/live.js";
 import { clientIp } from "./clientIp.js";
+import { RouteTimings } from "./routeTimings.js";
 
 const logger = createLogger("api");
 
@@ -45,6 +47,8 @@ const LIVE_REFRESH_TOKEN_LIMIT = LIVE_TICK_MAX_TOKENS;
  * distinct pages ticking every 10s; past it readers see the worker's once-a-minute numbers.
  */
 const LIVE_REFRESH_CALLS_PER_MINUTE = 120;
+/** A request this slow gets a log line of its own, so a slow call shows up without asking. */
+const SLOW_REQUEST_LOG_MS = 2_000;
 
 export async function buildServer(env: Env): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, trustProxy: true });
@@ -57,6 +61,25 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     logger.error("unhandled route error", { url: request.url, error: err.message });
     const status = err.statusCode ?? 500;
     reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
+  });
+
+  // Per-route response times for GET /stats/routes (see routeTimings.ts), and a Server-Timing
+  // header so a browser's network panel shows how much of a slow request was the server. Event
+  // streams are left out: they are hijacked and stay open for as long as the tab does.
+  const timings = new RouteTimings();
+  const routeKey = (request: FastifyRequest) =>
+    `${request.method} ${request.routeOptions.url ?? "(unmatched)"}`;
+  app.addHook("onSend", async (_request, reply, payload) => {
+    reply.header("server-timing", `app;dur=${reply.elapsedTime.toFixed(1)}`);
+    return payload;
+  });
+  app.addHook("onResponse", async (request, reply) => {
+    const route = routeKey(request);
+    if (route.endsWith("/stream")) return;
+    const ms = reply.elapsedTime;
+    timings.record(route, ms, reply.statusCode);
+    if (ms >= SLOW_REQUEST_LOG_MS)
+      logger.warn("slow request", { route, ms: Math.round(ms), status: reply.statusCode });
   });
 
   await app.register(cors, {
@@ -231,12 +254,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    */
   app.decorate("authenticateSubscriber", async (request, reply) => {
     const session = await verifySession(request);
-    // The access lookup is read-only and keyed on the signed wallet, so it can start before the
-    // revocation check finishes; its answer is only used once that check has passed.
-    const [valid, access] = session
-      ? await Promise.all([sessionStillValid(request, session), resolveAccess(session.walletAddress, admins)])
-      : [false, null];
-    if (!session || !valid || !access) {
+    const access = session ? await subscriberCheck(request, session) : null;
+    if (!session || !access) {
       reply.code(401).send({ error: "unauthenticated" });
       return;
     }
@@ -251,6 +270,65 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     }
     request.access = access;
   });
+
+  /**
+   * The subscriber gate's reads: the session check and the access lookup. Null means the session
+   * is no longer valid.
+   *
+   * A browser session - nearly every dashboard request - gets all of it from ONE statement: the
+   * user's sessionVersion and feed settings, the wallet's Whitelist row, and the subscription of
+   * whoever owns the wallet. That used to be four Prisma queries (the nested subscription select
+   * is two) on three pool connections at once, in front of every request; the dashboard opens
+   * with six requests together, so the gate alone wanted eighteen of the twelve connections the
+   * API has, and the feed queries queued behind it. Device sessions keep the separate checks:
+   * their revocation lives on the device row, and they are rare.
+   */
+  async function subscriberCheck(request: FastifyRequest, session: SessionPayload) {
+    if (session.deviceId) {
+      const [valid, access] = await Promise.all([
+        sessionStillValid(request, session),
+        resolveAccess(session.walletAddress, admins),
+      ]);
+      return valid ? access : null;
+    }
+    const rows = await prisma.$queryRaw<
+      {
+        found: boolean;
+        sessionVersion: number | null;
+        curatedModel: string | null;
+        feedModels: string[] | null;
+        showModelAlerts: boolean | null;
+        whitelisted: boolean;
+        whitelistExpiresAt: Date | null;
+        subscriptionExpiresAt: Date | null;
+      }[]
+    >`
+      SELECT (u."id" IS NOT NULL) AS found,
+             u."sessionVersion", u."curatedModel", u."feedModels", u."showModelAlerts",
+             (w."walletAddress" IS NOT NULL) AS whitelisted,
+             w."expiresAt" AS "whitelistExpiresAt",
+             (SELECT s."expiresAt"
+                FROM "User" owner
+                JOIN "Subscription" s ON s."userId" = owner."id"
+               WHERE owner."walletAddress" = ${session.walletAddress}) AS "subscriptionExpiresAt"
+      FROM (VALUES (1)) AS one(x)
+      LEFT JOIN "User" u ON u."id" = ${session.userId}
+      LEFT JOIN "Whitelist" w ON w."walletAddress" = ${session.walletAddress}`;
+    const row = rows[0];
+    // Same rule as sessionStillValid: signing out bumps sessionVersion, killing every older cookie.
+    if (!row?.found || row.sessionVersion !== (session.sessionVersion ?? 0)) return null;
+    request.savedFeed = toSavedFeed({
+      curatedModel: row.curatedModel,
+      feedModels: row.feedModels ?? [],
+      showModelAlerts: row.showModelAlerts ?? true,
+    });
+    return decideAccess(
+      session.walletAddress,
+      admins,
+      row.whitelisted ? { expiresAt: row.whitelistExpiresAt } : null,
+      row.subscriptionExpiresAt,
+    );
+  }
 
   // The API's only outbound data source. Used for one thing: refreshing the market caps on a page
   // the moment it's opened, instead of leaving them until the worker's next tick - see
@@ -316,18 +394,26 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     viewStamps,
   });
   await app.register(registerLiveRoutes, { prefix: "/live", liveRefresher, viewStamps });
+  // Report caches warm themselves once the server is actually listening - so a real start pays
+  // for its first fills before any reader does, and a test server (inject, never listen) runs none.
+  const warmers: (() => void)[] = [];
+  app.addHook("onListen", async () => {
+    for (const warm of warmers) warm();
+  });
+
   await app.register(registerCuratedRoutes, {
     prefix: "/curated",
     env,
     liveRefresher,
     matchStream,
     viewStamps,
+    warmers,
   });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
-  await app.register(registerStatsRoutes, { prefix: "/stats", env });
+  await app.register(registerStatsRoutes, { prefix: "/stats", env, timings });
   await app.register(registerAdminRoutes, { prefix: "/admin", env });
   // Same /admin prefix and the same authenticateAdmin gate, registered separately only to keep
   // the subscription surface in its own readable block - see routes/admin.ts.

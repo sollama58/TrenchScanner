@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma, createLogger, HEURISTIC_CURATOR_SOURCE, type Env } from "@trenchscanner/core";
+import type { RouteTimings } from "../routeTimings.js";
 
 const logger = createLogger("stats");
 
@@ -125,7 +126,7 @@ function toCounts(r: RawCounts): GradedCounts {
  * Not behind a session: it exists for scripts and cloud sessions that can reach the API over
  * HTTPS but not the database. Guarded by STATS_API_TOKEN instead, and absent (404) without one.
  */
-export async function registerStatsRoutes(app: FastifyInstance, opts: { env: Env }) {
+export async function registerStatsRoutes(app: FastifyInstance, opts: { env: Env; timings?: RouteTimings }) {
   const token = opts.env.STATS_API_TOKEN;
   const enabled = token.length >= STATS_TOKEN_MIN_LENGTH;
   if (token && !enabled) {
@@ -173,6 +174,24 @@ export async function registerStatsRoutes(app: FastifyInstance, opts: { env: Env
     reply.header("cache-control", "no-store");
     return buildDbReport();
   });
+
+  /**
+   * How long each API route has been taking to answer on this instance: count, p50/p95/p99, max
+   * and the 5xx share, slowest p95 first - see routeTimings.ts. The dashboard's routes all need a
+   * subscriber session, so this is how a script sees their real speed.
+   */
+  app.get(
+    "/routes",
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      return {
+        since: opts.timings?.since ?? null,
+        uptimeSeconds: Math.round(process.uptime()),
+        routes: opts.timings?.summary() ?? [],
+      };
+    },
+  );
 }
 
 /** Exported for the route test; the route above is the only caller in production. */

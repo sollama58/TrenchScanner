@@ -2,6 +2,22 @@ import { createLogger } from "@trenchscanner/core";
 
 const logger = createLogger("shared-cache");
 
+export interface SharedCacheOptions {
+  /**
+   * Stale-while-revalidate: for this long past the TTL, a reader gets the expired value at once
+   * and the refresh runs behind them, instead of that reader waiting out the whole fill.
+   *
+   * Meant for the heavy report caches (learning panel, Model tab, leaderboards), whose fills are
+   * dozens of aggregates and take most of a second in production: without it, whoever happened
+   * to arrive first after each expiry paid that second on their page load, every few minutes,
+   * for figures that move hourly. Past this window the cache is treated as cold and the reader
+   * waits, so an idle cache never serves something arbitrarily old. Zero (the default) keeps the
+   * strict behaviour, which is what the feed pages need: they are cleared the moment a new alert
+   * lands and must never answer with the pre-alert rows.
+   */
+  staleWhileRevalidateMs?: number;
+}
+
 /**
  * A tiny single-flight TTL cache for values that are the same for every reader.
  *
@@ -26,8 +42,14 @@ export class SharedCache<T> {
   private inFlight: Promise<T> | undefined;
   /** Bumped by clear(): a fill that started before the bump must not store its (older) result. */
   private generation = 0;
+  private readonly staleMs: number;
 
-  constructor(private readonly ttlMs: number) {}
+  constructor(
+    private readonly ttlMs: number,
+    opts: SharedCacheOptions = {},
+  ) {
+    this.staleMs = opts.staleWhileRevalidateMs ?? 0;
+  }
 
   /**
    * Returns the cached value, or produces one. `produce` runs at most once per TTL window no
@@ -36,8 +58,27 @@ export class SharedCache<T> {
   async get(produce: () => Promise<T>): Promise<T> {
     const now = Date.now();
     if (this.value && this.value.expiresAt > now) return this.value.data;
+    if (this.value && this.staleMs > 0 && this.value.expiresAt + this.staleMs > now) {
+      // Stale but usable: answer now, refresh once in the background. A failed refresh already
+      // falls back to this same value inside fill(), so nothing here can reject.
+      if (!this.inFlight) void this.fill(produce).catch(() => {});
+      return this.value.data;
+    }
     if (this.inFlight) return this.inFlight;
+    return this.fill(produce);
+  }
 
+  /**
+   * Starts a fill now if the cache has nothing fresh and none is running - used to warm a cache at
+   * startup so the first reader after a deploy doesn't pay for it. Never rejects.
+   */
+  warm(produce: () => Promise<T>): void {
+    if (this.value && this.value.expiresAt > Date.now()) return;
+    if (this.inFlight) return;
+    void this.fill(produce).catch((err: unknown) => logger.warn("warm-up failed", { err: String(err) }));
+  }
+
+  private fill(produce: () => Promise<T>): Promise<T> {
     const generation = this.generation;
     const fill: Promise<T> = produce()
       .then((data) => {
