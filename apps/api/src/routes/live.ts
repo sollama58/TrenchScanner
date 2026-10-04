@@ -67,16 +67,19 @@ export async function registerLiveRoutes(
     if (refreshed) rows = await read();
 
     reply.header("Cache-Control", "no-store");
+    const now = Date.now();
+    const withReading = rows.filter((r) => r.liveDataAt !== null && r.liveMarketCapUsd !== null);
+    if (withReading.length > 0) {
+      opts.liveRefresher.noteServed(Math.max(...withReading.map((r) => now - r.liveDataAt!.getTime())));
+    }
     return {
-      at: new Date().toISOString(),
-      tokens: rows
-        .filter((r) => r.liveDataAt !== null && r.liveMarketCapUsd !== null)
-        .map((r) => ({
-          id: r.id,
-          marketCapUsd: r.liveMarketCapUsd,
-          priceUsd: r.livePriceUsd,
-          at: r.liveDataAt,
-        })),
+      at: new Date(now).toISOString(),
+      tokens: withReading.map((r) => ({
+        id: r.id,
+        marketCapUsd: r.liveMarketCapUsd,
+        priceUsd: r.livePriceUsd,
+        at: r.liveDataAt,
+      })),
     };
   });
 }
