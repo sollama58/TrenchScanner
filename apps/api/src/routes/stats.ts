@@ -39,6 +39,12 @@ export interface GradedCounts {
   won4x: number;
   /** Doubled only after first falling through the stop - counted as losses. */
   doubledAfterStop: number;
+  /**
+   * Calls with no verdict that never will get one, so they are not "pending" either. Only filter
+   * alerts report it: a Match with no grading anchor (every match before grading shipped on
+   * 2026-10-03, or one whose anchor write failed) has nothing for the watcher to close.
+   */
+  ungradable?: number;
 }
 
 export interface GradedRates extends GradedCounts {
@@ -76,7 +82,7 @@ export function withRates(
         ? "meets-targets"
         : "below-targets";
   }
-  return { ...c, pending: c.calls - c.graded, hitRate2xPct, hitRate4xPct, verdict };
+  return { ...c, pending: c.calls - c.graded - (c.ungradable ?? 0), hitRate2xPct, hitRate4xPct, verdict };
 }
 
 /** Sums groups into one - for the totals line above a breakdown. */
@@ -88,6 +94,9 @@ export function sumCounts(rows: GradedCounts[]): GradedCounts {
       won2x: acc.won2x + r.won2x,
       won4x: acc.won4x + r.won4x,
       doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
+      ...(acc.ungradable !== undefined || r.ungradable !== undefined
+        ? { ungradable: (acc.ungradable ?? 0) + (r.ungradable ?? 0) }
+        : {}),
     }),
     { calls: 0, graded: 0, won2x: 0, won4x: 0, doubledAfterStop: 0 },
   );
@@ -459,14 +468,18 @@ export async function buildHitRateReport(
   ).then((users) => {
     const userIds = users.map((u) => u.id);
     if (userIds.length === 0) return [];
-    return prisma.$queryRaw<(RawCounts & { filterId: string; name: string })[]>`
+    // A match is anchored a moment after it is created (anchorMatchOutcome), so an unanchored one
+    // only counts as ungradable once it is older than that gap could plausibly be.
+    return prisma.$queryRaw<(RawCounts & { filterId: string; name: string; ungradable: bigint })[]>`
       SELECT m."filterId" AS "filterId",
              f."name" AS name,
              count(*) AS calls,
              count(*) FILTER (WHERE m."hit2xIn1h" IS NOT NULL) AS graded,
              count(*) FILTER (WHERE m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)) AS won2x,
              count(*) FILTER (WHERE m."hit4xIn1h") AS won4x,
-             count(*) FILTER (WHERE m."disqualified") AS doubled_after_stop
+             count(*) FILTER (WHERE m."disqualified") AS doubled_after_stop,
+             count(*) FILTER (WHERE m."hit2xIn1h" IS NULL AND m."candidateOutcomeId" IS NULL
+                                AND m."matchedAt" < now() - interval '10 minutes') AS ungradable
       FROM "Match" m
       JOIN "UserFilter" f ON f."id" = m."filterId"
       WHERE m."userId" = ANY(${userIds}) AND m."matchedAt" >= ${since} AND m."matchedAt" < ${until}
@@ -533,7 +546,7 @@ export async function buildHitRateReport(
   const byFilter = new Map<string, { name: string; all: GradedCounts[] }>();
   for (const r of matches) {
     const entry = byFilter.get(r.filterId) ?? { name: r.name, all: [] };
-    entry.all.push(toCounts(r));
+    entry.all.push({ ...toCounts(r), ungradable: Number(r.ungradable) });
     byFilter.set(r.filterId, entry);
   }
   const filterList = [...byFilter.entries()]
@@ -543,7 +556,7 @@ export async function buildHitRateReport(
       ...rated(sumCounts(f.all)),
     }))
     .sort((a, b) => b.graded - a.graded || b.calls - a.calls);
-  const allMatchCounts = matches.map(toCounts);
+  const allMatchCounts = matches.map((r) => ({ ...toCounts(r), ungradable: Number(r.ungradable) }));
 
   return {
     window: { since, until },

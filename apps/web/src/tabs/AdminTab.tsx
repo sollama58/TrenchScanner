@@ -591,6 +591,8 @@ interface Rated {
   calls: number;
   graded: number;
   pending: number;
+  /** Filter alerts only: no verdict and no anchor to grade from, so never coming. */
+  ungradable?: number;
   won2x: number;
   won4x: number;
   hitRate2xPct: number | null;
@@ -710,6 +712,12 @@ function Alerts() {
                 ])}
               />
               <h3>Filter matches</h3>
+              {(h.filterMatches.total.ungradable ?? 0) > 0 && (
+                <p className="muted small">
+                  {n(h.filterMatches.total.ungradable!)} alerts in this window have no grading anchor (they
+                  predate grading, which started 2026-10-03) and are left out of Pending.
+                </p>
+              )}
               <Table
                 head={["Filter", ...rateHead]}
                 rows={[
