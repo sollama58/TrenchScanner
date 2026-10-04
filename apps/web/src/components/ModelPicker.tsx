@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { put, type Leaderboard } from "../api";
+import { invalidate } from "../cache";
 
 /**
  * Picks whose calls the Curated feed shows. Names and order come straight from the leaderboard,
@@ -16,6 +17,8 @@ export function ModelPicker({ board, onChanged }: { board: Leaderboard; onChange
     setError(null);
     try {
       await put("/curated/model", { model: value === "" ? null : value });
+      // Every cached /curated* answer was for the old pick.
+      invalidate("/curated");
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

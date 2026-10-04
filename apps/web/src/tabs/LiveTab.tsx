@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type CuratedPage, type CuratedStats, type Leaderboard, type MatchPage } from "../api";
+import { type CuratedPage, type CuratedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { RingGauge, SkeletonCards } from "../components/Charts";
 import { ModelPicker } from "../components/ModelPicker";
@@ -16,10 +16,10 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const [page, setPage] = useState(1);
   // Bumped when the user picks another model, so every view keyed on it refetches at once.
   const [pick, setPick] = useState(0);
-  const curated = usePolling(() => api<CuratedPage>(`/curated?page=${page}`), 30_000, `${page}:${pick}`);
-  const matches = usePolling(() => api<MatchPage>("/matches?page=1"), 45_000);
-  const stats = usePolling(() => api<CuratedStats>("/curated/stats"), 60_000);
-  const board = usePolling(() => api<Leaderboard>("/curated/models?days=30"), 120_000, String(pick));
+  const curated = usePolling<CuratedPage>(`/curated?page=${page}`, 30_000, String(pick));
+  const matches = usePolling<MatchPage>("/matches?page=1", 45_000);
+  const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
+  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
   const curatedLive = useNudgeStream("/curated/stream", curated.reload);
   const matchesLive = useNudgeStream("/matches/stream", matches.reload);
 

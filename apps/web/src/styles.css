@@ -33,8 +33,8 @@
   --shadow: 0 1px 0 var(--highlight) inset, 0 12px 32px -18px rgba(0, 0, 0, 0.7);
   --radius: 16px;
   --radius-s: 10px;
-  --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.5;

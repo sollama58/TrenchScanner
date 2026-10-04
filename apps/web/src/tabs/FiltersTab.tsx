@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, del, patch, post, ApiError, type AppConfig, type Filter, type FilterInput } from "../api";
+import { del, patch, post, ApiError, type AppConfig, type Filter, type FilterInput } from "../api";
 import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
 import { EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
@@ -102,8 +102,8 @@ function toInput(f: Filter): FilterInput {
 
 /** The Filters tab: up to ten saved setups, one active at a time. */
 export function FiltersTab() {
-  const filters = usePolling(() => api<Filter[]>("/filters"), 120_000);
-  const config = usePolling(() => api<AppConfig>("/config"), 600_000);
+  const filters = usePolling<Filter[]>("/filters", 120_000);
+  const config = usePolling<AppConfig>("/config", 600_000);
   const [editing, setEditing] = useState<{ id: string | null; draft: FilterInput } | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);

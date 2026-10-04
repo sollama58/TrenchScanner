@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  api,
   put,
   type EvolutionEvent,
   type GradedRates,
@@ -11,6 +10,7 @@ import {
 } from "../api";
 import { HBarChart, Skeleton, TargetBars } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
+import { invalidate } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { ago, pct, tokenLabel, usd } from "../format";
 
@@ -34,16 +34,8 @@ export function ModelTab() {
   const now = useNow(60_000);
   const [days, setDays] = useState<(typeof WINDOWS)[number]>(30);
   const [pick, setPick] = useState(0);
-  const insights = usePolling(
-    () => api<ModelInsights>(`/curated/insights?days=${days}`),
-    120_000,
-    String(days),
-  );
-  const board = usePolling(
-    () => api<Leaderboard>(`/curated/models?days=${days}`),
-    120_000,
-    `${days}:${pick}`,
-  );
+  const insights = usePolling<ModelInsights>(`/curated/insights?days=${days}`, 120_000);
+  const board = usePolling<Leaderboard>(`/curated/models?days=${days}`, 120_000, String(pick));
 
   const error = insights.error ?? board.error;
   if (error && (!insights.data || !board.data))
@@ -73,6 +65,7 @@ export function ModelTab() {
   )[0];
   const useModel = async (id: string | null) => {
     await put("/curated/model", { model: id });
+    invalidate("/curated");
     setPick((n) => n + 1);
   };
 

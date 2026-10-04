@@ -211,6 +211,12 @@ services:
       - path: /*
         name: Referrer-Policy
         value: strict-origin-when-cross-origin
+      # Built JS, CSS and fonts have content hashes in their names, so a browser can keep them for
+      # good and skip revalidating on every visit. index.html keeps Render's default (revalidate),
+      # so a deploy still shows up on the next load.
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
     envVars:
       # Update this if you rename the API service or attach a custom domain.
       - key: VITE_API_URL

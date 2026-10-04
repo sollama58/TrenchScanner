@@ -62,3 +62,17 @@ export function tokenLabel(token: {
 }): string {
   return token.symbol ? `$${token.symbol}` : (token.name ?? shortAddress(token.mintAddress));
 }
+
+/**
+ * A small thumbnail for a token's launcher-supplied image. Most Pump.fun images are IPFS files on
+ * public gateways (ipfs.io rate-limits with 429s) at full size, often hundreds of KB for a 40px
+ * avatar. An IPFS image is served instead through Pump.fun's Pinata gateway, resized there to
+ * 96px (~2-3 KB). Anything else is returned unchanged. The card falls back to the original URL if
+ * the thumbnail fails to load.
+ */
+export function tokenThumb(url: string): string {
+  const cid =
+    /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?(?:[?#].*)?$/.exec(url)?.[1] ??
+    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?(?:[?#].*)?$/.exec(url)?.[1];
+  return cid ? `https://pump.mypinata.cloud/ipfs/${cid}?img-width=96&img-height=96&img-fit=cover` : url;
+}
