@@ -1,6 +1,9 @@
+import { authHeaders } from "./session";
+
 /**
  * The API client. Every call carries the session cookie (credentials: "include"): the API sets it
  * on sign-in and reads it on every request, and this page lives on a different origin from it.
+ * Browsers that drop that cookie as third-party send the token as a header instead (session.ts).
  */
 
 export const API_URL =
@@ -17,7 +20,7 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
+  const headers = authHeaders(new Headers(init.headers));
   if (init.body !== undefined && !headers.has("content-type"))
     headers.set("content-type", "application/json");
   return parse<T>(await fetch(`${API_URL}${path}`, { ...init, headers, credentials: "include" }));
