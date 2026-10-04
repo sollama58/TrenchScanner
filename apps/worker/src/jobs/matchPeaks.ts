@@ -355,7 +355,16 @@ const FULL_SWEEP_TOKENS_PER_BATCH = 100;
  * statement holds its locks for one batch, a deadlock costs one batch (retried once), and the
  * rest of the sweep still lands.
  */
-export async function recordMatchPeaksFullSweep(snapshotRetentionDays: number): Promise<PeakRecordingResult> {
+export async function recordMatchPeaksFullSweep(
+  snapshotRetentionDays: number,
+  /**
+   * Only snapshots taken from here on are read: a recorded peak only ever rises, and every pass
+   * that raises one is a peak over snapshots, so the peak each match already holds covers
+   * everything before the previous completed sweep. Reading each match's whole post-alert history
+   * every night is what made this sweep take most of half an hour. Omitted, it reads all of it.
+   */
+  snapshotsSince?: Date,
+): Promise<PeakRecordingResult> {
   const tokens = await prisma.$queryRaw<{ tokenId: string }[]>`
     SELECT DISTINCT "tokenId" FROM "Match"
     WHERE "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
@@ -365,7 +374,7 @@ export async function recordMatchPeaksFullSweep(snapshotRetentionDays: number): 
     const tokenIds = tokens.slice(i, i + FULL_SWEEP_TOKENS_PER_BATCH).map((t) => t.tokenId);
     for (let attempt = 1; ; attempt += 1) {
       try {
-        const batch = await recordMatchPeaksForTokens(snapshotRetentionDays, tokenIds);
+        const batch = await recordMatchPeaksForTokens(snapshotRetentionDays, tokenIds, snapshotsSince);
         total.fromSnapshots += batch.fromSnapshots;
         total.fromLivePings += batch.fromLivePings;
         break;
@@ -388,28 +397,40 @@ export async function recordMatchPeaksFullSweep(snapshotRetentionDays: number): 
 async function recordMatchPeaksForTokens(
   snapshotRetentionDays: number,
   tokenIds: string[],
+  snapshotsSince: Date = new Date(0),
 ): Promise<PeakRecordingResult> {
+  // The peak is looked up once per alert moment, not once per match: one alert writes a Match per
+  // filter that caught it, all in one transaction and so all with the same matchedAt, and each of
+  // them used to re-read the same post-alert snapshots.
   const fromSnapshots = await prisma.$executeRaw`
     UPDATE "Match" m
     SET "peakMcapUsd" = p.peak_mcap,
         "peakMcapAt"  = p.peak_at
     FROM (
       SELECT m2.id,
-             best."marketCapUsd" AS peak_mcap,
-             best."takenAt"      AS peak_at
+             best.peak_mcap,
+             best.peak_at
       FROM "Match" m2
       JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
-      JOIN LATERAL (
-        SELECT s."marketCapUsd", s."takenAt"
-        FROM "TokenSnapshot" s
-        WHERE s."tokenId" = m2."tokenId"
-          AND s."takenAt" >= m2."matchedAt"
-        ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
-        LIMIT 1
-      ) best ON TRUE
+      JOIN (
+        SELECT a."tokenId", a."matchedAt", b."marketCapUsd" AS peak_mcap, b."takenAt" AS peak_at
+        FROM (
+          SELECT DISTINCT "tokenId", "matchedAt" FROM "Match"
+          WHERE "tokenId" = ANY(${tokenIds})
+            AND "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+        ) a
+        JOIN LATERAL (
+          SELECT s."marketCapUsd", s."takenAt"
+          FROM "TokenSnapshot" s
+          WHERE s."tokenId" = a."tokenId"
+            AND s."takenAt" >= GREATEST(a."matchedAt", ${snapshotsSince})
+          ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
+          LIMIT 1
+        ) b ON TRUE
+      ) best ON best."tokenId" = m2."tokenId" AND best."matchedAt" = m2."matchedAt"
       WHERE m2."tokenId" = ANY(${tokenIds})
         AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
-        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
+        AND best.peak_mcap > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
     ) p
     -- Re-checked on the row being updated, not just on the m2 copy above: if another pass raised
     -- this match's peak while this statement waited on its row lock, Postgres re-evaluates only

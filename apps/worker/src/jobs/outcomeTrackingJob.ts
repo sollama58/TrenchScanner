@@ -1,4 +1,4 @@
-import { prisma, createLogger, type DexScreenerClient } from "@trenchscanner/core";
+import { prisma, createLogger, forEachWithConcurrency, type DexScreenerClient } from "@trenchscanner/core";
 import { recordMatchPeaksFullSweep } from "./matchPeaks.js";
 
 const logger = createLogger("outcome-tracking-job");
@@ -114,6 +114,9 @@ export function reconcileMatchOutcome(
  * high-scored matches run further than low-scored ones?) instead of staying a set of reasoned-but
  * -unvalidated weights forever.
  */
+/** Match writes in flight at once in the nightly reconcile. */
+const OUTCOME_WRITE_CONCURRENCY = 4;
+
 export async function runOutcomeTrackingJob(
   dexScreener: DexScreenerClient,
   snapshotRetentionDays: number,
@@ -125,7 +128,15 @@ export async function runOutcomeTrackingJob(
   // moved recently, which is right for a one-minute cadence but means a token whose history was
   // written before this deploy - or during a stretch when the worker was down - is never revisited
   // by it. This is the safety net for exactly those rows.
-  const swept = await recordMatchPeaksFullSweep(snapshotRetentionDays);
+  // From a day before the last completed run on: everything earlier is already in the recorded
+  // peaks (see recordMatchPeaksFullSweep), and the day of slack covers a run that overlapped it.
+  const lastRun = await prisma.systemHeartbeat
+    .findUnique({ where: { job: "outcome-tracking" }, select: { lastSuccessAt: true } })
+    .catch(() => null);
+  const snapshotsSince = lastRun?.lastSuccessAt
+    ? new Date(lastRun.lastSuccessAt.getTime() - 86_400_000)
+    : undefined;
+  const swept = await recordMatchPeaksFullSweep(snapshotRetentionDays, snapshotsSince);
 
   const cutoff = new Date(startedAt - OUTCOME_TRACKING_WINDOW_DAYS * 86_400_000);
   const matches = await prisma.match.findMany({
@@ -156,7 +167,9 @@ export async function runOutcomeTrackingJob(
     const live = await dexScreener.getTokensByAddresses(mints, 1);
     const mcapByMint = new Map(live.map((c) => [c.mintAddress, c.marketCapUsd]));
 
-    for (const match of matches) {
+    // Four writes in flight rather than one: thousands of matches, one round trip each, was a
+    // large share of this job's runtime, and each write is a single-row update by primary key.
+    await forEachWithConcurrency(matches, OUTCOME_WRITE_CONCURRENCY, async (match) => {
       // Token not found in the live response (delisted, liquidity pulled, DexScreener hasn't
       // indexed it, ...) - `undefined` tells reconcileMatchOutcome to work from the recorded peak
       // alone rather than treating "no data this run" as "worth zero now". It can still stamp
@@ -175,7 +188,7 @@ export async function runOutcomeTrackingJob(
         currentMcap,
         now,
       );
-      if (!update) continue;
+      if (!update) return;
 
       // The live prices above take minutes to fetch, and match-peaks keeps raising peaks the whole
       // time - so a new high from this run only lands if it is still higher than what is on the
@@ -192,7 +205,7 @@ export async function runOutcomeTrackingJob(
             })
           : await prisma.match.updateMany({ where: { id: match.id }, data: update });
       updated += write.count;
-    }
+    });
   }
 
   const repaired = await repairOutcomeBookkeeping();
