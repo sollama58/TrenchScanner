@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { prisma } from "../db.js";
-import { creditBurn, claimHeldBurns, resolveAccess, extendedExpiry } from "./access.js";
+import { creditBurn, claimHeldBurns, resolveAccess, extendedExpiry, decideAccess } from "./access.js";
 import { SUBSCRIPTION_MINT, SUBSCRIPTION_RAW_PER_MONTH, SUBSCRIPTION_DAYS } from "./constants.js";
 import type { BurnCredit } from "./parseBurn.js";
 
@@ -18,6 +18,43 @@ const credit = (over: Partial<BurnCredit> = {}): BurnCredit => ({
   slot: 442_000_000n,
   blockTime: new Date(),
   ...over,
+});
+
+describe("decideAccess", () => {
+  const now = new Date("2026-01-01T00:00:00Z");
+  const later = new Date("2026-02-01T00:00:00Z");
+  const earlier = new Date("2025-12-01T00:00:00Z");
+
+  it("puts admins first, then a live whitelist entry, then a live subscription", () => {
+    expect(decideAccess("w", new Set(["w"]), null, null, now)).toEqual({
+      hasAccess: true,
+      expiresAt: null,
+      reason: "admin",
+    });
+    expect(decideAccess("w", NO_ADMINS, { expiresAt: null }, earlier, now)).toEqual({
+      hasAccess: true,
+      expiresAt: null,
+      reason: "whitelist",
+    });
+    expect(decideAccess("w", NO_ADMINS, { expiresAt: earlier }, later, now)).toEqual({
+      hasAccess: true,
+      expiresAt: later,
+      reason: "subscription",
+    });
+  });
+
+  it("refuses with the lapsed expiry, or none, when nothing is live", () => {
+    expect(decideAccess("w", NO_ADMINS, { expiresAt: earlier }, earlier, now)).toEqual({
+      hasAccess: false,
+      expiresAt: earlier,
+      reason: "none",
+    });
+    expect(decideAccess("w", NO_ADMINS, null, null, now)).toEqual({
+      hasAccess: false,
+      expiresAt: null,
+      reason: "none",
+    });
+  });
 });
 
 describe("extendedExpiry", () => {

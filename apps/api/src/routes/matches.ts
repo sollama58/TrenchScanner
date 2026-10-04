@@ -7,6 +7,8 @@ import {
   attachAiReviewsForAdmin,
   curatedAlertInclude,
   withLatestSnapshots,
+  latestSnapshotsByToken,
+  TOKEN_CARD_SELECT,
   foldCuratedIntoPage,
   groupSameTokenCalls,
   serializeCuratedAlert,
@@ -58,10 +60,13 @@ type CuratedCardMeta = ReturnType<typeof serializeCuratedAlert>["curated"] & { c
  */
 const matchInclude = {
   // The latest snapshot is attached by withLatestSnapshots, not a nested include - see there.
-  token: true,
+  token: { select: TOKEN_CARD_SELECT },
   snapshot: true,
   filter: { select: { id: true, name: true } },
 } satisfies Prisma.MatchInclude;
+
+/** What ordering and slicing the feed needs from a match - the page's own rows load in full. */
+const MATCH_ORDER_SELECT = { id: true, matchedAt: true, tokenId: true } satisfies Prisma.MatchSelect;
 
 export const listQuerySchema = z.object({
   // Capped: the merge below reads page * PAGE_SIZE rows of each source, so an unbounded page was
@@ -221,7 +226,10 @@ export async function registerMatchRoutes(
           // Interleaving needs the whole run up to this page (it slices the union itself);
           // otherwise this IS the page.
           ...(interleave ? { take: mergeDepth } : { skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE }),
-          include: matchInclude,
+          // Bare rows, like the curated half: only the page's own matches are loaded in full,
+          // below, and a deep page's merge used to pull up to 300 matches with their token and
+          // snapshot rows to show twelve.
+          select: MATCH_ORDER_SELECT,
         }),
         prisma.match.count({ where }),
       ]),
@@ -276,8 +284,22 @@ export async function registerMatchRoutes(
     }
     const groupByNewest = new Map(pageGroups.map((g) => [g.newest.id, g]));
 
+    // The page's full rows and every card's latest snapshot, all at once: the bare rows already
+    // name each card's token, so the snapshot lookup (one statement for both halves) doesn't have
+    // to wait for the rows it decorates.
+    const pageMatchIds = pageItems.flatMap((i) => (i.kind === "match" ? [i.row.id] : []));
+    const latest = latestSnapshotsByToken([
+      ...pageItems.flatMap((i) => (i.kind === "match" ? [i.row.tokenId] : [])),
+      ...pageGroups.map((g) => g.lead.tokenId),
+    ]);
+    // Awaited below; this only stops a failure from going unhandled if both row loads fail first.
+    latest.catch(() => {});
     const [pageMatches, pageCurated] = await Promise.all([
-      withLatestSnapshots(pageItems.flatMap((i) => (i.kind === "match" ? [i.row] : []))),
+      pageMatchIds.length === 0
+        ? Promise.resolve([])
+        : prisma.match
+            .findMany({ where: { id: { in: pageMatchIds } }, include: matchInclude })
+            .then((rows) => withLatestSnapshots(rows, latest)),
       pageGroups.length === 0
         ? Promise.resolve([])
         : prisma.curatedAlert
@@ -285,7 +307,7 @@ export async function registerMatchRoutes(
               where: { id: { in: pageGroups.map((g) => g.lead.id) } },
               include: curatedAlertInclude,
             })
-            .then(withLatestSnapshots),
+            .then((rows) => withLatestSnapshots(rows, latest)),
     ]);
     const matchById = new Map(pageMatches.map((m) => [m.id, m]));
     const curatedById = new Map(pageCurated.map((c) => [c.id, c]));

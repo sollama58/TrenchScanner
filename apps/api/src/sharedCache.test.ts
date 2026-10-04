@@ -105,4 +105,77 @@ describe("SharedCache", () => {
     expect(await fresh).toBe("after-alert");
     expect(await cache.get(async () => "unused")).toBe("after-alert");
   });
+
+  it("with stale-while-revalidate, answers from the expired value at once and refreshes behind it", async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new SharedCache<string>(1_000, { staleWhileRevalidateMs: 10_000 });
+      await cache.get(async () => "old");
+      vi.setSystemTime(Date.now() + 1_500);
+
+      let release!: (v: string) => void;
+      let runs = 0;
+      const slow = () => {
+        runs += 1;
+        return new Promise<string>((r) => (release = r));
+      };
+      // Neither reader waits on the refill, and the refill runs once.
+      expect(await cache.get(slow)).toBe("old");
+      expect(await cache.get(slow)).toBe("old");
+      expect(runs).toBe(1);
+
+      release("new");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await cache.get(slow)).toBe("new");
+      expect(runs).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("past the stale window, waits for a fresh value like a cold cache", async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new SharedCache<string>(1_000, { staleWhileRevalidateMs: 10_000 });
+      await cache.get(async () => "old");
+      vi.setSystemTime(Date.now() + 11_001);
+      expect(await cache.get(async () => "new")).toBe("new");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps serving the stale value when its background refresh fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new SharedCache<string>(1_000, { staleWhileRevalidateMs: 10_000 });
+      await cache.get(async () => "old");
+      vi.setSystemTime(Date.now() + 1_500);
+      expect(await cache.get(async () => Promise.reject(new Error("db down")))).toBe("old");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await cache.get(async () => "new")).toBe("old");
+      // The failed refresh cleared itself, so the next reader's refresh went through.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await cache.get(async () => "unused")).toBe("new");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("warm() fills a cold cache once, and never rejects", async () => {
+    const cache = new SharedCache<string>(60_000);
+    let runs = 0;
+    cache.warm(async () => {
+      runs += 1;
+      return "warmed";
+    });
+    cache.warm(async () => "second");
+    expect(await cache.get(async () => "unused")).toBe("warmed");
+    expect(runs).toBe(1);
+
+    const failing = new SharedCache<string>(60_000);
+    failing.warm(async () => Promise.reject(new Error("boom")));
+    await tick();
+    await expect(failing.get(async () => "after")).resolves.toBe("after");
+  });
 });

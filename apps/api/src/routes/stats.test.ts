@@ -47,6 +47,32 @@ describe("withRates", () => {
   });
 });
 
+describe("GET /stats/routes", () => {
+  it("reports per-route timings by route pattern, behind the stats token", async () => {
+    const app = await buildServer({ ...loadEnv(), STATS_API_TOKEN: TOKEN });
+    try {
+      expect((await app.inject({ method: "GET", url: "/stats/routes" })).statusCode).toBe(401);
+      const config = await app.inject({ method: "GET", url: "/config" });
+      expect(config.headers["server-timing"]).toMatch(/^app;dur=\d+(\.\d)?$/);
+      await app.inject({ method: "GET", url: "/tokens/some-mint" });
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/stats/routes",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const routes = res.json().routes as { route: string; count: number; p95Ms: number }[];
+      expect(routes.find((r) => r.route === "GET /config")).toMatchObject({ count: 1 });
+      // The pattern, never the raw URL - ids can't grow the table.
+      expect(routes.find((r) => r.route === "GET /tokens/:mintAddress")).toMatchObject({ count: 1 });
+      expect(routes.some((r) => r.route.includes("some-mint"))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe("GET /stats/hit-rates gating", () => {
   it("does not exist without a token, or with one too short to trust", async () => {
     for (const STATS_API_TOKEN of ["", "short-token"]) {

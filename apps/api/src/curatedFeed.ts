@@ -32,31 +32,68 @@ import {
  */
 export async function withLatestSnapshots<T extends { token: { id: string } }>(
   rows: T[],
+  // A caller that already knows the page's tokens can start this lookup alongside its own row
+  // load and pass the result in, instead of waiting for the rows first.
+  latest?: Promise<Map<string, TokenSnapshot>>,
 ): Promise<(T & { token: T["token"] & { snapshots: TokenSnapshot[] } })[]> {
-  const tokenIds = [...new Set(rows.map((r) => r.token.id))];
-  const latestIds =
-    tokenIds.length === 0
-      ? []
-      : await prisma.$queryRaw<{ id: string }[]>`
-          SELECT s.id
-          FROM unnest(${tokenIds}::text[]) AS t(id)
-          CROSS JOIN LATERAL (
-            SELECT id FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
-          ) s`;
-  const snapshots =
-    latestIds.length === 0
-      ? []
-      : await prisma.tokenSnapshot.findMany({ where: { id: { in: latestIds.map((r) => r.id) } } });
-  const byToken = new Map(snapshots.map((s) => [s.tokenId, s]));
+  const byToken = await (latest ?? latestSnapshotsByToken(rows.map((r) => r.token.id)));
   return rows.map((r) => {
-    const latest = byToken.get(r.token.id);
-    return { ...r, token: { ...r.token, snapshots: latest ? [latest] : [] } };
+    const snapshot = byToken.get(r.token.id);
+    return { ...r, token: { ...r.token, snapshots: snapshot ? [snapshot] : [] } };
   });
 }
 
+/**
+ * Each token's newest snapshot, in one statement: one index probe per token through
+ * (tokenId, takenAt), returning the whole row. This was two round trips - the ids first, then
+ * the rows by id - and a feed page runs it once per half (matches and curated calls).
+ */
+export async function latestSnapshotsByToken(
+  tokenIds: readonly string[],
+): Promise<Map<string, TokenSnapshot>> {
+  const ids = [...new Set(tokenIds)];
+  if (ids.length === 0) return new Map();
+  const snapshots = await prisma.$queryRaw<TokenSnapshot[]>`
+    SELECT s.*
+    FROM unnest(${ids}::text[]) AS t(id)
+    CROSS JOIN LATERAL (
+      SELECT * FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
+    ) s`;
+  return new Map(snapshots.map((s) => [s.tokenId, s]));
+}
+
+/**
+ * The token columns a card carries: everything but the AI text read (aiTextScores), which is a
+ * model input the worker keeps on the row, not something any card shows - every card on every
+ * poll was shipping it.
+ */
+export const TOKEN_CARD_SELECT = {
+  id: true,
+  mintAddress: true,
+  symbol: true,
+  name: true,
+  pairAddress: true,
+  imageUrl: true,
+  firstSeenAt: true,
+  hasTwitter: true,
+  hasTelegram: true,
+  hasWebsite: true,
+  narrativeTags: true,
+  description: true,
+  discoverySource: true,
+  dexBoosted: true,
+  firstInBandAt: true,
+  lastViewedAt: true,
+  liveMarketCapUsd: true,
+  livePriceUsd: true,
+  liveDataAt: true,
+  lastLiveAt: true,
+  lastMcapUsd: true,
+} satisfies Prisma.TokenSelect;
+
 /** Everything a curated card needs, in one Prisma include - plus withLatestSnapshots. */
 export const curatedAlertInclude = {
-  token: true,
+  token: { select: TOKEN_CARD_SELECT },
   snapshot: true,
   candidateOutcome: {
     select: {
