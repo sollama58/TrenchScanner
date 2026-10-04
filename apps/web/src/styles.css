@@ -2072,3 +2072,88 @@ button.small-btn {
     min-width: 0;
   }
 }
+
+/* Feed heading with its "how this works" button */
+.heading-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.heading-row h2 {
+  margin-bottom: 0;
+}
+.heading-row .icon-btn {
+  padding: 5px;
+  border-color: transparent;
+}
+
+/* About modal */
+.about-modal {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  color: var(--ink);
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 64px -24px rgba(0, 0, 0, 0.6);
+}
+.about-modal::backdrop {
+  background: rgba(4, 5, 8, 0.6);
+}
+.about-body {
+  padding: 22px 24px 26px;
+}
+.about-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.about-head h2 {
+  margin: 0;
+}
+.about-body h3 {
+  margin: 20px 0 6px;
+}
+.about-body p,
+.about-body li,
+.about-body dd {
+  color: var(--ink-2);
+}
+.about-body p {
+  margin: 0 0 8px;
+}
+.about-body ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.about-terms {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 10px 0 0;
+}
+.about-terms dt {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.about-terms dd {
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .about-body {
+    padding: 18px 16px 22px;
+  }
+  .about-terms {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .about-terms dd {
+    margin-bottom: 8px;
+  }
+}

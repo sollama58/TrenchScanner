@@ -3,7 +3,8 @@ import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { RingGauge, SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
-import { ArrowRightIcon, BrainIcon, RadarIcon, SlidersIcon } from "../components/Icons";
+import { AboutModal } from "../components/AboutModal";
+import { ArrowRightIcon, BrainIcon, InfoIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, useNow, useNudgeStream } from "../hooks";
 import { ago, pct } from "../format";
@@ -19,6 +20,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const [pick, setPick] = useState(0);
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
   // "saved": the API mixes in model calls per this user's own switch and checked models.
   const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved`;
   const feedPage = usePolling<MatchPage>(feedPath(page), 30_000, String(pick));
@@ -126,22 +128,23 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
         Hit rates cover the last 30 days of {modelName}'s graded calls.
       </p>
 
+      <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} targets={t} />
       <section className="panel feed">
         <header className="section-head">
           <div>
             <span className="eyebrow">Live feed</span>
-            <h2>Your alerts{modelsOn ? " and model calls" : ""}</h2>
-            <p className="muted small">
-              <span className="pill pill-mine">
-                <SlidersIcon size={12} /> Your alert
-              </span>{" "}
-              is your own filter&apos;s catch;{" "}
-              <span className="pill pill-model">
-                <BrainIcon size={12} /> Model
-              </span>{" "}
-              is a model&apos;s call. A token several models call shows once. Win = 2x within 1h of a
-              realistic fill, before a 50% drop.
-            </p>
+            <div className="heading-row">
+              <h2>Your alerts{modelsOn ? " and model calls" : ""}</h2>
+              <button
+                type="button"
+                className="ghost icon-btn"
+                onClick={() => setAboutOpen(true)}
+                aria-label="How this works"
+                title="How this works"
+              >
+                <InfoIcon size={16} />
+              </button>
+            </div>
           </div>
           <div className="feed-controls">
             <button

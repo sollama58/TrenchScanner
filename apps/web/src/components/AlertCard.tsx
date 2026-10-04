@@ -9,7 +9,8 @@ const DAY_MS = 86_400_000;
 
 /** What a card's verdict badge says. Words and an icon carry it; color only reinforces. */
 export function outcomeBadge(outcome: Outcome | null): { text: string; tone: string } {
-  if (!outcome) return { text: "Filter match", tone: "neutral" };
+  // Who called it is on the card's source pill; the badge only carries the verdict.
+  if (!outcome) return { text: "Grading", tone: "neutral" };
   switch (outcome.status) {
     case "watching":
       return outcome.hit2x
@@ -26,9 +27,26 @@ export function outcomeBadge(outcome: Outcome | null): { text: string; tone: str
   }
 }
 
-/** A filter match's verdict, from the columns the outcome job writes onto the Match row. */
-function matchOutcome(card: Card): Outcome | null {
-  if (card.kind !== "match" || card.hit2xIn1h === undefined || card.hit2xIn1h === null) return null;
+/**
+ * A filter match's verdict, from the columns the outcome job writes onto the Match row. Before
+ * they're written, a match inside its win window reads as live, the way a model call does.
+ */
+function matchOutcome(card: Card, now: number): Outcome | null {
+  if (card.kind !== "match") return null;
+  if (card.hit2xIn1h === undefined || card.hit2xIn1h === null) {
+    const minutesIn = (now - new Date(card.matchedAt).getTime()) / 60_000;
+    if (!(minutesIn < WIN_WINDOW_MIN)) return null;
+    return {
+      status: "watching",
+      hit2x: false,
+      hitGoal: null,
+      peak1hReturnPct: null,
+      maxDrawdown1hPct: null,
+      peak24hReturnPct: null,
+      finalized: false,
+      minutesLeft: Math.max(0, Math.ceil(WIN_WINDOW_MIN - minutesIn)),
+    };
+  }
   return {
     status: card.disqualified ? "disqualified" : card.hit2xIn1h ? "won" : "missed",
     hit2x: card.hit2xIn1h,
@@ -68,7 +86,7 @@ export function AlertCard({
   const nowMcap = card.currentMarketCapUsd;
   const move = change(alertMcap, nowMcap);
   const curated = card.curated;
-  const outcome = curated?.outcome ?? matchOutcome(card);
+  const outcome = curated?.outcome ?? matchOutcome(card, now);
   const badge = outcomeBadge(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");
   const calls = curated?.calledBy ?? [];
@@ -83,6 +101,10 @@ export function AlertCard({
   const watching = outcome?.status === "watching" && outcome.minutesLeft !== null;
   const elapsedPct = watching ? ((WIN_WINDOW_MIN - outcome.minutesLeft!) / WIN_WINDOW_MIN) * 100 : 0;
   const hasPeak = peak !== null && peak !== undefined && peak > 0;
+  // Measured at alert time when the wallet lookups made it in time; otherwise from a later scan.
+  const freshAtAlert = s.freshTop10WalletPct;
+  const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
+  const freshPct = freshAtAlert ?? freshLater;
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -185,13 +207,17 @@ export function AlertCard({
             <dt>Top 10</dt>
             <dd className="num">{pct(s.top10HolderPct)}</dd>
           </div>
-          <div>
-            <dt>Dev</dt>
-            <dd className="num">{pct(s.devWalletPct, 1)}</dd>
-          </div>
-          <div>
-            <dt>Snipers</dt>
-            <dd className="num">{pct(s.freshTop10WalletPct)}</dd>
+          <div
+            title={
+              freshPct === null
+                ? "Top-10 holder wallets created in the last 24h: not measured for this token yet"
+                : `Top-10 holder wallets created in the last 24h${
+                    freshAtAlert === null ? ", from a scan after the alert" : ", at alert time"
+                  }`
+            }
+          >
+            <dt>Fresh wallets</dt>
+            <dd className="num">{pct(freshPct)}</dd>
           </div>
           <div>
             <dt>Risk</dt>
