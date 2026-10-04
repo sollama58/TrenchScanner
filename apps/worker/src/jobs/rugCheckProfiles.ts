@@ -43,7 +43,7 @@ export interface RugProfileResolution {
   profiles: Map<string, RugCheckProfile>;
   /** Mints RugCheck definitively has no report for - distinct from ones whose lookup failed. */
   absent: Set<string>;
-  stats: { requested: number; cached: number; fetched: number; failed: number };
+  stats: { requested: number; cached: number; fetched: number; failed: number; reused?: number };
 }
 
 /**
@@ -68,6 +68,8 @@ export async function resolveRugProfiles(
   mintAddresses: string[],
   rugCheck: RugCheckClient,
   ttlMinutes: number,
+  /** Most network lookups this call makes - see the budget note below. */
+  maxLookups: number = Infinity,
 ): Promise<RugProfileResolution> {
   const unique = [...new Set(mintAddresses)];
   const profiles = new Map<string, RugCheckProfile>();
@@ -76,12 +78,13 @@ export async function resolveRugProfiles(
     return { profiles, absent, stats: { requested: 0, cached: 0, fetched: 0, failed: 0 } };
   }
 
-  const fresh = await prisma.rugCheckCache.findMany({
-    where: {
-      mintAddress: { in: unique },
-      checkedAt: { gt: new Date(Date.now() - ttlMinutes * 60_000) },
-    },
-  });
+  // Every cached row, stale ones included: past the lookup budget a stale answer stands in.
+  const rows = await prisma.rugCheckCache.findMany({ where: { mintAddress: { in: unique } } });
+  const ttlCutoff = Date.now() - ttlMinutes * 60_000;
+  const fresh = rows.filter((r) => r.checkedAt.getTime() > ttlCutoff);
+  const staleRows = new Map(
+    rows.filter((r) => r.checkedAt.getTime() <= ttlCutoff).map((r) => [r.mintAddress, r]),
+  );
 
   const hit = new Set<string>();
   for (const row of fresh) {
@@ -101,7 +104,35 @@ export async function resolveRugProfiles(
     hit.add(row.mintAddress);
   }
 
-  const stale = unique.filter((mint) => !hit.has(mint));
+  // The lookup budget. In steady state the TTL keeps lookups to the candidates whose answer just
+  // aged out, well under it. After downtime every candidate is stale at once, and at RugCheck's
+  // pace (and its 429s) looking all of them up held a single scan cycle for many minutes - the
+  // "hung" scan of 2026-10-04 15:16 was 166s+ in this stage alone. So: never-checked mints first
+  // (they are the new arrivals the feed is waiting on), then the oldest answers; past the budget a
+  // mint keeps its last answer for one more cycle, and the next cycle refreshes it.
+  const needed = unique
+    .filter((mint) => !hit.has(mint))
+    .sort(
+      (a, b) =>
+        (staleRows.get(a)?.checkedAt.getTime() ?? -Infinity) -
+        (staleRows.get(b)?.checkedAt.getTime() ?? -Infinity),
+    );
+  const stale = needed.slice(0, maxLookups);
+  let reused = 0;
+  for (const mint of needed.slice(maxLookups)) {
+    const row = staleRows.get(mint);
+    if (!row) continue;
+    if (row.profile === null) {
+      absent.add(mint);
+      reused += 1;
+      continue;
+    }
+    const parsed = cachedProfileSchema.safeParse(row.profile);
+    if (parsed.success) {
+      profiles.set(mint, parsed.data as RugCheckProfile);
+      reused += 1;
+    }
+  }
   let failed = 0;
   if (stale.length > 0) {
     const results = await rugCheck.getProfileResults(stale);
@@ -143,7 +174,13 @@ export async function resolveRugProfiles(
     });
   }
 
-  const stats = { requested: unique.length, cached: hit.size, fetched: stale.length - failed, failed };
+  const stats = {
+    requested: unique.length,
+    cached: hit.size,
+    fetched: stale.length - failed,
+    failed,
+    reused,
+  };
   logger.info("resolved rugcheck profiles", stats);
   return { profiles, absent, stats };
 }

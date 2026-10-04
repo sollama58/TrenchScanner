@@ -245,6 +245,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     candidates.map((c) => c.mintAddress),
     deps.rugCheck,
     env.RUGCHECK_CACHE_TTL_MINUTES,
+    env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
   );
   lap("rugCheck");
 

@@ -70,6 +70,30 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("past the lookup budget, looks up new mints and the oldest answers, and reuses the rest", async () => {
+    const [fresh, old, newer] = [mint("bud-new"), mint("bud-old"), mint("bud-newer")];
+    const { client, calls } = fakeClient({
+      [fresh]: { status: "found", profile: profile(fresh, 1) },
+      [old]: { status: "found", profile: profile(old, 2) },
+      [newer]: { status: "found", profile: profile(newer, 3) },
+    });
+    await resolveRugProfiles([old, newer], client, 5);
+    await prisma.rugCheckCache.update({
+      where: { mintAddress: old },
+      data: { checkedAt: new Date(Date.now() - 60 * 60_000) },
+    });
+    await prisma.rugCheckCache.update({
+      where: { mintAddress: newer },
+      data: { checkedAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    calls.length = 0;
+
+    const result = await resolveRugProfiles([newer, old, fresh], client, 5, 2);
+    expect(calls.flat().sort()).toEqual([fresh, old].sort());
+    expect(result.profiles.get(newer)?.holderCount).toBe(3);
+    expect(result.stats).toMatchObject({ fetched: 2, reused: 1 });
+  });
+
   it("re-fetches once the TTL has elapsed", async () => {
     const a = mint("ttl");
     const { client, calls } = fakeClient({ [a]: { status: "found", profile: profile(a, 500) } });
