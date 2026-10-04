@@ -116,4 +116,40 @@ describe.skipIf(!dbAvailable)("combined feed", () => {
     const board = (await call("GET", "/curated/models?days=30")).json() as { selectedModels: string[] };
     expect(board.selectedModels).toEqual(["trees"]);
   });
+
+  it("pages on hasMore and fills in a card's calls from before what the page read", async () => {
+    await call("PUT", "/curated/feed", { models: ["rules", "trees"], showModelAlerts: true });
+    const later = (minutes: number) => new Date(Date.now() + 120 * 60_000 + minutes * 60_000);
+    const base = { source: "test", confidence: 70, anchorPriceUsd: 0.0001, anchorMcapUsd: 50_000 };
+    const late = (await prisma.token.create({ data: { mintAddress: `${TAG}-late` } })).id;
+    const fillers: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      fillers.push((await prisma.token.create({ data: { mintAddress: `${TAG}-fill-${i}` } })).id);
+    }
+    await prisma.curatedAlert.createMany({
+      data: [
+        // Called by Rules first, then by Trees after a dozen other tokens were called by both.
+        { ...base, tokenId: late, model: "rules", modelName: "Rules", createdAt: later(0) },
+        ...fillers.flatMap((tokenId, i) => [
+          { ...base, tokenId, model: "rules", modelName: "Rules", createdAt: later(10 + i) },
+          { ...base, tokenId, model: "trees", modelName: "Trees", createdAt: later(10 + i) },
+        ]),
+        { ...base, tokenId: late, model: "trees", modelName: "Trees", createdAt: later(60) },
+      ],
+    });
+
+    const res = await call("GET", "/matches?page=1&includeCurated=saved");
+    const body = res.json() as {
+      hasMore: boolean;
+      matches: { tokenId: string; curated: { model: string; calledBy: { model: string }[] } | null }[];
+    };
+    expect(body.hasMore).toBe(true);
+    expect(body.matches).toHaveLength(12);
+    // The card sits at Trees' call, at the top, but is Rules' first call, with both listed.
+    expect(body.matches[0]!.tokenId).toBe(late);
+    expect(body.matches[0]!.curated!.model).toBe("rules");
+    expect(body.matches[0]!.curated!.calledBy.map((c) => c.model)).toEqual(["rules", "trees"]);
+    // No token twice.
+    expect(new Set(body.matches.map((c) => c.tokenId)).size).toBe(12);
+  });
 });
