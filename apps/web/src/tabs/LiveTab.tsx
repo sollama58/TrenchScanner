@@ -17,6 +17,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   // Bumped when the user changes their feed settings, so every view keyed on them refetches at once.
   const [pick, setPick] = useState(0);
   const [toggling, setToggling] = useState(false);
+  const [toggleError, setToggleError] = useState<string | null>(null);
   // "saved": the API mixes in model calls per this user's own switch and checked models.
   const feedPage = usePolling<MatchPage>(`/matches?page=${page}&includeCurated=saved`, 30_000, String(pick));
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
@@ -33,7 +34,10 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const live = selected?.composite.live;
   const feed = stats.data?.feed;
   const pace = feed ? Math.min(100, (feed.pace.actualPerHour24h / feed.pace.targetPerHour) * 100) : 0;
-  const pages = feedPage.data ? Math.max(1, Math.ceil(feedPage.data.totalCount / feedPage.data.pageSize)) : 1;
+  // Older API builds (mid-deploy) only send totalCount.
+  const hasMore = feedPage.data
+    ? (feedPage.data.hasMore ?? page * feedPage.data.pageSize < feedPage.data.totalCount)
+    : false;
   const modelName = selected?.name ?? "–";
   const chosenNames =
     chosen.length === 0
@@ -49,9 +53,12 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   };
   const toggleModels = async () => {
     setToggling(true);
+    setToggleError(null);
     try {
       await saveFeedSettings({ showModelAlerts: !modelsOn });
       changed();
+    } catch (e) {
+      setToggleError(e instanceof Error ? e.message : String(e));
     } finally {
       setToggling(false);
     }
@@ -148,13 +155,14 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
             </button>
             {lb && <ModelPicker board={lb} disabled={!modelsOn} onChanged={changed} />}
             <span className={`live-dot ${streamLive ? "on" : ""}`}>{streamLive ? "Live" : "Polling"}</span>
+            {toggleError && <small className="error">Couldn&apos;t switch model alerts: {toggleError}</small>}
           </div>
         </header>
         {feedPage.error && !feedPage.data && (
           <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
         )}
         {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
-        {feedPage.data && feedPage.data.matches.length === 0 && (
+        {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (
           <div className="empty-state">
             <RadarIcon size={28} />
             <p>
@@ -172,15 +180,16 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
             <AlertCard key={card.id} card={card} now={now} labelSource />
           ))}
         </div>
-        {pages > 1 && (
+        {feedPage.data && feedPage.data.matches.length === 0 && page > 1 && (
+          <p className="muted small center">Nothing older here.</p>
+        )}
+        {(page > 1 || hasMore) && (
           <nav className="pager">
             <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
               ← Newer
             </button>
-            <span className="muted small num">
-              {page} / {pages}
-            </span>
-            <button disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>
+            <span className="muted small num">Page {page}</span>
+            <button disabled={!hasMore} onClick={() => setPage((p) => p + 1)}>
               Older →
             </button>
           </nav>

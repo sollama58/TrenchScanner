@@ -10,6 +10,7 @@ import {
   foldCuratedIntoPage,
   groupSameTokenCalls,
   serializeCuratedAlert,
+  type CallGroup,
   type ModelCall,
 } from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
@@ -35,8 +36,16 @@ const CURATED_MATCH_LINK_WINDOW_MS = 6 * 3_600_000;
  */
 const MAX_MERGE_DEPTH = 300;
 
-/** How many calls per card the interleaved feed reads ahead for when several models are checked. */
-const MAX_CALLS_PER_CARD = 3;
+/** The columns grouping calls needs - the page's own calls are loaded in full afterwards. */
+const CALL_SELECT = {
+  id: true,
+  tokenId: true,
+  createdAt: true,
+  model: true,
+  modelName: true,
+  confidence: true,
+} satisfies Prisma.CuratedAlertSelect;
+type CallRow = Prisma.CuratedAlertGetPayload<{ select: typeof CALL_SELECT }>;
 
 type CuratedCardMeta = ReturnType<typeof serializeCuratedAlert>["curated"] & { calledBy: ModelCall[] };
 
@@ -180,23 +189,31 @@ export async function registerMatchRoutes(
     // The curated calls interleaved are every model the reader checked (else their single pick,
     // else the default) - the same list the Models tab marks as in their feed.
     // Fetched alongside the matches rather than after them: the two halves are independent.
-    const loadCurated = async () => {
+    const feedModels = async () => {
       const [state, feed] = await Promise.all([contestState(opts.env), saved ?? savedFeed(request)]);
-      const { models } = resolveFeedModels(state, feed);
-      return Promise.all([
+      return resolveFeedModels(state, feed).models;
+    };
+    const loadCurated = async () => {
+      const models = await feedModels();
+      // Several models calling one token collapse into one card (at most one call per model), so
+      // the newest page * models calls always hold this page's cards whole - see
+      // groupSameTokenCalls. Only the columns grouping needs; the page's own rows are loaded in
+      // full below.
+      const take = mergeDepth * models.length;
+      const [rows, total] = await Promise.all([
         prisma.curatedAlert.findMany({
           where: { model: { in: models } },
           orderBy: { createdAt: "desc" },
-          // Several models calling one token collapse into one card, so a page of cards can take
-          // more than a page of calls. Bounded at a few pages' worth whatever the model count.
-          take: mergeDepth * Math.min(models.length, MAX_CALLS_PER_CARD),
-          include: curatedAlertInclude,
+          take,
+          select: CALL_SELECT,
         }),
-        prisma.curatedAlert.count({ where: { model: { in: models } } }),
+        // Only the legacy flag reports a count; the dashboard pages on hasMore instead.
+        includeCurated === "on" ? prisma.curatedAlert.count({ where: { model: { in: models } } }) : 0,
       ]);
+      return { models, rows, total, hitLimit: rows.length === take };
     };
 
-    const [[matches, matchTotal], [curatedAlerts, curatedTotal]] = await Promise.all([
+    const [[matches, matchTotal], curated] = await Promise.all([
       Promise.all([
         prisma.match.findMany({
           where,
@@ -208,34 +225,72 @@ export async function registerMatchRoutes(
         }),
         prisma.match.count({ where }),
       ]),
-      interleave ? loadCurated() : Promise.resolve([[], 0] as const),
+      interleave ? loadCurated() : Promise.resolve(null),
     ]);
 
-    // Ordered and sliced on the bare rows; only the page's own rows then get their latest
-    // snapshot, rather than every row the merge had to read.
+    // Ordered and sliced on the bare rows; only the page's own rows then get loaded in full and
+    // get their latest snapshot, rather than every row the merge had to read.
     type Item =
       | { kind: "match"; at: Date; row: (typeof matches)[number] }
-      | { kind: "curated"; at: Date; row: (typeof curatedAlerts)[number]; calls: ModelCall[] };
+      | { kind: "curated"; at: Date; group: CallGroup<CallRow> };
     const items: Item[] = [
       ...matches.map((row) => ({ kind: "match" as const, at: row.matchedAt, row })),
-      ...groupSameTokenCalls([...curatedAlerts], CURATED_MATCH_LINK_WINDOW_MS).map(({ lead, calls }) => ({
+      ...groupSameTokenCalls(curated?.rows ?? [], CURATED_MATCH_LINK_WINDOW_MS).map((group) => ({
         kind: "curated" as const,
-        at: lead.createdAt,
-        row: lead,
-        calls,
+        at: group.newest.createdAt,
+        group,
       })),
     ].sort((a, b) => b.at.getTime() - a.at.getTime());
-    const pageItems = interleave ? items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : items;
+    const end = page * PAGE_SIZE;
+    const pageItems = interleave ? items.slice(end - PAGE_SIZE, end) : items;
+    const hasMore = interleave
+      ? items.length > end || matchTotal > matches.length || (curated?.hitLimit ?? false)
+      : matchTotal > end;
+
+    // A card on this page can have older calls than the read reached; fill them in, so the card
+    // shows the token's first call and every model that called it.
+    let pageGroups = pageItems.flatMap((i) => (i.kind === "curated" ? [i.group] : []));
+    if (curated?.hitLimit && pageGroups.length > 0) {
+      const horizon = curated.rows[curated.rows.length - 1]!.createdAt;
+      const reach = (g: CallGroup<CallRow>) => g.newest.createdAt.getTime() - CURATED_MATCH_LINK_WINDOW_MS;
+      const open = pageGroups.filter((g) => reach(g) < horizon.getTime());
+      if (open.length > 0) {
+        const tokenIds = [...new Set(open.map((g) => g.newest.tokenId))];
+        const older = await prisma.curatedAlert.findMany({
+          where: {
+            tokenId: { in: tokenIds },
+            model: { in: curated.models },
+            createdAt: { gte: new Date(Math.min(...open.map(reach))), lt: horizon },
+          },
+          orderBy: { createdAt: "desc" },
+          select: CALL_SELECT,
+        });
+        const regrouped = new Map(
+          groupSameTokenCalls(
+            [...curated.rows.filter((r) => tokenIds.includes(r.tokenId)), ...older],
+            CURATED_MATCH_LINK_WINDOW_MS,
+          ).map((g) => [g.newest.id, g]),
+        );
+        pageGroups = pageGroups.map((g) => regrouped.get(g.newest.id) ?? g);
+      }
+    }
+    const groupByNewest = new Map(pageGroups.map((g) => [g.newest.id, g]));
 
     const [pageMatches, pageCurated] = await Promise.all([
       withLatestSnapshots(pageItems.flatMap((i) => (i.kind === "match" ? [i.row] : []))),
-      withLatestSnapshots(pageItems.flatMap((i) => (i.kind === "curated" ? [i.row] : []))),
+      pageGroups.length === 0
+        ? Promise.resolve([])
+        : prisma.curatedAlert
+            .findMany({
+              where: { id: { in: pageGroups.map((g) => g.lead.id) } },
+              include: curatedAlertInclude,
+            })
+            .then(withLatestSnapshots),
     ]);
-    const callsByAlert = new Map(
-      pageItems.flatMap((i) => (i.kind === "curated" ? [[i.row.id, i.calls] as const] : [])),
-    );
+    const matchById = new Map(pageMatches.map((m) => [m.id, m]));
+    const curatedById = new Map(pageCurated.map((c) => [c.id, c]));
 
-    const matchCards = pageMatches.map((match) => {
+    const toMatchCard = (match: (typeof pageMatches)[number]) => {
       const { snapshots, ...token } = match.token;
       const latestSnapshot = snapshots[0] ?? null;
       const current = currentMarketCap(token, latestSnapshot);
@@ -250,23 +305,32 @@ export async function registerMatchRoutes(
         currentMarketCapAt: current.at,
         curated: null as CuratedCardMeta | null,
       };
-    });
-    const curatedCards = pageCurated.map((alert) => {
+    };
+    const toCuratedCard = (alert: (typeof pageCurated)[number], group: CallGroup<CallRow>) => {
       const card = serializeCuratedAlert(alert, currentMarketCap);
-      // Every model that called this token, first call first (the card is that first call).
-      return { ...card, curated: { ...card.curated, calledBy: callsByAlert.get(alert.id) ?? [] } };
-    });
+      return { ...card, curated: { ...card.curated, calledBy: group.calls } as CuratedCardMeta | null };
+    };
 
-    const merged = [...matchCards, ...curatedCards].sort(
-      (a, b) => b.matchedAt.getTime() - a.matchedAt.getTime(),
-    );
+    // In feed order: a card sits at its newest call, so this is not matchedAt order.
+    const ordered: (ReturnType<typeof toMatchCard> | ReturnType<typeof toCuratedCard>)[] = [];
+    for (const item of pageItems) {
+      if (item.kind === "match") {
+        const match = matchById.get(item.row.id);
+        if (match) ordered.push(toMatchCard(match));
+        continue;
+      }
+      const group = groupByNewest.get(item.group.newest.id) ?? item.group;
+      const alert = curatedById.get(group.lead.id);
+      // Gone between the two reads (its token was pruned): nothing to show.
+      if (alert) ordered.push(toCuratedCard(alert, group));
+    }
     // Folded after slicing, so a card's curated badge depends only on the page it is on - see
     // foldCuratedIntoPage.
-    const cards = foldCuratedIntoPage(merged, CURATED_MATCH_LINK_WINDOW_MS);
+    const cards = foldCuratedIntoPage(ordered, CURATED_MATCH_LINK_WINDOW_MS);
 
-    // An upper bound: a page that folds two cards into one leaves this a little high, which at
-    // worst costs a short final page and never a missing card.
-    const totalCount = matchTotal + curatedTotal;
+    // Only meaningful for the legacy flag (an upper bound there: folded cards leave it a little
+    // high). The dashboard pages on hasMore, which can't promise a page that turns out empty.
+    const totalCount = matchTotal + (curated?.total ?? 0);
 
     // Marks every token on this page as "currently being looked at," regardless of which user
     // fetched it - see the comment on Token.lastViewedAt. This is a side effect of a GET, which
@@ -293,6 +357,7 @@ export async function registerMatchRoutes(
       page,
       pageSize: PAGE_SIZE,
       totalCount,
+      hasMore,
     };
   });
 }

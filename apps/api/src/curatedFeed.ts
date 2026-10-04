@@ -392,15 +392,27 @@ export interface ModelCall {
   alertedAt: Date;
 }
 
+/** Calls on one token collapsed into one card. */
+export interface CallGroup<T> {
+  /** The first call: the card shows it (that is when the token was alerted, and its fill). */
+  lead: T;
+  /** The latest call: where the card sits in the feed. */
+  newest: T;
+  /** Every model that called it, first call first. */
+  calls: ModelCall[];
+}
+
 /**
  * Collapses calls on the same token by different models into one entry, so a reader following
  * several models sees a token once however many of them called it.
  *
- * The entry is the FIRST call (that is when the token was alerted; its fill and grade are the
- * ones the reader could have acted on), carrying every model that called it in `calls`, oldest
- * first. A later call joins it when it lands within `windowMs` of that first call and is from a
- * model not already in it - a model calling the same token again after its own cooldown is a
- * new alert, not a duplicate. Takes and returns rows newest first.
+ * Groups are built from the newest call backwards: an older call joins when it lands within
+ * `windowMs` of the group's newest call and is from a model not already in it (a model calling
+ * the same token again after its own cooldown is a new alert, not a duplicate). Built this way, a
+ * group only depends on calls newer than its own, so the newest `n * models` calls always hold the
+ * top `n` groups whole up to their newest call - which is what makes paging over them exact. A
+ * group sits at its newest call; its older calls past what was read are filled in afterwards
+ * (see the /matches route). Takes rows newest first; returns groups newest first.
  */
 export function groupSameTokenCalls<
   T extends {
@@ -410,31 +422,36 @@ export function groupSameTokenCalls<
     modelName: string | null;
     confidence: number;
   },
->(rowsNewestFirst: T[], windowMs: number): { lead: T; calls: ModelCall[] }[] {
-  const open = new Map<string, { lead: T; calls: ModelCall[] }>();
-  const groups: { lead: T; calls: ModelCall[] }[] = [];
-  for (let i = rowsNewestFirst.length - 1; i >= 0; i--) {
-    const row = rowsNewestFirst[i]!;
-    const call: ModelCall = {
-      model: row.model,
-      modelName: row.modelName ?? (row.model ? (contestantSpec(row.model)?.name ?? row.model) : null),
-      confidence: row.confidence,
-      alertedAt: row.createdAt,
-    };
+>(rowsNewestFirst: T[], windowMs: number): CallGroup<T>[] {
+  const open = new Map<string, { newest: T; rows: T[] }>();
+  const groups: { newest: T; rows: T[] }[] = [];
+  for (const row of rowsNewestFirst) {
     const group = open.get(row.tokenId);
     if (
       group &&
-      row.createdAt.getTime() - group.lead.createdAt.getTime() <= windowMs &&
-      !group.calls.some((c) => c.model === row.model)
+      group.newest.createdAt.getTime() - row.createdAt.getTime() <= windowMs &&
+      !group.rows.some((r) => r.model === row.model)
     ) {
-      group.calls.push(call);
+      group.rows.push(row);
       continue;
     }
-    const fresh = { lead: row, calls: [call] };
+    const fresh = { newest: row, rows: [row] };
     open.set(row.tokenId, fresh);
     groups.push(fresh);
   }
-  return groups.reverse();
+  return groups.map(({ newest, rows }) => {
+    const oldestFirst = [...rows].reverse();
+    return {
+      lead: oldestFirst[0]!,
+      newest,
+      calls: oldestFirst.map((r) => ({
+        model: r.model,
+        modelName: r.modelName ?? (r.model ? (contestantSpec(r.model)?.name ?? r.model) : null),
+        confidence: r.confidence,
+        alertedAt: r.createdAt,
+      })),
+    };
+  });
 }
 
 /** The AI reviewer's verdict on a curated alert, as only admins see it. */

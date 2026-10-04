@@ -173,6 +173,8 @@ export interface MatchPage {
   page: number;
   pageSize: number;
   totalCount: number;
+  /** Whether an older page has anything on it (the combined feed pages on this, not totalCount). */
+  hasMore?: boolean;
 }
 
 export interface CuratedStats {
