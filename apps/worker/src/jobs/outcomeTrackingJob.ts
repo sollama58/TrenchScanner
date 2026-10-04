@@ -217,8 +217,15 @@ export async function runOutcomeTrackingJob(
     peaksUpdated: updated,
     missingLiveData: skipped,
     peaksRecoveredInFullSweep: swept.fromSnapshots + swept.fromLivePings,
+    peakSweepBatchesFailed: swept.failedBatches,
     bookkeepingRepaired: repaired,
   });
+  // The next sweep reads only snapshots from a day before this run's success, so a batch that
+  // failed here would never have its older snapshots read again. Failing the run keeps
+  // lastSuccessAt where it was, and the next run reads far enough back to cover them.
+  if (swept.failedBatches > 0) {
+    throw new Error(`full peak sweep: ${swept.failedBatches} batch(es) failed; next run re-reads them`);
+  }
 }
 
 /**

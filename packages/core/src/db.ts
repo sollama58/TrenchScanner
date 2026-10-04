@@ -123,16 +123,18 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 /**
- * Binds a list of numbers for a raw query as `${floatArrayParam(xs)}::text[]::float8[]`.
+ * Binds a list of numbers for a raw query as `${floatArrayParam(xs)}::text::float8[]`: one Postgres
+ * array literal such as `{1.5,NULL,54321}`, sent as a single text value.
  *
- * Passing a plain number[] with `::float8[]` fails intermittently with 22P03 "improper binary format
- * in array element N": Prisma prepares the statement once per connection, fixing the element type it
- * guessed from that first call's numbers (whole numbers and fractions encode differently), so a later
- * batch of a different shape is sent in a format Postgres can't read. Text elements are always text
- * and cast cleanly. Non-finite values become NULL.
+ * Passing a number[] (or a string[] with NULLs) lets Prisma guess the parameter's type from the
+ * first call's values and keep it for that statement on that connection. A later call of a
+ * different shape is then sent in a format Postgres can't read - 22P03 "improper binary format in
+ * array element N" when whole numbers and fractions swap, or 08P01 on every later call once an
+ * all-NULL list went first. A plain string is always text. Non-finite values become NULL.
  */
-export function floatArrayParam(values: readonly (number | null | undefined)[]): (string | null)[] {
-  return values.map((n) => (typeof n === "number" && Number.isFinite(n) ? String(n) : null));
+export function floatArrayParam(values: readonly (number | null | undefined)[]): string {
+  const items = values.map((n) => (typeof n === "number" && Number.isFinite(n) ? String(n) : "NULL"));
+  return `{${items.join(",")}}`;
 }
 
 export type { PrismaClient } from "@prisma/client";

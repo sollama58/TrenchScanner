@@ -255,8 +255,11 @@ describe.skipIf(!dbAvailable)("runCleanupJob: batched snapshot sweep", () => {
       },
     });
 
-    // A launch that never traded: the nightly sweep skips it, the weekly full walk doesn't.
-    const quiet = await prisma.token.create({ data: { mintAddress: `${TAG}-quiet`, firstSeenAt: oldSeen } });
+    // A launch that never traded: the nightly sweep skips it, the weekly full walk doesn't. First
+    // seen after the others, so it sits on a later page than the first.
+    const quiet = await prisma.token.create({
+      data: { mintAddress: `${TAG}-quiet`, firstSeenAt: new Date(oldSeen.getTime() + 60_000) },
+    });
     await prisma.tokenSnapshot.create({
       data: {
         tokenId: quiet.id,

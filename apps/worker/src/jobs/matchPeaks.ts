@@ -364,12 +364,12 @@ export async function recordMatchPeaksFullSweep(
    * every night is what made this sweep take most of half an hour. Omitted, it reads all of it.
    */
   snapshotsSince?: Date,
-): Promise<PeakRecordingResult> {
+): Promise<PeakRecordingResult & { failedBatches: number }> {
   const tokens = await prisma.$queryRaw<{ tokenId: string }[]>`
     SELECT DISTINCT "tokenId" FROM "Match"
     WHERE "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
     ORDER BY "tokenId"`;
-  const total: PeakRecordingResult = { fromSnapshots: 0, fromLivePings: 0 };
+  const total = { fromSnapshots: 0, fromLivePings: 0, failedBatches: 0 };
   for (let i = 0; i < tokens.length; i += FULL_SWEEP_TOKENS_PER_BATCH) {
     const tokenIds = tokens.slice(i, i + FULL_SWEEP_TOKENS_PER_BATCH).map((t) => t.tokenId);
     for (let attempt = 1; ; attempt += 1) {
@@ -384,6 +384,7 @@ export async function recordMatchPeaksFullSweep(
             tokens: tokenIds.length,
             error: String(err),
           });
+          total.failedBatches += 1;
           break;
         }
       }
