@@ -26,6 +26,8 @@ import {
   contestState,
   modelLabel,
   resolveFeedModel,
+  resolveFeedModels,
+  savedFeed,
   savedFeedModel,
   type Leaderboard,
 } from "../contest.js";
@@ -88,6 +90,14 @@ const chooseModelSchema = z.object({
   /** A contestant id, or null to follow the default. */
   model: z.string().max(64).nullable(),
 });
+
+const feedSettingsSchema = z
+  .object({
+    /** The combined feed's checked models; an empty list (or null) follows the default. */
+    models: z.array(z.string().max(64)).max(32).nullable().optional(),
+    showModelAlerts: z.boolean().optional(),
+  })
+  .refine((v) => v.models !== undefined || v.showModelAlerts !== undefined, "nothing to change");
 
 export async function registerCuratedRoutes(
   app: FastifyInstance,
@@ -252,12 +262,58 @@ export async function registerCuratedRoutes(
     const [board, state, saved] = await Promise.all([
       cache.get(() => buildLeaderboard(opts.env, days)),
       contestState(opts.env),
-      savedFeedModel(request),
+      savedFeed(request),
     ]);
+    const feed = resolveFeedModels(state, saved);
     return {
       ...board,
-      selectedModel: resolveFeedModel(state, undefined, saved),
-      followsDefault: saved === null || resolveFeedModel(state, undefined, saved) !== saved,
+      // The single-ledger pick (/curated) - the first checked model.
+      selectedModel: feed.models[0],
+      // Every model whose calls the combined feed shows; the Live tab's checkboxes and the
+      // Models tab's both read and write this one list.
+      selectedModels: feed.models,
+      followsDefault: feed.followsDefault,
+      showModelAlerts: saved.showModelAlerts,
+    };
+  });
+
+  /**
+   * The combined feed's settings: which models' calls it shows (checkboxes) and whether it shows
+   * model calls at all. Either field alone may be sent.
+   */
+  app.put("/feed", async (request, reply) => {
+    const parsed = feedSettingsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const state = await contestState(opts.env);
+    const { models, showModelAlerts } = parsed.data;
+    const data: { feedModels?: string[]; curatedModel?: string | null; showModelAlerts?: boolean } = {};
+    if (models !== undefined) {
+      const wanted = new Set(models ?? []);
+      if ([...wanted].some((id) => !state.roster.some((c) => c.id === id))) {
+        return reply.code(400).send({ error: "unknown model" });
+      }
+      // Stored in roster order, so the first entry (the /curated pick) doesn't depend on click order.
+      const ordered = state.roster.filter((c) => wanted.has(c.id)).map((c) => c.id);
+      data.feedModels = ordered;
+      data.curatedModel = ordered[0] ?? null;
+    }
+    if (showModelAlerts !== undefined) data.showModelAlerts = showModelAlerts;
+    const user = await prisma.user.update({
+      where: { id: request.user!.userId },
+      data,
+      select: { curatedModel: true, feedModels: true, showModelAlerts: true },
+    });
+    const feed = resolveFeedModels(state, {
+      model: user.curatedModel,
+      models: user.feedModels,
+      showModelAlerts: user.showModelAlerts,
+    });
+    return {
+      selectedModels: feed.models,
+      followsDefault: feed.followsDefault,
+      showModelAlerts: user.showModelAlerts,
     };
   });
 
@@ -272,7 +328,11 @@ export async function registerCuratedRoutes(
     if (model !== null && !state.roster.some((c) => c.id === model)) {
       return reply.code(400).send({ error: "unknown model" });
     }
-    await prisma.user.update({ where: { id: request.user!.userId }, data: { curatedModel: model } });
+    // The combined feed's checkboxes follow a single pick too, so the two never disagree.
+    await prisma.user.update({
+      where: { id: request.user!.userId },
+      data: { curatedModel: model, feedModels: model === null ? [] : [model] },
+    });
     return { selectedModel: resolveFeedModel(state, undefined, model), followsDefault: model === null };
   });
 

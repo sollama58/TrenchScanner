@@ -34,6 +34,12 @@ model User {
   /// The curator contestant whose calls this user's Curated feed shows (curation/contestants.ts);
   /// null = the default (the consensus, or Rules until the consensus can call).
   curatedModel   String?
+  /// Every contestant whose calls the dashboard's combined feed shows (checkboxes on Live and the
+  /// Models tab). Empty = follow the default. curatedModel is kept equal to the first entry so the
+  /// single-ledger /curated feed (other clients) shows one of the same models.
+  feedModels      String[] @default([])
+  /// Whether model calls are mixed into the combined feed at all; off = only this user's filter matches.
+  showModelAlerts Boolean  @default(true)
 
   filters      UserFilter[]
   matches      Match[]

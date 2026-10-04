@@ -8,11 +8,13 @@ import {
   curatedAlertInclude,
   withLatestSnapshots,
   foldCuratedIntoPage,
+  groupSameTokenCalls,
   serializeCuratedAlert,
+  type ModelCall,
 } from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
-import { contestState, resolveFeedModel, savedFeedModel } from "../contest.js";
+import { contestState, resolveFeedModels, savedFeed } from "../contest.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
@@ -32,6 +34,11 @@ const CURATED_MATCH_LINK_WINDOW_MS = 6 * 3_600_000;
  * history has its own tab.
  */
 const MAX_MERGE_DEPTH = 300;
+
+/** How many calls per card the interleaved feed reads ahead for when several models are checked. */
+const MAX_CALLS_PER_CARD = 3;
+
+type CuratedCardMeta = ReturnType<typeof serializeCuratedAlert>["curated"] & { calledBy: ModelCall[] };
 
 /**
  * Only the latest snapshot per token, not the whole history - lets the dashboard show "now"
@@ -57,6 +64,8 @@ export const listQuerySchema = z.object({
    * and a reader who never asked for the curator's picks shouldn't have to recognise which cards
    * are theirs. Curated alerts always have their own tab regardless.
    *
+   * "saved" follows the reader's own model-alerts switch (User.showModelAlerts).
+   *
    * Parsed by hand rather than z.coerce.boolean(), which treats the string "false" as true -
    * every value here arrives as a query string, so that coercion would make the flag impossible
    * to turn off.
@@ -64,7 +73,9 @@ export const listQuerySchema = z.object({
   includeCurated: z
     .string()
     .optional()
-    .transform((v) => v === "true" || v === "1"),
+    .transform((v): "on" | "off" | "saved" =>
+      v === "true" || v === "1" ? "on" : v === "saved" ? "saved" : "off",
+    ),
 });
 
 export async function registerMatchRoutes(
@@ -147,7 +158,8 @@ export async function registerMatchRoutes(
      * The curated feed can be interleaved into this one, for readers who ask for it
      * (includeCurated): a curated alert is an alert, and the point of curation is that a
      * subscriber can see it without having to build a filter for it. Off unless requested,
-     * because the Live Feed's default promise is the reader's own matches.
+     * because the Live Feed's default promise is the reader's own matches. "saved" follows the
+     * reader's own on/off switch (PUT /curated/feed) - what the dashboard sends.
      *
      * Merging two independently-paginated time-ordered sources exactly: take the newest
      * `page * PAGE_SIZE` of each, merge, sort, and slice out this page. The union's first N
@@ -159,47 +171,71 @@ export async function registerMatchRoutes(
      * was: that far back is history browsing, and the curated history has its own tab.
      */
     const mergeDepth = page * PAGE_SIZE;
+    const saved = includeCurated === "saved" ? await savedFeed(request) : null;
+    const wantsCurated = includeCurated === "on" || (saved?.showModelAlerts ?? false);
     // Skipped entirely when the reader hasn't opted in - no curated rows are fetched, so nothing
     // is filtered out after the fact and the page count stays exact.
-    const interleave = includeCurated && mergeDepth <= MAX_MERGE_DEPTH;
+    const interleave = wantsCurated && mergeDepth <= MAX_MERGE_DEPTH;
 
-    // The curated calls interleaved are the ledger this user's Curated tab shows (their picked
-    // model, else the default), so the two tabs never disagree about what "curated" means.
+    // The curated calls interleaved are every model the reader checked (else their single pick,
+    // else the default) - the same list the Models tab marks as in their feed.
     // Fetched alongside the matches rather than after them: the two halves are independent.
     const loadCurated = async () => {
-      const [state, saved] = await Promise.all([contestState(opts.env), savedFeedModel(request)]);
-      const curatedModel = resolveFeedModel(state, undefined, saved);
+      const [state, feed] = await Promise.all([contestState(opts.env), saved ?? savedFeed(request)]);
+      const { models } = resolveFeedModels(state, feed);
       return Promise.all([
-        prisma.curatedAlert
-          .findMany({
-            where: { model: curatedModel },
-            orderBy: { createdAt: "desc" },
-            take: mergeDepth,
-            include: curatedAlertInclude,
-          })
-          .then(withLatestSnapshots),
-        prisma.curatedAlert.count({ where: { model: curatedModel } }),
+        prisma.curatedAlert.findMany({
+          where: { model: { in: models } },
+          orderBy: { createdAt: "desc" },
+          // Several models calling one token collapse into one card, so a page of cards can take
+          // more than a page of calls. Bounded at a few pages' worth whatever the model count.
+          take: mergeDepth * Math.min(models.length, MAX_CALLS_PER_CARD),
+          include: curatedAlertInclude,
+        }),
+        prisma.curatedAlert.count({ where: { model: { in: models } } }),
       ]);
     };
 
     const [[matches, matchTotal], [curatedAlerts, curatedTotal]] = await Promise.all([
       Promise.all([
-        prisma.match
-          .findMany({
-            where,
-            orderBy: { matchedAt: "desc" },
-            // Interleaving needs the whole run up to this page (it slices the union itself);
-            // otherwise this IS the page.
-            ...(interleave ? { take: mergeDepth } : { skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE }),
-            include: matchInclude,
-          })
-          .then(withLatestSnapshots),
+        prisma.match.findMany({
+          where,
+          orderBy: { matchedAt: "desc" },
+          // Interleaving needs the whole run up to this page (it slices the union itself);
+          // otherwise this IS the page.
+          ...(interleave ? { take: mergeDepth } : { skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE }),
+          include: matchInclude,
+        }),
         prisma.match.count({ where }),
       ]),
       interleave ? loadCurated() : Promise.resolve([[], 0] as const),
     ]);
 
-    const matchCards = matches.map((match) => {
+    // Ordered and sliced on the bare rows; only the page's own rows then get their latest
+    // snapshot, rather than every row the merge had to read.
+    type Item =
+      | { kind: "match"; at: Date; row: (typeof matches)[number] }
+      | { kind: "curated"; at: Date; row: (typeof curatedAlerts)[number]; calls: ModelCall[] };
+    const items: Item[] = [
+      ...matches.map((row) => ({ kind: "match" as const, at: row.matchedAt, row })),
+      ...groupSameTokenCalls([...curatedAlerts], CURATED_MATCH_LINK_WINDOW_MS).map(({ lead, calls }) => ({
+        kind: "curated" as const,
+        at: lead.createdAt,
+        row: lead,
+        calls,
+      })),
+    ].sort((a, b) => b.at.getTime() - a.at.getTime());
+    const pageItems = interleave ? items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : items;
+
+    const [pageMatches, pageCurated] = await Promise.all([
+      withLatestSnapshots(pageItems.flatMap((i) => (i.kind === "match" ? [i.row] : []))),
+      withLatestSnapshots(pageItems.flatMap((i) => (i.kind === "curated" ? [i.row] : []))),
+    ]);
+    const callsByAlert = new Map(
+      pageItems.flatMap((i) => (i.kind === "curated" ? [[i.row.id, i.calls] as const] : [])),
+    );
+
+    const matchCards = pageMatches.map((match) => {
       const { snapshots, ...token } = match.token;
       const latestSnapshot = snapshots[0] ?? null;
       const current = currentMarketCap(token, latestSnapshot);
@@ -212,20 +248,21 @@ export async function registerMatchRoutes(
         // client doesn't have to re-implement the "which of these two is newer" comparison.
         currentMarketCapUsd: current.marketCapUsd,
         currentMarketCapAt: current.at,
-        curated: null as ReturnType<typeof serializeCuratedAlert>["curated"] | null,
+        curated: null as CuratedCardMeta | null,
       };
     });
-    const curatedCards = curatedAlerts.map((alert) => serializeCuratedAlert(alert, currentMarketCap));
+    const curatedCards = pageCurated.map((alert) => {
+      const card = serializeCuratedAlert(alert, currentMarketCap);
+      // Every model that called this token, first call first (the card is that first call).
+      return { ...card, curated: { ...card.curated, calledBy: callsByAlert.get(alert.id) ?? [] } };
+    });
 
     const merged = [...matchCards, ...curatedCards].sort(
       (a, b) => b.matchedAt.getTime() - a.matchedAt.getTime(),
     );
     // Folded after slicing, so a card's curated badge depends only on the page it is on - see
     // foldCuratedIntoPage.
-    const cards = foldCuratedIntoPage(
-      interleave ? merged.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : merged,
-      CURATED_MATCH_LINK_WINDOW_MS,
-    );
+    const cards = foldCuratedIntoPage(merged, CURATED_MATCH_LINK_WINDOW_MS);
 
     // An upper bound: a page that folds two cards into one leaves this a little high, which at
     // worst costs a short final page and never a missing card.

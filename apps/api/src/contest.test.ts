@@ -2,7 +2,13 @@
 import "./bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE, STACKED_MODEL_KIND } from "@trenchscanner/core";
-import { buildLeaderboard, contestState, resetContestStateCache, resolveFeedModel } from "./contest.js";
+import {
+  buildLeaderboard,
+  contestState,
+  resetContestStateCache,
+  resolveFeedModel,
+  resolveFeedModels,
+} from "./contest.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `contest-test-${Date.now()}`;
@@ -67,6 +73,17 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     expect(resolveFeedModel(state, undefined, "linear")).toBe("linear");
     expect(resolveFeedModel(state, "not-a-model", null)).toBe(state.defaultModel);
     expect(resolveFeedModel(state, undefined, "retired-model")).toBe(state.defaultModel);
+  });
+
+  it("resolves the combined feed's models: checked ones in roster order, else the single pick, else the default", async () => {
+    const state = await contestState(env);
+    const feed = (models: string[], model: string | null = null) =>
+      resolveFeedModels(state, { model, models, showModelAlerts: true });
+    expect(feed(["trees", "rules"])).toEqual({ models: ["rules", "trees"], followsDefault: false });
+    expect(feed(["retired-model", "linear"])).toEqual({ models: ["linear"], followsDefault: false });
+    expect(feed([], "linear")).toEqual({ models: ["linear"], followsDefault: false });
+    expect(feed([])).toEqual({ models: [state.defaultModel], followsDefault: true });
+    expect(feed(["retired-model"])).toEqual({ models: [state.defaultModel], followsDefault: true });
   });
 
   it("ranks the leaderboard on composite scores built from live calls and exams", async () => {

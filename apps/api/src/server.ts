@@ -14,6 +14,7 @@ import {
   resolveAccess,
   prisma,
 } from "@trenchscanner/core";
+import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
 import { createSessionSigner, SESSION_COOKIE_NAME, type SessionPayload } from "./auth/session.js";
 import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
 import { registerAuthRoutes } from "./routes/auth.js";
@@ -165,13 +166,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
     // A browser session is only as good as the user's current sessionVersion: signing out bumps
     // it, so a copied cookie stops working everywhere at once instead of living out its TTL.
-    // curatedModel rides along on the same row so the feeds don't look the user up again.
+    // The feed settings ride along on the same row so the feeds don't look the user up again.
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { sessionVersion: true, curatedModel: true },
+      select: { sessionVersion: true, ...SAVED_FEED_SELECT },
     });
     if (!user || user.sessionVersion !== (session.sessionVersion ?? 0)) return false;
-    request.savedFeedModel = user.curatedModel;
+    request.savedFeed = toSavedFeed(user);
     return true;
   }
 
