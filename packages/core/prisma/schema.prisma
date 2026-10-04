@@ -288,6 +288,12 @@ model CuratedAlert {
   modelName  String?
   /// The curator's conviction at emission, 0-100.
   confidence Float
+  /// "high" when the call cleared the model's high-conviction line (CURATED_HIGH_CONVICTION_RANK),
+  /// "standard" otherwise; null on rules calls and rows from before tiers existed.
+  tier       String?
+  /// The 2x rate of recent out-of-sample calls ranked like this one, in percent, from the model's
+  /// calibration table at emission; null when it had none.
+  calibratedPct Float?
   /// Why, as short human-readable strings - the top contributing signals at emission time.
   reasons    String[] @default([])
 
@@ -515,6 +521,11 @@ model CandidateOutcome {
   ///    by every match of the token within MATCH_SAMPLE_SPACING_MINUTES. Chosen by users'
   ///    filters, so kept out of training too.
   sampleKind     String    @default("hourly")
+  /// Which grading rule the labels follow (LEGACY_LABEL_RULE / CURRENT_LABEL_RULE in
+  /// curation/trainer.ts): 1 = graded from the scan price (every row anchored before the fill
+  /// rule shipped on 2026-10-03), 2 = from a realistic fill. The trainer down-weights rule-1 rows
+  /// and the exam grades rule-2 rows only; the two have different base rates.
+  labelRule      Int       @default(2)
 
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
   /// snapshot knew, NOT a snapshot reference, so training data outlives the 30-day

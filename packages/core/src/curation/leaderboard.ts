@@ -42,6 +42,12 @@ const RETURN_TARGET_DOUBLINGS = 2;
 const RETURN_SHRINK_CALLS = 10;
 /** Graded live calls at which the live record and the exam weigh the same. */
 export const LIVE_EVIDENCE_PIVOT = 30;
+/**
+ * Graded live calls a contestant needs before it is RANKED on its score. Below this it is
+ * "warming up": its score still shows, but it sorts behind every seasoned contestant, so a
+ * fresh seat cannot top the board (or be bred from as the best) on a dozen lucky calls.
+ */
+export const MIN_LIVE_CALLS_TO_RANK = 50;
 
 export function emptyRecord(): CallRecord {
   return { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
@@ -93,6 +99,8 @@ export interface CompositeScore {
   score: number | null;
   /** How much of `score` the live record carries, 0-1. */
   liveWeight: number;
+  /** Fewer than MIN_LIVE_CALLS_TO_RANK graded live calls: shown, but ranked behind the seasoned. */
+  warmingUp: boolean;
   live: RecordSummary;
   exam: RecordSummary;
 }
@@ -118,17 +126,28 @@ export function compositeScore(
   } else {
     score = Math.round((liveWeight * liveSummary.score + (1 - liveWeight) * examSummary.score) * 10) / 10;
   }
-  return { score, liveWeight, live: liveSummary, exam: examSummary };
+  return {
+    score,
+    liveWeight,
+    warmingUp: live.graded < MIN_LIVE_CALLS_TO_RANK,
+    live: liveSummary,
+    exam: examSummary,
+  };
 }
 
 /**
- * Leaderboard order: higher composite first; a contestant with no score sorts last; ties go to
- * the one with more graded live calls (more evidence), then to roster order (the input order).
+ * Leaderboard order: seasoned contestants (MIN_LIVE_CALLS_TO_RANK graded live calls) before
+ * warming-up ones; within each, higher composite first; a contestant with no score sorts last;
+ * ties go to the one with more graded live calls (more evidence), then to roster order (the
+ * input order).
  */
 export function rankByComposite<T extends { composite: CompositeScore }>(entries: T[]): T[] {
   return entries
     .map((entry, i) => ({ entry, i }))
     .sort((a, b) => {
+      const wa = a.entry.composite.warmingUp ? 1 : 0;
+      const wb = b.entry.composite.warmingUp ? 1 : 0;
+      if (wa !== wb) return wa - wb;
       const sa = a.entry.composite.score;
       const sb = b.entry.composite.score;
       if (sa !== sb) {

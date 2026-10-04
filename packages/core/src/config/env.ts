@@ -287,13 +287,30 @@ const envSchema = z.object({
   // CURATED_TARGET_PER_HOUR stays a ceiling.
   CURATED_TARGET_WIN_RATE_PCT: z.coerce.number().min(0).max(100).default(75),
   CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
-  CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(30),
+  CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(50),
   // How sure a cutoff's out-of-sample record must make us that it meets the targets, as a normal
   // z-score: a cutoff counts as meeting them when the Wilson LOWER BOUND of its hit rates does.
   // Choosing the lowest of hundreds of cutoffs that shows 75% favours lucky ones; the bound
   // discounts a thin record. 0 = judge the observed rates. Either way, alerts still go out at
   // the best cutoff when none qualifies.
-  CURATED_CALIBRATION_CONFIDENCE_Z: z.coerce.number().min(0).max(4).default(1),
+  // 0.5 (about 70% one-sided) since 2026-10-05: at z = 1 a cutoff of 30 calls had to win 25 of
+  // them to qualify, which no cutoff can do at a 7% base rate; cutoffs are now walked from the
+  // strictest down (fixed-sequence testing, see chooseCutoff), which supplies the multiplicity
+  // control the larger z was standing in for.
+  CURATED_CALIBRATION_CONFIDENCE_Z: z.coerce.number().min(0).max(4).default(0.5),
+  // Rows graded under the old scan-price rule (before 2026-10-03) answer a different, easier
+  // question than the fill-price rule the feed is held to; they train at this fraction of a
+  // current row's weight. 0 drops them entirely.
+  CURATOR_LEGACY_LABEL_WEIGHT: z.coerce.number().min(0).max(1).default(0.25),
+  // Fewest wins a walk-forward fold's decision rows must hold before it is judged (the fold count
+  // shrinks until each has this many; a fold still short of it is skipped).
+  CURATOR_EXAM_MIN_FOLD_WINS: z.coerce.number().int().min(0).default(30),
+  // Calls ranked in the top (1 - this) share of decision moments are tiered "high conviction" on
+  // the card and tracked separately in the hit rates. 0.995 = the top half-percent.
+  CURATED_HIGH_CONVICTION_RANK: z.coerce.number().min(0.5).max(0.9999).default(0.995),
+  // How far back the per-model calibration table (the "2x rate of calls like this one" on the
+  // card) looks over the exam's out-of-sample calls.
+  CURATOR_CALIBRATION_WINDOW_DAYS: z.coerce.number().positive().default(14),
   // The curator contest's roster, comma-separated contestant ids (curation/contestants.ts):
   // each trains every run and makes calls on its own feed, and the consensus stacks the learners.
   // Default: all of them. Trim it if a training run gets too slow for the worker - memory stays
@@ -319,6 +336,13 @@ const envSchema = z.object({
   // record the leaderboard can judge it on.
   CURATOR_EVOLUTION_MIN_AGE_HOURS: z.coerce.number().min(0).default(12),
   CURATOR_EVOLUTION_MARGIN: z.coerce.number().min(0).max(50).default(3),
+  // A takeover also needs evidence (curation/evolution.ts, TakeoverEvidence): the challenger's
+  // exam must hold at least this many wins, it must out-score the seat it replaces in this share
+  // of paired bootstrap resamples of the same exam rows (0 = off), and seats change hands at most
+  // once per this many hours.
+  CURATOR_EVOLUTION_MIN_EXAM_WINS: z.coerce.number().int().min(0).default(30),
+  CURATOR_EVOLUTION_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.9),
+  CURATOR_EVOLUTION_MIN_TAKEOVER_INTERVAL_HOURS: z.coerce.number().min(0).default(24),
   // The default model is the leaderboard's best performer, re-chosen after each training run
   // (curation/champion.ts). A model needs this many graded live calls (30-day window) before it
   // can hold the default, and a challenger must beat the sitting champion by MARGIN points.

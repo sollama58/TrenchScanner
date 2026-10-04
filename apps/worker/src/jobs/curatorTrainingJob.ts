@@ -13,11 +13,14 @@ import {
   withLanes,
   NEVER_EMIT_THRESHOLD,
   STACKED_MODEL_KIND,
+  BLEND_MODEL_KIND,
+  DISQUALIFYING_DRAWDOWN_FRACTION,
   type ContestRunOutcome,
   type ContestantTrainingResult,
   type Lane,
   type LaneFitness,
   type StackedCuratorParams,
+  type BlendCuratorParams,
   type Env,
   type TrainingRow,
   type PrecisionTargets,
@@ -106,6 +109,10 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
       cooldownHours: env.CURATED_ALERT_COOLDOWN_HOURS,
       heuristicPrecisionGate: env.CURATED_HEURISTIC_PRECISION_GATE,
       contestants,
+      legacyLabelWeight: env.CURATOR_LEGACY_LABEL_WEIGHT,
+      minTestWins: env.CURATOR_EXAM_MIN_FOLD_WINS,
+      highConvictionRank: env.CURATED_HIGH_CONVICTION_RANK,
+      calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
     },
     plan ?? undefined,
   );
@@ -151,7 +158,28 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
       threshold: "threshold" in r.params ? r.params.threshold : null,
       calibration: r.metrics.precisionCalibration,
       exam: r.metrics.exam,
+      highConviction: r.metrics.highConviction ?? null,
+      calibrationCalls: r.metrics.calibrationCalls ?? 0,
     })),
+    // The inputs' health this run: anything null on most rows, or with no lift at either end,
+    // is a wire to check (see curation/featureReport.ts).
+    featureReport: results[0]?.metrics.featureReport
+      ? {
+          rows: results[0].metrics.featureReport.rows,
+          mostlyNull: results[0].metrics.featureReport.features
+            .filter((f) => f.nullRatePct >= 90)
+            .map((f) => f.feature),
+          strongest: [...results[0].metrics.featureReport.features]
+            .filter((f) => f.topDecileLift !== null)
+            .sort(
+              (a, b) =>
+                Math.max(b.topDecileLift!, b.bottomDecileLift!) -
+                Math.max(a.topDecileLift!, a.bottomDecileLift!),
+            )
+            .slice(0, 8)
+            .map((f) => ({ feature: f.feature, top: f.topDecileLift, bottom: f.bottomDecileLift })),
+        }
+      : null,
   });
 }
 
@@ -193,9 +221,10 @@ export async function applyContestResults(
   evolution: { founding?: Lane[]; replacement?: ContestRunOutcome["replacement"] } = {},
 ): Promise<Map<string, string>> {
   const now = new Date();
-  // The consensus references its members, so it goes after them.
+  // The consensus and the blend reference their members, so they go after them.
+  const dependent = (kind: string) => kind === STACKED_MODEL_KIND || kind === BLEND_MODEL_KIND;
   const ordered = [...results].sort(
-    (a, b) => Number(a.params.kind === STACKED_MODEL_KIND) - Number(b.params.kind === STACKED_MODEL_KIND),
+    (a, b) => Number(dependent(a.params.kind)) - Number(dependent(b.params.kind)),
   );
   return prisma.$transaction(async (tx) => {
     // Lanes first: the seats' recipes as of this run, in the same transaction as the models they
@@ -234,12 +263,12 @@ export async function applyContestResults(
     const ids = new Map<string, string>();
     for (const result of ordered) {
       let params = result.params;
-      if (params.kind === STACKED_MODEL_KIND) {
-        const stacked = params as StackedCuratorParams;
+      if (params.kind === STACKED_MODEL_KIND || params.kind === BLEND_MODEL_KIND) {
+        const withMembers = params as StackedCuratorParams | BlendCuratorParams;
         params = {
-          ...stacked,
-          members: stacked.members.map((m) => ({ ...m, modelId: ids.get(m.contestant) ?? "" })),
-        };
+          ...withMembers,
+          members: withMembers.members.map((m) => ({ ...m, modelId: ids.get(m.contestant) ?? "" })),
+        } as typeof params;
       }
       const created = await tx.curatorModel.create({
         data: {
@@ -287,7 +316,7 @@ async function evolutionPlan(
 ): Promise<ContestPlan | null> {
   if (env.CURATOR_EVOLUTION_CHALLENGERS === 0 || lanes.length === 0) return null;
   const since = new Date(now.getTime() - FITNESS_WINDOW_DAYS * 86_400_000);
-  const [live, active, top] = await Promise.all([
+  const [live, active, top, lastTakeover] = await Promise.all([
     liveCallRecords(
       lanes.map((l) => l.slot),
       since,
@@ -298,6 +327,7 @@ async function evolutionPlan(
       select: { contestant: true, evalMetrics: true },
     }),
     prisma.curatorLane.aggregate({ _max: { generation: true } }),
+    prisma.curatorLane.aggregate({ _max: { bornAt: true }, where: { generation: { gt: 0 } } }),
   ]);
   const lastExam = new Map(
     active.map((r) => [
@@ -329,6 +359,14 @@ async function evolutionPlan(
       minAgeMs: env.CURATOR_EVOLUTION_MIN_AGE_HOURS * 3_600_000,
       margin: env.CURATOR_EVOLUTION_MARGIN,
       challengerLearners: challengers.map((c) => c.recipe.learner),
+      evidence: {
+        minExamWins: env.CURATOR_EVOLUTION_MIN_EXAM_WINS,
+        confidence: env.CURATOR_EVOLUTION_CONFIDENCE,
+        lastTakeoverAt: lastTakeover._max.bornAt ?? null,
+        minTakeoverIntervalMs: env.CURATOR_EVOLUTION_MIN_TAKEOVER_INTERVAL_HOURS * 3_600_000,
+        targets,
+        seed,
+      },
     },
   };
 }
@@ -370,6 +408,8 @@ export async function loadTrainingRows(
         signalPriceUsd: true,
         anchorMcapUsd: true,
         sampleKind: true,
+        labelRule: true,
+        maxDrawdown1hPct: true,
       },
     });
     for (const r of page) {
@@ -382,6 +422,12 @@ export async function loadTrainingRows(
         anchorPriceUsd: r.signalPriceUsd ?? r.anchorPriceUsd,
         anchorMcapUsd: r.anchorMcapUsd,
         sampleKind: r.sampleKind,
+        labelRule: r.labelRule,
+        // Held above the stop for the hour (the two-stage model's first-stage label). Unknown
+        // when the drawdown was never recorded.
+        ...(r.maxDrawdown1hPct !== null
+          ? { survived: r.maxDrawdown1hPct > -DISQUALIFYING_DRAWDOWN_FRACTION * 100 }
+          : {}),
       });
     }
     if (page.length < pageRows) break;

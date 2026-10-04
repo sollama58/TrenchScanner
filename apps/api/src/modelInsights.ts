@@ -2,6 +2,7 @@ import {
   prisma,
   BOOSTED_MODEL_KIND,
   CURATOR_MODEL_KIND,
+  TWO_STAGE_MODEL_KIND,
   FRIENDLY_FEATURE_LABELS,
   HEURISTIC_CURATOR_SOURCE,
   contestantSpec,
@@ -9,6 +10,8 @@ import {
   type BoostedCuratorParams,
   type LogisticCuratorParams,
   type StoredEvalMetrics,
+  type TwoStageCuratorParams,
+  type FeatureReport,
   type AiBlendMetrics,
   type AiBlendParams,
   type JudgeRecordSummary,
@@ -93,6 +96,20 @@ function isKnownParams(params: unknown): params is LogisticCuratorParams | Boost
   );
 }
 
+/** The model whose weights explain a stored params blob: itself, or a two-stage model's second stage. */
+function explainable(params: unknown): (LogisticCuratorParams | BoostedCuratorParams) | null {
+  if (isKnownParams(params)) return params;
+  if (
+    typeof params === "object" &&
+    params !== null &&
+    (params as { kind?: unknown }).kind === TWO_STAGE_MODEL_KIND
+  ) {
+    const win = (params as TwoStageCuratorParams).win;
+    if (isKnownParams(win)) return win;
+  }
+  return null;
+}
+
 function asMetrics(value: unknown): Partial<StoredEvalMetrics> {
   return typeof value === "object" && value !== null ? (value as Partial<StoredEvalMetrics>) : {};
 }
@@ -135,10 +152,14 @@ function summarizeRun(row: {
     precisionCurve: m.precisionCurve ?? [],
     heuristicCalibration: m.heuristicCalibration ?? null,
     heuristicPrecisionCurve: m.heuristicPrecisionCurve ?? [],
+    highConviction: m.highConviction ?? null,
+    calibrationCalls: m.calibrationCalls ?? 0,
     folds: folds.map((f) => ({
       testFrom: f.testFrom,
       testTo: f.testTo,
       testRows: f.testRows,
+      decisionRows: f.decisionRows ?? null,
+      decisionWins: f.decisionWins ?? null,
       baseWinRatePct: f.baseWinRatePct,
       model: {
         emitted: f.model.emitted,
@@ -202,12 +223,13 @@ const IMPORTANCE_CACHE_MAX = 16;
 async function importanceFor(id: string): Promise<Importance | null> {
   if (importanceCache.has(id)) return importanceCache.get(id) ?? null;
   const row = await prisma.curatorModel.findUnique({ where: { id }, select: { params: true } });
-  const params = row && isKnownParams(row.params) ? row.params : null;
+  const params = row ? explainable(row.params) : null;
+  const threshold = row ? (row.params as { threshold?: unknown } | null)?.threshold : undefined;
   const importance: Importance | null = params
     ? {
         modelId: id,
         learner: params.kind === BOOSTED_MODEL_KIND ? "gbdt" : "logistic",
-        threshold: params.threshold,
+        threshold: typeof threshold === "number" ? threshold : params.threshold,
         features: featureImportance(params),
       }
     : null;
@@ -239,7 +261,10 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     // Importance is a weights-level view, so it comes from a learner (the consensus's inputs are
     // other models' ranks, not features): the newest active one.
     prisma.curatorModel.findFirst({
-      where: { status: "active", kind: { in: [CURATOR_MODEL_KIND, BOOSTED_MODEL_KIND] } },
+      where: {
+        status: "active",
+        kind: { in: [CURATOR_MODEL_KIND, BOOSTED_MODEL_KIND, TWO_STAGE_MODEL_KIND] },
+      },
       orderBy: { createdAt: "desc" },
       select: { id: true },
     }),
@@ -271,6 +296,10 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
   const latest = runs[0] ?? null;
   const importanceId = active?.id ?? latest?.id ?? null;
   const importance = importanceId ? await importanceFor(importanceId) : null;
+  // The inputs' health from the newest run that measured it (every learner in a run carries the
+  // same report; one copy is enough).
+  const featureHealth: FeatureReport | null =
+    runs.map((r) => asMetrics(r.evalMetrics).featureReport).find((f) => f !== undefined) ?? null;
 
   return {
     window: { days, since, until },
@@ -285,6 +314,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
       targetPerHour: env.CURATED_TARGET_PER_HOUR,
     },
     importance,
+    featureHealth,
     runs: runs.map(summarizeRun),
     // Everything the hit-rate report knows, minus per-filter rows: those name other users' filters.
     curatedAlerts: report.curatedAlerts,

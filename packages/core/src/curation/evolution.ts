@@ -1,6 +1,14 @@
 import { DEFAULT_BOOSTING_OPTIONS, type BoostingOptions } from "./boosting.js";
-import { ORDER_FLOW_FEATURES, type ContestantSpec, type CuratorRecipe } from "./contestants.js";
+import {
+  MOMENTUM_FEATURES,
+  ORDER_FLOW_FEATURES,
+  type ContestantSpec,
+  type CuratorRecipe,
+} from "./contestants.js";
 import { CANDIDATE_FEATURE_NAMES, type CandidateFeatureName } from "./features.js";
+import { recordScore, type CallRecord } from "./leaderboard.js";
+import { GOAL_MULTIPLE } from "./labels.js";
+import type { PrecisionTargets } from "./trainer.js";
 
 /**
  * The curator contest, evolving. Every learner seat on the roster (contestants.ts) is a LANE: a
@@ -83,15 +91,19 @@ const TREE_KNOBS = Object.keys(TREE_BOUNDS) as TreeKnob[];
 /** A recipe with every knob the mutator touches written out, so offspring differ by explicit steps. */
 export function normalizeRecipe(recipe: CuratorRecipe, baseHalfLifeDays: number): CuratorRecipe {
   const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? baseHalfLifeDays;
+  // The two-stage shape is inherited, never mutated: it is a different question (survive, then
+  // run), and a seat that holds it keeps asking it.
+  const shape = recipe.twoStage ? { twoStage: true as const } : {};
   if (recipe.learner === "gbdt") {
     const boosting: BoostingOptions = {};
     for (const k of TREE_KNOBS) boosting[k] = recipe.boosting?.[k] ?? DEFAULT_BOOSTING_OPTIONS[k];
-    return { learner: "gbdt", recencyHalfLifeDays, boosting };
+    return { learner: "gbdt", recencyHalfLifeDays, boosting, ...shape };
   }
   return {
     learner: "logistic",
     recencyHalfLifeDays,
     ...(recipe.featureNames ? { featureNames: [...recipe.featureNames] } : {}),
+    ...shape,
   };
 }
 
@@ -165,7 +177,14 @@ export function mutateRecipe(
       } else if (rng() < 0.5) {
         child = mate.featureNames
           ? { ...child, featureNames: [...mate.featureNames] }
-          : { learner: "logistic", recencyHalfLifeDays: child.recencyHalfLifeDays };
+          : normalizeRecipe(
+              {
+                learner: "logistic",
+                recencyHalfLifeDays: child.recencyHalfLifeDays,
+                twoStage: child.twoStage,
+              },
+              opts.baseHalfLifeDays,
+            );
       }
     }
     if (rng() < FAMILY_SWITCH_P) {
@@ -173,6 +192,7 @@ export function mutateRecipe(
         {
           learner: child.learner === "gbdt" ? "logistic" : "gbdt",
           recencyHalfLifeDays: child.recencyHalfLifeDays,
+          twoStage: child.twoStage,
         },
         opts.baseHalfLifeDays,
       );
@@ -191,7 +211,14 @@ export function mutateRecipe(
           const featureNames = mutateFeatures(child.featureNames, rng);
           child = featureNames
             ? { ...child, featureNames }
-            : { learner: "logistic", recencyHalfLifeDays: child.recencyHalfLifeDays };
+            : normalizeRecipe(
+                {
+                  learner: "logistic",
+                  recencyHalfLifeDays: child.recencyHalfLifeDays,
+                  twoStage: child.twoStage,
+                },
+                opts.baseHalfLifeDays,
+              );
         }
       }
     }
@@ -206,9 +233,10 @@ export function mutateRecipe(
   return forced;
 }
 
-const isOrderFlow = (names: readonly string[]) =>
-  names.length === ORDER_FLOW_FEATURES.length &&
-  names.every((n) => ORDER_FLOW_FEATURES.includes(n as CandidateFeatureName));
+const sameSet = (names: readonly string[], set: readonly CandidateFeatureName[]) =>
+  names.length === set.length && names.every((n) => set.includes(n as CandidateFeatureName));
+const isOrderFlow = (names: readonly string[]) => sameSet(names, ORDER_FLOW_FEATURES);
+const isMomentum = (names: readonly string[]) => sameSet(names, MOMENTUM_FEATURES);
 
 /** The family-and-traits part of a lane's name, e.g. "Deep Trees Recent". */
 export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): string {
@@ -219,12 +247,14 @@ export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): stri
     family = depth >= 5 ? "Deep Trees" : depth <= 2 ? "Shallow Trees" : "Trees";
   } else if (r.featureNames && isOrderFlow(r.featureNames)) {
     family = "Order Flow";
+  } else if (r.featureNames && isMomentum(r.featureNames)) {
+    family = "Momentum";
   } else {
     family = r.featureNames ? "Lean Linear" : "Linear";
   }
   const hl = r.recencyHalfLifeDays!;
   const memory = hl <= 4 ? " Recent" : hl >= 30 ? " Patient" : "";
-  return family + memory;
+  return (r.twoStage ? "Survivor " : "") + family + memory;
 }
 
 const fmtDays = (d: number) => `${Number.isInteger(d) ? d : d.toFixed(1)} day${d === 1 ? "" : "s"}`;
@@ -247,6 +277,8 @@ export function describeRecipe(
     const n = r.featureNames?.length ?? CANDIDATE_FEATURE_NAMES.length;
     what = `Logistic regression on ${n === CANDIDATE_FEATURE_NAMES.length ? "every" : `${n} of ${CANDIDATE_FEATURE_NAMES.length}`} features; ${memory}`;
   }
+  if (r.twoStage)
+    what = `Two stages (survive the hour, then double): ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
   return parentName ? `${what}. Bred from ${parentName}.` : what;
 }
 
@@ -351,6 +383,87 @@ export interface ReplacementInput {
    * collapsed onto one family has no fallback when the market shifts under it.
    */
   challengerLearners?: readonly CuratorRecipe["learner"][];
+  /**
+   * The statistical gate on a takeover, when given (see TakeoverEvidence). Without it the margin
+   * alone decides, as before.
+   */
+  evidence?: TakeoverEvidence;
+}
+
+/**
+ * What makes a challenger's exam win EVIDENCE rather than a point estimate. The margin absorbs
+ * best-of-several luck among the challengers; this absorbs the exam's own noise: an exam of 12
+ * calls can swing 20 points on two coin flips, so a lane is only unseated when the challenger's
+ * exam has enough wins behind it and beats the lane's on the same rows in most paired bootstrap
+ * resamples - and never twice in quick succession, so a seat is not churned run after run on
+ * the same thin evidence.
+ */
+export interface TakeoverEvidence {
+  /** Wins the challenger's exam record must hold (a hit rate over three wins is noise). */
+  minExamWins: number;
+  /** Share of paired bootstrap resamples in which the challenger must score higher, 0-1 (0 = off). */
+  confidence: number;
+  /** The paired bootstrap confidence that challenger `index` beats lane `slot` on the same rows, or null when unmeasurable. */
+  pairedConfidence: (slot: string, challenger: number) => number | null;
+  /** Wins in each challenger's exam record, in breeding order. */
+  challengerExamWins: readonly number[];
+  /** When the newest takeover happened, if any. */
+  lastTakeoverAt: Date | null;
+  /** A takeover sooner than this after the last one is refused. */
+  minTakeoverIntervalMs: number;
+}
+
+/** Paired bootstrap resamples. 200 resolves a 0.9 confidence to about +/-0.02. */
+const BOOTSTRAP_DRAWS = 200;
+const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
+
+/**
+ * The share of bootstrap resamples (rows drawn with replacement, the SAME draw for both sides)
+ * in which the challenger's call record scores higher than the lane's. Both sides are given as
+ * their call masks over the same rows - "would it have called row i" - so the comparison is
+ * paired: both see the same lucky and unlucky rows in every resample. Null when either side
+ * called nothing (no record to compare).
+ */
+export function pairedBootstrapConfidence(
+  labels: ArrayLike<number>,
+  challengerCalls: ArrayLike<number>,
+  laneCalls: ArrayLike<number>,
+  targets: PrecisionTargets,
+  rng: Rng,
+  draws = BOOTSTRAP_DRAWS,
+): number | null {
+  const n = labels.length;
+  if (n === 0 || challengerCalls.length !== n || laneCalls.length !== n) return null;
+  let anyChallenger = false;
+  let anyLane = false;
+  for (let i = 0; i < n; i++) {
+    if (challengerCalls[i]) anyChallenger = true;
+    if (laneCalls[i]) anyLane = true;
+  }
+  if (!anyChallenger || !anyLane) return null;
+  let challengerWins = 0;
+  for (let d = 0; d < draws; d++) {
+    const c: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
+    const l: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
+    for (let k = 0; k < n; k++) {
+      const i = Math.floor(rng() * n);
+      const label = labels[i]!;
+      if (challengerCalls[i]) add(c, label);
+      if (laneCalls[i]) add(l, label);
+    }
+    const sc = recordScore(c, targets) ?? 0;
+    const sl = recordScore(l, targets) ?? 0;
+    if (sc > sl) challengerWins += 1;
+  }
+  return challengerWins / draws;
+}
+
+function add(record: CallRecord, label: number): void {
+  record.calls += 1;
+  record.graded += 1;
+  if (label > 0) record.wins += 1;
+  if (label >= GOAL_LABEL) record.goals += 1;
+  record.sumLabel += label;
 }
 
 export interface Replacement {
@@ -390,11 +503,33 @@ export function chooseReplacement(input: ReplacementInput): Replacement | null {
   const challengerScore = input.challengerScores[best]!;
   const bar = (weakest.examScore ?? 0) + input.margin;
   if (challengerScore < bar) return null;
+  let evidenceNote = "";
+  const ev = input.evidence;
+  if (ev) {
+    if (
+      ev.lastTakeoverAt !== null &&
+      input.now.getTime() - ev.lastTakeoverAt.getTime() < ev.minTakeoverIntervalMs
+    )
+      return null;
+    const wins = ev.challengerExamWins[best] ?? 0;
+    if (wins < ev.minExamWins) return null;
+    if (ev.confidence > 0) {
+      const confidence = ev.pairedConfidence(weakest.lane.slot, best);
+      // A lane with no exam record of its own to pair against is beaten by the wins floor alone.
+      if (confidence !== null && confidence < ev.confidence) return null;
+      evidenceNote =
+        confidence === null
+          ? `, ${wins} exam wins`
+          : `, ${wins} exam wins, ahead in ${Math.round(confidence * 100)}% of paired resamples`;
+    } else {
+      evidenceNote = `, ${wins} exam wins`;
+    }
+  }
   return {
     slot: weakest.lane.slot,
     challenger: best,
     reason:
       `exam ${challengerScore.toFixed(1)} vs ${weakest.lane.name}'s ${weakest.examScore?.toFixed(1) ?? "none"} ` +
-      `on the same run (leaderboard ${weakest.composite?.toFixed(1) ?? "unscored"}, weakest of ${seasoned.length} seasoned)`,
+      `on the same run (leaderboard ${weakest.composite?.toFixed(1) ?? "unscored"}, weakest of ${seasoned.length} seasoned${evidenceNote})`,
   };
 }

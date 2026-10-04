@@ -1,5 +1,10 @@
 import type { BoostingOptions } from "./boosting.js";
-import { TRADE_FLOW_FEATURES, type CandidateFeatureName } from "./features.js";
+import {
+  MARKET_CONTEXT_FEATURES,
+  PRICE_PATH_FEATURES,
+  TRADE_FLOW_FEATURES,
+  type CandidateFeatureName,
+} from "./features.js";
 import type { CuratorLearner } from "./trainer.js";
 
 /**
@@ -16,12 +21,14 @@ import type { CuratorLearner } from "./trainer.js";
  *    the point: near-identical members teach the consensus nothing.
  *  - "stacked": the consensus - a second-order model trained on the other contestants' own
  *    out-of-sample calls (curation/stacking.ts). The default feed.
+ *  - "blend": the learners' confidence ranks averaged, nothing fitted (curation/blend.ts) - the
+ *    consensus's unlearned rival.
  *
  * Ids are stable storage keys (CuratedAlert.model, CuratorModel.contestant, User.curatedModel):
  * never rename one; retire it and add a new id instead.
  */
 
-export type ContestantRole = "rules" | "learner" | "stacked";
+export type ContestantRole = "rules" | "learner" | "stacked" | "blend";
 
 /** What a learner contestant trains - the knobs that make it a different model. */
 export interface CuratorRecipe {
@@ -32,6 +39,8 @@ export interface CuratorRecipe {
   featureNames?: readonly CandidateFeatureName[];
   /** Boosted only: hyperparameters over DEFAULT_BOOSTING_OPTIONS. */
   boosting?: BoostingOptions;
+  /** Survival-first two-stage shape (see TwoStageCuratorParams in trainer.ts), either family. */
+  twoStage?: boolean;
 }
 
 export interface ContestantSpec {
@@ -47,6 +56,7 @@ export interface ContestantSpec {
 /** The consensus - what every subscriber sees until they pick another model. */
 export const CONSENSUS_CONTESTANT = "consensus";
 export const RULES_CONTESTANT = "rules";
+export const BLEND_CONTESTANT = "blend";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
 export const RECENT_HALF_LIFE_DAYS = 3;
@@ -77,12 +87,28 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = [
   ...TRADE_FLOW_FEATURES,
 ];
 
+/**
+ * The last half hour's price path and the market around it, plus the order flow - the "what is
+ * it doing right now, and is now a good time" lens, blind to holder structure and socials.
+ */
+export const MOMENTUM_FEATURES: readonly CandidateFeatureName[] = [
+  ...PRICE_PATH_FEATURES,
+  ...MARKET_CONTEXT_FEATURES,
+  ...ORDER_FLOW_FEATURES,
+];
+
 export const CONTESTANTS: readonly ContestantSpec[] = [
   {
     id: CONSENSUS_CONTESTANT,
     name: "Consensus",
     description: "Learns how far to trust each other model, and calls when the room agrees",
     role: "stacked",
+  },
+  {
+    id: BLEND_CONTESTANT,
+    name: "Blend",
+    description: "The trained models' confidence ranks averaged, with the extremes trimmed - nothing fitted",
+    role: "blend",
   },
   {
     id: RULES_CONTESTANT,
@@ -132,6 +158,21 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     role: "learner",
     recipe: { learner: "gbdt", recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS },
   },
+  {
+    id: "momentum",
+    name: "Momentum",
+    description:
+      "Logistic regression on the last half hour's price path, order flow and the market around it",
+    role: "learner",
+    recipe: { learner: "logistic", featureNames: MOMENTUM_FEATURES },
+  },
+  {
+    id: "survivor",
+    name: "Survivor",
+    description: "Two boosted-tree stages: first whether it holds above the stop, then whether it doubles",
+    role: "learner",
+    recipe: { learner: "gbdt", twoStage: true },
+  },
 ];
 
 export const CONTESTANT_IDS: readonly string[] = CONTESTANTS.map((c) => c.id);
@@ -153,5 +194,7 @@ export function enabledContestants(ids: readonly string[]): ContestantSpec[] {
   const wanted = new Set(ids);
   wanted.add(RULES_CONTESTANT);
   const learners = CONTESTANTS.filter((c) => c.role === "learner" && wanted.has(c.id));
-  return CONTESTANTS.filter((c) => wanted.has(c.id) && (c.role !== "stacked" || learners.length >= 2));
+  return CONTESTANTS.filter(
+    (c) => wanted.has(c.id) && ((c.role !== "stacked" && c.role !== "blend") || learners.length >= 2),
+  );
 }

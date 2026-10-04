@@ -19,16 +19,21 @@ import {
   rankFromQuantiles,
   rulesSignal,
   scoreStacked,
+  scoreBlend,
+  calibratedWinRate,
   RULES_CONTESTANT,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
+  BLEND_MODEL_KIND,
   SUPPORTED_CURATOR_MODEL_KINDS,
   GOVERNOR_BURST_WINDOW_MINUTES,
+  type BlendCuratorParams,
   type ContestantSpec,
   type CurationDecision,
   type Env,
   type RulesCuratorParams,
   type ScoredToken,
+  type ServedCuratorExtras,
   type StackedCuratorParams,
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
@@ -65,7 +70,8 @@ type RosterEntry =
       rankCutoff: number | undefined;
     }
   | { role: "learner"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
-  | { role: "stacked"; spec: ContestantSpec; model: ModelRef<StackedCuratorParams> };
+  | { role: "stacked"; spec: ContestantSpec; model: ModelRef<StackedCuratorParams> }
+  | { role: "blend"; spec: ContestantSpec; model: ModelRef<BlendCuratorParams> };
 
 interface CuratorRoster {
   /** Enabled contestants that have what they need to decide, in roster order. */
@@ -135,25 +141,43 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
           model: { id: row.id, params: row.params as unknown as TrainedCuratorParams },
         });
       }
-    } else if (row?.kind === STACKED_MODEL_KIND) {
+    } else if (spec.role === "stacked" && row?.kind === STACKED_MODEL_KIND) {
       entries.push({
         role: "stacked",
         spec,
         model: { id: row.id, params: row.params as unknown as StackedCuratorParams },
       });
+    } else if (spec.role === "blend" && row?.kind === BLEND_MODEL_KIND) {
+      entries.push({
+        role: "blend",
+        spec,
+        model: { id: row.id, params: row.params as unknown as BlendCuratorParams },
+      });
     }
   }
 
-  // The consensus reads its members' probabilities through quantile tables built from exactly
-  // the models it was trained beside. If a member's current model is a different generation (or
-  // missing), those tables describe the wrong scale - it sits out until the next run.
+  // The consensus and the blend read their members' probabilities through quantile tables built
+  // from exactly the models they were trained beside. If a member's current model is a different
+  // generation (or missing), those tables describe the wrong scale - the combiner sits out until
+  // the next run, and says so in the log (a silent sit-out looked like a model that never calls).
   const learnerIds = new Map(
     entries.flatMap((e) => (e.role === "learner" ? [[e.spec.id, e.model.id] as const] : [])),
   );
-  const usable = entries.filter(
-    (e) =>
-      e.role !== "stacked" || e.model.params.members.every((m) => learnerIds.get(m.contestant) === m.modelId),
-  );
+  const usable = entries.filter((e) => {
+    if (e.role !== "stacked" && e.role !== "blend") return true;
+    const stale = e.model.params.members.filter((m) => learnerIds.get(m.contestant) !== m.modelId);
+    if (stale.length === 0) return true;
+    logger.warn("combiner sitting out: its members' active models are not the ones it was trained beside", {
+      contestant: e.spec.id,
+      modelId: e.model.id,
+      staleMembers: stale.map((m) => ({
+        contestant: m.contestant,
+        trainedBeside: m.modelId,
+        active: learnerIds.get(m.contestant) ?? null,
+      })),
+    });
+    return false;
+  });
   const consensus = usable.find((e) => e.role === "stacked");
   // The default is the stored best performer (curation/champion.ts) while it can still send here;
   // else the consensus once it can call, else Rules - the same answer the API gives.
@@ -245,11 +269,41 @@ function decideCurations(
         confidence: probability * 100,
         reasons: curate ? topModelReasons(params, features) : [],
         source: id,
+        ...servedFields(params, probability),
       });
     }
   }
 
   for (const entry of roster.entries) {
+    if (entry.role === "blend") {
+      const { params, id } = entry.model;
+      const probability = scoreBlend(params, probabilities);
+      const curate = probability >= params.threshold;
+      let reasons: string[] = [];
+      if (curate) {
+        const ranked = params.members
+          .map((m) => ({
+            m,
+            rank: rankFromQuantiles(m.quantiles, probabilities.get(m.contestant) ?? -Infinity),
+          }))
+          .sort((a, b) => b.rank - a.rank);
+        const backers = ranked
+          .filter((r) => r.rank >= BACKING_RANK)
+          .map((r) => names.get(r.m.contestant))
+          .filter((b): b is string => b !== undefined);
+        if (backers.length > 0) reasons.push(`backed by ${backers.join(", ")}`);
+        const strongest = ranked[0] ? learners.get(ranked[0].m.contestant) : undefined;
+        if (strongest) reasons = [...reasons, ...topModelReasons(strongest.params, features, 3)];
+      }
+      decisions.set(entry.spec.id, {
+        curate,
+        confidence: probability * 100,
+        reasons,
+        source: id,
+        ...servedFields(params, probability),
+      });
+      continue;
+    }
     if (entry.role !== "stacked") continue;
     const { params, id } = entry.model;
     const probability = scoreStacked(params, probabilities, rulesSignal(scored, params.rules.minScore));
@@ -270,9 +324,29 @@ function decideCurations(
       const strongest = ranked[0] ? learners.get(ranked[0].m.contestant) : undefined;
       if (strongest) reasons = [...reasons, ...topModelReasons(strongest.params, features, 3)];
     }
-    decisions.set(entry.spec.id, { curate, confidence: probability * 100, reasons, source: id });
+    decisions.set(entry.spec.id, {
+      curate,
+      confidence: probability * 100,
+      reasons,
+      source: id,
+      ...servedFields(params, probability),
+    });
   }
   return decisions;
+}
+
+/** The tier and the calibrated 2x rate for a model's probability - see ServedCuratorExtras. */
+function servedFields(
+  params: ServedCuratorExtras,
+  probability: number,
+): Pick<CurationDecision, "tier" | "calibratedPct"> {
+  const out: Pick<CurationDecision, "tier" | "calibratedPct"> = {};
+  if (params.highConvictionThreshold !== undefined) {
+    out.tier = probability >= params.highConvictionThreshold ? "high" : "standard";
+  }
+  const rate = calibratedWinRate(params.calibration, probability);
+  if (rate !== null) out.calibratedPct = Math.round(rate * 1000) / 10;
+  return out;
 }
 
 /**
@@ -634,6 +708,8 @@ async function emitCuratedAlert(
       modelName,
       source: decision.source,
       confidence: decision.confidence,
+      tier: decision.tier ?? null,
+      calibratedPct: decision.calibratedPct ?? null,
       reasons: decision.reasons,
       anchorPriceUsd: scored.priceUsd,
       anchorMcapUsd: scored.marketCapUsd,
@@ -648,6 +724,8 @@ async function emitCuratedAlert(
     mint: token.mintAddress,
     symbol: scored.symbol,
     confidence: decision.confidence,
+    tier: decision.tier ?? null,
+    calibratedPct: decision.calibratedPct ?? null,
     mcap: scored.marketCapUsd,
     reasons: decision.reasons,
   });

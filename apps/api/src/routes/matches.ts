@@ -46,6 +46,8 @@ const CALL_SELECT = {
   model: true,
   modelName: true,
   confidence: true,
+  tier: true,
+  calibratedPct: true,
 } satisfies Prisma.CuratedAlertSelect;
 type CallRow = Prisma.CuratedAlertGetPayload<{ select: typeof CALL_SELECT }>;
 

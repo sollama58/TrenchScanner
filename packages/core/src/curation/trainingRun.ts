@@ -2,6 +2,7 @@ import type { McapBand } from "./curator.js";
 import {
   calibrateThresholdForPrecision,
   precisionCurve,
+  probabilityAtRank,
   thresholdAtRank,
   trainCuratorModel,
   walkForwardEvaluate,
@@ -10,6 +11,7 @@ import {
   type PrecisionCurvePoint,
   type PrecisionTargets,
   type PromotionVerdict,
+  type ServedCuratorExtras,
   type TrainedCuratorParams,
   type TrainingRow,
   type UnthresholdedCuratorParams,
@@ -26,7 +28,10 @@ import {
 } from "./contestants.js";
 import { emptyRecord, recordScore, type CallRecord } from "./leaderboard.js";
 import type { Challenger, Replacement } from "./evolution.js";
-import { trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
+import { quantileTable, trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
+import { trainBlendCurator, type BlendCuratorParams } from "./blend.js";
+import { buildCalibration } from "./calibration.js";
+import { featureHealthReport, type FeatureReport } from "./featureReport.js";
 
 /**
  * One training run, minus the IO: examine every enabled model family on the same walk-forward
@@ -54,6 +59,18 @@ export interface CuratorTrainingConfig {
   heuristicPrecisionGate: boolean;
   /** Families to examine, in order of preference when their records tie. */
   learners: readonly CuratorLearner[];
+  /** Weight multiplier for legacy-rule rows in training (env CURATOR_LEGACY_LABEL_WEIGHT). */
+  legacyLabelWeight?: number;
+  /** Fewest wins a judged exam fold must hold (env CURATOR_EXAM_MIN_FOLD_WINS). */
+  minTestWins?: number;
+  /**
+   * The confidence rank above which a call is tiered "high conviction" (env
+   * CURATED_HIGH_CONVICTION_RANK): 0.995 = the top half-percent of decision moments. Omitted =
+   * no tiering.
+   */
+  highConvictionRank?: number;
+  /** How far back the recent-calls calibration looks (env CURATOR_CALIBRATION_WINDOW_DAYS). Omitted = all of them. */
+  calibrationWindowDays?: number;
 }
 
 /** How one family did in this run's exam - stored for every family, shipped or not. */
@@ -93,6 +110,12 @@ export interface StoredEvalMetrics {
   contestantName?: string;
   /** The exam's governed call record - what the leaderboard scores before live calls exist. */
   exam?: CallRecord;
+  /** The high-conviction tier's rank cutoff and its out-of-sample record, when tiering is on. */
+  highConviction?: { rank: number; record: CallRecord };
+  /** How many recent out-of-sample calls the calibration table was fitted on (0 = no table). */
+  calibrationCalls?: number;
+  /** Per-feature null rates and decile lifts over the rows this run's exam graded. */
+  featureReport?: FeatureReport;
 }
 
 export interface CuratorTrainingOutcome {
@@ -142,6 +165,64 @@ interface RecipeExam {
   trained: UnthresholdedCuratorParams;
   /** The shipped model's probability cutoff, or null when the exam could not set one. */
   deployedThreshold: number | null;
+  /** The high-conviction line and the calibration table - see ServedCuratorExtras. */
+  extras: ServedCuratorExtras;
+  /** The high-conviction tier's out-of-sample record, when tiering is on. */
+  highConviction: StoredEvalMetrics["highConviction"];
+  /** The shipped model's probabilities over the reference rows (aligned with it). */
+  shippedProbabilities: Float64Array;
+}
+
+/** The out-of-sample record of every call at or above a rank cutoff, cooldown replayed. */
+function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: number): CallRecord {
+  const record = emptyRecord();
+  const above = calls.filter((c) => c.probability >= rankCutoff);
+  const byTime = [...above].sort((a, b) => (a.anchorAt?.getTime() ?? 0) - (b.anchorAt?.getTime() ?? 0));
+  const lastSent = new Map<string, number>();
+  for (const c of byTime) {
+    if (c.tokenId !== undefined && c.anchorAt !== undefined) {
+      const t = c.anchorAt.getTime();
+      const last = lastSent.get(c.tokenId);
+      if (last !== undefined && t - last < cooldownMs) continue;
+      lastSent.set(c.tokenId, t);
+    }
+    record.calls += 1;
+    record.graded += 1;
+    if (c.labelValue > 0) record.wins += 1;
+    if (c.labelValue >= Math.log2(4)) record.goals += 1;
+    record.sumLabel += c.labelValue;
+  }
+  return record;
+}
+
+/**
+ * What ships beside a model's cutoff: the high-conviction line (the probability at
+ * cfg.highConvictionRank over the reference rows, the same way the cutoff is translated) and the
+ * calibration table fitted on the newest out-of-sample calls (curation/calibration.ts).
+ */
+function servedExtras(
+  cfg: Pick<CuratorTrainingConfig, "highConvictionRank" | "calibrationWindowDays" | "cooldownHours">,
+  outOfSampleRanks: ScoredOutcome[],
+  shippedProbabilities: ArrayLike<number>,
+  translate: (rank: number) => number | null,
+): { extras: ServedCuratorExtras; highConviction: StoredEvalMetrics["highConviction"] } {
+  const extras: ServedCuratorExtras = {};
+  let highConviction: StoredEvalMetrics["highConviction"];
+  if (cfg.highConvictionRank !== undefined && outOfSampleRanks.length > 0) {
+    const threshold = translate(cfg.highConvictionRank);
+    if (threshold !== null) extras.highConvictionThreshold = threshold;
+    highConviction = {
+      rank: cfg.highConvictionRank,
+      record: recordAbove(outOfSampleRanks, cfg.highConvictionRank, cfg.cooldownHours * 3_600_000),
+    };
+  }
+  const calibration = buildCalibration(
+    outOfSampleRanks,
+    quantileTable(shippedProbabilities),
+    (cfg.calibrationWindowDays ?? Infinity) * 86_400_000,
+  );
+  if (calibration) extras.calibration = calibration;
+  return { extras, highConviction };
 }
 
 async function examineRecipe(
@@ -168,6 +249,9 @@ async function examineRecipe(
     learner: recipe.learner,
     featureNames: recipe.featureNames,
     boosting: recipe.boosting,
+    twoStage: recipe.twoStage,
+    legacyLabelWeight: cfg.legacyLabelWeight,
+    minTestWins: cfg.minTestWins,
   });
   // Calibrated in RANK units: each fold model and the shipped model put probabilities on their
   // own scales, so a raw probability that hit 75% on the fold models says nothing about the
@@ -184,6 +268,8 @@ async function examineRecipe(
     learner: recipe.learner,
     featureNames: recipe.featureNames,
     boosting: recipe.boosting,
+    twoStage: recipe.twoStage,
+    legacyLabelWeight: cfg.legacyLabelWeight,
   });
   // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
   // at its best-effort cutoff (see chooseCutoff) and still competes on its exam. Only an exam
@@ -192,11 +278,23 @@ async function examineRecipe(
     precisionCalibration.threshold === null
       ? null
       : thresholdAtRank(trained, evaluation.decisionReference, precisionCalibration.threshold);
+  const shippedProbabilities = Float64Array.from(evaluation.decisionReference, (r) =>
+    scoreCandidateWithModel(trained, r.features),
+  );
+  const { extras, highConviction } = servedExtras(
+    cfg,
+    evaluation.outOfSampleRanks,
+    shippedProbabilities,
+    (rank) => thresholdAtRank(trained, evaluation.decisionReference, rank),
+  );
   return {
     evaluation,
     result: { learner: recipe.learner, verdict: evaluation.verdict, precisionCalibration },
     trained,
     deployedThreshold,
+    extras,
+    highConviction,
+    shippedProbabilities,
   };
 }
 
@@ -235,7 +333,7 @@ export async function runCuratorTraining(
   const exams: RecipeExam[] = [];
   for (const learner of cfg.learners) exams.push(await examineRecipe(rows, cfg, { learner }));
   const chosen = exams[pickCuratorFamily(exams.map((e) => e.result))]!;
-  const { evaluation, trained, deployedThreshold } = chosen;
+  const { evaluation, trained, deployedThreshold, extras } = chosen;
   const { learner, precisionCalibration } = chosen.result;
 
   // The hand-tuned heuristic gets its cutoff the same way while it holds the job. Its calls do not
@@ -245,7 +343,11 @@ export async function runCuratorTraining(
     cfg.targets,
     cooldown,
   );
-  const params = { ...trained, threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD } as TrainedCuratorParams;
+  const params = {
+    ...trained,
+    threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD,
+    ...extras,
+  } as TrainedCuratorParams;
   const verdict = verdictWithCutoff(chosen);
   const metrics: StoredEvalMetrics = {
     folds: evaluation.folds,
@@ -255,6 +357,8 @@ export async function runCuratorTraining(
     familyComparison: exams.map((e) => e.result),
     precisionCalibration,
     precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
+    ...(chosen.highConviction ? { highConviction: chosen.highConviction } : {}),
+    calibrationCalls: extras.calibration?.calls ?? 0,
     // Stored only when there was evidence to set a cutoff from. Without it the heuristic keeps
     // sending on its gate alone (see heuristicGate in curatedAlerts.ts).
     ...(heuristicCalibration.threshold !== null ? { heuristicCalibration } : {}),
@@ -273,7 +377,8 @@ export interface RulesCuratorParams {
   rankCutoff: number | null;
 }
 
-export type ContestantParams = TrainedCuratorParams | StackedCuratorParams | RulesCuratorParams;
+export type ContestantParams =
+  TrainedCuratorParams | StackedCuratorParams | BlendCuratorParams | RulesCuratorParams;
 
 export interface ContestantTrainingResult {
   contestant: string;
@@ -294,6 +399,8 @@ interface LearnerExam {
   /** Out-of-sample fold probabilities and the shipped model's probabilities, per reference row. */
   foldRanks: Float64Array | null;
   shipped: Float64Array | null;
+  /** 1 where the fold rank clears the exam's own rank cutoff (what the exam called), per reference row. */
+  calls: Uint8Array | null;
 }
 
 async function examineLearner(
@@ -310,7 +417,11 @@ async function examineLearner(
   const record = foldsRecord(evaluation.folds, "model");
   const result: ContestantTrainingResult = {
     contestant: slot,
-    params: { ...trained, threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD } as TrainedCuratorParams,
+    params: {
+      ...trained,
+      threshold: deployedThreshold ?? NEVER_EMIT_THRESHOLD,
+      ...exam.extras,
+    } as TrainedCuratorParams,
     metrics: {
       contestant: slot,
       contestantName: name,
@@ -322,6 +433,8 @@ async function examineLearner(
       precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
       heuristicPrecisionCurve: [],
       exam: record,
+      ...(exam.highConviction ? { highConviction: exam.highConviction } : {}),
+      calibrationCalls: exam.extras.calibration?.calls ?? 0,
     },
   };
   // Every learner's exam cuts the same rows into the same folds, so their reference rows (and
@@ -331,13 +444,33 @@ async function examineLearner(
     ref.length > 0 &&
     evaluation.decisionReference.length === ref.length &&
     evaluation.decisionReference.every((r, i) => r === ref[i]);
+  const rankCutoff = exam.result.precisionCalibration.threshold;
   return {
     result,
     examScore: recordScore(record, cfg.targets),
     evaluation,
     foldRanks: aligned ? Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability) : null,
-    shipped: aligned ? Float64Array.from(ref, (r) => scoreCandidateWithModel(trained, r.features)) : null,
+    shipped: aligned ? exam.shippedProbabilities : null,
+    calls:
+      aligned && rankCutoff !== null
+        ? Uint8Array.from(evaluation.outOfSampleRanks, (c) => (c.probability >= rankCutoff ? 1 : 0))
+        : null,
   };
+}
+
+/**
+ * The exam evidence behind a takeover decision: every side's calls over the SAME reference rows,
+ * so a challenger and a lane can be compared pairwise (see pairedBootstrapConfidence).
+ */
+export interface ExamEvidence {
+  /** The reference rows' labels, in reference order. */
+  labels: Float64Array;
+  /** Per lane slot: 1 where its exam called the row. Absent when its exam set no cutoff. */
+  laneCalls: Map<string, Uint8Array>;
+  /** Per challenger, in breeding order; null when its exam set no cutoff. */
+  challengerCalls: (Uint8Array | null)[];
+  /** Wins in each challenger's exam record, in breeding order. */
+  challengerExamWins: number[];
 }
 
 /**
@@ -349,6 +482,7 @@ export interface EvolutionPlan {
   decide: (
     laneExamScores: Map<string, number | null>,
     challengerScores: (number | null)[],
+    evidence: ExamEvidence,
   ) => Replacement | null;
 }
 
@@ -387,6 +521,7 @@ export async function runEvolvingContest(
   let reference: TrainingRow[] | null = null;
   let rulesEvidence: { folds: EvalFold[]; heuristicOutOfSample: ScoredOutcome[] } | null = null;
 
+  const laneCalls = new Map<string, Uint8Array>();
   const keep = (slot: string, exam: LearnerExam) => {
     if (exam.foldRanks && exam.shipped) {
       foldRanks.set(slot, exam.foldRanks);
@@ -395,7 +530,11 @@ export async function runEvolvingContest(
       foldRanks.delete(slot);
       shippedProbabilities.delete(slot);
     }
+    if (exam.calls) laneCalls.set(slot, exam.calls);
+    else laneCalls.delete(slot);
   };
+  // Measured once, on the rows every learner's exam grades: the inputs' health this run.
+  let featureReport: FeatureReport | null = null;
 
   for (const spec of cfg.contestants) {
     if (spec.role !== "learner" || !spec.recipe) continue;
@@ -406,17 +545,23 @@ export async function runEvolvingContest(
         folds: exam.evaluation.folds,
         heuristicOutOfSample: exam.evaluation.heuristicOutOfSample,
       };
+      featureReport = featureHealthReport(reference);
     }
+    if (featureReport) exam.result.metrics.featureReport = featureReport;
     results.push(exam.result);
     laneExamScores.set(spec.id, exam.examScore);
     keep(spec.id, exam);
   }
 
   const challengerScores: (number | null)[] = [];
+  const challengerCalls: (Uint8Array | null)[] = [];
+  const challengerExamWins: number[] = [];
   let bestChallenger: { index: number; exam: LearnerExam } | null = null;
   for (const [i, bred] of (plan?.challengers ?? []).entries()) {
     const exam = await examineLearner(rows, cfg, "", bred.name, bred.recipe, reference);
     challengerScores.push(exam.examScore);
+    challengerCalls.push(exam.calls);
+    challengerExamWins.push(exam.result.metrics.exam?.wins ?? 0);
     if (
       exam.examScore !== null &&
       (bestChallenger === null || exam.examScore > bestChallenger.exam.examScore!)
@@ -425,7 +570,15 @@ export async function runEvolvingContest(
     }
   }
   let replacement: ContestRunOutcome["replacement"] = null;
-  const decided = plan && challengerScores.length > 0 ? plan.decide(laneExamScores, challengerScores) : null;
+  const decided =
+    plan && challengerScores.length > 0
+      ? plan.decide(laneExamScores, challengerScores, {
+          labels: Float64Array.from(reference ?? [], (r) => r.labelValue),
+          laneCalls,
+          challengerCalls,
+          challengerExamWins,
+        })
+      : null;
   if (decided && bestChallenger && decided.challenger === bestChallenger.index) {
     const { exam } = bestChallenger;
     const slot = decided.slot;
@@ -434,7 +587,7 @@ export async function runEvolvingContest(
       results[seat] = {
         contestant: slot,
         params: exam.result.params,
-        metrics: { ...exam.result.metrics, contestant: slot },
+        metrics: { ...exam.result.metrics, contestant: slot, ...(featureReport ? { featureReport } : {}) },
       };
       keep(slot, exam);
       replacement = { ...decided, bred: plan!.challengers[decided.challenger]!, examScore: exam.examScore };
@@ -487,10 +640,15 @@ export async function runEvolvingContest(
       NEVER_EMIT_THRESHOLD,
     );
     if (stacked) {
+      const served = servedExtras(cfg, stacked.outOfSample, stacked.shippedProbabilities, (rank) =>
+        probabilityAtRank(stacked.shippedProbabilities, rank),
+      );
       results.push({
         contestant: stackedSpec.id,
-        params: stacked.params,
+        params: { ...stacked.params, ...served.extras },
         metrics: {
+          ...(served.highConviction ? { highConviction: served.highConviction } : {}),
+          calibrationCalls: served.extras.calibration?.calls ?? 0,
           contestant: stackedSpec.id,
           contestantName: stackedSpec.name,
           folds: [],
@@ -503,6 +661,51 @@ export async function runEvolvingContest(
           precisionCurve: stacked.precisionCurve,
           heuristicPrecisionCurve: [],
           exam: stacked.exam,
+        },
+      });
+    }
+  }
+
+  const blendSpec = cfg.contestants.find((c) => c.role === "blend");
+  if (blendSpec && reference !== null && foldRanks.size >= 2) {
+    const blend = trainBlendCurator(
+      {
+        reference,
+        memberFoldRanks: foldRanks,
+        memberShippedProbabilities: shippedProbabilities,
+        targets: cfg.targets,
+        cooldownHours: cfg.cooldownHours,
+        targetPerHour: cfg.targetPerHour,
+      },
+      NEVER_EMIT_THRESHOLD,
+    );
+    if (blend) {
+      // Blend scores are already ranks (mean member rank), on one scale for folds and serving:
+      // a rank line translates to itself.
+      const served = servedExtras(
+        cfg,
+        blend.outOfSample,
+        blend.outOfSample.map((c) => c.probability),
+        (rank) => rank,
+      );
+      results.push({
+        contestant: blendSpec.id,
+        params: { ...blend.params, ...served.extras },
+        metrics: {
+          contestant: blendSpec.id,
+          contestantName: blendSpec.name,
+          folds: [],
+          verdict: {
+            promote: false,
+            reason: `${blendSpec.name}: ${blend.params.members.length} models' ranks averaged, judged on ${blend.examChunks} chunk(s) of their out-of-sample calls`,
+          },
+          targets: cfg.targets,
+          precisionCalibration: blend.precisionCalibration,
+          precisionCurve: blend.precisionCurve,
+          heuristicPrecisionCurve: [],
+          exam: blend.exam,
+          ...(served.highConviction ? { highConviction: served.highConviction } : {}),
+          calibrationCalls: served.extras.calibration?.calls ?? 0,
         },
       });
     }

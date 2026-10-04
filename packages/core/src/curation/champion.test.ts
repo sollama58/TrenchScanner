@@ -11,7 +11,13 @@ function standing(id: string, score: number | null, liveGraded: number, calling 
     avgReturnDoublings: null,
     score,
   };
-  const composite: CompositeScore = { score, liveWeight: 0.5, live: summary, exam: summary };
+  const composite: CompositeScore = {
+    score,
+    liveWeight: 0.5,
+    warmingUp: liveGraded < 50,
+    live: summary,
+    exam: summary,
+  };
   return { id, name: id.toUpperCase(), calling, composite };
 }
 

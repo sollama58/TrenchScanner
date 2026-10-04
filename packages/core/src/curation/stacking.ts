@@ -15,6 +15,7 @@ import {
   type PrecisionCurvePoint,
   type PrecisionTargets,
   type ScoredOutcome,
+  type ServedCuratorExtras,
   type TrainingRow,
 } from "./trainer.js";
 import { GOAL_LABEL, type CallRecord } from "./leaderboard.js";
@@ -53,7 +54,7 @@ export interface StackedMember {
   quantiles: number[];
 }
 
-export interface StackedCuratorParams {
+export interface StackedCuratorParams extends ServedCuratorExtras {
   kind: typeof STACKED_MODEL_KIND;
   members: StackedMember[];
   /** The rules contestant as a member: its rank-score quantiles and the gate's score floor. */
@@ -159,6 +160,10 @@ export interface StackingResult {
   /** The meta exam's governed record, each chunk graded at a cutoff set from the other chunks. */
   exam: CallRecord;
   examChunks: number;
+  /** The meta exam's out-of-sample calls in rank units - what the calibration table is fitted on. */
+  outOfSample: ScoredOutcome[];
+  /** The shipped meta model's probabilities over the reference rows (the calibration's quantile source). */
+  shippedProbabilities: number[];
 }
 
 /** Returns null when there is nothing to stack (fewer than two members, or no reference rows). */
@@ -258,6 +263,7 @@ export async function trainStackedCurator(
     precisionCalibration.threshold === null
       ? null
       : thresholdAtRank(meta, metaRows, precisionCalibration.threshold);
+  const shippedProbabilities = metaRows.map((r) => scoreCandidateWithModel(meta, r.features));
 
   return {
     params: {
@@ -275,6 +281,8 @@ export async function trainStackedCurator(
     precisionCurve: precisionCurve(outOfSample),
     exam,
     examChunks: judged.length,
+    outOfSample,
+    shippedProbabilities,
   };
 }
 

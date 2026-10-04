@@ -163,6 +163,19 @@ export function AlertCard({
                 </span>
               </span>
             )}
+            {curated && (calls.some((c) => c.tier === "high") || curated.tier === "high") && (
+              <span className="pill pill-model" title="In the model's top half-percent of decision moments">
+                <span className="pill-text">High conviction</span>
+              </span>
+            )}
+            {curated && calibratedRate(curated, calls) !== null && (
+              <span
+                className="pill"
+                title="Of recent out-of-sample calls ranked like this one, the share that doubled within the hour"
+              >
+                <span className="pill-text">≈{calibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
+              </span>
+            )}
             {showFilter && !labelSource && card.kind === "match" && card.filter && (
               <span className="pill">{card.filter.name}</span>
             )}
@@ -335,4 +348,15 @@ function TokenAvatar({ url, symbol }: { url: string | null; symbol: string | nul
       onError={() => setAttempt((a) => a + 1)}
     />
   );
+}
+
+/** The best calibrated 2x rate among the calls on a card (the lead call's when alone), or null. */
+function calibratedRate(
+  curated: { calibratedPct?: number | null },
+  calls: { calibratedPct?: number | null }[],
+): number | null {
+  const rates = [curated.calibratedPct, ...calls.map((c) => c.calibratedPct)].filter(
+    (r): r is number => typeof r === "number",
+  );
+  return rates.length > 0 ? Math.max(...rates) : null;
 }

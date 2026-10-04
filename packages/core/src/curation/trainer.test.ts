@@ -344,11 +344,18 @@ describe("decidePromotion", () => {
   });
 
   it("scores a heuristic-silent fold against blind chance", () => {
-    // baseWinRatePct is 5: random emission doubles 5% of the time, so the bar is 10%.
-    const silent = fold({ precisionPct: 12 }, { emitted: 0, precisionPct: null, avgLabel: null });
+    // baseWinRatePct is 5: random emission doubles 5% of the time, so the bar is 10% - cleared by
+    // the record's lower bound, so the picks have to be many as well as good.
+    const silent = fold(
+      { emitted: 100, precisionPct: 15 },
+      { emitted: 0, precisionPct: null, avgLabel: null },
+    );
     expect(decidePromotion([silent, silent], 5_000, 1_500).promote).toBe(true);
-    const weak = fold({ precisionPct: 8 }, { emitted: 0, precisionPct: null, avgLabel: null });
+    const weak = fold({ emitted: 100, precisionPct: 8 }, { emitted: 0, precisionPct: null, avgLabel: null });
     expect(decidePromotion([weak, weak], 5_000, 1_500).promote).toBe(false);
+    // The same 15% on a dozen picks is one lucky call from 7%: not evidence.
+    const thin = fold({ emitted: 13, precisionPct: 15 }, { emitted: 0, precisionPct: null, avgLabel: null });
+    expect(decidePromotion([thin, thin], 5_000, 1_500).promote).toBe(false);
   });
 
   it("never promotes a model that emits nothing", () => {
@@ -362,9 +369,9 @@ describe("decidePromotion", () => {
   });
 
   it("treats a heuristic under the emissions floor as silent - the bar becomes blind chance", () => {
-    const thinHeuristic = fold({ emitted: 20, precisionPct: 15 }, { emitted: 2, precisionPct: 100 });
+    const thinHeuristic = fold({ emitted: 100, precisionPct: 15 }, { emitted: 2, precisionPct: 100 });
     expect(decidePromotion([thinHeuristic, thinHeuristic], 5_000, 1_500).promote).toBe(true);
-    const thinBoth = fold({ emitted: 20, precisionPct: 8 }, { emitted: 2, precisionPct: 100 });
+    const thinBoth = fold({ emitted: 100, precisionPct: 8 }, { emitted: 2, precisionPct: 100 });
     expect(decidePromotion([thinBoth, thinBoth], 5_000, 1_500).promote).toBe(false);
   });
 });

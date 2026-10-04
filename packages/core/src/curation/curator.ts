@@ -95,6 +95,18 @@ export interface CurationDecision {
   /** Short human-readable strings: why it was curated - shown on the alert card. */
   reasons: string[];
   source: string;
+  /**
+   * "high" when the call clears the model's high-conviction line (the top CURATED_HIGH_CONVICTION_RANK
+   * share of decision moments), else "standard". Absent from the rules and from models trained
+   * before tiers existed.
+   */
+  tier?: "high" | "standard";
+  /**
+   * The 2x rate of recent out-of-sample calls ranked like this one, in percent - the number a
+   * trader can act on, as opposed to `confidence`, which is in the curator's own units. Absent
+   * when the model carries no calibration table.
+   */
+  calibratedPct?: number;
 }
 
 /**
