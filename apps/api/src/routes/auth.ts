@@ -11,7 +11,7 @@ import {
   type User,
 } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
-import { SESSION_COOKIE_NAME, verifyRequestSession } from "../auth/session.js";
+import { SESSION_COOKIE_NAME, verifyRequestSessions } from "../auth/session.js";
 
 // Length caps run before any base58 decode: bs58.decode is quadratic in input length, so an
 // uncapped field let one unauthenticated request (a ~1MB walletAddress) block the event loop for
@@ -239,13 +239,22 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
   app.post("/logout", async (request, reply) => {
     // Revoke, not just forget: clearing the cookie alone left a copied token valid for the rest
     // of SESSION_TTL_HOURS. Bumping sessionVersion invalidates every browser session this user
-    // holds. Only for a verified, current browser session - a paired phone is revoked per device.
-    const session = await verifyRequestSession(app.sessionSigner, request);
-    if (session && !session.deviceId) {
-      await prisma.user.updateMany({
-        where: { id: session.userId, sessionVersion: session.sessionVersion ?? 0 },
-        data: { sessionVersion: { increment: 1 } },
-      });
+    // holds; a paired phone signing out switches off its own device row, the one thing that
+    // revokes a device session (its token is good for a year otherwise). Every verified token on
+    // the request counts - the cookie and a header can both be present, and the live one may be
+    // either. A stale browser token matches no row, so it can't sign out newer sessions.
+    for (const session of await verifyRequestSessions(app.sessionSigner, request)) {
+      if (session.deviceId) {
+        await prisma.linkedDevice.updateMany({
+          where: { id: session.deviceId, userId: session.userId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      } else {
+        await prisma.user.updateMany({
+          where: { id: session.userId, sessionVersion: session.sessionVersion ?? 0 },
+          data: { sessionVersion: { increment: 1 } },
+        });
+      }
     }
 
     // Same attributes as when it was set. Browsers key a cookie's identity on name+domain+path

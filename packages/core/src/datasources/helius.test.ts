@@ -376,6 +376,31 @@ describe("HeliusClient.getEarliestActivityBatch with boundSufficientBefore", () 
   });
 });
 
+describe("HeliusClient.getEarliestActivityBatch when the exact lookup fails", () => {
+  it("reports a busy wallet as failed, never as its in-window bound", async () => {
+    // The bound only says "busy"; passed on, the caller cached the wallet as not fresh for good.
+    const cutoff = SECONDS;
+    const { url } = await startServer((calls) =>
+      calls.map((c) =>
+        c.method === "getTransactionsForAddress"
+          ? { jsonrpc: "2.0", id: c.id, error: { code: -32429, message: "rate limited" } }
+          : {
+              jsonrpc: "2.0",
+              id: c.id,
+              result: Array.from({ length: 200 }, (_, i) => ({ signature: `s${i}`, blockTime: cutoff + 60 })),
+            },
+      ),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+
+    const result = await client.getEarliestActivityBatch(["busy"], {
+      boundSufficientBefore: new Date(cutoff * 1000),
+    });
+
+    expect(result.get("busy")).toEqual({ status: "failed" });
+  });
+});
+
 describe("HeliusClient.getMintAuthorityStatusBatch", () => {
   function mintAccount(mintAuthority: string | null, freezeAuthority: string | null) {
     return { data: { parsed: { info: { mintAuthority, freezeAuthority } } } };

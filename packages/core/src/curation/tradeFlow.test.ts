@@ -43,6 +43,24 @@ describe("TradeFlowBook", () => {
     expect(f.devInitialBuySol).toBe(1.5);
   });
 
+  it("reads a busy mint's trade rate off the span its window buffer still holds", () => {
+    // 10 trades a second for 5 minutes: 3,000 trades, more than the buffer keeps.
+    const book = new TradeFlowBook();
+    book.launch({ mint: MINT, creator: "dev", marketCapSol: 30, at: T0 });
+    for (let i = 0; i < 3_000; i += 1) book.trade(trade(`w${i % 50}`, "buy", 0.1, T0 + i * 100));
+    const f = book.features(MINT, T0 + 300_000);
+    expect(f.tradesPerMin5m).toBeCloseTo(600, -1);
+  });
+
+  it("keeps the dev's sells when a create message arrives twice", () => {
+    const book = new TradeFlowBook();
+    const create = { mint: MINT, creator: "dev", initialBuyTokens: 100, initialBuySol: 1, at: T0 };
+    book.launch(create);
+    book.trade(trade("dev", "sell", 1, sec(10), { tokenAmount: 100 }));
+    book.launch(create);
+    expect(book.features(MINT, sec(20)).devSoldShare).toBe(1);
+  });
+
   it("tracks the launch's early buyers and the dev's bag", () => {
     const book = new TradeFlowBook();
     book.launch({ mint: MINT, creator: "dev", initialBuyTokens: 50_000_000, at: T0 });

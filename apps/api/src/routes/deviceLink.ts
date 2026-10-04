@@ -69,7 +69,10 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
       maxAge: 365 * 24 * 60 * 60,
     });
     request.log.info({ userId: result.userId, deviceId: result.deviceId }, "paired a phone");
-    return { walletAddress: result.walletAddress, deviceId: result.deviceId };
+    // The token in the body too, like /auth/verify: phone browsers are the ones most likely to
+    // drop the cookie as third-party (Safari on iOS does by default), and a client that keeps the
+    // token can send it as a Bearer header instead - see sessionTokens.
+    return { walletAddress: result.walletAddress, deviceId: result.deviceId, sessionToken: token };
   });
 
   /** The phones currently linked to this account. Revoked ones are gone, not greyed out. */

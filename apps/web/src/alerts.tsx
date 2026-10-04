@@ -115,29 +115,90 @@ export async function requestNotifications(): Promise<NotificationState> {
   }
 }
 
-function showNotification(title: string, body: string, icon: string | undefined, tag: string): boolean {
-  if (notificationState() !== "granted") return false;
+/** The service worker that shows notifications (public/sw.js); null where there is none. */
+let worker: Promise<ServiceWorkerRegistration | null> | null = null;
+
+function notificationWorker(): Promise<ServiceWorkerRegistration | null> {
+  if (worker) return worker;
+  worker =
+    typeof navigator !== "undefined" && "serviceWorker" in navigator && window.isSecureContext
+      ? navigator.serviceWorker.register("/sw.js").catch(() => null)
+      : Promise.resolve(null);
+  return worker;
+}
+
+/** Registers the notification worker early, so the first alert doesn't wait on it. */
+export function prepareNotifications(): void {
+  if (notificationState() === "granted") void notificationWorker();
+}
+
+export type NotifyResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Shows one notification: through the service worker where there is one (the only way on Chrome
+ * for Android, and the same on desktop), else with `new Notification`. Resolves with why it
+ * failed, so the Settings tab can say so instead of failing silently.
+ */
+export async function showNotification(
+  title: string,
+  body: string,
+  icon: string | undefined,
+  tag: string,
+): Promise<NotifyResult> {
+  const state = notificationState();
+  if (state === "unsupported")
+    return { ok: false, reason: "This browser can't show notifications from a page." };
+  if (state !== "granted") return { ok: false, reason: "Notifications aren't allowed for this site yet." };
+  // renotify: a notification with a tag already on screen replaces it silently otherwise.
+  const options: NotificationOptions & { renotify?: boolean } = { body, icon, tag, renotify: true };
+  let workerError: unknown = null;
   try {
-    const n = new Notification(title, { body, icon, tag });
+    const registration = await notificationWorker();
+    if (registration) {
+      const ready = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+      ]);
+      if (ready) {
+        await ready.showNotification(title, options);
+        return { ok: true };
+      }
+    }
+  } catch (e) {
+    workerError = e;
+  }
+  try {
+    const n = new Notification(title, options);
     n.onclick = () => {
       window.focus();
       if (window.location.hash !== "") window.location.hash = "";
       n.close();
     };
-    return true;
-  } catch {
-    // Some mobile browsers only allow notifications from a service worker.
-    return false;
+    return { ok: true };
+  } catch (e) {
+    const err = workerError ?? e;
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
-/** Plays the user's sound now (the Settings tab's preview and test button). */
-export function previewAlert(prefs: AlertPrefs, withNotification: boolean): void {
+/** Plays the user's sound now (the Settings tab's sound and volume previews). */
+export function previewAlert(prefs: AlertPrefs): void {
   unlockAudio();
   playAlertSound(prefs.sound, prefs.volume);
-  if (withNotification) {
-    showNotification("TrenchScanner test alert", "This is how a new alert will look.", undefined, "ts-test");
-  }
+}
+
+/** The test button: the sound (if on) and, when notifications are allowed, a test notification. */
+export async function sendTestAlert(prefs: AlertPrefs): Promise<NotifyResult | null> {
+  unlockAudio();
+  if (prefs.soundEnabled) playAlertSound(prefs.sound, prefs.volume);
+  if (notificationState() !== "granted") return null;
+  // A fresh tag each time, so every test pops up rather than replacing the last one.
+  return showNotification(
+    "TrenchScanner test alert",
+    "This is how a new alert will look.",
+    undefined,
+    `ts-test-${Date.now()}`,
+  );
 }
 
 // ---- The notifier ----
@@ -203,6 +264,7 @@ export function AlertNotifier() {
 
   // Browsers only allow sound after an interaction with the page: unlock on the first one.
   useEffect(() => {
+    prepareNotifications();
     const unlock = () => unlockAudio();
     window.addEventListener("pointerdown", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
@@ -237,7 +299,7 @@ export function AlertNotifier() {
         if (p.soundEnabled) playAlertSound(p.sound, p.volume);
         if (p.browserNotifications) {
           if (toAnnounce.length > MAX_NOTIFICATIONS) {
-            showNotification(
+            void showNotification(
               `${toAnnounce.length} new alerts`,
               toAnnounce.map((c) => describe(c).title).join(" · "),
               undefined,
@@ -246,7 +308,7 @@ export function AlertNotifier() {
           } else {
             for (const c of toAnnounce) {
               const d = describe(c);
-              showNotification(d.title, d.body, c.token.imageUrl ?? undefined, cardKey(c));
+              void showNotification(d.title, d.body, c.token.imageUrl ?? undefined, cardKey(c));
             }
           }
         }

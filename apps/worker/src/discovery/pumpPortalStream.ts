@@ -206,8 +206,7 @@ export class PumpPortalStream {
         this.book.trade(flow.trade);
         return;
       }
-      if (flow && "launch" in flow && this.book.launch(flow.launch))
-        this.pendingSubscribe.add(flow.launch.mint);
+      if (flow && "launch" in flow && this.book.launch(flow.launch)) this.subscribeNow(flow.launch.mint);
     }
     const event = parsePumpPortalMessage(raw, new Date(at));
     if (!event) return;
@@ -251,7 +250,6 @@ export class PumpPortalStream {
     this.lastActivityAt = Date.now();
     socket.addEventListener("open", () => {
       this.lastActivityAt = Date.now();
-      this.backoffMs = MIN_BACKOFF_MS;
       // One connection, both subscriptions - PumpPortal asks clients not to open one per topic.
       socket.send(JSON.stringify({ method: "subscribeNewToken" }));
       socket.send(JSON.stringify({ method: "subscribeMigration" }));
@@ -260,7 +258,12 @@ export class PumpPortalStream {
       logger.info("stream connected");
     });
     socket.addEventListener("message", (event: MessageEvent) => {
-      if (this.socket === socket) this.lastActivityAt = Date.now();
+      if (this.socket === socket) {
+        this.lastActivityAt = Date.now();
+        // Reset on a delivered message, not on open: a server that accepts and then drops us
+        // straight away (a rate limit or ban) would otherwise be redialled every two seconds.
+        this.backoffMs = MIN_BACKOFF_MS;
+      }
       if (typeof event.data === "string") this.handleMessage(event.data);
     });
     socket.addEventListener("error", () => {
@@ -272,6 +275,20 @@ export class PumpPortalStream {
       this.socket = null;
       if (!this.stopped) this.scheduleReconnect();
     });
+  }
+
+  /**
+   * A new launch's trades are subscribed to at once rather than on the next flush: its first
+   * seconds are the snipers and bundles the early-buyer and first-25 features exist to see, and
+   * waiting up to FLUSH_INTERVAL_MS for the batch missed them. Queued when the socket isn't open.
+   */
+  private subscribeNow(mint: string): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== 1) {
+      this.pendingSubscribe.add(mint);
+      return;
+    }
+    socket.send(JSON.stringify({ method: "subscribeTokenTrade", keys: [mint] }));
   }
 
   /** Sends queued trade subscriptions, in chunks. Kept queued while disconnected. */
