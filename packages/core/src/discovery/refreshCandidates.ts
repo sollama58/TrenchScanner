@@ -60,7 +60,14 @@ export async function refreshAndFilterToBand(
   const { mcapMin, mcapMax, bandPaddingRatio } = options;
   const { min: lowerBound, max: upperBound } = scanBand(mcapMin, mcapMax, bandPaddingRatio);
 
-  const marketData = await dexScreener.getTokensByAddresses(mintAddresses);
+  // Tighter than fetchJson's defaults (10s, two retries), which let one slow batch hold the whole
+  // scan cycle for half a minute or more - 47s on 2026-10-04 - when a batch normally answers in
+  // well under a second. A batch given up on costs its mints one cycle's reading, and the next
+  // cycle is seconds away.
+  const marketData = await dexScreener.getTokensByAddresses(mintAddresses, 5, {
+    timeoutMs: 5000,
+    retries: 1,
+  });
   return {
     inBand: marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound),
     liveMints: marketData.map((t) => t.mintAddress),

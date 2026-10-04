@@ -154,11 +154,21 @@ services:
       # makes, so a burn nobody claimed in the browser would sit uncredited.
       - key: SOLANA_RPC_URL
         sync: false
-      # One minute, so a new alert reaches the dashboard within ~a minute of the token qualifying.
-      # Affordable only because RUGCHECK_CACHE_TTL_MINUTES below decouples this cadence from
-      # RugCheck's request rate - see the worker's rugCheckProfiles.ts. A full cycle takes ~10s.
+      # Thirty seconds, so a new alert reaches the dashboard within ~half a minute of the token
+      # qualifying. Affordable because nothing upstream scales with it: RugCheck requests follow
+      # RUGCHECK_CACHE_TTL_MINUTES below (see the worker's rugCheckProfiles.ts), snapshot and
+      # liveness writes are spaced in wall-clock time (scanJob.ts), and the wallet budgets below
+      # are halved to keep Helius spend per minute what it was at one minute. A full cycle took
+      # ~8s on 2026-10-04.
       - key: SCAN_INTERVAL_MINUTES
-        value: "1"
+        value: "0.5"
+      # Per-CYCLE Helius budgets, half their defaults (50 and 30) because the cycle above runs
+      # twice a minute. Curated contenders' wallets are looked up first (one 10-wallet group fits
+      # each budget), the rest behind the cycle on what is left.
+      - key: WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE
+        value: "25"
+      - key: WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
+        value: "15"
       - key: RUGCHECK_CACHE_TTL_MINUTES
         value: "5"
       # Wall-clock span holderGrowthPct is measured over, deliberately independent of the scan
