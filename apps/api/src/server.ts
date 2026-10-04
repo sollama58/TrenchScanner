@@ -16,7 +16,7 @@ import {
   prisma,
 } from "@trenchscanner/core";
 import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
-import { createSessionSigner, verifyRequestSession, type SessionPayload } from "./auth/session.js";
+import { createSessionSigner, verifyRequestSessions, type SessionPayload } from "./auth/session.js";
 import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerDeviceLinkRoutes } from "./routes/deviceLink.js";
@@ -166,13 +166,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    * revocation lookup in resolveSession deliberately is not, because that check IS the revocation
    * and has to run every time.
    */
-  const verifiedSessions = new WeakMap<FastifyRequest, SessionPayload | null>();
-  async function verifySession(request: FastifyRequest): Promise<SessionPayload | null> {
-    if (verifiedSessions.has(request)) return verifiedSessions.get(request) ?? null;
-    // The cookie, or the Authorization header from a browser that drops third-party cookies.
-    const session = await verifyRequestSession(app.sessionSigner, request);
-    verifiedSessions.set(request, session);
-    return session;
+  const verifiedSessions = new WeakMap<FastifyRequest, SessionPayload[]>();
+  async function verifySessions(request: FastifyRequest): Promise<SessionPayload[]> {
+    const cached = verifiedSessions.get(request);
+    if (cached) return cached;
+    // The cookie, and the Authorization header from a browser that drops third-party cookies.
+    const sessions = await verifyRequestSessions(app.sessionSigner, request);
+    verifiedSessions.set(request, sessions);
+    return sessions;
   }
 
   await app.register(rateLimit, {
@@ -181,7 +182,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     keyGenerator: async (request) => {
       // Verified, never merely present: an unverified cookie would let one client mint a fresh
       // bucket per request simply by changing the value, which is no rate limit at all.
-      const session = await verifySession(request).catch(() => null);
+      const session = (await verifySessions(request).catch(() => []))[0];
       return session ? `user:${session.userId}` : `ip:${clientIp(request)}`;
     },
   });
@@ -214,10 +215,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     return true;
   }
 
+  // The first of the request's sessions that is still live: a signed-out cookie must not shadow
+  // a good header (or the reverse), so each is checked rather than only the first that verifies.
   async function resolveSession(request: FastifyRequest) {
-    const session = await verifySession(request);
-    if (!session) return null;
-    return (await sessionStillValid(request, session)) ? session : null;
+    for (const session of await verifySessions(request)) {
+      if (await sessionStillValid(request, session)) return session;
+    }
+    return null;
   }
 
   app.decorate("authenticate", async (request, reply) => {
@@ -257,8 +261,16 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    * three days ago" rather than the much less helpful "you have no access".
    */
   app.decorate("authenticateSubscriber", async (request, reply) => {
-    const session = await verifySession(request);
-    const access = session ? await subscriberCheck(request, session) : null;
+    let session: SessionPayload | null = null;
+    let access: Awaited<ReturnType<typeof subscriberCheck>> = null;
+    // Same rule as resolveSession: the first session that is still live, not merely signed.
+    for (const candidate of await verifySessions(request)) {
+      access = await subscriberCheck(request, candidate);
+      if (access) {
+        session = candidate;
+        break;
+      }
+    }
     if (!session || !access) {
       reply.code(401).send({ error: "unauthenticated" });
       return;
