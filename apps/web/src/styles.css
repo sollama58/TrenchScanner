@@ -2588,3 +2588,90 @@ button.small-btn {
 .champion .row {
   flex-wrap: wrap;
 }
+
+/* ---------- Admin panel ---------- */
+.admin h3 {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.admin-head {
+  margin-bottom: 12px;
+}
+.admin-sections {
+  display: flex;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
+}
+.admin .kpi.admin-ok .kpi-value {
+  color: var(--good-ink);
+}
+.admin .kpi.admin-warn .kpi-value {
+  color: var(--warn);
+}
+.admin .kpi-value {
+  font-size: 26px;
+}
+.admin-tag-ok,
+.admin-tag-warn,
+.admin-tag-bad,
+.admin-tag-muted {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+.admin-tag-ok {
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+.admin-tag-warn {
+  color: var(--warn);
+}
+.admin-tag-bad {
+  color: var(--bad-ink);
+  background: var(--bad-wash);
+}
+.admin-tag-muted {
+  color: var(--muted);
+}
+.admin-error {
+  display: inline-block;
+  white-space: normal;
+  min-width: 260px;
+  max-width: 520px;
+  color: var(--bad-ink);
+  font-size: 12px;
+  font-family: var(--mono);
+  word-break: break-word;
+}
+.admin-query {
+  display: inline-block;
+  white-space: normal;
+  min-width: 300px;
+  max-width: 640px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  word-break: break-word;
+}
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.admin-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.admin-form input {
+  flex: 1 1 220px;
+}
+.admin-form input.admin-days {
+  flex: 0 0 90px;
+}

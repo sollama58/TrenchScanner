@@ -16,6 +16,7 @@ import {
 } from "./components/Icons";
 import {
   TAB_DATA,
+  loadAdminTab,
   loadFiltersTab,
   loadModelTab,
   loadSettingsTab,
@@ -31,6 +32,7 @@ import { AlertNotifier } from "./alerts";
 const LazyModelTab = lazy(() => loadModelTab().then((m) => ({ default: m.ModelTab })));
 const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
 const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.SettingsTab })));
+const LazyAdminTab = lazy(() => loadAdminTab().then((m) => ({ default: m.AdminTab })));
 const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
@@ -39,6 +41,8 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
+/** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
+const ADMIN_TAB = { id: "admin" as Tab, label: "Admin", Icon: ShieldIcon };
 
 type Session = { state: "loading" } | { state: "signed-out" } | { state: "signed-in"; user: User };
 
@@ -85,6 +89,9 @@ export function App() {
   const ModelTab = loaded.model?.ModelTab ?? LazyModelTab;
   const FiltersTab = loaded.filters?.FiltersTab ?? LazyFiltersTab;
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
+  const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
+  const isAdmin = signedIn && session.user.isAdmin;
+  const tabs = isAdmin ? [...TABS, ADMIN_TAB] : TABS;
 
   return (
     <div className="app">
@@ -99,7 +106,7 @@ export function App() {
           </a>
           {signedIn && (
             <nav className="tabs" role="tablist">
-              {TABS.map(({ id, label, Icon }) => (
+              {tabs.map(({ id, label, Icon }) => (
                 <button
                   key={id}
                   role="tab"
@@ -149,6 +156,7 @@ export function App() {
                 {tab === "model" && <ModelTab />}
                 {tab === "filters" && <FiltersTab />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
+                {tab === "admin" && (isAdmin ? <AdminTab goTo={goTo} /> : <LiveTab goTo={goTo} />)}
               </Suspense>
             </div>
           </AccessGate>
