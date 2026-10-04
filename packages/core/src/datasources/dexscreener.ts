@@ -62,7 +62,12 @@ export class DexScreenerClient {
    * A token can have multiple pairs (e.g. multiple DEXes); we keep the
    * highest-liquidity pair per mint as the canonical price source.
    */
-  async getTokensByAddresses(mintAddresses: string[], concurrency = 5): Promise<CandidateToken[]> {
+  async getTokensByAddresses(
+    mintAddresses: string[],
+    concurrency = 5,
+    /** Per-batch timeout and retries; fetchJson's defaults when omitted. */
+    fetchOptions: { timeoutMs?: number; retries?: number } = {},
+  ): Promise<CandidateToken[]> {
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
 
@@ -81,6 +86,7 @@ export class DexScreenerClient {
       try {
         const pairs = await fetchJson<DexScreenerPair[]>(
           `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
+          fetchOptions,
         );
         results.push(...this.selectCanonicalPairs(pairs ?? [], new Set(chunk)));
       } catch (err) {
