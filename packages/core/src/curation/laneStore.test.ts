@@ -38,18 +38,28 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
         alert("a", 30, null),
         alert("b", 5, true),
         alert("b", 50, true), // before b's lane was born - excluded
+        // After the takeover, but called under the retired lane's name by a stale roster - excluded.
+        { ...alert("b", 3, false), modelName: `${TAG}-b-old` },
+        { ...alert("b", 4, null), modelName: `${TAG}-b-new` },
         alert("a", 60 * 24 * 40, true), // outside the window
       ],
     });
     const since = at(60 * 24 * 30);
-    const lanes = [{ slot: `${TAG}-b`, bornAt: at(40) }] as unknown as Parameters<typeof liveCallRecords>[2];
+    const lanes = [{ slot: `${TAG}-b`, name: `${TAG}-b-new`, bornAt: at(40) }] as unknown as Parameters<
+      typeof liveCallRecords
+    >[2];
     const models = [`${TAG}-a`, `${TAG}-b`, `${TAG}-none`];
     const batched = await liveCallRecords(models, since, lanes);
 
     expect(batched.get(`${TAG}-a`)).toEqual(await liveCallRecord(`${TAG}-a`, since));
-    expect(batched.get(`${TAG}-b`)).toEqual(await liveCallRecord(`${TAG}-b`, at(40)));
     expect(batched.get(`${TAG}-none`)).toEqual({ calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 });
     expect(batched.get(`${TAG}-a`)).toMatchObject({ calls: 3, graded: 2, wins: 1, goals: 1 });
-    expect(batched.get(`${TAG}-b`)).toMatchObject({ calls: 1, wins: 1 });
+    expect(batched.get(`${TAG}-b`)).toEqual({
+      calls: 2,
+      graded: 1,
+      wins: 1,
+      goals: 0,
+      sumLabel: expect.any(Number),
+    });
   });
 });

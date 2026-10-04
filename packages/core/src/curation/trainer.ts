@@ -227,9 +227,13 @@ export async function trainTwoStageCurator(
   rows: TrainingRow[],
   opts: ModelTrainOptions = {},
 ): Promise<UnthresholdedCuratorParams> {
+  // A clean win survived by definition: it doubled before any stop. The stored `survived` reads
+  // the whole hour's low, which a win that dumps after doubling breaches - without this it would
+  // teach stage one that a winner was a stop-out and drop it from stage two.
+  const survivedRow = (r: TrainingRow) => r.labelValue > 0 || r.survived === true;
   const known = rows.filter((r) => r.survived !== undefined || r.labelValue > 0);
-  const survivalRows = known.map((r) => ({ ...r, labelValue: (r.survived ?? r.labelValue > 0) ? 1 : 0 }));
-  const survivors = known.filter((r) => r.survived ?? r.labelValue > 0);
+  const survivalRows = known.map((r) => ({ ...r, labelValue: survivedRow(r) ? 1 : 0 }));
+  const survivors = known.filter(survivedRow);
   const survivalPositives = survivalRows.filter((r) => r.labelValue > 0).length;
   const winPositives = survivors.filter((r) => r.labelValue > 0).length;
   if (
@@ -362,12 +366,21 @@ export async function trainCurator(
   // indicator half of the vector, never imputed into the mean.
   const means = new Array<number>(n).fill(0);
   const stdevs = new Array<number>(n).fill(1);
+  // Features with no present value anywhere in the rows (a signal not collected yet, such as the
+  // text reads before the AI key is set). Their missing indicator is 1 on every row, so left
+  // trainable it just splits the intercept with the bias - and the day the signal starts
+  // arriving the indicator flips to 0 and takes that share of the intercept with it, moving
+  // every scored probability. Both their weights stay 0: the model knows nothing about them.
+  const frozen = new Array<boolean>(n).fill(false);
   for (let j = 0; j < n; j++) {
     const present = rows
       .map((r) => r.features[featureNames[j]!])
       .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v))
       .map((v) => transformFeature(featureNames[j]!, v, transform));
-    if (present.length === 0) continue;
+    if (present.length === 0) {
+      frozen[j] = true;
+      continue;
+    }
     const mean = present.reduce((s, v) => s + v, 0) / present.length;
     const variance = present.reduce((s, v) => s + (v - mean) ** 2, 0) / present.length;
     means[j] = mean;
@@ -377,8 +390,14 @@ export async function trainCurator(
   const xs = rows.map((r) => vectorize(r.features, featureNames, means, stdevs, transform));
   const ys = rows.map((r) => (r.labelValue > 0 ? 1 : 0));
   const newestMs = maxAnchorMs(rows);
-  const sampleWeights = rows.map((r) => rowWeight(r, newestMs, opts));
-  const totalWeight = sampleWeights.reduce((s, w) => s + w, 0);
+  let sampleWeights = rows.map((r) => rowWeight(r, newestMs, opts));
+  let totalWeight = sampleWeights.reduce((s, w) => s + w, 0);
+  // Every row weighing nothing (an all-legacy slice with CURATOR_LEGACY_LABEL_WEIGHT=0) would
+  // divide the gradient by zero and ship NaN weights; train on the rows as they are instead.
+  if (!(totalWeight > 0)) {
+    sampleWeights = rows.map(() => 1);
+    totalWeight = rows.length;
+  }
 
   const dim = 2 * n;
   const weights = new Array<number>(dim).fill(0);
@@ -408,6 +427,7 @@ export async function trainCurator(
     // Simple decay keeps late iterations from oscillating; the bias is never regularized.
     const lr = LEARNING_RATE / (1 + iter / 100);
     for (let j = 0; j < dim; j++) {
+      if (frozen[j % n]) continue;
       weights[j] = weights[j]! - lr * (grad[j]! / totalWeight + L2_LAMBDA * weights[j]!);
     }
     bias -= lr * (gradBias / totalWeight);

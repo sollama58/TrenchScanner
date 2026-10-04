@@ -519,7 +519,7 @@ export async function registerCuratedRoutes(
                count(*) FILTER (WHERE "createdAt" >= ${day1}) AS d1,
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
                count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins,
-               count(*) FILTER (WHERE "hit4xIn1h" = true) AS goal_hits,
+               count(*) FILTER (WHERE "hit4xIn1h" = true AND "disqualified" = false) AS goal_hits,
                max("peak24hReturnPct") AS best_peak
         FROM "CuratedAlert"
         WHERE "model" = ${model}`,

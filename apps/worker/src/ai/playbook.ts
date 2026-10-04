@@ -96,6 +96,17 @@ export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<E
       },
     });
     if (baselined > 0) return "waiting-for-graded-calls";
+    // A baseline that failed to submit waits out the evolution interval like any other attempt,
+    // rather than being resubmitted on every pass.
+    const recentFailure = await prisma.aiReplayRun.count({
+      where: {
+        purpose: "baseline",
+        playbookIds: { has: active.id },
+        status: "failed",
+        createdAt: { gte: new Date(now - env.AI_PLAYBOOK_EVOLUTION_HOURS * 3_600_000) },
+      },
+    });
+    if (recentFailure > 0) return "not-due";
     const from = new Date(holdoutStart.getTime() - BASELINE_DAYS * 86_400_000);
     const items = await loadReplayItems(env, { from, to: holdoutStart, take: env.AI_REPLAY_MAX_ROWS });
     if (items.length < MIN_REFLECTION_CALLS) return "waiting-for-graded-calls";
@@ -109,9 +120,18 @@ export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<E
   }
 
   const proposals = await reviewRecord(env, active, record);
-  if (proposals === null) return "review-failed";
+  // Both dead ends are logged as an evolution run so the interval gate above counts them: without
+  // a row, every 10-minute pass would pay for another full reflection call.
+  const window = { from: holdoutStart, to: holdoutEnd };
+  if (proposals === null) {
+    await recordDeadEnd(env, active.id, window, "review failed");
+    return "review-failed";
+  }
   const fresh = proposals.filter((p) => p.text !== "" && p.text !== sanitizePlaybookText(active.text));
-  if (fresh.length === 0) return "no-new-candidates";
+  if (fresh.length === 0) {
+    await recordDeadEnd(env, active.id, window, "no new candidates");
+    return "no-new-candidates";
+  }
 
   const maxVersion = await prisma.aiPlaybook.aggregate({ _max: { version: true } });
   let version = maxVersion._max.version ?? active.version;
@@ -140,6 +160,27 @@ export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<E
     return "submit-failed";
   }
   return "evolution-submitted";
+}
+
+/** An evolution attempt that ended before any replay: stored as a failed run with no requests. */
+async function recordDeadEnd(
+  env: Env,
+  playbookId: string,
+  window: { from: Date; to: Date },
+  error: string,
+): Promise<void> {
+  await prisma.aiReplayRun.create({
+    data: {
+      purpose: "evolution",
+      status: "failed",
+      model: env.AI_REVIEW_MODEL,
+      playbookIds: [playbookId],
+      windowStart: window.from,
+      windowEnd: window.to,
+      requestCount: 0,
+      error,
+    },
+  });
 }
 
 /**
