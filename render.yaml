@@ -48,7 +48,7 @@ services:
   - type: web
     name: trenchscanner-api
     runtime: node
-    plan: starter
+    plan: standard
     region: oregon
     # --include=dev: NODE_ENV=production (set below) makes npm omit devDependencies by default,
     # but prisma/typescript/dotenv-cli - all needed just to build - are devDependencies here.
@@ -123,7 +123,7 @@ services:
   - type: worker
     name: trenchscanner-worker
     runtime: node
-    plan: starter
+    plan: standard
     region: oregon
     # See the api service's buildCommand comment above - same reason.
     buildCommand: npm install --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
@@ -228,6 +228,8 @@ databases:
     # plans (basic-256mb/1gb/4gb, pro-*, accelerated-*) with storage billed separately. This is
     # the cheapest paid tier, matching what "starter" used to cost (~$7/mo); its default disk
     # size (15GB) is more than this app needs at v1 scale.
-    plan: basic-256mb
+    # Raised one tier on 2026-10-04: at 256MB with ~3.9GB of data the database was crashing and
+    # restarting repeatedly under the scan's write load.
+    plan: basic-1gb
     databaseName: trenchscanner
     user: trenchscanner
