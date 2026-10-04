@@ -120,7 +120,11 @@ function toInput(f: Filter): FilterInput {
 export function FiltersTab() {
   const filters = usePolling<Filter[]>("/filters", 120_000);
   const config = usePolling<AppConfig>("/config", 600_000);
-  const [editing, setEditing] = useState<{ id: string | null; draft: FilterInput } | null>(null);
+  // `opened` tells apart two editors for the same filter (or two new ones), so opening again starts
+  // the form over instead of keeping the last one's keyword text.
+  const [editing, setEditing] = useState<{ id: string | null; draft: FilterInput; opened: number } | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -167,7 +171,9 @@ export function FiltersTab() {
             className="primary"
             disabled={full || busy}
             title={full ? "Delete a filter to add another" : undefined}
-            onClick={() => setEditing({ id: null, draft: blankFilter(config.data, list.length) })}
+            onClick={() =>
+              setEditing({ id: null, draft: blankFilter(config.data, list.length), opened: Date.now() })
+            }
           >
             <PlusIcon size={15} /> New filter
           </button>
@@ -225,7 +231,7 @@ export function FiltersTab() {
                     className="icon-btn"
                     title="Edit"
                     aria-label={`Edit ${f.name}`}
-                    onClick={() => setEditing({ id: f.id, draft: toInput(f) })}
+                    onClick={() => setEditing({ id: f.id, draft: toInput(f), opened: Date.now() })}
                     disabled={busy}
                   >
                     <EditIcon size={15} />
@@ -252,7 +258,7 @@ export function FiltersTab() {
       <section className="panel editor">
         {editing ? (
           <FilterEditor
-            key={editing.id ?? "new"}
+            key={`${editing.id ?? "new"}:${editing.opened}`}
             draft={editing.draft}
             isNew={editing.id === null}
             config={config.data}

@@ -36,11 +36,11 @@ const MAX_BACKOFF_MS = 300_000;
  */
 export function usePolling<T>(path: string, intervalMs: number, key = ""): Loadable<T> {
   const want = `${path}\n${key}`;
-  // The data and the path+key it answers.
-  // An answer restored from an earlier visit shows as stale until this visit's own lands.
-  const [held, setHeld] = useState<{ data: T; for: string } | null>(() => {
+  // The data and the path+key it answers. An answer restored from an earlier visit (`saved`)
+  // shows as stale until this visit's own lands, but stays up if the API can't be reached.
+  const [held, setHeld] = useState<{ data: T; for: string; saved: boolean } | null>(() => {
     const cached = peek<T>(path);
-    return cached ? { data: cached.data, for: cached.restored ? "" : want } : null;
+    return cached ? { data: cached.data, for: want, saved: cached.restored } : null;
   });
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,7 +66,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
         if (mine !== seq.current) return;
         failures.current = 0;
         retryAt.current = 0;
-        setHeld({ data: d, for: wantRef.current });
+        setHeld({ data: d, for: wantRef.current, saved: false });
         setError(null);
       })
       .catch((e: unknown) => {
@@ -101,7 +101,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
     firstKey.current = key;
     // A new path shows its own cached data if any; otherwise the previous answer stays up as stale.
     const cached = forced ? null : peek<T>(path);
-    if (cached) setHeld({ data: cached.data, for: cached.restored ? "" : `${path}\n${key}` });
+    if (cached) setHeld({ data: cached.data, for: `${path}\n${key}`, saved: cached.restored });
     setError(null);
     again.current = false;
     run(forced ? -1 : FRESH_ON_MOUNT_MS);
@@ -125,7 +125,7 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   }, [path, key, intervalMs, run, reload]);
 
   const data = held?.data ?? null;
-  return { data, stale: held !== null && held.for !== want, error, loading, reload };
+  return { data, stale: held !== null && (held.for !== want || held.saved), error, loading, reload };
 }
 
 /** First wait before reopening a dropped nudge stream; doubles per failure up to the cap. */

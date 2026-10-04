@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type AlertPrefs, type Leaderboard, type Settings } from "../api";
 import { ALERT_SOUND_OPTIONS, type AlertSound } from "../alertSounds";
 import {
@@ -128,13 +128,28 @@ function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
     if (sound !== prefs.sound) save({ sound });
   };
 
-  const commitVolume = () => {
-    previewAlert({ ...prefs, volume });
-    if (volume !== prefs.volume) save({ volume });
+  // The slider's native "change" fires once when it is let go (wherever the pointer is by then)
+  // and after keyboard steps; React's onChange fires on every move instead.
+  const volumeRef = useRef<HTMLInputElement>(null);
+  const commitRef = useRef<(v: number) => void>(() => undefined);
+  commitRef.current = (v: number) => {
+    previewAlert({ ...prefs, volume: v });
+    if (v !== prefs.volume) save({ volume: v });
   };
+  const hasSaved = saved !== null;
+  useEffect(() => {
+    const el = volumeRef.current;
+    if (!el) return;
+    const onCommit = () => commitRef.current(Number(el.value));
+    el.addEventListener("change", onCommit);
+    return () => el.removeEventListener("change", onCommit);
+  }, [hasSaved]);
 
   const toggleNotifications = async () => {
-    if (prefs.browserNotifications) {
+    // The switch shows notifications as on only where this browser may show them, so a pref
+    // saved on another device (or before the permission was reset) asks here rather than
+    // turning the pref off for every device.
+    if (prefs.browserNotifications && permission === "granted") {
       save({ browserNotifications: false });
       return;
     }
@@ -206,8 +221,7 @@ function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
                 value={volume}
                 aria-label="Alert volume"
                 onChange={(e) => setVolume(Number(e.target.value))}
-                onPointerUp={commitVolume}
-                onKeyUp={commitVolume}
+                ref={volumeRef}
               />
               <span className="num small volume-value">{volume}%</span>
             </label>
