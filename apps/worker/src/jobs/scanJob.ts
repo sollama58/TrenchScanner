@@ -84,6 +84,25 @@ export interface ScanCycleMeta {
   stagesMs: Record<string, number>;
 }
 
+/** How long a cycle waits on the wallet stage - see the note at its call. */
+const WALLET_STAGE_BUDGET_MS = 60_000;
+
+/** The wallet stage's lookups while they are still running, possibly past a cycle's budget. */
+let walletStageInFlight: Promise<void> | null = null;
+
+/** `work`'s result, or null if it has not settled within `ms`. Rejections propagate. */
+async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
   const startedAt = Date.now();
   logger.info("scan cycle starting");
@@ -333,16 +352,43 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     (priors) => ({ priors }),
     (error: unknown) => ({ error }),
   );
-  const [earliestActivityByAddress, holdingsByAddress] = await Promise.all([
-    resolveEarliestActivity(
-      walletGroups.map((g) => g.addresses),
-      deps.helius,
-      { maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE },
-    ),
-    resolveWalletHoldings(walletGroups, deps.helius, env, {
-      maxNewLookups: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
-    }),
-  ]);
+  //
+  // Time-boxed: both signals are enrichment, and a slow RPC provider held whole scan cycles for
+  // minutes here on 2026-10-04 (burn-scan, on the same provider, stalled alongside). Past the
+  // budget the cycle goes on without them - every candidate's wallet figures read as unknown, as
+  // they would on a provider outage - and the lookups carry on in the background, filling the
+  // caches for the next cycle. A cycle that finds the previous lookups still running doesn't
+  // start more on top of them.
+  let walletResults: [Map<string, Date | null>, Map<string, WalletHoldings>] | null = null;
+  if (walletStageInFlight) {
+    logger.warn("previous wallet lookups still running - skipping wallet signals this cycle");
+  } else {
+    const work = Promise.all([
+      resolveEarliestActivity(
+        walletGroups.map((g) => g.addresses),
+        deps.helius,
+        { maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE },
+      ),
+      resolveWalletHoldings(walletGroups, deps.helius, env, {
+        maxNewLookups: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
+      }),
+    ]);
+    const settled = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    walletStageInFlight = settled;
+    void settled.then(() => {
+      if (walletStageInFlight === settled) walletStageInFlight = null;
+    });
+    walletResults = await withinBudget(work, WALLET_STAGE_BUDGET_MS);
+    if (!walletResults) {
+      logger.warn("wallet lookups over budget - continuing without wallet signals", {
+        budgetMs: WALLET_STAGE_BUDGET_MS,
+      });
+    }
+  }
+  const [earliestActivityByAddress, holdingsByAddress] = walletResults ?? [new Map(), new Map()];
   lap("wallets");
 
   // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the

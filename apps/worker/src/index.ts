@@ -52,9 +52,10 @@ async function main() {
   });
 
   // Deadlines (see scheduleInterval): each is several times the slowest run production has
-  // recorded, so only a run that is never coming back reaches one. Curator training has none - a
-  // slow retrain on boot would otherwise restart the worker in a loop, and a stuck one holds up
-  // nothing but itself.
+  // recorded, so only a run that is never coming back reaches one. Curator training and burn-scan
+  // have none: a slow retrain, or a slow RPC provider under the reconciler's sequential pages,
+  // would otherwise restart the whole worker in a loop, and either one stuck holds up nothing
+  // but itself.
   const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
     deadlineMinutes: 20,
   });
@@ -95,7 +96,6 @@ async function main() {
     "burn-scan",
     async () => void (await reconcileBurns(env, rpc)),
     env.BURN_SCAN_INTERVAL_MINUTES,
-    { deadlineMinutes: 15 },
   );
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
   // purpose: see createMatchPeaksRunner.
