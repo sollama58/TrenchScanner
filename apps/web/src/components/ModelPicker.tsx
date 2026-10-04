@@ -9,8 +9,9 @@ import { invalidate } from "../cache";
  */
 export async function saveFeedSettings(change: { models?: string[] | null; showModelAlerts?: boolean }) {
   await put("/curated/feed", change);
-  // Every cached feed and leaderboard answer was for the old settings.
-  invalidate("/curated");
+  // Every cached feed and leaderboard answer was for the old settings. Stats and insights don't
+  // depend on them, so they stay cached (the Models tab keeps painting at once).
+  invalidate("/curated/models");
   invalidate("/matches");
 }
 

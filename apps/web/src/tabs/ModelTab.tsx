@@ -11,6 +11,7 @@ import {
 import { HBarChart, Skeleton, TargetBars } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
+import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { ago, pct, tokenLabel, usd } from "../format";
 
@@ -70,7 +71,8 @@ export function ModelTab() {
   };
 
   return (
-    <div className="stack">
+    // Dimmed while a new window's numbers load (the old window's stay up meanwhile).
+    <div className={`stack${insights.stale ? " stale" : ""}`} aria-busy={insights.stale}>
       <section className="panel hero">
         <div className="hero-top">
           <div>
@@ -100,7 +102,15 @@ export function ModelTab() {
           </div>
           <div className="segmented" role="tablist" aria-label="Window">
             {WINDOWS.map((w) => (
-              <button key={w} className={w === days ? "on" : ""} onClick={() => setDays(w)}>
+              <button
+                key={w}
+                className={w === days ? "on" : ""}
+                onPointerEnter={() => {
+                  prefetch(`/curated/insights?days=${w}`);
+                  prefetch(`/curated/models?days=${w}`);
+                }}
+                onClick={() => setDays(w)}
+              >
                 {w}d
               </button>
             ))}
@@ -143,7 +153,13 @@ export function ModelTab() {
         </p>
       </section>
 
-      <LeaderboardPanel board={lb} days={days} onSetModels={setFeedModels} now={now} />
+      <LeaderboardPanel
+        board={lb}
+        days={days}
+        onSetModels={setFeedModels}
+        refreshing={board.stale}
+        now={now}
+      />
 
       <EvolutionPanel board={lb} now={now} />
 
@@ -224,11 +240,14 @@ function LeaderboardPanel({
   board,
   days,
   onSetModels,
+  refreshing,
   now,
 }: {
   board: Leaderboard;
   days: number;
   onSetModels: (models: string[] | null) => Promise<void>;
+  /** `board` is from before the last change and its fresh copy is loading: hold further clicks. */
+  refreshing: boolean;
   now: number;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -250,7 +269,11 @@ function LeaderboardPanel({
           <p className="muted small">{board.scoring.summary}</p>
         </div>
         {!board.followsDefault && (
-          <button className="ghost" disabled={busy !== null} onClick={() => void use("default", null)}>
+          <button
+            className="ghost"
+            disabled={busy !== null || refreshing}
+            onClick={() => void use("default", null)}
+          >
             Back to the default
           </button>
         )}
@@ -331,7 +354,7 @@ function LeaderboardPanel({
                       <input
                         type="checkbox"
                         checked={mine}
-                        disabled={busy !== null || onlyOne}
+                        disabled={busy !== null || refreshing || onlyOne}
                         onChange={() => void use(e.id, toggledModels(board, e.id))}
                       />
                       In feed

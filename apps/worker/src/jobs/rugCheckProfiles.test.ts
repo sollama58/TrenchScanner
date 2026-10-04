@@ -7,7 +7,7 @@ import {
   type RugCheckProfile,
   type RugCheckProfileResult,
 } from "@trenchscanner/core";
-import { resolveRugProfiles } from "./rugCheckProfiles.js";
+import { resolveRugProfiles, settleRugCheckRefresh } from "./rugCheckProfiles.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -169,6 +169,72 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     const result = await resolveRugProfiles([a], client, 5);
     expect(result.profiles.get(a)?.holderCount).toBe(700);
     expect(calls).toHaveLength(1);
+  });
+
+  it("with refreshStaleInBackground, serves stale reports at once and refreshes them behind the cycle", async () => {
+    // Waiting on these refreshes was ~11s of every production scan cycle - see resolveRugProfiles.
+    const [old, gone, fresh] = [mint("swr-old"), mint("swr-gone"), mint("swr-new")];
+    const answers: Record<string, RugCheckProfileResult> = {
+      [old]: { status: "found", profile: profile(old, 10) },
+      [gone]: { status: "absent" },
+      [fresh]: { status: "found", profile: profile(fresh, 30) },
+    };
+    const { client, calls } = fakeClient(answers);
+    await resolveRugProfiles([old, gone], client, 5);
+    await prisma.rugCheckCache.updateMany({
+      where: { mintAddress: { in: [old, gone] } },
+      data: { checkedAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    calls.length = 0;
+    answers[old] = { status: "found", profile: profile(old, 11) };
+    answers[gone] = { status: "found", profile: profile(gone, 20) };
+
+    const result = await resolveRugProfiles([old, gone, fresh], client, 5, Infinity, {
+      refreshStaleInBackground: true,
+    });
+    // The stale report is served as it was; a never-checked mint and one last seen absent are
+    // waited on, since without a report neither can be curated.
+    expect(result.profiles.get(old)?.holderCount).toBe(10);
+    expect(result.profiles.get(gone)?.holderCount).toBe(20);
+    expect(result.profiles.get(fresh)?.holderCount).toBe(30);
+    expect(result.stats).toMatchObject({ fetched: 2, reused: 1, refreshing: 1 });
+
+    await settleRugCheckRefresh();
+    expect(calls.flat().sort()).toEqual([old, gone, fresh].sort());
+    const next = await resolveRugProfiles([old], client, 5, Infinity, { refreshStaleInBackground: true });
+    expect(next.profiles.get(old)?.holderCount).toBe(11);
+    expect(next.stats).toMatchObject({ cached: 1, fetched: 0 });
+  });
+
+  it("does not stack a second background refresh on one still running", async () => {
+    const a = mint("swr-busy");
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[][] = [];
+    const client = {
+      async getProfileResults(mints: string[]) {
+        calls.push([...mints]);
+        await gate;
+        return new Map(mints.map((m) => [m, { status: "found" as const, profile: profile(m, 5) }]));
+      },
+    } as unknown as RugCheckClient;
+    await prisma.rugCheckCache.create({
+      data: {
+        mintAddress: a,
+        profile: profile(a, 4) as unknown as object,
+        checkedAt: new Date(Date.now() - 10 * 60_000),
+      },
+    });
+
+    const first = await resolveRugProfiles([a], client, 5, Infinity, { refreshStaleInBackground: true });
+    const second = await resolveRugProfiles([a], client, 5, Infinity, { refreshStaleInBackground: true });
+    expect(first.profiles.get(a)?.holderCount).toBe(4);
+    expect(second.profiles.get(a)?.holderCount).toBe(4);
+    expect(calls).toHaveLength(1);
+    release();
+    await settleRugCheckRefresh();
   });
 
   it("makes no request at all for an empty candidate list", async () => {

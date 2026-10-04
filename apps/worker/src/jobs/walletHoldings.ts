@@ -36,6 +36,14 @@ export interface WalletGroup {
 export interface WalletHoldingsOptions {
   /** Cap on how many UNCACHED wallets are actually priced this call - see the env knob. */
   maxNewLookups?: number;
+  /**
+   * Only the first this-many groups may send lookups; the rest are answered from the cache alone.
+   * Lets the scan wait on lookups for the candidates about to be decided on and leave the rest to
+   * a pass behind the cycle - see the wallet stage in scanJob.ts.
+   */
+  lookupGroups?: number;
+  /** Told how many lookups this call is about to send, before it sends them. */
+  onLookups?: (count: number) => void;
 }
 
 /**
@@ -112,7 +120,9 @@ export async function resolveWalletHoldings(
   const toFetch: string[] = [];
   const queued = new Set<string>();
   let skippedGroups = 0;
-  for (const group of groups) {
+  const lookupGroups = opts.lookupGroups ?? Number.POSITIVE_INFINITY;
+  for (const [index, group] of groups.entries()) {
+    if (index >= lookupGroups) break;
     const needed = [...new Set(group.addresses)].filter((a) => !result.has(a) && !queued.has(a));
     if (needed.some((a) => (failureBackoffUntil.get(a) ?? 0) > now)) {
       skippedGroups += 1;
@@ -129,6 +139,7 @@ export async function resolveWalletHoldings(
   }
 
   const cacheHits = result.size;
+  opts.onLookups?.(toFetch.length);
   if (toFetch.length === 0) {
     logger.info("resolved wallet holdings", {
       requested: unique.length,
