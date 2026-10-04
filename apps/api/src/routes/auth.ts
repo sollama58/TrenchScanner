@@ -11,7 +11,7 @@ import {
   type User,
 } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
-import { SESSION_COOKIE_NAME } from "../auth/session.js";
+import { SESSION_COOKIE_NAME, verifyRequestSession } from "../auth/session.js";
 
 // Length caps run before any base58 decode: bs58.decode is quadratic in input length, so an
 // uncapped field let one unauthenticated request (a ~1MB walletAddress) block the event loop for
@@ -231,15 +231,16 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       maxAge: opts.env.SESSION_TTL_HOURS * 60 * 60,
     });
 
-    return toUserResponse(user, opts.env);
+    // The same token in the body, for a browser that drops the cookie as third-party (see
+    // sessionTokens): the dashboard keeps it only if a cookie-only /auth/me then fails.
+    return { ...toUserResponse(user, opts.env), sessionToken: token };
   });
 
   app.post("/logout", async (request, reply) => {
     // Revoke, not just forget: clearing the cookie alone left a copied token valid for the rest
     // of SESSION_TTL_HOURS. Bumping sessionVersion invalidates every browser session this user
     // holds. Only for a verified, current browser session - a paired phone is revoked per device.
-    const token = request.cookies[SESSION_COOKIE_NAME];
-    const session = token ? await app.sessionSigner.verify(token) : null;
+    const session = await verifyRequestSession(app.sessionSigner, request);
     if (session && !session.deviceId) {
       await prisma.user.updateMany({
         where: { id: session.userId, sessionVersion: session.sessionVersion ?? 0 },

@@ -2,6 +2,32 @@ import { SignJWT, jwtVerify } from "jose";
 
 export const SESSION_COOKIE_NAME = "ts_session";
 
+/**
+ * The session tokens a request carries, the cookie first and then an `Authorization: Bearer`
+ * header.
+ *
+ * The header is the fallback for browsers that refuse the cookie. While the dashboard and this API
+ * sit on different sites (two onrender.com hosts), the cookie is third-party, and Safari, Brave,
+ * Edge with strict tracking prevention or InPrivate, and any browser set to block third-party
+ * cookies drop it without an error: sign-in "works" and the very next request is signed out. The
+ * dashboard then keeps the token itself and sends it here instead (see apps/web/src/session.ts).
+ * A header is never attached by the browser on its own, so it adds no CSRF exposure.
+ *
+ * Both are returned so a stale cookie can't shadow a valid header. Anything else in the header
+ * (the stats routes' STATS_API_TOKEN, say) just fails verification and reads as no session.
+ */
+export function sessionTokens(request: {
+  cookies: Record<string, string | undefined>;
+  headers: { authorization?: string };
+}): string[] {
+  const tokens: string[] = [];
+  const cookie = request.cookies[SESSION_COOKIE_NAME];
+  if (cookie) tokens.push(cookie);
+  const bearer = /^Bearer\s+(\S+)\s*$/i.exec(request.headers.authorization ?? "")?.[1];
+  if (bearer && bearer !== cookie) tokens.push(bearer);
+  return tokens;
+}
+
 export interface SessionPayload {
   userId: string;
   walletAddress: string;
@@ -64,3 +90,15 @@ export function createSessionSigner(jwtSecret: string, ttlHours: number) {
 }
 
 export type SessionSigner = ReturnType<typeof createSessionSigner>;
+
+/** The first of the request's session tokens (see sessionTokens) that verifies, or null. */
+export async function verifyRequestSession(
+  signer: SessionSigner,
+  request: Parameters<typeof sessionTokens>[0],
+): Promise<SessionPayload | null> {
+  for (const token of sessionTokens(request)) {
+    const session = await signer.verify(token);
+    if (session) return session;
+  }
+  return null;
+}

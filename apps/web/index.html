@@ -29,8 +29,14 @@
         );
         var boot = (window.__boot = {});
         if (!window.fetch) return;
+        // The session token src/session.ts keeps for browsers that drop the third-party cookie.
+        var headers = {};
+        try {
+          var token = localStorage.getItem("ts-session-token");
+          if (token) headers.authorization = "Bearer " + token;
+        } catch (e) {}
         paths.forEach(function (p) {
-          boot[p] = fetch(api + p, { credentials: "include" });
+          boot[p] = fetch(api + p, { credentials: "include", headers: headers });
           boot[p].catch(function () {});
         });
       })();
