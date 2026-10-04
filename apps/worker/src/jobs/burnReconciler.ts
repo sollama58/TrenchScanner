@@ -28,8 +28,9 @@ const MAX_PAGES_PER_PASS = 10;
  *
  * 50 rather than the 100 an RPC will happily accept: public endpoints weight a batch by the number
  * of calls inside it, and measured against api.mainnet-beta.solana.com a batch of 100 draws a 429
- * on its own. Production should point SOLANA_RPC_URL at a paid endpoint regardless - a rate-limited
- * reconciler is a paying user waiting - but the default shouldn't be self-defeating.
+ * on its own. Production reads through Helius (HELIUS_API_KEY, or a paid SOLANA_RPC_URL) regardless -
+ * a rate-limited reconciler is a paying user waiting - but the keyless fallback shouldn't be
+ * self-defeating. On Helius each call in a batch costs one credit, the same as sent singly.
  */
 const FETCH_BATCH_SIZE = 50;
 

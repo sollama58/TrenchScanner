@@ -25,9 +25,9 @@
 #         Turns on the AI buy/no-buy reviewer (AI_REVIEW_MODE, shadow by default), its daily
 #         playbook evolution (AI_PLAYBOOK_EVOLUTION) and Claude's text features for the models
 #         (AI_TEXT_FEATURES). Left empty all three are off and alerts flow exactly as before.
-#   - SOLANA_RPC_URL (both api + worker)           the same paid RPC as HELIUS_API_KEY
-#         Verifies and reconciles burns. Left empty it falls back to the public endpoint, which
-#         this repo has measured rejecting the batched calls the reconciler makes.
+#   - SOLANA_RPC_URL (both api + worker)           optional: leave empty to use Helius
+#         Verifies and reconciles burns. Empty (or a public endpoint) means the Helius RPC built
+#         from HELIUS_API_KEY; set it only to use a different paid RPC.
 #   - ADMIN_WALLET_ADDRESSES (api only)            your own wallet's base58 address, to reach /admin
 #
 # DATABASE_CONNECTION_LIMIT is set (not sync: false - it ships with a value) on both services
@@ -89,11 +89,8 @@ services:
       - key: HELIUS_API_KEY
         sync: false
       # Verifies burns for /subscription/claim and mints the blockhash the burn is signed
-      # against. Undeclared, this fell back to the schema's empty default, which means the
-      # public endpoint - and the comment on SolanaRpc's batch latch records that endpoint
-      # answering batched getTransaction calls with a flat HTTP 400. This is the path that takes
-      # users' money, so it should point at the same paid Helius RPC the rest of the deployment
-      # uses. Declaring it here is also what makes Render prompt for it at all.
+      # against. Empty (or a public endpoint) uses the Helius RPC built from HELIUS_API_KEY, so it
+      # only needs a value to point at a different paid RPC.
       - key: SOLANA_RPC_URL
         sync: false
       - key: JWT_SECRET
@@ -162,8 +159,7 @@ services:
       - key: HELIUS_API_KEY
         sync: false
       # The burn reconciler's endpoint - see the note on this var on the API above. Empty means
-      # the public RPC, which this repo has measured rejecting the batched calls the reconciler
-      # makes, so a burn nobody claimed in the browser would sit uncredited.
+      # Helius via HELIUS_API_KEY.
       - key: SOLANA_RPC_URL
         sync: false
       # Thirty seconds, so a new alert reaches the dashboard within ~half a minute of the token

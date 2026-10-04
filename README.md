@@ -153,8 +153,10 @@ can run at once, and any of them can be retried, without granting the same burn 
 
 ### Choosing an RPC (`SOLANA_RPC_URL`)
 
-Set this to a paid endpoint before taking real money. The default is the public mainnet RPC, and
-measured against the real endpoints:
+Leave it empty to use Helius: with `SOLANA_RPC_URL` unset (or set to one of the public endpoints
+below), the burn reconciler and claim endpoint read the chain through the Helius RPC built from
+`HELIUS_API_KEY`. Set it only to point at a different paid RPC. Without a Helius key the default
+is the public mainnet RPC, and measured against the real endpoints:
 
 | Endpoint                                | Batching          | Pagination                        | Rate limit                          |
 | --------------------------------------- | ----------------- | --------------------------------- | ----------------------------------- |
@@ -163,7 +165,9 @@ measured against the real endpoints:
 
 The client copes with both - it falls back to unbatched fetching when a batch is refused, and it
 never advances its cursor over a transaction it failed to read, so nothing is silently skipped -
-but a throttled reconciler is a paying user waiting for access.
+but a throttled reconciler is a paying user waiting for access. Each burn-scan run on
+`/health/worker` shows the endpoint's host (`rpcProvider`) and its calls per method (`rpcCalls`),
+which on Helius is what the pass cost in credits.
 
 ### Admin
 
