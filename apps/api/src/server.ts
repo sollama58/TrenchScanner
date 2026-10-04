@@ -255,8 +255,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   // Holds one Postgres LISTEN connection and pushes new matches to connected dashboards the moment
   // the worker records them - see matchStream.ts. Built here rather than in index.ts so a server
-  // constructed for a test gets a working stream too, and torn down via onClose so nothing leaks
+  // constructed for a test gets a working stream too, and torn down on close so nothing leaks
   // between test servers or blocks shutdown.
+  //
+  // preClose, not onClose: Fastify runs onClose only after the HTTP server has finished closing,
+  // and the server waits for every open connection - which a hijacked event stream never ends on
+  // its own. With one tab open, close() hung forever and the hook that would have ended the
+  // stream never ran.
   //
   // Declared before any route is registered, not after: Fastify creates a plugin's encapsulated
   // instance at register time, so a decoration added later only reaches it through the prototype

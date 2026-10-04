@@ -106,6 +106,40 @@ describe("scheduleInterval", () => {
     expect(heartbeats[1]).toMatchObject({ job: "scan", success: true });
   });
 
+  it("calls onDeadline for a run that never returns, and not for one that does", async () => {
+    const hits: [string, number][] = [];
+    const onDeadline = (job: string, ms: number) => void hits.push([job, ms]);
+    const hung = scheduleInterval("scan", () => new Promise(() => {}), 1, {
+      deadlineMinutes: 20,
+      onDeadline,
+    });
+    const fine = scheduleInterval("fast-match", jobTaking(10_000, []), 0.25, {
+      deadlineMinutes: 1,
+      onDeadline,
+    });
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    hung.stop();
+    fine.stop();
+    expect(hits).toEqual([["scan", 20 * 60_000]]);
+  });
+
+  it("does not count a blocked event loop against the deadline", async () => {
+    const hits: string[] = [];
+    let release!: () => void;
+    const job = scheduleInterval("fast-match", () => new Promise<void>((r) => (release = r)), 0.25, {
+      deadlineMinutes: 10,
+      onDeadline: (j) => void hits.push(j),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Twelve minutes pass with no timer able to fire, as during a long synchronous retrain.
+    vi.setSystemTime(Date.now() + 12 * 60_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    release();
+    await vi.advanceTimersByTimeAsync(1_000);
+    job.stop();
+    expect(hits).toEqual([]);
+  });
+
   it("stops scheduling once stopped", async () => {
     const runs: number[] = [];
     const job = scheduleInterval("scan", jobTaking(1_000, runs), 1);
