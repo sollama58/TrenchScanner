@@ -127,11 +127,14 @@ export async function resolveEarliestActivity(
     return result;
   }
 
-  const fetched = await helius.getEarliestActivityBatch(toFetch);
-
   // Only definitive outcomes get cached. A "failed" lookup is deliberately left absent so a
   // later cycle retries it - caching it would be indistinguishable from a real "indeterminate".
   const freshCutoffMs = now - FRESH_WITHIN_HOURS * 3_600_000;
+  // Freshness only asks whether a wallet is older than the window, so a bound past it settles a
+  // wallet as well as its exact first transaction does - and costs a tenth as much to get.
+  const fetched = await helius.getEarliestActivityBatch(toFetch, {
+    boundSufficientBefore: new Date(freshCutoffMs),
+  });
   const toCache: { address: string; earliestActivityAt: Date | null }[] = [];
   let failedCount = 0;
   for (const address of toFetch) {

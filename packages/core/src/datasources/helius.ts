@@ -464,10 +464,43 @@ export class HeliusClient {
    * therefore can't see past that: an address with more history than one page reports
    * "indeterminate" rather than a confidently wrong timestamp.
    */
-  async getEarliestActivityBatch(addresses: string[]): Promise<Map<string, EarliestActivityResult>> {
+  async getEarliestActivityBatch(
+    addresses: string[],
+    opts: {
+      /**
+       * An "older-than" bound before this date is answer enough - the caller only needs to know
+       * the wallet is older than that. When set, every address is first asked the cheap way
+       * (getSignaturesForAddress, 1 credit) and only those it can't settle go on to
+       * getTransactionsForAddress (10 credits): a wallet whose whole history fits one page, or
+       * whose page already reaches back past this date, never needs it - which covers the fresh
+       * sniper wallets and long-lived wallets alike; only busy wallets with a full page inside
+       * the window pay for the exact answer.
+       */
+      boundSufficientBefore?: Date;
+    } = {},
+  ): Promise<Map<string, EarliestActivityResult>> {
     const unique = [...new Set(addresses)];
-    const out = new Map<string, EarliestActivityResult>();
-    if (unique.length === 0) return out;
+    if (unique.length === 0) return new Map();
+
+    if (opts.boundSufficientBefore && !this.gtfaUnavailable) {
+      const sufficientMs = opts.boundSufficientBefore.getTime();
+      const cheap = await this.earliestViaSignatures(unique);
+      const unsettled = unique.filter((address) => {
+        const r = cheap.get(address);
+        return (
+          !r || r.status === "failed" || (r.status === "older-than" && r.boundAt.getTime() >= sufficientMs)
+        );
+      });
+      if (unsettled.length === 0) return cheap;
+      const exact = await this.earliestViaGetTransactionsForAddress(unsettled);
+      if (exact) {
+        for (const [address, result] of exact) {
+          // A failed exact lookup keeps whatever the cheap pass did learn.
+          if (result.status !== "failed" || !cheap.has(address)) cheap.set(address, result);
+        }
+      }
+      return cheap;
+    }
 
     if (!this.gtfaUnavailable) {
       // null means "this round produced nothing usable" - fall through and redo the batch the
@@ -485,14 +518,24 @@ export class HeliusClient {
       });
     }
 
-    const calls: RpcCall[] = unique.map((address) => ({
+    return this.earliestViaSignatures(unique);
+  }
+
+  /**
+   * getSignaturesForAddress path for getEarliestActivityBatch: one page of the newest
+   * SIGNATURES_PAGE_LIMIT signatures per address. A partial page is the wallet's whole history,
+   * so its oldest entry is exact; a full page only bounds it ("older-than").
+   */
+  private async earliestViaSignatures(addresses: string[]): Promise<Map<string, EarliestActivityResult>> {
+    const out = new Map<string, EarliestActivityResult>();
+    const calls: RpcCall[] = addresses.map((address) => ({
       id: address,
       method: "getSignaturesForAddress",
       params: [address, { limit: SIGNATURES_PAGE_LIMIT }],
     }));
     const responses = await this.sendBatched<SignaturesResult>(calls, 15_000);
 
-    for (const address of unique) {
+    for (const address of addresses) {
       const res = responses.get(address);
       if (!res || res.error) {
         if (res?.error) logger.warn("rpc error on getSignaturesForAddress", { address, error: res.error });
