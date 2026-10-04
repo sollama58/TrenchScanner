@@ -211,7 +211,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       await prisma.$executeRaw`
         UPDATE "Token" AS t
         SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-        FROM unnest(${mints}::text[], ${mcaps}::text[]::float8[]) AS v(mint, mcap)
+        FROM unnest(${mints}::text[], ${mcaps}::text::float8[]) AS v(mint, mcap)
         WHERE t."mintAddress" = v.mint`.catch((err) =>
         logger.warn("failed to stamp lastLiveAt", { error: String(err) }),
       );
@@ -609,7 +609,7 @@ export async function reviveMovingMints(
   return prisma.$executeRaw`
     UPDATE "Token" AS t
     SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-    FROM unnest(${mints}::text[], ${mcaps}::text[]::float8[]) AS v(mint, mcap)
+    FROM unnest(${mints}::text[], ${mcaps}::text::float8[]) AS v(mint, mcap)
     WHERE t."mintAddress" = v.mint`.catch((err) => {
     logger.warn("failed to revive moving mints", { error: String(err) });
     return 0;

@@ -134,29 +134,33 @@ async function deleteExpiredSnapshots(cutoff: Date, opts: BatchOptions, fullWalk
     const tokens: { id: string; firstSeenAt: Date }[] = await prisma.token.findMany({
       where: {
         firstSeenAt: { lt: cutoff },
-        // Only tokens that can own a snapshot. One is written only for a scan candidate (every one
-        // of which came back from DexScreener and so carries lastLiveAt), a token someone had open
-        // (lastViewedAt), or a fast-match alert on a token the scan vetted - while nearly every
-        // old Token row is a launch that never traded and never had one. Probing all of them
-        // every night is what made this sweep take hours. The weekly full walk catches anything
-        // this misses.
-        ...(fullWalk
-          ? {}
-          : {
-              OR: [
-                { lastLiveAt: { not: null } },
-                { lastViewedAt: { not: null } },
-                { firstInBandAt: { not: null } },
-              ],
-            }),
-        ...(after
-          ? {
-              OR: [
-                { firstSeenAt: { gt: after.firstSeenAt } },
-                { firstSeenAt: after.firstSeenAt, id: { gt: after.id } },
-              ],
-            }
-          : {}),
+        // Both conditions are ORs, so they go under AND: as two spread `OR` keys the cursor's
+        // replaced the token filter on every page after the first.
+        AND: [
+          // Only tokens that can own a snapshot. One is written only for a scan candidate (every
+          // one of which came back from DexScreener and so carries lastLiveAt), a token someone had
+          // open (lastViewedAt), or a fast-match alert on a token the scan vetted - while nearly
+          // every old Token row is a launch that never traded and never had one. Probing all of
+          // them every night is what made this sweep take hours. The weekly full walk catches
+          // anything this misses.
+          fullWalk
+            ? {}
+            : {
+                OR: [
+                  { lastLiveAt: { not: null } },
+                  { lastViewedAt: { not: null } },
+                  { firstInBandAt: { not: null } },
+                ],
+              },
+          after
+            ? {
+                OR: [
+                  { firstSeenAt: { gt: after.firstSeenAt } },
+                  { firstSeenAt: after.firstSeenAt, id: { gt: after.id } },
+                ],
+              }
+            : {},
+        ],
       },
       orderBy: [{ firstSeenAt: "asc" }, { id: "asc" }],
       select: { id: true, firstSeenAt: true },

@@ -245,6 +245,7 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
     });
     const result = await recordMatchPeaksFullSweep(RETENTION_DAYS);
     expect(result.fromSnapshots).toBeGreaterThanOrEqual(1);
+    expect(result.failedBatches).toBe(0);
     expect((await reload(match.id)).peakMcapUsd).toBe(640_000);
   });
 

@@ -54,8 +54,8 @@ export async function refreshLiveMarketData(
       SET "liveMarketCapUsd" = v.mcap, "livePriceUsd" = v.price, "liveDataAt" = now()
       FROM unnest(
         ${rows.map((r) => r.id)}::text[],
-        ${floatArrayParam(rows.map((r) => r.mcap))}::text[]::float8[],
-        ${floatArrayParam(rows.map((r) => r.price))}::text[]::float8[]
+        ${floatArrayParam(rows.map((r) => r.mcap))}::text::float8[],
+        ${floatArrayParam(rows.map((r) => r.price))}::text::float8[]
       ) AS v(id, mcap, price)
       WHERE t.id = v.id`;
   } catch (err) {

@@ -6,16 +6,11 @@ import { refreshLiveMarketData } from "./liveMarketData.js";
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
 describe("floatArrayParam", () => {
-  it("sends numbers as text and anything non-finite as NULL", () => {
-    expect(floatArrayParam([54321, 1.5, NaN, Infinity, null, undefined, 0])).toEqual([
-      "54321",
-      "1.5",
-      null,
-      null,
-      null,
-      null,
-      "0",
-    ]);
+  it("writes one array literal, with anything non-finite as NULL", () => {
+    expect(floatArrayParam([54321, 1.5, NaN, Infinity, null, undefined, 0, 1e21, 5e-324])).toBe(
+      "{54321,1.5,NULL,NULL,NULL,NULL,0,1e+21,5e-324}",
+    );
+    expect(floatArrayParam([])).toBe("{}");
   });
 });
 
@@ -24,6 +19,26 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
 
   afterAll(async () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  // Runs first in the file on purpose. An all-NULL list going first used to fix a wrong parameter
+  // type on the connection, and every later write through it failed with 08P01.
+  it("keeps writing after a batch where every number was missing", async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-nulls` } });
+    let data = { marketCapUsd: NaN, priceUsd: NaN };
+    const dexScreener = {
+      getTokensByAddresses: async () => [{ mintAddress: token.mintAddress, ...data }],
+    } as unknown as DexScreenerClient;
+    // Several rounds, so the pool hands back the same connection whichever one went first.
+    for (let i = 0; i < 3; i++) {
+      data = { marketCapUsd: NaN, priceUsd: NaN };
+      expect(await refreshLiveMarketData(dexScreener, [token])).toEqual({ requested: 1, updated: 1 });
+      data = { marketCapUsd: 1234.5 + i, priceUsd: 3 };
+      expect(await refreshLiveMarketData(dexScreener, [token])).toEqual({ requested: 1, updated: 1 });
+    }
+    const row = await prisma.token.findUniqueOrThrow({ where: { id: token.id } });
+    expect([row.liveMarketCapUsd, row.livePriceUsd]).toEqual([1236.5, 3]);
   });
 
   // Production failed writes with 22P03 "improper binary format in array element N". Prisma
