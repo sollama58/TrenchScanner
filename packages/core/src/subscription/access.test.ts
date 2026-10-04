@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { prisma } from "../db.js";
-import { creditBurn, claimHeldBurns, resolveAccess, extendedExpiry, decideAccess } from "./access.js";
+import {
+  burnWalletLockKey,
+  creditBurn,
+  claimHeldBurns,
+  resolveAccess,
+  extendedExpiry,
+  decideAccess,
+} from "./access.js";
 import { SUBSCRIPTION_MINT, SUBSCRIPTION_RAW_PER_MONTH, SUBSCRIPTION_DAYS } from "./constants.js";
 import type { BurnCredit } from "./parseBurn.js";
 
@@ -189,6 +196,59 @@ describe.skipIf(!dbAvailable)("burn crediting", () => {
 
     const sub = await prisma.subscription.findUniqueOrThrow({ where: { userId: user.id } });
     const daysGranted = (sub.expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+    expect(daysGranted).toBeLessThan(SUBSCRIPTION_DAYS + 1);
+
+    await prisma.burnEvent.deleteMany({ where: { burnerWallet: wallet } });
+    await prisma.subscription.deleteMany({ where: { userId: user.id } });
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
+  it("serialises a held burn with a first sign-in on the wallet's lock", async () => {
+    // A burn from a wallet with no account was recorded without any lock, so a first sign-in's
+    // claimHeldBurns could read before that held row committed and leave it held. Both now wait
+    // on the wallet's lock: while something holds it, neither may proceed.
+    const wallet = `HeldRace${RUN}`.padEnd(43, "1");
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    const holder = prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${burnWalletLockKey(wallet)}))`;
+        await released;
+      },
+      { timeout: 10_000 },
+    );
+    await new Promise((r) => setTimeout(r, 100));
+
+    let credited = false;
+    const crediting = creditBurn(
+      `sig-${RUN}-held-race`,
+      credit({ burnerWallet: wallet, months: 1 }),
+      SUBSCRIPTION_MINT,
+      "reconciler",
+    ).then((outcome) => {
+      credited = true;
+      return outcome;
+    });
+    const user = await prisma.user.create({ data: { walletAddress: wallet } });
+    let claimed = false;
+    const claiming = claimHeldBurns(user.id, wallet).then((months) => {
+      claimed = true;
+      return months;
+    });
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(credited).toBe(false);
+    expect(claimed).toBe(false);
+
+    release();
+    await holder;
+    await Promise.all([crediting, claiming]);
+    // Whichever ran first, the burn ends up credited to the new account exactly once.
+    const burn = await prisma.burnEvent.findUniqueOrThrow({ where: { signature: `sig-${RUN}-held-race` } });
+    expect(burn.creditedAt).not.toBeNull();
+    const sub = await prisma.subscription.findUniqueOrThrow({ where: { userId: user.id } });
+    const daysGranted = (sub.expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+    expect(daysGranted).toBeGreaterThan(SUBSCRIPTION_DAYS - 1);
     expect(daysGranted).toBeLessThan(SUBSCRIPTION_DAYS + 1);
 
     await prisma.burnEvent.deleteMany({ where: { burnerWallet: wallet } });
