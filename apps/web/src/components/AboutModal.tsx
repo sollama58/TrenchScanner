@@ -84,8 +84,9 @@ export function AboutModal({
           slice: the loosest cutoff that met the targets in that exam, or its best slice when none did. Their
           live calls are graded and ranked on the Models tab, and every few hours new variants are bred from
           the leaders; one that beats the weakest model takes its seat. Consensus learns which models to trust
-          and when they agree, and is the default feed. Model calls are paced, so a busy market doesn&apos;t
-          flood the feed.
+          and when they agree. The best performer on the leaderboard is the default feed, re-chosen after
+          every run; you can follow it automatically or keep your own picks in Settings. Model calls are
+          paced, so a busy market doesn&apos;t flood the feed.
         </p>
 
         <h3>How alerts are graded</h3>

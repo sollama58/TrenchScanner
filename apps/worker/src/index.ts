@@ -9,6 +9,7 @@ import {
   HeliusClient,
   SolanaRpc,
   lastHeartbeatAt,
+  loadChampion,
 } from "@trenchscanner/core";
 import { runScanCycle } from "./jobs/scanJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
@@ -17,7 +18,7 @@ import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
 import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
-import { runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
+import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { scheduleInterval, scheduleDailyAt } from "./scheduler.js";
@@ -140,6 +141,13 @@ async function main() {
       },
     },
   );
+  // The default model is re-chosen after each training run; on a fresh install (or the first
+  // deploy of the champion table) choose one now rather than waiting out the training interval.
+  void loadChampion()
+    .then((c) => (c ? undefined : rechooseDefaultModel(env)))
+    .catch((err: unknown) =>
+      logger.warn("couldn't choose the default model at start", { error: String(err) }),
+    );
   // The AI reviewer's learning loop: collects replay batches, runs playbook evolution and refits
   // the AI blend - see runAiJudgeJob. Inert without ANTHROPIC_API_KEY.
   const aiJudgeJob = scheduleInterval("ai-judge", () => runAiJudgeJob(env), AI_JUDGE_INTERVAL_MINUTES);

@@ -479,6 +479,19 @@ export interface Leaderboard {
   followsDefault: boolean;
   /** Whether model calls are mixed into the combined feed at all. */
   showModelAlerts: boolean;
+  /** The user follows the best performer (absent from API builds before Settings). */
+  followBest?: boolean;
+  /** When and why the default (the best performer) was last chosen; null before the first pick. */
+  champion?: {
+    id: string;
+    name: string;
+    score: number | null;
+    liveGraded: number;
+    reason: string;
+    chosenAt: string;
+    minLiveGraded: number;
+    margin: number;
+  } | null;
   entries: LeaderboardEntry[];
   evolution: {
     challengersPerRun: number;
@@ -486,5 +499,33 @@ export interface Leaderboard {
     margin: number;
     runEveryHours: number;
     history: EvolutionEvent[];
+  };
+}
+
+// ---- Settings (/settings) ----
+
+export type AlertSoundId = "chime" | "ping" | "bell" | "coin" | "radar";
+
+export interface AlertPrefs {
+  soundEnabled: boolean;
+  sound: AlertSoundId;
+  /** 0-100. */
+  volume: number;
+  browserNotifications: boolean;
+  notifyOn: { filterMatches: boolean; modelCalls: boolean };
+}
+
+export interface Settings {
+  alerts: AlertPrefs;
+  account: {
+    walletAddress: string;
+    memberSince: string;
+    access: {
+      hasAccess: boolean;
+      level: "admin" | "whitelist" | "subscription" | "none";
+      expiresAt: string | null;
+      subscription: { since: string; expiresAt: string; source: "BURN" | "ADMIN_GRANT" } | null;
+      burns: number;
+    };
   };
 }
