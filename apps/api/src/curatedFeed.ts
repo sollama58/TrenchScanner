@@ -384,6 +384,59 @@ export function foldCuratedIntoPage<
     });
 }
 
+/** One model's call on a token, as listed on a card several models called. */
+export interface ModelCall {
+  model: string | null;
+  modelName: string | null;
+  confidence: number;
+  alertedAt: Date;
+}
+
+/**
+ * Collapses calls on the same token by different models into one entry, so a reader following
+ * several models sees a token once however many of them called it.
+ *
+ * The entry is the FIRST call (that is when the token was alerted; its fill and grade are the
+ * ones the reader could have acted on), carrying every model that called it in `calls`, oldest
+ * first. A later call joins it when it lands within `windowMs` of that first call and is from a
+ * model not already in it - a model calling the same token again after its own cooldown is a
+ * new alert, not a duplicate. Takes and returns rows newest first.
+ */
+export function groupSameTokenCalls<
+  T extends {
+    tokenId: string;
+    createdAt: Date;
+    model: string | null;
+    modelName: string | null;
+    confidence: number;
+  },
+>(rowsNewestFirst: T[], windowMs: number): { lead: T; calls: ModelCall[] }[] {
+  const open = new Map<string, { lead: T; calls: ModelCall[] }>();
+  const groups: { lead: T; calls: ModelCall[] }[] = [];
+  for (let i = rowsNewestFirst.length - 1; i >= 0; i--) {
+    const row = rowsNewestFirst[i]!;
+    const call: ModelCall = {
+      model: row.model,
+      modelName: row.modelName ?? (row.model ? (contestantSpec(row.model)?.name ?? row.model) : null),
+      confidence: row.confidence,
+      alertedAt: row.createdAt,
+    };
+    const group = open.get(row.tokenId);
+    if (
+      group &&
+      row.createdAt.getTime() - group.lead.createdAt.getTime() <= windowMs &&
+      !group.calls.some((c) => c.model === row.model)
+    ) {
+      group.calls.push(call);
+      continue;
+    }
+    const fresh = { lead: row, calls: [call] };
+    open.set(row.tokenId, fresh);
+    groups.push(fresh);
+  }
+  return groups.reverse();
+}
+
 /** The AI reviewer's verdict on a curated alert, as only admins see it. */
 export interface AdminAiReview {
   mode: string;

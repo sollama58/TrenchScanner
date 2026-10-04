@@ -133,12 +133,53 @@ export function resolveFeedModel(
   return state.defaultModel;
 }
 
-export async function savedFeedModel(request: FastifyRequest): Promise<string | null> {
+/** What a user saved about their feed: the User columns the feeds read. */
+export interface SavedFeed {
+  /** The single-ledger pick (/curated); kept equal to models[0]. */
+  model: string | null;
+  /** The combined feed's checked models; empty = follow the default. */
+  models: string[];
+  showModelAlerts: boolean;
+}
+
+export const SAVED_FEED_SELECT = { curatedModel: true, feedModels: true, showModelAlerts: true } as const;
+
+export function toSavedFeed(user: {
+  curatedModel: string | null;
+  feedModels: string[];
+  showModelAlerts: boolean;
+}): SavedFeed {
+  return { model: user.curatedModel, models: user.feedModels, showModelAlerts: user.showModelAlerts };
+}
+
+const DEFAULT_SAVED_FEED: SavedFeed = { model: null, models: [], showModelAlerts: true };
+
+export async function savedFeed(request: FastifyRequest): Promise<SavedFeed> {
   // The auth hook already read it for browser sessions; only device sessions pay for a lookup.
-  if (request.savedFeedModel !== undefined) return request.savedFeedModel;
+  if (request.savedFeed !== undefined) return request.savedFeed;
   const userId = request.user!.userId;
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { curatedModel: true } });
-  return user?.curatedModel ?? null;
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: SAVED_FEED_SELECT });
+  return user ? toSavedFeed(user) : DEFAULT_SAVED_FEED;
+}
+
+export async function savedFeedModel(request: FastifyRequest): Promise<string | null> {
+  return (await savedFeed(request)).model;
+}
+
+/**
+ * The ledgers the combined feed reads, in roster order: the user's checked models that are still
+ * on the roster, else their single pick, else the default. `followsDefault` is true when nothing
+ * the user saved survived, so the feed is following the default.
+ */
+export function resolveFeedModels(
+  state: ContestState,
+  saved: SavedFeed,
+): { models: string[]; followsDefault: boolean } {
+  const checked = new Set(saved.models);
+  const models = state.roster.filter((c) => checked.has(c.id)).map((c) => c.id);
+  if (models.length > 0) return { models, followsDefault: false };
+  const single = resolveFeedModel(state, undefined, saved.model);
+  return { models: [single], followsDefault: single !== saved.model };
 }
 
 /** The display block a feed response carries for the model it is showing. */

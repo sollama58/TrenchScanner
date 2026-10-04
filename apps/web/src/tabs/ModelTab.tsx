@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  put,
   type EvolutionEvent,
   type GradedRates,
   type Leaderboard,
@@ -10,7 +9,7 @@ import {
 } from "../api";
 import { HBarChart, Skeleton, TargetBars } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
-import { invalidate } from "../cache";
+import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { usePolling, useNow } from "../hooks";
 import { ago, pct, tokenLabel, usd } from "../format";
 
@@ -56,16 +55,16 @@ export function ModelTab() {
   const lb = board.data;
   const t = lb.targets;
   const base = data.samples.byKind.find((k) => k.kind === "event");
-  const selected = lb.entries.find((e) => e.id === lb.selectedModel) ?? null;
+  const following = lb.entries.filter((e) => lb.selectedModels.includes(e.id));
   const consensus = lb.entries.find((e) => e.role === "stacked") ?? null;
   const contenders = lb.entries.filter((e) => e.role !== "stacked");
   const leader = lb.entries[0] ?? null;
   const bestContender = [...contenders].sort(
     (a, b) => (b.composite.live.winRatePct ?? -1) - (a.composite.live.winRatePct ?? -1),
   )[0];
-  const useModel = async (id: string | null) => {
-    await put("/curated/model", { model: id });
-    invalidate("/curated");
+  // Same list, same save, as the Live tab's model checkboxes.
+  const setFeedModels = async (models: string[] | null) => {
+    await saveFeedSettings({ models });
     setPick((n) => n + 1);
   };
 
@@ -85,8 +84,10 @@ export function ModelTab() {
               and is graded the same way: {data.rules.win}. The field evolves: every run breeds new variants
               of the leaders, and a variant that clearly beats the weakest model takes its seat. The{" "}
               <strong>Consensus</strong> doesn't read the market directly; it learns how far to trust each of
-              the others. Your feed shows <strong>{selected?.name ?? "–"}</strong>
-              {lb.followsDefault ? " (the default)" : ""}.
+              the others. Your feed shows calls from{" "}
+              <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
+              {lb.followsDefault ? " (the default)" : ""}
+              {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
               {leader && leader.composite.score !== null && (
                 <>
                   {" "}
@@ -141,7 +142,7 @@ export function ModelTab() {
         </p>
       </section>
 
-      <LeaderboardPanel board={lb} days={days} onUse={useModel} now={now} />
+      <LeaderboardPanel board={lb} days={days} onSetModels={setFeedModels} now={now} />
 
       <EvolutionPanel board={lb} now={now} />
 
@@ -221,19 +222,19 @@ const STATUS_TEXT: Record<LeaderboardEntry["status"], { text: string; tone: stri
 function LeaderboardPanel({
   board,
   days,
-  onUse,
+  onSetModels,
   now,
 }: {
   board: Leaderboard;
   days: number;
-  onUse: (id: string | null) => Promise<void>;
+  onSetModels: (models: string[] | null) => Promise<void>;
   now: number;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
-  const use = async (id: string | null) => {
-    setBusy(id ?? "default");
+  const use = async (key: string, models: string[] | null) => {
+    setBusy(key);
     try {
-      await onUse(id);
+      await onSetModels(models);
     } finally {
       setBusy(null);
     }
@@ -248,7 +249,7 @@ function LeaderboardPanel({
           <p className="muted small">{board.scoring.summary}</p>
         </div>
         {!board.followsDefault && (
-          <button className="ghost" disabled={busy !== null} onClick={() => void use(null)}>
+          <button className="ghost" disabled={busy !== null} onClick={() => void use("default", null)}>
             Back to the default
           </button>
         )}
@@ -273,7 +274,8 @@ function LeaderboardPanel({
           </thead>
           <tbody>
             {board.entries.map((e) => {
-              const mine = e.id === board.selectedModel;
+              const mine = board.selectedModels.includes(e.id);
+              const onlyOne = mine && board.selectedModels.length === 1;
               const { live, exam } = e.composite;
               return (
                 <tr key={e.id} className={mine ? "selected" : ""}>
@@ -317,15 +319,22 @@ function LeaderboardPanel({
                     </span>
                   </td>
                   <td className="r">
-                    {!mine && (
-                      <button
-                        className="ghost small-btn"
-                        disabled={busy !== null}
-                        onClick={() => void use(e.id)}
-                      >
-                        Use
-                      </button>
-                    )}
+                    <label
+                      className="in-feed"
+                      title={
+                        onlyOne
+                          ? "Your feed needs at least one model"
+                          : "Show this model's calls in your feed"
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={mine}
+                        disabled={busy !== null || onlyOne}
+                        onChange={() => void use(e.id, toggledModels(board, e.id))}
+                      />
+                      In feed
+                    </label>
                   </td>
                 </tr>
               );

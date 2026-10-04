@@ -65,20 +65,24 @@ describe("listQuerySchema - includeCurated", () => {
   const parse = (query: Record<string, string>) => listQuerySchema.parse(query);
 
   it("leaves curated alerts out unless they are asked for", () => {
-    expect(parse({}).includeCurated).toBe(false);
-    expect(parse({ page: "2" }).includeCurated).toBe(false);
+    expect(parse({}).includeCurated).toBe("off");
+    expect(parse({ page: "2" }).includeCurated).toBe("off");
   });
 
   it("accepts the affirmative forms a client actually sends", () => {
-    expect(parse({ includeCurated: "true" }).includeCurated).toBe(true);
-    expect(parse({ includeCurated: "1" }).includeCurated).toBe(true);
+    expect(parse({ includeCurated: "true" }).includeCurated).toBe("on");
+    expect(parse({ includeCurated: "1" }).includeCurated).toBe("on");
+  });
+
+  it('reads "saved" as following the reader\'s own switch', () => {
+    expect(parse({ includeCurated: "saved" }).includeCurated).toBe("saved");
   });
 
   it('reads "false" as false - the trap z.coerce.boolean() falls into', () => {
     // Every query value arrives as a string, and coercion treats any non-empty one as true, so
     // the flag would have been impossible to turn off once a client started sending it.
-    expect(parse({ includeCurated: "false" }).includeCurated).toBe(false);
-    expect(parse({ includeCurated: "0" }).includeCurated).toBe(false);
-    expect(parse({ includeCurated: "" }).includeCurated).toBe(false);
+    expect(parse({ includeCurated: "false" }).includeCurated).toBe("off");
+    expect(parse({ includeCurated: "0" }).includeCurated).toBe("off");
+    expect(parse({ includeCurated: "" }).includeCurated).toBe("off");
   });
 });

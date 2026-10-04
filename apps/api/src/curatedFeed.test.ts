@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { foldCuratedIntoPage, resolveOutcome, serializeCuratedAlert } from "./curatedFeed.js";
+import {
+  foldCuratedIntoPage,
+  groupSameTokenCalls,
+  resolveOutcome,
+  serializeCuratedAlert,
+} from "./curatedFeed.js";
 import { currentMarketCap } from "./routes/matches.js";
 
 const T0 = new Date("2026-08-27T12:00:00Z");
@@ -21,6 +26,44 @@ const curatedCard = (tokenId: string, minutes: number, alertId = `a-${tokenId}-$
   tokenId,
   matchedAt: at(minutes),
   curated: { alertId } as { alertId: string } | null,
+});
+
+/** Raw CuratedAlert rows as the combined feed reads them. */
+const call = (tokenId: string, minutes: number, model: string) => ({
+  id: `${model}-${tokenId}-${minutes}`,
+  tokenId,
+  createdAt: at(minutes),
+  model,
+  modelName: model.toUpperCase(),
+  confidence: 70,
+});
+const newestFirst = <T extends { createdAt: Date }>(rows: T[]) =>
+  [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+describe("groupSameTokenCalls", () => {
+  it("shows a token several models called once, as the first call, listing every model", () => {
+    const groups = groupSameTokenCalls(
+      newestFirst([call("A", 0, "consensus"), call("A", 20, "trees"), call("B", 10, "trees")]),
+      WINDOW,
+    );
+    expect(groups.map((g) => g.lead.id)).toEqual(["trees-B-10", "consensus-A-0"]);
+    expect(groups[1]!.calls.map((c) => c.model)).toEqual(["consensus", "trees"]);
+    expect(groups[1]!.calls.map((c) => c.modelName)).toEqual(["CONSENSUS", "TREES"]);
+  });
+
+  it("keeps a model's own repeat call as a new alert", () => {
+    const groups = groupSameTokenCalls(newestFirst([call("A", 0, "trees"), call("A", 120, "trees")]), WINDOW);
+    expect(groups).toHaveLength(2);
+  });
+
+  it("starts a new card once the first call is older than the window", () => {
+    const groups = groupSameTokenCalls(
+      newestFirst([call("A", 0, "consensus"), call("A", 7 * 60, "trees")]),
+      WINDOW,
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.calls.length)).toEqual([1, 1]);
+  });
 });
 
 describe("foldCuratedIntoPage", () => {
