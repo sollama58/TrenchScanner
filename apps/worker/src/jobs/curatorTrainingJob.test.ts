@@ -14,7 +14,7 @@ import {
   type TrainedCuratorParams,
   type ScoredToken,
 } from "@trenchscanner/core";
-import { applyContestResults, loadTrainingRows } from "./curatorTrainingJob.js";
+import { applyContestResults, describeRowBudget, loadTrainingRows } from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
   emitCuratedCycle,
@@ -306,12 +306,17 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     const all = await loadTrainingRows(windowStart, 100, 2);
     expect(all.map((r) => r.anchorAt.getTime())).toEqual([...anchors].reverse().map((a) => a.getTime()));
 
+    // Under the cap every event row stays (anchors 1, 3, 5) and the hourly background is cut to
+    // the newest rows that fit (anchors 6 and 4) - the decision moments keep the whole window.
     const capped = await loadTrainingRows(windowStart, 5, 2);
     expect(capped.map((r) => r.anchorAt.getTime())).toEqual(
-      [...anchors]
-        .reverse()
-        .slice(0, 5)
-        .map((a) => a.getTime()),
+      [anchors[6], anchors[5], anchors[4], anchors[3], anchors[1]].map((a) => a!.getTime()),
     );
+    expect(capped.filter((r) => r.sampleKind === "event")).toHaveLength(3);
+
+    const budget = describeRowBudget(capped, windowStart, 5);
+    expect(budget).toMatchObject({ rows: 5, eventRows: 3, hourlyRows: 2, capped: true });
+    expect(budget.historyDays).toBeGreaterThanOrEqual(budget.hourlyDays);
+    expect(describeRowBudget(all, windowStart, 100).capped).toBe(false);
   });
 });

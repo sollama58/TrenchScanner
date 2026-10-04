@@ -17,6 +17,7 @@ import {
   type JudgeRecordSummary,
 } from "@trenchscanner/core";
 import { buildHitRateReport, type Targets } from "./routes/stats.js";
+import { buildLearningCurve } from "./learningCurve.js";
 
 /**
  * The Model tab's data: how the curator and the AI reviewer are learning and how their calls are
@@ -251,7 +252,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
   };
 
-  const [report, runs, active, recentReviews, aiJudge] = await Promise.all([
+  const [report, runs, active, recentReviews, aiJudge, learning] = await Promise.all([
     buildHitRateReport(since, until, targets, env, { includeFilterMatches: false }),
     prisma.curatorModel.findMany({
       orderBy: { createdAt: "desc" },
@@ -290,6 +291,8 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
       },
     }),
     aiJudgeState(isAdmin),
+    // Day-over-day: is the feed's edge over the market growing as the data does (learningCurve.ts)?
+    buildLearningCurve(since, until, targets, days),
   ]);
 
   // Importance is read from the model that is curating now, else the newest one examined.
@@ -316,6 +319,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     importance,
     featureHealth,
     runs: runs.map(summarizeRun),
+    learning,
     // Everything the hit-rate report knows, minus per-filter rows: those name other users' filters.
     curatedAlerts: report.curatedAlerts,
     shadowEmissions: report.shadowEmissions,

@@ -345,6 +345,75 @@ export interface AiJudgeState {
   } | null;
 }
 
+export interface LearningRates {
+  calls: number;
+  graded: number;
+  won2x: number;
+  won4x: number;
+  doubledAfterStop: number;
+  rate2xPct: number | null;
+  rate4xPct: number | null;
+}
+
+export interface LearningDay {
+  /** UTC calendar day, YYYY-MM-DD. */
+  day: string;
+  /** The decision moments the models saw that day (graded "event" training rows). */
+  market: LearningRates;
+  /** Every model's calls that day, pooled. */
+  feed: LearningRates;
+  /** feed 2x rate / market 2x rate; null when either side is too thin. */
+  lift2x: number | null;
+  lift4x: number | null;
+}
+
+export interface LearningRunModel {
+  contestant: string;
+  name: string | null;
+  calls: number;
+  wins: number;
+  goals: number;
+  rate2xPct: number | null;
+  rate4xPct: number | null;
+  lift2x: number | null;
+  score: number | null;
+}
+
+export interface LearningRun {
+  at: string;
+  trainingRows: number;
+  historyDays: number;
+  exam: { decisionRows: number; decisionWins: number; baseRate2xPct: number | null };
+  models: LearningRunModel[];
+  best: LearningRunModel | null;
+}
+
+export interface LearningSpan {
+  from: string;
+  to: string;
+  feed: LearningRates;
+  market: LearningRates;
+  lift2x: number | null;
+}
+
+export interface LearningTrend {
+  recent: LearningSpan;
+  prior: LearningSpan | null;
+  verdict: "improving" | "flat" | "worsening" | "too-early";
+  reason: string;
+}
+
+/** Day-over-day: the feed's edge over the market, and each training run's exam against its base rate. */
+export interface LearningCurve {
+  window: { since: string; until: string };
+  days: LearningDay[];
+  runs: LearningRun[];
+  trend: LearningTrend | null;
+  minGradedForLift: number;
+  trendSpanDays: number;
+  note: string;
+}
+
 export interface ModelInsights {
   window: { days: number };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
@@ -364,6 +433,7 @@ export interface ModelInsights {
     features: { feature: string; label: string; sharePct: number; direction: 1 | -1 | null }[];
   } | null;
   runs: ModelRun[];
+  learning: LearningCurve;
   curatedAlerts: {
     total: GradedRates;
     bySource: (GradedRates & { source: string })[];

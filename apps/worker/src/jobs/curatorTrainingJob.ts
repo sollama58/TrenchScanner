@@ -63,12 +63,15 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     });
     return;
   }
-  if (trainingRows.length >= env.CURATOR_TRAINING_MAX_ROWS) {
-    logger.info("training on the newest samples only", {
-      rows: trainingRows.length,
-      oldestAnchorAt: trainingRows[trainingRows.length - 1]!.anchorAt,
-    });
+  const budget = describeRowBudget(trainingRows, windowStart, env.CURATOR_TRAINING_MAX_ROWS);
+  if (budget.capped) {
+    // The window asked for more rows than the cap allows: the decision moments still reach back
+    // the whole window, the hourly background does not (see loadTrainingRows).
+    logger.info("training row cap reached - hourly background shortened to fit", budget);
   }
+  // The history the models actually saw, not the window they were allowed: when the cap binds
+  // the oldest row is days newer than windowStart, and the stored span should say so.
+  const trainingFrom = trainingRows[trainingRows.length - 1]!.anchorAt;
 
   const targets: PrecisionTargets = {
     winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
@@ -122,7 +125,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
     return;
   }
 
-  const modelIds = await applyContestResults(results, trainingRows.length, windowStart, {
+  const modelIds = await applyContestResults(results, trainingRows.length, trainingFrom, {
     founding,
     replacement: outcome.replacement,
   });
@@ -152,6 +155,8 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   logger.info("curator contest training complete", {
     durationMs: Date.now() - startedAt,
     rows: trainingRows.length,
+    decisionRows: budget.eventRows,
+    historyDays: budget.historyDays,
     contestants: results.map((r) => ({
       contestant: r.contestant,
       modelId: modelIds.get(r.contestant),
@@ -378,25 +383,89 @@ async function evolutionPlan(
 const LOAD_PAGE_ROWS = 5_000;
 
 /**
- * The newest `maxRows` finalized training rows in the window, newest first. Paged, so the
- * query engine's raw result is never the whole window at once - only the mapped rows accumulate.
+ * The training set for one run: every finalized decision moment ("event" row) in the window, plus
+ * as much of the hourly background as the row cap leaves room for, newest first.
+ *
+ * The cap exists for memory (CURATOR_TRAINING_MAX_ROWS); the window is the horizon the models
+ * are meant to learn from. Taken newest-first across both kinds, the cap would also be the
+ * horizon as soon as the scan banked more rows than it holds - on 2026-10-04 that was about
+ * eight days of a 21-day window, shrinking as discovery widened - and the exam's graded history
+ * (decision moments) would stop growing with the data. Event rows are a small share of the rows
+ * (about one in fourteen), so keeping all of them costs little; what the cap trims is background
+ * samples of tokens the feed never decides on, where more depth is worth the least. Emission and
+ * match rows stay out: they exist because a curator or a user's filter picked them, and training
+ * on them would teach someone's selection rather than the market (see CandidateOutcome.sampleKind).
  */
 export async function loadTrainingRows(
   windowStart: Date,
   maxRows: number,
   pageRows = LOAD_PAGE_ROWS,
 ): Promise<TrainingRow[]> {
+  const events = await loadRowsOfKind("event", windowStart, maxRows, pageRows);
+  const hourly = await loadRowsOfKind("hourly", windowStart, maxRows - events.length, pageRows);
+  // Newest first, as a single newest-first query would have returned them; ties keep events first.
+  return [...events, ...hourly].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
+}
+
+/** What loadTrainingRows kept, for the run's log: how deep each kind reaches and whether the cap bound. */
+export function describeRowBudget(
+  rows: readonly TrainingRow[],
+  windowStart: Date,
+  maxRows: number,
+): {
+  rows: number;
+  eventRows: number;
+  hourlyRows: number;
+  capped: boolean;
+  /** Days between the oldest row kept and the newest. */
+  historyDays: number;
+  /** Days of hourly background kept, counted from the newest row. */
+  hourlyDays: number;
+  windowDays: number;
+} {
+  const newest = rows.reduce((m, r) => Math.max(m, r.anchorAt.getTime()), Number.NEGATIVE_INFINITY);
+  const oldestOf = (kind?: string) =>
+    rows.reduce(
+      (m, r) => (kind === undefined || r.sampleKind === kind ? Math.min(m, r.anchorAt.getTime()) : m),
+      Number.POSITIVE_INFINITY,
+    );
+  const days = (oldest: number) =>
+    Number.isFinite(oldest) && Number.isFinite(newest)
+      ? Math.round(((newest - oldest) / 86_400_000) * 10) / 10
+      : 0;
+  const eventRows = rows.filter((r) => r.sampleKind === "event").length;
+  return {
+    rows: rows.length,
+    eventRows,
+    hourlyRows: rows.length - eventRows,
+    capped: rows.length >= maxRows,
+    historyDays: days(oldestOf()),
+    hourlyDays: days(oldestOf("hourly")),
+    windowDays: Number.isFinite(newest)
+      ? Math.round(((newest - windowStart.getTime()) / 86_400_000) * 10) / 10
+      : 0,
+  };
+}
+
+/**
+ * The newest `maxRows` finalized rows of one sample kind in the window, newest first. Paged, so
+ * the query engine's raw result is never the whole window at once - only the mapped rows
+ * accumulate.
+ */
+async function loadRowsOfKind(
+  sampleKind: "hourly" | "event",
+  windowStart: Date,
+  maxRows: number,
+  pageRows: number,
+): Promise<TrainingRow[]> {
   const out: TrainingRow[] = [];
   let cursor: string | undefined;
   while (out.length < maxRows) {
     const page = await prisma.candidateOutcome.findMany({
-      // Emission rows exist because a curator picked them, and match rows because a user's filter
-      // did; training on either would teach the model someone's selection rather than the market
-      // (see CandidateOutcome.sampleKind). Listed positively so a new kind stays out by default.
       where: {
         finalizedAt: { not: null },
         anchorAt: { gte: windowStart },
-        sampleKind: { in: ["hourly", "event"] },
+        sampleKind,
       },
       orderBy: [{ anchorAt: "desc" }, { id: "desc" }],
       take: Math.min(pageRows, maxRows - out.length),

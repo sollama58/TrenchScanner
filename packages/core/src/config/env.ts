@@ -276,13 +276,15 @@ const envSchema = z.object({
   // row ceiling below, and it is the window - not the ceiling - that should set how far back the
   // models look. The recency half-life below tilts the fit toward the newest part of it.
   CURATOR_TRAINING_WINDOW_DAYS: z.coerce.number().positive().default(21),
-  // Ceiling on the samples one training run loads: the newest this many from the window. A run
-  // holds every sample (features included) in memory at once, and the walk-forward exam and the
-  // model families multiply that several times over - at ~60k rows a run peaked near 200MB of
-  // heap on its own, which on a 512MB worker is what crashed it once enough history had built
-  // up (that is why it was 40,000 until 2026-10-05). On the trainer process, with 2GB to itself
-  // and nothing else resident, 100,000 is about two weeks of rows. The window still bounds how
-  // OLD a sample can be; this bounds how many there are.
+  // Ceiling on the samples one training run loads. A run holds every sample (features included)
+  // in memory at once, and the walk-forward exam and the model families multiply that several
+  // times over - at ~60k rows a run peaked near 200MB of heap on its own, which on a 512MB worker
+  // is what crashed it once enough history had built up (that is why it was 40,000 until
+  // 2026-10-05). On the trainer process, with 2GB to itself and nothing else resident, 100,000
+  // was about two weeks of rows when set; by 2026-10-05 discovery banked ~12,000 a day, so it is
+  // about eight. The window still bounds how OLD a sample can be; this bounds how many there are,
+  // and when it binds the decision moments ("event" rows) keep the whole window while only the
+  // hourly background is shortened (see loadTrainingRows in the worker's curatorTrainingJob.ts).
   CURATOR_TRAINING_MAX_ROWS: z.coerce.number().int().positive().default(100_000),
   // Half-life for the trainer's recency decay: a sample this many days older than the newest one
   // counts half as much in the loss. The meta this market trades on rotates in weeks, and an

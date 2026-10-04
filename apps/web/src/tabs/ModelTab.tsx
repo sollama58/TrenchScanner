@@ -7,10 +7,12 @@ import {
   type ModelInsights,
   type FeatureHealthReport,
   type ModelRun,
+  type LearningCurve,
+  type LearningTrend,
   type AiJudgeState,
   type ScoreBand,
 } from "../api";
-import { HBarChart, Skeleton, TargetBars } from "../components/Charts";
+import { HBarChart, Skeleton, TargetBars, TrendLines } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { prefetch } from "../cache";
@@ -169,6 +171,8 @@ export function ModelTab() {
       <EvolutionPanel board={lb} now={now} />
 
       <HowItWorks board={lb} />
+
+      <LearningPanel learning={data.learning} now={now} />
 
       <TrainingPanel runs={data.runs} board={lb} targets={t} now={now} />
 
@@ -733,6 +737,152 @@ function EvolutionPanel({ board, now }: { board: Leaderboard; now: number }) {
             </li>
           ))}
         </ol>
+      )}
+    </section>
+  );
+}
+
+const TREND_TEXT: Record<LearningTrend["verdict"], string> = {
+  improving: "▲ Improving",
+  flat: "→ Holding steady",
+  worsening: "▼ Slipping",
+  "too-early": "Too early to say",
+};
+
+const TREND_STATE: Record<LearningTrend["verdict"], string> = {
+  improving: "met",
+  flat: "early",
+  worsening: "below",
+  "too-early": "early",
+};
+
+function lift(value: number | null | undefined): string {
+  return value === null || value === undefined ? "–" : `${value.toFixed(2)}x`;
+}
+
+function shortDay(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+/**
+ * Day over day: is the system getting better as data accumulates? Hit rates alone can't say - on a
+ * day the whole market doubles twice as often every model looks twice as good - and the score
+ * can't either, since it climbs with evidence at a constant skill. The feed's LIFT over the market
+ * (its 2x rate divided by the 2x rate of the moments the models decided on) is what carries across
+ * days, so that is what this panel tracks, by day for the live feed and by run for the exam.
+ */
+function LearningPanel({ learning, now }: { learning: LearningCurve; now: number }) {
+  const days = learning.days.filter((d) => d.feed.calls > 0 || d.market.calls > 0);
+  const trend = learning.trend;
+  const runs = learning.runs;
+  const [showRuns, setShowRuns] = useState(false);
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">Learning</span>
+          <h3>Is it getting better?</h3>
+          <p className="muted small">{learning.note}</p>
+        </div>
+        {trend && (
+          <div className="ring-text">
+            <span className="ring-label">
+              Last {learning.trendSpanDays} days vs the {learning.trendSpanDays} before
+            </span>
+            <span className={`state ${TREND_STATE[trend.verdict]}`}>{TREND_TEXT[trend.verdict]}</span>
+          </div>
+        )}
+      </header>
+
+      {trend ? (
+        <>
+          <div className="family-figs">
+            <div>
+              <label>Feed 2x, last {learning.trendSpanDays}d</label>
+              <span className="num">{pct(trend.recent.feed.rate2xPct, 1)}</span>
+            </div>
+            <div>
+              <label>Market 2x, same days</label>
+              <span className="num">{pct(trend.recent.market.rate2xPct, 1)}</span>
+            </div>
+            <div>
+              <label>Lift</label>
+              <span className="num">{lift(trend.recent.lift2x)}</span>
+            </div>
+            {trend.prior && (
+              <div>
+                <label>Lift, {learning.trendSpanDays}d before</label>
+                <span className="num">{lift(trend.prior.lift2x)}</span>
+              </div>
+            )}
+          </div>
+          <p className="muted small">{trend.reason}</p>
+        </>
+      ) : (
+        <p className="empty">Appears once the models have made graded calls.</p>
+      )}
+
+      {days.length > 1 && (
+        <>
+          <h4>Feed vs market, by day</h4>
+          <TrendLines
+            aLabel="Feed 2x rate"
+            bLabel="Market 2x rate (decision moments)"
+            data={days.map((d) => ({
+              label: shortDay(d.day),
+              a: d.feed.rate2xPct,
+              b: d.market.rate2xPct,
+              sub: `${d.feed.graded} graded calls of ${d.feed.calls}; ${d.market.graded.toLocaleString()} moments; lift ${lift(d.lift2x)}`,
+            }))}
+          />
+        </>
+      )}
+
+      {runs.length > 0 && (
+        <details className="folds" onToggle={(e) => setShowRuns((e.target as HTMLDetailsElement).open)}>
+          <summary>Training run by training run ({runs.length})</summary>
+          {showRuns && (
+            <>
+              <p className="muted small">
+                Each run's exam grades the newest half of its decision moments out of sample. "Base 2x" is
+                what picking at random from them would have earned; "Best model" is the top exam 2x rate at
+                its cutoff that run, with its lift over the base. The exam window moves with the data, so
+                compare lifts, not rates.
+              </p>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Run</th>
+                      <th className="r">Rows</th>
+                      <th className="r">History</th>
+                      <th className="r">Moments</th>
+                      <th className="r">Base 2x</th>
+                      <th>Best model</th>
+                      <th className="r">2x</th>
+                      <th className="r">Lift</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {runs.map((r) => (
+                      <tr key={r.at}>
+                        <td className="muted">{ago(r.at, now)}</td>
+                        <td className="r num">{r.trainingRows.toLocaleString()}</td>
+                        <td className="r num">{r.historyDays.toFixed(1)}d</td>
+                        <td className="r num">{r.exam.decisionRows.toLocaleString()}</td>
+                        <td className="r num">{pct(r.exam.baseRate2xPct, 1)}</td>
+                        <td>{r.best ? (r.best.name ?? r.best.contestant) : "–"}</td>
+                        <td className="r num">{pct(r.best?.rate2xPct, 1)}</td>
+                        <td className="r num">{lift(r.best?.lift2x)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </details>
       )}
     </section>
   );
