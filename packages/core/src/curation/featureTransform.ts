@@ -41,6 +41,7 @@ const UNTRANSFORMED_FEATURES = new Set([
   "earlyBuyerSoldShare",
   "devSoldShare",
   "firstBuyersHolding",
+  "devHolding",
 ]);
 
 /** Applies a model's feature transform to one raw value. */

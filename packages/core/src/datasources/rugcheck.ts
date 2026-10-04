@@ -153,6 +153,8 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     holderCount: report.totalHolders,
     top10HolderPct: realHolders.length > 0 ? top10HolderPct : undefined,
     devWalletPct: devHolder?.pct,
+    creatorHolding:
+      report.creator && typeof report.creatorBalance === "number" ? report.creatorBalance > 0 : undefined,
     mintAuthorityActive: Boolean(report.token?.mintAuthority),
     freezeAuthorityActive: Boolean(report.token?.freezeAuthority),
     lpBurned,

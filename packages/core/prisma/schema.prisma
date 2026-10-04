@@ -634,6 +634,9 @@ model TokenSnapshot {
   // PumpPortal trade stream (curation/tradeFlow.ts), so null for a launch it didn't see.
   firstBuyersHolding  Int?
   firstBuyersSeen     Int?
+  // Whether the dev still holds the token (resolveDevHolding: the trade stream's view of the dev's
+  // bag, else RugCheck's creator balance). Null when neither knew.
+  devHolding          Boolean?
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
   // was screened out. Null means the check never ran or failed, which the screen also rejects.

@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import type { ScoredToken } from "@trenchscanner/core";
+import { resolveDevHolding, type ScoredToken } from "@trenchscanner/core";
 
 /**
  * Which job is writing the row. See TokenSnapshot.source in schema.prisma for why this matters:
@@ -66,6 +66,7 @@ export function snapshotDataFor(
     top10WalletsChecked: scored.top10WalletsChecked,
     firstBuyersHolding: scored.tradeFlow?.firstBuyersHolding ?? null,
     firstBuyersSeen: scored.tradeFlow?.firstBuyersSeen ?? null,
+    devHolding: resolveDevHolding(scored),
     isMayhemMode: scored.isMayhemMode,
     graduated: scored.graduated,
     rugScreenPassed: scored.rugScreen.passed,

@@ -92,6 +92,8 @@ export interface Snapshot {
   /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
   firstBuyersHolding?: number | null;
   firstBuyersSeen?: number | null;
+  /** Whether the dev still holds the token; null when unknown. */
+  devHolding?: boolean | null;
   ageMinutes: number | null;
   graduated: boolean | null;
   score: number;
