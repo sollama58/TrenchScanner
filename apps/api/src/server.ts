@@ -27,6 +27,7 @@ import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
 import { registerAdminOpsRoutes } from "./routes/adminOps.js";
+import { registerAdminBackupRoutes } from "./routes/adminBackups.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
@@ -450,6 +451,16 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     async (instance) => {
       instance.addHook("preHandler", instance.authenticateAdmin);
       await registerAdminOpsRoutes(instance, { env, timings, liveRefresher });
+    },
+    { prefix: "/admin" },
+  );
+  // Model backups: list, take, download, import, pin, restore - see routes/adminBackups.ts. Gated
+  // at onRequest rather than preHandler: the import takes a large body, and nobody but an admin
+  // should get as far as having one read.
+  await app.register(
+    async (instance) => {
+      instance.addHook("onRequest", instance.authenticateAdmin);
+      await registerAdminBackupRoutes(instance, { env });
     },
     { prefix: "/admin" },
   );

@@ -15,7 +15,8 @@ export type HeartbeatJob =
   | "curator-training"
   | "match-peaks"
   | "ai-judge"
-  | "champion-refresh";
+  | "champion-refresh"
+  | "model-backup";
 
 /**
  * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
@@ -40,6 +41,7 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "curator-training": "trainer",
   "ai-judge": "trainer",
   "champion-refresh": "trainer",
+  "model-backup": "trainer",
 };
 
 /** Whether a process in `role` schedules `job`. */

@@ -2758,3 +2758,8 @@ button.small-btn {
 .admin-form input.admin-days {
   flex: 0 0 90px;
 }
+.admin-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

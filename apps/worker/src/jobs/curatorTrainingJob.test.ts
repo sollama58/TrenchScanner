@@ -126,10 +126,10 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     );
     const second = await applyContestResults([result("linear", handParams(0.5))], 2_500, new Date());
 
-    const firstLinear = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first.get("linear")! } });
-    const firstRules = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first.get("rules")! } });
+    const firstLinear = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first!.get("linear")! } });
+    const firstRules = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first!.get("rules")! } });
     const secondLinear = await prisma.curatorModel.findUniqueOrThrow({
-      where: { id: second.get("linear")! },
+      where: { id: second!.get("linear")! },
     });
     expect(firstLinear.status).toBe("retired");
     expect(firstRules.status).toBe("retired");
@@ -221,13 +221,13 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
       2_000,
       new Date(),
     );
-    const row = await prisma.curatorModel.findUniqueOrThrow({ where: { id: ids.get("consensus")! } });
+    const row = await prisma.curatorModel.findUniqueOrThrow({ where: { id: ids!.get("consensus")! } });
     const members = (row.params as unknown as StackedCuratorParams).members;
-    expect(members.map((m) => m.modelId)).toEqual([ids.get("linear"), ids.get("trees")]);
+    expect(members.map((m) => m.modelId)).toEqual([ids!.get("linear"), ids!.get("trees")]);
   });
 
   it("a learner curates on its own ledger: emits above its threshold with the model row as source", async () => {
-    const modelId = (await applyContestResults([result("linear", handParams(0.9))], 2_000, new Date())).get(
+    const modelId = (await applyContestResults([result("linear", handParams(0.9))], 2_000, new Date()))!.get(
       "linear",
     )!;
     resetCuratorModelCache();

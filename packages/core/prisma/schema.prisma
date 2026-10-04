@@ -24,16 +24,16 @@ model SystemHeartbeat {
 
 /// A person, identified by their Solana wallet (Sign-In With Solana).
 model User {
-  id            String   @id @default(cuid())
-  walletAddress String   @unique
-  createdAt     DateTime @default(now())
+  id              String   @id @default(cuid())
+  walletAddress   String   @unique
+  createdAt       DateTime @default(now())
   /// Stamped into every browser session's JWT and checked on each request. Signing out bumps it,
   /// which revokes every browser session the user holds - a JWT can't be withdrawn on its own.
   /// Paired phones are revoked per device instead (LinkedDevice.revokedAt).
-  sessionVersion Int     @default(0)
+  sessionVersion  Int      @default(0)
   /// The curator contestant whose calls this user's Curated feed shows (curation/contestants.ts);
   /// null = the default (the consensus, or Rules until the consensus can call).
-  curatedModel   String?
+  curatedModel    String?
   /// Every contestant whose calls the dashboard's combined feed shows (checkboxes on Live and the
   /// Models tab). Empty = follow the default. curatedModel is kept equal to the first entry so the
   /// single-ledger /curated feed (other clients) shows one of the same models.
@@ -275,27 +275,27 @@ model CuratedAlert {
   snapshotId String?
   snapshot   TokenSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
 
-  createdAt  DateTime @default(now())
+  createdAt     DateTime @default(now())
   /// Which decision-maker emitted it - "heuristic-v1", or the CuratorModel id whose weights made
   /// the call - so every call is traceable to the exact model generation.
-  source     String
+  source        String
   /// The contestant whose ledger this call is on (curation/contestants.ts): every contestant calls
   /// on its own feed, governed and graded separately - the leaderboard is built from these.
   /// Null only on rows written before the contest existed (the migration backfilled those).
-  model      String?
+  model         String?
   /// The name the model held when it made this call. Evolving seats change recipe and name
   /// (CuratorLane), so the card keeps showing who actually called it.
-  modelName  String?
+  modelName     String?
   /// The curator's conviction at emission, 0-100.
-  confidence Float
+  confidence    Float
   /// "high" when the call cleared the model's high-conviction line (CURATED_HIGH_CONVICTION_RANK),
   /// "standard" otherwise; null on rules calls and rows from before tiers existed.
-  tier       String?
+  tier          String?
   /// The 2x rate of recent out-of-sample calls ranked like this one, in percent, from the model's
   /// calibration table at emission; null when it had none.
   calibratedPct Float?
   /// Why, as short human-readable strings - the top contributing signals at emission time.
-  reasons    String[] @default([])
+  reasons       String[] @default([])
 
   anchorPriceUsd Float
   anchorMcapUsd  Float
@@ -552,20 +552,20 @@ model CandidateOutcome {
 
   // ---- Running aggregates, initialized to the anchor price at creation ----
   /// Highest price seen within the 1h label window.
-  peak1hPriceUsd      Float
-  peak1hAt            DateTime?
+  peak1hPriceUsd         Float
+  peak1hAt               DateTime?
   /// Lowest price seen within the 1h window - the worst drawdown a buyer at the anchor endured.
-  low1hPriceUsd       Float
+  low1hPriceUsd          Float
   /// Lowest price seen BEFORE the first observed 2x - frozen the tick the price first reaches
   /// 2x the anchor. This is what decides disqualification: a token that dropped 50%+ and then
   /// "2x'd from the bottom" stopped out anyone who actually bought the alert.
-  lowBefore2xPriceUsd Float
+  lowBefore2xPriceUsd    Float
   /// First tick at which price >= 2x anchor was observed, anywhere inside the 1h window - the
   /// WIN test (see curation/labels.ts).
-  hit2xAt             DateTime?
+  hit2xAt                DateTime?
   /// Highest price seen over the whole watch (up to 24h for extended rows).
-  peak24hPriceUsd     Float
-  peak24hAt           DateTime?
+  peak24hPriceUsd        Float
+  peak24hAt              DateTime?
   /// The 1h window's highest price before it first fell to the stop, frozen at that moment -
   /// what the 4x and labelValue are graded on (see cleanPeakPriceUsd in curation/labels.ts). Null
   /// on rows from before it was tracked.
@@ -1068,19 +1068,19 @@ model BurnScanCursor {
 /// alerts the review never saw, and promotes a candidate only when it beats the incumbent
 /// (apps/worker/src/ai/playbook.ts). Old rows are kept, so every verdict's playbook stays readable.
 model AiPlaybook {
-  id         String    @id @default(cuid())
-  version    Int
+  id        String    @id @default(cuid())
+  version   Int
   /// "active" | "candidate" | "retired" | "rejected"
-  status     String
-  text       String
+  status    String
+  text      String
   /// Why the review proposed this version - one or two sentences.
-  rationale  String?
-  parentId   String?
-  createdAt  DateTime  @default(now())
+  rationale String?
+  parentId  String?
+  createdAt DateTime  @default(now())
   /// When it was promoted, retired or rejected.
-  decidedAt  DateTime?
+  decidedAt DateTime?
   /// Its record on the replay that decided it (JudgeRecordSummary), for the Models tab.
-  metrics    Json?
+  metrics   Json?
 
   @@index([status, createdAt])
 }
@@ -1141,5 +1141,35 @@ model AiBlendModel {
   /// AiBlendMetrics - rows, out-of-sample Brier for the blend and each input alone.
   metrics   Json
 
+  @@index([createdAt])
+}
+
+/// A snapshot of every model the contest is running (curation/modelBackup.ts): each seat's active
+/// CuratorModel (weights, cutoff, calibration, exam), its lane (recipe and lineage) and live record,
+/// the default-model pick, and the AI reviewer's active playbook and blend. Kept apart from the live
+/// tables on purpose: a training run retires every model it replaces, and the cleanup job strips a
+/// retired model's weights a week later, so without this a good model's weights are gone for good.
+/// Written weekly by the trainer (and on demand from the Admin tab); restorable from the Admin tab.
+model ModelBackup {
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
+  /// "weekly" | "manual" | "pre-restore" | "imported"
+  kind         String
+  note         String?
+  /// Pinned backups are never pruned.
+  pinned       Boolean   @default(false)
+  modelCount   Int
+  /// The gzipped ModelBackupPayload JSON - exactly the bytes the download serves.
+  data         Bytes
+  sizeBytes    Int
+  /// sha256 (hex) of `data`, checked before any restore or download.
+  sha256       String
+  /// The off-site copy (MODEL_BACKUP_S3_*): its object key once uploaded, else the last error.
+  offsiteKey   String?
+  offsiteAt    DateTime?
+  offsiteError String?
+  restoredAt   DateTime?
+
+  @@index([kind, createdAt])
   @@index([createdAt])
 }

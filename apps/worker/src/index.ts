@@ -21,6 +21,7 @@ import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
 import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
+import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { scheduleInterval, scheduleDailyAt, type JobRunMeta, type ScheduledJob } from "./scheduler.js";
@@ -39,6 +40,7 @@ const AI_JUDGE_INTERVAL_MINUTES = 10;
  * within the hour. Also the start-up choice: the first run is immediate.
  */
 const CHAMPION_REFRESH_MINUTES = 60;
+const MODEL_BACKUP_CHECK_MINUTES = 60;
 
 /**
  * One process runs the jobs its WORKER_ROLE owns - see HEARTBEAT_JOB_ROLE in core's heartbeat.ts
@@ -211,6 +213,13 @@ async function main() {
       async (): Promise<JobRunMeta> => rechooseDefaultModel(env),
       CHAMPION_REFRESH_MINUTES,
     ),
+  );
+  // Weekly model backups, checked hourly (see runModelBackupJob). Held a few minutes after boot so
+  // a restart doesn't put the snapshot's reads on top of the first training reads.
+  schedule("model-backup", () =>
+    scheduleInterval("model-backup", () => runModelBackupJob(env), MODEL_BACKUP_CHECK_MINUTES, {
+      firstRunDelayMs: async () => 5 * 60_000,
+    }),
   );
   // The AI reviewer's learning loop: collects replay batches, runs playbook evolution and refits
   // the AI blend - see runAiJudgeJob. Inert without ANTHROPIC_API_KEY.

@@ -34,6 +34,8 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "ai-judge": 40 * 60_000,
   // Hourly: re-chooses the default model from the leaderboard between training runs.
   "champion-refresh": 3 * 3_600_000,
+  // Hourly: takes the weekly model backup when one is due and copies new ones off-site.
+  "model-backup": 3 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 const MAX_ERROR_LENGTH = 300;

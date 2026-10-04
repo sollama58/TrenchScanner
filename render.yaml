@@ -29,6 +29,10 @@
 #         Verifies and reconciles burns. Empty (or a public endpoint) means the Helius RPC built
 #         from HELIUS_API_KEY; set it only to use a different paid RPC.
 #   - ADMIN_WALLET_ADDRESSES (api only)            your own wallet's base58 address, to reach /admin
+#   - MODEL_BACKUP_S3_ENDPOINT, _BUCKET, _ACCESS_KEY_ID, _SECRET_ACCESS_KEY (trainer only, optional)
+#         Off-site copies of the weekly model backups to any S3-compatible bucket (Cloudflare R2,
+#         Backblaze B2, AWS S3); MODEL_BACKUP_S3_REGION defaults to "auto" (R2). Unset, backups
+#         stay in Postgres only (Admin tab -> Backups) and can still be downloaded from there.
 #
 # DATABASE_CONNECTION_LIMIT is set (not sync: false - it ships with a value) on both services
 # below. Verify the two values plus one LISTEN connection (the API's SSE push, held outside the

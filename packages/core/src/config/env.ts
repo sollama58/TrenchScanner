@@ -364,6 +364,29 @@ const envSchema = z.object({
   // can hold the default, and a challenger must beat the sitting champion by MARGIN points.
   CURATOR_CHAMPION_MIN_LIVE_GRADED: z.coerce.number().int().min(0).default(10),
   CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(2),
+  // The training run's guard (curation/runGuard.ts): a run that would ship broken weights, train on
+  // under half the rows the running models saw, or silence every seat that was calling is held
+  // back and the running models kept. A held run is let through once the running models are this
+  // many hours old, so a real change in the data can't freeze the models forever. "false" stores
+  // every run as before.
+  CURATOR_TRAINING_GUARD: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  CURATOR_GUARD_MAX_HOLD_HOURS: z.coerce.number().min(0).default(24),
+  // Model backups (curation/modelBackup.ts): the trainer snapshots every running model once a
+  // week; this many weekly backups are kept (pinned ones, never pruned, don't count).
+  MODEL_BACKUP_KEEP_WEEKS: z.coerce.number().int().min(8).default(12),
+  // Off-site copies of each backup, to any S3-compatible bucket (Cloudflare R2, Backblaze B2, AWS
+  // S3). All four of endpoint, bucket and the key pair must be set, else backups stay in Postgres
+  // only. Endpoint is the bucket host's base URL, e.g. https://<account>.r2.cloudflarestorage.com;
+  // region "auto" suits R2. Set on the trainer service.
+  MODEL_BACKUP_S3_ENDPOINT: z.string().optional().default(""),
+  MODEL_BACKUP_S3_BUCKET: z.string().optional().default(""),
+  MODEL_BACKUP_S3_REGION: z.string().optional().default("auto"),
+  MODEL_BACKUP_S3_ACCESS_KEY_ID: z.string().optional().default(""),
+  MODEL_BACKUP_S3_SECRET_ACCESS_KEY: z.string().optional().default(""),
+  MODEL_BACKUP_S3_PREFIX: z.string().optional().default("trenchscanner/"),
   // Holds the hand-tuned heuristic to the same cutoff rule while it is the live curator: it only
   // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned in
   // the newest training run (the target-meeting one, else the best one). Without a record the
