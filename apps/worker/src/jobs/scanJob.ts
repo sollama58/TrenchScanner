@@ -581,6 +581,11 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     });
   }
 
+  // Per-METHOD invocation counts, which is what a metered RPC plan actually bills on - batching
+  // collapses these into far fewer HTTP requests, so nothing else reveals the real number. Reset
+  // each read, so this is everything the worker's Helius client sent since the last cycle ended
+  // (the wallet backfill behind a cycle lands in the next one). Served on GET /health/worker.
+  const rpcCalls = deps.helius.takeCallStats();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
@@ -588,14 +593,12 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     matches: matchCount,
     curated: curatedEmitted,
     samplesBanked: samples.banked,
-    // Per-METHOD invocation counts, which is what a metered RPC plan actually bills on - batching
-    // collapses these into far fewer HTTP requests, so nothing else in this log reveals the real
-    // number. Reset each read, so this is the cycle's own spend.
-    rpcCalls: deps.helius.takeCallStats(),
+    rpcCalls,
     stagesMs,
   });
   return {
     stagesMs,
+    rpcCalls,
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,

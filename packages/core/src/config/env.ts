@@ -144,8 +144,8 @@ const envSchema = z.object({
   // appear in, while staying current enough for a signal about whether a wallet is a shell.
   WALLET_HOLDINGS_CACHE_TTL_MINUTES: z.coerce.number().positive().default(60),
   // How long the cleanup job keeps a WalletHoldingsCache row. A row past the TTL above is never
-  // read again, so this only needs slack over it. 0 keeps rows the 90 days the other RPC caches get.
-  WALLET_HOLDINGS_CACHE_RETENTION_HOURS: z.coerce.number().nonnegative().default(0),
+  // read again, so this only needs slack over it. 0 keeps rows the 90 days the other RPC caches get. Owner-approved 2026-10-04.
+  WALLET_HOLDINGS_CACHE_RETENTION_HOURS: z.coerce.number().nonnegative().default(6),
   // How long a "mint/freeze authority still active" answer is trusted before being re-checked
   // (see the worker's mintAuthority.ts). Revocation is permanent and cached forever; this TTL
   // covers only the reversible direction, which used to be re-queried every single scan cycle
@@ -193,18 +193,18 @@ const envSchema = z.object({
   // back than this.
   CLEANUP_HOUR_UTC: z.coerce.number().min(0).max(23).default(4),
   SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
-  STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(90),
+  STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(14),
   // The short horizon for snapshots of tokens nothing else points at - no CandidateOutcome, Match,
   // curated or shadow call, or AI verdict (see untrackedTokenIds in cleanupJob.ts). Those are
   // almost all launches that failed the rug screen on every scan, and they write most of the
   // table's rows; past the first few minutes nothing reads them. 0 keeps them for the full
   // SNAPSHOT_RETENTION_DAYS.
-  SNAPSHOT_UNTRACKED_RETENTION_HOURS: z.coerce.number().nonnegative().default(0),
+  SNAPSHOT_UNTRACKED_RETENTION_HOURS: z.coerce.number().nonnegative().default(48),
   // Tracked tokens' snapshots older than this many days are thinned to one per
   // SNAPSHOT_DOWNSAMPLE_BUCKET_MINUTES (the highest market cap in each bucket, plus any row a Match
   // or curated alert points at). The models read CandidateOutcome, not snapshot history, and peak
   // recovery only needs each bucket's high. 0 keeps every row for SNAPSHOT_RETENTION_DAYS.
-  SNAPSHOT_DOWNSAMPLE_AFTER_DAYS: z.coerce.number().nonnegative().default(0),
+  SNAPSHOT_DOWNSAMPLE_AFTER_DAYS: z.coerce.number().nonnegative().default(7),
   SNAPSHOT_DOWNSAMPLE_BUCKET_MINUTES: z.coerce.number().positive().default(5),
 
   // Daily outcome-tracking job (see apps/worker/src/jobs/outcomeTrackingJob.ts) - backtesting
@@ -224,7 +224,7 @@ const envSchema = z.object({
   // creation rate the whole open set fits in one sweep with room to spare.
   // Retention is deliberately much longer than SNAPSHOT_RETENTION_DAYS - these rows ARE the
   // training set, they carry their own copy of the features precisely so snapshots can be pruned
-  // on the normal horizon, and 180 days is enough history to ride out a full meta-shift.
+  // on the normal horizon, and 90 days keeps the 60-day training window plus room to look back (Match and CuratedAlert keep their own outcome copies).
   CANDIDATE_SAMPLE_SPACING_MINUTES: z.coerce.number().positive().default(60),
   // The "looks ready" sample (CandidateOutcome.sampleKind = "event"): at most one per token per
   // this window, taken the first scan the token passes passesEventPreGate. The curators decide
@@ -238,7 +238,7 @@ const envSchema = z.object({
   CANDIDATE_ENTRY_SLIPPAGE_PCT_GRADUATED: z.coerce.number().min(0).max(50).default(1),
   CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
   CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(600),
-  CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(180),
+  CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(90),
 
   // Curated Alerts feed (see packages/core/src/curation/curator.ts). CURATED_MIN_SCORE is the
   // heuristic curator's composite-score floor - env-tunable so emission volume can be steered in

@@ -375,7 +375,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   //    purging a token whose snapshots aged out would silently destroy its training samples.
   //  - CuratedAlert: the one record that is supposed to be permanent. A curated token nobody's
   //    filter also caught holds no Match: its snapshots age out at 30 days, its outcome rows at
-  //    180, and on the first sweep after that the token itself qualified - taking the feed's
+  //    90, and on the first sweep after that the token itself qualified - taking the feed's
   //    public, self-grading track record (PLANNING 7b, /curated/stats) with it.
   //  - CuratedShadowEmission: pruned on its own horizon above, but only by age - a row still
   //    inside it must not be destroyed by a token sweep either.
