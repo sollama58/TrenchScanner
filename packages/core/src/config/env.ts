@@ -466,8 +466,10 @@ const envSchema = z.object({
 
   // Where the burn reconciler and the claim endpoint read the chain.
   //
-  // Set this. The default is the public mainnet RPC, and measurement against the real endpoints
-  // shows why that is a stopgap rather than a configuration:
+  // Empty (the default) means Helius, built from HELIUS_API_KEY, and so does a value naming one of
+  // the public endpoints below while a Helius key is set (see resolveSolanaRpcUrl). Set it only to
+  // use a different paid RPC. Without a Helius key the fallback is the public mainnet RPC, and
+  // measurement against the real endpoints shows why that is a stopgap rather than a configuration:
   //   - api.mainnet-beta.solana.com rate-limits a cold start into a stutter (429s within seconds
   //     of starting a first scan), though it does support batching and proper pagination.
   //   - solana-rpc.publicnode.com rejects JSON-RPC batches outright with a 400, and caps
@@ -477,8 +479,8 @@ const envSchema = z.object({
   // over anything it failed to read), but "copes" is not the same as "is fine": this is the path
   // that decides whether someone who paid gets what they paid for.
   //
-  // Kept separate from HELIUS_API_KEY so the two can diverge - the enrichment path can tolerate a
-  // throttled RPC, this one cannot.
+  // Kept separate from HELIUS_API_KEY so the two can diverge onto a different paid RPC - the
+  // enrichment path can tolerate a throttled RPC, this one cannot.
   SOLANA_RPC_URL: z.string().optional().default(""),
 
   // How often the reconciler sweeps the chain for burns nobody claimed. This is the backstop that

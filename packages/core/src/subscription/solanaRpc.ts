@@ -7,6 +7,31 @@ const logger = createLogger("solana-rpc");
 /** Public mainnet RPC. Rate-limited and fine for a low-volume path, but Helius is preferred. */
 const PUBLIC_FALLBACK_RPC = "https://api.mainnet-beta.solana.com";
 
+/**
+ * Free public endpoints. A SOLANA_RPC_URL pointing at one of these loses to the Helius key when
+ * there is one: they rate-limit a shared host's IP into a stutter (Render's egress IPs are shared)
+ * and some reject batches outright, and the burn scan stalled on exactly that in production.
+ */
+const PUBLIC_RPC_HOSTS = new Set(["api.mainnet-beta.solana.com", "solana-rpc.publicnode.com"]);
+
+/**
+ * Which endpoint the chain reads go to: SOLANA_RPC_URL when it names a real (paid) RPC, otherwise
+ * Helius when its key is set, otherwise the public mainnet RPC.
+ */
+export function resolveSolanaRpcUrl(options: SolanaRpcOptions = {}): string {
+  const heliusUrl = options.apiKey ? `https://mainnet.helius-rpc.com/?api-key=${options.apiKey}` : null;
+  if (options.rpcUrl && !(heliusUrl && isPublicRpc(options.rpcUrl))) return options.rpcUrl;
+  return heliusUrl ?? PUBLIC_FALLBACK_RPC;
+}
+
+function isPublicRpc(url: string): boolean {
+  try {
+    return PUBLIC_RPC_HOSTS.has(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export interface SignatureInfo {
   signature: string;
   slot: number;
@@ -51,13 +76,38 @@ export class SolanaRpc {
    */
   private batchUnsupported = false;
 
+  /** RPC method invocations issued since the last takeCallStats() - what a metered plan bills on. */
+  private readonly callCounts = new Map<string, number>();
+
   constructor(options: SolanaRpcOptions = {}) {
-    this.rpcUrl =
-      options.rpcUrl ??
-      (options.apiKey ? `https://mainnet.helius-rpc.com/?api-key=${options.apiKey}` : PUBLIC_FALLBACK_RPC);
+    this.rpcUrl = resolveSolanaRpcUrl(options);
+  }
+
+  /** The endpoint's host, never its key - for health output and logs. */
+  get provider(): string {
+    try {
+      return new URL(this.rpcUrl).hostname;
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * Calls per method since the last read, then reset. A batch counts each call inside it: on
+   * Helius that is the number that costs credits, not the count of HTTP requests.
+   */
+  takeCallStats(): Record<string, number> {
+    const stats = Object.fromEntries(this.callCounts);
+    this.callCounts.clear();
+    return stats;
+  }
+
+  private count(method: string, n = 1): void {
+    this.callCounts.set(method, (this.callCounts.get(method) ?? 0) + n);
   }
 
   private async call<T>(method: string, params: unknown[], timeoutMs = 15_000): Promise<T | null> {
+    this.count(method);
     try {
       const body = await fetchJson<RpcEnvelope<T>>(this.rpcUrl, {
         method: "POST",
@@ -124,6 +174,7 @@ export class SolanaRpc {
       ],
     }));
 
+    this.count("getTransaction", signatures.length);
     try {
       const responses = await fetchJson<(RpcEnvelope<ParsedTransaction> & { id?: string })[]>(this.rpcUrl, {
         method: "POST",
@@ -131,9 +182,21 @@ export class SolanaRpc {
         body: JSON.stringify(body),
         timeoutMs: 30_000,
       });
+      // Some endpoints refuse a batch with a 200 and a single error object rather than a 4xx
+      // (plan-gated batching answers this way). Unlatched, that failed every fetch on every pass
+      // and the reconciler never moved, so it gets the same treatment as a rejecting 4xx.
       if (!Array.isArray(responses)) {
-        for (const sig of signatures) out.set(sig, null);
-        return out;
+        const error = (responses as RpcEnvelope<unknown> | null)?.error;
+        logger.warn(
+          "endpoint answered a JSON-RPC batch with a non-array - falling back to one call at a time",
+          {
+            provider: this.provider,
+            code: error?.code,
+            message: error?.message,
+          },
+        );
+        this.batchUnsupported = true;
+        return this.fetchSequentially(signatures);
       }
       for (const response of responses) {
         const index = Number(response.id);
@@ -146,6 +209,7 @@ export class SolanaRpc {
       // immediately serve this same call the slow way, so the caller never sees the difference.
       if (err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 429) {
         logger.warn("endpoint rejected a JSON-RPC batch - falling back to one call at a time", {
+          provider: this.provider,
           status: err.status,
         });
         this.batchUnsupported = true;
@@ -210,6 +274,7 @@ export class SolanaRpc {
    * did NOT happen, and the frontend needs to say so rather than leave someone wondering.
    */
   async sendRawTransaction(base64Tx: string): Promise<{ signature: string } | { error: string }> {
+    this.count("sendTransaction");
     try {
       const body = await fetchJson<RpcEnvelope<string>>(this.rpcUrl, {
         method: "POST",

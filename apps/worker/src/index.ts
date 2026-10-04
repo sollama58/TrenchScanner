@@ -134,7 +134,10 @@ async function main() {
     scheduleInterval(
       "burn-scan",
       async () => {
-        const { stoppedEarly, ...counts } = await reconcileBurns(env, rpc);
+        const { stoppedEarly, ...result } = await reconcileBurns(env, rpc);
+        // Which endpoint answered (host only, never the key) and what the pass cost it, per
+        // method - the same shape as the scan's rpcCalls, so Helius credits stay visible here too.
+        const counts = { ...result, rpcProvider: rpc.provider, rpcCalls: rpc.takeCallStats() };
         // An RPC failure leaves the cursors where they were and returns normally, which used to
         // record a healthy heartbeat for a reconciler that was getting nowhere. Failing the run
         // shows it on /health/worker (lastError, a stale lastSuccessAt) while the next pass retries.
