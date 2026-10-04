@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { pickCanonicalPair } from "./dexscreener.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DexScreenerClient, pickCanonicalPair } from "./dexscreener.js";
 
 describe("pickCanonicalPair", () => {
   const curve = { dexId: "pumpfun", volume: { h1: 20_000 } };
@@ -32,5 +32,41 @@ describe("pickCanonicalPair", () => {
     const a = { dexId: "meteora", liquidity: { usd: 10 } };
     const b = { dexId: "raydium", liquidity: { usd: 500 } };
     expect(pickCanonicalPair([a, b])).toBe(b);
+  });
+});
+
+describe("getTokensByAddresses deadline", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the batches that answered once the deadline passes, without waiting on the rest", async () => {
+    // A throttled DexScreener held scan cycles for 20-50s; the scan now stops waiting after its
+    // deadline and goes on with what it has.
+    const mints = Array.from({ length: 31 }, (_, i) => `mint${i}`);
+    vi.stubGlobal("fetch", (url: string, init: { signal: AbortSignal }) => {
+      if (url.includes("mint0,")) {
+        const pair = {
+          chainId: "solana",
+          dexId: "raydium",
+          baseToken: { address: "mint0" },
+          marketCap: 50_000,
+        };
+        return Promise.resolve(new Response(JSON.stringify([pair])));
+      }
+      // The second batch never answers until aborted.
+      return new Promise((_, reject) => {
+        init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    });
+
+    const startedAt = Date.now();
+    const result = await new DexScreenerClient().getTokensByAddresses(mints, 1, {
+      timeoutMs: 5_000,
+      retries: 0,
+      deadlineMs: 200,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(result.map((t) => t.mintAddress)).toEqual(["mint0"]);
   });
 });

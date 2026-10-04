@@ -65,9 +65,14 @@ export class DexScreenerClient {
   async getTokensByAddresses(
     mintAddresses: string[],
     concurrency = 5,
-    /** Per-batch timeout and retries; fetchJson's defaults when omitted. */
-    fetchOptions: { timeoutMs?: number; retries?: number } = {},
+    /**
+     * Per-batch timeout and retries (fetchJson's defaults when omitted), and `deadlineMs`: how
+     * long the whole lookup may take. Past it, the batches already answered are returned and no
+     * more are started; mints are looked up in the order given, so put the important ones first.
+     */
+    options: { timeoutMs?: number; retries?: number; deadlineMs?: number } = {},
   ): Promise<CandidateToken[]> {
+    const { deadlineMs, ...fetchOptions } = options;
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
 
@@ -82,7 +87,13 @@ export class DexScreenerClient {
     // trips, adding real wall-clock time to every scan cycle. A modest concurrency cap gets most
     // of the speedup without hammering a public, unauthenticated API with 30 simultaneous requests.
     const results: CandidateToken[] = [];
-    await forEachWithConcurrency(chunks, concurrency, async (chunk) => {
+    const deadline = deadlineMs === undefined ? Infinity : Date.now() + deadlineMs;
+    let skipped = 0;
+    const work = forEachWithConcurrency(chunks, concurrency, async (chunk) => {
+      if (Date.now() >= deadline) {
+        skipped += chunk.length;
+        return;
+      }
       try {
         const pairs = await fetchJson<DexScreenerPair[]>(
           `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
@@ -93,7 +104,26 @@ export class DexScreenerClient {
         logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
       }
     });
-    return results;
+    if (deadline === Infinity) {
+      await work;
+      return results;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const expired = await Promise.race([
+      work.then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), Math.max(0, deadline - Date.now()));
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (expired || skipped > 0) {
+      logger.warn("token lookup past its deadline - returning what answered", {
+        answered: results.length,
+        requested: unique.length,
+        deadlineMs,
+      });
+    }
+    // A copy: batches still in flight past the deadline keep pushing into `results`.
+    return [...results];
   }
 
   /**
