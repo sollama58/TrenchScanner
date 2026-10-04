@@ -134,6 +134,22 @@ describe("SolanaRpc", () => {
     expect(batches).toBeGreaterThan(before);
   });
 
+  it("asks for version 1 transactions, single and batched", async () => {
+    const { url, bodies } = await startServer((body) =>
+      Array.isArray(body)
+        ? body.map((c: { id: string }) => ({ jsonrpc: "2.0", id: c.id, result: { slot: 1 } }))
+        : { jsonrpc: "2.0", id: 1, result: { slot: 1 } },
+    );
+    const rpc = new SolanaRpc({ rpcUrl: url });
+    await rpc.getParsedTransaction("a");
+    await rpc.getParsedTransactions(["b", "c"]);
+    const calls = bodies.flatMap((b) => (Array.isArray(b) ? b : [b])) as {
+      params: [string, { maxSupportedTransactionVersion: number }];
+    }[];
+    expect(calls).toHaveLength(3);
+    for (const call of calls) expect(call.params[1].maxSupportedTransactionVersion).toBe(1);
+  });
+
   it("counts every call inside a working batch", async () => {
     const { url } = await startServer((body) =>
       Array.isArray(body)

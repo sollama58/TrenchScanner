@@ -14,6 +14,15 @@ const PUBLIC_FALLBACK_RPC = "https://api.mainnet-beta.solana.com";
 const SEQUENTIAL_PAUSE_MS = 120;
 
 /**
+ * Newest transaction format getTransaction may return. Version 1 transactions now appear on this
+ * mint, and an RPC asked for at most version 0 answers one with a -32015 error rather than the
+ * transaction - which the reconciler reads as "could not fetch" and stops on, every pass, forever.
+ * The jsonParsed shape the burn parser reads (accountKeys, instructions, token balances) is the
+ * same across versions. Raise this when a newer format starts failing the same way.
+ */
+const MAX_TRANSACTION_VERSION = 1;
+
+/**
  * Free public endpoints. A SOLANA_RPC_URL pointing at one of these loses to the Helius key when
  * there is one: they rate-limit a shared host's IP into a stutter (Render's egress IPs are shared)
  * and some reject batches outright, and the burn scan stalled on exactly that in production.
@@ -160,7 +169,11 @@ export class SolanaRpc {
   async getParsedTransaction(signature: string): Promise<ParsedTransaction | null> {
     return this.call<ParsedTransaction>("getTransaction", [
       signature,
-      { encoding: "jsonParsed", commitment: "finalized", maxSupportedTransactionVersion: 0 },
+      {
+        encoding: "jsonParsed",
+        commitment: "finalized",
+        maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+      },
     ]);
   }
 
@@ -188,7 +201,11 @@ export class SolanaRpc {
       method: "getTransaction",
       params: [
         signature,
-        { encoding: "jsonParsed", commitment: "finalized", maxSupportedTransactionVersion: 0 },
+        {
+          encoding: "jsonParsed",
+          commitment: "finalized",
+          maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+        },
       ],
     }));
 
