@@ -8,6 +8,7 @@ import {
   type FeatureHealthReport,
   type ModelRun,
   type AiJudgeState,
+  type ScoreBand,
 } from "../api";
 import { HBarChart, Skeleton, TargetBars } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
@@ -97,7 +98,9 @@ export function ModelTab() {
                 <>
                   {" "}
                   Leading the board: <strong>{leader.name}</strong> at{" "}
-                  <span className="num">{leader.composite.score.toFixed(0)}</span>.
+                  <span className="num">{leader.composite.score.toFixed(0)}</span>
+                  {leader.composite.band ? ` (${leader.composite.band.label.toLowerCase()})` : ""}: the score
+                  is how far a model has proven itself toward the goal, 0-100.
                 </>
               )}
             </p>
@@ -354,7 +357,10 @@ function LeaderboardPanel({
         <div>
           <span className="eyebrow">Leaderboard</span>
           <h3>Who's calling it best, last {days} days</h3>
-          <p className="muted small">{board.scoring.summary}</p>
+          <p className="muted small">
+            Score = how far a model has proven itself toward the goal, 0 to 100. Hover a score for its
+            working, or see <a href="#score-guide">what the score means</a> below.
+          </p>
         </div>
         {board.followBest === false && (
           <button
@@ -373,7 +379,7 @@ function LeaderboardPanel({
             <tr>
               <th className="r">#</th>
               <th>Model</th>
-              <th>Score</th>
+              <th title="How far the model has proven itself toward the goal, 0-100">Score</th>
               <th className="r">Live calls</th>
               <th className="r">2x</th>
               <th className="r">4x</th>
@@ -420,7 +426,17 @@ function LeaderboardPanel({
                     )}
                   </td>
                   <td data-label="Score" className="lb-score">
-                    <ScoreBar score={e.composite.score} liveWeight={e.composite.liveWeight} />
+                    <ScoreBar
+                      score={e.composite.score}
+                      band={e.composite.band ?? null}
+                      title={e.scoreExplained ?? scoreTitle(e.composite.liveWeight)}
+                    />
+                    {e.composite.basis && (
+                      <small className="faint score-proof num">
+                        proven 2x {e.composite.basis.proven2xPct.toFixed(0)}% · 4x{" "}
+                        {e.composite.basis.proven4xPct.toFixed(0)}%
+                      </small>
+                    )}
                   </td>
                   <td className="r num" data-label="Live calls">
                     {live.calls}
@@ -484,10 +500,105 @@ function LeaderboardPanel({
         </table>
       </div>
       <p className="faint small">
-        Avg doublings is the average return per call: a 2x counts 1, a 4x counts 2, a miss or a stop-out 0.
-        Backtest figures are the latest training run's walk-forward exam, with the number of calls it made.
+        Avg doublings is the average return per call: a 2x counts 1, a 4x counts 2, a miss or a stop-out 0. It
+        is shown for context and not scored. Backtest figures are the latest training run's walk-forward exam,
+        with the number of calls it made.
       </p>
+      <ScoreGuide board={board} />
     </section>
+  );
+}
+
+function scoreTitle(liveWeight: number): string {
+  return `${Math.round(liveWeight * 100)}% from live calls, ${Math.round((1 - liveWeight) * 100)}% from the backtest`;
+}
+
+const BAND_TONE: Record<ScoreBand["id"], string> = {
+  "on-target": "good",
+  "closing-in": "info",
+  "getting-there": "neutral",
+  "far-off": "neutral",
+};
+
+/**
+ * What the score means, in words a trader can act on: the bands, the two parts, the small-sample
+ * rule, and the board's top scorer worked through as an example.
+ */
+function ScoreGuide({ board }: { board: Leaderboard }) {
+  const sc = board.scoring;
+  const t = board.targets;
+  const w = sc.weights;
+  const example = board.entries.find((e) => e.composite.basis && e.composite.score !== null);
+  const b = example?.composite.basis;
+  const bands = sc.bands ?? [];
+  return (
+    <details className="score-guide" id="score-guide">
+      <summary>What the score means</summary>
+      <div className="score-guide-body">
+        <p className="muted small">
+          A model's score is how far it has <strong>proven</strong> itself toward the goal: 2x on{" "}
+          {t.hitRate2xPct}% of its calls and 4x on {t.hitRate4xPct}%. 100 means its record meets both targets.
+          0 means it has proven nothing yet.
+        </p>
+        {bands.length > 0 && (
+          <ul className="score-bands">
+            {bands.map((band, i) => (
+              <li key={band.id}>
+                <span className={`badge ${BAND_TONE[band.id]}`}>{band.label}</span>
+                <span className="num muted small">
+                  {band.min}
+                  {i === 0 ? "–100" : `–${(bands[i - 1]?.min ?? 100) - 1}`}
+                </span>
+                <span className="small">{band.meaning}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <ol className="steps small">
+          <li>
+            <strong>{Math.round(w.winRate * 100)} points for hitting 2x.</strong> The model's proven 2x rate
+            as a share of the {t.hitRate2xPct}% target: proving {Math.round(t.hitRate2xPct / 2)}% earns half
+            the points, proving {t.hitRate2xPct}% or more earns them all.
+          </li>
+          <li>
+            <strong>{Math.round(w.goalRate * 100)} points for hitting 4x.</strong> The same, against the{" "}
+            {t.hitRate4xPct}% target.
+          </li>
+          <li>
+            <strong>Proven, not raw.</strong> Before the rate is worked out, {sc.priorCalls ?? 10} extra calls
+            are counted as misses. Three wins from three calls proves{" "}
+            {pct((3 / (3 + (sc.priorCalls ?? 10))) * 100)}, not 100%; 150 wins from 200 calls proves{" "}
+            {pct((150 / (200 + (sc.priorCalls ?? 10))) * 100)}. A short hot streak can't outscore a long good
+            record.
+          </li>
+          <li>
+            <strong>Live calls first.</strong> A new model is scored on its backtest, which counts for at most{" "}
+            {sc.livePivotCalls} calls' worth. Its live calls add to that one by one, so by {sc.livePivotCalls}{" "}
+            graded live calls the two weigh the same, and from there the live record takes over. Models with
+            fewer than {sc.minLiveCallsToRank ?? 50} graded live calls are "warming up": their score shows,
+            but they rank below every seasoned model.
+          </li>
+          <li>
+            <strong>Beating a target earns nothing extra.</strong> Two models that both meet the goal tie at
+            100; the one with more graded live calls ranks first.
+          </li>
+        </ol>
+        {example && b && example.composite.score !== null && (
+          <p className="muted small score-example">
+            <strong>Worked example, {example.name}:</strong> {b.liveCalls} graded live call
+            {b.liveCalls === 1 ? "" : "s"}
+            {b.backtestCalls > 0 ? ` plus a backtest counting as ${b.backtestCalls}` : ""} prove a 2x rate of{" "}
+            <span className="num">{b.proven2xPct.toFixed(0)}%</span> ({Math.round(w.winRate * 100)} ×{" "}
+            {b.proven2xPct.toFixed(0)}/{t.hitRate2xPct} = <span className="num">{b.points2x.toFixed(0)}</span>{" "}
+            points) and a 4x rate of <span className="num">{b.proven4xPct.toFixed(0)}%</span> (
+            {Math.round(w.goalRate * 100)} × {b.proven4xPct.toFixed(0)}/{t.hitRate4xPct} ={" "}
+            <span className="num">{b.points4x.toFixed(0)}</span> points), for a score of{" "}
+            <span className="num">{example.composite.score.toFixed(0)}</span>
+            {example.composite.band ? `: ${example.composite.band.label.toLowerCase()}` : ""}.
+          </p>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -501,17 +612,15 @@ function doublings(value: number | null): string {
   return value.toFixed(2);
 }
 
-function ScoreBar({ score, liveWeight }: { score: number | null; liveWeight: number }) {
+function ScoreBar({ score, band, title }: { score: number | null; band: ScoreBand | null; title: string }) {
   if (score === null) return <span className="faint">–</span>;
   return (
-    <div
-      className="score-bar"
-      title={`${Math.round(liveWeight * 100)}% from live calls, ${Math.round((1 - liveWeight) * 100)}% from the backtest`}
-    >
+    <div className="score-bar" title={title}>
       <span className="score-track">
         <span className="score-fill" style={{ width: `${Math.max(2, Math.min(100, score))}%` }} />
       </span>
       <span className="num">{score.toFixed(0)}</span>
+      {band && <span className={`badge score-band ${BAND_TONE[band.id]}`}>{band.label}</span>}
     </div>
   );
 }
@@ -541,10 +650,11 @@ function HowItWorks({ board }: { board: Leaderboard }) {
         </li>
         <li>
           <strong>Battle.</strong> Every model calls on its own feed, paced and graded the same way. The
-          leaderboard score is {Math.round(w.winRate * 100)}% 2x rate, {Math.round(w.goalRate * 100)}% 4x rate
-          and {Math.round(w.avgReturn * 100)}% average return, judged against the targets with small samples
-          discounted. It starts from the backtest and shifts to live calls as they're graded (half and half at{" "}
-          {board.scoring.livePivotCalls}).
+          leaderboard score is how far each has proven itself toward the goal, 0-100:{" "}
+          {Math.round(w.winRate * 100)} points for its 2x rate against the {board.targets.hitRate2xPct}%
+          target, {Math.round(w.goalRate * 100)} for its 4x rate against {board.targets.hitRate4xPct}%, with a
+          few phantom misses added so a short streak proves little. It starts from the backtest and shifts to
+          live calls as they're graded (half and half at {board.scoring.livePivotCalls}).
         </li>
         <li>
           <strong>Evolve.</strong> Every run also breeds {board.evolution.challengersPerRun} challenger

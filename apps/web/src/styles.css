@@ -1839,6 +1839,54 @@ select:focus {
   min-width: 2ch;
   text-align: right;
 }
+.score-bar .score-band {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.score-proof {
+  display: block;
+  margin-top: 4px;
+}
+.score-guide {
+  margin-top: 12px;
+}
+.score-guide summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+.score-guide-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+.score-bands {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.score-bands li {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 10px;
+  align-items: center;
+}
+.score-example {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-3);
+}
+@media (max-width: 640px) {
+  .score-bands li {
+    grid-template-columns: auto 1fr;
+  }
+  .score-bands li > :last-child {
+    grid-column: 1 / -1;
+  }
+}
 button.small-btn {
   padding: 4px 10px;
   font-size: 12px;
