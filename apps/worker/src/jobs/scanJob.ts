@@ -1,5 +1,6 @@
 import {
   recordRunProgress,
+  floatArrayParam,
   prisma,
   createLogger,
   refreshAndFilterToBand,
@@ -25,7 +26,7 @@ import {
   type WatchlistCandidate,
   type TradeFlowFeatures,
 } from "@trenchscanner/core";
-import type { Token } from "@prisma/client";
+import type { Prisma, Token } from "@prisma/client";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
@@ -204,13 +205,11 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     // on. One statement for the whole batch - the values differ per row, so updateMany can't.
     if (refreshed.liveMarketCaps.length > 0) {
       const mints = refreshed.liveMarketCaps.map((m) => m.mintAddress);
-      const mcaps = refreshed.liveMarketCaps.map((m) =>
-        Number.isFinite(m.marketCapUsd) ? m.marketCapUsd : null,
-      );
+      const mcaps = floatArrayParam(refreshed.liveMarketCaps.map((m) => m.marketCapUsd));
       await prisma.$executeRaw`
         UPDATE "Token" AS t
         SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-        FROM unnest(${mints}::text[], ${mcaps}::float8[]) AS v(mint, mcap)
+        FROM unnest(${mints}::text[], ${mcaps}::text[]::float8[]) AS v(mint, mcap)
         WHERE t."mintAddress" = v.mint`.catch((err) =>
         logger.warn("failed to stamp lastLiveAt", { error: String(err) }),
       );
@@ -604,11 +603,11 @@ export async function reviveMovingMints(
   }
   if (byMint.size === 0) return 0;
   const mints = [...byMint.keys()];
-  const mcaps = [...byMint.values()];
+  const mcaps = floatArrayParam([...byMint.values()]);
   return prisma.$executeRaw`
     UPDATE "Token" AS t
     SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-    FROM unnest(${mints}::text[], ${mcaps}::float8[]) AS v(mint, mcap)
+    FROM unnest(${mints}::text[], ${mcaps}::text[]::float8[]) AS v(mint, mcap)
     WHERE t."mintAddress" = v.mint`.catch((err) => {
     logger.warn("failed to revive moving mints", { error: String(err) });
     return 0;
@@ -774,6 +773,53 @@ export async function loadCandidatePriors(
   return out;
 }
 
+/** What a re-scan may set on a Token row - see tokenChanges. */
+interface TokenScanFields {
+  symbol?: string;
+  name?: string;
+  pairAddress?: string;
+  imageUrl?: string;
+  hasTwitter?: boolean;
+  hasTelegram?: boolean;
+  hasWebsite?: boolean;
+  firstInBandAt?: Date;
+  narrativeTags: string[];
+}
+
+/**
+ * The update a re-scan makes to a Token row: against `existing`, only the fields that differ from
+ * it (empty when nothing does); with no row to compare against, every field it may set. Either way
+ * the stickiness rules hold:
+ *  - imageUrl only when there is one. DexScreener has no artwork for almost any token in this
+ *    band, so assigning it unconditionally on re-scan would blank the Pump.fun image that
+ *    discovery already recorded.
+ *  - Socials only ever go from false to true: a re-scan's candidate comes from DexScreener, which
+ *    reports socials for almost nothing in this band, while discovery read them from Pump.fun's
+ *    own metadata. Overwriting with `?? false` erased real knowledge on the first re-scan - the
+ *    badges vanished from the card and the scoring's social component silently lost its input.
+ *  - firstInBandAt is stamped once and kept.
+ * Exported for tests.
+ */
+export function tokenChanges(existing: Token | null, f: TokenScanFields): Prisma.TokenUpdateInput {
+  const out: Prisma.TokenUpdateInput = {};
+  const differs = (a: unknown, b: unknown) => existing === null || a !== b;
+  // Set when the candidate has one, as before: an absent value never cleared a stored one.
+  if (f.symbol !== undefined && differs(existing?.symbol, f.symbol)) out.symbol = f.symbol;
+  if (f.name !== undefined && differs(existing?.name, f.name)) out.name = f.name;
+  if (f.pairAddress !== undefined && differs(existing?.pairAddress, f.pairAddress))
+    out.pairAddress = f.pairAddress;
+  if (f.imageUrl && differs(existing?.imageUrl, f.imageUrl)) out.imageUrl = f.imageUrl;
+  if (f.hasTwitter && !existing?.hasTwitter) out.hasTwitter = true;
+  if (f.hasTelegram && !existing?.hasTelegram) out.hasTelegram = true;
+  if (f.hasWebsite && !existing?.hasWebsite) out.hasWebsite = true;
+  if (f.firstInBandAt && !existing?.firstInBandAt) out.firstInBandAt = f.firstInBandAt;
+  const tags = existing?.narrativeTags ?? null;
+  if (!tags || tags.length !== f.narrativeTags.length || tags.some((t, i) => t !== f.narrativeTags[i])) {
+    out.narrativeTags = f.narrativeTags;
+  }
+  return out;
+}
+
 async function processCandidate(
   candidate: CandidateToken,
   prior: CandidatePrior,
@@ -815,41 +861,40 @@ async function processCandidate(
   );
   if (tradeFlow) scored.tradeFlow = tradeFlow;
 
-  const token = await prisma.token.upsert({
-    where: { mintAddress: candidate.mintAddress },
-    create: {
-      mintAddress: candidate.mintAddress,
-      symbol: candidate.symbol,
-      name: candidate.name,
-      pairAddress: candidate.pairAddress,
-      imageUrl: candidate.imageUrl,
-      hasTwitter: candidate.hasTwitter ?? false,
-      hasTelegram: candidate.hasTelegram ?? false,
-      hasWebsite: candidate.hasWebsite ?? false,
-      firstInBandAt,
-      narrativeTags: scored.narrativeTags,
-    },
-    update: {
-      symbol: candidate.symbol,
-      name: candidate.name,
-      pairAddress: candidate.pairAddress,
-      // Only when there is one. DexScreener has no artwork for almost any token in this band, so
-      // assigning candidate.imageUrl unconditionally on re-scan would blank the Pump.fun image
-      // that discovery already recorded.
-      ...(candidate.imageUrl ? { imageUrl: candidate.imageUrl } : {}),
-      // Sticky, for exactly the reason the image above is: a re-scan's candidate comes from
-      // DexScreener, which reports socials for almost nothing in this band, while discovery read
-      // them from Pump.fun's own metadata. Overwriting with `?? false` therefore erased real
-      // knowledge on the first re-scan - the badges vanished from the card and the scoring's
-      // social component silently lost its input. A link a token once had it still has, so these
-      // only ever go from false to true.
-      ...(candidate.hasTwitter ? { hasTwitter: true } : {}),
-      ...(candidate.hasTelegram ? { hasTelegram: true } : {}),
-      ...(candidate.hasWebsite ? { hasWebsite: true } : {}),
-      ...(firstInBandAt && !existingToken?.firstInBandAt ? { firstInBandAt } : {}),
-      narrativeTags: scored.narrativeTags,
-    },
+  // An existing row is written only when something on it actually changed. The unconditional
+  // upsert this replaces rewrote every candidate's Token row - description and all - every cycle:
+  // around a million dead row versions a day for autovacuum to clear, on the table every feed
+  // query joins. Nearly every re-scan changes nothing here.
+  const changes = tokenChanges(existingToken, {
+    symbol: candidate.symbol,
+    name: candidate.name,
+    pairAddress: candidate.pairAddress,
+    imageUrl: candidate.imageUrl,
+    hasTwitter: candidate.hasTwitter,
+    hasTelegram: candidate.hasTelegram,
+    hasWebsite: candidate.hasWebsite,
+    firstInBandAt,
+    narrativeTags: scored.narrativeTags,
   });
+  const token =
+    existingToken && Object.keys(changes).length === 0
+      ? existingToken
+      : await prisma.token.upsert({
+          where: { mintAddress: candidate.mintAddress },
+          create: {
+            mintAddress: candidate.mintAddress,
+            symbol: candidate.symbol,
+            name: candidate.name,
+            pairAddress: candidate.pairAddress,
+            imageUrl: candidate.imageUrl,
+            hasTwitter: candidate.hasTwitter ?? false,
+            hasTelegram: candidate.hasTelegram ?? false,
+            hasWebsite: candidate.hasWebsite ?? false,
+            firstInBandAt,
+            narrativeTags: scored.narrativeTags,
+          },
+          update: changes,
+        });
 
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "scan"),

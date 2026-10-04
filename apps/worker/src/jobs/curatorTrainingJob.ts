@@ -2,21 +2,18 @@ import {
   prisma,
   createLogger,
   breedChallengers,
-  chooseReplacement,
   compositeScore,
   emptyRecord,
   enabledContestants,
   foundingLanes,
   liveCallRecords,
   loadCurrentLanes,
-  runEvolvingContest,
   seededRng,
   withLanes,
   NEVER_EMIT_THRESHOLD,
   STACKED_MODEL_KIND,
   type ContestRunOutcome,
   type ContestantTrainingResult,
-  type EvolutionPlan,
   type Lane,
   type LaneFitness,
   type StackedCuratorParams,
@@ -26,6 +23,8 @@ import {
   type StoredEvalMetrics,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
+import { runContestOffThread } from "../training/runContest.js";
+import type { ContestPlan } from "../training/contestPlan.js";
 
 const logger = createLogger("curator-training");
 
@@ -94,7 +93,7 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
   // Every learner contestant sits the same walk-forward exam and ships its own model at its own
   // cutoff; challengers sit it too; the consensus is stacked on the final lineup's out-of-sample
   // calls (see runEvolvingContest in packages/core/src/curation/trainingRun.ts for all the math).
-  const outcome = await runEvolvingContest(
+  const outcome = await runContestOffThread(
     trainingRows,
     {
       targets,
@@ -246,14 +245,14 @@ function laneData(lane: Lane, examScore: number | null): Prisma.CuratorLaneCreat
 /**
  * This run's evolution: score every learner seat the way the leaderboard does (live calls since
  * its lane took the seat, blended with its last exam), breed challengers from the strongest, and
- * hand runEvolvingContest the rule that picks the takeover. Null when evolution is off.
+ * hand runEvolvingContest the inputs to the rule that picks the takeover (see ContestPlan). Null when evolution is off.
  */
 async function evolutionPlan(
   env: Env,
   lanes: Lane[],
   targets: PrecisionTargets,
   now: Date,
-): Promise<EvolutionPlan | null> {
+): Promise<ContestPlan | null> {
   if (env.CURATOR_EVOLUTION_CHALLENGERS === 0 || lanes.length === 0) return null;
   const since = new Date(now.getTime() - FITNESS_WINDOW_DAYS * 86_400_000);
   const [live, active, top] = await Promise.all([
@@ -292,15 +291,13 @@ async function evolutionPlan(
   if (challengers.length === 0) return null;
   return {
     challengers,
-    decide: (laneExamScores, challengerScores) =>
-      chooseReplacement({
-        lanes: fitness.map((f) => ({ ...f, examScore: laneExamScores.get(f.lane.slot) ?? null })),
-        challengerScores,
-        now,
-        minAgeMs: env.CURATOR_EVOLUTION_MIN_AGE_HOURS * 3_600_000,
-        margin: env.CURATOR_EVOLUTION_MARGIN,
-        challengerLearners: challengers.map((c) => c.recipe.learner),
-      }),
+    rule: {
+      lanes: fitness,
+      now,
+      minAgeMs: env.CURATOR_EVOLUTION_MIN_AGE_HOURS * 3_600_000,
+      margin: env.CURATOR_EVOLUTION_MARGIN,
+      challengerLearners: challengers.map((c) => c.recipe.learner),
+    },
   };
 }
 

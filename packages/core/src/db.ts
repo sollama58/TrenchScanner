@@ -122,5 +122,18 @@ if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }
 
+/**
+ * Binds a list of numbers for a raw query as `${floatArrayParam(xs)}::text[]::float8[]`.
+ *
+ * Passing a plain number[] with `::float8[]` fails intermittently with 22P03 "improper binary format
+ * in array element N": Prisma prepares the statement once per connection, fixing the element type it
+ * guessed from that first call's numbers (whole numbers and fractions encode differently), so a later
+ * batch of a different shape is sent in a format Postgres can't read. Text elements are always text
+ * and cast cleanly. Non-finite values become NULL.
+ */
+export function floatArrayParam(values: readonly (number | null | undefined)[]): (string | null)[] {
+  return values.map((n) => (typeof n === "number" && Number.isFinite(n) ? String(n) : null));
+}
+
 export type { PrismaClient } from "@prisma/client";
 export * from "@prisma/client";
