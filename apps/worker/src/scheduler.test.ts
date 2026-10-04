@@ -179,6 +179,55 @@ describe("scheduleDailyAt", () => {
     expect(runs).toEqual([]);
   });
 
+  it("asks again when the last run can't be read, and catches up once it can", async () => {
+    const runs: number[] = [];
+    let reads = 0;
+    const job = scheduleDailyAt("cleanup", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => {
+        reads += 1;
+        if (reads === 1) throw new Error("db down");
+        return null;
+      },
+    });
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    job.stop();
+    expect(runs).toEqual([T0 + 30 * 60_000]);
+  });
+
+  it("retries a failed run after half an hour, up to three times, then waits for its hour", async () => {
+    const runs: number[] = [];
+    const job = scheduleDailyAt(
+      "outcome-tracking",
+      async () => {
+        runs.push(Date.now());
+        throw new Error("Can't reach database server");
+      },
+      5,
+      { catchUpAfterHours: 26, lastRunAt: async () => null },
+    );
+    await vi.advanceTimersByTimeAsync(3 * HOUR);
+    job.stop();
+    const MIN = 60_000;
+    expect(runs).toEqual([T0, T0 + 30 * MIN, T0 + 60 * MIN, T0 + 90 * MIN]);
+  });
+
+  it("goes back to its daily slot once a retry succeeds", async () => {
+    const runs: number[] = [];
+    const job = scheduleDailyAt(
+      "outcome-tracking",
+      async () => {
+        runs.push(Date.now());
+        if (runs.length === 1) throw new Error("blip");
+      },
+      5,
+      { catchUpAfterHours: 26, lastRunAt: async () => null },
+    );
+    await vi.advanceTimersByTimeAsync(20 * HOUR);
+    job.stop();
+    expect(runs).toEqual([T0, T0 + 30 * 60_000, Date.UTC(2026, 9, 4, 5, 0, 0)]);
+  });
+
   it("never stacks a run that overruns its day - the next one takes the following slot", async () => {
     const runs: number[] = [];
     const job = scheduleDailyAt(

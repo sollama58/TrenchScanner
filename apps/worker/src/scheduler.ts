@@ -117,19 +117,39 @@ export function scheduleInterval(
  * never run), run it now rather than waiting for the next slot. A daily job only ever fired when
  * the worker happened to be up at that hour, so a worker restarting more often than daily - an
  * out-of-memory loop, a run of deploys - could go weeks without cleanup at all.
+ *
+ * A run that throws is retried after `retryAfterMinutes` (default 30), up to
+ * `maxRetries` (default 3) times before falling back to the next daily slot. Without that, a
+ * database blip partway through cost the whole day: on 2026-10-04 production's database dropped
+ * out twice within ten minutes, and both catch-up runs died with it.
  */
 export function scheduleDailyAt(
   name: HeartbeatJob,
   fn: () => Promise<void>,
   hourUtc: number,
-  opts: { catchUpAfterHours?: number; lastRunAt?: (job: HeartbeatJob) => Promise<Date | null> } = {},
+  opts: {
+    catchUpAfterHours?: number;
+    lastRunAt?: (job: HeartbeatJob) => Promise<Date | null>;
+    retryAfterMinutes?: number;
+    maxRetries?: number;
+  } = {},
 ): ScheduledJob {
+  const { retryAfterMinutes = 30, maxRetries = 3 } = opts;
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
+  let failuresInARow = 0;
 
   const scheduleNext = () => {
     if (stopped) return;
-    const delay = msUntilNextHour(hourUtc);
+    const untilSlot = msUntilNextHour(hourUtc);
+    const retryMs = retryAfterMinutes * 60_000;
+    if (failuresInARow > 0 && failuresInARow <= maxRetries && retryMs < untilSlot) {
+      logger.info("daily job failed, retrying", { job: name, attempt: failuresInARow, retryAfterMinutes });
+      next = setTimeout(() => void run(), retryMs);
+      return;
+    }
+    failuresInARow = 0;
+    const delay = untilSlot;
     logger.info("daily job scheduled", { job: name, hourUtc, nextRunInMinutes: Math.round(delay / 60_000) });
     next = setTimeout(() => void run(), delay);
   };
@@ -142,7 +162,14 @@ export function scheduleDailyAt(
     watchdog.unref?.();
     try {
       await recordRunStart(name, new Date(startedAt)).catch(() => {});
-      await fn();
+      try {
+        await fn();
+      } catch (err) {
+        // Only the job itself failing earns a retry - not the heartbeat write after a good run.
+        failuresInARow += 1;
+        throw err;
+      }
+      failuresInARow = 0;
       await recordHeartbeat(name, { success: true, meta: { durationMs: Date.now() - startedAt } });
     } catch (err) {
       logger.error("job threw an unhandled error", { job: name, error: String(err) });
@@ -161,7 +188,12 @@ export function scheduleDailyAt(
     const { catchUpAfterHours, lastRunAt = lastHeartbeatAt } = opts;
     if (catchUpAfterHours !== undefined) {
       const last = await lastRunAt(name).catch(() => undefined);
-      // undefined = the read failed: don't guess, keep the ordinary schedule.
+      // undefined = the read failed: don't guess. Ask again shortly - a worker that boots while
+      // the database is down would otherwise never catch up - and keep the ordinary schedule.
+      if (last === undefined && !stopped) {
+        next = setTimeout(() => void start(), retryAfterMinutes * 60_000);
+        return;
+      }
       if (
         last !== undefined &&
         (last === null || Date.now() - last.getTime() > catchUpAfterHours * 3_600_000)
