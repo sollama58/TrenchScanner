@@ -1600,6 +1600,15 @@ legend {
 .wallet img {
   border-radius: 7px;
 }
+.wallet-letter {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--border-strong);
+  font-size: 14px;
+}
 .wallet-go {
   margin-left: auto;
   color: var(--muted);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_URL, api, type Card, type LiveMarket } from "./api";
 import { cachedGet, peek } from "./cache";
+import { sessionToken } from "./session";
 
 export interface Loadable<T> {
   data: T | null;
@@ -144,7 +145,7 @@ interface StreamSubscriber {
  */
 class SharedStream {
   private readonly subs = new Set<StreamSubscriber>();
-  private source: EventSource | null = null;
+  private source: { close(): void } | null = null;
   private retry: number | undefined;
   private failures = 0;
   private live = false;
@@ -184,19 +185,14 @@ class SharedStream {
 
   private open() {
     this.close();
-    const es = new EventSource(`${API_URL}${this.path}`, { withCredentials: true });
-    this.source = es;
     const fire = () => {
       for (const s of [...this.subs]) s.onEvent();
     };
-    es.addEventListener("ready", () => {
+    const ready = () => {
       this.failures = 0;
       this.setLive(true);
-    });
-    es.onmessage = fire;
-    es.addEventListener("match", fire);
-    es.addEventListener("curated", fire);
-    es.onerror = () => {
+    };
+    const failed = () => {
       this.close();
       const wait = Math.min(STREAM_RETRY_MAX_MS, STREAM_RETRY_MS * 2 ** this.failures++);
       this.retry = window.setTimeout(
@@ -207,7 +203,78 @@ class SharedStream {
         wait / 2 + Math.random() * (wait / 2),
       );
     };
+
+    // EventSource can't send headers, so a browser signed in by header (session.ts) reads the
+    // stream over fetch instead.
+    const token = sessionToken();
+    if (token) {
+      this.source = fetchEventStream(
+        `${API_URL}${this.path}`,
+        token,
+        (event) => {
+          if (event === "ready") ready();
+          else fire();
+        },
+        failed,
+      );
+      return;
+    }
+
+    const es = new EventSource(`${API_URL}${this.path}`, { withCredentials: true });
+    this.source = es;
+    es.addEventListener("ready", ready);
+    es.onmessage = fire;
+    es.addEventListener("match", fire);
+    es.addEventListener("curated", fire);
+    es.onerror = failed;
   }
+}
+
+/**
+ * A minimal EventSource over fetch, for the header-authenticated case: calls `onEvent` with each
+ * event's name ("message" when it has none) and `onError` once if the stream fails or ends. Only
+ * event names matter here - the streams are nudges, and the data is always refetched.
+ */
+function fetchEventStream(
+  url: string,
+  token: string,
+  onEvent: (event: string) => void,
+  onError: () => void,
+): { close(): void } {
+  const controller = new AbortController();
+  void (async () => {
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${token}`, accept: "text/event-stream" },
+      credentials: "include",
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+      let end: number;
+      while ((end = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const lines = block.split("\n").filter((l) => l && !l.startsWith(":"));
+        // A block of only "retry:" lines is not an event.
+        if (!lines.some((l) => l.startsWith("data") || l.startsWith("event"))) continue;
+        const name = lines
+          .find((l) => l.startsWith("event:"))
+          ?.slice(6)
+          .trim();
+        onEvent(name || "message");
+      }
+    }
+    throw new Error("stream ended");
+  })().catch(() => {
+    if (!controller.signal.aborted) onError();
+  });
+  return { close: () => controller.abort() };
 }
 
 const sharedStreams = new Map<string, SharedStream>();

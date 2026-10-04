@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { ApiError, post, type Subscription, type User, type WorkerHealth } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
+import { setSessionToken } from "./session";
 import { usePolling } from "./hooks";
 import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
@@ -58,6 +59,7 @@ export function App() {
         // Unreachable API with a remembered session: keep showing it (polling retries). A real
         // "not signed in" answer ends it and clears what this device kept.
         if (!(e instanceof ApiError) && peek<User>("/auth/me")) return;
+        if (e instanceof ApiError && e.status === 401) setSessionToken(null);
         invalidate();
         setSession({ state: "signed-out" });
       });
@@ -74,6 +76,7 @@ export function App() {
 
   const signOut = async () => {
     await post("/auth/logout").catch(() => undefined);
+    setSessionToken(null);
     invalidate();
     setSession({ state: "signed-out" });
   };
@@ -138,7 +141,7 @@ export function App() {
           </Suspense>
         )}
         {signedIn && (
-          <AccessGate>
+          <AccessGate onSignedOut={signOut}>
             <AlertNotifier />
             <div className="tab-view" key={tab}>
               <Suspense fallback={<Boot />}>
@@ -182,7 +185,7 @@ function WorkerStatus() {
 }
 
 /** Feed routes answer 402 without a subscription; show that instead of three broken tabs. */
-function AccessGate({ children }: { children: React.ReactNode }) {
+function AccessGate({ children, onSignedOut }: { children: React.ReactNode; onSignedOut: () => void }) {
   const { data, error } = usePolling<Subscription>("/subscription", 300_000);
   const hasAccess = data?.hasAccess === true;
   const warmed = useRef(false);
@@ -198,6 +201,20 @@ function AccessGate({ children }: { children: React.ReactNode }) {
     else setTimeout(warm, 3000);
   }, [hasAccess]);
   if (error && !data) {
+    // Signed in a moment ago but the API no longer knows us: the session didn't stick.
+    if (error instanceof ApiError && error.status === 401)
+      return (
+        <section className="panel paywall">
+          <h2>Your session ended</h2>
+          <p className="muted">
+            This browser didn't keep the sign-in. Sign in again; if it keeps happening, allow cookies for this
+            site or set tracking prevention to Balanced.
+          </p>
+          <button className="button primary" onClick={onSignedOut}>
+            Sign in again
+          </button>
+        </section>
+      );
     return <p className="error center">Couldn't check your access: {error.message}</p>;
   }
   if (!data) return <Boot />;

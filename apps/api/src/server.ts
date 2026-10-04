@@ -16,7 +16,7 @@ import {
   prisma,
 } from "@trenchscanner/core";
 import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
-import { createSessionSigner, SESSION_COOKIE_NAME, type SessionPayload } from "./auth/session.js";
+import { createSessionSigner, verifyRequestSession, type SessionPayload } from "./auth/session.js";
 import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerDeviceLinkRoutes } from "./routes/deviceLink.js";
@@ -169,8 +169,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const verifiedSessions = new WeakMap<FastifyRequest, SessionPayload | null>();
   async function verifySession(request: FastifyRequest): Promise<SessionPayload | null> {
     if (verifiedSessions.has(request)) return verifiedSessions.get(request) ?? null;
-    const token = request.cookies[SESSION_COOKIE_NAME];
-    const session = token ? await app.sessionSigner.verify(token) : null;
+    // The cookie, or the Authorization header from a browser that drops third-party cookies.
+    const session = await verifyRequestSession(app.sessionSigner, request);
     verifiedSessions.set(request, session);
     return session;
   }
