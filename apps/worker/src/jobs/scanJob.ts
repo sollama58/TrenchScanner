@@ -1,5 +1,6 @@
 import {
   recordRunProgress,
+  floatArrayParam,
   prisma,
   createLogger,
   refreshAndFilterToBand,
@@ -204,13 +205,11 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     // on. One statement for the whole batch - the values differ per row, so updateMany can't.
     if (refreshed.liveMarketCaps.length > 0) {
       const mints = refreshed.liveMarketCaps.map((m) => m.mintAddress);
-      const mcaps = refreshed.liveMarketCaps.map((m) =>
-        Number.isFinite(m.marketCapUsd) ? m.marketCapUsd : null,
-      );
+      const mcaps = floatArrayParam(refreshed.liveMarketCaps.map((m) => m.marketCapUsd));
       await prisma.$executeRaw`
         UPDATE "Token" AS t
         SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-        FROM unnest(${mints}::text[], ${mcaps}::float8[]) AS v(mint, mcap)
+        FROM unnest(${mints}::text[], ${mcaps}::text[]::float8[]) AS v(mint, mcap)
         WHERE t."mintAddress" = v.mint`.catch((err) =>
         logger.warn("failed to stamp lastLiveAt", { error: String(err) }),
       );
@@ -604,11 +603,11 @@ export async function reviveMovingMints(
   }
   if (byMint.size === 0) return 0;
   const mints = [...byMint.keys()];
-  const mcaps = [...byMint.values()];
+  const mcaps = floatArrayParam([...byMint.values()]);
   return prisma.$executeRaw`
     UPDATE "Token" AS t
     SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-    FROM unnest(${mints}::text[], ${mcaps}::float8[]) AS v(mint, mcap)
+    FROM unnest(${mints}::text[], ${mcaps}::text[]::float8[]) AS v(mint, mcap)
     WHERE t."mintAddress" = v.mint`.catch((err) => {
     logger.warn("failed to revive moving mints", { error: String(err) });
     return 0;
