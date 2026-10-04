@@ -5,6 +5,7 @@ const logger = createLogger("live-refresh");
 /** DexScreener's batch lookup takes 30 addresses per call - see DexScreenerClient. */
 const ADDRESSES_PER_CALL = 30;
 const BUDGET_WINDOW_MS = 60_000;
+const MAX_DURATIONS = 200;
 
 /** The shape GET /matches already has to hand for every token on the page. */
 export interface RefreshableToken {
@@ -59,6 +60,9 @@ export class OnDemandLiveRefresher {
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly attemptedAt = new Map<string, number>();
   private readonly calls: number[] = [];
+  private readonly counters = { lookups: 0, tokens: 0, failures: 0, overBudget: 0, since: new Date() };
+  /** The latest lookups' durations (ms), newest last - for /stats/live. */
+  private readonly durations: number[] = [];
 
   constructor(
     private readonly dexScreener: DexScreenerClient,
@@ -169,11 +173,25 @@ export class OnDemandLiveRefresher {
     if (budget === undefined) return true;
     while (this.calls.length > 0 && now - this.calls[0]! >= BUDGET_WINDOW_MS) this.calls.shift();
     if (this.calls.length + count > budget) {
+      this.counters.overBudget += 1;
       logger.debug("live refresh over its call budget, skipping", { budget });
       return false;
     }
     for (let i = 0; i < count; i += 1) this.calls.push(now);
     return true;
+  }
+
+  /** What this process's refresher has done since it started - served on /stats/live. */
+  stats() {
+    const sorted = [...this.durations].sort((a, b) => a - b);
+    const at = (q: number) =>
+      sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]! : null;
+    return {
+      ...this.counters,
+      callsLastMinute: this.calls.filter((t) => Date.now() - t < BUDGET_WINDOW_MS).length,
+      callsPerMinuteBudget: this.options.callsPerMinute ?? null,
+      lookupMs: { p50: at(0.5), p95: at(0.95), max: sorted.at(-1) ?? null, sample: sorted.length },
+    };
   }
 
   /** Keeps the cooldown map from growing with every token this process has ever seen. */
