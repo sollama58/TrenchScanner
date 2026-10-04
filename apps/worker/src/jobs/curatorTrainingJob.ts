@@ -8,6 +8,7 @@ import {
   foundingLanes,
   liveCallRecords,
   loadCurrentLanes,
+  rechooseChampion,
   seededRng,
   withLanes,
   NEVER_EMIT_THRESHOLD,
@@ -135,6 +136,12 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
         : null,
     });
   }
+  // The new exams (and the live records since the last run) can change who leads: re-choose the
+  // default model now, so users following the best performer switch with this run.
+  await rechooseDefaultModel(env).catch((err: unknown) =>
+    logger.warn("couldn't re-choose the default model", { error: String(err) }),
+  );
+
   logger.info("curator contest training complete", {
     durationMs: Date.now() - startedAt,
     rows: trainingRows.length,
@@ -145,6 +152,31 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
       calibration: r.metrics.precisionCalibration,
       exam: r.metrics.exam,
     })),
+  });
+}
+
+/**
+ * Re-chooses the default model (the leaderboard's best performer - curation/champion.ts) and logs
+ * a change. Also run once at worker start when nothing has been chosen yet.
+ */
+export async function rechooseDefaultModel(env: Env): Promise<void> {
+  const lanes = await loadCurrentLanes();
+  const { champion, changed, pick } = await rechooseChampion({
+    roster: withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes),
+    lanes,
+    targets: {
+      winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
+      goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
+      minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
+      confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
+    },
+    rules: { minLiveGraded: env.CURATOR_CHAMPION_MIN_LIVE_GRADED, margin: env.CURATOR_CHAMPION_MARGIN },
+  });
+  logger.info(changed ? "default model re-chosen" : "default model unchanged", {
+    model: champion.contestant,
+    score: champion.score,
+    liveGraded: champion.liveGraded,
+    reason: pick.reason,
   });
 }
 

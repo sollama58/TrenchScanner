@@ -2,6 +2,8 @@ import {
   prisma,
   compositeScore,
   defaultContestant,
+  loadChampion,
+  resolveDefaultModel,
   emptyRecord,
   enabledContestants,
   liveCallRecords,
@@ -12,6 +14,7 @@ import {
   LIVE_EVIDENCE_PIVOT,
   COMPOSITE_WEIGHTS,
   NEVER_EMIT_THRESHOLD,
+  type ChampionRecord,
   type CompositeScore,
   type ContestantSpec,
   type Env,
@@ -49,8 +52,10 @@ export interface ContestState {
   lanes: Lane[];
   /** Each contestant's current (active) model row, when it has one. */
   current: Map<string, ContestantModel>;
-  /** Whose calls a user who hasn't picked sees. */
+  /** Whose calls a user who hasn't picked sees: the champion while it can call, else the fallback. */
   defaultModel: string;
+  /** The stored best-performer pick (curation/champion.ts); null before the first one. */
+  champion: ChampionRecord | null;
 }
 
 /**
@@ -71,7 +76,7 @@ export function resetContestStateCache(): void {
 
 export function contestState(env: Env): Promise<ContestState> {
   return stateCache.get(async () => {
-    const lanes = await loadCurrentLanes();
+    const [lanes, champion] = await Promise.all([loadCurrentLanes(), loadChampion()]);
     const roster = withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes);
     const rows = await prisma.curatorModel.findMany({
       where: { status: "active", contestant: { in: roster.map((c) => c.id) } },
@@ -116,11 +121,23 @@ export function contestState(env: Env): Promise<ContestState> {
       });
     }
     const consensusEnabled = roster.some((c) => c.id === CONSENSUS_CONTESTANT);
+    const canCall = (id: string) => {
+      const spec = roster.find((c) => c.id === id);
+      if (!spec) return false;
+      if (spec.role === "rules") return true;
+      const threshold = current.get(id)?.threshold;
+      return typeof threshold === "number" && threshold < NEVER_EMIT_THRESHOLD;
+    };
     return {
       roster,
       lanes,
       current,
-      defaultModel: defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
+      champion,
+      defaultModel: resolveDefaultModel(
+        champion?.contestant ?? null,
+        canCall,
+        defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
+      ),
     };
   });
 }
@@ -149,19 +166,32 @@ export interface SavedFeed {
   /** The combined feed's checked models; empty = follow the default. */
   models: string[];
   showModelAlerts: boolean;
+  /** Follow the best performer (the default) instead of the hand picks above. */
+  followBest: boolean;
 }
 
-export const SAVED_FEED_SELECT = { curatedModel: true, feedModels: true, showModelAlerts: true } as const;
+export const SAVED_FEED_SELECT = {
+  curatedModel: true,
+  feedModels: true,
+  showModelAlerts: true,
+  followBestModel: true,
+} as const;
 
 export function toSavedFeed(user: {
   curatedModel: string | null;
   feedModels: string[];
   showModelAlerts: boolean;
+  followBestModel: boolean;
 }): SavedFeed {
-  return { model: user.curatedModel, models: user.feedModels, showModelAlerts: user.showModelAlerts };
+  return {
+    model: user.curatedModel,
+    models: user.feedModels,
+    showModelAlerts: user.showModelAlerts,
+    followBest: user.followBestModel,
+  };
 }
 
-const DEFAULT_SAVED_FEED: SavedFeed = { model: null, models: [], showModelAlerts: true };
+const DEFAULT_SAVED_FEED: SavedFeed = { model: null, models: [], showModelAlerts: true, followBest: true };
 
 export async function savedFeed(request: FastifyRequest): Promise<SavedFeed> {
   // The auth hook already read it for browser sessions; only device sessions pay for a lookup.
@@ -171,19 +201,22 @@ export async function savedFeed(request: FastifyRequest): Promise<SavedFeed> {
   return user ? toSavedFeed(user) : DEFAULT_SAVED_FEED;
 }
 
+/** The single-ledger pick a /curated request falls back to: none while following the best. */
 export async function savedFeedModel(request: FastifyRequest): Promise<string | null> {
-  return (await savedFeed(request)).model;
+  const saved = await savedFeed(request);
+  return saved.followBest ? null : saved.model;
 }
 
 /**
- * The ledgers the combined feed reads, in roster order: the user's checked models that are still
- * on the roster, else their single pick, else the default. `followsDefault` is true when nothing
- * the user saved survived, so the feed is following the default.
+ * The ledgers the combined feed reads, in roster order: the default (the best performer) while the
+ * user follows it; else their checked models that are still on the roster, else their single
+ * pick, else the default. `followsDefault` is true when the feed is showing the default.
  */
 export function resolveFeedModels(
   state: ContestState,
-  saved: SavedFeed,
+  saved: Pick<SavedFeed, "model" | "models"> & Partial<SavedFeed>,
 ): { models: string[]; followsDefault: boolean } {
+  if (saved.followBest) return { models: [state.defaultModel], followsDefault: true };
   const checked = new Set(saved.models);
   const models = state.roster.filter((c) => checked.has(c.id)).map((c) => c.id);
   if (models.length > 0) return { models, followsDefault: false };
@@ -231,6 +264,19 @@ export interface Leaderboard {
     summary: string;
   };
   defaultModel: string;
+  /** When and why the default was last (re-)chosen; null before the first pick. */
+  champion: {
+    id: string;
+    name: string;
+    score: number | null;
+    liveGraded: number;
+    reason: string;
+    chosenAt: Date;
+    /** Graded live calls a model needs before it can hold the default. */
+    minLiveGraded: number;
+    /** Points a challenger must lead the sitting default by. */
+    margin: number;
+  } | null;
   entries: LeaderboardEntry[];
   evolution: {
     challengersPerRun: number;
@@ -339,6 +385,19 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
         `25% average return per call. Blends the backtest with live calls; live counts half at ${LIVE_EVIDENCE_PIVOT} graded calls.`,
     },
     defaultModel: state.defaultModel,
+    champion:
+      state.champion && state.champion.contestant === state.defaultModel
+        ? {
+            id: state.champion.contestant,
+            name: state.roster.find((c) => c.id === state.champion!.contestant)?.name ?? state.champion.name,
+            score: state.champion.score,
+            liveGraded: state.champion.liveGraded,
+            reason: state.champion.reason,
+            chosenAt: state.champion.chosenAt,
+            minLiveGraded: env.CURATOR_CHAMPION_MIN_LIVE_GRADED,
+            margin: env.CURATOR_CHAMPION_MARGIN,
+          }
+        : null,
     entries: rankByComposite(unranked).map((entry, i) => ({ rank: i + 1, ...entry })),
     evolution: {
       challengersPerRun: env.CURATOR_EVOLUTION_CHALLENGERS,

@@ -30,6 +30,7 @@ import { registerConfigRoutes } from "./routes/config.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
+import { registerSettingsRoutes } from "./routes/settings.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
@@ -301,13 +302,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
         curatedModel: string | null;
         feedModels: string[] | null;
         showModelAlerts: boolean | null;
+        followBestModel: boolean | null;
         whitelisted: boolean;
         whitelistExpiresAt: Date | null;
         subscriptionExpiresAt: Date | null;
       }[]
     >`
       SELECT (u."id" IS NOT NULL) AS found,
-             u."sessionVersion", u."curatedModel", u."feedModels", u."showModelAlerts",
+             u."sessionVersion", u."curatedModel", u."feedModels", u."showModelAlerts", u."followBestModel",
              (w."walletAddress" IS NOT NULL) AS whitelisted,
              w."expiresAt" AS "whitelistExpiresAt",
              (SELECT s."expiresAt"
@@ -324,6 +326,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       curatedModel: row.curatedModel,
       feedModels: row.feedModels ?? [],
       showModelAlerts: row.showModelAlerts ?? true,
+      followBestModel: row.followBestModel ?? true,
     });
     return decideAccess(
       session.walletAddress,
@@ -415,6 +418,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
+  await app.register(registerSettingsRoutes, { prefix: "/settings", env });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
   await app.register(registerAdminRoutes, { prefix: "/admin", env });

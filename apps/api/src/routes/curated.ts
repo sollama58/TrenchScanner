@@ -29,6 +29,8 @@ import {
   resolveFeedModels,
   savedFeed,
   savedFeedModel,
+  toSavedFeed,
+  SAVED_FEED_SELECT,
   type Leaderboard,
 } from "../contest.js";
 
@@ -119,8 +121,16 @@ const feedSettingsSchema = z
     /** The combined feed's checked models; an empty list (or null) follows the default. */
     models: z.array(z.string().max(64)).max(32).nullable().optional(),
     showModelAlerts: z.boolean().optional(),
+    /**
+     * true: show the best performer (the default) and switch when a new one is chosen. false:
+     * keep the hand picks. Picking models turns it off unless this says otherwise.
+     */
+    followBest: z.boolean().optional(),
   })
-  .refine((v) => v.models !== undefined || v.showModelAlerts !== undefined, "nothing to change");
+  .refine(
+    (v) => v.models !== undefined || v.showModelAlerts !== undefined || v.followBest !== undefined,
+    "nothing to change",
+  );
 
 export async function registerCuratedRoutes(
   app: FastifyInstance,
@@ -304,6 +314,7 @@ export async function registerCuratedRoutes(
       selectedModels: feed.models,
       followsDefault: feed.followsDefault,
       showModelAlerts: saved.showModelAlerts,
+      followBest: saved.followBest,
     };
   });
 
@@ -317,8 +328,13 @@ export async function registerCuratedRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const state = await contestState(opts.env);
-    const { models, showModelAlerts } = parsed.data;
-    const data: { feedModels?: string[]; curatedModel?: string | null; showModelAlerts?: boolean } = {};
+    const { models, showModelAlerts, followBest } = parsed.data;
+    const data: {
+      feedModels?: string[];
+      curatedModel?: string | null;
+      showModelAlerts?: boolean;
+      followBestModel?: boolean;
+    } = {};
     if (models !== undefined) {
       const wanted = new Set(models ?? []);
       if ([...wanted].some((id) => !state.roster.some((c) => c.id === id))) {
@@ -328,22 +344,34 @@ export async function registerCuratedRoutes(
       const ordered = state.roster.filter((c) => wanted.has(c.id)).map((c) => c.id);
       data.feedModels = ordered;
       data.curatedModel = ordered[0] ?? null;
+      // Ticking models is choosing by hand; clearing them goes back to following the best.
+      data.followBestModel = ordered.length === 0;
     }
     if (showModelAlerts !== undefined) data.showModelAlerts = showModelAlerts;
+    if (followBest !== undefined) {
+      data.followBestModel = followBest;
+      if (!followBest && models === undefined) {
+        // Switching to "keep my picks" with nothing picked yet keeps today's best as the pick,
+        // so the feed stays on it when the best performer changes.
+        const saved = await savedFeed(request);
+        if (saved.models.length === 0) {
+          data.feedModels = [state.defaultModel];
+          data.curatedModel = state.defaultModel;
+        }
+      }
+    }
     const user = await prisma.user.update({
       where: { id: request.user!.userId },
       data,
-      select: { curatedModel: true, feedModels: true, showModelAlerts: true },
+      select: SAVED_FEED_SELECT,
     });
-    const feed = resolveFeedModels(state, {
-      model: user.curatedModel,
-      models: user.feedModels,
-      showModelAlerts: user.showModelAlerts,
-    });
+    const saved = toSavedFeed(user);
+    const feed = resolveFeedModels(state, saved);
     return {
       selectedModels: feed.models,
       followsDefault: feed.followsDefault,
       showModelAlerts: user.showModelAlerts,
+      followBest: saved.followBest,
     };
   });
 
@@ -361,7 +389,11 @@ export async function registerCuratedRoutes(
     // The combined feed's checkboxes follow a single pick too, so the two never disagree.
     await prisma.user.update({
       where: { id: request.user!.userId },
-      data: { curatedModel: model, feedModels: model === null ? [] : [model] },
+      data: {
+        curatedModel: model,
+        feedModels: model === null ? [] : [model],
+        followBestModel: model === null,
+      },
     });
     return { selectedModel: resolveFeedModel(state, undefined, model), followsDefault: model === null };
   });
