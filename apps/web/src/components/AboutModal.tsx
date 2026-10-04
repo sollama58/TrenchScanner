@@ -122,6 +122,13 @@ export function AboutModal({
             How many of the top 10 holders are wallets first used in the last 24 hours, a common sign of
             snipers or insiders. Shown as &ldquo;–&rdquo; until those wallets have been looked up.
           </dd>
+          <dt>Snipers</dt>
+          <dd>
+            Of the first 25 wallets to buy after launch (the dev aside), how many still hold it, shown as
+            12/25. Snipers who have sold out can&apos;t dump on you; ones still holding can. Counted from the
+            live trade stream, so it shows &ldquo;–&rdquo; for a launch the scanner didn&apos;t see happen.
+            You can set a minimum or maximum on the Filters tab, and the models read it too.
+          </dd>
           <dt>Risk</dt>
           <dd>RugCheck&apos;s risk score, 0-100, lower is safer.</dd>
         </dl>

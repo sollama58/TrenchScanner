@@ -60,6 +60,46 @@ describe("TradeFlowBook", () => {
     expect(f.devSoldShare).toBe(1);
   });
 
+  it("counts how many of the first 25 buyers after launch still hold, dust and dev aside", () => {
+    const book = new TradeFlowBook();
+    book.launch({ mint: MINT, creator: "dev", initialBuyTokens: 50_000_000, at: T0 });
+    book.trade(trade("dev", "buy", 1, sec(1), { tokenAmount: 1_000_000 }));
+    for (let i = 0; i < 30; i++) {
+      book.trade(
+        trade(`w${i}`, "buy", 1, sec(2 + i), { tokenAmount: 1_000_000, newTokenBalance: 1_000_000 }),
+      );
+    }
+    let f = book.features(MINT, sec(60));
+    expect(f.firstBuyersSeen).toBe(25);
+    expect(f.firstBuyersHolding).toBe(25);
+    // w0 sells out, w1 leaves dust, w2 sells half, w29 (not a first buyer) sells out.
+    book.trade(trade("w0", "sell", 1, sec(70), { tokenAmount: 1_000_000, newTokenBalance: 0 }));
+    book.trade(trade("w1", "sell", 1, sec(71), { tokenAmount: 995_000, newTokenBalance: 5_000 }));
+    book.trade(trade("w2", "sell", 0.5, sec(72), { tokenAmount: 500_000, newTokenBalance: 500_000 }));
+    book.trade(trade("w29", "sell", 1, sec(73), { tokenAmount: 1_000_000, newTokenBalance: 0 }));
+    f = book.features(MINT, sec(80));
+    expect(f.firstBuyersHolding).toBe(23);
+    expect(f.firstBuyersSeen).toBe(25);
+    const features = buildCandidateFeatures({
+      mintAddress: MINT,
+      priceUsd: 1,
+      marketCapUsd: 100_000,
+      narrativeTags: [],
+      rugScreen: { passed: true, reasons: [] },
+      score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
+      tradeFlow: f,
+    } as ScoredToken);
+    expect(features.firstBuyersHolding).toBe(23);
+    expect("firstBuyersSeen" in features).toBe(false);
+  });
+
+  it("only counts first buyers on a launch it saw", () => {
+    const book = new TradeFlowBook();
+    book.watch([MINT], T0);
+    book.trade(trade("a", "buy", 1, sec(10)));
+    expect(book.features(MINT, sec(20)).firstBuyersHolding).toBeNull();
+  });
+
   it("says nothing it didn't watch: no launch seen, and under 5 minutes of watching", () => {
     const book = new TradeFlowBook();
     book.watch([MINT], T0);

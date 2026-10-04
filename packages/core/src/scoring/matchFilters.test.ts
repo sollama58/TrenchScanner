@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { matchesFilter } from "./matchFilters.js";
+import { EMPTY_TRADE_FLOW } from "../curation/tradeFlow.js";
 import type { FilterCriteria, ScoredToken } from "../types.js";
 
 function baseToken(overrides: Partial<ScoredToken> = {}): ScoredToken {
@@ -132,5 +133,24 @@ describe("maxEmptyTop10WalletPct", () => {
   it("is inert when the user has not set it", () => {
     const token = baseToken({ emptyTop10WalletPct: 100 });
     expect(matchesFilter(token, baseFilter)).toBe(true);
+  });
+});
+
+describe("first buyers still holding", () => {
+  const withHolding = (n: number | null) =>
+    baseToken({
+      tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersHolding: n, firstBuyersSeen: n === null ? null : 25 },
+    });
+
+  it("applies the floor and the ceiling", () => {
+    expect(matchesFilter(withHolding(8), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);
+    expect(matchesFilter(withHolding(12), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(true);
+    expect(matchesFilter(withHolding(20), { ...baseFilter, maxFirstBuyersHolding: 15 })).toBe(false);
+    expect(matchesFilter(withHolding(15), { ...baseFilter, maxFirstBuyersHolding: 15 })).toBe(true);
+  });
+
+  it("fails the floor but skips the ceiling when the launch wasn't seen", () => {
+    expect(matchesFilter(withHolding(null), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);
+    expect(matchesFilter(withHolding(null), { ...baseFilter, maxFirstBuyersHolding: 15 })).toBe(true);
   });
 });

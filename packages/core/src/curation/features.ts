@@ -78,6 +78,9 @@ export const CANDIDATE_FEATURE_NAMES = [
   "earlyBuyerSoldShare",
   "devInitialBuySol",
   "devSoldShare",
+  // Added 2026-10-04: of the launch's first 25 buyers, how many still hold it (null when the
+  // tracker didn't see the launch).
+  "firstBuyersHolding",
   // Added 2026-10-04: Claude's read of the launch's own name and description, 0-1 each
   // (curation/textFeatures.ts). Null until the mint has been read, and on rows banked before.
   "textCopycatRisk",
@@ -102,6 +105,7 @@ export const TRADE_FLOW_FEATURES = [
   "earlyBuyerSoldShare",
   "devInitialBuySol",
   "devSoldShare",
+  "firstBuyersHolding",
 ] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
 
 /** The text-read features, each a TextScores field - see curation/textFeatures.ts. */
@@ -170,6 +174,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   earlyBuyerSoldShare: "snipers selling",
   devInitialBuySol: "dev's launch buy",
   devSoldShare: "dev selling",
+  firstBuyersHolding: "first 25 buyers still holding",
   textCopycatRisk: "copycat name",
   textNarrativeStrength: "narrative strength",
   textMemeAppeal: "meme appeal",
@@ -342,7 +347,10 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
     // Known whenever the source could have had one; a Pump.fun description is the launcher's
     // pitch, and its absence on a Pump.fun launch is itself a (weak) tell.
     hasDescription: scored.description === undefined ? null : scored.description.trim() !== "" ? 1 : 0,
-    ...(scored.tradeFlow ?? EMPTY_TRADE_FLOW),
+    // Only the listed features: TradeFlowFeatures also carries display-only fields.
+    ...(Object.fromEntries(
+      TRADE_FLOW_FEATURES.map((k) => [k, (scored.tradeFlow ?? EMPTY_TRADE_FLOW)[k]]),
+    ) as Record<(typeof TRADE_FLOW_FEATURES)[number], number | null>),
     textCopycatRisk: scored.textScores?.copycatRisk ?? null,
     textNarrativeStrength: scored.textScores?.narrativeStrength ?? null,
     textMemeAppeal: scored.textScores?.memeAppeal ?? null,

@@ -1,5 +1,6 @@
 import type { ScoredToken } from "../types.js";
 import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
+import { FIRST_BUYERS } from "./tradeFlow.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   GOAL_MULTIPLE,
@@ -189,6 +190,7 @@ function tradeFlowLines(scored: ScoredToken): string[] {
     `- average buy (5m): ${f.avgBuySol5m === null ? "unknown" : `${f.avgBuySol5m.toFixed(2)} SOL`}; biggest buyer's share of buy volume: ${fmtShare(f.topBuyerShare5m)}`,
     `- net SOL flow over 5 minutes vs market cap: ${f.netFlow5mToMcap === null ? "unknown" : `${(f.netFlow5mToMcap * 100).toFixed(2)}%`}; trades per minute: ${fmtVal(f.tradesPerMin5m, 1)}`,
     `- launch snipers (bought within 30s of launch): ${fmtVal(f.earlyBuyerCount)} wallets, still holding ${f.earlyBuyerHoldPct === null ? "unknown" : `${f.earlyBuyerHoldPct.toFixed(1)}%`} of supply, sold ${fmtShare(f.earlyBuyerSoldShare)} of what they bought`,
+    `- first ${f.firstBuyersSeen ?? FIRST_BUYERS} buyers after launch (dev aside) still holding: ${f.firstBuyersHolding === null ? "unknown" : `${f.firstBuyersHolding} of ${f.firstBuyersSeen ?? FIRST_BUYERS}`}`,
     `- dev's launch buy: ${f.devInitialBuySol === null ? "unknown" : `${f.devInitialBuySol.toFixed(2)} SOL`}; dev has sold ${fmtShare(f.devSoldShare)} of it`,
     ``,
   ];
@@ -243,6 +245,7 @@ const COMPARISON_FEATURES = [
   "netFlow5mToMcap",
   "earlyBuyerSoldShare",
   "devSoldShare",
+  "firstBuyersHolding",
 ] as const;
 const LOG_SCALED = new Set([
   "mcapUsd",

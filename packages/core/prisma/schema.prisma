@@ -144,6 +144,9 @@ model UserFilter {
   /// maxFreshTop10WalletPct's wallet-age test: a sniper farm can age its wallets, but funding
   /// each one with a real portfolio costs real money.
   maxEmptyTop10WalletPct   Float?
+  /// Bounds on how many of the launch's first 25 buyers still hold it (TokenSnapshot.firstBuyersHolding).
+  minFirstBuyersHolding    Int?
+  maxFirstBuyersHolding    Int?
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -626,6 +629,11 @@ model TokenSnapshot {
   // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots
   // written before this column existed, and on any snapshot with no holder list at all.
   top10WalletsChecked Int?
+  // Of the first 25 wallets to buy after launch (the dev aside), how many still hold it, out of
+  // firstBuyersSeen (under 25 only while the launch has had fewer buyers). From the worker's
+  // PumpPortal trade stream (curation/tradeFlow.ts), so null for a launch it didn't see.
+  firstBuyersHolding  Int?
+  firstBuyersSeen     Int?
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
   // was screened out. Null means the check never ran or failed, which the screen also rejects.

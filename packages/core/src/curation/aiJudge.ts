@@ -192,6 +192,7 @@ const REFLECTION_COLUMNS: { key: string; label: string; fmt: (v: number) => stri
   { key: "earlyBuyerHoldPct", label: "launch snipers hold %", fmt: (v) => v.toFixed(1) },
   { key: "earlyBuyerSoldShare", label: "launch snipers sold %", fmt: (v) => (v * 100).toFixed(0) },
   { key: "devSoldShare", label: "dev sold %", fmt: (v) => (v * 100).toFixed(0) },
+  { key: "firstBuyersHolding", label: "first 25 buyers still holding", fmt: (v) => v.toFixed(0) },
 ];
 
 /** How many calls one review reads - the wrong ones first, see buildReflectionBrief. */

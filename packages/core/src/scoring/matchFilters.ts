@@ -11,11 +11,11 @@ import { CRITICAL_RISK_FLAGS } from "./rugScreen.js";
  * Unknown data is handled by direction, not uniformly - and the split is
  * deliberate, so don't "fix" one side to match the other:
  *
- *  - MAX criteria (top10/devWallet/riskScore/maxAge/maxFresh) skip an unknown
+ *  - MAX criteria (top10/devWallet/riskScore/maxAge/maxFresh/maxFirstBuyers) skip an unknown
  *    value: a ceiling can't be shown to be exceeded by data we don't have,
  *    and rejecting on unknowns here would hide tokens for reasons no user
  *    chose.
- *  - MIN criteria (minVolumeMcapRatio/minHolderGrowthPct/minTokenAgeMinutes)
+ *  - MIN criteria (minVolumeMcapRatio/minHolderGrowthPct/minTokenAgeMinutes/minFirstBuyers)
  *    fail closed on unknown: the user asked for "at least X", and a value we
  *    can't measure can't be shown to clear that floor. Treating unknown as
  *    passing would alert on exactly the thin, unmeasurable tokens a floor
@@ -70,6 +70,23 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     filter.maxEmptyTop10WalletPct != null &&
     token.emptyTop10WalletPct !== undefined &&
     token.emptyTop10WalletPct > filter.maxEmptyTop10WalletPct
+  ) {
+    return false;
+  }
+
+  // Unknown when the trade stream didn't see the launch: the floor fails closed, the ceiling
+  // skips, per the split above.
+  const firstBuyersHolding = token.tradeFlow?.firstBuyersHolding ?? null;
+  if (
+    filter.minFirstBuyersHolding != null &&
+    (firstBuyersHolding === null || firstBuyersHolding < filter.minFirstBuyersHolding)
+  ) {
+    return false;
+  }
+  if (
+    filter.maxFirstBuyersHolding != null &&
+    firstBuyersHolding !== null &&
+    firstBuyersHolding > filter.maxFirstBuyersHolding
   ) {
     return false;
   }
