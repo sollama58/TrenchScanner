@@ -74,6 +74,10 @@ export async function refreshAndFilterToBand(
   return {
     inBand: marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound),
     liveMints: marketData.map((t) => t.mintAddress),
-    liveMarketCaps: marketData.map((t) => ({ mintAddress: t.mintAddress, marketCapUsd: t.marketCapUsd })),
+    // A pair with no market cap (or fdv) reads as 0; stamped, that would drop a live mint out of
+    // the near-band tier selection ranks on.
+    liveMarketCaps: marketData
+      .filter((t) => t.marketCapUsd > 0)
+      .map((t) => ({ mintAddress: t.mintAddress, marketCapUsd: t.marketCapUsd })),
   };
 }
