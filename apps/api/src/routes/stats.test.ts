@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
-import { bearerMatches, buildDbReport, withRates } from "./stats.js";
+import { bearerMatches, buildDbReport, buildStorageReport, withRates } from "./stats.js";
 
 const TOKEN = "stats-test-token-0123456789abcdef0123456789";
 const TARGETS = { hitRate2xPct: 75, hitRate4xPct: 50 };
@@ -317,6 +317,17 @@ describe.skipIf(!dbAvailable)("buildDbReport", () => {
     expect(report.indexes.some((i) => i.index === "Token_firstSeenAt_idx" && i.valid)).toBe(true);
     expect(typeof report.locksWaiting).toBe("number");
     // No BigInt left anywhere - it would make the route's JSON serialization throw.
+    expect(() => JSON.stringify(report)).not.toThrow();
+  });
+});
+
+describe.skipIf(!dbAvailable)("buildStorageReport", () => {
+  it("reports per-table sizes, daily growth and the snapshot sample as plain JSON", async () => {
+    const report = await buildStorageReport();
+    expect(report.databaseMb).toBeGreaterThan(0);
+    expect(report.tables.map((t) => t.table)).toContain("TokenSnapshot");
+    expect(typeof report.tokens.neverLive).toBe("number");
+    expect(Array.isArray(report.snapshotSample)).toBe(true);
     expect(() => JSON.stringify(report)).not.toThrow();
   });
 });
