@@ -37,6 +37,14 @@ export interface WalletFreshnessOptions {
    * are never capped - they're free.
    */
   maxNewLookups?: number;
+  /**
+   * Only the first this-many groups may send lookups; the rest are answered from the cache alone.
+   * Lets the scan wait on lookups for the candidates about to be decided on and leave the rest to
+   * a pass behind the cycle - see the wallet stage in scanJob.ts.
+   */
+  lookupGroups?: number;
+  /** Told how many lookups this call is about to send, before it sends them. */
+  onLookups?: (count: number) => void;
 }
 
 /**
@@ -83,7 +91,9 @@ export async function resolveEarliestActivity(
   const toFetch: string[] = [];
   const queued = new Set<string>();
   let skippedGroups = 0;
-  for (const group of groups) {
+  const lookupGroups = opts.lookupGroups ?? Number.POSITIVE_INFINITY;
+  for (const [index, group] of groups.entries()) {
+    if (index >= lookupGroups) break;
     const needed = [...new Set(group)].filter((a) => !result.has(a) && !queued.has(a));
     if (needed.some((a) => (failureBackoffUntil.get(a) ?? 0) > now)) {
       skippedGroups += 1;
@@ -100,6 +110,7 @@ export async function resolveEarliestActivity(
   }
 
   const cacheHits = result.size;
+  opts.onLookups?.(toFetch.length);
 
   // Cheap keep-alive for rows the retention sweep would otherwise evict while they're still in
   // active use: one statement, and only for entries already past half the horizon, so a hot
