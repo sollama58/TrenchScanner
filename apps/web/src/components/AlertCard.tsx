@@ -105,6 +105,11 @@ export function AlertCard({
   const freshAtAlert = s.freshTop10WalletPct;
   const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
   const freshPct = freshAtAlert ?? freshLater;
+  // The empty-wallet share, with the same fallback. Both wallet checks are paid lookups with a
+  // per-scan budget, so a token can go unchecked; the card says so rather than showing a blank.
+  const emptyAtAlert = s.emptyTop10WalletPct ?? null;
+  const emptyPct = emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? null;
+  const walletsChecked = freshPct !== null || emptyPct !== null;
   // The same fallback for the first-buyers count, which needs the trade stream to have seen the launch.
   const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
   const firstHolding = buyersFrom?.firstBuyersHolding ?? null;
@@ -232,15 +237,27 @@ export function AlertCard({
           </div>
           <div
             title={
-              freshPct === null
-                ? "Top-10 holder wallets created in the last 24h: not measured for this token yet"
-                : `Top-10 holder wallets created in the last 24h${
-                    freshAtAlert === null ? ", from a scan after the alert" : ", at alert time"
-                  }`
+              walletsChecked
+                ? `Fresh: top-10 holder wallets first used in the last 24h${
+                    freshPct === null
+                      ? " (not checked yet)"
+                      : freshAtAlert === null
+                        ? ", from a scan after the alert"
+                        : ", at alert time"
+                  }. Empty: top-10 holders with under $25 of other tokens${
+                    emptyPct === null
+                      ? " (not checked yet)"
+                      : emptyAtAlert === null
+                        ? ", from a scan after the alert"
+                        : ", at alert time"
+                  }.`
+                : "Wallet checks haven't run for this token yet. They're limited per scan, and tokens closest to alerting go first."
             }
           >
-            <dt>Fresh wallets</dt>
-            <dd className="num">{pct(freshPct)}</dd>
+            <dt>Fresh / Empty</dt>
+            <dd className={walletsChecked ? "num" : "muted"}>
+              {walletsChecked ? `${pct(freshPct)} / ${pct(emptyPct)}` : "Not checked"}
+            </dd>
           </div>
           <div
             title={
