@@ -508,11 +508,12 @@ export class HeliusClient {
       });
       if (unsettled.length === 0) return cheap;
       const exact = await this.earliestViaGetTransactionsForAddress(unsettled);
-      if (exact) {
-        for (const [address, result] of exact) {
-          // A failed exact lookup keeps whatever the cheap pass did learn.
-          if (result.status !== "failed" || !cheap.has(address)) cheap.set(address, result);
-        }
+      // An unsettled address takes the exact answer or none. Its cheap result is a bound INSIDE
+      // the window, which says only "busy", and handing it on when the exact lookup failed had
+      // the caller cache a recently funded busy wallet as "not fresh" for good, off one 429.
+      // Failed, it is retried on a later cycle instead.
+      for (const address of unsettled) {
+        cheap.set(address, exact?.get(address) ?? { status: "failed" });
       }
       return cheap;
     }

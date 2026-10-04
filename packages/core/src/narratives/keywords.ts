@@ -38,10 +38,12 @@ export function matchesNarrativeKeywords(
   token: { name?: string; symbol?: string; description?: string; narrativeTags: string[] },
   userKeywords: string[] | undefined,
 ): boolean {
-  if (!userKeywords || userKeywords.length === 0) return true;
+  // Blank entries dropped first: "".includes is true of every token, so one " " turned the rule off.
+  const keywords = (userKeywords ?? []).map((kw) => kw.toLowerCase().trim()).filter((kw) => kw.length > 0);
+  if (keywords.length === 0) return true;
   const haystack =
     `${token.name ?? ""} ${token.symbol ?? ""} ${token.description ?? ""} ${token.narrativeTags.join(" ")}`.toLowerCase();
-  return userKeywords.some((kw) => haystack.includes(kw.toLowerCase().trim()));
+  return keywords.some((kw) => haystack.includes(kw));
 }
 
 function containsWord(haystack: string, word: string): boolean {

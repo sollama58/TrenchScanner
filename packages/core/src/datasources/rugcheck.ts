@@ -155,8 +155,10 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     devWalletPct: devHolder?.pct,
     creatorHolding:
       report.creator && typeof report.creatorBalance === "number" ? report.creatorBalance > 0 : undefined,
-    mintAuthorityActive: Boolean(report.token?.mintAuthority),
-    freezeAuthorityActive: Boolean(report.token?.freezeAuthority),
+    // A report without its token block hasn't said either way: active until shown otherwise, as
+    // the screen fails closed everywhere else, rather than read as renounced.
+    mintAuthorityActive: report.token ? Boolean(report.token.mintAuthority) : true,
+    freezeAuthorityActive: report.token ? Boolean(report.token.freezeAuthority) : true,
     lpBurned,
     riskScore: report.score_normalised,
     riskFlags,

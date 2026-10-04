@@ -84,6 +84,11 @@ describe("PumpPortalStream trade flow", () => {
     expect(sent).toEqual([{ method: "subscribeTokenTrade", keys: [MINT, OTHER] }]);
     stream.flushSubscriptions();
     expect(sent).toHaveLength(1);
+
+    // Connected, a launch's trades are subscribed at once - its first seconds are the snipers.
+    const LATER = "So11111111111111111111111111111111111111112";
+    stream.handleMessage(JSON.stringify({ mint: LATER, txType: "create", traderPublicKey: "dev2" }), at);
+    expect(sent[1]).toEqual({ method: "subscribeTokenTrade", keys: [LATER] });
   });
 
   it("ignores trades for mints it isn't following, and stays out of the book when flow is off", () => {
