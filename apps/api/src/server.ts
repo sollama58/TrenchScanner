@@ -269,7 +269,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const matchStream = new MatchStream(env.DATABASE_URL);
   matchStream.start();
   app.decorate("matchStream", matchStream);
-  app.addHook("onClose", async () => {
+  app.addHook("preClose", async () => {
     await matchStream.stop();
   });
 
