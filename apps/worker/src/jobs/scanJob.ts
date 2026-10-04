@@ -31,7 +31,7 @@ import type { Prisma, Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
 import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
-import { markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
+import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveWalletHoldings, computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
@@ -246,21 +246,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       { mcapMin: env.MCAP_FILTER_MIN, mcapMax: env.MCAP_FILTER_MAX },
     );
     candidates = refreshed.inBand;
-    // The stamp the liveness-prioritized selection above runs on. Never worth failing a cycle
-    // over - a missed stamp just costs a mint one cycle of priority.
-    // Stamped with the market cap each mint was seen at, which is what the next selection ranks
-    // on. One statement for the whole batch - the values differ per row, so updateMany can't.
-    if (refreshed.liveMarketCaps.length > 0) {
-      const mints = refreshed.liveMarketCaps.map((m) => m.mintAddress);
-      const mcaps = floatArrayParam(refreshed.liveMarketCaps.map((m) => m.marketCapUsd));
-      await prisma.$executeRaw`
-        UPDATE "Token" AS t
-        SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
-        FROM unnest(${mints}::text[], ${mcaps}::text::float8[]) AS v(mint, mcap)
-        WHERE t."mintAddress" = v.mint`.catch((err) =>
-        logger.warn("failed to stamp lastLiveAt", { error: String(err) }),
-      );
-    }
+    // The stamp the liveness-prioritized selection above runs on.
+    await stampLiveMarketCaps(refreshed.liveMarketCaps, env);
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
     return { stagesMs };
@@ -660,6 +647,39 @@ function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): Wa
 }
 
 /**
+ * Stamps lastLiveAt and lastMcapUsd - what the liveness-prioritized selection in selectWatchlist
+ * runs on - for the mints the refresh found market data for. One statement for the whole batch;
+ * the values differ per row, so updateMany can't. Never worth failing a cycle over: a missed
+ * stamp just costs a mint one cycle of priority. Exported for tests.
+ */
+export async function stampLiveMarketCaps(
+  liveMarketCaps: { mintAddress: string; marketCapUsd: number }[],
+  env: Env,
+): Promise<void> {
+  if (liveMarketCaps.length === 0) return;
+  const mints = liveMarketCaps.map((m) => m.mintAddress);
+  const mcaps = floatArrayParam(liveMarketCaps.map((m) => m.marketCapUsd));
+  // The near-band tier selectWatchlist ranks on.
+  const tierMin = env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD;
+  const tierMax = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
+  await prisma.$executeRaw`
+    UPDATE "Token" AS t
+    SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
+    FROM unnest(${mints}::text[], ${mcaps}::text::float8[]) AS v(mint, mcap)
+    WHERE t."mintAddress" = v.mint
+      -- One stamp every couple of minutes is plenty for the liveness horizon (two hours) and the
+      -- near-band tier; stamping every live mint every cycle rewrote ~900 Token rows a cycle, and
+      -- twice that at a 30-second cadence. A mint whose cap crossed in or out of the near-band
+      -- tier is stamped at once, since tier membership is what selection uses.
+      AND (
+        t."lastLiveAt" IS NULL
+        OR t."lastLiveAt" < now() - interval '2 minutes'
+        OR (t."lastMcapUsd" BETWEEN ${tierMin}::float8 AND ${tierMax}::float8)
+          IS DISTINCT FROM (v.mcap BETWEEN ${tierMin}::float8 AND ${tierMax}::float8)
+      )`.catch((err) => logger.warn("failed to stamp lastLiveAt", { error: String(err) }));
+}
+
+/**
  * Puts mints that are moving right now back at the front of the watchlist, whatever their age:
  * stamps lastLiveAt (so they count as alive) and lastMcapUsd (what the near-band tier of
  * selectWatchlist ranks on) for those already known. Only mints at or above the near-band floor
@@ -782,6 +802,8 @@ export interface CandidatePrior {
   holderCount10m: number | null;
   /** An hourly training sample already exists inside its spacing window. */
   recentHourlySample: boolean;
+  /** Has a user match or a curated alert, so the feeds read its newest snapshot - see persistSnapshot. */
+  alerted: boolean;
 }
 
 const NO_PRIORS: CandidatePrior = {
@@ -789,6 +811,7 @@ const NO_PRIORS: CandidatePrior = {
   holderCount: null,
   holderCount10m: null,
   recentHourlySample: false,
+  alerted: false,
 };
 
 /**
@@ -813,7 +836,7 @@ export async function loadCandidatePriors(
   const growthCutoff = new Date(now - env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000);
   const growth10mCutoff = new Date(now - 10 * 60_000);
   const spacingCutoff = new Date(now - env.CANDIDATE_SAMPLE_SPACING_MINUTES * 60_000);
-  const [baselines, recentHourly] = await Promise.all([
+  const [baselines, recentHourly, alertedRows] = await Promise.all([
     prisma.$queryRaw<{ id: string; h: number | null; h10: number | null }[]>`
       SELECT t.id, b."holderCount" AS h, b10."holderCount" AS h10
       FROM unnest(${ids}::text[]) AS t(id)
@@ -832,9 +855,14 @@ export async function loadCandidatePriors(
       WHERE co."tokenId" = ANY(${ids}::text[])
         AND co."sampleKind" = 'hourly'
         AND co."anchorAt" > ${spacingCutoff}`,
+    prisma.$queryRaw<{ tokenId: string }[]>`
+      SELECT m."tokenId" FROM "Match" m WHERE m."tokenId" = ANY(${ids}::text[])
+      UNION
+      SELECT c."tokenId" FROM "CuratedAlert" c WHERE c."tokenId" = ANY(${ids}::text[])`,
   ]);
   const baselineById = new Map(baselines.map((b) => [b.id, b]));
   const recent = new Set(recentHourly.map((r) => r.tokenId));
+  const alerted = new Set(alertedRows.map((r) => r.tokenId));
   for (const token of tokens) {
     const b = baselineById.get(token.id);
     out.set(token.mintAddress, {
@@ -842,6 +870,7 @@ export async function loadCandidatePriors(
       holderCount: b?.h ?? null,
       holderCount10m: b?.h10 ?? null,
       recentHourlySample: recent.has(token.id),
+      alerted: alerted.has(token.id),
     });
   }
   return out;
@@ -892,6 +921,39 @@ export function tokenChanges(existing: Token | null, f: TokenScanFields): Prisma
     out.narrativeTags = f.narrativeTags;
   }
   return out;
+}
+
+/**
+ * How often a candidate that fails the rug screen, and has never been alerted on, gets a scan
+ * snapshot. Every candidate used to get one every cycle: ~850 rows a minute into the largest
+ * table in the database (TokenSnapshot, 2.9GB, 2026-10-04), when only ~60 of them passed the
+ * screen. A failing token can't match, be sampled or be curated, and nothing shows its numbers,
+ * so its rows only serve as holder-growth baselines for the day it starts passing - which a few
+ * minutes' spacing still gives (a 10-minute baseline up to 13 minutes old). This is also what
+ * keeps the snapshot rate from tracking SCAN_INTERVAL_MINUTES.
+ */
+const FAILING_SNAPSHOT_SPACING_MS = 3 * 60_000;
+
+/** When each token's newest scan snapshot was written by this process. */
+const lastSnapshotAt = new Map<string, number>();
+
+/** Records a scan snapshot written for `tokenId` - see persistSnapshot. Exported for tests. */
+export function noteSnapshotWritten(tokenId: string, at: number): void {
+  lastSnapshotAt.set(tokenId, at);
+}
+
+/** Whether a candidate that failed the rug screen still gets this cycle's snapshot. */
+export function persistSnapshot(tokenId: string, prior: CandidatePrior, now: number = Date.now()): boolean {
+  // Matched and curated tokens keep one every cycle: the feeds show their newest snapshot as
+  // "now", and peak tracking reads them.
+  if (prior.alerted) return true;
+  const last = lastSnapshotAt.get(tokenId);
+  if (last !== undefined && now - last < FAILING_SNAPSHOT_SPACING_MS) return false;
+  if (lastSnapshotAt.size > 20_000) {
+    for (const [id, at] of lastSnapshotAt)
+      if (now - at >= FAILING_SNAPSHOT_SPACING_MS) lastSnapshotAt.delete(id);
+  }
+  return true;
 }
 
 async function processCandidate(
@@ -973,9 +1035,15 @@ async function processCandidate(
           update: changes,
         });
 
+  if (!scored.rugScreen.passed && !persistSnapshot(token.id, prior)) {
+    // Out of the fast lane exactly as a failing verdict would put it - see vettedTokens.ts.
+    dropScanVerdict(token.id);
+    return 0;
+  }
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "scan"),
   });
+  noteSnapshotWritten(token.id, snapshot.takenAt.getTime());
   noteFreshMarketData([token.id]);
   // Passing or failing - the fast-match lane goes by the newest verdict. See vettedTokens.ts.
   recordScanVerdict({

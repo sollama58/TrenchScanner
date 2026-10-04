@@ -8,7 +8,15 @@ import {
   type RugCheckProfile,
   type MintAuthorityResult,
 } from "@trenchscanner/core";
-import { addNewMintsToWatchlist, buildOnChainProfile, reviveMovingMints } from "./scanJob.js";
+import {
+  addNewMintsToWatchlist,
+  buildOnChainProfile,
+  noteSnapshotWritten,
+  persistSnapshot,
+  reviveMovingMints,
+  stampLiveMarketCaps,
+  type CandidatePrior,
+} from "./scanJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -89,5 +97,53 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
     expect(revived.lastLiveAt!.getTime()).toBeGreaterThan(stale.getTime());
     const untouched = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(4) } });
     expect(untouched.lastMcapUsd).toBe(4_000);
+  });
+
+  it("stamps a live mint at most every couple of minutes, unless its cap crossed the near-band tier", async () => {
+    // Stamping all ~900 live mints every cycle rewrote that many Token rows a cycle.
+    const recent = new Date(Date.now() - 30_000);
+    const old = new Date(Date.now() - 5 * 60_000);
+    await prisma.token.createMany({
+      data: [
+        { mintAddress: mint(5), lastLiveAt: recent, lastMcapUsd: 20_000 },
+        { mintAddress: mint(6), lastLiveAt: recent, lastMcapUsd: 3_000 },
+        { mintAddress: mint(7), lastLiveAt: old, lastMcapUsd: 20_000 },
+        { mintAddress: mint(8) },
+      ],
+    });
+    await stampLiveMarketCaps(
+      [
+        { mintAddress: mint(5), marketCapUsd: 21_000 }, // same tier, stamped recently: left alone
+        { mintAddress: mint(6), marketCapUsd: 30_000 }, // climbed into the tier: stamped
+        { mintAddress: mint(7), marketCapUsd: 22_000 }, // stamp is old: stamped
+        { mintAddress: mint(8), marketCapUsd: 5_000 }, // never stamped: stamped
+      ],
+      env,
+    );
+    const rows = await prisma.token.findMany({
+      where: { mintAddress: { in: [mint(5), mint(6), mint(7), mint(8)] } },
+    });
+    const mcap = (n: number) => rows.find((r) => r.mintAddress === mint(n))?.lastMcapUsd;
+    expect([mcap(5), mcap(6), mcap(7), mcap(8)]).toEqual([20_000, 30_000, 22_000, 5_000]);
+  });
+});
+
+describe("persistSnapshot", () => {
+  const prior = (alerted: boolean): CandidatePrior => ({
+    token: null,
+    holderCount: null,
+    holderCount10m: null,
+    recentHourlySample: false,
+    alerted,
+  });
+
+  it("spaces a failing token's snapshots out, but never an alerted token's", () => {
+    const now = Date.now();
+    const id = `spacing-${RUN}`;
+    expect(persistSnapshot(id, prior(false), now)).toBe(true);
+    noteSnapshotWritten(id, now);
+    expect(persistSnapshot(id, prior(false), now + 60_000)).toBe(false);
+    expect(persistSnapshot(id, prior(true), now + 60_000)).toBe(true);
+    expect(persistSnapshot(id, prior(false), now + 3 * 60_000)).toBe(true);
   });
 });
