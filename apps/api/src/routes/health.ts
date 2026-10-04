@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { prisma, runningSinceFrom } from "@trenchscanner/core";
+import { HEARTBEAT_JOB_ROLE, prisma, runningSinceFrom, type HeartbeatJob } from "@trenchscanner/core";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
@@ -26,11 +26,13 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "match-peaks": 20 * 60_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
-  // Runs every CURATOR_TRAINING_INTERVAL_HOURS (4h by default), not daily - same "expected
+  // Runs every CURATOR_TRAINING_INTERVAL_HOURS (2h by default), not daily - same "expected
   // cadence + 2h" buffer as the daily jobs above, scaled to its own interval.
-  "curator-training": 6 * 3_600_000,
+  "curator-training": 4 * 3_600_000,
   // Every 10 minutes; replay batches and playbook rounds wait on it, nothing user-facing does.
   "ai-judge": 40 * 60_000,
+  // Hourly: re-chooses the default model from the leaderboard between training runs.
+  "champion-refresh": 3 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 const MAX_ERROR_LENGTH = 300;
@@ -69,6 +71,10 @@ export async function registerHealthRoutes(app: FastifyInstance) {
         const runningForMs = runningSince ? now - runningSince.getTime() : null;
         return {
           job: h.job,
+          // Which worker process owns the job (render.yaml runs a scanner and a trainer), so a
+          // stale row says which of the two to look at. Null for a job name this build no
+          // longer knows (a row left behind by an older worker).
+          role: HEARTBEAT_JOB_ROLE[h.job as HeartbeatJob] ?? null,
           lastRunAt: h.lastRunAt,
           lastSuccessAt: h.lastSuccessAt,
           lastError: h.lastError ? h.lastError.slice(0, MAX_ERROR_LENGTH) : null,

@@ -10,7 +10,8 @@ import {
   HeliusClient,
   SolanaRpc,
   lastHeartbeatAt,
-  loadChampion,
+  runsJob,
+  type HeartbeatJob,
 } from "@trenchscanner/core";
 import { runScanCycle } from "./jobs/scanJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
@@ -22,7 +23,7 @@ import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
 import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
-import { scheduleInterval, scheduleDailyAt } from "./scheduler.js";
+import { scheduleInterval, scheduleDailyAt, type JobRunMeta, type ScheduledJob } from "./scheduler.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 
 const logger = createLogger("worker");
@@ -31,14 +32,36 @@ const logger = createLogger("worker");
 const DAILY_CATCH_UP_AFTER_HOURS = 26;
 /** How often the AI judge job checks on replay batches and playbook rounds. */
 const AI_JUDGE_INTERVAL_MINUTES = 10;
+/**
+ * How often the default model is re-chosen from the leaderboard between training runs. Live
+ * records change every minute as calls are graded; a training run only comes every
+ * CURATOR_TRAINING_INTERVAL_HOURS, and this is one query, so the feed follows the evidence
+ * within the hour. Also the start-up choice: the first run is immediate.
+ */
+const CHAMPION_REFRESH_MINUTES = 60;
 
+/**
+ * One process runs the jobs its WORKER_ROLE owns - see HEARTBEAT_JOB_ROLE in core's heartbeat.ts
+ * for the split and why. Everything below is declared in one place for every role; the role
+ * decides which of the schedules are actually started, so "all" (local dev, tests) behaves
+ * exactly as the single worker always did.
+ */
 async function main() {
   const env = loadEnv();
+  const role = env.WORKER_ROLE;
+  const jobs: ScheduledJob[] = [];
+  /** Starts a schedule only when this process's role owns the job. */
+  const schedule = (job: HeartbeatJob, start: () => ScheduledJob) => {
+    if (runsJob(role, job)) jobs.push(start());
+  };
+  const scans = runsJob(role, "scan");
 
-  // Live launch/graduation feed, drained by every scan cycle - see PumpPortalStream.
-  const stream = env.PUMPPORTAL_WS_URL
-    ? new PumpPortalStream(env.PUMPPORTAL_WS_URL, undefined, { tradeFlow: env.PUMPPORTAL_TRADE_FLOW })
-    : undefined;
+  // Live launch/graduation feed, drained by every scan cycle - see PumpPortalStream. Only the
+  // process that scans holds the socket.
+  const stream =
+    scans && env.PUMPPORTAL_WS_URL
+      ? new PumpPortalStream(env.PUMPPORTAL_WS_URL, undefined, { tradeFlow: env.PUMPPORTAL_TRADE_FLOW })
+      : undefined;
   stream?.start();
 
   const deps = {
@@ -63,99 +86,124 @@ async function main() {
   // have none: a slow retrain, or a slow RPC provider under the reconciler's sequential pages,
   // would otherwise restart the whole worker in a loop, and either one stuck holds up nothing
   // but itself.
-  const scanJob = scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
-    deadlineMinutes: 20,
-  });
+  schedule("scan", () =>
+    scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
+      deadlineMinutes: 20,
+    }),
+  );
   // Runs far more often than the scan cycle, but only touches tokens someone currently has open
   // and only fetches market data - see runLivePriceJob's own comment.
-  const livePriceJob = scheduleInterval(
-    "live-price",
-    () => runLivePriceJob(deps.dexScreener, env),
-    env.LIVE_PRICE_INTERVAL_MINUTES,
-    { deadlineMinutes: 10 },
+  schedule("live-price", () =>
+    scheduleInterval(
+      "live-price",
+      () => runLivePriceJob(deps.dexScreener, env),
+      env.LIVE_PRICE_INTERVAL_MINUTES,
+      { deadlineMinutes: 10 },
+    ),
   );
   // The path a subscriber actually feels. Re-prices tokens the scan cycle has recently vetted and
   // alerts on user filters, four times a minute, without any of the discovery or enrichment that
   // paces the full cycle - see runFastMatchCycle for why that split is safe. The scan cycle still
   // owns everything else; this only shortens the distance between a token becoming matchable and
   // the person who asked for it hearing about it.
-  const fastMatchJob = scheduleInterval(
-    "fast-match",
-    () => runFastMatchCycle(deps.dexScreener, env),
-    env.FAST_MATCH_INTERVAL_SECONDS / 60,
-    { deadlineMinutes: 10 },
+  schedule("fast-match", () =>
+    scheduleInterval(
+      "fast-match",
+      () => runFastMatchCycle(deps.dexScreener, env),
+      env.FAST_MATCH_INTERVAL_SECONDS / 60,
+      { deadlineMinutes: 10 },
+    ),
   );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
   // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
   // and the win bar is "2x within 1 hour", so at the default it decides each verdict on about
   // sixty observations - lowering it is the lever for sharper labels.
-  const candidateWatchJob = scheduleInterval(
-    "candidate-watch",
-    () => runCandidateWatchJob(deps.dexScreener, env),
-    env.CANDIDATE_WATCH_INTERVAL_MINUTES,
-    { deadlineMinutes: 15 },
+  schedule("candidate-watch", () =>
+    scheduleInterval(
+      "candidate-watch",
+      () => runCandidateWatchJob(deps.dexScreener, env),
+      env.CANDIDATE_WATCH_INTERVAL_MINUTES,
+      { deadlineMinutes: 15 },
+    ),
   );
   // The backstop that makes the paywall's promise true: it finds burns whose owners never told us
   // about them - a closed tab, a flat battery, or someone who burned from a wallet UI and has not
   // opened the dashboard yet - and credits them anyway. Runs often, because the gap between
   // burning and having access is time a paying user spends locked out.
-  const burnScanJob = scheduleInterval(
-    "burn-scan",
-    async () => void (await reconcileBurns(env, rpc)),
-    env.BURN_SCAN_INTERVAL_MINUTES,
+  schedule("burn-scan", () =>
+    scheduleInterval(
+      "burn-scan",
+      async () => void (await reconcileBurns(env, rpc)),
+      env.BURN_SCAN_INTERVAL_MINUTES,
+    ),
   );
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
   // purpose: see createMatchPeaksRunner.
   const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping, {
     viewWindowMinutes: env.ACTIVE_VIEW_WINDOW_MINUTES,
   });
-  const matchPeaksJob = scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES, {
-    deadlineMinutes: 15,
-  });
+  schedule("match-peaks", () =>
+    scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES, {
+      deadlineMinutes: 15,
+    }),
+  );
   // Both daily jobs catch up on boot when overdue - see scheduleDailyAt. Cleanup's deletes are
   // batched (see runCleanupJob), so a boot-time run after a long gap is many short statements,
   // not one huge delete racing the first scan cycles.
-  const cleanupJob = scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC, {
-    catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS,
-  });
-  const outcomeTrackingJob = scheduleDailyAt(
-    "outcome-tracking",
-    () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
-    env.OUTCOME_TRACKING_HOUR_UTC,
-    { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS },
+  schedule("cleanup", () =>
+    scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC, {
+      catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS,
+    }),
+  );
+  schedule("outcome-tracking", () =>
+    scheduleDailyAt(
+      "outcome-tracking",
+      () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
+      env.OUTCOME_TRACKING_HOUR_UTC,
+      { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS },
+    ),
   );
   // The self-learning half of Curated Alerts: walk-forward evaluation every
   // CURATOR_TRAINING_INTERVAL_HOURS, and the curator changes hands only on a win - see
   // runCuratorTrainingJob. An interval, not a fixed daily hour: this pipeline is still
   // experimental, and a frequent retrain is what lets a model that just earned (or just lost) the
   // job take effect within hours rather than up to a day later.
-  const curatorTrainingJob = scheduleInterval(
-    "curator-training",
-    () => runCuratorTrainingJob(env),
-    env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
-    {
-      // Not straight away on every boot: a retrain is minutes of the worker's CPU, and running
-      // one on each restart (several on 2026-10-04) landed it on top of the cold first scan
-      // cycles. The first run waits for the slot the last finished run set.
-      firstRunDelayMs: async () => {
-        const last = await lastHeartbeatAt("curator-training");
-        if (!last) return 0;
-        return last.getTime() + env.CURATOR_TRAINING_INTERVAL_HOURS * 3_600_000 - Date.now();
+  schedule("curator-training", () =>
+    scheduleInterval(
+      "curator-training",
+      () => runCuratorTrainingJob(env),
+      env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
+      {
+        // Not straight away on every boot: a retrain on each restart (several on 2026-10-04)
+        // is a retrain nobody asked for, and while the scanner and trainer were one process it
+        // landed on the cold first scan cycles too. The first run waits for the slot the last
+        // finished run set - read from the heartbeat row, so a redeploy keeps the cadence.
+        firstRunDelayMs: async () => {
+          const last = await lastHeartbeatAt("curator-training");
+          if (!last) return 0;
+          return last.getTime() + env.CURATOR_TRAINING_INTERVAL_HOURS * 3_600_000 - Date.now();
+        },
       },
-    },
+    ),
   );
-  // The default model is re-chosen after each training run; on a fresh install (or the first
-  // deploy of the champion table) choose one now rather than waiting out the training interval.
-  void loadChampion()
-    .then((c) => (c ? undefined : rechooseDefaultModel(env)))
-    .catch((err: unknown) =>
-      logger.warn("couldn't choose the default model at start", { error: String(err) }),
-    );
+  // The default model follows the leaderboard between training runs - and at start-up, so a
+  // fresh install (or the first deploy of the champion table) has a default at once.
+  schedule("champion-refresh", () =>
+    scheduleInterval(
+      "champion-refresh",
+      async (): Promise<JobRunMeta> => rechooseDefaultModel(env),
+      CHAMPION_REFRESH_MINUTES,
+    ),
+  );
   // The AI reviewer's learning loop: collects replay batches, runs playbook evolution and refits
   // the AI blend - see runAiJudgeJob. Inert without ANTHROPIC_API_KEY.
-  const aiJudgeJob = scheduleInterval("ai-judge", () => runAiJudgeJob(env), AI_JUDGE_INTERVAL_MINUTES);
+  schedule("ai-judge", () =>
+    scheduleInterval("ai-judge", () => runAiJudgeJob(env), AI_JUDGE_INTERVAL_MINUTES),
+  );
 
   logger.info("worker started", {
+    role,
+    jobs: jobs.length,
     scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
     fastMatchIntervalSeconds: env.FAST_MATCH_INTERVAL_SECONDS,
     livePriceIntervalMinutes: env.LIVE_PRICE_INTERVAL_MINUTES,
@@ -172,16 +220,7 @@ async function main() {
 
   const shutdown = async (signal: string) => {
     logger.info("shutting down", { signal });
-    scanJob.stop();
-    fastMatchJob.stop();
-    livePriceJob.stop();
-    candidateWatchJob.stop();
-    burnScanJob.stop();
-    matchPeaksJob.stop();
-    cleanupJob.stop();
-    outcomeTrackingJob.stop();
-    curatorTrainingJob.stop();
-    aiJudgeJob.stop();
+    for (const job of jobs) job.stop();
     stream?.stop();
     await prisma.$disconnect();
     process.exit(0);
