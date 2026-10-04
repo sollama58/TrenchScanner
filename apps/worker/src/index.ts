@@ -133,7 +133,16 @@ async function main() {
   schedule("burn-scan", () =>
     scheduleInterval(
       "burn-scan",
-      async () => void (await reconcileBurns(env, rpc)),
+      async () => {
+        const { stoppedEarly, ...counts } = await reconcileBurns(env, rpc);
+        // An RPC failure leaves the cursors where they were and returns normally, which used to
+        // record a healthy heartbeat for a reconciler that was getting nowhere. Failing the run
+        // shows it on /health/worker (lastError, a stale lastSuccessAt) while the next pass retries.
+        if (stoppedEarly) {
+          throw new Error(`burn scan stopped early on an RPC failure (${JSON.stringify(counts)})`);
+        }
+        return counts;
+      },
       env.BURN_SCAN_INTERVAL_MINUTES,
     ),
   );

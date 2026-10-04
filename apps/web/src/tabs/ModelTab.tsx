@@ -274,26 +274,28 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
             {pct(health.baseWinRatePct, 1)}). Lift is a signal's top or bottom tenth's 2x rate over the base;
             1 is no signal.
           </p>
-          <table className="compact">
-            <thead>
-              <tr>
-                <th>Strongest on its own</th>
-                <th className="r">Top tenth</th>
-                <th className="r">Bottom tenth</th>
-                <th className="r">Missing</th>
-              </tr>
-            </thead>
-            <tbody>
-              {strongest.map((f) => (
-                <tr key={f.feature}>
-                  <td>{f.label}</td>
-                  <td className="r num">{f.topDecileLift?.toFixed(2)}x</td>
-                  <td className="r num">{f.bottomDecileLift?.toFixed(2)}x</td>
-                  <td className="r num muted">{pct(f.nullRatePct, 0)}</td>
+          <div className="table-wrap">
+            <table className="compact">
+              <thead>
+                <tr>
+                  <th>Strongest on its own</th>
+                  <th className="r">Top tenth</th>
+                  <th className="r">Bottom tenth</th>
+                  <th className="r">Missing</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {strongest.map((f) => (
+                  <tr key={f.feature}>
+                    <td>{f.label}</td>
+                    <td className="r num">{f.topDecileLift?.toFixed(2)}x</td>
+                    <td className="r num">{f.bottomDecileLift?.toFixed(2)}x</td>
+                    <td className="r num muted">{pct(f.nullRatePct, 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {mostlyNull.length > 0 && (
             <p className="small muted">
               Mostly missing:{" "}
@@ -333,10 +335,14 @@ function LeaderboardPanel({
   now: number;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const use = async (key: string, models: string[] | null) => {
     setBusy(key);
+    setError(null);
     try {
       await onSetModels(models);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
@@ -360,6 +366,7 @@ function LeaderboardPanel({
           </button>
         )}
       </header>
+      {error && <p className="error small">Couldn&apos;t change your feed: {error}</p>}
       <div className="table-wrap">
         <table className="leaderboard">
           <thead>

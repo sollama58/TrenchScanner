@@ -1,6 +1,6 @@
 import {
   createLogger,
-  lastHeartbeatAt,
+  lastSuccessfulRunAt,
   recordHeartbeat,
   recordRunStart,
   type HeartbeatJob,
@@ -158,8 +158,8 @@ export function scheduleInterval(
  * meaning the job never runs again, which is how outcome-tracking went from 2026-09-03 to
  * 2026-10-03 without completing.
  *
- * `catchUpAfterHours`: on startup, if the job's last recorded run is older than this (or it has
- * never run), run it now rather than waiting for the next slot. A daily job only ever fired when
+ * `catchUpAfterHours`: on startup, if the job's last successful run is older than this (or it has
+ * never succeeded), run it now rather than waiting for the next slot. A daily job only ever fired when
  * the worker happened to be up at that hour, so a worker restarting more often than daily - an
  * out-of-memory loop, a run of deploys - could go weeks without cleanup at all.
  *
@@ -170,7 +170,7 @@ export function scheduleInterval(
  */
 export function scheduleDailyAt(
   name: HeartbeatJob,
-  fn: () => Promise<void>,
+  fn: () => Promise<JobRunMeta | void>,
   hourUtc: number,
   opts: {
     catchUpAfterHours?: number;
@@ -182,6 +182,8 @@ export function scheduleDailyAt(
   const { retryAfterMinutes = 30, maxRetries = 3 } = opts;
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
+  let readRetry: NodeJS.Timeout | undefined;
+  let running = false;
   let failuresInARow = 0;
 
   const scheduleNext = () => {
@@ -200,6 +202,7 @@ export function scheduleDailyAt(
   };
 
   const run = async () => {
+    running = true;
     const startedAt = Date.now();
     const watchdog = setInterval(() => {
       logger.error("daily job run has not returned", { job: name, runningForMs: Date.now() - startedAt });
@@ -207,15 +210,19 @@ export function scheduleDailyAt(
     watchdog.unref?.();
     try {
       await recordRunStart(name, new Date(startedAt)).catch(() => {});
+      let meta: JobRunMeta | void;
       try {
-        await fn();
+        meta = await fn();
       } catch (err) {
         // Only the job itself failing earns a retry - not the heartbeat write after a good run.
         failuresInARow += 1;
         throw err;
       }
       failuresInARow = 0;
-      await recordHeartbeat(name, { success: true, meta: { durationMs: Date.now() - startedAt } });
+      await recordHeartbeat(name, {
+        success: true,
+        meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt },
+      });
     } catch (err) {
       logger.error("job threw an unhandled error", { job: name, error: String(err) });
       await recordHeartbeat(name, {
@@ -225,30 +232,36 @@ export function scheduleDailyAt(
       }).catch(() => {});
     } finally {
       clearInterval(watchdog);
+      running = false;
       scheduleNext();
     }
   };
 
   const start = async () => {
-    const { catchUpAfterHours, lastRunAt = lastHeartbeatAt } = opts;
+    const { catchUpAfterHours, lastRunAt = lastSuccessfulRunAt } = opts;
     if (catchUpAfterHours !== undefined) {
       const last = await lastRunAt(name).catch(() => undefined);
-      // undefined = the read failed: don't guess. Ask again shortly - a worker that boots while
-      // the database is down would otherwise never catch up - and keep the ordinary schedule.
-      if (last === undefined && !stopped) {
-        next = setTimeout(() => void start(), retryAfterMinutes * 60_000);
+      if (stopped) return;
+      // undefined = the read failed: don't guess. Keep the ordinary slot, and ask again shortly -
+      // a worker that boots while the database is down would otherwise never catch up. Only
+      // asking again used to leave no slot at all: a boot at 03:50 whose read failed asked again
+      // at 04:20, found the last run under a day old, and skipped straight to tomorrow.
+      if (last === undefined) {
+        if (!next) scheduleNext();
+        readRetry = setTimeout(() => void start(), retryAfterMinutes * 60_000);
         return;
       }
-      if (
-        last !== undefined &&
-        (last === null || Date.now() - last.getTime() > catchUpAfterHours * 3_600_000)
-      ) {
-        logger.info("daily job overdue, running now", { job: name, lastRunAt: last });
-        if (!stopped) void run();
+      if (last === null || Date.now() - last.getTime() > catchUpAfterHours * 3_600_000) {
+        // The slot's own run may already be under way (a late answer to a retried read).
+        if (running) return;
+        logger.info("daily job overdue, running now", { job: name, lastSuccessAt: last });
+        if (next) clearTimeout(next);
+        next = undefined;
+        void run();
         return;
       }
     }
-    scheduleNext();
+    if (!next) scheduleNext();
   };
   void start();
 
@@ -256,6 +269,7 @@ export function scheduleDailyAt(
     stop: () => {
       stopped = true;
       if (next) clearTimeout(next);
+      if (readRetry) clearTimeout(readRetry);
     },
   };
 }

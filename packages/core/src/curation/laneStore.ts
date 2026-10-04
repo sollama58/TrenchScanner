@@ -89,6 +89,7 @@ export async function liveCallRecords(
 ): Promise<Map<string, CallRecord>> {
   const tier = opts.tier ?? null;
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
+  const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
   const out = new Map<string, CallRecord>();
   if (models.length === 0) return out;
   const froms = models.map((model) => {
@@ -100,7 +101,11 @@ export async function liveCallRecords(
   const earliest = new Date(Math.min(...froms.map((d) => d.getTime())));
   const rows = await prisma.$queryRaw<(LiveRow & { model: string })[]>`
     WITH seats AS (
-      SELECT * FROM unnest(${[...models]}::text[], ${froms.map((d) => d.toISOString())}::timestamp(3)[]) AS s(model, since)
+      SELECT * FROM unnest(
+        ${[...models]}::text[],
+        ${froms.map((d) => d.toISOString())}::timestamp(3)[],
+        ${models.map((m) => laneName.get(m) ?? "-")}::text[]
+      ) AS s(model, since, lane)
     ),
     calls AS (
       SELECT a."model" AS model,
@@ -110,7 +115,11 @@ export async function liveCallRecords(
              co."labelValue" AS label,
              a."peak1hReturnPct" AS peak
       FROM "CuratedAlert" a
+      -- A seat's record is its current lane's calls only: after a takeover the emitter's cached
+      -- roster can still call a few minutes under the retired lane's name and recipe. ('-' = a seat
+      -- with no lane: a null inside a bound array trips Prisma's binary encoding, 22P03.)
       JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
+        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" = seats.lane)
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${earliest}
         AND (${tier}::text IS NULL OR a."tier" = ${tier}::text)

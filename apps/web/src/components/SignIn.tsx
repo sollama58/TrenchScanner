@@ -18,13 +18,13 @@ const FEATURES = [
   },
   {
     Icon: BrainIcon,
-    title: "A model that grades itself",
-    body: "It retrains on what actually doubled and only takes over when it beats the heuristic out of sample.",
+    title: "Models that grade themselves",
+    body: "Several models retrain on what actually doubled, and a public leaderboard ranks their live calls.",
   },
   {
     Icon: RobotIcon,
-    title: "AI buy / no-buy",
-    body: "Each pick gets a second opinion from an AI reviewer, scored against real outcomes.",
+    title: "AI second opinion",
+    body: "An AI reviewer is being trained to give a buy / no-buy on picks, scored against real outcomes.",
   },
 ];
 

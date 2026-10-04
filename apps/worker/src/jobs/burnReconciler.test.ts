@@ -159,4 +159,60 @@ describe.skipIf(!dbAvailable)("reconcileBurns: cold-start backfill", () => {
     expect(cursor.backfillBefore).toBeNull();
     expect(cursor.scanFloor).toBeNull();
   });
+
+  it("a backfill that stops early still moves its resume point down to what it finished", async () => {
+    await prisma.burnScanCursor.create({
+      data: {
+        id: "burn-scan",
+        lastSignature: "sig-tip",
+        backfillBefore: "sig-mid",
+        scanFloor: new Date(Date.now() - 400 * DAY),
+      },
+    });
+    const { rpc } = stubRpc([
+      { signature: "sig-tip", ageDays: 1 },
+      { signature: "sig-mid", ageDays: 100 },
+      { signature: "sig-a", ageDays: 150 },
+      { signature: "sig-b", ageDays: 200 },
+      { signature: "sig-c", ageDays: 250 },
+    ]);
+    const getParsed = rpc.getParsedTransactions.bind(rpc);
+    rpc.getParsedTransactions = async (sigs: string[]) => {
+      const fetched = await getParsed(sigs);
+      if (fetched.has("sig-b")) fetched.set("sig-b", null as never);
+      return fetched;
+    };
+
+    const result = await reconcileBurns(env, rpc);
+
+    // Newest first: sig-a is done, sig-b failed, so the next pass resumes below sig-a.
+    expect(result.stoppedEarly).toBe(true);
+    const cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
+    expect(cursor.backfillBefore).toBe("sig-a");
+    expect(cursor.scanFloor).not.toBeNull();
+  });
+
+  it("a forward walk that hits the page cap hands the gap below it to the backfill", async () => {
+    // lastSignature sits below more new signatures than one pass can page through.
+    const signatures = Array.from({ length: 10_500 }, (_, i) => ({
+      signature: `sig-${i}`,
+      ageDays: 0.5 + i * 0.00001,
+    }));
+    await prisma.burnScanCursor.create({ data: { id: "burn-scan", lastSignature: "sig-10400" } });
+    const { rpc } = stubRpc(signatures);
+    // Every transaction fetch fails, so processing stops at once (and the test skips the batch
+    // pauses of fetching ten thousand): the gap must be recorded regardless.
+    rpc.getParsedTransactions = async (sigs: string[]) => new Map(sigs.map((s) => [s, null as never]));
+
+    const result = await reconcileBurns(env, rpc);
+
+    expect(result.stoppedEarly).toBe(true);
+    const cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
+    // Nothing was processed, so the forward cursor stays put...
+    expect(cursor.lastSignature).toBe("sig-10400");
+    // ...and sig-10000 to sig-10399, below the page cap, are owed to the backfill.
+    expect(cursor.backfillBefore).toBe("sig-9999");
+    expect(cursor.scanFloor).not.toBeNull();
+    expect(cursor.scanFloor!.getTime()).toBeLessThan(Date.now() - 0.9 * DAY);
+  });
 });

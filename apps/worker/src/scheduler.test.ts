@@ -12,6 +12,7 @@ vi.mock("@trenchscanner/core", () => ({
     starts.push(job);
   },
   lastHeartbeatAt: async () => null,
+  lastSuccessfulRunAt: async () => null,
 }));
 
 const { scheduleInterval, scheduleDailyAt } = await import("./scheduler.js");
@@ -221,6 +222,24 @@ describe("scheduleDailyAt", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     job.stop();
     expect(runs).toEqual([]);
+  });
+
+  it("still takes its slot when the last run can't be read just before it", async () => {
+    const runs: number[] = [];
+    // Boot at 03:50, ten minutes before the slot; the read fails, then answers "ran yesterday".
+    vi.setSystemTime(Date.UTC(2026, 9, 4, 3, 50, 0));
+    let reads = 0;
+    const job = scheduleDailyAt("cleanup", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => {
+        reads += 1;
+        if (reads === 1) throw new Error("db down");
+        return new Date(Date.UTC(2026, 9, 3, 4, 30, 0));
+      },
+    });
+    await vi.advanceTimersByTimeAsync(HOUR);
+    job.stop();
+    expect(runs).toEqual([Date.UTC(2026, 9, 4, 4, 0, 0)]);
   });
 
   it("asks again when the last run can't be read, and catches up once it can", async () => {

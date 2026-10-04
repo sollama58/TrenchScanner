@@ -59,6 +59,11 @@ jobs:
       - name: Apply migrations to the CI database
         run: npm run prisma:deploy
 
+      - name: Check migrations re-run safely and match the schema
+        run: |
+          psql "$DATABASE_URL" -c 'CREATE DATABASE shadow'
+          SHADOW_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/shadow ./scripts/check-migrations.sh
+
       - name: Lint
         run: npm run lint
 

@@ -106,6 +106,19 @@ export type CreditOutcome =
  * guarantees nothing would ever retry it. That is precisely the "burned and got nothing" case this
  * feature exists to prevent.
  */
+/**
+ * The advisory-lock key for one burner wallet, held by creditBurn and claimHeldBurns.
+ *
+ * The per-user lock alone could not cover a wallet with no account yet: creditBurn found no user,
+ * took no lock and recorded the burn as held, while a first sign-in created the user and ran
+ * claimHeldBurns - which read before that held row committed, found nothing, and left the burn
+ * held until the next sign-in. Both now take this lock first (then the user's), so whichever runs
+ * second sees what the first committed. Always wallet before user, so the two never deadlock.
+ */
+export function burnWalletLockKey(walletAddress: string): string {
+  return `burn-wallet:${walletAddress}`;
+}
+
 export async function creditBurn(
   signature: string,
   credit: BurnCredit,
@@ -114,6 +127,8 @@ export async function creditBurn(
 ): Promise<CreditOutcome> {
   try {
     return await prisma.$transaction(async (tx) => {
+      // Before the user lookup, so the lookup sees any account a concurrent sign-in committed.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${burnWalletLockKey(credit.burnerWallet)}))`;
       const user = await tx.user.findUnique({
         where: { walletAddress: credit.burnerWallet },
         select: { id: true },
@@ -182,6 +197,9 @@ export async function claimHeldBurns(userId: string, walletAddress: string): Pro
   // path to get wrong, and re-reading inside it means the second caller correctly finds nothing
   // left to claim.
   return prisma.$transaction(async (tx) => {
+    // The wallet's lock first (see burnWalletLockKey): a burn being recorded as held for this
+    // wallet right now commits before the read below, instead of slipping past it.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${burnWalletLockKey(walletAddress)}))`;
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
 
     const held = await tx.burnEvent.findMany({

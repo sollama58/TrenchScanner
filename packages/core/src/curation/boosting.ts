@@ -333,6 +333,9 @@ function recencyWeights(
     w[i] = weight;
     sum += weight;
   }
+  // Every row weighing nothing (an all-legacy slice with a legacy weight of 0): train on the rows
+  // as they are rather than dividing by zero into NaN.
+  if (!(sum > 0)) return w.fill(1);
   // Mean weight 1, so minLeafHessian means "about this many rows' worth" whatever the decay.
   for (let i = 0; i < w.length; i++) w[i] = (w[i]! * rows.length) / sum;
   return w;

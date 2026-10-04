@@ -585,7 +585,7 @@ async function emitForModel(
   // per cycle). A failed review fails OPEN: an outage at the reviewer must not silence a feed
   // the curator already vouched for, and the error is recorded against the pick.
   const gateReviews: (AiReviewResult | null)[] = gating
-    ? await Promise.all(picks.map((p) => reviewPick(p.scored, p.decision, env)))
+    ? await Promise.all(picks.map((p) => reviewPick(p.scored, p.decision, env, { gate: true })))
     : picks.map(() => null);
 
   let emitted = 0;

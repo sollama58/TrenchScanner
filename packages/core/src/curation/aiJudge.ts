@@ -141,6 +141,15 @@ export function decidePlaybookPromotion(
       reason: `best candidate scored ${bestScore.toFixed(1)} vs incumbent ${incumbentScore.toFixed(1)}; needs +${rules.minGain}`,
     };
   }
+  // A playbook whose buys don't beat the replay's own base rate is no better than picking at
+  // random, whatever its composite - and an incumbent that rarely says buy scores null (0 here),
+  // so without this any candidate with a few lucky buys would take over.
+  if (best.summary.liftPts === null || best.summary.liftPts <= 0) {
+    return {
+      winner: null,
+      reason: `best candidate's buys won no more often than the replay's base rate (lift ${best.summary.liftPts?.toFixed(1) ?? "n/a"} pts)`,
+    };
+  }
   if (
     best.summary.brier !== null &&
     incumbent.brier !== null &&
