@@ -20,5 +20,10 @@ declare module "fastify" {
     user?: SessionPayload;
     /** Set by `authenticateSubscriber` - why this request was let through, and until when. */
     access?: AccessState;
+    /**
+     * The user's saved feed model, read alongside the sessionVersion check for browser sessions.
+     * Undefined when it wasn't loaded (device sessions) - see savedFeedModel() in contest.ts.
+     */
+    savedFeedModel?: string | null;
   }
 }

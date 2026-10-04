@@ -3,7 +3,12 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { createMatchPeaksRunner, recordMatchPeaks, recordMatchPeaksFullSweep } from "./matchPeaks.js";
+import {
+  createMatchPeaksRunner,
+  noteFreshMarketData,
+  recordMatchPeaks,
+  recordMatchPeaksFullSweep,
+} from "./matchPeaks.js";
 
 const MIN = 60_000;
 const HOUR = 3_600_000;
@@ -205,6 +210,31 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
       await recordMatchPeaks(RETENTION_DAYS, { sinceMinutes: 10 });
       expect((await reload(match.id)).peakMcapUsd).toBe(120_000);
     });
+
+    it("driven from known tokens, reaches only those tokens' matches", async () => {
+      const { token, match } = await seedMatch("known", 80_000, []);
+      const other = await seedMatch("unknown", 80_000, []);
+      await snapshotAt(token.id, 250_000, 1);
+      await snapshotAt(other.token.id, 250_000, 1);
+      await prisma.token.update({
+        where: { id: other.token.id },
+        data: { liveMarketCapUsd: 260_000, liveDataAt: new Date() },
+      });
+
+      const result = await recordMatchPeaks(RETENTION_DAYS, {
+        sinceMinutes: 10,
+        tokenIds: { snapshots: [token.id], livePings: [] },
+      });
+      expect(result).toEqual({ fromSnapshots: 1, fromLivePings: 0 });
+      expect((await reload(match.id)).peakMcapUsd).toBe(250_000);
+      expect((await reload(other.match.id)).peakMcapUsd).toBeNull();
+
+      await recordMatchPeaks(RETENTION_DAYS, {
+        sinceMinutes: 10,
+        tokenIds: { snapshots: [], livePings: [other.token.id] },
+      });
+      expect((await reload(other.match.id)).peakMcapUsd).toBe(260_000);
+    });
   });
 
   it("the batched nightly sweep recovers the same full-history peaks", async () => {
@@ -231,6 +261,21 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
       // Under a minute since the first pass started, plus the slack.
       expect(second.windowMinutes).toBe(3);
       expect(windows).toEqual([60, 3]);
+    });
+
+    it("after its first pass, follows the tokens noted since the previous one", async () => {
+      const run = createMatchPeaksRunner(RETENTION_DAYS, async () => 0);
+      await run();
+      const { token, match } = await seedMatch("noted", 80_000, []);
+      await prisma.tokenSnapshot.create({
+        data: { tokenId: token.id, priceUsd: 0, marketCapUsd: 333_000, score: 70 },
+      });
+      noteFreshMarketData([token.id]);
+      const second = await run();
+      expect(second.tokens).toBe(1);
+      expect((await reload(match.id)).peakMcapUsd).toBe(333_000);
+      // Drained: the next pass starts from an empty set.
+      expect((await run()).tokens).toBe(0);
     });
   });
 });

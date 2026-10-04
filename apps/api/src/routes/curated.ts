@@ -46,7 +46,14 @@ const MAX_CACHED_PAGES = 8;
  * the hour, training runs every CURATOR_TRAINING_INTERVAL_HOURS, and the alert counts move by
  * single digits. The panel polls once a minute, so this collapses every open tab onto one pass.
  */
-const STATS_CACHE_TTL_MS = 30_000;
+const STATS_CACHE_TTL_MS = 5 * 60_000;
+
+/**
+ * The base-rate counts are a full pass over CandidateOutcome (no index leads with sampleKind,
+ * and the table is one of the largest), and they only move when outcomes finalize on the hour.
+ * Cached on their own, much longer than the rest of the panel.
+ */
+const BASE_RATE_CACHE_TTL_MS = 15 * 60_000;
 
 /** What the cache holds: the database rows, not the rendered cards. */
 type CuratedPage = {
@@ -58,7 +65,7 @@ type CuratedPage = {
  * How long the Model tab's report is reused. It runs the hit-rate report's aggregates, which
  * move hourly at most (outcomes finalize on the hour, training every few hours).
  */
-const INSIGHTS_CACHE_TTL_MS = 60_000;
+const INSIGHTS_CACHE_TTL_MS = 5 * 60_000;
 
 const insightsQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(30),
@@ -74,7 +81,8 @@ const leaderboardQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(30),
 });
 
-const LEADERBOARD_CACHE_TTL_MS = 60_000;
+/** Live records move as outcomes finalize (hourly); the Model tab polls every two minutes. */
+const LEADERBOARD_CACHE_TTL_MS = 3 * 60_000;
 
 const chooseModelSchema = z.object({
   /** A contestant id, or null to follow the default. */
@@ -180,7 +188,7 @@ export async function registerCuratedRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const { page } = parsed.data;
-    const [state, saved] = await Promise.all([contestState(opts.env), savedFeedModel(request.user!.userId)]);
+    const [state, saved] = await Promise.all([contestState(opts.env), savedFeedModel(request)]);
     const model = resolveFeedModel(state, parsed.data.model, saved);
 
     const { alerts, totalCount } = await cacheForPage(model, page).get(async () => {
@@ -244,7 +252,7 @@ export async function registerCuratedRoutes(
     const [board, state, saved] = await Promise.all([
       cache.get(() => buildLeaderboard(opts.env, days)),
       contestState(opts.env),
-      savedFeedModel(request.user!.userId),
+      savedFeedModel(request),
     ]);
     return {
       ...board,
@@ -275,39 +283,37 @@ export async function registerCuratedRoutes(
    * it beats the gate" a claim subscribers can check against live picks, not just backtests.
    * Alerts carry their outcome copies; shadow rows are graded through their outcome link.
    */
-  const curatorRecord30d = async (side: "heuristic" | "model", since: Date) => {
-    const sourceFilter =
-      side === "heuristic" ? { equals: HEURISTIC_CURATOR_SOURCE } : { not: HEURISTIC_CURATOR_SOURCE };
-    const [liveEmitted, liveGraded, liveWins, shadowEmitted, shadowGraded, shadowWins] = await Promise.all([
-      prisma.curatedAlert.count({ where: { source: sourceFilter, createdAt: { gte: since } } }),
-      prisma.curatedAlert.count({
-        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn1h: { not: null } },
-      }),
-      prisma.curatedAlert.count({
-        where: { source: sourceFilter, createdAt: { gte: since }, hit2xIn1h: true, disqualified: false },
-      }),
-      prisma.curatedShadowEmission.count({
-        where: { source: sourceFilter, createdAt: { gte: since } },
-      }),
-      prisma.curatedShadowEmission.count({
-        where: {
-          source: sourceFilter,
-          createdAt: { gte: since },
-          candidateOutcome: { finalizedAt: { not: null } },
-        },
-      }),
-      prisma.curatedShadowEmission.count({
-        where: {
-          source: sourceFilter,
-          createdAt: { gte: since },
-          candidateOutcome: { labelValue: { gt: 0 } },
-        },
-      }),
+  const curatorRecords30d = async (since: Date) => {
+    // Both curators, both ledgers, in two grouped passes: this used to be twelve separate counts,
+    // and the shadow ones each joined through CandidateOutcome on their own.
+    const [live, shadow] = await Promise.all([
+      prisma.$queryRaw<{ heuristic: boolean; emitted: bigint; graded: bigint; wins: bigint }[]>`
+        SELECT ("source" = ${HEURISTIC_CURATOR_SOURCE}) AS heuristic,
+               count(*) AS emitted,
+               count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
+               count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins
+        FROM "CuratedAlert"
+        WHERE "createdAt" >= ${since}
+        GROUP BY 1`,
+      prisma.$queryRaw<{ heuristic: boolean; emitted: bigint; graded: bigint; wins: bigint }[]>`
+        SELECT (s."source" = ${HEURISTIC_CURATOR_SOURCE}) AS heuristic,
+               count(*) AS emitted,
+               count(*) FILTER (WHERE o."finalizedAt" IS NOT NULL) AS graded,
+               count(*) FILTER (WHERE o."labelValue" > 0) AS wins
+        FROM "CuratedShadowEmission" s
+        LEFT JOIN "CandidateOutcome" o ON o."id" = s."candidateOutcomeId"
+        WHERE s."createdAt" >= ${since}
+        GROUP BY 1`,
     ]);
-    const emitted = liveEmitted + shadowEmitted;
-    const graded = liveGraded + shadowGraded;
-    const wins = liveWins + shadowWins;
-    return { emitted, graded, wins, hitRatePct: graded > 0 ? (wins / graded) * 100 : null };
+    const record = (heuristic: boolean) => {
+      const l = live.find((r) => r.heuristic === heuristic);
+      const sh = shadow.find((r) => r.heuristic === heuristic);
+      const emitted = Number(l?.emitted ?? 0) + Number(sh?.emitted ?? 0);
+      const graded = Number(l?.graded ?? 0) + Number(sh?.graded ?? 0);
+      const wins = Number(l?.wins ?? 0) + Number(sh?.wins ?? 0);
+      return { emitted, graded, wins, hitRatePct: graded > 0 ? (wins / graded) * 100 : null };
+    };
+    return { heuristic: record(true), model: record(false) };
   };
 
   /**
@@ -321,8 +327,8 @@ export async function registerCuratedRoutes(
    * Identical for every subscriber, refetched once a minute per open tab, and about two dozen
    * aggregates per call - including counts over the largest table in the schema, whose own route
    * comment notes it "grows with the table forever". The list endpoint was given a SharedCache
-   * for exactly this reason; the heavier endpoint next to it had none. A minute of staleness is
-   * invisible here: labels close hourly and training runs every few hours.
+   * for exactly this reason; the heavier endpoint next to it had none. A few minutes of staleness
+   * are invisible here: labels close hourly and training runs every few hours.
    */
   /** The fields the stats panel reads off a model row - not params, which hold its weights. */
   const LATEST_MODEL_SELECT = {
@@ -331,6 +337,8 @@ export async function registerCuratedRoutes(
     status: true,
     evalMetrics: true,
   } as const;
+
+  const baseRateCache = new SharedCache<{ finalized: bigint; winners: bigint }[]>(BASE_RATE_CACHE_TTL_MS);
 
   const buildStats = async () => {
     const day1 = new Date(Date.now() - 86_400_000);
@@ -347,15 +355,17 @@ export async function registerCuratedRoutes(
     // behind it (auth lookups included) for as long as the slowest count took.
     const activeModel = defaultRow;
     const [eventSamples, samples7d, latestModel] = await Promise.all([
-      // The base rate a pick has to beat is the population curators decide on: event moments.
-      // Emission, AI-veto and filter-match anchors are someone's selection, not the base. Both
-      // counts in one pass - no index leads with sampleKind, so each was its own full scan of
-      // CandidateOutcome.
-      prisma.$queryRaw<{ finalized: bigint; winners: bigint }[]>`
-        SELECT count(*) FILTER (WHERE "finalizedAt" IS NOT NULL) AS finalized,
-               count(*) FILTER (WHERE "labelValue" > 0) AS winners
-        FROM "CandidateOutcome"
-        WHERE "sampleKind" = 'event'`,
+      baseRateCache.get(
+        () =>
+          // The base rate a pick has to beat is the population curators decide on: event moments.
+          // Emission, AI-veto and filter-match anchors are someone's selection, not the base. Both
+          // counts in one pass - no index leads with sampleKind, so each was its own full scan.
+          prisma.$queryRaw<{ finalized: bigint; winners: bigint }[]>`
+            SELECT count(*) FILTER (WHERE "finalizedAt" IS NOT NULL) AS finalized,
+                   count(*) FILTER (WHERE "labelValue" > 0) AS winners
+            FROM "CandidateOutcome"
+            WHERE "sampleKind" = 'event'`,
+      ),
       prisma.candidateOutcome.count({ where: { anchorAt: { gte: day7 } } }),
       defaultRow
         ? prisma.curatorModel.findUnique({
@@ -367,17 +377,38 @@ export async function registerCuratedRoutes(
     ]);
     const finalizedSamples = Number(eventSamples[0]?.finalized ?? 0);
     const winners = Number(eventSamples[0]?.winners ?? 0);
-    const [alertsTotal, alerts7d, alerts24h, graded, wins, goalHits, feedBest] = await Promise.all([
-      prisma.curatedAlert.count({ where: { model } }),
-      prisma.curatedAlert.count({ where: { model, createdAt: { gte: day7 } } }),
-      prisma.curatedAlert.count({ where: { model, createdAt: { gte: day1 } } }),
-      prisma.curatedAlert.count({ where: { model, hit2xIn1h: { not: null } } }),
-      prisma.curatedAlert.count({ where: { model, hit2xIn1h: true, disqualified: false } }),
-      prisma.curatedAlert.count({ where: { model, hit4xIn1h: true } }),
-      prisma.curatedAlert.aggregate({ where: { model }, _max: { peak24hReturnPct: true } }),
+    // One pass over the default model's alerts instead of seven counts, each its own scan.
+    const [feedRows, comparison30d] = await Promise.all([
+      prisma.$queryRaw<
+        {
+          total: bigint;
+          d7: bigint;
+          d1: bigint;
+          graded: bigint;
+          wins: bigint;
+          goal_hits: bigint;
+          best_peak: number | null;
+        }[]
+      >`
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE "createdAt" >= ${day7}) AS d7,
+               count(*) FILTER (WHERE "createdAt" >= ${day1}) AS d1,
+               count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
+               count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins,
+               count(*) FILTER (WHERE "hit4xIn1h" = true) AS goal_hits,
+               max("peak24hReturnPct") AS best_peak
+        FROM "CuratedAlert"
+        WHERE "model" = ${model}`,
+      curatorRecords30d(day30),
     ]);
-    const heuristic30d = await curatorRecord30d("heuristic", day30);
-    const model30d = await curatorRecord30d("model", day30);
+    const feedRow = feedRows[0];
+    const alertsTotal = Number(feedRow?.total ?? 0);
+    const alerts7d = Number(feedRow?.d7 ?? 0);
+    const alerts24h = Number(feedRow?.d1 ?? 0);
+    const graded = Number(feedRow?.graded ?? 0);
+    const wins = Number(feedRow?.wins ?? 0);
+    const goalHits = Number(feedRow?.goal_hits ?? 0);
+    const bestPeak24hReturnPct = feedRow?.best_peak ?? null;
 
     // The training job stores its walk-forward verdict inside evalMetrics; surface just the
     // verdict here - the panel shows WHY the model is or isn't live, not every fold number.
@@ -428,16 +459,13 @@ export async function registerCuratedRoutes(
         // the bar, counted separately so it can't be mistaken for the hit rate itself.
         goalHits,
         goalRatePct: graded > 0 ? (goalHits / graded) * 100 : null,
-        bestPeak24hReturnPct: feedBest._max.peak24hReturnPct,
+        bestPeak24hReturnPct,
       },
       // The two curators side by side on the last 30 days of PRODUCTION picks - each one's real
       // alerts from any time it held the job plus its shadow picks from the bench (see
       // curatorRecord30d). The walk-forward backtest decides takeovers; this is the live-fire
       // record subscribers can hold that decision against.
-      comparison30d: {
-        heuristic: heuristic30d,
-        model: model30d,
-      },
+      comparison30d,
     };
   };
 

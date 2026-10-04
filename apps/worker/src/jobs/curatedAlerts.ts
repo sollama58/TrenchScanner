@@ -75,13 +75,32 @@ let modelCache: { fetchedAt: number; key: string; roster: CuratorRoster } | null
 /** Test hook: forget the cached models so the next emission re-reads the table. */
 export function resetCuratorModelCache(): void {
   modelCache = null;
+  modelFill = null;
 }
+
+/**
+ * A refill in progress. The roster is asked for by every candidate the scan has in flight at
+ * once, so without this an expired cache had each of them reload every active model's params
+ * (whole GBDT forests) in parallel.
+ */
+let modelFill: { key: string; promise: Promise<CuratorRoster> } | null = null;
 
 async function curatorRoster(env: Env): Promise<CuratorRoster> {
   const key = env.CURATOR_CONTESTANTS.join(",");
   if (modelCache && modelCache.key === key && Date.now() - modelCache.fetchedAt < MODEL_CACHE_TTL_MS) {
     return modelCache.roster;
   }
+  if (modelFill && modelFill.key === key) return modelFill.promise;
+  const fill = { key, promise: loadCuratorRoster(env, key) };
+  modelFill = fill;
+  try {
+    return await fill.promise;
+  } finally {
+    if (modelFill === fill) modelFill = null;
+  }
+}
+
+async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> {
   // Learner seats show and score as their current lane (curation/evolution.ts).
   const specs = withLanes(enabledContestants(env.CURATOR_CONTESTANTS), await loadCurrentLanes());
   // The newest active row per contestant. A kind this build doesn't understand is ignored rather

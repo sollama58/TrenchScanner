@@ -181,6 +181,43 @@ function reviewOutcome(
   return co.hit2xIn1h ? "won" : "missed";
 }
 
+type Importance = {
+  modelId: string;
+  learner: "gbdt" | "logistic";
+  threshold: number;
+  features: ReturnType<typeof featureImportance>;
+};
+
+/**
+ * Importance per model id. A model's params never change once written, and they are the largest
+ * thing on the row (a GBDT's whole forest), so each model's importance is computed once instead
+ * of reloading the weights on every report.
+ */
+const importanceCache = new Map<string, Importance | null>();
+const IMPORTANCE_CACHE_MAX = 16;
+
+async function importanceFor(id: string): Promise<Importance | null> {
+  if (importanceCache.has(id)) return importanceCache.get(id) ?? null;
+  const row = await prisma.curatorModel.findUnique({ where: { id }, select: { params: true } });
+  const params = row && isKnownParams(row.params) ? row.params : null;
+  const importance: Importance | null = params
+    ? {
+        modelId: id,
+        learner: params.kind === BOOSTED_MODEL_KIND ? "gbdt" : "logistic",
+        threshold: params.threshold,
+        features: featureImportance(params),
+      }
+    : null;
+  // Only a found row is final; a missing one may yet be written.
+  if (row) {
+    if (importanceCache.size >= IMPORTANCE_CACHE_MAX) {
+      importanceCache.delete(importanceCache.keys().next().value as string);
+    }
+    importanceCache.set(id, importance);
+  }
+  return importance;
+}
+
 export async function buildModelInsights(env: Env, days: number, isAdmin: boolean) {
   const until = new Date();
   const since = new Date(until.getTime() - days * 86_400_000);
@@ -190,7 +227,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
   };
 
   const [report, runs, active, recentReviews] = await Promise.all([
-    buildHitRateReport(since, until, targets, env),
+    buildHitRateReport(since, until, targets, env, { includeFilterMatches: false }),
     prisma.curatorModel.findMany({
       orderBy: { createdAt: "desc" },
       take: MODEL_HISTORY_LIMIT,
@@ -201,7 +238,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     prisma.curatorModel.findFirst({
       where: { status: "active", kind: { in: [CURATOR_MODEL_KIND, BOOSTED_MODEL_KIND] } },
       orderBy: { createdAt: "desc" },
-      select: { id: true, params: true },
+      select: { id: true },
     }),
     prisma.aiReview.findMany({
       orderBy: { createdAt: "desc" },
@@ -228,12 +265,8 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
 
   // Importance is read from the model that is curating now, else the newest one examined.
   const latest = runs[0] ?? null;
-  const importanceSource =
-    active ??
-    (latest
-      ? await prisma.curatorModel.findUnique({ where: { id: latest.id }, select: { id: true, params: true } })
-      : null);
-  const params = importanceSource && isKnownParams(importanceSource.params) ? importanceSource.params : null;
+  const importanceId = active?.id ?? latest?.id ?? null;
+  const importance = importanceId ? await importanceFor(importanceId) : null;
 
   return {
     window: { days, since, until },
@@ -247,14 +280,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
       aiReviewMinGradedBuys: env.AI_REVIEW_MIN_GRADED_BUYS,
       targetPerHour: env.CURATED_TARGET_PER_HOUR,
     },
-    importance: params
-      ? {
-          modelId: importanceSource!.id,
-          learner: params.kind === BOOSTED_MODEL_KIND ? "gbdt" : "logistic",
-          threshold: params.threshold,
-          features: featureImportance(params),
-        }
-      : null,
+    importance,
     runs: runs.map(summarizeRun),
     // Everything the hit-rate report knows, minus per-filter rows: those name other users' filters.
     curatedAlerts: report.curatedAlerts,

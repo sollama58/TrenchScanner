@@ -20,6 +20,7 @@ import {
   type StoredEvalMetrics,
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
+import type { FastifyRequest } from "fastify";
 
 /**
  * The curator contest as the API serves it: which contestant's calls are the default feed, which
@@ -72,14 +73,27 @@ export function contestState(env: Env): Promise<ContestState> {
         kind: true,
         createdAt: true,
         trainingRows: true,
-        params: true,
         evalMetrics: true,
       },
     });
+    // Only the cutoff is read off params, and params is the whole model (a GBDT's forest runs to
+    // megabytes): pull the one number out in SQL instead of shipping every model's weights here.
+    const thresholds = new Map(
+      rows.length === 0
+        ? []
+        : (
+            await prisma.$queryRaw<{ id: string; threshold: number | null }[]>`
+              SELECT "id",
+                     CASE WHEN jsonb_typeof("params"->'threshold') = 'number'
+                          THEN ("params"->>'threshold')::float8 END AS threshold
+              FROM "CuratorModel"
+              WHERE "id" = ANY(${rows.map((r) => r.id)})`
+          ).map((r) => [r.id, r.threshold] as const),
+    );
     const current = new Map<string, ContestantModel>();
     for (const row of rows) {
       if (!row.contestant || current.has(row.contestant)) continue;
-      const threshold = (row.params as { threshold?: unknown } | null)?.threshold;
+      const threshold = thresholds.get(row.id);
       current.set(row.contestant, {
         id: row.id,
         kind: row.kind,
@@ -119,7 +133,10 @@ export function resolveFeedModel(
   return state.defaultModel;
 }
 
-export async function savedFeedModel(userId: string): Promise<string | null> {
+export async function savedFeedModel(request: FastifyRequest): Promise<string | null> {
+  // The auth hook already read it for browser sessions; only device sessions pay for a lookup.
+  if (request.savedFeedModel !== undefined) return request.savedFeedModel;
+  const userId = request.user!.userId;
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { curatedModel: true } });
   return user?.curatedModel ?? null;
 }

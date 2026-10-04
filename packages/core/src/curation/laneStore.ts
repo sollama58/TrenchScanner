@@ -87,10 +87,50 @@ export async function liveCallRecords(
 ): Promise<Map<string, CallRecord>> {
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const out = new Map<string, CallRecord>();
-  for (const model of models) {
+  if (models.length === 0) return out;
+  const froms = models.map((model) => {
     const born = bornAt.get(model);
-    const from = born && born > since ? born : since;
-    out.set(model, await liveCallRecord(model, from));
+    return born && born > since ? born : since;
+  });
+  // Every model in one grouped pass over the window, not one scan of CuratedAlert per model.
+  // Each model's own start is applied per row; the range scan uses the earliest of them.
+  const earliest = new Date(Math.min(...froms.map((d) => d.getTime())));
+  const rows = await prisma.$queryRaw<(LiveRow & { model: string })[]>`
+    WITH seats AS (
+      SELECT * FROM unnest(${[...models]}::text[], ${froms.map((d) => d.toISOString())}::timestamp(3)[]) AS s(model, since)
+    ),
+    calls AS (
+      SELECT a."model" AS model,
+             COALESCE(a."hit2xIn1h", co."hit2xIn1h") AS hit2x,
+             COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
+             COALESCE(a."disqualified", co."disqualified", false) AS dq,
+             co."labelValue" AS label,
+             a."peak1hReturnPct" AS peak
+      FROM "CuratedAlert" a
+      JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
+      LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+      WHERE a."createdAt" >= ${earliest}
+    )
+    SELECT model,
+           count(*) AS calls,
+           count(*) FILTER (WHERE hit2x IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE hit2x AND NOT dq) AS wins,
+           count(*) FILTER (WHERE hit4x AND NOT dq) AS goals,
+           sum(CASE WHEN hit2x AND NOT dq THEN
+                 COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
+               ELSE 0 END)::float8 AS sum_label
+    FROM calls
+    GROUP BY model`;
+  const byModel = new Map(rows.map((r) => [r.model, r]));
+  for (const model of models) {
+    const r = byModel.get(model);
+    out.set(model, {
+      calls: Number(r?.calls ?? 0),
+      graded: Number(r?.graded ?? 0),
+      wins: Number(r?.wins ?? 0),
+      goals: Number(r?.goals ?? 0),
+      sumLabel: r?.sum_label ?? 0,
+    });
   }
   return out;
 }

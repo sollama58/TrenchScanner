@@ -88,7 +88,9 @@ async function main() {
   );
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
   // purpose: see createMatchPeaksRunner.
-  const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping);
+  const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping, {
+    viewWindowMinutes: env.ACTIVE_VIEW_WINDOW_MINUTES,
+  });
   const matchPeaksJob = scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES);
   // Both daily jobs catch up on boot when overdue - see scheduleDailyAt. Cleanup's deletes are
   // batched (see runCleanupJob), so a boot-time run after a long gap is many short statements,

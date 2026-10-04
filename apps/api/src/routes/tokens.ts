@@ -13,15 +13,18 @@ export async function registerTokenRoutes(app: FastifyInstance) {
 
   app.get("/:mintAddress", async (request, reply) => {
     const { mintAddress } = request.params as { mintAddress: string };
-    const token = await prisma.token.findUnique({
-      where: { mintAddress },
-      include: {
-        snapshots: { orderBy: { takenAt: "desc" }, take: 50 },
-      },
-    });
+    const token = await prisma.token.findUnique({ where: { mintAddress } });
     if (!token) {
       return reply.code(404).send({ error: "token not found" });
     }
-    return token;
+    // Its own query rather than a nested `snapshots: { take: 50 }` include: Prisma doesn't
+    // reliably push a nested take down as SQL LIMIT, and TokenSnapshot is the largest table.
+    // A direct take on the (tokenId, takenAt) index is a bounded index walk.
+    const snapshots = await prisma.tokenSnapshot.findMany({
+      where: { tokenId: token.id },
+      orderBy: { takenAt: "desc" },
+      take: 50,
+    });
+    return { ...token, snapshots };
   });
 }

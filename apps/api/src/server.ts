@@ -37,6 +37,16 @@ const logger = createLogger("api");
 export async function buildServer(env: Env): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, trustProxy: true });
 
+  // Set before any route plugin is registered: Fastify hands each plugin the error handler in
+  // force when it is registered, so a handler set at the end only covered the root context and
+  // every routed 500 fell through to Fastify's default body - which carries the raw error
+  // message (for Prisma, the database hostname). Details stay in the log; clients get a code.
+  app.setErrorHandler((err: FastifyError, request, reply) => {
+    logger.error("unhandled route error", { url: request.url, error: err.message });
+    const status = err.statusCode ?? 500;
+    reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
+  });
+
   await app.register(cors, {
     origin: corsOriginList(env),
     credentials: true,
@@ -137,30 +147,38 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     },
   });
 
-  // Shared by authenticate and authenticateAdmin below so the cookie-read-and-verify step (and
-  // any future change to it) only lives in one place.
-  async function resolveSession(request: FastifyRequest) {
-    const session = await verifySession(request);
-    if (!session) return null;
-
+  // Shared by the three auth hooks below so the cookie-read-and-verify step (and any future
+  // change to it) only lives in one place.
+  //
+  // Split from verifySession so authenticateSubscriber can run this revocation check and the
+  // access lookup side by side: they are independent reads, and doing them one after the other
+  // put three sequential round trips in front of every dashboard request.
+  async function sessionStillValid(request: FastifyRequest, session: SessionPayload): Promise<boolean> {
     // A paired-phone session is only as good as its device row. The JWT itself cannot be
     // withdrawn once signed, so this lookup IS the revocation: switch the device off and the very
-    // next request from that phone fails here. Desktop sessions carry no deviceId and skip it
-    // entirely, so the ordinary path costs nothing.
+    // next request from that phone fails here. Desktop sessions carry no deviceId and skip it.
     if (session.deviceId) {
-      if (!(await deviceIsActive(session.deviceId, session.userId))) return null;
+      if (!(await deviceIsActive(session.deviceId, session.userId))) return false;
       touchDevice(session.deviceId);
-      return session;
+      return true;
     }
 
     // A browser session is only as good as the user's current sessionVersion: signing out bumps
     // it, so a copied cookie stops working everywhere at once instead of living out its TTL.
+    // curatedModel rides along on the same row so the feeds don't look the user up again.
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { sessionVersion: true },
+      select: { sessionVersion: true, curatedModel: true },
     });
-    if (!user || user.sessionVersion !== (session.sessionVersion ?? 0)) return null;
-    return session;
+    if (!user || user.sessionVersion !== (session.sessionVersion ?? 0)) return false;
+    request.savedFeedModel = user.curatedModel;
+    return true;
+  }
+
+  async function resolveSession(request: FastifyRequest) {
+    const session = await verifySession(request);
+    if (!session) return null;
+    return (await sessionStillValid(request, session)) ? session : null;
   }
 
   app.decorate("authenticate", async (request, reply) => {
@@ -200,14 +218,18 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    * three days ago" rather than the much less helpful "you have no access".
    */
   app.decorate("authenticateSubscriber", async (request, reply) => {
-    const session = await resolveSession(request);
-    if (!session) {
+    const session = await verifySession(request);
+    // The access lookup is read-only and keyed on the signed wallet, so it can start before the
+    // revocation check finishes; its answer is only used once that check has passed.
+    const [valid, access] = session
+      ? await Promise.all([sessionStillValid(request, session), resolveAccess(session.walletAddress, admins)])
+      : [false, null];
+    if (!session || !valid || !access) {
       reply.code(401).send({ error: "unauthenticated" });
       return;
     }
     request.user = session;
 
-    const access = await resolveAccess(session.walletAddress, admins);
     if (!access.hasAccess) {
       reply.code(402).send({
         error: "subscription_required",
@@ -284,12 +306,6 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     },
     { prefix: "/admin" },
   );
-
-  app.setErrorHandler((err: FastifyError, request, reply) => {
-    logger.error("unhandled route error", { url: request.url, error: err.message });
-    const status = err.statusCode ?? 500;
-    reply.code(status).send({ error: status === 500 ? "internal_error" : err.message });
-  });
 
   return app;
 }
