@@ -109,6 +109,8 @@ export function AlertCard({
   const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
   const firstHolding = buyersFrom?.firstBuyersHolding ?? null;
   const firstSeen = buyersFrom?.firstBuyersSeen ?? null;
+  // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
+  const devHolding = card.latestSnapshot?.devHolding ?? s.devHolding ?? null;
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -211,6 +213,10 @@ export function AlertCard({
             <dt>Top 10</dt>
             <dd className="num">{pct(s.top10HolderPct)}</dd>
           </div>
+          <div>
+            <dt>Risk</dt>
+            <dd className="num">{s.riskScore ?? "–"}</dd>
+          </div>
           <div
             title={
               freshPct === null
@@ -235,9 +241,17 @@ export function AlertCard({
             <dt>Snipers</dt>
             <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
           </div>
-          <div>
-            <dt>Risk</dt>
-            <dd className="num">{s.riskScore ?? "–"}</dd>
+          <div
+            title={
+              devHolding === null
+                ? "Dev Holding / Dev Sold: not known for this token yet"
+                : devHolding
+                  ? "DH = Dev Holding: the creator's wallet still holds this token (as of the latest scan)"
+                  : "DS = Dev Sold: the creator's wallet holds none of this token (as of the latest scan)"
+            }
+          >
+            <dt>Dev</dt>
+            <dd className="num">{devHolding === null ? "–" : devHolding ? "DH" : "DS"}</dd>
           </div>
         </dl>
       )}

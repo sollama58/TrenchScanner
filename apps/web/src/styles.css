@@ -969,7 +969,7 @@ input[type="checkbox"] {
 }
 .card-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px 10px;
   margin: 0;
   padding: 0 2px;
@@ -1722,7 +1722,7 @@ legend {
     padding-left: 28px;
   }
   .card-stats {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 6px;
   }
   h1 {

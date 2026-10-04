@@ -369,3 +369,19 @@ export class TradeFlowBook {
     return flow;
   }
 }
+
+/** A dev who has sold at least this share of what they bought counts as sold out. */
+const DEV_SOLD_OUT_SHARE = 0.99;
+
+/**
+ * Whether the dev still holds the token: from the trade stream when it watched the dev's own
+ * buys and sells, otherwise from RugCheck's creator balance. Null when neither knows.
+ */
+export function resolveDevHolding(token: {
+  tradeFlow?: Pick<TradeFlowFeatures, "devSoldShare">;
+  creatorHolding?: boolean;
+}): boolean | null {
+  const soldShare = token.tradeFlow?.devSoldShare ?? null;
+  if (soldShare !== null) return soldShare < DEV_SOLD_OUT_SHARE;
+  return token.creatorHolding ?? null;
+}

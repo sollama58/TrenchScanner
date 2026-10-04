@@ -49,6 +49,15 @@ describe("toProfile", () => {
     expect(toProfile(MINT, baseReport({ markets: [] })).lpBurned).toBe(false);
   });
 
+  it("reads whether the creator still holds from creatorBalance", () => {
+    expect(toProfile(MINT, baseReport({ creatorBalance: 1_000 })).creatorHolding).toBe(true);
+    expect(toProfile(MINT, baseReport({ creatorBalance: 0 })).creatorHolding).toBe(false);
+    expect(toProfile(MINT, baseReport({})).creatorHolding).toBeUndefined();
+    expect(
+      toProfile(MINT, baseReport({ creator: undefined, creatorBalance: 0 })).creatorHolding,
+    ).toBeUndefined();
+  });
+
   it("derives devWalletPct when the creator appears in the (pool-excluded) holder list", () => {
     const report = baseReport({
       topHolders: [

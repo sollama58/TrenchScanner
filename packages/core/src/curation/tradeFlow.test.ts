@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCandidateFeatures, CANDIDATE_FEATURE_NAMES, TRADE_FLOW_FEATURES } from "./features.js";
-import { TradeFlowBook, type FlowTrade } from "./tradeFlow.js";
+import { EMPTY_TRADE_FLOW, resolveDevHolding, TradeFlowBook, type FlowTrade } from "./tradeFlow.js";
 import type { ScoredToken } from "../types.js";
 
 const MINT = "mintA";
@@ -156,5 +156,16 @@ describe("order-flow features in the vector", () => {
     book.launch({ mint: MINT, creator: "dev", initialBuySol: 2, at: T0 });
     scored.tradeFlow = book.features(MINT, sec(30));
     expect(buildCandidateFeatures(scored).devInitialBuySol).toBe(2);
+  });
+});
+
+describe("resolveDevHolding", () => {
+  it("prefers the trade stream's view of the dev's bag, then RugCheck's creator balance", () => {
+    const flow = (devSoldShare: number | null) => ({ ...EMPTY_TRADE_FLOW, devSoldShare });
+    expect(resolveDevHolding({ tradeFlow: flow(1), creatorHolding: true })).toBe(false);
+    expect(resolveDevHolding({ tradeFlow: flow(0.5), creatorHolding: false })).toBe(true);
+    expect(resolveDevHolding({ tradeFlow: flow(null), creatorHolding: false })).toBe(false);
+    expect(resolveDevHolding({ tradeFlow: flow(null) })).toBeNull();
+    expect(resolveDevHolding({})).toBeNull();
   });
 });
