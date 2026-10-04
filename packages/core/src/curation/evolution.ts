@@ -342,6 +342,12 @@ export interface ReplacementInput {
   minAgeMs: number;
   /** Points a challenger's exam must beat the weakest lane's same-run exam by. */
   margin: number;
+  /**
+   * Each challenger's model family, in breeding order. When given, a family's last seat is never
+   * handed to the other family: the consensus learns from disagreement, and a field that has
+   * collapsed onto one family has no fallback when the market shifts under it.
+   */
+  challengerLearners?: readonly CuratorRecipe["learner"][];
 }
 
 export interface Replacement {
@@ -354,12 +360,10 @@ export interface Replacement {
  * At most one takeover per run: the weakest seasoned lane (lowest blended score, never-graded
  * lanes weakest of all) gives its seat to the best challenger, when that challenger beat the
  * lane's own exam on this same run - same rows, same folds - by `margin` points. The margin
- * absorbs the best-of-several luck in picking the top challenger.
+ * absorbs the best-of-several luck in picking the top challenger. With challengerLearners, every
+ * model family keeps at least one seat (see ReplacementInput.challengerLearners).
  */
 export function chooseReplacement(input: ReplacementInput): Replacement | null {
-  const seasoned = input.lanes.filter((l) => input.now.getTime() - l.lane.bornAt.getTime() >= input.minAgeMs);
-  if (seasoned.length === 0) return null;
-  const weakest = seasoned.reduce((w, l) => ((l.composite ?? -1) < (w.composite ?? -1) ? l : w));
   let best = -1;
   for (let i = 0; i < input.challengerScores.length; i++) {
     const s = input.challengerScores[i];
@@ -367,6 +371,19 @@ export function chooseReplacement(input: ReplacementInput): Replacement | null {
     if (best === -1 || s > input.challengerScores[best]!) best = i;
   }
   if (best === -1) return null;
+  const family = input.challengerLearners?.[best];
+  const familySeats = new Map<string, number>();
+  for (const l of input.lanes)
+    familySeats.set(l.lane.recipe.learner, (familySeats.get(l.lane.recipe.learner) ?? 0) + 1);
+  const seasoned = input.lanes.filter(
+    (l) =>
+      input.now.getTime() - l.lane.bornAt.getTime() >= input.minAgeMs &&
+      (family === undefined ||
+        l.lane.recipe.learner === family ||
+        familySeats.get(l.lane.recipe.learner)! > 1),
+  );
+  if (seasoned.length === 0) return null;
+  const weakest = seasoned.reduce((w, l) => ((l.composite ?? -1) < (w.composite ?? -1) ? l : w));
   const challengerScore = input.challengerScores[best]!;
   const bar = (weakest.examScore ?? 0) + input.margin;
   if (challengerScore < bar) return null;

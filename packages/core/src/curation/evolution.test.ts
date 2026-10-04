@@ -146,6 +146,22 @@ describe("chooseReplacement", () => {
   });
 });
 
+describe("chooseReplacement keeps every family seated", () => {
+  it("skips a family's last seat and takes the weakest of the challenger's own family instead", () => {
+    const now = new Date(t0.getTime() + 48 * 3_600_000);
+    const at = (slot: string, learner: "logistic" | "gbdt", composite: number) => ({
+      lane: lane(slot, { learner }),
+      composite,
+      examScore: 20,
+    });
+    const lanes = [at("lin", "logistic", 10), at("t1", "gbdt", 30), at("t2", "gbdt", 40)];
+    const base = { lanes, challengerScores: [50], now, minAgeMs: 0, margin: 3 };
+    expect(chooseReplacement({ ...base, challengerLearners: ["gbdt"] })?.slot).toBe("t1");
+    expect(chooseReplacement({ ...base, challengerLearners: ["logistic"] })?.slot).toBe("lin");
+    expect(chooseReplacement(base)?.slot).toBe("lin");
+  });
+});
+
 describe("withLanes", () => {
   it("swaps a learner seat's name, description and recipe for its lane's, leaving others alone", () => {
     const specs = enabledContestants(CONTESTANT_IDS);

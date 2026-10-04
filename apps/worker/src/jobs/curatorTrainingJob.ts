@@ -293,6 +293,7 @@ async function evolutionPlan(
         now,
         minAgeMs: env.CURATOR_EVOLUTION_MIN_AGE_HOURS * 3_600_000,
         margin: env.CURATOR_EVOLUTION_MARGIN,
+        challengerLearners: challengers.map((c) => c.recipe.learner),
       }),
   };
 }

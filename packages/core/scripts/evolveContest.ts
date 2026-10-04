@@ -146,6 +146,7 @@ async function simulate(all: TrainingRow[], challengers: number): Promise<SimRes
                 now: new Date(now),
                 minAgeMs: STEP_DAYS * DAY,
                 margin: 3,
+                challengerLearners: bred.map((b) => b.recipe.learner),
               }),
           }
         : undefined,
