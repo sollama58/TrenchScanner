@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { loadFiltersTab, loadModelTab, loadSignIn, tabFromHash } from "./routes";
+import { loadFiltersTab, loadModelTab, loadSettingsTab, loadSignIn, tabFromHash } from "./routes";
 import "./fonts.css";
 import "./styles.css";
 
@@ -9,6 +9,7 @@ import "./styles.css";
 const tab = tabFromHash();
 if (tab === "model") void loadModelTab();
 else if (tab === "filters") void loadFiltersTab();
+else if (tab === "settings") void loadSettingsTab();
 // A signed-out visitor needs the sign-in code next; fetch it as soon as the session check says so.
 void window.__boot?.["/auth/me"]?.then(
   (res) => {
@@ -27,6 +28,7 @@ createRoot(document.getElementById("root")!).render(
 const warm = () => {
   void loadModelTab();
   void loadFiltersTab();
+  void loadSettingsTab();
   void loadSignIn();
 };
 if ("requestIdleCallback" in window) window.requestIdleCallback(warm, { timeout: 4000 });

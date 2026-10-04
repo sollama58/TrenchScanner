@@ -40,6 +40,13 @@ model User {
   feedModels      String[] @default([])
   /// Whether model calls are mixed into the combined feed at all; off = only this user's filter matches.
   showModelAlerts Boolean  @default(true)
+  /// Follow the best performer (CuratorChampion): the feed shows whichever model holds the default
+  /// and switches when a new one is chosen. Picking models by hand turns it off; feedModels then
+  /// decides. Kept separate from feedModels so switching back keeps the user's hand picks.
+  followBestModel Boolean  @default(true)
+  /// How alerts reach this user in the dashboard (sound, volume, browser notifications) - see
+  /// alertPrefs.ts in apps/api for the shape. Null = defaults.
+  alertPrefs      Json?
 
   filters      UserFilter[]
   matches      Match[]
@@ -433,6 +440,25 @@ model CuratorModel {
 /// (`slot`, a contestant id) is the stable ledger key; the lane is what holds it: name, recipe,
 /// lineage. A lane is current while retiredAt is null - at most one per slot, kept so by the
 /// training job's transaction. Retired lanes stay as the evolution history.
+/// The default model over time: the leaderboard's best performer, re-chosen after each training
+/// run (curation/champion.ts). The newest row is the current default; a row is added only when
+/// the pick changes.
+model CuratorChampion {
+  id         String   @id @default(cuid())
+  contestant String
+  /// Its display name when chosen (an evolved seat may since have been renamed).
+  name       String
+  /// Composite score (0-100) when chosen; null when the fallback rule chose.
+  score      Float?
+  /// Graded live calls in the window when chosen.
+  liveGraded Int      @default(0)
+  previous   String?
+  reason     String
+  chosenAt   DateTime @default(now())
+
+  @@index([chosenAt])
+}
+
 model CuratorLane {
   id            String    @id @default(cuid())
   slot          String
@@ -634,6 +660,9 @@ model TokenSnapshot {
   // PumpPortal trade stream (curation/tradeFlow.ts), so null for a launch it didn't see.
   firstBuyersHolding  Int?
   firstBuyersSeen     Int?
+  // Whether the dev still holds the token (resolveDevHolding: the trade stream's view of the dev's
+  // bag, else RugCheck's creator balance). Null when neither knew.
+  devHolding          Boolean?
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
   // was screened out. Null means the check never ran or failed, which the screen also rejects.

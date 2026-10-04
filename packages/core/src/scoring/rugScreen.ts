@@ -1,5 +1,8 @@
 import type { OnChainProfile, RugScreenResult } from "../types.js";
 
+/** Above this share of the top-10 holders on wallets under a day old, a token is never alerted. */
+export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
+
 /**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
  * user, independent of their filter settings - this is the "auto-filter
@@ -39,6 +42,18 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
       profile.isMayhemMode === true
         ? "Pump.fun Mayhem Mode token (AI-driven supply and trading)"
         : "Mayhem Mode status unverified - failing closed",
+    );
+  }
+
+  // A holder list that is mostly brand-new wallets is a sniper or insider farm, whatever anyone's
+  // filter says. Only applied once measured: until the wallet lookups land the figure is unknown,
+  // and model calls wait for it anyway (CURATED_REQUIRE_WALLET_CHECKS).
+  if (
+    profile.freshTop10WalletPct !== undefined &&
+    profile.freshTop10WalletPct > SAFETY_MAX_FRESH_WALLET_PCT
+  ) {
+    reasons.push(
+      `${profile.freshTop10WalletPct.toFixed(0)}% of top-10 holders are fresh wallets (over ${SAFETY_MAX_FRESH_WALLET_PCT}%)`,
     );
   }
 

@@ -4,19 +4,39 @@ import { cachedGet, invalidate, peek, prefetch } from "./cache";
 import { usePolling } from "./hooks";
 import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
-import { BrainIcon, LogoMark, LogoutIcon, PulseIcon, ShieldIcon, SlidersIcon } from "./components/Icons";
-import { TAB_DATA, loadFiltersTab, loadModelTab, loadSignIn, loaded, tabFromHash, type Tab } from "./routes";
+import {
+  BrainIcon,
+  GearIcon,
+  LogoMark,
+  LogoutIcon,
+  PulseIcon,
+  ShieldIcon,
+  SlidersIcon,
+} from "./components/Icons";
+import {
+  TAB_DATA,
+  loadFiltersTab,
+  loadModelTab,
+  loadSettingsTab,
+  loadSignIn,
+  loaded,
+  tabFromHash,
+  type Tab,
+} from "./routes";
+import { AlertNotifier } from "./alerts";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
 const LazyModelTab = lazy(() => loadModelTab().then((m) => ({ default: m.ModelTab })));
 const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
+const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.SettingsTab })));
 const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
   { id: "filters", label: "Filters", Icon: SlidersIcon },
+  { id: "settings", label: "Settings", Icon: GearIcon },
 ];
 
 type Session = { state: "loading" } | { state: "signed-out" } | { state: "signed-in"; user: User };
@@ -61,6 +81,7 @@ export function App() {
   const signedIn = session.state === "signed-in";
   const ModelTab = loaded.model?.ModelTab ?? LazyModelTab;
   const FiltersTab = loaded.filters?.FiltersTab ?? LazyFiltersTab;
+  const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
 
   return (
     <div className="app">
@@ -118,11 +139,13 @@ export function App() {
         )}
         {signedIn && (
           <AccessGate>
+            <AlertNotifier />
             <div className="tab-view" key={tab}>
               <Suspense fallback={<Boot />}>
                 {tab === "live" && <LiveTab goTo={goTo} />}
                 {tab === "model" && <ModelTab />}
                 {tab === "filters" && <FiltersTab />}
+                {tab === "settings" && <SettingsTab goTo={goTo} />}
               </Suspense>
             </div>
           </AccessGate>

@@ -53,8 +53,10 @@ export function AboutModal({
         <p>
           New launches stream in as they happen, and every token in the market-cap band is rescanned about
           once a minute: market cap, liquidity, volume, holders, how much the top 10 wallets hold, RugCheck
-          risk, and the live trade flow (who is buying, snipers, bundles, whether the dev sold). Tokens that
-          fail the rug screen are dropped before anything else looks at them.
+          risk, and the live trade flow (who is buying, snipers, bundles, whether the dev sold). Before
+          anything can alert, a token must pass the safety screen: mint and freeze authority renounced,
+          liquidity burned or locked, not a Mayhem Mode launch, and no more than 70% of its top 10 holders on
+          fresh wallets. Tokens that fail are dropped before your filters or the models see them.
         </p>
 
         <h3>Two kinds of alert</h3>
@@ -82,8 +84,9 @@ export function AboutModal({
           slice: the loosest cutoff that met the targets in that exam, or its best slice when none did. Their
           live calls are graded and ranked on the Models tab, and every few hours new variants are bred from
           the leaders; one that beats the weakest model takes its seat. Consensus learns which models to trust
-          and when they agree, and is the default feed. Model calls are paced, so a busy market doesn&apos;t
-          flood the feed.
+          and when they agree. The best performer on the leaderboard is the default feed, re-chosen after
+          every run; you can follow it automatically or keep your own picks in Settings. Model calls are
+          paced, so a busy market doesn&apos;t flood the feed.
         </p>
 
         <h3>How alerts are graded</h3>
@@ -128,6 +131,12 @@ export function AboutModal({
             12/25. Snipers who have sold out can&apos;t dump on you; ones still holding can. Counted from the
             live trade stream, so it shows &ldquo;–&rdquo; for a launch the scanner didn&apos;t see happen.
             You can set a minimum or maximum on the Filters tab, and the models read it too.
+          </dd>
+          <dt>Dev</dt>
+          <dd>
+            DH (Dev Holding) means the creator&apos;s wallet still holds the token; DS (Dev Sold) means it
+            holds none. Read from the live trade stream when the scanner saw the launch, otherwise from
+            RugCheck, and kept current as the token is rescanned.
           </dd>
           <dt>Risk</dt>
           <dd>RugCheck&apos;s risk score, 0-100, lower is safer.</dd>

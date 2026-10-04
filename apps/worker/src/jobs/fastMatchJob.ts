@@ -81,6 +81,7 @@ function profileFromSnapshot(
     riskFlags: string[];
     freshTop10WalletPct: number | null;
     emptyTop10WalletPct: number | null;
+    devHolding: boolean | null;
   },
 ): OnChainProfile | null {
   // The three the screen treats as hard requirements. Unknown means the snapshot predates the
@@ -106,6 +107,8 @@ function profileFromSnapshot(
     riskFlags: snapshot.riskFlags,
     freshTop10WalletPct: snapshot.freshTop10WalletPct ?? undefined,
     emptyTop10WalletPct: snapshot.emptyTop10WalletPct ?? undefined,
+    // The scan's resolved answer, carried forward; the fast path has no trade-stream view of its own.
+    creatorHolding: snapshot.devHolding ?? undefined,
   };
 }
 

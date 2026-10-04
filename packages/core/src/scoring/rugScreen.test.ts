@@ -22,6 +22,13 @@ describe("runRugScreen", () => {
     expect(result.reasons).toHaveLength(0);
   });
 
+  it("rejects a token whose top-10 holders are over 70% fresh wallets, and only once measured", () => {
+    expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: 80 }).passed).toBe(false);
+    expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: 80 }).reasons[0]).toMatch(/fresh wallets/);
+    expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: 70 }).passed).toBe(true);
+    expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: undefined }).passed).toBe(true);
+  });
+
   it("fails closed when no profile is available", () => {
     const result = runRugScreen(null);
     expect(result.passed).toBe(false);

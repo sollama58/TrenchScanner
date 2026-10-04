@@ -89,7 +89,7 @@ export function ModelTab() {
               <strong>Consensus</strong> doesn't read the market directly; it learns how far to trust each of
               the others. Your feed shows calls from{" "}
               <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
-              {lb.followsDefault ? " (the default)" : ""}
+              {lb.followBest ? " (the best performer; you follow it automatically)" : ""}
               {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
               {leader && leader.composite.score !== null && (
                 <>
@@ -268,13 +268,13 @@ function LeaderboardPanel({
           <h3>Who's calling it best, last {days} days</h3>
           <p className="muted small">{board.scoring.summary}</p>
         </div>
-        {!board.followsDefault && (
+        {board.followBest === false && (
           <button
             className="ghost"
             disabled={busy !== null || refreshing}
             onClick={() => void use("default", null)}
           >
-            Back to the default
+            Follow the best performer
           </button>
         )}
       </header>
@@ -307,7 +307,11 @@ function LeaderboardPanel({
                   <td className="model-cell">
                     <div className="row">
                       <strong>{e.name}</strong>
-                      {e.isDefault && <span className="chip chip-model">default</span>}
+                      {e.isDefault && (
+                        <span className="chip chip-model" title="The best performer: the default feed">
+                          best
+                        </span>
+                      )}
                       {mine && <span className="chip">your feed</span>}
                     </div>
                     <small className="muted">
@@ -440,7 +444,13 @@ function HowItWorks({ board }: { board: Leaderboard }) {
         <li>
           <strong>Consensus.</strong> A second-order model trained on the others' out-of-sample calls: it
           learns which models to trust and when they agree, and gets its own exam on later weeks than it
-          trained on. It's the default feed once its exam gives it a cutoff; until then the default is Rules.
+          trained on.
+        </li>
+        <li>
+          <strong>The default.</strong> After each run the best performer on this board (with at least{" "}
+          {board.champion?.minLiveGraded ?? 10} graded live calls) becomes the default feed, and everyone who
+          follows the best switches to it. Until a model qualifies, the default is the Consensus when it can
+          call, else Rules.
         </li>
       </ol>
     </section>

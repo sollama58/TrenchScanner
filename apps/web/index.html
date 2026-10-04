@@ -18,12 +18,14 @@
         if (api.charAt(0) === "%") api = "http://localhost:4000";
         api = api.replace(/\/$/, "");
         var h = location.hash.replace("#", "");
-        var paths = ["/auth/me", "/subscription", "/health/worker"].concat(
+        var paths = ["/auth/me", "/subscription", "/health/worker", "/settings"].concat(
           h === "model"
             ? ["/curated/insights?days=30", "/curated/models?days=30"]
             : h === "filters"
               ? ["/filters", "/config"]
-              : ["/matches?page=1&includeCurated=saved", "/curated/stats", "/curated/models?days=30"],
+              : h === "settings"
+                ? ["/curated/models?days=30"]
+                : ["/matches?page=1&includeCurated=saved", "/curated/stats", "/curated/models?days=30"],
         );
         var boot = (window.__boot = {});
         if (!window.fetch) return;

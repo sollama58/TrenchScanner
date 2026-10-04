@@ -1,6 +1,6 @@
 import type { ScoredToken } from "../types.js";
 import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
-import { FIRST_BUYERS } from "./tradeFlow.js";
+import { FIRST_BUYERS, resolveDevHolding } from "./tradeFlow.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   GOAL_MULTIPLE,
@@ -155,7 +155,7 @@ export function buildAiReviewBrief(
     `- holder count: ${fmtNum(scored.holderCount)}`,
     `- holder growth over the last 30 minutes: ${fmtPct(scored.holderGrowthPct)}`,
     `- top 10 wallets hold: ${fmtPct(scored.top10HolderPct)}`,
-    `- dev wallet holds: ${fmtPct(scored.devWalletPct)}`,
+    `- dev wallet holds: ${fmtPct(scored.devWalletPct)}; dev still holding: ${devHoldingText(resolveDevHolding(scored))}`,
     `- top-10 wallets that are brand new: ${fmtPct(scored.freshTop10WalletPct)}`,
     `- top-10 wallets holding almost nothing else: ${fmtPct(scored.emptyTop10WalletPct)}`,
     `- RugCheck risk score (higher is riskier): ${fmtNum(scored.riskScore)}`,
@@ -356,4 +356,8 @@ export function formatComparables(comparables: ComparableOutcome[]): string {
     `closest ${lines.length}:`,
     ...lines,
   ].join("\n");
+}
+
+function devHoldingText(holding: boolean | null): string {
+  return holding === null ? "unknown" : holding ? "yes" : "no, sold out";
 }

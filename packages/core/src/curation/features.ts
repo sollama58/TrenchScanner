@@ -1,5 +1,5 @@
 import type { ScoredToken } from "../types.js";
-import { EMPTY_TRADE_FLOW, type TradeFlowFeatures } from "./tradeFlow.js";
+import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
 import type { TextScores } from "./textFeatures.js";
 
 /**
@@ -63,6 +63,8 @@ export const CANDIDATE_FEATURE_NAMES = [
   "minutesSinceFirstInBand",
   "dexBoosted",
   "hasDescription",
+  // Added 2026-10-04: 1 while the dev still holds the token, 0 once sold out (resolveDevHolding).
+  "devHolding",
   // Added 2026-10-04: trade-by-trade order flow from the PumpPortal stream (curation/tradeFlow.ts)
   // - who is buying, how big, and what the launch's snipers and the dev are doing with their bags.
   // Null on rows banked before, and whenever the tracker didn't watch the token long enough.
@@ -175,6 +177,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   devInitialBuySol: "dev's launch buy",
   devSoldShare: "dev selling",
   firstBuyersHolding: "first 25 buyers still holding",
+  devHolding: "dev still holding",
   textCopycatRisk: "copycat name",
   textNarrativeStrength: "narrative strength",
   textMemeAppeal: "meme appeal",
@@ -225,6 +228,7 @@ export function scoredFromFeatures(
     dexBoosted: bool("dexBoosted"),
     top10HolderPct: num("top10HolderPct"),
     devWalletPct: num("devWalletPct"),
+    creatorHolding: num("devHolding") === null ? undefined : num("devHolding") === 1,
     riskScore: num("riskScore"),
     freshTop10WalletPct: num("freshTop10WalletPct"),
     emptyTop10WalletPct: num("emptyTop10WalletPct"),
@@ -351,9 +355,15 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
     ...(Object.fromEntries(
       TRADE_FLOW_FEATURES.map((k) => [k, (scored.tradeFlow ?? EMPTY_TRADE_FLOW)[k]]),
     ) as Record<(typeof TRADE_FLOW_FEATURES)[number], number | null>),
+    devHolding: devHoldingFeature(scored),
     textCopycatRisk: scored.textScores?.copycatRisk ?? null,
     textNarrativeStrength: scored.textScores?.narrativeStrength ?? null,
     textMemeAppeal: scored.textScores?.memeAppeal ?? null,
     textScamSignals: scored.textScores?.scamSignals ?? null,
   };
+}
+
+function devHoldingFeature(scored: ScoredToken): number | null {
+  const holding = resolveDevHolding(scored);
+  return holding === null ? null : holding ? 1 : 0;
 }

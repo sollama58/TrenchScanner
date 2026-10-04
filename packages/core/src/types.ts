@@ -99,6 +99,12 @@ export interface OnChainProfile {
   holderCount?: number;
   top10HolderPct?: number;
   devWalletPct?: number;
+  /**
+   * Whether the creator's wallet still holds any of the token, from RugCheck's creatorBalance.
+   * Undefined when RugCheck named no creator or gave no balance. See resolveDevHolding for the
+   * trade-stream reading that takes precedence.
+   */
+  creatorHolding?: boolean;
   mintAuthorityActive: boolean;
   freezeAuthorityActive: boolean;
   lpBurned: boolean;

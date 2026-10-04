@@ -313,6 +313,11 @@ const envSchema = z.object({
   // record the leaderboard can judge it on.
   CURATOR_EVOLUTION_MIN_AGE_HOURS: z.coerce.number().min(0).default(12),
   CURATOR_EVOLUTION_MARGIN: z.coerce.number().min(0).max(50).default(3),
+  // The default model is the leaderboard's best performer, re-chosen after each training run
+  // (curation/champion.ts). A model needs this many graded live calls (30-day window) before it
+  // can hold the default, and a challenger must beat the sitting champion by MARGIN points.
+  CURATOR_CHAMPION_MIN_LIVE_GRADED: z.coerce.number().int().min(0).default(10),
+  CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(2),
   // Holds the hand-tuned heuristic to the same cutoff rule while it is the live curator: it only
   // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned in
   // the newest training run (the target-meeting one, else the best one). Without a record the
