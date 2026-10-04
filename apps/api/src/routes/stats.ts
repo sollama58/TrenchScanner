@@ -180,6 +180,22 @@ export async function registerStatsRoutes(
   });
 
   /**
+   * Where the database's disk goes and how fast each table fills: every table's heap, TOAST and
+   * index size with rows inserted/deleted since the stats reset, a week of daily row counts for
+   * the tables that grow with launches, and a 1% sample of TokenSnapshot split by how old each row
+   * is and whether its token ever mattered (a training row, a filter alert, a curated call). This
+   * is what retention is tuned from - see apps/worker/src/jobs/cleanupJob.ts.
+   */
+  app.get(
+    "/storage",
+    { config: { rateLimit: { max: 6, timeWindow: "1 minute" } }, preHandler: guard },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      return buildStorageReport();
+    },
+  );
+
+  /**
    * How long each API route has been taking to answer on this instance: count, p50/p95/p99, max
    * and the 5xx share, slowest p95 first - see routeTimings.ts. The dashboard's routes all need a
    * subscriber session, so this is how a script sees their real speed.
@@ -578,5 +594,112 @@ export async function buildDbReport() {
       scans: Number(i.scans),
     })),
     locksWaiting: Number(locks[0]?.waiting ?? 0),
+  };
+}
+
+const mb = (bytes: bigint | number | null) => Math.round((Number(bytes ?? 0) / 1_048_576) * 10) / 10;
+
+/**
+ * Exported for the route test. Everything but the Token class count and the snapshot sample
+ * reads the catalog or an indexed range; those two are a single pass over Token (no index serves
+ * "never traded") and a 1% block sample of TokenSnapshot.
+ */
+export async function buildStorageReport() {
+  const [db, tables, daily, outcomes, tokenClasses, snapshotSample] = await Promise.all([
+    prisma.$queryRaw<{ bytes: bigint; stats_reset: Date | null }[]>`
+      SELECT pg_database_size(current_database()) AS bytes, stats_reset
+      FROM pg_stat_database WHERE datname = current_database()`,
+    prisma.$queryRaw<
+      {
+        table: string;
+        live_rows: bigint;
+        dead_rows: bigint;
+        inserted: bigint;
+        deleted: bigint;
+        heap: bigint;
+        indexes: bigint;
+        total: bigint;
+      }[]
+    >`
+      SELECT relname AS table, n_live_tup AS live_rows, n_dead_tup AS dead_rows,
+             n_tup_ins AS inserted, n_tup_del AS deleted,
+             pg_relation_size(relid) AS heap, pg_indexes_size(relid) AS indexes,
+             pg_total_relation_size(relid) AS total
+      FROM pg_stat_user_tables
+      ORDER BY pg_total_relation_size(relid) DESC`,
+    // A week of new rows per day, each through an index on its own timestamp.
+    prisma.$queryRaw<{ day: Date; table: string; rows: bigint }[]>`
+      SELECT date_trunc('day', "firstSeenAt") AS day, 'Token' AS table, count(*) AS rows
+        FROM "Token" WHERE "firstSeenAt" >= date_trunc('day', now()) - interval '7 days' GROUP BY 1
+      UNION ALL
+      SELECT date_trunc('day', "createdAt"), 'CuratedAlert', count(*)
+        FROM "CuratedAlert" WHERE "createdAt" >= date_trunc('day', now()) - interval '7 days' GROUP BY 1
+      ORDER BY 2, 1`,
+    prisma.$queryRaw<{ day: Date; kind: string; rows: bigint; avg_features_bytes: number | null }[]>`
+      SELECT date_trunc('day', "anchorAt") AS day, "sampleKind" AS kind, count(*) AS rows,
+             avg(pg_column_size("features"))::float8 AS avg_features_bytes
+      FROM "CandidateOutcome"
+      WHERE "anchorAt" >= date_trunc('day', now()) - interval '7 days'
+      GROUP BY 1, 2 ORDER BY 1, 2`,
+    prisma.$queryRaw<
+      { never_live: bigint; live_never_in_band: bigint; in_band: bigint; older_than_3d: bigint }[]
+    >`
+      SELECT count(*) FILTER (WHERE "lastLiveAt" IS NULL AND "firstInBandAt" IS NULL) AS never_live,
+             count(*) FILTER (WHERE "lastLiveAt" IS NOT NULL AND "firstInBandAt" IS NULL) AS live_never_in_band,
+             count(*) FILTER (WHERE "firstInBandAt" IS NOT NULL) AS in_band,
+             count(*) FILTER (WHERE "firstSeenAt" < now() - interval '3 days') AS older_than_3d
+      FROM "Token"`,
+    // "Mattered" = anything the training set, the alert feeds or the grading still points at.
+    prisma.$queryRaw<{ age: string; source: string; mattered: boolean; rows: bigint; avg_bytes: number }[]>`
+      SELECT CASE WHEN s."takenAt" > now() - interval '1 day' THEN '0-1d'
+                  WHEN s."takenAt" > now() - interval '2 days' THEN '1-2d'
+                  WHEN s."takenAt" > now() - interval '7 days' THEN '2-7d'
+                  WHEN s."takenAt" > now() - interval '30 days' THEN '7-30d'
+                  ELSE '30d+' END AS age,
+             s."source" AS source,
+             (EXISTS (SELECT 1 FROM "CandidateOutcome" c WHERE c."tokenId" = s."tokenId")
+              OR EXISTS (SELECT 1 FROM "Match" m WHERE m."tokenId" = s."tokenId")
+              OR EXISTS (SELECT 1 FROM "CuratedAlert" a WHERE a."tokenId" = s."tokenId")) AS mattered,
+             count(*) AS rows,
+             avg(pg_column_size(s.*))::float8 AS avg_bytes
+      FROM "TokenSnapshot" s TABLESAMPLE SYSTEM (1)
+      GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`,
+  ]);
+  const n = (v: bigint | number | null | undefined) => Number(v ?? 0);
+  return {
+    databaseMb: mb(db[0]?.bytes ?? 0),
+    statsResetAt: db[0]?.stats_reset ?? null,
+    tables: tables.map((t) => ({
+      table: t.table,
+      liveRows: n(t.live_rows),
+      deadRows: n(t.dead_rows),
+      insertedSinceReset: n(t.inserted),
+      deletedSinceReset: n(t.deleted),
+      heapMb: mb(t.heap),
+      toastMb: mb(Number(t.total) - Number(t.heap) - Number(t.indexes)),
+      indexMb: mb(t.indexes),
+      totalMb: mb(t.total),
+    })),
+    dailyRows: daily.map((d) => ({ day: d.day, table: d.table, rows: n(d.rows) })),
+    candidateOutcomesDaily: outcomes.map((o) => ({
+      day: o.day,
+      kind: o.kind,
+      rows: n(o.rows),
+      avgFeaturesBytes: o.avg_features_bytes === null ? null : Math.round(o.avg_features_bytes),
+    })),
+    tokens: {
+      neverLive: n(tokenClasses[0]?.never_live),
+      liveNeverInBand: n(tokenClasses[0]?.live_never_in_band),
+      inBand: n(tokenClasses[0]?.in_band),
+      olderThan3d: n(tokenClasses[0]?.older_than_3d),
+    },
+    // A 1% block sample: multiply rows by ~100 for the table-wide estimate.
+    snapshotSample: snapshotSample.map((s) => ({
+      age: s.age,
+      source: s.source,
+      mattered: s.mattered,
+      rows: n(s.rows),
+      avgBytes: Math.round(s.avg_bytes),
+    })),
   };
 }
