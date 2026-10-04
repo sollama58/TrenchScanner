@@ -91,14 +91,21 @@ export function createSessionSigner(jwtSecret: string, ttlHours: number) {
 
 export type SessionSigner = ReturnType<typeof createSessionSigner>;
 
-/** The first of the request's session tokens (see sessionTokens) that verifies, or null. */
-export async function verifyRequestSession(
+/**
+ * Every session token on the request that verifies (signature and expiry), cookie first.
+ *
+ * All of them, not just the first: a cookie can verify and still be dead (signed out, so its
+ * sessionVersion is behind, or a revoked device), and stopping at it let that cookie shadow a
+ * perfectly good header. The auth hooks try each in turn - see resolveSession in server.ts.
+ */
+export async function verifyRequestSessions(
   signer: SessionSigner,
   request: Parameters<typeof sessionTokens>[0],
-): Promise<SessionPayload | null> {
+): Promise<SessionPayload[]> {
+  const sessions: SessionPayload[] = [];
   for (const token of sessionTokens(request)) {
     const session = await signer.verify(token);
-    if (session) return session;
+    if (session) sessions.push(session);
   }
-  return null;
+  return sessions;
 }

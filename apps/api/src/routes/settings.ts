@@ -57,13 +57,21 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const userId = request.user!.userId;
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { alertPrefs: true } });
-    if (!user) return reply.code(401).send({ error: "unauthenticated" });
-    const next = applyAlertPrefsPatch(parseAlertPrefs(user.alertPrefs), parsed.data);
-    await prisma.user.update({
-      where: { id: userId },
-      data: { alertPrefs: next as unknown as Prisma.InputJsonValue },
+    // Read and written under the user's row lock: the dashboard saves each control as it changes,
+    // and two saves in flight (sound picked, then volume nudged) each merged into the same old
+    // value, so whichever landed second silently undid the first.
+    const next = await prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<{ alertPrefs: unknown }[]>`
+        SELECT "alertPrefs" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+      if (rows.length === 0) return null;
+      const merged = applyAlertPrefsPatch(parseAlertPrefs(rows[0]!.alertPrefs), parsed.data);
+      await tx.user.update({
+        where: { id: userId },
+        data: { alertPrefs: merged as unknown as Prisma.InputJsonValue },
+      });
+      return merged;
     });
+    if (!next) return reply.code(401).send({ error: "unauthenticated" });
     return { alerts: next };
   });
 }
