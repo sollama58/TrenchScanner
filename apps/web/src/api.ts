@@ -231,6 +231,22 @@ export interface CuratedStats {
     goalRatePct: number | null;
     bestPeak24hReturnPct: number | null;
   };
+  /** Absent from older API builds mid-deploy, null when the reading failed. */
+  market?: MarketWeather | null;
+}
+
+/** How often launches are doubling now against the last week. Informational; gates nothing. */
+export interface MarketWeather {
+  condition: "hot" | "normal" | "cold" | "unknown";
+  recentHours: number;
+  recentGraded: number;
+  recentWins: number;
+  recentRatePct: number | null;
+  trailingDays: number;
+  trailingGraded: number;
+  trailingWins: number;
+  trailingRatePct: number | null;
+  ratio: number | null;
 }
 
 export interface GradedRates {

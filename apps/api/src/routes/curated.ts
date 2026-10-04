@@ -21,6 +21,7 @@ import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { buildModelInsights, type ModelInsights } from "../modelInsights.js";
+import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import {
   buildLeaderboard,
   contestState,
@@ -464,6 +465,11 @@ export async function registerCuratedRoutes(
     staleWhileRevalidateMs: REPORT_STALE_MS,
   });
 
+  // The Live tab's market weather chip: same TTL as the base rate, for the same reason.
+  const weatherCache = new SharedCache<MarketWeather>(BASE_RATE_CACHE_TTL_MS, {
+    staleWhileRevalidateMs: REPORT_STALE_MS,
+  });
+
   const buildStats = async () => {
     const day1 = new Date(Date.now() - 86_400_000);
     const day7 = new Date(Date.now() - 7 * 86_400_000);
@@ -478,7 +484,7 @@ export async function registerCuratedRoutes(
     // 12-connection pool, so every cache fill held the whole pool and queued every other request
     // behind it (auth lookups included) for as long as the slowest count took.
     const activeModel = defaultRow;
-    const [eventSamples, samples7d, latestModel] = await Promise.all([
+    const [eventSamples, samples7d, latestModel, market] = await Promise.all([
       baseRateCache.get(
         () =>
           // The base rate a pick has to beat is the population curators decide on: event moments.
@@ -498,6 +504,8 @@ export async function registerCuratedRoutes(
             select: LATEST_MODEL_SELECT,
           })
         : prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" }, select: LATEST_MODEL_SELECT }),
+      // Informational: a failed reading hides the chip rather than failing the panel.
+      weatherCache.get(() => loadMarketWeather(opts.env)).catch((): MarketWeather | null => null),
     ]);
     const finalizedSamples = Number(eventSamples[0]?.finalized ?? 0);
     const winners = Number(eventSamples[0]?.winners ?? 0);
@@ -590,6 +598,8 @@ export async function registerCuratedRoutes(
       // curatorRecord30d). The walk-forward backtest decides takeovers; this is the live-fire
       // record subscribers can hold that decision against.
       comparison30d,
+      // How often launches are doubling now against the last week (the Live tab's chip).
+      market,
     };
   };
 

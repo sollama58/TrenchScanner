@@ -129,6 +129,9 @@ describe.skipIf(!dbAvailable)("GET /curated/stats", () => {
       )._max.peak24hReturnPct,
     });
     expect(body.comparison30d.heuristic.emitted).toBeGreaterThanOrEqual(3);
+    // The market weather chip's reading rides along; the query itself must run.
+    expect(body.market).toMatchObject({ recentHours: 6, trailingDays: 7 });
+    expect(["hot", "normal", "cold", "unknown"]).toContain(body.market.condition);
   });
 
   it("serves the Model tab's windows only, so ?days= can't be walked to force cache misses", async () => {
