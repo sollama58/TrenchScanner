@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma, createLogger, HEURISTIC_CURATOR_SOURCE, type Env } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
+import { exportQuerySchema, exportWindow, startExport } from "./statsExport.js";
 
 const logger = createLogger("stats");
 
@@ -210,6 +211,40 @@ export async function registerStatsRoutes(
         uptimeSeconds: Math.round(process.uptime()),
         routes: opts.timings?.summary() ?? [],
       };
+    },
+  );
+
+  /**
+   * Row-level data for offline research: training rows (with features, labels and the stored
+   * price aggregates), their snapshot price paths, curated alerts, shadow picks and AI reviews,
+   * for a date range, as gzipped JSONL or CSV. Read-only and streamed a page at a time, so a
+   * 60-day pull never sits in memory. See statsExport.ts for the datasets and their columns.
+   */
+  app.get(
+    "/export",
+    { config: { rateLimit: { max: 12, timeWindow: "1 minute" } }, compress: false, preHandler: guard },
+    async (request, reply) => {
+      const parsed = exportQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten() });
+        return;
+      }
+      const q = parsed.data;
+      const { since, until } = exportWindow(q);
+      const stream = startExport(q, since, until);
+      if (!stream) {
+        reply.code(429).send({ error: "export_busy" });
+        return;
+      }
+      const day = (d: Date) => d.toISOString().slice(0, 10);
+      reply
+        .header("cache-control", "no-store")
+        .header("content-type", "application/gzip")
+        .header(
+          "content-disposition",
+          `attachment; filename="trenchscanner-${q.dataset}-${day(since)}-${day(until)}.${q.format}.gz"`,
+        );
+      return reply.send(stream);
     },
   );
 
