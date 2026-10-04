@@ -14,7 +14,38 @@ export type HeartbeatJob =
   | "candidate-watch"
   | "curator-training"
   | "match-peaks"
-  | "ai-judge";
+  | "ai-judge"
+  | "champion-refresh";
+
+/**
+ * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
+ * "scanner" owns everything on the alert path and the per-minute label grading, the "trainer"
+ * owns the batch work - model training, the AI judge's learning loop and the nightly sweeps - so
+ * minutes of training CPU, the training set's memory and a crashed training run never land on
+ * the 30-second scan. WORKER_ROLE picks which one a process is; "all" (the default, for local
+ * dev and tests) runs every job in one process as before.
+ */
+export type WorkerRole = "all" | "scanner" | "trainer";
+export type JobRole = Exclude<WorkerRole, "all">;
+
+export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
+  scan: "scanner",
+  "live-price": "scanner",
+  "fast-match": "scanner",
+  "candidate-watch": "scanner",
+  "burn-scan": "scanner",
+  "match-peaks": "scanner",
+  cleanup: "trainer",
+  "outcome-tracking": "trainer",
+  "curator-training": "trainer",
+  "ai-judge": "trainer",
+  "champion-refresh": "trainer",
+};
+
+/** Whether a process in `role` schedules `job`. */
+export function runsJob(role: WorkerRole, job: HeartbeatJob): boolean {
+  return role === "all" || HEARTBEAT_JOB_ROLE[job] === role;
+}
 
 export interface HeartbeatResult {
   success: boolean;

@@ -187,7 +187,9 @@ export async function runCuratorTrainingJob(env: Env): Promise<void> {
  * Re-chooses the default model (the leaderboard's best performer - curation/champion.ts) and logs
  * a change. Also run once at worker start when nothing has been chosen yet.
  */
-export async function rechooseDefaultModel(env: Env): Promise<void> {
+export async function rechooseDefaultModel(
+  env: Env,
+): Promise<{ model: string; changed: boolean; liveGraded: number }> {
   const lanes = await loadCurrentLanes();
   const { champion, changed, pick } = await rechooseChampion({
     roster: withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes),
@@ -206,6 +208,7 @@ export async function rechooseDefaultModel(env: Env): Promise<void> {
     liveGraded: champion.liveGraded,
     reason: pick.reason,
   });
+  return { model: champion.contestant, changed, liveGraded: champion.liveGraded };
 }
 
 /**

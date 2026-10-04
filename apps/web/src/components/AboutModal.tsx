@@ -140,6 +140,16 @@ export function AboutModal({
           </dd>
           <dt>Risk</dt>
           <dd>RugCheck&apos;s risk score, 0-100, lower is safer.</dd>
+          <dt>High conviction</dt>
+          <dd>
+            The call came from the model&apos;s most confident moments (its top half-percent). These are rarer
+            and the Models tab tracks their hit rate separately.
+          </dd>
+          <dt>≈41% 2x</dt>
+          <dd>
+            Of the model&apos;s recent calls ranked like this one, on data it wasn&apos;t trained on, the
+            share that doubled within the hour. When several models called the token, the best of their rates.
+          </dd>
         </dl>
 
         <h3>Staying current</h3>

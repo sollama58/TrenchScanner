@@ -262,14 +262,26 @@ const envSchema = z.object({
   // the calibrated threshold still has an absolute quality floor, so dead hours emit nothing.
   // MIN_TRAINING_ROWS is the promotion floor - below it the job still trains and records the
   // evaluation (the learning panel shows progress) but never lets the model take over.
-  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().positive().default(4),
-  CURATOR_TRAINING_WINDOW_DAYS: z.coerce.number().positive().default(60),
+  // Which jobs this worker process runs - see HEARTBEAT_JOB_ROLE in heartbeat.ts. Production
+  // runs two processes (render.yaml): one "scanner" on the alert path and one "trainer" for the
+  // model and nightly batch work. "all" runs everything in one process.
+  WORKER_ROLE: z.enum(["all", "scanner", "trainer"]).default("all"),
+  // Every 2 hours since 2026-10-05, when training moved to its own process: a run no longer
+  // costs the scan anything, and a model that just earned (or lost) a seat, a fresh calibration
+  // table and new cutoffs take effect within two hours of the evidence.
+  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().positive().default(2),
+  // Three weeks: on 2026-10-04 the scan banked ~7,700 training rows a day, so this is about the
+  // row ceiling below, and it is the window - not the ceiling - that should set how far back the
+  // models look. The recency half-life below tilts the fit toward the newest part of it.
+  CURATOR_TRAINING_WINDOW_DAYS: z.coerce.number().positive().default(21),
   // Ceiling on the samples one training run loads: the newest this many from the window. A run
-  // holds every sample (features included) in memory at once, and the walk-forward exam and both
+  // holds every sample (features included) in memory at once, and the walk-forward exam and the
   // model families multiply that several times over - at ~60k rows a run peaked near 200MB of
   // heap on its own, which on a 512MB worker is what crashed it once enough history had built
-  // up. The window still bounds how OLD a sample can be; this bounds how many there are.
-  CURATOR_TRAINING_MAX_ROWS: z.coerce.number().int().positive().default(40_000),
+  // up (that is why it was 40,000 until 2026-10-05). On the trainer process, with 2GB to itself
+  // and nothing else resident, 100,000 is about two weeks of rows. The window still bounds how
+  // OLD a sample can be; this bounds how many there are.
+  CURATOR_TRAINING_MAX_ROWS: z.coerce.number().int().positive().default(100_000),
   // Half-life for the trainer's recency decay: a sample this many days older than the newest one
   // counts half as much in the loss. The meta this market trades on rotates in weeks, and an
   // equal-weighted 60-day window means a third of the gradient comes from a regime that no

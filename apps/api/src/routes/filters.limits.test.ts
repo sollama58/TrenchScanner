@@ -47,6 +47,24 @@ describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
     return rows.map((r) => r.id);
   }
 
+  it("refuses a min above its max, on create and on a PATCH against the stored row", async () => {
+    const badAge = await call("POST", "/filters", { minTokenAgeMinutes: 30, maxTokenAgeMinutes: 10 });
+    expect(badAge.statusCode).toBe(400);
+    expect(badAge.json().error).toMatch(/token age/);
+    const badBuyers = await call("POST", "/filters", { minFirstBuyersHolding: 20, maxFirstBuyersHolding: 5 });
+    expect(badBuyers.statusCode).toBe(400);
+    expect((await call("POST", "/filters", { narrativeKeywords: ["ai", "  "] })).statusCode).toBe(400);
+
+    const ok = await call("POST", "/filters", { name: "pairs", maxFirstBuyersHolding: 5 });
+    expect(ok.statusCode).toBe(201);
+    const id = (ok.json() as { id: string }).id;
+    // Only the min is sent; the max it conflicts with is the one already saved.
+    const patched = await call("PATCH", `/filters/${id}`, { minFirstBuyersHolding: 10 });
+    expect(patched.statusCode).toBe(400);
+    expect((await call("PATCH", `/filters/${id}`, { minFirstBuyersHolding: 5 })).statusCode).toBe(200);
+    await prisma.userFilter.deleteMany({ where: { userId } });
+  });
+
   it("keeps only the newest created filter active", async () => {
     const a = (await call("POST", "/filters", { name: "a" })).json() as { id: string };
     const b = (await call("POST", "/filters", { name: "b" })).json() as { id: string };

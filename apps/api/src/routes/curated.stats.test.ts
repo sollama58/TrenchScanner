@@ -123,7 +123,7 @@ describe.skipIf(!dbAvailable)("GET /curated/stats", () => {
       alertsTotal: await prisma.curatedAlert.count({ where: { model } }),
       graded,
       wins: await prisma.curatedAlert.count({ where: { model, hit2xIn1h: true, disqualified: false } }),
-      goalHits: await prisma.curatedAlert.count({ where: { model, hit4xIn1h: true } }),
+      goalHits: await prisma.curatedAlert.count({ where: { model, hit4xIn1h: true, disqualified: false } }),
       bestPeak24hReturnPct: (
         await prisma.curatedAlert.aggregate({ where: { model }, _max: { peak24hReturnPct: true } })
       )._max.peak24hReturnPct,

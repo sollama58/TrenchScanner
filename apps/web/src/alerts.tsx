@@ -51,6 +51,13 @@ export function loadSettings(force = false): Promise<void> {
   return loading;
 }
 
+/** Forgets the loaded settings, on sign-out or sign-in, so one wallet's never show for another. */
+export function resetSettings(): void {
+  settings = null;
+  loading = null;
+  emit();
+}
+
 export function useSettings(): Settings | null {
   const s = useSyncExternalStore(subscribe, () => settings);
   useEffect(() => {

@@ -24,7 +24,7 @@ import {
   tabFromHash,
   type Tab,
 } from "./routes";
-import { AlertNotifier } from "./alerts";
+import { AlertNotifier, resetSettings } from "./alerts";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -40,7 +40,11 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
 
-type Session = { state: "loading" } | { state: "signed-out" } | { state: "signed-in"; user: User };
+type Session =
+  | { state: "loading" }
+  | { state: "signed-out" }
+  | { state: "unreachable"; message: string }
+  | { state: "signed-in"; user: User };
 
 export function App() {
   // A returning visitor starts signed in as last time (src/cache.ts keeps the answer), so their
@@ -51,18 +55,32 @@ export function App() {
   });
   const [tab, setTab] = useState<Tab>(tabFromHash);
 
-  useEffect(() => {
+  const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
-    cachedGet<User>("/auth/me", 10_000)
+    cachedGet<User>("/auth/me", maxAgeMs)
       .then((user) => setSession({ state: "signed-in", user }))
       .catch((e: unknown) => {
-        // Unreachable API with a remembered session: keep showing it (polling retries). A real
-        // "not signed in" answer ends it and clears what this device kept.
-        if (!(e instanceof ApiError) && peek<User>("/auth/me")) return;
-        if (e instanceof ApiError && e.status === 401) setSessionToken(null);
-        invalidate();
-        setSession({ state: "signed-out" });
+        // Only a real "not signed in" answer ends the session and clears what this device kept.
+        if (e instanceof ApiError && e.status === 401) {
+          setSessionToken(null);
+          invalidate();
+          resetSettings();
+          setSession({ state: "signed-out" });
+          return;
+        }
+        // The API is down or restarting (a network error, a 502 or 503 during a deploy): a
+        // remembered session keeps showing its saved data while polling retries. Without one,
+        // say so rather than offering a sign-in that can't work right now.
+        if (peek<User>("/auth/me")) return;
+        setSession({
+          state: "unreachable",
+          message: e instanceof Error ? e.message : String(e),
+        });
       });
+  };
+
+  useEffect(() => {
+    checkSession(10_000);
     const onHash = () => setTab(tabFromHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -78,6 +96,7 @@ export function App() {
     await post("/auth/logout").catch(() => undefined);
     setSessionToken(null);
     invalidate();
+    resetSettings();
     setSession({ state: "signed-out" });
   };
 
@@ -129,12 +148,32 @@ export function App() {
 
       <main className="content">
         {session.state === "loading" && <Boot />}
+        {session.state === "unreachable" && (
+          <section className="panel paywall">
+            <h2>Can&apos;t reach TrenchScanner</h2>
+            <p className="muted">
+              The server didn&apos;t answer ({session.message}). It may be restarting; try again in a moment.
+            </p>
+            <button
+              className="button primary"
+              onClick={() => {
+                // The boot requests failed with the rest; drop them so every view asks again.
+                invalidate();
+                setSession({ state: "loading" });
+                checkSession(-1);
+              }}
+            >
+              Try again
+            </button>
+          </section>
+        )}
         {session.state === "signed-out" && (
           <Suspense fallback={<Boot />}>
             <SignIn
               onSignedIn={(user) => {
                 // Anything cached while signed out (401s aside, e.g. /health/worker) is stale now.
                 invalidate();
+                resetSettings();
                 setSession({ state: "signed-in", user });
               }}
             />
