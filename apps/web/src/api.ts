@@ -92,6 +92,8 @@ export interface Snapshot {
   devWalletPct: number | null;
   riskScore: number | null;
   freshTop10WalletPct: number | null;
+  /** Share of the top 10 holders with under $25 of other tokens; null when not checked. */
+  emptyTop10WalletPct?: number | null;
   /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
   firstBuyersHolding?: number | null;
   firstBuyersSeen?: number | null;

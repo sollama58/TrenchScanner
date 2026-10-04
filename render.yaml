@@ -174,13 +174,16 @@ services:
       # ~8s on 2026-10-04.
       - key: SCAN_INTERVAL_MINUTES
         value: "0.5"
-      # Per-CYCLE Helius budgets, half their defaults (50 and 30) because the cycle above runs
-      # twice a minute. Curated contenders' wallets are looked up first (one 10-wallet group fits
-      # each budget), the rest behind the cycle on what is left.
+      # Per-CYCLE Helius budgets. Curated contenders' wallets are looked up first, the rest
+      # behind the cycle on what is left. Freshness is half its default (50) because the cycle
+      # above runs twice a minute. Holdings was cut from 15 to 10 on 2026-10-04 to save Helius
+      # credits: each lookup costs 10 credits and the old budget filled every cycle (~88% of all
+      # Helius spend). 10 is the floor - a top-10 holder group is all-or-nothing, so a smaller
+      # budget could never complete a contender whose wallets are all uncached.
       - key: WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE
         value: "25"
       - key: WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
-        value: "15"
+        value: "10"
       - key: RUGCHECK_CACHE_TTL_MINUTES
         value: "5"
       # Wall-clock span holderGrowthPct is measured over, deliberately independent of the scan

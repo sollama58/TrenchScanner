@@ -52,11 +52,18 @@ export function AboutModal({
         <h3>The scan</h3>
         <p>
           New launches stream in as they happen, and every token in the market-cap band is rescanned about
-          once a minute: market cap, liquidity, volume, holders, how much the top 10 wallets hold, RugCheck
+          every 30 seconds: market cap, liquidity, volume, holders, how much the top 10 wallets hold, RugCheck
           risk, and the live trade flow (who is buying, snipers, bundles, whether the dev sold). Before
           anything can alert, a token must pass the safety screen: mint and freeze authority renounced,
           liquidity burned or locked, not a Mayhem Mode launch, and no more than 70% of its top 10 holders on
           fresh wallets. Tokens that fail are dropped before your filters or the models see them.
+        </p>
+        <p>
+          Every scanned token gets all of the checks above. Two checks on its top 10 holders are rationed: how
+          many are fresh wallets, and how many are empty (under $25 of other tokens). Each one is a paid
+          lookup per wallet, so the scanner checks a limited number of wallets per scan, starting with the
+          tokens closest to alerting. The rest are checked as room allows. Until then a card shows &ldquo;Not
+          checked&rdquo;, which means the check hasn&apos;t run yet, not that the wallets are clean.
         </p>
 
         <h3>Two kinds of alert</h3>
@@ -120,10 +127,12 @@ export function AboutModal({
           <dd>Liquidity, 24-hour volume, holder count and minutes since launch, at alert time.</dd>
           <dt>Top 10</dt>
           <dd>Share of supply held by the 10 largest wallets.</dd>
-          <dt>Fresh wallets</dt>
+          <dt>Fresh / Empty</dt>
           <dd>
-            How many of the top 10 holders are wallets first used in the last 24 hours, a common sign of
-            snipers or insiders. Shown as &ldquo;–&rdquo; until those wallets have been looked up.
+            Of the top 10 holders, the share on wallets first used in the last 24 hours, then the share
+            holding under $25 of anything else. Both are common signs of snipers or insiders. Shows &ldquo;Not
+            checked&rdquo; until those wallets have been looked up, and &ldquo;–&rdquo; for one of the two
+            that hasn&apos;t run yet.
           </dd>
           <dt>Snipers</dt>
           <dd>

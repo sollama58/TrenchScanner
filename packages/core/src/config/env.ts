@@ -136,8 +136,10 @@ const envSchema = z.object({
   // Cap on UNCACHED holdings lookups per scan cycle. Sized against the DAS rate limit rather
   // than the RPC one - DAS is billed and throttled separately, and far more tightly (10 req/s
   // against 50 on the tier this runs on), so this budget is the guard that keeps a busy cycle
-  // from spending the whole allowance in a few seconds.
-  WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(30),
+  // from spending the whole allowance in a few seconds. It is also the main Helius credit cost
+  // (10 credits a lookup). Below 10 it could never complete a top-10 holder group whose wallets
+  // are all uncached, since a group is all-or-nothing.
+  WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(10),
   // How long a holdings reading stays usable. Unlike wallet earliest-activity, this answer
   // decays - a portfolio changes with every trade - so it carries a TTL instead of being cached
   // forever. An hour keeps a wallet from being re-priced on every one of the ~60 cycles it might
