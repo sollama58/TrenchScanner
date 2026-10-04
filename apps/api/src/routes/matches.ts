@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
-import { prisma, corsOriginList, type Env, type DexScreenerClient } from "@trenchscanner/core";
-import { OnDemandLiveRefresher } from "../liveRefresh.js";
+import { prisma, corsOriginList, type Env } from "@trenchscanner/core";
+import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import {
   attachAiReviewsForAdmin,
   curatedAlertInclude,
@@ -94,17 +94,15 @@ export const listQuerySchema = z.object({
 
 export async function registerMatchRoutes(
   app: FastifyInstance,
-  opts: { env: Env; dexScreener: DexScreenerClient; matchStream: MatchStream; viewStamps: ViewStampBuffer },
+  opts: {
+    env: Env;
+    liveRefresher: OnDemandLiveRefresher;
+    matchStream: MatchStream;
+    viewStamps: ViewStampBuffer;
+  },
 ) {
   // The feed itself, and the live stream that pushes to it. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
-
-  // Bounded to one page's worth per request - a single batched DexScreener lookup - and skips
-  // anything already as fresh as the worker's live-price cadence promises. See liveRefresh.ts.
-  const liveRefresher = new OnDemandLiveRefresher(opts.dexScreener, {
-    maxAgeMs: opts.env.LIVE_PRICE_INTERVAL_MINUTES * 60_000,
-    limit: PAGE_SIZE,
-  });
 
   /**
    * Server-sent events: a nudge the instant a match is created for this user, rather than waiting
@@ -368,9 +366,9 @@ export async function registerMatchRoutes(
     // so a page being opened - a first visit, or paging back to one seen earlier - would show
     // whatever the last tick left behind until the next one came round. This asks for those
     // specific tokens to be refreshed right now. Deliberately not awaited: the numbers in *this*
-    // response are the ones we already have, and the dashboard's next poll picks up the new ones a
-    // few seconds later. A slow or broken DexScreener can't delay or fail the page load.
-    liveRefresher.request(cards.map((c) => c.token));
+    // response are the ones we already have, and the dashboard's live tick (routes/live.ts) picks up
+    // the new ones within seconds. A slow or broken DexScreener can't delay or fail the page load.
+    opts.liveRefresher.request(cards.map((c) => c.token));
 
     return {
       // Still `matches`, and every entry still Match-shaped, so a bundle deployed before this

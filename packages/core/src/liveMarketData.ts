@@ -27,6 +27,13 @@ export interface LiveMarketDataRefresh {
 export async function refreshLiveMarketData(
   dexScreener: DexScreenerClient,
   tokens: readonly { id: string; mintAddress: string }[],
+  options: {
+    /**
+     * Also raise the recorded peak of these tokens' matches from the last this-many days, from the
+     * readings just taken. Omit to leave peaks to the worker's match-peaks pass alone.
+     */
+    peakWindowDays?: number;
+  } = {},
 ): Promise<LiveMarketDataRefresh> {
   if (tokens.length === 0) return { requested: 0, updated: 0 };
 
@@ -62,5 +69,43 @@ export async function refreshLiveMarketData(
     logger.warn("failed to persist live market data", { count: rows.length, error: String(err) });
   }
 
+  if (updated > 0 && options.peakWindowDays !== undefined) {
+    await raiseMatchPeaks(rows, options.peakWindowDays);
+  }
+
   return { requested: tokens.length, updated };
+}
+
+/**
+ * Raises Match.peakMcapUsd wherever a reading just taken is above it.
+ *
+ * The worker's match-peaks pass folds live readings in every two minutes, but a live reading is
+ * only the latest value, so a high that came and went between two passes was never recorded -
+ * and with the dashboard's live tick reading every few seconds, most readings were thrown away
+ * that way. Doing it here records each one as it is taken. Same rule as the live-ping statement in
+ * matchPeaks.ts: a peak only counts above the alert market cap. peakReturnPct and hitHundredPctAt
+ * follow on the worker's next pass (repairOutcomeBookkeeping keys off peakMcapAt).
+ *
+ * Failures are logged, not thrown: the market data itself is already saved.
+ */
+async function raiseMatchPeaks(
+  rows: readonly { id: string; mcap: number }[],
+  windowDays: number,
+): Promise<void> {
+  try {
+    await prisma.$executeRaw`
+      UPDATE "Match" m
+      SET "peakMcapUsd" = v.mcap, "peakMcapAt" = now()
+      FROM unnest(
+        ${rows.map((r) => r.id)}::text[],
+        ${floatArrayParam(rows.map((r) => r.mcap))}::text::float8[]
+      ) AS v(id, mcap),
+      "TokenSnapshot" alert
+      WHERE m."tokenId" = v.id
+        AND alert.id = m."snapshotId"
+        AND m."matchedAt" > now() - MAKE_INTERVAL(days => ${windowDays}::int)
+        AND v.mcap > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")`;
+  } catch (err) {
+    logger.warn("failed to record live match peaks", { count: rows.length, error: String(err) });
+  }
 }

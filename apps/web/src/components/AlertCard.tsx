@@ -5,6 +5,7 @@ import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } 
 
 /** The 1-hour win window every alert is graded over. */
 const WIN_WINDOW_MIN = 60;
+const DAY_MS = 86_400_000;
 
 /** What a card's verdict badge says. Words and an icon carry it; color only reinforces. */
 export function outcomeBadge(outcome: Outcome | null): { text: string; tone: string } {
@@ -71,7 +72,12 @@ export function AlertCard({
   const badge = outcomeBadge(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");
   const calls = curated?.calledBy ?? [];
-  const peak = curated?.outcome.peak24hReturnPct ?? card.peakReturnPct;
+  const recordedPeak = curated?.outcome.peak24hReturnPct ?? card.peakReturnPct;
+  // The recorded peak catches up on the worker's next pass; a "Now" above it is already a peak.
+  // A curated card's peak is its 24h peak, so a reading past that window doesn't count there.
+  const alertAt = new Date(curated?.alertedAt ?? card.matchedAt).getTime();
+  const nowCounts = move !== null && move > 0 && (!curated || now - alertAt < DAY_MS);
+  const peak = nowCounts ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
   const ai = curated?.aiReview;
   const mint = card.token.mintAddress;
   const watching = outcome?.status === "watching" && outcome.minutesLeft !== null;

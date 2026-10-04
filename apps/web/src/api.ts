@@ -139,6 +139,12 @@ export interface ModelCall {
   alertedAt: string;
 }
 
+/** GET /live/market: current market data for the tokens on screen, seconds old. */
+export interface LiveMarket {
+  at: string;
+  tokens: { id: string; marketCapUsd: number; priceUsd: number | null; at: string }[];
+}
+
 /** One feed card - a filter match or a curated alert, which the API serializes alike. */
 export interface Card {
   id: string;
@@ -151,6 +157,8 @@ export interface Card {
   snapshot: Snapshot;
   latestSnapshot: Snapshot | null;
   currentMarketCapUsd: number | null;
+  /** When currentMarketCapUsd was read (absent from API builds before the live tick). */
+  currentMarketCapAt?: string | null;
   filter: { id: string; name: string } | null;
   curated: CuratedMeta | null;
   // Match-only outcome columns.

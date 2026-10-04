@@ -32,11 +32,21 @@ import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
+import { OnDemandLiveRefresher } from "./liveRefresh.js";
+import { registerLiveRoutes, LIVE_TICK_MAX_TOKENS } from "./routes/live.js";
 import { clientIp } from "./clientIp.js";
 import { RouteTimings } from "./routeTimings.js";
 
 const logger = createLogger("api");
 
+/** Tokens one live refresh may look up: the live tick's limit, one DexScreener call. */
+const LIVE_REFRESH_TOKEN_LIMIT = LIVE_TICK_MAX_TOKENS;
+/**
+ * DexScreener calls the API may spend on live refreshes per minute, across all readers. Its batch
+ * endpoint allows 300 a minute; the worker uses its share from its own host. 120 covers ~20
+ * distinct pages ticking every 10s; past it readers see the worker's once-a-minute numbers.
+ */
+const LIVE_REFRESH_CALLS_PER_MINUTE = 120;
 /** A request this slow gets a log line of its own, so a slow call shows up without asking. */
 const SLOW_REQUEST_LOG_MS = 2_000;
 
@@ -327,6 +337,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // the moment it's opened, instead of leaving them until the worker's next tick - see
   // liveRefresh.ts for how that's kept from becoming a per-request upstream call.
   const dexScreener = new DexScreenerClient({ baseUrl: env.DEXSCREENER_BASE_URL });
+  // One per process, shared by every route, so its in-flight sharing, cooldown and call budget
+  // hold across the feeds and the live tick rather than per route.
+  const liveRefresher = new OnDemandLiveRefresher(dexScreener, {
+    maxAgeMs: env.LIVE_PRICE_INTERVAL_MINUTES * 60_000,
+    limit: LIVE_REFRESH_TOKEN_LIMIT,
+    callsPerMinute: LIVE_REFRESH_CALLS_PER_MINUTE,
+    peakWindowDays: env.SNAPSHOT_RETENTION_DAYS,
+  });
 
   // Reads the chain for the subscription gate: verifying burns, relaying signed transactions, and
   // feeding the reconciler. Separate from the enrichment path's Helius client because this one
@@ -371,7 +389,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   await app.register(registerDeviceLinkRoutes, { prefix: "/auth", env });
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
-  await app.register(registerMatchRoutes, { prefix: "/matches", env, dexScreener, matchStream, viewStamps });
+  await app.register(registerMatchRoutes, {
+    prefix: "/matches",
+    env,
+    liveRefresher,
+    matchStream,
+    viewStamps,
+  });
+  await app.register(registerLiveRoutes, { prefix: "/live", liveRefresher, viewStamps });
   // Report caches warm themselves once the server is actually listening - so a real start pays
   // for its first fills before any reader does, and a test server (inject, never listen) runs none.
   const warmers: (() => void)[] = [];
@@ -382,7 +407,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerCuratedRoutes, {
     prefix: "/curated",
     env,
-    dexScreener,
+    liveRefresher,
     matchStream,
     viewStamps,
     warmers,

@@ -2,6 +2,10 @@ import { createLogger, refreshLiveMarketData, type DexScreenerClient } from "@tr
 
 const logger = createLogger("live-refresh");
 
+/** DexScreener's batch lookup takes 30 addresses per call - see DexScreenerClient. */
+const ADDRESSES_PER_CALL = 30;
+const BUDGET_WINDOW_MS = 60_000;
+
 /** The shape GET /matches already has to hand for every token on the page. */
 export interface RefreshableToken {
   id: string;
@@ -13,39 +17,48 @@ export interface OnDemandLiveRefresherOptions {
   /**
    * How old a token's live reading may be before opening a page is worth a fresh lookup for it.
    * Set to the worker's live-price cadence: anything fresher than that is already as current as
-   * this deployment ever promises to be, so refreshing it would buy nothing.
+   * the worker keeps it, so a page load refreshing it would buy nothing. The live tick
+   * (GET /live/market) asks for a tighter bound per call; this is also the ceiling on that.
    */
   maxAgeMs: number;
   /** Hard cap on tokens per refresh - one page's worth, i.e. one batched DexScreener call. */
   limit: number;
+  /**
+   * Upstream calls this process may make per minute, across every reader. DexScreener allows
+   * 300 a minute on the batch endpoint; the worker spends some of that from its own host. Past
+   * the budget a refresh is skipped and readers get the worker's once-a-minute numbers, which is
+   * slower, never broken.
+   */
+  callsPerMinute?: number;
+  /** Where the refreshed tokens' matches get their peak raised - see refreshLiveMarketData. */
+  peakWindowDays?: number;
 }
 
 /**
- * Refreshes market data for the tokens on a page the moment that page is fetched.
+ * Refreshes market data for the tokens on screen, on request.
  *
- * Why this exists on top of the worker's periodic live-price job: that job only knows a token is
- * being looked at *after* GET /matches has stamped Token.lastViewedAt, and it only ticks once a
- * minute. So the first load of any page - including paging back to one visited earlier - showed
- * whatever the last scan or live tick left behind, for up to a full minute. Kicking a refresh off
- * from the request itself closes that gap; the dashboard polls, so the fresh numbers land on the
- * next poll a few seconds later.
+ * Two callers. A page load (GET /matches, GET /curated) fires one off without waiting, at the
+ * worker's cadence, so a page opened between worker ticks doesn't sit on old numbers. The live
+ * tick (GET /live/market), which an open dashboard polls every few seconds, waits for one at a
+ * much tighter bound so the numbers it returns are seconds old rather than up to a minute.
  *
- * Three things keep this from turning every poll into an upstream call:
+ * Four things keep this from turning every poll into an upstream call:
  *
- *  - Freshness. A token whose reading is younger than maxAgeMs is skipped outright, so the steady
- *    poll of a page that's already current costs nothing.
- *  - In-flight de-duplication. Concurrent requests for the same token (several users on the same
- *    page, or one user's poll overlapping the previous one) collapse into a single lookup.
- *  - A cooldown on *attempts*, not successes. This is the one that matters: a token DexScreener
- *    has no data for never gets liveDataAt written, so it would look stale forever and be retried
- *    on every single request. Recording the attempt is what stops that.
+ *  - Freshness. A token whose reading is younger than the bound is skipped outright.
+ *  - In-flight sharing. Concurrent requests for the same token (several users on the same page,
+ *    a page load and a tick together) share one lookup, and a waiting caller waits on it.
+ *  - A cooldown on *attempts*, not successes. A token DexScreener has no data for never gets
+ *    liveDataAt written, so it would look stale forever and be retried on every request.
+ *  - A per-minute call budget, so the number of readers can't push the API over DexScreener's
+ *    rate limit.
  *
- * The upshot is that upstream cost is bounded by how many distinct tokens are being viewed per
- * cooldown window, not by how many people are viewing them - the same bound the worker's job has.
+ * One instance per process (server.ts), shared by every route, so all of the above hold across
+ * routes rather than per route.
  */
 export class OnDemandLiveRefresher {
-  private readonly inFlight = new Set<string>();
+  private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly attemptedAt = new Map<string, number>();
+  private readonly calls: number[] = [];
 
   constructor(
     private readonly dexScreener: DexScreenerClient,
@@ -62,26 +75,74 @@ export class OnDemandLiveRefresher {
     });
   }
 
-  /** Awaitable form of {@link request}. Returns how many tokens it actually looked up. */
-  async refresh(tokens: readonly RefreshableToken[], now = Date.now()): Promise<number> {
-    const due = this.selectDue(tokens, now);
-    if (due.length === 0) return 0;
+  /**
+   * Refreshes whatever of `tokens` is older than `maxAgeMs` and waits - at most `timeoutMs` - for
+   * that and for any lookup already in flight for these tokens. Resolves true when anything was
+   * looked up or waited on, i.e. when re-reading the rows can find newer numbers. Never throws.
+   */
+  async refreshAndWait(
+    tokens: readonly RefreshableToken[],
+    { maxAgeMs, timeoutMs }: { maxAgeMs: number; timeoutMs: number },
+  ): Promise<boolean> {
+    const pending = new Set<Promise<unknown>>();
+    for (const token of tokens) {
+      const running = this.inFlight.get(token.mintAddress);
+      if (running) pending.add(running);
+    }
+    const own = this.start(tokens, Date.now(), maxAgeMs);
+    if (own) pending.add(own);
+    if (pending.size === 0) return false;
 
-    for (const token of due) {
-      this.inFlight.add(token.mintAddress);
-      this.attemptedAt.set(token.mintAddress, now);
-    }
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+      timer.unref?.();
+    });
     try {
-      const result = await refreshLiveMarketData(this.dexScreener, due);
-      logger.info("on-demand live refresh", { requested: result.requested, updated: result.updated });
-      return result.requested;
+      await Promise.race([Promise.allSettled(pending), timeout]);
     } finally {
-      for (const token of due) this.inFlight.delete(token.mintAddress);
+      clearTimeout(timer);
     }
+    return true;
   }
 
-  /** Which of these tokens are stale, not already being fetched, and off cooldown. Exposed for tests. */
-  selectDue(tokens: readonly RefreshableToken[], now: number): RefreshableToken[] {
+  /** Awaitable form of {@link request}. Returns how many tokens it actually looked up. */
+  async refresh(tokens: readonly RefreshableToken[], now = Date.now(), maxAgeMs?: number): Promise<number> {
+    return (await this.start(tokens, now, maxAgeMs)) ?? 0;
+  }
+
+  /**
+   * Picks what is due and starts one lookup for it, synchronously, so a caller knows at once
+   * whether there is anything to wait for. Null when nothing is due or the budget is spent.
+   */
+  private start(tokens: readonly RefreshableToken[], now: number, maxAgeMs?: number): Promise<number> | null {
+    const due = this.selectDue(tokens, now, maxAgeMs);
+    if (due.length === 0) return null;
+    if (!this.takeBudget(Math.ceil(due.length / ADDRESSES_PER_CALL), now)) return null;
+
+    for (const token of due) this.attemptedAt.set(token.mintAddress, now);
+    const lookup = refreshLiveMarketData(this.dexScreener, due, {
+      peakWindowDays: this.options.peakWindowDays,
+    })
+      .then((result) => {
+        logger.debug("on-demand live refresh", { requested: result.requested, updated: result.updated });
+        return result.requested;
+      })
+      .finally(() => {
+        for (const token of due) {
+          if (this.inFlight.get(token.mintAddress) === lookup) this.inFlight.delete(token.mintAddress);
+        }
+      });
+    for (const token of due) this.inFlight.set(token.mintAddress, lookup);
+    return lookup;
+  }
+
+  /**
+   * Which of these tokens are older than `maxAgeMs` (default: the configured bound, and never
+   * looser than it), not already being fetched, and off cooldown. Exposed for tests.
+   */
+  selectDue(tokens: readonly RefreshableToken[], now: number, maxAgeMs?: number): RefreshableToken[] {
+    const bound = Math.min(maxAgeMs ?? this.options.maxAgeMs, this.options.maxAgeMs);
     this.pruneAttempts(now);
     const due: RefreshableToken[] = [];
     const claimed = new Set<string>();
@@ -92,14 +153,27 @@ export class OnDemandLiveRefresher {
       if (claimed.has(token.mintAddress)) continue;
       if (this.inFlight.has(token.mintAddress)) continue;
       const attempted = this.attemptedAt.get(token.mintAddress);
-      if (attempted !== undefined && now - attempted < this.options.maxAgeMs) continue;
+      if (attempted !== undefined && now - attempted < bound) continue;
       const age = token.liveDataAt ? now - token.liveDataAt.getTime() : Infinity;
-      if (age < this.options.maxAgeMs) continue;
+      if (age < bound) continue;
 
       claimed.add(token.mintAddress);
       due.push(token);
     }
     return due;
+  }
+
+  /** Records `count` upstream calls if the last minute's budget has room for them. */
+  private takeBudget(count: number, now: number): boolean {
+    const budget = this.options.callsPerMinute;
+    if (budget === undefined) return true;
+    while (this.calls.length > 0 && now - this.calls[0]! >= BUDGET_WINDOW_MS) this.calls.shift();
+    if (this.calls.length + count > budget) {
+      logger.debug("live refresh over its call budget, skipping", { budget });
+      return false;
+    }
+    for (let i = 0; i < count; i += 1) this.calls.push(now);
+    return true;
   }
 
   /** Keeps the cooldown map from growing with every token this process has ever seen. */

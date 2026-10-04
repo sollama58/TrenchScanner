@@ -79,4 +79,41 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
     ]);
     expect(rows.every((r) => r.liveDataAt !== null)).toBe(true);
   });
+
+  it("raises a match's peak from a live reading above it, and only above the alert", async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet-${Date.now()}` } });
+    try {
+      const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-peak` } });
+      const alert = await prisma.tokenSnapshot.create({
+        data: { tokenId: token.id, priceUsd: 0.001, marketCapUsd: 1000 },
+      });
+      const match = await prisma.match.create({
+        data: { userId: user.id, filterId: filter.id, tokenId: token.id, snapshotId: alert.id, score: 50 },
+      });
+      let mcap = 900;
+      const dexScreener = {
+        getTokensByAddresses: async () => [
+          { mintAddress: token.mintAddress, marketCapUsd: mcap, priceUsd: 1 },
+        ],
+      } as unknown as DexScreenerClient;
+      const peakAfter = async (value: number, peakWindowDays?: number) => {
+        mcap = value;
+        await refreshLiveMarketData(dexScreener, [token], { peakWindowDays });
+        return (await prisma.match.findUniqueOrThrow({ where: { id: match.id } })).peakMcapUsd;
+      };
+
+      // Below the alert market cap: not a peak.
+      expect(await peakAfter(900, 30)).toBeNull();
+      // Without a window the caller leaves peaks to the worker.
+      expect(await peakAfter(5000)).toBeNull();
+      expect(await peakAfter(2500, 30)).toBe(2500);
+      // A lower reading never lowers it.
+      expect(await peakAfter(2000, 30)).toBe(2500);
+      expect(await peakAfter(3000, 30)).toBe(3000);
+    } finally {
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
 });

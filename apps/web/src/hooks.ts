@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { API_URL } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { API_URL, api, type Card, type LiveMarket } from "./api";
 import { cachedGet, peek } from "./cache";
 
 export interface Loadable<T> {
@@ -192,6 +192,68 @@ export function useNudgeStream(path: string, onEvent: () => void, enabled = true
   }, [path, enabled]);
 
   return live;
+}
+
+/** How often an open feed asks for fresh market caps. The API keeps each reading under 8s old. */
+const LIVE_TICK_MS = 10_000;
+
+/**
+ * Keeps the "Now" market cap on `cards` seconds old: polls GET /live/market for the tokens on
+ * screen every LIVE_TICK_MS while the tab is visible (and at once when they change or the tab
+ * comes back), and returns the cards with any newer reading laid over them. The full feed poll is
+ * much slower and stays the source of everything else on a card.
+ *
+ * A failed tick just leaves the last numbers up; the next one tries again.
+ */
+export function useLiveMarketCaps(cards: Card[] | undefined): Card[] | undefined {
+  const [live, setLive] = useState<Map<string, { marketCapUsd: number; at: string }>>(() => new Map());
+  const ids = cards ? [...new Set(cards.map((c) => c.tokenId))].sort().join(",") : "";
+
+  useEffect(() => {
+    if (!ids) return;
+    let stopped = false;
+    let busy = false;
+    const tick = () => {
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      api<LiveMarket>(`/live/market?tokens=${encodeURIComponent(ids)}`)
+        .then((res) => {
+          if (stopped) return;
+          setLive((prev) => {
+            const next = new Map(prev);
+            for (const t of res.tokens) next.set(t.id, { marketCapUsd: t.marketCapUsd, at: t.at });
+            return next;
+          });
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          busy = false;
+        });
+    };
+    tick();
+    const timer = window.setInterval(tick, LIVE_TICK_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [ids]);
+
+  return useMemo(() => {
+    if (!cards || live.size === 0) return cards;
+    return cards.map((card) => {
+      const reading = live.get(card.tokenId);
+      if (!reading) return card;
+      // The feed may already carry something newer (a scan snapshot, or a later poll).
+      const cardAt = card.currentMarketCapAt ? new Date(card.currentMarketCapAt).getTime() : 0;
+      if (new Date(reading.at).getTime() <= cardAt) return card;
+      return { ...card, currentMarketCapUsd: reading.marketCapUsd, currentMarketCapAt: reading.at };
+    });
+  }, [cards, live]);
 }
 
 /** Re-renders every `ms` - for countdowns and "3m ago" labels. */
