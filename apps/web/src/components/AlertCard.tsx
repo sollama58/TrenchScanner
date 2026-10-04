@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Card, Outcome } from "../api";
-import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
+import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon } from "./Icons";
 
 /** The 1-hour win window every alert is graded over. */
@@ -90,18 +90,7 @@ export function AlertCard({
       )}
       <header className="card-head">
         <div className={`avatar-wrap tone-${badge.tone}`}>
-          {card.token.imageUrl?.startsWith("https://") ? (
-            // Launcher-supplied URL: https only, and no referrer sent to whoever hosts it.
-            <img
-              className="avatar"
-              src={card.token.imageUrl}
-              alt=""
-              loading="lazy"
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <span className="avatar placeholder">{(card.token.symbol ?? "?").slice(0, 2)}</span>
-          )}
+          <TokenAvatar url={card.token.imageUrl} symbol={card.token.symbol} />
         </div>
         <div className="card-title">
           <div className="title-row">
@@ -233,5 +222,34 @@ export function AlertCard({
         </nav>
       </footer>
     </article>
+  );
+}
+
+/** The token's image as a small thumbnail, falling back to the original URL, then to its initials. */
+function TokenAvatar({ url, symbol }: { url: string | null; symbol: string | null }) {
+  // 0: thumbnail, 1: original URL, 2: give up.
+  const [attempt, setAttempt] = useState(0);
+  const thumb = url ? tokenThumb(url) : null;
+  const src = !url?.startsWith("https://")
+    ? null
+    : attempt === 0
+      ? thumb
+      : attempt === 1 && thumb !== url
+        ? url
+        : null;
+  if (!src) return <span className="avatar placeholder">{(symbol ?? "?").slice(0, 2)}</span>;
+  return (
+    // Launcher-supplied URL: https only, and no referrer sent to whoever hosts it.
+    <img
+      className="avatar"
+      src={src}
+      alt=""
+      width={40}
+      height={40}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={() => setAttempt((a) => a + 1)}
+    />
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ago, change, multiple, pct, shortAddress, tokenLabel, usd } from "./format";
+import { ago, change, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "./format";
 
 describe("format", () => {
   it("abbreviates dollar figures", () => {
@@ -30,5 +30,24 @@ describe("format", () => {
     expect(ago("2026-10-03T09:00:00Z", now)).toBe("3h ago");
     expect(shortAddress("So11111111111111111111111111111111111111112")).toBe("So11…1112");
     expect(tokenLabel({ symbol: "WIF", name: "dogwifhat", mintAddress: "x" })).toBe("$WIF");
+  });
+});
+
+describe("tokenThumb", () => {
+  const cid = "bafkreihxafgbuv2tw7icchpr27buj42hltprkndct4544qkrtsylsxqovy";
+  const thumb = `https://pump.mypinata.cloud/ipfs/${cid}?img-width=96&img-height=96&img-fit=cover`;
+
+  it("resizes IPFS gateway images through Pinata", () => {
+    expect(tokenThumb(`https://ipfs.io/ipfs/${cid}`)).toBe(thumb);
+    expect(tokenThumb(`https://cf-ipfs.com/ipfs/${cid}`)).toBe(thumb);
+    expect(tokenThumb(`https://gateway.pinata.cloud/ipfs/${cid}?filename=a.png`)).toBe(thumb);
+    expect(tokenThumb(`https://${cid}.ipfs.dweb.link/`)).toBe(thumb);
+  });
+
+  it("leaves other hosts and IPFS sub-paths alone", () => {
+    const tw = "https://pbs.twimg.com/media/abc.jpg";
+    expect(tokenThumb(tw)).toBe(tw);
+    const sub = `https://ipfs.io/ipfs/${cid}/image.png`;
+    expect(tokenThumb(sub)).toBe(sub);
   });
 });

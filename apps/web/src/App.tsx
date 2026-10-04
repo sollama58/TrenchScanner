@@ -1,35 +1,23 @@
-import { useEffect, useState } from "react";
-import type { Wallet } from "@wallet-standard/base";
-import { api, post, ApiError, type Subscription, type User, type WorkerHealth } from "./api";
-import { onWalletsChanged, signInWithWallet, solanaWallets } from "./wallet";
+import { Suspense, lazy, useEffect, useState } from "react";
+import { post, type Subscription, type User, type WorkerHealth } from "./api";
+import { cachedGet, invalidate } from "./cache";
 import { usePolling } from "./hooks";
 import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
-import { ModelTab } from "./tabs/ModelTab";
-import { FiltersTab } from "./tabs/FiltersTab";
-import {
-  BrainIcon,
-  LogoMark,
-  LogoutIcon,
-  PulseIcon,
-  RobotIcon,
-  ShieldIcon,
-  SlidersIcon,
-  TargetIcon,
-} from "./components/Icons";
+import { BrainIcon, LogoMark, LogoutIcon, PulseIcon, ShieldIcon, SlidersIcon } from "./components/Icons";
+import { loadFiltersTab, loadModelTab, loadSignIn, tabFromHash, type Tab } from "./routes";
 
-type Tab = "live" | "model" | "filters";
+// Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
+// returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
+const ModelTab = lazy(() => loadModelTab().then((m) => ({ default: m.ModelTab })));
+const FiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
+const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
   { id: "filters", label: "Filters", Icon: SlidersIcon },
 ];
-
-function tabFromHash(): Tab {
-  const h = window.location.hash.replace("#", "");
-  return h === "model" || h === "filters" ? h : "live";
-}
 
 type Session = { state: "loading" } | { state: "signed-out" } | { state: "signed-in"; user: User };
 
@@ -38,7 +26,8 @@ export function App() {
   const [tab, setTab] = useState<Tab>(tabFromHash);
 
   useEffect(() => {
-    api<User>("/auth/me")
+    // index.html already started this request; cachedGet adopts it rather than sending another.
+    cachedGet<User>("/auth/me", 10_000)
       .then((user) => setSession({ state: "signed-in", user }))
       .catch(() => setSession({ state: "signed-out" }));
     const onHash = () => setTab(tabFromHash());
@@ -54,6 +43,7 @@ export function App() {
 
   const signOut = async () => {
     await post("/auth/logout").catch(() => undefined);
+    invalidate();
     setSession({ state: "signed-out" });
   };
 
@@ -101,20 +91,26 @@ export function App() {
       </header>
 
       <main className="content">
-        {session.state === "loading" && (
-          <div className="boot">
-            <LogoMark size={40} />
-          </div>
-        )}
+        {session.state === "loading" && <Boot />}
         {session.state === "signed-out" && (
-          <SignIn onSignedIn={(user) => setSession({ state: "signed-in", user })} />
+          <Suspense fallback={<Boot />}>
+            <SignIn
+              onSignedIn={(user) => {
+                // Anything cached while signed out (401s aside, e.g. /health/worker) is stale now.
+                invalidate();
+                setSession({ state: "signed-in", user });
+              }}
+            />
+          </Suspense>
         )}
         {signedIn && (
           <AccessGate>
             <div className="tab-view" key={tab}>
-              {tab === "live" && <LiveTab goTo={goTo} />}
-              {tab === "model" && <ModelTab />}
-              {tab === "filters" && <FiltersTab />}
+              <Suspense fallback={<Boot />}>
+                {tab === "live" && <LiveTab goTo={goTo} />}
+                {tab === "model" && <ModelTab />}
+                {tab === "filters" && <FiltersTab />}
+              </Suspense>
             </div>
           </AccessGate>
         )}
@@ -129,7 +125,7 @@ export function App() {
 
 /** A pill for the scanner's health, from the public worker heartbeat. */
 function WorkerStatus() {
-  const { data } = usePolling(() => api<WorkerHealth>("/health/worker"), 60_000);
+  const { data } = usePolling<WorkerHealth>("/health/worker", 60_000);
   const scan = data?.jobs.find((j) => j.job === "scan");
   if (!data) return null;
   // Only the scan loop decides the pill: daily jobs (cleanup, outcome tracking) read as stale for
@@ -149,16 +145,11 @@ function WorkerStatus() {
 
 /** Feed routes answer 402 without a subscription; show that instead of three broken tabs. */
 function AccessGate({ children }: { children: React.ReactNode }) {
-  const { data, error } = usePolling(() => api<Subscription>("/subscription"), 300_000);
+  const { data, error } = usePolling<Subscription>("/subscription", 300_000);
   if (error && !data) {
     return <p className="error center">Couldn't check your access: {error.message}</p>;
   }
-  if (!data)
-    return (
-      <div className="boot">
-        <LogoMark size={40} />
-      </div>
-    );
+  if (!data) return <Boot />;
   if (!data.hasAccess) {
     return (
       <section className="panel paywall">
@@ -181,104 +172,10 @@ function AccessGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-const FEATURES = [
-  {
-    Icon: TargetIcon,
-    title: "Curated picks",
-    body: "A curator scans every new Pump.fun token and sends only the few worth a look.",
-  },
-  {
-    Icon: BrainIcon,
-    title: "A model that grades itself",
-    body: "It retrains on what actually doubled and only takes over when it beats the heuristic out of sample.",
-  },
-  {
-    Icon: RobotIcon,
-    title: "AI buy / no-buy",
-    body: "Each pick gets a second opinion from an AI reviewer, scored against real outcomes.",
-  },
-];
-
-function SignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
-  const [wallets, setWallets] = useState<readonly Wallet[]>(solanaWallets);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => onWalletsChanged(() => setWallets(solanaWallets())), []);
-
-  const connect = async (wallet: Wallet) => {
-    setBusy(wallet.name);
-    setError(null);
-    try {
-      onSignedIn(await signInWithWallet(wallet));
-    } catch (e) {
-      setError(
-        e instanceof ApiError && e.status === 401
-          ? "The signature didn't verify. Try again, and make sure the wallet shows this site's address."
-          : e instanceof Error
-            ? e.message
-            : String(e),
-      );
-    } finally {
-      setBusy(null);
-    }
-  };
-
+function Boot() {
   return (
-    <section className="signin">
-      <div className="signin-copy">
-        <span className="eyebrow brand-eyebrow">Solana memecoin scanner</span>
-        <h1>
-          Pump.fun alerts, <span className="grad">picked by a model</span> that grades itself.
-        </h1>
-        <p className="lead muted">
-          Every pick is measured against one goal in public: 2x on 75% of alerts, 4x on half, within an hour
-          of a realistic fill.
-        </p>
-        <div className="features">
-          {FEATURES.map(({ Icon, title, body }) => (
-            <div key={title} className="feature">
-              <span className="feature-icon">
-                <Icon size={18} />
-              </span>
-              <div>
-                <strong>{title}</strong>
-                <p className="muted small">{body}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="panel signin-box">
-        <h2>Sign in</h2>
-        <p className="muted small">Signing proves you own the wallet. It's free and sends no transaction.</p>
-        {wallets.length === 0 ? (
-          <div className="empty-state left">
-            <p>
-              No Solana wallet found in this browser. Install{" "}
-              <a href="https://phantom.app" target="_blank" rel="noreferrer">
-                Phantom
-              </a>{" "}
-              or{" "}
-              <a href="https://solflare.com" target="_blank" rel="noreferrer">
-                Solflare
-              </a>
-              , then reload.
-            </p>
-          </div>
-        ) : (
-          <div className="wallets">
-            {wallets.map((w) => (
-              <button key={w.name} className="wallet" disabled={busy !== null} onClick={() => connect(w)}>
-                <img src={w.icon} alt="" width={28} height={28} />
-                <span>{busy === w.name ? "Waiting for wallet…" : w.name}</span>
-                <span className="wallet-go">→</span>
-              </button>
-            ))}
-          </div>
-        )}
-        {error && <p className="error small">{error}</p>}
-      </div>
-    </section>
+    <div className="boot">
+      <LogoMark size={40} />
+    </div>
   );
 }

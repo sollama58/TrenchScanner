@@ -20,7 +20,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body !== undefined && !headers.has("content-type"))
     headers.set("content-type", "application/json");
-  const res = await fetch(`${API_URL}${path}`, { ...init, headers, credentials: "include" });
+  return parse<T>(await fetch(`${API_URL}${path}`, { ...init, headers, credentials: "include" }));
+}
+
+/** Reads an API response: the JSON body, or an ApiError for a non-2xx status. */
+export async function parse<T>(res: Response): Promise<T> {
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   let body: unknown;
