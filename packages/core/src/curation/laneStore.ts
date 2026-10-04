@@ -84,7 +84,10 @@ export async function liveCallRecords(
   models: readonly string[],
   since: Date,
   lanes: readonly Lane[],
+  /** Only calls of this tier (CuratedAlert.tier), e.g. "high" for the high-conviction record. */
+  opts: { tier?: string } = {},
 ): Promise<Map<string, CallRecord>> {
+  const tier = opts.tier ?? null;
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const out = new Map<string, CallRecord>();
   if (models.length === 0) return out;
@@ -110,6 +113,7 @@ export async function liveCallRecords(
       JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${earliest}
+        AND (${tier}::text IS NULL OR a."tier" = ${tier}::text)
     )
     SELECT model,
            count(*) AS calls,

@@ -1,5 +1,12 @@
 import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, scoredFromFeatures } from "./features.js";
-import { curationRankScore, evaluateCandidateHeuristic, inMcapBand, type McapBand } from "./curator.js";
+import {
+  curationRankScore,
+  evaluateCandidateHeuristic,
+  inMcapBand,
+  passesEventPreGate,
+  type McapBand,
+} from "./curator.js";
+import type { IsotonicCalibration } from "./calibration.js";
 import { CANDIDATE_WATCH_WINDOW_MINUTES, GOAL_MULTIPLE } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 import {
@@ -46,6 +53,47 @@ export interface TrainingRow {
    * replays the per-token alert cooldown production enforces.
    */
   tokenId?: string;
+  /**
+   * Which grading rule the label came from (CandidateOutcome.labelRule): LEGACY_LABEL_RULE rows
+   * were graded from the scan price, CURRENT_LABEL_RULE rows from a realistic fill. The two are
+   * different questions with different base rates (about 16% vs 7% doubling), so the trainer
+   * down-weights legacy rows (TrainOptions.legacyLabelWeight) and the exam grades only current
+   * ones. Omitted = current.
+   */
+  labelRule?: number;
+  /**
+   * Whether the row never fell through the disqualifying drawdown inside the hour (the
+   * two-stage model's first-stage label). Omitted = unknown; such rows sit out that stage.
+   */
+  survived?: boolean;
+}
+
+/** Graded from the scan price - every row anchored before the fill rule shipped on 2026-10-03. */
+export const LEGACY_LABEL_RULE = 1;
+/** Graded from a realistic fill (first price >= CANDIDATE_ENTRY_DELAY_SECONDS after the anchor, plus slippage). */
+export const CURRENT_LABEL_RULE = 2;
+
+/** Whether a row's label was graded under the current rule - see TrainingRow.labelRule. */
+export function isCurrentLabelRule(row: { labelRule?: number }): boolean {
+  return row.labelRule === undefined || row.labelRule >= CURRENT_LABEL_RULE;
+}
+
+/**
+ * One row's training weight: recency decay from the newest row (half-life in days, none when
+ * omitted) times the legacy-label discount. Shared by both families so "how much a row counts"
+ * means the same thing whichever one trains on it.
+ */
+export function rowWeight(
+  row: { anchorAt: Date; labelRule?: number },
+  newestMs: number,
+  opts: { recencyHalfLifeDays?: number; legacyLabelWeight?: number },
+): number {
+  let w = 1;
+  if (opts.recencyHalfLifeDays !== undefined && opts.recencyHalfLifeDays > 0) {
+    w *= 0.5 ** ((newestMs - row.anchorAt.getTime()) / (opts.recencyHalfLifeDays * 86_400_000));
+  }
+  if (opts.legacyLabelWeight !== undefined && !isCurrentLabelRule(row)) w *= opts.legacyLabelWeight;
+  return w;
 }
 
 export const CURATOR_MODEL_KIND = "weighted-logistic-v1";
@@ -74,17 +122,58 @@ export interface LogisticCuratorParams {
   transform?: FeatureTransform;
 }
 
+export const TWO_STAGE_MODEL_KIND = "two-stage-v1";
+
 /**
- * A stored curator model of either family. Readers switch on `kind`; a kind not listed in
+ * The survival-first model: a first stage predicts whether the token holds above the stop for the
+ * hour at all, a second - trained on the survivors only - whether it doubles; the score is their
+ * product. Most losses here are stop-outs rather than "went nowhere", and asking the two
+ * questions separately lets each stage specialize (what predicts a rug is not what predicts a
+ * run). Either stage is a plain logistic or boosted model.
+ */
+export interface TwoStageCuratorParams {
+  kind: typeof TWO_STAGE_MODEL_KIND;
+  /** P(no disqualifying drawdown within the hour). */
+  survival: Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;
+  /** P(clean 2x | survived). */
+  win: Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;
+  /** Emit when survival x win >= this. */
+  threshold: number;
+}
+
+/**
+ * What the training job adds to any shipped model beyond its cutoff: the high-conviction line
+ * and the recent-calls calibration. Absent on rows stored before either existed.
+ */
+export interface ServedCuratorExtras {
+  /**
+   * The probability at the high-conviction rank (CURATED_HIGH_CONVICTION_RANK of decision
+   * moments): calls at or above it are tiered "high" - the precision-curve top the feed is
+   * operated by. Absent = no tiering.
+   */
+  highConvictionThreshold?: number;
+  /** The 2x rate by confidence rank over the newest out-of-sample calls - see curation/calibration.ts. */
+  calibration?: IsotonicCalibration;
+}
+
+/**
+ * A stored curator model of any family. Readers switch on `kind`; a kind not listed in
  * SUPPORTED_CURATOR_MODEL_KINDS must be ignored, never half-applied.
  */
-export type TrainedCuratorParams = LogisticCuratorParams | BoostedCuratorParams;
+export type TrainedCuratorParams = (LogisticCuratorParams | BoostedCuratorParams | TwoStageCuratorParams) &
+  ServedCuratorExtras;
 
 /** A model before its emission cutoff is set (Omit over each family - Omit on a union would merge them). */
 export type UnthresholdedCuratorParams =
-  Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;
+  | Omit<LogisticCuratorParams, "threshold">
+  | Omit<BoostedCuratorParams, "threshold">
+  | Omit<TwoStageCuratorParams, "threshold">;
 
-export const SUPPORTED_CURATOR_MODEL_KINDS: readonly string[] = [CURATOR_MODEL_KIND, BOOSTED_MODEL_KIND];
+export const SUPPORTED_CURATOR_MODEL_KINDS: readonly string[] = [
+  CURATOR_MODEL_KIND,
+  BOOSTED_MODEL_KIND,
+  TWO_STAGE_MODEL_KIND,
+];
 
 /**
  * The model families the training job can fit: "logistic" (trainCurator below) and "gbdt"
@@ -94,14 +183,67 @@ export const SUPPORTED_CURATOR_MODEL_KINDS: readonly string[] = [CURATOR_MODEL_K
 export type CuratorLearner = "logistic" | "gbdt";
 export const CURATOR_LEARNERS: readonly CuratorLearner[] = ["logistic", "gbdt"];
 
-/** Trains one model of the given family. */
+export interface ModelTrainOptions extends TrainOptions {
+  learner?: CuratorLearner;
+  boosting?: BoostingOptions;
+  /** Train the survival-first two-stage model (TWO_STAGE_MODEL_KIND) with this family for both stages. */
+  twoStage?: boolean;
+}
+
+/** Trains one model of the given family (and shape). */
 export async function trainCuratorModel(
   rows: TrainingRow[],
-  opts: TrainOptions & { learner?: CuratorLearner; boosting?: BoostingOptions } = {},
+  opts: ModelTrainOptions = {},
 ): Promise<UnthresholdedCuratorParams> {
+  if (opts.twoStage) return trainTwoStageCurator(rows, opts);
+  return trainSingleStage(rows, opts);
+}
+
+async function trainSingleStage(
+  rows: TrainingRow[],
+  opts: ModelTrainOptions,
+): Promise<Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">> {
   return opts.learner === "gbdt"
-    ? trainBoostedCurator(rows, { ...opts.boosting, recencyHalfLifeDays: opts.recencyHalfLifeDays })
+    ? trainBoostedCurator(rows, {
+        ...opts.boosting,
+        recencyHalfLifeDays: opts.recencyHalfLifeDays,
+        legacyLabelWeight: opts.legacyLabelWeight,
+      })
     : trainCurator(rows, opts);
+}
+
+/** Fewest rows (and positives) a two-stage stage trains on before falling back to one stage. */
+const MIN_STAGE_ROWS = 50;
+const MIN_STAGE_POSITIVES = 5;
+
+/**
+ * The two-stage trainer - see TwoStageCuratorParams. Stage one trains on every row whose
+ * survival is known (label: survived); stage two on the survivors alone (label: the usual clean
+ * 2x). Rows with unknown survival are skipped by stage one and, when they won, count as survivors
+ * for stage two (a clean win never breached the stop). With too few rows for either stage the
+ * plain one-stage model of the same family is returned instead, so a recipe never ships nothing.
+ */
+export async function trainTwoStageCurator(
+  rows: TrainingRow[],
+  opts: ModelTrainOptions = {},
+): Promise<UnthresholdedCuratorParams> {
+  const known = rows.filter((r) => r.survived !== undefined || r.labelValue > 0);
+  const survivalRows = known.map((r) => ({ ...r, labelValue: (r.survived ?? r.labelValue > 0) ? 1 : 0 }));
+  const survivors = known.filter((r) => r.survived ?? r.labelValue > 0);
+  const survivalPositives = survivalRows.filter((r) => r.labelValue > 0).length;
+  const winPositives = survivors.filter((r) => r.labelValue > 0).length;
+  if (
+    survivalRows.length < MIN_STAGE_ROWS ||
+    survivalPositives < MIN_STAGE_POSITIVES ||
+    survivalRows.length - survivalPositives < MIN_STAGE_POSITIVES ||
+    survivors.length < MIN_STAGE_ROWS ||
+    winPositives < MIN_STAGE_POSITIVES
+  ) {
+    return trainSingleStage(rows, opts);
+  }
+  const survival = await trainSingleStage(survivalRows, opts);
+  const win = await trainSingleStage(survivors, opts);
+  return { kind: TWO_STAGE_MODEL_KIND, survival, win };
 }
 
 const LEARNING_RATE = 0.5;
@@ -188,6 +330,12 @@ export interface TrainOptions {
    * values (the stacked model's inputs are already ranks in [0, 1]).
    */
   transform?: FeatureTransform | null;
+  /**
+   * Weight multiplier for rows graded under LEGACY_LABEL_RULE (scan-price labels, a different
+   * and easier question than the fill-price one the feed is held to). Omitted = 1: legacy rows
+   * count in full.
+   */
+  legacyLabelWeight?: number;
 }
 
 /**
@@ -228,14 +376,8 @@ export async function trainCurator(
 
   const xs = rows.map((r) => vectorize(r.features, featureNames, means, stdevs, transform));
   const ys = rows.map((r) => (r.labelValue > 0 ? 1 : 0));
-  const sampleWeights = rows.map(() => 1);
-  if (opts.recencyHalfLifeDays !== undefined && opts.recencyHalfLifeDays > 0) {
-    const newestMs = maxAnchorMs(rows);
-    const halfLifeMs = opts.recencyHalfLifeDays * 86_400_000;
-    for (let i = 0; i < rows.length; i++) {
-      sampleWeights[i] = sampleWeights[i]! * 0.5 ** ((newestMs - rows[i]!.anchorAt.getTime()) / halfLifeMs);
-    }
-  }
+  const newestMs = maxAnchorMs(rows);
+  const sampleWeights = rows.map((r) => rowWeight(r, newestMs, opts));
   const totalWeight = sampleWeights.reduce((s, w) => s + w, 0);
 
   const dim = 2 * n;
@@ -288,6 +430,9 @@ export function scoreCandidateWithModel(
   features: Record<string, number | null | undefined>,
 ): number {
   if (params.kind === BOOSTED_MODEL_KIND) return scoreBoosted(params, features);
+  if (params.kind === TWO_STAGE_MODEL_KIND) {
+    return scoreCandidateWithModel(params.survival, features) * scoreCandidateWithModel(params.win, features);
+  }
   const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
   let z = params.bias;
   for (let j = 0; j < x.length; j++) z += params.weights[j]! * x[j]!;
@@ -407,13 +552,19 @@ interface CutoffRecord {
 /**
  * The cutoff rule. The targets are what the feed aims for, not a gate: alerts are never held
  * back just because nothing has reached them yet.
- *  - When some cutoffs met the targets on at least minSupport alerts: the LOWEST of them, since
- *    every alert that still meets the bar is one more tradeable call.
- *  - Otherwise: the cutoff with the best hit-rate record - the highest Wilson lower bound of its
- *    2x rate (z = max(1, confidenceZ)), 4x rate breaking ties. The bound, rather than the raw
- *    rate, keeps "best" from meaning "the luckiest 30 calls": it favours a strong rate on many
- *    alerts over a slightly stronger one on barely enough. The feed then sends its best calls,
- *    and the stored record shows how far they are from the targets.
+ *  - Cutoffs are walked from the STRICTEST down (fixed-sequence testing, as in Learn-then-Test):
+ *    while each judged cutoff's record (at least minSupport alerts) meets the targets, the walk
+ *    continues to the next looser one; it stops at the first that fails, and the last cutoff
+ *    that passed is chosen - the loosest one reached without ever stepping through a miss. The
+ *    older rule picked the lowest qualifying cutoff anywhere in the grid, which lets a cutoff
+ *    far below a run of misses qualify on a lucky stretch; a walk that must pass every stricter
+ *    cutoff first has a finite-sample guarantee the free search did not.
+ *  - When the strictest judged cutoff already misses: the cutoff with the best hit-rate record -
+ *    the highest Wilson lower bound of its 2x rate (z = max(1, confidenceZ)), 4x rate breaking
+ *    ties. The bound, rather than the raw rate, keeps "best" from meaning "the luckiest 30
+ *    calls": it favours a strong rate on many alerts over a slightly stronger one on barely
+ *    enough. The feed then sends its best calls, and the stored record shows how far they are
+ *    from the targets.
  */
 function chooseCutoff(records: CutoffRecord[], targets: PrecisionTargets): PrecisionCalibration {
   const point = (r: CutoffRecord, meets: boolean): PrecisionCalibration => ({
@@ -423,19 +574,16 @@ function chooseCutoff(records: CutoffRecord[], targets: PrecisionTargets): Preci
     winRatePct: (r.wins / r.n) * 100,
     goalRatePct: (r.goals / r.n) * 100,
   });
-  const judged = records.filter((r) => r.n >= targets.minSupport);
+  const judged = records.filter((r) => r.n >= targets.minSupport).sort((a, b) => b.cutoff - a.cutoff);
   if (judged.length === 0) {
     return { threshold: null, meetsTargets: false, support: 0, winRatePct: null, goalRatePct: null };
   }
-  let lowestQualifying: CutoffRecord | null = null;
+  let lastQualifying: CutoffRecord | null = null;
   for (const r of judged) {
-    if (
-      meetsTargets(r.wins, r.goals, r.n, targets) &&
-      (lowestQualifying === null || r.cutoff < lowestQualifying.cutoff)
-    )
-      lowestQualifying = r;
+    if (!meetsTargets(r.wins, r.goals, r.n, targets)) break;
+    lastQualifying = r;
   }
-  if (lowestQualifying !== null) return point(lowestQualifying, true);
+  if (lastQualifying !== null) return point(lastQualifying, true);
 
   const z = Math.max(1, targets.confidenceZ ?? 0);
   let best = judged[0]!;
@@ -576,6 +724,8 @@ export function topModelReasons(
   features: Record<string, number | null | undefined>,
   limit = 4,
 ): string[] {
+  // The two-stage model's reasons are its second stage's: "why it should run", given it survives.
+  if (params.kind === TWO_STAGE_MODEL_KIND) return topModelReasons(params.win, features, limit);
   let contributions: { name: string; value: number }[];
   if (params.kind === BOOSTED_MODEL_KIND) {
     contributions = [...boostedContributions(params, features)].map(([name, value]) => ({ name, value }));
@@ -613,6 +763,9 @@ export interface EvalFold {
   testTo: string;
   trainRows: number;
   testRows: number;
+  /** The decision moments the fold grades (event rows and pseudo-events inside the band), and their wins. */
+  decisionRows?: number;
+  decisionWins?: number;
   baseWinRatePct: number;
   /** Mean labelValue across ALL test rows - what blind, random emission would earn per alert. */
   meanLabelPerRow: number;
@@ -714,11 +867,49 @@ export interface WalkForwardOptions {
   featureNames?: readonly string[];
   /** The boosted family's hyperparameters (defaults: DEFAULT_BOOSTING_OPTIONS). */
   boosting?: BoostingOptions;
+  /** Train the two-stage survival-first shape - see TwoStageCuratorParams. */
+  twoStage?: boolean;
+  /** Weight multiplier for legacy-rule rows in every fold's training - see TrainOptions. */
+  legacyLabelWeight?: number;
+  /**
+   * Fewest WINS a fold's decision rows must hold before the fold is judged: a hit rate over three
+   * wins is noise. The fold count shrinks (down to one) until each fold has this many; a fold
+   * still short of it is skipped. Omitted = no floor.
+   */
+  minTestWins?: number;
+  /**
+   * Grade and calibrate on current-label-rule rows only (see TrainingRow.labelRule): rows graded
+   * from the scan price answer a different question than the feed is held to. Legacy rows still
+   * train (down-weighted by legacyLabelWeight). Default true.
+   */
+  currentLabelRuleOnly?: boolean;
 }
 
-/** Whether a row is a moment a live curator decides on - see WalkForwardOptions.decisionRowsOnly. */
-export function isDecisionRow(row: TrainingRow): boolean {
-  return row.sampleKind === undefined || row.sampleKind === "event";
+/**
+ * Whether a row is a moment a live curator decides on - see WalkForwardOptions.decisionRowsOnly.
+ * Event rows are, by construction. With a band, an hourly background sample whose stored
+ * features would have passed the event pre-gate (passesEventPreGate: in band, buyers in control
+ * of the hour, last five minutes not falling) is a PSEUDO-EVENT: a moment the live scan would
+ * have decided on had it been looking, graded by the same label. Event rows alone date from
+ * 2026-10-03; pseudo-events let the exam reach back over the whole window.
+ */
+export function isDecisionRow(row: TrainingRow, band?: McapBand): boolean {
+  if (row.sampleKind === undefined || row.sampleKind === "event") return true;
+  if (row.sampleKind !== "hourly" || band === undefined) return false;
+  const f = row.features;
+  const num = (k: string): number | undefined => {
+    const v = f[k];
+    return v === null || v === undefined ? undefined : v;
+  };
+  return passesEventPreGate(
+    {
+      marketCapUsd: num("mcapUsd") ?? row.anchorMcapUsd,
+      buys1h: num("buys1h"),
+      sells1h: num("sells1h"),
+      priceChange5mPct: num("priceChange5mPct"),
+    },
+    band,
+  );
 }
 
 function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
@@ -744,17 +935,32 @@ export async function walkForwardEvaluate(
   rows: TrainingRow[],
   opts: WalkForwardOptions,
 ): Promise<WalkForwardResult> {
-  const foldCount = opts.folds ?? 3;
   const minTrainRows = opts.minTrainRows ?? 300;
   const minTestRows = opts.minTestRows ?? 50;
   const minRowsToPromote = opts.minRowsToPromote ?? 1_500;
+  const currentRuleOnly = opts.currentLabelRuleOnly ?? true;
 
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
   const cooldownMs = opts.cooldownHours !== undefined ? opts.cooldownHours * 3_600_000 : undefined;
   const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
   const inBand = (r: TrainingRow) =>
     (!opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand)) &&
-    (!opts.decisionRowsOnly || isDecisionRow(r));
+    (!opts.decisionRowsOnly || isDecisionRow(r, opts.mcapBand)) &&
+    (!currentRuleOnly || isCurrentLabelRule(r));
+
+  // The folds tile the newest half of the DECISION rows, not of every row: the exam grades
+  // decision moments, and when those are a thin, recent slice of a window dominated by hourly
+  // background samples (or by legacy-rule rows), tiling every row put them all in the last fold
+  // and left the others with nothing to grade. Rows that are not decision rows still train every
+  // fold they precede.
+  const decisionSorted = sorted.filter(inBand);
+  const decisionWinsNewestHalf = decisionSorted
+    .slice(Math.floor(decisionSorted.length * 0.5))
+    .filter((r) => r.labelValue > 0).length;
+  const foldCount =
+    opts.minTestWins !== undefined && opts.minTestWins > 0
+      ? Math.max(1, Math.min(opts.folds ?? 3, Math.floor(decisionWinsNewestHalf / opts.minTestWins)))
+      : (opts.folds ?? 3);
 
   // Pass one: train each fold's model and score its test slice. Pass two (below) grades the
   // folds - it runs after all of them are scored because, with targets, a fold's cutoffs are
@@ -771,18 +977,18 @@ export async function walkForwardEvaluate(
   }
   const scoredFolds: ScoredFold[] = [];
 
-  if (sorted.length >= minTrainRows + minTestRows) {
-    // Test folds tile the newest 50% of history; the oldest 50% is the first fold's training
-    // floor. Each later fold trains on strictly more history, mirroring how the training job
-    // will actually behave as data accumulates.
-    const testStartIndex = Math.floor(sorted.length * 0.5);
-    const testRowsTotal = sorted.length - testStartIndex;
+  if (sorted.length >= minTrainRows + minTestRows && decisionSorted.length > 0) {
+    // Test folds tile the newest 50% of the decision rows; everything anchored before a fold's
+    // first row is its training floor. Each later fold trains on strictly more history,
+    // mirroring how the training job will actually behave as data accumulates.
+    const testStartIndex = Math.floor(decisionSorted.length * 0.5);
+    const testRowsTotal = decisionSorted.length - testStartIndex;
     const perFold = Math.floor(testRowsTotal / foldCount);
 
     for (let f = 0; f < foldCount; f++) {
       const start = testStartIndex + f * perFold;
-      const end = f === foldCount - 1 ? sorted.length : start + perFold;
-      const test = sorted.slice(start, end);
+      const end = f === foldCount - 1 ? decisionSorted.length : start + perFold;
+      const test = decisionSorted.slice(start, end);
       if (test.length === 0) continue;
       // Two leaks closed before training. A row's label is only known once its watch window
       // closes, so a training row anchored within that window of the fold's start was graded
@@ -791,20 +997,26 @@ export async function walkForwardEvaluate(
       // a token's earlier hours grades its memory of that token rather than its judgment.
       const testStartMs = test[0]!.anchorAt.getTime();
       const testTokens = new Set(test.flatMap((r) => (r.tokenId === undefined ? [] : [r.tokenId])));
-      const train = sorted
-        .slice(0, start)
-        .filter(
-          (r) =>
-            r.anchorAt.getTime() + labelWindowMs <= testStartMs &&
-            (r.tokenId === undefined || !testTokens.has(r.tokenId)),
-        );
+      const train = sorted.filter(
+        (r) =>
+          r.anchorAt.getTime() + labelWindowMs <= testStartMs &&
+          (r.tokenId === undefined || !testTokens.has(r.tokenId)),
+      );
       if (train.length < minTrainRows || test.length < minTestRows) continue;
+      if (
+        opts.minTestWins !== undefined &&
+        opts.minTestWins > 0 &&
+        test.filter((r) => r.labelValue > 0).length < opts.minTestWins
+      )
+        continue;
 
       const params = await trainCuratorModel(train, {
         recencyHalfLifeDays: opts.recencyHalfLifeDays,
         learner: opts.learner,
         featureNames: opts.featureNames,
         boosting: opts.boosting,
+        twoStage: opts.twoStage,
+        legacyLabelWeight: opts.legacyLabelWeight,
       });
       // Without targets the model plays the pace cutoff, calibrated on the band-filtered train
       // slice - a threshold ranked against unemittable rows grades a model production never
@@ -821,7 +1033,7 @@ export async function walkForwardEvaluate(
       // disproportionately past breakouts still sampled via the actively-viewed path), and
       // letting them into meanLabelPerRow would raise the "beat blind chance" bar with wins
       // nobody was allowed to pick.
-      const testEmittable = test.filter(inBand);
+      const testEmittable = test;
       const probabilities = testEmittable.map((row) => scoreCandidateWithModel(params, row.features));
       const ranks = confidenceRanks(probabilities);
       scoredFolds.push({
@@ -896,6 +1108,8 @@ export async function walkForwardEvaluate(
       testTo: test[test.length - 1]!.anchorAt.toISOString(),
       trainRows: fold.trainRows,
       testRows: test.length,
+      decisionRows: testEmittable.length,
+      decisionWins: testEmittable.filter((r) => r.labelValue > 0).length,
       baseWinRatePct:
         testEmittable.length > 0
           ? (testEmittable.filter((r) => r.labelValue > 0).length / testEmittable.length) * 100
@@ -956,7 +1170,16 @@ export function thresholdAtRank(
   rankCutoff: number,
 ): number | null {
   if (referenceRows.length === 0) return null;
-  const probabilities = referenceRows.map((r) => scoreCandidateWithModel(params, r.features));
+  return probabilityAtRank(
+    referenceRows.map((r) => scoreCandidateWithModel(params, r.features)),
+    rankCutoff,
+  );
+}
+
+/** thresholdAtRank over probabilities already scored: the lowest one whose rank clears the cutoff. */
+export function probabilityAtRank(scored: ArrayLike<number>, rankCutoff: number): number | null {
+  const probabilities = Array.from(scored);
+  if (probabilities.length === 0) return null;
   const ranks = confidenceRanks(probabilities);
   let cutoff: number | null = null;
   let best = -Infinity;
@@ -1039,7 +1262,12 @@ export function decidePromotion(
   const modelWon = (f: EvalFold): boolean => {
     if (f.model.emitted < minEmissionsToWin) return false;
     const modelRate = f.model.precisionPct ?? 0;
-    if (f.heuristic.emitted < minEmissionsToWin) return modelRate > 2 * f.baseWinRatePct;
+    if (f.heuristic.emitted < minEmissionsToWin) {
+      // Blind chance is beaten by the record's LOWER BOUND, not its point rate: six wins in
+      // sixty-four picks reads as 9.4% against a 4.3% base, and is one lucky pick from 7.8%.
+      const wins = Math.round((modelRate * f.model.emitted) / 100);
+      return wilsonLowerBound(wins, f.model.emitted, 1) * 100 > 2 * f.baseWinRatePct;
+    }
     const heuristicRate = f.heuristic.precisionPct ?? 0;
     if (modelRate !== heuristicRate) return modelRate > heuristicRate;
     return (f.model.avgLabel ?? 0) > (f.heuristic.avgLabel ?? 0);

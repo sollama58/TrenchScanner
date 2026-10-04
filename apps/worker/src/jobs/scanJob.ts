@@ -25,6 +25,8 @@ import {
   type DiscoveredCoin,
   type WatchlistCandidate,
   type TradeFlowFeatures,
+  type MarketContextFeatures,
+  type PricePathBook,
   parseTextScores,
 } from "@trenchscanner/core";
 import type { Prisma, Token } from "@prisma/client";
@@ -37,7 +39,8 @@ import { resolveWalletHoldings, computeEmptyPct, type WalletHoldings } from "./w
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
-import { recordCandidateSample } from "./candidateOutcomeJob.js";
+import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
+import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
@@ -74,7 +77,17 @@ export interface ScanDeps {
     /** Their order-flow features right now, when trade flow is on. */
     tradeFlow?(mint: string): TradeFlowFeatures | undefined;
   };
+  /** The per-mint price tape the price-path features read from (curation/pricePath.ts). Optional. */
+  pricePath?: PricePathBook;
 }
+
+/**
+ * How long the feed may go without banking a single training sample before the cycle logs an
+ * error: a sampler that has quietly stopped (the 13-day hole of September 2026 was found two
+ * weeks late) costs the models their newest data, and nothing else in the cycle's output says so.
+ */
+const SAMPLE_SILENCE_ALARM_MS = 30 * 60_000;
+const processStartedAt = Date.now();
 
 /**
  * Where a cycle's time went, stage by stage, in milliseconds - returned to the scheduler, which
@@ -463,6 +476,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   if ("error" in loaded) throw loaded.error;
   const { priors } = loaded;
 
+  // One reading of the market for the whole cycle - the same context on every sample.
+  const marketContext = await loadMarketContext(env, candidates.length);
+  deps.pricePath?.prune(new Date(Date.now() - 2 * 3_600_000));
+
   const perCandidateMatches: number[] = [];
   const curatedCycle = newCuratedCycle();
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
@@ -479,6 +496,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           curatedCycle,
           env,
           deps.stream?.tradeFlow?.(candidate.mintAddress),
+          deps.pricePath,
+          marketContext,
         ),
       );
     } catch (err) {
@@ -502,19 +521,39 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // Match peaks are no longer rolled forward here - they have their own job (createMatchPeaksRunner)
   // so they stop holding up the next cycle.
 
+  // Data continuity: what the cycle banked for the models, and an alarm when nothing has been
+  // banked for a while (the process has to have been up that long first).
+  const samples = takeSampleStats();
+  const samplesBanked = (samples.banked.hourly ?? 0) + (samples.banked.event ?? 0);
+  const silentSince = samples.lastBankedAt?.getTime() ?? processStartedAt;
+  if (Date.now() - silentSince > SAMPLE_SILENCE_ALARM_MS) {
+    logger.error("no training samples banked for 30 minutes - the models are not learning", {
+      lastBankedAt: samples.lastBankedAt,
+      inBand: candidates.length,
+    });
+  }
+
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,
     curated: curatedEmitted,
+    samplesBanked: samples.banked,
     // Per-METHOD invocation counts, which is what a metered RPC plan actually bills on - batching
     // collapses these into far fewer HTTP requests, so nothing else in this log reveals the real
     // number. Reset each read, so this is the cycle's own spend.
     rpcCalls: deps.helius.takeCallStats(),
     stagesMs,
   });
-  return { stagesMs, tracked: tracked.length, inBand: candidates.length, matches: matchCount };
+  return {
+    stagesMs,
+    tracked: tracked.length,
+    inBand: candidates.length,
+    matches: matchCount,
+    samplesBanked,
+    pricePathMints: deps.pricePath?.size ?? 0,
+  };
 }
 
 /**
@@ -967,6 +1006,8 @@ async function processCandidate(
   curatedCycle: CuratedCycle,
   env: Env,
   tradeFlow?: TradeFlowFeatures,
+  pricePath?: PricePathBook,
+  marketContext?: MarketContextFeatures,
 ): Promise<number> {
   const existingToken = prior.token;
   const onChain = withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env);
@@ -996,6 +1037,13 @@ async function processCandidate(
     },
   );
   if (tradeFlow) scored.tradeFlow = tradeFlow;
+  // The price tape: this cycle's observation goes on first, then the path features read back
+  // over the last hour of it.
+  if (pricePath) {
+    pricePath.observe(candidate.mintAddress, new Date(), scored.priceUsd, scored.holderCount ?? null);
+    scored.pricePath = pricePath.features(candidate.mintAddress);
+  }
+  if (marketContext) scored.marketContext = marketContext;
   // Claude's read of the launch's text, once the text scorer has made one (ai/textScorer.ts).
   const textScores = parseTextScores(existingToken?.aiTextScores);
   if (textScores) scored.textScores = textScores;

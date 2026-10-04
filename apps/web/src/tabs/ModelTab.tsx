@@ -5,6 +5,7 @@ import {
   type Leaderboard,
   type LeaderboardEntry,
   type ModelInsights,
+  type FeatureHealthReport,
   type ModelRun,
   type AiJudgeState,
 } from "../api";
@@ -21,6 +22,7 @@ const LEARNER_NAME = { logistic: "Logistic regression", gbdt: "Gradient-boosted 
 
 const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
   stacked: "Stacked on the others",
+  blend: "The others' ranks averaged",
   rules: "Hand-tuned rules",
   learner: "Trained model",
 };
@@ -193,6 +195,8 @@ export function ModelTab() {
           )}
         </section>
 
+        <FeatureHealthPanel data={data} now={now} />
+
         <section className="panel">
           <span className="eyebrow">Baseline</span>
           <h3>What a model has to beat</h3>
@@ -228,6 +232,84 @@ export function ModelTab() {
 
 function runName(run: ModelRun | undefined): string | null {
   return run?.contestantName ?? null;
+}
+
+/** How many signals the health panel lists at each end. */
+const HEALTH_ROWS = 6;
+
+/**
+ * The inputs' health from the newest training run: which signals are mostly missing (a wire
+ * that has come loose), and which carry the most signal on their own; plus the data-continuity
+ * line - when the newest training sample was banked.
+ */
+function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number }) {
+  const health = data.featureHealth ?? null;
+  const newest = data.samples.newestAnchorAt ? new Date(data.samples.newestAnchorAt).getTime() : null;
+  const stale = newest !== null && now - newest > 30 * 60_000;
+  const mostlyNull = health
+    ? health.features.filter((f) => f.nullRatePct >= 50).sort((a, b) => b.nullRatePct - a.nullRatePct)
+    : [];
+  const lift = (f: FeatureHealthReport["features"][number]) =>
+    Math.max(f.topDecileLift ?? 0, f.bottomDecileLift ?? 0);
+  const strongest = health
+    ? health.features
+        .filter((f) => f.topDecileLift !== null)
+        .sort((a, b) => lift(b) - lift(a))
+        .slice(0, HEALTH_ROWS)
+    : [];
+  return (
+    <section className="panel">
+      <span className="eyebrow">Inputs</span>
+      <h3>Signal health</h3>
+      <p className={`small ${stale || newest === null ? "bad" : "muted"}`}>
+        {newest === null
+          ? "No training samples banked in the last week."
+          : `Newest training sample ${ago(new Date(newest), now)}; ${(data.samples.lastHourRows ?? 0).toLocaleString()} in the last hour.`}
+        {stale && " Nothing banked for over 30 minutes - the models are not learning."}
+      </p>
+      {health ? (
+        <>
+          <p className="muted small">
+            Measured on {health.rows.toLocaleString()} decision moments in the newest run (base 2x rate{" "}
+            {pct(health.baseWinRatePct, 1)}). Lift is a signal's top or bottom tenth's 2x rate over the base;
+            1 is no signal.
+          </p>
+          <table className="compact">
+            <thead>
+              <tr>
+                <th>Strongest on its own</th>
+                <th className="r">Top tenth</th>
+                <th className="r">Bottom tenth</th>
+                <th className="r">Missing</th>
+              </tr>
+            </thead>
+            <tbody>
+              {strongest.map((f) => (
+                <tr key={f.feature}>
+                  <td>{f.label}</td>
+                  <td className="r num">{f.topDecileLift?.toFixed(2)}x</td>
+                  <td className="r num">{f.bottomDecileLift?.toFixed(2)}x</td>
+                  <td className="r num muted">{pct(f.nullRatePct, 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {mostlyNull.length > 0 && (
+            <p className="small muted">
+              Mostly missing:{" "}
+              {mostlyNull
+                .slice(0, HEALTH_ROWS * 2)
+                .map((f) => `${f.label} (${pct(f.nullRatePct, 0)})`)
+                .join(", ")}
+              {mostlyNull.length > HEALTH_ROWS * 2 ? ` and ${mostlyNull.length - HEALTH_ROWS * 2} more` : ""}.
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="empty">Appears after the first training run.</p>
+      )}
+    </section>
+  );
 }
 
 const STATUS_TEXT: Record<LeaderboardEntry["status"], { text: string; tone: string }> = {
@@ -292,6 +374,12 @@ function LeaderboardPanel({
                 Avg doublings
               </th>
               <th className="r">Backtest 2x / 4x</th>
+              <th
+                className="r"
+                title="Live 2x rate of its high-conviction calls alone (its top half-percent of moments)"
+              >
+                High-conv 2x
+              </th>
               <th>Status</th>
               <th />
             </tr>
@@ -337,10 +425,24 @@ function LeaderboardPanel({
                     {exam.graded > 0 ? `${pct(exam.winRatePct)} / ${pct(exam.goalRatePct)}` : "–"}
                     {exam.graded > 0 && <span className="faint"> · {exam.graded}</span>}
                   </td>
+                  <td
+                    className={`r num ${e.highConviction ? rateTone(e.highConviction.winRatePct, t.hitRate2xPct) : "muted"}`}
+                  >
+                    {e.highConviction ? pct(e.highConviction.winRatePct) : "–"}
+                    {e.highConviction && <span className="faint"> · {e.highConviction.graded}</span>}
+                  </td>
                   <td>
                     <span className={`badge ${STATUS_TEXT[e.status].tone}`}>
                       {STATUS_TEXT[e.status].text}
                     </span>
+                    {e.composite.warmingUp && e.status === "calling" && (
+                      <span
+                        className="badge neutral"
+                        title={`Fewer than ${board.scoring.minLiveCallsToRank ?? 50} graded live calls: ranked behind seasoned models until then`}
+                      >
+                        warming up
+                      </span>
+                    )}
                   </td>
                   <td className="r">
                     <label

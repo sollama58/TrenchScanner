@@ -129,6 +129,10 @@ export interface CuratedMeta {
   model?: string | null;
   modelName?: string | null;
   confidence: number;
+  /** "high" for a high-conviction call (the model's top half-percent of moments), "standard" otherwise; null on rules calls and older rows. */
+  tier?: string | null;
+  /** The 2x rate of recent out-of-sample calls ranked like this one, in percent, at emission. */
+  calibratedPct?: number | null;
   reasons: string[];
   alertedAt: string;
   outcome: Outcome;
@@ -141,6 +145,8 @@ export interface ModelCall {
   model: string | null;
   modelName: string | null;
   confidence: number;
+  tier?: string | null;
+  calibratedPct?: number | null;
   alertedAt: string;
 }
 
@@ -357,6 +363,7 @@ export interface ModelInsights {
     total: GradedRates;
     bySource: (GradedRates & { source: string })[];
     byModel: (GradedRates & { model: string })[];
+    byTier?: (GradedRates & { tier: string })[];
   };
   shadowEmissions: { total: GradedRates; bySource: (GradedRates & { source: string })[] };
   curatorConfidenceBands: (GradedRates & { side: "heuristic" | "model"; band: number })[];
@@ -373,7 +380,14 @@ export interface ModelInsights {
     probability2xBands: (GradedRates & { band: number })[];
   };
   aiJudge: AiJudgeState;
-  samples: { byKind: (GradedRates & { kind: string })[] };
+  samples: {
+    byKind: (GradedRates & { kind: string })[];
+    /** When the newest training sample was banked (null = none in a week), and how many landed in the last hour. */
+    newestAnchorAt?: string | null;
+    lastHourRows?: number;
+  };
+  /** Per-feature null rates and decile lifts from the newest training run, or null before one. */
+  featureHealth?: FeatureHealthReport | null;
   recentAiReviews: AiReviewRow[];
 }
 
@@ -434,7 +448,20 @@ export interface RecordSummary {
   score: number | null;
 }
 
-export type ContestantRole = "rules" | "learner" | "stacked";
+export type ContestantRole = "rules" | "learner" | "stacked" | "blend";
+
+export interface FeatureHealthReport {
+  rows: number;
+  baseWinRatePct: number;
+  features: {
+    feature: string;
+    label: string;
+    nullRatePct: number;
+    topDecileLift: number | null;
+    bottomDecileLift: number | null;
+    present: number;
+  }[];
+}
 
 export interface LeaderboardEntry {
   rank: number;
@@ -444,8 +471,23 @@ export interface LeaderboardEntry {
   role: ContestantRole;
   isDefault: boolean;
   status: "calling" | "silent" | "untrained";
-  composite: { score: number | null; liveWeight: number; live: RecordSummary; exam: RecordSummary };
-  model: { id: string; trainedAt: string; trainingRows: number; cutoffMeetsTargets: boolean | null } | null;
+  composite: {
+    score: number | null;
+    liveWeight: number;
+    /** Fewer graded live calls than the board's minLiveCallsToRank: shown, ranked behind the seasoned. */
+    warmingUp?: boolean;
+    live: RecordSummary;
+    exam: RecordSummary;
+  };
+  /** Its live record on high-conviction calls alone; null with none graded. */
+  highConviction?: RecordSummary | null;
+  model: {
+    id: string;
+    trainedAt: string;
+    trainingRows: number;
+    cutoffMeetsTargets: boolean | null;
+    calibrationCalls?: number;
+  } | null;
   /** Evolving seats: the recipe holding the seat now (generation 0 = a founding recipe). */
   lane: { generation: number; parentName: string | null; bornAt: string } | null;
 }
@@ -468,6 +510,7 @@ export interface Leaderboard {
   scoring: {
     weights: { winRate: number; goalRate: number; avgReturn: number };
     livePivotCalls: number;
+    minLiveCallsToRank?: number;
     summary: string;
   };
   defaultModel: string;

@@ -10,9 +10,12 @@ import {
   withLanes,
   CONSENSUS_CONTESTANT,
   LIVE_EVIDENCE_PIVOT,
+  MIN_LIVE_CALLS_TO_RANK,
   COMPOSITE_WEIGHTS,
   NEVER_EMIT_THRESHOLD,
+  summarizeRecord,
   type CompositeScore,
+  type RecordSummary,
   type ContestantSpec,
   type Env,
   type Lane,
@@ -211,6 +214,8 @@ export interface LeaderboardEntry {
    */
   status: "calling" | "silent" | "untrained";
   composite: CompositeScore;
+  /** Its live record on high-conviction calls alone (CuratedAlert.tier = "high"); null with none graded. */
+  highConviction: RecordSummary | null;
   /** Evolving seats only: the recipe holding the seat now, and where it came from. */
   lane: { generation: number; parentName: string | null; bornAt: Date } | null;
   model: {
@@ -219,6 +224,8 @@ export interface LeaderboardEntry {
     trainingRows: number;
     /** Whether its cutoff met both hit-rate targets in its exam (else it calls at its best effort). */
     cutoffMeetsTargets: boolean | null;
+    /** How many recent out-of-sample calls its calibration table rests on (0 = none). */
+    calibrationCalls: number;
   } | null;
 }
 
@@ -228,6 +235,8 @@ export interface Leaderboard {
   scoring: {
     weights: typeof COMPOSITE_WEIGHTS;
     livePivotCalls: number;
+    /** Graded live calls a contestant needs before it is ranked on its score. */
+    minLiveCallsToRank: number;
     summary: string;
   };
   defaultModel: string;
@@ -265,11 +274,17 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
   const state = await contestState(env);
-  const [live, history] = await Promise.all([
+  const [live, liveHigh, history] = await Promise.all([
     liveCallRecords(
       state.roster.map((c) => c.id),
       since,
       state.lanes,
+    ),
+    liveCallRecords(
+      state.roster.map((c) => c.id),
+      since,
+      state.lanes,
+      { tier: "high" },
     ),
     prisma.curatorLane.findMany({
       orderBy: { bornAt: "desc" },
@@ -308,6 +323,10 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       isDefault: spec.id === state.defaultModel,
       status,
       composite: compositeScore(live.get(spec.id) ?? emptyRecord(), exam, targets),
+      highConviction: (() => {
+        const record = liveHigh.get(spec.id);
+        return record && record.graded > 0 ? summarizeRecord(record, targets) : null;
+      })(),
       lane: (() => {
         const lane = laneBySlot.get(spec.id);
         return lane
@@ -320,6 +339,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
             trainedAt: model.trainedAt,
             trainingRows: model.trainingRows,
             cutoffMeetsTargets: model.metrics.precisionCalibration?.meetsTargets ?? null,
+            calibrationCalls: model.metrics.calibrationCalls ?? 0,
           }
         : null,
     };
@@ -334,9 +354,11 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     scoring: {
       weights: COMPOSITE_WEIGHTS,
       livePivotCalls: LIVE_EVIDENCE_PIVOT,
+      minLiveCallsToRank: MIN_LIVE_CALLS_TO_RANK,
       summary:
         "0-100: 45% the 2x hit rate vs target, 30% the 4x rate vs target (both as lower confidence bounds), " +
-        `25% average return per call. Blends the backtest with live calls; live counts half at ${LIVE_EVIDENCE_PIVOT} graded calls.`,
+        `25% average return per call. Blends the backtest with live calls; live counts half at ${LIVE_EVIDENCE_PIVOT} graded calls. ` +
+        `Models with fewer than ${MIN_LIVE_CALLS_TO_RANK} graded live calls are still warming up and rank below the rest.`,
     },
     defaultModel: state.defaultModel,
     entries: rankByComposite(unranked).map((entry, i) => ({ rank: i + 1, ...entry })),

@@ -8,6 +8,7 @@ import {
   computeOutcomeLabels,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
+  CURRENT_LABEL_RULE,
   type Env,
   type DexScreenerClient,
   type ScoredToken,
@@ -104,6 +105,7 @@ export async function recordCandidateSample(
       anchorPriceUsd: scored.priceUsd,
       anchorMcapUsd: scored.marketCapUsd,
       sampleKind: kind,
+      labelRule: CURRENT_LABEL_RULE,
       features: buildCandidateFeatures(scored) as Prisma.InputJsonValue,
       score: scored.score.total,
       nextCheckAt: new Date(anchorAt.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
@@ -115,7 +117,35 @@ export async function recordCandidateSample(
       peakBeforeStopPriceUsd: agg.peakBeforeStopPriceUsd,
     },
   });
+  noteSampleBanked(kind, anchorAt.getTime());
   return { id: row.id, created: true };
+}
+
+/** Rows banked since the counters were last read, by kind - the scan cycle's data-continuity line. */
+let bankedSinceRead: Record<string, number> = {};
+let lastBankedAtMs: number | null = null;
+
+function noteSampleBanked(kind: CandidateSampleKind, atMs: number): void {
+  bankedSinceRead[kind] = (bankedSinceRead[kind] ?? 0) + 1;
+  lastBankedAtMs = atMs;
+}
+
+/**
+ * The training rows banked since the last read (hourly and event rows are what the models train
+ * on), and when the newest of any kind was banked. Read by the scan cycle for its heartbeat and
+ * its continuity alarm: a feed that stops banking samples stops learning, and nothing else in
+ * the cycle's output says so.
+ */
+export function takeSampleStats(): { banked: Record<string, number>; lastBankedAt: Date | null } {
+  const banked = bankedSinceRead;
+  bankedSinceRead = {};
+  return { banked, lastBankedAt: lastBankedAtMs === null ? null : new Date(lastBankedAtMs) };
+}
+
+/** Test hook. */
+export function resetSampleStats(): void {
+  bankedSinceRead = {};
+  lastBankedAtMs = null;
 }
 
 /**

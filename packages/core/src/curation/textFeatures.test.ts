@@ -47,7 +47,8 @@ describe("text features", () => {
     expect(features.textCopycatRisk).toBe(0.9);
     expect(features.textScamSignals).toBe(0.2);
     expect(scoredFromFeatures(features, 1, 100_000).textScores).toEqual(scored.textScores);
-    expect(CANDIDATE_FEATURE_NAMES.slice(-4)).toEqual([
+    const start = CANDIDATE_FEATURE_NAMES.indexOf("textCopycatRisk");
+    expect(CANDIDATE_FEATURE_NAMES.slice(start, start + 4)).toEqual([
       "textCopycatRisk",
       "textNarrativeStrength",
       "textMemeAppeal",

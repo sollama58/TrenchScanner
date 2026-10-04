@@ -270,6 +270,10 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
     model: alert.model,
     modelName: alert.modelName ?? (alert.model ? (contestantSpec(alert.model)?.name ?? alert.model) : null),
     confidence: alert.confidence,
+    /** "high" for a high-conviction call, "standard" otherwise, null on rules calls and older rows. */
+    tier: alert.tier,
+    /** The 2x rate of recent out-of-sample calls ranked like this one at emission, in percent. */
+    calibratedPct: alert.calibratedPct,
     // An "AI: ..." line was how a gate-mode reviewer's reasoning reached public cards; that is now
     // admin-only (see attachAiReviewsForAdmin), so any such line already stored is held back too.
     reasons: alert.reasons.filter((r) => !r.startsWith("AI: ")),
@@ -429,6 +433,8 @@ export interface ModelCall {
   model: string | null;
   modelName: string | null;
   confidence: number;
+  tier: string | null;
+  calibratedPct: number | null;
   alertedAt: Date;
 }
 
@@ -461,6 +467,8 @@ export function groupSameTokenCalls<
     model: string | null;
     modelName: string | null;
     confidence: number;
+    tier?: string | null;
+    calibratedPct?: number | null;
   },
 >(rowsNewestFirst: T[], windowMs: number): CallGroup<T>[] {
   const open = new Map<string, { newest: T; rows: T[] }>();
@@ -488,6 +496,8 @@ export function groupSameTokenCalls<
         model: r.model,
         modelName: r.modelName ?? (r.model ? (contestantSpec(r.model)?.name ?? r.model) : null),
         confidence: r.confidence,
+        tier: r.tier ?? null,
+        calibratedPct: r.calibratedPct ?? null,
         alertedAt: r.createdAt,
       })),
     };

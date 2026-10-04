@@ -270,6 +270,30 @@ export async function buildHitRateReport(
     GROUP BY 1
     ORDER BY calls DESC`;
 
+  // The same calls by conviction tier (CuratedAlert.tier): the high-conviction tier is the
+  // precision-curve top the feed is operated by, so its own rate is the one to watch.
+  const tierRows = prisma.$queryRaw<(RawCounts & { tier: string })[]>`
+    SELECT COALESCE(a."tier", 'untiered') AS tier,
+           count(*) AS calls,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
+                              AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
+           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop
+    FROM "CuratedAlert" a
+    LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+    GROUP BY 1
+    ORDER BY 1`;
+
+  // Data continuity: when the newest training sample was banked, and how many in the last hour.
+  // A feed that has stopped banking samples has stopped learning.
+  const continuityRows = prisma.$queryRaw<{ newest: Date | null; last_hour: bigint }[]>`
+    SELECT max("anchorAt") AS newest,
+           count(*) FILTER (WHERE "anchorAt" >= now() - INTERVAL '1 hour') AS last_hour
+    FROM "CandidateOutcome"
+    WHERE "sampleKind" IN ('hourly', 'event') AND "anchorAt" >= now() - INTERVAL '7 days'`;
+
   const shadowRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
     SELECT s."source" AS source,
            count(*) AS calls,
@@ -407,18 +431,31 @@ export async function buildHitRateReport(
     GROUP BY 1
     ORDER BY 1`;
 
-  const [curated, byModel, shadow, confidence, ai, aiProbability, aiPlaybooks, matches, samples] =
-    await Promise.all([
-      curatedRows,
-      modelRows,
-      shadowRows,
-      confidenceRows,
-      aiRows,
-      aiProbabilityRows,
-      aiPlaybookRows,
-      matchRows,
-      sampleRows,
-    ]);
+  const [
+    curated,
+    byModel,
+    shadow,
+    confidence,
+    ai,
+    aiProbability,
+    aiPlaybooks,
+    matches,
+    samples,
+    byTier,
+    continuity,
+  ] = await Promise.all([
+    curatedRows,
+    modelRows,
+    shadowRows,
+    confidenceRows,
+    aiRows,
+    aiProbabilityRows,
+    aiPlaybookRows,
+    matchRows,
+    sampleRows,
+    tierRows,
+    continuityRows,
+  ]);
 
   const rated = (c: GradedCounts, min?: number) => withRates(c, targets, min);
 
@@ -469,6 +506,10 @@ export async function buildHitRateReport(
         const counts = toCounts(r);
         return { model: r.model, ...counts, ...rated(counts) };
       }),
+      byTier: byTier.map((r) => {
+        const counts = toCounts(r);
+        return { tier: r.tier, ...counts, ...rated(counts) };
+      }),
     },
     shadowEmissions: {
       total: rated(sumCounts(shadowCounts)),
@@ -504,6 +545,10 @@ export async function buildHitRateReport(
     },
     samples: {
       byKind: samples.map((r) => ({ kind: r.kind, ...rated(toCounts(r)) })),
+      // When the newest hourly/event sample was banked and how many landed in the last hour: the
+      // continuity check (null newest = nothing in a week).
+      newestAnchorAt: continuity[0]?.newest ?? null,
+      lastHourRows: Number(continuity[0]?.last_hour ?? 0),
     },
   };
 }

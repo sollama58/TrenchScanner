@@ -142,7 +142,9 @@ describe("order-flow features in the vector", () => {
     // After every feature that predates them; only the later text-read features follow.
     const start = names.indexOf(TRADE_FLOW_FEATURES[0]);
     expect(names.slice(start, start + TRADE_FLOW_FEATURES.length)).toEqual([...TRADE_FLOW_FEATURES]);
-    expect(names.slice(start + TRADE_FLOW_FEATURES.length).every((n) => n.startsWith("text"))).toBe(true);
+    expect(names.slice(start + TRADE_FLOW_FEATURES.length).every((n) => /^(text|path|mkt|ctx)/.test(n))).toBe(
+      true,
+    );
     const scored = {
       mintAddress: MINT,
       priceUsd: 1,

@@ -1,4 +1,5 @@
 import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
+import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
 import type { TextScores } from "./curation/textFeatures.js";
 /**
  * Domain types shared across data source clients, the scoring engine, the
@@ -173,6 +174,10 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   tradeFlow?: TradeFlowFeatures;
   /** Claude's read of the launch's name and description (Token.aiTextScores), once it has one. */
   textScores?: TextScores;
+  /** The shape of the recent price path from the scan's own tape (curation/pricePath.ts). */
+  pricePath?: PricePathFeatures;
+  /** What the market as a whole is doing right now, and the clock (curation/pricePath.ts). */
+  marketContext?: MarketContextFeatures;
 }
 
 export interface RugScreenResult {

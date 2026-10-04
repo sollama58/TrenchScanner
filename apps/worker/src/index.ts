@@ -1,6 +1,7 @@
 import "./bootstrap-env.js"; // must run before any @trenchscanner/core import - see file comment
 import {
   loadEnv,
+  PricePathBook,
   createLogger,
   prisma,
   DexScreenerClient,
@@ -45,6 +46,8 @@ async function main() {
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     stream,
+    // The per-mint price tape behind the price-path model inputs - in memory, bounded.
+    pricePath: new PricePathBook(),
   };
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because

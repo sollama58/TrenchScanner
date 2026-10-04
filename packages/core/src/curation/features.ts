@@ -1,6 +1,12 @@
 import type { ScoredToken } from "../types.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
 import type { TextScores } from "./textFeatures.js";
+import {
+  EMPTY_MARKET_CONTEXT,
+  EMPTY_PRICE_PATH,
+  type MarketContextFeatures,
+  type PricePathFeatures,
+} from "./pricePath.js";
 
 /**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
@@ -89,6 +95,26 @@ export const CANDIDATE_FEATURE_NAMES = [
   "textNarrativeStrength",
   "textMemeAppeal",
   "textScamSignals",
+  // Added 2026-10-05: the shape of the last half hour's price path and holder slope, from the
+  // scan's own tape (curation/pricePath.ts). Null until a mint has a few minutes of tape.
+  "pathRet1mPct",
+  "pathRet5mPct",
+  "pathRet15mPct",
+  "pathRet30mPct",
+  "pathDrawdown15mPct",
+  "pathDrawdown60mPct",
+  "pathGreenShare10m",
+  "pathMinutesSinceHigh60m",
+  "pathHolderSlope10m",
+  "pathObservedMinutes",
+  // Added 2026-10-05: what the whole market is doing at the moment, and the clock.
+  "mktBaseRate1hPct",
+  "mktBaseRate6hPct",
+  "mktLaunchesPerHour",
+  "mktInBandCount",
+  "ctxHourSin",
+  "ctxHourCos",
+  "ctxWeekend",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -109,6 +135,31 @@ export const TRADE_FLOW_FEATURES = [
   "devSoldShare",
   "firstBuyersHolding",
 ] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
+
+/** The price-path features, in vector order - each a PricePathFeatures field of the same name. */
+export const PRICE_PATH_FEATURES = [
+  "pathRet1mPct",
+  "pathRet5mPct",
+  "pathRet15mPct",
+  "pathRet30mPct",
+  "pathDrawdown15mPct",
+  "pathDrawdown60mPct",
+  "pathGreenShare10m",
+  "pathMinutesSinceHigh60m",
+  "pathHolderSlope10m",
+  "pathObservedMinutes",
+] as const satisfies readonly (CandidateFeatureName & keyof PricePathFeatures)[];
+
+/** The market-context features, in vector order - each a MarketContextFeatures field of the same name. */
+export const MARKET_CONTEXT_FEATURES = [
+  "mktBaseRate1hPct",
+  "mktBaseRate6hPct",
+  "mktLaunchesPerHour",
+  "mktInBandCount",
+  "ctxHourSin",
+  "ctxHourCos",
+  "ctxWeekend",
+] as const satisfies readonly (CandidateFeatureName & keyof MarketContextFeatures)[];
 
 /** The text-read features, each a TextScores field - see curation/textFeatures.ts. */
 export const TEXT_FEATURES = {
@@ -182,6 +233,23 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   textNarrativeStrength: "narrative strength",
   textMemeAppeal: "meme appeal",
   textScamSignals: "scam wording",
+  pathRet1mPct: "1m path return",
+  pathRet5mPct: "5m path return",
+  pathRet15mPct: "15m path return",
+  pathRet30mPct: "30m path return",
+  pathDrawdown15mPct: "off the 15m high",
+  pathDrawdown60mPct: "off the 1h high",
+  pathGreenShare10m: "green minutes (10m)",
+  pathMinutesSinceHigh60m: "minutes since the 1h high",
+  pathHolderSlope10m: "holders per minute",
+  pathObservedMinutes: "minutes on tape",
+  mktBaseRate1hPct: "market 2x rate (1h)",
+  mktBaseRate6hPct: "market 2x rate (6h)",
+  mktLaunchesPerHour: "launches per hour",
+  mktInBandCount: "tokens in the band",
+  ctxHourSin: "time of day",
+  ctxHourCos: "time of day",
+  ctxWeekend: "weekend",
 };
 
 /**
@@ -241,6 +309,12 @@ export function scoredFromFeatures(
     tradeFlow: Object.fromEntries(
       TRADE_FLOW_FEATURES.map((k) => [k, num(k) ?? null]),
     ) as unknown as TradeFlowFeatures,
+    pricePath: Object.fromEntries(
+      PRICE_PATH_FEATURES.map((k) => [k, num(k) ?? null]),
+    ) as unknown as PricePathFeatures,
+    marketContext: Object.fromEntries(
+      MARKET_CONTEXT_FEATURES.map((k) => [k, num(k) ?? null]),
+    ) as unknown as MarketContextFeatures,
     textScores: textScoresFromFeatures(features),
     rugScreen: { passed: true, reasons: [] },
     score: {
@@ -360,6 +434,12 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
     textNarrativeStrength: scored.textScores?.narrativeStrength ?? null,
     textMemeAppeal: scored.textScores?.memeAppeal ?? null,
     textScamSignals: scored.textScores?.scamSignals ?? null,
+    ...(Object.fromEntries(
+      PRICE_PATH_FEATURES.map((k) => [k, (scored.pricePath ?? EMPTY_PRICE_PATH)[k]]),
+    ) as Record<(typeof PRICE_PATH_FEATURES)[number], number | null>),
+    ...(Object.fromEntries(
+      MARKET_CONTEXT_FEATURES.map((k) => [k, (scored.marketContext ?? EMPTY_MARKET_CONTEXT)[k]]),
+    ) as Record<(typeof MARKET_CONTEXT_FEATURES)[number], number | null>),
   };
 }
 
