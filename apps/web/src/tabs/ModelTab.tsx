@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   type EvolutionEvent,
   type GradedRates,
@@ -75,6 +75,9 @@ export function ModelTab() {
     setPick((n) => n + 1);
   };
 
+  const trend = data.learning.trend;
+  const leadLive = leader?.composite.live ?? null;
+
   return (
     // Dimmed while a new window's numbers load (the old window's stay up meanwhile).
     <div className={`stack${insights.stale ? " stale" : ""}`} aria-busy={insights.stale}>
@@ -82,29 +85,24 @@ export function ModelTab() {
         <div className="hero-top">
           <div>
             <span className="eyebrow">
-              <BrainIcon size={13} /> The contest
+              <BrainIcon size={13} /> Your models at a glance
             </span>
             <h2 className="hero-title">
-              <span className="grad">{lb.entries.length} models</span> compete for your feed
+              {leader && leader.composite.score !== null ? (
+                <>
+                  <span className="grad">{leader.name}</span> is calling it best right now
+                </>
+              ) : (
+                <>The models are still warming up</>
+              )}
             </h2>
             <p className="muted">
-              Each one trains on the same graded history every few hours, makes its own calls on its own feed,
-              and is graded the same way: {data.rules.win}. The field evolves: every run breeds new variants
-              of the leaders, and a variant that clearly beats the weakest model takes its seat. The{" "}
-              <strong>Consensus</strong> doesn't read the market directly; it learns how far to trust each of
-              the others. Your feed shows calls from{" "}
+              {lb.entries.length} models compete to spot tokens that double within an hour. Every call is
+              graded the same way, and the goal is a 2x on {t.hitRate2xPct}% of calls and a 4x on{" "}
+              {t.hitRate4xPct}%. Your feed shows calls from{" "}
               <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
-              {lb.followBest ? " (the best performer; you follow it automatically)" : ""}
+              {lb.followBest ? " (whichever model is doing best; it switches automatically)" : ""}
               {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
-              {leader && leader.composite.score !== null && (
-                <>
-                  {" "}
-                  Leading the board: <strong>{leader.name}</strong> at{" "}
-                  <span className="num">{leader.composite.score.toFixed(0)}</span>
-                  {leader.composite.band ? ` (${leader.composite.band.label.toLowerCase()})` : ""}: the score
-                  is how far a model has proven itself toward the goal, 0-100.
-                </>
-              )}
             </p>
           </div>
           <div className="segmented" role="tablist" aria-label="Window">
@@ -124,40 +122,44 @@ export function ModelTab() {
           </div>
         </div>
 
-        <ol className="pipeline" aria-label="How a call is made">
-          <PipelineStage
-            Icon={RadarIcon}
-            title="Scanner"
-            caption="decision moments"
-            count={base?.calls}
-            rate={base?.hitRate2xPct}
-          />
-          <PipelineStage
-            Icon={BrainIcon}
-            title={`${contenders.length} models`}
-            caption={bestContender ? `best: ${bestContender.name}` : "calls"}
-            count={undefined}
-            rate={bestContender?.composite.live.winRatePct}
-          />
-          <PipelineStage
-            Icon={BrainIcon}
-            title="Consensus"
-            caption="calls"
-            count={consensus?.composite.live.calls}
-            rate={consensus?.composite.live.winRatePct}
-          />
-          <li className="stage goal">
-            <span className="stage-icon">
-              <TargetIcon size={16} />
+        <div className="kpis glance">
+          <div className="glance-tile">
+            <label>Best model</label>
+            <span className="glance-value">{leader?.name ?? "–"}</span>
+            <span className="muted small">
+              {leader?.composite.score != null
+                ? `Score ${leader.composite.score.toFixed(0)} of 100${
+                    leader.composite.band ? `: ${leader.composite.band.label.toLowerCase()}` : ""
+                  }`
+                : "No score yet"}
             </span>
-            <span className="stage-title">Goal</span>
-            <span className="stage-rate num">{t.hitRate2xPct}%</span>
-            <span className="stage-caption">hit 2x · {t.hitRate4xPct}% hit 4x</span>
-          </li>
-        </ol>
-        <p className="faint small">
-          Live 2x rate over the last {days} days at each step. Fill: {data.rules.fill}.
-        </p>
+          </div>
+          <div className="glance-tile">
+            <label>Its calls that doubled</label>
+            <span
+              className={`glance-value num ${leadLive ? rateTone(leadLive.winRatePct, t.hitRate2xPct) : ""}`}
+            >
+              {pct(leadLive?.winRatePct)}
+            </span>
+            <span className="muted small">
+              Goal {t.hitRate2xPct}% · reached 4x on {pct(leadLive?.goalRatePct)} (goal {t.hitRate4xPct}%)
+              {leadLive ? ` · ${leadLive.graded} graded calls in ${days} days` : ""}
+            </span>
+          </div>
+          <div className="glance-tile">
+            <label>Getting better?</label>
+            <span className={`glance-value state ${trend ? TREND_STATE[trend.verdict] : "early"}`}>
+              {trend ? TREND_TEXT[trend.verdict] : TREND_TEXT["too-early"]}
+            </span>
+            <span className="muted small">
+              {trend?.recent.lift2x != null
+                ? `Lately your feed's picks double ${trend.recent.lift2x.toFixed(1)}x as often as the average token it could have picked${
+                    trend.prior?.lift2x != null ? ` (${trend.prior.lift2x.toFixed(1)}x before)` : ""
+                  }.`
+                : "Needs a few days of graded calls to tell."}
+            </span>
+          </div>
+        </div>
       </section>
 
       <LeaderboardPanel
@@ -168,72 +170,172 @@ export function ModelTab() {
         now={now}
       />
 
-      <EvolutionPanel board={lb} now={now} />
-
-      <HowItWorks board={lb} />
-
-      <LearningPanel learning={data.learning} now={now} />
-
-      <TrainingPanel runs={data.runs} board={lb} targets={t} now={now} />
-
-      <div className="columns even">
+      <UnderTheHood>
         <section className="panel">
-          <span className="eyebrow">Signals</span>
-          <h3>What the models look at</h3>
-          {data.importance && data.importance.features.length > 0 ? (
-            <>
-              <p className="muted small">
-                {runName(data.runs.find((r) => r.id === data.importance!.modelId)) ??
-                  LEARNER_NAME[data.importance.learner]}{" "}
-                {data.importance.learner === "gbdt"
-                  ? "- share of tree splits that use each signal."
-                  : "- share of standardized weight; ▲ more is better, ▼ less is better."}
-              </p>
-              <HBarChart
-                data={data.importance.features.map((f) => ({
-                  label: `${f.direction === 1 ? "▲ " : f.direction === -1 ? "▼ " : ""}${f.label}`,
-                  value: f.sharePct,
-                  display: `${f.sharePct.toFixed(1)}%`,
-                }))}
-              />
-            </>
-          ) : (
-            <p className="empty">Appears after the first training run.</p>
-          )}
-        </section>
-
-        <FeatureHealthPanel data={data} now={now} />
-
-        <section className="panel">
-          <span className="eyebrow">Baseline</span>
-          <h3>What a model has to beat</h3>
+          <span className="eyebrow">The contest</span>
+          <h3>How a call is made</h3>
           <p className="muted small">
-            Picking at random from the moments the models decide on would have earned this. Every model's hit
-            rate is only worth something above it.
+            Each model trains on the same graded history every few hours, makes its own calls on its own feed,
+            and is graded the same way: {data.rules.win}. The field evolves: every run breeds new variants of
+            the leaders, and a variant that clearly beats the weakest model takes its seat. The{" "}
+            <strong>Consensus</strong> doesn&apos;t read the market directly; it learns how far to trust each
+            of the others.
           </p>
-          {base ? (
-            <div className="family-figs">
-              <div>
-                <label>Moments</label>
-                <span className="num">{base.calls.toLocaleString()}</span>
-              </div>
-              <div>
-                <label>Base 2x</label>
-                <span className="num">{pct(base.hitRate2xPct, 1)}</span>
-              </div>
-              <div>
-                <label>Base 4x</label>
-                <span className="num">{pct(base.hitRate4xPct, 1)}</span>
-              </div>
-            </div>
-          ) : (
-            <p className="empty">No graded decision moments in this window yet.</p>
-          )}
+          <ol className="pipeline" aria-label="How a call is made">
+            <PipelineStage
+              Icon={RadarIcon}
+              title="Scanner"
+              caption="decision moments"
+              count={base?.calls}
+              rate={base?.hitRate2xPct}
+            />
+            <PipelineStage
+              Icon={BrainIcon}
+              title={`${contenders.length} models`}
+              caption={bestContender ? `best: ${bestContender.name}` : "calls"}
+              count={undefined}
+              rate={bestContender?.composite.live.winRatePct}
+            />
+            <PipelineStage
+              Icon={BrainIcon}
+              title="Consensus"
+              caption="calls"
+              count={consensus?.composite.live.calls}
+              rate={consensus?.composite.live.winRatePct}
+            />
+            <li className="stage goal">
+              <span className="stage-icon">
+                <TargetIcon size={16} />
+              </span>
+              <span className="stage-title">Goal</span>
+              <span className="stage-rate num">{t.hitRate2xPct}%</span>
+              <span className="stage-caption">hit 2x · {t.hitRate4xPct}% hit 4x</span>
+            </li>
+          </ol>
+          <p className="faint small">
+            Live 2x rate over the last {days} days at each step. Fill: {data.rules.fill}.
+          </p>
         </section>
-      </div>
 
-      <AiReviewerPanel data={data} now={now} />
+        <LeaderboardPanel
+          board={lb}
+          days={days}
+          onSetModels={setFeedModels}
+          refreshing={board.stale}
+          now={now}
+          detailed
+        />
+
+        <LearningPanel learning={data.learning} now={now} />
+
+        <HowItWorks board={lb} />
+
+        <EvolutionPanel board={lb} now={now} />
+
+        <TrainingPanel runs={data.runs} board={lb} targets={t} now={now} />
+
+        <div className="columns even">
+          <section className="panel">
+            <span className="eyebrow">Signals</span>
+            <h3>What the models look at</h3>
+            {data.importance && data.importance.features.length > 0 ? (
+              <>
+                <p className="muted small">
+                  {runName(data.runs.find((r) => r.id === data.importance!.modelId)) ??
+                    LEARNER_NAME[data.importance.learner]}{" "}
+                  {data.importance.learner === "gbdt"
+                    ? "- share of tree splits that use each signal."
+                    : "- share of standardized weight; ▲ more is better, ▼ less is better."}
+                </p>
+                <HBarChart
+                  data={data.importance.features.map((f) => ({
+                    label: `${f.direction === 1 ? "▲ " : f.direction === -1 ? "▼ " : ""}${f.label}`,
+                    value: f.sharePct,
+                    display: `${f.sharePct.toFixed(1)}%`,
+                  }))}
+                />
+              </>
+            ) : (
+              <p className="empty">Appears after the first training run.</p>
+            )}
+          </section>
+
+          <FeatureHealthPanel data={data} now={now} />
+
+          <section className="panel">
+            <span className="eyebrow">Baseline</span>
+            <h3>What a model has to beat</h3>
+            <p className="muted small">
+              Picking at random from the moments the models decide on would have earned this. Every
+              model&apos;s hit rate is only worth something above it.
+            </p>
+            {base ? (
+              <div className="family-figs">
+                <div>
+                  <label>Moments</label>
+                  <span className="num">{base.calls.toLocaleString()}</span>
+                </div>
+                <div>
+                  <label>Base 2x</label>
+                  <span className="num">{pct(base.hitRate2xPct, 1)}</span>
+                </div>
+                <div>
+                  <label>Base 4x</label>
+                  <span className="num">{pct(base.hitRate4xPct, 1)}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="empty">No graded decision moments in this window yet.</p>
+            )}
+          </section>
+        </div>
+
+        <AiReviewerPanel data={data} now={now} />
+      </UnderTheHood>
     </div>
+  );
+}
+
+const HOOD_KEY = "ts.model.underTheHood";
+
+/**
+ * The details most people don't need: collapsed by default, remembered per browser, and only
+ * rendered once opened so the closed tab stays light.
+ */
+function UnderTheHood({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(HOOD_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  return (
+    <details
+      className="under-hood"
+      open={open}
+      onToggle={(e) => {
+        const next = (e.target as HTMLDetailsElement).open;
+        setOpen(next);
+        try {
+          localStorage.setItem(HOOD_KEY, next ? "1" : "0");
+        } catch {
+          // Private mode: the section just starts closed next time.
+        }
+      }}
+    >
+      <summary className="panel under-hood-summary">
+        <span>
+          <strong>Under the hood</strong>
+          <span className="muted small">
+            The full leaderboard, how scores and profit are worked out, whether the models are learning,
+            training exams, evolution, the signals they read, and the AI reviewer.
+          </span>
+        </span>
+        <span className="under-hood-toggle small">{open ? "Hide" : "Show"}</span>
+      </summary>
+      {open && <div className="stack">{children}</div>}
+    </details>
   );
 }
 
@@ -346,6 +448,7 @@ function LeaderboardPanel({
   onSetModels,
   refreshing,
   now,
+  detailed = false,
 }: {
   board: Leaderboard;
   days: number;
@@ -353,6 +456,8 @@ function LeaderboardPanel({
   /** `board` is from before the last change and its fresh copy is loading: hold further clicks. */
   refreshing: boolean;
   now: number;
+  /** Every column and the scoring guides (Under the hood); otherwise the plain view with the feed picker. */
+  detailed?: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -372,14 +477,22 @@ function LeaderboardPanel({
     <section className="panel">
       <header className="section-head">
         <div>
-          <span className="eyebrow">Leaderboard</span>
-          <h3>Who's calling it best, last {days} days</h3>
-          <p className="muted small">
-            Score = how far a model has proven itself toward the goal, 0 to 100. Hover a score for its
-            working, or see <a href="#score-guide">what the score means</a> below.
-          </p>
+          <span className="eyebrow">{detailed ? "Full leaderboard" : "Leaderboard"}</span>
+          <h3>{detailed ? "Every figure, model by model" : `Who's calling it best, last ${days} days`}</h3>
+          {detailed ? (
+            <p className="muted small">
+              Score = how far a model has proven itself toward the goal, 0 to 100. Hover a score for its
+              working, or see <a href="#score-guide">what the score means</a> below.
+            </p>
+          ) : (
+            <p className="muted small">
+              The score runs from 0 to 100: 100 means a model&apos;s calls have reliably hit the goal. Profit
+              is what following every call with one fixed exit plan would have returned. Tick{" "}
+              <strong>In feed</strong> to get a model&apos;s alerts on the Live tab.
+            </p>
+          )}
         </div>
-        {board.followBest === false && (
+        {!detailed && board.followBest === false && (
           <button
             className="ghost"
             disabled={busy !== null || refreshing}
@@ -397,30 +510,36 @@ function LeaderboardPanel({
               <th className="r">#</th>
               <th>Model</th>
               <th title="How far the model has proven itself toward the goal, 0-100">Score</th>
-              <th className="r">Live calls</th>
-              <th className="r">2x</th>
-              <th className="r">4x</th>
-              <th className="r" title="Average doublings per call">
-                Avg doublings
-              </th>
+              <th className="r">{detailed ? "Live calls" : "Calls"}</th>
+              <th className="r">{detailed ? "2x" : "Doubled"}</th>
+              <th className="r">{detailed ? "4x" : "Hit 4x"}</th>
+              {detailed && (
+                <th className="r" title="Average doublings per call">
+                  Avg doublings
+                </th>
+              )}
               <th className="r" title="Average simulated return per live call under the fixed exit plan">
                 Avg profit
               </th>
-              <th
-                className="r"
-                title="Total simulated return over its live calls, staking the same amount on each"
-              >
-                Total profit
-              </th>
-              <th className="r">Backtest 2x / 4x</th>
-              <th
-                className="r"
-                title="Live 2x rate of its high-conviction calls alone (its top half-percent of moments)"
-              >
-                High-conv 2x
-              </th>
-              <th>Status</th>
-              <th />
+              {detailed && (
+                <>
+                  <th
+                    className="r"
+                    title="Total simulated return over its live calls, staking the same amount on each"
+                  >
+                    Total profit
+                  </th>
+                  <th className="r">Backtest 2x / 4x</th>
+                  <th
+                    className="r"
+                    title="Live 2x rate of its high-conviction calls alone (its top half-percent of moments)"
+                  >
+                    High-conv 2x
+                  </th>
+                  <th>Status</th>
+                </>
+              )}
+              {!detailed && <th />}
             </tr>
           </thead>
           <tbody>
@@ -442,10 +561,14 @@ function LeaderboardPanel({
                       )}
                       {mine && <span className="chip">your feed</span>}
                     </div>
-                    <small className="muted">
-                      {ROLE_LABEL[e.role]} · {e.description}
-                    </small>
-                    {e.lane && e.lane.generation > 0 && (
+                    {detailed ? (
+                      <small className="muted">
+                        {ROLE_LABEL[e.role]} · {e.description}
+                      </small>
+                    ) : (
+                      e.status !== "calling" && <small className="muted">{STATUS_TEXT[e.status].text}</small>
+                    )}
+                    {detailed && e.lane && e.lane.generation > 0 && (
                       <small className="faint lineage">
                         In this seat since {ago(e.lane.bornAt, now)}; live record counts from then
                       </small>
@@ -457,97 +580,115 @@ function LeaderboardPanel({
                       band={e.composite.band ?? null}
                       title={e.scoreExplained ?? scoreTitle(e.composite.liveWeight)}
                     />
-                    {e.composite.basis && (
+                    {detailed && e.composite.basis && (
                       <small className="faint score-proof num">
                         proven 2x {e.composite.basis.proven2xPct.toFixed(0)}% · 4x{" "}
                         {e.composite.basis.proven4xPct.toFixed(0)}%
                       </small>
                     )}
                   </td>
-                  <td className="r num" data-label="Live calls">
+                  <td className="r num" data-label={detailed ? "Live calls" : "Calls"}>
                     {live.calls}
                     {live.calls > live.graded && <span className="faint"> ({live.graded} graded)</span>}
                   </td>
-                  <td className={`r num ${rateTone(live.winRatePct, t.hitRate2xPct)}`} data-label="2x">
+                  <td
+                    className={`r num ${rateTone(live.winRatePct, t.hitRate2xPct)}`}
+                    data-label={detailed ? "2x" : "Doubled"}
+                  >
                     {pct(live.winRatePct)}
                   </td>
-                  <td className={`r num ${rateTone(live.goalRatePct, t.hitRate4xPct)}`} data-label="4x">
+                  <td
+                    className={`r num ${rateTone(live.goalRatePct, t.hitRate4xPct)}`}
+                    data-label={detailed ? "4x" : "Hit 4x"}
+                  >
                     {pct(live.goalRatePct)}
                   </td>
-                  <td className="r num" data-label="Avg doublings">
-                    {doublings(live.avgReturnDoublings)}
-                  </td>
+                  {detailed && (
+                    <td className="r num" data-label="Avg doublings">
+                      {doublings(live.avgReturnDoublings)}
+                    </td>
+                  )}
                   <td className={`r num ${profitTone(live.avgSimReturnPct)}`} data-label="Avg profit">
                     {signedPct(live.avgSimReturnPct)}
                   </td>
-                  <td
-                    className={`r num ${profitTone(live.totalSimReturnPct)}`}
-                    data-label="Total profit"
-                    title={
-                      live.simCalls
-                        ? `${live.simCalls} graded call${live.simCalls === 1 ? "" : "s"} with a simulated result`
-                        : undefined
-                    }
-                  >
-                    {stakes(live.totalSimReturnPct)}
-                  </td>
-                  <td className="r num muted" data-label="Backtest">
-                    {exam.graded > 0 ? `${pct(exam.winRatePct)} / ${pct(exam.goalRatePct)}` : "–"}
-                    {exam.graded > 0 && <span className="faint"> · {exam.graded}</span>}
-                  </td>
-                  <td
-                    className={`r num ${e.highConviction ? rateTone(e.highConviction.winRatePct, t.hitRate2xPct) : "muted"}`}
-                    data-label="High-conv 2x"
-                  >
-                    {e.highConviction ? pct(e.highConviction.winRatePct) : "–"}
-                    {e.highConviction && <span className="faint"> · {e.highConviction.graded}</span>}
-                  </td>
-                  <td className="lb-status">
-                    <span className={`badge ${STATUS_TEXT[e.status].tone}`}>
-                      {STATUS_TEXT[e.status].text}
-                    </span>
-                    {e.composite.warmingUp && e.status === "calling" && (
-                      <span
-                        className="badge neutral"
-                        title={`Fewer than ${board.scoring.minLiveCallsToRank ?? 50} graded live calls: ranked behind seasoned models until then`}
+                  {detailed && (
+                    <>
+                      <td
+                        className={`r num ${profitTone(live.totalSimReturnPct)}`}
+                        data-label="Total profit"
+                        title={
+                          live.simCalls
+                            ? `${live.simCalls} graded call${live.simCalls === 1 ? "" : "s"} with a simulated result`
+                            : undefined
+                        }
                       >
-                        warming up
-                      </span>
-                    )}
-                  </td>
-                  <td className="r lb-feed">
-                    <label
-                      className="in-feed"
-                      title={
-                        onlyOne
-                          ? "Your feed needs at least one model"
-                          : "Show this model's calls in your feed"
-                      }
-                    >
-                      <input
-                        type="checkbox"
-                        checked={mine}
-                        disabled={busy !== null || refreshing || onlyOne}
-                        onChange={() => void use(e.id, toggledModels(board, e.id))}
-                      />
-                      In feed
-                    </label>
-                  </td>
+                        {stakes(live.totalSimReturnPct)}
+                      </td>
+                      <td className="r num muted" data-label="Backtest">
+                        {exam.graded > 0 ? `${pct(exam.winRatePct)} / ${pct(exam.goalRatePct)}` : "–"}
+                        {exam.graded > 0 && <span className="faint"> · {exam.graded}</span>}
+                      </td>
+                      <td
+                        className={`r num ${e.highConviction ? rateTone(e.highConviction.winRatePct, t.hitRate2xPct) : "muted"}`}
+                        data-label="High-conv 2x"
+                      >
+                        {e.highConviction ? pct(e.highConviction.winRatePct) : "–"}
+                        {e.highConviction && <span className="faint"> · {e.highConviction.graded}</span>}
+                      </td>
+                      <td className="lb-status">
+                        <span className={`badge ${STATUS_TEXT[e.status].tone}`}>
+                          {STATUS_TEXT[e.status].text}
+                        </span>
+                        {e.composite.warmingUp && e.status === "calling" && (
+                          <span
+                            className="badge neutral"
+                            title={`Fewer than ${board.scoring.minLiveCallsToRank ?? 50} graded live calls: ranked behind seasoned models until then`}
+                          >
+                            warming up
+                          </span>
+                        )}
+                      </td>
+                    </>
+                  )}
+                  {!detailed && (
+                    <td className="r lb-feed">
+                      <label
+                        className="in-feed"
+                        title={
+                          onlyOne
+                            ? "Your feed needs at least one model"
+                            : "Show this model's calls in your feed"
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={mine}
+                          disabled={busy !== null || refreshing || onlyOne}
+                          onChange={() => void use(e.id, toggledModels(board, e.id))}
+                        />
+                        In feed
+                      </label>
+                    </td>
+                  )}
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <p className="faint small">
-        Avg doublings is the average return per call: a 2x counts 1, a 4x counts 2, a miss or a stop-out 0. It
-        is shown for context and not scored. Avg and total profit follow every live call with one fixed exit
-        plan, so a feed whose losers lose a lot shows it even when its hit rate looks fine; see{" "}
-        <a href="#profit-guide">what profit means</a>. Backtest figures are the latest training run's
-        walk-forward exam, with the number of calls it made.
-      </p>
-      <ScoreGuide board={board} />
-      <ProfitGuide board={board} />
+      {detailed && (
+        <>
+          <p className="faint small">
+            Avg doublings is the average return per call: a 2x counts 1, a 4x counts 2, a miss or a stop-out
+            0. It is shown for context and not scored. Avg and total profit follow every live call with one
+            fixed exit plan, so a feed whose losers lose a lot shows it even when its hit rate looks fine; see{" "}
+            <a href="#profit-guide">what profit means</a>. Backtest figures are the latest training run's
+            walk-forward exam, with the number of calls it made.
+          </p>
+          <ScoreGuide board={board} />
+          <ProfitGuide board={board} />
+        </>
+      )}
     </section>
   );
 }

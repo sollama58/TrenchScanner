@@ -2821,3 +2821,64 @@ button.small-btn {
   flex-wrap: wrap;
   gap: 6px;
 }
+
+/* ---------- Model tab: at a glance, under the hood ---------- */
+.kpis.glance {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 18px;
+  position: relative;
+  z-index: 1;
+}
+.glance-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  min-width: 0;
+}
+.glance-tile label {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.glance-value {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.glance-value.state {
+  font-size: 22px;
+}
+.under-hood > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+}
+.under-hood > summary::-webkit-details-marker {
+  display: none;
+}
+.under-hood > summary > span:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.under-hood-toggle {
+  flex-shrink: 0;
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+.under-hood[open] > summary {
+  margin-bottom: 18px;
+}
+@media (max-width: 640px) {
+  .kpis.glance {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
