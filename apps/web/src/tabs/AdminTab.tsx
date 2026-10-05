@@ -924,8 +924,9 @@ function Alerts() {
               <h3>Filter matches</h3>
               {(h.filterMatches.total.ungradable ?? 0) > 0 && (
                 <p className="muted small">
-                  {n(h.filterMatches.total.ungradable!)} alerts in this window have no grading anchor (they
-                  predate grading, which started 2026-10-03) and are left out of Pending.
+                  {n(h.filterMatches.total.ungradable!)} alerts in this window can never be graded (no grading
+                  anchor, which predates 2026-10-03, or no price seen inside the win window) and are left out
+                  of Pending.
                 </p>
               )}
               <Table
@@ -994,8 +995,11 @@ function Alerts() {
                   <Tag tone="ok">4x</Tag>
                 ) : a.hit2xIn1h ? (
                   <Tag tone="ok">2x</Tag>
-                ) : a.outcomeFinalizedAt ? (
+                ) : a.hit2xIn1h === false ? (
                   <Tag tone="bad">miss</Tag>
+                ) : a.outcomeFinalizedAt ? (
+                  // Closed with no fill inside the win window (an outage) - never graded.
+                  <Tag tone="muted">ungraded</Tag>
                 ) : (
                   <Tag tone="muted">open</Tag>
                 ),

@@ -154,14 +154,17 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-mint`, symbol: "STAT" } });
     tokenId = token.id;
 
-    // Curated: a 4x win, a plain 2x, a stop-then-double (a loss), and one still in its hour.
-    // The first carries its outcome copies; the rest are read through the live link.
+    // Curated: a 4x win, a plain 2x, a stop-then-double (a loss), one still in its window, and
+    // one whose row closed with no fill (ungradable). The first carries its outcome copies; the
+    // rest are read through the live link.
     const live = [
       await outcome(1, "emission", { hit2x: true, hit4x: true }),
       await outcome(2, "emission", { hit2x: true }),
       await outcome(3, "emission", { hit2x: true, dq: true }),
       await outcome(4, "emission", null),
+      await outcome(5, "emission", null),
     ];
+    await prisma.candidateOutcome.update({ where: { id: live[4]! }, data: { finalized24hAt: at(21) } });
     for (const [i, candidateOutcomeId] of live.entries()) {
       await prisma.curatedAlert.create({
         data: {
@@ -217,7 +220,7 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
       });
     }
 
-    // Filter matches: one win, one loss.
+    // Filter matches: one win, one loss, and one whose anchor row closed with no fill.
     const user = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet` } });
     userId = user.id;
     const filter = await prisma.userFilter.create({ data: { userId, name: `${TAG}-filter` } });
@@ -239,6 +242,19 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
         },
       });
     }
+    const unfilled = await outcome(32, "match", null);
+    await prisma.candidateOutcome.update({ where: { id: unfilled }, data: { finalized24hAt: at(48) } });
+    await prisma.match.create({
+      data: {
+        userId,
+        filterId: filter.id,
+        tokenId,
+        snapshotId: snapshot.id,
+        matchedAt: at(32),
+        score: 60,
+        candidateOutcomeId: unfilled,
+      },
+    });
   });
 
   afterAll(async () => {
@@ -258,9 +274,10 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     const body = res.json();
 
     expect(body.curatedAlerts.total).toMatchObject({
-      calls: 4,
+      calls: 5,
       graded: 3,
       pending: 1,
+      ungradable: 1,
       won2x: 2,
       won4x: 1,
       doubledAfterStop: 1,
@@ -276,7 +293,7 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     ]);
 
     expect(body.curatorConfidenceBands).toEqual([
-      expect.objectContaining({ side: "heuristic", band: 80, calls: 4 }),
+      expect.objectContaining({ side: "heuristic", band: 80, calls: 5 }),
       expect.objectContaining({ side: "model", band: 40, calls: 2 }),
     ]);
 
@@ -291,19 +308,19 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     expect(body.aiReviewer.probability2xBands.map((b: { band: number }) => b.band)).toEqual([20, 70, 80]);
 
     expect(body.filterMatches.total).toMatchObject({
-      calls: 2,
+      calls: 3,
       graded: 2,
       won2x: 1,
       pending: 0,
-      ungradable: 0,
+      ungradable: 1,
     });
     expect(body.filterMatches.byFilter).toEqual([
-      expect.objectContaining({ name: `${TAG}-filter`, calls: 2 }),
+      expect.objectContaining({ name: `${TAG}-filter`, calls: 3 }),
     ]);
 
     expect(body.samples.byKind).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "emission", calls: 6 }),
+        expect.objectContaining({ kind: "emission", calls: 7 }),
         expect.objectContaining({ kind: "event", calls: 3 }),
       ]),
     );

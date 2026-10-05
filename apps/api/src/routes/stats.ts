@@ -55,9 +55,11 @@ export interface GradedCounts {
   simCalls?: number;
   sumSimReturnPct?: number;
   /**
-   * Calls with no verdict that never will get one, so they are not "pending" either. Only filter
-   * alerts report it: a Match with no grading anchor (every match before grading shipped on
-   * 2026-10-03, or one whose anchor write failed) has nothing for the watcher to close.
+   * Calls with no verdict that never will get one, so they are not "pending" either. Filter
+   * alerts: a Match with no grading anchor (every match before grading shipped on 2026-10-03, or
+   * one whose anchor write failed) has nothing for the watcher to close. Curated alerts: the row
+   * closed with no fill inside the win window (a worker outage, or a mint with no price), so the
+   * watcher retired it ungraded.
    */
   ungradable?: number;
 }
@@ -160,6 +162,8 @@ type RawCounts = {
   /** Only on the queries that read a simulated return. */
   sim_calls?: bigint;
   sim_sum?: number | null;
+  /** Only on the queries whose calls can close with no verdict. */
+  ungradable?: bigint;
 };
 
 function toCounts(r: RawCounts): GradedCounts {
@@ -172,6 +176,7 @@ function toCounts(r: RawCounts): GradedCounts {
     ...(r.sim_calls !== undefined
       ? { simCalls: Number(r.sim_calls), sumSimReturnPct: Number(r.sim_sum ?? 0) }
       : {}),
+    ...(r.ungradable !== undefined ? { ungradable: Number(r.ungradable) } : {}),
   };
 }
 
@@ -397,7 +402,10 @@ export async function buildHitRateReport(
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
            sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
+                              AND (a."outcomeFinalizedAt" IS NOT NULL
+                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
@@ -416,7 +424,10 @@ export async function buildHitRateReport(
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
            sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
+                              AND (a."outcomeFinalizedAt" IS NOT NULL
+                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
@@ -436,7 +447,10 @@ export async function buildHitRateReport(
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
            sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
+                              AND (a."outcomeFinalizedAt" IS NOT NULL
+                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
@@ -565,7 +579,9 @@ export async function buildHitRateReport(
     const userIds = users.map((u) => u.id);
     if (userIds.length === 0) return [];
     // A match is anchored a moment after it is created (anchorMatchOutcome), so an unanchored one
-    // only counts as ungradable once it is older than that gap could plausibly be.
+    // only counts as ungradable once it is older than that gap could plausibly be. One whose
+    // anchor row closed with no fill inside the win window (an outage) is ungradable too, for as
+    // long as that row exists to say so; Match carries no closing time of its own.
     return prisma.$queryRaw<(RawCounts & { filterId: string; name: string; ungradable: bigint })[]>`
       SELECT m."filterId" AS "filterId",
              f."name" AS name,
@@ -574,8 +590,13 @@ export async function buildHitRateReport(
              count(*) FILTER (WHERE m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)) AS won2x,
              count(*) FILTER (WHERE m."hit4xIn1h") AS won4x,
              count(*) FILTER (WHERE m."disqualified") AS doubled_after_stop,
-             count(*) FILTER (WHERE m."hit2xIn1h" IS NULL AND m."candidateOutcomeId" IS NULL
-                                AND m."matchedAt" < now() - interval '10 minutes') AS ungradable
+             count(*) FILTER (WHERE m."hit2xIn1h" IS NULL
+                                AND ((m."candidateOutcomeId" IS NULL
+                                      AND m."matchedAt" < now() - interval '10 minutes')
+                                  OR EXISTS (SELECT 1 FROM "CandidateOutcome" o
+                                              WHERE o."id" = m."candidateOutcomeId"
+                                                AND o."finalized24hAt" IS NOT NULL
+                                                AND o."finalizedAt" IS NULL))) AS ungradable
       FROM "Match" m
       JOIN "UserFilter" f ON f."id" = m."filterId"
       WHERE m."userId" = ANY(${userIds}) AND m."matchedAt" >= ${since} AND m."matchedAt" < ${until}

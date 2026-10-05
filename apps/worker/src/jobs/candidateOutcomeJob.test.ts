@@ -430,6 +430,55 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.finalized24hAt).not.toBeNull();
     const after = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
     expect(after.hit2xIn1h).toBeNull();
+    // The alert learns that its row closed with no verdict - that is what keeps the card and the
+    // hit-rate report from treating it as a miss, or as pending forever.
+    expect(after.outcomeFinalizedAt).not.toBeNull();
+    expect(after.outcomeFinalizedAt!.getTime()).toBe(updated.finalized24hAt!.getTime());
+  });
+
+  it("retires an unfilled row as soon as the win window has passed, not at the goal window", async () => {
+    const token = await createToken("unfilled-20m");
+    // No price for 20 minutes: the fill is refused after 15, so nothing can grade this row.
+    const anchorAt = new Date(Date.now() - 20 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, { entryAt: null, signalPriceUsd: null });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.1 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.entryAt).toBeNull();
+    expect(updated.finalizedAt).toBeNull();
+    expect(updated.finalized24hAt).not.toBeNull();
+  });
+
+  it("stamps the closing time onto alerts of rows an earlier build retired ungraded", async () => {
+    const token = await createToken("stranded-ungraded");
+    const anchorAt = new Date(Date.now() - 3 * HOUR);
+    const closedAt = new Date(anchorAt.getTime() + 30 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+      finalized24hAt: closedAt,
+      nextCheckAt: new Date(Date.now() + HOUR),
+    });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: row.id,
+        confidence: 0.7,
+        anchorMcapUsd: 100_000,
+        anchorPriceUsd: 1.0,
+        source: "heuristic-v1",
+      },
+    });
+    // Something else due, so the sweep runs its repair pass.
+    const other = await createToken("stranded-ungraded-other");
+    await seedRow(other.id, new Date(Date.now() - 2 * MINUTE), 1.0);
+
+    await runCandidateWatchJob(stubDexScreener({ [other.mintAddress]: 1.0 }), env);
+
+    const after = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(after.hit2xIn1h).toBeNull();
+    expect(after.outcomeFinalizedAt?.getTime()).toBe(closedAt.getTime());
   });
 
   it("leaves a row alone when an alert moved its anchor after the sweep read it", async () => {
