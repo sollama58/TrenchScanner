@@ -2,6 +2,7 @@ import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { mayhemStateAddress } from "../solana.js";
+import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
 
 const logger = createLogger("helius");
 
@@ -74,6 +75,18 @@ export type EarliestActivityResult =
   | { status: "indeterminate" }
   | { status: "failed" };
 
+/**
+ * A launch's first buyers, read from the mint's earliest transactions (see launchBuyers.ts).
+ * "complete" means reading again won't change the list: it reached the count asked for, or the
+ * page cap ran out first (hundreds of transactions with few distinct buyers - bots looping).
+ * Short of both, the token's history simply ends there for now, and a later read can add buyers.
+ * "unsupported": this endpoint can't serve the read at all.
+ */
+export type LaunchBuyersResult =
+  | ({ status: "found"; complete: boolean } & LaunchBuyersReading)
+  | { status: "unsupported" }
+  | { status: "failed" };
+
 export type MintAuthorityResult =
   { status: "found"; mintAuthorityActive: boolean; freezeAuthorityActive: boolean } | { status: "failed" };
 
@@ -102,6 +115,16 @@ const RPC_BATCH_SIZE = 50;
 const GMA_MAX_KEYS = 100;
 /** How many of those batched POSTs to have in flight at once. */
 const BATCH_CONCURRENCY = 3;
+
+/**
+ * Transactions per getTransactionsForAddress page on the launch-buyers read. Full transactions
+ * bill 10 credits per 100 returned, so a page of 100 is the most one 10-credit call can carry.
+ */
+const LAUNCH_TX_PAGE = 100;
+/** Pages read before giving up on reaching the full buyer count - caps a launch at 30 credits. */
+const LAUNCH_MAX_PAGES = 3;
+/** Matches packages/core/src/subscription/solanaRpc.ts: v1 transactions exist on mainnet. */
+const MAX_TRANSACTION_VERSION = 1;
 
 /** JSON-RPC's standard "Method not found" - what a non-Helius endpoint returns for a Helius-only method. */
 const RPC_METHOD_NOT_FOUND = -32601;
@@ -625,6 +648,116 @@ export class HeliusClient {
         continue;
       }
       out.set(mint, { status: "found", isMayhemMode: pdaAccount.value !== null });
+    }
+    return out;
+  }
+
+  /**
+   * The first `maxBuyers` buyers of each mint, from its earliest transactions: one
+   * getTransactionsForAddress call per mint (sortOrder asc, full transactions, failed ones
+   * filtered out server-side), 10 credits for up to 100 transactions. A launch whose first page
+   * holds fewer buyers than asked - a create buried under failed sniper attempts and bot noise -
+   * reads a further page, up to LAUNCH_MAX_PAGES. Helius-only: elsewhere every mint reports
+   * "unsupported".
+   */
+  async getLaunchBuyersBatch(
+    mintAddresses: string[],
+    maxBuyers: number,
+  ): Promise<Map<string, LaunchBuyersResult>> {
+    const unique = [...new Set(mintAddresses)];
+    const out = new Map<string, LaunchBuyersResult>();
+    if (unique.length === 0) return out;
+    if (this.gtfaUnavailable) {
+      for (const mint of unique) out.set(mint, { status: "unsupported" });
+      return out;
+    }
+
+    const txsByMint = new Map<string, RawLaunchTx[]>(unique.map((m) => [m, []]));
+    const cursor = new Map<string, string | undefined>();
+    let pending = unique;
+    for (let page = 1; page <= LAUNCH_MAX_PAGES && pending.length > 0; page += 1) {
+      const calls: RpcCall[] = pending.map((mint) => ({
+        id: mint,
+        method: "getTransactionsForAddress",
+        params: [
+          mint,
+          {
+            transactionDetails: "full",
+            sortOrder: "asc",
+            limit: LAUNCH_TX_PAGE,
+            encoding: "json",
+            maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+            filters: { status: "succeeded" },
+            ...(cursor.get(mint) ? { paginationToken: cursor.get(mint) } : {}),
+          },
+        ],
+      }));
+      const responses = await this.sendBatched<{ data?: RawLaunchTx[]; paginationToken?: string | null }>(
+        calls,
+        20_000,
+      );
+
+      const next: string[] = [];
+      for (const mint of pending) {
+        const res = responses.get(mint);
+        if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
+          this.gtfaUnavailable = true;
+          logger.info("getTransactionsForAddress not served by this endpoint - launch buyers unavailable");
+          out.set(mint, { status: "unsupported" });
+          continue;
+        }
+        if (!res || res.error || !Array.isArray(res.result?.data)) {
+          if (res?.error) logger.warn("rpc error on launch buyers read", { mint, error: res.error });
+          out.set(mint, { status: "failed" });
+          continue;
+        }
+        const txs = txsByMint.get(mint)!;
+        txs.push(...res.result.data);
+        const reading = parseLaunchBuyers(mint, txs, maxBuyers);
+        if (!reading) {
+          // An empty history is a mint too new for the index yet - worth a retry, not an answer.
+          out.set(mint, { status: "failed" });
+          continue;
+        }
+        const token = res.result.paginationToken ?? undefined;
+        const historyEnds = res.result.data.length < LAUNCH_TX_PAGE || !token;
+        if (reading.buyers.length >= maxBuyers || historyEnds || page === LAUNCH_MAX_PAGES) {
+          out.set(mint, {
+            status: "found",
+            complete: reading.buyers.length >= maxBuyers || !historyEnds,
+            ...reading,
+          });
+          continue;
+        }
+        cursor.set(mint, token);
+        next.push(mint);
+      }
+      pending = next;
+    }
+    return out;
+  }
+
+  /**
+   * Current balances (base units) of SPL token accounts, via getMultipleAccounts - one billed
+   * call per 100 accounts. A closed or never-created account is 0; an account whose chunk got no
+   * answer is left out, so the caller can tell "sold" from "unknown".
+   */
+  async getTokenAccountBalances(accounts: string[]): Promise<Map<string, number>> {
+    const unique = [...new Set(accounts)];
+    const out = new Map<string, number>();
+    if (unique.length === 0) return out;
+    const values = await this.getMultipleAccounts<{
+      data?: { parsed?: { info?: { tokenAmount?: { amount?: string } } } };
+    }>(unique, { encoding: "jsonParsed" });
+    for (const account of unique) {
+      const v = values.get(account);
+      if (!v || v === "failed") continue;
+      if (v.value === null) {
+        out.set(account, 0);
+        continue;
+      }
+      const amount = Number(v.value.data?.parsed?.info?.tokenAmount?.amount);
+      if (Number.isFinite(amount)) out.set(account, amount);
     }
     return out;
   }

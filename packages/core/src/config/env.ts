@@ -143,6 +143,18 @@ const envSchema = z.object({
   // (10 credits a lookup). Below 10 it could never complete a top-10 holder group whose wallets
   // are all uncached, since a group is all-or-nothing.
   WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(10),
+  // The snipers figure (first 25 buyers still holding), read from the chain - see the worker's
+  // launchSnipers.ts. Who the first buyers were costs one 10-credit getTransactionsForAddress per
+  // token, read once and cached; this many new tokens are read per scan cycle, contenders first.
+  // 0 turns the chain read off (the figure then only comes from the trade stream, when it runs).
+  SNIPER_LAUNCH_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
+  // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
+  // every few minutes for the band, every minute for a token about to be decided on.
+  SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(300),
+  SNIPER_CONTENDER_REFRESH_SECONDS: z.coerce.number().positive().default(60),
+  // Most buyer token accounts re-read per cycle; each 100 is one credit, so this caps the refresh
+  // at 5 credits a cycle.
+  SNIPER_MAX_REFRESH_ACCOUNTS_PER_CYCLE: z.coerce.number().int().positive().default(500),
   // How long a holdings reading stays usable. Unlike wallet earliest-activity, this answer
   // decays - a portfolio changes with every trade - so it carries a TTL instead of being cached
   // forever. An hour keeps a wallet from being re-priced on every one of the ~60 cycles it might
