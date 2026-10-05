@@ -85,10 +85,14 @@ const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
   },
 ];
 
+// The starting values every new filter opens with. Below the platform's MCAP_FILTER_MIN on purpose:
+// the API accepts anything inside the padded scan band (scanBand), which reaches down to $5k.
+const DEFAULT_FILTER_MCAP_MIN = 8_000;
+
 function blankFilter(config: AppConfig | null, count: number): FilterInput {
   return {
     name: `Filter ${count + 1}`,
-    mcapMin: config?.mcapFilterMin ?? 10_000,
+    mcapMin: Math.max(DEFAULT_FILTER_MCAP_MIN, config?.scanBandMin ?? 0),
     mcapMax: config?.mcapFilterMax ?? 1_000_000,
     minVolumeMcapRatio: null,
     minHolderGrowthPct: null,
@@ -96,12 +100,12 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxDevWalletPct: null,
     maxRiskScore: null,
     excludeCriticalRiskFlags: true,
-    minTokenAgeMinutes: null,
+    minTokenAgeMinutes: 0.5,
     maxTokenAgeMinutes: null,
     narrativeKeywords: [],
     minScore: null,
-    maxFreshTop10WalletPct: null,
-    maxEmptyTop10WalletPct: null,
+    maxFreshTop10WalletPct: 40,
+    maxEmptyTop10WalletPct: 60,
     minFirstBuyersHolding: null,
     maxFirstBuyersHolding: null,
     isActive: count === 0,
