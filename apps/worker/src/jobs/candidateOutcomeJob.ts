@@ -15,7 +15,6 @@ import {
   type DexScreenerClient,
   type ScoredToken,
   type OutcomeAggregates,
-  type EntryRule,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 
@@ -175,22 +174,6 @@ export function resetSampleStats(): void {
 }
 
 /**
- * The fill rule for one row: the configured delay, and slippage by venue - the pre-bond bonding
- * curve is thin and moves against a buyer far more than a graduated pool. An unknown venue gets
- * the pre-bond (worse) figure.
- */
-export function entryRuleFor(features: unknown, env: Env): EntryRule {
-  const graduated =
-    typeof features === "object" &&
-    features !== null &&
-    (features as Record<string, unknown>).graduated === 1;
-  const slippagePct = graduated
-    ? env.CANDIDATE_ENTRY_SLIPPAGE_PCT_GRADUATED
-    : env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND;
-  return { delayMs: env.CANDIDATE_ENTRY_DELAY_SECONDS * 1_000, slippageFraction: slippagePct / 100 };
-}
-
-/**
  * The watcher: price-checks every open CandidateOutcome row that's due, folds the tick into the
  * row's running aggregates (see curation/labels.ts for the math), closes the 30-minute goal window
  * (the moment labels are written - the 2x-within-15-minutes verdict included), and retires
@@ -225,9 +208,8 @@ export async function runCandidateWatchJob(
 
   const mints = [...new Set(due.map((row) => row.token.mintAddress))];
   // When the prices were seen. The batched fetch below can take a while (hundreds of mints, a
-  // few at a time, with retries), and stamping each tick after it put prices observed before the
-  // entry delay past it - the fill is "the first price at least the delay after the alert" - and
-  // pushed prices seen just inside a window out of it.
+  // few at a time, with retries), and stamping each tick after it pushed prices seen just inside
+  // a window out of it.
   const observedAt = new Date();
   const priceByMint = new Map<string, number>();
   try {
@@ -308,14 +290,12 @@ export async function runCandidateWatchJob(
       if (crashContradicted) crashTicksSkipped += 1;
       if (snapshot) fromSnapshots += 1;
       const price = dexPrice ?? snapshot?.priceUsd;
-      // When the price was seen: the sweep's fetch, or the snapshot's own time - a fill or a 2x is
+      // When the price was seen: the sweep's fetch, or the snapshot's own time - a 2x or a stop is
       // timed by when the price existed, not by when this sweep got round to it.
       const priceAt = snapshot?.at ?? tickAt;
 
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
-      // Until the fill is taken, every tick goes through the entry rule (see EntryRule).
-      const entryRule = entryRuleFor(row.features, env);
-      const aggUpdates = price !== undefined ? applyPriceTick(row, price, priceAt, entryRule) : {};
+      const aggUpdates = price !== undefined ? applyPriceTick(row, price, priceAt) : {};
       const merged: OutcomeAggregates = { ...row, ...aggUpdates };
 
       const data: Prisma.CandidateOutcomeUpdateInput = { ...aggUpdates, lastCheckedAt: tickAt };
@@ -337,9 +317,9 @@ export async function runCandidateWatchJob(
       let runPeakMinutes: number | null = null;
       let closedUngraded = false;
       if (row.finalizedAt === null && elapsedMs > winWindowMs && merged.entryAt === null) {
-        // The win window closed without a single price at or past the entry delay: the worker was
-        // down, or DexScreener had nothing for the mint through it. A fill can no longer be taken
-        // (applyPriceTick refuses one past the win window), so there is nothing to grade from and
+        // The win window closed without a single price: the worker was down, or DexScreener had
+        // nothing for the mint through it. A first price past the win window is refused
+        // (applyPriceTick), so there is nothing to grade from and
         // the row is retired ungraded now rather than price-checked for another 15 minutes -
         // finalizedAt stays null, which keeps it out of training, the AI's graded record and every
         // hit rate, and no verdict is copied to an alert. Graded, it read as a clean loss off the
@@ -359,7 +339,7 @@ export async function runCandidateWatchJob(
         data.labelValue = closedLabels.labelValue;
         // The call's return under the fixed exit plan, closing at this tick's price (the first
         // seen at or after the window closed) or, without one, the last price the row saw.
-        simReturnPct = simulateExitPlan(merged, price ?? row.lastPriceUsd, entryRule.slippageFraction);
+        simReturnPct = simulateExitPlan(merged, price ?? row.lastPriceUsd);
         data.simReturnPct = simReturnPct;
         finalized += 1;
 
@@ -411,7 +391,7 @@ export async function runCandidateWatchJob(
       // rule. Found through the token (Match.tokenId is indexed; candidateOutcomeId deliberately
       // isn't - see schema.prisma).
       const copyToMatches = row.sampleKind === "match" && closedLabels !== null;
-      // An alert whose row closed with no fill gets only the closing time: that is what tells the
+      // An alert whose row closed with no price seen gets only the closing time: that is what tells the
       // feed and the hit-rate report "this one will never be graded" - without it the card kept
       // reading as a live miss off the unmoved anchor, and the report counted it as pending
       // forever. Copied, like the verdicts, because the row itself is pruned later.
@@ -420,8 +400,8 @@ export async function runCandidateWatchJob(
       await prisma.$transaction(async (tx) => {
         // Only if the row is still anchored where this sweep read it. A curated alert going out
         // moves a fresh row's anchor to the moment it is sent (emitCuratedAlert); a tick computed
-        // against the old anchor would take the fill seconds after the alert from a price seen
-        // before it, and overwrite the moved row's schedule. The next sweep picks it up instead.
+        // against the old anchor would fold in a price seen before the alert, and overwrite the
+        // moved row's schedule. The next sweep picks it up instead.
         const written = await tx.candidateOutcome.updateMany({
           where: { id: row.id, anchorAt: row.anchorAt },
           data: data as Prisma.CandidateOutcomeUpdateManyMutationInput,
@@ -475,7 +455,7 @@ export async function runCandidateWatchJob(
   const repaired = (await repairCuratedVerdicts()) + (await repairUngradedAlerts());
 
   // Returned as well as logged: it lands on the job's heartbeat, so GET /health/worker shows how
-  // many due rows the fetch priced and how many closed with no fill - the regression above was
+  // many due rows the fetch priced and how many closed with no price seen - the regression above was
   // invisible there before.
   const summary = {
     due: due.length,
@@ -493,7 +473,7 @@ export async function runCandidateWatchJob(
 }
 
 /**
- * Stamps the closing time onto curated alerts whose row was retired ungraded (no fill inside the
+ * Stamps the closing time onto curated alerts whose row was retired ungraded (no price inside the
  * win window) before the watcher copied it - rows closed by earlier builds, which stamped nothing,
  * so their alerts read as pending or as a live miss. One statement; it matches nothing once the
  * stranded alerts are stamped, and only alerts whose row still exists can be found.

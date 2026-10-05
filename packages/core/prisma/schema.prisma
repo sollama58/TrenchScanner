@@ -505,15 +505,15 @@ model CandidateOutcome {
 
   /// The moment the label is measured FROM - "if the curator had alerted right now".
   anchorAt       DateTime  @default(now())
-  /// The base every label is graded from: the scan price at creation, then - once the watcher
-  /// takes the fill (entryAt) - the higher of the scan price and the first tick at least
-  /// CANDIDATE_ENTRY_DELAY_SECONDS later, plus slippage. See EntryRule in curation/labels.ts.
+  /// The base every label is graded from: the price the token was detected and alerted at (the
+  /// scan price). Label-rule-2 rows (2026-10-03 to 10-05) moved it to a "realistic fill"; the
+  /// 20261005080000 migration moved them back.
   anchorPriceUsd Float
   anchorMcapUsd  Float
-  /// When the fill was taken. Null until then; rows created before fills existed were stamped
-  /// with anchorAt by the migration (graded from the scan price, as they always were).
+  /// When the watcher first priced the row (inside the win window). Null until then; a row with
+  /// no price inside the win window closes ungraded.
   entryAt        DateTime?
-  /// The scan price, kept once anchorPriceUsd has moved to the fill.
+  /// The scan price, stamped when the row is first priced (equal to anchorPriceUsd).
   signalPriceUsd Float?
   /// How the row came to be sampled - the trainer and the cutoff calibration care which:
   ///  - "hourly": the background sample, at most once per CANDIDATE_SAMPLE_SPACING_MINUTES.
@@ -527,10 +527,10 @@ model CandidateOutcome {
   ///    filters, so kept out of training too.
   sampleKind     String    @default("hourly")
   /// Which grading rule the labels follow (LEGACY_LABEL_RULE / CURRENT_LABEL_RULE in
-  /// curation/trainer.ts): 1 = graded from the scan price (every row anchored before the fill
-  /// rule shipped on 2026-10-03), 2 = from a realistic fill. The trainer down-weights rule-1 rows
-  /// and the exam grades rule-2 rows only; the two have different base rates.
-  labelRule      Int       @default(2)
+  /// curation/labels.ts): 1 = the scan price under the old 1-hour rule (before 2026-10-03),
+  /// 2 = a realistic fill (2026-10-03 to 10-05, re-graded to 3 where the aggregates allow),
+  /// 3 = the alert price. The trainer down-weights older rules and the exam grades rule 3 only.
+  labelRule      Int       @default(3)
 
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
   /// snapshot knew, NOT a snapshot reference, so training data outlives the 30-day

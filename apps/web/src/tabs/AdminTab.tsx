@@ -875,7 +875,7 @@ function Alerts() {
     <div className="stack">
       <Panel
         title="Hit rates"
-        note="Graded on the production rules: 2x within 15 minutes (goal 4x within 30) of a realistic fill, a 50% drop first is a loss."
+        note="Graded on the production rules: 2x within 15 minutes (goal 4x within 30) of the alert price, a 50% drop first is a loss."
         actions={
           <div className="segmented" role="tablist" aria-label="Window">
             {[1, 7, 30, 90].map((d) => (
@@ -998,7 +998,7 @@ function Alerts() {
                 ) : a.hit2xIn1h === false ? (
                   <Tag tone="bad">miss</Tag>
                 ) : a.outcomeFinalizedAt ? (
-                  // Closed with no fill inside the win window (an outage) - never graded.
+                  // Closed with no price inside the win window (an outage) - never graded.
                   <Tag tone="muted">ungraded</Tag>
                 ) : (
                   <Tag tone="muted">open</Tag>

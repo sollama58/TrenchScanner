@@ -1,4 +1,5 @@
 import { LEARNER_FEATURE_NAMES } from "./features.js";
+import { isCurrentLabelRule } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 
 /**
@@ -329,7 +330,7 @@ function recencyWeights(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
     let weight = decay ? 0.5 ** ((newest - row.anchorAt.getTime()) / halfLifeMs) : 1;
-    if (legacyLabelWeight !== undefined && row.labelRule !== undefined && row.labelRule < 2) {
+    if (legacyLabelWeight !== undefined && !isCurrentLabelRule(row)) {
       weight *= legacyLabelWeight;
     }
     w[i] = weight;

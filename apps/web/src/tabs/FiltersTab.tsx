@@ -282,7 +282,7 @@ export function FiltersTab() {
             </p>
             <p className="muted small">
               Each filter's 2x / 4x rate uses the same rule as the curated feed: 2x within 15 minutes (4x
-              within 30) of a realistic fill, before a 50% drop.
+              within 30) of the alert price, before a 50% drop.
             </p>
           </div>
         )}

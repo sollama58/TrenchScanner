@@ -12,8 +12,7 @@ import {
  * stop and one whose losers drift 10% lower read the same. This puts a return on every graded
  * call instead, under one plan applied to everything (EXIT_PLAN):
  *
- *   - buy at the realistic fill the labels are graded from (CandidateOutcome.anchorPriceUsd: the
- *     first price CANDIDATE_ENTRY_DELAY_SECONDS after the alert, plus slippage),
+ *   - buy at the alert price the labels are graded from (CandidateOutcome.anchorPriceUsd),
  *   - sell a share of the position at each take-profit multiple, lowest first,
  *   - sell whatever is left at the stop if the price falls to it first,
  *   - and close whatever is still held when the label window (30 minutes) is up.
@@ -26,16 +25,13 @@ import {
  * assumes the trader fills at the level itself (a sell at exactly 2x, a stop at exactly -50%)
  * rather than at a gap through it.
  *
- * Every sale pays the same slippage the fill did (the venue's CANDIDATE_ENTRY_SLIPPAGE_PCT_*):
- * selling into a thin curve moves against the seller just as buying does.
- *
  * The result is written once, when a row's label window closes (candidateOutcomeJob.ts), and copied onto
  * any curated alert anchored to the row, like the other verdicts. Changing the plan changes rows
  * graded from then on; rows already graded keep the number they were graded with.
  */
 
 export interface TakeProfit {
-  /** Sell when the price reaches this multiple of the fill. */
+  /** Sell when the price reaches this multiple of the alert price. */
   multiple: number;
   /** The share of the ORIGINAL position sold there, 0-1. */
   sellFraction: number;
@@ -45,7 +41,7 @@ export interface ExitPlan {
   /** The ladder, in any order (it is applied lowest multiple first). Sell fractions sum to at most 1. */
   takeProfits: readonly TakeProfit[];
   /**
-   * Sell everything left when the price falls to this fraction of the fill. Fixed to the label
+   * Sell everything left when the price falls to this fraction of the alert price. Fixed to the label
    * stop: it is the only stop the watcher tracks.
    */
   readonly stopFraction: number;
@@ -86,8 +82,8 @@ export function describeExitPlan(plan: ExitPlan = EXIT_PLAN): string {
     ? `${hours} hour${hours === 1 ? "" : "s"}`
     : `${plan.maxHoldMinutes} minutes`;
   return (
-    `Buy at the realistic fill, ${steps.join(", ")}, stop out at -${stopPct}%, ` +
-    `and close whatever is left at ${hold}. Sales pay the same slippage as the buy.`
+    `Buy at the alert price, ${steps.join(", ")}, stop out at -${stopPct}%, ` +
+    `and close whatever is left at ${hold}.`
   );
 }
 
@@ -105,7 +101,6 @@ export type SimulationInput = Pick<
 export function simulateExitPlan(
   row: SimulationInput,
   closePriceUsd: number | null,
-  exitSlippageFraction: number,
   plan: ExitPlan = EXIT_PLAN,
 ): number | null {
   const entry = row.anchorPriceUsd;
@@ -119,7 +114,7 @@ export function simulateExitPlan(
       : row.low1hPriceUsd <= entry * plan.stopFraction;
 
   let held = 1;
-  let proceeds = 0; // in multiples of the stake, before slippage
+  let proceeds = 0; // in multiples of the stake
   for (const tp of [...plan.takeProfits].sort((a, b) => a.multiple - b.multiple)) {
     if (held <= 1e-9 || peak < entry * tp.multiple) break;
     const share = Math.min(tp.sellFraction, held);
@@ -132,5 +127,5 @@ export function simulateExitPlan(
       proceeds += held * (closePriceUsd / entry);
     else return null;
   }
-  return (proceeds * (1 - exitSlippageFraction) - 1) * 100;
+  return (proceeds - 1) * 100;
 }

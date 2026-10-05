@@ -29,6 +29,21 @@
  * the label describes what a human watching the chart at the same cadence could have traded.
  */
 
+/**
+ * Which grading rule a CandidateOutcome row's labels came from (CandidateOutcome.labelRule):
+ *   1 - the scan price, with the old pipeline's features (rows from before 2026-10-03),
+ *   2 - a "realistic fill": the first price a minute after the alert plus slippage (2026-10-03 to
+ *       2026-10-05; re-graded to rule 3 from their recorded aggregates where they could be),
+ *   3 - the price the token was detected and alerted at (user decision 2026-10-05).
+ */
+export const LEGACY_LABEL_RULE = 1;
+export const CURRENT_LABEL_RULE = 3;
+
+/** Whether a row's label was graded under the current rule - see CURRENT_LABEL_RULE. */
+export function isCurrentLabelRule(row: { labelRule?: number }): boolean {
+  return row.labelRule === undefined || row.labelRule >= CURRENT_LABEL_RULE;
+}
+
 /** How long the WIN has to land in - "2x within 15 minutes" of the alert. */
 export const WIN_WINDOW_MINUTES = 15;
 /** How long the GOAL has to land in - "4x within 30 minutes" of the alert. */
@@ -60,30 +75,21 @@ export const DISQUALIFYING_DRAWDOWN_FRACTION = 0.5;
 const LABEL_CAP_MULTIPLE = 100;
 export const LABEL_LOG2_CAP = Math.log2(LABEL_CAP_MULTIPLE);
 
-/**
- * How a row's FILL is taken - the price a trader acting on the alert by hand could actually have
- * bought at. The first tick at least `delayMs` after the anchor becomes the entry; the base every
- * label is graded from is the higher of the signal price and that tick, plus `slippageFraction`
- * for the spread and impact of a real buy on a thin market. Grading from the signal price itself
- * credited fills no one gets: the ranking leans on the last 5-minute candle, so picks are usually
- * mid-move, and a 2x from the signal can be a 1.5x from a real fill.
- */
-export interface EntryRule {
-  delayMs: number;
-  slippageFraction: number;
-}
-
 /** The running aggregates a CandidateOutcome row carries between price ticks. */
 export interface OutcomeAggregates {
   anchorAt: Date;
   /**
-   * The base labels are graded from. The signal (scan) price until the entry is taken, then the
-   * fill - see EntryRule. The signal price itself is preserved in signalPriceUsd.
+   * The base labels are graded from: the price the token was detected and alerted at (the scan
+   * price). It never moves (user decision 2026-10-05; from 2026-10-03 to then it moved to a
+   * "realistic fill" a minute later plus slippage, label rule 2).
    */
   anchorPriceUsd: number;
-  /** When the fill was taken; null until then (and on rows that predate fills - see migration). */
+  /**
+   * When the watcher first saw a price for the row, inside the win window; null until then. A row
+   * that never gets one closes ungraded (see the candidate watcher).
+   */
   entryAt: Date | null;
-  /** The scan price the alert was made at, kept once the base moves to the fill. */
+  /** The alert price again, stamped with the first observation (the export and old rows read it). */
   signalPriceUsd: number | null;
   peak1hPriceUsd: number;
   peak1hAt: Date | null;
@@ -129,43 +135,23 @@ export function initialOutcomeAggregates(anchorPriceUsd: number, anchorAt: Date)
  * window's aggregates - the boundary is judged by the tick's own timestamp, so a sweep that runs
  * late can't smuggle a price from past the window into the labels.
  *
- * With an entry rule, ticks before the fill are ignored outright (no trader holds the token yet,
- * so neither a 2x nor a stop-out has happened to them), and the first tick at or past the delay
- * takes the fill: the base moves to it and every aggregate restarts from that tick. A tick past
- * the win window never takes it: a buy made after the 2x deadline can't win.
+ * Every label is measured from the alert price (agg.anchorPriceUsd). The first tick also stamps
+ * entryAt - the row has been observed - unless it lands past the win window: a row whose first
+ * price comes after the 2x deadline was never watched while it could win, so it closes ungraded
+ * rather than as a loss graded on nothing it saw.
  */
 export function applyPriceTick(
   agg: OutcomeAggregates,
   priceUsd: number,
   at: Date,
-  entry?: EntryRule,
 ): Partial<OutcomeAggregates> {
   const updates: Partial<OutcomeAggregates> = {};
   if (!Number.isFinite(priceUsd) || priceUsd <= 0) return updates;
 
-  if (entry && agg.entryAt === null) {
-    const sinceAnchorMs = at.getTime() - agg.anchorAt.getTime();
-    if (sinceAnchorMs < entry.delayMs) return updates;
-    // No fill once the win window has passed: the first price seen after an outage would become
-    // the base and every aggregate would restart from it - a "loss" graded on nothing the row
-    // ever watched, since a fill past the 2x deadline can never win. A row that never got its
-    // fill closes ungraded instead (see the candidate watcher).
-    if (sinceAnchorMs > WIN_WINDOW_MINUTES * 60_000) return updates;
-    const base = Math.max(agg.anchorPriceUsd, priceUsd) * (1 + entry.slippageFraction);
-    return {
-      entryAt: at,
-      signalPriceUsd: agg.anchorPriceUsd,
-      anchorPriceUsd: base,
-      peak1hPriceUsd: priceUsd,
-      peak1hAt: at,
-      low1hPriceUsd: priceUsd,
-      lowBefore2xPriceUsd: priceUsd,
-      hit2xAt: null,
-      peak24hPriceUsd: priceUsd,
-      peak24hAt: at,
-      peakBeforeStopPriceUsd: priceUsd,
-      stoppedAt: priceUsd <= base * DISQUALIFYING_DRAWDOWN_FRACTION ? at : null,
-    };
+  if (agg.entryAt === null) {
+    if (at.getTime() - agg.anchorAt.getTime() > WIN_WINDOW_MINUTES * 60_000) return updates;
+    updates.entryAt = at;
+    updates.signalPriceUsd = agg.anchorPriceUsd;
   }
 
   const withinLabelWindow = at.getTime() - agg.anchorAt.getTime() <= CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;

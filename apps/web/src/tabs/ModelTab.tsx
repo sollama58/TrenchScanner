@@ -215,7 +215,7 @@ export function ModelTab() {
             </li>
           </ol>
           <p className="faint small">
-            Live 2x rate over the last {days} days at each step. Fill: {data.rules.fill}.
+            Live 2x rate over the last {days} days at each step. Entry: {data.rules.fill}.
           </p>
         </section>
 
@@ -921,19 +921,18 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
         <p className="small">
           <strong>
             {board.exitPlan ??
-              "Buy at the realistic fill, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 30 minutes."}
+              "Buy at the alert price, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 30 minutes."}
           </strong>
         </p>
         <ol className="steps small">
           <li>
-            <strong>The fill is the one the hit rates use:</strong> the first price a minute after the alert,
-            plus slippage, so nobody is credited with a price they couldn't get.
+            <strong>The entry is the one the hit rates use:</strong> the price the token was at when it was
+            detected and alerted.
           </li>
           <li>
             <strong>Some worked calls.</strong> One that runs to 4x returns +200% (half sold at 2x, half at
             4x). One that doubles and then falls to the stop returns +25%. One that drops to the stop first
-            returns -50%. One that ends its 30 minutes 20% up without reaching 2x returns +20%. Each sale also
-            pays the slippage, so the real figures sit a little lower.
+            returns -50%. One that ends its 30 minutes 20% up without reaching 2x returns +20%.
           </li>
           <li>
             <strong>Avg profit</strong> is the average return per graded live call.{" "}
@@ -998,7 +997,7 @@ function HowItWorks({ board }: { board: Leaderboard }) {
       <ol className="steps">
         <li>
           <strong>Train.</strong> Every few hours each model refits on the last weeks of graded decision
-          moments: what a token looked like, and whether it then hit 2x on a realistic fill within 15 minutes.
+          moments: what a token looked like, and whether it then hit 2x on the alert price within 15 minutes.
           The models differ on purpose: {learners.join(", ")} see the market through different families,
           memories and signals.
         </li>

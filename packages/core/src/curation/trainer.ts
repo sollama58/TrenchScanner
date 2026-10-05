@@ -7,7 +7,7 @@ import {
   type McapBand,
 } from "./curator.js";
 import type { IsotonicCalibration } from "./calibration.js";
-import { CANDIDATE_WATCH_WINDOW_MINUTES, GOAL_MULTIPLE } from "./labels.js";
+import { CANDIDATE_WATCH_WINDOW_MINUTES, GOAL_MULTIPLE, isCurrentLabelRule } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 import {
   BOOSTED_MODEL_KIND,
@@ -54,11 +54,10 @@ export interface TrainingRow {
    */
   tokenId?: string;
   /**
-   * Which grading rule the label came from (CandidateOutcome.labelRule): LEGACY_LABEL_RULE rows
-   * were graded from the scan price, CURRENT_LABEL_RULE rows from a realistic fill. The two are
-   * different questions with different base rates (about 16% vs 7% doubling), so the trainer
-   * down-weights legacy rows (TrainOptions.legacyLabelWeight) and the exam grades only current
-   * ones. Omitted = current.
+   * Which grading rule the label came from (CandidateOutcome.labelRule - see CURRENT_LABEL_RULE
+   * in labels.ts). Rows graded under an older rule answer a different question, so the trainer
+   * down-weights them (TrainOptions.legacyLabelWeight) and the exam grades only current ones.
+   * Omitted = current.
    */
   labelRule?: number;
   /**
@@ -68,20 +67,10 @@ export interface TrainingRow {
   survived?: boolean;
   /**
    * For a clean winner whose extended watch has ended: its run peak, the highest price over the
-   * whole watch as a multiple of the fill - how far it went after the call. Omitted otherwise.
+   * whole watch as a multiple of the alert price - how far it went after the call. Omitted otherwise.
    * Read by the runner-traits report (featureReport.ts), not by the fit.
    */
   runPeakMultiple?: number;
-}
-
-/** Graded from the scan price - every row anchored before the fill rule shipped on 2026-10-03. */
-export const LEGACY_LABEL_RULE = 1;
-/** Graded from a realistic fill (first price >= CANDIDATE_ENTRY_DELAY_SECONDS after the anchor, plus slippage). */
-export const CURRENT_LABEL_RULE = 2;
-
-/** Whether a row's label was graded under the current rule - see TrainingRow.labelRule. */
-export function isCurrentLabelRule(row: { labelRule?: number }): boolean {
-  return row.labelRule === undefined || row.labelRule >= CURRENT_LABEL_RULE;
 }
 
 /**
@@ -343,9 +332,8 @@ export interface TrainOptions {
    */
   transform?: FeatureTransform | null;
   /**
-   * Weight multiplier for rows graded under LEGACY_LABEL_RULE (scan-price labels, a different
-   * and easier question than the fill-price one the feed is held to). Omitted = 1: legacy rows
-   * count in full.
+   * Weight multiplier for rows graded under an older label rule (see CURRENT_LABEL_RULE): a
+   * different question than the one the feed is held to. Omitted = 1: legacy rows count in full.
    */
   legacyLabelWeight?: number;
 }

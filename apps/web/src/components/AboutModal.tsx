@@ -100,11 +100,11 @@ export function AboutModal({
 
         <h3>How alerts are graded</h3>
         <p>
-          Every alert, yours and the models&apos;, is graded the same way. The entry is a realistic fill: the
-          first price at least a minute after the alert, plus slippage. It&apos;s a win if it reaches 2x
-          within 15 minutes of the alert, and a 4x win if it reaches 4x within 30 minutes. If it drops 50%
-          before doubling, it&apos;s stopped out and counts as a loss. Winners stay watched for a day after,
-          so the card&apos;s Peak shows how high they went.
+          Every alert, yours and the models&apos;, is graded the same way, from the price the token was at
+          when it was detected and alerted. It&apos;s a win if it reaches 2x within 15 minutes of the alert,
+          and a 4x win if it reaches 4x within 30 minutes. If it drops 50% before doubling, it&apos;s stopped
+          out and counts as a loss. Winners stay watched for a day after, so the card&apos;s Peak shows how
+          high they went.
         </p>
         <dl className="about-terms">
           <dt>Live · 12m left</dt>
@@ -114,7 +114,7 @@ export function AboutModal({
           <dt>✕ Missed 2x</dt>
           <dd>The 15 minutes ran out before it doubled.</dd>
           <dt>✕ Stopped out</dt>
-          <dd>Fell 50% from the fill before doubling.</dd>
+          <dd>Fell 50% from the alert price before doubling.</dd>
           <dt>Grading</dt>
           <dd>The window is over and the result is being worked out.</dd>
         </dl>

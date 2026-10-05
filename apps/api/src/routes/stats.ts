@@ -56,9 +56,9 @@ export interface GradedCounts {
   calls: number;
   /** Calls whose verdict is in (the rest are still inside their window, or lost their anchor). */
   graded: number;
-  /** Doubled within 15 minutes from the fill without first falling through the 50% stop. */
+  /** Doubled within 15 minutes from the alert price without first falling through the 50% stop. */
   won2x: number;
-  /** Reached 4x within 30 minutes from the fill, stop respected. */
+  /** Reached 4x within 30 minutes from the alert price, stop respected. */
   won4x: number;
   /** Doubled only after first falling through the stop - counted as losses. */
   doubledAfterStop: number;
@@ -72,7 +72,7 @@ export interface GradedCounts {
    * Calls with no verdict that never will get one, so they are not "pending" either. Filter
    * alerts: a Match with no grading anchor (every match before grading shipped on 2026-10-03, or
    * one whose anchor write failed) has nothing for the watcher to close. Curated alerts: the row
-   * closed with no fill inside the win window (a worker outage, or a mint with no price), so the
+   * closed with no price inside the win window (a worker outage, or a mint with no price), so the
    * watcher retired it ungraded.
    */
   ungradable?: number;
@@ -196,7 +196,7 @@ function toCounts(r: RawCounts): GradedCounts {
 
 /**
  * The read-only hit-rate report: how production alerts grade under the current rules - a win is
- * 2x within 15 minutes (goal 4x within 30) of a realistic fill, and a 50% drop before the double is a loss
+ * 2x within 15 minutes (goal 4x within 30) of the alert price, and a 50% drop before the double is a loss
  * (see curation/labels.ts). Every figure comes from the same CandidateOutcome labels the feed's
  * own stats use; nothing here grades anything itself.
  *
@@ -382,7 +382,7 @@ export function toWinnerRuns(r: WinnerRunRow) {
     winners: Number(r.winners),
     /** Of those, how many have finished their run watch (the rest are still being watched). */
     finished,
-    /** The median winner's run peak, as a multiple of the fill. */
+    /** The median winner's run peak, as a multiple of the alert price. */
     medianPeakMultiple: round1(r.median_multiple),
     bestPeakMultiple: round1(r.best_multiple),
     /** Share of finished winners whose run went on to 4x / 10x at some point in the 24h watch. */
@@ -594,7 +594,7 @@ export async function buildHitRateReport(
     if (userIds.length === 0) return [];
     // A match is anchored a moment after it is created (anchorMatchOutcome), so an unanchored one
     // only counts as ungradable once it is older than that gap could plausibly be. One whose
-    // anchor row closed with no fill inside the win window (an outage) is ungradable too, for as
+    // anchor row closed with no price inside the win window (an outage) is ungradable too, for as
     // long as that row exists to say so; Match carries no closing time of its own.
     return prisma.$queryRaw<(RawCounts & { filterId: string; name: string; ungradable: bigint })[]>`
       SELECT m."filterId" AS "filterId",
@@ -632,7 +632,7 @@ export async function buildHitRateReport(
     ORDER BY 1`;
 
   // How far clean winners ran after the call: each one stays on the 24h watch once it wins, and
-  // its run peak (the highest price over the watch, on the fill) and when it came are recorded.
+  // its run peak (the highest price over the watch, on the alert price) and when it came are recorded.
   // Curated alerts are the feed's own calls; samples are the training population.
   const winnerRunRows = prisma.$queryRaw<WinnerRunRow[]>`
     WITH winners AS (
@@ -728,13 +728,13 @@ export async function buildHitRateReport(
   return {
     window: { since, until },
     rules: {
-      win: `2x on the fill within ${WIN_WINDOW_MINUTES} minutes of the alert, without first falling 50% below it`,
-      goal: `4x on the fill within ${GOAL_WINDOW_MINUTES} minutes of the alert, same stop`,
+      win: `2x on the alert price within ${WIN_WINDOW_MINUTES} minutes of the alert, without first falling 50% below it`,
+      goal: `4x on the alert price within ${GOAL_WINDOW_MINUTES} minutes of the alert, same stop`,
       windowsNote:
         "The windows were 1 hour each until 2026-10-05; older calls were re-graded under the current windows from their recorded price path.",
       runPeak: `clean winners stay watched for ${CANDIDATE_EXTENDED_WATCH_HOURS}h to record how far they ran (winnerRuns)`,
-      fill: `first price at least ${env.CANDIDATE_ENTRY_DELAY_SECONDS}s after the alert, plus slippage`,
-      note: "Rows anchored before the fill rule shipped were graded from the scan price.",
+      fill: "the price the token was detected and alerted at (no delay, no slippage)",
+      note: "From 2026-10-03 to 2026-10-05 calls were graded from a fill a minute later plus slippage; those were re-graded from the alert price.",
       exitPlan: describeExitPlan(),
     },
     targets,

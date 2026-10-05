@@ -221,7 +221,6 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       snapshotDownsampleAfterDays: env.SNAPSHOT_DOWNSAMPLE_AFTER_DAYS,
       walletHoldingsCacheRetentionHours: env.WALLET_HOLDINGS_CACHE_RETENTION_HOURS,
       candidateOutcomeRetentionDays: env.CANDIDATE_OUTCOME_RETENTION_DAYS,
-      candidateEntryDelaySeconds: env.CANDIDATE_ENTRY_DELAY_SECONDS,
       curatedTargetWinRatePct: env.CURATED_TARGET_WIN_RATE_PCT,
       curatedTargetGoalRatePct: env.CURATED_TARGET_GOAL_RATE_PCT,
       curatedTargetPerHour: env.CURATED_TARGET_PER_HOUR,

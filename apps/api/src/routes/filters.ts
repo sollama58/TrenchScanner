@@ -87,8 +87,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       where: { userId: request.user!.userId },
       orderBy: { createdAt: "asc" },
     });
-    // Each filter's last-30-day record on the curated feed's verdict (2x within 15 minutes of a realistic
-    // fill, a 50% drop first is a loss) - additive, so an older dashboard simply ignores it.
+    // Each filter's last-30-day record on the curated feed's verdict (2x within 15 minutes of the alert
+    // price, a 50% drop first is a loss) - additive, so an older dashboard simply ignores it.
     const records = await loadFilterTrackRecords(filters).catch(() => new Map());
     return filters.map((f) => ({ ...f, trackRecord: records.get(f.id) ?? null }));
   });
