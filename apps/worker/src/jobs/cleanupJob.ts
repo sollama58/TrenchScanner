@@ -365,6 +365,22 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         AND o."peak24hReturnPct" IS NOT NULL
         AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
         AND m."peak24hReturnPct" IS NULL`;
+    // The verdict too, for an alert whose copy never landed (a crash between the old split writes,
+    // or an anchor attached after its window closed). The watcher repairs curated alerts this
+    // way every sweep; match alerts had no such pass, and once the anchor below was gone the
+    // alert counted as pending in every hit rate forever.
+    await prisma.$executeRaw`
+      UPDATE "Match" m
+      SET "hit2xIn1h" = o."hit2xIn1h",
+          "hit4xIn1h" = o."hit4xIn1h",
+          "disqualified" = o."disqualified",
+          "peak1hReturnPct" = o."peak1hReturnPct",
+          "maxDrawdown1hPct" = o."maxDrawdown1hPct"
+      FROM "CandidateOutcome" o
+      WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${matchOutcomeCutoff}
+        AND o."finalizedAt" IS NOT NULL
+        AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
+        AND m."hit2xIn1h" IS NULL`;
   }
   const deletedCandidateOutcomes = {
     count: await deleteInBatches(
