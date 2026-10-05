@@ -458,6 +458,20 @@ const envSchema = z.object({
   AI_TEXT_MODEL: z.string().default("claude-opus-5-5"),
   AI_TEXT_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
   AI_TEXT_MAX_PER_HOUR: z.coerce.number().int().min(0).default(60),
+  // The hard daily cap on everything the AI spends (curation/aiSpend.ts): the reviewer, the text
+  // reads and the playbook evolution share AI_DAILY_BUDGET_USD per UTC day. Every call reserves
+  // its estimated cost before it runs and is trued up to the real cost afterwards; once the next
+  // call would cross the cap, the AI stops until midnight UTC (shown on /health/worker and the
+  // Admin tab). The last AI_BUDGET_REVIEW_RESERVE_PCT of the cap is kept for reviews of
+  // high-conviction picks - background work (text reads, playbook tests, reviews of standard
+  // picks) pauses once spend reaches the rest. 0 stops every AI call.
+  AI_DAILY_BUDGET_USD: z.coerce.number().min(0).default(10),
+  AI_BUDGET_REVIEW_RESERVE_PCT: z.coerce.number().min(0).max(100).default(40),
+  // Which picks the reviewer is pointed at. It always reviews the default model's high-conviction
+  // picks (tier "high", or every pick when the model has no high-conviction cutoff yet).
+  // "spare": standard picks are reviewed too, but only out of the budget left above the
+  // high-conviction reserve. "never": standard picks are never reviewed.
+  AI_REVIEW_STANDARD_PICKS: z.enum(["spare", "never"]).default("spare"),
 
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),

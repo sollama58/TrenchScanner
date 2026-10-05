@@ -399,7 +399,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     await viewStamps.stop();
   });
 
-  await app.register(registerHealthRoutes, { prefix: "/health" });
+  await app.register(registerHealthRoutes, { prefix: "/health", env });
   await app.register(registerConfigRoutes, { prefix: "/config", env });
 
   await app.register(registerAuthRoutes, { prefix: "/auth", env });

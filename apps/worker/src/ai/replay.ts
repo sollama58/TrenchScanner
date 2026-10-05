@@ -8,12 +8,15 @@ import {
   nearestOutcomes,
   scoredFromFeatures,
   summarizeJudgeRecord,
+  aiSpendDay,
+  usageCostUsd,
   type CurationDecision,
   type Env,
   type JudgeRecordSummary,
   type JudgedCall,
 } from "@trenchscanner/core";
 import { anthropicClient, describeAnthropicError } from "./client.js";
+import { aiBudgetRoomUsd, estimateCallUsd, reserveAiSpend, settleAiSpend } from "./budget.js";
 import { blendTargets } from "./blend.js";
 import {
   COMPARABLES_K,
@@ -157,8 +160,27 @@ function parseCustomId(id: string): { playbookIndex: number; candidateOutcomeId:
 }
 
 /**
+ * What one replay request is expected to cost: the last scored run's real cost per request, or,
+ * before any, a live review's estimate at the Batches API's half price.
+ */
+export async function replayRequestUsd(env: Env): Promise<number> {
+  const last = await prisma.aiReplayRun.findFirst({
+    where: { status: "scored", costUsd: { not: null }, requestCount: { gt: 0 }, model: env.AI_REVIEW_MODEL },
+    orderBy: { createdAt: "desc" },
+    select: { costUsd: true, requestCount: true },
+  });
+  if (last?.costUsd) return last.costUsd / last.requestCount;
+  return estimateCallUsd("review", env.AI_REVIEW_MODEL) * 0.5;
+}
+
+export type SubmitReplayResult =
+  { runId: string } | { runId: null; reason: "nothing-to-replay" | "over-budget" | "submit-failed" };
+
+/**
  * Submits one replay: every item under every playbook, as one Message Batch. Records the run
- * first so a failed submit is visible; returns its id, or null when there was nothing to replay.
+ * first so a failed submit is visible. A replay is background work on the daily AI budget: the
+ * items are trimmed to what the budget left above the high-conviction reserve can pay for, and
+ * when that is fewer than `minItems` nothing is sent ("over-budget").
  */
 export async function submitReplay(
   env: Env,
@@ -167,11 +189,30 @@ export async function submitReplay(
     playbooks: { id: string; text: string }[];
     items: ReplayItem[];
     window: { from: Date; to: Date };
+    /** The fewest items worth replaying; fewer affordable and the replay waits. Default 1. */
+    minItems?: number;
   },
-): Promise<string | null> {
-  if (opts.items.length === 0 || opts.playbooks.length === 0) return null;
-  // Every playbook sees the same items, so the cap trims items, never one playbook's share.
-  const items = opts.items.slice(0, Math.floor(MAX_BATCH_REQUESTS / opts.playbooks.length));
+): Promise<SubmitReplayResult> {
+  if (opts.items.length === 0 || opts.playbooks.length === 0) {
+    return { runId: null, reason: "nothing-to-replay" };
+  }
+  const perRequestUsd = await replayRequestUsd(env);
+  const affordable = Math.floor(
+    (await aiBudgetRoomUsd(env, "background")) / (perRequestUsd * opts.playbooks.length),
+  );
+  // Every playbook sees the same items, so the caps trim items, never one playbook's share.
+  const items = opts.items.slice(
+    0,
+    Math.min(Math.floor(MAX_BATCH_REQUESTS / opts.playbooks.length), affordable),
+  );
+  if (items.length < Math.max(1, opts.minItems ?? 1)) {
+    logger.info("ai replay waits for budget", {
+      purpose: opts.purpose,
+      affordable,
+      wanted: opts.items.length,
+    });
+    return { runId: null, reason: "over-budget" };
+  }
   const { type, schema } = zodOutputFormat(VerdictSchema);
   const requests = opts.playbooks.flatMap((playbook, p) => {
     const system = aiReviewSystemPrompt(playbook.text);
@@ -187,6 +228,9 @@ export async function submitReplay(
     }));
   });
 
+  const estimatedCostUsd = perRequestUsd * requests.length;
+  const reservation = await reserveAiSpend(env, "replay", estimatedCostUsd, "background");
+  if (!reservation) return { runId: null, reason: "over-budget" };
   const run = await prisma.aiReplayRun.create({
     data: {
       purpose: opts.purpose,
@@ -196,6 +240,7 @@ export async function submitReplay(
       windowStart: opts.window.from,
       windowEnd: opts.window.to,
       requestCount: requests.length,
+      estimatedCostUsd,
     },
   });
   try {
@@ -207,12 +252,17 @@ export async function submitReplay(
       requests: requests.length,
       batch: batch.id,
     });
-    return run.id;
+    return { runId: run.id };
   } catch (err) {
+    // A batch that was never created runs nothing and bills nothing.
+    await settleAiSpend(reservation, 0);
     const error = describeAnthropicError(err);
-    await prisma.aiReplayRun.update({ where: { id: run.id }, data: { status: "failed", error } });
+    await prisma.aiReplayRun.update({
+      where: { id: run.id },
+      data: { status: "failed", error, costUsd: 0 },
+    });
     logger.warn("ai replay submit failed", { run: run.id, error });
-    return null;
+    return { runId: null, reason: "submit-failed" };
   }
 }
 
@@ -301,7 +351,13 @@ export async function pollReplayRuns(env: Env): Promise<ScoredReplayRun[]> {
       // Replace rather than append, so a pass that died half-way through ingesting is redone whole.
       await prisma.aiReplayVerdict.deleteMany({ where: { runId: run.id } });
       let buffer: NonNullable<ReturnType<typeof replayVerdictRow>>[] = [];
+      let costUsd = 0;
       for await (const result of await client.messages.batches.results(run.batchId)) {
+        // Only requests that ran are billed, at batch rates.
+        if (result.result.type === "succeeded") {
+          const message = result.result.message;
+          costUsd += usageCostUsd([run.model, message.model], message.usage, { batch: true });
+        }
         const row = replayVerdictRow(run.id, run.playbookIds, result);
         if (row) buffer.push(row);
         if (buffer.length >= 500) {
@@ -314,8 +370,20 @@ export async function pollReplayRuns(env: Env): Promise<ScoredReplayRun[]> {
       const summaries = await summarizeRun(run.id, run.playbookIds, env);
       await prisma.aiReplayRun.update({
         where: { id: run.id },
-        data: { status: "scored", scoredAt: new Date(), metrics: summaries as object },
+        data: { status: "scored", scoredAt: new Date(), metrics: summaries as object, costUsd },
       });
+      // True the day's budget up from the reservation made at submit to what the batch cost -
+      // after the run is marked scored, so a pass that dies half-way can't count it twice. A run
+      // from before the ledger existed reserved nothing, and is charged in full.
+      await settleAiSpend(
+        {
+          day: aiSpendDay(run.createdAt),
+          source: "replay",
+          estimateUsd: run.estimatedCostUsd ?? 0,
+          capUsd: env.AI_DAILY_BUDGET_USD,
+        },
+        costUsd,
+      );
       logger.info("ai replay scored", { run: run.id, purpose: run.purpose, summaries });
       scored.push({ id: run.id, purpose: run.purpose, playbookIds: run.playbookIds, summaries });
     } catch (err) {

@@ -10,6 +10,7 @@ vi.mock("./client.js", () => ({
   describeAnthropicError: (err: unknown) => String(err),
 }));
 const { requestTextScores, resetTextScorer } = await import("./textScorer.js");
+const { resetAiBudget } = await import("./budget.js");
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `ai-text-test-${Date.now()}`;
@@ -20,8 +21,11 @@ describe.skipIf(!dbAvailable)("text scorer", () => {
 
   beforeEach(() => {
     resetTextScorer();
+    resetAiBudget();
     parse.mockReset();
     parse.mockResolvedValue({
+      model: "claude-opus-5-5",
+      usage: { input_tokens: 800, output_tokens: 400 },
       stop_reason: "end_turn",
       parsed_output: { copycatRisk: 0.8, narrativeStrength: 0.4, memeAppeal: 0.6, scamSignals: 1.7 },
     });
@@ -64,6 +68,18 @@ describe.skipIf(!dbAvailable)("text scorer", () => {
     const t3 = await newToken("c3");
     await Promise.all([requestTextScores(t1, env), requestTextScores(t2, env)]);
     expect(requestTextScores(t3, env)).toBeNull();
+    expect(parse).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks nothing once the daily AI budget is spent, and gives the hourly slot back", async () => {
+    const token = await newToken("e");
+    await requestTextScores(token, { ...env, AI_DAILY_BUDGET_USD: 0 });
+    expect(parse).not.toHaveBeenCalled();
+    const row = await prisma.token.findUniqueOrThrow({ where: { id: token.id } });
+    expect(row.aiTextScoredAt).toBeNull();
+    // Not marked failed, and the slot is free again: with budget back, the same mint is read.
+    await requestTextScores(token, env);
+    await requestTextScores(await newToken("e2"), env);
     expect(parse).toHaveBeenCalledTimes(2);
   });
 

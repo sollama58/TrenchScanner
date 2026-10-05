@@ -1,5 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { HEARTBEAT_JOB_ROLE, prisma, runningSinceFrom, type HeartbeatJob } from "@trenchscanner/core";
+import {
+  HEARTBEAT_JOB_ROLE,
+  prisma,
+  readAiBudget,
+  runningSinceFrom,
+  type Env,
+  type HeartbeatJob,
+} from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 
 /**
@@ -47,7 +54,11 @@ const MAX_ERROR_LENGTH = 300;
  */
 const WORKER_HEALTH_CACHE_MS = 5_000;
 
-export async function registerHealthRoutes(app: FastifyInstance) {
+export async function registerHealthRoutes(
+  app: FastifyInstance,
+  opts: { env?: Pick<Env, "AI_DAILY_BUDGET_USD" | "AI_BUDGET_REVIEW_RESERVE_PCT"> } = {},
+) {
+  const budgetEnv = opts.env ?? { AI_DAILY_BUDGET_USD: 10, AI_BUDGET_REVIEW_RESERVE_PCT: 40 };
   /** Plain liveness check - what Render's healthCheckPath hits. */
   app.get("/", async () => ({ ok: true }));
 
@@ -67,15 +78,34 @@ export async function registerHealthRoutes(app: FastifyInstance) {
    * dashboard check worker health without needing a session. Error messages are truncated as a
    * light defense-in-depth measure against dumping internal detail to an unauthenticated caller.
    */
-  const readHeartbeats = () => prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } });
+  const readHeartbeats = async () => {
+    const [heartbeats, aiBudget] = await Promise.all([
+      prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
+      readAiBudget(budgetEnv),
+    ]);
+    return { heartbeats, aiBudget };
+  };
   const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
 
   app.get("/worker", async () => {
-    const heartbeats = await heartbeatCache.get(readHeartbeats);
+    const { heartbeats, aiBudget } = await heartbeatCache.get(readHeartbeats);
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
 
-    return { jobs: heartbeats.map((h) => summarizeHeartbeat(h, now)) };
+    return {
+      jobs: heartbeats.map((h) => summarizeHeartbeat(h, now)),
+      // Today's AI spend against the daily cap (AI_DAILY_BUDGET_USD): totals only here - the
+      // per-source split is on the admin panel.
+      aiBudget: {
+        day: aiBudget.day,
+        capUsd: aiBudget.capUsd,
+        spentUsd: aiBudget.spentUsd,
+        remainingUsd: aiBudget.remainingUsd,
+        stopped: aiBudget.stopped,
+        backgroundPaused: aiBudget.backgroundPaused,
+        resetsAt: aiBudget.resetsAt,
+      },
+    };
   });
 }
 
