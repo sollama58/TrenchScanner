@@ -1,3 +1,4 @@
+import { paceBudget } from "./governor.js";
 import { FRIENDLY_FEATURE_LABELS, LEARNER_FEATURE_NAMES, scoredFromFeatures } from "./features.js";
 import {
   curationRankScore,
@@ -472,7 +473,7 @@ export function calibrateThreshold(
   const probs = rows.map((r) => scoreCandidateWithModel(params, r.features)).sort((a, b) => b - a);
   const spanMs = maxAnchorMs(rows) - minAnchorMs(rows);
   const spanHours = Math.max(1, spanMs / 3_600_000);
-  const allowed = Math.min(probs.length, Math.max(1, Math.round(targetPerHour * spanHours)));
+  const allowed = Math.min(probs.length, paceBudget(targetPerHour, spanHours));
   const byRate = probs[allowed - 1]!;
 
   // Twice the base rate, but never below an absolute floor: with a 0% base rate the relative
@@ -1095,7 +1096,7 @@ export async function walkForwardEvaluate(
     // strongest conviction first. Grading all-above-cutoff instead would score a firehose
     // neither curator is allowed to be - and would flatter whichever side over-emits, since
     // extra mediocre picks pad `emitted` while the governor would have cut exactly those.
-    const emissionBudget = Math.max(1, Math.round(opts.targetPerHour * fold.spanHours));
+    const emissionBudget = paceBudget(opts.targetPerHour, fold.spanHours);
     const takeBest = (ranked: { row: TrainingRow; confidence: number }[]): TrainingRow[] =>
       applyCooldown(ranked, cooldownMs)
         .sort((a, b) => b.confidence - a.confidence)

@@ -575,10 +575,9 @@ export async function registerCuratedRoutes(
       feed: {
         alertsTotal,
         alerts7d,
-        // The pace check: the emission governor holds the feed near pace.targetPerHour (see
-        // curation/governor.ts), and actualPerHour24h is the last day's measured rate - the
-        // panel shows the two side by side so "about one alert per ten minutes" is a promise
-        // subscribers can verify, not a slogan.
+        // The pace check: when a pace is set the emission governor holds each model under
+        // pace.targetPerHour (see curation/governor.ts); 0 means no cap. actualPerHour24h is the
+        // last day's measured rate, shown beside it.
         pace: {
           targetPerHour: opts.env.CURATED_TARGET_PER_HOUR,
           alerts24h,

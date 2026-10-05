@@ -21,6 +21,13 @@
  * out up to the budget, and a quiet hour emits nothing. (A "dynamic quality bar" derived from
  * the day's flow used to live here; it set quality by pace, which the hit-rate cutoffs replaced.)
  *
+ * OFF by default since 2026-10-05 (CURATED_TARGET_PER_HOUR=0): the user wants every call that
+ * clears a curator's cutoff sent. Over the 43 hours before, every contestant hit its 6/hour
+ * ceiling in busy hours (and the burst cap held back half its calls), so the pace was deciding
+ * what got called, not the models. A target above zero turns the pace back on. Duplicates are
+ * guarded elsewhere: the per-token cooldown (CURATED_ALERT_COOLDOWN_HOURS) per ledger, and one
+ * pick per token per cycle (see emitForModel).
+ *
  * All pure math here - the worker owns the IO (counting the ledgers) so every rule is
  * unit-testable without a database.
  */
@@ -35,7 +42,23 @@ export const GOVERNOR_BURST_WINDOW_MINUTES = 10;
  * average stays pinned to the target.
  */
 export function governorBurstCap(targetPerHour: number): number {
+  if (!paceLimited(targetPerHour)) return Number.POSITIVE_INFINITY;
   return Math.max(1, Math.round(targetPerHour / 3));
+}
+
+/** Whether a pace is set at all: a target of zero (the default) means no ceiling. */
+export function paceLimited(targetPerHour: number): boolean {
+  return targetPerHour > 0;
+}
+
+/**
+ * How many calls the pace allows over `spanHours` - what the training exam, the blend and the
+ * stacker grade a curator at, so they judge the same policy production runs. Unlimited (every
+ * cutoff-clearing call) when no pace is set.
+ */
+export function paceBudget(targetPerHour: number, spanHours: number): number {
+  if (!paceLimited(targetPerHour)) return Number.POSITIVE_INFINITY;
+  return Math.max(1, Math.round(targetPerHour * spanHours));
 }
 
 export interface EmissionWindowCounts {
@@ -48,9 +71,10 @@ export interface EmissionWindowCounts {
 /**
  * How many alerts may be emitted right now. The hourly side uses a ceiling so a fractional
  * target still emits whole alerts (a 0.5/hour target emits one, then waits for the window to
- * clear); the burst side is the hard short-term cap. Never negative.
+ * clear); the burst side is the hard short-term cap. Never negative; infinite with no pace set.
  */
 export function governorCapacity(counts: EmissionWindowCounts, targetPerHour: number): number {
+  if (!paceLimited(targetPerHour)) return Number.POSITIVE_INFINITY;
   const hourly = Math.max(0, Math.ceil(targetPerHour - counts.lastHour));
   const burst = Math.max(0, governorBurstCap(targetPerHour) - counts.lastBurstWindow);
   return Math.min(hourly, burst);

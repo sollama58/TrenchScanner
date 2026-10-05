@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { governorBurstCap, governorCapacity, selectEmissions } from "./governor.js";
+import { governorBurstCap, governorCapacity, paceBudget, selectEmissions } from "./governor.js";
 
 describe("governorCapacity", () => {
   it("caps the hour at the target and the burst window at a third of it", () => {
@@ -22,6 +22,20 @@ describe("governorCapacity", () => {
     expect(governorBurstCap(0.5)).toBe(1);
     expect(governorCapacity({ lastHour: 0, lastBurstWindow: 0 }, 0.5)).toBe(1);
     expect(governorCapacity({ lastHour: 1, lastBurstWindow: 0 }, 0.5)).toBe(0);
+  });
+});
+
+describe("no pace set", () => {
+  it("a zero target means no ceiling, in production and in the exam", () => {
+    expect(governorCapacity({ lastHour: 50, lastBurstWindow: 20 }, 0)).toBe(Number.POSITIVE_INFINITY);
+    expect(paceBudget(0, 12)).toBe(Number.POSITIVE_INFINITY);
+    expect(paceBudget(6, 2)).toBe(12);
+    expect(paceBudget(6, 0.01)).toBe(1);
+  });
+
+  it("an unlimited capacity sends every contender, strongest first", () => {
+    const picks = selectEmissions([{ confidence: 1 }, { confidence: 3 }, { confidence: 2 }], Infinity);
+    expect(picks.map((p) => p.confidence)).toEqual([3, 2, 1]);
   });
 });
 
