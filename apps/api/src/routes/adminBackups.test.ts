@@ -196,5 +196,34 @@ describe.skipIf(!dbAvailable)("admin model backups", () => {
     expect(restored.json()).toMatchObject({ models: 1 });
     const active = await prisma.curatorModel.findMany({ where: { status: "active", contestant: SEAT } });
     expect(active.map((m) => (m.params as { bias: number }).bias)).toEqual([2]);
+
+    // Per-model: list what's running, export one seat, and list/download one seat of a backup.
+    const running = await call("admin", { method: "GET", url: "/admin/models" });
+    expect(running.json().seats.map((x: { seat: string }) => x.seat)).toContain(SEAT);
+    const exported = await call("admin", { method: "GET", url: `/admin/models/export?seats=${SEAT}` });
+    expect(exported.statusCode, exported.body).toBe(200);
+    expect(exported.headers["content-disposition"]).toContain(`-${SEAT}.json.gz`);
+    const detail = await call("admin", { method: "GET", url: `/admin/model-backups/${ownImport.json().id}` });
+    expect(detail.json().seats).toEqual([expect.objectContaining({ seat: SEAT, threshold: 0.4 })]);
+    const one = await call("admin", {
+      method: "GET",
+      url: `/admin/model-backups/${backup.id}/download?seats=${SEAT}`,
+    });
+    expect(one.statusCode, one.body).toBe(200);
+    const reimported = await call("admin", {
+      method: "POST",
+      url: "/admin/model-backups/import",
+      payload: one.rawPayload,
+      headers: { "content-type": "application/gzip" },
+    });
+    expect(reimported.json()).toMatchObject({ modelCount: 1 });
+    const missing = await call("admin", { method: "GET", url: `/admin/models/export?seats=no-such-seat` });
+    expect(missing.statusCode).toBe(422);
+    const partial = await call("admin", {
+      method: "POST",
+      url: `/admin/model-backups/${reimported.json().id}/restore`,
+      payload: { confirm: true, seats: [SEAT] },
+    });
+    expect(partial.json()).toMatchObject({ seats: [SEAT] });
   });
 });

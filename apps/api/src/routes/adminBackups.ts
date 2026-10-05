@@ -4,6 +4,10 @@ import {
   backupFileName,
   createLogger,
   decodeBackup,
+  describeBackupSeats,
+  encodeBackup,
+  exportRunningModels,
+  selectSeats,
   listModelBackups,
   loadBackupData,
   prisma,
@@ -25,7 +29,27 @@ const patchSchema = z.object({
   pinned: z.boolean().optional(),
   note: z.string().trim().max(200).nullable().optional(),
 });
-const restoreSchema = z.object({ confirm: z.literal(true) });
+const restoreSchema = z.object({
+  confirm: z.literal(true),
+  seats: z.array(z.string().min(1).max(100)).max(50).optional(),
+});
+const seatsQuery = z.object({ seats: z.string().max(2000).optional() });
+
+/** "?seats=a,b" -> ["a", "b"]; absent or empty -> []. */
+function parseSeats(query: unknown): string[] {
+  const parsed = seatsQuery.safeParse(query);
+  if (!parsed.success || !parsed.data.seats) return [];
+  return parsed.data.seats
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const fileName = (createdAt: Date, kind: string, id: string, seats: string[]) =>
+  backupFileName({ createdAt, kind, id }).replace(
+    /\.json\.gz$/,
+    seats.length > 0 ? `-${seats.join("+").replace(/[^a-zA-Z0-9+_-]/g, "")}.json.gz` : ".json.gz",
+  );
 
 /**
  * The Admin tab's model backups (curation/modelBackup.ts): list, take one now, download, import a
@@ -69,16 +93,62 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
     return backup;
   });
 
-  app.get("/model-backups/:id/download", async (request, reply) => {
+  /** One backup and the seats it holds, for picking which models to export or restore. */
+  app.get("/model-backups/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
       const loaded = await loadBackupData(id);
       if (!loaded) return reply.code(404).send({ error: "no such backup" });
+      return { backup: loaded.row, seats: describeBackupSeats(decodeBackup(loaded.data)) };
+    } catch (err) {
+      if (err instanceof ModelBackupError) return reply.code(422).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  /** The backup file, whole or (?seats=a,b) cut down to those models. */
+  app.get("/model-backups/:id/download", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const seats = parseSeats(request.query);
+    try {
+      const loaded = await loadBackupData(id);
+      if (!loaded) return reply.code(404).send({ error: "no such backup" });
+      const data =
+        seats.length > 0 ? encodeBackup(selectSeats(decodeBackup(loaded.data), seats)).data : loaded.data;
       return reply
         .header("content-type", "application/gzip")
-        .header("content-disposition", `attachment; filename="${backupFileName(loaded.row)}"`)
+        .header(
+          "content-disposition",
+          `attachment; filename="${fileName(loaded.row.createdAt, loaded.row.kind, loaded.row.id, seats)}"`,
+        )
         .header("cache-control", "no-store")
-        .send(loaded.data);
+        .send(data);
+    } catch (err) {
+      if (err instanceof ModelBackupError) return reply.code(422).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  /** The seats running right now, as a backup would list them. */
+  app.get("/models", async () => {
+    const payload = await exportRunningModels();
+    return { seats: payload ? describeBackupSeats(payload) : [] };
+  });
+
+  /** The models running right now as a backup file (?seats=a,b for some), without storing it. */
+  app.get("/models/export", async (request, reply) => {
+    const seats = parseSeats(request.query);
+    try {
+      const payload = await exportRunningModels(seats);
+      if (!payload) return reply.code(409).send({ error: "There are no trained models to export yet." });
+      return reply
+        .header("content-type", "application/gzip")
+        .header(
+          "content-disposition",
+          `attachment; filename="${fileName(new Date(payload.createdAt), "export", "running", seats)}"`,
+        )
+        .header("cache-control", "no-store")
+        .send(encodeBackup(payload).data);
     } catch (err) {
       if (err instanceof ModelBackupError) return reply.code(422).send({ error: err.message });
       throw err;
@@ -132,11 +202,15 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
 
   app.post("/model-backups/:id/restore", async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!restoreSchema.safeParse(request.body).success) {
+    const parsed = restoreSchema.safeParse(request.body);
+    if (!parsed.success) {
       return reply.code(400).send({ error: 'send {"confirm": true} to restore' });
     }
     try {
-      const result = await restoreModelBackup(id, { actor: request.user!.walletAddress });
+      const result = await restoreModelBackup(id, {
+        actor: request.user!.walletAddress,
+        seats: parsed.data.seats ?? [],
+      });
       logger.warn("models restored from a backup", { ...result, by: request.user!.walletAddress });
       return result;
     } catch (err) {

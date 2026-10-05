@@ -6,6 +6,8 @@ import {
   prisma,
   loadEnv,
   decodeBackup,
+  describeBackupSeats,
+  selectSeats,
   encodeBackup,
   loadBackupData,
   pruneModelBackups,
@@ -141,6 +143,39 @@ describe.skipIf(!dbAvailable)("model backups", () => {
     const safety = decodeBackup((await loadBackupData(restored.safetyBackupId!))!.data);
     expect(safety.lanes[0]!.name).toBe("Lean Linear #5");
     expect((await prisma.modelBackup.findUnique({ where: { id: backup.id } }))!.restoredAt).not.toBeNull();
+  });
+
+  it("restores a single model, leaving the other seats as they run", async () => {
+    await seedGeneration(0.25, "Linear");
+    const backup = (await saveModelBackup("manual"))!;
+    const payload = decodeBackup((await loadBackupData(backup.id))!.data);
+    const seats = describeBackupSeats(payload);
+    expect(seats.find((s) => s.seat === "consensus")!.members).toEqual(["linear", "trees"]);
+    expect(seats.find((s) => s.seat === "linear")).toMatchObject({ name: "Linear", threshold: 0.6 });
+
+    // Picking the consensus brings its members; picking a learner brings only itself.
+    expect(
+      selectSeats(payload, ["consensus"])
+        .models.map((m) => m.contestant)
+        .sort(),
+    ).toEqual(["consensus", "linear", "trees"]);
+    const justLinear = selectSeats(payload, ["linear"]);
+    expect(justLinear.models.map((m) => m.contestant)).toEqual(["linear"]);
+    expect(decodeBackup(encodeBackup(justLinear).data).models).toHaveLength(1);
+    expect(() => selectSeats(payload, ["nope"])).toThrow(ModelBackupError);
+
+    await seedGeneration(-3, "Linear");
+    const trees = await prisma.curatorModel.findFirstOrThrow({
+      where: { status: "active", contestant: "trees" },
+    });
+    const restored = await restoreModelBackup(backup.id, { seats: ["linear"] });
+    expect(restored.seats).toEqual(["linear"]);
+    const active = await prisma.curatorModel.findMany({ where: { status: "active" } });
+    const bias = (c: string) =>
+      (active.find((m) => m.contestant === c)!.params as unknown as { bias: number }).bias;
+    expect(bias("linear")).toBe(0.25);
+    expect(bias("trees")).toBe(-3);
+    expect(active.find((m) => m.contestant === "trees")!.id).toBe(trees.id);
   });
 
   it("a training run that started before a restore does not overwrite it", async () => {
