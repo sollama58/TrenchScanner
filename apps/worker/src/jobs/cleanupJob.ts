@@ -359,26 +359,37 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     ),
   };
 
-  // Graded filter-alert anchors go much sooner: the verdict already lives on every Match that
-  // points here (copied in the same transaction that finalized the row), and no model trains on
-  // them. Only finished, graded rows that nothing but Match references; an ungraded one stays, as
-  // it is what tells the hit-rate report that its alerts will never be graded.
-  const deletedMatchOutcomes = {
-    count:
-      env.MATCH_OUTCOME_RETENTION_DAYS > 0
-        ? await deleteInBatches(
-            `SELECT o."id" FROM "CandidateOutcome" o
-             WHERE o."sampleKind" = 'match' AND o."anchorAt" < $1
-               AND o."finalizedAt" IS NOT NULL AND o."finalized24hAt" IS NOT NULL
-               AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."candidateOutcomeId" = o."id")
-               AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."candidateOutcomeId" = o."id")
-               AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."candidateOutcomeId" = o."id")`,
-            "CandidateOutcome",
-            [new Date(startedAt - env.MATCH_OUTCOME_RETENTION_DAYS * DAY_MS)],
-            batch,
-          )
-        : 0,
-  };
+  // Graded filter-alert anchors go much sooner (user decision 2026-10-05: 7 days after their watch
+  // ends): the verdict and the run peak already live on every Match that points here (copied when
+  // the row finalized and retired), and no model trains on them. Only finished, graded rows that
+  // nothing but Match references; an ungraded one stays, as it is what tells the hit-rate report
+  // that its alerts will never be graded.
+  const matchOutcomeCutoff = new Date(startedAt - env.MATCH_OUTCOME_RETENTION_DAYS * DAY_MS);
+  let deletedMatchOutcomes = 0;
+  if (env.MATCH_OUTCOME_RETENTION_DAYS > 0) {
+    // Anchors that retired before the run peak was copied (before 2026-10-05) hand it over first,
+    // so the filter leaderboard's run size survives the delete. Found through Match's tokenId
+    // index; candidateOutcomeId has none. A no-op once every alert has its copy.
+    await prisma.$executeRaw`
+      UPDATE "Match" m
+      SET "peak24hReturnPct" = o."peak24hReturnPct"
+      FROM "CandidateOutcome" o
+      WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${matchOutcomeCutoff}
+        AND o."peak24hReturnPct" IS NOT NULL
+        AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
+        AND m."peak24hReturnPct" IS NULL`;
+    deletedMatchOutcomes = await deleteInBatches(
+      `SELECT o."id" FROM "CandidateOutcome" o
+       WHERE o."sampleKind" = 'match' AND o."anchorAt" < $1
+         AND o."finalizedAt" IS NOT NULL AND o."finalized24hAt" < $1
+         AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."candidateOutcomeId" = o."id")
+         AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."candidateOutcomeId" = o."id")
+         AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."candidateOutcomeId" = o."id")`,
+      "CandidateOutcome",
+      [matchOutcomeCutoff],
+      batch,
+    );
+  }
 
   // The bench curator's ledger (see CuratedShadowEmission), on the same horizon as the training
   // set it grades against: unlike CuratedAlert rows these are evaluation data, not a public
@@ -503,7 +514,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedUntrackedSnapshots: snapshotSweep.untracked,
     downsampledSnapshots: snapshotSweep.downsampled,
     deletedCandidateOutcomes: deletedCandidateOutcomes.count,
-    deletedMatchOutcomes: deletedMatchOutcomes.count,
+    deletedMatchOutcomes,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
     deletedCuratorModels: deletedCuratorModels.count,

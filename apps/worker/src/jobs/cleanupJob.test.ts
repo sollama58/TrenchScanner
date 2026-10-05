@@ -477,9 +477,27 @@ describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () =
           peak24hPriceUsd: 1,
           finalizedAt: graded === true ? new Date(Date.now() - ageDays * DAY) : null,
           finalized24hAt: graded === false ? null : new Date(Date.now() - ageDays * DAY),
+          peak24hReturnPct: graded === true ? 300 : null,
         },
       });
     const oldGraded = await row("match", 10, true);
+    // Its alert retired before run peaks were copied: the sweep hands the peak over first.
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-user-${Date.now()}` } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id, name: "f" } });
+    const snapshot = await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 1, marketCapUsd: 50_000 },
+    });
+    const alert = await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        score: 50,
+        candidateOutcomeId: oldGraded.id,
+        hit2xIn1h: true,
+      },
+    });
     const recentGraded = await row("match", 3, true);
     const oldUngraded = await row("match", 10, "ungraded");
     const oldEvent = await row("event", 10, true);
@@ -504,5 +522,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () =
     expect(left.has(oldGraded.id)).toBe(false);
     expect([recentGraded.id, oldUngraded.id, oldEvent.id, shared.id].every((id) => left.has(id))).toBe(true);
     expect((meta as { deletedMatchOutcomes: number }).deletedMatchOutcomes).toBe(1);
+    expect((await prisma.match.findUniqueOrThrow({ where: { id: alert.id } })).peak24hReturnPct).toBe(300);
+    await prisma.user.delete({ where: { id: user.id } });
   });
 });
