@@ -1107,6 +1107,10 @@ model AiReplayRun {
   windowStart  DateTime
   windowEnd    DateTime
   requestCount Int
+  /// What the run was expected to cost when it was submitted (charged to the daily AI budget then),
+  /// and what its results actually cost once they came back (the budget is trued up to this).
+  estimatedCostUsd Float?
+  costUsd          Float?
   createdAt    DateTime  @default(now())
   scoredAt     DateTime?
   /// Per-playbook JudgeRecordSummary, keyed by playbook id.
@@ -1178,4 +1182,21 @@ model ModelBackup {
 
   @@index([kind, createdAt])
   @@index([createdAt])
+}
+
+/// The AI's daily spend ledger, one row per UTC day and source ("review", "review-spare", "text",
+/// "playbook", "replay"). Every Anthropic call reserves its estimated cost here before it runs and
+/// is trued up to the real cost from its usage afterwards, so the scanner and trainer processes
+/// share one AI_DAILY_BUDGET_USD. `refused` counts calls the budget turned away; `capUsd` is the
+/// cap the worker was enforcing on its last write, so the API shows the worker's cap, not its own.
+model AiSpend {
+  day       String
+  source    String
+  costUsd   Float    @default(0)
+  calls     Int      @default(0)
+  refused   Int      @default(0)
+  capUsd    Float
+  updatedAt DateTime @default(now())
+
+  @@id([day, source])
 }

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { adminWalletSet, prisma, type Env } from "@trenchscanner/core";
+import { adminWalletSet, prisma, readAiBudget, type Env } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { SharedCache } from "../sharedCache.js";
@@ -59,6 +59,7 @@ export async function registerAdminOpsRoutes(
       burns7d,
       dbSize,
       heartbeats,
+      aiBudget,
     ] = await Promise.all([
       prisma.user.count(),
       prisma.user.count({ where: { createdAt: { gt: dayAgo } } }),
@@ -73,6 +74,7 @@ export async function registerAdminOpsRoutes(
       prisma.burnEvent.count({ where: { createdAt: { gt: weekAgo } } }),
       prisma.$queryRaw<{ bytes: bigint }[]>`SELECT pg_database_size(current_database()) AS bytes`,
       prisma.systemHeartbeat.findMany(),
+      readAiBudget(env, now),
     ]);
     const jobs = heartbeats.map((h) => summarizeHeartbeat(h, now.getTime()));
     return {
@@ -81,6 +83,7 @@ export async function registerAdminOpsRoutes(
       activeFilters,
       curatedAlerts: { last24h: alerts24h, last7d: alerts7d },
       aiReviews24h,
+      aiBudget,
       databaseMb: Math.round((Number(dbSize[0]?.bytes ?? 0) / 1_048_576) * 10) / 10,
       worker: {
         jobs: jobs.length,
@@ -145,7 +148,7 @@ export async function registerAdminOpsRoutes(
       { label: "24h", since: new Date(now - DAY_MS) },
       { label: "7d", since: new Date(now - 7 * DAY_MS) },
     ];
-    const [reviews, replays, recent] = await Promise.all([
+    const [reviews, replays, recent, budget, budgetDays] = await Promise.all([
       Promise.all(
         windows.map(async (w) => {
           const [agg, byDecision] = await Promise.all([
@@ -194,6 +197,14 @@ export async function registerAdminOpsRoutes(
           token: { select: { symbol: true, mintAddress: true } },
         },
       }),
+      readAiBudget(env),
+      prisma.aiSpend.groupBy({
+        by: ["day"],
+        where: { day: { gte: new Date(now - 13 * DAY_MS).toISOString().slice(0, 10) } },
+        _sum: { costUsd: true, calls: true, refused: true },
+        _max: { capUsd: true },
+        orderBy: { day: "desc" },
+      }),
     ]);
     const r = replays[0];
     return {
@@ -204,7 +215,17 @@ export async function registerAdminOpsRoutes(
         textModel: env.AI_TEXT_MODEL,
         textFeatures: env.AI_TEXT_FEATURES,
         playbookEvolution: env.AI_PLAYBOOK_EVOLUTION,
+        standardPicks: env.AI_REVIEW_STANDARD_PICKS,
       },
+      budget,
+      // The last two weeks' spend per UTC day, newest first.
+      budgetDays: budgetDays.map((d) => ({
+        day: d.day,
+        costUsd: Math.round((d._sum.costUsd ?? 0) * 100) / 100,
+        calls: d._sum.calls ?? 0,
+        refused: d._sum.refused ?? 0,
+        capUsd: d._max.capUsd,
+      })),
       reviews,
       replays7d: {
         runs: Number(r?.runs ?? 0),

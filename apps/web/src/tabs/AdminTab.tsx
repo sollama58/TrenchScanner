@@ -163,6 +163,8 @@ function Table({
 }
 
 const n = (v: number | null | undefined) => (v === null || v === undefined ? "–" : v.toLocaleString());
+/** Dollars to the cent - AI spend is small numbers, which format.ts's usd() rounds away. */
+const dollars = (v: number | null | undefined) => (v === null || v === undefined ? "–" : `$${v.toFixed(2)}`);
 const ms = (v: number | null | undefined) =>
   v === null || v === undefined
     ? "–"
@@ -394,6 +396,7 @@ interface Overview {
   activeFilters: number;
   curatedAlerts: { last24h: number; last7d: number };
   aiReviews24h: number;
+  aiBudget: AiBudget;
   databaseMb: number;
   worker: { jobs: number; stale: string[]; hung: string[]; failing: string[] };
   api: { uptimeSeconds: number; stream: boolean };
@@ -464,6 +467,12 @@ function Overview() {
                 value={`${Math.round(o.api.uptimeSeconds / 3600)}h up`}
                 sub={`${o.api.stream ? "push stream connected" : "push stream DOWN"} · ${o.aiReviews24h} AI reviews 24h · ${o.access.linkedDevices} phones`}
                 tone={o.api.stream ? undefined : "warn"}
+              />
+              <Kpi
+                label="AI spend today"
+                value={`${dollars(o.aiBudget.spentUsd)} / ${dollars(o.aiBudget.capUsd)}`}
+                sub={budgetLine(o.aiBudget)}
+                tone={o.aiBudget.stopped ? "warn" : undefined}
               />
             </div>
           </div>
@@ -1147,7 +1156,37 @@ function Levers({ onDone }: { onDone: () => void }) {
 
 // ---------- AI ----------
 
+interface AiBudget {
+  day: string;
+  capUsd: number;
+  spentUsd: number;
+  remainingUsd: number;
+  reservePct: number;
+  stopped: boolean;
+  backgroundPaused: boolean;
+  resetsAt: string;
+  bySource: { source: string; costUsd: number; calls: number; refused: number }[];
+}
+
+/** One line on where the day's AI budget stands. */
+function budgetLine(b: AiBudget): string {
+  const resets = `resets ${when(b.resetsAt)}`;
+  if (b.stopped) return `cap reached: AI stopped until midnight UTC (${resets})`;
+  if (b.backgroundPaused) return `down to the ${b.reservePct}% kept for high-conviction reviews · ${resets}`;
+  return `${dollars(b.remainingUsd)} left · ${resets}`;
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  review: "Reviews (high conviction)",
+  "review-spare": "Reviews (standard picks)",
+  text: "Text reads",
+  playbook: "Playbook reviews",
+  replay: "Playbook tests (replays)",
+};
+
 interface AiReport {
+  budget: AiBudget;
+  budgetDays: { day: string; costUsd: number; calls: number; refused: number; capUsd: number | null }[];
   config: {
     mode: string;
     apiKeySet: boolean;
@@ -1155,6 +1194,7 @@ interface AiReport {
     textModel: string;
     textFeatures: unknown;
     playbookEvolution: unknown;
+    standardPicks: string;
   };
   reviews: {
     window: string;
@@ -1191,6 +1231,39 @@ function Ai() {
               Render worker to turn it on.
             </p>
           )}
+          <Panel
+            title="Daily AI budget"
+            note={`${dollars(a.budget.spentUsd)} of ${dollars(a.budget.capUsd)} spent today (UTC) · ${budgetLine(a.budget)}. The last ${a.budget.reservePct}% is kept for reviews of high-conviction picks; standard picks are reviewed ${a.config.standardPicks === "never" ? "never" : "only from what is left above it"}.`}
+          >
+            {a.budget.stopped && (
+              <p className="notice">
+                The daily cap is spent, so the AI has stopped for today. Alerts still go out on the models
+                alone.
+              </p>
+            )}
+            <Table
+              head={["Source", "Spent today", "Calls", "Turned away"]}
+              rows={a.budget.bySource.map((r) => [
+                SOURCE_LABELS[r.source] ?? r.source,
+                dollars(r.costUsd),
+                n(r.calls),
+                n(r.refused),
+              ])}
+              empty="Nothing spent today."
+            />
+            {a.budgetDays.length > 1 && (
+              <Table
+                head={["Day (UTC)", "Spent", "Cap", "Calls", "Turned away"]}
+                rows={a.budgetDays.map((d) => [
+                  d.day,
+                  dollars(d.costUsd),
+                  dollars(d.capUsd),
+                  n(d.calls),
+                  n(d.refused),
+                ])}
+              />
+            )}
+          </Panel>
           <Panel
             title="AI reviewer"
             note={`Mode ${a.config.mode} · model ${a.config.reviewModel} · text model ${a.config.textModel}`}

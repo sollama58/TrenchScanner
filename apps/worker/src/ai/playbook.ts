@@ -15,7 +15,15 @@ import {
 } from "@trenchscanner/core";
 import { anthropicClient, describeAnthropicError } from "./client.js";
 import { ensureActivePlaybook, resetActivePlaybookCache, type ActivePlaybook } from "./playbookStore.js";
-import { loadReplayItems, submitReplay, type ScoredReplayRun } from "./replay.js";
+import { loadReplayItems, replayRequestUsd, submitReplay, type ScoredReplayRun } from "./replay.js";
+import {
+  aiBudgetRoomUsd,
+  estimateCallUsd,
+  failedCallCostUsd,
+  reserveAiSpend,
+  responseCostUsd,
+  settleAiSpend,
+} from "./budget.js";
 
 const logger = createLogger("ai-playbook");
 
@@ -56,7 +64,8 @@ export type EvolutionStep =
   | "review-failed"
   | "no-new-candidates"
   | "evolution-submitted"
-  | "submit-failed";
+  | "submit-failed"
+  | "over-budget";
 
 /** One pass of the loop - see the module comment. Cheap when nothing is due. */
 export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<EvolutionStep> {
@@ -110,16 +119,27 @@ export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<E
     const from = new Date(holdoutStart.getTime() - BASELINE_DAYS * 86_400_000);
     const items = await loadReplayItems(env, { from, to: holdoutStart, take: env.AI_REPLAY_MAX_ROWS });
     if (items.length < MIN_REFLECTION_CALLS) return "waiting-for-graded-calls";
-    const runId = await submitReplay(env, {
+    const submitted = await submitReplay(env, {
       purpose: "baseline",
       playbooks: [active],
       items,
       window: { from, to: holdoutStart },
+      minItems: MIN_REFLECTION_CALLS,
     });
-    return runId ? "baseline-submitted" : "submit-failed";
+    if (submitted.runId !== null) return "baseline-submitted";
+    return submitted.reason === "over-budget" ? "over-budget" : "submit-failed";
   }
 
+  // A round is background work on the daily AI budget: the review plus a replay of the incumbent
+  // and two candidates on at least MIN_HOLDOUT_ROWS alerts. When what is left above the
+  // high-conviction reserve can't pay for that, the round waits - with no run recorded, so it is
+  // tried again once the budget resets.
+  const roundUsd =
+    estimateCallUsd("playbook", env.AI_REVIEW_MODEL) + MIN_HOLDOUT_ROWS * 3 * (await replayRequestUsd(env));
+  if ((await aiBudgetRoomUsd(env, "background")) < roundUsd) return "over-budget";
+
   const proposals = await reviewRecord(env, active, record);
+  if (proposals === "over-budget") return "over-budget";
   // Both dead ends are logged as an evolution run so the interval gate above counts them: without
   // a row, every 10-minute pass would pay for another full reflection call.
   const window = { from: holdoutStart, to: holdoutEnd };
@@ -146,11 +166,12 @@ export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<E
     );
   }
 
-  const runId = await submitReplay(env, {
+  const { runId } = await submitReplay(env, {
     purpose: "evolution",
     playbooks: [active, ...candidates],
     items: holdout,
     window: { from: holdoutStart, to: holdoutEnd },
+    minItems: MIN_HOLDOUT_ROWS,
   });
   if (!runId) {
     await prisma.aiPlaybook.updateMany({
@@ -265,27 +286,44 @@ async function reflectionRecord(active: ActivePlaybook, before: Date): Promise<R
   });
 }
 
-/** Asks Claude to review the record into candidate playbooks; null when the call fails. */
+/**
+ * Asks Claude to review the record into candidate playbooks; null when the call fails,
+ * "over-budget" when the daily AI budget can't take it.
+ */
 async function reviewRecord(
   env: Env,
   active: ActivePlaybook,
   record: ReflectionCall[],
-): Promise<{ text: string; rationale: string }[] | null> {
+): Promise<{ text: string; rationale: string }[] | null | "over-budget"> {
+  const reservation = await reserveAiSpend(
+    env,
+    "playbook",
+    estimateCallUsd("playbook", env.AI_REVIEW_MODEL),
+    "background",
+  );
+  if (!reservation) return "over-budget";
   try {
-    const response = await anthropicClient(env).beta.messages.parse(
-      {
-        model: env.AI_REVIEW_MODEL,
-        max_tokens: 32000,
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
-        system: REFLECTION_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: buildReflectionBrief(active.text, record) }],
-        output_config: { effort: "high", format: betaZodOutputFormat(ReflectionSchema) },
-      },
-      // A review is one call a day reading a few hundred rows; give it room beyond the live
-      // reviewer's timeout.
-      { timeout: 10 * 60_000 },
-    );
+    let response;
+    try {
+      response = await anthropicClient(env).beta.messages.parse(
+        {
+          model: env.AI_REVIEW_MODEL,
+          max_tokens: 32000,
+          betas: ["server-side-fallback-2026-07-01"],
+          fallbacks: "default",
+          system: REFLECTION_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: buildReflectionBrief(active.text, record) }],
+          output_config: { effort: "high", format: betaZodOutputFormat(ReflectionSchema) },
+        },
+        // A review is one call a day reading a few hundred rows; give it room beyond the live
+        // reviewer's timeout.
+        { timeout: 10 * 60_000 },
+      );
+    } catch (err) {
+      await settleAiSpend(reservation, failedCallCostUsd(err, reservation));
+      throw err;
+    }
+    await settleAiSpend(reservation, responseCostUsd(env.AI_REVIEW_MODEL, response), "playbook");
     if (response.stop_reason === "refusal" || !response.parsed_output) {
       logger.warn("playbook review returned nothing usable", { stop: response.stop_reason });
       return null;

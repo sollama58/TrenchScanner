@@ -12,7 +12,7 @@ import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import type { AiReviewResult } from "../ai/reviewer.js";
 import { resetAiBlendCache } from "../ai/blend.js";
 
-const reviewPick = vi.fn<() => Promise<AiReviewResult>>();
+const reviewPick = vi.fn<() => Promise<AiReviewResult | null>>();
 /** Whether the reviewer has earned gate mode - true unless a test says otherwise. */
 const gateQualified = vi.fn(async () => true);
 vi.mock("../ai/reviewer.js", () => ({
@@ -141,6 +141,14 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
     const review = await prisma.aiReview.findFirstOrThrow({ where: { tokenId: token.id } });
     expect(review.decision).toBeNull();
     expect(review.error).toBe("rate limited");
+  });
+
+  it("gate mode: a pick the budget can't pay for goes out unreviewed, with no review recorded", async () => {
+    reviewPick.mockResolvedValue(null);
+    const { token, emitted } = await run(gate, "over-budget");
+    expect(emitted).toBe(1);
+    expect(reviewPick).toHaveBeenCalledTimes(1);
+    expect(await prisma.aiReview.count({ where: { tokenId: token.id } })).toBe(0);
   });
 
   it("shadow mode: the alert goes out regardless, and the review is recorded alongside it", async () => {

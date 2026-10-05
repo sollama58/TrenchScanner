@@ -19,6 +19,13 @@ import {
   type ScoredToken,
 } from "@trenchscanner/core";
 import { anthropicClient, describeAnthropicError } from "./client.js";
+import {
+  estimateCallUsd,
+  failedCallCostUsd,
+  reserveAiSpend,
+  responseCostUsd,
+  settleAiSpend,
+} from "./budget.js";
 import { activePlaybook } from "./playbookStore.js";
 
 const logger = createLogger("ai-reviewer");
@@ -196,8 +203,22 @@ export function aiReviewEnabled(env: Env): boolean {
 }
 
 /**
+ * How much of the budget a pick's review may use, or null when it isn't reviewed at all. The
+ * reviewer is pointed at high-conviction calls first: a pick the model rates high-conviction (or
+ * any pick, while the model has no high-conviction cutoff to rate it by) is reviewed out of the
+ * whole daily budget; a standard pick only out of what is left above the high-conviction reserve
+ * (AI_REVIEW_STANDARD_PICKS "spare"), or never.
+ */
+export function reviewPriority(decision: CurationDecision, env: Env): "live" | "background" | null {
+  if (decision.tier !== "standard") return "live";
+  return env.AI_REVIEW_STANDARD_PICKS === "spare" ? "background" : null;
+}
+
+/**
  * Asks Claude for a buy/no-buy call on one pick. Never throws: a failure comes back as
- * `{ verdict: null, error }` so the caller decides what an outage means for the feed.
+ * `{ verdict: null, error }` so the caller decides what an outage means for the feed. Returns
+ * null - no call made - when the pick isn't one the reviewer is pointed at (reviewPriority) or
+ * the daily AI budget can't take it.
  */
 export async function reviewPick(
   scored: ScoredToken,
@@ -208,7 +229,16 @@ export async function reviewPick(
    * slow call costs one timeout at most before the pick fails open, not two.
    */
   opts: { gate?: boolean } = {},
-): Promise<AiReviewResult> {
+): Promise<AiReviewResult | null> {
+  const priority = reviewPriority(decision, env);
+  if (priority === null) return null;
+  const reservation = await reserveAiSpend(
+    env,
+    priority === "live" ? "review" : "review-spare",
+    estimateCallUsd("review", env.AI_REVIEW_MODEL),
+    priority,
+  );
+  if (!reservation) return null;
   const startedAt = Date.now();
   const [comparables, playbook] = await Promise.all([comparablesFor(scored, env), activePlaybook()]);
   const brief = buildAiReviewBrief(scored, decision, comparables);
@@ -240,6 +270,7 @@ export async function reviewPick(
       opts.gate ? { maxRetries: 0 } : undefined,
     );
     const latencyMs = Date.now() - startedAt;
+    await settleAiSpend(reservation, responseCostUsd(env.AI_REVIEW_MODEL, response), "review");
     const usage = {
       ...base,
       model: response.model,
@@ -267,6 +298,7 @@ export async function reviewPick(
     return { ...usage, verdict: verdictFromParsed(parsed), error: null, latencyMs };
   } catch (err) {
     const latencyMs = Date.now() - startedAt;
+    await settleAiSpend(reservation, failedCallCostUsd(err, reservation));
     const message = describeAnthropicError(err);
     logger.warn("ai review failed", { mint: scored.mintAddress, error: message });
     return { ...base, verdict: null, error: message, latencyMs };
