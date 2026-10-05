@@ -58,7 +58,10 @@ const envSchema = z.object({
   PUMPPORTAL_WS_URL: z.string().default("wss://pumpportal.fun/api/data"),
   // Follow every new launch's and every candidate's trades over the same connection, for the
   // order-flow features (curation/tradeFlow.ts). Memory is capped (at most 600 mints, bounded per
-  // mint); "false" keeps the stream to launches and graduations only.
+  // mint); "false" keeps the stream to launches and graduations only. PumpPortal only streams
+  // trades to a connection opened with an API key whose wallet holds 0.02+ SOL (metered at 0.01
+  // SOL per 10,000 messages): set PUMPPORTAL_WS_URL to wss://pumpportal.fun/api/data?api-key=KEY.
+  // Without one the trade inputs stay null (the stream logs the refusal once).
   PUMPPORTAL_TRADE_FLOW: z
     .enum(["true", "false"])
     .default("true")
