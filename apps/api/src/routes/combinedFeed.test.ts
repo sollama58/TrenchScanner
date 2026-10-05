@@ -152,4 +152,56 @@ describe.skipIf(!dbAvailable)("combined feed", () => {
     // No token twice.
     expect(new Set(body.matches.map((c) => c.tokenId)).size).toBe(12);
   });
+
+  it("reaches every match past the merge depth, none skipped and none twice", async () => {
+    await call("PUT", "/curated/feed", { models: ["rules"], showModelAlerts: true });
+    const filter = await prisma.userFilter.create({ data: { userId, name: TAG, mcapMin: 1, mcapMax: 1e9 } });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-deep` } });
+    const snapshot = await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 0.001, marketCapUsd: 100_000, score: 60 },
+    });
+    // 330 matches, older than anything else this file dates, one a minute; 40 model calls spread
+    // through the same stretch so the first 300 merged items hold fewer than 300 matches.
+    const start = Date.now() - 365 * 86_400_000;
+    const at = (minutes: number) => new Date(start - minutes * 60_000);
+    await prisma.match.createMany({
+      data: Array.from({ length: 330 }, (_, i) => ({
+        userId,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        matchedAt: at(i),
+        score: 60,
+      })),
+    });
+    const called: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      called.push((await prisma.token.create({ data: { mintAddress: `${TAG}-deep-call-${i}` } })).id);
+    }
+    await prisma.curatedAlert.createMany({
+      data: called.map((tokenId, i) => ({
+        source: "test",
+        confidence: 70,
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 50_000,
+        tokenId,
+        model: "rules",
+        modelName: "Rules",
+        createdAt: at(i * 7 + 0.5),
+      })),
+    });
+
+    const seen: string[] = [];
+    let page = 1;
+    for (; page <= 80; page++) {
+      const res = await call("GET", `/matches?page=${page}&includeCurated=saved`);
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { hasMore: boolean; matches: { id: string; tokenId: string }[] };
+      seen.push(...body.matches.filter((c) => c.tokenId === token.id).map((c) => c.id));
+      if (!body.hasMore) break;
+    }
+    expect(page).toBeLessThan(80);
+    expect(seen).toHaveLength(330);
+    expect(new Set(seen).size).toBe(330);
+  });
 });
