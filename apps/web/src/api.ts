@@ -611,8 +611,12 @@ export interface ScoreBand {
 export interface ScoreBasis {
   points2x: number;
   points4x: number;
+  /** Points from run size (absent from an API that predates it). */
+  pointsRun?: number;
   proven2xPct: number;
   proven4xPct: number;
+  /** The run size proven, in doublings per call. */
+  provenRunDoublings?: number;
   /** Calls' worth of evidence: graded live calls plus the backtest's share. */
   evidenceCalls: number;
   backtestCalls: number;
@@ -711,7 +715,9 @@ export interface Leaderboard {
   window: { days: number; since: string };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   scoring: {
-    weights: { winRate: number; goalRate: number; avgReturn?: number };
+    weights: { winRate: number; goalRate: number; runSize?: number; avgReturn?: number };
+    /** Run-size target, in doublings per call (2 = a 4x average). */
+    runTargetDoublings?: number;
     /** Calls' worth the backtest counts for at most; live weighs the same at this many graded calls. */
     livePivotCalls: number;
     /** Calls counted as misses on top of every record (absent from older API builds). */

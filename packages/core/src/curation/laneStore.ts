@@ -1,4 +1,4 @@
-import { prisma } from "../db.js";
+import { Prisma, prisma } from "../db.js";
 import type { CuratorRecipe } from "./contestants.js";
 import type { Lane } from "./evolution.js";
 import { LABEL_LOG2_CAP } from "./labels.js";
@@ -41,7 +41,23 @@ interface LiveRow {
   sum_label: number | null;
   sim_calls: bigint;
   sum_sim: number | null;
+  sum_run: number | null;
 }
+
+/**
+ * One graded call's run size in doublings (CallRecord.sumRun), over the \`calls\` CTE's columns: a
+ * clean win counts log2 of its run peak (never less than its label); a miss that never fell 50%
+ * inside the label window counts its run peak if that reached 2x (a late runner a holder still
+ * had); anything else is 0. The run peak is the 24h peak once written, the window peak before.
+ */
+const RUN_DOUBLINGS = Prisma.sql`
+  CASE
+    WHEN hit2x AND NOT dq THEN
+      LEAST(GREATEST(COALESCE(label, 1), log(2::numeric, GREATEST(1 + COALESCE(run, peak, 0) / 100, 1)::numeric)::float8), ${LABEL_LOG2_CAP}::float8)
+    WHEN hit2x IS FALSE AND COALESCE(dd, -100) > -50 AND 1 + COALESCE(run, peak, 0) / 100 >= 2 THEN
+      LEAST(log(2::numeric, (1 + COALESCE(run, peak, 0) / 100)::numeric)::float8, ${LABEL_LOG2_CAP}::float8)
+    ELSE 0
+  END`;
 
 /**
  * One model's live record: its calls since `since`, graded exactly like the hit-rate report -
@@ -56,7 +72,9 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
              COALESCE(a."disqualified", co."disqualified", false) AS dq,
              co."labelValue" AS label,
-             a."peak1hReturnPct" AS peak,
+             COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
+             COALESCE(a."peak24hReturnPct", co."peak24hReturnPct") AS run,
+             COALESCE(a."maxDrawdown1hPct", co."maxDrawdown1hPct") AS dd,
              COALESCE(a."simReturnPct", co."simReturnPct") AS sim
       FROM "CuratedAlert" a
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
@@ -70,7 +88,8 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
                  COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
                ELSE 0 END)::float8 AS sum_label,
            count(sim) FILTER (WHERE hit2x IS NOT NULL) AS sim_calls,
-           sum(sim) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_sim
+           sum(sim) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_sim,
+           sum(${RUN_DOUBLINGS}) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_run
     FROM calls`;
   return {
     calls: Number(r?.calls ?? 0),
@@ -80,6 +99,7 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
     sumLabel: r?.sum_label ?? 0,
     simCalls: Number(r?.sim_calls ?? 0),
     sumSimReturnPct: r?.sum_sim ?? 0,
+    sumRun: r?.sum_run ?? 0,
   };
 }
 
@@ -120,7 +140,9 @@ export async function liveCallRecords(
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
              COALESCE(a."disqualified", co."disqualified", false) AS dq,
              co."labelValue" AS label,
-             a."peak1hReturnPct" AS peak,
+             COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
+             COALESCE(a."peak24hReturnPct", co."peak24hReturnPct") AS run,
+             COALESCE(a."maxDrawdown1hPct", co."maxDrawdown1hPct") AS dd,
              COALESCE(a."simReturnPct", co."simReturnPct") AS sim
       FROM "CuratedAlert" a
       -- A seat's record is its current lane's calls only: after a takeover the emitter's cached
@@ -141,7 +163,8 @@ export async function liveCallRecords(
                  COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
                ELSE 0 END)::float8 AS sum_label,
            count(sim) FILTER (WHERE hit2x IS NOT NULL) AS sim_calls,
-           sum(sim) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_sim
+           sum(sim) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_sim,
+           sum(${RUN_DOUBLINGS}) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_run
     FROM calls
     GROUP BY model`;
   const byModel = new Map(rows.map((r) => [r.model, r]));
@@ -155,6 +178,7 @@ export async function liveCallRecords(
       sumLabel: r?.sum_label ?? 0,
       simCalls: Number(r?.sim_calls ?? 0),
       sumSimReturnPct: r?.sum_sim ?? 0,
+      sumRun: r?.sum_run ?? 0,
     });
   }
   return out;

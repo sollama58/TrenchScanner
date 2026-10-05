@@ -676,6 +676,8 @@ function LeaderboardPanel({
                       <small className="faint score-proof num">
                         proven 2x {e.composite.basis.proven2xPct.toFixed(0)}% · 4x{" "}
                         {e.composite.basis.proven4xPct.toFixed(0)}%
+                        {e.composite.basis.provenRunDoublings != null &&
+                          ` · run ${e.composite.basis.provenRunDoublings.toFixed(2)}`}
                       </small>
                     )}
                   </td>
@@ -826,6 +828,7 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
   const sc = board.scoring;
   const t = board.targets;
   const w = sc.weights;
+  const runTarget = sc.runTargetDoublings ?? 2;
   const example = board.entries.find((e) => e.composite.basis && e.composite.score !== null);
   const b = example?.composite.basis;
   const bands = sc.bands ?? [];
@@ -835,8 +838,8 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
       <div className="score-guide-body">
         <p className="muted small">
           A model's score is how far it has <strong>proven</strong> itself toward the goal: 2x on{" "}
-          {t.hitRate2xPct}% of its calls and 4x on {t.hitRate4xPct}%. 100 means its record meets both targets.
-          0 means it has proven nothing yet.
+          {t.hitRate2xPct}% of its calls and 4x on {t.hitRate4xPct}%, and catching the big runs these tokens
+          make. 100 means its record meets every target. 0 means it has proven nothing yet.
         </p>
         {bands.length > 0 && (
           <ul className="score-bands">
@@ -862,9 +865,18 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
             <strong>{Math.round(w.goalRate * 100)} points for hitting 4x.</strong> The same, against the{" "}
             {t.hitRate4xPct}% target.
           </li>
+          {w.runSize != null && (
+            <li>
+              <strong>{Math.round(w.runSize * 100)} points for run size.</strong> How far its calls went over
+              the 24 hours after the call, counted in doublings (a 4x is 2, a 32x is 5, capped at 100x),
+              averaged over every call against a target of {runTarget} (a {2 ** runTarget}x average). A call
+              scores 0 if it fell 50% before running or never doubled. A 2x that stops there and one that runs
+              to 50x earn the same points above; this is what tells them apart.
+            </li>
+          )}
           <li>
-            <strong>Proven, not raw.</strong> Before the rate is worked out, {sc.priorCalls ?? 10} extra calls
-            are counted as misses. Three wins from three calls proves{" "}
+            <strong>Proven, not raw.</strong> Before a rate or the run size is worked out,{" "}
+            {sc.priorCalls ?? 10} extra calls are counted as misses. Three wins from three calls proves{" "}
             {pct((3 / (3 + (sc.priorCalls ?? 10))) * 100)}, not 100%; 150 wins from 200 calls proves{" "}
             {pct((150 / (200 + (sc.priorCalls ?? 10))) * 100)}. A short hot streak can't outscore a long good
             record.
@@ -890,8 +902,16 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
             {b.proven2xPct.toFixed(0)}/{t.hitRate2xPct} = <span className="num">{b.points2x.toFixed(0)}</span>{" "}
             points) and a 4x rate of <span className="num">{b.proven4xPct.toFixed(0)}%</span> (
             {Math.round(w.goalRate * 100)} × {b.proven4xPct.toFixed(0)}/{t.hitRate4xPct} ={" "}
-            <span className="num">{b.points4x.toFixed(0)}</span> points), for a score of{" "}
-            <span className="num">{example.composite.score.toFixed(0)}</span>
+            <span className="num">{b.points4x.toFixed(0)}</span> points)
+            {b.pointsRun != null && b.provenRunDoublings != null && w.runSize != null && (
+              <>
+                {" "}
+                and a run size of <span className="num">{b.provenRunDoublings.toFixed(2)}</span> doublings a
+                call ({Math.round(w.runSize * 100)} × {b.provenRunDoublings.toFixed(2)}/{runTarget} ={" "}
+                <span className="num">{b.pointsRun.toFixed(0)}</span> points)
+              </>
+            )}
+            , for a score of <span className="num">{example.composite.score.toFixed(0)}</span>
             {example.composite.band ? `: ${example.composite.band.label.toLowerCase()}` : ""}.
           </p>
         )}

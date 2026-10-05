@@ -55,6 +55,8 @@ function standing(id: string, score: number, liveGraded: number): ChampionStandi
     proven2xPct: null,
     proven4xPct: null,
     avgReturnDoublings: null,
+    avgRunDoublings: null,
+    provenRunDoublings: null,
     simCalls: 0,
     avgSimReturnPct: null,
     totalSimReturnPct: null,
