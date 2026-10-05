@@ -439,17 +439,23 @@ export function foldCuratedIntoPage<
   // stamped the curated badge onto BOTH cards while the standalone curated card was removed:
   // one alert rendered as two curated-badged cards, against the documented one-absorption rule.
   const folded = new Map<string, T["curated"]>();
+  // Candidate twins by token, in page order: a page is twelve cards, but the Live tiles fold a
+  // whole day's feed (thousands of cards) through here too, where a scan per alert was quadratic.
+  const matchesByToken = new Map<string, T[]>();
+  for (const card of cards) {
+    if (card.kind !== "match" || card.curated !== null) continue;
+    const list = matchesByToken.get(card.tokenId);
+    if (list) list.push(card);
+    else matchesByToken.set(card.tokenId, [card]);
+  }
 
   for (const card of cards) {
     if (card.kind !== "curated" || !card.curated) continue;
-    const twin = cards.find(
-      (m) =>
-        m.kind === "match" &&
-        m.tokenId === card.tokenId &&
-        !folded.has(m.id) &&
-        m.curated === null &&
-        Math.abs(m.matchedAt.getTime() - card.matchedAt.getTime()) <= windowMs,
-    );
+    const twin = matchesByToken
+      .get(card.tokenId)
+      ?.find(
+        (m) => !folded.has(m.id) && Math.abs(m.matchedAt.getTime() - card.matchedAt.getTime()) <= windowMs,
+      );
     if (!twin) continue;
     folded.set(twin.id, card.curated);
     absorbed.add(card.curated.alertId);
