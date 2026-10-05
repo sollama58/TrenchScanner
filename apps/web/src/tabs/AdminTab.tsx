@@ -3,7 +3,7 @@ import { ApiError, api, del, downloadFile, patch, post } from "../api";
 import { Skeleton } from "../components/Charts";
 import { ShieldIcon } from "../components/Icons";
 import { usePolling, type Loadable } from "../hooks";
-import { ago, multiple, pct, shortAddress, signedPct, stakes, usd } from "../format";
+import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
 /**
  * The admin panel: everything about the running system in one place, for the wallets in
@@ -1367,7 +1367,7 @@ interface AiBudget {
 
 /** One line on where the day's AI budget stands. */
 function budgetLine(b: AiBudget): string {
-  const resets = `resets ${when(b.resetsAt)}`;
+  const resets = `resets ${until(b.resetsAt)}`;
   if (b.stopped) return `cap reached: AI stopped until midnight UTC (${resets})`;
   if (b.backgroundPaused) return `down to the ${b.reservePct}% kept for high-conviction reviews · ${resets}`;
   return `${dollars(b.remainingUsd)} left · ${resets}`;

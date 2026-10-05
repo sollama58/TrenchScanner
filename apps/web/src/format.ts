@@ -61,6 +61,18 @@ export function ago(iso: string | Date | null | undefined, now = Date.now()): st
   return `${Math.floor(h / 24)}d ago`;
 }
 
+/** How far off a future moment is: "in 5m", "in 3h", "in 2d"; "now" once it has passed. */
+export function until(iso: string | Date | null | undefined, now = Date.now()): string {
+  if (!iso) return "never";
+  const ms = new Date(iso).getTime() - now;
+  const min = Math.ceil(ms / 60_000);
+  if (min < 1) return "now";
+  if (min < 60) return `in ${min}m`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `in ${h}h`;
+  return `in ${Math.floor(h / 24)}d`;
+}
+
 export function minutes(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "–";
   if (value < 60) return `${Math.round(value)}m`;

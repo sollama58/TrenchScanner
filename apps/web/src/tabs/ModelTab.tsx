@@ -574,7 +574,7 @@ function LeaderboardPanel({
           {detailed ? (
             <p className="muted small">
               Score = how far a model has proven itself toward the goal, 0 to 100. Hover a score for its
-              working, or see <a href="#score-guide">what the score means</a> below.
+              working, or see <GuideLink id="score-guide">what the score means</GuideLink> below.
             </p>
           ) : (
             <p className="muted small">
@@ -774,14 +774,36 @@ function LeaderboardPanel({
             Avg doublings is the average return per call: a 2x counts 1, a 4x counts 2, a miss or a stop-out
             0. It is shown for context and not scored. Avg and total profit follow every live call with one
             fixed exit plan, so a feed whose losers lose a lot shows it even when its hit rate looks fine; see{" "}
-            <a href="#profit-guide">what profit means</a>. Backtest figures are the latest training run's
-            walk-forward exam, with the number of calls it made.
+            <GuideLink id="profit-guide">what profit means</GuideLink>. Backtest figures are the latest
+            training run's walk-forward exam, with the number of calls it made.
           </p>
           <ScoreGuide board={board} />
           <ProfitGuide board={board} />
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * A link to one of the guides further down the panel. A plain `href="#score-guide"` would change
+ * the hash, and the hash picks the tab (routes.ts), so the click used to throw the reader back
+ * to the Live tab; this opens the guide and scrolls to it instead.
+ */
+function GuideLink({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <a
+      href={`#${id}`}
+      onClick={(e) => {
+        e.preventDefault();
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (el instanceof HTMLDetailsElement) el.open = true;
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }}
+    >
+      {children}
+    </a>
   );
 }
 
