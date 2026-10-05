@@ -52,6 +52,14 @@ const MIN_VOLUME_1H_MCAP_RATIO = 0.25;
  */
 export const MIN_BUY_RATIO = 0.55;
 /**
+ * Oldest a token may be at an event moment. The win is a 2x within 15 minutes, and on 2,591
+ * production decision rows (2026-10-03..05) that happened to 10.7% of launches under five minutes
+ * old, ~2.5% of those one to six hours old, and 0.3% of those six to twenty-four hours old - 27%
+ * of the rows for 2% of the wins. A moment past this age is not one a curator is asked about, so
+ * it is not banked as an event, not decided on, and (through isDecisionRow) not examined on.
+ */
+export const MAX_EVENT_AGE_MINUTES = 360;
+/**
  * Skip-if-unknown risk cap: a token down more than this in the last five minutes is mid-flush,
  * and an alert into a flush is exactly the shape the label's 50%-drawdown clause disqualifies -
  * the entry gets stopped out even when the chart later "wins". Lenient on purpose (normal
@@ -298,7 +306,8 @@ export function walletChecksKnown(
 
 /**
  * The cheap "looks ready" test that marks an EVENT moment (CandidateOutcome.sampleKind = "event"):
- * in the band, buyers in control of the hour's flow, and the last five minutes not falling.
+ * in the band, not older than MAX_EVENT_AGE_MINUTES, buyers in control of the hour's flow, and
+ * the last five minutes not falling. An unknown age passes, like an unobserved 5m candle.
  * Curators decide only at the first such moment per token per CANDIDATE_EVENT_SPACING_MINUTES, and
  * the trainer calibrates on exactly those rows, so the model is examined on the same moments it is
  * asked about live - not on an hourly sample of everything in the band, which is a different and
@@ -306,10 +315,11 @@ export function walletChecksKnown(
  * the curators still pick the token.
  */
 export function passesEventPreGate(
-  scored: Pick<ScoredToken, "marketCapUsd" | "buys1h" | "sells1h" | "priceChange5mPct">,
+  scored: Pick<ScoredToken, "marketCapUsd" | "buys1h" | "sells1h" | "priceChange5mPct" | "ageMinutes">,
   band: McapBand,
 ): boolean {
   if (!inMcapBand(scored.marketCapUsd, band)) return false;
+  if (scored.ageMinutes !== undefined && scored.ageMinutes > MAX_EVENT_AGE_MINUTES) return false;
   const totalTxns1h = (scored.buys1h ?? 0) + (scored.sells1h ?? 0);
   if (!(totalTxns1h > 0 && (scored.buys1h ?? 0) / totalTxns1h >= MIN_BUY_RATIO)) return false;
   return scored.priceChange5mPct === undefined || scored.priceChange5mPct >= 0;

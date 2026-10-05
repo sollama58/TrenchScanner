@@ -316,6 +316,15 @@ describe("pseudo-event decision rows", () => {
     // Without a band only event rows decide, as before.
     expect(isDecisionRow(row({ mcapUsd: 50_000, buys1h: 60, sells1h: 40 }))).toBe(false);
     expect(isDecisionRow(row({}, "event"))).toBe(true);
+    // The age cap applies to stored event rows too (banked before the cap) and to pseudo-events.
+    expect(isDecisionRow(row({ ageMinutes: 361 }, "event"))).toBe(false);
+    expect(isDecisionRow(row({ ageMinutes: 360 }, "event"))).toBe(true);
+    expect(
+      isDecisionRow(
+        row({ mcapUsd: 50_000, buys1h: 60, sells1h: 40, priceChange5mPct: 2, ageMinutes: 400 }),
+        band,
+      ),
+    ).toBe(false);
   });
 });
 
