@@ -2,88 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { del, patch, post, ApiError, type AppConfig, type Filter, type FilterInput } from "../api";
 import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
+import { GROUPS } from "../filterFields";
 import { EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
 
 /** Mirrors MAX_FILTERS_PER_USER in apps/api/src/routes/filters.ts. */
 const MAX_FILTERS = 10;
-
-type NumberField = {
-  [K in keyof FilterInput]: FilterInput[K] extends number | null ? K : never;
-}[keyof FilterInput];
-
-interface FieldSpec {
-  key: NumberField;
-  label: string;
-  hint: string;
-  unit?: string;
-  step?: number;
-}
-
-const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
-  {
-    title: "Momentum",
-    blurb: "Is money and attention arriving?",
-    fields: [
-      {
-        key: "minVolumeMcapRatio",
-        label: "Min 24h volume ÷ market cap",
-        hint: "e.g. 0.5 = volume at least half the market cap",
-        step: 0.1,
-      },
-      { key: "minHolderGrowthPct", label: "Min holder growth", hint: "over the last 30 minutes", unit: "%" },
-      { key: "minScore", label: "Min composite score", hint: "0-100, the scanner's overall score" },
-    ],
-  },
-  {
-    title: "Safety",
-    blurb: "Screens out the setups that usually end in a rug.",
-    fields: [
-      { key: "maxTop10HolderPct", label: "Max top-10 holders", hint: "share of supply", unit: "%" },
-      { key: "maxDevWalletPct", label: "Max dev wallet", hint: "share of supply", unit: "%" },
-      { key: "maxRiskScore", label: "Max RugCheck risk", hint: "0-100, lower is safer" },
-      {
-        key: "maxFreshTop10WalletPct",
-        label: "Max fresh wallets",
-        hint: "top-10 holders on wallets under a day old",
-        unit: "%",
-      },
-      {
-        key: "maxEmptyTop10WalletPct",
-        label: "Max empty holder wallets",
-        hint: "top-10 holders with nothing else",
-        unit: "%",
-      },
-      {
-        key: "minFirstBuyersHolding",
-        label: "Min first buyers holding",
-        hint: "of the first 25 buyers; tokens without a count are skipped",
-        unit: "of 25",
-        step: 1,
-      },
-      {
-        key: "maxFirstBuyersHolding",
-        label: "Max first buyers holding",
-        hint: "of the first 25 buyers, e.g. 10 = snipers mostly gone",
-        unit: "of 25",
-        step: 1,
-      },
-    ],
-  },
-  {
-    title: "Age",
-    blurb: "How long the token has existed.",
-    fields: [
-      {
-        key: "minTokenAgeMinutes",
-        label: "Min age",
-        hint: "minutes; 0.5 = 30 seconds",
-        unit: "min",
-        step: 0.25,
-      },
-      { key: "maxTokenAgeMinutes", label: "Max age", hint: "minutes", unit: "min" },
-    ],
-  },
-];
 
 // The starting values every new filter opens with. Below the platform's MCAP_FILTER_MIN on purpose:
 // the API accepts anything inside the padded scan band (scanBand), which reaches down to $5k.
@@ -109,11 +32,12 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     minFirstBuyersHolding: null,
     maxFirstBuyersHolding: null,
     isActive: count === 0,
+    shareOnLeaderboard: false,
   };
 }
 
 function toInput(f: Filter): FilterInput {
-  const { id: _id, createdAt: _c, trackRecord: _t, ...rest } = f;
+  const { id: _id, createdAt: _c, criteriaChangedAt: _cc, trackRecord: _t, ...rest } = f;
   return {
     ...rest,
     narrativeKeywords: rest.narrativeKeywords ?? [],
@@ -213,6 +137,7 @@ export function FiltersTab() {
                   <span>
                     <strong>{f.name}</strong>
                     {f.isActive && <span className="pill pill-model">Active</span>}
+                    {f.shareOnLeaderboard && <span className="pill">Shared</span>}
                     <small className="muted block">
                       {usd(f.mcapMin)}–{usd(f.mcapMax)}
                       {f.narrativeKeywords.length > 0 && ` · ${f.narrativeKeywords.slice(0, 3).join(", ")}`}
@@ -436,6 +361,18 @@ function FilterEditor({
         <input type="checkbox" checked={draft.isActive} onChange={(e) => set("isActive", e.target.checked)} />
         Make this my active filter (switches the others off)
       </label>
+
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={draft.shareOnLeaderboard}
+          onChange={(e) => set("shareOnLeaderboard", e.target.checked)}
+        />
+        Share on the filter leaderboard (shows the name and settings, never your wallet)
+      </label>
+      {!isNew && draft.shareOnLeaderboard && (
+        <p className="muted small">Changing any setting starts this filter's leaderboard record over.</p>
+      )}
 
       <div className="row gap-s end">
         <button type="button" onClick={onCancel} disabled={busy}>

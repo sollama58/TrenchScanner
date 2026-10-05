@@ -549,12 +549,50 @@ export interface FilterInput {
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
   isActive: boolean;
+  /** Listed on the public filter leaderboard (off by default). */
+  shareOnLeaderboard: boolean;
 }
 
 export interface Filter extends FilterInput {
   id: string;
   createdAt: string;
+  /** When the matching criteria last changed: the leaderboard record starts here. */
+  criteriaChangedAt: string;
   trackRecord: { graded: number; won2x: number; won4x: number } | null;
+}
+
+/** The fields that decide what a filter matches: what "Copy" copies. */
+export type FilterCriteria = Omit<FilterInput, "name" | "isActive" | "shareOnLeaderboard">;
+
+export interface FilterBoardEntry {
+  id: string;
+  name: string;
+  /** Short tag from the filter id, to tell apart filters with the same name. */
+  tag: string;
+  rank: number | null;
+  score: number | null;
+  band: ScoreBand | null;
+  graded: number;
+  won2x: number;
+  won4x: number;
+  winRatePct: number | null;
+  goalRatePct: number | null;
+  proven2xPct: number | null;
+  proven4xPct: number | null;
+  recordSince: string;
+  isActive: boolean;
+  criteria: FilterCriteria;
+  mine: boolean;
+}
+
+export interface FilterBoard {
+  generatedAt: string;
+  windowDays: number;
+  minGradedToRank: number;
+  targets: { hitRate2xPct: number; hitRate4xPct: number };
+  ranked: FilterBoardEntry[];
+  warmingUp: FilterBoardEntry[];
+  sharedCount: number;
 }
 
 export interface AppConfig {

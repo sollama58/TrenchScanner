@@ -10,11 +10,11 @@ import {
   type LearningCurve,
   type LearningTrend,
   type AiJudgeState,
-  type ScoreBand,
 } from "../api";
 import { HBarChart, Skeleton, TargetBars, TrendLines } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
+import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
 import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { ago, pct, signedPct, stakes, tokenLabel, usd } from "../format";
@@ -811,13 +811,6 @@ function scoreTitle(liveWeight: number): string {
   return `${Math.round(liveWeight * 100)}% from live calls, ${Math.round((1 - liveWeight) * 100)}% from the backtest`;
 }
 
-const BAND_TONE: Record<ScoreBand["id"], string> = {
-  "on-target": "good",
-  "closing-in": "info",
-  "getting-there": "neutral",
-  "far-off": "neutral",
-};
-
 /**
  * What the score means, in words a trader can act on: the bands, the two parts, the small-sample
  * rule, and the board's top scorer worked through as an example.
@@ -972,19 +965,6 @@ function rateTone(value: number | null, target: number): string {
 function doublings(value: number | null): string {
   if (value === null) return "–";
   return value.toFixed(2);
-}
-
-function ScoreBar({ score, band, title }: { score: number | null; band: ScoreBand | null; title: string }) {
-  if (score === null) return <span className="faint">–</span>;
-  return (
-    <div className="score-bar" title={title}>
-      <span className="score-track">
-        <span className="score-fill" style={{ width: `${Math.max(2, Math.min(100, score))}%` }} />
-      </span>
-      <span className="num">{score.toFixed(0)}</span>
-      {band && <span className={`badge score-band ${BAND_TONE[band.id]}`}>{band.label}</span>}
-    </div>
-  );
 }
 
 function HowItWorks({ board }: { board: Leaderboard }) {

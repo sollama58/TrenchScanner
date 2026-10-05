@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { type Env, prisma, scanBand, loadFilterTrackRecords } from "@trenchscanner/core";
+import {
+  boardFor,
+  buildFilterLeaderboard,
+  criteriaChanged,
+  filterLeaderboardCache,
+} from "../filterLeaderboard.js";
 
 // A factory (rather than a module-level constant) so mcapMin/mcapMax default to this deployment's
 // own MCAP_FILTER_MIN/MAX instead of a hardcoded literal that could drift out of sync with them -
@@ -32,6 +38,8 @@ function buildFilterInputSchema(env: Env) {
     minFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
     maxFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
     isActive: z.boolean().default(true),
+    // Opt-in to the public filter leaderboard; off unless the owner turns it on.
+    shareOnLeaderboard: z.boolean().default(false),
   });
 }
 
@@ -109,6 +117,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       if (parsed.data.isActive) await deactivateOthers(tx, userId, null);
       return tx.userFilter.create({ data: { ...parsed.data, userId } });
     });
+    if (created?.shareOnLeaderboard) filterLeaderboardCache.clear();
     if (!created) {
       return reply
         .code(409)
@@ -153,9 +162,19 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       if (rangeError) return { error: 400 as const, message: rangeError };
       // Turning one filter on turns the user's other filters off: one active filter at a time.
       if (parsed.data.isActive) await deactivateOthers(tx, userId, id);
-      return { updated: await tx.userFilter.update({ where: { id }, data: parsed.data }) };
+      // New criteria start a new leaderboard record: the record shown must be the one of the
+      // settings a copier would get, not of whatever the filter used to be.
+      const reset = criteriaChanged(existing, parsed.data);
+      const updated = await tx.userFilter.update({
+        where: { id },
+        data: { ...parsed.data, ...(reset ? { criteriaChangedAt: new Date() } : {}) },
+      });
+      return { updated, boardChanged: existing.shareOnLeaderboard || updated.shareOnLeaderboard };
     });
-    if ("updated" in result) return result.updated;
+    if ("updated" in result) {
+      if (result.boardChanged) filterLeaderboardCache.clear();
+      return result.updated;
+    }
     if (result.error === 404) return reply.code(404).send({ error: "filter not found" });
     return reply.code(400).send({ error: result.message });
   });
@@ -167,8 +186,68 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       return reply.code(404).send({ error: "filter not found" });
     }
     await prisma.userFilter.delete({ where: { id } });
+    if (existing.shareOnLeaderboard) filterLeaderboardCache.clear();
     return reply.code(204).send();
   });
+
+  /**
+   * The public filter leaderboard - shared filters ranked by their alerts' graded record (see
+   * filterLeaderboard.ts). The same board for every reader, cached; the caller's own entries are
+   * flagged and no owner is ever named.
+   */
+  app.get("/leaderboard", async (request) => {
+    const board = await filterLeaderboardCache.get(() => buildFilterLeaderboard(opts.env));
+    return boardFor(board, request.user!.userId);
+  });
+
+  /**
+   * Copies a shared filter's criteria into a new saved filter for the caller: inactive, not shared,
+   * and counted against their MAX_FILTERS_PER_USER like any other.
+   */
+  app.post("/leaderboard/:id/copy", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const userId = request.user!.userId;
+    const result = await prisma.$transaction(async (tx) => {
+      const source = await tx.userFilter.findUnique({ where: { id } });
+      if (!source || !source.shareOnLeaderboard) return { error: 404 as const };
+      await lockUserFilters(tx, userId);
+      if ((await tx.userFilter.count({ where: { userId } })) >= MAX_FILTERS_PER_USER) {
+        return { error: 409 as const };
+      }
+      // Everything but identity, ownership and state: exactly the criteria (FILTER_CRITERIA_KEYS).
+      const {
+        id: _id,
+        userId: _owner,
+        name,
+        isActive: _active,
+        shareOnLeaderboard: _shared,
+        createdAt: _created,
+        updatedAt: _updated,
+        criteriaChangedAt: _changed,
+        ...criteria
+      } = source;
+      const created = await tx.userFilter.create({
+        data: {
+          ...criteria,
+          name: copyName(name),
+          isActive: false,
+          shareOnLeaderboard: false,
+          userId,
+        },
+      });
+      return { created };
+    });
+    if ("created" in result) return reply.code(201).send(result.created);
+    if (result.error === 404) return reply.code(404).send({ error: "That filter is no longer shared." });
+    return reply
+      .code(409)
+      .send({ error: `You can save up to ${MAX_FILTERS_PER_USER} filters. Delete one to copy another.` });
+  });
+}
+
+/** "Copy of <name>", kept inside the 60-character name limit. */
+function copyName(name: string): string {
+  return `Copy of ${name}`.slice(0, 60);
 }
 
 /**
