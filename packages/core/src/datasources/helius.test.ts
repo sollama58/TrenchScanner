@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HeliusClient } from "./helius.js";
 
 /**
@@ -25,7 +25,13 @@ async function startServer(
       const body = JSON.parse(raw);
       requests.push({ body });
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify(handler(body)));
+      const reply = handler(body);
+      if (reply && typeof reply === "object" && "__status" in reply) {
+        res.statusCode = (reply as { __status: number }).__status;
+        res.end("{}");
+        return;
+      }
+      res.end(JSON.stringify(reply));
     });
   });
 
@@ -291,7 +297,43 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
     requests.length = 0;
     await client.getEarliestActivityBatch(["d"]);
     expect((requests[0]!.body as { method: string }[])[0]!.method).toBe("getSignaturesForAddress");
+    // The launch-buyers read rides on the same method and stands down with it.
+    expect((await client.getLaunchBuyersBatch(["m"], 25)).get("m")).toEqual({ status: "unsupported" });
+
+    // Stood down, not switched off: a bad minute at Helius is not a fact about the plan. Ten
+    // minutes on, both reads try the method again - and it answers.
+    failGtfa = false;
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    try {
+      expect(client.earliestActivityMethod).toBe("getTransactionsForAddress");
+      requests.length = 0;
+      const back = await client.getEarliestActivityBatch(["e"]);
+      expect((requests[0]!.body as { method: string }[])[0]!.method).toBe("getTransactionsForAddress");
+      expect(back.get("e")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+    } finally {
+      vi.useRealTimers();
+    }
   });
+
+  it("does not count a round nobody answered against the latch", async () => {
+    // A timeout or a 5xx on the whole batch says nothing about whether the plan serves the method.
+    let down = true;
+    const { url } = await startServer((calls) => {
+      if (down) return { __status: 502 };
+      return calls.map((c) => ({
+        jsonrpc: "2.0",
+        id: c.id,
+        result: { data: [{ signature: "f", blockTime: SECONDS }] },
+      }));
+    });
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+    for (let i = 0; i < 3; i++) await client.getEarliestActivityBatch([`a${i}`]);
+    expect(client.earliestActivityMethod).toBe("getTransactionsForAddress");
+    down = false;
+    const result = await client.getEarliestActivityBatch(["b"]);
+    expect(result.get("b")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+  }, 30_000);
 
   it("latches the fallback so later batches skip getTransactionsForAddress entirely", async () => {
     const { url, requests } = await startServer((calls) =>
@@ -492,7 +534,10 @@ describe("HeliusClient.getMayhemModeBatch", () => {
     const { url } = await gmaServer(() => null);
     const client = new HeliusClient({ rpcUrl: url });
 
-    expect((await client.getMayhemModeBatch([OTHER_MINT])).get(OTHER_MINT)).toEqual({ status: "failed" });
+    expect((await client.getMayhemModeBatch([OTHER_MINT])).get(OTHER_MINT)).toEqual({
+      status: "failed",
+      mintPending: true,
+    });
   });
 
   it("queries the mint and its derived PDA in one call, without account data", async () => {

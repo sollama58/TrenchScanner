@@ -9,6 +9,12 @@ const logger = createLogger("mayhem-mode");
  * Process-local: it describes a transient condition, so losing it on restart is correct.
  */
 const FAILURE_BACKOFF_MINUTES = 20;
+/**
+ * A mint the RPC doesn't see yet (confirmed-commitment lag on a seconds-old token) is a different
+ * wait: the account appears within a slot or two, and a token that reached the band this fast is
+ * exactly one worth re-checking on the next cycle rather than screening out for 20 minutes.
+ */
+const MINT_PENDING_BACKOFF_MINUTES = 1;
 const failureBackoffUntil = new Map<string, number>();
 
 /** Test hook: forget every recorded failure so the next call retries immediately. */
@@ -81,7 +87,8 @@ export async function resolveMayhemMode(
     if (outcome.status === "found") {
       toCache.push({ mintAddress: mint, isMayhemMode: outcome.isMayhemMode });
     } else {
-      failureBackoffUntil.set(mint, now + FAILURE_BACKOFF_MINUTES * 60_000);
+      const minutes = outcome.mintPending ? MINT_PENDING_BACKOFF_MINUTES : FAILURE_BACKOFF_MINUTES;
+      failureBackoffUntil.set(mint, now + minutes * 60_000);
       failed += 1;
     }
   }

@@ -55,4 +55,27 @@ describe.skipIf(!dbAvailable)("resolveEarliestActivity lookupGroups", () => {
     expect(result.has(c1) && result.has(c2) && result.has(cached)).toBe(true);
     expect(result.has(uncached)).toBe(false);
   });
+
+  it("leaves a busy wallet the signatures path can't date as unknown, and never caches it as old", async () => {
+    // Only an older-than bound OUTSIDE the freshness window settles a wallet. One inside it says
+    // "busy", which a day-old sniper bot is too - and it used to be cached as "not fresh" for good.
+    const [busy, old] = [wallet("busy"), wallet("old")];
+    const helius = {
+      async getEarliestActivityBatch(addresses: string[]) {
+        return new Map(
+          addresses.map((a) =>
+            a === busy
+              ? [a, { status: "older-than" as const, boundAt: new Date(Date.now() - 3_600_000) }]
+              : [a, { status: "older-than" as const, boundAt: LONG_AGO }],
+          ),
+        );
+      },
+    } as unknown as HeliusClient;
+
+    const result = await resolveEarliestActivity([[busy, old]], helius, {});
+    expect(result.has(busy)).toBe(false);
+    expect(result.get(old)).toEqual(LONG_AGO);
+    const rows = await prisma.walletActivityCache.findMany({ where: { address: { in: [busy, old] } } });
+    expect(rows.map((r) => r.address)).toEqual([old]);
+  });
 });

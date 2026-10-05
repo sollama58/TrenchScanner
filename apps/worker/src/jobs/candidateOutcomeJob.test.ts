@@ -432,6 +432,30 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(after.hit2xIn1h).toBeNull();
   });
 
+  it("retires an unfilled row as soon as the win window has passed, not at the goal window", async () => {
+    // Past 15 minutes no fill can be taken, so there is nothing left to watch for.
+    const token = await createToken("unfilled-16m");
+    const anchorAt = new Date(Date.now() - 16 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, { entryAt: null, signalPriceUsd: null });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.1 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.entryAt).toBeNull();
+    expect(updated.finalizedAt).toBeNull();
+    expect(updated.finalized24hAt).not.toBeNull();
+
+    // Inside the window the row is still waiting for its fill.
+    const waiting = await createToken("unfilled-10m");
+    const open = await seedRow(waiting.id, new Date(Date.now() - 10 * MINUTE), 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+    });
+    await runCandidateWatchJob(stubDexScreener({}), env);
+    const still = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: open.id } });
+    expect(still.finalized24hAt).toBeNull();
+  });
+
   it("leaves a row alone when an alert moved its anchor after the sweep read it", async () => {
     const token = await createToken("moved-anchor");
     const anchorAt = new Date(Date.now() - 2 * MINUTE);
