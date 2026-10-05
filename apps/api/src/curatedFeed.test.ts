@@ -257,6 +257,7 @@ function liveRow(
     peakBeforeStopPriceUsd: null as number | null,
     hit2xAt: null,
     finalizedAt: null,
+    finalized24hAt: null as Date | null,
     peak1hReturnPct: null,
     maxDrawdown1hPct: null,
     hit2xIn15m: null,
@@ -457,6 +458,32 @@ describe("resolveOutcome", () => {
       }),
     );
     expect(view.status).toBe("won");
+  });
+
+  it("reports a row retired with no fill as ungraded, not as a miss", () => {
+    // The worker was down through the win window: no price ever moved the aggregates off the
+    // anchor, and the watcher closed the row with no verdict.
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(40),
+          peak1hPriceUsd: 1,
+          low1hPriceUsd: 1,
+          lowBefore2xPriceUsd: 1,
+          peak24hPriceUsd: 1,
+          finalized24hAt: minutesAgo(10),
+        }),
+      }),
+    );
+    expect(view.status).toBe("unknown");
+    expect(view.finalized).toBe(true);
+    expect(view.peak1hReturnPct).toBeNull();
+  });
+
+  it("keeps an ungraded alert ungraded once its training row is pruned", () => {
+    const view = resolveOutcome(alert({ candidateOutcome: null, outcomeFinalizedAt: new Date() }));
+    expect(view.status).toBe("unknown");
+    expect(view.finalized).toBe(true);
   });
 
   it("admits ignorance when neither source exists, instead of guessing", () => {

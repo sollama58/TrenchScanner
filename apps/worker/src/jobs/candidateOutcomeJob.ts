@@ -238,6 +238,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       let simReturnPct: number | null = null;
       let finalPeak24hPct: number | null = null;
       let runPeakMinutes: number | null = null;
+      let closedUngraded = false;
       if (row.finalizedAt === null && elapsedMs > winWindowMs && merged.entryAt === null) {
         // The win window closed without a single price at or past the entry delay: the worker was
         // down, or DexScreener had nothing for the mint through it. A fill can no longer be taken
@@ -247,6 +248,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
         // hit rate, and no verdict is copied to an alert. Graded, it read as a clean loss off the
         // scan price with nothing observed, and every alert of an outage became a public loss.
         data.finalized24hAt = tickAt;
+        closedUngraded = true;
         unobserved += 1;
       } else if (row.finalizedAt === null && elapsedMs >= labelWindowMs) {
         closedLabels = computeOutcomeLabels(merged);
@@ -312,6 +314,11 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       // rule. Found through the token (Match.tokenId is indexed; candidateOutcomeId deliberately
       // isn't - see schema.prisma).
       const copyToMatches = row.sampleKind === "match" && closedLabels !== null;
+      // An alert whose row closed with no fill gets only the closing time: that is what tells the
+      // feed and the hit-rate report "this one will never be graded" - without it the card kept
+      // reading as a live miss off the unmoved anchor, and the report counted it as pending
+      // forever. Copied, like the verdicts, because the row itself is pruned later.
+      const stampUngraded = row.curatedAlerts.length > 0 && closedUngraded;
 
       await prisma.$transaction(async (tx) => {
         // Only if the row is still anchored where this sweep read it. A curated alert going out
@@ -344,6 +351,12 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
             },
           });
         }
+        if (stampUngraded) {
+          await tx.curatedAlert.updateMany({
+            where: { candidateOutcomeId: row.id, outcomeFinalizedAt: null },
+            data: { outcomeFinalizedAt: tickAt },
+          });
+        }
         if (copyToMatches && closedLabels !== null) {
           await tx.match.updateMany({
             where: { tokenId: row.tokenId, candidateOutcomeId: row.id },
@@ -362,7 +375,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
     }
   });
 
-  const repaired = await repairCuratedVerdicts();
+  const repaired = (await repairCuratedVerdicts()) + (await repairUngradedAlerts());
 
   logger.info("candidate watch sweep complete", {
     durationMs: Date.now() - startedAt,
@@ -373,6 +386,29 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
     ...(unobserved > 0 ? { retiredUngraded: unobserved } : {}),
     ...(repaired > 0 ? { repaired } : {}),
   });
+}
+
+/**
+ * Stamps the closing time onto curated alerts whose row was retired ungraded (no fill inside the
+ * win window) before the watcher copied it - rows closed by earlier builds, which stamped nothing,
+ * so their alerts read as pending or as a live miss. One statement; it matches nothing once the
+ * stranded alerts are stamped, and only alerts whose row still exists can be found.
+ */
+async function repairUngradedAlerts(): Promise<number> {
+  try {
+    return await prisma.$executeRaw`
+      UPDATE "CuratedAlert" a
+      SET "outcomeFinalizedAt" = o."finalized24hAt"
+      FROM "CandidateOutcome" o
+      WHERE o."id" = a."candidateOutcomeId"
+        AND a."outcomeFinalizedAt" IS NULL
+        AND a."hit2xIn1h" IS NULL
+        AND o."finalized24hAt" IS NOT NULL
+        AND o."finalizedAt" IS NULL`;
+  } catch (err) {
+    logger.warn("failed to stamp ungraded alerts", { error: String(err) });
+    return 0;
+  }
 }
 
 /**

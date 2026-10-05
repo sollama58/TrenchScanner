@@ -108,6 +108,7 @@ export const curatedAlertInclude = {
       peakBeforeStopPriceUsd: true,
       hit2xAt: true,
       finalizedAt: true,
+      finalized24hAt: true,
       peak1hReturnPct: true,
       maxDrawdown1hPct: true,
       hit2xIn15m: true,
@@ -216,6 +217,27 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
       hitGoal: stored.hitGoal,
       ...peaks,
       finalized: alert.outcomeFinalizedAt != null,
+      minutesLeft: null,
+    };
+  }
+
+  // The row closed with no verdict: no fill was ever seen inside the win window (the worker was
+  // down, or the mint had no price), so nothing was measured - the watcher retires such a row
+  // ungraded and stamps only the closing time on the alert. Not a miss: the unmoved aggregates
+  // below would read as one, and the hit-rate report leaves these out of pending and graded alike.
+  const ungraded = live
+    ? live.finalized24hAt != null && live.finalizedAt == null
+    : alert.outcomeFinalizedAt != null;
+  if (ungraded) {
+    return {
+      status: "unknown",
+      hit2x: false,
+      hitGoal: null,
+      peak1hReturnPct: null,
+      maxDrawdown1hPct: null,
+      peak24hReturnPct: null,
+      runPeakMinutes: null,
+      finalized: true,
       minutesLeft: null,
     };
   }
