@@ -10,6 +10,7 @@ import {
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
+import { exportQuerySchema, exportWindow, startExport } from "./statsExport.js";
 
 const logger = createLogger("stats");
 
@@ -50,6 +51,12 @@ export interface GradedCounts {
    */
   simCalls?: number;
   sumSimReturnPct?: number;
+  /**
+   * Calls with no verdict that never will get one, so they are not "pending" either. Only filter
+   * alerts report it: a Match with no grading anchor (every match before grading shipped on
+   * 2026-10-03, or one whose anchor write failed) has nothing for the watcher to close.
+   */
+  ungradable?: number;
 }
 
 export interface GradedRates extends GradedCounts {
@@ -95,7 +102,7 @@ export function withRates(
   const simSum = c.sumSimReturnPct ?? 0;
   return {
     ...c,
-    pending: c.calls - c.graded,
+    pending: c.calls - c.graded - (c.ungradable ?? 0),
     hitRate2xPct,
     hitRate4xPct,
     avgSimReturnPct: simCalls > 0 ? Math.round((simSum / simCalls) * 10) / 10 : null,
@@ -113,10 +120,17 @@ export function sumCounts(rows: GradedCounts[]): GradedCounts {
       won2x: acc.won2x + r.won2x,
       won4x: acc.won4x + r.won4x,
       doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
-      simCalls: (acc.simCalls ?? 0) + (r.simCalls ?? 0),
-      sumSimReturnPct: (acc.sumSimReturnPct ?? 0) + (r.sumSimReturnPct ?? 0),
+      ...(acc.ungradable !== undefined || r.ungradable !== undefined
+        ? { ungradable: (acc.ungradable ?? 0) + (r.ungradable ?? 0) }
+        : {}),
+      ...(acc.simCalls !== undefined || r.simCalls !== undefined
+        ? {
+            simCalls: (acc.simCalls ?? 0) + (r.simCalls ?? 0),
+            sumSimReturnPct: (acc.sumSimReturnPct ?? 0) + (r.sumSimReturnPct ?? 0),
+          }
+        : {}),
     }),
-    { calls: 0, graded: 0, won2x: 0, won4x: 0, doubledAfterStop: 0, simCalls: 0, sumSimReturnPct: 0 },
+    { calls: 0, graded: 0, won2x: 0, won4x: 0, doubledAfterStop: 0 },
   );
 }
 
@@ -250,6 +264,40 @@ export async function registerStatsRoutes(
         uptimeSeconds: Math.round(process.uptime()),
         routes: opts.timings?.summary() ?? [],
       };
+    },
+  );
+
+  /**
+   * Row-level data for offline research: training rows (with features, labels and the stored
+   * price aggregates), their snapshot price paths, curated alerts, shadow picks and AI reviews,
+   * for a date range, as gzipped JSONL or CSV. Read-only and streamed a page at a time, so a
+   * 60-day pull never sits in memory. See statsExport.ts for the datasets and their columns.
+   */
+  app.get(
+    "/export",
+    { config: { rateLimit: { max: 12, timeWindow: "1 minute" } }, compress: false, preHandler: guard },
+    async (request, reply) => {
+      const parsed = exportQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten() });
+        return;
+      }
+      const q = parsed.data;
+      const { since, until } = exportWindow(q);
+      const stream = startExport(q, since, until);
+      if (!stream) {
+        reply.code(429).send({ error: "export_busy" });
+        return;
+      }
+      const day = (d: Date) => d.toISOString().slice(0, 10);
+      reply
+        .header("cache-control", "no-store")
+        .header("content-type", "application/gzip")
+        .header(
+          "content-disposition",
+          `attachment; filename="trenchscanner-${q.dataset}-${day(since)}-${day(until)}.${q.format}.gz"`,
+        );
+      return reply.send(stream);
     },
   );
 
@@ -480,14 +528,18 @@ export async function buildHitRateReport(
   ).then((users) => {
     const userIds = users.map((u) => u.id);
     if (userIds.length === 0) return [];
-    return prisma.$queryRaw<(RawCounts & { filterId: string; name: string })[]>`
+    // A match is anchored a moment after it is created (anchorMatchOutcome), so an unanchored one
+    // only counts as ungradable once it is older than that gap could plausibly be.
+    return prisma.$queryRaw<(RawCounts & { filterId: string; name: string; ungradable: bigint })[]>`
       SELECT m."filterId" AS "filterId",
              f."name" AS name,
              count(*) AS calls,
              count(*) FILTER (WHERE m."hit2xIn1h" IS NOT NULL) AS graded,
              count(*) FILTER (WHERE m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)) AS won2x,
              count(*) FILTER (WHERE m."hit4xIn1h") AS won4x,
-             count(*) FILTER (WHERE m."disqualified") AS doubled_after_stop
+             count(*) FILTER (WHERE m."disqualified") AS doubled_after_stop,
+             count(*) FILTER (WHERE m."hit2xIn1h" IS NULL AND m."candidateOutcomeId" IS NULL
+                                AND m."matchedAt" < now() - interval '10 minutes') AS ungradable
       FROM "Match" m
       JOIN "UserFilter" f ON f."id" = m."filterId"
       WHERE m."userId" = ANY(${userIds}) AND m."matchedAt" >= ${since} AND m."matchedAt" < ${until}
@@ -554,7 +606,7 @@ export async function buildHitRateReport(
   const byFilter = new Map<string, { name: string; all: GradedCounts[] }>();
   for (const r of matches) {
     const entry = byFilter.get(r.filterId) ?? { name: r.name, all: [] };
-    entry.all.push(toCounts(r));
+    entry.all.push({ ...toCounts(r), ungradable: Number(r.ungradable) });
     byFilter.set(r.filterId, entry);
   }
   const filterList = [...byFilter.entries()]
@@ -564,7 +616,7 @@ export async function buildHitRateReport(
       ...rated(sumCounts(f.all)),
     }))
     .sort((a, b) => b.graded - a.graded || b.calls - a.calls);
-  const allMatchCounts = matches.map(toCounts);
+  const allMatchCounts = matches.map((r) => ({ ...toCounts(r), ungradable: Number(r.ungradable) }));
 
   return {
     window: { since, until },
