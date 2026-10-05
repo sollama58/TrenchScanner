@@ -86,8 +86,8 @@ export const CANDIDATE_FEATURE_NAMES = [
   "earlyBuyerSoldShare",
   "devInitialBuySol",
   "devSoldShare",
-  // Added 2026-10-04: of the launch's first 25 buyers, how many still hold it (null when the
-  // tracker didn't see the launch).
+  // Added 2026-10-04: of the launch's first 25 buyers, how many still hold it (null until the
+  // launch has been read - from the chain since 2026-10-05, the worker's launchSnipers.ts).
   "firstBuyersHolding",
   // Added 2026-10-04: Claude's read of the launch's own name and description, 0-1 each
   // (curation/textFeatures.ts). Null until the mint has been read, and on rows banked before.

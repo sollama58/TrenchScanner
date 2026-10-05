@@ -28,6 +28,7 @@ import {
   type MarketContextFeatures,
   type PricePathBook,
   parseTextScores,
+  EMPTY_TRADE_FLOW,
 } from "@trenchscanner/core";
 import type { Prisma, Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
@@ -38,6 +39,12 @@ import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { resolveWalletHoldings, computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
+import {
+  launchSnipersFromCache,
+  resolveLaunchSnipers,
+  type LaunchSnipers,
+  type SniperGroup,
+} from "./launchSnipers.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
 import { loadMarketContext } from "./marketContext.js";
@@ -167,6 +174,56 @@ async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> 
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The sniper reads still running, possibly past a cycle's budget - see startSniperStage. */
+let sniperStageInFlight: Promise<unknown> | null = null;
+
+/**
+ * Starts this cycle's chain reads for the snipers figure, or - while the previous cycle's are
+ * still running - answers from the cache, so a slow provider never stacks reads on reads.
+ */
+function startSniperStage(
+  groups: SniperGroup[],
+  helius: HeliusClient,
+  env: Env,
+): Promise<Map<string, LaunchSnipers>> {
+  const mints = groups.map((g) => g.mintAddress);
+  if (sniperStageInFlight || env.SNIPER_LAUNCH_LOOKUPS_PER_CYCLE === 0) {
+    return Promise.resolve(launchSnipersFromCache(mints));
+  }
+  const work = resolveLaunchSnipers(groups, helius, {
+    maxNewLookups: env.SNIPER_LAUNCH_LOOKUPS_PER_CYCLE,
+    refreshMs: env.SNIPER_HOLDING_REFRESH_SECONDS * 1000,
+    contenderRefreshMs: env.SNIPER_CONTENDER_REFRESH_SECONDS * 1000,
+    maxRefreshAccounts: env.SNIPER_MAX_REFRESH_ACCOUNTS_PER_CYCLE,
+  }).catch((err: unknown) => {
+    logger.warn("sniper reads failed - using cached figures", { error: String(err) });
+    return launchSnipersFromCache(mints);
+  });
+  const settled = work.then(() => undefined);
+  sniperStageInFlight = settled;
+  void settled.then(() => {
+    if (sniperStageInFlight === settled) sniperStageInFlight = null;
+  });
+  return work;
+}
+
+/**
+ * The trade stream's order flow with the snipers figure filled in from the chain when the stream
+ * has none (it only has one for a launch it watched). Unknown stays unknown: no chain figure and
+ * no stream figure leaves the flow as it was.
+ */
+export function withLaunchSnipers(
+  flow: TradeFlowFeatures | undefined,
+  snipers: LaunchSnipers | undefined,
+): TradeFlowFeatures | undefined {
+  if (!snipers || (flow?.firstBuyersHolding ?? null) !== null) return flow;
+  return {
+    ...(flow ?? EMPTY_TRADE_FLOW),
+    firstBuyersHolding: snipers.holding,
+    firstBuyersSeen: snipers.seen,
+  };
 }
 
 export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
@@ -430,6 +487,20 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     }))
     .filter((g) => g.addresses.length > 0)
     .sort((a, b) => Number(b.contender) - Number(a.contender) || b.churn - a.churn);
+  // The snipers figure, read from the chain for every token that passed the screen (see
+  // launchSnipers.ts) - started now so it overlaps the wallet stage, and given the same budget:
+  // past it the cycle reads the cache and the reads finish behind it for the next cycle.
+  const sniperGroups = candidates
+    .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
+    .map((c) => ({
+      mintAddress: c.mintAddress,
+      contender: passesEventPreGate(c, curatedBand),
+      churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
+    }))
+    .sort((a, b) => Number(b.contender) - Number(a.contender) || b.churn - a.churn);
+  const sniperStageStartedAt = Date.now();
+  const sniperWork = startSniperStage(sniperGroups, deps.helius, env);
+
   // A user filter with a wallet criterion lets an unknown figure through (see matchFilters), so
   // while any is active every candidate's lookups are waited on, as they always were - otherwise
   // a first-sight match would skip the very check that user asked for.
@@ -526,6 +597,12 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   }
   const [earliestActivityByAddress, holdingsByAddress] = walletResults ?? [new Map(), new Map()];
   lap("wallets");
+  const sniperByMint =
+    (await withinBudget(
+      sniperWork,
+      Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)),
+    )) ?? launchSnipersFromCache(sniperGroups.map((g) => g.mintAddress));
+  lap("snipers");
 
   // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
   // counter BEFORE the await and writes it after, so two candidates finishing close together can
@@ -558,7 +635,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           holdingsByAddress,
           curatedCycle,
           env,
-          deps.stream?.tradeFlow?.(candidate.mintAddress),
+          withLaunchSnipers(
+            deps.stream?.tradeFlow?.(candidate.mintAddress),
+            sniperByMint.get(candidate.mintAddress),
+          ),
           deps.pricePath,
           marketContext,
         ),

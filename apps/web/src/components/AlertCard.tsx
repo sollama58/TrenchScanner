@@ -110,7 +110,7 @@ export function AlertCard({
   const emptyAtAlert = s.emptyTop10WalletPct ?? null;
   const emptyPct = emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? null;
   const walletsChecked = freshPct !== null || emptyPct !== null;
-  // The same fallback for the first-buyers count, which needs the trade stream to have seen the launch.
+  // The same fallback for the first-buyers count, read from the launch's first transactions.
   const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
   const firstHolding = buyersFrom?.firstBuyersHolding ?? null;
   const firstSeen = buyersFrom?.firstBuyersSeen ?? null;
@@ -262,7 +262,7 @@ export function AlertCard({
           <div
             title={
               firstHolding === null
-                ? "First 25 buyers still holding: not tracked for this token (its launch wasn't seen)"
+                ? "First 25 buyers still holding: not checked yet for this token"
                 : `${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
                     buyersFrom === s ? ", at alert time" : ", from a scan after the alert"
                   }`

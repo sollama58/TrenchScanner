@@ -74,7 +74,7 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
-  // Unknown when the trade stream didn't see the launch: the floor fails closed, the ceiling
+  // Unknown until the launch's first buyers have been read: the floor fails closed, the ceiling
   // skips, per the split above.
   const firstBuyersHolding = token.tradeFlow?.firstBuyersHolding ?? null;
   if (
