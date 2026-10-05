@@ -126,7 +126,11 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       const existing = await tx.userFilter.findUnique({ where: { id } });
       if (!existing || existing.userId !== userId) return null;
       await deactivateOthers(tx, userId, id);
-      return tx.userFilter.update({ where: { id }, data: { isActive: true } });
+      return tx.userFilter.update({
+        where: { id },
+        // Switched on from off: it starts from what newly matches, not the backlog (armedAt).
+        data: { isActive: true, ...(existing.isActive ? {} : { armedAt: new Date() }) },
+      });
     });
     if (!activated) return reply.code(404).send({ error: "filter not found" });
     return activated;
@@ -153,7 +157,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       if (rangeError) return { error: 400 as const, message: rangeError };
       // Turning one filter on turns the user's other filters off: one active filter at a time.
       if (parsed.data.isActive) await deactivateOthers(tx, userId, id);
-      return { updated: await tx.userFilter.update({ where: { id }, data: parsed.data }) };
+      const data = rearms(existing, parsed.data) ? { ...parsed.data, armedAt: new Date() } : parsed.data;
+      return { updated: await tx.userFilter.update({ where: { id }, data }) };
     });
     if ("updated" in result) return result.updated;
     if (result.error === 404) return reply.code(404).send({ error: "filter not found" });
@@ -169,6 +174,23 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     await prisma.userFilter.delete({ where: { id } });
     return reply.code(204).send();
   });
+}
+
+/**
+ * Whether a change makes the filter start over from what newly matches (UserFilter.armedAt):
+ * switched on from off, or any matching rule changed. Renaming, or saving it unchanged, doesn't -
+ * a filter that is already alerting keeps its cooldowns either way, this only stops the tokens it
+ * newly matches at that moment from all alerting at once.
+ */
+export function rearms(existing: Record<string, unknown>, change: Record<string, unknown>): boolean {
+  if (change.isActive === true && existing.isActive !== true) return true;
+  return Object.entries(change).some(
+    ([key, value]) =>
+      key !== "name" &&
+      key !== "isActive" &&
+      value !== undefined &&
+      JSON.stringify(value) !== JSON.stringify(existing[key] ?? null),
+  );
 }
 
 /**

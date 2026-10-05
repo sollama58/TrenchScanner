@@ -5,7 +5,7 @@ import { prisma, loadEnv } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { MAX_FILTERS_PER_USER } from "./filters.js";
+import { MAX_FILTERS_PER_USER, rearms } from "./filters.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `filters-limits-test-${Date.now()}`;
@@ -85,6 +85,39 @@ describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
     expect(await activeIds()).toEqual([second.id]);
   });
 
+  it("re-arms a filter when its rules change or it is switched on, not when it is renamed", async () => {
+    const [previouslyActive] = await activeIds();
+    const created = (await call("POST", "/filters", { name: "arming", isActive: false })).json() as {
+      id: string;
+      armedAt: string;
+    };
+    const longAgo = new Date(Date.now() - 3_600_000);
+    const armedAt = async () =>
+      (await prisma.userFilter.findUniqueOrThrow({ where: { id: created.id } })).armedAt.getTime();
+    const age = () => prisma.userFilter.update({ where: { id: created.id }, data: { armedAt: longAgo } });
+
+    await age();
+    await call("PATCH", `/filters/${created.id}`, { name: "renamed" });
+    expect(await armedAt()).toBe(longAgo.getTime());
+
+    await call("PATCH", `/filters/${created.id}`, { minScore: 40 });
+    expect(await armedAt()).toBeGreaterThan(longAgo.getTime());
+
+    await age();
+    await call("POST", `/filters/${created.id}/activate`);
+    expect(await armedAt()).toBeGreaterThan(longAgo.getTime());
+
+    // Already on: activating again is not a fresh start.
+    await age();
+    await call("POST", `/filters/${created.id}/activate`);
+    expect(await armedAt()).toBe(longAgo.getTime());
+
+    await prisma.userFilter.delete({ where: { id: created.id } });
+    if (previouslyActive) {
+      await prisma.userFilter.update({ where: { id: previouslyActive }, data: { isActive: true } });
+    }
+  });
+
   it("404s activating a filter the user doesn't own", async () => {
     const res = await call("POST", "/filters/not-a-real-filter/activate");
     expect(res.statusCode).toBe(404);
@@ -100,5 +133,20 @@ describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
     expect(await prisma.userFilter.count({ where: { userId } })).toBe(MAX_FILTERS_PER_USER);
     // The refused create must not have switched off the active filter either.
     expect(await activeIds()).toHaveLength(1);
+  });
+});
+
+describe("rearms", () => {
+  const stored = { name: "a", isActive: true, minScore: null, narrativeKeywords: ["ai"], mcapMin: 8000 };
+  it("ignores renames and unchanged values", () => {
+    expect(rearms(stored, { name: "b" })).toBe(false);
+    expect(rearms(stored, { minScore: null, narrativeKeywords: ["ai"], mcapMin: 8000, isActive: true })).toBe(
+      false,
+    );
+  });
+  it("re-arms on a changed rule or on switching on", () => {
+    expect(rearms(stored, { mcapMin: 9000 })).toBe(true);
+    expect(rearms(stored, { narrativeKeywords: ["ai", "dog"] })).toBe(true);
+    expect(rearms({ ...stored, isActive: false }, { isActive: true })).toBe(true);
   });
 });

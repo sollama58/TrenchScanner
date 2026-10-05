@@ -276,7 +276,7 @@ async function newestScanVerdictsFromDb(since: Date, env: Env): Promise<VettedEn
  * the same staleness profile the full cycle's own cached lookups produce.
  */
 async function alertForToken(
-  token: { id: string; mintAddress: string },
+  token: { id: string; mintAddress: string; firstSeenAt: Date },
   scored: Parameters<typeof createMatchesForTargets>[0]["scored"],
   activeFilters: FilterWithUser[],
   env: Env,
@@ -287,6 +287,7 @@ async function alertForToken(
   // minute per such token, every one of them unreferenced by any Match.
   const toAlert = await resolveAlertTargets({
     tokenId: token.id,
+    tokenFirstSeenAt: token.firstSeenAt,
     scored,
     activeFilters,
     guard: env.MATCH_ALERT_GUARD,
