@@ -21,6 +21,7 @@ import {
   type ScoredOutcome,
   scoreCandidateWithModel,
 } from "./trainer.js";
+import { CANDIDATE_FEATURE_NAMES } from "./features.js";
 import {
   CONSENSUS_CONTESTANT,
   RULES_CONTESTANT,
@@ -33,6 +34,7 @@ import { quantileTable, trainStackedCurator, type StackedCuratorParams } from ".
 import { trainBlendCurator, type BlendCuratorParams } from "./blend.js";
 import { buildCalibration } from "./calibration.js";
 import { featureHealthReport, type FeatureReport } from "./featureReport.js";
+import { featureOnset, type HeldFeature } from "./featureOnset.js";
 
 /**
  * One training run, minus the IO: examine every enabled model family on the same walk-forward
@@ -72,6 +74,11 @@ export interface CuratorTrainingConfig {
   highConvictionRank?: number;
   /** How far back the recent-calls calibration looks (env CURATOR_CALIBRATION_WINDOW_DAYS). Omitted = all of them. */
   calibrationWindowDays?: number;
+  /**
+   * Hold back inputs too new (or too lately dead) to train on - see curation/featureOnset.ts
+   * (env CURATOR_FEATURE_ONSET_GUARD). Omitted = off.
+   */
+  featureOnsetGuard?: boolean;
 }
 
 /** How one family did in this run's exam - stored for every family, shipped or not. */
@@ -117,6 +124,8 @@ export interface StoredEvalMetrics {
   calibrationCalls?: number;
   /** Per-feature null rates and decile lifts over the rows this run's exam graded. */
   featureReport?: FeatureReport;
+  /** Inputs this run held back as too new (or lately dead) to train on - see featureOnset.ts. */
+  heldFeatures?: HeldFeature[];
 }
 
 export interface CuratorTrainingOutcome {
@@ -226,11 +235,35 @@ function servedExtras(
   return { extras, highConviction };
 }
 
+/**
+ * The inputs a run may train on: everything, or with the onset guard on, everything except
+ * inputs too new (or lately dead) - see curation/featureOnset.ts.
+ */
+function runFeatures(
+  rows: TrainingRow[],
+  cfg: Pick<CuratorTrainingConfig, "featureOnsetGuard">,
+): { usable: ReadonlySet<string> | null; held: HeldFeature[] } {
+  if (!cfg.featureOnsetGuard) return { usable: null, held: [] };
+  const { usable, held } = featureOnset(rows, CANDIDATE_FEATURE_NAMES);
+  return { usable: new Set(usable), held };
+}
+
+/** A recipe narrowed to the run's usable inputs; one left with none keeps its own list. */
+function narrowRecipe(recipe: CuratorRecipe, usable: ReadonlySet<string> | null): CuratorRecipe {
+  if (usable === null) return recipe;
+  const wanted = recipe.featureNames ?? CANDIDATE_FEATURE_NAMES;
+  const kept = wanted.filter((f) => usable.has(f));
+  if (kept.length === wanted.length || kept.length === 0) return recipe;
+  return { ...recipe, featureNames: kept };
+}
+
 async function examineRecipe(
   rows: TrainingRow[],
   cfg: Omit<CuratorTrainingConfig, "learners">,
-  recipe: CuratorRecipe,
+  wholeRecipe: CuratorRecipe,
+  usable: ReadonlySet<string> | null = null,
 ): Promise<RecipeExam> {
+  const recipe = narrowRecipe(wholeRecipe, usable);
   const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
   const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? cfg.recencyHalfLifeDays;
   const evaluation = await walkForwardEvaluate(rows, {
@@ -331,8 +364,10 @@ export async function runCuratorTraining(
   if (cfg.learners.length === 0) throw new Error("no curator model families enabled");
   const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
 
+  const features = runFeatures(rows, cfg);
   const exams: RecipeExam[] = [];
-  for (const learner of cfg.learners) exams.push(await examineRecipe(rows, cfg, { learner }));
+  for (const learner of cfg.learners)
+    exams.push(await examineRecipe(rows, cfg, { learner }, features.usable));
   const chosen = exams[pickCuratorFamily(exams.map((e) => e.result))]!;
   const { evaluation, trained, deployedThreshold, extras } = chosen;
   const { learner, precisionCalibration } = chosen.result;
@@ -360,6 +395,7 @@ export async function runCuratorTraining(
     precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
     ...(chosen.highConviction ? { highConviction: chosen.highConviction } : {}),
     calibrationCalls: extras.calibration?.calls ?? 0,
+    ...(cfg.featureOnsetGuard ? { heldFeatures: features.held } : {}),
     // Stored only when there was evidence to set a cutoff from. Without it the heuristic keeps
     // sending on its gate alone (see heuristicGate in curatedAlerts.ts).
     ...(heuristicCalibration.threshold !== null ? { heuristicCalibration } : {}),
@@ -411,8 +447,9 @@ async function examineLearner(
   name: string,
   recipe: CuratorRecipe,
   reference: TrainingRow[] | null,
+  usable: ReadonlySet<string> | null,
 ): Promise<LearnerExam> {
-  const exam = await examineRecipe(rows, cfg, recipe);
+  const exam = await examineRecipe(rows, cfg, recipe, usable);
   const { evaluation, trained, deployedThreshold } = exam;
   const verdict = verdictWithCutoff(exam);
   const record = foldsRecord(evaluation.folds, "model");
@@ -536,10 +573,13 @@ export async function runEvolvingContest(
   };
   // Measured once, on the rows every learner's exam grades: the inputs' health this run.
   let featureReport: FeatureReport | null = null;
+  // Decided once for the whole field: the inputs too new (or lately dead) to train on.
+  const features = runFeatures(rows, cfg);
+  const heldFeatures = cfg.featureOnsetGuard ? { heldFeatures: features.held } : {};
 
   for (const spec of cfg.contestants) {
     if (spec.role !== "learner" || !spec.recipe) continue;
-    const exam = await examineLearner(rows, cfg, spec.id, spec.name, spec.recipe, reference);
+    const exam = await examineLearner(rows, cfg, spec.id, spec.name, spec.recipe, reference, features.usable);
     if (reference === null) {
       reference = exam.evaluation.decisionReference;
       rulesEvidence = {
@@ -549,6 +589,7 @@ export async function runEvolvingContest(
       featureReport = featureHealthReport(reference);
     }
     if (featureReport) exam.result.metrics.featureReport = featureReport;
+    Object.assign(exam.result.metrics, heldFeatures);
     results.push(exam.result);
     laneExamScores.set(spec.id, exam.examScore);
     keep(spec.id, exam);
@@ -559,7 +600,7 @@ export async function runEvolvingContest(
   const challengerExamWins: number[] = [];
   let bestChallenger: { index: number; exam: LearnerExam } | null = null;
   for (const [i, bred] of (plan?.challengers ?? []).entries()) {
-    const exam = await examineLearner(rows, cfg, "", bred.name, bred.recipe, reference);
+    const exam = await examineLearner(rows, cfg, "", bred.name, bred.recipe, reference, features.usable);
     challengerScores.push(exam.examScore);
     challengerCalls.push(exam.calls);
     challengerExamWins.push(exam.result.metrics.exam?.wins ?? 0);
@@ -588,7 +629,12 @@ export async function runEvolvingContest(
       results[seat] = {
         contestant: slot,
         params: exam.result.params,
-        metrics: { ...exam.result.metrics, contestant: slot, ...(featureReport ? { featureReport } : {}) },
+        metrics: {
+          ...exam.result.metrics,
+          contestant: slot,
+          ...(featureReport ? { featureReport } : {}),
+          ...heldFeatures,
+        },
       };
       keep(slot, exam);
       replacement = { ...decided, bred: plan!.challengers[decided.challenger]!, examScore: exam.examScore };

@@ -330,6 +330,15 @@ const envSchema = z.object({
   // How far back the per-model calibration table (the "2x rate of calls like this one" on the
   // card) looks over the exam's out-of-sample calls.
   CURATOR_CALIBRATION_WINDOW_DAYS: z.coerce.number().positive().default(14),
+  // Train only on inputs with enough history (curation/featureOnset.ts): an input wired in the
+  // last few days (or one that went dead lately) is held back until its coverage across the
+  // decision rows the cutoffs are set on matches what live candidates carry. Without it, a run
+  // right after new inputs ship sets its cutoffs and high-conviction line on rows that lack them.
+  // "false" trains on every input as before.
+  CURATOR_FEATURE_ONSET_GUARD: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // The curator contest's roster, comma-separated contestant ids (curation/contestants.ts):
   // each trains every run and makes calls on its own feed, and the consensus stacks the learners.
   // Default: all of them. Trim it if a training run gets too slow for the worker - memory stays

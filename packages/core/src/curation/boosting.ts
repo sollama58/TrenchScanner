@@ -86,6 +86,8 @@ export interface BoostingOptions {
   recencyHalfLifeDays?: number;
   /** Same meaning as TrainOptions.legacyLabelWeight in trainer.ts. */
   legacyLabelWeight?: number;
+  /** The inputs the forest may split on - see TrainOptions.featureNames. Omitted = all of them. */
+  featureNames?: readonly string[];
 }
 
 /**
@@ -94,7 +96,7 @@ export interface BoostingOptions {
  * is the usual slow-and-many trade; min 30 rows a leaf keeps every leaf a statistic.
  */
 export const DEFAULT_BOOSTING_OPTIONS: Required<
-  Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight">
+  Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "featureNames">
 > = {
   maxTrees: 300,
   learningRate: 0.05,
@@ -205,7 +207,7 @@ interface GrowContext {
   edges: number[][];
   grad: Float64Array;
   hess: Float64Array;
-  opts: Required<Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight">>;
+  opts: Required<Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "featureNames">>;
   features: number[];
 }
 
@@ -350,7 +352,7 @@ async function boost(
   fit: BoostingRow[],
   valid: BoostingRow[],
   treeLimit: number,
-  opts: Required<Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight">>,
+  opts: Required<Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "featureNames">>,
   halfLifeDays: number | undefined,
   legacyLabelWeight: number | undefined,
   featureNames: string[],
@@ -467,7 +469,7 @@ export async function trainBoostedCurator(
 ): Promise<Omit<BoostedCuratorParams, "threshold">> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const opts = { ...DEFAULT_BOOSTING_OPTIONS, ...stripUndefined(options) };
-  const featureNames = [...CANDIDATE_FEATURE_NAMES];
+  const featureNames = [...(options.featureNames ?? CANDIDATE_FEATURE_NAMES)];
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
 
   const cut = Math.floor(sorted.length * (1 - opts.validationFraction));

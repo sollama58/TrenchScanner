@@ -208,6 +208,7 @@ async function trainSingleStage(
         ...opts.boosting,
         recencyHalfLifeDays: opts.recencyHalfLifeDays,
         legacyLabelWeight: opts.legacyLabelWeight,
+        featureNames: opts.featureNames,
       })
     : trainCurator(rows, opts);
 }

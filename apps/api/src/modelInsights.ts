@@ -303,6 +303,16 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
   // same report; one copy is enough).
   const featureHealth: FeatureReport | null =
     runs.map((r) => asMetrics(r.evalMetrics).featureReport).find((f) => f !== undefined) ?? null;
+  // Inputs the newest run that ran the onset guard held back (curation/featureOnset.ts). Only the
+  // ones the scan actually carries lately: an input never wired at all is not "waiting".
+  const heldFeatures = (
+    runs.map((r) => asMetrics(r.evalMetrics).heldFeatures).find((h) => h !== undefined) ?? []
+  )
+    .filter((h) => Math.max(h.referencePct, h.recentPct) >= 2)
+    .map((h) => ({
+      ...h,
+      label: FRIENDLY_FEATURE_LABELS[h.feature as keyof typeof FRIENDLY_FEATURE_LABELS] ?? h.feature,
+    }));
 
   return {
     window: { days, since, until },
@@ -318,6 +328,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     },
     importance,
     featureHealth,
+    heldFeatures,
     runs: runs.map(summarizeRun),
     learning,
     // Everything the hit-rate report knows, minus per-filter rows: those name other users' filters.
