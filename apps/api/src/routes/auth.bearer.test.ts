@@ -124,6 +124,27 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
     expect((await me({ authorization: `Bearer ${sessionToken}` })).statusCode).toBe(200);
   });
 
+  it("a paired phone can't mint a link code for another device", async () => {
+    const code = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
+    const issued = await app.inject({
+      method: "POST",
+      url: "/auth/link/code",
+      headers: { authorization: `Bearer ${code}` },
+    });
+    const redeemed = await app.inject({
+      method: "POST",
+      url: "/auth/link/redeem",
+      payload: { code: issued.json().code },
+    });
+    const phone = redeemed.json().sessionToken as string;
+    const chained = await app.inject({
+      method: "POST",
+      url: "/auth/link/code",
+      headers: { authorization: `Bearer ${phone}` },
+    });
+    expect(chained.statusCode).toBe(403);
+  });
+
   it("refuses a token that isn't a session", async () => {
     expect((await me({ authorization: "Bearer not-a-jwt" })).statusCode).toBe(401);
   });

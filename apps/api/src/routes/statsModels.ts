@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma, CANDIDATE_FEATURE_NAMES, TRADE_FLOW_FEATURES, type Env } from "@trenchscanner/core";
+import { SharedCache } from "../sharedCache.js";
 import { buildLeaderboard } from "../contest.js";
 import { buildLearningCurve } from "../learningCurve.js";
 import { bearerMatches, STATS_TOKEN_MIN_LENGTH } from "./stats.js";
@@ -79,6 +80,11 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
     },
   );
 
+  // One cache per window (hours is 1-48, so at most 48 of them).
+  const featureFillCaches = new Map<
+    number,
+    SharedCache<Awaited<ReturnType<typeof buildFeatureFillReport>>>
+  >();
   app.get(
     "/features",
     { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
@@ -89,9 +95,15 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
         return;
       }
       const { hours } = parsed.data;
-      const since = new Date(Date.now() - hours * HOUR_MS);
       reply.header("cache-control", "no-store");
-      return buildFeatureFillReport(since);
+      // jsonb_each over every row of the window: one fill per window serves every reader for a
+      // minute, so polling it can't keep the database busy with it.
+      let cache = featureFillCaches.get(hours);
+      if (!cache) {
+        cache = new SharedCache(60_000);
+        featureFillCaches.set(hours, cache);
+      }
+      return cache.get(() => buildFeatureFillReport(new Date(Date.now() - hours * HOUR_MS)));
     },
   );
 }

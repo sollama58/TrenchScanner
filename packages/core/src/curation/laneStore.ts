@@ -53,9 +53,9 @@ interface LiveRow {
 export const RUN_DOUBLINGS = Prisma.sql`
   CASE
     WHEN hit2x AND NOT dq THEN
-      LEAST(GREATEST(COALESCE(label, 1), log(2::numeric, GREATEST(1 + COALESCE(run, peak, 0) / 100, 1)::numeric)::float8), ${LABEL_LOG2_CAP}::float8)
-    WHEN hit2x IS FALSE AND COALESCE(dd, -100) > -50 AND 1 + COALESCE(run, peak, 0) / 100 >= 2 THEN
-      LEAST(log(2::numeric, (1 + COALESCE(run, peak, 0) / 100)::numeric)::float8, ${LABEL_LOG2_CAP}::float8)
+      LEAST(GREATEST(COALESCE(label, 1), log(2::numeric, GREATEST(1 + COALESCE(NULLIF(run, 'NaN'::float8), NULLIF(peak, 'NaN'::float8), 0) / 100, 1)::numeric)::float8), ${LABEL_LOG2_CAP}::float8)
+    WHEN hit2x IS FALSE AND COALESCE(dd, -100) > -50 AND 1 + COALESCE(NULLIF(run, 'NaN'::float8), NULLIF(peak, 'NaN'::float8), 0) / 100 >= 2 THEN
+      LEAST(log(2::numeric, (1 + COALESCE(NULLIF(run, 'NaN'::float8), NULLIF(peak, 'NaN'::float8), 0) / 100)::numeric)::float8, ${LABEL_LOG2_CAP}::float8)
     ELSE 0
   END`;
 

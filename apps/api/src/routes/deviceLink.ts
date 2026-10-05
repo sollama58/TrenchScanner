@@ -31,7 +31,13 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
   app.post(
     "/link/code",
     { preHandler: app.authenticate, config: { rateLimit: LINK_ROUTE_RATE_LIMIT } },
-    async (request) => {
+    async (request, reply) => {
+      // A paired phone can't pair another: a session minted that way would outlive the phone's
+      // own revocation (each LinkedDevice row is revoked on its own), so a lost phone could keep
+      // handing out sessions nobody knows to revoke.
+      if (request.user!.deviceId) {
+        return reply.code(403).send({ error: "sign in on a desktop browser to pair a device" });
+      }
       const { code, expiresAt } = await issueLinkCode(request.user!.userId);
       request.log.info({ userId: request.user!.userId }, "issued a mobile link code");
       // The raw code is returned exactly once, here. Nothing stores it - see hashCode.
