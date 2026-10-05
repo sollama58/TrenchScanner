@@ -27,6 +27,8 @@ interface Entry {
   buyers: LaunchBuyer[];
   complete: boolean;
   readAt: number;
+  /** Re-reads of an incomplete launch so far: each waits twice as long as the last. */
+  rereads: number;
   holding: number | null;
   holdingAt: number;
 }
@@ -37,8 +39,18 @@ const entries = new Map<string, Entry>();
 /** Mints whose read failed, and when they may be tried again. */
 const failedUntil = new Map<string, number>();
 const FAILURE_BACKOFF_MS = 5 * 60_000;
-/** How soon a launch that had fewer than 25 buyers is read again for the rest. */
+/**
+ * How soon a launch that had fewer than 25 buyers is read again for the rest, doubling on each
+ * re-read up to INCOMPLETE_RETRY_MAX_MS: a dud with twelve buyers stays incomplete for as long
+ * as it sits in band, and every re-read pays for its whole history again (10+ credits) to learn
+ * that nobody new bought.
+ */
 const INCOMPLETE_RETRY_MS = 5 * 60_000;
+const INCOMPLETE_RETRY_MAX_MS = 60 * 60_000;
+
+function incompleteRetryMs(rereads: number): number {
+  return Math.min(INCOMPLETE_RETRY_MAX_MS, INCOMPLETE_RETRY_MS * 2 ** rereads);
+}
 /** A holdings reading older than this is too stale to use. */
 const MAX_HOLDING_AGE_MS = 30 * 60_000;
 
@@ -111,7 +123,7 @@ export async function resolveLaunchSnipers(
     .filter((g) => {
       if (failedUntil.has(g.mintAddress)) return false;
       const e = entries.get(g.mintAddress);
-      return !e || (!e.complete && now - e.readAt > INCOMPLETE_RETRY_MS);
+      return !e || (!e.complete && now - e.readAt > incompleteRetryMs(e.rereads));
     })
     .slice(0, Math.max(0, opts.maxNewLookups))
     .map((g) => g.mintAddress);
@@ -127,6 +139,7 @@ export async function resolveLaunchSnipers(
           buyers: r.buyers,
           complete: r.complete,
           readAt: now,
+          rereads: prev ? prev.rereads + 1 : 0,
           holding: prev?.holding ?? null,
           holdingAt: prev?.holdingAt ?? 0,
         });

@@ -110,7 +110,7 @@ export async function resolveWalletHoldings(
       // total - a known zero. This is what spares a recurring wallet a fresh 10-credit lookup
       // each time it turns up on another launch's holder list.
       for (const mint of ownMints.get(row.address) ?? []) perMintUsd[mint] ??= 0;
-    } else if (!coversEveryRelevantMint(row.address, perMintUsd, groups)) {
+    } else if (!coversEveryRelevantMint(perMintUsd, ownMints.get(row.address))) {
       // A row can only answer for launches it was actually checked against. One written before
       // this wallet was seen holding today's candidate - or before the column existed at all -
       // would otherwise be subtracted against nothing and report the wallet as richer than it
@@ -286,13 +286,11 @@ export function compactPerMint(
 }
 
 function coversEveryRelevantMint(
-  address: string,
   perMintUsd: Record<string, number>,
-  groups: WalletGroup[],
+  ownMints: Iterable<string> | undefined,
 ): boolean {
-  for (const group of groups) {
-    if (!group.addresses.includes(address)) continue;
-    if (!(group.mintAddress in perMintUsd)) return false;
+  for (const mint of ownMints ?? []) {
+    if (!(mint in perMintUsd)) return false;
   }
   return true;
 }

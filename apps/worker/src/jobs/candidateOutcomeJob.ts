@@ -47,6 +47,13 @@ const SNAPSHOT_FALLBACK_MAX_AGE_MS = 90_000;
 const RESCHEDULE_SLACK_MS = 5_000;
 
 /**
+ * How long the sweep's DexScreener lookup may run. Under the one-minute cadence; what it has
+ * not answered by then falls back to the scan's snapshots, and rows left with no price at all
+ * are simply rescheduled, as they are after a failed fetch.
+ */
+const PRICE_FETCH_DEADLINE_MS = 40_000;
+
+/**
  * A fetched price this far below the row's last price (or its scan price, before any) is checked
  * against the scan before it is folded in - see the suspect-tick note in runCandidateWatchJob.
  */
@@ -84,6 +91,12 @@ export type CandidateSampleKind = "hourly" | "event" | "emission" | "match";
  * be graded from a price its user never saw.
  */
 export const MATCH_SAMPLE_SPACING_MINUTES = 2;
+/**
+ * And only while the price is still about the anchor's: every call is graded from its own alert
+ * price (label rule 3), and a token that moved 50% inside the spacing window would hand the
+ * later alert a verdict ("2x", or a stop) its own price never earned.
+ */
+export const MATCH_ANCHOR_SHARE_TOLERANCE = 0.03;
 
 export async function recordCandidateSample(
   tokenId: string,
@@ -116,9 +129,14 @@ export async function recordCandidateSample(
     const spacingCutoff = new Date(Date.now() - spacingMinutes * 60_000);
     const recent = await prisma.candidateOutcome.findFirst({
       where: { tokenId, sampleKind: kind, anchorAt: { gt: spacingCutoff } },
-      select: { id: true },
+      select: { id: true, anchorPriceUsd: true },
     });
-    if (recent) return { id: recent.id, created: false };
+    const sameAlertPrice =
+      recent !== null &&
+      (kind !== "match" ||
+        Math.abs(recent.anchorPriceUsd - scored.priceUsd) <=
+          recent.anchorPriceUsd * MATCH_ANCHOR_SHARE_TOLERANCE);
+    if (recent && sameAlertPrice) return { id: recent.id, created: false };
   }
 
   const anchorAt = new Date();
@@ -209,6 +227,15 @@ export async function runCandidateWatchJob(
     include: { token: { select: { mintAddress: true } }, curatedAlerts: { select: { id: true } } },
   });
   if (due.length === 0) return;
+  // At the cap, the rows the sweep left behind are the 24h-extended ones (sorted last), and a cap
+  // hit every minute means they never get checked: the 600 cap was hit every minute for a day
+  // before anyone noticed, so it is said out loud and on the heartbeat (atCap below).
+  const atCap = due.length >= env.CANDIDATE_WATCH_MAX_BATCH;
+  if (atCap) {
+    logger.warn("candidate watch sweep at its cap - rows past it wait for the next sweep", {
+      cap: env.CANDIDATE_WATCH_MAX_BATCH,
+    });
+  }
 
   const mints = [...new Set(due.map((row) => row.token.mintAddress))];
   // When the prices were seen. The batched fetch below can take a while (hundreds of mints, a
@@ -216,8 +243,20 @@ export async function runCandidateWatchJob(
   // a window out of it.
   const observedAt = new Date();
   const priceByMint = new Map<string, number>();
+  // When each mint's own batch answered. The sweep is up to 2000 rows (~70 batches) and a
+  // throttled DexScreener holds a batch for its Retry-After, so prices can arrive well into the
+  // sweep; stamping them all at `observedAt` folded a 2x seen at minute 17 in as minute 15, and
+  // a stop likewise. Bounded like the scan's own lookup, too: past the deadline the batches
+  // already answered are used and the scan's snapshots stand in for the rest (below), instead of
+  // one sweep running for minutes while the next one queues behind it.
+  const seenAt = new Map<string, Date>();
   try {
-    for (const candidate of await dexScreener.getTokensByAddresses(mints)) {
+    for (const candidate of await dexScreener.getTokensByAddresses(mints, undefined, {
+      timeoutMs: 8_000,
+      retries: 1,
+      deadlineMs: PRICE_FETCH_DEADLINE_MS,
+      seenAt,
+    })) {
       priceByMint.set(candidate.mintAddress, candidate.priceUsd);
     }
   } catch (err) {
@@ -294,23 +333,31 @@ export async function runCandidateWatchJob(
       if (crashContradicted) crashTicksSkipped += 1;
       if (snapshot) fromSnapshots += 1;
       const price = dexPrice ?? snapshot?.priceUsd;
-      // When the price was seen: the sweep's fetch, or the snapshot's own time - a 2x or a stop is
+      // When the price was seen: its batch's answer, or the snapshot's own time - a 2x or a stop is
       // timed by when the price existed, not by when this sweep got round to it.
-      const priceAt = snapshot?.at ?? tickAt;
+      const priceAt = snapshot?.at ?? seenAt.get(row.token.mintAddress) ?? tickAt;
 
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
       const aggUpdates = price !== undefined ? applyPriceTick(row, price, priceAt) : {};
       const merged: OutcomeAggregates = { ...row, ...aggUpdates };
 
-      const data: Prisma.CandidateOutcomeUpdateInput = { ...aggUpdates, lastCheckedAt: tickAt };
+      // lastCheckedAt is the bar a later snapshot has to clear ("newer" above), so it records the
+      // moment of the price this row just folded in, never an earlier one.
+      const data: Prisma.CandidateOutcomeUpdateInput = {
+        ...aggUpdates,
+        lastCheckedAt: priceAt > tickAt ? priceAt : tickAt,
+      };
       if (price !== undefined) data.lastPriceUsd = price;
 
       const elapsedMs = tickAt.getTime() - row.anchorAt.getTime();
       const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
       const winWindowMs = WIN_WINDOW_MINUTES * 60_000;
       const extendedWindowMs = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
-      const peak24hReturnPct = () =>
-        ((merged.peak24hPriceUsd - merged.anchorPriceUsd) / merged.anchorPriceUsd) * 100;
+      // Never NaN: Postgres would store it, and a NaN run peak poisons the model score's sort.
+      const peak24hReturnPct = () => {
+        const pct = ((merged.peak24hPriceUsd - merged.anchorPriceUsd) / merged.anchorPriceUsd) * 100;
+        return Number.isFinite(pct) ? pct : null;
+      };
       const runPeakMinutesOf = () =>
         merged.peak24hAt ? (merged.peak24hAt.getTime() - merged.anchorAt.getTime()) / 60_000 : null;
 
@@ -401,15 +448,25 @@ export async function runCandidateWatchJob(
       // forever. Copied, like the verdicts, because the row itself is pruned later.
       const stampUngraded = row.curatedAlerts.length > 0 && closedUngraded;
 
+      const copyRunPeak = row.sampleKind === "match" && finalPeak24hPct !== null;
+      // Only if the row is still anchored where this sweep read it. A curated alert going out
+      // moves a fresh row's anchor to the moment it is sent (emitCuratedAlert); a tick computed
+      // against the old anchor would fold in a price seen before the alert, and overwrite the
+      // moved row's schedule. The next sweep picks it up instead.
+      const rowUpdate = {
+        where: { id: row.id, anchorAt: row.anchorAt },
+        data: data as Prisma.CandidateOutcomeUpdateManyMutationInput,
+      };
+      // A plain mid-window tick is one UPDATE; only a closing or retiring row, whose copies have
+      // to land with it or not at all, opens a transaction. Every one of up to 2000 rows a minute
+      // used to hold a pooled connection open for an interactive transaction, ten at a time, on
+      // the pool the scan and the fast lane share.
+      if (!copyVerdict && !stampUngraded && !copyToMatches && !copyRunPeak) {
+        await prisma.candidateOutcome.updateMany(rowUpdate);
+        return;
+      }
       await prisma.$transaction(async (tx) => {
-        // Only if the row is still anchored where this sweep read it. A curated alert going out
-        // moves a fresh row's anchor to the moment it is sent (emitCuratedAlert); a tick computed
-        // against the old anchor would fold in a price seen before the alert, and overwrite the
-        // moved row's schedule. The next sweep picks it up instead.
-        const written = await tx.candidateOutcome.updateMany({
-          where: { id: row.id, anchorAt: row.anchorAt },
-          data: data as Prisma.CandidateOutcomeUpdateManyMutationInput,
-        });
+        const written = await tx.candidateOutcome.updateMany(rowUpdate);
         if (written.count === 0) return;
         if (copyVerdict) {
           await tx.curatedAlert.updateMany({
@@ -452,7 +509,7 @@ export async function runCandidateWatchJob(
         }
         // The run peak too, once the row retires: the filter leaderboard's run-size part reads it
         // from the alert, so it survives the anchor being pruned.
-        if (row.sampleKind === "match" && finalPeak24hPct !== null) {
+        if (copyRunPeak) {
           await tx.match.updateMany({
             where: { tokenId: row.tokenId, candidateOutcomeId: row.id },
             data: { peak24hReturnPct: finalPeak24hPct },
@@ -471,6 +528,7 @@ export async function runCandidateWatchJob(
   // invisible there before.
   const summary = {
     due: due.length,
+    atCap: atCap ? 1 : 0,
     mints: mints.length,
     pricesFound: fromDex,
     fromSnapshots,

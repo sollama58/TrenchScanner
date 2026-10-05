@@ -746,8 +746,11 @@ export class HeliusClient {
         txs.push(...res.result.data);
         const reading = parseLaunchBuyers(mint, txs, maxBuyers);
         if (!reading) {
-          if (txs.length === 0) {
+          if (txs.length === 0 || txs.some((tx) => !tx || !tx.meta)) {
             // An empty history is a mint too new for the index yet - worth a retry, not an answer.
+            // So is a page with an entry that carries no meta at all (not a failed transaction, an
+            // unreadable one): the parser skips it, the next entry stands in as the "launch" and
+            // reads as not one, and the answer below would be cached for the process lifetime.
             out.set(mint, { status: "failed" });
           } else {
             // A history that doesn't start at a launch (a mint created and minted to in separate

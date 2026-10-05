@@ -32,7 +32,7 @@ import {
 } from "@trenchscanner/core";
 import type { Prisma, Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
-import { createMatchesForCandidate, type FilterWithUser } from "./matchDispatch.js";
+import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
@@ -353,9 +353,14 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // DexScreener stalled it added another 20s to the cycle - every alert waiting on prices for
   // tokens that are only being watched (2026-10-04: viewedRefresh 20.1s, a 30.6s cycle).
   const viewCutoff = new Date(Date.now() - env.ACTIVE_VIEW_WINDOW_MINUTES * 60_000);
+  // Bounded like the live-price job's read of the same rows: any subscriber can stamp tokens as
+  // viewed (GET /live/market), and an unbounded read put their whole list into every cycle's
+  // DexScreener calls. The most recently viewed win.
   const activelyViewed = await prisma.token.findMany({
     where: { lastViewedAt: { gt: viewCutoff } },
     select: { mintAddress: true, firstSeenAt: true },
+    orderBy: { lastViewedAt: "desc" },
+    take: env.LIVE_PRICE_MAX_TRACKED,
   });
   const viewedLookup =
     activelyViewed.length > 0
@@ -653,6 +658,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   });
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
   markScanVerdictsPopulated();
+  // Every in-band token has now been evaluated against these filters: a filter armed before
+  // this cycle loaded them has its backlog baselined and alerts from here on.
+  markFilterPassComplete(activeFilters);
   lap("candidates");
 
   // The cycle's governor pass: of everything the curators would emit, the strongest contenders
@@ -1302,13 +1310,23 @@ async function processCandidate(
   // millisecond here is a millisecond between the backend knowing about a token and the person
   // who asked for it seeing it. The curated/training writes below are the product's homework -
   // they used to run ahead of this, which put two or three DB writes in front of every alert.
-  const matchCount = await createMatchesForCandidate({
-    token,
-    snapshot,
-    scored,
-    activeFilters,
-    env,
-  });
+  // Caught here rather than by the cycle's loop: the snapshot and verdict above are good, and
+  // the loop's catch drops the verdict, which took the token out of the fast lane for a whole
+  // cycle - exactly when a retry there would have recovered the alert this write lost (its
+  // cooldown never started). A match write that fails (the match transaction timing out under
+  // pool pressure, say) costs this cycle's alerts, not the token's place.
+  let matchCount = 0;
+  try {
+    matchCount = await createMatchesForCandidate({
+      token,
+      snapshot,
+      scored,
+      activeFilters,
+      env,
+    });
+  } catch (err) {
+    logger.error("failed to write matches", { mint: token.mintAddress, error: String(err) });
+  }
 
   // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample
   // for why it's every candidate and not just matched ones. Then, if this is the token's first

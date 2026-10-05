@@ -412,7 +412,7 @@ function deriveBuyRatio(buys: number | null, sells: number | null): number | nul
 export const VOLUME_ACCEL_MIN_AGE_MINUTES = 5;
 
 /** Builds the feature vector for a scored candidate, at the moment it would be curated. */
-export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
+export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date()): CandidateFeatures {
   const buys = scored.buys24h ?? null;
   const sells = scored.sells24h ?? null;
   // Derived rather than left to the model to figure out from raw counts: the *ratio* of buys is
@@ -441,11 +441,22 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
   // all rows - which made the input a second copy of "under five minutes old" and dragged the
   // scale every older token was standardized on). The missing-indicator carries "too young to
   // measure"; ageMinutes already says how young.
+  // The pair's age too, not only the token's: the windows are per DexScreener pair, and at
+  // graduation the canonical pair becomes the new PumpSwap pool, whose volume only covers trades
+  // since it opened - the same "12 by construction" for the pool's first five minutes while the
+  // token itself reads as minutes or hours old.
+  const pairAgeMinutes =
+    scored.pairCreatedAt instanceof Date && !Number.isNaN(scored.pairCreatedAt.getTime())
+      ? (now.getTime() - scored.pairCreatedAt.getTime()) / 60_000
+      : undefined;
+  const tooYoungForAccel = (age: number | undefined) =>
+    age !== undefined && age < VOLUME_ACCEL_MIN_AGE_MINUTES;
   const volumeAccel =
     scored.volume5mUsd !== undefined &&
     scored.volume1hUsd !== undefined &&
     scored.volume1hUsd > 0 &&
-    !(scored.ageMinutes !== undefined && scored.ageMinutes < VOLUME_ACCEL_MIN_AGE_MINUTES)
+    !tooYoungForAccel(scored.ageMinutes) &&
+    !tooYoungForAccel(pairAgeMinutes)
       ? (scored.volume5mUsd * 12) / scored.volume1hUsd
       : null;
 
