@@ -6,20 +6,28 @@ import type { PrecisionTargets } from "./trainer.js";
  * the leaderboard can rank on, and one a person can read without the formula.
  *
  * THE SCORE IS HOW FAR A MODEL HAS PROVEN ITSELF TOWARD THE GOAL, 0-100. The goal is the two
- * hit-rate targets: 2x on 75% of calls and 4x on 50% (CURATED_TARGET_*). A model that has shown,
- * with confidence, that it meets both scores 100; one that has shown nothing scores 0.
+ * hit-rate targets, 2x on 75% of calls and 4x on 50% (CURATED_TARGET_*), plus catching the big
+ * runs these tokens make: a model that has shown, with confidence, that it meets all three scores
+ * 100; one that has shown nothing scores 0.
  *
- *  - 60 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
- *  - 40 points for the 4x rate: the same against the 4x target.
+ *  - 50 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
+ *  - 30 points for the 4x rate: the same against the 4x target.
+ *  - 20 points for run size: how far its calls ultimately ran (the 24h run peak), in doublings
+ *    per call, against RUN_SIZE_TARGET_DOUBLINGS. A 2x, 4x or 4x-in-30-minutes call earns the
+ *    same 2x/4x points whether it stops there or runs to 50x; this part is what tells them apart.
  *
  * "Proven" means the hit rate after PRIOR_CALLS extra calls are counted as misses: wins divided by
  * (graded calls + PRIOR_CALLS). Every model starts with the same handful of misses to call its
  * way out of, so a 3-for-3 streak proves about 23%, not 100%, while a long record is barely
  * dented (150 of 200 proves 71%). That is the whole small-sample rule: one number, no confidence
  * bound to explain. Each part is capped at its target, so beating a target earns nothing extra:
- * the goal is the goal. The average return per call is shown on the board but is no longer scored: a 4x already
- * counts in the 4x rate, and a target of "every call averages a 4x" was so far off that the
- * part only squeezed every score together.
+ * the goal is the goal.
+ *
+ * Run size counts each call's run peak as doublings (log2 of the peak multiple, capped at 100x like
+ * the training label) when the call ran to at least 2x without first being stopped out: a clean
+ * win, or a call that never fell 50% inside the label window and doubled later. Anything else is
+ * 0. A late runner counts because a holder still had it. It is proven the same way as the rates
+ * (sum over graded calls plus PRIOR_CALLS), so one moonshot on a short record can't carry a model.
  *
  * Every contestant has two records: its EXAM (the walk-forward backtest its latest training run
  * graded it on) and its LIVE record (its own production calls, graded by the same labels). The
@@ -40,6 +48,13 @@ export interface CallRecord {
   /** Sum of the graded calls' labels (doublings; 0 for a miss). */
   sumLabel: number;
   /**
+   * Sum of the graded calls' run sizes: doublings to the run peak (log2 of the 24h peak multiple,
+   * capped), for calls that ran to 2x+ without being stopped out first; 0 otherwise (see the
+   * module comment). Absent on records that don't track it (backtests, older stored records):
+   * those fall back to sumLabel, the clean winners' doublings inside the label window.
+   */
+  sumRun?: number;
+  /**
    * Graded calls with a simulated return under the fixed exit plan (curation/profitSim.ts), and
    * the sum of those returns in percent of a stake. Live records only; absent on exams.
    */
@@ -50,9 +65,20 @@ export interface CallRecord {
 /** labelValue is log2 of the peak multiple for clean wins: the 4x goal is labelValue >= 2. */
 export const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
-export const COMPOSITE_WEIGHTS = { winRate: 0.6, goalRate: 0.4 } as const;
+export const COMPOSITE_WEIGHTS = { winRate: 0.5, goalRate: 0.3, runSize: 0.2 } as const;
+/**
+ * The run-size target, in doublings per call: 2 = calls average a 4x run. Hitting both rate
+ * targets with every winner stopping at its 4x makes 1.25, so full points need runners that keep
+ * going.
+ */
+export const RUN_SIZE_TARGET_DOUBLINGS = 2;
 /** Calls counted as misses on top of every record, so a short streak can't prove a high rate. */
 export const PRIOR_CALLS = 10;
+
+/** A record's run-size sum: sumRun when it tracks one, else the label-window doublings. */
+export function runSum(record: CallRecord): number {
+  return record.sumRun ?? record.sumLabel;
+}
 
 /** The hit rate a record proves: hits over its graded calls plus PRIOR_CALLS misses. */
 export function provenRate(hits: number, graded: number): number {
@@ -87,6 +113,10 @@ export interface RecordSummary {
   proven4xPct: number | null;
   /** Average doublings per graded call. */
   avgReturnDoublings: number | null;
+  /** Average run size per graded call, in doublings (see CallRecord.sumRun). */
+  avgRunDoublings: number | null;
+  /** The run size this record proves, the same way as the rates; null with nothing graded. */
+  provenRunDoublings: number | null;
   /** Graded calls with a simulated return under the fixed exit plan. */
   simCalls: number;
   /** Average simulated return per call, in percent of the stake; null with none. */
@@ -108,6 +138,8 @@ export function summarizeRecord(record: CallRecord, targets: PrecisionTargets): 
     proven2xPct: g > 0 ? round1(provenRate(record.wins, g) * 100) : null,
     proven4xPct: g > 0 ? round1(provenRate(record.goals, g) * 100) : null,
     avgReturnDoublings: g > 0 ? record.sumLabel / g : null,
+    avgRunDoublings: g > 0 ? round2(runSum(record) / g) : null,
+    provenRunDoublings: g > 0 ? round2(provenRate(runSum(record), g)) : null,
     simCalls,
     avgSimReturnPct: simCalls > 0 ? round1((record.sumSimReturnPct ?? 0) / simCalls) : null,
     totalSimReturnPct: simCalls > 0 ? round1(record.sumSimReturnPct ?? 0) : null,
@@ -119,14 +151,22 @@ function round1(x: number): number {
   return Math.round(x * 10) / 10;
 }
 
+function round2(x: number): number {
+  return Math.round(x * 100) / 100;
+}
+
 /** The points each part of the score is worth and how a record earned them - see the module comment. */
 export interface ScoreParts {
   /** Points from the 2x rate: weight × min(1, proven / target) × 100. */
   points2x: number;
   points4x: number;
+  /** Points from run size: weight × min(1, proven run / RUN_SIZE_TARGET_DOUBLINGS) × 100. */
+  pointsRun: number;
   /** The proven rates the points came from, in percent. */
   proven2xPct: number;
   proven4xPct: number;
+  /** The proven run size the run points came from, in doublings per call. */
+  provenRunDoublings: number;
 }
 
 export function scoreParts(record: CallRecord, targets: PrecisionTargets): ScoreParts | null {
@@ -135,11 +175,14 @@ export function scoreParts(record: CallRecord, targets: PrecisionTargets): Score
   const part = (value: number, target: number) => (target > 0 ? Math.min(1, value / target) : 1);
   const proven2x = provenRate(record.wins, n);
   const proven4x = provenRate(record.goals, n);
+  const provenRun = provenRate(runSum(record), n);
   return {
     points2x: round1(100 * COMPOSITE_WEIGHTS.winRate * part(proven2x, targets.winRate)),
     points4x: round1(100 * COMPOSITE_WEIGHTS.goalRate * part(proven4x, targets.goalRate)),
+    pointsRun: round1(100 * COMPOSITE_WEIGHTS.runSize * part(provenRun, RUN_SIZE_TARGET_DOUBLINGS)),
     proven2xPct: round1(proven2x * 100),
     proven4xPct: round1(proven4x * 100),
+    provenRunDoublings: round2(provenRun),
   };
 }
 
@@ -147,7 +190,11 @@ export function scoreParts(record: CallRecord, targets: PrecisionTargets): Score
 export function recordScore(record: CallRecord, targets: PrecisionTargets): number | null {
   const parts = scoreParts(record, targets);
   if (parts === null) return null;
-  return round1(parts.points2x + parts.points4x);
+  return partsTotal(parts);
+}
+
+function partsTotal(parts: ScoreParts): number {
+  return round1(parts.points2x + parts.points4x + parts.pointsRun);
 }
 
 /**
@@ -170,7 +217,7 @@ export const SCORE_BANDS: readonly ScoreBand[] = [
     id: "on-target",
     min: 90,
     label: "On target",
-    meaning: "Its proven hit rates meet, or all but meet, both targets.",
+    meaning: "Its proven hit rates and run size meet, or all but meet, every target.",
   },
   {
     id: "closing-in",
@@ -217,6 +264,7 @@ export function pooledRecord(
       wins: live.wins + exam.wins * k,
       goals: live.goals + exam.goals * k,
       sumLabel: live.sumLabel + exam.sumLabel * k,
+      sumRun: runSum(live) + runSum(exam) * k,
     },
   };
 }
@@ -253,7 +301,7 @@ export function compositeScore(
   const examSummary = summarizeRecord(exam, targets);
   const pooled = pooledRecord(live, exam);
   const parts = scoreParts(pooled.record, targets);
-  const score = parts === null ? null : round1(parts.points2x + parts.points4x);
+  const score = parts === null ? null : partsTotal(parts);
   const evidenceCalls = pooled.record.graded;
   return {
     score,
@@ -283,7 +331,9 @@ export function explainScore(composite: CompositeScore, targets: PrecisionTarget
   return (
     `Proven to hit 2x on at least ${b.proven2xPct.toFixed(0)}% of calls (target ${Math.round(targets.winRate * 100)}%) ` +
     `and 4x on at least ${b.proven4xPct.toFixed(0)}% (target ${Math.round(targets.goalRate * 100)}%), ` +
-    `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} = ${composite.score.toFixed(0)} of 100.`
+    `with runs worth ${b.provenRunDoublings.toFixed(2)} doublings a call (target ${RUN_SIZE_TARGET_DOUBLINGS}, a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average), ` +
+    `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} + ${b.pointsRun.toFixed(0)} = ` +
+    `${composite.score.toFixed(0)} of 100.`
   );
 }
 

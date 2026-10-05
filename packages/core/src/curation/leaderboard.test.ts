@@ -23,7 +23,7 @@ describe("recordScore", () => {
     expect(recordScore(emptyRecord(), targets)).toBeNull();
   });
 
-  it("is 100 for a long record that meets both targets, and no more for beating them", () => {
+  it("is 100 for a long record that meets every target, and no more for beating them", () => {
     expect(recordScore(record(1000, 900, 700, 2.5), targets)).toBe(100);
     expect(recordScore(record(1000, 1000, 1000, 3), targets)).toBe(100);
   });
@@ -34,7 +34,8 @@ describe("recordScore", () => {
     expect(streak).toBeLessThan(steady);
     // 3 of 3 proves 3 / (3 + 10) = 23% of each rate.
     expect(scoreParts(record(3, 3, 3, 3), targets)).toMatchObject({ proven2xPct: 23.1, proven4xPct: 23.1 });
-    expect(streak).toBeCloseTo(60 * (23.1 / 75) + 40 * (23.1 / 50), 0);
+    // 3 of 3 averaging 3 doublings proves 9 / 13 = 0.69 doublings a call.
+    expect(streak).toBeCloseTo(50 * (23.1 / 75) + 30 * (23.1 / 50) + 20 * (0.69 / 2), 0);
     expect(steady).toBeGreaterThan(90);
   });
 
@@ -44,20 +45,39 @@ describe("recordScore", () => {
     expect(better).toBeGreaterThan(weak);
   });
 
-  it("ignores the average return: two records with the same hit rates score the same", () => {
-    expect(recordScore(record(100, 40, 20, 0.5), targets)).toBe(
-      recordScore(record(100, 40, 20, 1.5), targets),
-    );
+  it("ranks the record whose calls ran further higher when the hit rates are the same", () => {
+    const short = recordScore(record(100, 40, 20, 0.5), targets)!;
+    const long = recordScore(record(100, 40, 20, 1.5), targets)!;
+    expect(long).toBeGreaterThan(short);
+    // 0.5 vs 1.5 doublings a call over 110 proven calls: 20 × (1 / 1.1) / 2 ≈ 9 points apart.
+    expect(long - short).toBeCloseTo(9.1, 0);
   });
 
-  it("is 60 points of 2x rate and 40 of 4x rate, each the proven rate's share of its target", () => {
+  it("reads run size from sumRun when the record tracks it, sumLabel otherwise", () => {
+    const base = record(100, 40, 20, 0.5);
+    const runner = { ...base, sumRun: 150 };
+    expect(scoreParts(base, targets)!.provenRunDoublings).toBeCloseTo(50 / 110, 2);
+    expect(scoreParts(runner, targets)!.provenRunDoublings).toBeCloseTo(150 / 110, 2);
+    expect(recordScore(runner, targets)!).toBeGreaterThan(recordScore(base, targets)!);
+  });
+
+  it("caps run size at its target like the rates", () => {
+    expect(scoreParts({ ...record(1000, 0, 0, 0), sumRun: 6000 }, targets)!.pointsRun).toBe(20);
+  });
+
+  it("is 50 points of 2x rate, 30 of 4x rate and 20 of run size, each the proven share of its target", () => {
     const parts = scoreParts(record(400, 300, 100, 1), targets)!;
-    // 75% raw on 400 calls proves 300/410 = 73%; 25% raw proves 24%.
+    // 75% raw on 400 calls proves 300/410 = 73%; 25% raw proves 24%; 1 doubling a call proves 0.98.
     expect(parts.proven2xPct).toBeGreaterThan(70);
     expect(parts.proven2xPct).toBeLessThan(75);
-    expect(parts.points2x).toBeCloseTo(60 * (parts.proven2xPct / 75), 0);
-    expect(parts.points4x).toBeCloseTo(40 * (parts.proven4xPct / 50), 0);
-    expect(recordScore(record(400, 300, 100, 1), targets)).toBeCloseTo(parts.points2x + parts.points4x, 1);
+    expect(parts.points2x).toBeCloseTo(50 * (parts.proven2xPct / 75), 0);
+    expect(parts.points4x).toBeCloseTo(30 * (parts.proven4xPct / 50), 0);
+    expect(parts.provenRunDoublings).toBeCloseTo(400 / 410, 2);
+    expect(parts.pointsRun).toBeCloseTo(20 * (parts.provenRunDoublings / 2), 0);
+    expect(recordScore(record(400, 300, 100, 1), targets)).toBeCloseTo(
+      parts.points2x + parts.points4x + parts.pointsRun,
+      1,
+    );
   });
 });
 
@@ -82,12 +102,20 @@ describe("pooledRecord", () => {
     expect(pooled.record.graded).toBe(10 + BACKTEST_EVIDENCE_CAP);
     expect(pooled.record.wins).toBeCloseTo(4 + 15, 6);
     expect(pooled.record.goals).toBeCloseTo(1 + 6, 6);
+    // Neither record tracks sumRun, so both fall back to their label sums: 5 + 240 × 0.1.
+    expect(pooled.record.sumRun).toBeCloseTo(5 + 24, 6);
+  });
+
+  it("pools a live run sum with the backtest's label sum", () => {
+    const live = { ...record(10, 4, 1, 0.5), sumRun: 9 };
+    const pooled = pooledRecord(live, record(30, 15, 6, 0.8));
+    expect(pooled.record.sumRun).toBeCloseTo(9 + 24, 6);
   });
 
   it("uses a small backtest as it is", () => {
     const pooled = pooledRecord(emptyRecord(), record(12, 6, 3, 1));
     expect(pooled.backtestCalls).toBe(12);
-    expect(pooled.record).toEqual(record(12, 6, 3, 1));
+    expect(pooled.record).toEqual({ ...record(12, 6, 3, 1), sumRun: 12 });
   });
 });
 
