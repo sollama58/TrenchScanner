@@ -278,7 +278,7 @@ export function describeRecipe(
     what = `Logistic regression on ${n === CANDIDATE_FEATURE_NAMES.length ? "every" : `${n} of ${CANDIDATE_FEATURE_NAMES.length}`} features; ${memory}`;
   }
   if (r.twoStage)
-    what = `Two stages (survive the hour, then double): ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
+    what = `Two stages (dodge the stop, then double): ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
   return parentName ? `${what}. Bred from ${parentName}.` : what;
 }
 

@@ -118,8 +118,8 @@ async function main() {
   );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
   // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
-  // and the win bar is "2x within 1 hour", so at the default it decides each verdict on about
-  // sixty observations - lowering it is the lever for sharper labels.
+  // and the win bar is "2x within 15 minutes", so at the default it decides each verdict on about
+  // fifteen observations - lowering it is the lever for sharper labels.
   schedule("candidate-watch", () =>
     scheduleInterval(
       "candidate-watch",

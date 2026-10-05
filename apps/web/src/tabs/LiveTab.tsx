@@ -243,7 +243,7 @@ function WeatherChip({ weather: w, onAbout }: { weather: MarketWeather; onAbout:
   const detail =
     w.recentRatePct === null
       ? `Only ${w.recentGraded} graded moments in the last ${w.recentHours}h, too few to read.`
-      : `${pct(w.recentRatePct, 1)} of ${w.recentGraded.toLocaleString()} launch moments doubled within the hour ` +
+      : `${pct(w.recentRatePct, 1)} of ${w.recentGraded.toLocaleString()} launch moments doubled within 15 minutes ` +
         `over the last ${w.recentHours}h` +
         (w.trailingRatePct === null
           ? `. Not enough history yet for the ${w.trailingDays}-day average.`

@@ -4,6 +4,7 @@ import { FIRST_BUYERS, resolveDevHolding } from "./tradeFlow.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   GOAL_MULTIPLE,
+  GOAL_WINDOW_MINUTES,
   WIN_MULTIPLE,
   WIN_WINDOW_MINUTES,
 } from "./labels.js";
@@ -11,7 +12,7 @@ import {
 /**
  * The AI reviewer's half that needs no network: the instructions and the per-token brief. A
  * second opinion on every pick the curator and governor have already chosen - "would you buy
- * this, right now, to hold for the next hour?" - asked of a language model that can weigh the
+ * this, right now, to hold for the next half hour?" - asked of a language model that can weigh the
  * whole profile at once, including the parts no numeric feature captures (a name or description
  * that reads like a copycat or a scam, a holder profile that contradicts the flow).
  *
@@ -41,7 +42,7 @@ Each alert is a token that already passed an automated rug screen (mint and free
 
 Decide whether the trader should buy it right now. An alert is a WIN only if the price reaches ${WIN_MULTIPLE}x the alert price within ${WIN_WINDOW_MINUTES} minutes WITHOUT first falling to ${Math.round(
   DISQUALIFYING_DRAWDOWN_FRACTION * 100,
-)}% of it (that is a stop-out). The trader's standard is strict: at least 75% of the alerts they buy should win, and at least 50% should reach ${GOAL_MULTIPLE}x. Most alerts will not meet that bar, so "no_buy" is the expected answer unless the evidence is genuinely strong. Missing a winner costs far less than buying a loser.
+)}% of it (that is a stop-out). The trader's standard is strict: at least 75% of the alerts they buy should win, and at least 50% should reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. Most alerts will not meet that bar, so "no_buy" is the expected answer unless the evidence is genuinely strong. Missing a winner costs far less than buying a loser.
 
 Weigh momentum and order flow against holder health: concentrated or fresh-wallet holders, a large dev bag, a dump in the last minutes, thin liquidity, or a name or description that looks like a copy of another token are reasons to pass. Unknown values are unknown, not good news.
 
@@ -166,7 +167,7 @@ export function buildAiReviewBrief(
     `- composite score: ${Math.round(scored.score.total)}/100`,
     ...(modelProbability !== undefined
       ? [
-          `- the scanner model's own estimate that this doubles within the hour: ${fmtShare(modelProbability)}`,
+          `- the scanner model's own estimate that this doubles within ${WIN_WINDOW_MINUTES} minutes: ${fmtShare(modelProbability)}`,
         ]
       : []),
     `- curator: ${decision.source}, conviction ${decision.confidence.toFixed(1)}`,
@@ -352,7 +353,7 @@ export function formatComparables(comparables: ComparableOutcome[]): string {
   });
   return [
     `similar past calls (the ${n} most alike graded moments from this scanner, measured from a realistic fill):`,
-    `- of those ${n}: ${pct(wins)} doubled within the hour, ${pct(goals)} reached ${GOAL_MULTIPLE}x, ${pct(stops)} hit the stop first`,
+    `- of those ${n}: ${pct(wins)} doubled within ${WIN_WINDOW_MINUTES} minutes, ${pct(goals)} reached ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES}, ${pct(stops)} hit the stop first`,
     `closest ${lines.length}:`,
     ...lines,
   ].join("\n");

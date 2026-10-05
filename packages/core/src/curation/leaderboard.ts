@@ -31,11 +31,11 @@ import type { PrecisionTargets } from "./trainer.js";
 
 export interface CallRecord {
   calls: number;
-  /** Calls whose 1h window has closed. */
+  /** Calls whose label window has closed. */
   graded: number;
-  /** Clean 2x within the hour. */
+  /** Clean 2x within 15 minutes. */
   wins: number;
-  /** Clean 4x within the hour. */
+  /** Clean 4x within 30 minutes. */
   goals: number;
   /** Sum of the graded calls' labels (doublings; 0 for a miss). */
   sumLabel: number;

@@ -587,7 +587,7 @@ export async function registerCuratedRoutes(
         graded,
         wins,
         hitRatePct: graded > 0 ? (wins / graded) * 100 : null,
-        // How often a win went on to reach the 4x goal within the hour - the ambition behind
+        // How often a win went on to reach the 4x goal within 30 minutes - the ambition behind
         // the bar, counted separately so it can't be mistaken for the hit rate itself.
         goalHits,
         goalRatePct: graded > 0 ? (goalHits / graded) * 100 : null,

@@ -2,11 +2,11 @@ import { prisma } from "../db.js";
 
 /** A filter's graded alerts over the last TRACK_RECORD_DAYS - see loadFilterTrackRecords. */
 export interface FilterTrackRecord {
-  /** Alerts whose 1h verdict is in. */
+  /** Alerts whose verdict is in. */
   graded: number;
-  /** Doubled within the hour without first falling through the 50% stop. */
+  /** Doubled within 15 minutes without first falling through the 50% stop. */
   won2x: number;
-  /** Reached 4x within the hour, stop respected. */
+  /** Reached 4x within 30 minutes, stop respected. */
   won4x: number;
 }
 
@@ -15,7 +15,7 @@ export const TRACK_RECORD_DAYS = 30;
 
 /**
  * Each filter's graded alerts over the last TRACK_RECORD_DAYS: how many have a verdict, how many
- * doubled within the hour without the stop, and how many reached 4x. Scoped by user as well as
+ * doubled within 15 minutes without the stop, and how many reached 4x within 30. Scoped by user as well as
  * filter so the read rides Match's (userId, matchedAt) index.
  */
 export async function loadFilterTrackRecords(

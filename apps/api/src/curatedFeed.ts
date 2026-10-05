@@ -2,6 +2,7 @@ import type { Prisma, TokenSnapshot } from "@prisma/client";
 import {
   prisma,
   WIN_WINDOW_MINUTES,
+  GOAL_WINDOW_MINUTES,
   GOAL_MULTIPLE,
   hit2xInWinWindow,
   disqualifiedByDrawdown,
@@ -103,6 +104,7 @@ export const curatedAlertInclude = {
       low1hPriceUsd: true,
       lowBefore2xPriceUsd: true,
       peak24hPriceUsd: true,
+      peak24hAt: true,
       peakBeforeStopPriceUsd: true,
       hit2xAt: true,
       finalizedAt: true,
@@ -113,6 +115,7 @@ export const curatedAlertInclude = {
       hit4xIn1h: true,
       disqualified: true,
       peak24hReturnPct: true,
+      runPeakMinutes: true,
     },
   },
 } satisfies Prisma.CuratedAlertInclude;
@@ -133,13 +136,15 @@ export interface OutcomeView {
   status: "watching" | "won" | "missed" | "disqualified" | "unknown";
   /** True the moment a 2x is observed inside the win window - the badge flips right then. */
   hit2x: boolean;
-  /** Whether the run went on to clear the 4x goal within the hour. Null until it's knowable. */
+  /** Whether the run went on to clear the 4x goal within 30 minutes. Null until it's knowable. */
   hitGoal: boolean | null;
   /** Final once the goal window closes; the running peak-so-far before that. */
   peak1hReturnPct: number | null;
   maxDrawdown1hPct: number | null;
-  /** Keeps climbing for winners until their 24h watch ends. */
+  /** The run peak: keeps climbing for winners until their 24h watch ends. */
   peak24hReturnPct: number | null;
+  /** Minutes from the alert to the run peak so far; null until it has traded above the fill. */
+  runPeakMinutes: number | null;
   /** The 24h book is closed - every number above is final. */
   finalized: boolean;
   /** Minutes left in the WIN window, for the countdown badge. Null once it has closed. */
@@ -156,6 +161,7 @@ type OutcomeSources = Pick<
   | "hit4xIn1h"
   | "disqualified"
   | "peak24hReturnPct"
+  | "runPeakMinutes"
   | "outcomeFinalizedAt"
 > & { candidateOutcome: CuratedAlertWithRelations["candidateOutcome"] };
 
@@ -164,8 +170,9 @@ type OutcomeSources = Pick<
  * while it exists (updated every watcher tick), the columns copied onto the alert after the
  * training row has been pruned.
  *
- * The verdict lands when the 1-hour win window closes; hit2x flips the moment a 2x is observed
- * inside it, so the badge can show the win before the hour is up.
+ * The verdict lands when the 15-minute win window closes; hit2x flips the moment a 2x is observed
+ * inside it, so the badge can show the win before the window is up. The 4x goal settles when the
+ * 30-minute goal window closes.
  */
 export function resolveOutcome(alert: OutcomeSources): OutcomeView {
   const live = alert.candidateOutcome;
@@ -178,10 +185,15 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
       alert.peak24hReturnPct ??
       live?.peak24hReturnPct ??
       (live ? pctFrom(live.peak24hPriceUsd, live.anchorPriceUsd) : null),
+    runPeakMinutes:
+      alert.runPeakMinutes ??
+      live?.runPeakMinutes ??
+      (live?.peak24hAt ? (live.peak24hAt.getTime() - live.anchorAt.getTime()) / 60_000 : null),
   };
 
-  // The stored verdict, from whichever source has it. hit2xIn1h is THE bar (2x within the hour),
-  // and every graded row carries it, including ones graded under the earlier 15-minute bar.
+  // The stored verdict, from whichever source has it. hit2xIn1h is THE bar (2x within 15 minutes
+  // since 2026-10-05; the name predates it), and every graded row carries it - the migration
+  // re-graded older rows under the current windows.
   const stored =
     live?.finalizedAt != null
       ? {
@@ -225,7 +237,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
       return {
         status: disqualified ? "disqualified" : hit2x ? "won" : "missed",
         hit2x,
-        hitGoal: hitGoal ? true : elapsedMin >= 60 ? false : null,
+        hitGoal: hitGoal ? true : elapsedMin >= GOAL_WINDOW_MINUTES ? false : null,
         ...peaks,
         finalized: false,
         minutesLeft: null,
@@ -251,6 +263,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
     peak1hReturnPct: null,
     maxDrawdown1hPct: null,
     peak24hReturnPct: null,
+    runPeakMinutes: null,
     finalized: false,
     minutesLeft: null,
   };

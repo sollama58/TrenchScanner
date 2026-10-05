@@ -6,6 +6,9 @@ import {
   createLogger,
   describeExitPlan,
   HEURISTIC_CURATOR_SOURCE,
+  WIN_WINDOW_MINUTES,
+  GOAL_WINDOW_MINUTES,
+  CANDIDATE_EXTENDED_WATCH_HOURS,
   type Env,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
@@ -37,11 +40,11 @@ const querySchema = z
 export interface GradedCounts {
   /** Calls made in the window. */
   calls: number;
-  /** Calls whose 1h verdict is in (the rest are still inside their hour, or lost their anchor). */
+  /** Calls whose verdict is in (the rest are still inside their window, or lost their anchor). */
   graded: number;
-  /** Doubled within the hour from the fill without first falling through the 50% stop. */
+  /** Doubled within 15 minutes from the fill without first falling through the 50% stop. */
   won2x: number;
-  /** Reached 4x within the hour from the fill, stop respected. */
+  /** Reached 4x within 30 minutes from the fill, stop respected. */
   won4x: number;
   /** Doubled only after first falling through the stop - counted as losses. */
   doubledAfterStop: number;
@@ -338,6 +341,39 @@ export async function buildLiveFreshnessReport(liveRefresher?: OnDemandLiveRefre
   };
 }
 
+interface WinnerRunRow {
+  population: string;
+  winners: bigint;
+  finished: bigint;
+  median_multiple: number | null;
+  best_multiple: number | null;
+  reached_4x: bigint;
+  reached_10x: bigint;
+  median_minutes: number | null;
+}
+
+/** One population's winner runs, as the report shows them. */
+export function toWinnerRuns(r: WinnerRunRow) {
+  const finished = Number(r.finished);
+  const round1 = (v: number | null) => (v === null ? null : Math.round(Number(v) * 10) / 10);
+  const share = (n: bigint) => (finished > 0 ? Math.round((Number(n) / finished) * 1000) / 10 : null);
+  return {
+    population: r.population,
+    /** Clean winners in the window. */
+    winners: Number(r.winners),
+    /** Of those, how many have finished their run watch (the rest are still being watched). */
+    finished,
+    /** The median winner's run peak, as a multiple of the fill. */
+    medianPeakMultiple: round1(r.median_multiple),
+    bestPeakMultiple: round1(r.best_multiple),
+    /** Share of finished winners whose run went on to 4x / 10x at some point in the 24h watch. */
+    reached4xPct: share(r.reached_4x),
+    reached10xPct: share(r.reached_10x),
+    /** Median minutes from the alert to the run peak. */
+    medianMinutesToPeak: round1(r.median_minutes),
+  };
+}
+
 /** Exported for the route test; the route above is the only caller in production. */
 export async function buildHitRateReport(
   since: Date,
@@ -560,6 +596,41 @@ export async function buildHitRateReport(
     GROUP BY 1
     ORDER BY 1`;
 
+  // How far clean winners ran after the call: each one stays on the 24h watch once it wins, and
+  // its run peak (the highest price over the watch, on the fill) and when it came are recorded.
+  // Curated alerts are the feed's own calls; samples are the training population.
+  const winnerRunRows = prisma.$queryRaw<WinnerRunRow[]>`
+    WITH winners AS (
+      SELECT 'curated' AS population,
+             COALESCE(a."peak24hReturnPct", co."peak24hReturnPct") AS peak,
+             COALESCE(a."runPeakMinutes", co."runPeakMinutes") AS minutes,
+             (a."outcomeFinalizedAt" IS NOT NULL OR co."finalized24hAt" IS NOT NULL) AS done
+      FROM "CuratedAlert" a
+      LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+        AND COALESCE(a."hit2xIn1h", co."hit2xIn1h")
+        AND NOT COALESCE(a."disqualified", co."disqualified", false)
+      UNION ALL
+      SELECT 'samples', co."peak24hReturnPct", co."runPeakMinutes", co."finalized24hAt" IS NOT NULL
+      FROM "CandidateOutcome" co
+      WHERE co."anchorAt" >= ${since} AND co."anchorAt" < ${until}
+        AND co."sampleKind" IN ('hourly', 'event')
+        AND co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)
+    )
+    SELECT population,
+           count(*) AS winners,
+           count(*) FILTER (WHERE done AND peak IS NOT NULL) AS finished,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY 1 + peak / 100)
+             FILTER (WHERE done AND peak IS NOT NULL) AS median_multiple,
+           max(1 + peak / 100) FILTER (WHERE done AND peak IS NOT NULL) AS best_multiple,
+           count(*) FILTER (WHERE done AND peak >= 300) AS reached_4x,
+           count(*) FILTER (WHERE done AND peak >= 900) AS reached_10x,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY minutes)
+             FILTER (WHERE done AND minutes IS NOT NULL) AS median_minutes
+    FROM winners
+    GROUP BY population
+    ORDER BY population`;
+
   const [
     curated,
     byModel,
@@ -585,6 +656,7 @@ export async function buildHitRateReport(
     tierRows,
     continuityRows,
   ]);
+  const winnerRuns = await winnerRunRows;
 
   const rated = (c: GradedCounts, min?: number) => withRates(c, targets, min);
 
@@ -621,8 +693,11 @@ export async function buildHitRateReport(
   return {
     window: { since, until },
     rules: {
-      win: "2x within 1 hour of the fill, without first falling 50% below it",
-      goal: "4x within 1 hour of the fill, same stop",
+      win: `2x on the fill within ${WIN_WINDOW_MINUTES} minutes of the alert, without first falling 50% below it`,
+      goal: `4x on the fill within ${GOAL_WINDOW_MINUTES} minutes of the alert, same stop`,
+      windowsNote:
+        "The windows were 1 hour each until 2026-10-05; older calls were re-graded under the current windows from their recorded price path.",
+      runPeak: `clean winners stay watched for ${CANDIDATE_EXTENDED_WATCH_HOURS}h to record how far they ran (winnerRuns)`,
       fill: `first price at least ${env.CANDIDATE_ENTRY_DELAY_SECONDS}s after the alert, plus slippage`,
       note: "Rows anchored before the fill rule shipped were graded from the scan price.",
       exitPlan: describeExitPlan(),
@@ -673,6 +748,7 @@ export async function buildHitRateReport(
       filterCount: filterList.length,
       byFilter: filterList.slice(0, 50),
     },
+    winnerRuns: winnerRuns.map(toWinnerRuns),
     samples: {
       byKind: samples.map((r) => ({ kind: r.kind, ...rated(toCounts(r)) })),
       // When the newest hourly/event sample was banked and how many landed in the last hour: the

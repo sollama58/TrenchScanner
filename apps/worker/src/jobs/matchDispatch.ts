@@ -196,8 +196,8 @@ export async function createMatchesForTargets(opts: {
 /**
  * Grades these alerts the way curated alerts are graded: a "match" CandidateOutcome row anchored
  * now, at the price the alert was raised on, which the candidate watcher fills (first price at
- * least CANDIDATE_ENTRY_DELAY_SECONDS later, plus slippage), watches for an hour, and closes with
- * the 2x / 4x / 50%-stop verdict - copied onto these Match rows (candidateOutcomeJob.ts). That
+ * least CANDIDATE_ENTRY_DELAY_SECONDS later, plus slippage), watches through the 30-minute goal
+ * window, and closes with the 2x-in-15-minutes / 4x-in-30 / 50%-stop verdict - copied onto these Match rows (candidateOutcomeJob.ts). That
  * is what lets a filter's track record be stated in the same terms as the curated feed's.
  *
  * Never worth failing the alert over: the match is committed and delivered by now.

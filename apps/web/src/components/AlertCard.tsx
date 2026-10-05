@@ -3,8 +3,8 @@ import type { Card, Outcome } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
 
-/** The 1-hour win window every alert is graded over. */
-const WIN_WINDOW_MIN = 60;
+/** The win window every alert is graded over: 2x within 15 minutes (the 4x goal gets 30). */
+const WIN_WINDOW_MIN = 15;
 const DAY_MS = 86_400_000;
 
 /** What a card's verdict badge says. Words and an icon carry it; color only reinforces. */
@@ -101,6 +101,9 @@ export function AlertCard({
   const watching = outcome?.status === "watching" && outcome.minutesLeft !== null;
   const elapsedPct = watching ? ((WIN_WINDOW_MIN - outcome.minutesLeft!) / WIN_WINDOW_MIN) * 100 : 0;
   const hasPeak = peak !== null && peak !== undefined && peak > 0;
+  // When the recorded run peak came - only while "Now" hasn't overtaken it.
+  const runPeakAfter =
+    !nowCounts || (recordedPeak ?? 0) >= (move ?? 0) ? (curated?.outcome.runPeakMinutes ?? null) : null;
   // Measured at alert time when the wallet lookups made it in time; otherwise from a later scan.
   const freshAtAlert = s.freshTop10WalletPct;
   const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
@@ -129,7 +132,7 @@ export function AlertCard({
       className={`card tone-${badge.tone}${compact ? " compact" : ""}${labelSource ? (card.kind === "match" ? " src-mine" : " src-model") : ""}`}
     >
       {watching && (
-        <div className="countdown" title={`${outcome.minutesLeft}m left in the 1h win window`}>
+        <div className="countdown" title={`${outcome.minutesLeft}m left in the 15-minute win window`}>
           <span style={{ width: `${elapsedPct}%` }} />
         </div>
       )}
@@ -176,7 +179,7 @@ export function AlertCard({
             {curated && calibratedRate(curated, calls) !== null && (
               <span
                 className="pill"
-                title="Of recent out-of-sample calls ranked like this one, the share that doubled within the hour"
+                title="Of recent out-of-sample calls ranked like this one, the share that doubled within 15 minutes"
               >
                 <span className="pill-text">≈{calibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
               </span>
@@ -205,7 +208,16 @@ export function AlertCard({
         </div>
         <div className={`fig peak ${hasPeak && peak >= 100 ? "hot" : ""}`}>
           <label>Peak</label>
-          <span className="num">{hasPeak ? multiple(peak) : "–"}</span>
+          <span
+            className="num"
+            title={
+              runPeakAfter !== null && runPeakAfter > 0
+                ? `Highest since the alert, about ${Math.round(runPeakAfter)} minutes in`
+                : undefined
+            }
+          >
+            {hasPeak ? multiple(peak) : "–"}
+          </span>
         </div>
       </div>
 

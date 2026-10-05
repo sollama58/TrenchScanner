@@ -8,35 +8,46 @@
  * The second clause is what makes the label honest: a token that dumped 60% and then "2x'd from
  * the bottom" stopped out anyone who actually bought the alert, so it trains as a loss.
  *
- * ONE window, matching how the alerts are actually used: a subscriber sees the alert and trades
- * it by hand, so the question is "did it double within the hour after the call?" (2026-10-03:
- * moved from a 15-minute bar, which graded scalps nobody trading manually could catch).
- *   - the WIN is a 2x inside WIN_WINDOW_MINUTES (1 hour), without first breaching the stop.
- *   - the GOAL is a GOAL_MULTIPLE 4x inside the same hour, tracked and shown alongside.
- *   - labelValue is log2 of the 1h peak multiple (a 2x = 1.0, a 4x = 2.0, an 8x = 3.0), capped
- *     at LABEL_LOG2_CAP (a 100x), and 0 for anything that missed the 2x or was disqualified - so
- *     the learner prefers bigger runs exactly as much as they're worth in doublings.
- * hit2xIn15m is still recorded as an informational speed signal; it no longer decides anything.
+ * Two windows, both measured from the alert (2026-10-05, the user's call: "double within 15
+ * minutes, and 4x within 30 minutes"; it was 2x/4x within one hour from 2026-10-03):
+ *   - the WIN is a 2x inside WIN_WINDOW_MINUTES (15 minutes), without first breaching the stop.
+ *   - the GOAL is a GOAL_MULTIPLE 4x inside GOAL_WINDOW_MINUTES (30 minutes), by a call that won,
+ *     still before the stop.
+ *   - labelValue is log2 of the peak multiple inside the goal window (a 2x = 1.0, a 4x = 2.0, an
+ *     8x = 3.0), capped at LABEL_LOG2_CAP (a 100x), and 0 for anything that missed the 2x or was
+ *     disqualified - so labelValue >= 2 is exactly "reached the goal".
+ * The label window (CANDIDATE_WATCH_WINDOW_MINUTES) is the goal window: labels are written when
+ * it closes. Clean winners then stay on the extended watch (CANDIDATE_EXTENDED_WATCH_HOURS) so
+ * the record shows how far each one ultimately ran and when it peaked (the run peak).
+ *
+ * The aggregates and columns keep their historical "1h" names (peak1hPriceUsd, hit2xIn1h,
+ * hit4xIn1h, ...): they are the stored contract the API, the exports and the dashboard read.
+ * They now mean "inside the label window", "the win" and "the goal".
  *
  * Granularity caveat: the watcher samples roughly once a minute, so intra-minute wicks - both
  * a momentary 2x and a momentary stop-run - are invisible. That cuts both ways and is accepted;
  * the label describes what a human watching the chart at the same cadence could have traded.
  */
 
+/** How long the WIN has to land in - "2x within 15 minutes" of the alert. */
+export const WIN_WINDOW_MINUTES = 15;
+/** How long the GOAL has to land in - "4x within 30 minutes" of the alert. */
+export const GOAL_WINDOW_MINUTES = 30;
 /**
- * How long a row is measured for - the win/goal window, and what the watcher waits out before
- * writing labels.
+ * How long a row is measured for before its labels are written - the goal window, the longer
+ * of the two. Also the simulated trade's longest hold (profitSim.ts).
  */
-export const CANDIDATE_WATCH_WINDOW_MINUTES = 60;
-/** How long the WIN has to land in - "2x within 1 hour". The same span as the watch window. */
-export const WIN_WINDOW_MINUTES = CANDIDATE_WATCH_WINDOW_MINUTES;
-/** The informational fast-double window behind hit2xIn15m - recorded, never the verdict. */
-export const FAST_2X_WINDOW_MINUTES = 15;
-/** How long extended rows (winners + curated alerts) keep being watched for their ultimate peak. */
+export const CANDIDATE_WATCH_WINDOW_MINUTES = GOAL_WINDOW_MINUTES;
+/** The window behind hit2xIn15m. The same as the win window since 2026-10-05, so the two agree. */
+export const FAST_2X_WINDOW_MINUTES = WIN_WINDOW_MINUTES;
+/**
+ * How long extended rows (clean winners + curated alerts) keep being watched for their run peak:
+ * how far the token ultimately went after the call, and when.
+ */
 export const CANDIDATE_EXTENDED_WATCH_HOURS = 24;
 /** The multiple that counts as a win, inside the win window. */
 export const WIN_MULTIPLE = 2;
-/** The multiple a winner is aiming for by the end of the goal window - what grading pulls toward. */
+/** The multiple a winner is aiming for by the end of the goal window (4x within 30 minutes). */
 export const GOAL_MULTIPLE = 4;
 /** Trading at or below this fraction of the anchor before the first 2x disqualifies the win. */
 export const DISQUALIFYING_DRAWDOWN_FRACTION = 0.5;
@@ -82,7 +93,7 @@ export interface OutcomeAggregates {
   peak24hPriceUsd: number;
   peak24hAt: Date | null;
   /**
-   * The highest price seen inside the 1h window before the price first fell to the stop
+   * The highest price seen inside the label window before the price first fell to the stop
    * (DISQUALIFYING_DRAWDOWN_FRACTION of the base) - frozen once it does. The 4x and labelValue
    * are graded on this, so a run that doubled, fell through the stop and only then reached 4x is
    * not a 4x: its buyer was stopped out on the way. Null on rows from before it was tracked,
@@ -114,14 +125,14 @@ export function initialOutcomeAggregates(anchorPriceUsd: number, anchorAt: Date)
 
 /**
  * Folds one observed price into the aggregates, returning ONLY the fields that changed (shaped
- * for a Prisma update). Ticks after the 1h window still move the 24h peak but never the 1h
- * aggregates - the boundary is judged by the tick's own timestamp, so a sweep that runs late
- * can't smuggle an hour-old-plus price into the label window.
+ * for a Prisma update). Ticks after the label window still move the run (24h) peak but never the
+ * window's aggregates - the boundary is judged by the tick's own timestamp, so a sweep that runs
+ * late can't smuggle a price from past the window into the labels.
  *
  * With an entry rule, ticks before the fill are ignored outright (no trader holds the token yet,
  * so neither a 2x nor a stop-out has happened to them), and the first tick at or past the delay
  * takes the fill: the base moves to it and every aggregate restarts from that tick. A tick past
- * the label window never takes it.
+ * the win window never takes it: a buy made after the 2x deadline can't win.
  */
 export function applyPriceTick(
   agg: OutcomeAggregates,
@@ -135,11 +146,11 @@ export function applyPriceTick(
   if (entry && agg.entryAt === null) {
     const sinceAnchorMs = at.getTime() - agg.anchorAt.getTime();
     if (sinceAnchorMs < entry.delayMs) return updates;
-    // No fill once the label window has passed: the first price seen after an outage would become
-    // the base, every aggregate would restart from it, and the window would close on the same
-    // tick - a "loss" graded on nothing the row ever watched, whatever the token did in its hour.
-    // A row that never got its fill closes ungraded instead (see the candidate watcher).
-    if (sinceAnchorMs > CANDIDATE_WATCH_WINDOW_MINUTES * 60_000) return updates;
+    // No fill once the win window has passed: the first price seen after an outage would become
+    // the base and every aggregate would restart from it - a "loss" graded on nothing the row
+    // ever watched, since a fill past the 2x deadline can never win. A row that never got its
+    // fill closes ungraded instead (see the candidate watcher).
+    if (sinceAnchorMs > WIN_WINDOW_MINUTES * 60_000) return updates;
     const base = Math.max(agg.anchorPriceUsd, priceUsd) * (1 + entry.slippageFraction);
     return {
       entryAt: at,
@@ -189,14 +200,17 @@ export function applyPriceTick(
 export interface OutcomeLabels {
   peak1hReturnPct: number;
   maxDrawdown1hPct: number;
-  /** Doubled inside the first 15 minutes - informational speed signal, NOT the win test. */
+  /** Doubled inside the first 15 minutes. The same test as hit2xIn1h since the win window became 15 minutes. */
   hit2xIn15m: boolean;
-  /** THE bar: doubled inside the 1h win window. What "won" means everywhere downstream. */
+  /**
+   * THE bar: doubled inside the win window (15 minutes; the column name predates it). What "won"
+   * means everywhere downstream.
+   */
   hit2xIn1h: boolean;
   /**
-   * Cleanly cleared GOAL_MULTIPLE inside the window - the ambition, tracked and shown. Held to
-   * the same stop as the 2x: a run that fell through -50% first stopped its buyer out before the
-   * 4x, so it is not a 4x anyone traded.
+   * The goal: a win that cleanly cleared GOAL_MULTIPLE inside the goal window (30 minutes; the
+   * column name predates it). Held to the same stop as the 2x: a run that fell through -50% first
+   * stopped its buyer out before the 4x, so it is not a 4x anyone traded.
    */
   hit4xIn1h: boolean;
   disqualified: boolean;

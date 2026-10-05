@@ -12,6 +12,7 @@ import {
   type StoredEvalMetrics,
   type TwoStageCuratorParams,
   type FeatureReport,
+  type RunnerReport,
   type AiBlendMetrics,
   type AiBlendParams,
   type JudgeRecordSummary,
@@ -303,6 +304,9 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
   // same report; one copy is enough).
   const featureHealth: FeatureReport | null =
     runs.map((r) => asMetrics(r.evalMetrics).featureReport).find((f) => f !== undefined) ?? null;
+  // What the winners that ran furthest had in common, from the newest run that measured it.
+  const runnerTraits: RunnerReport | null =
+    runs.map((r) => asMetrics(r.evalMetrics).runnerReport).find((f) => f !== undefined) ?? null;
   // Inputs the newest run that ran the onset guard held back (curation/featureOnset.ts). Only the
   // ones the scan actually carries lately: an input never wired at all is not "waiting".
   const heldFeatures = (
@@ -328,6 +332,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     },
     importance,
     featureHealth,
+    runnerTraits,
     heldFeatures,
     runs: runs.map(summarizeRun),
     learning,
@@ -338,6 +343,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
     aiReviewer: report.aiReviewer,
     aiJudge,
     samples: report.samples,
+    winnerRuns: report.winnerRuns,
     recentAiReviews: recentReviews.map((r) => ({
       id: r.id,
       createdAt: r.createdAt,

@@ -305,15 +305,18 @@ model CuratedAlert {
   /// link while it exists.
   peak1hReturnPct    Float?
   maxDrawdown1hPct   Float?
-  /// Doubled within the first 15 minutes - informational speed signal, not the verdict.
+  /// Doubled within the first 15 minutes - the same test as hit2xIn1h since 2026-10-05.
   hit2xIn15m         Boolean?
-  /// THE verdict: doubled within the 1h win window (without first breaching the stop - see
-  /// `disqualified`).
+  /// THE verdict: doubled within the 15-minute win window (without first breaching the stop -
+  /// see `disqualified`). The name predates the window; it was one hour until 2026-10-05.
   hit2xIn1h          Boolean?
-  /// Cleared the 4x goal inside the goal window.
+  /// Cleared the 4x goal inside the 30-minute goal window.
   hit4xIn1h          Boolean?
   disqualified       Boolean?
+  /// The run peak: how far the call ultimately went over the 24h watch, on the fill.
   peak24hReturnPct   Float?
+  /// Minutes from the alert to the run peak.
+  runPeakMinutes     Float?
   outcomeFinalizedAt DateTime?
   /// Copy of CandidateOutcome.simReturnPct: the call's return under the fixed exit plan.
   simReturnPct       Float?
@@ -545,30 +548,30 @@ model CandidateOutcome {
   nextCheckAt   DateTime
   lastCheckedAt DateTime?
   lastPriceUsd  Float?
-  /// Whether this row keeps being watched past the 1h label window, out to 24h - set for rows
-  /// that hit 2x (to record how far winners ultimately ran) and for rows a curated alert points
-  /// at (their public outcome badge shows the 24h peak). Everything else stops at 1h: the
-  /// extended watch is 3x the API volume of the label window, and a dud's 24h peak teaches
-  /// nothing the 1h window didn't.
+  /// Whether this row keeps being watched past the 30-minute label window, out to 24h - set for
+  /// clean winners (to record how far they ultimately ran: the run peak) and for rows a curated
+  /// alert points at (their public outcome badge shows the 24h peak). Everything else stops when
+  /// the label window closes: a dud's 24h peak teaches nothing the window didn't.
   extended24h   Boolean   @default(false)
 
   // ---- Running aggregates, initialized to the anchor price at creation ----
-  /// Highest price seen within the 1h label window.
+  /// Highest price seen within the label window (30 minutes since 2026-10-05, 1 hour before; the
+  /// "1h" in this and the other column names predates the change).
   peak1hPriceUsd         Float
   peak1hAt               DateTime?
-  /// Lowest price seen within the 1h window - the worst drawdown a buyer at the anchor endured.
+  /// Lowest price seen within the label window - the worst drawdown a buyer at the anchor endured.
   low1hPriceUsd          Float
   /// Lowest price seen BEFORE the first observed 2x - frozen the tick the price first reaches
   /// 2x the anchor. This is what decides disqualification: a token that dropped 50%+ and then
   /// "2x'd from the bottom" stopped out anyone who actually bought the alert.
   lowBefore2xPriceUsd    Float
-  /// First tick at which price >= 2x anchor was observed, anywhere inside the 1h window - the
-  /// WIN test (see curation/labels.ts).
+  /// First tick at which price >= 2x anchor was observed, anywhere inside the label window. The
+  /// WIN test is this landing inside the 15-minute win window (see curation/labels.ts).
   hit2xAt                DateTime?
   /// Highest price seen over the whole watch (up to 24h for extended rows).
   peak24hPriceUsd        Float
   peak24hAt              DateTime?
-  /// The 1h window's highest price before it first fell to the stop, frozen at that moment -
+  /// The label window's highest price before it first fell to the stop, frozen at that moment -
   /// what the 4x and labelValue are graded on (see cleanPeakPriceUsd in curation/labels.ts). Null
   /// on rows from before it was tracked.
   peakBeforeStopPriceUsd Float?
@@ -580,27 +583,33 @@ model CandidateOutcome {
   peak1hReturnPct  Float?
   /// (low1h - anchor) / anchor * 100 - zero or negative.
   maxDrawdown1hPct Float?
-  /// Doubled inside the first 15 minutes. Informational speed signal only since 2026-10-03.
+  /// Doubled inside the first 15 minutes. The same test as hit2xIn1h since 2026-10-05.
   hit2xIn15m       Boolean?
-  /// THE bar: doubled inside the 1h win window. This is what "won" means for the feed, the
-  /// stats, and (via labelValue) the learner - see curation/labels.ts.
+  /// THE bar: doubled inside the 15-minute win window (the name predates it; it was one hour
+  /// until 2026-10-05). This is what "won" means for the feed, the stats, and (via labelValue)
+  /// the learner - see curation/labels.ts.
   hit2xIn1h        Boolean?
-  /// Reached 4x inside the goal window - the ambition a win is trained to run toward.
+  /// The goal: a win that reached 4x inside the 30-minute goal window (the name predates it).
   hit4xIn1h        Boolean?
-  /// Hit 2x inside the 1h win window, but only after first dropping through the disqualifying
+  /// Hit 2x inside the win window, but only after first dropping through the disqualifying
   /// drawdown - see lowBefore2xPriceUsd. Disqualified rows train as losses.
   disqualified     Boolean?
-  /// The training target: 0 unless the row cleanly doubled within the hour, else log2 of the 1h
-  /// peak multiple, capped - a 2x is 1.0, the 4x goal is 2.0 - so the learner prefers bigger
-  /// runs exactly as much as they're worth in doublings. See computeOutcomeLabels in
-  /// curation/labels.ts.
+  /// The training target: 0 unless the row cleanly doubled within 15 minutes, else log2 of the
+  /// label window's peak multiple, capped - a 2x is 1.0, the 4x goal is 2.0. See
+  /// computeOutcomeLabels in curation/labels.ts.
   labelValue       Float?
-  /// Set when the row is completely done (at 1h for non-extended rows, 24h for extended ones).
+  /// Set when the row is completely done (when the label window closes for non-extended rows,
+  /// at 24h for extended ones).
   finalized24hAt   DateTime?
+  /// The run peak: the highest price over the whole watch, as a return on the fill. For clean
+  /// winners this is how far the token ultimately went after the call.
   peak24hReturnPct Float?
+  /// Minutes from the alert to the run peak (peak24hAt). Written with peak24hReturnPct.
+  runPeakMinutes   Float?
   /// Simulated return of the call under the fixed exit plan (EXIT_PLAN in curation/profitSim.ts:
-  /// half at 2x, the rest at 4x, stop at -50%, out at 1 hour), in percent of the stake. Written
-  /// when the hour closes; null when ungraded or when the close price is unknown.
+  /// half at 2x, the rest at 4x, stop at -50%, out at 30 minutes; 1 hour on rows graded before
+  /// 2026-10-05), in percent of the stake. Written when the label window closes; null when
+  /// ungraded or when the close price is unknown.
   simReturnPct     Float?
 
   curatedAlerts   CuratedAlert[]
@@ -778,8 +787,9 @@ model Match {
   hitHundredPctAt DateTime?
 
   // The curated feed's verdict, applied to this alert: graded by the CandidateOutcome row
-  // (sampleKind "match") anchored when the match was created - the realistic fill, the 1h win
-  // window and the 50%-drop stop, exactly as curated alerts are graded. Copied over when that
+  // (sampleKind "match") anchored when the match was created - the realistic fill, the 15-minute
+  // win window, the 30-minute goal window and the 50%-drop stop, exactly as curated alerts are
+  // graded (the "1h" column names predate the windows). Copied over when that
   // row's window closes, in the same transaction, because outcome rows are pruned on
   // CANDIDATE_OUTCOME_RETENTION_DAYS. All null until then, and on matches from before this
   // existed.
@@ -792,7 +802,7 @@ model Match {
   peak1hReturnPct    Float?
   maxDrawdown1hPct   Float?
   hit2xIn1h          Boolean?
-  /// 4x inside the hour without the stop - false whenever disqualified.
+  /// 4x inside the 30-minute goal window without the stop - false whenever disqualified.
   hit4xIn1h          Boolean?
   /// Hit 2x only after first falling through the 50% stop: a loss.
   disqualified       Boolean?

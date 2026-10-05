@@ -246,13 +246,14 @@ function liveRow(
   overrides: Partial<NonNullable<Parameters<typeof resolveOutcome>[0]["candidateOutcome"]>> = {},
 ) {
   return {
-    // Anchored just now: inside the 1-hour win window, so the default row is still watching.
+    // Anchored just now: inside the 15-minute win window, so the default row is still watching.
     anchorAt: new Date(),
     anchorPriceUsd: 1,
     peak1hPriceUsd: 1.4,
     low1hPriceUsd: 0.9,
     lowBefore2xPriceUsd: 0.9,
     peak24hPriceUsd: 1.4,
+    peak24hAt: null as Date | null,
     peakBeforeStopPriceUsd: null as number | null,
     hit2xAt: null,
     finalizedAt: null,
@@ -263,6 +264,7 @@ function liveRow(
     hit4xIn1h: null,
     disqualified: null,
     peak24hReturnPct: null,
+    runPeakMinutes: null as number | null,
     ...overrides,
   };
 }
@@ -277,6 +279,7 @@ function alert(overrides: Partial<Parameters<typeof resolveOutcome>[0]> = {}) {
     hit4xIn1h: null,
     disqualified: null,
     peak24hReturnPct: null,
+    runPeakMinutes: null,
     outcomeFinalizedAt: null,
     candidateOutcome: liveRow(),
     ...overrides,
@@ -306,38 +309,54 @@ describe("resolveOutcome", () => {
     expect(view.peak1hReturnPct).toBeCloseTo(110);
   });
 
-  it("counts down the 1-hour win window", () => {
+  it("counts down the 15-minute win window", () => {
     const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(5) }) }));
     expect(view.status).toBe("watching");
-    expect(view.minutesLeft).toBe(55);
+    expect(view.minutesLeft).toBe(10);
   });
 
-  it("keeps watching past 15 minutes - the bar is the hour", () => {
-    const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(20) }) }));
-    expect(view.status).toBe("watching");
-    expect(view.minutesLeft).toBe(40);
-  });
-
-  it("calls a miss once the hour closes, even before the watcher finalizes the row", () => {
-    const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(61) }) }));
+  it("calls a miss once the 15 minutes close, even before the watcher finalizes the row", () => {
+    const view = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(16) }) }));
     expect(view.status).toBe("missed");
     expect(view.minutesLeft).toBeNull();
     expect(view.finalized).toBe(false);
   });
 
-  it("a 2x that lands after 15 minutes but inside the hour is a win", () => {
+  it("a 2x that lands after 15 minutes is a miss", () => {
     const view = resolveOutcome(
       alert({
         candidateOutcome: liveRow({
-          anchorAt: minutesAgo(61),
-          hit2xAt: minutesAgo(21), // 40 minutes after the anchor
+          anchorAt: minutesAgo(25),
+          hit2xAt: minutesAgo(5), // 20 minutes after the anchor
           peak1hPriceUsd: 3.0,
           peak24hPriceUsd: 3.0,
         }),
       }),
     );
-    expect(view.status).toBe("won");
-    expect(view.hit2x).toBe(true);
+    expect(view.status).toBe("missed");
+    expect(view.hit2x).toBe(false);
+  });
+
+  it("keeps the 4x open until 30 minutes, then settles it", () => {
+    const won = { hit2xAt: minutesAgo(15), peak1hPriceUsd: 2.5, peak24hPriceUsd: 2.5 };
+    const open = resolveOutcome(alert({ candidateOutcome: liveRow({ ...won, anchorAt: minutesAgo(20) }) }));
+    expect(open.status).toBe("won");
+    expect(open.hitGoal).toBeNull();
+    const closed = resolveOutcome(alert({ candidateOutcome: liveRow({ ...won, anchorAt: minutesAgo(31) }) }));
+    expect(closed.hitGoal).toBe(false);
+  });
+
+  it("reports when the run peaked", () => {
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(90),
+          peak24hPriceUsd: 6,
+          peak24hAt: minutesAgo(30),
+        }),
+      }),
+    );
+    expect(view.runPeakMinutes).toBeCloseTo(60, 0);
   });
 
   it("reports the 4x goal once the run clears it", () => {
@@ -394,8 +413,8 @@ describe("resolveOutcome", () => {
     const live = resolveOutcome(
       alert({
         candidateOutcome: liveRow({
-          anchorAt: minutesAgo(65),
-          hit2xAt: minutesAgo(30),
+          anchorAt: minutesAgo(25),
+          hit2xAt: minutesAgo(15),
           lowBefore2xPriceUsd: 0.4,
           peak1hPriceUsd: 2.2,
         }),

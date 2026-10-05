@@ -1,6 +1,6 @@
 import { GOAL_LABEL, recordScore } from "./leaderboard.js";
 import type { PrecisionTargets } from "./trainer.js";
-import { GOAL_MULTIPLE, WIN_MULTIPLE, WIN_WINDOW_MINUTES } from "./labels.js";
+import { GOAL_MULTIPLE, GOAL_WINDOW_MINUTES, WIN_MULTIPLE, WIN_WINDOW_MINUTES } from "./labels.js";
 import { MAX_PLAYBOOK_CHARS } from "./aiReview.js";
 
 /**
@@ -210,7 +210,7 @@ export const MAX_REFLECTION_CALLS = 250;
 
 export const REFLECTION_SYSTEM_PROMPT = `You improve the playbook of an AI reviewer that judges Solana memecoin alerts for a trader who buys by hand.
 
-The reviewer sees each alert's market, holder and order-flow numbers plus its text, and answers buy or no_buy with its odds. An alert WINS if it reaches ${WIN_MULTIPLE}x the alert price within ${WIN_WINDOW_MINUTES} minutes without first falling to half (a stop-out). The trader's aim: 75% of buys win and 50% reach ${GOAL_MULTIPLE}x. Missing a winner costs far less than buying a loser.
+The reviewer sees each alert's market, holder and order-flow numbers plus its text, and answers buy or no_buy with its odds. An alert WINS if it reaches ${WIN_MULTIPLE}x the alert price within ${WIN_WINDOW_MINUTES} minutes without first falling to half (a stop-out). The trader's aim: 75% of buys win and 50% reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. Missing a winner costs far less than buying a loser.
 
 Its playbook is a short list of lessons appended to its fixed instructions. You get the current playbook and a graded record of the reviewer's recent calls: what it said, its odds, the key numbers it saw, and what happened.
 

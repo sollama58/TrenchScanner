@@ -558,6 +558,8 @@ async function loadRowsOfKind(
         sampleKind: true,
         labelRule: true,
         maxDrawdown1hPct: true,
+        peak24hReturnPct: true,
+        finalized24hAt: true,
       },
     });
     for (const r of page) {
@@ -571,10 +573,14 @@ async function loadRowsOfKind(
         anchorMcapUsd: r.anchorMcapUsd,
         sampleKind: r.sampleKind,
         labelRule: r.labelRule,
-        // Held above the stop for the hour (the two-stage model's first-stage label). Unknown
-        // when the drawdown was never recorded.
+        // Held above the stop through the label window (the two-stage model's first-stage
+        // label). Unknown when the drawdown was never recorded.
         ...(r.maxDrawdown1hPct !== null
           ? { survived: r.maxDrawdown1hPct > -DISQUALIFYING_DRAWDOWN_FRACTION * 100 }
+          : {}),
+        // How far a clean winner ran once its extended watch ended (the runner-traits report).
+        ...((r.labelValue ?? 0) > 0 && r.finalized24hAt !== null && r.peak24hReturnPct !== null
+          ? { runPeakMultiple: 1 + r.peak24hReturnPct / 100 }
           : {}),
       });
     }

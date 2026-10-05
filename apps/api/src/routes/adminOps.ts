@@ -268,6 +268,8 @@ export async function registerAdminOpsRoutes(
         anchorMcapUsd: true,
         peak1hReturnPct: true,
         maxDrawdown1hPct: true,
+        peak24hReturnPct: true,
+        runPeakMinutes: true,
         hit2xIn1h: true,
         hit4xIn1h: true,
         disqualified: true,
