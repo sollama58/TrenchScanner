@@ -199,7 +199,11 @@ export async function runCandidateWatchJob(
   const sweepAt = new Date(startedAt);
   const due = await prisma.candidateOutcome.findMany({
     where: { finalized24hAt: null, nextCheckAt: { lte: sweepAt } },
-    orderBy: { nextCheckAt: "asc" },
+    // Rows still inside their 30-minute window first (finalizedAt null), then the 24h-extended
+    // ones: a late check inside the window can miss a 2x or a stop, while a winner's run peak only
+    // gets recorded a little later. On 2026-10-05 the sweep hit its cap every minute (600 due),
+    // and under nextCheckAt order alone the window rows queued behind the extended watch.
+    orderBy: [{ finalizedAt: { sort: "asc", nulls: "first" } }, { nextCheckAt: "asc" }],
     take: env.CANDIDATE_WATCH_MAX_BATCH,
     // curatedAlerts: so closing a window can push outcome copies onto the feed row - see below.
     include: { token: { select: { mintAddress: true } }, curatedAlerts: { select: { id: true } } },

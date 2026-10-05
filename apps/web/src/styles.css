@@ -2882,3 +2882,55 @@ button.small-btn {
     gap: 10px;
   }
 }
+
+/* ---------- Top filters: the shared-filter leaderboard ---------- */
+.filter-board {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.board-entry {
+  display: grid;
+  grid-template-columns: 2.5ch minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.board-entry.mine {
+  border-left: 3px solid color-mix(in srgb, var(--series-1) 70%, transparent);
+}
+.board-rank {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink-2);
+  text-align: right;
+}
+.board-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.board-stats {
+  margin: 0;
+}
+.board-criteria summary {
+  cursor: pointer;
+  color: var(--ink-2);
+}
+.board-criteria ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+@media (max-width: 640px) {
+  .board-entry {
+    grid-template-columns: 2.5ch minmax(0, 1fr);
+  }
+  .board-actions {
+    grid-column: 2;
+  }
+}

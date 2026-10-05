@@ -23,11 +23,13 @@
             ? ["/curated/insights?days=30", "/curated/models?days=30"]
             : h === "filters"
               ? ["/filters", "/config"]
-              : h === "settings"
-                ? ["/curated/models?days=30"]
-                : h === "admin"
-                  ? []
-                  : ["/matches?page=1&includeCurated=saved", "/curated/stats", "/curated/models?days=30"],
+              : h === "top"
+                ? ["/filters/leaderboard"]
+                : h === "settings"
+                  ? ["/curated/models?days=30"]
+                  : h === "admin"
+                    ? []
+                    : ["/matches?page=1&includeCurated=saved", "/curated/stats", "/curated/models?days=30"],
         );
         var boot = (window.__boot = {});
         if (!window.fetch) return;

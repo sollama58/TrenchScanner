@@ -237,8 +237,10 @@ const envSchema = z.object({
   // is "2x within 15 minutes", ~15 observations at the default, and a 2x that round-trips inside a
   // minute is invisible. Shortening this sharpens every future label at a directly proportional
   // cost in DexScreener calls; stretching it coarsens them.
-  // CANDIDATE_WATCH_MAX_BATCH caps rows per sweep as DexScreener back-pressure; at the default
-  // creation rate the whole open set fits in one sweep with room to spare.
+  // CANDIDATE_WATCH_MAX_BATCH caps rows per sweep as DexScreener back-pressure. It was 600 until
+  // 2026-10-05, when every sweep came back at exactly 600 due (filter-alert anchors had grown to
+  // ~40% of new rows); 600 rows were ~390 mints, 13 batched calls and 1.5s, so 2000 is ~45 calls
+  // and a few seconds a minute, well inside DexScreener's limits.
   // Retention is deliberately much longer than SNAPSHOT_RETENTION_DAYS - these rows ARE the
   // training set, they carry their own copy of the features precisely so snapshots can be pruned
   // on the normal horizon, and 90 days keeps the 60-day training window plus room to look back (Match and CuratedAlert keep their own outcome copies).
@@ -248,8 +250,14 @@ const envSchema = z.object({
   // only at these moments, so the training rows and the live picks share one distribution.
   CANDIDATE_EVENT_SPACING_MINUTES: z.coerce.number().positive().default(60),
   CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
-  CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(600),
+  CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(2000),
   CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(90),
+  // Graded "match" rows (the anchors user-filter alerts are graded from) are kept this long instead:
+  // their verdict is copied onto the Match rows when the window closes, they never train a model,
+  // and at ~6k rows (~28MB) a day they were 40% of the table's growth. 0 keeps them on the
+  // CANDIDATE_OUTCOME_RETENTION_DAYS horizon.
+  // Off (0) until the user approves the shorter horizon.
+  MATCH_OUTCOME_RETENTION_DAYS: z.coerce.number().nonnegative().default(0),
 
   // Curated Alerts feed (see packages/core/src/curation/curator.ts). CURATED_MIN_SCORE is the
   // heuristic curator's composite-score floor - env-tunable so emission volume can be steered in

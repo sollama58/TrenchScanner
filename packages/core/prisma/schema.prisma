@@ -164,6 +164,14 @@ model UserFilter {
   /// on, not on the whole watchlist at once (apps/worker/src/jobs/matchDispatch.ts).
   armedAt   DateTime @default(now())
 
+  /// Opted in to the public filter leaderboard by its owner (off by default). The board shows the
+  /// filter's name and settings, never the owner's wallet - see apps/api/src/filterLeaderboard.ts.
+  shareOnLeaderboard Boolean  @default(false)
+  /// When the matching criteria last changed (a name, active or sharing change doesn't count).
+  /// The leaderboard record counts only alerts raised since, so it always belongs to the settings
+  /// a copier would get. Filters from before 2026-10-05 start at createdAt.
+  criteriaChangedAt  DateTime @default(now())
+
   matches   Match[]
   baselines FilterBaseline[]
 

@@ -439,3 +439,70 @@ describe.skipIf(!dbAvailable)("runCleanupJob: tracked snapshot downsampling", ()
     expect(left.filter((s) => s.takenAt.getTime() > Date.now() - DAY)).toHaveLength(3);
   });
 });
+
+/**
+ * Graded filter-alert anchors ("match" rows) go on MATCH_OUTCOME_RETENTION_DAYS: their verdict
+ * already sits on the Match rows. Training rows, ungraded anchors (the report reads those to call
+ * an alert ungradable) and anchors a curated alert shares stay.
+ */
+describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () => {
+  const TAG = "CleanupMatchAnchorTest";
+  const DAY = 86_400_000;
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 3650,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 3650,
+    MATCH_OUTCOME_RETENTION_DAYS: 7,
+  } as never;
+
+  const cleanUp = () => prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  beforeEach(cleanUp);
+  afterAll(cleanUp);
+
+  it("prunes old graded match anchors and keeps everything else", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-a` } });
+    const row = (kind: string, ageDays: number, graded: boolean | "ungraded") =>
+      prisma.candidateOutcome.create({
+        data: {
+          tokenId: token.id,
+          sampleKind: kind,
+          anchorAt: new Date(Date.now() - ageDays * DAY),
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 50_000,
+          features: {},
+          nextCheckAt: new Date(),
+          peak1hPriceUsd: 1,
+          low1hPriceUsd: 1,
+          lowBefore2xPriceUsd: 1,
+          peak24hPriceUsd: 1,
+          finalizedAt: graded === true ? new Date(Date.now() - ageDays * DAY) : null,
+          finalized24hAt: graded === false ? null : new Date(Date.now() - ageDays * DAY),
+        },
+      });
+    const oldGraded = await row("match", 10, true);
+    const recentGraded = await row("match", 3, true);
+    const oldUngraded = await row("match", 10, "ungraded");
+    const oldEvent = await row("event", 10, true);
+    const shared = await row("match", 10, true);
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: shared.id,
+        source: "heuristic-v1",
+        confidence: 0.9,
+        reasons: [],
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+      },
+    });
+
+    const meta = await runCleanupJob(env, { rowsPerBatch: 1, pauseMs: 0 });
+
+    const left = new Set(
+      (await prisma.candidateOutcome.findMany({ where: { tokenId: token.id } })).map((r) => r.id),
+    );
+    expect(left.has(oldGraded.id)).toBe(false);
+    expect([recentGraded.id, oldUngraded.id, oldEvent.id, shared.id].every((id) => left.has(id))).toBe(true);
+    expect((meta as { deletedMatchOutcomes: number }).deletedMatchOutcomes).toBe(1);
+  });
+});

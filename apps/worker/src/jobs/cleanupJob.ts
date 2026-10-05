@@ -359,6 +359,27 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     ),
   };
 
+  // Graded filter-alert anchors go much sooner: the verdict already lives on every Match that
+  // points here (copied in the same transaction that finalized the row), and no model trains on
+  // them. Only finished, graded rows that nothing but Match references; an ungraded one stays, as
+  // it is what tells the hit-rate report that its alerts will never be graded.
+  const deletedMatchOutcomes = {
+    count:
+      env.MATCH_OUTCOME_RETENTION_DAYS > 0
+        ? await deleteInBatches(
+            `SELECT o."id" FROM "CandidateOutcome" o
+             WHERE o."sampleKind" = 'match' AND o."anchorAt" < $1
+               AND o."finalizedAt" IS NOT NULL AND o."finalized24hAt" IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."candidateOutcomeId" = o."id")
+               AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."candidateOutcomeId" = o."id")
+               AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."candidateOutcomeId" = o."id")`,
+            "CandidateOutcome",
+            [new Date(startedAt - env.MATCH_OUTCOME_RETENTION_DAYS * DAY_MS)],
+            batch,
+          )
+        : 0,
+  };
+
   // The bench curator's ledger (see CuratedShadowEmission), on the same horizon as the training
   // set it grades against: unlike CuratedAlert rows these are evaluation data, not a public
   // track record, and a shadow row whose outcome link has been pruned can't be graded anyway.
@@ -482,6 +503,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedUntrackedSnapshots: snapshotSweep.untracked,
     downsampledSnapshots: snapshotSweep.downsampled,
     deletedCandidateOutcomes: deletedCandidateOutcomes.count,
+    deletedMatchOutcomes: deletedMatchOutcomes.count,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
     deletedCuratorModels: deletedCuratorModels.count,
