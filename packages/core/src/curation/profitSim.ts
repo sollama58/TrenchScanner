@@ -16,7 +16,7 @@ import {
  *     first price CANDIDATE_ENTRY_DELAY_SECONDS after the alert, plus slippage),
  *   - sell a share of the position at each take-profit multiple, lowest first,
  *   - sell whatever is left at the stop if the price falls to it first,
- *   - and close whatever is still held when the hour is up.
+ *   - and close whatever is still held when the label window (30 minutes) is up.
  *
  * It runs on the aggregates the candidate watcher already records - no extra price history, no
  * extra API calls. That is also its limit: the watcher tracks the peak BEFORE the stop
@@ -29,7 +29,7 @@ import {
  * Every sale pays the same slippage the fill did (the venue's CANDIDATE_ENTRY_SLIPPAGE_PCT_*):
  * selling into a thin curve moves against the seller just as buying does.
  *
- * The result is written once, when a row's hour closes (candidateOutcomeJob.ts), and copied onto
+ * The result is written once, when a row's label window closes (candidateOutcomeJob.ts), and copied onto
  * any curated alert anchored to the row, like the other verdicts. Changing the plan changes rows
  * graded from then on; rows already graded keep the number they were graded with.
  */
@@ -53,7 +53,7 @@ export interface ExitPlan {
   readonly maxHoldMinutes: number;
 }
 
-/** The plan every call is simulated under: half at 2x, the rest at 4x, stop at -50%, out at 1 hour. */
+/** The plan every call is simulated under: half at 2x, the rest at 4x, stop at -50%, out at 30 minutes. */
 export const EXIT_PLAN: ExitPlan = {
   takeProfits: [
     { multiple: 2, sellFraction: 0.5 },
@@ -99,7 +99,7 @@ export type SimulationInput = Pick<
 
 /**
  * The return of one call under the plan, in percent of the stake (+200 = tripled, -50 = halved).
- * `closePriceUsd` is the price when the hour closed; null when unknown, in which case the result
+ * `closePriceUsd` is the price when the label window closed; null when unknown, in which case the result
  * is null unless the plan was already fully out (every share sold at a take-profit or the stop).
  */
 export function simulateExitPlan(

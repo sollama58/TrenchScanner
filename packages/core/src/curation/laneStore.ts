@@ -46,7 +46,7 @@ interface LiveRow {
 /**
  * One model's live record: its calls since `since`, graded exactly like the hit-rate report -
  * the alert's outcome copies when they've landed, else the linked training row. Returns in
- * doublings use the row's labelValue, or - once the row is pruned - the copied 1h peak, capped
+ * doublings use the row's labelValue, or - once the row is pruned - the copied window peak, capped
  * the same way.
  */
 export async function liveCallRecord(model: string, since: Date): Promise<CallRecord> {

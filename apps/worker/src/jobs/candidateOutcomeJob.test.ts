@@ -153,7 +153,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.hit4xIn1h).toBe(false); // won, but short of the 4x goal
     expect(updated.extended24h).toBe(true);
     expect(updated.finalized24hAt).toBeNull(); // still on the 24h watch
-    // Under the exit plan: half sold at 2x, the rest closed at the hour's 1.4, every sale paying
+    // Under the exit plan: half sold at 2x, the rest closed at the window's close of 1.4, every sale paying
     // the pre-bond slippage.
     const slip = env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND / 100;
     expect(updated.simReturnPct).toBeCloseTo(((0.5 * 2 + 0.5 * 1.4) * (1 - slip) - 1) * 100);
@@ -167,12 +167,12 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updatedAlert.simReturnPct).toBeCloseTo(updated.simReturnPct!);
   });
 
-  it("grades a 2x after 15 minutes but inside the hour as a win, and extends its watch", async () => {
+  it("grades a 2x after 15 minutes as a miss, and retires it at the window edge", async () => {
     const token = await createToken("slow-double");
-    const anchorAt = new Date(Date.now() - 61 * MINUTE);
+    const anchorAt = new Date(Date.now() - 31 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, {
       peak1hPriceUsd: 2.6,
-      hit2xAt: new Date(anchorAt.getTime() + 35 * MINUTE),
+      hit2xAt: new Date(anchorAt.getTime() + 20 * MINUTE),
       lowBefore2xPriceUsd: 0.8,
       low1hPriceUsd: 0.8,
       peak24hPriceUsd: 2.6,
@@ -181,15 +181,14 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.4 }), env);
 
     const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
-    expect(updated.hit2xIn15m).toBe(false); // recorded as a speed signal only
-    expect(updated.hit2xIn1h).toBe(true);
-    expect(updated.labelValue).toBeCloseTo(Math.log2(2.6));
-    // A clean win graduates to the 24h watch like any other.
-    expect(updated.extended24h).toBe(true);
-    expect(updated.finalized24hAt).toBeNull();
+    expect(updated.hit2xIn15m).toBe(false);
+    expect(updated.hit2xIn1h).toBe(false);
+    expect(updated.labelValue).toBe(0);
+    expect(updated.extended24h).toBe(false);
+    expect(updated.finalized24hAt).not.toBeNull();
   });
 
-  it("retires a row that never doubled inside the hour", async () => {
+  it("retires a row that never doubled inside the window", async () => {
     const token = await createToken("no-double");
     const anchorAt = new Date(Date.now() - 61 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, {
@@ -255,8 +254,9 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
       peak1hPriceUsd: 2.4,
       hit2xAt: new Date(anchorAt.getTime() + 10 * MINUTE),
       peak24hPriceUsd: 6.0,
+      peak24hAt: new Date(anchorAt.getTime() + 150 * MINUTE),
       extended24h: true,
-      finalizedAt: new Date(anchorAt.getTime() + 60 * MINUTE),
+      finalizedAt: new Date(anchorAt.getTime() + 30 * MINUTE),
       hit2xIn1h: true,
       disqualified: false,
       labelValue: Math.log2(2.4),
@@ -280,9 +280,12 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(updated.finalized24hAt).not.toBeNull();
     expect(updated.peak24hReturnPct).toBeCloseTo(500);
+    // When the run peaked, for the "how far winners ran" read.
+    expect(updated.runPeakMinutes).toBeCloseTo(150);
 
     const updatedAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
     expect(updatedAlert.peak24hReturnPct).toBeCloseTo(500);
+    expect(updatedAlert.runPeakMinutes).toBeCloseTo(150);
     expect(updatedAlert.outcomeFinalizedAt).not.toBeNull();
   });
 
@@ -363,7 +366,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
       sampleKind: "match",
       peak1hPriceUsd: 4.4,
       peakBeforeStopPriceUsd: 4.4,
-      hit2xAt: new Date(anchorAt.getTime() + 20 * MINUTE),
+      hit2xAt: new Date(anchorAt.getTime() + 10 * MINUTE),
       lowBefore2xPriceUsd: 0.9,
       low1hPriceUsd: 0.9,
       peak24hPriceUsd: 4.4,
@@ -403,7 +406,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
 
   it("retires a row that never got its fill ungraded, instead of grading a late price as a loss", async () => {
     const token = await createToken("unobserved");
-    // The worker was down for the whole hour: the first price it sees is 90 minutes in.
+    // The worker was down through the whole window: the first price it sees is 90 minutes in.
     const anchorAt = new Date(Date.now() - 90 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, { entryAt: null, signalPriceUsd: null });
     const alert = await prisma.curatedAlert.create({

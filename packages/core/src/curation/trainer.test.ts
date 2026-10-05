@@ -495,8 +495,9 @@ describe("walkForwardEvaluate leak guards", () => {
   });
 
   it("purges training rows anchored within the label window of the fold's start", async () => {
-    // Rows every 10 minutes, each its own token: the purge removes the 5 rows anchored less than
-    // an hour before each fold boundary (the row exactly an hour before has a closed label).
+    // Rows every 10 minutes, each its own token: the purge removes the 2 rows anchored less than
+    // the 30-minute label window before each fold boundary (the row exactly 30 minutes before
+    // has a closed label).
     const rows = syntheticRows(1_000).map((r, i) => ({
       ...r,
       tokenId: `t-${i}`,
@@ -505,7 +506,7 @@ describe("walkForwardEvaluate leak guards", () => {
     const result = await walkForwardEvaluate(rows, { targetPerHour: 6, heuristicMinScore: 0 });
     expect(result.folds.length).toBeGreaterThan(0);
     const firstTestIndex = 500;
-    expect(result.folds[0]!.trainRows).toBe(firstTestIndex - 5);
+    expect(result.folds[0]!.trainRows).toBe(firstTestIndex - 2);
   });
 
   it("collects the heuristic's out-of-sample calls in its own rank-score units", async () => {

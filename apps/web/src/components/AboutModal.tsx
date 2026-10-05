@@ -44,9 +44,9 @@ export function AboutModal({
 
         <p>
           TrenchScanner watches new Pump.fun launches on Solana and flags the few worth a manual look. The aim
-          is that {targets.hitRate2xPct}% of alerts double and {targets.hitRate4xPct}% reach 4x within an
-          hour. It finds tokens for you to inspect and trade yourself; it doesn&apos;t trade, and nothing here
-          is financial advice.
+          is that {targets.hitRate2xPct}% of alerts double within 15 minutes and {targets.hitRate4xPct}% reach
+          4x within 30 minutes. It finds tokens for you to inspect and trade yourself; it doesn&apos;t trade,
+          and nothing here is financial advice.
         </p>
 
         <h3>The scan</h3>
@@ -102,20 +102,21 @@ export function AboutModal({
         <p>
           Every alert, yours and the models&apos;, is graded the same way. The entry is a realistic fill: the
           first price at least a minute after the alert, plus slippage. It&apos;s a win if it reaches 2x
-          within 1 hour of the alert, and a 4x win if it gets there. If it drops 50% before doubling,
-          it&apos;s stopped out and counts as a loss.
+          within 15 minutes of the alert, and a 4x win if it reaches 4x within 30 minutes. If it drops 50%
+          before doubling, it&apos;s stopped out and counts as a loss. Winners stay watched for a day after,
+          so the card&apos;s Peak shows how high they went.
         </p>
         <dl className="about-terms">
-          <dt>Live · 42m left</dt>
-          <dd>Still inside its hour; the bar along the top of the card shows how much is gone.</dd>
+          <dt>Live · 12m left</dt>
+          <dd>Still inside its 15 minutes; the bar along the top of the card shows how much is gone.</dd>
           <dt>✓ 2x win, ✓✓ 4x win</dt>
-          <dd>Reached the multiple within the hour.</dd>
+          <dd>Doubled within 15 minutes; ✓✓ means it also reached 4x within 30.</dd>
           <dt>✕ Missed 2x</dt>
-          <dd>The hour ran out before it doubled.</dd>
+          <dd>The 15 minutes ran out before it doubled.</dd>
           <dt>✕ Stopped out</dt>
           <dd>Fell 50% from the fill before doubling.</dd>
           <dt>Grading</dt>
-          <dd>The hour is over and the result is being worked out.</dd>
+          <dd>The window is over and the result is being worked out.</dd>
         </dl>
 
         <h3>Reading a card</h3>
@@ -159,7 +160,8 @@ export function AboutModal({
           <dt>≈41% 2x</dt>
           <dd>
             Of the model&apos;s recent calls ranked like this one, on data it wasn&apos;t trained on, the
-            share that doubled within the hour. When several models called the token, the best of their rates.
+            share that doubled within 15 minutes. When several models called the token, the best of their
+            rates.
           </dd>
         </dl>
 
@@ -167,9 +169,9 @@ export function AboutModal({
         <p>
           The chip under the scores says how often launches are doubling right now. It takes every decision
           moment the scanner graded in the last 6 hours (tokens in the market-cap band, checked on the hour
-          and when something happened) and counts the share that hit 2x within the hour. It compares that with
-          the same share over the last 7 days: 25% or more above the week reads hot, 25% or more below reads
-          cold, anything between is normal. With too few graded moments it says so instead of guessing.
+          and when something happened) and counts the share that hit 2x within 15 minutes. It compares that
+          with the same share over the last 7 days: 25% or more above the week reads hot, 25% or more below
+          reads cold, anything between is normal. With too few graded moments it says so instead of guessing.
         </p>
         <p>
           It is there to help you size or skip trades on a cold day. It doesn&apos;t change or hold back any

@@ -128,7 +128,10 @@ export interface Outcome {
   hitGoal: boolean | null;
   peak1hReturnPct: number | null;
   maxDrawdown1hPct: number | null;
+  /** The run peak: winners stay watched for a day to see how high they go. */
   peak24hReturnPct: number | null;
+  /** Minutes from the alert to the run peak (older API builds omit it). */
+  runPeakMinutes?: number | null;
   finalized: boolean;
   minutesLeft: number | null;
 }
@@ -499,6 +502,10 @@ export interface ModelInsights {
   };
   /** Per-feature null rates and decile lifts from the newest training run, or null before one. */
   featureHealth?: FeatureHealthReport | null;
+  /** What the winners that ran furthest had in common, from the newest training run. */
+  runnerTraits?: RunnerTraitsReport | null;
+  /** How far clean winners ran after the call: the feed's calls ("curated") and the training samples. */
+  winnerRuns?: WinnerRuns[];
   /** Inputs the newest run held back as too new (or lately dead) to train on. */
   heldFeatures?: { feature: string; label: string; referencePct: number; recentPct: number }[];
   recentAiReviews: AiReviewRow[];
@@ -594,6 +601,32 @@ export interface ScoreBasis {
 }
 
 export type ContestantRole = "rules" | "learner" | "stacked" | "blend";
+
+export interface WinnerRuns {
+  population: "curated" | "samples" | string;
+  winners: number;
+  /** Winners whose run watch has ended (the rest are still being watched). */
+  finished: number;
+  medianPeakMultiple: number | null;
+  bestPeakMultiple: number | null;
+  reached4xPct: number | null;
+  reached10xPct: number | null;
+  medianMinutesToPeak: number | null;
+}
+
+export interface RunnerTraitsReport {
+  winners: number;
+  /** A big runner went at least this far (the top quarter of winners by run peak). */
+  bigRunnerMultiple: number | null;
+  medianRunMultiple: number | null;
+  traits: {
+    feature: string;
+    label: string;
+    topThirdLift: number;
+    bottomThirdLift: number;
+    present: number;
+  }[];
+}
 
 export interface FeatureHealthReport {
   rows: number;

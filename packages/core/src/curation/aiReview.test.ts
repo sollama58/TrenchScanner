@@ -40,9 +40,9 @@ const decision: CurationDecision = {
 
 describe("AI review brief", () => {
   it("states the trader's bar in the instructions", () => {
-    expect(AI_REVIEW_SYSTEM_PROMPT).toContain("2x the alert price within 60 minutes");
+    expect(AI_REVIEW_SYSTEM_PROMPT).toContain("2x the alert price within 15 minutes");
     expect(AI_REVIEW_SYSTEM_PROMPT).toContain("at least 75%");
-    expect(AI_REVIEW_SYSTEM_PROMPT).toContain("4x");
+    expect(AI_REVIEW_SYSTEM_PROMPT).toContain("4x within 30 minutes");
   });
 
   it("carries the token's numbers and spells out what is unknown", () => {
@@ -136,8 +136,8 @@ describe("comparable past calls", () => {
         peak1hReturnPct: 30,
       },
     ]);
-    expect(text).toContain("50% doubled within the hour");
-    expect(text).toContain("50% reached 4x");
+    expect(text).toContain("50% doubled within 15 minutes");
+    expect(text).toContain("50% reached 4x within 30");
     expect(text).toContain("50% hit the stop first");
     expect(text).toContain("STOPPED OUT");
   });
@@ -177,8 +177,8 @@ describe("AI review brief - model odds and trade flow", () => {
     const model: CurationDecision = { ...decision, source: "cm_123", confidence: 41 };
     expect(curatorProbabilityOf(model)).toBeCloseTo(0.41);
     expect(curatorProbabilityOf(decision)).toBeUndefined();
-    expect(buildAiReviewBrief(scored, model)).toContain("doubles within the hour: 41%");
-    expect(buildAiReviewBrief(scored, decision)).not.toContain("doubles within the hour");
+    expect(buildAiReviewBrief(scored, model)).toContain("doubles within 15 minutes: 41%");
+    expect(buildAiReviewBrief(scored, decision)).not.toContain("doubles within 15 minutes");
   });
 
   it("lists the trade-by-trade flow when the token was tracked, and omits the section when not", () => {

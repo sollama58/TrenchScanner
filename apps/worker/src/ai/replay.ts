@@ -10,6 +10,7 @@ import {
   summarizeJudgeRecord,
   aiSpendDay,
   usageCostUsd,
+  CANDIDATE_WATCH_WINDOW_MINUTES,
   type CurationDecision,
   type Env,
   type JudgeRecordSummary,
@@ -42,8 +43,8 @@ const logger = createLogger("ai-replay");
  * own stored feature vector.
  */
 
-/** A pool row counts as known at time t once its 1h label window (plus slack) has closed. */
-const LABEL_SETTLE_MS = 65 * 60_000;
+/** A pool row counts as known at time t once its label window (plus slack) has closed. */
+const LABEL_SETTLE_MS = (CANDIDATE_WATCH_WINDOW_MINUTES + 5) * 60_000;
 /** The most pool rows one replay loads for comparables. */
 const REPLAY_POOL_MAX_ROWS = 8_000;
 /** Most requests one replay sends - well under the API's limits, keeps the request body small. */

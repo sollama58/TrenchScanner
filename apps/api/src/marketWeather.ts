@@ -5,7 +5,7 @@ import { prisma, type Env } from "@trenchscanner/core";
  *
  * The same population and the same definition as the models' mktBaseRate6hPct input
  * (apps/worker/src/jobs/marketContext.ts): hourly and event decision moments in the mcap band,
- * finalized in the window, that hit 2x within the hour. The models already see it; this puts it
+ * finalized in the window, that won (2x within 15 minutes). The models already see it; this puts it
  * in front of the person trading the alerts. Informational only - nothing reads it to gate the feed.
  */
 

@@ -151,7 +151,7 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
     const item = items.find((i) => i.candidateOutcomeId === alertId);
     expect(item).toBeDefined();
     expect(item!.brief).toContain("symbol: ALERT");
-    expect(item!.brief).toContain("doubles within the hour: 42%");
+    expect(item!.brief).toContain("doubles within 15 minutes: 42%");
     expect(item!.brief).toContain("backed by Trees");
     // The earlier row won (+150%); the later one, which would read "missed (peak +10%)", is unseen.
     expect(item!.brief).toContain("WON (peak +150%)");

@@ -102,16 +102,17 @@ hand-tuned heuristic and eventually by a model trained on the system's own recor
 Three shipping phases, each useful on its own:
 
 - **Phase A — labels** (`CandidateOutcome`, `packages/core/src/curation/`): every rug-screen-passing
-  candidate gets sampled (at most hourly per token) and its price watched for an hour. The
-  **win** is reaching **2x within 1 hour without first trading at/below 50% of the anchor** (the
-  drawdown clause makes the label mean "tradeable win", not "eventually printed a green candle");
-  the **goal** is a **4x within the same hour**. The window was 15 minutes until 2026-10-03; it
-  moved to an hour because alerts are traded by hand. The training target is log2 of the 1h peak
-  multiple, capped at a 100x, awarded only to clean wins, so the learner prefers bigger runs exactly in proportion to
-  their doublings. Labels are recorded for ALL candidates, not just curated/matched ones:
-  full-population outcomes are what let any future gate be evaluated offline, and they remove the
-  explore/exploit problem entirely. Winners (and curated picks) stay watched to 24h for their
-  ultimate peak. Sampling is minutely, so intra-minute wicks are invisible - accepted; the label
+  candidate gets sampled (at most hourly per token) and its price watched for 30 minutes. The
+  **win** is reaching **2x within 15 minutes without first trading at/below 50% of the anchor**
+  (the drawdown clause makes the label mean "tradeable win", not "eventually printed a green
+  candle"); the **goal** is a **4x within 30 minutes**. Both windows were one hour from
+  2026-10-03 to 2026-10-05, when the user moved them to 15/30 minutes; older rows were re-graded
+  from their recorded price path. The training target is log2 of the 30-minute peak multiple,
+  capped at a 100x, awarded only to clean wins. Labels are recorded for ALL candidates, not just
+  curated/matched ones: full-population outcomes are what let any future gate be evaluated
+  offline, and they remove the explore/exploit problem entirely. Winners (and curated picks) stay
+  watched to 24h for their run peak - how far and how fast they ultimately went - which the
+  stats, the Models tab and each training run's runner-traits report read. Sampling is minutely, so intra-minute wicks are invisible - accepted; the label
   describes what a human at the same cadence could have traded.
 - **Phase B — the feed** (`CuratedAlert`, `/curated` routes, the Curated tab): a strict
   quality-floor gate (see `curator.ts`) nominates alerts, and an **emission governor**

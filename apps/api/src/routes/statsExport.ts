@@ -33,7 +33,7 @@ export const exportQuerySchema = z
       .optional()
       .transform((s) => (s ? s.split(",").map((k) => k.trim()) : undefined))
       .pipe(z.array(z.enum(SAMPLE_KINDS)).min(1).optional()),
-    /** outcomes / paths: only rows whose 1h labels are written. */
+    /** outcomes / paths: only rows whose labels are written. */
     finalizedOnly: z
       .enum(["true", "false", "1", "0"])
       .optional()
@@ -87,6 +87,7 @@ const OUTCOME_COLUMNS = [
   "peak1hReturnPct",
   "maxDrawdown1hPct",
   "peak24hReturnPct",
+  "runPeakMinutes",
   "hit2xIn15m",
   "hit2xIn1h",
   "hit4xIn1h",
@@ -243,6 +244,7 @@ const ALERT_COLUMNS = [
   "hit4xIn1h",
   "disqualified",
   "peak24hReturnPct",
+  "runPeakMinutes",
   "outcomeFinalizedAt",
 ] as const;
 

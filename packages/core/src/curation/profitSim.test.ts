@@ -75,7 +75,7 @@ describe("simulateExitPlan (half at 2x, rest at 4x, stop -50%, out at 1h)", () =
 describe("describeExitPlan", () => {
   it("reads the default plan as a sentence", () => {
     expect(describeExitPlan()).toBe(
-      "Buy at the realistic fill, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 1 hour. Sales pay the same slippage as the buy.",
+      "Buy at the realistic fill, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 30 minutes. Sales pay the same slippage as the buy.",
     );
   });
 });

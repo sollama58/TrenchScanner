@@ -222,7 +222,7 @@ const envSchema = z.object({
   // packages/core/src/curation/). Every rug-screen-passing candidate gets a CandidateOutcome row
   // at most once per CANDIDATE_SAMPLE_SPACING_MINUTES, and the watcher job price-checks open rows
   // every CANDIDATE_WATCH_INTERVAL_MINUTES. That cadence is the label's resolution: the win bar
-  // is "2x within 1 hour", ~60 observations at the default, and a 2x that round-trips inside a
+  // is "2x within 15 minutes", ~15 observations at the default, and a 2x that round-trips inside a
   // minute is invisible. Shortening this sharpens every future label at a directly proportional
   // cost in DexScreener calls; stretching it coarsens them.
   // CANDIDATE_WATCH_MAX_BATCH caps rows per sweep as DexScreener back-pressure; at the default

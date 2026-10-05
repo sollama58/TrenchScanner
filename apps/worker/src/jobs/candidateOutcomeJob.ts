@@ -21,10 +21,10 @@ import type { Prisma } from "@prisma/client";
 const logger = createLogger("candidate-outcome");
 
 /**
- * Cadence for rows past their 1h goal window that are still being watched to 24h (winners and
- * curated alerts - see CandidateOutcome.extended24h). Coarser than the goal window's cadence on
- * purpose: the 24h peak is a display number, not a training input, and the extended set is what
- * would otherwise dominate the job's DexScreener volume.
+ * Cadence for rows past their 30-minute goal window that are still being watched to 24h (clean
+ * winners and curated alerts - see CandidateOutcome.extended24h). Coarser than the goal window's
+ * cadence on purpose: the run peak is a record of how far a winner went, not a label, and the
+ * extended set is what would otherwise dominate the job's DexScreener volume.
  */
 const EXTENDED_CHECK_INTERVAL_MINUTES = 5;
 
@@ -167,8 +167,9 @@ export function entryRuleFor(features: unknown, env: Env): EntryRule {
 
 /**
  * The watcher: price-checks every open CandidateOutcome row that's due, folds the tick into the
- * row's running aggregates (see curation/labels.ts for the math), closes the 1h goal window (the
- * moment labels are written - the 2x-within-1h verdict included), and retires extended rows at 24h.
+ * row's running aggregates (see curation/labels.ts for the math), closes the 30-minute goal window
+ * (the moment labels are written - the 2x-within-15-minutes verdict included), and retires
+ * extended rows at 24h with their run peak: how high a winner went, and when.
  *
  * One batched DexScreener fetch per sweep covers every due row - the same 30-per-call endpoint
  * the scan itself uses - which is the whole reason this can run every minute. Tokens the fetch
@@ -192,7 +193,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
   // When the prices were seen. The batched fetch below can take a while (hundreds of mints, a
   // few at a time, with retries), and stamping each tick after it put prices observed before the
   // entry delay past it - the fill is "the first price at least the delay after the alert" - and
-  // pushed prices seen just inside the hour out of the label window.
+  // pushed prices seen just inside a window out of it.
   const observedAt = new Date();
   const priceByMint = new Map<string, number>();
   try {
@@ -227,14 +228,17 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       const extendedWindowMs = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
       const peak24hReturnPct = () =>
         ((merged.peak24hPriceUsd - merged.anchorPriceUsd) / merged.anchorPriceUsd) * 100;
+      const runPeakMinutesOf = () =>
+        merged.peak24hAt ? (merged.peak24hAt.getTime() - merged.anchorAt.getTime()) / 60_000 : null;
 
       let extended = row.extended24h;
       let closedLabels: ReturnType<typeof computeOutcomeLabels> | null = null;
       let simReturnPct: number | null = null;
       let finalPeak24hPct: number | null = null;
+      let runPeakMinutes: number | null = null;
       if (row.finalizedAt === null && elapsedMs >= labelWindowMs && merged.entryAt === null) {
         // The window closed without a single price at or past the entry delay: the worker was
-        // down, or DexScreener had nothing for the mint all hour. There is no fill to grade from,
+        // down, or DexScreener had nothing for the mint through the win window. There is no fill to grade from,
         // so the row is retired ungraded - finalizedAt stays null, which keeps it out of training,
         // the AI's graded record and every hit rate, and no verdict is copied to an alert. Graded,
         // it read as a clean loss off the scan price with nothing observed, and every alert of an
@@ -252,30 +256,35 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
         data.disqualified = closedLabels.disqualified;
         data.labelValue = closedLabels.labelValue;
         // The call's return under the fixed exit plan, closing at this tick's price (the first
-        // seen at or after the hour) or, without one, the last price the row saw.
+        // seen at or after the window closed) or, without one, the last price the row saw.
         simReturnPct = simulateExitPlan(merged, price ?? row.lastPriceUsd, entryRule.slippageFraction);
         data.simReturnPct = simReturnPct;
         finalized += 1;
 
         // Clean winners graduate to the 24h watch so the record shows how far they ultimately
-        // ran. A disqualified 2x doesn't - it already trains as a loss, and its later path
-        // teaches nothing a dud's would.
+        // ran, and when they peaked - the run peak the stats, the dashboard and the training
+        // report's runner traits read. A disqualified 2x doesn't - it already trains as a loss,
+        // and its later path teaches nothing a dud's would.
         if (closedLabels.hit2xIn1h && !closedLabels.disqualified && !extended) {
           extended = true;
           data.extended24h = true;
         }
         if (!extended) {
           finalPeak24hPct = peak24hReturnPct();
+          runPeakMinutes = runPeakMinutesOf();
           data.finalized24hAt = tickAt;
           data.peak24hReturnPct = finalPeak24hPct;
+          data.runPeakMinutes = runPeakMinutes;
           retired += 1;
         }
       }
 
       if (extended && data.finalized24hAt === undefined && elapsedMs >= extendedWindowMs) {
         finalPeak24hPct = peak24hReturnPct();
+        runPeakMinutes = runPeakMinutesOf();
         data.finalized24hAt = tickAt;
         data.peak24hReturnPct = finalPeak24hPct;
+        data.runPeakMinutes = runPeakMinutes;
         retired += 1;
       }
 
@@ -327,7 +336,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
                   }
                 : {}),
               ...(finalPeak24hPct !== null
-                ? { peak24hReturnPct: finalPeak24hPct, outcomeFinalizedAt: tickAt }
+                ? { peak24hReturnPct: finalPeak24hPct, runPeakMinutes, outcomeFinalizedAt: tickAt }
                 : {}),
             },
           });
@@ -393,6 +402,7 @@ async function repairCuratedVerdicts(): Promise<number> {
           disqualified: true,
           simReturnPct: true,
           peak24hReturnPct: true,
+          runPeakMinutes: true,
           finalized24hAt: true,
         },
       },
@@ -416,7 +426,9 @@ async function repairCuratedVerdicts(): Promise<number> {
           hit4xIn1h: outcome.hit4xIn1h,
           disqualified: outcome.disqualified,
           simReturnPct: outcome.simReturnPct,
-          ...(outcome.peak24hReturnPct !== null ? { peak24hReturnPct: outcome.peak24hReturnPct } : {}),
+          ...(outcome.peak24hReturnPct !== null
+            ? { peak24hReturnPct: outcome.peak24hReturnPct, runPeakMinutes: outcome.runPeakMinutes }
+            : {}),
           ...(outcome.finalized24hAt !== null ? { outcomeFinalizedAt: outcome.finalized24hAt } : {}),
         },
       });

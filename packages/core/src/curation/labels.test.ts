@@ -47,25 +47,26 @@ describe("candidate outcome labels", () => {
     expect(agg.hit2xAt).toEqual(minutes(12));
   });
 
-  it("a 2x that arrives after 15 minutes but inside the hour is still a win", () => {
-    // The bar is 2x within the hour - a 40-minute double is a win; hit2xIn15m just records speed.
+  it("a 2x that arrives after 15 minutes is a miss", () => {
+    // The bar is 2x within 15 minutes - a 20-minute double is too late, even inside the window.
     const agg = replay(1, [
       [1.4, 10],
-      [2.5, 40],
+      [2.5, 20],
     ]);
     const labels = computeOutcomeLabels(agg);
+    expect(agg.hit2xAt).toEqual(minutes(20));
     expect(labels.hit2xIn15m).toBe(false);
-    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.hit2xIn1h).toBe(false);
     expect(labels.disqualified).toBe(false);
-    expect(labels.labelValue).toBeCloseTo(Math.log2(2.5));
+    expect(labels.labelValue).toBe(0);
   });
 
-  it("grades a win on how far it ran by the hour, so the 4x goal is worth double a 2x", () => {
+  it("grades a win on how far it ran by 30 minutes, so the 4x goal is worth double a 2x", () => {
     const stalled = computeOutcomeLabels(replay(1, [[2.1, 10]]));
     const ranOn = computeOutcomeLabels(
       replay(1, [
         [2.1, 10],
-        [4.0, 50], // kept running after the win landed - the goal
+        [4.0, 25], // kept running after the win landed - the goal
       ]),
     );
     expect(stalled.hit4xIn1h).toBe(false);
@@ -75,20 +76,43 @@ describe("candidate outcome labels", () => {
     expect(ranOn.labelValue).toBeGreaterThan(stalled.labelValue);
   });
 
-  it("credits a 4x that arrives late in the hour as the goal it is", () => {
-    const agg = replay(1, [[4.0, 45]]);
+  it("credits a 4x at minute 30 after a 15-minute double as the goal it is", () => {
+    const agg = replay(1, [
+      [2.2, 14],
+      [4.0, 30],
+    ]);
     const labels = computeOutcomeLabels(agg);
     expect(labels.hit4xIn1h).toBe(true);
     expect(labels.hit2xIn1h).toBe(true);
-    expect(labels.hit2xIn15m).toBe(false);
+    expect(labels.hit2xIn15m).toBe(true);
     expect(labels.labelValue).toBeCloseTo(2);
+  });
+
+  it("does not count a 4x that lands after 30 minutes", () => {
+    const agg = replay(1, [
+      [2.2, 10],
+      [3.0, 28],
+      [4.5, 40], // past the goal window: the run peak, not the goal
+    ]);
+    const labels = computeOutcomeLabels(agg);
+    expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.hit4xIn1h).toBe(false);
+    expect(labels.labelValue).toBeCloseTo(Math.log2(3));
+    expect(agg.peak24hPriceUsd).toBe(4.5);
+  });
+
+  it("does not count a 4x by a call that doubled too late", () => {
+    const labels = computeOutcomeLabels(replay(1, [[4.0, 20]]));
+    expect(labels.hit2xIn1h).toBe(false);
+    expect(labels.hit4xIn1h).toBe(false);
+    expect(labels.labelValue).toBe(0);
   });
 
   it("does not count a 4x that first breached the stop", () => {
     const labels = computeOutcomeLabels(
       replay(1, [
         [0.45, 5],
-        [4.5, 40],
+        [4.5, 12],
       ]),
     );
     expect(labels.disqualified).toBe(true);
@@ -102,7 +126,7 @@ describe("candidate outcome labels", () => {
       replay(1, [
         [2.1, 10],
         [0.45, 20],
-        [4.2, 50],
+        [4.2, 28],
       ]),
     );
     expect(labels.hit2xIn1h).toBe(true);
@@ -113,14 +137,14 @@ describe("candidate outcome labels", () => {
   });
 
   it("falls back to the window peak on rows that predate the stop-aware peak", () => {
-    const agg = { ...replay(1, [[4.5, 30]]), peakBeforeStopPriceUsd: null, stoppedAt: null };
+    const agg = { ...replay(1, [[4.5, 12]]), peakBeforeStopPriceUsd: null, stoppedAt: null };
     expect(computeOutcomeLabels(agg).hit4xIn1h).toBe(true);
   });
 
-  it("disqualifies a late 2x that first traded at or below half the anchor", () => {
+  it("disqualifies a 2x that first traded at or below half the anchor", () => {
     const agg = replay(1, [
-      [0.4, 20],
-      [2.2, 50],
+      [0.4, 8],
+      [2.2, 14],
     ]);
     const labels = computeOutcomeLabels(agg);
     expect(labels.hit2xIn1h).toBe(true);
@@ -166,25 +190,31 @@ describe("candidate outcome labels", () => {
   });
 
   it("treats the exact win-window boundary as inside the window", () => {
-    const labels = computeOutcomeLabels(replay(1, [[2.0, 60]]));
+    const labels = computeOutcomeLabels(replay(1, [[2.0, 15]]));
     expect(labels.hit2xIn1h).toBe(true);
+    expect(labels.hit2xIn15m).toBe(true);
     expect(labels.labelValue).toBeCloseTo(1);
   });
 
-  it("treats the exact 15-minute boundary as a fast double", () => {
-    const labels = computeOutcomeLabels(replay(1, [[2.0, 15]]));
-    expect(labels.hit2xIn15m).toBe(true);
+  it("treats the exact 30-minute boundary as inside the goal window", () => {
+    const labels = computeOutcomeLabels(
+      replay(1, [
+        [2.0, 5],
+        [4.0, 30],
+      ]),
+    );
+    expect(labels.hit4xIn1h).toBe(true);
   });
 
-  it("keeps ticks after the goal window out of the 1h aggregates but in the 24h peak", () => {
+  it("keeps ticks after the goal window out of the window aggregates but in the run peak", () => {
     const agg = replay(1, [
       [1.5, 10],
-      [3.0, 90], // past the goal window
+      [3.0, 45], // past the goal window
     ]);
     expect(agg.peak1hPriceUsd).toBe(1.5);
     expect(agg.hit2xAt).toBeNull();
     expect(agg.peak24hPriceUsd).toBe(3.0);
-    expect(agg.peak24hAt).toEqual(minutes(90));
+    expect(agg.peak24hAt).toEqual(minutes(45));
     const labels = computeOutcomeLabels(agg);
     expect(labels.hit2xIn1h).toBe(false);
     expect(labels.hit4xIn1h).toBe(false);
@@ -232,8 +262,8 @@ describe("fill-price grading", () => {
     expect(computeOutcomeLabels(agg).hit2xIn1h).toBe(false);
   });
 
-  it("never takes the fill after the label window - an outage's first price is not an entry", () => {
-    const agg = replayWithEntry(1, [[1.1, 90 * 60]]);
+  it("never takes the fill after the win window - an outage's first price is not an entry", () => {
+    const agg = replayWithEntry(1, [[1.1, 16 * 60]]);
     expect(agg.entryAt).toBeNull();
     expect(agg.anchorPriceUsd).toBe(1);
   });
@@ -266,7 +296,7 @@ describe("fill-price grading", () => {
       replayWithEntry(1, [
         [1.0, 61],
         [0.5, 300], // below half of the 1.03 base
-        [2.5, 1200],
+        [2.5, 840],
       ]),
     );
     expect(labels.disqualified).toBe(true);

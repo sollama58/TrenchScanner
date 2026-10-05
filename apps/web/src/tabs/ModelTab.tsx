@@ -97,9 +97,9 @@ export function ModelTab() {
               )}
             </h2>
             <p className="muted">
-              {lb.entries.length} models compete to spot tokens that double within an hour. Every call is
-              graded the same way, and the goal is a 2x on {t.hitRate2xPct}% of calls and a 4x on{" "}
-              {t.hitRate4xPct}%. Your feed shows calls from{" "}
+              {lb.entries.length} models compete to spot tokens that double within 15 minutes. Every call is
+              graded the same way, and the goal is a 2x within 15 minutes on {t.hitRate2xPct}% of calls and a
+              4x within 30 minutes on {t.hitRate4xPct}%. Your feed shows calls from{" "}
               <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
               {lb.followBest ? " (whichever model is doing best; it switches automatically)" : ""}
               {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
@@ -169,6 +169,8 @@ export function ModelTab() {
         refreshing={board.stale}
         now={now}
       />
+
+      <WinnerRunsPanel data={data} days={days} />
 
       <UnderTheHood>
         <section className="panel">
@@ -293,6 +295,96 @@ export function ModelTab() {
         <AiReviewerPanel data={data} now={now} />
       </UnderTheHood>
     </div>
+  );
+}
+
+/** How many runner traits the winners panel lists. */
+const RUNNER_TRAIT_ROWS = 4;
+
+/**
+ * How far the winners went after the call. A call that doubles inside 15 minutes stays on watch
+ * for a day, and its run peak shows whether the models are finding doubles or real runners -
+ * plus, from the newest training run, which signals the biggest runners shared.
+ */
+function WinnerRunsPanel({ data, days }: { data: ModelInsights; days: number }) {
+  const runs = data.winnerRuns ?? [];
+  const feed = runs.find((r) => r.population === "curated") ?? null;
+  const samples = runs.find((r) => r.population === "samples") ?? null;
+  const traits = data.runnerTraits ?? null;
+  const shown = feed && feed.finished > 0 ? feed : samples;
+  const mult = (v: number | null | undefined) => (v == null ? "–" : `${v.toFixed(1)}x`);
+  const minutes = (v: number | null | undefined) =>
+    v == null ? "–" : v >= 90 ? `${(v / 60).toFixed(1)}h` : `${Math.round(v)} min`;
+  return (
+    <section className="panel">
+      <span className="eyebrow">After the win</span>
+      <h3>How far the winners ran</h3>
+      <p className="muted small">
+        Every call that doubles inside 15 minutes is watched for another day to see how high it goes.
+        {shown === samples && samples
+          ? " Your feed has no finished runs yet in this window, so these are all the winning moments the models learn from."
+          : ` Your feed's winners over the last ${days} days.`}
+      </p>
+      {shown && shown.finished > 0 ? (
+        <div className="family-figs">
+          <div>
+            <label>Typical run</label>
+            <span className="num">{mult(shown.medianPeakMultiple)}</span>
+          </div>
+          <div>
+            <label>Went on to 4x</label>
+            <span className="num">{pct(shown.reached4xPct, 0)}</span>
+          </div>
+          <div>
+            <label>Went on to 10x</label>
+            <span className="num">{pct(shown.reached10xPct, 0)}</span>
+          </div>
+          <div>
+            <label>Best</label>
+            <span className="num">{mult(shown.bestPeakMultiple)}</span>
+          </div>
+          <div>
+            <label>Peak came after</label>
+            <span className="num">{minutes(shown.medianMinutesToPeak)}</span>
+          </div>
+        </div>
+      ) : (
+        <p className="empty">
+          {shown && shown.winners > 0
+            ? `${shown.winners} winner${shown.winners === 1 ? "" : "s"} still being watched.`
+            : "No winners to follow in this window yet."}
+        </p>
+      )}
+      {traits && traits.traits.length > 0 && traits.bigRunnerMultiple !== null && (
+        <>
+          <p className="muted small">
+            What the biggest runners had in common (the top quarter of {traits.winners.toLocaleString()}{" "}
+            winners, each of which ran to {mult(traits.bigRunnerMultiple)} or more). Lift is how much more
+            often a winner with the signal high (or low) became one of them; 1 is no difference.
+          </p>
+          <div className="table-wrap">
+            <table className="compact">
+              <thead>
+                <tr>
+                  <th>Signal</th>
+                  <th className="r">When high</th>
+                  <th className="r">When low</th>
+                </tr>
+              </thead>
+              <tbody>
+                {traits.traits.slice(0, RUNNER_TRAIT_ROWS).map((f) => (
+                  <tr key={f.feature}>
+                    <td>{f.label}</td>
+                    <td className="r num">{f.topThirdLift.toFixed(2)}x</td>
+                    <td className="r num">{f.bottomThirdLift.toFixed(2)}x</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -807,7 +899,7 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
         <p className="small">
           <strong>
             {board.exitPlan ??
-              "Buy at the realistic fill, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 1 hour."}
+              "Buy at the realistic fill, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 30 minutes."}
           </strong>
         </p>
         <ol className="steps small">
@@ -818,8 +910,8 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
           <li>
             <strong>Some worked calls.</strong> One that runs to 4x returns +200% (half sold at 2x, half at
             4x). One that doubles and then falls to the stop returns +25%. One that drops to the stop first
-            returns -50%. One that ends the hour 20% up without reaching 2x returns +20%. Each sale also pays
-            the slippage, so the real figures sit a little lower.
+            returns -50%. One that ends its 30 minutes 20% up without reaching 2x returns +20%. Each sale also
+            pays the slippage, so the real figures sit a little lower.
           </li>
           <li>
             <strong>Avg profit</strong> is the average return per graded live call.{" "}
@@ -884,7 +976,7 @@ function HowItWorks({ board }: { board: Leaderboard }) {
       <ol className="steps">
         <li>
           <strong>Train.</strong> Every few hours each model refits on the last weeks of graded decision
-          moments: what a token looked like, and whether it then hit 2x within the hour of a realistic fill.
+          moments: what a token looked like, and whether it then hit 2x on a realistic fill within 15 minutes.
           The models differ on purpose: {learners.join(", ")} see the market through different families,
           memories and signals.
         </li>
@@ -1306,7 +1398,7 @@ function TrainingPanel({
 const CURVE_SLICES = ["1%", "2%", "5%", "10%", "20%", "50%"];
 
 const OUTCOME_TEXT: Record<ModelInsights["recentAiReviews"][number]["outcome"], string> = {
-  pending: "◷ in its hour",
+  pending: "◷ in its window",
   won: "✓ 2x",
   won4x: "✓✓ 4x",
   missed: "✕ missed",

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildCalibration, calibratedWinRate, fitIsotonicRanks } from "./calibration.js";
 import { PricePathBook, clockContext } from "./pricePath.js";
 import { blendRanks, scoreBlend, trainBlendCurator } from "./blend.js";
-import { featureHealthReport } from "./featureReport.js";
+import { featureHealthReport, runnerTraitsReport } from "./featureReport.js";
 import {
   chooseReplacement,
   pairedBootstrapConfidence,
@@ -210,6 +210,42 @@ describe("featureHealthReport", () => {
     expect(weak.topDecileLift!).toBeLessThan(2);
     expect(gone.nullRatePct).toBe(90);
     expect(gone.topDecileLift).toBeNull();
+  });
+});
+
+describe("runnerTraitsReport", () => {
+  it("finds the signals the furthest-running winners shared, ignoring losers and unfinished runs", () => {
+    const rows = [
+      // 100 winners with a finished run: the higher "fuel", the further they ran.
+      ...Array.from({ length: 100 }, (_, i) => ({
+        features: { fuel: i, noise: (i * 37) % 100 },
+        labelValue: 1,
+        runPeakMultiple: 2 + i / 10,
+      })),
+      // Losers and winners still on watch carry no run and must not count.
+      ...Array.from({ length: 50 }, (_, i) => ({ features: { fuel: i, noise: i }, labelValue: 0 })),
+      { features: { fuel: 0, noise: 0 }, labelValue: 1, runPeakMultiple: null },
+    ];
+    const report = runnerTraitsReport(rows, ["fuel", "noise"]);
+    expect(report.winners).toBe(100);
+    expect(report.bigRunnerMultiple).toBeCloseTo(9.5);
+    expect(report.medianRunMultiple).toBeCloseTo(7);
+    expect(report.traits[0]!.feature).toBe("fuel");
+    expect(report.traits[0]!.topThirdLift).toBeGreaterThan(2.5);
+    expect(report.traits[0]!.bottomThirdLift).toBe(0);
+  });
+
+  it("reports the runs but no traits until there are enough finished winners", () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      features: { fuel: i },
+      labelValue: 1,
+      runPeakMultiple: 3,
+    }));
+    const report = runnerTraitsReport(rows, ["fuel"]);
+    expect(report.winners).toBe(10);
+    expect(report.medianRunMultiple).toBe(3);
+    expect(report.traits).toEqual([]);
+    expect(runnerTraitsReport([], ["fuel"]).bigRunnerMultiple).toBeNull();
   });
 });
 

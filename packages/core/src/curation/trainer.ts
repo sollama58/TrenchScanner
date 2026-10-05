@@ -62,10 +62,16 @@ export interface TrainingRow {
    */
   labelRule?: number;
   /**
-   * Whether the row never fell through the disqualifying drawdown inside the hour (the
+   * Whether the row never fell through the disqualifying drawdown inside the label window (the
    * two-stage model's first-stage label). Omitted = unknown; such rows sit out that stage.
    */
   survived?: boolean;
+  /**
+   * For a clean winner whose extended watch has ended: its run peak, the highest price over the
+   * whole watch as a multiple of the fill - how far it went after the call. Omitted otherwise.
+   * Read by the runner-traits report (featureReport.ts), not by the fit.
+   */
+  runPeakMultiple?: number;
 }
 
 /** Graded from the scan price - every row anchored before the fill rule shipped on 2026-10-03. */
@@ -133,7 +139,7 @@ export const TWO_STAGE_MODEL_KIND = "two-stage-v1";
  */
 export interface TwoStageCuratorParams {
   kind: typeof TWO_STAGE_MODEL_KIND;
-  /** P(no disqualifying drawdown within the hour). */
+  /** P(no disqualifying drawdown within the label window). */
   survival: Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;
   /** P(clean 2x | survived). */
   win: Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;

@@ -834,6 +834,9 @@ interface AdminAlert {
   anchorMcapUsd: number;
   peak1hReturnPct: number | null;
   maxDrawdown1hPct: number | null;
+  /** The run peak over the 24h watch (winners), and when it came. */
+  peak24hReturnPct?: number | null;
+  runPeakMinutes?: number | null;
   hit2xIn1h: boolean | null;
   hit4xIn1h: boolean | null;
   disqualified: boolean | null;
@@ -872,7 +875,7 @@ function Alerts() {
     <div className="stack">
       <Panel
         title="Hit rates"
-        note="Graded on the production rules: 2x (goal 4x) within an hour of a realistic fill, a 50% drop first is a loss."
+        note="Graded on the production rules: 2x within 15 minutes (goal 4x within 30) of a realistic fill, a 50% drop first is a loss."
         actions={
           <div className="segmented" role="tablist" aria-label="Window">
             {[1, 7, 30, 90].map((d) => (
@@ -888,9 +891,9 @@ function Alerts() {
             <div className="stack">
               <p className="muted small">
                 Profit follows every graded call with one fixed exit plan:{" "}
-                {h.rules?.exitPlan ?? "sell half at 2x, the rest at 4x, stop at -50%, close at 1 hour."} Total
-                profit is in stakes, staking the same amount on every call. Filter matches have no simulated
-                result.
+                {h.rules?.exitPlan ?? "sell half at 2x, the rest at 4x, stop at -50%, close at 30 minutes."}{" "}
+                Total profit is in stakes, staking the same amount on every call. Filter matches have no
+                simulated result.
               </p>
               <h3>Model alerts by model</h3>
               <Table
@@ -956,7 +959,8 @@ function Alerts() {
                 "Conf.",
                 "Tier",
                 "Mcap",
-                "Peak 1h",
+                "Peak 30m",
+                "Ran to",
                 "Drawdown",
                 "Profit",
                 "Result",
@@ -972,6 +976,16 @@ function Alerts() {
                 a.tier ?? "–",
                 <span className="num">{usd(a.anchorMcapUsd)}</span>,
                 <span className="num">{multiple(a.peak1hReturnPct)}</span>,
+                <span
+                  className="num"
+                  title={
+                    a.runPeakMinutes != null
+                      ? `peaked ${Math.round(a.runPeakMinutes)} min after the alert`
+                      : undefined
+                  }
+                >
+                  {multiple(a.peak24hReturnPct)}
+                </span>,
                 <span className="num">{pct(a.maxDrawdown1hPct)}</span>,
                 <span className={profitClass(a.simReturnPct)}>{signedPct(a.simReturnPct)}</span>,
                 a.disqualified ? (
