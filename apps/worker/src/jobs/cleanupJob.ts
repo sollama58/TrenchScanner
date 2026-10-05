@@ -418,7 +418,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
    *
    * Revoked devices are the smaller kind, kept a month first - see above.
    */
-  const [deletedLinkCodes, deletedRevokedDevices, deletedNonces] = await Promise.all([
+  const [deletedLinkCodes, deletedRevokedDevices, deletedNonces, deletedFilterBaselines] = await Promise.all([
     prisma.mobileLinkCode.deleteMany({
       where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
     }),
@@ -434,6 +434,11 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     // have been used anyway. An hour of slack keeps it clear of nonces still in flight.
     prisma.authNonce.deleteMany({
       where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
+    }),
+    // What a filter already matched when it was armed only counts for the alert cooldown, so a
+    // day is plenty (ALERT_COOLDOWN_HOURS is 12).
+    prisma.filterBaseline.deleteMany({
+      where: { createdAt: { lt: new Date(startedAt - DAY_MS) } },
     }),
   ]);
 
@@ -484,6 +489,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedLinkCodes: deletedLinkCodes.count,
     deletedRevokedDevices: deletedRevokedDevices.count,
     deletedNonces: deletedNonces.count,
+    deletedFilterBaselines: deletedFilterBaselines.count,
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,

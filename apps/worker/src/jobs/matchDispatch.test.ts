@@ -3,12 +3,20 @@ import "../bootstrap-env.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv, loadFilterTrackRecords, type ScoredToken } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
-import { createMatchesForCandidate, ALERT_COOLDOWN_HOURS, type FilterWithUser } from "./matchDispatch.js";
+import {
+  createMatchesForCandidate,
+  ALERT_COOLDOWN_HOURS,
+  FILTER_ARM_QUIET_MINUTES,
+  type FilterWithUser,
+} from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
 const TAG = `match-dispatch-test-${Date.now()}`;
+
+/** Armed well before any token here was seen: most tests are about alerting, not settling in. */
+const ARMED_LONG_AGO = new Date(Date.now() - 3_600_000);
 
 function scoredFixture(mintAddress: string): ScoredToken {
   return {
@@ -28,10 +36,10 @@ function scoredFixture(mintAddress: string): ScoredToken {
   };
 }
 
-async function seedUserWithFilter(suffix: string): Promise<FilterWithUser> {
+async function seedUserWithFilter(suffix: string, armedAt = ARMED_LONG_AGO): Promise<FilterWithUser> {
   const user = await prisma.user.create({ data: { walletAddress: `${TAG}-${suffix}` } });
   return prisma.userFilter.create({
-    data: { userId: user.id, name: suffix, mcapMin: 1_000, mcapMax: 10_000_000, isActive: true },
+    data: { userId: user.id, name: suffix, mcapMin: 1_000, mcapMax: 10_000_000, isActive: true, armedAt },
   });
 }
 
@@ -120,7 +128,14 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     const { token, snapshot } = await seedToken("two-filters");
     const first = await seedUserWithFilter("f");
     const second = await prisma.userFilter.create({
-      data: { userId: first.userId, name: "second", mcapMin: 1_000, mcapMax: 10_000_000, isActive: true },
+      data: {
+        userId: first.userId,
+        name: "second",
+        mcapMin: 1_000,
+        mcapMax: 10_000_000,
+        isActive: true,
+        armedAt: ARMED_LONG_AGO,
+      },
     });
 
     const count = await createMatchesForCandidate({
@@ -130,6 +145,53 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
       activeFilters: [first, second],
     });
     expect(count).toBe(2);
+  });
+
+  it("doesn't alert on what a just-applied filter already matches, then cools it down", async () => {
+    // The token was on the watchlist before the filter was applied: backlog, not news.
+    const { token, snapshot } = await seedToken("backlog");
+    const filter = await seedUserWithFilter("fresh-filter", new Date());
+    const args = {
+      token,
+      snapshot,
+      scored: scoredFixture(token.mintAddress),
+      activeFilters: [filter],
+    };
+
+    expect(await createMatchesForCandidate(args)).toBe(0);
+    expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
+    expect(await prisma.filterBaseline.count({ where: { filterId: filter.id, tokenId: token.id } })).toBe(1);
+
+    // Past the quiet window the filter alerts normally, but this token is already known to it.
+    const settled = await prisma.userFilter.update({
+      where: { id: filter.id },
+      data: { armedAt: new Date(Date.now() - (FILTER_ARM_QUIET_MINUTES + 1) * 60_000) },
+    });
+    expect(await createMatchesForCandidate({ ...args, activeFilters: [settled] })).toBe(0);
+
+    // A token that newly matches after that is a real alert.
+    const later = await seedToken("after-settling");
+    expect(
+      await createMatchesForCandidate({
+        token: later.token,
+        snapshot: later.snapshot,
+        scored: scoredFixture(later.token.mintAddress),
+        activeFilters: [settled],
+      }),
+    ).toBe(1);
+  });
+
+  it("alerts at once on a token first seen after the filter was applied", async () => {
+    const filter = await seedUserWithFilter("newer-token", new Date(Date.now() - 5_000));
+    const { token, snapshot } = await seedToken("brand-new");
+    expect(
+      await createMatchesForCandidate({
+        token,
+        snapshot,
+        scored: scoredFixture(token.mintAddress),
+        activeFilters: [filter],
+      }),
+    ).toBe(1);
   });
 
   it("does nothing at all when the token matches nobody", async () => {
