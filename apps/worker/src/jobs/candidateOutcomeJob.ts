@@ -33,6 +33,30 @@ const EXTENDED_CHECK_INTERVAL_MINUTES = 5;
 const UPDATE_CONCURRENCY = 10;
 
 /**
+ * How old a scan snapshot's price may be to stand in for a mint the sweep's own DexScreener fetch
+ * didn't return. The scan prices every tracked token about once a minute from the same pairs, so
+ * this covers one scan cycle with room for a slow one, and no more: an older price would be
+ * stamped at its own time, which a later sweep has already looked past.
+ */
+const SNAPSHOT_FALLBACK_MAX_AGE_MS = 90_000;
+
+/**
+ * Rows come due this much before a full interval from the sweep's start. The scheduler starts the
+ * next sweep one interval after this one started, give or take the few milliseconds its own
+ * bookkeeping takes; without slack a row due at exactly that moment was a coin flip.
+ */
+const RESCHEDULE_SLACK_MS = 5_000;
+
+/**
+ * A fetched price this far below the row's last price (or its scan price, before any) is checked
+ * against the scan before it is folded in - see the suspect-tick note in runCandidateWatchJob.
+ */
+const CRASH_TICK_FRACTION = 0.1;
+/** A scan snapshot at least this share of the last price, taken since the previous sweep,
+ *  contradicts a crash tick. */
+const CRASH_CONTRADICTION_FRACTION = 0.3;
+
+/**
  * Banks one training sample for the curated-alerts learner: this candidate, at this moment, with
  * these features - the watcher job then fills in what the price actually did. Called from the
  * scan cycle for every rug-screen-passing candidate; the spacing check is what turns "a token
@@ -179,10 +203,19 @@ export function entryRuleFor(features: unknown, env: Env): EntryRule {
  * sweep after restart finalizes it from whatever was already observed - or, when nothing was
  * observed past the entry delay, retires it ungraded rather than inventing a loss.
  */
-export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: Env): Promise<void> {
+export async function runCandidateWatchJob(
+  dexScreener: DexScreenerClient,
+  env: Env,
+): Promise<Record<string, number> | void> {
   const startedAt = Date.now();
+  // Rows are rescheduled from this moment (less RESCHEDULE_SLACK_MS), not from after the due-row
+  // query. The scheduler starts the next sweep one interval after this one STARTED, so a row
+  // rescheduled from after the query was a fraction of a second short of due when it came round,
+  // and every row was checked every other minute - seven looks at the 15-minute win window
+  // instead of fifteen, and a cohort whose price was missed once waited two minutes to retry.
+  const sweepAt = new Date(startedAt);
   const due = await prisma.candidateOutcome.findMany({
-    where: { finalized24hAt: null, nextCheckAt: { lte: new Date() } },
+    where: { finalized24hAt: null, nextCheckAt: { lte: sweepAt } },
     orderBy: { nextCheckAt: "asc" },
     take: env.CANDIDATE_WATCH_MAX_BATCH,
     // curatedAlerts: so closing a window can push outcome copies onto the feed row - see below.
@@ -206,19 +239,83 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
     // keeps a DexScreener outage from freezing the due set into one ever-growing sweep.
     logger.warn("price fetch failed, advancing checks without prices", { error: String(err) });
   }
+  const fromDex = priceByMint.size;
+
+  // Two cases read the scan's own latest snapshots (same DexScreener pairs, priced about once a
+  // minute), each only from a snapshot taken since the row's previous check, so a tick never lands
+  // behind one the row has already seen:
+  //
+  // - Mints the fetch didn't return. A 30-mint batch that times out or is refused drops every
+  //   mint in it, and because rows banked in the same scan sort together, the same cohort kept
+  //   landing in the failing batch sweep after sweep: on 2026-10-05 up to 17% of an hour's rows
+  //   got no price through the whole 15-minute win window and closed ungraded, while the scan was
+  //   pricing those tokens every minute. The snapshot stands in, stamped at its own time.
+  // - Suspect crash ticks. Around a pump.fun graduation DexScreener can briefly answer with a
+  //   price ~50x below the token's (a fresh pool's, on the evidence), and that one tick stopped the
+  //   row out: about 1% of decision rows on 2026-10-04/05, including some that went on to double.
+  //   A fetched price under CRASH_TICK_FRACTION of the row's last price is skipped for this sweep
+  //   when a newer snapshot still shows the token well above it. A real rug has no such snapshot
+  //   (the scan sees the crash too), so it lands, at most one sweep later.
+  const referencePrice = (row: (typeof due)[number]) => row.lastPriceUsd ?? row.anchorPriceUsd;
+  const isSuspect = (row: (typeof due)[number]) => {
+    const price = priceByMint.get(row.token.mintAddress);
+    return price !== undefined && price < referencePrice(row) * CRASH_TICK_FRACTION;
+  };
+  const snapshotByMint = new Map<string, { priceUsd: number; at: Date }>();
+  const snapshotTokenIds = [
+    ...new Set(
+      due
+        .filter((row) => !priceByMint.has(row.token.mintAddress) || isSuspect(row))
+        .map((row) => row.tokenId),
+    ),
+  ];
+  if (snapshotTokenIds.length > 0) {
+    try {
+      const snapshots = await prisma.$queryRaw<{ mintAddress: string; priceUsd: number; takenAt: Date }[]>`
+        SELECT DISTINCT ON (s."tokenId") t."mintAddress", s."priceUsd", s."takenAt"
+        FROM "TokenSnapshot" s
+        JOIN "Token" t ON t."id" = s."tokenId"
+        WHERE s."tokenId" = ANY(${snapshotTokenIds})
+          AND s."takenAt" >= ${new Date(observedAt.getTime() - SNAPSHOT_FALLBACK_MAX_AGE_MS)}
+        ORDER BY s."tokenId", s."takenAt" DESC`;
+      for (const snap of snapshots) {
+        if (Number.isFinite(snap.priceUsd) && snap.priceUsd > 0) {
+          snapshotByMint.set(snap.mintAddress, { priceUsd: snap.priceUsd, at: snap.takenAt });
+        }
+      }
+    } catch (err) {
+      logger.warn("snapshot price lookup failed", { error: String(err) });
+    }
+  }
 
   let finalized = 0;
   let retired = 0;
   let unobserved = 0;
+  let fromSnapshots = 0;
+  let crashTicksSkipped = 0;
   await forEachWithConcurrency(due, UPDATE_CONCURRENCY, async (row) => {
     try {
       const tickAt = observedAt;
-      const price = priceByMint.get(row.token.mintAddress);
+      const fetched = priceByMint.get(row.token.mintAddress);
+      const latest = snapshotByMint.get(row.token.mintAddress);
+      const newer = latest && latest.at > (row.lastCheckedAt ?? row.anchorAt) ? latest : undefined;
+      const crashContradicted =
+        isSuspect(row) &&
+        newer !== undefined &&
+        newer.priceUsd >= referencePrice(row) * CRASH_CONTRADICTION_FRACTION;
+      const dexPrice = crashContradicted ? undefined : fetched;
+      const snapshot = fetched === undefined ? newer : undefined;
+      if (crashContradicted) crashTicksSkipped += 1;
+      if (snapshot) fromSnapshots += 1;
+      const price = dexPrice ?? snapshot?.priceUsd;
+      // When the price was seen: the sweep's fetch, or the snapshot's own time - a fill or a 2x is
+      // timed by when the price existed, not by when this sweep got round to it.
+      const priceAt = snapshot?.at ?? tickAt;
 
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
       // Until the fill is taken, every tick goes through the entry rule (see EntryRule).
       const entryRule = entryRuleFor(row.features, env);
-      const aggUpdates = price !== undefined ? applyPriceTick(row, price, tickAt, entryRule) : {};
+      const aggUpdates = price !== undefined ? applyPriceTick(row, price, priceAt, entryRule) : {};
       const merged: OutcomeAggregates = { ...row, ...aggUpdates };
 
       const data: Prisma.CandidateOutcomeUpdateInput = { ...aggUpdates, lastCheckedAt: tickAt };
@@ -296,7 +393,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       if (data.finalized24hAt === undefined) {
         const stepMinutes =
           elapsedMs < labelWindowMs ? env.CANDIDATE_WATCH_INTERVAL_MINUTES : EXTENDED_CHECK_INTERVAL_MINUTES;
-        data.nextCheckAt = new Date(tickAt.getTime() + stepMinutes * 60_000);
+        data.nextCheckAt = new Date(sweepAt.getTime() + stepMinutes * 60_000 - RESCHEDULE_SLACK_MS);
       }
 
       // A closing window is also the feed's moment of truth: copy the verdict onto any curated
@@ -377,15 +474,22 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
 
   const repaired = (await repairCuratedVerdicts()) + (await repairUngradedAlerts());
 
-  logger.info("candidate watch sweep complete", {
-    durationMs: Date.now() - startedAt,
+  // Returned as well as logged: it lands on the job's heartbeat, so GET /health/worker shows how
+  // many due rows the fetch priced and how many closed with no fill - the regression above was
+  // invisible there before.
+  const summary = {
     due: due.length,
-    pricesFound: priceByMint.size,
+    mints: mints.length,
+    pricesFound: fromDex,
+    fromSnapshots,
+    crashTicksSkipped,
     finalized,
     retired,
-    ...(unobserved > 0 ? { retiredUngraded: unobserved } : {}),
-    ...(repaired > 0 ? { repaired } : {}),
-  });
+    retiredUngraded: unobserved,
+    repaired,
+  };
+  logger.info("candidate watch sweep complete", { durationMs: Date.now() - startedAt, ...summary });
+  return summary;
 }
 
 /**

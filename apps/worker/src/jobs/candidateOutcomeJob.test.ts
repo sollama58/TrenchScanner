@@ -543,6 +543,108 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.lastPriceUsd).toBeNull();
     expect(updated.peak1hPriceUsd).toBe(1.0); // no fabricated tick
   });
+
+  it("takes the fill from the scan's snapshot when the sweep's own fetch missed the mint", async () => {
+    const token = await createToken("snapshot-fill");
+    const anchorAt = new Date(Date.now() - 2 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+      features: { graduated: 1 },
+    });
+    const takenAt = new Date(Date.now() - 20_000);
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, takenAt, priceUsd: 1.5, marketCapUsd: 150_000 },
+    });
+
+    const summary = await runCandidateWatchJob(stubDexScreener({}), env);
+
+    const filled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    // Timed at the snapshot, not at the sweep.
+    expect(filled.entryAt?.getTime()).toBe(takenAt.getTime());
+    expect(filled.anchorPriceUsd).toBeCloseTo(1.515, 6);
+    expect(filled.lastPriceUsd).toBe(1.5);
+    expect(summary).toMatchObject({ fromSnapshots: expect.any(Number) });
+    expect((summary as Record<string, number>).fromSnapshots).toBeGreaterThanOrEqual(1);
+  });
+
+  it("ignores a snapshot older than one scan cycle", async () => {
+    const token = await createToken("stale-snapshot");
+    const row = await seedRow(token.id, new Date(Date.now() - 5 * MINUTE), 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+    });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: token.id,
+        takenAt: new Date(Date.now() - 3 * MINUTE),
+        priceUsd: 1.5,
+        marketCapUsd: 150_000,
+      },
+    });
+
+    await runCandidateWatchJob(stubDexScreener({}), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.entryAt).toBeNull();
+    expect(updated.lastPriceUsd).toBeNull();
+  });
+
+  it("skips a crash tick the scan contradicts, and takes one the scan confirms", async () => {
+    const token = await createToken("crash-tick");
+    const anchorAt = new Date(Date.now() - 4 * MINUTE);
+    const lastCheckedAt = new Date(Date.now() - 60_000);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      entryAt: new Date(anchorAt.getTime() + 70_000),
+      lastPriceUsd: 1.1,
+      lastCheckedAt,
+      peakBeforeStopPriceUsd: 1.1,
+    });
+    // The scan priced the token at 1.05 after the last check; DexScreener now answers 0.02.
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: token.id,
+        takenAt: new Date(Date.now() - 20_000),
+        priceUsd: 1.05,
+        marketCapUsd: 105_000,
+      },
+    });
+
+    const summary = await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 0.02 }), env);
+
+    const skipped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(skipped.stoppedAt).toBeNull();
+    expect(skipped.low1hPriceUsd).toBe(1.0);
+    expect(skipped.lastPriceUsd).toBe(1.1);
+    expect((summary as Record<string, number>).crashTicksSkipped).toBeGreaterThanOrEqual(1);
+
+    // The scan sees the crash too: a real rug, and it lands.
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, takenAt: new Date(), priceUsd: 0.021, marketCapUsd: 2_100 },
+    });
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 0.02 }), env);
+    const stopped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(stopped.stoppedAt).not.toBeNull();
+    expect(stopped.low1hPriceUsd).toBe(0.02);
+  });
+
+  it("reschedules a row to be due when the next sweep starts, one interval after this one", async () => {
+    const token = await createToken("cadence");
+    const row = await seedRow(token.id, new Date(Date.now() - 5 * MINUTE), 1.0);
+
+    const before = Date.now();
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.1 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    // The scheduler starts the next sweep one interval after this one started. A row due even a
+    // moment after that waits for the sweep after it, and is checked every other minute.
+    expect(updated.nextCheckAt.getTime()).toBeLessThan(before + MINUTE);
+    expect(updated.nextCheckAt.getTime()).toBeGreaterThan(before + MINUTE - 10_000);
+  });
 });
 
 /** Inserts a row as recordCandidateSample would have at `anchorAt`, with optional aggregate state. */
