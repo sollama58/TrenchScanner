@@ -1,4 +1,4 @@
-import { CANDIDATE_FEATURE_NAMES } from "./features.js";
+import { LEARNER_FEATURE_NAMES } from "./features.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 
 /**
@@ -86,7 +86,7 @@ export interface BoostingOptions {
   recencyHalfLifeDays?: number;
   /** Same meaning as TrainOptions.legacyLabelWeight in trainer.ts. */
   legacyLabelWeight?: number;
-  /** The inputs the forest may split on - see TrainOptions.featureNames. Omitted = all of them. */
+  /** The inputs the forest may split on - see TrainOptions.featureNames. Omitted = LEARNER_FEATURE_NAMES. */
   featureNames?: readonly string[];
 }
 
@@ -469,7 +469,7 @@ export async function trainBoostedCurator(
 ): Promise<Omit<BoostedCuratorParams, "threshold">> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const opts = { ...DEFAULT_BOOSTING_OPTIONS, ...stripUndefined(options) };
-  const featureNames = [...(options.featureNames ?? CANDIDATE_FEATURE_NAMES)];
+  const featureNames = [...(options.featureNames ?? LEARNER_FEATURE_NAMES)];
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
 
   const cut = Math.floor(sorted.length * (1 - opts.validationFraction));

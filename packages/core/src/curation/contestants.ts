@@ -1,5 +1,6 @@
 import type { BoostingOptions } from "./boosting.js";
 import {
+  learnerSubset,
   MARKET_CONTEXT_FEATURES,
   PRICE_PATH_FEATURES,
   TRADE_FLOW_FEATURES,
@@ -66,9 +67,8 @@ export const RECENT_HALF_LIFE_DAYS = 3;
  * holder structure, socials and the heuristic's own scores. Deliberately partial: a member that
  * sees the market through one lens disagrees with the others in ways the consensus can use.
  */
-export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = [
+export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
   "mcapUsd",
-  "liquidityToMcapRatio",
   "priceChange5mPct",
   "priceChange1hPct",
   "volume5mUsd",
@@ -76,26 +76,27 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = [
   "volume5mToMcapRatio",
   "volume1hToMcapRatio",
   "volumeAccel",
+  "buys5m",
+  "sells5m",
+  "buyRatio5m",
   "buys1h",
   "sells1h",
-  "buyRatio1h",
   "holderGrowth10mPct",
-  "holderGrowthPct",
   "ageMinutes",
   "minutesSinceFirstInBand",
   // Who is doing the buying, trade by trade (curation/tradeFlow.ts).
   ...TRADE_FLOW_FEATURES,
-];
+]);
 
 /**
  * The last half hour's price path and the market around it, plus the order flow - the "what is
  * it doing right now, and is now a good time" lens, blind to holder structure and socials.
  */
-export const MOMENTUM_FEATURES: readonly CandidateFeatureName[] = [
+export const MOMENTUM_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
   ...PRICE_PATH_FEATURES,
   ...MARKET_CONTEXT_FEATURES,
   ...ORDER_FLOW_FEATURES,
-];
+]);
 
 export const CONTESTANTS: readonly ContestantSpec[] = [
   {

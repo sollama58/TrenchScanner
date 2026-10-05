@@ -20,15 +20,15 @@ function interactionRows(count: number, seed = 3): BoostingRow[] {
   const rand = rng(seed);
   const rows: BoostingRow[] = [];
   for (let i = 0; i < count; i++) {
-    const buyRatio1h = 0.3 + rand() * 0.5;
+    const buyRatio24h = 0.3 + rand() * 0.5;
     const snipers = rand() * 60;
-    const strongBuy = buyRatio1h > 0.6;
+    const strongBuy = buyRatio24h > 0.6;
     const clean = snipers < 30;
     const p = strongBuy === clean ? 0.7 : 0.05;
     rows.push({
       tokenId: `t${i}`,
       anchorAt: new Date(T0 + i * 60_000),
-      features: { buyRatio1h, freshTop10WalletPct: snipers, ageMinutes: rand() * 300 },
+      features: { buyRatio24h, freshTop10WalletPct: snipers, ageMinutes: rand() * 300 },
       labelValue: rand() < p ? 1.5 : 0,
     });
   }
@@ -76,7 +76,7 @@ describe("trainBoostedCurator", () => {
     const rows: BoostingRow[] = Array.from({ length: 2000 }, (_, i) => ({
       tokenId: `n${i}`,
       anchorAt: new Date(T0 + i * 60_000),
-      features: { buyRatio1h: rand(), freshTop10WalletPct: rand() * 60, ageMinutes: rand() * 300 },
+      features: { buyRatio24h: rand(), freshTop10WalletPct: rand() * 60, ageMinutes: rand() * 300 },
       labelValue: rand() < 0.1 ? 1 : 0,
     }));
     const params = await trainBoostedCurator(rows.slice(0, 1500));
@@ -96,7 +96,7 @@ describe("trainBoostedCurator", () => {
     const b = await trainBoostedCurator(rows);
     expect(b).toEqual(a);
     const stored = JSON.parse(JSON.stringify({ ...a, threshold: 0.5 }));
-    const probe = { buyRatio1h: 0.7, freshTop10WalletPct: 10, ageMinutes: 60 };
+    const probe = { buyRatio24h: 0.7, freshTop10WalletPct: 10, ageMinutes: 60 };
     expect(scoreCandidateWithModel(stored, probe)).toBeCloseTo(scoreBoosted(a, probe), 12);
   });
 
@@ -119,7 +119,7 @@ describe("trainBoostedCurator", () => {
 
   it("attributes a score to the features that moved it", async () => {
     const params = await trainBoostedCurator(interactionRows(3000, 3));
-    const features = { buyRatio1h: 0.75, freshTop10WalletPct: 5, ageMinutes: 100 };
+    const features = { buyRatio24h: 0.75, freshTop10WalletPct: 5, ageMinutes: 100 };
     const contributions = boostedContributions(params, features);
     const total = [...contributions.values()].reduce((s, v) => s + v, 0);
     const rootSum = params.trees.reduce((s, t) => s + t.value[0]!, 0);

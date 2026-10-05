@@ -118,9 +118,61 @@ export const CANDIDATE_FEATURE_NAMES = [
   "ctxHourSin",
   "ctxHourCos",
   "ctxWeekend",
+  // Added 2026-10-05 (model input audit): the 5-minute trade counts and their buy share. The
+  // same DexScreener response has carried them all along (the scanner stored them on snapshots);
+  // the 5-minute price move and volume are the strongest inputs the models have for a 15-minute
+  // double, and these are the flow behind them. Null on rows banked before.
+  "buys5m",
+  "sells5m",
+  "buyRatio5m",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
+
+/**
+ * Inputs still recorded on every row but no longer read by the learners (model input audit,
+ * 2026-10-05, on 2,591 production decision rows): their top and bottom tenths doubled at the
+ * same rate as everything else, or they repeat an input the model already has. Recorded still,
+ * so the feature report keeps watching them and any of them can be brought back by removing it
+ * here. The heuristic curator's safety gates (fresh-wallet cap, risk caps) read the scored
+ * token, not this list, so retiring an input never loosens a gate.
+ */
+export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set<CandidateFeatureName>([
+  // No signal on their own.
+  "hasTelegram",
+  "hasDescription",
+  "narrativeTagCount",
+  "dexBoosted",
+  "buyRatio1h",
+  "holderGrowthPct",
+  "pathRet1mPct",
+  "pathHolderSlope10m",
+  "devHolding",
+  "devWalletPct",
+  "liquidityToMcapRatio",
+  "mktInBandCount",
+  "mktLaunchesPerHour",
+  // For a launch younger than the window DexScreener reports the move since launch, so these
+  // were the 1h figure again on most rows (1h == 6h on 99.8% of tokens under an hour old).
+  "priceChange6hPct",
+  "priceChange24hPct",
+  // Deterministic functions of inputs the model already reads (scoring/scorer.ts).
+  "scoreMomentum",
+  "scoreHolderHealth",
+  "scoreAge",
+  "scoreNarrative",
+  "scoreTotal",
+]);
+
+/** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
+export const LEARNER_FEATURE_NAMES: readonly CandidateFeatureName[] = CANDIDATE_FEATURE_NAMES.filter(
+  (name) => !RETIRED_LEARNER_INPUTS.has(name),
+);
+
+/** A recipe's feature list with the retired inputs taken out. */
+export function learnerSubset(names: readonly CandidateFeatureName[]): CandidateFeatureName[] {
+  return names.filter((name) => !RETIRED_LEARNER_INPUTS.has(name));
+}
 
 /** The order-flow features, in vector order - each is a TradeFlowFeatures field of the same name. */
 export const TRADE_FLOW_FEATURES = [
@@ -253,6 +305,9 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   ctxHourSin: "time of day",
   ctxHourCos: "time of day",
   ctxWeekend: "weekend",
+  buys5m: "5m buys",
+  sells5m: "5m sells",
+  buyRatio5m: "5m buy pressure",
 };
 
 /**
@@ -292,6 +347,8 @@ export function scoredFromFeatures(
     volume1hUsd: num("volume1hUsd"),
     buys1h: num("buys1h"),
     sells1h: num("sells1h"),
+    buys5m: num("buys5m"),
+    sells5m: num("sells5m"),
     holderCount: num("holderCount"),
     holderGrowthPct: num("holderGrowthPct"),
     holderGrowth10mPct: num("holderGrowth10mPct"),
@@ -364,6 +421,9 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
   const buys1h = scored.buys1h ?? null;
   const sells1h = scored.sells1h ?? null;
   const buyRatio1h = deriveBuyRatio(buys1h, sells1h);
+  const buys5m = scored.buys5m ?? null;
+  const sells5m = scored.sells5m ?? null;
+  const buyRatio5m = deriveBuyRatio(buys5m, sells5m);
 
   // 1h churn relative to size - the short-window sibling of volumeToMcapRatio, and the sharper
   // of the two for anything older than an hour.
@@ -455,6 +515,9 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
     ...(Object.fromEntries(
       MARKET_CONTEXT_FEATURES.map((k) => [k, (scored.marketContext ?? EMPTY_MARKET_CONTEXT)[k]]),
     ) as Record<(typeof MARKET_CONTEXT_FEATURES)[number], number | null>),
+    buys5m,
+    sells5m,
+    buyRatio5m,
   };
 }
 
