@@ -3,6 +3,7 @@ import {
   curationRankScore,
   evaluateCandidateHeuristic,
   HEURISTIC_CURATOR_SOURCE,
+  MAX_EVENT_AGE_MINUTES,
   passesEventPreGate,
   walletChecksKnown,
 } from "./curator.js";
@@ -229,6 +230,10 @@ describe("passesEventPreGate", () => {
 
   it("skips out-of-band, sell-dominated, tradeless-hour and falling moments", () => {
     expect(passesEventPreGate(ready({ marketCapUsd: 50_000 }), band)).toBe(false);
+    // Six hours is the oldest a decided-on token may be; unknown age passes.
+    expect(passesEventPreGate(ready({ ageMinutes: MAX_EVENT_AGE_MINUTES }), band)).toBe(true);
+    expect(passesEventPreGate(ready({ ageMinutes: MAX_EVENT_AGE_MINUTES + 1 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ ageMinutes: undefined }), band)).toBe(true);
     expect(passesEventPreGate(ready({ buys1h: 40, sells1h: 60 }), band)).toBe(false);
     expect(passesEventPreGate(ready({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
     expect(passesEventPreGate(ready({ priceChange5mPct: -2 }), band)).toBe(false);
