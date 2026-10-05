@@ -21,7 +21,7 @@ import {
   type ScoredOutcome,
   scoreCandidateWithModel,
 } from "./trainer.js";
-import { CANDIDATE_FEATURE_NAMES } from "./features.js";
+import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES } from "./features.js";
 import {
   CONSENSUS_CONTESTANT,
   RULES_CONTESTANT,
@@ -258,7 +258,7 @@ function runFeatures(
 /** A recipe narrowed to the run's usable inputs; one left with none keeps its own list. */
 function narrowRecipe(recipe: CuratorRecipe, usable: ReadonlySet<string> | null): CuratorRecipe {
   if (usable === null) return recipe;
-  const wanted = recipe.featureNames ?? CANDIDATE_FEATURE_NAMES;
+  const wanted = recipe.featureNames ?? LEARNER_FEATURE_NAMES;
   const kept = wanted.filter((f) => usable.has(f));
   if (kept.length === wanted.length || kept.length === 0) return recipe;
   return { ...recipe, featureNames: kept };

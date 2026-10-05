@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildCandidateFeatures, scoredFromFeatures, CANDIDATE_FEATURE_NAMES } from "./features.js";
+import {
+  buildCandidateFeatures,
+  scoredFromFeatures,
+  CANDIDATE_FEATURE_NAMES,
+  LEARNER_FEATURE_NAMES,
+  RETIRED_LEARNER_INPUTS,
+  learnerSubset,
+} from "./features.js";
 import type { ScoredToken } from "../types.js";
 
 function scored(overrides: Partial<ScoredToken> = {}): ScoredToken {
@@ -23,6 +30,29 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(buildCandidateFeatures(scored({ buys1h: 80, sells1h: 20 })).buyRatio1h).toBeCloseTo(0.8);
     expect(buildCandidateFeatures(scored({ buys1h: 0, sells1h: 0 })).buyRatio1h).toBeNull();
     expect(buildCandidateFeatures(scored({})).buyRatio1h).toBeNull();
+  });
+
+  it("derives the 5m buy ratio from the 5m counts, and nulls it with no trades", () => {
+    const f = buildCandidateFeatures(scored({ buys5m: 30, sells5m: 10 }));
+    expect(f.buys5m).toBe(30);
+    expect(f.sells5m).toBe(10);
+    expect(f.buyRatio5m).toBeCloseTo(0.75);
+    expect(buildCandidateFeatures(scored({ buys5m: 0, sells5m: 0 })).buyRatio5m).toBeNull();
+    expect(buildCandidateFeatures(scored({})).buys5m).toBeNull();
+    const back = scoredFromFeatures(f, 1, 100_000);
+    expect(back.buys5m).toBe(30);
+    expect(back.sells5m).toBe(10);
+  });
+
+  it("keeps the retired inputs recorded but out of the learners' default list", () => {
+    for (const name of RETIRED_LEARNER_INPUTS) {
+      expect(CANDIDATE_FEATURE_NAMES).toContain(name);
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
+    expect(LEARNER_FEATURE_NAMES.length).toBe(CANDIDATE_FEATURE_NAMES.length - RETIRED_LEARNER_INPUTS.size);
+    for (const name of ["priceChange5mPct", "volume5mUsd", "ageMinutes", "buyRatio5m", "ctxHourSin"] as const)
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+    expect(learnerSubset(["scoreTotal", "ageMinutes", "hasTelegram"])).toEqual(["ageMinutes"]);
   });
 
   it("derives 1h churn against mcap", () => {

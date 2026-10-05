@@ -1,4 +1,4 @@
-import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, scoredFromFeatures } from "./features.js";
+import { FRIENDLY_FEATURE_LABELS, LEARNER_FEATURE_NAMES, scoredFromFeatures } from "./features.js";
 import {
   curationRankScore,
   evaluateCandidateHeuristic,
@@ -331,7 +331,8 @@ export interface TrainOptions {
    */
   recencyHalfLifeDays?: number;
   /**
-   * The features the model reads, in vector order. Default: every CANDIDATE_FEATURE_NAMES entry.
+   * The features the model reads, in vector order. Default: LEARNER_FEATURE_NAMES - every
+   * recorded input the audit has not retired (see RETIRED_LEARNER_INPUTS in features.ts).
    * A subset is how one contestant specializes (see curation/contestants.ts); the stacked model
    * passes its own member-signal names here.
    */
@@ -365,7 +366,7 @@ export async function trainCurator(
   opts: TrainOptions = {},
 ): Promise<Omit<LogisticCuratorParams, "threshold">> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
-  const featureNames: string[] = [...(opts.featureNames ?? CANDIDATE_FEATURE_NAMES)];
+  const featureNames: string[] = [...(opts.featureNames ?? LEARNER_FEATURE_NAMES)];
   const n = featureNames.length;
   const transform = opts.transform === null ? undefined : (opts.transform ?? CURRENT_FEATURE_TRANSFORM);
 

@@ -5,7 +5,7 @@ import {
   type ContestantSpec,
   type CuratorRecipe,
 } from "./contestants.js";
-import { CANDIDATE_FEATURE_NAMES, type CandidateFeatureName } from "./features.js";
+import { LEARNER_FEATURE_NAMES, type CandidateFeatureName } from "./features.js";
 import { recordScore, type CallRecord } from "./leaderboard.js";
 import { GOAL_MULTIPLE } from "./labels.js";
 import type { PrecisionTargets } from "./trainer.js";
@@ -135,7 +135,7 @@ function mutateFeatures(
   current: readonly string[] | undefined,
   rng: Rng,
 ): CandidateFeatureName[] | undefined {
-  const all = CANDIDATE_FEATURE_NAMES as readonly CandidateFeatureName[];
+  const all = LEARNER_FEATURE_NAMES;
   const have = new Set<CandidateFeatureName>((current as CandidateFeatureName[] | undefined) ?? all);
   const missing = all.filter((f) => !have.has(f));
   const steps = 1 + Math.floor(rng() * 3);
@@ -274,8 +274,8 @@ export function describeRecipe(
       b.rowSample! * 100,
     )}% of rows and ${Math.round(b.featureSample! * 100)}% of features; ${memory}`;
   } else {
-    const n = r.featureNames?.length ?? CANDIDATE_FEATURE_NAMES.length;
-    what = `Logistic regression on ${n === CANDIDATE_FEATURE_NAMES.length ? "every" : `${n} of ${CANDIDATE_FEATURE_NAMES.length}`} features; ${memory}`;
+    const n = r.featureNames?.length ?? LEARNER_FEATURE_NAMES.length;
+    what = `Logistic regression on ${n === LEARNER_FEATURE_NAMES.length ? "every" : `${n} of ${LEARNER_FEATURE_NAMES.length}`} features; ${memory}`;
   }
   if (r.twoStage)
     what = `Two stages (dodge the stop, then double): ${what.charAt(0).toLowerCase()}${what.slice(1)}`;

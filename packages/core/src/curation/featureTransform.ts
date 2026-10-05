@@ -19,6 +19,7 @@ export const CURRENT_FEATURE_TRANSFORM: FeatureTransform = "signed-log1p-v1";
 const UNTRANSFORMED_FEATURES = new Set([
   "buyRatio24h",
   "buyRatio1h",
+  "buyRatio5m",
   "top10HolderPct",
   "devWalletPct",
   "riskScore",
