@@ -36,7 +36,7 @@ export class ViewStampBuffer {
   private pending = new Set<string>();
   private timer: NodeJS.Timeout | undefined;
   /** Guards against a slow write overlapping the next tick and stacking flushes. */
-  private flushing = false;
+  private flushing: Promise<void> | null = null;
   private stopped = false;
 
   constructor(private readonly options: { flushIntervalMs?: number; maxPending?: number } = {}) {}
@@ -54,7 +54,7 @@ export class ViewStampBuffer {
   }
 
   private arm(): void {
-    if (this.timer || this.pending.size === 0) return;
+    if (this.stopped || this.timer || this.pending.size === 0) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.flush();
@@ -70,13 +70,18 @@ export class ViewStampBuffer {
    */
   async flush(): Promise<void> {
     if (this.flushing || this.pending.size === 0) return;
-    this.flushing = true;
+    this.flushing = this.write().finally(() => {
+      this.flushing = null;
+      this.arm();
+    });
+    await this.flushing;
+  }
 
+  private async write(): Promise<void> {
     // Swapped before the await so stamps arriving mid-write land in the next batch instead of
     // being cleared unwritten.
     const batch = [...this.pending];
     this.pending.clear();
-
     try {
       await prisma.token.updateMany({
         where: { id: { in: batch } },
@@ -84,19 +89,21 @@ export class ViewStampBuffer {
       });
     } catch (err) {
       logger.error("could not flush view stamps", { err: String(err), count: batch.length });
-    } finally {
-      this.flushing = false;
-      this.arm();
     }
   }
 
-  /** Final flush for shutdown, so the last page anyone opened is not lost. */
+  /**
+   * Final flush for shutdown, so the last page anyone opened is not lost: waits out a write
+   * already in flight (whose batch was swapped out before stamps kept arriving), then writes
+   * what came in meanwhile.
+   */
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
+    if (this.flushing) await this.flushing;
     await this.flush();
   }
 }
