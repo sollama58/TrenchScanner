@@ -71,7 +71,7 @@ const envSchema = z.object({
   // RugCheck is called once per in-band candidate per cycle, so this interval used to multiply its
   // traffic one-for-one and was held at 7 minutes because of it. RUGCHECK_CACHE_TTL_MINUTES below
   // breaks that coupling, which is what makes a one-minute alert loop affordable.
-  SCAN_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
+  SCAN_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(1),
   // How long a RugCheck report is reused before being re-fetched (see the worker's
   // rugCheckProfiles.ts). Short, because everything RugCheck reports is mutable - holder
   // distribution, dev wallet %, risk score - unlike mint authority revocation or Mayhem Mode,
@@ -187,17 +187,17 @@ const envSchema = z.object({
   // paced by how expensive enrichment is, not by how fast a filter can be re-evaluated, and at
   // one minute it left an average half-minute between a token becoming matchable and anyone
   // hearing about it. Seconds, not minutes, because that is the unit the answer belongs in.
-  FAST_MATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(15),
+  FAST_MATCH_INTERVAL_SECONDS: z.coerce.number().min(5).default(15),
   // The platform's floor under every user-filter alert, both lanes (see scoring/alertGuard.ts):
   // "flush" (default) holds a match back while the price is down 25%+ over five minutes; "ready"
   // also requires buyers to hold the last hour's flow and the last five minutes not to be red;
   // "off" alerts on any match. A held-back match doesn't start the filter's cooldown.
   MATCH_ALERT_GUARD: z.enum(["off", "flush", "ready"]).default("flush"),
-  LIVE_PRICE_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
+  LIVE_PRICE_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(1),
   // How often match peaks are rolled forward from the snapshots and live pings already banked
   // (apps/worker/src/jobs/matchPeaks.ts). Its own timer rather than part of the scan cycle, which
   // it used to slow down; peaks feed the leaderboard and outcome figures, nothing time-critical.
-  MATCH_PEAKS_INTERVAL_MINUTES: z.coerce.number().positive().default(2),
+  MATCH_PEAKS_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(2),
   LIVE_PRICE_MAX_TRACKED: z.coerce.number().int().positive().default(150),
 
   // Daily cleanup job (see apps/worker/src/jobs/cleanupJob.ts) - prunes TokenSnapshot rows older
@@ -208,7 +208,7 @@ const envSchema = z.object({
   // (apps/worker/src/jobs/matchPeaks.ts) mines a match's peak out of its token's snapshot history,
   // and once those snapshots are pruned there is nothing left to mine, so it doesn't look further
   // back than this.
-  CLEANUP_HOUR_UTC: z.coerce.number().min(0).max(23).default(4),
+  CLEANUP_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(4),
   SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
   STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(14),
   // The short horizon for snapshots of tokens nothing else points at - no CandidateOutcome, Match,
@@ -228,7 +228,7 @@ const envSchema = z.object({
   // data: re-checks recent Match rows against live market data and records the highest mcap seen
   // since the match, so scoring quality can eventually be measured against real outcomes. Runs an
   // hour after cleanup purely to keep the two daily jobs from overlapping on a cold start.
-  OUTCOME_TRACKING_HOUR_UTC: z.coerce.number().min(0).max(23).default(5),
+  OUTCOME_TRACKING_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(5),
 
   // Curated-alerts training data (see apps/worker/src/jobs/candidateOutcomeJob.ts and
   // packages/core/src/curation/). Every rug-screen-passing candidate gets a CandidateOutcome row
@@ -249,7 +249,7 @@ const envSchema = z.object({
   // this window, taken the first scan the token passes passesEventPreGate. The curators decide
   // only at these moments, so the training rows and the live picks share one distribution.
   CANDIDATE_EVENT_SPACING_MINUTES: z.coerce.number().positive().default(60),
-  CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
+  CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(1),
   CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(2000),
   CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(90),
   // Graded "match" rows (the anchors user-filter alerts are graded from) are kept this long instead:
@@ -288,7 +288,7 @@ const envSchema = z.object({
   // Every 2 hours since 2026-10-05, when training moved to its own process: a run no longer
   // costs the scan anything, and a model that just earned (or lost) a seat, a fresh calibration
   // table and new cutoffs take effect within two hours of the evidence.
-  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().positive().default(2),
+  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().min(0.25).default(2),
   // Three weeks: on 2026-10-04 the scan banked ~7,700 training rows a day, so this is about the
   // row ceiling below, and it is the window - not the ceiling - that should set how far back the
   // models look. The recency half-life below tilts the fit toward the newest part of it.
@@ -560,7 +560,7 @@ const envSchema = z.object({
   // How often the reconciler sweeps the chain for burns nobody claimed. This is the backstop that
   // makes the promise "if you burn, you get access" true even when the browser never reports in,
   // so it runs on a tight-ish loop rather than daily.
-  BURN_SCAN_INTERVAL_MINUTES: z.coerce.number().positive().default(3),
+  BURN_SCAN_INTERVAL_MINUTES: z.coerce.number().min(1).default(3),
 
   // How far back a cold start looks. Only used when there is no cursor yet (a fresh deploy, or a
   // wiped BurnScanCursor); after that every pass walks forward from where the last one stopped.

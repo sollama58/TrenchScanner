@@ -9,7 +9,39 @@ import {
 const logger = createLogger("scheduler");
 
 export interface ScheduledJob {
+  /** Cancels the next run. A run already in flight keeps going - see `settle`. */
   stop(): void;
+  /**
+   * Waits for the run in flight (if any) to finish, up to `timeoutMs`. "idle": nothing was
+   * running; "finished": it returned (and wrote its own heartbeat) in time; "interrupted": it is
+   * still going, and the process is about to end under it.
+   */
+  settle(timeoutMs: number): Promise<"idle" | "finished" | "interrupted">;
+}
+
+/**
+ * The message a run cut short by a shutdown leaves on its heartbeat row. Written by the worker's
+ * shutdown (apps/worker/src/index.ts) for runs that outlive the grace period: a cleanup or a
+ * retrain killed by a deploy used to leave no trace at all - `runningSince` stayed stamped,
+ * lastSuccessAt stayed at the previous run, and nothing said the run had been cut.
+ */
+export const SHUTDOWN_INTERRUPTED_ERROR = "run interrupted by a worker shutdown (deploy or restart)";
+
+/** The settle() shared by both schedulers: resolves on the in-flight run, or on the timeout. */
+function settleWith(inFlight: () => Promise<void> | undefined): ScheduledJob["settle"] {
+  return async (timeoutMs) => {
+    const current = inFlight();
+    if (!current) return "idle";
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<"interrupted">((resolve) => {
+      timer = setTimeout(() => resolve("interrupted"), timeoutMs);
+    });
+    try {
+      return await Promise.race([current.then(() => "finished" as const), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
 }
 
 /** What a job may hand back about its own run - stored on its heartbeat row and served by
@@ -63,8 +95,16 @@ export function scheduleInterval(
   const { deadlineMinutes, onDeadline = exitForRestart } = opts;
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
+  let inFlight: Promise<void> | undefined;
 
-  const run = async () => {
+  const run = () => {
+    inFlight = runOnce().finally(() => {
+      inFlight = undefined;
+    });
+    return inFlight;
+  };
+
+  const runOnce = async () => {
     const startedAt = Date.now();
     // A run that hangs is otherwise invisible: the heartbeat only advances when it returns, and
     // nothing else is ever scheduled behind it.
@@ -134,7 +174,9 @@ export function scheduleInterval(
   if (opts.firstRunDelayMs) {
     void opts
       .firstRunDelayMs()
-      .catch(() => 0)
+      // The read failed (a database blip at boot): hold the first run for a whole interval rather
+      // than run it at once - "at once" is exactly what the caller asked not to happen.
+      .catch(() => intervalMs)
       .then((delay) => {
         if (!stopped) next = setTimeout(() => void run(), Math.max(0, delay));
       });
@@ -146,6 +188,7 @@ export function scheduleInterval(
       stopped = true;
       if (next) clearTimeout(next);
     },
+    settle: settleWith(() => inFlight),
   };
 }
 
@@ -184,6 +227,9 @@ export function scheduleDailyAt(
   let next: NodeJS.Timeout | undefined;
   let readRetry: NodeJS.Timeout | undefined;
   let running = false;
+  let inFlight: Promise<void> | undefined;
+  /** When this process last started a run - the slot it took, whatever the heartbeat row says. */
+  let lastStartedAt: number | undefined;
   let failuresInARow = 0;
 
   const scheduleNext = () => {
@@ -201,9 +247,17 @@ export function scheduleDailyAt(
     next = setTimeout(() => void run(), delay);
   };
 
-  const run = async () => {
+  const run = () => {
+    inFlight = runOnce().finally(() => {
+      inFlight = undefined;
+    });
+    return inFlight;
+  };
+
+  const runOnce = async () => {
     running = true;
     const startedAt = Date.now();
+    lastStartedAt = startedAt;
     const watchdog = setInterval(() => {
       logger.error("daily job run has not returned", { job: name, runningForMs: Date.now() - startedAt });
     }, DAILY_STALL_MS);
@@ -251,9 +305,21 @@ export function scheduleDailyAt(
         readRetry = setTimeout(() => void start(), retryAfterMinutes * 60_000);
         return;
       }
-      if (last === null || Date.now() - last.getTime() > catchUpAfterHours * 3_600_000) {
-        // The slot's own run may already be under way (a late answer to a retried read).
-        if (running) return;
+      // Overdue: never succeeded, older than the grace, or - whatever its age - from before the
+      // most recent slot that has already come round. The grace alone missed a run cut short by
+      // a deploy: cleanup (half an hour on 2026-10-05) killed at 04:20 left yesterday's success
+      // 24h20m old, under the 26h grace, so the boot right after skipped straight to tomorrow
+      // and that day's deletes never happened. A run that finished after the slot is that slot's.
+      const slot = mostRecentSlot(hourUtc);
+      if (
+        last === null ||
+        Date.now() - last.getTime() > catchUpAfterHours * 3_600_000 ||
+        last.getTime() < slot
+      ) {
+        // The slot's own run may already be under way, or done (a late answer to a retried read
+        // that still says yesterday: the row was read before this process's slot run wrote it).
+        // Either way its own finally schedules the slot after.
+        if (running || (lastStartedAt !== undefined && lastStartedAt >= slot)) return;
         logger.info("daily job overdue, running now", { job: name, lastSuccessAt: last });
         if (next) clearTimeout(next);
         next = undefined;
@@ -271,17 +337,43 @@ export function scheduleDailyAt(
       if (next) clearTimeout(next);
       if (readRetry) clearTimeout(readRetry);
     },
+    settle: settleWith(() => inFlight),
   };
 }
 
-/** The default deadline action: a run that will never return has wedged this process for good. */
+/** How long the deadline exit waits for its heartbeat write before giving up on it. */
+const EXIT_HEARTBEAT_TIMEOUT_MS = 5_000;
+
+/**
+ * The default deadline action: a run that will never return has wedged this process for good.
+ * Best effort, the failure is written to the job's heartbeat first: without it the only record
+ * of "the scan passed its deadline and the worker restarted" was the log, and GET /health/worker
+ * showed the previous run's (possibly clean) result under a runningSince the next process
+ * overwrote within a minute.
+ */
 function exitForRestart(job: HeartbeatJob, runningForMs: number): void {
   logger.error("job run passed its deadline - exiting so the worker restarts", { job, runningForMs });
-  process.exit(1);
+  const exit = () => process.exit(1);
+  const giveUp = setTimeout(exit, EXIT_HEARTBEAT_TIMEOUT_MS);
+  giveUp.unref?.();
+  void recordHeartbeat(job, {
+    success: false,
+    error: `run passed its deadline after ${Math.round(runningForMs / 1000)}s; worker restarted`,
+    meta: { durationMs: runningForMs },
+  })
+    .catch(() => {})
+    .finally(exit);
 }
 
 /** A daily run going this long is logged as stalled, and again each time this much more passes. */
 const DAILY_STALL_MS = 2 * 3_600_000;
+
+/** The latest `hourUtc:00 UTC` at or before now, as a timestamp. */
+function mostRecentSlot(hourUtc: number): number {
+  const now = new Date();
+  const slot = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hourUtc, 0, 0, 0);
+  return slot <= now.getTime() ? slot : slot - 86_400_000;
+}
 
 function msUntilNextHour(hourUtc: number): number {
   const now = new Date();

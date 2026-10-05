@@ -52,6 +52,19 @@ describe.skipIf(!dbAvailable)("ViewStampBuffer", () => {
     await buffer.stop();
   });
 
+  it("stop() writes the stamps that arrived during a write already in flight", async () => {
+    const buffer = new ViewStampBuffer({ flushIntervalMs: 60_000 });
+    buffer.record(tokenIds.slice(0, 1));
+    const inFlight = buffer.flush();
+    // Landed after the first batch was swapped out: before, stop() saw a flush in progress,
+    // returned at once, and these were never written.
+    buffer.record(tokenIds.slice(1));
+    await buffer.stop();
+    await inFlight;
+
+    expect(await stampedCount()).toBe(3);
+  });
+
   it("flushes on its own once the interval elapses", async () => {
     const buffer = new ViewStampBuffer({ flushIntervalMs: 50 });
     buffer.record(tokenIds);

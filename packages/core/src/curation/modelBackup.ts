@@ -562,7 +562,31 @@ export async function restoreModelBackup(
   const safety = safetyPayload ? await storeBackupPayload(safetyPayload, "pre-restore", safetyNote) : null;
   const safetyIds = new Set((safetyPayload?.models ?? []).map((m) => m.id));
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await restoreUnderLock(backupId, payload, safetyIds, label, now).catch(
+    async (err: unknown) => {
+      // Nothing was restored, so the snapshot taken to undo it guards nothing: drop it rather than
+      // leave a multi-megabyte "pre-restore" row per retry until the 90-day prune.
+      if (safety) await prisma.modelBackup.delete({ where: { id: safety.id } }).catch(() => {});
+      throw err;
+    },
+  );
+
+  return {
+    backupId,
+    seats: payload.models.flatMap((m) => (m.contestant ? [m.contestant] : [])),
+    safetyBackupId: safety?.id ?? null,
+    ...result,
+  };
+}
+
+function restoreUnderLock(
+  backupId: string,
+  payload: ModelBackupPayload,
+  safetyIds: Set<string>,
+  label: string,
+  now: Date,
+) {
+  return prisma.$transaction(async (tx) => {
     await lockCuratorModelWrites(tx);
 
     // The safety backup was taken outside this lock, so a training run that committed in between
@@ -683,13 +707,6 @@ export async function restoreModelBackup(
     await tx.modelBackup.update({ where: { id: backupId }, data: { restoredAt: now } });
     return { models: ordered.length, lanesRestored, playbookRestored, blendRestored };
   }, MODEL_WRITE_TX_OPTIONS);
-
-  return {
-    backupId,
-    seats: payload.models.flatMap((m) => (m.contestant ? [m.contestant] : [])),
-    safetyBackupId: safety?.id ?? null,
-    ...result,
-  };
 }
 
 /** Whether the weekly backup is due: none yet, or the newest is a week old. */

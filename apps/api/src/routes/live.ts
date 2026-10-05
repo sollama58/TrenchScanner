@@ -20,6 +20,8 @@ const LIVE_TICK_MAX_AGE_MS = 8_000;
  */
 const LIVE_TICK_WAIT_MS = 2_500;
 
+const LIVE_TICK_RATE_LIMIT = { max: 40, timeWindow: "1 minute" };
+
 const tickQuerySchema = z.object({
   tokens: z
     .string()
@@ -46,7 +48,9 @@ export async function registerLiveRoutes(
   // Same gate as the feeds these numbers belong to.
   app.addHook("preHandler", app.authenticateSubscriber);
 
-  app.get("/market", async (request, reply) => {
+  // The dashboard ticks every 10 seconds; a few tabs fit under this. Each tick's lookup spends the
+  // refresher's shared upstream budget, so one client can't burn it for everyone by ticking fast.
+  app.get("/market", { config: { rateLimit: LIVE_TICK_RATE_LIMIT } }, async (request, reply) => {
     const parsed = tickQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });

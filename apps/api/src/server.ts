@@ -62,7 +62,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // every routed 500 fell through to Fastify's default body - which carries the raw error
   // message (for Prisma, the database hostname). Details stay in the log; clients get a code.
   app.setErrorHandler((err: FastifyError, request, reply) => {
-    logger.error("unhandled route error", { url: request.url, error: err.message });
+    logger.error("unhandled route error", { url: request.url, error: err.message, stack: err.stack });
     const status = err.statusCode ?? 500;
     reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
   });
@@ -185,9 +185,15 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     keyGenerator: async (request) => {
       // Verified, never merely present: an unverified cookie would let one client mint a fresh
       // bucket per request simply by changing the value, which is no rate limit at all.
+      // Keyed by the session's revocation discriminator too, so a signed-out cookie somebody
+      // copied before sign-out lands in its own bucket instead of draining the live user's.
       const session = (await verifySessions(request).catch(() => []))[0];
-      return session ? `user:${session.userId}` : `ip:${clientIp(request)}`;
+      if (!session) return `ip:${clientIp(request)}`;
+      return `user:${session.userId}:${session.deviceId ? `d${session.deviceId}` : `v${session.sessionVersion}`}`;
     },
+    // A preflight carries no credentials and is answered from a table; counting it against the
+    // IP bucket let one office on a shared address spend its limit on OPTIONS.
+    allowList: (request) => request.method === "OPTIONS",
   });
 
   // Shared by the three auth hooks below so the cookie-read-and-verify step (and any future
