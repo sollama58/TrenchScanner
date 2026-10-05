@@ -35,7 +35,7 @@ export interface CuratorRecipe {
   learner: CuratorLearner;
   /** Overrides CURATOR_RECENCY_HALF_LIFE_DAYS for this contestant. */
   recencyHalfLifeDays?: number;
-  /** Logistic only: the features it reads (default: all). */
+  /** The features it reads (default: all). Training narrows it further to the run's usable inputs. */
   featureNames?: readonly CandidateFeatureName[];
   /** Boosted only: hyperparameters over DEFAULT_BOOSTING_OPTIONS. */
   boosting?: BoostingOptions;

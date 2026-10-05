@@ -479,6 +479,8 @@ export interface ModelInsights {
   };
   /** Per-feature null rates and decile lifts from the newest training run, or null before one. */
   featureHealth?: FeatureHealthReport | null;
+  /** Inputs the newest run held back as too new (or lately dead) to train on. */
+  heldFeatures?: { feature: string; label: string; referencePct: number; recentPct: number }[];
   recentAiReviews: AiReviewRow[];
 }
 

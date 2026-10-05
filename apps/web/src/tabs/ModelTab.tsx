@@ -251,6 +251,7 @@ const HEALTH_ROWS = 6;
  */
 function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number }) {
   const health = data.featureHealth ?? null;
+  const held = data.heldFeatures ?? [];
   const newest = data.samples.newestAnchorAt ? new Date(data.samples.newestAnchorAt).getTime() : null;
   const stale = newest !== null && now - newest > 30 * 60_000;
   const mostlyNull = health
@@ -311,6 +312,18 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
                 .map((f) => `${f.label} (${pct(f.nullRatePct, 0)})`)
                 .join(", ")}
               {mostlyNull.length > HEALTH_ROWS * 2 ? ` and ${mostlyNull.length - HEALTH_ROWS * 2} more` : ""}.
+            </p>
+          )}
+          {held.length > 0 && (
+            <p className="small muted">
+              Not used by the models yet, waiting for history:{" "}
+              {held
+                .map(
+                  (f) =>
+                    `${f.label} (on ${pct(f.recentPct, 0)} of recent moments, ${pct(f.referencePct, 0)} of the history the cutoffs come from)`,
+                )
+                .join(", ")}
+              . A new input joins once it covers enough of that history, usually within a few days.
             </p>
           )}
         </>

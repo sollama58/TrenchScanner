@@ -504,6 +504,36 @@ describe("the wider roster", () => {
   }, 120_000);
 });
 
+describe("the feature onset guard", () => {
+  it("trains no seat on an input that only the newest rows carry, and records why", async () => {
+    const market = syntheticMarket({ tokens: 1500, days: 30, truth: "interactions", seed: 21 });
+    const onset = market[market.length - 1]!.anchorAt.getTime() - 6 * 3_600_000;
+    const rows = market.map((r) => ({
+      ...r,
+      features: { ...r.features, pathRet5mPct: r.anchorAt.getTime() >= onset ? 1 : null },
+    }));
+    const results = await runContestTraining(rows, {
+      targets,
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1000,
+      recencyHalfLifeDays: 14,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      contestants: enabledContestants(["linear", "trees"]),
+      minTestWins: 5,
+      featureOnsetGuard: true,
+    });
+    for (const id of ["linear", "trees"]) {
+      const r = results.find((x) => x.contestant === id)!;
+      const params = r.params as { featureNames: string[] };
+      expect(params.featureNames).not.toContain("pathRet5mPct");
+      expect(params.featureNames).toContain("mcapUsd");
+      expect(r.metrics.heldFeatures?.map((h) => h.feature)).toContain("pathRet5mPct");
+    }
+  }, 120_000);
+});
+
 // Keeps the ScoredToken import used under isolatedModules.
 const _scoredShape: ScoredToken | undefined = undefined;
 void _scoredShape;

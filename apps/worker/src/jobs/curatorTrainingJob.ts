@@ -121,6 +121,7 @@ export async function runCuratorTrainingJob(
       minTestWins: env.CURATOR_EXAM_MIN_FOLD_WINS,
       highConvictionRank: env.CURATED_HIGH_CONVICTION_RANK,
       calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
+      featureOnsetGuard: env.CURATOR_FEATURE_ONSET_GUARD,
     },
     plan ?? undefined,
   );
@@ -186,6 +187,8 @@ export async function runCuratorTrainingJob(
     logger.warn("couldn't re-choose the default model", { error: String(err) }),
   );
 
+  // The field-wide reports ride on every learner's metrics; the roster lists the combiners first.
+  const learnerMetrics = results.find((r) => r.metrics.featureReport)?.metrics;
   logger.info("curator contest training complete", {
     durationMs: Date.now() - startedAt,
     rows: trainingRows.length,
@@ -200,15 +203,21 @@ export async function runCuratorTrainingJob(
       highConviction: r.metrics.highConviction ?? null,
       calibrationCalls: r.metrics.calibrationCalls ?? 0,
     })),
+    // Inputs held back as too new (or lately dead) to train on - see curation/featureOnset.ts.
+    heldFeatures: learnerMetrics?.heldFeatures?.map((h) => ({
+      feature: h.feature,
+      referencePct: h.referencePct,
+      recentPct: h.recentPct,
+    })),
     // The inputs' health this run: anything null on most rows, or with no lift at either end,
     // is a wire to check (see curation/featureReport.ts).
-    featureReport: results[0]?.metrics.featureReport
+    featureReport: learnerMetrics?.featureReport
       ? {
-          rows: results[0].metrics.featureReport.rows,
-          mostlyNull: results[0].metrics.featureReport.features
+          rows: learnerMetrics.featureReport.rows,
+          mostlyNull: learnerMetrics.featureReport.features
             .filter((f) => f.nullRatePct >= 90)
             .map((f) => f.feature),
-          strongest: [...results[0].metrics.featureReport.features]
+          strongest: [...learnerMetrics.featureReport.features]
             .filter((f) => f.topDecileLift !== null)
             .sort(
               (a, b) =>
