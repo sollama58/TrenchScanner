@@ -233,6 +233,7 @@ export async function trainStackedCurator(
       c.rows.map((row, i) => ({
         probability: c.ranks[i]!,
         labelValue: row.labelValue,
+        ...(row.runPeakMultiple !== undefined ? { runPeakMultiple: row.runPeakMultiple } : {}),
         tokenId: row.tokenId,
         anchorAt: row.anchorAt,
       })),

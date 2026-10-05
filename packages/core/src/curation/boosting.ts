@@ -1,5 +1,5 @@
 import { LEARNER_FEATURE_NAMES } from "./features.js";
-import { isCurrentLabelRule } from "./labels.js";
+import { isCurrentLabelRule, runWeight } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 
 /**
@@ -59,6 +59,8 @@ export interface BoostingRow {
   tokenId?: string;
   /** Same meaning as TrainingRow.labelRule in trainer.ts. */
   labelRule?: number;
+  /** Same meaning as TrainingRow.runPeakMultiple in trainer.ts: weighs the row by how far it ran. */
+  runPeakMultiple?: number;
 }
 
 export interface BoostingOptions {
@@ -87,6 +89,8 @@ export interface BoostingOptions {
   recencyHalfLifeDays?: number;
   /** Same meaning as TrainOptions.legacyLabelWeight in trainer.ts. */
   legacyLabelWeight?: number;
+  /** Same meaning as TrainOptions.runWeightPerDoubling in trainer.ts. */
+  runWeightPerDoubling?: number;
   /** The inputs the forest may split on - see TrainOptions.featureNames. Omitted = LEARNER_FEATURE_NAMES. */
   featureNames?: readonly string[];
 }
@@ -97,7 +101,7 @@ export interface BoostingOptions {
  * is the usual slow-and-many trade; min 30 rows a leaf keeps every leaf a statistic.
  */
 export const DEFAULT_BOOSTING_OPTIONS: Required<
-  Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "featureNames">
+  Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames">
 > = {
   maxTrees: 300,
   learningRate: 0.05,
@@ -208,7 +212,12 @@ interface GrowContext {
   edges: number[][];
   grad: Float64Array;
   hess: Float64Array;
-  opts: Required<Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "featureNames">>;
+  opts: Required<
+    Omit<
+      BoostingOptions,
+      "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames"
+    >
+  >;
   features: number[];
 }
 
@@ -313,23 +322,28 @@ function leafOf(tree: BoostedTree, x: ArrayLike<number>): number {
   return node;
 }
 
-/** Per-row weights (recency decay x legacy-label discount - see rowWeight in trainer.ts), mean 1. */
+/**
+ * Per-row weights (run weight x recency decay x legacy-label discount - see rowWeight in
+ * trainer.ts), mean 1.
+ */
 function recencyWeights(
   rows: BoostingRow[],
   halfLifeDays: number | undefined,
   legacyLabelWeight: number | undefined,
+  runWeightPerDoubling: number | undefined,
 ): Float64Array {
   const w = new Float64Array(rows.length).fill(1);
   if (rows.length === 0) return w;
   const decay = halfLifeDays !== undefined && halfLifeDays > 0;
-  if (!decay && legacyLabelWeight === undefined) return w;
   let newest = -Infinity;
   for (const r of rows) newest = Math.max(newest, r.anchorAt.getTime());
   const halfLifeMs = (halfLifeDays ?? 1) * 86_400_000;
   let sum = 0;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
-    let weight = decay ? 0.5 ** ((newest - row.anchorAt.getTime()) / halfLifeMs) : 1;
+    let weight =
+      runWeight(row, runWeightPerDoubling) *
+      (decay ? 0.5 ** ((newest - row.anchorAt.getTime()) / halfLifeMs) : 1);
     if (legacyLabelWeight !== undefined && !isCurrentLabelRule(row)) {
       weight *= legacyLabelWeight;
     }
@@ -353,16 +367,22 @@ async function boost(
   fit: BoostingRow[],
   valid: BoostingRow[],
   treeLimit: number,
-  opts: Required<Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "featureNames">>,
+  opts: Required<
+    Omit<
+      BoostingOptions,
+      "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames"
+    >
+  >,
   halfLifeDays: number | undefined,
   legacyLabelWeight: number | undefined,
+  runWeightPerDoubling: number | undefined,
   featureNames: string[],
 ): Promise<{ baseScore: number; trees: BoostedTree[]; bestTrees: number }> {
   const transform = CURRENT_FEATURE_TRANSFORM;
   const cols = featureColumns(fit, featureNames, transform);
   const binned = cols.map((c) => binColumn(c, opts.maxBins));
   const ys = Float64Array.from(fit, (r) => (r.labelValue > 0 ? 1 : 0));
-  const weights = recencyWeights(fit, halfLifeDays, legacyLabelWeight);
+  const weights = recencyWeights(fit, halfLifeDays, legacyLabelWeight, runWeightPerDoubling);
 
   let wSum = 0;
   let wPos = 0;
@@ -381,7 +401,7 @@ async function boost(
   const validCols = valid.length > 0 ? featureColumns(valid, featureNames, transform) : [];
   const validX = valid.map((_, i) => validCols.map((c) => c[i]!));
   const validY = valid.map((r) => (r.labelValue > 0 ? 1 : 0));
-  const validW = recencyWeights(valid, halfLifeDays, legacyLabelWeight);
+  const validW = recencyWeights(valid, halfLifeDays, legacyLabelWeight, runWeightPerDoubling);
   const validMargin = new Float64Array(valid.length).fill(baseScore);
 
   const rand = prng(opts.seed);
@@ -492,6 +512,7 @@ export async function trainBoostedCurator(
       opts,
       options.recencyHalfLifeDays,
       options.legacyLabelWeight,
+      options.runWeightPerDoubling,
       featureNames,
     );
     // At least a handful: a forest that "stops" at 1-2 trees is barely more than the base rate.
@@ -504,6 +525,7 @@ export async function trainBoostedCurator(
     opts,
     options.recencyHalfLifeDays,
     options.legacyLabelWeight,
+    options.runWeightPerDoubling,
     featureNames,
   );
   return {

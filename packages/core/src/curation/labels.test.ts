@@ -4,6 +4,9 @@ import {
   computeOutcomeLabels,
   initialOutcomeAggregates,
   LABEL_LOG2_CAP,
+  RUN_WEIGHT_PER_DOUBLING,
+  runDoublings,
+  runWeight,
   type OutcomeAggregates,
 } from "./labels.js";
 
@@ -288,5 +291,21 @@ describe("alert-price grading", () => {
     );
     expect(labels.disqualified).toBe(true);
     expect(labels.labelValue).toBe(0);
+  });
+});
+
+describe("runWeight", () => {
+  it("weighs a loss and a plain 2x as one row, and a winner more the further it ran", () => {
+    expect(runWeight({ labelValue: 0, runPeakMultiple: 50 })).toBe(1);
+    expect(runWeight({ labelValue: 1 })).toBe(1);
+    expect(runWeight({ labelValue: 2 })).toBeCloseTo(1 + RUN_WEIGHT_PER_DOUBLING, 9);
+    // The 24h run peak counts when it is further than the label window's peak.
+    expect(runWeight({ labelValue: 1, runPeakMultiple: 16 })).toBeCloseTo(1 + 3 * RUN_WEIGHT_PER_DOUBLING, 9);
+    expect(runWeight({ labelValue: 2, runPeakMultiple: 1.5 })).toBeCloseTo(1 + RUN_WEIGHT_PER_DOUBLING, 9);
+  });
+
+  it("caps the run at the label cap and turns off at 0", () => {
+    expect(runDoublings({ labelValue: 1, runPeakMultiple: 10_000 })).toBeCloseTo(LABEL_LOG2_CAP, 9);
+    expect(runWeight({ labelValue: 3, runPeakMultiple: 64 }, 0)).toBe(1);
   });
 });

@@ -9,7 +9,7 @@ import {
   type McapBand,
 } from "./curator.js";
 import type { IsotonicCalibration } from "./calibration.js";
-import { CANDIDATE_WATCH_WINDOW_MINUTES, GOAL_MULTIPLE, isCurrentLabelRule } from "./labels.js";
+import { CANDIDATE_WATCH_WINDOW_MINUTES, GOAL_MULTIPLE, isCurrentLabelRule, runWeight } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 import {
   BOOSTED_MODEL_KIND,
@@ -70,22 +70,28 @@ export interface TrainingRow {
   /**
    * For a clean winner whose extended watch has ended: its run peak, the highest price over the
    * whole watch as a multiple of the alert price - how far it went after the call. Omitted otherwise.
-   * Read by the runner-traits report (featureReport.ts), not by the fit.
+   * Read by the runner-traits report (featureReport.ts) and by the fit's run weight (runWeight).
    */
   runPeakMultiple?: number;
 }
 
 /**
  * One row's training weight: recency decay from the newest row (half-life in days, none when
- * omitted) times the legacy-label discount. Shared by both families so "how much a row counts"
- * means the same thing whichever one trains on it.
+ * omitted) times the legacy-label discount times the run weight. Shared by both families so "how
+ * much a row counts" means the same thing whichever one trains on it.
  */
 export function rowWeight(
-  row: { anchorAt: Date; labelRule?: number },
+  row: { anchorAt: Date; labelRule?: number; labelValue?: number; runPeakMultiple?: number },
   newestMs: number,
-  opts: { recencyHalfLifeDays?: number; legacyLabelWeight?: number },
+  opts: { recencyHalfLifeDays?: number; legacyLabelWeight?: number; runWeightPerDoubling?: number },
 ): number {
-  let w = 1;
+  let w =
+    row.labelValue === undefined
+      ? 1
+      : runWeight(
+          { labelValue: row.labelValue, runPeakMultiple: row.runPeakMultiple },
+          opts.runWeightPerDoubling,
+        );
   if (opts.recencyHalfLifeDays !== undefined && opts.recencyHalfLifeDays > 0) {
     w *= 0.5 ** ((newestMs - row.anchorAt.getTime()) / (opts.recencyHalfLifeDays * 86_400_000));
   }
@@ -205,6 +211,7 @@ async function trainSingleStage(
         ...opts.boosting,
         recencyHalfLifeDays: opts.recencyHalfLifeDays,
         legacyLabelWeight: opts.legacyLabelWeight,
+        runWeightPerDoubling: opts.runWeightPerDoubling,
         featureNames: opts.featureNames,
       })
     : trainCurator(rows, opts);
@@ -338,12 +345,18 @@ export interface TrainOptions {
    * different question than the one the feed is held to. Omitted = 1: legacy rows count in full.
    */
   legacyLabelWeight?: number;
+  /**
+   * Extra weight per doubling a winner ran past its 2x (runWeight). Omitted =
+   * RUN_WEIGHT_PER_DOUBLING (labels.ts); 0 weighs every winner the same.
+   */
+  runWeightPerDoubling?: number;
 }
 
 /**
- * Trains the model on labeled rows. Every row weighs the same: the output is used as a
- * probability (the cutoff is set by hit rate), and weighting winners by how far they ran - as
- * this once did, 1 + labelValue - inflates every predicted probability toward the big runs.
+ * Trains the model on labeled rows. Winners weigh more the further they ran (runWeight): the
+ * label is still "a clean 2x", but the fit leans toward what the big runners looked like. This
+ * once weighted 1 + labelValue and was dropped because it inflated every predicted probability;
+ * since cutoffs and the shown rate moved to rank units that drift no longer reaches the feed.
  * recencyHalfLifeDays (when set) decays each weight by the row's age: this market's meta
  * rotates in weeks, and an equal-weighted long window spends a third of its gradient learning a
  * regime that no longer exists.
@@ -491,6 +504,8 @@ export function calibrateThreshold(
 export interface ScoredOutcome {
   probability: number;
   labelValue: number;
+  /** The row's 24h run peak multiple, when known (TrainingRow.runPeakMultiple). */
+  runPeakMultiple?: number;
   /**
    * The row's token and moment. When both are present on every call and a cooldown is given,
    * calibration replays production's per-token alert cooldown (see calibrateThresholdForPrecision).
@@ -889,6 +904,8 @@ export interface WalkForwardOptions {
   twoStage?: boolean;
   /** Weight multiplier for legacy-rule rows in every fold's training - see TrainOptions. */
   legacyLabelWeight?: number;
+  /** Extra weight per doubling a winner ran past its 2x - see TrainOptions. */
+  runWeightPerDoubling?: number;
   /**
    * Fewest WINS a fold's decision rows must hold before the fold is judged: a hit rate over three
    * wins is noise. The fold count shrinks (down to one) until each fold has this many; a fold
@@ -1043,6 +1060,7 @@ export async function walkForwardEvaluate(
         boosting: opts.boosting,
         twoStage: opts.twoStage,
         legacyLabelWeight: opts.legacyLabelWeight,
+        runWeightPerDoubling: opts.runWeightPerDoubling,
       });
       // Without targets the model plays the pace cutoff, calibrated on the band-filtered train
       // slice - a threshold ranked against unemittable rows grades a model production never
@@ -1081,6 +1099,7 @@ export async function walkForwardEvaluate(
   const call = (row: TrainingRow, probability: number): ScoredOutcome => ({
     probability,
     labelValue: row.labelValue,
+    ...(row.runPeakMultiple !== undefined ? { runPeakMultiple: row.runPeakMultiple } : {}),
     tokenId: row.tokenId,
     anchorAt: row.anchorAt,
   });

@@ -75,6 +75,39 @@ export const DISQUALIFYING_DRAWDOWN_FRACTION = 0.5;
 const LABEL_CAP_MULTIPLE = 100;
 export const LABEL_LOG2_CAP = Math.log2(LABEL_CAP_MULTIPLE);
 
+/**
+ * Extra training weight a clean winner gets per doubling past its 2x (see runWeight). The goal is
+ * 2x and 4x, but these tokens are parabolic and the calls that matter most are the ones that keep
+ * running: at 0.5 a 4x winner counts 1.5 rows, a 16x 2.5 and a 100x (the cap) about 3.8.
+ */
+export const RUN_WEIGHT_PER_DOUBLING = 0.5;
+
+/**
+ * How far a row ran, in doublings: the larger of its label (the clean peak inside the label
+ * window) and its 24h run peak when that is known, capped like the label. 0 for a non-winner.
+ */
+export function runDoublings(row: { labelValue: number; runPeakMultiple?: number }): number {
+  if (!(row.labelValue > 0)) return 0;
+  const run =
+    row.runPeakMultiple !== undefined && row.runPeakMultiple > 1 ? Math.log2(row.runPeakMultiple) : 0;
+  return Math.min(Math.max(row.labelValue, run), LABEL_LOG2_CAP);
+}
+
+/**
+ * A row's weight for how far it ran: 1 for a loss or a plain 2x, plus perDoubling for every
+ * doubling past the 2x. This tilts what the model learns toward the traits of the big runners
+ * without changing what it predicts a probability OF (a clean 2x): cutoffs and the calibrated
+ * rate shown on cards are read in confidence-rank units (thresholdAtRank in trainer.ts, calibration.ts), so the
+ * upward drift this puts on raw probabilities doesn't move what the feed sends or what it claims.
+ */
+export function runWeight(
+  row: { labelValue: number; runPeakMultiple?: number },
+  perDoubling: number = RUN_WEIGHT_PER_DOUBLING,
+): number {
+  if (!(perDoubling > 0)) return 1;
+  return 1 + perDoubling * Math.max(0, runDoublings(row) - 1);
+}
+
 /** The running aggregates a CandidateOutcome row carries between price ticks. */
 export interface OutcomeAggregates {
   anchorAt: Date;

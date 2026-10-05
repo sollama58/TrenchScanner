@@ -33,6 +33,7 @@ import type { Challenger, Replacement } from "./evolution.js";
 import { quantileTable, trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
 import { trainBlendCurator, type BlendCuratorParams } from "./blend.js";
 import { buildCalibration } from "./calibration.js";
+import { runDoublings } from "./labels.js";
 import {
   featureHealthReport,
   runnerTraitsReport,
@@ -69,6 +70,8 @@ export interface CuratorTrainingConfig {
   learners: readonly CuratorLearner[];
   /** Weight multiplier for legacy-rule rows in training (env CURATOR_LEGACY_LABEL_WEIGHT). */
   legacyLabelWeight?: number;
+  /** Extra training weight per doubling a winner ran past 2x (env CURATOR_RUN_WEIGHT_PER_DOUBLING). */
+  runWeightPerDoubling?: number;
   /** Fewest wins a judged exam fold must hold (env CURATOR_EXAM_MIN_FOLD_WINS). */
   minTestWins?: number;
   /**
@@ -208,6 +211,7 @@ function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: num
     if (c.labelValue > 0) record.wins += 1;
     if (c.labelValue >= Math.log2(4)) record.goals += 1;
     record.sumLabel += c.labelValue;
+    record.sumRun = (record.sumRun ?? 0) + runDoublings(c);
   }
   return record;
 }
@@ -292,6 +296,7 @@ async function examineRecipe(
     boosting: recipe.boosting,
     twoStage: recipe.twoStage,
     legacyLabelWeight: cfg.legacyLabelWeight,
+    runWeightPerDoubling: cfg.runWeightPerDoubling,
     minTestWins: cfg.minTestWins,
   });
   // Calibrated in RANK units: each fold model and the shipped model put probabilities on their
@@ -311,6 +316,7 @@ async function examineRecipe(
     boosting: recipe.boosting,
     twoStage: recipe.twoStage,
     legacyLabelWeight: cfg.legacyLabelWeight,
+    runWeightPerDoubling: cfg.runWeightPerDoubling,
   });
   // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
   // at its best-effort cutoff (see chooseCutoff) and still competes on its exam. Only an exam
