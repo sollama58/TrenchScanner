@@ -51,7 +51,7 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
   }
 
   /** `graded` graded alerts for a filter, `wins` of them clean 2x (half of those also 4x). */
-  async function grade(filterId: string, graded: number, wins: number, ageMs = 60_000) {
+  async function grade(filterId: string, graded: number, wins: number, ageMs = 60_000, runPct = 100) {
     // The filter was created a moment ago; its record has to reach back over these alerts.
     await prisma.userFilter.update({
       where: { id: filterId },
@@ -68,6 +68,9 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
         hit2xIn1h: i < wins,
         hit4xIn1h: i < wins / 2,
         disqualified: false,
+        peak1hReturnPct: i < wins ? 100 : 10,
+        maxDrawdown1hPct: -60,
+        peak24hReturnPct: i < wins ? runPct : 10,
       })),
     });
   }
@@ -115,6 +118,24 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     expect(raw).not.toContain(ownerId);
     // The owner sees their own entries flagged.
     expect((await board(ownerCookie)).ranked.every((e) => e.mine)).toBe(true);
+  });
+
+  it("ranks bigger runs higher when the 2x and 4x records are the same", async () => {
+    const mk = async (name: string) =>
+      (
+        (
+          await call(ownerCookie, "POST", "/filters", { name, isActive: false, shareOnLeaderboard: true })
+        ).json() as { id: string }
+      ).id;
+    const runner = await mk("runner");
+    const flat = await mk("flat");
+    await grade(runner, 40, 10, 60_000, 4900); // winners ran to 50x
+    await grade(flat, 40, 10, 60_000, 100); // winners stopped at 2x
+    const b = await board();
+    const at = (id: string) => b.ranked.find((e) => e.id === id)!;
+    expect(at(runner).score).toBeGreaterThan(at(flat).score);
+    expect(b.ranked.findIndex((e) => e.id === runner)).toBeLessThan(b.ranked.findIndex((e) => e.id === flat));
+    await prisma.userFilter.deleteMany({ where: { id: { in: [runner, flat] } } });
   });
 
   it("starts a filter's record over when its criteria change, but not on a rename", async () => {

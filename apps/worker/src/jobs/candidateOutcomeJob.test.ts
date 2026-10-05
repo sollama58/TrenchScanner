@@ -385,6 +385,17 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(graded.peak1hReturnPct).toBeCloseTo(340);
     const untouched = await prisma.match.findUniqueOrThrow({ where: { id: other.id } });
     expect(untouched.hit2xIn1h).toBeNull();
+    // A clean winner stays on the 24h watch: its run peak lands on the alert when that ends.
+    expect(graded.peak24hReturnPct).toBeNull();
+    const dayAgo = new Date(Date.now() - 25 * 60 * MINUTE);
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { anchorAt: dayAgo, nextCheckAt: new Date(Date.now() - MINUTE) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 9 }), env);
+    const retired = await prisma.match.findUniqueOrThrow({ where: { id: linked.id } });
+    expect(retired.peak24hReturnPct).toBeCloseTo(800);
+    expect((await prisma.match.findUniqueOrThrow({ where: { id: other.id } })).peak24hReturnPct).toBeNull();
     await prisma.user.delete({ where: { id: user.id } });
   });
 

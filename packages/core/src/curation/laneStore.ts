@@ -50,7 +50,7 @@ interface LiveRow {
  * inside the label window counts its run peak if that reached 2x (a late runner a holder still
  * had); anything else is 0. The run peak is the 24h peak once written, the window peak before.
  */
-const RUN_DOUBLINGS = Prisma.sql`
+export const RUN_DOUBLINGS = Prisma.sql`
   CASE
     WHEN hit2x AND NOT dq THEN
       LEAST(GREATEST(COALESCE(label, 1), log(2::numeric, GREATEST(1 + COALESCE(run, peak, 0) / 100, 1)::numeric)::float8), ${LABEL_LOG2_CAP}::float8)

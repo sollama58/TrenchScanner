@@ -6,14 +6,16 @@ import {
   scoreBand,
   provenRate,
   TRACK_RECORD_DAYS,
+  RUN_DOUBLINGS,
+  RUN_SIZE_TARGET_DOUBLINGS,
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
 
 /**
  * The public filter leaderboard: saved filters whose owners opted in (UserFilter.shareOnLeaderboard),
  * ranked by the same 0-100 score as the model contest (curation/leaderboard.ts: how far the
- * filter's PROVEN 2x and 4x rates reach toward the 75% / 50% targets), on its alerts' own
- * verdicts - 2x within 15 minutes of the alert price, 4x within 30, a 50% drop first is a loss.
+ * filter's PROVEN 2x and 4x rates reach toward the 75% / 50% targets, plus how far its calls ran
+ * over their 24h watch, its run size), on its alerts' own verdicts - 2x within 15 minutes of the alert price, 4x within 30, a 50% drop first is a loss.
  *
  * A filter's record counts only alerts raised in the last TRACK_RECORD_DAYS AND since its criteria
  * last changed (criteriaChangedAt), so the record next to a filter is always the record of the
@@ -83,6 +85,10 @@ export interface FilterLeaderboardEntry {
   goalRatePct: number | null;
   proven2xPct: number | null;
   proven4xPct: number | null;
+  /** Average run size per graded alert, in doublings (the model score's run-size measure). */
+  avgRunDoublings: number | null;
+  /** The run size the record proves (with the score's phantom misses), in doublings. */
+  provenRunDoublings: number | null;
   /** Where the record starts: the later of the window start and the last criteria change. */
   recordSince: string;
   /** Whether it is its owner's active filter now (only an active filter raises alerts). */
@@ -96,7 +102,7 @@ export interface FilterLeaderboard {
   generatedAt: string;
   windowDays: number;
   minGradedToRank: number;
-  targets: { hitRate2xPct: number; hitRate4xPct: number };
+  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number };
   ranked: FilterLeaderboardEntry[];
   warmingUp: FilterLeaderboardEntry[];
   /** Every shared filter, ranked or not (the lists above are capped). */
@@ -110,6 +116,7 @@ interface CachedBoard extends Omit<FilterLeaderboard, "ranked" | "warmingUp"> {
 }
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
+const round2 = (x: number) => Math.round(x * 100) / 100;
 
 type Row = {
   id: string;
@@ -120,6 +127,7 @@ type Row = {
   graded: bigint;
   won2x: bigint;
   won4x: bigint;
+  sum_run: number | null;
 } & Record<FilterCriteriaKey, unknown>;
 
 export async function buildFilterLeaderboard(env: Env, now = new Date()): Promise<CachedBoard> {
@@ -132,21 +140,40 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
   };
   // One pass over the shared filters' graded alerts, through Match's filterId index. Only graded
   // rows count (hit2xIn1h set); the verdicts are the ones copied from each alert's own anchor.
+  // Run size is the model score's own measure (RUN_DOUBLINGS, curation/laneStore.ts), over the
+  // same columns: the run peak copied onto the alert once its anchor retires, else the anchor's
+  // live 24h peak while it is still being watched.
   const rows = await prisma.$queryRaw<Row[]>`
+    WITH calls AS (
+      SELECT m."filterId",
+             m."hit2xIn1h" AS hit2x,
+             m."hit4xIn1h" AS hit4x,
+             COALESCE(m."disqualified", false) AS dq,
+             co."labelValue" AS label,
+             m."peak1hReturnPct" AS peak,
+             COALESCE(m."peak24hReturnPct", co."peak24hReturnPct",
+                      (co."peak24hPriceUsd" / NULLIF(co."anchorPriceUsd", 0) - 1) * 100) AS run,
+             m."maxDrawdown1hPct" AS dd
+      FROM "UserFilter" sf
+      JOIN "Match" m
+        ON m."filterId" = sf."id"
+       AND m."hit2xIn1h" IS NOT NULL
+       AND m."matchedAt" >= GREATEST(sf."criteriaChangedAt", ${since})
+      LEFT JOIN "CandidateOutcome" co ON co."id" = m."candidateOutcomeId"
+      WHERE sf."shareOnLeaderboard"
+    )
     SELECT f."id", f."userId", f."name", f."isActive", f."criteriaChangedAt",
            f."mcapMin", f."mcapMax", f."minVolumeMcapRatio", f."minHolderGrowthPct",
            f."maxTop10HolderPct", f."maxDevWalletPct", f."maxRiskScore", f."excludeCriticalRiskFlags",
            f."minTokenAgeMinutes", f."maxTokenAgeMinutes", f."narrativeKeywords", f."minScore",
            f."maxFreshTop10WalletPct", f."maxEmptyTop10WalletPct", f."minFirstBuyersHolding",
            f."maxFirstBuyersHolding",
-           count(m."id") AS graded,
-           count(m."id") FILTER (WHERE m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)) AS won2x,
-           count(m."id") FILTER (WHERE m."hit4xIn1h") AS won4x
+           count(c.hit2x) AS graded,
+           count(*) FILTER (WHERE c.hit2x AND NOT c.dq) AS won2x,
+           count(*) FILTER (WHERE c.hit4x AND NOT c.dq) AS won4x,
+           COALESCE(sum(${RUN_DOUBLINGS}) FILTER (WHERE c.hit2x IS NOT NULL), 0)::float8 AS sum_run
     FROM "UserFilter" f
-    LEFT JOIN "Match" m
-      ON m."filterId" = f."id"
-     AND m."hit2xIn1h" IS NOT NULL
-     AND m."matchedAt" >= GREATEST(f."criteriaChangedAt", ${since})
+    LEFT JOIN calls c ON c."filterId" = f."id"
     WHERE f."shareOnLeaderboard"
     GROUP BY f."id"`;
 
@@ -154,7 +181,8 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     const graded = Number(r.graded);
     const won2x = Number(r.won2x);
     const won4x = Number(r.won4x);
-    const record = { calls: graded, graded, wins: won2x, goals: won4x, sumLabel: 0 };
+    const sumRun = Number(r.sum_run ?? 0);
+    const record = { calls: graded, graded, wins: won2x, goals: won4x, sumLabel: 0, sumRun };
     const score = recordScore(record, targets);
     const recordSince = r.criteriaChangedAt > since ? r.criteriaChangedAt : since;
     return {
@@ -172,6 +200,8 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       goalRatePct: graded > 0 ? round1((won4x / graded) * 100) : null,
       proven2xPct: graded > 0 ? round1(provenRate(won2x, graded) * 100) : null,
       proven4xPct: graded > 0 ? round1(provenRate(won4x, graded) * 100) : null,
+      avgRunDoublings: graded > 0 ? round2(sumRun / graded) : null,
+      provenRunDoublings: graded > 0 ? round2(provenRate(sumRun, graded)) : null,
       recordSince: recordSince.toISOString(),
       isActive: r.isActive,
       criteria: pickCriteria(r),
@@ -196,6 +226,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     targets: {
       hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
       hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
+      runDoublings: RUN_SIZE_TARGET_DOUBLINGS,
     },
     ranked,
     warmingUp,

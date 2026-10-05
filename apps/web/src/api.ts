@@ -579,6 +579,9 @@ export interface FilterBoardEntry {
   goalRatePct: number | null;
   proven2xPct: number | null;
   proven4xPct: number | null;
+  /** Average run size per graded alert, in doublings: 2 = calls ran to 4x on average. */
+  avgRunDoublings: number | null;
+  provenRunDoublings: number | null;
   recordSince: string;
   isActive: boolean;
   criteria: FilterCriteria;
@@ -589,7 +592,7 @@ export interface FilterBoard {
   generatedAt: string;
   windowDays: number;
   minGradedToRank: number;
-  targets: { hitRate2xPct: number; hitRate4xPct: number };
+  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number };
   ranked: FilterBoardEntry[];
   warmingUp: FilterBoardEntry[];
   sharedCount: number;
