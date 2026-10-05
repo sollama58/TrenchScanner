@@ -98,10 +98,6 @@ export async function resolveWalletHoldings(
   const mintsOfInterest = new Set(groups.map((g) => g.mintAddress));
   if (unique.length === 0) return result;
 
-  // An endpoint that doesn't serve DAS can never answer this. Bail before touching the database:
-  // every group would be skipped anyway, and the signal simply stays unknown.
-  if (!helius.holdingsLookupAvailable) return result;
-
   const freshCutoff = new Date(now - env.WALLET_HOLDINGS_CACHE_TTL_MINUTES * 60_000);
   const cached = await prisma.walletHoldingsCache.findMany({
     where: { address: { in: unique }, checkedAt: { gt: freshCutoff } },
@@ -124,7 +120,12 @@ export async function resolveWalletHoldings(
     result.set(row.address, { otherHoldingsUsd: row.otherHoldingsUsd, perMintUsd });
   }
 
-  const budget = opts.maxNewLookups ?? Number.POSITIVE_INFINITY;
+  // An endpoint that doesn't serve DAS (or one stood down after an outage) can't answer anything
+  // new, but what the cache already holds still answers: skipping lookups is the whole response.
+  // Checked after the cache read, not before it - bailing first made every token's empty-wallet
+  // share unknown for the whole stand-down, cached wallets included, and with
+  // CURATED_REQUIRE_WALLET_CHECKS on that held up every curated decision for ten minutes.
+  const budget = helius.holdingsLookupAvailable ? (opts.maxNewLookups ?? Number.POSITIVE_INFINITY) : 0;
   const toFetch: string[] = [];
   const queued = new Set<string>();
   let skippedGroups = 0;

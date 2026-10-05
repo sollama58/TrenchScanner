@@ -107,8 +107,10 @@ describe("PumpPortalStream trade flow", () => {
       at,
     );
     expect(sent).toEqual([{ method: "subscribeTokenTrade", keys: [MINT] }]);
-    // Before the refusal, a launch watched with no trades reads as zero buyers.
-    expect(stream.tradeFlow(MINT)!.uniqueBuyers5m).toBe(0);
+    // Before any trade has arrived, a launch watched with no trades is not "zero buyers": the
+    // connection may not be sending trades at all, so the counters stay unknown.
+    expect(stream.tradeFlow(MINT)!.uniqueBuyers5m).toBeNull();
+    expect(stream.tradeFlow(MINT)!.devInitialBuySol).toBe(1.2);
 
     stream.handleMessage(
       JSON.stringify({
@@ -130,6 +132,32 @@ describe("PumpPortalStream trade flow", () => {
     // The subscription ack is not a refusal.
     stream.handleMessage(JSON.stringify({ message: "Successfully subscribed to token creation events." }));
     expect(stream.drain().map((e) => e.mintAddress)).toEqual([MINT, OTHER]);
+
+    // A reconnect gets one more round of subscriptions (the key may have been funded since) but
+    // the refusal stands until a trade actually arrives - the book's empty windows are not
+    // reported as zero buyers in between.
+    // (What the open handler does: every tracked mint back on the list, one retry allowed.)
+    (stream as unknown as { retrySubscriptionsOnce: boolean }).retrySubscriptionsOnce = true;
+    for (const mint of stream.book!.trackedMints()) {
+      (stream as unknown as { pendingSubscribe: Set<string> }).pendingSubscribe.add(mint);
+    }
+    stream.flushSubscriptions();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual({ method: "subscribeTokenTrade", keys: [MINT, OTHER] });
+    expect(stream.tradeFlowRefused).toBe(true);
+    expect(stream.tradeFlow(MINT)!.uniqueBuyers5m).toBeNull();
+    // A second flush without trades sends nothing more.
+    stream.watch([MINT]);
+    stream.flushSubscriptions();
+    expect(sent).toHaveLength(2);
+    // A delivered trade is the confirmation: the counters come back.
+    stream.handleMessage(
+      JSON.stringify({ mint: MINT, txType: "buy", traderPublicKey: "w1", solAmount: 1, tokenAmount: 3e7 }),
+      at + 1000,
+    );
+    expect(stream.tradeFlowRefused).toBe(false);
+    expect(stream.tradeFlow(MINT)!.uniqueBuyers5m).toBe(0);
+    expect(stream.tradeFlow(MINT)!.earlyBuyerCount).toBe(1);
   });
 
   it("ignores trades for mints it isn't following, and stays out of the book when flow is off", () => {

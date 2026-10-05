@@ -190,6 +190,49 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
     expect(found?.status === "found" && found.buyers.map((b) => b.wallet)).toEqual(["a", "b"]);
   });
 
+  it("calls a history that doesn't start at a launch complete with no buyers, so it isn't re-read", async () => {
+    // The first transaction is fixed, so a history that can't be parsed never will be - and
+    // retrying it every five minutes cost 10-30 credits a time for the same answer.
+    // Someone already held the mint before its first recorded transaction: not a launch.
+    respond([{ data: [tx([["someone", "someoneAta", 5, 7]])] }]);
+    expect((await client().getLaunchBuyersBatch([MINT], 25)).get(MINT)).toEqual({
+      status: "found",
+      complete: true,
+      buyers: [],
+      launchAt: null,
+    });
+  });
+
+  it("keeps the pages already read when a later page fails", async () => {
+    const filler = Array.from({ length: 96 }, () => tx([[DEV, "devAta", 200, 200]]));
+    let call = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const batch = JSON.parse(String(init?.body)) as { id: string }[];
+      call += 1;
+      const body =
+        call === 1
+          ? batch.map((c) => ({
+              jsonrpc: "2.0",
+              id: c.id,
+              result: {
+                data: [create, buy("a", 1), buy("b", 1), buy("c", 1), ...filler],
+                paginationToken: "p2",
+              },
+            }))
+          : batch.map((c) => ({ jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } }));
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const r = (await client().getLaunchBuyersBatch([MINT], 25)).get(MINT)!;
+    expect(r.status).toBe("found");
+    if (r.status === "found") {
+      expect(r.complete).toBe(false);
+      expect(r.buyers.length).toBe(3);
+    }
+  });
+
   it("reports a launch it can't read as failed, and a non-Helius endpoint as unsupported", async () => {
     respond([{ data: [] }]);
     expect((await client().getLaunchBuyersBatch([MINT], 25)).get(MINT)).toEqual({ status: "failed" });

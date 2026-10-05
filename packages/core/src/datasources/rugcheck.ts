@@ -165,6 +165,8 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     // Feeds the worker's wallet-freshness check (apps/worker/src/jobs/walletFreshness.ts) - a
     // wallet address per top-10 holder, already pool-excluded above. Falls back to `address` for
     // a holder entry that has no separate `owner` (RugCheck's shape allows both).
-    top10HolderAddresses: top10Holders.map((h) => h.owner ?? h.address),
+    // Deduplicated: RugCheck lists token accounts, and one owner with two accounts in the top ten
+    // would otherwise be counted twice by both wallet checks.
+    top10HolderAddresses: [...new Set(top10Holders.map((h) => h.owner ?? h.address))],
   };
 }

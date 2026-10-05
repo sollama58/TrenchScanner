@@ -97,9 +97,12 @@ describe.skipIf(!dbAvailable)("resolveEarliestActivity", () => {
     });
 
     // A page full of transactions all from the last hour says the wallet is busy, not that it is
-    // new - so it records as unknown-but-answered (null), which counts as not fresh.
+    // old - a day-old sniper bot looks exactly like this - so it stays unknown (absent) and is
+    // retried later, rather than being recorded as "not fresh".
     const result = await resolveEarliestActivity([[address]], client);
-    expect(result.get(address)).toBeNull();
+    expect(result.has(address)).toBe(false);
+    const cached = await prisma.walletActivityCache.findUnique({ where: { address } });
+    expect(cached).toBeNull();
   });
 
   it("backs a failed wallet off instead of retrying it every cycle", async () => {

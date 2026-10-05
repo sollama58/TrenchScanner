@@ -151,8 +151,12 @@ export async function resolveEarliestActivity(
         result.set(address, outcome.boundAt);
         toCache.push({ address, earliestActivityAt: outcome.boundAt });
       } else {
-        result.set(address, null);
-        toCache.push({ address, earliestActivityAt: null });
+        // Only the signatures-only path answers this way (the Helius path settles it exactly). A
+        // busy wallet may well have been funded this very day - a sniper bot that has fired a
+        // few hundred transactions since is exactly the wallet this check exists for - and this
+        // used to be written to the cache as "not fresh" for good. Unknown instead, retried later.
+        failureBackoffUntil.set(address, now + FAILURE_BACKOFF_MINUTES * 60_000);
+        failedCount += 1;
       }
     } else if (outcome.status === "indeterminate") {
       result.set(address, null);

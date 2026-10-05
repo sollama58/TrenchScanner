@@ -228,7 +228,12 @@ export function pickCanonicalPair<P extends Pick<DexScreenerPair, "dexId" | "liq
   if (pools.some((p) => p.dexId === "pumpswap")) return deepest(pools);
   const curve = pairs.find((p) => p.dexId === "pumpfun" && (p.volume?.h1 ?? 0) > 0);
   if (curve) return curve;
-  return deepest(pools.length > 0 ? pools : pairs);
+  if (pools.length > 0) return deepest(pools);
+  // No real pool and a quiet curve: the curve is still where the token lives. Falling through to
+  // the deepest pair of any size let a few dollars in a side pool outrank it - pricing the token
+  // off that pool and reading it as graduated.
+  const quietCurve = pairs.find((p) => p.dexId === "pumpfun");
+  return quietCurve ?? deepest(pairs);
 }
 
 function toCandidateToken(pair: DexScreenerPair): CandidateToken {

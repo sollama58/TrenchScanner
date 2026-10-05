@@ -164,7 +164,9 @@ export async function createMatchesForTargets(opts: {
     // Prisma's default is to give up after 2s waiting for a connection. This runs while the scan's
     // candidate fan-out holds most of the worker's pool, and a timeout here drops the alert until
     // the next cycle - the one write in the worker that is worth waiting for.
-    { maxWait: 10_000 },
+    // ...and, once it has a connection, long enough to finish: the default 5s body timeout
+    // aborted the whole alert when the inserts queued behind the candidate fan-out.
+    { maxWait: 10_000, timeout: 15_000 },
   );
   if (created.length === 0) return 0;
 

@@ -150,9 +150,14 @@ export async function runFastMatchCycle(
   // which is a large share of what pushed the worker past its memory limit.
   // From the scan cycle's own in-memory record (vettedTokens.ts); the database only until the
   // first cycle after a restart has filled it.
+  // The cap is applied to PASSING verdicts. Most verdicts recorded in a cycle are failing ones
+  // (hundreds in band, a few dozen passing), and capping before the screen let them push the
+  // older passing tokens past the cap - those were then not re-priced at all, so the fast lane
+  // quietly fell back to the scan's cadence for whichever tokens a cycle had reached last.
   const recent =
-    recentScanVerdicts(vettedSince, MAX_TRACKED) ?? (await newestScanVerdictsFromDb(vettedSince, env));
-  const vetted = recent.filter((v) => v.snapshot.rugScreenPassed);
+    recentScanVerdicts(vettedSince, Number.POSITIVE_INFINITY) ??
+    (await newestScanVerdictsFromDb(vettedSince, env));
+  const vetted = recent.filter((v) => v.snapshot.rugScreenPassed).slice(0, MAX_TRACKED);
   lap("select");
   if (vetted.length === 0) return { stagesMs };
 
@@ -242,13 +247,14 @@ async function newestScanVerdictsFromDb(since: Date, env: Env): Promise<VettedEn
     SELECT s.id
     FROM "Token" t
     CROSS JOIN LATERAL (
-      SELECT id, "takenAt"
+      SELECT id, "takenAt", "rugScreenPassed"
       FROM "TokenSnapshot"
       WHERE "tokenId" = t.id AND "takenAt" > ${since} AND source = 'scan'
       ORDER BY "takenAt" DESC
       LIMIT 1
     ) s
-    WHERE t."firstSeenAt" > ${watchlistSince} OR t."lastViewedAt" > ${viewedSince}
+    WHERE (t."firstSeenAt" > ${watchlistSince} OR t."lastViewedAt" > ${viewedSince})
+      AND s."rugScreenPassed"
     ORDER BY s."takenAt" DESC
     LIMIT ${MAX_TRACKED}`;
   if (newestIds.length === 0) return [];

@@ -9,6 +9,7 @@ import {
   simulateExitPlan,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
+  WIN_WINDOW_MINUTES,
   CURRENT_LABEL_RULE,
   type Env,
   type DexScreenerClient,
@@ -225,6 +226,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
 
       const elapsedMs = tickAt.getTime() - row.anchorAt.getTime();
       const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+      const winWindowMs = WIN_WINDOW_MINUTES * 60_000;
       const extendedWindowMs = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
       const peak24hReturnPct = () =>
         ((merged.peak24hPriceUsd - merged.anchorPriceUsd) / merged.anchorPriceUsd) * 100;
@@ -236,13 +238,14 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
       let simReturnPct: number | null = null;
       let finalPeak24hPct: number | null = null;
       let runPeakMinutes: number | null = null;
-      if (row.finalizedAt === null && elapsedMs >= labelWindowMs && merged.entryAt === null) {
-        // The window closed without a single price at or past the entry delay: the worker was
-        // down, or DexScreener had nothing for the mint through the win window. There is no fill to grade from,
-        // so the row is retired ungraded - finalizedAt stays null, which keeps it out of training,
-        // the AI's graded record and every hit rate, and no verdict is copied to an alert. Graded,
-        // it read as a clean loss off the scan price with nothing observed, and every alert of an
-        // outage became a public loss.
+      if (row.finalizedAt === null && elapsedMs > winWindowMs && merged.entryAt === null) {
+        // The win window closed without a single price at or past the entry delay: the worker was
+        // down, or DexScreener had nothing for the mint through it. A fill can no longer be taken
+        // (applyPriceTick refuses one past the win window), so there is nothing to grade from and
+        // the row is retired ungraded now rather than price-checked for another 15 minutes -
+        // finalizedAt stays null, which keeps it out of training, the AI's graded record and every
+        // hit rate, and no verdict is copied to an alert. Graded, it read as a clean loss off the
+        // scan price with nothing observed, and every alert of an outage became a public loss.
         data.finalized24hAt = tickAt;
         unobserved += 1;
       } else if (row.finalizedAt === null && elapsedMs >= labelWindowMs) {
