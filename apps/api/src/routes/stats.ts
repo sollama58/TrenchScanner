@@ -1,7 +1,13 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { prisma, createLogger, HEURISTIC_CURATOR_SOURCE, type Env } from "@trenchscanner/core";
+import {
+  prisma,
+  createLogger,
+  describeExitPlan,
+  HEURISTIC_CURATOR_SOURCE,
+  type Env,
+} from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 
@@ -38,12 +44,22 @@ export interface GradedCounts {
   won4x: number;
   /** Doubled only after first falling through the stop - counted as losses. */
   doubledAfterStop: number;
+  /**
+   * Graded calls with a simulated return under the fixed exit plan (curation/profitSim.ts), and
+   * the sum of those returns in percent of a stake. Absent where the source has no such number.
+   */
+  simCalls?: number;
+  sumSimReturnPct?: number;
 }
 
 export interface GradedRates extends GradedCounts {
   pending: number;
   hitRate2xPct: number | null;
   hitRate4xPct: number | null;
+  /** Average simulated return per graded call under the exit plan, in percent; null with none. */
+  avgSimReturnPct: number | null;
+  /** Total simulated return, in percent of one stake (one stake per call); null with none. */
+  totalSimReturnPct: number | null;
   /**
    * Held against CURATED_TARGET_WIN_RATE_PCT / CURATED_TARGET_GOAL_RATE_PCT. "insufficient-data"
    * below MIN_GRADED_FOR_VERDICT graded calls - a 3-for-4 start says nothing yet.
@@ -75,7 +91,17 @@ export function withRates(
         ? "meets-targets"
         : "below-targets";
   }
-  return { ...c, pending: c.calls - c.graded, hitRate2xPct, hitRate4xPct, verdict };
+  const simCalls = c.simCalls ?? 0;
+  const simSum = c.sumSimReturnPct ?? 0;
+  return {
+    ...c,
+    pending: c.calls - c.graded,
+    hitRate2xPct,
+    hitRate4xPct,
+    avgSimReturnPct: simCalls > 0 ? Math.round((simSum / simCalls) * 10) / 10 : null,
+    totalSimReturnPct: simCalls > 0 ? Math.round(simSum * 10) / 10 : null,
+    verdict,
+  };
 }
 
 /** Sums groups into one - for the totals line above a breakdown. */
@@ -87,8 +113,10 @@ export function sumCounts(rows: GradedCounts[]): GradedCounts {
       won2x: acc.won2x + r.won2x,
       won4x: acc.won4x + r.won4x,
       doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
+      simCalls: (acc.simCalls ?? 0) + (r.simCalls ?? 0),
+      sumSimReturnPct: (acc.sumSimReturnPct ?? 0) + (r.sumSimReturnPct ?? 0),
     }),
-    { calls: 0, graded: 0, won2x: 0, won4x: 0, doubledAfterStop: 0 },
+    { calls: 0, graded: 0, won2x: 0, won4x: 0, doubledAfterStop: 0, simCalls: 0, sumSimReturnPct: 0 },
   );
 }
 
@@ -106,7 +134,16 @@ export function bearerMatches(header: string | undefined, token: string): boolea
 }
 
 /** Postgres returns count(*) as bigint; every column of a counts row comes back through here. */
-type RawCounts = { calls: bigint; graded: bigint; won2x: bigint; won4x: bigint; doubled_after_stop: bigint };
+type RawCounts = {
+  calls: bigint;
+  graded: bigint;
+  won2x: bigint;
+  won4x: bigint;
+  doubled_after_stop: bigint;
+  /** Only on the queries that read a simulated return. */
+  sim_calls?: bigint;
+  sim_sum?: number | null;
+};
 
 function toCounts(r: RawCounts): GradedCounts {
   return {
@@ -115,6 +152,9 @@ function toCounts(r: RawCounts): GradedCounts {
     won2x: Number(r.won2x),
     won4x: Number(r.won4x),
     doubledAfterStop: Number(r.doubled_after_stop),
+    ...(r.sim_calls !== undefined
+      ? { simCalls: Number(r.sim_calls), sumSimReturnPct: Number(r.sim_sum ?? 0) }
+      : {}),
   };
 }
 
@@ -269,7 +309,11 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                               AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
-           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop
+           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
+           count(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
+           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
@@ -284,7 +328,11 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                               AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
-           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop
+           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
+           count(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
+           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
@@ -300,7 +348,11 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                               AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
-           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop
+           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
+           count(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
+           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
@@ -321,7 +373,9 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
-           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
+           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop,
+           count(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS sim_calls,
+           sum(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
     FROM "CuratedShadowEmission" s
     LEFT JOIN "CandidateOutcome" co ON co."id" = s."candidateOutcomeId"
     WHERE s."createdAt" >= ${since} AND s."createdAt" < ${until}
@@ -363,7 +417,9 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
-           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
+           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop,
+           count(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS sim_calls,
+           sum(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
     FROM "AiReview" r
     LEFT JOIN "CandidateOutcome" co ON co."id" = r."candidateOutcomeId"
     WHERE r."createdAt" >= ${since} AND r."createdAt" < ${until}
@@ -517,6 +573,7 @@ export async function buildHitRateReport(
       goal: "4x within 1 hour of the fill, same stop",
       fill: `first price at least ${env.CANDIDATE_ENTRY_DELAY_SECONDS}s after the alert, plus slippage`,
       note: "Rows anchored before the fill rule shipped were graded from the scan price.",
+      exitPlan: describeExitPlan(),
     },
     targets,
     minGradedForVerdict: MIN_GRADED_FOR_VERDICT,

@@ -39,6 +39,8 @@ interface LiveRow {
   wins: bigint;
   goals: bigint;
   sum_label: number | null;
+  sim_calls: bigint;
+  sum_sim: number | null;
 }
 
 /**
@@ -54,7 +56,8 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
              COALESCE(a."disqualified", co."disqualified", false) AS dq,
              co."labelValue" AS label,
-             a."peak1hReturnPct" AS peak
+             a."peak1hReturnPct" AS peak,
+             COALESCE(a."simReturnPct", co."simReturnPct") AS sim
       FROM "CuratedAlert" a
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."model" = ${model} AND a."createdAt" >= ${since}
@@ -65,7 +68,9 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
            count(*) FILTER (WHERE hit4x AND NOT dq) AS goals,
            sum(CASE WHEN hit2x AND NOT dq THEN
                  COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
-               ELSE 0 END)::float8 AS sum_label
+               ELSE 0 END)::float8 AS sum_label,
+           count(sim) FILTER (WHERE hit2x IS NOT NULL) AS sim_calls,
+           sum(sim) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_sim
     FROM calls`;
   return {
     calls: Number(r?.calls ?? 0),
@@ -73,6 +78,8 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
     wins: Number(r?.wins ?? 0),
     goals: Number(r?.goals ?? 0),
     sumLabel: r?.sum_label ?? 0,
+    simCalls: Number(r?.sim_calls ?? 0),
+    sumSimReturnPct: r?.sum_sim ?? 0,
   };
 }
 
@@ -113,7 +120,8 @@ export async function liveCallRecords(
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
              COALESCE(a."disqualified", co."disqualified", false) AS dq,
              co."labelValue" AS label,
-             a."peak1hReturnPct" AS peak
+             a."peak1hReturnPct" AS peak,
+             COALESCE(a."simReturnPct", co."simReturnPct") AS sim
       FROM "CuratedAlert" a
       -- A seat's record is its current lane's calls only: after a takeover the emitter's cached
       -- roster can still call a few minutes under the retired lane's name and recipe. ('-' = a seat
@@ -131,7 +139,9 @@ export async function liveCallRecords(
            count(*) FILTER (WHERE hit4x AND NOT dq) AS goals,
            sum(CASE WHEN hit2x AND NOT dq THEN
                  COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
-               ELSE 0 END)::float8 AS sum_label
+               ELSE 0 END)::float8 AS sum_label,
+           count(sim) FILTER (WHERE hit2x IS NOT NULL) AS sim_calls,
+           sum(sim) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_sim
     FROM calls
     GROUP BY model`;
   const byModel = new Map(rows.map((r) => [r.model, r]));
@@ -143,6 +153,8 @@ export async function liveCallRecords(
       wins: Number(r?.wins ?? 0),
       goals: Number(r?.goals ?? 0),
       sumLabel: r?.sum_label ?? 0,
+      simCalls: Number(r?.sim_calls ?? 0),
+      sumSimReturnPct: r?.sum_sim ?? 0,
     });
   }
   return out;

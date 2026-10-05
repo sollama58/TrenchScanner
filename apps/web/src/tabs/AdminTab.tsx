@@ -3,7 +3,7 @@ import { ApiError, api, del, downloadFile, patch, post } from "../api";
 import { Skeleton } from "../components/Charts";
 import { ShieldIcon } from "../components/Icons";
 import { usePolling, type Loadable } from "../hooks";
-import { ago, multiple, pct, shortAddress, usd } from "../format";
+import { ago, multiple, pct, shortAddress, signedPct, stakes, usd } from "../format";
 
 /**
  * The admin panel: everything about the running system in one place, for the wallets in
@@ -595,10 +595,14 @@ interface Rated {
   won4x: number;
   hitRate2xPct: number | null;
   hitRate4xPct: number | null;
+  /** Simulated return under the fixed exit plan; absent where the source has none. */
+  avgSimReturnPct?: number | null;
+  totalSimReturnPct?: number | null;
   verdict: "meets-targets" | "below-targets" | "insufficient-data";
 }
 
 interface HitRates {
+  rules?: { exitPlan?: string };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   curatedAlerts: {
     total: Rated;
@@ -639,19 +643,24 @@ interface AdminAlert {
   hit2xIn1h: boolean | null;
   hit4xIn1h: boolean | null;
   disqualified: boolean | null;
+  simReturnPct?: number | null;
   outcomeFinalizedAt: string | null;
   symbol: string | null;
   mint: string;
   ai: { decision: string | null; probability2x: number | null } | null;
 }
 
-const rateHead = ["Calls", "Graded", "Pending", "2x", "4x", "Verdict"];
+const rateHead = ["Calls", "Graded", "Pending", "2x", "4x", "Avg profit", "Total profit", "Verdict"];
+const profitClass = (v: number | null | undefined) =>
+  `num ${v == null ? "" : v > 0 ? "up" : v < 0 ? "down" : ""}`;
 const rateCells = (r: Rated) => [
   n(r.calls),
   n(r.graded),
   n(r.pending),
   <span className="num">{pct(r.hitRate2xPct, 1)}</span>,
   <span className="num">{pct(r.hitRate4xPct, 1)}</span>,
+  <span className={profitClass(r.avgSimReturnPct)}>{signedPct(r.avgSimReturnPct, 1)}</span>,
+  <span className={profitClass(r.totalSimReturnPct)}>{stakes(r.totalSimReturnPct)}</span>,
   r.verdict === "meets-targets" ? (
     <Tag tone="ok">meets</Tag>
   ) : r.verdict === "below-targets" ? (
@@ -683,6 +692,12 @@ function Alerts() {
         <Load q={q}>
           {(h) => (
             <div className="stack">
+              <p className="muted small">
+                Profit follows every graded call with one fixed exit plan:{" "}
+                {h.rules?.exitPlan ?? "sell half at 2x, the rest at 4x, stop at -50%, close at 1 hour."} Total
+                profit is in stakes, staking the same amount on every call. Filter matches have no simulated
+                result.
+              </p>
               <h3>Model alerts by model</h3>
               <Table
                 head={["Model", ...rateHead]}
@@ -743,6 +758,7 @@ function Alerts() {
                 "Mcap",
                 "Peak 1h",
                 "Drawdown",
+                "Profit",
                 "Result",
                 "AI",
               ]}
@@ -757,6 +773,7 @@ function Alerts() {
                 <span className="num">{usd(a.anchorMcapUsd)}</span>,
                 <span className="num">{multiple(a.peak1hReturnPct)}</span>,
                 <span className="num">{pct(a.maxDrawdown1hPct)}</span>,
+                <span className={profitClass(a.simReturnPct)}>{signedPct(a.simReturnPct)}</span>,
                 a.disqualified ? (
                   <Tag tone="muted">disqualified</Tag>
                 ) : a.hit4xIn1h ? (
