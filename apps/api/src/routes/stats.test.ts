@@ -324,6 +324,9 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
         expect.objectContaining({ kind: "event", calls: 3 }),
       ]),
     );
+    // Filter alerts' anchors are reported from Match (filterMatches), not here: graded ones are
+    // deleted after 7 days, so this row would read as mostly pending over a longer window.
+    expect(body.samples.byKind.map((r: { kind: string }) => r.kind)).not.toContain("match");
   });
 
   it("caps the window whichever way it is spelled", async () => {

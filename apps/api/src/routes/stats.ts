@@ -618,7 +618,10 @@ export async function buildHitRateReport(
   });
 
   // Every sampled moment by kind. "event" rows are the population curators choose from, so their
-  // rate is the base a pick has to beat; "match" rows are filter alerts deduplicated per token.
+  // rate is the base a pick has to beat. "match" rows (filter alerts' grading anchors) are left
+  // out: the cleanup job deletes graded ones 7 days after their watch ends and keeps ungraded
+  // ones, so over a longer window that kind would read as mostly pending. Filter alerts are
+  // reported from Match itself (filterMatches), which keeps every verdict.
   const sampleRows = prisma.$queryRaw<(RawCounts & { kind: string })[]>`
     SELECT co."sampleKind" AS kind,
            count(*) AS calls,
@@ -627,7 +630,7 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
     FROM "CandidateOutcome" co
-    WHERE co."anchorAt" >= ${since} AND co."anchorAt" < ${until}
+    WHERE co."anchorAt" >= ${since} AND co."anchorAt" < ${until} AND co."sampleKind" <> 'match'
     GROUP BY 1
     ORDER BY 1`;
 
