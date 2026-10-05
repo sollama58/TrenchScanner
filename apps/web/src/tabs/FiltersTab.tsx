@@ -242,8 +242,11 @@ export function FiltersTab() {
                     aria-label={`Delete ${f.name}`}
                     disabled={busy}
                     onClick={() => {
-                      if (window.confirm(`Delete “${f.name}”?`))
-                        void run(() => del(`/filters/${f.id}`), "Filter deleted.");
+                      if (!window.confirm(`Delete “${f.name}”?`)) return;
+                      void run(() => del(`/filters/${f.id}`), "Filter deleted.").then((ok) => {
+                        // The editor can't save a filter that no longer exists.
+                        if (ok) setEditing((e) => (e?.id === f.id ? null : e));
+                      });
                     }}
                   >
                     <TrashIcon size={15} />

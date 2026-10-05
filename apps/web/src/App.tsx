@@ -57,7 +57,7 @@ export function App() {
     const user = peek<User>("/auth/me")?.data;
     return user ? { state: "signed-in", user } : { state: "loading" };
   });
-  const [tab, setTab] = useState<Tab>(tabFromHash);
+  const [wantedTab, setTab] = useState<Tab>(tabFromHash);
 
   const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
@@ -111,6 +111,8 @@ export function App() {
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
   const isAdmin = signedIn && session.user.isAdmin;
   const tabs = isAdmin ? [...TABS, ADMIN_TAB] : TABS;
+  // #admin without an admin wallet reads as the Live tab, so a tab is always the highlighted one.
+  const tab: Tab = wantedTab === "admin" && !isAdmin ? "live" : wantedTab;
 
   return (
     <div className="app">
@@ -195,7 +197,7 @@ export function App() {
                 {tab === "model" && <ModelTab />}
                 {tab === "filters" && <FiltersTab />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
-                {tab === "admin" && (isAdmin ? <AdminTab goTo={goTo} /> : <LiveTab goTo={goTo} />)}
+                {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
             </div>
           </AccessGate>
