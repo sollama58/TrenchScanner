@@ -9,7 +9,14 @@ import {
   type McapBand,
 } from "./curator.js";
 import type { IsotonicCalibration } from "./calibration.js";
-import { CANDIDATE_WATCH_WINDOW_MINUTES, GOAL_MULTIPLE, isCurrentLabelRule, runWeight } from "./labels.js";
+import {
+  CANDIDATE_EXTENDED_WATCH_HOURS,
+  CANDIDATE_WATCH_WINDOW_MINUTES,
+  GOAL_MULTIPLE,
+  isCurrentLabelRule,
+  runDoublings,
+  runWeight,
+} from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 import {
   BOOSTED_MODEL_KIND,
@@ -250,7 +257,10 @@ export async function trainTwoStageCurator(
   ) {
     return trainSingleStage(rows, opts);
   }
-  const survival = await trainSingleStage(survivalRows, opts);
+  // Stage one asks "did it hold above the stop", and every survivor is a 1 there whether it
+  // then ran to 2x or 50x: the run weight (which tilts the fit toward the big runners' traits)
+  // belongs to the stage that predicts the win, not to the one that predicts survival.
+  const survival = await trainSingleStage(survivalRows, { ...opts, runWeightPerDoubling: 0 });
   const win = await trainSingleStage(survivors, opts);
   return { kind: TWO_STAGE_MODEL_KIND, survival, win };
 }
@@ -789,6 +799,12 @@ export interface FoldSide {
   goalPrecisionPct: number | null;
   /** Mean labelValue (doublings) per emission; null when nothing was emitted. */
   avgLabel: number | null;
+  /**
+   * Sum of the emissions' run sizes in doublings (runDoublings in labels.ts: the measure the live
+   * record's RUN_DOUBLINGS uses), so the exam's run-size score is read on the same scale as the
+   * live one. Absent on folds stored before it was recorded.
+   */
+  sumRun?: number;
 }
 
 export interface EvalFold {
@@ -965,6 +981,7 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
     precisionPct: emitted > 0 ? (wins / emitted) * 100 : null,
     goalPrecisionPct: emitted > 0 ? (goals / emitted) * 100 : null,
     avgLabel: emitted > 0 ? emittedRows.reduce((s, r) => s + r.labelValue, 0) / emitted : null,
+    sumRun: emittedRows.reduce((s, r) => s + runDoublings(r), 0),
   };
 }
 
@@ -986,6 +1003,7 @@ export async function walkForwardEvaluate(
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
   const cooldownMs = opts.cooldownHours !== undefined ? opts.cooldownHours * 3_600_000 : undefined;
   const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+  const extendedWatchMs = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
   const inBand = (r: TrainingRow) =>
     (!opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand)) &&
     (!opts.decisionRowsOnly || isDecisionRow(r, opts.mcapBand)) &&
@@ -1040,11 +1058,23 @@ export async function walkForwardEvaluate(
       // a token's earlier hours grades its memory of that token rather than its judgment.
       const testStartMs = test[0]!.anchorAt.getTime();
       const testTokens = new Set(test.flatMap((r) => (r.tokenId === undefined ? [] : [r.tokenId])));
-      const train = sorted.filter(
-        (r) =>
-          r.anchorAt.getTime() + labelWindowMs <= testStartMs &&
-          (r.tokenId === undefined || !testTokens.has(r.tokenId)),
-      );
+      // A third leak runs through the weights: a winner's run peak (runPeakMultiple, read by
+      // runWeight) is measured over its 24h watch, so a training row anchored inside that span
+      // before the fold starts was weighed by prices from inside the fold. Its weight falls
+      // back to its label, which the purge above already keeps out of the fold.
+      const train = sorted
+        .filter(
+          (r) =>
+            r.anchorAt.getTime() + labelWindowMs <= testStartMs &&
+            (r.tokenId === undefined || !testTokens.has(r.tokenId)),
+        )
+        .map((r) =>
+          r.labelValue > 0 &&
+          r.runPeakMultiple !== undefined &&
+          r.anchorAt.getTime() + extendedWatchMs > testStartMs
+            ? { ...r, runPeakMultiple: undefined }
+            : r,
+        );
       if (train.length < minTrainRows || test.length < minTestRows) continue;
       if (
         opts.minTestWins !== undefined &&
