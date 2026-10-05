@@ -179,7 +179,7 @@ type PathTick = {
  * minute-by-minute tape (that is folded into the row's aggregates and never stored) - snapshots
  * come from scans, so their spacing follows how often the token was rescanned, and old ones are
  * thinned by retention. Good for re-grading rules the stored aggregates can't answer (a longer
- * window, a different fill delay); check the tick density before trusting a result.
+ * window, a different entry price); check the tick density before trusting a result.
  */
 async function* pathPages(q: ExportQuery, since: Date, until: Date, pageSize = PATH_PAGE_SIZE) {
   for await (const page of outcomePages(q, since, until, pageSize)) {

@@ -72,7 +72,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
         </h1>
         <p className="lead muted">
           Every pick is measured against one goal in public: 2x within 15 minutes on 75% of alerts, and 4x
-          within 30 minutes on half, from a realistic fill.
+          within 30 minutes on half, from the price at the alert.
         </p>
         <div className="features">
           {FEATURES.map(({ Icon, title, body }) => (

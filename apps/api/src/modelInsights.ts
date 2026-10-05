@@ -203,7 +203,7 @@ export function reviewOutcome(
 ): "pending" | "won" | "won4x" | "missed" | "stopped" | "unknown" {
   if (!co) return "unknown";
   if (co.hit2xIn1h === null) {
-    // Book closed with no verdict: retired ungraded (no fill seen inside the window), so it is
+    // Book closed with no verdict: retired ungraded (no price seen inside the window), so it is
     // not pending - nothing will ever grade it.
     return co.finalizedAt === null && co.finalized24hAt !== null ? "unknown" : "pending";
   }

@@ -9,7 +9,7 @@ import {
   type DexScreenerClient,
   type ScoredToken,
 } from "@trenchscanner/core";
-import { entryRuleFor, recordCandidateSample, runCandidateWatchJob } from "./candidateOutcomeJob.js";
+import { recordCandidateSample, runCandidateWatchJob } from "./candidateOutcomeJob.js";
 
 /**
  * Same posture as outcomeBookkeeping.test.ts: this logic IS row bookkeeping, so it's tested
@@ -153,10 +153,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.hit4xIn1h).toBe(false); // won, but short of the 4x goal
     expect(updated.extended24h).toBe(true);
     expect(updated.finalized24hAt).toBeNull(); // still on the 24h watch
-    // Under the exit plan: half sold at 2x, the rest closed at the window's close of 1.4, every sale paying
-    // the pre-bond slippage.
-    const slip = env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND / 100;
-    expect(updated.simReturnPct).toBeCloseTo(((0.5 * 2 + 0.5 * 1.4) * (1 - slip) - 1) * 100);
+    // Under the exit plan: half sold at 2x, the rest closed at the window's close of 1.4.
+    expect(updated.simReturnPct).toBeCloseTo((0.5 * 2 + 0.5 * 1.4 - 1) * 100);
 
     // The verdict was copied onto the feed row the moment the window closed - the badge must
     // not wait out the 24h watch - but the outcome isn't stamped final until that watch ends.
@@ -312,46 +310,32 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(kinds).toEqual({ [hourly!.id]: "hourly", [event!.id]: "event", [emission!.id]: "emission" });
   });
 
-  it("takes the fill on the first tick past the entry delay and grades from it", async () => {
+  it("grades from the alert price, whatever the first price seen", async () => {
     const token = await createToken("fill");
     const anchorAt = new Date(Date.now() - 2 * MINUTE);
-    // Graduated: the 1% slippage applies.
     const row = await seedRow(token.id, anchorAt, 1.0, {
       entryAt: null,
       signalPriceUsd: null,
       features: { graduated: 1 },
     });
 
-    // The token ran 50% between the scan and the fill: a buyer pays 1.5 plus slippage.
+    // The token ran 50% after the alert: the base stays the alert price.
     await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.5 }), env);
-    const filled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
-    expect(filled.entryAt).not.toBeNull();
-    expect(filled.signalPriceUsd).toBe(1.0);
-    expect(filled.anchorPriceUsd).toBeCloseTo(1.515, 6);
-    expect(filled.hit2xAt).toBeNull();
+    const opened = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(opened.entryAt).not.toBeNull();
+    expect(opened.signalPriceUsd).toBe(1.0);
+    expect(opened.anchorPriceUsd).toBe(1.0);
+    expect(opened.hit2xAt).toBeNull();
 
-    // 2.2 doubles the scan price but not the fill - no win.
+    // 2.2 doubles the alert price - a win.
     await prisma.candidateOutcome.update({
       where: { id: row.id },
       data: { nextCheckAt: new Date(Date.now() - 1000) },
     });
     await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.2 }), env);
     const after = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
-    expect(after.hit2xAt).toBeNull();
+    expect(after.hit2xAt).not.toBeNull();
     expect(after.peak1hPriceUsd).toBe(2.2);
-  });
-
-  it("charges pre-bond and unknown venues the larger slippage", () => {
-    expect(entryRuleFor({ graduated: 1 }, env).slippageFraction).toBeCloseTo(
-      env.CANDIDATE_ENTRY_SLIPPAGE_PCT_GRADUATED / 100,
-    );
-    expect(entryRuleFor({ graduated: 0 }, env).slippageFraction).toBeCloseTo(
-      env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND / 100,
-    );
-    expect(entryRuleFor({}, env).slippageFraction).toBeCloseTo(
-      env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND / 100,
-    );
-    expect(entryRuleFor({}, env).delayMs).toBe(env.CANDIDATE_ENTRY_DELAY_SECONDS * 1000);
   });
 
   it("copies a match row's verdict onto the filter alerts anchored to it, and only those", async () => {
@@ -404,7 +388,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     await prisma.user.delete({ where: { id: user.id } });
   });
 
-  it("retires a row that never got its fill ungraded, instead of grading a late price as a loss", async () => {
+  it("retires a row that never got a price ungraded, instead of grading a late price as a loss", async () => {
     const token = await createToken("unobserved");
     // The worker was down through the whole window: the first price it sees is 90 minutes in.
     const anchorAt = new Date(Date.now() - 90 * MINUTE);
@@ -436,9 +420,9 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(after.outcomeFinalizedAt!.getTime()).toBe(updated.finalized24hAt!.getTime());
   });
 
-  it("retires an unfilled row as soon as the win window has passed, not at the goal window", async () => {
+  it("retires a row with no price as soon as the win window has passed, not at the goal window", async () => {
     const token = await createToken("unfilled-20m");
-    // No price for 20 minutes: the fill is refused after 15, so nothing can grade this row.
+    // No price for 20 minutes: a first price is refused after 15, so nothing can grade this row.
     const anchorAt = new Date(Date.now() - 20 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, { entryAt: null, signalPriceUsd: null });
 
@@ -481,8 +465,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(after.outcomeFinalizedAt?.getTime()).toBe(closedAt.getTime());
   });
 
-  it("retires an unfilled row as soon as the win window has passed, not at the goal window", async () => {
-    // Past 15 minutes no fill can be taken, so there is nothing left to watch for.
+  it("retires a row with no price as soon as the win window has passed, not at the goal window", async () => {
+    // Past 15 minutes no first price can be taken, so there is nothing left to watch for.
     const token = await createToken("unfilled-16m");
     const anchorAt = new Date(Date.now() - 16 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, { entryAt: null, signalPriceUsd: null });
@@ -494,7 +478,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.finalizedAt).toBeNull();
     expect(updated.finalized24hAt).not.toBeNull();
 
-    // Inside the window the row is still waiting for its fill.
+    // Inside the window the row is still waiting for its first price.
     const waiting = await createToken("unfilled-10m");
     const open = await seedRow(waiting.id, new Date(Date.now() - 10 * MINUTE), 1.0, {
       entryAt: null,
@@ -544,7 +528,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.peak1hPriceUsd).toBe(1.0); // no fabricated tick
   });
 
-  it("takes the fill from the scan's snapshot when the sweep's own fetch missed the mint", async () => {
+  it("takes the price from the scan's snapshot when the sweep's own fetch missed the mint", async () => {
     const token = await createToken("snapshot-fill");
     const anchorAt = new Date(Date.now() - 2 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, {
@@ -562,7 +546,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     const filled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     // Timed at the snapshot, not at the sweep.
     expect(filled.entryAt?.getTime()).toBe(takenAt.getTime());
-    expect(filled.anchorPriceUsd).toBeCloseTo(1.515, 6);
+    expect(filled.anchorPriceUsd).toBe(1.0);
     expect(filled.lastPriceUsd).toBe(1.5);
     expect(summary).toMatchObject({ fromSnapshots: expect.any(Number) });
     expect((summary as Record<string, number>).fromSnapshots).toBeGreaterThanOrEqual(1);
@@ -663,7 +647,7 @@ async function seedRow(
       anchorMcapUsd: 100_000,
       features: {},
       score: 50,
-      // Already filled at the anchor (as grandfathered rows are) unless a test says otherwise, so
+      // Already opened at the anchor (as grandfathered rows are) unless a test says otherwise, so
       // the grading tests below see exactly the base they seed.
       entryAt: anchorAt,
       signalPriceUsd: anchorPriceUsd,

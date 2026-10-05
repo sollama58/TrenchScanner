@@ -505,7 +505,7 @@ export async function collectCuratedContender(
  *
  * The default feed's contestant goes first: it is the one the AI reviewer checks (and, in gate
  * mode, can veto). Every other ledger's calls go out without a review. Contestants calling the
- * same token in the same pass share one anchor, so their grades are measured from the same fill.
+ * same token in the same pass share one anchor, so their grades are measured from the same price.
  *
  * Returns the number of calls sent across every ledger.
  */
@@ -676,12 +676,11 @@ async function emitCuratedAlert(
 
   let anchor = sharedAnchor ?? (pick.cycleSample?.created ? pick.cycleSample : null);
   if (anchor && !sharedAnchor) {
-    // The fill is "the first price at least CANDIDATE_ENTRY_DELAY_SECONDS after the alert", and
-    // the alert is going out now - after the rest of the scan cycle, the governor and (in gate
-    // mode) the AI review, which can take most of a minute. Counting the delay from the scan
-    // moment let the fill land seconds after a subscriber first saw the card, so the anchor
-    // moves to now. Only while no fill has been taken: once one has, it predates the alert, and
-    // the alert gets a fresh row like a stale sample would.
+    // The windows run from the alert, and the alert is going out now - after the rest of the scan
+    // cycle, the governor and (in gate mode) the AI review, which can take most of a minute - so
+    // the anchor's clock moves to now. Its price stays the one the token was detected and alerted
+    // at. Only while the row has seen no price yet: once it has, that price predates the alert,
+    // and the alert gets a fresh row like a stale sample would.
     const now = new Date();
     const moved = await prisma.candidateOutcome.updateMany({
       where: { id: anchor.id, entryAt: null },

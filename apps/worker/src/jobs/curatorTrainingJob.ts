@@ -568,7 +568,7 @@ async function loadRowsOfKind(
         anchorAt: r.anchorAt,
         features: r.features as Record<string, number | null>,
         labelValue: r.labelValue ?? 0,
-        // The price the features were observed at - the fill the label is graded from comes later.
+        // The price the features were observed at (the alert price the label is graded from).
         anchorPriceUsd: r.signalPriceUsd ?? r.anchorPriceUsd,
         anchorMcapUsd: r.anchorMcapUsd,
         sampleKind: r.sampleKind,

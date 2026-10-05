@@ -29,11 +29,10 @@ import {
   trainCuratorModel,
   walkForwardEvaluate,
   TWO_STAGE_MODEL_KIND,
-  LEGACY_LABEL_RULE,
-  CURRENT_LABEL_RULE,
   type ScoredOutcome,
   type TrainingRow,
 } from "./trainer.js";
+import { LEGACY_LABEL_RULE, CURRENT_LABEL_RULE } from "./labels.js";
 import type { ScoredToken } from "../types.js";
 
 const T0 = new Date("2026-09-01T00:00:00Z").getTime();

@@ -247,12 +247,6 @@ const envSchema = z.object({
   // this window, taken the first scan the token passes passesEventPreGate. The curators decide
   // only at these moments, so the training rows and the live picks share one distribution.
   CANDIDATE_EVENT_SPACING_MINUTES: z.coerce.number().positive().default(60),
-  // The fill every row is graded from (see EntryRule in curation/labels.ts): the first price at
-  // least this long after the alert, plus slippage - more on the thin pre-bond bonding curve
-  // than on a graduated pool.
-  CANDIDATE_ENTRY_DELAY_SECONDS: z.coerce.number().nonnegative().default(60),
-  CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND: z.coerce.number().min(0).max(50).default(3),
-  CANDIDATE_ENTRY_SLIPPAGE_PCT_GRADUATED: z.coerce.number().min(0).max(50).default(1),
   CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().positive().default(1),
   CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(600),
   CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(90),

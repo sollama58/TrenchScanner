@@ -39,7 +39,7 @@ The reviewer keeps improving through a versioned **playbook** of lessons appende
 
 ### Hit-rate report
 
-`GET /stats/hit-rates` reports how production calls actually graded under the rules above (2x within 15 minutes / 4x within 30 minutes of the alert, from the fill, 50% stop): curated alerts and shadow picks by curator, curator confidence bands, the AI reviewer's buy/no-buy record and probability calibration, user-filter matches, and the base rate of every sampled moment. Each group shows calls, graded, wins, rates and a verdict against the targets (withheld below 30 graded calls; the reviewer's buys need `AI_REVIEW_MIN_GRADED_BUYS`).
+`GET /stats/hit-rates` reports how production calls actually graded under the rules above (2x within 15 minutes / 4x within 30 minutes of the alert, from the alert price, 50% stop): curated alerts and shadow picks by curator, curator confidence bands, the AI reviewer's buy/no-buy record and probability calibration, user-filter matches, and the base rate of every sampled moment. Each group shows calls, graded, wins, rates and a verdict against the targets (withheld below 30 graded calls; the reviewer's buys need `AI_REVIEW_MIN_GRADED_BUYS`).
 
 It is for scripts and cloud sessions that can reach the API but not the database, so it is guarded by a bearer token rather than a session. Set `STATS_API_TOKEN` on the API service to a random string of at least 32 characters (`openssl rand -hex 32`); without one the route answers 404. Query with `days` (default 30, max 180) or an explicit `since`/`until` (ISO dates):
 

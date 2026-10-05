@@ -88,7 +88,7 @@ export interface RunnerTrait {
 export interface RunnerReport {
   /** Clean winners with a finished run. */
   winners: number;
-  /** The run peak (multiple of the fill) a winner needs to be a big runner: the top quarter's floor. */
+  /** The run peak (multiple of the alert price) a winner needs to be a big runner: the top quarter's floor. */
   bigRunnerMultiple: number | null;
   medianRunMultiple: number | null;
   /** The strongest traits first, by the larger of the two lifts. */

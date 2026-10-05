@@ -120,7 +120,7 @@ describe("candidate outcome labels", () => {
   });
 
   it("does not count a 4x reached only after a post-2x fall through the stop", () => {
-    // Doubled cleanly, then fell to 45% of the fill (a stop-out), then ran to 4.2x. Still a 2x
+    // Doubled cleanly, then fell to 45% of the alert price (a stop-out), then ran to 4.2x. Still a 2x
     // win - the double came first - but the 4x is not one a buyer holding to the stop traded.
     const labels = computeOutcomeLabels(
       replay(1, [
@@ -238,74 +238,55 @@ describe("candidate outcome labels", () => {
   });
 });
 
-describe("fill-price grading", () => {
-  const rule = { delayMs: 60_000, slippageFraction: 0.03 };
-
-  /** Like replay, but through the entry rule - ticks are [price, seconds]. */
-  function replayWithEntry(anchorPrice: number, ticks: [price: number, second: number][]): OutcomeAggregates {
+describe("alert-price grading", () => {
+  /** Ticks are [price, seconds after the alert]. */
+  function replayAt(anchorPrice: number, ticks: [price: number, second: number][]): OutcomeAggregates {
     let agg = initialOutcomeAggregates(anchorPrice, T0);
     for (const [price, second] of ticks) {
-      agg = { ...agg, ...applyPriceTick(agg, price, new Date(T0.getTime() + second * 1000), rule) };
+      agg = { ...agg, ...applyPriceTick(agg, price, new Date(T0.getTime() + second * 1000)) };
     }
     return agg;
   }
 
-  it("ignores ticks before the fill, so an instant spike nobody could buy isn't a win", () => {
-    const agg = replayWithEntry(1, [
-      [2.2, 30], // a 2x inside the first half-minute - before anyone acting on the alert holds it
-      [1.3, 70], // the fill
+  it("grades from the alert price, with no delay and no slippage", () => {
+    const agg = replayAt(1, [
+      [2.0, 30], // a 2x of the alert price inside the first half-minute counts
       [1.5, 600],
     ]);
-    expect(agg.entryAt).toEqual(new Date(T0.getTime() + 70_000));
+    expect(agg.entryAt).toEqual(new Date(T0.getTime() + 30_000));
     expect(agg.signalPriceUsd).toBe(1);
-    expect(agg.anchorPriceUsd).toBeCloseTo(1.3 * 1.03);
-    expect(computeOutcomeLabels(agg).hit2xIn1h).toBe(false);
-  });
-
-  it("never takes the fill after the win window - an outage's first price is not an entry", () => {
-    const agg = replayWithEntry(1, [[1.1, 16 * 60]]);
-    expect(agg.entryAt).toBeNull();
     expect(agg.anchorPriceUsd).toBe(1);
+    expect(computeOutcomeLabels(agg).hit2xIn1h).toBe(true);
   });
 
-  it("grades the double from the fill plus slippage, not the signal price", () => {
-    // 2.4 is a 2.4x from the signal but only 1.79x from a 1.3 fill with 3% slippage.
-    const missed = computeOutcomeLabels(
-      replayWithEntry(1, [
+  it("keeps the base at the alert price when the first price is higher or lower", () => {
+    expect(replayAt(1, [[1.3, 65]]).anchorPriceUsd).toBe(1);
+    expect(replayAt(1, [[0.8, 61]]).anchorPriceUsd).toBe(1);
+    // 2.4 is a 2x of the alert price even though the first price seen was 1.3.
+    const won = computeOutcomeLabels(
+      replayAt(1, [
         [1.3, 65],
         [2.4, 900],
-      ]),
-    );
-    expect(missed.hit2xIn1h).toBe(false);
-    const won = computeOutcomeLabels(
-      replayWithEntry(1, [
-        [1.3, 65],
-        [2.8, 900],
       ]),
     );
     expect(won.hit2xIn1h).toBe(true);
   });
 
-  it("never grades from below the signal price, even when the fill tick is cheaper", () => {
-    const agg = replayWithEntry(1, [[0.8, 61]]);
-    expect(agg.anchorPriceUsd).toBeCloseTo(1.03);
+  it("never opens a row after the win window - an outage's first price is not an entry", () => {
+    const agg = replayAt(1, [[1.1, 16 * 60]]);
+    expect(agg.entryAt).toBeNull();
+    expect(agg.anchorPriceUsd).toBe(1);
   });
 
-  it("measures the stop from the fill base", () => {
+  it("measures the stop from the alert price", () => {
     const labels = computeOutcomeLabels(
-      replayWithEntry(1, [
+      replayAt(1, [
         [1.0, 61],
-        [0.5, 300], // below half of the 1.03 base
+        [0.5, 300], // half the alert price
         [2.5, 840],
       ]),
     );
     expect(labels.disqualified).toBe(true);
-    expect(labels.labelValue).toBe(0);
-  });
-
-  it("a row that never got a tick past the delay grades as a miss", () => {
-    const labels = computeOutcomeLabels(replayWithEntry(1, [[3, 20]]));
-    expect(labels.hit2xIn1h).toBe(false);
     expect(labels.labelValue).toBe(0);
   });
 });

@@ -144,7 +144,7 @@ export interface OutcomeView {
   maxDrawdown1hPct: number | null;
   /** The run peak: keeps climbing for winners until their 24h watch ends. */
   peak24hReturnPct: number | null;
-  /** Minutes from the alert to the run peak so far; null until it has traded above the fill. */
+  /** Minutes from the alert to the run peak so far; null until it has traded above the alert price. */
   runPeakMinutes: number | null;
   /** The 24h book is closed - every number above is final. */
   finalized: boolean;
@@ -221,7 +221,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
     };
   }
 
-  // The row closed with no verdict: no fill was ever seen inside the win window (the worker was
+  // The row closed with no verdict: no price was ever seen inside the win window (the worker was
   // down, or the mint had no price), so nothing was measured - the watcher retires such a row
   // ungraded and stamps only the closing time on the alert. Not a miss: the unmoved aggregates
   // below would read as one, and the hit-rate report leaves these out of pending and graded alike.
@@ -475,7 +475,7 @@ export interface ModelCall {
 
 /** Calls on one token collapsed into one card. */
 export interface CallGroup<T> {
-  /** The first call: the card shows it (that is when the token was alerted, and its fill). */
+  /** The first call: the card shows it (that is when the token was alerted, and its alert price). */
   lead: T;
   /** The latest call: where the card sits in the feed. */
   newest: T;

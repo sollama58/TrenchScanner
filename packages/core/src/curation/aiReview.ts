@@ -352,7 +352,7 @@ export function formatComparables(comparables: ComparableOutcome[]): string {
     return `- mcap ${fmt(c.mcapUsd, (x) => `$${Math.round(x).toLocaleString("en-US")}`)}, age ${fmt(c.ageMinutes, (x) => `${Math.round(x)}m`)}, 5m ${fmt(c.priceChange5mPct, (x) => `${x.toFixed(0)}%`)}, 1h ${fmt(c.priceChange1hPct, (x) => `${x.toFixed(0)}%`)}, 1h buys ${fmt(c.buyRatio1h, (x) => `${Math.round(x * 100)}%`)}, top-10 ${fmt(c.top10HolderPct, (x) => `${x.toFixed(0)}%`)}: ${outcome}`;
   });
   return [
-    `similar past calls (the ${n} most alike graded moments from this scanner, measured from a realistic fill):`,
+    `similar past calls (the ${n} most alike graded moments from this scanner, measured from the alert price):`,
     `- of those ${n}: ${pct(wins)} doubled within ${WIN_WINDOW_MINUTES} minutes, ${pct(goals)} reached ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES}, ${pct(stops)} hit the stop first`,
     `closest ${lines.length}:`,
     ...lines,
