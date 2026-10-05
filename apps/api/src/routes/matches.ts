@@ -12,9 +12,11 @@ import {
   foldCuratedIntoPage,
   groupSameTokenCalls,
   serializeCuratedAlert,
+  resolveOutcome,
   type CallGroup,
   type ModelCall,
 } from "../curatedFeed.js";
+import { summarizeFeed, type FeedStatsCard } from "../feedStats.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { contestState, resolveFeedModels, savedFeed } from "../contest.js";
@@ -94,6 +96,13 @@ export const listQuerySchema = z.object({
     ),
 });
 
+export const feedStatsQuerySchema = z.object({
+  hours: z.coerce.number().int().min(1).max(168).default(24),
+});
+
+/** Per source: far above any real feed's day, so it only bounds a runaway window. */
+const FEED_STATS_MAX_ROWS = 5_000;
+
 export async function registerMatchRoutes(
   app: FastifyInstance,
   opts: {
@@ -157,6 +166,137 @@ export async function registerMatchRoutes(
 
     request.raw.on("close", dispose);
     request.raw.on("error", dispose);
+  });
+
+  /**
+   * The Live tab's top tiles: how the coins this reader's own feed alerted on over the last
+   * `hours` did - the same cards the feed shows (their filter's alerts plus, when their switch is
+   * on, the calls of the models they follow, folded the same way), each graded as its card is.
+   */
+  app.get("/stats", async (request, reply) => {
+    const parsed = feedStatsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { hours } = parsed.data;
+    const since = new Date(Date.now() - hours * 3_600_000);
+    const saved = await savedFeed(request);
+    const models = saved.showModelAlerts ? resolveFeedModels(await contestState(opts.env), saved).models : [];
+
+    const [matches, calls] = await Promise.all([
+      prisma.match.findMany({
+        where: { userId: request.user!.userId, matchedAt: { gte: since } },
+        orderBy: { matchedAt: "desc" },
+        take: FEED_STATS_MAX_ROWS,
+        select: {
+          id: true,
+          tokenId: true,
+          matchedAt: true,
+          candidateOutcomeId: true,
+          peakReturnPct: true,
+          peak1hReturnPct: true,
+          maxDrawdown1hPct: true,
+          hit2xIn1h: true,
+          hit4xIn1h: true,
+          disqualified: true,
+          token: { select: { symbol: true } },
+        },
+      }),
+      models.length === 0
+        ? Promise.resolve([])
+        : prisma.curatedAlert.findMany({
+            where: { model: { in: models }, createdAt: { gte: since } },
+            orderBy: { createdAt: "desc" },
+            take: FEED_STATS_MAX_ROWS,
+            select: {
+              ...CALL_SELECT,
+              peak1hReturnPct: true,
+              maxDrawdown1hPct: true,
+              hit2xIn15m: true,
+              hit2xIn1h: true,
+              hit4xIn1h: true,
+              disqualified: true,
+              peak24hReturnPct: true,
+              runPeakMinutes: true,
+              outcomeFinalizedAt: true,
+              candidateOutcome: curatedAlertInclude.candidateOutcome,
+              token: { select: { symbol: true } },
+            },
+          }),
+    ]);
+
+    // A filter alert is graded by its own outcome row (the watcher copies the verdict onto the
+    // match when the window closes); read it while it is still open, so a 2x shows the moment it
+    // lands, as on the card.
+    const openIds = matches.flatMap((m) =>
+      m.hit2xIn1h === null && m.candidateOutcomeId ? [m.candidateOutcomeId] : [],
+    );
+    const rows =
+      openIds.length === 0
+        ? []
+        : await prisma.candidateOutcome.findMany({
+            where: { id: { in: openIds } },
+            select: { id: true, ...curatedAlertInclude.candidateOutcome.select },
+          });
+    const rowById = new Map(rows.map(({ id, ...row }) => [id, row]));
+
+    type StatsCard = FeedStatsCard & {
+      id: string;
+      matchedAt: Date;
+      curated: { alertId: string; card: FeedStatsCard } | null;
+    };
+    const matchCards: StatsCard[] = matches.map((m) => {
+      const outcome = resolveOutcome({
+        createdAt: m.matchedAt,
+        peak1hReturnPct: m.peak1hReturnPct,
+        maxDrawdown1hPct: m.maxDrawdown1hPct,
+        hit2xIn15m: null,
+        hit2xIn1h: m.hit2xIn1h,
+        hit4xIn1h: m.hit4xIn1h,
+        disqualified: m.disqualified,
+        peak24hReturnPct: null,
+        runPeakMinutes: null,
+        outcomeFinalizedAt: null,
+        candidateOutcome: (m.candidateOutcomeId && rowById.get(m.candidateOutcomeId)) || null,
+      });
+      return {
+        id: m.id,
+        kind: "match",
+        tokenId: m.tokenId,
+        matchedAt: m.matchedAt,
+        symbol: m.token.symbol,
+        outcome,
+        // The card's ATH figure for a filter alert.
+        peakPct: m.peakReturnPct ?? outcome.peak24hReturnPct,
+        curated: null,
+      };
+    });
+    // Several followed models calling one token are one card, graded on its first call.
+    const callCards: StatsCard[] = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).map(
+      ({ lead }) => {
+        const outcome = resolveOutcome(lead);
+        const card: FeedStatsCard = {
+          kind: "curated",
+          tokenId: lead.tokenId,
+          symbol: lead.token.symbol,
+          outcome,
+          peakPct: outcome.peak24hReturnPct,
+        };
+        return { ...card, id: lead.id, matchedAt: lead.createdAt, curated: { alertId: lead.id, card } };
+      },
+    );
+    // A model call on a token the reader's filter also caught is one card showing the call.
+    const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
+      (c): FeedStatsCard =>
+        c.kind === "match" && c.curated ? { ...c.curated.card, kind: "match", tokenId: c.tokenId } : c,
+    );
+
+    return {
+      ...summarizeFeed(cards, hours),
+      showModelAlerts: saved.showModelAlerts,
+      // The caps bound a pathological window; a real feed is far below them.
+      truncated: matches.length === FEED_STATS_MAX_ROWS || calls.length === FEED_STATS_MAX_ROWS,
+    };
   });
 
   /** The live feed: this user's matches, newest first, 12 per page. */

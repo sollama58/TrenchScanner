@@ -211,6 +211,25 @@ export interface CuratedPage {
   model: { id: string; name: string; isDefault: boolean };
 }
 
+/** GET /matches/stats: how the coins this reader's own feed alerted on did over the window. */
+export interface FeedStats {
+  hours: number;
+  alerts: number;
+  fromFilter: number;
+  fromModels: number;
+  graded: number;
+  pending: number;
+  hit2x: number;
+  hit2xPct: number | null;
+  goalGraded: number;
+  hit4x: number;
+  hit4xPct: number | null;
+  best: { tokenId: string; symbol: string | null; peakPct: number } | null;
+  medianPeakPct: number | null;
+  showModelAlerts: boolean;
+  truncated: boolean;
+}
+
 export interface MatchPage {
   matches: Card[];
   page: number;
