@@ -130,7 +130,7 @@ export type CuratedAlertWithRelations = Awaited<
 /** How one curated call is going / went, resolved from the freshest source available. */
 export interface OutcomeView {
   /**
-   * watching: the 1-hour win window is still open. won/missed/disqualified: the verdict.
+   * watching: the 15-minute win window is still open. won/missed/disqualified: the verdict.
    * unknown: the training row was pruned before its copies landed - surfaced honestly rather
    * than guessed at.
    */

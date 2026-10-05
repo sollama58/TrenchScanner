@@ -196,7 +196,7 @@ function toCounts(r: RawCounts): GradedCounts {
 
 /**
  * The read-only hit-rate report: how production alerts grade under the current rules - a win is
- * 2x (goal 4x) within one hour of a realistic fill, and a 50% drop before the double is a loss
+ * 2x within 15 minutes (goal 4x within 30) of a realistic fill, and a 50% drop before the double is a loss
  * (see curation/labels.ts). Every figure comes from the same CandidateOutcome labels the feed's
  * own stats use; nothing here grades anything itself.
  *
