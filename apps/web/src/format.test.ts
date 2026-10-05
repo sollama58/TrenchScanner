@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ago,
+  until,
   change,
   multiple,
   pct,
@@ -71,5 +72,16 @@ describe("tokenThumb", () => {
     expect(tokenThumb(tw)).toBe(tw);
     const sub = `https://ipfs.io/ipfs/${cid}/image.png`;
     expect(tokenThumb(sub)).toBe(sub);
+  });
+});
+
+describe("until", () => {
+  const now = Date.UTC(2026, 9, 5, 12, 0, 0);
+  it("says how far off a future moment is", () => {
+    expect(until(new Date(now + 5 * 60_000), now)).toBe("in 5m");
+    expect(until(new Date(now + 3 * 3600_000), now)).toBe("in 3h");
+    expect(until(new Date(now + 3 * 86_400_000), now)).toBe("in 3d");
+    expect(until(new Date(now - 1000), now)).toBe("now");
+    expect(until(null, now)).toBe("never");
   });
 });

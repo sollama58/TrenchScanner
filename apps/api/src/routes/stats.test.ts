@@ -326,6 +326,21 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     );
   });
 
+  it("caps the window whichever way it is spelled", async () => {
+    const get = (query: string) =>
+      app.inject({
+        method: "GET",
+        url: `/stats/hit-rates?${query}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+    // `since` alone used to open the whole table, past the cap on `days`.
+    expect((await get("since=1970-01-01T00:00:00Z")).statusCode).toBe(400);
+    expect((await get("days=181")).statusCode).toBe(400);
+    expect((await get(`since=${new Date(Date.now() - 100 * 86_400_000).toISOString()}`)).statusCode).toBe(
+      200,
+    );
+  });
+
   it("rejects a reversed window", async () => {
     const res = await app.inject({
       method: "GET",

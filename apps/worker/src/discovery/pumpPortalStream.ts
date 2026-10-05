@@ -158,6 +158,18 @@ export class PumpPortalStream {
    */
   private tradesRefused = false;
   private refusalLogged = false;
+  /**
+   * A trade has been delivered on the current connection. Until one has, the book's trade
+   * counters describe a connection that may not be sending trades at all (before the refusal
+   * notice lands, or on a key that was never funded) - zeros that would read as a dead token - so
+   * only launch-derived inputs are reported. A funded key delivers trades within seconds.
+   */
+  private tradesConfirmed = false;
+  /**
+   * A fresh connection gets one round of trade subscriptions even after a refusal, in case the
+   * key was funded since: either trades then arrive (and confirm), or the refusal comes back.
+   */
+  private retrySubscriptionsOnce = false;
 
   constructor(
     private readonly url: string,
@@ -178,7 +190,7 @@ export class PumpPortalStream {
   /** The order-flow features for a mint right now, or undefined when trade flow is off. */
   tradeFlow(mint: string): TradeFlowFeatures | undefined {
     const flow = this.book?.features(mint, Date.now());
-    if (!flow || !this.tradesRefused) return flow;
+    if (!flow || this.tradesConfirmed) return flow;
     // The dev's launch buy comes with the create message itself; everything else needs trades.
     return { ...EMPTY_TRADE_FLOW, devInitialBuySol: flow.devInitialBuySol };
   }
@@ -232,6 +244,8 @@ export class PumpPortalStream {
       }
       if (typeof msg === "object" && msg !== null && isTradeSubscriptionRefusal(msg)) {
         this.tradesRefused = true;
+        this.tradesConfirmed = false;
+        this.retrySubscriptionsOnce = false;
         this.pendingSubscribe.clear();
         if (!this.refusalLogged) {
           this.refusalLogged = true;
@@ -244,6 +258,8 @@ export class PumpPortalStream {
       const flow = typeof msg === "object" && msg !== null ? parseFlowMessage(msg, at) : null;
       if (flow && "trade" in flow) {
         this.book.trade(flow.trade);
+        this.tradesConfirmed = true;
+        this.tradesRefused = false;
         return;
       }
       if (flow && "launch" in flow && this.book.launch(flow.launch)) this.subscribeNow(flow.launch.mint);
@@ -294,8 +310,12 @@ export class PumpPortalStream {
       socket.send(JSON.stringify({ method: "subscribeNewToken" }));
       socket.send(JSON.stringify({ method: "subscribeMigration" }));
       // A fresh connection has no trade subscriptions: everything tracked goes back on the list.
-      // It also gets one more try at them, in case the key was funded since the last refusal.
-      this.tradesRefused = false;
+      // It also gets one more try at them, in case the key was funded since the last refusal -
+      // but the refusal itself stands until a trade actually arrives. Clearing it here reported
+      // the book's empty windows as zero buyers and zero trades to any scan cycle that ran in the
+      // seconds between a reconnect and the next refusal notice.
+      this.tradesConfirmed = false;
+      this.retrySubscriptionsOnce = true;
       if (this.book) for (const mint of this.book.trackedMints()) this.pendingSubscribe.add(mint);
       logger.info("stream connected");
     });
@@ -325,7 +345,7 @@ export class PumpPortalStream {
    * waiting up to FLUSH_INTERVAL_MS for the batch missed them. Queued when the socket isn't open.
    */
   private subscribeNow(mint: string): void {
-    if (this.tradesRefused) return;
+    if (this.tradesRefused && !this.retrySubscriptionsOnce) return;
     const socket = this.socket;
     if (!socket || socket.readyState !== 1) {
       this.pendingSubscribe.add(mint);
@@ -338,10 +358,11 @@ export class PumpPortalStream {
   flushSubscriptions(): void {
     const socket = this.socket;
     if (!socket || socket.readyState !== 1 || this.pendingSubscribe.size === 0) return;
-    if (this.tradesRefused) {
+    if (this.tradesRefused && !this.retrySubscriptionsOnce) {
       this.pendingSubscribe.clear();
       return;
     }
+    this.retrySubscriptionsOnce = false;
     const keys = [...this.pendingSubscribe].filter((m) => this.book?.has(m));
     this.pendingSubscribe.clear();
     for (let i = 0; i < keys.length; i += SUBSCRIBE_CHUNK) {

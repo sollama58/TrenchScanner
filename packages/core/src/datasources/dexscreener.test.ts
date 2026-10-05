@@ -28,6 +28,14 @@ describe("pickCanonicalPair", () => {
     expect(pickCanonicalPair([staleCurve, thin, raydium])).toBe(raydium);
   });
 
+  it("keeps a quiet curve over dust side pools when no real pool exists", () => {
+    // A few dollars in a side pool used to outrank the curve here, pricing the token off that
+    // pool and reading it as graduated.
+    const staleCurve = { dexId: "pumpfun", liquidity: { usd: 0 }, volume: { h1: 0 } };
+    const dust = { dexId: "meteora", liquidity: { usd: 5 } };
+    expect(pickCanonicalPair([staleCurve, dust])).toBe(staleCurve);
+  });
+
   it("falls back to the deepest pair when nothing is funded", () => {
     const a = { dexId: "meteora", liquidity: { usd: 10 } };
     const b = { dexId: "raydium", liquidity: { usd: 500 } };

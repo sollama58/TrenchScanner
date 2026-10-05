@@ -1,11 +1,12 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
+import { randomBytes } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
-import { csvCell, exportChunks, exportQuerySchema } from "./statsExport.js";
+import { csvCell, exportChunks, exportQuerySchema, startExportStream } from "./statsExport.js";
 
 const TOKEN = "stats-test-token-0123456789abcdef0123456789";
 
@@ -24,6 +25,34 @@ describe("export query", () => {
     expect(csvCell(null)).toBe("");
     expect(csvCell(["x", "y"])).toBe("x|y");
     expect(csvCell(new Date("2001-01-01T00:00:00Z"))).toBe("2001-01-01T00:00:00.000Z");
+  });
+
+  it("caps the window whichever way it is spelled", () => {
+    expect(exportQuerySchema.safeParse({ dataset: "outcomes", since: "1970-01-01" }).success).toBe(false);
+    expect(exportQuerySchema.safeParse({ dataset: "outcomes", days: "181" }).success).toBe(false);
+    const since = new Date(Date.now() - 100 * 86_400_000).toISOString();
+    expect(exportQuerySchema.safeParse({ dataset: "outcomes", since }).success).toBe(true);
+  });
+
+  it("frees an export slot when the client stops reading", async () => {
+    // Endless incompressible output, so the pipeline fills and then waits on the reader.
+    async function* endless() {
+      for (;;) yield randomBytes(4096).toString("hex");
+    }
+    const start = (idleMs?: number) => startExportStream(endless(), "test", idleMs);
+    // Never read: the gzip output sits in the pipeline until the watchdog ends it.
+    const stalled = start(200)!;
+    expect(stalled).not.toBeNull();
+    const ended = new Promise<void>((resolve) => stalled.on("close", () => resolve()));
+    const second = start()!;
+    expect(start()).toBeNull();
+    await ended;
+    // Only the pipeline callback frees the slot, and it runs after the stream closes.
+    await new Promise((r) => setTimeout(r, 50));
+    const third = start(200);
+    expect(third).not.toBeNull();
+    for (const s of [second, third!]) (s as unknown as { destroy(): void }).destroy();
+    await new Promise((r) => setTimeout(r, 50));
   });
 });
 

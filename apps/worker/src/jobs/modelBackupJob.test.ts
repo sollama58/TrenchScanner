@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import {
   prisma,
   loadEnv,
@@ -18,6 +18,8 @@ import {
   CURATOR_MODEL_KIND,
   STACKED_MODEL_KIND,
   ModelBackupError,
+  sealBackupPayload,
+  type ModelBackupPayload,
   type ContestantTrainingResult,
   type StackedCuratorParams,
   type TrainedCuratorParams,
@@ -211,6 +213,42 @@ describe.skipIf(!dbAvailable)("model backups", () => {
     // Plain JSON of an untouched payload is fine (an unzipped download).
     expect(decodeBackup(gunzipSync(data)).models).toHaveLength(3);
     expect(encodeBackup(decodeBackup(data)).data.length).toBeGreaterThan(0);
+  });
+
+  it("refuses a sealed file whose fields the restore could not write", async () => {
+    await seedGeneration(0.25, "Linear");
+    const backup = (await saveModelBackup("manual"))!;
+    const { data } = (await loadBackupData(backup.id))!;
+    const good = JSON.parse(gunzipSync(data).toString("utf8")) as ModelBackupPayload;
+    const { integrity: _i, ...body } = good;
+    const reseal = (change: (p: typeof body) => void) => {
+      const copy = JSON.parse(JSON.stringify(body)) as typeof body;
+      change(copy);
+      return Buffer.from(JSON.stringify(sealBackupPayload(copy)));
+    };
+    // Each of these passed the integrity check and failed later, as a 500 or inside the restore.
+    expect(() => decodeBackup(reseal((p) => ((p as { createdAt: unknown }).createdAt = 5)))).toThrow(
+      /createdAt/,
+    );
+    expect(() => decodeBackup(reseal((p) => ((p as { liveRecords: unknown }).liveRecords = null)))).toThrow(
+      ModelBackupError,
+    );
+    expect(() => decodeBackup(reseal((p) => (p.lanes[0]!.bornAt = "yesterday")))).toThrow(/bornAt/);
+    expect(() => decodeBackup(reseal((p) => (p.models[0]!.trainingTo = undefined as never)))).toThrow(
+      /trainingTo/,
+    );
+    expect(() =>
+      decodeBackup(reseal((p) => ((p.models[0]!.params as unknown as { x: unknown }).x = "no"))),
+    ).not.toThrow();
+    // Untouched, it still reads.
+    expect(decodeBackup(reseal(() => undefined)).models).toHaveLength(3);
+  });
+
+  it("refuses a file that unzips to more than a backup could be", () => {
+    // 64MB of zeros gzips to ~64KB; a 512MB cap is what stops a bomb, so this is a cap of our own.
+    const bomb = gzipSync(Buffer.alloc(64 * 1024 * 1024));
+    expect(bomb.length).toBeLessThan(200_000);
+    expect(() => decodeBackup(bomb)).toThrow(ModelBackupError);
   });
 
   it("the hourly pass takes a weekly backup once a week and keeps the newest N", async () => {

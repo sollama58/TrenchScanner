@@ -1,4 +1,4 @@
-import { Readable, pipeline } from "node:stream";
+import { Readable, Transform, pipeline } from "node:stream";
 import { createGzip } from "node:zlib";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
@@ -14,6 +14,22 @@ export const EXPORT_PAGE_SIZE = 1000;
 export const PATH_PAGE_SIZE = 200;
 /** Two exports at once per instance at most; a third gets a 429 rather than queueing on the pool. */
 export const MAX_CONCURRENT_EXPORTS = 2;
+/** Longest window one export may cover, however the caller spells it. */
+export const MAX_EXPORT_WINDOW_DAYS = 180;
+/**
+ * An export whose client has taken nothing for this long is dropped. Fastify tears a stream down
+ * when the socket closes, but a client that stays connected and stops reading stalls the pipeline
+ * through backpressure with no error anywhere - and held one of the two slots for as long as the
+ * process lived. A real reader pulls a chunk every few seconds; a page read never takes minutes.
+ */
+export const EXPORT_IDLE_TIMEOUT_MS = 10 * 60_000;
+
+/** The window a query asks for, in days - resolved the way exportWindow does (it can't be called from the schema). */
+function windowDays(q: { days: number; since?: Date; until?: Date }, now = new Date()): number {
+  const until = q.until ?? now;
+  const since = q.since ?? new Date(until.getTime() - q.days * DAY_MS);
+  return (until.getTime() - since.getTime()) / DAY_MS;
+}
 
 export const EXPORT_DATASETS = ["outcomes", "paths", "alerts", "shadow", "ai-reviews"] as const;
 export type ExportDataset = (typeof EXPORT_DATASETS)[number];
@@ -24,7 +40,7 @@ export const exportQuerySchema = z
   .object({
     dataset: z.enum(EXPORT_DATASETS),
     format: z.enum(["jsonl", "csv"]).default("jsonl"),
-    days: z.coerce.number().int().min(1).max(180).default(7),
+    days: z.coerce.number().int().min(1).max(MAX_EXPORT_WINDOW_DAYS).default(7),
     since: z.coerce.date().optional(),
     until: z.coerce.date().optional(),
     /** outcomes / paths: comma-separated sampleKinds, e.g. "event,emission". Default: all. */
@@ -43,7 +59,11 @@ export const exportQuerySchema = z
     /** Stop after this many records (paths: outcome rows). */
     limit: z.coerce.number().int().min(1).max(2_000_000).optional(),
   })
-  .refine((q) => !q.since || !q.until || q.since < q.until, { message: "since must be before until" });
+  .refine((q) => !q.since || !q.until || q.since < q.until, { message: "since must be before until" })
+  // Same cap as /stats/hit-rates: `since` alone used to turn the export into a whole-table dump.
+  .refine((q) => windowDays(q) <= MAX_EXPORT_WINDOW_DAYS, {
+    message: `window must be at most ${MAX_EXPORT_WINDOW_DAYS} days`,
+  });
 
 export type ExportQuery = z.infer<typeof exportQuerySchema>;
 
@@ -419,12 +439,34 @@ let inFlight = 0;
  * running. The slot frees when the stream ends, fails or the client goes away.
  */
 export function startExport(q: ExportQuery, since: Date, until: Date): NodeJS.ReadableStream | null {
+  return startExportStream(exportChunks(q, since, until), q.dataset);
+}
+
+/** The gzip pipeline and slot accounting behind startExport, over any chunk source (tests feed one). */
+export function startExportStream(
+  chunks: AsyncIterable<string>,
+  dataset: string,
+  idleTimeoutMs = EXPORT_IDLE_TIMEOUT_MS,
+): NodeJS.ReadableStream | null {
   if (inFlight >= MAX_CONCURRENT_EXPORTS) return null;
   inFlight++;
   const started = Date.now();
-  return pipeline(Readable.from(exportChunks(q, since, until)), createGzip(), (err) => {
+  // Every chunk the client takes passes through here (backpressure stops the transform being
+  // called once the client stops reading); a gap longer than the idle timeout ends the export
+  // with an error, which frees the slot through the pipeline callback below.
+  const onIdle = () => watchdog.destroy(new Error(`client took nothing for ${idleTimeoutMs}ms`));
+  let idle = setTimeout(onIdle, idleTimeoutMs);
+  const watchdog = new Transform({
+    transform(chunk, _encoding, callback) {
+      clearTimeout(idle);
+      idle = setTimeout(onIdle, idleTimeoutMs);
+      callback(null, chunk);
+    },
+  });
+  return pipeline(Readable.from(chunks), createGzip(), watchdog, (err) => {
+    clearTimeout(idle);
     inFlight--;
-    if (err) logger.warn("export stopped early", { dataset: q.dataset, err: String(err) });
-    else logger.info("export finished", { dataset: q.dataset, ms: Date.now() - started });
+    if (err) logger.warn("export stopped early", { dataset, err: String(err) });
+    else logger.info("export finished", { dataset, ms: Date.now() - started });
   });
 }

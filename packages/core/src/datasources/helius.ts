@@ -93,7 +93,10 @@ export type MintAuthorityResult =
 /** Whether a mint was launched in Pump.fun's Mayhem Mode. "failed" is kept distinct from a
  *  definitive false for the same reason as EarliestActivityResult: the rug screen treats an
  *  unverified answer as a rejection, which is only correct if we can tell the two apart. */
-export type MayhemModeResult = { status: "found"; isMayhemMode: boolean } | { status: "failed" };
+export type MayhemModeResult =
+  | { status: "found"; isMayhemMode: boolean }
+  /** `mintPending`: the RPC answered but doesn't see the mint account yet (a seconds-old token). */
+  | { status: "failed"; mintPending?: boolean };
 
 export interface HeliusClientOptions {
   apiKey?: string;
@@ -200,6 +203,14 @@ const DAS_FAILURE_LATCH_ROUNDS = 3;
  * about the endpoint. Everything else stands down for this long and then re-probes.
  */
 const DAS_STANDDOWN_MS = 10 * 60_000;
+
+/**
+ * The same, for getTransactionsForAddress. Its barren latch was permanent too - and it had more
+ * riding on it: the latch also switches off the launch-buyers read behind the snipers figure, so
+ * three barren rounds (two can happen per scan cycle: the wallet stage and its backfill) during
+ * one Helius slowdown left every token's snipers unknown until the next deploy.
+ */
+const GTFA_STANDDOWN_MS = 10 * 60_000;
 
 /**
  * Hard ceiling on searchAssets pages per wallet.
@@ -310,7 +321,17 @@ export class HeliusClient {
    * getSignaturesForAddress for the rest of the process's life.
    */
   private gtfaUnavailable = false;
-  /** Consecutive rounds the Helius-only path produced nothing usable - see GTFA_FAILURE_LATCH_ROUNDS. */
+  /**
+   * Set instead when getTransactionsForAddress merely stopped answering usefully - see
+   * GTFA_STANDDOWN_MS. Temporary: both the earliest-activity and launch-buyers reads skip the
+   * method until this passes, then try it again.
+   */
+  private gtfaStoodDownUntil = 0;
+  /**
+   * Consecutive rounds the Helius-only path was REACHED and still produced nothing usable - see
+   * GTFA_FAILURE_LATCH_ROUNDS. A round nobody answered (a timeout, a 5xx on the whole batch) is
+   * not counted: an unreachable endpoint says nothing about what it serves.
+   */
   private gtfaBarrenRounds = 0;
   /**
    * Set once searchAssets is established as unusable - true for any non-Helius endpoint, and for
@@ -363,9 +384,18 @@ export class HeliusClient {
     return stats;
   }
 
+  /**
+   * Whether getTransactionsForAddress is currently worth calling: not on a non-Helius endpoint or
+   * a plan that answered "method not found" (permanent), and not while stood down after barren
+   * rounds (expires on its own).
+   */
+  get gtfaUsable(): boolean {
+    return !this.gtfaUnavailable && Date.now() >= this.gtfaStoodDownUntil;
+  }
+
   /** Which method is currently answering earliest-activity lookups, for health/diagnostics. */
   get earliestActivityMethod(): "getTransactionsForAddress" | "getSignaturesForAddress" {
-    return this.gtfaUnavailable ? "getSignaturesForAddress" : "getTransactionsForAddress";
+    return this.gtfaUsable ? "getTransactionsForAddress" : "getSignaturesForAddress";
   }
 
   /**
@@ -520,7 +550,7 @@ export class HeliusClient {
     const unique = [...new Set(addresses)];
     if (unique.length === 0) return new Map();
 
-    if (opts.boundSufficientBefore && !this.gtfaUnavailable) {
+    if (opts.boundSufficientBefore && this.gtfaUsable) {
       const sufficientMs = opts.boundSufficientBefore.getTime();
       const cheap = await this.earliestViaSignatures(unique);
       const unsettled = unique.filter((address) => {
@@ -541,7 +571,7 @@ export class HeliusClient {
       return cheap;
     }
 
-    if (!this.gtfaUnavailable) {
+    if (this.gtfaUsable) {
       // null means "this round produced nothing usable" - fall through and redo the batch the
       // standard way rather than reporting every address as failed. That distinction is the
       // whole point: the previous version only fell through on an explicit -32601 JSON-RPC
@@ -553,7 +583,7 @@ export class HeliusClient {
       logger.info("getTransactionsForAddress unusable this round, falling back", {
         addresses: unique.length,
         barrenRounds: this.gtfaBarrenRounds,
-        latched: this.gtfaUnavailable,
+        latched: !this.gtfaUsable,
       });
     }
 
@@ -637,14 +667,12 @@ export class HeliusClient {
     for (const mint of unique) {
       const mintAccount = accounts.get(mint);
       const pdaAccount = accounts.get(pdaByMint.get(mint)!);
-      if (
-        !mintAccount ||
-        mintAccount === "failed" ||
-        !pdaAccount ||
-        pdaAccount === "failed" ||
-        mintAccount.value === null
-      ) {
+      if (!mintAccount || mintAccount === "failed" || !pdaAccount || pdaAccount === "failed") {
         out.set(mint, { status: "failed" });
+        continue;
+      }
+      if (mintAccount.value === null) {
+        out.set(mint, { status: "failed", mintPending: true });
         continue;
       }
       out.set(mint, { status: "found", isMayhemMode: pdaAccount.value !== null });
@@ -667,7 +695,7 @@ export class HeliusClient {
     const unique = [...new Set(mintAddresses)];
     const out = new Map<string, LaunchBuyersResult>();
     if (unique.length === 0) return out;
-    if (this.gtfaUnavailable) {
+    if (!this.gtfaUsable) {
       for (const mint of unique) out.set(mint, { status: "unsupported" });
       return out;
     }
@@ -706,17 +734,29 @@ export class HeliusClient {
           out.set(mint, { status: "unsupported" });
           continue;
         }
+        const txs = txsByMint.get(mint)!;
         if (!res || res.error || !Array.isArray(res.result?.data)) {
           if (res?.error) logger.warn("rpc error on launch buyers read", { mint, error: res.error });
-          out.set(mint, { status: "failed" });
+          // A later page failing doesn't lose the pages already paid for: what they hold is the
+          // reading so far, incomplete, and the retry adds to it rather than starting over.
+          const partial = txs.length > 0 ? parseLaunchBuyers(mint, txs, maxBuyers) : null;
+          out.set(mint, partial ? { status: "found", complete: false, ...partial } : { status: "failed" });
           continue;
         }
-        const txs = txsByMint.get(mint)!;
         txs.push(...res.result.data);
         const reading = parseLaunchBuyers(mint, txs, maxBuyers);
         if (!reading) {
-          // An empty history is a mint too new for the index yet - worth a retry, not an answer.
-          out.set(mint, { status: "failed" });
+          if (txs.length === 0) {
+            // An empty history is a mint too new for the index yet - worth a retry, not an answer.
+            out.set(mint, { status: "failed" });
+          } else {
+            // A history that doesn't start at a launch (a mint created and minted to in separate
+            // transactions, a token that didn't launch on a curve) never will: its first
+            // transaction is fixed. Reported as a complete reading with no buyers - which stays
+            // "unknown" downstream - so the caller caches it instead of re-paying 10-30 credits
+            // for the same answer every five minutes the token spends in band.
+            out.set(mint, { status: "found", complete: true, buyers: [], launchAt: null });
+          }
           continue;
         }
         const token = res.result.paginationToken ?? undefined;
@@ -784,6 +824,7 @@ export class HeliusClient {
     const responses = await this.sendBatched<TransactionsForAddressResult>(calls, 15_000);
 
     let usable = 0;
+    let answered = 0;
     for (const address of addresses) {
       const res = responses.get(address);
       if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
@@ -791,6 +832,7 @@ export class HeliusClient {
         logger.info("getTransactionsForAddress not served by this endpoint - using signatures path");
         return null;
       }
+      if (res) answered += 1;
       if (!res || res.error) {
         if (res?.error) logger.warn("rpc error on getTransactionsForAddress", { address, error: res.error });
         out.set(address, { status: "failed" });
@@ -808,12 +850,22 @@ export class HeliusClient {
     }
 
     if (usable === 0 && addresses.length > 0) {
-      this.gtfaBarrenRounds += 1;
-      if (this.gtfaBarrenRounds >= GTFA_FAILURE_LATCH_ROUNDS) {
-        this.gtfaUnavailable = true;
-        logger.warn("getTransactionsForAddress barren for too many rounds - using signatures path", {
-          rounds: this.gtfaBarrenRounds,
+      // Stood down, never switched off: a barren round looks the same from here whether the plan
+      // lacks the method or Helius is having a bad minute, and only -32601 above is the former.
+      // A round with no answer at all is not counted - it says nothing about the method.
+      if (answered === 0) {
+        logger.warn("getTransactionsForAddress unreachable this round - not counted against the latch", {
+          addresses: addresses.length,
         });
+      } else {
+        this.gtfaBarrenRounds += 1;
+        if (this.gtfaBarrenRounds >= GTFA_FAILURE_LATCH_ROUNDS) {
+          this.gtfaStoodDownUntil = Date.now() + GTFA_STANDDOWN_MS;
+          this.gtfaBarrenRounds = 0;
+          logger.warn("getTransactionsForAddress barren for too many rounds - standing down, will retry", {
+            standDownMinutes: Math.round(GTFA_STANDDOWN_MS / 60_000),
+          });
+        }
       }
       return null;
     }

@@ -78,7 +78,11 @@ export function assessTrainingRun(input: RunGuardInput): RunGuardVerdict {
   }
   if (problems.length === 0) return { accept: true, reason: null };
 
-  const live = input.incumbents.map((m) => m.activatedAt?.getTime() ?? 0).reduce((a, b) => Math.max(a, b), 0);
+  // An incumbent with no activation time (a row older than the column) counts as activated now:
+  // reading it as the epoch made the hold window look long spent, and the run went through at once.
+  const live = input.incumbents
+    .map((m) => m.activatedAt?.getTime() ?? input.now.getTime())
+    .reduce((a, b) => Math.max(a, b), 0);
   const heldSinceMs = input.now.getTime() - live;
   if (heldSinceMs >= input.maxHoldMs) {
     return {

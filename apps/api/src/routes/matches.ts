@@ -190,6 +190,11 @@ export async function registerMatchRoutes(
     // Skipped entirely when the reader hasn't opted in - no curated rows are fetched, so nothing
     // is filtered out after the fact and the page count stays exact.
     const interleave = wantsCurated && mergeDepth <= MAX_MERGE_DEPTH;
+    // Past the merge depth with curated cards on, this page is matches only - but the pages before
+    // it showed fewer than MAX_MERGE_DEPTH matches (curated cards took slots), so a plain
+    // (page - 1) * PAGE_SIZE offset skipped every match ranked between the last one shown and
+    // position MAX_MERGE_DEPTH. The offset is counted from the merged run instead.
+    const pastMergeDepth = wantsCurated && !interleave;
 
     // The curated calls interleaved are every model the reader checked (else their single pick,
     // else the default) - the same list the Models tab marks as in their feed.
@@ -198,13 +203,13 @@ export async function registerMatchRoutes(
       const [state, feed] = await Promise.all([contestState(opts.env), saved ?? savedFeed(request)]);
       return resolveFeedModels(state, feed).models;
     };
-    const loadCurated = async () => {
+    const loadCurated = async (depth = mergeDepth) => {
       const models = await feedModels();
       // Several models calling one token collapse into one card (at most one call per model), so
       // the newest page * models calls always hold this page's cards whole - see
       // groupSameTokenCalls. Only the columns grouping needs; the page's own rows are loaded in
       // full below.
-      const take = mergeDepth * models.length;
+      const take = depth * models.length;
       const [rows, total] = await Promise.all([
         prisma.curatedAlert.findMany({
           where: { model: { in: models } },
@@ -218,6 +223,31 @@ export async function registerMatchRoutes(
       return { models, rows, total, hitLimit: rows.length === take };
     };
 
+    // How many of the first MAX_MERGE_DEPTH merged items were matches: where the matches-only
+    // tail starts. The same two bare reads page MAX_MERGE_DEPTH / PAGE_SIZE itself makes.
+    const matchesInMergedRun = async (): Promise<number> => {
+      const [run, calls] = await Promise.all([
+        prisma.match.findMany({
+          where,
+          orderBy: { matchedAt: "desc" },
+          take: MAX_MERGE_DEPTH,
+          select: { matchedAt: true },
+        }),
+        loadCurated(MAX_MERGE_DEPTH),
+      ]);
+      const times = [
+        ...run.map((m) => ({ match: true, at: m.matchedAt.getTime() })),
+        ...groupSameTokenCalls(calls.rows, CURATED_MATCH_LINK_WINDOW_MS).map((g) => ({
+          match: false,
+          at: g.newest.createdAt.getTime(),
+        })),
+      ].sort((a, b) => b.at - a.at);
+      return times.slice(0, MAX_MERGE_DEPTH).filter((t) => t.match).length;
+    };
+    const skip = pastMergeDepth
+      ? (await matchesInMergedRun()) + mergeDepth - MAX_MERGE_DEPTH - PAGE_SIZE
+      : (page - 1) * PAGE_SIZE;
+
     const [[matches, matchTotal], curated] = await Promise.all([
       Promise.all([
         prisma.match.findMany({
@@ -225,7 +255,7 @@ export async function registerMatchRoutes(
           orderBy: { matchedAt: "desc" },
           // Interleaving needs the whole run up to this page (it slices the union itself);
           // otherwise this IS the page.
-          ...(interleave ? { take: mergeDepth } : { skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE }),
+          ...(interleave ? { take: mergeDepth } : { skip, take: PAGE_SIZE }),
           // Bare rows, like the curated half: only the page's own matches are loaded in full,
           // below, and a deep page's merge used to pull up to 300 matches with their token and
           // snapshot rows to show twelve.
@@ -253,7 +283,7 @@ export async function registerMatchRoutes(
     const pageItems = interleave ? items.slice(end - PAGE_SIZE, end) : items;
     const hasMore = interleave
       ? items.length > end || matchTotal > matches.length || (curated?.hitLimit ?? false)
-      : matchTotal > end;
+      : matchTotal > skip + matches.length;
 
     // A card on this page can have older calls than the read reached; fill them in, so the card
     // shows the token's first call and every model that called it.
