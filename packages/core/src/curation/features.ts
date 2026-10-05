@@ -27,10 +27,13 @@ export const CANDIDATE_FEATURE_NAMES = [
   "buys24h",
   "sells24h",
   "buyRatio24h",
-  // Short-window momentum - the label is "2x within the NEXT hour", and these are the only
-  // features that can see what the price and flow were doing over the minutes just before; on
-  // an hour-long question a 24h aggregate is weak evidence. All from the same DexScreener response the 24h figures come from; null on
-  // rows banked before they were captured (the trainer's missing-indicators absorb that cleanly).
+  // Short-window momentum - the label is "2x within the next 15 minutes", and these are the
+  // only features that can see what the price and flow were doing over the minutes just before;
+  // on a quarter-hour question a 24h aggregate is weak evidence. All from the same DexScreener
+  // response the 24h figures come from; null on rows banked before they were captured (the
+  // trainer's missing-indicators absorb that cleanly). For a token younger than a window,
+  // DexScreener reports the change since launch, so on a launch under an hour old the 1h, 6h and
+  // 24h moves are one and the same figure.
   "priceChange5mPct",
   "priceChange1hPct",
   "priceChange6hPct",
@@ -348,6 +351,9 @@ function deriveBuyRatio(buys: number | null, sells: number | null): number | nul
   return buys === null && sells === null ? null : totalTxns === 0 ? null : (buys ?? 0) / totalTxns;
 }
 
+/** The short window volumeAccel compares against: a token younger than this has not lived through it. */
+export const VOLUME_ACCEL_MIN_AGE_MINUTES = 5;
+
 /** Builds the feature vector for a scored candidate, at the moment it would be curated. */
 export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
   const buys = scored.buys24h ?? null;
@@ -369,8 +375,17 @@ export function buildCandidateFeatures(scored: ScoredToken): CandidateFeatures {
   // Is the churn speeding up or dying down: the last 5 minutes extrapolated to an hour's pace,
   // over the actual last hour. >1 means accelerating. Null when the hour had no volume to
   // compare against - a division by zero here is not "infinitely accelerating", it's "no data".
+  // Null too while the token is younger than the 5-minute window: every trade it has ever had
+  // sits inside both windows, so the ratio is exactly 12 by construction, not a measurement (on
+  // production decision rows 695 of 697 launches under five minutes old read 12.00 - a third of
+  // all rows - which made the input a second copy of "under five minutes old" and dragged the
+  // scale every older token was standardized on). The missing-indicator carries "too young to
+  // measure"; ageMinutes already says how young.
   const volumeAccel =
-    scored.volume5mUsd !== undefined && scored.volume1hUsd !== undefined && scored.volume1hUsd > 0
+    scored.volume5mUsd !== undefined &&
+    scored.volume1hUsd !== undefined &&
+    scored.volume1hUsd > 0 &&
+    !(scored.ageMinutes !== undefined && scored.ageMinutes < VOLUME_ACCEL_MIN_AGE_MINUTES)
       ? (scored.volume5mUsd * 12) / scored.volume1hUsd
       : null;
 

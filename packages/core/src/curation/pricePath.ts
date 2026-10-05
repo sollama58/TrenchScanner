@@ -96,6 +96,8 @@ const MAX_MINTS = 6_000;
 /** Two observations closer than this are one minute's worth: keep the newest. */
 const MIN_TICK_SPACING_MS = 20_000;
 const MINUTE = 60_000;
+/** How much newer than "N minutes ago" the reference tick for a trailing return may be. */
+const PRICE_AGO_SLACK_MS = MIN_TICK_SPACING_MS / 2;
 
 /**
  * The tape: one short price/holder series per mint, fed by the scan. Memory is bounded by
@@ -150,14 +152,16 @@ export class PricePathBook {
     const first = tape[0]!;
     const observedMinutes = (now.at - first.at) / MINUTE;
 
-    // The price at least `minutes` ago: the newest tick at or before that moment, provided the
-    // tape reaches back that far (within half a minute of slack).
+    // The price `minutes` ago: the newest tick at or before that moment, give or take the slack
+    // of one tick's spacing, provided the tape reaches back that far. The slack used to be half a
+    // minute, which on the scan's 30-second cadence let the tick from the previous cycle stand
+    // in for "a minute ago": pathRet1mPct was a 30-second return, and null only on a one-tick tape.
     const priceAgo = (minutes: number): number | null => {
       const target = now.at - minutes * MINUTE;
-      if (first.at > target + MINUTE / 2) return null;
+      if (first.at > target + PRICE_AGO_SLACK_MS) return null;
       let best: Tick | null = null;
       for (const tick of tape) {
-        if (tick.at <= target + MINUTE / 2) best = tick;
+        if (tick.at <= target + PRICE_AGO_SLACK_MS) best = tick;
         else break;
       }
       return best ? best.priceUsd : null;

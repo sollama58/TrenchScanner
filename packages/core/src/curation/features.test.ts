@@ -37,6 +37,18 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(f.volumeAccel).toBeCloseTo(2);
     // A zero-volume hour has no pace to compare against - null, not Infinity.
     expect(buildCandidateFeatures(scored({ volume5mUsd: 5_000, volume1hUsd: 0 })).volumeAccel).toBeNull();
+    // A launch younger than the 5-minute window has all its volume in both windows: 12 by
+    // construction, so unknown rather than "accelerating twelvefold". Five minutes old measures.
+    expect(
+      buildCandidateFeatures(scored({ volume5mUsd: 5_000, volume1hUsd: 5_000, ageMinutes: 3 })).volumeAccel,
+    ).toBeNull();
+    expect(
+      buildCandidateFeatures(scored({ volume5mUsd: 5_000, volume1hUsd: 5_000, ageMinutes: 5 })).volumeAccel,
+    ).toBeCloseTo(12);
+    // Unknown age leaves the measurement alone.
+    expect(
+      buildCandidateFeatures(scored({ volume5mUsd: 5_000, volume1hUsd: 5_000 })).volumeAccel,
+    ).toBeCloseTo(12);
   });
 
   it("records every declared feature name, unknowns as null", () => {
