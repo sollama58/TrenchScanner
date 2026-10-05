@@ -196,11 +196,17 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
 
   app.delete("/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const existing = await prisma.userFilter.findUnique({ where: { id } });
-    if (!existing || existing.userId !== request.user!.userId) {
-      return reply.code(404).send({ error: "filter not found" });
-    }
-    await prisma.userFilter.delete({ where: { id } });
+    const userId = request.user!.userId;
+    // Under the same lock as the other filter writes, so a create counting toward the cap and a
+    // delete can't interleave, and a concurrent PATCH gets a 404 rather than a P2025 500.
+    const existing = await prisma.$transaction(async (tx) => {
+      await lockUserFilters(tx, userId);
+      const row = await tx.userFilter.findUnique({ where: { id } });
+      if (!row || row.userId !== userId) return null;
+      await tx.userFilter.delete({ where: { id } });
+      return row;
+    });
+    if (!existing) return reply.code(404).send({ error: "filter not found" });
     if (existing.shareOnLeaderboard) filterLeaderboardCache.clear();
     return reply.code(204).send();
   });

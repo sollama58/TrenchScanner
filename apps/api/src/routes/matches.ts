@@ -103,6 +103,56 @@ export const feedStatsQuerySchema = z.object({
 /** Per source: far above any real feed's day, so it only bounds a runaway window. */
 const FEED_STATS_MAX_ROWS = 5_000;
 
+/** The match columns resolveOutcome reads, plus the link to the row grading it. */
+const MATCH_OUTCOME_SELECT = {
+  matchedAt: true,
+  candidateOutcomeId: true,
+  peak1hReturnPct: true,
+  maxDrawdown1hPct: true,
+  hit2xIn1h: true,
+  hit4xIn1h: true,
+  disqualified: true,
+  peak24hReturnPct: true,
+} satisfies Prisma.MatchSelect;
+type MatchOutcomeRow = Prisma.MatchGetPayload<{ select: typeof MATCH_OUTCOME_SELECT }>;
+
+/**
+ * A filter alert is graded by its own outcome row (the watcher copies the verdict onto the match
+ * when the window closes). Reads the rows still open for these matches, so a 2x shows the moment
+ * it lands and the card doesn't say "Live" for the whole window after the token doubled.
+ */
+async function openOutcomeRows(matches: readonly MatchOutcomeRow[]) {
+  const openIds = matches.flatMap((m) =>
+    m.hit2xIn1h === null && m.candidateOutcomeId ? [m.candidateOutcomeId] : [],
+  );
+  const rows =
+    openIds.length === 0
+      ? []
+      : await prisma.candidateOutcome.findMany({
+          where: { id: { in: openIds } },
+          select: { id: true, ...curatedAlertInclude.candidateOutcome.select },
+        });
+  return new Map(rows.map(({ id, ...row }) => [id, row]));
+}
+
+/** How a filter alert is going / went, from its open grading row while there is one. */
+function matchOutcome(m: MatchOutcomeRow, rowById: Awaited<ReturnType<typeof openOutcomeRows>>) {
+  return resolveOutcome({
+    createdAt: m.matchedAt,
+    peak1hReturnPct: m.peak1hReturnPct,
+    maxDrawdown1hPct: m.maxDrawdown1hPct,
+    hit2xIn15m: null,
+    hit2xIn1h: m.hit2xIn1h,
+    hit4xIn1h: m.hit4xIn1h,
+    disqualified: m.disqualified,
+    peak24hReturnPct: m.peak24hReturnPct,
+    runPeakMinutes: null,
+    // A match keeps no closing stamp of its own; the row's verdict is what makes it final.
+    outcomeFinalizedAt: m.hit2xIn1h === null ? null : m.matchedAt,
+    candidateOutcome: (m.candidateOutcomeId && rowById.get(m.candidateOutcomeId)) || null,
+  });
+}
+
 export async function registerMatchRoutes(
   app: FastifyInstance,
   opts: {
@@ -191,14 +241,8 @@ export async function registerMatchRoutes(
         select: {
           id: true,
           tokenId: true,
-          matchedAt: true,
-          candidateOutcomeId: true,
           peakReturnPct: true,
-          peak1hReturnPct: true,
-          maxDrawdown1hPct: true,
-          hit2xIn1h: true,
-          hit4xIn1h: true,
-          disqualified: true,
+          ...MATCH_OUTCOME_SELECT,
           token: { select: { symbol: true } },
         },
       }),
@@ -225,20 +269,7 @@ export async function registerMatchRoutes(
           }),
     ]);
 
-    // A filter alert is graded by its own outcome row (the watcher copies the verdict onto the
-    // match when the window closes); read it while it is still open, so a 2x shows the moment it
-    // lands, as on the card.
-    const openIds = matches.flatMap((m) =>
-      m.hit2xIn1h === null && m.candidateOutcomeId ? [m.candidateOutcomeId] : [],
-    );
-    const rows =
-      openIds.length === 0
-        ? []
-        : await prisma.candidateOutcome.findMany({
-            where: { id: { in: openIds } },
-            select: { id: true, ...curatedAlertInclude.candidateOutcome.select },
-          });
-    const rowById = new Map(rows.map(({ id, ...row }) => [id, row]));
+    const rowById = await openOutcomeRows(matches);
 
     type StatsCard = FeedStatsCard & {
       id: string;
@@ -246,19 +277,7 @@ export async function registerMatchRoutes(
       curated: { alertId: string; card: FeedStatsCard } | null;
     };
     const matchCards: StatsCard[] = matches.map((m) => {
-      const outcome = resolveOutcome({
-        createdAt: m.matchedAt,
-        peak1hReturnPct: m.peak1hReturnPct,
-        maxDrawdown1hPct: m.maxDrawdown1hPct,
-        hit2xIn15m: null,
-        hit2xIn1h: m.hit2xIn1h,
-        hit4xIn1h: m.hit4xIn1h,
-        disqualified: m.disqualified,
-        peak24hReturnPct: null,
-        runPeakMinutes: null,
-        outcomeFinalizedAt: null,
-        candidateOutcome: (m.candidateOutcomeId && rowById.get(m.candidateOutcomeId)) || null,
-      });
+      const outcome = matchOutcome(m, rowById);
       return {
         id: m.id,
         kind: "match",
@@ -469,7 +488,13 @@ export async function registerMatchRoutes(
         ? Promise.resolve([])
         : prisma.match
             .findMany({ where: { id: { in: pageMatchIds } }, include: matchInclude })
-            .then((rows) => withLatestSnapshots(rows, latest)),
+            .then(async (rows) => {
+              const [decorated, outcomeRows] = await Promise.all([
+                withLatestSnapshots(rows, latest),
+                openOutcomeRows(rows),
+              ]);
+              return decorated.map((m) => ({ ...m, outcome: matchOutcome(m, outcomeRows) }));
+            }),
       pageGroups.length === 0
         ? Promise.resolve([])
         : prisma.curatedAlert
@@ -495,6 +520,9 @@ export async function registerMatchRoutes(
         // client doesn't have to re-implement the "which of these two is newer" comparison.
         currentMarketCapUsd: current.marketCapUsd,
         currentMarketCapAt: current.at,
+        // How the alert is going, from its open grading row (see openOutcomeRows). The stored
+        // columns stay on the card for older bundles, which derive the badge from them.
+        outcome: match.outcome,
         curated: null as CuratedCardMeta | null,
       };
     };
