@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
+import { type CuratedStats, type Leaderboard, type MarketWeather, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { RingGauge, SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
@@ -124,9 +124,12 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
           </span>
         </button>
       </section>
-      <p className="window-note faint small">
-        Hit rates cover the last 30 days of {modelName}'s graded calls.
-      </p>
+      <div className="window-row">
+        <p className="window-note faint small">
+          Hit rates cover the last 30 days of {modelName}'s graded calls.
+        </p>
+        {stats.data?.market && <WeatherChip weather={stats.data.market} onAbout={() => setAboutOpen(true)} />}
+      </div>
 
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} targets={t} />
       <section className="panel feed">
@@ -222,5 +225,47 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
         )}
       </section>
     </div>
+  );
+}
+
+const WEATHER_LABEL: Record<MarketWeather["condition"], string> = {
+  hot: "Hot market",
+  normal: "Normal market",
+  cold: "Cold market",
+  unknown: "Market: too early to read",
+};
+
+/**
+ * How often launches are doubling right now against the last week. Informational only: it holds
+ * nothing back. The hover says what it measured; a click opens the full explanation.
+ */
+function WeatherChip({ weather: w, onAbout }: { weather: MarketWeather; onAbout: () => void }) {
+  const detail =
+    w.recentRatePct === null
+      ? `Only ${w.recentGraded} graded moments in the last ${w.recentHours}h, too few to read.`
+      : `${pct(w.recentRatePct, 1)} of ${w.recentGraded.toLocaleString()} launch moments doubled within the hour ` +
+        `over the last ${w.recentHours}h` +
+        (w.trailingRatePct === null
+          ? `. Not enough history yet for the ${w.trailingDays}-day average.`
+          : `, against ${pct(w.trailingRatePct, 1)} over the last ${w.trailingDays} days.`);
+  const title = `${detail} Informational only: it doesn't change or hold back any alert. Click for how it works.`;
+  return (
+    <button
+      type="button"
+      className={`weather-chip ${w.condition}`}
+      onClick={onAbout}
+      title={title}
+      aria-label={`${WEATHER_LABEL[w.condition]}. ${title}`}
+    >
+      <span className="weather-dot" aria-hidden="true" />
+      {WEATHER_LABEL[w.condition]}
+      {w.recentRatePct !== null && (
+        <span className="num">
+          {" "}
+          · {pct(w.recentRatePct, 0)} doubling ({w.recentHours}h)
+          {w.trailingRatePct !== null && ` vs ${pct(w.trailingRatePct, 0)} (${w.trailingDays}d)`}
+        </span>
+      )}
+    </button>
   );
 }

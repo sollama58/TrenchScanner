@@ -315,6 +315,8 @@ model CuratedAlert {
   disqualified       Boolean?
   peak24hReturnPct   Float?
   outcomeFinalizedAt DateTime?
+  /// Copy of CandidateOutcome.simReturnPct: the call's return under the fixed exit plan.
+  simReturnPct       Float?
 
   aiReviews AiReview[]
 
@@ -596,6 +598,10 @@ model CandidateOutcome {
   /// Set when the row is completely done (at 1h for non-extended rows, 24h for extended ones).
   finalized24hAt   DateTime?
   peak24hReturnPct Float?
+  /// Simulated return of the call under the fixed exit plan (EXIT_PLAN in curation/profitSim.ts:
+  /// half at 2x, the rest at 4x, stop at -50%, out at 1 hour), in percent of the stake. Written
+  /// when the hour closes; null when ungraded or when the close price is unknown.
+  simReturnPct     Float?
 
   curatedAlerts   CuratedAlert[]
   shadowEmissions CuratedShadowEmission[]

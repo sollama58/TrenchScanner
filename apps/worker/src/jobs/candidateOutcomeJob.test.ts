@@ -153,6 +153,10 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.hit4xIn1h).toBe(false); // won, but short of the 4x goal
     expect(updated.extended24h).toBe(true);
     expect(updated.finalized24hAt).toBeNull(); // still on the 24h watch
+    // Under the exit plan: half sold at 2x, the rest closed at the hour's 1.4, every sale paying
+    // the pre-bond slippage.
+    const slip = env.CANDIDATE_ENTRY_SLIPPAGE_PCT_PREBOND / 100;
+    expect(updated.simReturnPct).toBeCloseTo(((0.5 * 2 + 0.5 * 1.4) * (1 - slip) - 1) * 100);
 
     // The verdict was copied onto the feed row the moment the window closed - the badge must
     // not wait out the 24h watch - but the outcome isn't stamped final until that watch ends.
@@ -160,6 +164,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updatedAlert.hit2xIn15m).toBe(true);
     expect(updatedAlert.peak1hReturnPct).toBeCloseTo(160);
     expect(updatedAlert.outcomeFinalizedAt).toBeNull();
+    expect(updatedAlert.simReturnPct).toBeCloseTo(updated.simReturnPct!);
   });
 
   it("grades a 2x after 15 minutes but inside the hour as a win, and extends its watch", async () => {

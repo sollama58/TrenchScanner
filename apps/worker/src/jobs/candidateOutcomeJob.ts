@@ -6,6 +6,7 @@ import {
   initialOutcomeAggregates,
   applyPriceTick,
   computeOutcomeLabels,
+  simulateExitPlan,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
   CURRENT_LABEL_RULE,
@@ -214,8 +215,8 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
 
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
       // Until the fill is taken, every tick goes through the entry rule (see EntryRule).
-      const aggUpdates =
-        price !== undefined ? applyPriceTick(row, price, tickAt, entryRuleFor(row.features, env)) : {};
+      const entryRule = entryRuleFor(row.features, env);
+      const aggUpdates = price !== undefined ? applyPriceTick(row, price, tickAt, entryRule) : {};
       const merged: OutcomeAggregates = { ...row, ...aggUpdates };
 
       const data: Prisma.CandidateOutcomeUpdateInput = { ...aggUpdates, lastCheckedAt: tickAt };
@@ -229,6 +230,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
 
       let extended = row.extended24h;
       let closedLabels: ReturnType<typeof computeOutcomeLabels> | null = null;
+      let simReturnPct: number | null = null;
       let finalPeak24hPct: number | null = null;
       if (row.finalizedAt === null && elapsedMs >= labelWindowMs && merged.entryAt === null) {
         // The window closed without a single price at or past the entry delay: the worker was
@@ -249,6 +251,10 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
         data.hit4xIn1h = closedLabels.hit4xIn1h;
         data.disqualified = closedLabels.disqualified;
         data.labelValue = closedLabels.labelValue;
+        // The call's return under the fixed exit plan, closing at this tick's price (the first
+        // seen at or after the hour) or, without one, the last price the row saw.
+        simReturnPct = simulateExitPlan(merged, price ?? row.lastPriceUsd, entryRule.slippageFraction);
+        data.simReturnPct = simReturnPct;
         finalized += 1;
 
         // Clean winners graduate to the 24h watch so the record shows how far they ultimately
@@ -317,6 +323,7 @@ export async function runCandidateWatchJob(dexScreener: DexScreenerClient, env: 
                     hit2xIn1h: closedLabels.hit2xIn1h,
                     hit4xIn1h: closedLabels.hit4xIn1h,
                     disqualified: closedLabels.disqualified,
+                    simReturnPct,
                   }
                 : {}),
               ...(finalPeak24hPct !== null
@@ -384,6 +391,7 @@ async function repairCuratedVerdicts(): Promise<number> {
           hit2xIn1h: true,
           hit4xIn1h: true,
           disqualified: true,
+          simReturnPct: true,
           peak24hReturnPct: true,
           finalized24hAt: true,
         },
@@ -407,6 +415,7 @@ async function repairCuratedVerdicts(): Promise<number> {
           hit2xIn1h: outcome.hit2xIn1h,
           hit4xIn1h: outcome.hit4xIn1h,
           disqualified: outcome.disqualified,
+          simReturnPct: outcome.simReturnPct,
           ...(outcome.peak24hReturnPct !== null ? { peak24hReturnPct: outcome.peak24hReturnPct } : {}),
           ...(outcome.finalized24hAt !== null ? { outcomeFinalizedAt: outcome.finalized24hAt } : {}),
         },

@@ -39,6 +39,12 @@ export interface CallRecord {
   goals: number;
   /** Sum of the graded calls' labels (doublings; 0 for a miss). */
   sumLabel: number;
+  /**
+   * Graded calls with a simulated return under the fixed exit plan (curation/profitSim.ts), and
+   * the sum of those returns in percent of a stake. Live records only; absent on exams.
+   */
+  simCalls?: number;
+  sumSimReturnPct?: number;
 }
 
 /** labelValue is log2 of the peak multiple for clean wins: the 4x goal is labelValue >= 2. */
@@ -81,12 +87,19 @@ export interface RecordSummary {
   proven4xPct: number | null;
   /** Average doublings per graded call. */
   avgReturnDoublings: number | null;
+  /** Graded calls with a simulated return under the fixed exit plan. */
+  simCalls: number;
+  /** Average simulated return per call, in percent of the stake; null with none. */
+  avgSimReturnPct: number | null;
+  /** Total simulated return over those calls, in percent of one stake (one stake per call). */
+  totalSimReturnPct: number | null;
   /** This record's score on its own, 0-100; null with nothing graded. */
   score: number | null;
 }
 
 export function summarizeRecord(record: CallRecord, targets: PrecisionTargets): RecordSummary {
   const g = record.graded;
+  const simCalls = record.simCalls ?? 0;
   return {
     calls: record.calls,
     graded: g,
@@ -95,6 +108,9 @@ export function summarizeRecord(record: CallRecord, targets: PrecisionTargets): 
     proven2xPct: g > 0 ? round1(provenRate(record.wins, g) * 100) : null,
     proven4xPct: g > 0 ? round1(provenRate(record.goals, g) * 100) : null,
     avgReturnDoublings: g > 0 ? record.sumLabel / g : null,
+    simCalls,
+    avgSimReturnPct: simCalls > 0 ? round1((record.sumSimReturnPct ?? 0) / simCalls) : null,
+    totalSimReturnPct: simCalls > 0 ? round1(record.sumSimReturnPct ?? 0) : null,
     score: recordScore(record, targets),
   };
 }

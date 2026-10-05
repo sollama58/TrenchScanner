@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { ago, change, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "./format";
+import {
+  ago,
+  change,
+  multiple,
+  pct,
+  shortAddress,
+  signedPct,
+  stakes,
+  tokenLabel,
+  tokenThumb,
+  usd,
+} from "./format";
 
 describe("format", () => {
   it("abbreviates dollar figures", () => {
@@ -14,6 +25,17 @@ describe("format", () => {
     expect(multiple(300)).toBe("4.0x");
     expect(multiple(1900)).toBe("20x");
     expect(multiple(null)).toBe("–");
+  });
+
+  it("signs returns and counts stakes", () => {
+    expect(signedPct(12.4)).toBe("+12%");
+    expect(signedPct(-8)).toBe("-8%");
+    expect(signedPct(0.2)).toBe("0%");
+    expect(signedPct(null)).toBe("–");
+    expect(stakes(340)).toBe("+3.4 stakes");
+    expect(stakes(-100)).toBe("-1.0 stake");
+    expect(stakes(2)).toBe("0 stakes");
+    expect(stakes(undefined)).toBe("–");
   });
 
   it("measures change and handles a missing base", () => {
