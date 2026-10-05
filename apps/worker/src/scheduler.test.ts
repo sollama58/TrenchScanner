@@ -159,6 +159,37 @@ describe("scheduleInterval", () => {
     await vi.advanceTimersByTimeAsync(300_000);
     expect(runs).toEqual([0]);
   });
+
+  it("settle() waits for the run in flight and reports one that outlives the grace", async () => {
+    const runs: number[] = [];
+    const job = scheduleInterval("scan", jobTaking(10_000, runs), 1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    job.stop();
+    const quick = job.settle(2_000);
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(await quick).toBe("interrupted");
+    const patient = job.settle(20_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await patient).toBe("finished");
+    // Stopped: nothing was scheduled behind the run that finished.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(runs).toEqual([0]);
+    expect(await job.settle(1_000)).toBe("idle");
+  });
+
+  it("holds the first run for a whole interval when the delay can't be read", async () => {
+    const runs: number[] = [];
+    const job = scheduleInterval("curator-training", jobTaking(0, runs), 60, {
+      firstRunDelayMs: async () => {
+        throw new Error("db down");
+      },
+    });
+    await vi.advanceTimersByTimeAsync(59 * 60_000);
+    expect(runs).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    job.stop();
+    expect(runs).toEqual([60 * 60_000]);
+  });
 });
 
 describe("scheduleDailyAt", () => {
@@ -187,6 +218,36 @@ describe("scheduleDailyAt", () => {
     await vi.advanceTimersByTimeAsync(2 * HOUR);
     job.stop();
     expect(runs).toEqual([Date.UTC(2026, 9, 4, 4, 0, 0)]);
+  });
+
+  it("re-runs a slot whose run was cut short, even when the previous success is under a day old", async () => {
+    const runs: number[] = [];
+    // Boot at 04:25 after a deploy killed the 04:00 run; yesterday's success is 24h5m old.
+    vi.setSystemTime(Date.UTC(2026, 9, 4, 4, 25, 0));
+    const job = scheduleDailyAt("cleanup", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => new Date(Date.UTC(2026, 9, 3, 4, 20, 0)),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runs).toEqual([Date.UTC(2026, 9, 4, 4, 25, 0)]);
+    await vi.advanceTimersByTimeAsync(24 * HOUR);
+    job.stop();
+    expect(runs).toEqual([Date.UTC(2026, 9, 4, 4, 25, 0), Date.UTC(2026, 9, 5, 4, 0, 0)]);
+  });
+
+  it("does not re-run a slot whose run already finished after it", async () => {
+    const runs: number[] = [];
+    // Boot at 05:00; today's 04:00 run finished at 04:33.
+    vi.setSystemTime(Date.UTC(2026, 9, 4, 5, 0, 0));
+    const job = scheduleDailyAt("cleanup", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => new Date(Date.UTC(2026, 9, 4, 4, 33, 0)),
+    });
+    await vi.advanceTimersByTimeAsync(22 * HOUR);
+    expect(runs).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2 * HOUR);
+    job.stop();
+    expect(runs).toEqual([Date.UTC(2026, 9, 5, 4, 0, 0)]);
   });
 
   it("runs straight away when overdue, then settles onto its hour", async () => {
