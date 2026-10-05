@@ -109,6 +109,26 @@ describe("PricePathBook", () => {
     expect(scoredFromFeatures(vector, 1, 100_000).pricePath).toEqual(f);
   });
 
+  it("reads a trailing return from a tick at least that old, not the previous cycle's", () => {
+    // The scan observes every 30 seconds. Two ticks are 30 seconds of tape: no 1-minute return
+    // exists yet (it used to be the 30-second move, dressed as a minute).
+    const book = new PricePathBook();
+    book.observe("m", new Date(T0), 1);
+    book.observe("m", new Date(T0 + 30_000), 1.1);
+    expect(book.features("m").pathRet1mPct).toBeNull();
+    // Four ticks: the minute-ago reference is the tick 60s back, not the one 30s back.
+    book.observe("m", new Date(T0 + 60_000), 1.2);
+    book.observe("m", new Date(T0 + 90_000), 1.5);
+    expect(book.features("m").pathRet1mPct!).toBeCloseTo(((1.5 - 1.1) / 1.1) * 100, 6);
+    // A tick a few seconds short of the mark still counts (scan timing jitters).
+    const jitter = new PricePathBook();
+    jitter.observe("j", new Date(T0), 1);
+    jitter.observe("j", new Date(T0 + 29_000), 1.1);
+    jitter.observe("j", new Date(T0 + 58_000), 1.2);
+    jitter.observe("j", new Date(T0 + 115_000), 1.5);
+    expect(jitter.features("j").pathRet1mPct!).toBeCloseTo(((1.5 - 1.2) / 1.2) * 100, 6);
+  });
+
   it("forgets mints that stopped being observed", () => {
     const book = new PricePathBook();
     book.observe("a", new Date(T0), 1);
