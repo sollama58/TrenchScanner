@@ -45,10 +45,12 @@ export function TopFiltersTab({ goTo }: { goTo: (t: Tab) => void }) {
             <span className="eyebrow">Top filters</span>
             <h2>Filters ranked by their alerts</h2>
             <p className="muted">
-              Filters their owners chose to share, scored 0-100 the same way as the models: how far each one's
-              proven 2x and 4x rates reach toward the{" "}
-              {data ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}%` : "75% / 50%"} targets.
-              A win is 2x on the alert price within 15 minutes (4x within 30) before a 50% drop.
+              Filters their owners chose to share, scored 0-100 the same way as the models: 50 points for the
+              proven 2x rate, 30 for the 4x rate (targets{" "}
+              {data ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}%` : "75% / 50%"}), and 20
+              for run size, how far the calls ran over their 24h watch (target a{" "}
+              {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x). A win is 2x on the alert
+              price within 15 minutes (4x within 30) before a 50% drop.
             </p>
             {data && (
               <p className="muted small">
@@ -140,7 +142,7 @@ function BoardEntry({
           title={
             e.proven2xPct === null
               ? "No graded alerts yet"
-              : `Proven 2x ${e.proven2xPct}% · 4x ${e.proven4xPct}%`
+              : `Proven 2x ${e.proven2xPct}% · 4x ${e.proven4xPct}% · run ${e.provenRunDoublings} doublings`
           }
         />
         <p className="small muted board-stats">
@@ -151,7 +153,11 @@ function BoardEntry({
           <strong className={`num ${(e.goalRatePct ?? 0) >= targets.hitRate4xPct ? "up" : ""}`}>
             {pct(e.goalRatePct)}
           </strong>{" "}
-          4x · {e.graded.toLocaleString()} graded since {since}
+          4x ·{" "}
+          <span title="How far the alerts ran on average over their 24h watch (stopped-out calls count as 0)">
+            runs avg <strong className="num">{runMultiple(e.avgRunDoublings)}</strong>
+          </span>{" "}
+          · {e.graded.toLocaleString()} graded since {since}
         </p>
         <details className="board-criteria">
           <summary className="small">Settings</summary>
@@ -174,4 +180,10 @@ function BoardEntry({
       </div>
     </li>
   );
+}
+
+/** Average run size in doublings as a multiple, e.g. 1.5 doublings -> "2.8x". */
+function runMultiple(doublings: number | null): string {
+  if (doublings === null) return "–";
+  return `${(2 ** doublings).toFixed(1)}x`;
 }

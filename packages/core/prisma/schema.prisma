@@ -834,6 +834,10 @@ model Match {
   hit4xIn1h          Boolean?
   /// Hit 2x only after first falling through the 50% stop: a loss.
   disqualified       Boolean?
+  /// The run peak over the anchor's watch (24h for clean winners, the label window otherwise), as a
+  /// return on the alert price: copied when the anchor retires, so the filter leaderboard's run-size
+  /// part outlives the anchor row. Null until then, and on matches from before 2026-10-05.
+  peak24hReturnPct   Float?
 
   @@unique([userId, tokenId, filterId, matchedAt])
   @@index([userId, matchedAt])

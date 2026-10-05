@@ -450,6 +450,14 @@ export async function runCandidateWatchJob(
             },
           });
         }
+        // The run peak too, once the row retires: the filter leaderboard's run-size part reads it
+        // from the alert, so it survives the anchor being pruned.
+        if (row.sampleKind === "match" && finalPeak24hPct !== null) {
+          await tx.match.updateMany({
+            where: { tokenId: row.tokenId, candidateOutcomeId: row.id },
+            data: { peak24hReturnPct: finalPeak24hPct },
+          });
+        }
       });
     } catch (err) {
       logger.error("failed to update candidate outcome", { id: row.id, error: String(err) });
