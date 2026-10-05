@@ -256,7 +256,8 @@ const envSchema = z.object({
   // their verdict is copied onto the Match rows when the window closes, they never train a model,
   // and at ~6k rows (~28MB) a day they were 40% of the table's growth. 0 keeps them on the
   // CANDIDATE_OUTCOME_RETENTION_DAYS horizon.
-  MATCH_OUTCOME_RETENTION_DAYS: z.coerce.number().nonnegative().default(7),
+  // Off (0) until the user approves the shorter horizon.
+  MATCH_OUTCOME_RETENTION_DAYS: z.coerce.number().nonnegative().default(0),
 
   // Curated Alerts feed (see packages/core/src/curation/curator.ts). CURATED_MIN_SCORE is the
   // heuristic curator's composite-score floor - env-tunable so emission volume can be steered in
