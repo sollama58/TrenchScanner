@@ -17,6 +17,7 @@ import {
   PRIOR_CALLS,
   SCORE_BANDS,
   explainScore,
+  describeExitPlan,
   NEVER_EMIT_THRESHOLD,
   summarizeRecord,
   type ChampionRecord,
@@ -282,6 +283,8 @@ export interface Leaderboard {
     bands: typeof SCORE_BANDS;
     summary: string;
   };
+  /** The fixed exit plan the simulated returns on the board are worked out under, in a sentence. */
+  exitPlan: string;
   defaultModel: string;
   /** When and why the default was last (re-)chosen; null before the first pick. */
   champion: {
@@ -422,6 +425,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
         `can't score like a long record. The backtest counts for at most ${BACKTEST_EVIDENCE_CAP} calls' worth; live calls take over from there. ` +
         `Models with fewer than ${MIN_LIVE_CALLS_TO_RANK} graded live calls are still warming up and rank below the rest.`,
     },
+    exitPlan: describeExitPlan(),
     defaultModel: state.defaultModel,
     champion:
       state.champion && state.champion.contestant === state.defaultModel

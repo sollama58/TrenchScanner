@@ -11,6 +11,9 @@ function standing(id: string, score: number | null, liveGraded: number, calling 
     proven2xPct: null,
     proven4xPct: null,
     avgReturnDoublings: null,
+    simCalls: 0,
+    avgSimReturnPct: null,
+    totalSimReturnPct: null,
     score,
   };
   const composite: CompositeScore = {

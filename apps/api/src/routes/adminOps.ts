@@ -250,6 +250,7 @@ export async function registerAdminOpsRoutes(
         hit2xIn1h: true,
         hit4xIn1h: true,
         disqualified: true,
+        simReturnPct: true,
         outcomeFinalizedAt: true,
         token: { select: { symbol: true, mintAddress: true } },
         aiReviews: {
