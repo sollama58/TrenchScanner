@@ -60,6 +60,7 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
       sumLabel: 0,
       simCalls: 0,
       sumSimReturnPct: 0,
+      sumRun: 0,
     });
     expect(batched.get(`${TAG}-a`)).toMatchObject({
       calls: 3,
@@ -69,6 +70,8 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
       simCalls: 2,
       sumSimReturnPct: 141,
     });
+    // The 5x win runs log2(5) doublings; the 2.5x miss has no recorded drawdown, so it counts 0.
+    expect(batched.get(`${TAG}-a`)!.sumRun).toBeCloseTo(Math.log2(5), 6);
     expect(batched.get(`${TAG}-b`)).toEqual({
       calls: 2,
       graded: 1,
@@ -77,6 +80,7 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
       sumLabel: expect.any(Number),
       simCalls: 0,
       sumSimReturnPct: 0,
+      sumRun: expect.any(Number),
     });
   });
 });
