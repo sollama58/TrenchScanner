@@ -210,6 +210,96 @@ const KIND_LABEL: Record<string, string> = {
   imported: "Imported",
 };
 
+interface CallRecord {
+  calls: number;
+  graded: number;
+  wins: number;
+  goals: number;
+}
+
+interface BackupSeat {
+  seat: string;
+  name: string;
+  kind: string;
+  threshold: number | null;
+  trainingRows: number;
+  trainedAt: string;
+  exam: CallRecord | null;
+  live: CallRecord | null;
+  members: string[];
+}
+
+const record = (r: CallRecord | null) =>
+  r && r.graded > 0 ? `${r.wins}/${r.graded} 2x · ${r.goals} 4x` : <span className="faint">–</span>;
+
+/**
+ * A model list with checkboxes and the actions that take a selection. A consensus or blend needs
+ * its members, so ticking one ticks them too (the server adds them either way).
+ */
+function SeatPicker({
+  seats,
+  busy,
+  actions,
+}: {
+  seats: BackupSeat[];
+  busy: boolean;
+  actions: { label: string; primary?: boolean; run: (picked: string[]) => void }[];
+}) {
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const toggle = (s: BackupSeat) => {
+    const next = new Set(picked);
+    if (next.has(s.seat)) next.delete(s.seat);
+    else [s.seat, ...s.members].forEach((m) => next.add(m));
+    setPicked(next);
+  };
+  return (
+    <div className="stack">
+      <Table
+        head={["", "Model", "Kind", "Cutoff", "Exam", "Live (30d)", "Trained"]}
+        empty="No models."
+        rows={seats.map((s) => [
+          <input
+            type="checkbox"
+            aria-label={`Select ${s.name}`}
+            checked={picked.has(s.seat)}
+            onChange={() => toggle(s)}
+          />,
+          <>
+            {s.name}
+            {s.name !== s.seat && <span className="faint small"> ({s.seat})</span>}
+            {s.members.length > 0 && <span className="faint small"> · uses {s.members.join(", ")}</span>}
+          </>,
+          s.kind,
+          s.threshold === null ? (
+            "–"
+          ) : s.threshold >= 1 ? (
+            <Tag tone="muted">silent</Tag>
+          ) : (
+            s.threshold.toFixed(3)
+          ),
+          record(s.exam),
+          record(s.live),
+          when(s.trainedAt),
+        ])}
+      />
+      <div className="admin-form">
+        {actions.map((a) => (
+          <button
+            key={a.label}
+            className={a.primary ? "button primary" : "button"}
+            disabled={busy || picked.size === 0}
+            onClick={() => a.run([...picked])}
+          >
+            {a.label} ({picked.size})
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const seatsParam = (seats: string[]) => `seats=${encodeURIComponent(seats.join(","))}`;
+
 const kb = (bytes: number) =>
   bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
 
@@ -220,6 +310,9 @@ const kb = (bytes: number) =>
  */
 function Backups() {
   const q = usePolling<ModelBackups>("/admin/model-backups", 60_000);
+  const running = usePolling<{ seats: BackupSeat[] }>("/admin/models", 300_000);
+  const [open, setOpen] = useState<ModelBackupRow | null>(null);
+  const [openSeats, setOpenSeats] = useState<BackupSeat[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const run = async (what: () => Promise<string>) => {
@@ -248,25 +341,40 @@ function Backups() {
       });
       return `Imported ${b.modelCount} models. Restore it from the list below to put them back in charge.`;
     });
-  const restore = (b: ModelBackupRow) => {
+  /** Restores the whole backup, or only `seats` (with any members a picked consensus needs). */
+  const restore = (b: ModelBackupRow, seats: string[] = []) => {
+    const what = seats.length > 0 ? seats.join(", ") : `all ${b.modelCount} models`;
     if (
       !window.confirm(
-        `Restore the ${b.modelCount} models from ${new Date(b.createdAt).toLocaleString()}?\n\n` +
+        `Restore ${what} from the backup of ${new Date(b.createdAt).toLocaleString()}?\n\n` +
           "They replace the running models straight away. What runs now is backed up first, so this can be undone. " +
-          "The next training run retrains the restored recipes on fresh data.",
+          "The next training run retrains the restored recipes on fresh data." +
+          (seats.length > 0
+            ? "\n\nRestoring single models: the Consensus sits out until that next run if it was built on the models being replaced."
+            : ""),
       )
     )
       return;
     void run(async () => {
-      const r = await post<{ models: number; lanesRestored: number }>(
+      const r = await post<{ models: number; lanesRestored: number; seats: string[] }>(
         `/admin/model-backups/${b.id}/restore`,
-        {
-          confirm: true,
-        },
+        { confirm: true, ...(seats.length > 0 ? { seats } : {}) },
       );
-      return `Restored ${r.models} models and ${r.lanesRestored} recipes. The previous models were backed up first.`;
+      running.reload();
+      return `Restored ${r.seats.join(", ")} (${r.lanesRestored} recipes changed). The previous models were backed up first.`;
     });
   };
+  const showModels = (b: ModelBackupRow) =>
+    run(async () => {
+      if (open?.id === b.id) {
+        setOpen(null);
+        return "";
+      }
+      const d = await api<{ seats: BackupSeat[] }>(`/admin/model-backups/${b.id}`);
+      setOpen(b);
+      setOpenSeats(d.seats);
+      return "";
+    });
   return (
     <div className="stack">
       <Panel
@@ -374,13 +482,88 @@ function Backups() {
                     >
                       {b.pinned ? "Unpin" : "Pin"}
                     </button>
+                    <button className="ghost small" disabled={busy} onClick={() => void showModels(b)}>
+                      {open?.id === b.id ? "Hide models" : "Models"}
+                    </button>
                     <button className="ghost small" disabled={busy} onClick={() => restore(b)}>
-                      Restore
+                      Restore all
                     </button>
                   </span>,
                 ])}
               />
             </div>
+          )}
+        </Load>
+      </Panel>
+      {open && openSeats && (
+        <Panel
+          title={`Models in the backup of ${new Date(open.createdAt).toLocaleString()}`}
+          note="Pick models to download on their own or to put back in charge. A consensus brings the models it is built from."
+          actions={
+            <button className="ghost small" onClick={() => setOpen(null)}>
+              Close
+            </button>
+          }
+        >
+          <SeatPicker
+            key={open.id}
+            seats={openSeats}
+            busy={busy}
+            actions={[
+              {
+                label: "Download selected",
+                run: (seats) =>
+                  void run(async () => {
+                    await downloadFile(
+                      `/admin/model-backups/${open.id}/download?${seatsParam(seats)}`,
+                      `model-backup-${open.id}.json.gz`,
+                    );
+                    return "Downloaded.";
+                  }),
+              },
+              { label: "Restore selected", primary: true, run: (seats) => restore(open, seats) },
+            ]}
+          />
+        </Panel>
+      )}
+      <Panel
+        title="Running models"
+        note="Export any of the models running now as a file, without waiting for a backup. Load a file back with Import above."
+        actions={
+          <button
+            className="ghost small"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await downloadFile("/admin/models/export", "running-models.json.gz");
+                return "Downloaded every running model.";
+              })
+            }
+          >
+            Export all
+          </button>
+        }
+      >
+        <Load q={running}>
+          {(d) => (
+            <SeatPicker
+              seats={d.seats}
+              busy={busy}
+              actions={[
+                {
+                  label: "Export selected",
+                  primary: true,
+                  run: (seats) =>
+                    void run(async () => {
+                      await downloadFile(
+                        `/admin/models/export?${seatsParam(seats)}`,
+                        "running-models.json.gz",
+                      );
+                      return "Downloaded.";
+                    }),
+                },
+              ]}
+            />
           )}
         </Load>
       </Panel>

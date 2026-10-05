@@ -282,6 +282,81 @@ export function validateBackupPayload(value: unknown): ModelBackupPayload {
   return value as unknown as ModelBackupPayload;
 }
 
+/** One seat in a backup, as the Admin tab lists it. */
+export interface BackupSeat {
+  seat: string;
+  /** The lane's name when the backup has one, else the name its exam was stored under. */
+  name: string;
+  kind: string;
+  /** Emission cutoff; null for kinds without one (rules). */
+  threshold: number | null;
+  trainingRows: number;
+  trainedAt: string;
+  exam: CallRecord | null;
+  live: CallRecord | null;
+  /** Seats a consensus or blend is built from - restoring it brings them too. */
+  members: string[];
+}
+
+export function describeBackupSeats(payload: ModelBackupPayload): BackupSeat[] {
+  const laneName = new Map(payload.lanes.map((l) => [l.slot, l.name]));
+  return payload.models.flatMap((m) => {
+    if (!m.contestant) return [];
+    const params = (m.params ?? {}) as { threshold?: unknown; members?: { contestant: string }[] };
+    const metrics = (m.evalMetrics ?? {}) as { exam?: CallRecord; contestantName?: string };
+    return [
+      {
+        seat: m.contestant,
+        name: laneName.get(m.contestant) ?? metrics.contestantName ?? m.contestant,
+        kind: m.kind,
+        threshold: typeof params.threshold === "number" ? params.threshold : null,
+        trainingRows: m.trainingRows,
+        trainedAt: m.trainingTo,
+        exam: metrics.exam ?? null,
+        live: payload.liveRecords[m.contestant] ?? null,
+        members: Array.isArray(params.members) ? params.members.map((x) => x.contestant) : [],
+      },
+    ];
+  });
+}
+
+/**
+ * A backup cut down to some seats: their models and lanes, plus the members of any consensus or
+ * blend among them (its params point at those members, so it can't run without them). The AI
+ * playbook and blend stay out - they belong to the whole field, and a whole-backup restore carries
+ * them. Re-sealed, so the result is a backup file in its own right.
+ */
+export function selectSeats(payload: ModelBackupPayload, seats: readonly string[]): ModelBackupPayload {
+  const wanted = new Set(seats);
+  for (const m of payload.models) {
+    if (!m.contestant || !wanted.has(m.contestant)) continue;
+    const members = (m.params as { members?: { contestant: string }[] }).members ?? [];
+    for (const x of members) wanted.add(x.contestant);
+  }
+  const models = payload.models.filter((m) => m.contestant !== null && wanted.has(m.contestant));
+  if (models.length === 0) throw new ModelBackupError(`none of ${seats.join(", ")} is in this backup`);
+  const { integrity: _integrity, ...rest } = payload;
+  return sealBackupPayload({
+    ...rest,
+    note: [payload.note, `Selected: ${[...wanted].join(", ")}`].filter(Boolean).join(" · "),
+    models,
+    lanes: payload.lanes.filter((l) => wanted.has(l.slot)),
+    liveRecords: Object.fromEntries(Object.entries(payload.liveRecords).filter(([k]) => wanted.has(k))),
+    aiPlaybook: null,
+    aiBlend: null,
+  });
+}
+
+/**
+ * The running models as a backup file, without storing it - "export this model now". All seats
+ * when `seats` is empty. Null when nothing is running.
+ */
+export async function exportRunningModels(seats: readonly string[] = []): Promise<ModelBackupPayload | null> {
+  const payload = await captureModelSnapshot("manual", "Exported from the running models");
+  if (!payload) return null;
+  return seats.length > 0 ? selectSeats(payload, seats) : payload;
+}
+
 export interface ModelBackupSummary {
   id: string;
   createdAt: Date;
@@ -367,6 +442,8 @@ export function backupFileName(row: { createdAt: Date; kind: string; id: string 
 
 export interface RestoreResult {
   backupId: string;
+  /** The seats put back. */
+  seats: string[];
   safetyBackupId: string | null;
   models: number;
   lanesRestored: number;
@@ -389,11 +466,13 @@ export interface RestoreResult {
  */
 export async function restoreModelBackup(
   backupId: string,
-  opts: { now?: Date; actor?: string } = {},
+  /** `seats`: restore only these (see selectSeats); empty or absent restores the whole backup. */
+  opts: { now?: Date; actor?: string; seats?: readonly string[] } = {},
 ): Promise<RestoreResult> {
   const loaded = await loadBackupData(backupId);
   if (!loaded) throw new ModelBackupError("no such backup");
-  const payload = decodeBackup(loaded.data);
+  const whole = decodeBackup(loaded.data);
+  const payload = opts.seats && opts.seats.length > 0 ? selectSeats(whole, opts.seats) : whole;
   const now = opts.now ?? new Date();
   const label = `backup of ${payload.createdAt.slice(0, 16).replace("T", " ")} UTC`;
 
@@ -516,7 +595,12 @@ export async function restoreModelBackup(
     return { models: ordered.length, lanesRestored, playbookRestored, blendRestored };
   }, MODEL_WRITE_TX_OPTIONS);
 
-  return { backupId, safetyBackupId: safety?.id ?? null, ...result };
+  return {
+    backupId,
+    seats: payload.models.flatMap((m) => (m.contestant ? [m.contestant] : [])),
+    safetyBackupId: safety?.id ?? null,
+    ...result,
+  };
 }
 
 /** Whether the weekly backup is due: none yet, or the newest is a week old. */
