@@ -1,16 +1,25 @@
 import { useState } from "react";
-import { type CuratedStats, type Leaderboard, type MarketWeather, type MatchPage } from "../api";
+import {
+  type CuratedStats,
+  type FeedStats,
+  type Leaderboard,
+  type MarketWeather,
+  type MatchPage,
+} from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { RingGauge, SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
 import { AboutModal } from "../components/AboutModal";
-import { ArrowRightIcon, BrainIcon, InfoIcon, RadarIcon } from "../components/Icons";
+import { ArrowRightIcon, BoltIcon, BrainIcon, InfoIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, useNow, useNudgeStream } from "../hooks";
-import { ago, pct } from "../format";
+import { ago, multiple, pct } from "../format";
 
-/** Graded calls below which a hit rate shows as "early" rather than as a verdict. */
-const MIN_GRADED = 30;
+/** Graded alerts below which a hit rate shows as "early" rather than as a verdict. */
+const MIN_GRADED = 10;
+
+/** The window the top tiles cover. */
+const STATS_HOURS = 24;
 
 /** The main tab: your own filter's catches and the model calls you follow, in one stream. */
 export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) {
@@ -25,6 +34,10 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved`;
   const feedPage = usePolling<MatchPage>(feedPath(page), 30_000, String(pick));
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
+  // The tiles follow the same feed settings as the cards, so they refetch with them.
+  const feedStats = usePolling<FeedStats>(`/matches/stats?hours=${STATS_HOURS}`, 30_000, String(pick));
+  const fs = feedStats.data;
+  const hours = fs?.hours ?? STATS_HOURS;
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
   const lb = board.data;
   const modelsOn = lb?.showModelAlerts ?? true;
@@ -35,19 +48,10 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
 
   const t = lb?.targets ?? { hitRate2xPct: 75, hitRate4xPct: 50 };
   const chosen = lb ? lb.entries.filter((e) => lb.selectedModels.includes(e.id)) : [];
-  // The rings follow the best-ranked model you follow.
-  const selected = chosen[0] ?? null;
-  const live = selected?.composite.live;
-  const feed = stats.data?.feed;
-  // A target of 0 means the models' calls aren't paced: the bar fills only against a real cap.
-  const capped = (feed?.pace.targetPerHour ?? 0) > 0;
-  const pace =
-    feed && capped ? Math.min(100, (feed.pace.actualPerHour24h / feed.pace.targetPerHour) * 100) : 0;
   // Older API builds (mid-deploy) only send totalCount.
   const hasMore = feedPage.data
     ? (feedPage.data.hasMore ?? page * feedPage.data.pageSize < feedPage.data.totalCount)
     : false;
-  const modelName = selected?.name ?? "–";
   const chosenNames =
     chosen.length === 0
       ? "–"
@@ -76,64 +80,57 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   return (
     <div className="stack">
       <section className="kpis">
+        <div className="panel kpi">
+          <span className="eyebrow">
+            <RadarIcon size={13} /> Your feed · {hours}h
+          </span>
+          <span className="kpi-value num">{fs?.alerts ?? "–"}</span>
+          <small className="muted">
+            {fs
+              ? fs.alerts === 0
+                ? "No alerts yet"
+                : `${fs.fromFilter} from your filter${fs.showModelAlerts ? `, ${fs.fromModels} model calls` : ""}`
+              : " "}
+          </small>
+          {fs && fs.pending > 0 && <small className="faint">{fs.pending} still grading</small>}
+        </div>
         <div className="panel kpi kpi-ring">
           <RingGauge
-            label={`${modelName} calls that hit 2x`}
-            value={live?.winRatePct ?? null}
+            label="Hit 2x within 15 min"
+            value={fs?.hit2xPct ?? null}
             target={t.hitRate2xPct}
-            graded={live?.graded ?? 0}
+            graded={fs?.graded ?? 0}
             minGraded={MIN_GRADED}
             series={1}
           />
         </div>
         <div className="panel kpi kpi-ring">
           <RingGauge
-            label={`${modelName} calls that hit 4x`}
-            value={live?.goalRatePct ?? null}
+            label="Hit 4x within 30 min"
+            value={fs?.hit4xPct ?? null}
             target={t.hitRate4xPct}
-            graded={live?.graded ?? 0}
+            graded={fs?.goalGraded ?? 0}
             minGraded={MIN_GRADED}
             series={2}
           />
         </div>
         <div className="panel kpi">
           <span className="eyebrow">
-            <RadarIcon size={13} /> Default feed · 24h
+            <BoltIcon size={13} /> Best run · {hours}h
           </span>
-          <span className="kpi-value num">{feed?.pace.alerts24h ?? "–"}</span>
-          <div className="pace">
-            <span style={{ width: `${pace}%` }} />
-          </div>
+          <span className="kpi-value num">{fs?.best ? multiple(fs.best.peakPct) : "–"}</span>
           <small className="muted">
-            {feed
-              ? capped
-                ? `${feed.pace.actualPerHour24h.toFixed(1)}/h of a ${feed.pace.targetPerHour}/h cap`
-                : `${feed.pace.actualPerHour24h.toFixed(1)}/h, no cap`
-              : " "}
+            {fs?.best ? (fs.best.symbol ? `$${fs.best.symbol}` : "unnamed token") : " "}
           </small>
+          {fs?.medianPeakPct != null && (
+            <small className="faint">Typical alert peaked at {multiple(fs.medianPeakPct)}</small>
+          )}
         </div>
-        <button className="panel kpi kpi-link" onClick={() => goTo("model")}>
-          <span className="eyebrow">
-            <BrainIcon size={13} /> Your models
-          </span>
-          <span className="kpi-value small">{chosenNames}</span>
-          <span className="pill pill-model">
-            {!modelsOn
-              ? "model alerts off"
-              : selected
-                ? `#${selected.rank} of ${lb!.entries.length}${
-                    selected.composite.score === null ? "" : ` · score ${selected.composite.score.toFixed(0)}`
-                  }`
-                : "–"}
-          </span>
-          <span className="kpi-more">
-            Leaderboard <ArrowRightIcon size={13} />
-          </span>
-        </button>
       </section>
       <div className="window-row">
         <p className="window-note faint small">
-          Hit rates cover the last 30 days of {modelName}'s graded calls.
+          Coins alerted in your feed over the last {hours} hours, graded from the alert price. Alerts still
+          being graded don&apos;t count as misses.
         </p>
         {stats.data?.market && <WeatherChip weather={stats.data.market} onAbout={() => setAboutOpen(true)} />}
       </div>
