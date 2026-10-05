@@ -70,6 +70,9 @@ describe("assessTrainingRun", () => {
     });
     expect(stale.accept).toBe(true);
     expect(stale.reason).toContain("accepted after holding 25h");
+    // A running model with no activation time counts as activated now, not at the epoch.
+    const legacy = assessTrainingRun({ ...shrunk, incumbents: [incumbent({ activatedAt: null })] });
+    expect(legacy.accept).toBe(false);
   });
 
   it("compares against the row cap when the cap was lowered", () => {

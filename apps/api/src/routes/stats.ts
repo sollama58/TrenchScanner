@@ -28,13 +28,27 @@ export const MIN_GRADED_FOR_VERDICT = 30;
 /** Tight: this is a script's endpoint, and every call runs a dozen aggregates. */
 const STATS_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 
+/** Longest window one report may cover, whichever way the caller spells it (days, or since/until). */
+export const MAX_WINDOW_DAYS = 180;
+
+/** The window a since/until/days query asks for, in days, resolved the way the routes resolve it. */
+export function windowDays(q: { days: number; since?: Date; until?: Date }, now = new Date()): number {
+  const until = q.until ?? now;
+  const since = q.since ?? new Date(until.getTime() - q.days * DAY_MS);
+  return (until.getTime() - since.getTime()) / DAY_MS;
+}
+
 const querySchema = z
   .object({
-    days: z.coerce.number().int().min(1).max(180).default(30),
+    days: z.coerce.number().int().min(1).max(MAX_WINDOW_DAYS).default(30),
     since: z.coerce.date().optional(),
     until: z.coerce.date().optional(),
   })
-  .refine((q) => !q.since || !q.until || q.since < q.until, { message: "since must be before until" });
+  .refine((q) => !q.since || !q.until || q.since < q.until, { message: "since must be before until" })
+  // `since` alone used to open the whole table: the cap on `days` only bound the default window.
+  .refine((q) => windowDays(q) <= MAX_WINDOW_DAYS, {
+    message: `window must be at most ${MAX_WINDOW_DAYS} days`,
+  });
 
 /** One group of graded calls - the shape every section of the report is built from. */
 export interface GradedCounts {

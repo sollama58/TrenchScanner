@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { z } from "zod";
 import { Prisma, prisma } from "../db.js";
 import type { Env } from "../config/env.js";
 import { s3PutObject, type S3Config } from "../storage/s3.js";
@@ -7,6 +8,7 @@ import { liveCallRecords, loadCurrentLanes } from "./laneStore.js";
 import type { CallRecord } from "./leaderboard.js";
 import { STACKED_MODEL_KIND } from "./stacking.js";
 import { BLEND_MODEL_KIND } from "./blend.js";
+import { firstNonFinite } from "./runGuard.js";
 
 /**
  * Model backups: a self-contained snapshot of every model the contest is running, kept outside
@@ -36,6 +38,12 @@ export const WEEKLY_BACKUP_INTERVAL_MS = 7 * 86_400_000 - 3_600_000;
 export const OTHER_BACKUP_RETENTION_DAYS = 90;
 /** The live-record window stored with each seat - the leaderboard's. */
 const RECORD_WINDOW_DAYS = 30;
+/**
+ * Most bytes a backup may unzip to. The import route takes a 64MB body, and gzip expands about a
+ * thousandfold, so an uncapped gunzip of a crafted file could ask for tens of gigabytes and take
+ * the API process down with it. A real backup is a few MB unzipped.
+ */
+const MAX_DECODED_BYTES = 512 * 1024 * 1024;
 
 /**
  * Every write that replaces the active models (a training run storing its results, a restore)
@@ -221,8 +229,13 @@ export function decodeBackup(data: Uint8Array): ModelBackupPayload {
   const buf = Buffer.from(data);
   let text: string;
   try {
-    text = (buf[0] === 0x1f && buf[1] === 0x8b ? gunzipSync(buf) : buf).toString("utf8");
-  } catch {
+    text = (
+      buf[0] === 0x1f && buf[1] === 0x8b ? gunzipSync(buf, { maxOutputLength: MAX_DECODED_BYTES }) : buf
+    ).toString("utf8");
+  } catch (err) {
+    if ((err as { code?: string }).code === "ERR_BUFFER_TOO_LARGE") {
+      throw new ModelBackupError("the file unzips to more than this build will read - it is not a backup");
+    }
     throw new ModelBackupError("the file is not a readable backup (gzip failed - truncated?)");
   }
   let parsed: unknown;
@@ -237,6 +250,71 @@ export function decodeBackup(data: Uint8Array): ModelBackupPayload {
 export class ModelBackupError extends Error {}
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+/** An ISO-8601 timestamp that parses: every date in a backup is one, and `new Date` of anything else is NaN. */
+const isoDate = z.string().refine((v) => !Number.isNaN(Date.parse(v)), "is not a timestamp");
+const jsonValue: z.ZodType<unknown> = z.unknown();
+
+/**
+ * The full shape of a payload, every field the restore writes. The integrity hash only proves the
+ * file wasn't changed in transit - anyone can seal a payload - so a field the schema didn't check
+ * reached Prisma as-is, and a wrong one threw a TypeError (a 500 to the admin) or a validation
+ * error inside the restore transaction, after the pre-restore safety backup had already been taken.
+ */
+const backupModelSchema = z.object({
+  id: z.string().min(1),
+  contestant: z.string().min(1).nullable(),
+  kind: z.string().min(1),
+  params: z.record(z.string(), jsonValue),
+  trainingRows: z.number().int().nonnegative(),
+  trainingFrom: isoDate,
+  trainingTo: isoDate,
+  evalMetrics: jsonValue.optional(),
+  activatedAt: isoDate.nullable().optional(),
+  createdAt: isoDate.optional(),
+});
+const backupLaneSchema = z.object({
+  slot: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string(),
+  recipe: jsonValue,
+  generation: z.number().int(),
+  parentName: z.string().nullable().optional(),
+  examScore: z.number().nullable().optional(),
+  bornAt: isoDate,
+});
+const backupPayloadSchema = z.object({
+  format: z.literal(MODEL_BACKUP_FORMAT),
+  version: z.number().int(),
+  createdAt: isoDate,
+  kind: z.string().min(1),
+  note: z.string().nullable().optional(),
+  models: z.array(backupModelSchema).min(1, "the backup holds no models"),
+  lanes: z.array(backupLaneSchema),
+  liveRecords: z.record(z.string(), z.record(z.string(), jsonValue)),
+  champion: z
+    .object({
+      contestant: z.string(),
+      name: z.string(),
+      score: z.number().nullable(),
+      chosenAt: isoDate,
+    })
+    .nullable()
+    .optional(),
+  aiPlaybook: z
+    .object({
+      id: z.string(),
+      version: z.number().int(),
+      text: z.string(),
+      rationale: z.string().nullable().optional(),
+      metrics: jsonValue.optional(),
+    })
+    .nullable()
+    .optional(),
+  aiBlend: z.object({ params: jsonValue, metrics: jsonValue, createdAt: isoDate }).nullable().optional(),
+  integrity: z.string(),
+});
+const membersSchema = z.array(z.object({ contestant: z.string().min(1) }));
 
 /** Checks shape and integrity. Throws ModelBackupError with what is wrong. */
 export function validateBackupPayload(value: unknown): ModelBackupPayload {
@@ -255,31 +333,34 @@ export function validateBackupPayload(value: unknown): ModelBackupPayload {
   ) {
     throw new ModelBackupError("the backup's integrity check failed - the file was changed or cut short");
   }
-  if (!Array.isArray(value.models) || value.models.length === 0) {
-    throw new ModelBackupError("the backup holds no models");
+  const parsed = backupPayloadSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const where = issue?.path.length ? issue.path.join(".") : "the backup";
+    throw new ModelBackupError(`the backup is malformed: ${where} ${issue?.message ?? "is invalid"}`);
   }
-  for (const m of value.models) {
-    if (
-      !isObject(m) ||
-      typeof m.id !== "string" ||
-      typeof m.kind !== "string" ||
-      !isObject(m.params) ||
-      typeof m.trainingRows !== "number"
-    ) {
-      throw new ModelBackupError("a model in the backup is malformed");
+  const payload = parsed.data;
+  const seats = new Set(payload.models.flatMap((m) => (m.contestant ? [m.contestant] : [])));
+  for (const m of payload.models) {
+    // The training path never ships a model with a NaN or infinite weight (see runGuard); a file
+    // can carry one (NaN serialises as null, which JSON.parse hands back as null - caught by the
+    // record check above - but an Infinity written by hand is a number). Such a seat would score
+    // every candidate NaN and fall silent with nothing in the log.
+    const bad = firstNonFinite(m.params);
+    if (bad !== null) {
+      throw new ModelBackupError(`${m.contestant ?? m.id} has a weight that is not a number (${bad})`);
     }
-  }
-  if (!Array.isArray(value.lanes)) throw new ModelBackupError("the backup has no lanes list");
-  const contestants = new Set(value.models.map((m) => (m as { contestant: unknown }).contestant));
-  for (const m of value.models as BackupModel[]) {
     if (m.kind !== STACKED_MODEL_KIND && m.kind !== BLEND_MODEL_KIND) continue;
-    const members = (m.params as { members?: { contestant: string }[] }).members ?? [];
-    const missing = members.filter((x) => !contestants.has(x.contestant)).map((x) => x.contestant);
+    const members = membersSchema.safeParse(m.params.members ?? []);
+    if (!members.success) throw new ModelBackupError(`${m.contestant}'s members list is malformed`);
+    const missing = members.data.filter((x) => !seats.has(x.contestant));
     if (missing.length > 0) {
-      throw new ModelBackupError(`${m.contestant}'s members ${missing.join(", ")} are not in the backup`);
+      throw new ModelBackupError(
+        `${m.contestant}'s members ${missing.map((x) => x.contestant).join(", ")} are not in the backup`,
+      );
     }
   }
-  return value as unknown as ModelBackupPayload;
+  return payload as unknown as ModelBackupPayload;
 }
 
 /** One seat in a backup, as the Admin tab lists it. */
@@ -476,13 +557,21 @@ export async function restoreModelBackup(
   const now = opts.now ?? new Date();
   const label = `backup of ${payload.createdAt.slice(0, 16).replace("T", " ")} UTC`;
 
-  const safety = await saveModelBackup(
-    "pre-restore",
-    `Taken automatically before restoring the ${label}${opts.actor ? ` (by ${opts.actor})` : ""}`,
-  );
+  const safetyNote = `Taken automatically before restoring the ${label}${opts.actor ? ` (by ${opts.actor})` : ""}`;
+  const safetyPayload = await captureModelSnapshot("pre-restore", safetyNote);
+  const safety = safetyPayload ? await storeBackupPayload(safetyPayload, "pre-restore", safetyNote) : null;
+  const safetyIds = new Set((safetyPayload?.models ?? []).map((m) => m.id));
 
   const result = await prisma.$transaction(async (tx) => {
     await lockCuratorModelWrites(tx);
+
+    // The safety backup was taken outside this lock, so a training run that committed in between
+    // would be retired here without the "undo" backup holding it. The active set has to be
+    // exactly what was snapshotted; otherwise the admin retries and gets a fresh snapshot.
+    const active = await tx.curatorModel.findMany({ where: { status: "active" }, select: { id: true } });
+    if (active.length !== safetyIds.size || active.some((m) => !safetyIds.has(m.id))) {
+      throw new ModelBackupError("the running models changed while the restore was starting - try again");
+    }
 
     // Lanes: only where the seat isn't already on the backed-up one.
     let lanesRestored = 0;
@@ -665,7 +754,9 @@ export async function uploadPendingBackups(
   const now = opts.now ?? new Date();
   const pending = await prisma.modelBackup.findMany({
     where: { offsiteKey: null, createdAt: { gte: new Date(now.getTime() - 30 * 86_400_000) } },
-    orderBy: { createdAt: "asc" },
+    // Never-tried rows first: a backup the bucket keeps refusing would otherwise sort ahead of
+    // every newer one, and with five such rows no new backup ever left the database.
+    orderBy: [{ offsiteError: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
     take: opts.limit ?? 5,
     select: { id: true },
   });
