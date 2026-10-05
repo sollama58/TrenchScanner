@@ -308,14 +308,17 @@ const envSchema = z.object({
   // are graded on); this only tilts training toward the part of it that still describes the
   // present.
   CURATOR_RECENCY_HALF_LIFE_DAYS: z.coerce.number().positive().default(14),
-  CURATED_TARGET_PER_HOUR: z.coerce.number().positive().default(6),
+  // The per-model pace ceiling (curation/governor.ts). 0 (the default since 2026-10-05) means no
+  // ceiling: every call that clears a curator's hit-rate cutoff goes out, still once per token
+  // per CURATED_ALERT_COOLDOWN_HOURS. Set it above zero to pace each model's calls again.
+  CURATED_TARGET_PER_HOUR: z.coerce.number().min(0).default(0),
   CURATOR_MIN_TRAINING_ROWS: z.coerce.number().int().positive().default(1500),
   // The hit rates the curated feed AIMS for: of the alerts sent, the share that doubled within the
   // hour (WIN) and the share that reached 4x (GOAL). A curator's emission cutoff is the lowest
   // confidence whose out-of-sample calls met both on at least CURATED_MIN_CALIBRATION_ALERTS
   // alerts; when no cutoff does, it is the cutoff with the best hit-rate record instead - the
   // targets steer the cutoff, they never stop the feed (see chooseCutoff in trainer.ts).
-  // CURATED_TARGET_PER_HOUR stays a ceiling.
+  // CURATED_TARGET_PER_HOUR, when set, stays a ceiling.
   CURATED_TARGET_WIN_RATE_PCT: z.coerce.number().min(0).max(100).default(75),
   CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
   CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(50),

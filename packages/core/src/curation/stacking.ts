@@ -1,3 +1,4 @@
+import { paceBudget } from "./governor.js";
 import { scoredFromFeatures } from "./features.js";
 import { curationRankScore, evaluateCandidateHeuristic } from "./curator.js";
 import { CANDIDATE_WATCH_WINDOW_MINUTES } from "./labels.js";
@@ -246,7 +247,7 @@ export async function trainStackedCurator(
     if (others.length === 0) continue;
     const cutoff = calibrateThresholdForPrecision(calls(others), input.targets, { cooldownMs }).threshold;
     if (cutoff === null) continue;
-    const budget = Math.max(1, Math.round(input.targetPerHour * chunk.spanHours));
+    const budget = paceBudget(input.targetPerHour, chunk.spanHours);
     const sent = applyCooldown(
       chunk.rows.flatMap((row, i) =>
         chunk.ranks[i]! >= cutoff ? [{ row, confidence: chunk.ranks[i]! }] : [],

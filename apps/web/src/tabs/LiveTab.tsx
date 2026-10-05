@@ -39,7 +39,10 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const selected = chosen[0] ?? null;
   const live = selected?.composite.live;
   const feed = stats.data?.feed;
-  const pace = feed ? Math.min(100, (feed.pace.actualPerHour24h / feed.pace.targetPerHour) * 100) : 0;
+  // A target of 0 means the models' calls aren't paced: the bar fills only against a real cap.
+  const capped = (feed?.pace.targetPerHour ?? 0) > 0;
+  const pace =
+    feed && capped ? Math.min(100, (feed.pace.actualPerHour24h / feed.pace.targetPerHour) * 100) : 0;
   // Older API builds (mid-deploy) only send totalCount.
   const hasMore = feedPage.data
     ? (feedPage.data.hasMore ?? page * feedPage.data.pageSize < feedPage.data.totalCount)
@@ -102,7 +105,11 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
             <span style={{ width: `${pace}%` }} />
           </div>
           <small className="muted">
-            {feed ? `${feed.pace.actualPerHour24h.toFixed(1)}/h of a ${feed.pace.targetPerHour}/h cap` : " "}
+            {feed
+              ? capped
+                ? `${feed.pace.actualPerHour24h.toFixed(1)}/h of a ${feed.pace.targetPerHour}/h cap`
+                : `${feed.pace.actualPerHour24h.toFixed(1)}/h, no cap`
+              : " "}
           </small>
         </div>
         <button className="panel kpi kpi-link" onClick={() => goTo("model")}>

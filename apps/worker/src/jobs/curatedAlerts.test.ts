@@ -223,7 +223,8 @@ describe.skipIf(!dbAvailable)("curated alert emission", () => {
 });
 
 describe.skipIf(!dbAvailable)("emission governor", () => {
-  const env = dbAvailable ? loadEnv() : (undefined as never);
+  // The pace is off by default (CURATED_TARGET_PER_HOUR=0); these tests turn it on.
+  const env = dbAvailable ? { ...loadEnv(), CURATED_TARGET_PER_HOUR: 6 } : (undefined as never);
 
   beforeAll(async () => {
     await prisma.curatorModel.updateMany({
@@ -348,6 +349,31 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
     });
     expect(otherLedger.byModel.size).toBe(0);
   });
+
+  it("with no pace set, calls everything that clears the gate, however busy the hour", async () => {
+    const unpaced = { ...env, CURATED_TARGET_PER_HOUR: 0 };
+    await fillHourlyBudget(10, "gov-unpaced");
+    const cycle = newCuratedCycle();
+    const tokens = await Promise.all(
+      [0, 1, 2].map((i) => prisma.token.create({ data: { mintAddress: `${TAG}-gov-unpaced-pick-${i}` } })),
+    );
+    for (const token of tokens) {
+      await collectCuratedContender(cycle, token, curatableFixture(token.mintAddress), null, unpaced);
+    }
+    expect(await emitCuratedCycle(cycle, unpaced)).toBe(3);
+  });
+
+  it("calls a token once per ledger even when it was filed twice in one cycle", async () => {
+    const unpaced = { ...env, CURATED_TARGET_PER_HOUR: 0 };
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-gov-twice` } });
+    const scored = curatableFixture(token.mintAddress);
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, null, unpaced);
+    await collectCuratedContender(cycle, token, scored, null, unpaced);
+    expect(cycle.byModel.get(RULES_CONTESTANT)).toHaveLength(2);
+    expect(await emitCuratedCycle(cycle, unpaced)).toBe(1);
+    expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(1);
+  });
 });
 
 /**
@@ -442,9 +468,10 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
   });
 
   it("governs each ledger against its own budget", async () => {
+    const paced = { ...env, CURATED_TARGET_PER_HOUR: 6 };
     await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
     const fillers = await Promise.all(
-      Array.from({ length: Math.ceil(env.CURATED_TARGET_PER_HOUR) }, (_, i) =>
+      Array.from({ length: paced.CURATED_TARGET_PER_HOUR }, (_, i) =>
         prisma.token.create({ data: { mintAddress: `${TAG}-ledger-fill-${i}` } }),
       ),
     );
@@ -461,7 +488,7 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     });
 
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-ledger-governed` } });
-    expect(await collectAndEmit(env, token, curatableFixture(token.mintAddress), null)).toBe(true);
+    expect(await collectAndEmit(paced, token, curatableFixture(token.mintAddress), null)).toBe(true);
     const alerts = await prisma.curatedAlert.findMany({ where: { tokenId: token.id } });
     expect(alerts.map((a) => a.model)).toEqual(["linear"]);
   });

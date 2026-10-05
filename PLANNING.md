@@ -116,8 +116,9 @@ Three shipping phases, each useful on its own:
   describes what a human at the same cadence could have traded.
 - **Phase B — the feed** (`CuratedAlert`, `/curated` routes, the Curated tab): a strict
   quality-floor gate (see `curator.ts`) nominates alerts, and an **emission governor**
-  (`curation/governor.ts`) paces them: the feed targets `CURATED_TARGET_PER_HOUR` (default 6 —
-  about one alert per ten minutes) as a ceiling, counted from the actual alerts table, with a
+  (`curation/governor.ts`) can pace them. Since 2026-10-05 it is off by default
+  (`CURATED_TARGET_PER_HOUR=0`): every call that clears a curator's cutoff goes out, once per
+  token per cooldown. With a target set, it is a per-model ceiling counted from the actual alerts table, with a
   small burst allowance so a hot minute can put two out back-to-back. When a scan cycle brings
   more gate-passing contenders than the pace allows, the strongest conviction wins the slot and
   the rest re-contend next cycle. Quality comes from each curator's hit-rate cutoff (the

@@ -95,7 +95,7 @@ export function AboutModal({
           few hours new variants are bred from the leaders; one that beats the weakest model takes its seat.
           Consensus learns which models to trust and when they agree. The best performer on the leaderboard is
           the default feed, re-chosen after every run; you can follow it automatically or keep your own picks
-          in Settings. Model calls are paced, so a busy market doesn&apos;t flood the feed.
+          in Settings. Each model calls every token that clears its cutoff, once per token a day.
         </p>
 
         <h3>How alerts are graded</h3>

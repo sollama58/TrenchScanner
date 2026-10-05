@@ -1012,12 +1012,12 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           slice when none did. A model with no slice to judge stays silent until the next run.
         </li>
         <li>
-          <strong>Battle.</strong> Every model calls on its own feed, paced and graded the same way. The
-          leaderboard score is how far each has proven itself toward the goal, 0-100:{" "}
-          {Math.round(w.winRate * 100)} points for its 2x rate against the {board.targets.hitRate2xPct}%
-          target, {Math.round(w.goalRate * 100)} for its 4x rate against {board.targets.hitRate4xPct}%, with a
-          few phantom misses added so a short streak proves little. It starts from the backtest and shifts to
-          live calls as they're graded (half and half at {board.scoring.livePivotCalls}).
+          <strong>Battle.</strong> Every model calls on its own feed, graded the same way. The leaderboard
+          score is how far each has proven itself toward the goal, 0-100: {Math.round(w.winRate * 100)} points
+          for its 2x rate against the {board.targets.hitRate2xPct}% target, {Math.round(w.goalRate * 100)} for
+          its 4x rate against {board.targets.hitRate4xPct}%, with a few phantom misses added so a short streak
+          proves little. It starts from the backtest and shifts to live calls as they're graded (half and half
+          at {board.scoring.livePivotCalls}).
         </li>
         <li>
           <strong>Evolve.</strong> Every run also breeds {board.evolution.challengersPerRun} challenger

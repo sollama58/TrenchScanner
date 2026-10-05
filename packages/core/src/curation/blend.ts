@@ -1,3 +1,4 @@
+import { paceBudget } from "./governor.js";
 import { CANDIDATE_WATCH_WINDOW_MINUTES } from "./labels.js";
 import {
   applyCooldown,
@@ -140,7 +141,7 @@ export function trainBlendCurator(input: BlendInput, neverEmitThreshold: number)
     if (others.length === 0) continue;
     const cutoff = calibrateThresholdForPrecision(others, input.targets, { cooldownMs }).threshold;
     if (cutoff === null) continue;
-    const budget = Math.max(1, Math.round(input.targetPerHour * chunk.spanHours));
+    const budget = paceBudget(input.targetPerHour, chunk.spanHours);
     const sent = applyCooldown(
       chunk.indexes.flatMap((i) =>
         scores[i]! >= cutoff ? [{ row: input.reference[i]!, confidence: scores[i]! }] : [],

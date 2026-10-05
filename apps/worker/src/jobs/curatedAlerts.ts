@@ -8,6 +8,7 @@ import {
   scoreCandidateWithModel,
   topModelReasons,
   governorCapacity,
+  paceLimited,
   selectEmissions,
   enabledContestants,
   loadCurrentLanes,
@@ -546,6 +547,20 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
   return emitted;
 }
 
+/**
+ * One contender per token, the strongest: the cooldown read in collectCuratedContender only sees
+ * calls already written, so a token filed twice in one cycle (an event and a retry, say) would
+ * otherwise be called twice on the same ledger now that no pace caps the pass.
+ */
+function onePerToken(contenders: CuratedContender[]): CuratedContender[] {
+  const best = new Map<string, CuratedContender>();
+  for (const c of contenders) {
+    const held = best.get(c.token.id);
+    if (!held || c.confidence > held.confidence) best.set(c.token.id, c);
+  }
+  return [...best.values()];
+}
+
 async function emitForModel(
   model: string,
   /** The name the model calls under right now - stored on each call (CuratedAlert.modelName). */
@@ -556,10 +571,13 @@ async function emitForModel(
   env: Env,
   clock: { now: number; hourAgo: Date; burstAgo: Date },
 ): Promise<number> {
-  const [lastHour, lastBurstWindow] = await Promise.all([
-    prisma.curatedAlert.count({ where: { model, createdAt: { gt: clock.hourAgo } } }),
-    prisma.curatedAlert.count({ where: { model, createdAt: { gt: clock.burstAgo } } }),
-  ]);
+  // No pace set (the default): nothing to count, every contender has a slot.
+  const [lastHour, lastBurstWindow] = paceLimited(env.CURATED_TARGET_PER_HOUR)
+    ? await Promise.all([
+        prisma.curatedAlert.count({ where: { model, createdAt: { gt: clock.hourAgo } } }),
+        prisma.curatedAlert.count({ where: { model, createdAt: { gt: clock.burstAgo } } }),
+      ])
+    : [0, 0];
   const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
   const reviewing = isDefault && aiReviewEnabled(env);
   // Gate mode only once the reviewer has earned it, one of two ways: a learned blend of its odds
@@ -572,7 +590,7 @@ async function emitForModel(
     reviewing && env.AI_REVIEW_MODE === "gate" && (blend !== null || (await aiGateQualified(env)));
   // A token the reviewer just passed on doesn't contend again until its veto cools down -
   // otherwise it would win the same slot and buy the same review every minute.
-  const contenders = gating ? await withoutRecentVetoes(contendersIn, env) : contendersIn;
+  const contenders = onePerToken(gating ? await withoutRecentVetoes(contendersIn, env) : contendersIn);
   const picks = selectEmissions(contenders, capacity);
   // Lost on capacity alone - the curator still vouches for these, so they try again next
   // cycle. (Vetoed tokens are out of `contenders` already, and a pick vetoed below isn't here.)
