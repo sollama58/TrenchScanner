@@ -359,7 +359,9 @@ export function useLiveMarketCaps(cards: Card[] | undefined): Card[] | undefined
         .then((res) => {
           if (stopped) return;
           setLive((prev) => {
-            const next = new Map(prev);
+            // Only the tokens on screen: a long-open feed must not keep every token it ever showed.
+            const keep = new Set(ids.split(","));
+            const next = new Map([...prev].filter(([id]) => keep.has(id)));
             for (const t of res.tokens) next.set(t.id, { marketCapUsd: t.marketCapUsd, at: t.at });
             return next;
           });

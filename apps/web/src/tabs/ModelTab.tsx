@@ -1014,9 +1014,12 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           <strong>Battle.</strong> Every model calls on its own feed, graded the same way. The leaderboard
           score is how far each has proven itself toward the goal, 0-100: {Math.round(w.winRate * 100)} points
           for its 2x rate against the {board.targets.hitRate2xPct}% target, {Math.round(w.goalRate * 100)} for
-          its 4x rate against {board.targets.hitRate4xPct}%, with a few phantom misses added so a short streak
-          proves little. It starts from the backtest and shifts to live calls as they're graded (half and half
-          at {board.scoring.livePivotCalls}).
+          its 4x rate against {board.targets.hitRate4xPct}%
+          {w.runSize != null
+            ? `, and ${Math.round(w.runSize * 100)} for run size, how far its calls run over the day after`
+            : ""}
+          , with a few phantom misses added so a short streak proves little. It starts from the backtest and
+          shifts to live calls as they're graded (half and half at {board.scoring.livePivotCalls}).
         </li>
         <li>
           <strong>Evolve.</strong> Every run also breeds {board.evolution.challengersPerRun} challenger
@@ -1450,7 +1453,7 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
           A second opinion from Claude on each call the default feed makes. In shadow mode it records a buy /
           no-buy without blocking anything; in gate mode it holds back its no-buys once{" "}
           {data.curator.aiReviewMinGradedBuys} of its buys are graded and meet both targets.
-          {buys.calls === 0 && " It needs ANTHROPIC_API_KEY on the worker."}
+          {buys.calls === 0 && " It isn't connected yet (no API key set), so it has made no calls."}
         </p>
         <div className="table-wrap">
           <table>

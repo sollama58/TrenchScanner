@@ -103,7 +103,16 @@ function Panel({
 
 /** Data, a skeleton while it first loads, or the error. */
 function Load<T>({ q, children }: { q: Loadable<T>; children: (data: T) => ReactNode }) {
-  if (q.data) return <div className={q.stale ? "stale" : ""}>{children(q.data)}</div>;
+  if (q.data)
+    return (
+      <div className={q.stale ? "stale" : ""}>
+        {/* A later poll failing (API or database down) must not read as "all healthy" here. */}
+        {q.error && (
+          <p className="error small">Refresh failed: {q.error.message}. Showing the last answer.</p>
+        )}
+        {children(q.data)}
+      </div>
+    );
   if (q.error) return <p className="error">Couldn't load: {q.error.message}</p>;
   return <Skeleton lines={4} />;
 }
@@ -315,12 +324,12 @@ function Backups() {
   const [openSeats, setOpenSeats] = useState<BackupSeat[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
-  const run = async (what: () => Promise<string>) => {
+  const run = async (what: () => Promise<string>, { refresh = true } = {}) => {
     setBusy(true);
     setResult(null);
     try {
       setResult(await what());
-      q.reload();
+      if (refresh) q.reload();
     } catch (e) {
       setResult(`Failed: ${errorText(e)}`);
     } finally {
@@ -365,16 +374,19 @@ function Backups() {
     });
   };
   const showModels = (b: ModelBackupRow) =>
-    run(async () => {
-      if (open?.id === b.id) {
-        setOpen(null);
+    run(
+      async () => {
+        if (open?.id === b.id) {
+          setOpen(null);
+          return "";
+        }
+        const d = await api<{ seats: BackupSeat[] }>(`/admin/model-backups/${b.id}`);
+        setOpen(b);
+        setOpenSeats(d.seats);
         return "";
-      }
-      const d = await api<{ seats: BackupSeat[] }>(`/admin/model-backups/${b.id}`);
-      setOpen(b);
-      setOpenSeats(d.seats);
-      return "";
-    });
+      },
+      { refresh: false },
+    );
   return (
     <div className="stack">
       <Panel
@@ -459,13 +471,16 @@ function Backups() {
                       className="ghost small"
                       disabled={busy}
                       onClick={() =>
-                        void run(async () => {
-                          await downloadFile(
-                            `/admin/model-backups/${b.id}/download`,
-                            `model-backup-${b.id}.json.gz`,
-                          );
-                          return "Downloaded.";
-                        })
+                        void run(
+                          async () => {
+                            await downloadFile(
+                              `/admin/model-backups/${b.id}/download`,
+                              `model-backup-${b.id}.json.gz`,
+                            );
+                            return "Downloaded.";
+                          },
+                          { refresh: false },
+                        )
                       }
                     >
                       Download
@@ -513,13 +528,16 @@ function Backups() {
               {
                 label: "Download selected",
                 run: (seats) =>
-                  void run(async () => {
-                    await downloadFile(
-                      `/admin/model-backups/${open.id}/download?${seatsParam(seats)}`,
-                      `model-backup-${open.id}.json.gz`,
-                    );
-                    return "Downloaded.";
-                  }),
+                  void run(
+                    async () => {
+                      await downloadFile(
+                        `/admin/model-backups/${open.id}/download?${seatsParam(seats)}`,
+                        `model-backup-${open.id}.json.gz`,
+                      );
+                      return "Downloaded.";
+                    },
+                    { refresh: false },
+                  ),
               },
               { label: "Restore selected", primary: true, run: (seats) => restore(open, seats) },
             ]}
@@ -534,10 +552,13 @@ function Backups() {
             className="ghost small"
             disabled={busy}
             onClick={() =>
-              void run(async () => {
-                await downloadFile("/admin/models/export", "running-models.json.gz");
-                return "Downloaded every running model.";
-              })
+              void run(
+                async () => {
+                  await downloadFile("/admin/models/export", "running-models.json.gz");
+                  return "Downloaded every running model.";
+                },
+                { refresh: false },
+              )
             }
           >
             Export all
@@ -554,13 +575,16 @@ function Backups() {
                   label: "Export selected",
                   primary: true,
                   run: (seats) =>
-                    void run(async () => {
-                      await downloadFile(
-                        `/admin/models/export?${seatsParam(seats)}`,
-                        "running-models.json.gz",
-                      );
-                      return "Downloaded.";
-                    }),
+                    void run(
+                      async () => {
+                        await downloadFile(
+                          `/admin/models/export?${seatsParam(seats)}`,
+                          "running-models.json.gz",
+                        );
+                        return "Downloaded.";
+                      },
+                      { refresh: false },
+                    ),
                 },
               ]}
             />
@@ -618,7 +642,9 @@ function Overview() {
                 sub={
                   total
                     ? `${total.graded} graded · target ${o.targets.hitRate2xPct}% / ${o.targets.hitRate4xPct}%`
-                    : "loading"
+                    : hits.error
+                      ? "unavailable"
+                      : "loading"
                 }
                 tone={
                   total?.verdict === "meets-targets"
@@ -1274,6 +1300,7 @@ function RevokeButton({ wallet, onDone }: { wallet: string; onDone: () => void }
 function Levers({ onDone }: { onDone: () => void }) {
   const [wallet, setWallet] = useState("");
   const [days, setDays] = useState("30");
+  const dayCount = Number(days);
   const [note, setNote] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1316,10 +1343,10 @@ function Levers({ onDone }: { onDone: () => void }) {
         />
         <button
           className="button primary"
-          disabled={busy || !wallet.trim()}
+          disabled={busy || !wallet.trim() || !(dayCount >= 1 && dayCount <= 730)}
           onClick={() => void act("grant")}
         >
-          Grant {days || 0} days
+          Grant {dayCount >= 1 ? dayCount : 0} days
         </button>
         <input
           placeholder="Whitelist note (optional)"
@@ -1333,23 +1360,33 @@ function Levers({ onDone }: { onDone: () => void }) {
       {result && <p className="small muted">{result}</p>}
       <p className="small faint">
         Backup:{" "}
-        <a
-          href="#"
-          onClick={async (e) => {
-            e.preventDefault();
-            const data = await api<unknown>("/admin/subscriptions/export");
-            const url = URL.createObjectURL(
-              new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
-            );
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `trenchscanner-access-${new Date().toISOString().slice(0, 10)}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
+        <button
+          type="button"
+          className="link"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setResult(null);
+            api<unknown>("/admin/subscriptions/export")
+              .then((data) => {
+                const url = URL.createObjectURL(
+                  new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
+                );
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `trenchscanner-access-${new Date().toISOString().slice(0, 10)}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                // Revoked later: revoking at once can cancel the download in some browsers.
+                setTimeout(() => URL.revokeObjectURL(url), 10_000);
+              })
+              .catch((e: unknown) => setResult(`Export failed: ${errorText(e)}`))
+              .finally(() => setBusy(false));
           }}
         >
           download whitelist, subscriptions and burns as JSON
-        </a>
+        </button>
       </p>
     </Panel>
   );
@@ -1428,8 +1465,8 @@ function Ai() {
         <div className="stack">
           {!a.config.apiKeySet && (
             <p className="notice">
-              No ANTHROPIC_API_KEY on this API service, so the AI reviewer isn't running here. Add it on the
-              Render worker to turn it on.
+              No ANTHROPIC_API_KEY on this API service, so the AI reviewer isn't running. Set it on both the
+              API and worker services on Render to turn it on.
             </p>
           )}
           <Panel
@@ -1508,8 +1545,9 @@ function Ai() {
                 Last 30 days: buys hit 2x {pct(hits.data.aiReviewer.buys.hitRate2xPct, 1)} of{" "}
                 {hits.data.aiReviewer.buys.graded} graded, against{" "}
                 {pct(hits.data.aiReviewer.allReviewed.hitRate2xPct, 1)} for everything it reviewed (lift{" "}
-                {hits.data.aiReviewer.liftPts ?? "–"} pts). Brier {hits.data.aiReviewer.brier ?? "–"} vs the
-                model's {hits.data.aiReviewer.curatorBrier ?? "–"} (lower is better).
+                {hits.data.aiReviewer.liftPts?.toFixed(1) ?? "–"} pts). Brier{" "}
+                {hits.data.aiReviewer.brier?.toFixed(3) ?? "–"} vs the model's{" "}
+                {hits.data.aiReviewer.curatorBrier?.toFixed(3) ?? "–"} (lower is better).
               </p>
             )}
           </Panel>
@@ -1641,17 +1679,17 @@ function Database() {
                     ])}
                 />
                 <Table
-                  head={["Day", "New tokens", "Model alerts"]}
+                  head={["Day (UTC)", "New tokens", "Model alerts"]}
                   rows={days.map((d) => [
-                    new Date(d).toLocaleDateString(),
+                    d,
                     n(s.dailyRows.find((r) => r.day === d && r.table === "Token")?.rows ?? 0),
                     n(s.dailyRows.find((r) => r.day === d && r.table === "CuratedAlert")?.rows ?? 0),
                   ])}
                 />
                 <Table
-                  head={["Day", ...kinds.map((k) => `${k} samples`)]}
+                  head={["Day (UTC)", ...kinds.map((k) => `${k} samples`)]}
                   rows={outcomeDays.map((d) => [
-                    new Date(d).toLocaleDateString(),
+                    d,
                     ...kinds.map((k) =>
                       n(s.candidateOutcomesDaily.find((r) => r.day === d && r.kind === k)?.rows ?? 0),
                     ),
