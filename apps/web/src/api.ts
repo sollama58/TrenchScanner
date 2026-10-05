@@ -231,6 +231,22 @@ export interface CuratedStats {
     goalRatePct: number | null;
     bestPeak24hReturnPct: number | null;
   };
+  /** Absent from older API builds mid-deploy, null when the reading failed. */
+  market?: MarketWeather | null;
+}
+
+/** How often launches are doubling now against the last week. Informational; gates nothing. */
+export interface MarketWeather {
+  condition: "hot" | "normal" | "cold" | "unknown";
+  recentHours: number;
+  recentGraded: number;
+  recentWins: number;
+  recentRatePct: number | null;
+  trailingDays: number;
+  trailingGraded: number;
+  trailingWins: number;
+  trailingRatePct: number | null;
+  ratio: number | null;
 }
 
 export interface GradedRates {
@@ -242,6 +258,10 @@ export interface GradedRates {
   pending: number;
   hitRate2xPct: number | null;
   hitRate4xPct: number | null;
+  /** Average / total simulated return under the fixed exit plan, in percent (absent from older API builds). */
+  avgSimReturnPct?: number | null;
+  totalSimReturnPct?: number | null;
+  simCalls?: number;
   verdict: "meets-targets" | "below-targets" | "insufficient-data";
 }
 
@@ -541,6 +561,13 @@ export interface RecordSummary {
   proven4xPct?: number | null;
   /** Average doublings per graded call: a 2x is 1, a 4x is 2, a miss 0. */
   avgReturnDoublings: number | null;
+  /**
+   * Simulated return under the fixed exit plan (Leaderboard.exitPlan): calls with a number, the
+   * average per call and the total, in percent of a stake. Absent from older API builds.
+   */
+  simCalls?: number;
+  avgSimReturnPct?: number | null;
+  totalSimReturnPct?: number | null;
   score: number | null;
 }
 
@@ -642,6 +669,8 @@ export interface Leaderboard {
     bands?: ScoreBand[];
     summary: string;
   };
+  /** The fixed exit plan the simulated returns follow, in a sentence (absent from older API builds). */
+  exitPlan?: string;
   defaultModel: string;
   /** The first of selectedModels (the single-model feed other clients read). */
   selectedModel: string;

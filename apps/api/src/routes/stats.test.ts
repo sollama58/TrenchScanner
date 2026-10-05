@@ -45,6 +45,10 @@ describe("withRates", () => {
       verdict: "insufficient-data",
     });
   });
+
+  it("leaves calls that can never be graded out of pending", () => {
+    expect(withRates({ ...counts, ungradable: 7 }, TARGETS)).toMatchObject({ pending: 3, ungradable: 7 });
+  });
 });
 
 describe("GET /stats/routes", () => {
@@ -286,7 +290,13 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     );
     expect(body.aiReviewer.probability2xBands.map((b: { band: number }) => b.band)).toEqual([20, 70, 80]);
 
-    expect(body.filterMatches.total).toMatchObject({ calls: 2, graded: 2, won2x: 1 });
+    expect(body.filterMatches.total).toMatchObject({
+      calls: 2,
+      graded: 2,
+      won2x: 1,
+      pending: 0,
+      ungradable: 0,
+    });
     expect(body.filterMatches.byFilter).toEqual([
       expect.objectContaining({ name: `${TAG}-filter`, calls: 2 }),
     ]);

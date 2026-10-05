@@ -583,7 +583,9 @@ async function emitForModel(
 
   // Gate mode asks before sending (in parallel - the governor allows at most a burst's worth
   // per cycle). A failed review fails OPEN: an outage at the reviewer must not silence a feed
-  // the curator already vouched for, and the error is recorded against the pick.
+  // the curator already vouched for, and the error is recorded against the pick. So does a pick
+  // the reviewer isn't pointed at or the day's AI budget can't pay for (reviewPick's null): it
+  // goes out unreviewed. Picks come best first, so the budget goes to the strongest of them.
   const gateReviews: (AiReviewResult | null)[] = gating
     ? await Promise.all(picks.map((p) => reviewPick(p.scored, p.decision, env, { gate: true })))
     : picks.map(() => null);
@@ -639,11 +641,11 @@ async function emitForModel(
       await recordAiReview(pick, review, "gate", result.anchor, result.alertId, env).catch((err) =>
         logger.warn("failed to record ai review", { error: String(err) }),
       );
-    } else if (reviewing) {
+    } else if (reviewing && !gating) {
       // Shadow mode: the alert is already out; the review is bookkeeping and must never hold
       // up the scan cycle, so it runs detached.
       void reviewPick(pick.scored, pick.decision, env)
-        .then((r) => recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env))
+        .then((r) => (r ? recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env) : undefined))
         .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) }));
     }
   }

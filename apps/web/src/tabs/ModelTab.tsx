@@ -17,7 +17,7 @@ import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
-import { ago, pct, tokenLabel, usd } from "../format";
+import { ago, pct, signedPct, stakes, tokenLabel, usd } from "../format";
 
 const WINDOWS = [7, 30, 90] as const;
 
@@ -403,6 +403,15 @@ function LeaderboardPanel({
               <th className="r" title="Average doublings per call">
                 Avg doublings
               </th>
+              <th className="r" title="Average simulated return per live call under the fixed exit plan">
+                Avg profit
+              </th>
+              <th
+                className="r"
+                title="Total simulated return over its live calls, staking the same amount on each"
+              >
+                Total profit
+              </th>
               <th className="r">Backtest 2x / 4x</th>
               <th
                 className="r"
@@ -468,6 +477,20 @@ function LeaderboardPanel({
                   <td className="r num" data-label="Avg doublings">
                     {doublings(live.avgReturnDoublings)}
                   </td>
+                  <td className={`r num ${profitTone(live.avgSimReturnPct)}`} data-label="Avg profit">
+                    {signedPct(live.avgSimReturnPct)}
+                  </td>
+                  <td
+                    className={`r num ${profitTone(live.totalSimReturnPct)}`}
+                    data-label="Total profit"
+                    title={
+                      live.simCalls
+                        ? `${live.simCalls} graded call${live.simCalls === 1 ? "" : "s"} with a simulated result`
+                        : undefined
+                    }
+                  >
+                    {stakes(live.totalSimReturnPct)}
+                  </td>
                   <td className="r num muted" data-label="Backtest">
                     {exam.graded > 0 ? `${pct(exam.winRatePct)} / ${pct(exam.goalRatePct)}` : "–"}
                     {exam.graded > 0 && <span className="faint"> · {exam.graded}</span>}
@@ -518,10 +541,13 @@ function LeaderboardPanel({
       </div>
       <p className="faint small">
         Avg doublings is the average return per call: a 2x counts 1, a 4x counts 2, a miss or a stop-out 0. It
-        is shown for context and not scored. Backtest figures are the latest training run's walk-forward exam,
-        with the number of calls it made.
+        is shown for context and not scored. Avg and total profit follow every live call with one fixed exit
+        plan, so a feed whose losers lose a lot shows it even when its hit rate looks fine; see{" "}
+        <a href="#profit-guide">what profit means</a>. Backtest figures are the latest training run's
+        walk-forward exam, with the number of calls it made.
       </p>
       <ScoreGuide board={board} />
+      <ProfitGuide board={board} />
     </section>
   );
 }
@@ -617,6 +643,71 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
       </div>
     </details>
   );
+}
+
+/**
+ * What the simulated profit columns mean: the exit plan, how one call is worked out, and the
+ * board's best total worked through as an example.
+ */
+function ProfitGuide({ board }: { board: Leaderboard }) {
+  const example = [...board.entries]
+    .filter((e) => (e.composite.live.simCalls ?? 0) > 0 && e.composite.live.totalSimReturnPct != null)
+    .sort((a, b) => (b.composite.live.totalSimReturnPct ?? 0) - (a.composite.live.totalSimReturnPct ?? 0))[0];
+  const live = example?.composite.live;
+  return (
+    <details className="score-guide" id="profit-guide">
+      <summary>What the profit columns mean</summary>
+      <div className="score-guide-body">
+        <p className="muted small">
+          A hit rate counts each call as a win or a loss, so it can't tell a feed whose misses drift 10% lower
+          from one whose misses fall 50%. The profit columns put a return on every graded call by following it
+          with one fixed plan, the same for every model:
+        </p>
+        <p className="small">
+          <strong>
+            {board.exitPlan ??
+              "Buy at the realistic fill, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 1 hour."}
+          </strong>
+        </p>
+        <ol className="steps small">
+          <li>
+            <strong>The fill is the one the hit rates use:</strong> the first price a minute after the alert,
+            plus slippage, so nobody is credited with a price they couldn't get.
+          </li>
+          <li>
+            <strong>Some worked calls.</strong> One that runs to 4x returns +200% (half sold at 2x, half at
+            4x). One that doubles and then falls to the stop returns +25%. One that drops to the stop first
+            returns -50%. One that ends the hour 20% up without reaching 2x returns +20%. Each sale also pays
+            the slippage, so the real figures sit a little lower.
+          </li>
+          <li>
+            <strong>Avg profit</strong> is the average return per graded live call.{" "}
+            <strong>Total profit</strong> adds them up in stakes: staking the same amount on every call, +3.0
+            stakes means the model's calls made three times that amount over the window, after the losers.
+          </li>
+          <li>
+            <strong>It is a simulation, not a promise.</strong> Prices are checked about once a minute, so a
+            sale is assumed to fill at the level itself; in a fast dump a real stop can fill lower. Calls
+            whose last price is unknown are left out rather than guessed.
+          </li>
+        </ol>
+        {example && live && (
+          <p className="muted small score-example">
+            <strong>Example, {example.name}:</strong> {live.simCalls} graded live call
+            {live.simCalls === 1 ? "" : "s"} averaged{" "}
+            <span className="num">{signedPct(live.avgSimReturnPct, 1)}</span> each, a total of{" "}
+            <span className="num">{stakes(live.totalSimReturnPct)}</span> over the last {board.window.days}{" "}
+            days.
+          </p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function profitTone(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  return value > 0 ? "up" : value < 0 ? "down" : "";
 }
 
 function rateTone(value: number | null, target: number): string {

@@ -31,6 +31,7 @@ export * from "./subscription/index.js";
 
 export * from "./curation/features.js";
 export * from "./curation/labels.js";
+export * from "./curation/profitSim.js";
 export * from "./curation/curator.js";
 export * from "./curation/governor.js";
 export * from "./curation/trainer.js";
@@ -47,6 +48,7 @@ export * from "./curation/tradeFlow.js";
 export * from "./curation/textFeatures.js";
 export * from "./curation/aiJudge.js";
 export * from "./curation/aiBlend.js";
+export * from "./curation/aiSpend.js";
 export * from "./curation/pricePath.js";
 export * from "./curation/calibration.js";
 export * from "./curation/blend.js";

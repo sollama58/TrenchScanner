@@ -19,6 +19,23 @@ export function pct(value: number | null | undefined, digits = 0): string {
   return `${value.toFixed(digits)}%`;
 }
 
+/** A return in percent with its sign: +12%, -8%, 0%. */
+export function signedPct(value: number | null | undefined, digits = 0): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "–";
+  const text = Math.abs(value).toFixed(digits);
+  if (Number(text) === 0) return `${(0).toFixed(digits)}%`;
+  return `${value > 0 ? "+" : "-"}${text}%`;
+}
+
+/** A total return in percent of one stake, as stakes won or lost: +340% -> "+3.4 stakes". */
+export function stakes(totalPct: number | null | undefined): string {
+  if (totalPct === null || totalPct === undefined || !Number.isFinite(totalPct)) return "–";
+  const n = totalPct / 100;
+  const text = Math.abs(n) >= 100 ? Math.abs(n).toFixed(0) : Math.abs(n).toFixed(1);
+  if (Number(text) === 0) return "0 stakes";
+  return `${n > 0 ? "+" : "-"}${text} stake${text === "1.0" ? "" : "s"}`;
+}
+
 /** A return in percent as a price multiple: +100% -> 2.0x. */
 export function multiple(returnPct: number | null | undefined): string {
   if (returnPct === null || returnPct === undefined || !Number.isFinite(returnPct)) return "–";

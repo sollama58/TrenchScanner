@@ -58,7 +58,10 @@ const envSchema = z.object({
   PUMPPORTAL_WS_URL: z.string().default("wss://pumpportal.fun/api/data"),
   // Follow every new launch's and every candidate's trades over the same connection, for the
   // order-flow features (curation/tradeFlow.ts). Memory is capped (at most 600 mints, bounded per
-  // mint); "false" keeps the stream to launches and graduations only.
+  // mint); "false" keeps the stream to launches and graduations only. PumpPortal only streams
+  // trades to a connection opened with an API key whose wallet holds 0.02+ SOL (metered at 0.01
+  // SOL per 10,000 messages): set PUMPPORTAL_WS_URL to wss://pumpportal.fun/api/data?api-key=KEY.
+  // Without one the trade inputs stay null (the stream logs the refusal once).
   PUMPPORTAL_TRADE_FLOW: z
     .enum(["true", "false"])
     .default("true")
@@ -459,14 +462,30 @@ const envSchema = z.object({
   AI_BLEND_MIN_ROWS: z.coerce.number().int().positive().default(150),
   // Claude's read of each in-band mint's name and description (apps/worker/src/ai/textScorer.ts),
   // scored once per mint and fed to the models as features. AI_TEXT_MAX_PER_HOUR caps the calls
-  // (the cost knob); "false" stops new reads.
+  // (the cost knob); "false" stops new reads. Haiku by default (user's call, 2026-10-05): a few
+  // tenths of a cent a read, so 60 an hour fits well inside the daily AI budget. AI_TEXT_EFFORT
+  // applies only to models that take an effort setting (not Haiku).
   AI_TEXT_FEATURES: z
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  AI_TEXT_MODEL: z.string().default("claude-opus-5-5"),
+  AI_TEXT_MODEL: z.string().default("claude-haiku-4-5"),
   AI_TEXT_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
   AI_TEXT_MAX_PER_HOUR: z.coerce.number().int().min(0).default(60),
+  // The hard daily cap on everything the AI spends (curation/aiSpend.ts): the reviewer, the text
+  // reads and the playbook evolution share AI_DAILY_BUDGET_USD per UTC day. Every call reserves
+  // its estimated cost before it runs and is trued up to the real cost afterwards; once the next
+  // call would cross the cap, the AI stops until midnight UTC (shown on /health/worker and the
+  // Admin tab). The last AI_BUDGET_REVIEW_RESERVE_PCT of the cap is kept for reviews of
+  // high-conviction picks - background work (text reads, playbook tests, reviews of standard
+  // picks) pauses once spend reaches the rest. 0 stops every AI call.
+  AI_DAILY_BUDGET_USD: z.coerce.number().min(0).default(10),
+  AI_BUDGET_REVIEW_RESERVE_PCT: z.coerce.number().min(0).max(100).default(40),
+  // Which picks the reviewer is pointed at. It always reviews the default model's high-conviction
+  // picks (tier "high", or every pick when the model has no high-conviction cutoff yet).
+  // "spare": standard picks are reviewed too, but only out of the budget left above the
+  // high-conviction reserve. "never": standard picks are never reviewed.
+  AI_REVIEW_STANDARD_PICKS: z.enum(["spare", "never"]).default("spare"),
 
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),

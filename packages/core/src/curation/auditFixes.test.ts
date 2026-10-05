@@ -55,6 +55,9 @@ function standing(id: string, score: number, liveGraded: number): ChampionStandi
     proven2xPct: null,
     proven4xPct: null,
     avgReturnDoublings: null,
+    simCalls: 0,
+    avgSimReturnPct: null,
+    totalSimReturnPct: null,
     score,
   };
   const composite: CompositeScore = {

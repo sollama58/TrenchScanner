@@ -33,8 +33,8 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
     });
     await prisma.curatedAlert.createMany({
       data: [
-        alert("a", 10, true, 400),
-        alert("a", 20, false),
+        { ...alert("a", 10, true, 400), simReturnPct: 191 },
+        { ...alert("a", 20, false), simReturnPct: -50 },
         alert("a", 30, null),
         alert("b", 5, true),
         alert("b", 50, true), // before b's lane was born - excluded
@@ -52,14 +52,31 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
     const batched = await liveCallRecords(models, since, lanes);
 
     expect(batched.get(`${TAG}-a`)).toEqual(await liveCallRecord(`${TAG}-a`, since));
-    expect(batched.get(`${TAG}-none`)).toEqual({ calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 });
-    expect(batched.get(`${TAG}-a`)).toMatchObject({ calls: 3, graded: 2, wins: 1, goals: 1 });
+    expect(batched.get(`${TAG}-none`)).toEqual({
+      calls: 0,
+      graded: 0,
+      wins: 0,
+      goals: 0,
+      sumLabel: 0,
+      simCalls: 0,
+      sumSimReturnPct: 0,
+    });
+    expect(batched.get(`${TAG}-a`)).toMatchObject({
+      calls: 3,
+      graded: 2,
+      wins: 1,
+      goals: 1,
+      simCalls: 2,
+      sumSimReturnPct: 141,
+    });
     expect(batched.get(`${TAG}-b`)).toEqual({
       calls: 2,
       graded: 1,
       wins: 1,
       goals: 0,
       sumLabel: expect.any(Number),
+      simCalls: 0,
+      sumSimReturnPct: 0,
     });
   });
 });

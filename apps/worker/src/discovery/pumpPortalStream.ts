@@ -1,5 +1,6 @@
 import {
   createLogger,
+  EMPTY_TRADE_FLOW,
   looksLikeSolanaAddress,
   TradeFlowBook,
   type FlowLaunch,
@@ -51,6 +52,19 @@ interface PumpPortalMessage {
   initialBuy?: unknown;
   newTokenBalance?: unknown;
   marketCapSol?: unknown;
+  /** PumpPortal's own notices (subscription acks and refusals). */
+  message?: unknown;
+}
+
+/**
+ * PumpPortal only streams trades to a connection made with an API key whose wallet holds at
+ * least 0.02 SOL (the key goes on PUMPPORTAL_WS_URL as ?api-key=...). Without one, every
+ * subscribeTokenTrade is answered with this notice and no trade ever arrives.
+ */
+export function isTradeSubscriptionRefusal(msg: PumpPortalMessage): boolean {
+  return (
+    typeof msg.message === "string" && /subscribeTokenTrade/.test(msg.message) && /api key/i.test(msg.message)
+  );
 }
 
 /** Subscription batches - PumpPortal takes a key list per subscribe message. */
@@ -137,6 +151,13 @@ export class PumpPortalStream {
   private timers: ReturnType<typeof setInterval>[] = [];
   /** When the current socket last opened or delivered a message - see checkIdle. */
   private lastActivityAt = 0;
+  /**
+   * PumpPortal refused this connection's trade subscriptions (no funded API key). The book then
+   * only ever sees launches, and its trade counters would read as zero buyers and zero trades -
+   * a fake "dead token" the models would learn from - so only launch-derived inputs are reported.
+   */
+  private tradesRefused = false;
+  private refusalLogged = false;
 
   constructor(
     private readonly url: string,
@@ -156,7 +177,15 @@ export class PumpPortalStream {
 
   /** The order-flow features for a mint right now, or undefined when trade flow is off. */
   tradeFlow(mint: string): TradeFlowFeatures | undefined {
-    return this.book?.features(mint, Date.now());
+    const flow = this.book?.features(mint, Date.now());
+    if (!flow || !this.tradesRefused) return flow;
+    // The dev's launch buy comes with the create message itself; everything else needs trades.
+    return { ...EMPTY_TRADE_FLOW, devInitialBuySol: flow.devInitialBuySol };
+  }
+
+  /** Whether PumpPortal is refusing trade subscriptions on the current connection. */
+  get tradeFlowRefused(): boolean {
+    return this.tradesRefused;
   }
 
   /** Opens the connection. A no-op (logged once) when the runtime has no WebSocket. */
@@ -199,6 +228,17 @@ export class PumpPortalStream {
       try {
         msg = JSON.parse(raw) as PumpPortalMessage;
       } catch {
+        return;
+      }
+      if (typeof msg === "object" && msg !== null && isTradeSubscriptionRefusal(msg)) {
+        this.tradesRefused = true;
+        this.pendingSubscribe.clear();
+        if (!this.refusalLogged) {
+          this.refusalLogged = true;
+          logger.warn(
+            "PumpPortal refused trade subscriptions: order-flow inputs stay null until PUMPPORTAL_WS_URL carries ?api-key= for a wallet funded with 0.02+ SOL",
+          );
+        }
         return;
       }
       const flow = typeof msg === "object" && msg !== null ? parseFlowMessage(msg, at) : null;
@@ -254,6 +294,8 @@ export class PumpPortalStream {
       socket.send(JSON.stringify({ method: "subscribeNewToken" }));
       socket.send(JSON.stringify({ method: "subscribeMigration" }));
       // A fresh connection has no trade subscriptions: everything tracked goes back on the list.
+      // It also gets one more try at them, in case the key was funded since the last refusal.
+      this.tradesRefused = false;
       if (this.book) for (const mint of this.book.trackedMints()) this.pendingSubscribe.add(mint);
       logger.info("stream connected");
     });
@@ -283,6 +325,7 @@ export class PumpPortalStream {
    * waiting up to FLUSH_INTERVAL_MS for the batch missed them. Queued when the socket isn't open.
    */
   private subscribeNow(mint: string): void {
+    if (this.tradesRefused) return;
     const socket = this.socket;
     if (!socket || socket.readyState !== 1) {
       this.pendingSubscribe.add(mint);
@@ -295,6 +338,10 @@ export class PumpPortalStream {
   flushSubscriptions(): void {
     const socket = this.socket;
     if (!socket || socket.readyState !== 1 || this.pendingSubscribe.size === 0) return;
+    if (this.tradesRefused) {
+      this.pendingSubscribe.clear();
+      return;
+    }
     const keys = [...this.pendingSubscribe].filter((m) => this.book?.has(m));
     this.pendingSubscribe.clear();
     for (let i = 0; i < keys.length; i += SUBSCRIBE_CHUNK) {
