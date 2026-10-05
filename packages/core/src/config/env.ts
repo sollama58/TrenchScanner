@@ -338,6 +338,10 @@ const envSchema = z.object({
   // question than the fill-price rule the feed is held to; they train at this fraction of a
   // current row's weight. 0 drops them entirely.
   CURATOR_LEGACY_LABEL_WEIGHT: z.coerce.number().min(0).max(1).default(0.25),
+  // The goal is 2x and 4x, but the calls that matter most keep running: a clean winner trains at
+  // 1 + this x (doublings past its 2x, to its 24h run peak), so the models lean toward the traits
+  // of the big runners (curation/labels.ts runWeight). 0 weighs every winner the same.
+  CURATOR_RUN_WEIGHT_PER_DOUBLING: z.coerce.number().min(0).max(2).default(0.5),
   // Fewest wins a walk-forward fold's decision rows must hold before it is judged (the fold count
   // shrinks until each has this many; a fold still short of it is skipped).
   CURATOR_EXAM_MIN_FOLD_WINS: z.coerce.number().int().min(0).default(30),

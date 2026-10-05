@@ -118,6 +118,7 @@ export async function runCuratorTrainingJob(
       heuristicPrecisionGate: env.CURATED_HEURISTIC_PRECISION_GATE,
       contestants,
       legacyLabelWeight: env.CURATOR_LEGACY_LABEL_WEIGHT,
+      runWeightPerDoubling: env.CURATOR_RUN_WEIGHT_PER_DOUBLING,
       minTestWins: env.CURATOR_EXAM_MIN_FOLD_WINS,
       highConvictionRank: env.CURATED_HIGH_CONVICTION_RANK,
       calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
