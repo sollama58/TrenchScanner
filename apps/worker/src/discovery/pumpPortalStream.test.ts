@@ -91,6 +91,47 @@ describe("PumpPortalStream trade flow", () => {
     expect(sent[1]).toEqual({ method: "subscribeTokenTrade", keys: [LATER] });
   });
 
+  it("reports only launch inputs, and stops subscribing, once PumpPortal refuses trades", () => {
+    const stream = new PumpPortalStream("wss://example.invalid", null);
+    const { sent, socket } = fakeSocket();
+    (stream as unknown as { socket: unknown }).socket = socket;
+    const at = Date.now() - 6 * 60_000;
+    stream.handleMessage(
+      JSON.stringify({
+        mint: MINT,
+        txType: "create",
+        traderPublicKey: "dev",
+        solAmount: 1.2,
+        initialBuy: 4e7,
+      }),
+      at,
+    );
+    expect(sent).toEqual([{ method: "subscribeTokenTrade", keys: [MINT] }]);
+    // Before the refusal, a launch watched with no trades reads as zero buyers.
+    expect(stream.tradeFlow(MINT)!.uniqueBuyers5m).toBe(0);
+
+    stream.handleMessage(
+      JSON.stringify({
+        message:
+          "'subscribeTokenTrade' and 'subscribeAccountTrade' methods are only available when connecting with an API key funded with at least 0.02 SOL.",
+      }),
+    );
+    expect(stream.tradeFlowRefused).toBe(true);
+    const flow = stream.tradeFlow(MINT)!;
+    expect(flow.devInitialBuySol).toBe(1.2);
+    expect(flow.uniqueBuyers5m).toBeNull();
+    expect(flow.tradesPerMin5m).toBeNull();
+    expect(flow.earlyBuyerCount).toBeNull();
+
+    stream.watch([OTHER]);
+    stream.flushSubscriptions();
+    stream.handleMessage(JSON.stringify({ mint: OTHER, txType: "create", traderPublicKey: "dev2" }), at);
+    expect(sent).toHaveLength(1);
+    // The subscription ack is not a refusal.
+    stream.handleMessage(JSON.stringify({ message: "Successfully subscribed to token creation events." }));
+    expect(stream.drain().map((e) => e.mintAddress)).toEqual([MINT, OTHER]);
+  });
+
   it("ignores trades for mints it isn't following, and stays out of the book when flow is off", () => {
     const stream = new PumpPortalStream("wss://example.invalid", null);
     stream.handleMessage(JSON.stringify({ mint: MINT, txType: "buy", traderPublicKey: "w", solAmount: 1 }));
