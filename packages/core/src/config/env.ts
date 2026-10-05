@@ -450,12 +450,14 @@ const envSchema = z.object({
   AI_BLEND_MIN_ROWS: z.coerce.number().int().positive().default(150),
   // Claude's read of each in-band mint's name and description (apps/worker/src/ai/textScorer.ts),
   // scored once per mint and fed to the models as features. AI_TEXT_MAX_PER_HOUR caps the calls
-  // (the cost knob); "false" stops new reads.
+  // (the cost knob); "false" stops new reads. Haiku by default (user's call, 2026-10-05): a few
+  // tenths of a cent a read, so 60 an hour fits well inside the daily AI budget. AI_TEXT_EFFORT
+  // applies only to models that take an effort setting (not Haiku).
   AI_TEXT_FEATURES: z
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  AI_TEXT_MODEL: z.string().default("claude-opus-5-5"),
+  AI_TEXT_MODEL: z.string().default("claude-haiku-4-5"),
   AI_TEXT_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
   AI_TEXT_MAX_PER_HOUR: z.coerce.number().int().min(0).default(60),
   // The hard daily cap on everything the AI spends (curation/aiSpend.ts): the reviewer, the text
