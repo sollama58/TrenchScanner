@@ -192,16 +192,21 @@ const runSelect = {
 } as const;
 
 /** The outcome of one AI reviewer call, from its graded training row. */
-function reviewOutcome(
+export function reviewOutcome(
   co: {
     finalizedAt: Date | null;
+    finalized24hAt: Date | null;
     hit2xIn1h: boolean | null;
     hit4xIn1h: boolean | null;
     disqualified: boolean | null;
   } | null,
 ): "pending" | "won" | "won4x" | "missed" | "stopped" | "unknown" {
   if (!co) return "unknown";
-  if (co.hit2xIn1h === null) return "pending";
+  if (co.hit2xIn1h === null) {
+    // Book closed with no verdict: retired ungraded (no fill seen inside the window), so it is
+    // not pending - nothing will ever grade it.
+    return co.finalizedAt === null && co.finalized24hAt !== null ? "unknown" : "pending";
+  }
   if (co.disqualified) return "stopped";
   if (co.hit4xIn1h) return "won4x";
   return co.hit2xIn1h ? "won" : "missed";
@@ -287,7 +292,13 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
         curatedAlertId: true,
         token: { select: { mintAddress: true, symbol: true, name: true, imageUrl: true } },
         candidateOutcome: {
-          select: { finalizedAt: true, hit2xIn1h: true, hit4xIn1h: true, disqualified: true },
+          select: {
+            finalizedAt: true,
+            finalized24hAt: true,
+            hit2xIn1h: true,
+            hit4xIn1h: true,
+            disqualified: true,
+          },
         },
       },
     }),

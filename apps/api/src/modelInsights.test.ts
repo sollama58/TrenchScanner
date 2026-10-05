@@ -9,7 +9,7 @@ import {
   type BoostedCuratorParams,
   type LogisticCuratorParams,
 } from "@trenchscanner/core";
-import { buildModelInsights, featureImportance } from "./modelInsights.js";
+import { buildModelInsights, featureImportance, reviewOutcome } from "./modelInsights.js";
 
 describe("featureImportance", () => {
   it("ranks a logistic model by standardized weight, value and missing indicator together", () => {
@@ -67,6 +67,33 @@ describe("featureImportance", () => {
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `model-insights-test-${Date.now()}`;
+
+describe("reviewOutcome", () => {
+  const row = (o: Partial<Parameters<typeof reviewOutcome>[0] & object>) => ({
+    finalizedAt: null,
+    finalized24hAt: null,
+    hit2xIn1h: null,
+    hit4xIn1h: null,
+    disqualified: null,
+    ...o,
+  });
+
+  it("reads a graded row's verdict", () => {
+    const at = new Date();
+    expect(reviewOutcome(row({ finalizedAt: at, hit2xIn1h: true, hit4xIn1h: true }))).toBe("won4x");
+    expect(reviewOutcome(row({ finalizedAt: at, hit2xIn1h: true, hit4xIn1h: false }))).toBe("won");
+    expect(reviewOutcome(row({ finalizedAt: at, hit2xIn1h: false }))).toBe("missed");
+    expect(reviewOutcome(row({ finalizedAt: at, hit2xIn1h: true, disqualified: true }))).toBe("stopped");
+  });
+
+  it("calls an open row pending and a row retired without a fill unknown", () => {
+    expect(reviewOutcome(row({}))).toBe("pending");
+    // The watcher closed the book with no verdict: no price inside the win window, so nothing
+    // will ever grade it. Not pending.
+    expect(reviewOutcome(row({ finalized24hAt: new Date() }))).toBe("unknown");
+    expect(reviewOutcome(null)).toBe("unknown");
+  });
+});
 
 describe.skipIf(!dbAvailable)("buildModelInsights", () => {
   let reviewId: string;
