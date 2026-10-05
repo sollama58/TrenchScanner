@@ -158,6 +158,11 @@ model UserFilter {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  /// When this filter last started matching from scratch: created, switched on, or its criteria
+  /// changed. For FILTER_ARM_QUIET_MINUTES after this, tokens that already match it are recorded
+  /// in FilterBaseline instead of alerted - a new filter alerts on what newly matches from now
+  /// on, not on the whole watchlist at once (apps/worker/src/jobs/matchDispatch.ts).
+  armedAt   DateTime @default(now())
 
   /// Opted in to the public filter leaderboard by its owner (off by default). The board shows the
   /// filter's name and settings, never the owner's wallet - see apps/api/src/filterLeaderboard.ts.
@@ -167,9 +172,24 @@ model UserFilter {
   /// a copier would get. Filters from before 2026-10-05 start at createdAt.
   criteriaChangedAt  DateTime @default(now())
 
-  matches Match[]
+  matches   Match[]
+  baselines FilterBaseline[]
 
   @@index([userId])
+}
+
+/// Tokens that already matched a filter when it was armed (see UserFilter.armedAt). Counts as the
+/// alert cooldown for that (filter, token) pair, so the backlog never shows up as "just now"
+/// alerts. Not a Match: nothing here is shown, graded or notified. tokenId carries no foreign
+/// key - rows are swept by age (cleanupJob.ts), and Token deletes stay off this table.
+model FilterBaseline {
+  filterId  String
+  filter    UserFilter @relation(fields: [filterId], references: [id], onDelete: Cascade)
+  tokenId   String
+  createdAt DateTime   @default(now())
+
+  @@id([filterId, tokenId])
+  @@index([createdAt])
 }
 
 /// A distinct Solana token being tracked.

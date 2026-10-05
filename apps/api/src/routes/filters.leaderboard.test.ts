@@ -172,6 +172,7 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
       "createdAt",
       "updatedAt",
       "criteriaChangedAt",
+      "armedAt",
     ]);
     const criteria = Object.keys(row).filter((k) => !notCriteria.has(k));
     expect(criteria.sort()).toEqual([...FILTER_CRITERIA_KEYS].sort());

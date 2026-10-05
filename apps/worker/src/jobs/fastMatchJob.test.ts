@@ -58,7 +58,15 @@ async function seedVetted(suffix: string, overrides: Record<string, unknown> = {
 async function seedSubscriber(suffix: string) {
   const user = await prisma.user.create({ data: { walletAddress: `${TAG}-${suffix}` } });
   await prisma.userFilter.create({
-    data: { userId: user.id, name: suffix, mcapMin: 1_000, mcapMax: 10_000_000, isActive: true },
+    // Armed long ago: these tests are about alerting, not a just-applied filter settling in.
+    data: {
+      userId: user.id,
+      name: suffix,
+      mcapMin: 1_000,
+      mcapMax: 10_000_000,
+      isActive: true,
+      armedAt: new Date(Date.now() - 3_600_000),
+    },
   });
   return user;
 }

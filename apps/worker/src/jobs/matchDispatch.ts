@@ -17,7 +17,71 @@ const logger = createLogger("match-dispatch");
 /** Once a user has been alerted for a token+filter, don't re-alert for it again within this window. */
 export const ALERT_COOLDOWN_HOURS = 12;
 
+/**
+ * How long a newly armed filter (created, switched on, or edited - see UserFilter.armedAt) only
+ * records what already matches it instead of alerting. The scan re-checks the whole in-band
+ * watchlist every cycle (30s, ~50s at worst), so this covers a few full cycles: everything that
+ * matched the moment the filter was armed is seen, and baselined, before alerts start.
+ *
+ * Without it, applying a filter alerted on every token it matched at once - dozens of "just now"
+ * cards and pings for tokens that had been sitting in the watchlist for minutes or hours.
+ */
+export const FILTER_ARM_QUIET_MINUTES = 2;
+
 export type FilterWithUser = UserFilter;
+
+/**
+ * Whether this filter is still settling in for this token: armed within the quiet window, and
+ * the token is one the watchlist already knew when it was armed. A token first seen after that
+ * is news by definition, so it alerts even inside the window.
+ */
+export function isSettling(
+  filter: Pick<UserFilter, "armedAt">,
+  tokenFirstSeenAt: Date | undefined,
+  now = Date.now(),
+): boolean {
+  const armedAt = filter.armedAt.getTime();
+  if (now - armedAt >= FILTER_ARM_QUIET_MINUTES * 60_000) return false;
+  return !(tokenFirstSeenAt && tokenFirstSeenAt.getTime() > armedAt);
+}
+
+type Db = Pick<typeof prisma, "$executeRaw" | "filterBaseline">;
+
+/** Records that these filters already matched this token when they were armed - see FilterBaseline. */
+async function recordBaselines(db: Db, tokenId: string, filterIds: string[]): Promise<void> {
+  if (filterIds.length === 0) return;
+  await db.$executeRaw`
+    INSERT INTO "FilterBaseline" ("filterId", "tokenId", "createdAt")
+    SELECT f, ${tokenId}, now() FROM unnest(${filterIds}::text[]) AS f
+    ON CONFLICT ("filterId", "tokenId") DO UPDATE SET "createdAt" = EXCLUDED."createdAt"`;
+}
+
+/**
+ * The (user, filter) pairs on cooldown for this token: alerted inside ALERT_COOLDOWN_HOURS, or
+ * baselined inside it (already matching when the filter was armed, so never news).
+ */
+async function cooldownKeys(
+  db: Pick<typeof prisma, "match" | "filterBaseline">,
+  tokenId: string,
+  filters: FilterWithUser[],
+): Promise<Set<string>> {
+  const cutoff = new Date(Date.now() - ALERT_COOLDOWN_HOURS * 3_600_000);
+  const filterIds = filters.map((f) => f.id);
+  const [recent, baselined] = await Promise.all([
+    db.match.findMany({
+      where: { tokenId, matchedAt: { gt: cutoff }, filterId: { in: filterIds } },
+      select: { userId: true, filterId: true },
+    }),
+    db.filterBaseline.findMany({
+      where: { tokenId, createdAt: { gt: cutoff }, filterId: { in: filterIds } },
+      select: { filterId: true },
+    }),
+  ]);
+  const keys = new Set(recent.map((r) => `${r.userId}:${r.filterId}`));
+  const owner = new Map(filters.map((f) => [f.id, f.userId]));
+  for (const b of baselined) keys.add(`${owner.get(b.filterId)}:${b.filterId}`);
+  return keys;
+}
 
 /**
  * Turns one scored token into every alert it owes, for every user whose filter it matches: one
@@ -35,6 +99,7 @@ export async function createMatchesForCandidate(opts: {
 
   const toAlert = await resolveAlertTargets({
     tokenId: token.id,
+    tokenFirstSeenAt: token.firstSeenAt,
     scored,
     activeFilters,
     guard: env?.MATCH_ALERT_GUARD,
@@ -56,6 +121,8 @@ export async function createMatchesForCandidate(opts: {
  */
 export async function resolveAlertTargets(opts: {
   tokenId: string;
+  /** When the watchlist first saw the token - a token newer than a filter is never backlog. */
+  tokenFirstSeenAt?: Date;
   scored: ScoredToken;
   activeFilters: FilterWithUser[];
   /** MATCH_ALERT_GUARD - see scoring/alertGuard.ts. Omitted means "off". */
@@ -63,7 +130,19 @@ export async function resolveAlertTargets(opts: {
 }): Promise<FilterWithUser[]> {
   const { tokenId, scored, activeFilters } = opts;
 
-  const matching = activeFilters.filter((filter) => matchesFilter(scored, filter));
+  const allMatching = activeFilters.filter((filter) => matchesFilter(scored, filter));
+  if (allMatching.length === 0) return [];
+
+  // A filter that was only just armed records what already matches it instead of alerting on it.
+  // Before the guard on purpose: a token held back for flushing was still already matching.
+  const now = Date.now();
+  const settling = allMatching.filter((f) => isSettling(f, opts.tokenFirstSeenAt, now));
+  await recordBaselines(
+    prisma,
+    tokenId,
+    settling.map((f) => f.id),
+  );
+  const matching = allMatching.filter((f) => !settling.includes(f));
   if (matching.length === 0) return [];
 
   // Before the cooldown read, and returning nothing rather than a reason: a held-back match must
@@ -73,16 +152,7 @@ export async function resolveAlertTargets(opts: {
   // One round trip for every cooldown on this token, instead of one per matching filter. The
   // cooldown is per (user, filter, token), so the pair is what has to be compared - two of a
   // user's filters both catching this token are two separate alerts by design.
-  const cooldownCutoff = new Date(Date.now() - ALERT_COOLDOWN_HOURS * 3_600_000);
-  const recent = await prisma.match.findMany({
-    where: {
-      tokenId,
-      matchedAt: { gt: cooldownCutoff },
-      filterId: { in: matching.map((f) => f.id) },
-    },
-    select: { userId: true, filterId: true },
-  });
-  const onCooldown = new Set(recent.map((r) => `${r.userId}:${r.filterId}`));
+  const onCooldown = await cooldownKeys(prisma, tokenId, matching);
   return matching.filter((f) => !onCooldown.has(`${f.userId}:${f.id}`));
 }
 
@@ -115,31 +185,24 @@ export async function createMatchesForTargets(opts: {
   // it releases on commit or rollback with no cleanup path to get wrong, and it is taken on the
   // token rather than per (user, filter) pair because both lanes contend over exactly one token
   // at a time - one lock instead of a dozen.
-  const cooldownCutoff = new Date(Date.now() - ALERT_COOLDOWN_HOURS * 3_600_000);
   const created = await prisma.$transaction(
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${token.id}))`;
 
-      const recent = await tx.match.findMany({
-        where: {
-          tokenId: token.id,
-          matchedAt: { gt: cooldownCutoff },
-          filterId: { in: toAlert.map((f) => f.id) },
-        },
-        select: { userId: true, filterId: true },
-      });
-      const onCooldown = new Set(recent.map((r) => `${r.userId}:${r.filterId}`));
+      const onCooldown = await cooldownKeys(tx, token.id, toAlert);
       // The callers' filter list was read at the start of their cycle. A filter deleted since
       // would fail its insert on the foreign key and roll back every other user's alert for this
-      // token with it; one switched off since would still alert. Only filters still active now.
-      const stillActive = new Set(
-        (
-          await tx.userFilter.findMany({
-            where: { id: { in: toAlert.map((f) => f.id) }, isActive: true },
-            select: { id: true },
-          })
-        ).map((f) => f.id),
-      );
+      // token with it; one switched off since would still alert, and one edited or switched on
+      // again since is settling in again (see isSettling). Only filters still active now, as
+      // they are now.
+      const current = await tx.userFilter.findMany({
+        where: { id: { in: toAlert.map((f) => f.id) }, isActive: true },
+        select: { id: true, armedAt: true },
+      });
+      const now = Date.now();
+      const resettling = current.filter((f) => isSettling(f, token.firstSeenAt, now)).map((f) => f.id);
+      await recordBaselines(tx, token.id, resettling);
+      const stillActive = new Set(current.filter((f) => !resettling.includes(f.id)).map((f) => f.id));
       const confirmed = toAlert.filter(
         (f) => stillActive.has(f.id) && !onCooldown.has(`${f.userId}:${f.id}`),
       );

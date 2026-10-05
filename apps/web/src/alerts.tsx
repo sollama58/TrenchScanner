@@ -206,6 +206,13 @@ export async function sendTestAlert(prefs: AlertPrefs): Promise<NotifyResult | n
 const FEED_PATH = "/matches?page=1&includeCurated=saved";
 /** Cards older than this when first seen are not news (a settings change brought them in). */
 const FRESH_MS = 15 * 60_000;
+/**
+ * A card first seen now is news only if it was raised after the previous look (less this much
+ * slack, for clock skew and a delayed check). Anything older that turns up now was brought in by
+ * a change, not raised since: following another model shows its recent calls, and the default
+ * model can switch to the best performer on its own - neither is a new alert to ping for.
+ */
+const SINCE_LAST_LOOK_SLACK_MS = 2 * 60_000;
 /** The fallback check while no stream is up (and, throttled by the browser, in a hidden tab). */
 const CHECK_EVERY_MS = 30_000;
 /** More new alerts than this at once become one summary notification. */
@@ -254,6 +261,7 @@ export function AlertNotifier() {
   const s = useSettings();
   const prefs = s?.alerts ?? null;
   const seen = useRef<Set<string> | null>(null);
+  const lastLookAt = useRef(0);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
@@ -278,6 +286,9 @@ export function AlertNotifier() {
     cachedGet<MatchPage>(FEED_PATH, 0)
       .then((page) => {
         const cards = page.matches;
+        const now = Date.now();
+        const previousLook = lastLookAt.current;
+        lastLookAt.current = now;
         if (seen.current === null) {
           // The first look only learns what is already there.
           seen.current = new Set(cards.map(cardKey));
@@ -287,10 +298,10 @@ export function AlertNotifier() {
         const fresh = cards.filter((c) => !seen.current!.has(cardKey(c)));
         for (const c of fresh) seen.current.add(cardKey(c));
         if (!p) return;
-        const now = Date.now();
+        const raisedAfter = Math.max(now - FRESH_MS, previousLook - SINCE_LAST_LOOK_SLACK_MS);
         const news = fresh.filter(
           (c) =>
-            now - new Date(c.matchedAt).getTime() < FRESH_MS &&
+            new Date(c.matchedAt).getTime() > raisedAfter &&
             (c.kind === "curated" ? p.notifyOn.modelCalls : p.notifyOn.filterMatches),
         );
         const mine = new Set(claim(news.map(cardKey)));
