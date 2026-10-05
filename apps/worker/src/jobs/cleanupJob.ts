@@ -350,6 +350,22 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // CANDIDATE_OUTCOME_RETENTION_DAYS in env.ts. Deleted by age alone: rows this old are long
   // finalized, and they carry their own copy of the features, so nothing else references them.
   const candidateOutcomeCutoff = new Date(startedAt - env.CANDIDATE_OUTCOME_RETENTION_DAYS * DAY_MS);
+  const matchOutcomeCutoff = new Date(startedAt - env.MATCH_OUTCOME_RETENTION_DAYS * DAY_MS);
+  // Before either sweep: anchors that retired before the run peak was copied (before 2026-10-05)
+  // hand it over first, so the filter leaderboard's run size survives the delete. Found through
+  // Match's tokenId index; candidateOutcomeId has none. A no-op once every alert has its copy.
+  // Ahead of the age sweep below too: with MATCH_OUTCOME_RETENTION_DAYS set past the general
+  // horizon, that sweep would otherwise take the anchors before this copy saw them.
+  if (env.MATCH_OUTCOME_RETENTION_DAYS > 0) {
+    await prisma.$executeRaw`
+      UPDATE "Match" m
+      SET "peak24hReturnPct" = o."peak24hReturnPct"
+      FROM "CandidateOutcome" o
+      WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${matchOutcomeCutoff}
+        AND o."peak24hReturnPct" IS NOT NULL
+        AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
+        AND m."peak24hReturnPct" IS NULL`;
+  }
   const deletedCandidateOutcomes = {
     count: await deleteInBatches(
       `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
@@ -364,20 +380,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // the row finalized and retired), and no model trains on them. Only finished, graded rows that
   // nothing but Match references; an ungraded one stays, as it is what tells the hit-rate report
   // that its alerts will never be graded.
-  const matchOutcomeCutoff = new Date(startedAt - env.MATCH_OUTCOME_RETENTION_DAYS * DAY_MS);
   let deletedMatchOutcomes = 0;
   if (env.MATCH_OUTCOME_RETENTION_DAYS > 0) {
-    // Anchors that retired before the run peak was copied (before 2026-10-05) hand it over first,
-    // so the filter leaderboard's run size survives the delete. Found through Match's tokenId
-    // index; candidateOutcomeId has none. A no-op once every alert has its copy.
-    await prisma.$executeRaw`
-      UPDATE "Match" m
-      SET "peak24hReturnPct" = o."peak24hReturnPct"
-      FROM "CandidateOutcome" o
-      WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${matchOutcomeCutoff}
-        AND o."peak24hReturnPct" IS NOT NULL
-        AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
-        AND m."peak24hReturnPct" IS NULL`;
     deletedMatchOutcomes = await deleteInBatches(
       `SELECT o."id" FROM "CandidateOutcome" o
        WHERE o."sampleKind" = 'match' AND o."anchorAt" < $1

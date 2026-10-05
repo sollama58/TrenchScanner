@@ -47,6 +47,15 @@ const SNAPSHOT_FALLBACK_MAX_AGE_MS = 90_000;
 const RESCHEDULE_SLACK_MS = 5_000;
 
 /**
+ * How far back the two per-sweep repair passes look (by the alert's createdAt, which is
+ * indexed). Each pass matches nothing in the steady state, but without a bound each one read
+ * every curated alert ever written, every minute, and the table only grows (~800 a day). A copy
+ * that is going to land does so within the row's 24h watch, so a week is generous; alerts older
+ * than this that are still stranded were already looked at by every sweep of their first week.
+ */
+const REPAIR_LOOKBACK_MS = 7 * 86_400_000;
+
+/**
  * A fetched price this far below the row's last price (or its scan price, before any) is checked
  * against the scan before it is folded in - see the suspect-tick note in runCandidateWatchJob.
  */
@@ -497,6 +506,7 @@ async function repairUngradedAlerts(): Promise<number> {
       SET "outcomeFinalizedAt" = o."finalized24hAt"
       FROM "CandidateOutcome" o
       WHERE o."id" = a."candidateOutcomeId"
+        AND a."createdAt" >= ${new Date(Date.now() - REPAIR_LOOKBACK_MS)}
         AND a."outcomeFinalizedAt" IS NULL
         AND a."hit2xIn1h" IS NULL
         AND o."finalized24hAt" IS NOT NULL
@@ -522,6 +532,7 @@ async function repairUngradedAlerts(): Promise<number> {
 async function repairCuratedVerdicts(): Promise<number> {
   const stranded = await prisma.curatedAlert.findMany({
     where: {
+      createdAt: { gte: new Date(Date.now() - REPAIR_LOOKBACK_MS) },
       hit2xIn15m: null,
       candidateOutcome: { is: { finalizedAt: { not: null } } },
     },
