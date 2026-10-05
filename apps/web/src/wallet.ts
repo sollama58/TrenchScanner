@@ -154,7 +154,16 @@ async function finishSignIn({ sessionToken, ...user }: VerifyResponse): Promise<
     await api<User>("/auth/me");
     return user;
   } catch (e) {
-    if (!(e instanceof ApiError && e.status === 401) || !sessionToken) throw e;
+    if (!(e instanceof ApiError && e.status === 401)) throw e;
+    // The signature verified (the API answered sign-in); only the session failed to stick. An
+    // API without the token fallback leaves nothing to retry with, and saying "didn't verify"
+    // would send the user back to re-sign for nothing.
+    if (!sessionToken)
+      throw new Error(
+        "Your wallet signed, but this browser blocked the session cookie. Allow cookies for this site, " +
+          "or turn tracking prevention to Balanced, then try again.",
+        { cause: e },
+      );
   }
   setSessionToken(sessionToken);
   try {

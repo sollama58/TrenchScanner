@@ -41,8 +41,13 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
   const lb = board.data;
   const modelsOn = lb?.showModelAlerts ?? true;
-  const curatedLive = useNudgeStream("/curated/stream", feedPage.reload, modelsOn);
-  const matchesLive = useNudgeStream("/matches/stream", feedPage.reload);
+  // A new alert changes the tiles as well as the cards, so both refetch on a nudge.
+  const nudged = () => {
+    feedPage.reload();
+    feedStats.reload();
+  };
+  const curatedLive = useNudgeStream("/curated/stream", nudged, modelsOn);
+  const matchesLive = useNudgeStream("/matches/stream", nudged);
   // "Now" on each card, seconds old rather than as old as the last feed poll.
   const cards = useLiveMarketCaps(feedPage.data?.matches);
 

@@ -90,12 +90,13 @@ export function AboutModal({
           graded history and sit an exam on later weeks they never saw. Each one only calls its most confident
           slice: the loosest cutoff that met the targets in that exam, or its best slice when none did. Their
           live calls are graded and ranked on the Models tab by one score: how far each model has proven
-          itself toward the goal, 0 to 100, where 100 means its record meets both hit-rate targets. A few
-          phantom misses are counted first, so a short streak can&apos;t outscore a long good record. Every
-          few hours new variants are bred from the leaders; one that beats the weakest model takes its seat.
-          Consensus learns which models to trust and when they agree. The best performer on the leaderboard is
-          the default feed, re-chosen after every run; you can follow it automatically or keep your own picks
-          in Settings. Each model calls every token that clears its cutoff, once per token a day.
+          itself toward the goal, 0 to 100, where 100 means its record meets both hit-rate targets and the
+          run-size target (how far its calls run over the day after). A few phantom misses are counted first,
+          so a short streak can&apos;t outscore a long good record. Every few hours new variants are bred from
+          the leaders; one that beats the weakest model takes its seat. Consensus learns which models to trust
+          and when they agree. The best performer on the leaderboard is the default feed, re-chosen after
+          every run; you can follow it automatically or keep your own picks in Settings. Each model calls
+          every token that clears its cutoff, once per token a day.
         </p>
 
         <h3>How alerts are graded</h3>
