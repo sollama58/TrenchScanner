@@ -63,8 +63,12 @@ export const feedAppearanceSchema = z
     sourceStripe: z.boolean(),
     /** The "Learning from N graded moments" note under the feed. */
     learningNote: z.boolean(),
+    // Options added after launch take a default when missing, so a dashboard tab still running an
+    // older build (which doesn't send them) can keep saving.
     /** Volume tiles (5m / 1h / 24h) on the cards; off by default. */
-    volume: z.boolean(),
+    volume: z.boolean().default(false),
+    /** Color the Score tile red to green against recent alerts' scores; on by default. */
+    scoreColor: z.boolean().default(true),
     /** Card fields not shown. */
     hidden: z
       .array(z.enum(CARD_FIELDS))
@@ -91,6 +95,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   sourceStripe: true,
   learningNote: true,
   volume: false,
+  scoreColor: true,
   hidden: [],
 };
 

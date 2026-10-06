@@ -36,7 +36,7 @@ export function ScoreExplainer() {
 
 function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
-  const { weights: w, adoptedAt, history } = useScoreWeights();
+  const { weights: w, adoptedAt, history, scale } = useScoreWeights();
   const pct = (v: number) => `${Math.round(v * 100)}%`;
 
   useEffect(() => {
@@ -110,6 +110,13 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
           Most fresh launches score between 60 and 88. On recent filter matches, tokens scoring 80 or more
           doubled about 16% of the time, against 12% for all matches.
         </p>
+        {scale && (
+          <p>
+            On live cards the score is colored against the last day&apos;s alerts: red at{" "}
+            {Math.round(scale.p10)} or below (their lowest 10%), green at {Math.round(scale.p90)} or above
+            (their top 10%), shading in between. Customize can turn the color off.
+          </p>
+        )}
         <p>
           It is a quick screen, not the models&apos; call: the models read the raw numbers themselves. A min
           score in a filter drops tokens below it.

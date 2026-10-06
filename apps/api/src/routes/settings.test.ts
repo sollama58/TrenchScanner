@@ -7,7 +7,7 @@ import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import { DEFAULT_ALERT_PREFS, parseAlertPrefs } from "../alertPrefs.js";
-import { DEFAULT_FEED_APPEARANCE, parseFeedAppearance } from "../feedAppearance.js";
+import { DEFAULT_FEED_APPEARANCE, feedAppearanceSchema, parseFeedAppearance } from "../feedAppearance.js";
 
 /** The Settings tab's API: alert settings, access, and following the best performer. */
 
@@ -38,6 +38,12 @@ describe("parseFeedAppearance", () => {
         hidden: ["reasons", "sparkles", "reasons", 4],
       }),
     ).toEqual({ ...DEFAULT_FEED_APPEARANCE, win: "#00ff88", textSize: 110, hidden: ["reasons"] });
+  });
+
+  it("lets an older dashboard build save without the options added since", () => {
+    const { volume, scoreColor, ...older } = DEFAULT_FEED_APPEARANCE;
+    const parsed = feedAppearanceSchema.safeParse(older);
+    expect(parsed.success && parsed.data).toEqual({ ...older, volume, scoreColor });
   });
 });
 
