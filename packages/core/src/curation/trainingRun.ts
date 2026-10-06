@@ -126,8 +126,13 @@ export interface StoredEvalMetrics {
   contestantName?: string;
   /** The exam's governed call record - what the leaderboard scores before live calls exist. */
   exam?: CallRecord;
-  /** The high-conviction tier's rank cutoff and its out-of-sample record, when tiering is on. */
-  highConviction?: { rank: number; record: CallRecord };
+  /**
+   * The high-conviction tier's rank cutoff and its out-of-sample record, when tiering is on.
+   * `earned` (absent on older rows = earned) says whether that record out-scored the model's
+   * cutoff record, which is what it takes for the shipped model to tier any call "high" (user
+   * decision 2026-10-06): the tier claims more than the cutoff, so it has to show more.
+   */
+  highConviction?: { rank: number; record: CallRecord; earned?: boolean; cutoffRecord?: CallRecord };
   /** How many recent out-of-sample calls the calibration table was fitted on (0 = no table). */
   calibrationCalls?: number;
   /** Per-feature null rates and decile lifts over the rows this run's exam graded. */
@@ -224,21 +229,41 @@ function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: num
  * What ships beside a model's cutoff: the high-conviction line (the probability at
  * cfg.highConvictionRank over the reference rows, the same way the cutoff is translated) and the
  * calibration table fitted on the newest out-of-sample calls (curation/calibration.ts).
+ *
+ * The line ships only when the tier EARNED it: its out-of-sample record (the calls at or above
+ * the high-conviction rank) out-scores the cutoff record (the calls at or above `cutoff`, in the
+ * same units as outOfSampleRanks). In production the top half-percent by rank doubled at 10.6%
+ * against 18.5% for standard calls over 2026-10-03..06 - the very top of a model's range is
+ * where extreme inputs live, not its best calls - so a tier that hasn't shown it beats the cutoff
+ * is not shown at all (user decision 2026-10-06). Both records are still stored.
  */
 function servedExtras(
-  cfg: Pick<CuratorTrainingConfig, "highConvictionRank" | "calibrationWindowDays" | "cooldownHours">,
+  cfg: Pick<
+    CuratorTrainingConfig,
+    "highConvictionRank" | "calibrationWindowDays" | "cooldownHours" | "targets"
+  >,
   outOfSampleRanks: ScoredOutcome[],
   shippedProbabilities: ArrayLike<number>,
   translate: (rank: number) => number | null,
+  cutoff: number | null,
 ): { extras: ServedCuratorExtras; highConviction: StoredEvalMetrics["highConviction"] } {
   const extras: ServedCuratorExtras = {};
   let highConviction: StoredEvalMetrics["highConviction"];
   if (cfg.highConvictionRank !== undefined && outOfSampleRanks.length > 0) {
-    const threshold = translate(cfg.highConvictionRank);
+    const cooldownMs = cfg.cooldownHours * 3_600_000;
+    const record = recordAbove(outOfSampleRanks, cfg.highConvictionRank, cooldownMs);
+    const cutoffRecord = cutoff === null ? undefined : recordAbove(outOfSampleRanks, cutoff, cooldownMs);
+    const earned =
+      cutoffRecord !== undefined &&
+      record.graded > 0 &&
+      (recordScore(record, cfg.targets) ?? 0) > (recordScore(cutoffRecord, cfg.targets) ?? 0);
+    const threshold = earned ? translate(cfg.highConvictionRank) : null;
     if (threshold !== null) extras.highConvictionThreshold = threshold;
     highConviction = {
       rank: cfg.highConvictionRank,
-      record: recordAbove(outOfSampleRanks, cfg.highConvictionRank, cfg.cooldownHours * 3_600_000),
+      record,
+      earned,
+      ...(cutoffRecord ? { cutoffRecord } : {}),
     };
   }
   const calibration = buildCalibration(
@@ -339,6 +364,7 @@ async function examineRecipe(
     evaluation.outOfSampleRanks,
     shippedProbabilities,
     translate,
+    precisionCalibration.threshold,
   );
   return {
     evaluation,
@@ -737,8 +763,12 @@ export async function runEvolvingContest(
       NEVER_EMIT_THRESHOLD,
     );
     if (stacked) {
-      const served = servedExtras(cfg, stacked.outOfSample, stacked.shippedProbabilities, (rank) =>
-        probabilityAtRank(stacked.shippedProbabilities, rank),
+      const served = servedExtras(
+        cfg,
+        stacked.outOfSample,
+        stacked.shippedProbabilities,
+        (rank) => probabilityAtRank(stacked.shippedProbabilities, rank),
+        stacked.precisionCalibration.threshold,
       );
       results.push({
         contestant: stackedSpec.id,
@@ -783,11 +813,14 @@ export async function runEvolvingContest(
       // line translates back to the blend score at that percentile.
       const blendScores = blend.outOfSample.map((c) => c.probability);
       const blendPercentiles = confidenceRanks(blendScores);
+      // The blend's cutoff is a blend score; in percentile units it is the share of scores below it.
+      const blendCutoff = blend.precisionCalibration.threshold;
       const served = servedExtras(
         cfg,
         blend.outOfSample.map((c, i) => ({ ...c, probability: blendPercentiles[i]! })),
         blendScores,
         (rank) => probabilityAtRank(blendScores, rank),
+        blendCutoff === null ? null : blendScores.filter((p) => p < blendCutoff).length / blendScores.length,
       );
       results.push({
         contestant: blendSpec.id,

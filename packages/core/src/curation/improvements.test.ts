@@ -10,7 +10,13 @@ import {
   traitName,
   normalizeRecipe,
 } from "./evolution.js";
-import { compositeScore, emptyRecord, rankByComposite, MIN_LIVE_CALLS_TO_RANK } from "./leaderboard.js";
+import {
+  compositeScore,
+  emptyRecord,
+  rankByComposite,
+  recordScore,
+  MIN_LIVE_CALLS_TO_RANK,
+} from "./leaderboard.js";
 import { enabledContestants, BLEND_CONTESTANT } from "./contestants.js";
 import { runContestTraining, type ContestantTrainingResult } from "./trainingRun.js";
 import { syntheticMarket } from "./syntheticMarket.js";
@@ -590,9 +596,14 @@ describe("the wider roster", () => {
     for (const id of ["linear", "trees", "momentum", "survivor", "blend"]) {
       const r = byId.get(id)! as ContestantTrainingResult;
       const params = r.params as { highConvictionThreshold?: number; calibration?: { calls: number } };
-      expect(params.highConvictionThreshold).toBeDefined();
       expect(params.calibration?.calls ?? 0).toBeGreaterThan(0);
-      expect(r.metrics.highConviction?.rank).toBe(0.95);
+      const hc = r.metrics.highConviction!;
+      expect(hc.rank).toBe(0.95);
+      expect(hc.cutoffRecord).toBeDefined();
+      // The high-conviction line ships only when the tier's exam record out-scores the cutoff's.
+      const earned = recordScore(hc.record, targets)! > recordScore(hc.cutoffRecord!, targets)!;
+      expect(hc.earned).toBe(earned);
+      expect(params.highConvictionThreshold !== undefined).toBe(earned);
       expect(r.metrics.calibrationCalls).toBeGreaterThan(0);
     }
     expect(byId.get("linear")!.metrics.featureReport?.features.length).toBe(CANDIDATE_FEATURE_NAMES.length);
