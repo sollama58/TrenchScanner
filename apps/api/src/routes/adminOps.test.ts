@@ -22,6 +22,11 @@ const ROUTES = [
   "/admin/ai",
   "/admin/alerts?limit=10",
   "/admin/accounts?limit=10",
+  "/admin/tokensage?days=1",
+  "/admin/screen?hours=1",
+  "/admin/training",
+  "/admin/filters",
+  "/admin/lookups",
 ];
 
 async function call(url: string, as: "admin" | "other") {

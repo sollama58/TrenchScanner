@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { ApiError, api, del, downloadFile, patch, post } from "../api";
-import { Skeleton } from "../components/Charts";
 import { ShieldIcon } from "../components/Icons";
-import { usePolling, type Loadable } from "../hooks";
+import { usePolling } from "../hooks";
+import { Kpi, Load, Panel, Table, Tag, Wallet, dollars, ms, n, when } from "./adminShared";
+import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
 /**
@@ -16,6 +17,10 @@ const SECTIONS = [
   { id: "overview", label: "Overview" },
   { id: "worker", label: "Worker" },
   { id: "alerts", label: "Alerts" },
+  { id: "training", label: "Training" },
+  { id: "tokensage", label: "TokenSage" },
+  { id: "screen", label: "Safety screen" },
+  { id: "filters", label: "Filters" },
   { id: "users", label: "Users" },
   { id: "access", label: "Access" },
   { id: "ai", label: "AI" },
@@ -63,6 +68,10 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
       {section === "overview" && <Overview />}
       {section === "worker" && <Worker />}
       {section === "alerts" && <Alerts />}
+      {section === "training" && <Training />}
+      {section === "tokensage" && <TokenSageAdmin />}
+      {section === "screen" && <SafetyScreen />}
+      {section === "filters" && <FiltersAdmin />}
       {section === "users" && <Users />}
       {section === "access" && <Access />}
       {section === "ai" && <Ai />}
@@ -73,120 +82,6 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
     </div>
   );
 }
-
-// ---------- shared bits ----------
-
-function Panel({
-  title,
-  note,
-  children,
-  actions,
-}: {
-  title: string;
-  note?: ReactNode;
-  children: ReactNode;
-  actions?: ReactNode;
-}) {
-  return (
-    <section className="panel">
-      <header className="section-head">
-        <div>
-          <h2>{title}</h2>
-          {note && <p className="muted small">{note}</p>}
-        </div>
-        {actions}
-      </header>
-      {children}
-    </section>
-  );
-}
-
-/** Data, a skeleton while it first loads, or the error. */
-function Load<T>({ q, children }: { q: Loadable<T>; children: (data: T) => ReactNode }) {
-  if (q.data)
-    return (
-      <div className={q.stale ? "stale" : ""}>
-        {/* A later poll failing (API or database down) must not read as "all healthy" here. */}
-        {q.error && (
-          <p className="error small">Refresh failed: {q.error.message}. Showing the last answer.</p>
-        )}
-        {children(q.data)}
-      </div>
-    );
-  if (q.error) return <p className="error">Couldn't load: {q.error.message}</p>;
-  return <Skeleton lines={4} />;
-}
-
-function Kpi({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: ReactNode;
-  sub?: ReactNode;
-  tone?: "ok" | "warn";
-}) {
-  return (
-    <div className={`panel kpi${tone ? ` admin-${tone}` : ""}`}>
-      <span className="eyebrow">{label}</span>
-      <span className="kpi-value num">{value}</span>
-      {sub && <span className="muted small">{sub}</span>}
-    </div>
-  );
-}
-
-function Table({
-  head,
-  rows,
-  empty = "Nothing yet.",
-}: {
-  head: string[];
-  rows: ReactNode[][];
-  empty?: string;
-}) {
-  if (rows.length === 0) return <p className="muted small">{empty}</p>;
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            {head.map((h) => (
-              <th key={h}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>
-              {r.map((c, j) => (
-                <td key={j}>{c}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-const n = (v: number | null | undefined) => (v === null || v === undefined ? "–" : v.toLocaleString());
-/** Dollars to the cent - AI spend is small numbers, which format.ts's usd() rounds away. */
-const dollars = (v: number | null | undefined) => (v === null || v === undefined ? "–" : `$${v.toFixed(2)}`);
-const ms = (v: number | null | undefined) =>
-  v === null || v === undefined
-    ? "–"
-    : v >= 60_000
-      ? `${(v / 60_000).toFixed(1)}m`
-      : v >= 1000
-        ? `${(v / 1000).toFixed(1)}s`
-        : `${Math.round(v)}ms`;
-const when = (iso: string | null | undefined) =>
-  iso ? <span title={new Date(iso).toLocaleString()}>{ago(iso)}</span> : <span className="faint">never</span>;
-const Tag = ({ tone, children }: { tone: "ok" | "warn" | "bad" | "muted"; children: ReactNode }) => (
-  <span className={`admin-tag-${tone}`}>{children}</span>
-);
 
 // ---------- Backups ----------
 
@@ -610,6 +505,9 @@ interface Overview {
   curatedAlerts: { last24h: number; last7d: number };
   aiReviews24h: number;
   aiBudget: AiBudget;
+  /** Absent from API builds before the TokenSage tab. */
+  tokensage?: { on: boolean; stored24h: number };
+  defaultModel?: { name: string; chosenAt: string } | null;
   databaseMb: number;
   worker: { jobs: number; stale: string[]; hung: string[]; failing: string[] };
   api: { uptimeSeconds: number; stream: boolean };
@@ -691,6 +589,21 @@ function Overview() {
                 sub={budgetLine(o.aiBudget)}
                 tone={o.aiBudget.stopped ? "warn" : undefined}
               />
+              {o.defaultModel !== undefined && (
+                <Kpi
+                  label="Default model"
+                  value={o.defaultModel?.name ?? "–"}
+                  sub={o.defaultModel ? <>chosen {when(o.defaultModel.chosenAt)}</> : "none chosen yet"}
+                />
+              )}
+              {o.tokensage && (
+                <Kpi
+                  label="TokenSage"
+                  value={o.tokensage.on ? "On" : "Off"}
+                  sub={`${n(o.tokensage.stored24h)} answers stored in 24h`}
+                  tone={o.tokensage.on ? "ok" : undefined}
+                />
+              )}
             </div>
           </div>
         );
@@ -805,6 +718,7 @@ function Worker() {
                 </Panel>
               );
             })}
+          <Lookups />
         </div>
       )}
     </Load>
@@ -1112,20 +1026,6 @@ function Users() {
         )}
       </Load>
     </Panel>
-  );
-}
-
-function Wallet({ address }: { address: string }) {
-  return (
-    <a
-      className="num"
-      href={`https://solscan.io/account/${address}`}
-      target="_blank"
-      rel="noreferrer"
-      title={address}
-    >
-      {shortAddress(address)}
-    </a>
   );
 }
 
@@ -1523,29 +1423,10 @@ function Ai() {
             )}
           </Panel>
           {a.tokensage && (
-            <Panel
-              title="TokenSage narratives"
-              note={
-                a.tokensage.on
-                  ? "On. The scanner asks TokenSage what each in-band coin is about, and reads the X link and trends at its first decision."
-                  : "Off. Set TOKENSAGE_ENABLED=true, TOKENSAGE_API_URL and TOKENSAGE_API_KEY on the scanner worker to turn it on."
-              }
-            >
-              {a.tokensage.lastCycle && (
-                <p className="muted small">
-                  Last scan cycle: {n(a.tokensage.lastCycle.requested ?? 0)} asked,{" "}
-                  {n(a.tokensage.lastCycle.stored ?? 0)} stored, {n(a.tokensage.lastCycle.pending ?? 0)}{" "}
-                  waiting on TokenSage, {n(a.tokensage.lastCycle.errors ?? 0)} errors,{" "}
-                  {n(a.tokensage.lastCycle.turnedAway ?? 0)} turned away ·{" "}
-                  {n(a.tokensage.lastCycle.fullToday ?? 0)} deep reads today.
-                </p>
-              )}
-              <Table
-                head={["Depth", "Result", "Stored in the last 24h"]}
-                rows={a.tokensage.last24h.map((g) => [g.depth, g.status, n(g.count)])}
-                empty="Nothing stored in the last 24 hours."
-              />
-            </Panel>
+            <p className="muted small">
+              TokenSage is {a.tokensage.on ? "on" : "off"}. Its answers, coverage and how described coins went
+              are on the TokenSage section.
+            </p>
           )}
           <Panel
             title="AI reviewer"
