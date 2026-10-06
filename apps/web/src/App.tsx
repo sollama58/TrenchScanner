@@ -1,14 +1,16 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { ApiError, post, type Subscription, type User, type WorkerHealth } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
-import { setSessionToken } from "./session";
+import { isGuest, setGuest, setSessionToken } from "./session";
 import { usePolling } from "./hooks";
 import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
+import { GuestLiveTab } from "./tabs/GuestLiveTab";
 import {
   BrainIcon,
   GearIcon,
   LogoMark,
+  LockIcon,
   LogoutIcon,
   PulseIcon,
   ShieldIcon,
@@ -49,6 +51,8 @@ const ADMIN_TAB = { id: "admin" as Tab, label: "Admin", Icon: ShieldIcon };
 type Session =
   | { state: "loading" }
   | { state: "signed-out" }
+  /** Looking around without a wallet: the default model's feed, everything else locked. */
+  | { state: "guest" }
   | { state: "unreachable"; message: string }
   | { state: "signed-in"; user: User };
 
@@ -57,7 +61,8 @@ export function App() {
   // feed paints at once; the check below signs them out if the session has since ended.
   const [session, setSession] = useState<Session>(() => {
     const user = peek<User>("/auth/me")?.data;
-    return user ? { state: "signed-in", user } : { state: "loading" };
+    if (user) return { state: "signed-in", user };
+    return isGuest() ? { state: "guest" } : { state: "loading" };
   });
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
 
@@ -86,7 +91,8 @@ export function App() {
   };
 
   useEffect(() => {
-    checkSession(10_000);
+    // A guest has no session to check: asking would only fetch a 401.
+    if (session.state !== "guest") checkSession(10_000);
     const onHash = () => setTab(tabFromHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -106,7 +112,25 @@ export function App() {
     setSession({ state: "signed-out" });
   };
 
+  const enterGuest = () => {
+    setGuest(true);
+    invalidate();
+    resetSettings();
+    setSession({ state: "guest" });
+    // On a phone the guest button sits below the fold; the feed should open at its top.
+    window.scrollTo({ top: 0 });
+  };
+
+  /** From guest mode to the wallet sign-in page. */
+  const connectWallet = () => {
+    setGuest(false);
+    invalidate();
+    setSession({ state: "signed-out" });
+    window.scrollTo({ top: 0 });
+  };
+
   const signedIn = session.state === "signed-in";
+  const guest = session.state === "guest";
   const ModelTab = loaded.model?.ModelTab ?? LazyModelTab;
   const FiltersTab = loaded.filters?.FiltersTab ?? LazyFiltersTab;
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
@@ -127,6 +151,27 @@ export function App() {
               Trench<span>Scanner</span>
             </span>
           </a>
+          {guest && (
+            <nav className="tabs" role="tablist">
+              {TABS.map(({ id, label, Icon }) => {
+                const locked = id !== "live";
+                return (
+                  <button
+                    key={id}
+                    role="tab"
+                    aria-selected={tab === id}
+                    aria-disabled={locked || undefined}
+                    className={`${tab === id ? "on" : ""}${locked ? " locked" : ""}`}
+                    title={locked ? `Connect a wallet to use ${label}` : undefined}
+                    onClick={() => goTo(id)}
+                  >
+                    {locked ? <LockIcon size={13} /> : <Icon size={15} />}
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          )}
           {signedIn && (
             <nav className="tabs" role="tablist">
               {tabs.map(({ id, label, Icon }) => (
@@ -145,6 +190,11 @@ export function App() {
           )}
           <div className="topbar-right">
             <WorkerStatus />
+            {guest && (
+              <button className="button primary connect-btn" onClick={connectWallet}>
+                Connect wallet
+              </button>
+            )}
             {signedIn && (
               <button className="wallet-pill" onClick={signOut} title="Sign out">
                 <span className="wallet-dot" />
@@ -181,14 +231,28 @@ export function App() {
         {session.state === "signed-out" && (
           <Suspense fallback={<Boot />}>
             <SignIn
+              onGuest={enterGuest}
               onSignedIn={(user) => {
                 // Anything cached while signed out (401s aside, e.g. /health/worker) is stale now.
+                setGuest(false);
                 invalidate();
                 resetSettings();
                 setSession({ state: "signed-in", user });
               }}
             />
           </Suspense>
+        )}
+        {guest && (
+          <div className="tab-view" key={tab}>
+            {tab === "live" ? (
+              <GuestLiveTab onConnect={connectWallet} />
+            ) : (
+              <GuestLocked
+                label={TABS.find((t) => t.id === tab)?.label ?? "this"}
+                onConnect={connectWallet}
+              />
+            )}
+          </div>
         )}
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
@@ -304,6 +368,25 @@ function AccessGate({
     );
   }
   return <>{children}</>;
+}
+
+/** What a guest sees on a tab that needs a wallet, in place of the tab. */
+function GuestLocked({ label, onConnect }: { label: string; onConnect: () => void }) {
+  return (
+    <section className="panel paywall">
+      <span className="paywall-icon">
+        <LockIcon size={24} />
+      </span>
+      <h2>Connect a wallet to use {label}</h2>
+      <p className="muted">
+        You&apos;re looking around as a guest, so you see the recommended model&apos;s calls on the Live tab.
+        Your own filters, model picks, alerts and settings are saved to your wallet.
+      </p>
+      <button className="button primary" onClick={onConnect}>
+        Connect wallet
+      </button>
+    </section>
+  );
 }
 
 function Boot() {

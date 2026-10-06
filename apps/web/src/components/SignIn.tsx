@@ -28,7 +28,7 @@ const FEATURES = [
   },
 ];
 
-export function SignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
+export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void; onGuest?: () => void }) {
   const [wallets, setWallets] = useState<WalletOption[]>(walletOptions);
   const [searching, setSearching] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -134,6 +134,23 @@ export function SignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
           No subscription yet? Sign in, then burn $ASDFASDFA on the next screen to get access. Your wallet
           shows the exact amount and asks before anything is burned.
         </p>
+        {onGuest && (
+          <div className="guest-entry">
+            <span className="guest-or faint small">or</span>
+            <button
+              type="button"
+              className="button ghost guest-btn"
+              disabled={busy !== null}
+              onClick={onGuest}
+            >
+              Continue as guest
+            </button>
+            <p className="faint small">
+              Look around without a wallet: you see the recommended model&apos;s calls. Filters, model picks,
+              alerts and settings need a connected wallet.
+            </p>
+          </div>
+        )}
       </div>
     </section>
   );

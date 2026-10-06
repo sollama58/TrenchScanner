@@ -1,0 +1,102 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { prisma, type Env } from "@trenchscanner/core";
+import { currentMarketCap } from "./matches.js";
+import { curatedAlertInclude, serializeCuratedAlert, withLatestSnapshots } from "../curatedFeed.js";
+import { contestState, modelLabel } from "../contest.js";
+import type { MatchStream } from "../matchStream.js";
+import type { ViewStampBuffer } from "../viewStamps.js";
+import { SharedCache } from "../sharedCache.js";
+
+/**
+ * The guest feed: what a visitor who hasn't connected a wallet sees - the default model's calls
+ * (the leaderboard champion, the same ledger a new subscriber follows), read-only.
+ *
+ * Deliberately its own route rather than a loosened gate on /curated or /matches: those stay
+ * behind authenticateSubscriber, and this one only ever answers the one shared ledger, with no
+ * per-user data (no filters, no picks, no settings) and no AI reviews (those are admin-only on the
+ * paid feed too). It never reads a session, so a signed-in caller gets exactly the same answer.
+ */
+
+/** Same page size as the paid feeds, so the dashboard's card grid looks the same. */
+const PAGE_SIZE = 12;
+
+/** History browsing is what the paid feed is for; guests see the most recent few pages. */
+export const GUEST_MAX_PAGES = 5;
+
+/** Every guest reads the same pages, so one fill serves a burst of them. */
+const FEED_CACHE_TTL_MS = 5_000;
+
+/**
+ * Per caller (IP, as guests carry no session). An open guest tab polls this twice a minute, so
+ * this leaves room for dozens of guests behind one carrier or office address, while every answer
+ * comes from the shared page cache; the global 300/min would let one address scrape freely.
+ */
+const GUEST_RATE_LIMIT = { max: 90, timeWindow: "1 minute" };
+
+const querySchema = z.object({
+  page: z.coerce.number().int().min(1).max(GUEST_MAX_PAGES).default(1),
+});
+
+type GuestPage = { rows: Awaited<ReturnType<typeof loadRows>>; hasMore: boolean };
+
+async function loadRows(model: string, page: number) {
+  // One extra row says whether an older page exists, without a count over the whole ledger.
+  const rows = await prisma.curatedAlert.findMany({
+    where: { model },
+    orderBy: { createdAt: "desc" },
+    skip: (page - 1) * PAGE_SIZE,
+    take: PAGE_SIZE + 1,
+    include: curatedAlertInclude,
+  });
+  return withLatestSnapshots(rows);
+}
+
+export async function registerGuestRoutes(
+  app: FastifyInstance,
+  opts: { env: Env; matchStream: MatchStream; viewStamps: ViewStampBuffer },
+) {
+  // Keyed by model and page; bounded by GUEST_MAX_PAGES per model, and the model comes from the
+  // roster, never the request.
+  const pageCache = new Map<string, SharedCache<GuestPage>>();
+  const stopListening = opts.matchStream.onCuratedAlert(() => {
+    for (const cache of pageCache.values()) cache.clear();
+  });
+  app.addHook("onClose", async () => stopListening());
+
+  app.get("/feed", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = querySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { page } = parsed.data;
+    const state = await contestState(opts.env);
+    const model = state.defaultModel;
+
+    const key = `${model}:${page}`;
+    let cache = pageCache.get(key);
+    if (!cache) {
+      cache = new SharedCache<GuestPage>(FEED_CACHE_TTL_MS);
+      pageCache.set(key, cache);
+    }
+    const { rows, hasMore } = await cache.get(async () => {
+      const all = await loadRows(model, page);
+      return { rows: all.slice(0, PAGE_SIZE), hasMore: all.length > PAGE_SIZE && page < GUEST_MAX_PAGES };
+    });
+
+    const matches = rows.map((alert) => serializeCuratedAlert(alert, currentMarketCap));
+    // Keeps the cards' "Now" market cap refreshing, as the paid feeds do. Buffered and shared with
+    // every subscriber following the same model, so guests add next to nothing. The on-demand
+    // live refresher (which spends RPC credits) is left to signed-in readers.
+    opts.viewStamps.record(matches.map((c) => c.tokenId));
+
+    return {
+      matches,
+      page,
+      pageSize: PAGE_SIZE,
+      totalCount: (page - 1) * PAGE_SIZE + matches.length + (hasMore ? 1 : 0),
+      hasMore,
+      model: modelLabel(state, model),
+    };
+  });
+}
