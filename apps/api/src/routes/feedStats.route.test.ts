@@ -58,7 +58,24 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
     // A won filter alert that ran to 5x, a miss, one still in its window, and one from two days ago.
     await match(a, ago(120), { hit2xIn1h: true, hit4xIn1h: true, disqualified: false, peakReturnPct: 400 });
     await match(b, ago(90), { hit2xIn1h: false, hit4xIn1h: false, disqualified: false, peakReturnPct: 30 });
-    await match(c, ago(2), {});
+    // Still in its window, with its grading row already showing a 2x: the card says so at once.
+    const open = await prisma.candidateOutcome.create({
+      data: {
+        tokenId: c,
+        sampleKind: "event",
+        anchorAt: ago(2),
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 50_000,
+        features: {},
+        nextCheckAt: new Date(),
+        peak1hPriceUsd: 0.00025,
+        low1hPriceUsd: 0.00009,
+        lowBefore2xPriceUsd: 0.00009,
+        peak24hPriceUsd: 0.00025,
+        hit2xAt: ago(1),
+      },
+    });
+    await match(c, ago(2), { candidateOutcomeId: open.id });
     await match(old, ago(48 * 60), {
       hit2xIn1h: true,
       hit4xIn1h: true,
@@ -116,6 +133,21 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
     const body = (await call("GET", "/matches/stats")).json() as { hit2x: number; showModelAlerts: boolean };
     // Token B is now just the filter alert: a miss.
     expect(body).toMatchObject({ hit2x: 1, showModelAlerts: false });
+  });
+
+  it("the feed card carries the alert's outcome from its open grading row", async () => {
+    const res = await call("GET", "/matches");
+    expect(res.statusCode).toBe(200);
+    const cards = res.json().matches as { token: { symbol: string }; outcome: Record<string, unknown> }[];
+    const bySymbol = Object.fromEntries(cards.map((c) => [c.token.symbol, c.outcome]));
+    expect(bySymbol.CCC).toMatchObject({ status: "watching", hit2x: true, peak1hReturnPct: 150 });
+    expect(bySymbol.AAA).toMatchObject({
+      status: "won",
+      hitGoal: true,
+      finalized: true,
+      peak24hReturnPct: null,
+    });
+    expect(bySymbol.BBB).toMatchObject({ status: "missed" });
   });
 
   it("rejects an out-of-range window", async () => {
