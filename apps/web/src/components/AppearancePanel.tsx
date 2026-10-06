@@ -266,6 +266,14 @@ export function AppearanceControls() {
           />
           Volume tiles: 5m, 1h and 24h
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.scoreColor}
+            onChange={() => setAppearance({ scoreColor: !look.scoreColor })}
+          />
+          Color the score: red for the lowest 10% of recent alerts, green for the top 10%
+        </label>
         {look.hidden.length > 0 && (
           <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
             Show everything

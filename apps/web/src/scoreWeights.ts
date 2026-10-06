@@ -11,6 +11,7 @@ const REFRESH_MS = 30 * 60_000;
 const FALLBACK: ScoreWeightsInfo = {
   weights: { momentum: 0.45, freshness: 0.3, holderQuality: 0.1, narrative: 0.15 },
   adoptedAt: null,
+  scale: { p10: 60, p90: 88, sample: 0 },
   history: [],
 };
 
@@ -55,11 +56,37 @@ export function weightsLine(w: ScoreWeightsInfo["weights"]): string {
   return `momentum ${pct(w.momentum)} · freshness ${pct(w.freshness)} · holders ${pct(w.holderQuality)} · narrative ${pct(w.narrative)}`;
 }
 
+/** Where the score's color comes from when the server hasn't sent its scale (see FALLBACK). */
+export const DEFAULT_SCORE_SCALE = { p10: 60, p90: 88, sample: 0 };
+
+/**
+ * Where a score sits between recent alerts' 10th percentile (0) and 90th (1), clamped: the Score
+ * tile's red-to-green position. Null when there's no score.
+ */
+export function scoreTone(score: number | null, scale = DEFAULT_SCORE_SCALE): number | null {
+  if (score === null || !Number.isFinite(score)) return null;
+  const span = scale.p90 - scale.p10;
+  if (!(span > 0)) return 0.5;
+  return Math.min(1, Math.max(0, (score - scale.p10) / span));
+}
+
+/** The CSS color for a tone: the theme's (or the user's) loss color through to its win color. */
+export function scoreToneColor(tone: number): string {
+  return `color-mix(in oklab, var(--good-ink) ${Math.round(tone * 100)}%, var(--bad-ink))`;
+}
+
 /** The card tile's hover text: what the number is, in brief, with today's weights. */
-export function scoreTooltip(score: number | null, w: ScoreWeightsInfo["weights"]): string {
+export function scoreTooltip(
+  score: number | null,
+  w: ScoreWeightsInfo["weights"],
+  scale?: ScoreWeightsInfo["scale"],
+): string {
   const head =
     score === null
       ? "Composite score: not recorded for this alert."
       : `Composite score ${Math.round(score)}/100 at alert time.`;
-  return `${head} How much the token looked like the launches that double fast: its last 5 minutes, its age and its holders. Weights adapt to recent winners: ${weightsLine(w)}. Most fresh launches score 60-88.`;
+  const base = `${head} How much the token looked like the launches that double fast: its last 5 minutes, its age and its holders. Weights adapt to recent winners: ${weightsLine(w)}.`;
+  if (!scale) return `${base} Most fresh launches score 60-88.`;
+  const from = scale.sample > 0 ? "the last day's alerts" : "typical fresh launches";
+  return `${base} Color: red at or below ${Math.round(scale.p10)} (lowest 10% of ${from}), green at or above ${Math.round(scale.p90)} (top 10%).`;
 }

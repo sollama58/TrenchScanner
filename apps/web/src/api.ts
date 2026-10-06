@@ -921,6 +921,8 @@ export interface FeedAppearance {
   learningNote: boolean;
   /** Volume tiles (5m / 1h / 24h) on the cards; off by default, the score tile takes their place. */
   volume: boolean;
+  /** Color the Score tile red to green against recent alerts' scores; on by default. */
+  scoreColor: boolean;
   hidden: CardField[];
 }
 
@@ -928,6 +930,8 @@ export interface FeedAppearance {
 export interface ScoreWeightsInfo {
   weights: { momentum: number; freshness: number; holderQuality: number; narrative: number };
   adoptedAt: string | null;
+  /** Recent alerts' score spread the Score tile colors against (red at p10, green at p90). */
+  scale?: { p10: number; p90: number; sample: number };
   history: {
     at: string;
     momentum: number;

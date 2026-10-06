@@ -1,5 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { type Env, loadAdoptedScoreWeights, scanBand, scoreWeightsHistory } from "@trenchscanner/core";
+import {
+  type Env,
+  loadAdoptedScoreWeights,
+  recentScoreScale,
+  SCORE_SCALE_FALLBACK,
+  scanBand,
+  scoreWeightsHistory,
+} from "@trenchscanner/core";
 
 /**
  * Public (no auth) on purpose, like /health - the filter builder needs this before it can validate
@@ -21,17 +28,21 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
   });
 
   // The composite score's current weights and how they moved (scoring/scoreWeights.ts), for the
-  // card tooltip and the score explainer. Public like the rest: nothing here is per-user.
+  // card tooltip and the score explainer, plus the recent alerts' score spread the cards color
+  // against. Public like the rest: nothing here is per-user.
   let cached: { at: number; body: unknown } | null = null;
   app.get("/score", async () => {
-    if (cached && Date.now() - cached.at < 60_000) return cached.body;
-    const [{ weights, adoptedAt }, history] = await Promise.all([
+    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.body;
+    const [{ weights, adoptedAt }, history, scale] = await Promise.all([
       loadAdoptedScoreWeights(),
       scoreWeightsHistory(10),
+      // The color scale is a nicety: a failed read falls back rather than failing the weights.
+      recentScoreScale().catch(() => ({ ...SCORE_SCALE_FALLBACK })),
     ]);
     const body = {
       weights,
       adoptedAt,
+      scale,
       history: history.map((h) => ({
         at: h.createdAt,
         momentum: h.momentum,

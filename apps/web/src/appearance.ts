@@ -24,6 +24,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   sourceStripe: true,
   learningNote: true,
   volume: false,
+  scoreColor: true,
   hidden: [],
 };
 
@@ -172,6 +173,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     sourceStripe: typeof r.sourceStripe === "boolean" ? r.sourceStripe : d.sourceStripe,
     learningNote: typeof r.learningNote === "boolean" ? r.learningNote : d.learningNote,
     volume: typeof r.volume === "boolean" ? r.volume : d.volume,
+    scoreColor: typeof r.scoreColor === "boolean" ? r.scoreColor : d.scoreColor,
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : [],

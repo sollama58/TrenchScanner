@@ -4,7 +4,8 @@ import type { Card, CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
-import { scoreTooltip, useScoreWeights } from "../scoreWeights";
+import { useAppearance } from "../appearance";
+import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 
 const DAY_MS = 86_400_000;
 
@@ -30,10 +31,13 @@ export function AlertCard({
   hide?: ReadonlySet<CardField>;
 }) {
   const show = (f: CardField) => !hide?.has(f);
-  const { weights } = useScoreWeights();
+  const s = card.snapshot;
+  const { weights, scale } = useScoreWeights();
+  // Red at recent alerts' 10th percentile through to green at their 90th (Customize can turn it off).
+  const { scoreColor } = useAppearance();
+  const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const s = card.snapshot;
   const alertMcap = s.marketCapUsd;
   const nowMcap = card.currentMarketCapUsd;
   const move = change(alertMcap, nowMcap);
@@ -211,9 +215,14 @@ export function AlertCard({
           }
         >
           {show("score") && (
-            <div className="stat-score" title={scoreTooltip(s.score ?? null, weights)}>
+            <div
+              className="stat-score"
+              title={scoreTooltip(s.score ?? null, weights, scoreColor ? scale : undefined)}
+            >
               <dt>Score</dt>
-              <dd className="num">{s.score == null ? "–" : Math.round(s.score)}</dd>
+              <dd className="num" style={tone === null ? undefined : { color: scoreToneColor(tone) }}>
+                {s.score == null ? "–" : Math.round(s.score)}
+              </dd>
             </div>
           )}
           {show("vol") && (
