@@ -27,6 +27,15 @@ describe("export query", () => {
     expect(csvCell(new Date("2001-01-01T00:00:00Z"))).toBe("2001-01-01T00:00:00.000Z");
   });
 
+  it("stops a cell from opening as a spreadsheet formula, but leaves numbers signed", () => {
+    expect(csvCell("=HYPERLINK(x)")).toBe("'=HYPERLINK(x)");
+    expect(csvCell("+cmd|' /C calc'!A0")).toBe("'+cmd|' /C calc'!A0");
+    expect(csvCell("-SYM")).toBe("'-SYM");
+    expect(csvCell("@at")).toBe("'@at");
+    expect(csvCell(-12.5)).toBe("-12.5");
+    expect(csvCell(["=a", "b"])).toBe("=a|b");
+  });
+
   it("caps the window whichever way it is spelled", () => {
     expect(exportQuerySchema.safeParse({ dataset: "outcomes", since: "1970-01-01" }).success).toBe(false);
     expect(exportQuerySchema.safeParse({ dataset: "outcomes", days: "181" }).success).toBe(false);

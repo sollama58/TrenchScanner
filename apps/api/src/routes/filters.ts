@@ -114,16 +114,17 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     const created = await prisma.$transaction(async (tx) => {
       await lockUserFilters(tx, userId);
       if ((await tx.userFilter.count({ where: { userId } })) >= MAX_FILTERS_PER_USER) return null;
-      if (parsed.data.isActive) await deactivateOthers(tx, userId, null);
-      return tx.userFilter.create({ data: { ...parsed.data, userId } });
+      const switchedOff = parsed.data.isActive ? await deactivateOthers(tx, userId, null) : false;
+      const row = await tx.userFilter.create({ data: { ...parsed.data, userId } });
+      return { row, boardChanged: row.shareOnLeaderboard || switchedOff };
     });
-    if (created?.shareOnLeaderboard) filterLeaderboardCache.clear();
+    if (created?.boardChanged) filterLeaderboardCache.clear();
     if (!created) {
       return reply
         .code(409)
         .send({ error: `You can save up to ${MAX_FILTERS_PER_USER} filters. Delete one to add another.` });
     }
-    return reply.code(201).send(created);
+    return reply.code(201).send(created.row);
   });
 
   /** Makes this the user's one active filter, switching off whichever was active before. */
@@ -134,15 +135,18 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       await lockUserFilters(tx, userId);
       const existing = await tx.userFilter.findUnique({ where: { id } });
       if (!existing || existing.userId !== userId) return null;
-      await deactivateOthers(tx, userId, id);
-      return tx.userFilter.update({
+      const switchedOff = await deactivateOthers(tx, userId, id);
+      const row = await tx.userFilter.update({
         where: { id },
         // Switched on from off: it starts from what newly matches, not the backlog (armedAt).
         data: { isActive: true, ...(existing.isActive ? {} : { armedAt: new Date() }) },
       });
+      return { row, boardChanged: existing.shareOnLeaderboard || switchedOff };
     });
     if (!activated) return reply.code(404).send({ error: "filter not found" });
-    return activated;
+    // The board shows which shared filters are active now.
+    if (activated.boardChanged) filterLeaderboardCache.clear();
+    return activated.row;
   });
 
   app.patch("/:id", async (request, reply) => {
@@ -165,7 +169,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       const rangeError = filterError(merged);
       if (rangeError) return { error: 400 as const, message: rangeError };
       // Turning one filter on turns the user's other filters off: one active filter at a time.
-      if (parsed.data.isActive) await deactivateOthers(tx, userId, id);
+      const switchedOff = parsed.data.isActive ? await deactivateOthers(tx, userId, id) : false;
       // New criteria start a new leaderboard record: the record shown must be the one of the
       // settings a copier would get, not of whatever the filter used to be.
       const reset = criteriaChanged(existing, parsed.data);
@@ -177,7 +181,10 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
           ...(reset ? { criteriaChangedAt: new Date() } : {}),
         },
       });
-      return { updated, boardChanged: existing.shareOnLeaderboard || updated.shareOnLeaderboard };
+      return {
+        updated,
+        boardChanged: existing.shareOnLeaderboard || updated.shareOnLeaderboard || switchedOff,
+      };
     });
     if ("updated" in result) {
       if (result.boardChanged) filterLeaderboardCache.clear();
@@ -291,10 +298,13 @@ async function lockUserFilters(tx: Tx, userId: string): Promise<void> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"filters:" + userId}))`;
 }
 
-/** Switches off every active filter of this user except `keepId`. */
-async function deactivateOthers(tx: Tx, userId: string, keepId: string | null): Promise<void> {
-  await tx.userFilter.updateMany({
-    where: { userId, isActive: true, ...(keepId ? { id: { not: keepId } } : {}) },
-    data: { isActive: false },
-  });
+/**
+ * Switches off every active filter of this user except `keepId`. Returns whether one of them is
+ * on the public leaderboard, which shows each shared filter's active state.
+ */
+async function deactivateOthers(tx: Tx, userId: string, keepId: string | null): Promise<boolean> {
+  const where = { userId, isActive: true, ...(keepId ? { id: { not: keepId } } : {}) };
+  const shared = await tx.userFilter.count({ where: { ...where, shareOnLeaderboard: true } });
+  await tx.userFilter.updateMany({ where, data: { isActive: false } });
+  return shared > 0;
 }

@@ -20,6 +20,10 @@ export async function saveFeedSettings(change: {
   invalidate("/matches");
 }
 
+function sameSet(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
 /** The next checked list after ticking or unticking `id`, in leaderboard order. */
 export function toggledModels(board: Leaderboard, id: string): string[] {
   const checked = new Set(board.selectedModels);
@@ -60,12 +64,17 @@ export function ModelPicker({
     return () => document.removeEventListener("click", onClick);
   }, []);
 
-  useEffect(() => setPending(null), [board]);
+  // The optimistic selection stands until a board that agrees with it arrives: a poll that
+  // started before the save and lands after it must not snap the boxes back meanwhile.
+  useEffect(() => {
+    setPending((p) => (p && !sameSet(p, board.selectedModels) ? p : null));
+  }, [board]);
 
   const save = async (models: string[] | null) => {
     setSaving(true);
     setError(null);
-    setPending(models ?? []);
+    // Following the best shows the current best at once rather than an empty list.
+    setPending(models ?? [board.defaultModel]);
     try {
       await saveFeedSettings({ models });
       onChanged();
@@ -108,7 +117,7 @@ export function ModelPicker({
                 <input
                   type="checkbox"
                   checked={on}
-                  disabled={saving || last}
+                  disabled={disabled || saving || last}
                   onChange={() => void save(toggledModels({ ...board, selectedModels: [...checked] }, e.id))}
                 />
                 <span className="checklist-name">
@@ -122,7 +131,7 @@ export function ModelPicker({
             );
           })}
           {board.followBest === false && (
-            <button className="ghost small-btn" disabled={saving} onClick={() => void save(null)}>
+            <button className="ghost small-btn" disabled={disabled || saving} onClick={() => void save(null)}>
               Follow the best performer
             </button>
           )}

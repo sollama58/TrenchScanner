@@ -164,7 +164,13 @@ export async function runFastMatchCycle(
   const byMint = new Map(vetted.map((v) => [v.token.mintAddress, v]));
   let fresh;
   try {
-    fresh = await dexScreener.getTokensByAddresses([...byMint.keys()]);
+    // Bounded like the scan's own refresh: this lane runs every 15 seconds and a throttled
+    // DexScreener (Retry-After up to 10s, twice, per batch) could hold one pass for most of a minute.
+    fresh = await dexScreener.getTokensByAddresses([...byMint.keys()], undefined, {
+      timeoutMs: 5_000,
+      retries: 1,
+      deadlineMs: 10_000,
+    });
   } catch (err) {
     // The full cycle is still running underneath this; a failed fast pass costs latency, never
     // an alert.

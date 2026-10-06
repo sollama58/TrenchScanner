@@ -18,30 +18,63 @@ const logger = createLogger("match-dispatch");
 export const ALERT_COOLDOWN_HOURS = 12;
 
 /**
- * How long a newly armed filter (created, switched on, or edited - see UserFilter.armedAt) only
- * records what already matches it instead of alerting. The scan re-checks the whole in-band
- * watchlist every cycle (30s, ~50s at worst), so this covers a few full cycles: everything that
- * matched the moment the filter was armed is seen, and baselined, before alerts start.
+ * How long after arming (created, switched on, or edited - see UserFilter.armedAt) a filter can
+ * at most be settling in: recording what already matches it instead of alerting. Settling ends
+ * sooner, when the scan has evaluated the whole in-band watchlist against it once (see
+ * markFilterPassComplete): everything that matched the moment the filter was armed has then
+ * been seen, and baselined, and a token that starts matching after that pass is news.
  *
- * Without it, applying a filter alerted on every token it matched at once - dozens of "just now"
- * cards and pings for tokens that had been sitting in the watchlist for minutes or hours.
+ * Without the baseline, applying a filter alerted on every token it matched at once - dozens of
+ * "just now" cards and pings for tokens that had been sitting in the watchlist for minutes or
+ * hours. Settling used to be the wall clock alone, two minutes: a token that began matching a
+ * minute after arming was baselined as backlog and silenced for the cooldown, and a slow cycle
+ * that straddled the window alerted on the tail of the backlog after all. The bound here only
+ * limits how long a pass that never completes (a worker restart, a cycle that fails) can keep a
+ * filter quiet.
  */
-export const FILTER_ARM_QUIET_MINUTES = 2;
+export const FILTER_ARM_QUIET_MINUTES = 10;
 
 export type FilterWithUser = UserFilter;
 
 /**
- * Whether this filter is still settling in for this token: armed within the quiet window, and
- * the token is one the watchlist already knew when it was armed. A token first seen after that
- * is news by definition, so it alerts even inside the window.
+ * Per filter, the armedAt the scan has completed a full pass for. Process-local: after a restart
+ * a filter armed inside the window above settles for one more pass, which only baselines tokens
+ * that match it right then (on cooldown anyway, if they alerted before the restart).
+ */
+const passCompleteFor = new Map<string, number>();
+
+/**
+ * The scan's candidate loop finished with these filters loaded: whatever they matched has been
+ * baselined, so from now on they alert. Only the scan calls this - the fast lane evaluates a
+ * subset of the watchlist, so its passes don't count.
+ */
+export function markFilterPassComplete(filters: readonly Pick<UserFilter, "id" | "armedAt">[]): void {
+  for (const f of filters) passCompleteFor.set(f.id, f.armedAt.getTime());
+  // Bounded: filters that no longer exist drop out as the live set is re-marked every cycle.
+  if (passCompleteFor.size > 2 * filters.length + 1_000) {
+    const live = new Set(filters.map((f) => f.id));
+    for (const id of passCompleteFor.keys()) if (!live.has(id)) passCompleteFor.delete(id);
+  }
+}
+
+/** Test hook: forget every completed pass. */
+export function resetFilterPasses(): void {
+  passCompleteFor.clear();
+}
+
+/**
+ * Whether this filter is still settling in for this token: armed since the scan's last full pass
+ * (and within the quiet bound), and the token is one the watchlist already knew when it was armed.
+ * A token first seen after that is news by definition, so it alerts even while settling.
  */
 export function isSettling(
-  filter: Pick<UserFilter, "armedAt">,
+  filter: Pick<UserFilter, "id" | "armedAt">,
   tokenFirstSeenAt: Date | undefined,
   now = Date.now(),
 ): boolean {
   const armedAt = filter.armedAt.getTime();
   if (now - armedAt >= FILTER_ARM_QUIET_MINUTES * 60_000) return false;
+  if ((passCompleteFor.get(filter.id) ?? -Infinity) >= armedAt) return false;
   return !(tokenFirstSeenAt && tokenFirstSeenAt.getTime() > armedAt);
 }
 
@@ -50,9 +83,15 @@ type Db = Pick<typeof prisma, "$executeRaw" | "filterBaseline">;
 /** Records that these filters already matched this token when they were armed - see FilterBaseline. */
 async function recordBaselines(db: Db, tokenId: string, filterIds: string[]): Promise<void> {
   if (filterIds.length === 0) return;
+  // Joined to UserFilter so a filter deleted since the cycle loaded its list (inside its arming
+  // window, the only time it is here) is dropped rather than failing the insert's FK - which, from
+  // resolveAlertTargets, failed the whole candidate: every other user's alert on the token, its
+  // training sample and its curated contender, for that cycle.
   await db.$executeRaw`
     INSERT INTO "FilterBaseline" ("filterId", "tokenId", "createdAt")
-    SELECT f, ${tokenId}, now() FROM unnest(${filterIds}::text[]) AS f
+    SELECT u."id", ${tokenId}, now()
+    FROM unnest(${filterIds}::text[]) AS f(id)
+    JOIN "UserFilter" u ON u."id" = f.id
     ON CONFLICT ("filterId", "tokenId") DO UPDATE SET "createdAt" = EXCLUDED."createdAt"`;
 }
 

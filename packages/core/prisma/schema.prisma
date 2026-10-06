@@ -644,7 +644,8 @@ model CandidateOutcome {
   shadowEmissions CuratedShadowEmission[]
   aiReviews       AiReview[]
 
-  @@index([tokenId, anchorAt])
+  // No (tokenId, anchorAt) index: every per-token lookup also names the sampleKind, and the
+  // three-column index below serves plain tokenId probes (cleanup, the FK) through its prefix.
   @@index([tokenId, sampleKind, anchorAt])
   @@index([sampleKind, anchorAt])
   @@index([finalized24hAt, nextCheckAt])

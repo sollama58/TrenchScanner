@@ -46,9 +46,17 @@ export async function refreshLiveMarketData(
       const data = byMint.get(t.mintAddress);
       // A pair with no market cap or FDV yet reads as 0 - not a reading, so written as NULL
       // (like any non-finite figure) rather than stamped: the card showed "$0" as the freshest
-      // figure. refreshAndFilterToBand skips these for the same reason.
+      // figure. refreshAndFilterToBand skips these for the same reason. The price likewise: a
+      // pair with no priceUsd parses as 0 (toCandidateToken), and a $0 live price was stamped
+      // as the freshest one.
       return data
-        ? [{ id: t.id, mcap: data.marketCapUsd > 0 ? data.marketCapUsd : NaN, price: data.priceUsd }]
+        ? [
+            {
+              id: t.id,
+              mcap: data.marketCapUsd > 0 ? data.marketCapUsd : NaN,
+              price: data.priceUsd > 0 ? data.priceUsd : NaN,
+            },
+          ]
         : [];
     })
     // A stable order, so two overlapping refreshes take their row locks in the same sequence.

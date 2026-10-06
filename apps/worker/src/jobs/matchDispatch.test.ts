@@ -5,6 +5,8 @@ import { prisma, loadEnv, loadFilterTrackRecords, type ScoredToken } from "@tren
 import type { Token, TokenSnapshot } from "@prisma/client";
 import {
   createMatchesForCandidate,
+  markFilterPassComplete,
+  resetFilterPasses,
   ALERT_COOLDOWN_HOURS,
   FILTER_ARM_QUIET_MINUTES,
   type FilterWithUser,
@@ -53,6 +55,7 @@ async function seedToken(suffix: string): Promise<{ token: Token; snapshot: Toke
 
 describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
   afterEach(async () => {
+    resetFilterPasses();
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
@@ -147,6 +150,28 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     expect(count).toBe(2);
   });
 
+  it("still alerts everyone else when a just-applied filter was deleted inside its quiet window", async () => {
+    const { token, snapshot } = await seedToken("deleted-while-arming");
+    const kept = await seedUserWithFilter("kept-arming");
+    const deleted = await seedUserWithFilter("deleted-arming", new Date());
+    // Loaded as settling in; deleted before the candidate was dispatched. The baseline insert
+    // used to hit the filter's FK and fail the whole candidate - every other user's alert with it.
+    await prisma.userFilter.delete({ where: { id: deleted.id } });
+
+    const count = await createMatchesForCandidate({
+      token,
+      snapshot,
+      scored: scoredFixture(token.mintAddress),
+      activeFilters: [kept, deleted],
+    });
+
+    expect(count).toBe(1);
+    expect((await prisma.match.findMany({ where: { tokenId: token.id } })).map((m) => m.filterId)).toEqual([
+      kept.id,
+    ]);
+    expect(await prisma.filterBaseline.count({ where: { tokenId: token.id } })).toBe(0);
+  });
+
   it("doesn't alert on what a just-applied filter already matches, then cools it down", async () => {
     // The token was on the watchlist before the filter was applied: backlog, not news.
     const { token, snapshot } = await seedToken("backlog");
@@ -179,6 +204,44 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
         activeFilters: [settled],
       }),
     ).toBe(1);
+  });
+
+  it("alerts on a token that starts matching once the scan has passed over the new filter", async () => {
+    // Armed a minute ago, inside the quiet bound; the scan has since evaluated the whole
+    // watchlist against it. A token (older than the filter) that only now matches is news, not
+    // backlog - it used to be baselined and silenced for the cooldown.
+    const filter = await seedUserWithFilter("passed", new Date(Date.now() - 60_000));
+    const { token, snapshot } = await seedToken("newly-matching");
+    markFilterPassComplete([filter]);
+    expect(
+      await createMatchesForCandidate({
+        token,
+        snapshot,
+        scored: scoredFixture(token.mintAddress),
+        activeFilters: [filter],
+      }),
+    ).toBe(1);
+    expect(await prisma.filterBaseline.count({ where: { filterId: filter.id } })).toBe(0);
+  });
+
+  it("settles in again when the filter is re-armed after the pass the scan completed", async () => {
+    const filter = await seedUserWithFilter("re-armed", new Date(Date.now() - 120_000));
+    markFilterPassComplete([filter]);
+    const { token, snapshot } = await seedToken("rearm-backlog");
+    // Edited since: the cycle that marked the pass loaded the old armedAt.
+    const edited = await prisma.userFilter.update({
+      where: { id: filter.id },
+      data: { armedAt: new Date() },
+    });
+    expect(
+      await createMatchesForCandidate({
+        token,
+        snapshot,
+        scored: scoredFixture(token.mintAddress),
+        activeFilters: [edited],
+      }),
+    ).toBe(0);
+    expect(await prisma.filterBaseline.count({ where: { filterId: filter.id, tokenId: token.id } })).toBe(1);
   });
 
   it("alerts at once on a token first seen after the filter was applied", async () => {

@@ -2434,9 +2434,14 @@ button.small-btn {
 }
 
 /* ---------- Badge in the card's title row ---------- */
-/* A long symbol or name gives way to the badge: the name shrinks first, then the symbol. */
+/*
+ * A long symbol or name gives way to the badge: the name shrinks first, and only a very long
+ * symbol is cut. The symbol doesn't flex-shrink: when it did, Chrome's sub-pixel rounding
+ * ellipsized a five-letter symbol ("$TO…") on phone cards even though the text fit its box.
+ */
 .title-row .symbol {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  max-width: 60%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2753,6 +2758,13 @@ button.small-btn {
 }
 .admin .kpi-value {
   font-size: 26px;
+}
+@media (max-width: 640px) {
+  /* "$12.34 / $20.00" and "75% / 50%" in a half-width tile. */
+  .admin .kpi-value {
+    font-size: 20px;
+    overflow-wrap: anywhere;
+  }
 }
 .admin-tag-ok,
 .admin-tag-warn,

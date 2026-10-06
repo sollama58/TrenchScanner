@@ -17,7 +17,7 @@ import {
   type Env,
 } from "@trenchscanner/core";
 
-/** Base58, 32-44 chars - the shape of every Solana address and signature we accept. */
+/** Base58, 80-90 chars - the shape of a 64-byte Solana transaction signature. */
 const SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
 
 const claimSchema = z.object({ signature: z.string().regex(SIGNATURE_RE, "invalid transaction signature") });
@@ -185,6 +185,14 @@ export async function registerSubscriptionRoutes(
     const { signature } = parsed.data;
 
     const existing = await prisma.burnEvent.findUnique({ where: { signature } });
+    if (existing && existing.burnerWallet !== request.user!.walletAddress) {
+      // In the ledger under another wallet: nothing here is this caller's, and saying "credited"
+      // would show them access they don't have.
+      return reply.code(202).send({
+        status: "held",
+        message: "That burn was made by a different wallet. Sign in with that wallet to use it.",
+      });
+    }
     if (existing) {
       // Already in the ledger. Settle anything held for this wallet - covers the case where the
       // reconciler recorded the burn before this user's account existed - and report success,

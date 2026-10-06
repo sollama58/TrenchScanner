@@ -10,6 +10,7 @@ import {
   HeliusClient,
   SolanaRpc,
   lastHeartbeatAt,
+  recordHeartbeat,
   runsJob,
   type HeartbeatJob,
 } from "@trenchscanner/core";
@@ -24,7 +25,13 @@ import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrain
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
-import { scheduleInterval, scheduleDailyAt, type JobRunMeta, type ScheduledJob } from "./scheduler.js";
+import {
+  scheduleInterval,
+  scheduleDailyAt,
+  SHUTDOWN_INTERRUPTED_ERROR,
+  type JobRunMeta,
+  type ScheduledJob,
+} from "./scheduler.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 
 const logger = createLogger("worker");
@@ -41,6 +48,11 @@ const AI_JUDGE_INTERVAL_MINUTES = 10;
  */
 const CHAMPION_REFRESH_MINUTES = 60;
 const MODEL_BACKUP_CHECK_MINUTES = 60;
+/**
+ * How long a shutdown waits for the runs in flight. Render allows about 30 seconds between
+ * SIGTERM and SIGKILL; the rest is kept for the heartbeat writes and the disconnect.
+ */
+const SHUTDOWN_GRACE_MS = 20_000;
 
 /**
  * One process runs the jobs its WORKER_ROLE owns - see HEARTBEAT_JOB_ROLE in core's heartbeat.ts
@@ -51,10 +63,10 @@ const MODEL_BACKUP_CHECK_MINUTES = 60;
 async function main() {
   const env = loadEnv();
   const role = env.WORKER_ROLE;
-  const jobs: ScheduledJob[] = [];
+  const jobs: { name: HeartbeatJob; job: ScheduledJob }[] = [];
   /** Starts a schedule only when this process's role owns the job. */
   const schedule = (job: HeartbeatJob, start: () => ScheduledJob) => {
-    if (runsJob(role, job)) jobs.push(start());
+    if (runsJob(role, job)) jobs.push({ name: job, job: start() });
   };
   const scans = runsJob(role, "scan");
 
@@ -244,11 +256,32 @@ async function main() {
     burnScanIntervalMinutes: env.BURN_SCAN_INTERVAL_MINUTES,
   });
 
+  // Render sends SIGTERM and gives the process a short grace period before killing it. The runs
+  // in flight get most of that: a scan cycle or a watcher sweep finishes and writes its own
+  // heartbeat, so a deploy no longer tears its alert writes in half. A run that can't finish in
+  // time (cleanup, a retrain) is stamped as interrupted on its heartbeat row - visible on
+  // GET /health/worker, and for the daily jobs what makes the next boot run the cut slot again
+  // (see scheduleDailyAt's catch-up).
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
-    logger.info("shutting down", { signal });
-    for (const job of jobs) job.stop();
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS });
+    for (const { job } of jobs) job.stop();
     stream?.stop();
-    await prisma.$disconnect();
+    const outcomes = await Promise.all(
+      jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
+    );
+    const interrupted = outcomes.filter((o) => o.outcome === "interrupted").map((o) => o.name);
+    if (interrupted.length > 0) {
+      logger.warn("runs still in flight at shutdown, marking them interrupted", { jobs: interrupted });
+      await Promise.all(
+        interrupted.map((name) =>
+          recordHeartbeat(name, { success: false, error: SHUTDOWN_INTERRUPTED_ERROR }).catch(() => {}),
+        ),
+      );
+    }
+    await prisma.$disconnect().catch(() => {});
     process.exit(0);
   };
   // Node 22 ends the process on an unhandled rejection. Every known fire-and-forget path catches

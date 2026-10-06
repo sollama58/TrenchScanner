@@ -37,7 +37,12 @@ export const loadSignIn = () => import("./components/SignIn");
  * these in the background lets a tab paint its data the moment it opens, then refresh.
  */
 export const TAB_DATA: Record<Tab, string[]> = {
-  live: ["/matches?page=1&includeCurated=saved", "/curated/stats", "/curated/models?days=30"],
+  live: [
+    "/matches?page=1&includeCurated=saved",
+    "/matches/stats?hours=24",
+    "/curated/stats",
+    "/curated/models?days=30",
+  ],
   model: ["/curated/insights?days=30", "/curated/models?days=30"],
   filters: ["/filters", "/config"],
   top: ["/filters/leaderboard"],

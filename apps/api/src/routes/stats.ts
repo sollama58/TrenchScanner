@@ -12,6 +12,7 @@ import {
   type Env,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
+import { SharedCache } from "../sharedCache.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { exportQuerySchema, exportWindow, startExport } from "./statsExport.js";
 
@@ -262,12 +263,15 @@ export async function registerStatsRoutes(
    * is and whether its token ever mattered (a training row, a filter alert, a curated call). This
    * is what retention is tuned from - see apps/worker/src/jobs/cleanupJob.ts.
    */
+  // A full Token scan plus a snapshot sample: one fill serves every reader for a while, so a
+  // script polling it can't keep the database busy with it.
+  const storageCache = new SharedCache<Awaited<ReturnType<typeof buildStorageReport>>>(5 * 60_000);
   app.get(
     "/storage",
     { config: { rateLimit: { max: 6, timeWindow: "1 minute" } }, preHandler: guard },
     async (_request, reply) => {
       reply.header("cache-control", "no-store");
-      return buildStorageReport();
+      return storageCache.get(buildStorageReport);
     },
   );
 
@@ -681,6 +685,7 @@ export async function buildHitRateReport(
     samples,
     byTier,
     continuity,
+    winnerRuns,
   ] = await Promise.all([
     curatedRows,
     modelRows,
@@ -693,8 +698,8 @@ export async function buildHitRateReport(
     sampleRows,
     tierRows,
     continuityRows,
+    winnerRunRows,
   ]);
-  const winnerRuns = await winnerRunRows;
 
   const rated = (c: GradedCounts, min?: number) => withRates(c, targets, min);
 
