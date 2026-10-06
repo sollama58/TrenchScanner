@@ -1047,6 +1047,11 @@ model TokenNarrative {
   summary         String?
   /// Flag codes, e.g. ["copycat","x_link_reused"].
   flags           String[] @default([])
+  /// How well the linked X post/profile matches the token (TokenSage's x.match, full depth):
+  /// fit 0-1 and verdict "about_this_coin" / "related" / "unrelated". Null when not read or
+  /// "unknown" (nothing fetched), which is missing data, not a mismatch.
+  xFit            Float?
+  xVerdict        String?
   rulesVersion    String?
   analysis        Json?
   analyzedAt      DateTime?

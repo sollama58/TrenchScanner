@@ -38,6 +38,21 @@ export interface TokenSageAnalysis {
     predates_token_by_s?: number | null;
     reuse_count?: number;
     author?: { handle?: string | null; followers?: number | null; verified_type?: string | null } | null;
+    /** How well the linked post or profile matches the token (rules 0.6.0+, full depth only). */
+    match?: {
+      name?: { score: number; how?: string };
+      ticker?: { score: number; how?: string };
+      image?: { score: number; best_distance?: number | null; media_checked?: number };
+      referent?: {
+        x_label?: string | null;
+        x_kind?: string | null;
+        agrees?: boolean | null;
+        confidence?: number;
+      };
+      x_categories?: TokenSageCategory[];
+      fit?: number;
+      verdict?: "about_this_coin" | "related" | "unrelated" | "unknown";
+    } | null;
   } | null;
   trend?: { matched?: boolean; terms?: { term: string; spike?: number | null; source: string }[] };
   flags?: TokenSageFlag[];
@@ -55,16 +70,31 @@ export interface TokenSageBatchItem {
   status: TokenSageItemStatus;
   analysis?: TokenSageAnalysis | null;
   job_id?: number | null;
+  /** On a "failed" item: "quota_exceeded" / "overloaded" when that item was turned away. */
   error?: string | null;
+  retry_after_s?: number | null;
 }
 
-export interface TokenSageJob {
-  job_id: number;
-  status: "pending" | "running" | "done" | "failed";
-  ca?: string | null;
-  depth?: TokenSageDepth | null;
-  result?: { status?: string; analysis?: TokenSageAnalysis | null } | null;
-  error?: string | null;
+/**
+ * What TrenchScanner already knows about a mint, sent with the request so TokenSage can skip
+ * its own metadata fetch (and answer for a mint not yet visible on-chain). Untrusted launcher
+ * text, validated on TokenSage's side exactly like fetched metadata.
+ */
+export interface TokenSageHints {
+  name?: string;
+  symbol?: string;
+  description?: string;
+  image_url?: string;
+  twitter?: string;
+  website?: string;
+  /** ISO 8601. */
+  created_at?: string;
+}
+
+export interface TokenSageBatchResult {
+  items: TokenSageBatchItem[];
+  /** X-Quota-Full-Remaining: full-depth analyses this key may still start today. Null if absent. */
+  fullRemaining: number | null;
 }
 
 /** POST /v1/tokens:batch takes at most this many CAs. */
@@ -92,31 +122,59 @@ export class TokenSageClient {
 
   /**
    * Prefetch: cached analyses come back at once, the rest as `pending` with a job id. Never
-   * waits. No retries here: a 429/503 means "skip this cycle", and the caller backs off.
+   * waits. Re-sending a pending mint joins its open job for free (no quota) and returns the
+   * analysis once it is done, so this doubles as the poll. No retries here: a 429/503 means
+   * "skip this cycle", and the caller backs off.
    */
-  async batch(cas: string[], depth: TokenSageDepth): Promise<TokenSageBatchItem[]> {
+  async batch(
+    entries: { ca: string; hints?: TokenSageHints }[],
+    depth: TokenSageDepth,
+  ): Promise<TokenSageBatchResult> {
+    let fullRemaining: number | null = null;
+    const items = entries
+      .slice(0, TOKENSAGE_BATCH_MAX)
+      .map((e) => (e.hints ? { ca: e.ca, hints: e.hints } : { ca: e.ca }));
     const body = await fetchJson<{ items?: TokenSageBatchItem[] }>(`${this.baseUrl}/v1/tokens:batch`, {
       method: "POST",
       headers: this.headers({ "content-type": "application/json" }),
-      body: JSON.stringify({ cas: cas.slice(0, TOKENSAGE_BATCH_MAX), depth }),
+      body: JSON.stringify({ items, depth }),
       timeoutMs: this.timeoutMs,
       retries: 0,
+      onHeaders: (h) => {
+        const raw = h.get("x-quota-full-remaining");
+        const n = raw === null ? NaN : Number(raw);
+        fullRemaining = Number.isFinite(n) ? n : null;
+      },
     });
-    return Array.isArray(body.items) ? body.items : [];
-  }
-
-  /** Polls one job. Polling does not count against TokenSage's daily quotas. */
-  async job(jobId: number): Promise<TokenSageJob> {
-    return fetchJson<TokenSageJob>(`${this.baseUrl}/v1/jobs/${encodeURIComponent(String(jobId))}`, {
-      headers: this.headers(),
-      timeoutMs: this.timeoutMs,
-      retries: 0,
-    });
+    return { items: Array.isArray(body.items) ? body.items : [], fullRemaining };
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return { authorization: `Bearer ${this.apiKey}`, accept: "application/json", ...extra };
   }
+}
+
+/** The hints for a mint from what discovery stored on its Token row; empty fields are left out. */
+export function tokenSageHints(token: {
+  name?: string | null;
+  symbol?: string | null;
+  description?: string | null;
+  imageUrl?: string | null;
+  twitterUrl?: string | null;
+  websiteUrl?: string | null;
+  firstSeenAt?: Date | null;
+}): TokenSageHints | undefined {
+  const hints: TokenSageHints = {};
+  if (token.name) hints.name = token.name.slice(0, 200);
+  if (token.symbol) hints.symbol = token.symbol.slice(0, 50);
+  if (token.description) hints.description = token.description.slice(0, 2_000);
+  if (token.imageUrl?.startsWith("https://")) hints.image_url = token.imageUrl;
+  if (token.twitterUrl) hints.twitter = token.twitterUrl;
+  if (token.websiteUrl) hints.website = token.websiteUrl;
+  if (token.firstSeenAt && !Number.isNaN(token.firstSeenAt.getTime())) {
+    hints.created_at = token.firstSeenAt.toISOString();
+  }
+  return Object.keys(hints).length > 0 ? hints : undefined;
 }
 
 /** What a TokenNarrative row stores, derived from one Analysis document. */
@@ -128,6 +186,8 @@ export interface TokenNarrativeFields {
   referentKind: string | null;
   summary: string | null;
   flags: string[];
+  xFit: number | null;
+  xVerdict: string | null;
   rulesVersion: string | null;
   analyzedAt: Date | null;
 }
@@ -152,6 +212,9 @@ export function narrativeFieldsFromAnalysis(
     .map((c) => c.slice(0, 60))
     .slice(0, 30);
   const analyzedAt = analysis.analyzed_at ? new Date(analysis.analyzed_at) : null;
+  const match = analysis.x?.match;
+  const known = match?.verdict !== undefined && match.verdict !== "unknown";
+  const fit = known && typeof match?.fit === "number" && Number.isFinite(match.fit) ? match.fit : null;
   return {
     depth: analysis.depth === "full" ? "full" : "basic",
     status,
@@ -160,6 +223,8 @@ export function narrativeFieldsFromAnalysis(
     referentKind: clip(analysis.referent?.kind),
     summary: clip(analysis.summary),
     flags,
+    xFit: fit === null ? null : Math.min(1, Math.max(0, fit)),
+    xVerdict: known ? clip(match?.verdict) : null,
     rulesVersion: clip(analysis.versions?.rules),
     analyzedAt: analyzedAt && !Number.isNaN(analyzedAt.getTime()) ? analyzedAt : null,
   };

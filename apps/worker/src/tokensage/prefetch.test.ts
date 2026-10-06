@@ -14,9 +14,10 @@ const TAG = `ts-test-${Date.now()}`;
 
 function fakeClient() {
   const batch = vi.fn();
-  const job = vi.fn();
-  return { client: { batch, job } as unknown as TokenSageClient, batch, job };
+  return { client: { batch } as unknown as TokenSageClient, batch };
 }
+
+const ok = (items: unknown[], fullRemaining: number | null = null) => ({ items, fullRemaining });
 
 const analysis = (mint: string, depth: "basic" | "full") => ({
   mint,
@@ -25,8 +26,11 @@ const analysis = (mint: string, depth: "basic" | "full") => ({
   categories: [{ label: "animal/dog", confidence: 0.8 }],
   flags: [{ code: "copycat", severity: "warn" }],
   summary: "A dog coin",
-  versions: { rules: "1" },
+  versions: { rules: "0.6.0-full" },
+  ...(depth === "full" ? { x: { match: { fit: 0.96, verdict: "about_this_coin" } } } : {}),
 });
+
+const cas = (call: unknown[]) => (call[0] as { ca: string }[]).map((e) => e.ca);
 
 describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
   const base = dbAvailable ? loadEnv() : (undefined as never);
@@ -48,18 +52,21 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
-  it("stores cached answers, polls queued jobs, and never asks twice", async () => {
-    const { client, batch, job } = fakeClient();
+  it("sends hints, stores cached answers, and re-sends queued ones instead of polling", async () => {
+    const { client, batch } = fakeClient();
     const a = `${TAG}-a`;
     const b = `${TAG}-b`;
-    batch.mockResolvedValueOnce([
-      { ca: a, status: "complete", analysis: analysis(a, "basic") },
-      { ca: b, status: "pending", job_id: 7 },
-    ]);
-    noteNarrativeWanted(a, "basic", env);
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: a, status: "complete", analysis: analysis(a, "basic") },
+        { ca: b, status: "pending", job_id: 7 },
+      ]),
+    );
+    noteNarrativeWanted(a, "basic", env, { name: "Dog", symbol: "DOG" });
     noteNarrativeWanted(b, "basic", env);
     await flushNarrativeRequests(env, client);
-    expect(batch).toHaveBeenCalledWith([a, b], "basic");
+    expect(batch.mock.calls[0]![0]).toEqual([{ ca: a, hints: { name: "Dog", symbol: "DOG" } }, { ca: b }]);
+    expect(batch.mock.calls[0]![1]).toBe("basic");
     const rowA = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: a } });
     expect(rowA).toMatchObject({
       depth: "basic",
@@ -68,62 +75,130 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
       summary: "A dog coin",
     });
 
-    // Next cycle: both are noted again; a is settled, b is queued - only the poll goes out.
-    job.mockResolvedValueOnce({ job_id: 7, status: "done", result: { analysis: analysis(b, "basic") } });
+    // Next cycle: both are noted again; a is settled, b is re-sent (free on TokenSage's side).
+    batch.mockResolvedValueOnce(ok([{ ca: b, status: "complete", analysis: analysis(b, "basic") }]));
     noteNarrativeWanted(a, "basic", env);
     noteNarrativeWanted(b, "basic", env);
     await flushNarrativeRequests(env, client);
-    expect(batch).toHaveBeenCalledTimes(1);
-    expect(job).toHaveBeenCalledWith(7);
+    expect(cas(batch.mock.calls[1]!)).toEqual([b]);
     expect(await prisma.tokenNarrative.count({ where: { mintAddress: b } })).toBe(1);
+    // b counts once as requested, not once per re-send.
     expect(takeTokenSageStats()).toMatchObject({ requested: 2, stored: 2, pending: 0 });
+
+    // Nothing left to send.
+    noteNarrativeWanted(b, "basic", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch).toHaveBeenCalledTimes(2);
   });
 
-  it("upgrades to full depth and never lets a basic answer overwrite it", async () => {
+  it("upgrades to full depth, keeps the X match, and never lets a basic answer overwrite it", async () => {
     const { client, batch } = fakeClient();
     const c = `${TAG}-c`;
-    batch.mockResolvedValueOnce([{ ca: c, status: "complete", analysis: analysis(c, "full") }]);
+    batch.mockResolvedValueOnce(ok([{ ca: c, status: "complete", analysis: analysis(c, "full") }]));
     noteNarrativeWanted(c, "basic", env);
     noteNarrativeWanted(c, "full", env);
     await flushNarrativeRequests(env, client);
-    expect(batch).toHaveBeenCalledWith([c], "full");
+    expect(cas(batch.mock.calls[0]!)).toEqual([c]);
+    expect(batch.mock.calls[0]![1]).toBe("full");
+    const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: c } });
+    expect(row).toMatchObject({ depth: "full", xFit: 0.96, xVerdict: "about_this_coin" });
 
-    batch.mockResolvedValueOnce([{ ca: c, status: "complete", analysis: analysis(c, "basic") }]);
     resetTokenSage();
     noteNarrativeWanted(c, "basic", env);
     await flushNarrativeRequests(env, client);
     // Already stored at full depth: not even sent.
     expect(batch).toHaveBeenCalledTimes(1);
-    expect((await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: c } })).depth).toBe("full");
+  });
+
+  it("falls back to basic once the full-depth quota is spent", async () => {
+    const { client, batch } = fakeClient();
+    const d1 = `${TAG}-d1`;
+    const d2 = `${TAG}-d2`;
+    batch.mockResolvedValueOnce(ok([{ ca: d1, status: "pending", job_id: 1 }], 0));
+    noteNarrativeWanted(d1, "full", env);
+    await flushNarrativeRequests(env, client);
+
+    batch.mockResolvedValue(ok([]));
+    noteNarrativeWanted(d2, "full", env);
+    await flushNarrativeRequests(env, client);
+    // d1's full job is not re-sent while full is blocked; d2 goes as basic.
+    const last = batch.mock.calls.at(-1)!;
+    expect(last[1]).toBe("basic");
+    expect(cas(last)).toEqual([d2]);
+  });
+
+  it("re-queues an item turned away for quota and keeps the rest of the batch", async () => {
+    const { client, batch } = fakeClient();
+    const e1 = `${TAG}-e1`;
+    const e2 = `${TAG}-e2`;
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: e1, status: "complete", analysis: analysis(e1, "full") },
+        { ca: e2, status: "failed", error: "quota_exceeded", retry_after_s: 3600 },
+      ]),
+    );
+    noteNarrativeWanted(e1, "full", env);
+    noteNarrativeWanted(e2, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(await prisma.tokenNarrative.count({ where: { mintAddress: e2 } })).toBe(0);
+    expect(takeTokenSageStats()).toMatchObject({ stored: 1, turnedAway: 1 });
+
+    batch.mockResolvedValueOnce(ok([]));
+    await flushNarrativeRequests(env, client);
+    const last = batch.mock.calls.at(-1)!;
+    expect(last[1]).toBe("basic");
+    expect(cas(last)).toEqual([e2]);
   });
 
   it("caches definitive failures and pauses after a 429", async () => {
     const { client, batch } = fakeClient();
-    const d = `${TAG}-d`;
+    const f = `${TAG}-f`;
     batch.mockRejectedValueOnce(new HttpError(429, "https://ts.test/v1/tokens:batch"));
-    noteNarrativeWanted(d, "basic", env);
+    noteNarrativeWanted(f, "basic", env);
     await flushNarrativeRequests(env, client);
     await flushNarrativeRequests(env, client);
     expect(batch).toHaveBeenCalledTimes(1);
 
     resetTokenSage();
-    batch.mockResolvedValueOnce([{ ca: d, status: "invalid", error: "not a mint" }]);
-    noteNarrativeWanted(d, "basic", env);
+    batch.mockResolvedValueOnce(ok([{ ca: f, status: "invalid", error: "not a mint" }]));
+    noteNarrativeWanted(f, "basic", env);
     await flushNarrativeRequests(env, client);
-    expect((await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: d } })).status).toBe(
+    expect((await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: f } })).status).toBe(
       "failed",
     );
   });
 
-  it("keeps full-depth requests under the daily cap", async () => {
+  it("asks again for a partial answer, a few times", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { client, batch } = fakeClient();
+      const g = `${TAG}-g`;
+      batch.mockResolvedValue(ok([{ ca: g, status: "partial", analysis: analysis(g, "basic") }]));
+      noteNarrativeWanted(g, "basic", env);
+      await flushNarrativeRequests(env, client);
+      noteNarrativeWanted(g, "basic", env);
+      await flushNarrativeRequests(env, client);
+      expect(batch).toHaveBeenCalledTimes(1);
+      for (let i = 0; i < 5; i += 1) {
+        vi.setSystemTime(Date.now() + 100_000);
+        noteNarrativeWanted(g, "basic", env);
+        await flushNarrativeRequests(env, client);
+      }
+      // The first answer plus three retries, then it stops.
+      expect(batch).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps full-depth requests under our own daily cap", async () => {
     const { client, batch } = fakeClient();
-    batch.mockResolvedValue([]);
+    batch.mockResolvedValue(ok([]));
     const capped = { ...env, TOKENSAGE_FULL_PER_DAY: 1 };
-    noteNarrativeWanted(`${TAG}-e1`, "full", capped);
-    noteNarrativeWanted(`${TAG}-e2`, "full", capped);
+    noteNarrativeWanted(`${TAG}-h1`, "full", capped);
+    noteNarrativeWanted(`${TAG}-h2`, "full", capped);
     await flushNarrativeRequests(capped, client);
-    expect(batch).toHaveBeenCalledWith([`${TAG}-e1`], "full");
-    await flushNarrativeRequests(capped, client);
-    expect(batch).toHaveBeenCalledTimes(1);
+    const fullCalls = batch.mock.calls.filter((c) => c[1] === "full");
+    expect(fullCalls.map(cas)).toEqual([[`${TAG}-h1`]]);
   });
 });
