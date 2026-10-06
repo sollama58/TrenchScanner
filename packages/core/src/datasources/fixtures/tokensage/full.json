@@ -1,0 +1,372 @@
+{
+  "ca": "ERV8GnQeAgh3K4udtHBpJfwe7pJJ6RfCcCRVAuGXABvU",
+  "status": "complete",
+  "depth": "full",
+  "analysis": {
+    "schema_version": "1",
+    "mint": "ERV8GnQeAgh3K4udtHBpJfwe7pJJ6RfCcCRVAuGXABvU",
+    "created_at": "2026-10-06T22:08:11.079000Z",
+    "launchpad": "pump.fun",
+    "market": {
+      "complete": true,
+      "curve_progress": 1.0,
+      "graduated_pool": null,
+      "creator": "CTfBTtxhtAyGEysdjp9owVQvjSwPjtrzEGB9ZgAKewsY",
+      "is_mayhem_mode": false,
+      "quote_mint": "SOL",
+      "pair": {
+        "mint": "So11111111111111111111111111111111111111112",
+        "symbol": "SOL",
+        "name": "Solana",
+        "kind": "sol",
+        "source": "neutral",
+        "builds_on": false,
+        "builds_on_detail": null,
+        "referent": null,
+        "categories": []
+      }
+    },
+    "raw": {
+      "name": "Peanut the Squirrel 2.0",
+      "symbol": "PNUT2",
+      "description": "Peanut the Squirrel 2.0 on pump.fun",
+      "image_url": "https://ipfs.io/ipfs/bafkreignns4pa47e6yy3jiw7ua34gl3tagb4k2rmuxgly32zeku4abiukm",
+      "twitter": "https://x.com/elonmusk/status/1791351500217754008?s=20",
+      "telegram": "https://t.me/dogwifcap",
+      "website": null
+    },
+    "normalized": {
+      "name_tokens": ["peanut", "the", "squirrel", "2.0"],
+      "ticker": "PNUT2",
+      "ticker_base": "PNUT",
+      "markers": ["version:2"],
+      "emoji_keywords": [],
+      "obfuscation": []
+    },
+    "referent": {
+      "label": "Peanut (squirrel)",
+      "kind": "famous_animal",
+      "desc": "pet squirrel seized and euthanised by NY officials, Oct 2024",
+      "source": "known_coins:PNUT",
+      "confidence": 0.97
+    },
+    "categories": [
+      {
+        "label": "animal",
+        "confidence": 0.97
+      },
+      {
+        "label": "animal/squirrel",
+        "confidence": 0.97
+      },
+      {
+        "label": "derivative",
+        "confidence": 0.97
+      },
+      {
+        "label": "derivative/sequel",
+        "confidence": 0.96
+      },
+      {
+        "label": "news_event",
+        "confidence": 0.719
+      },
+      {
+        "label": "celebrity",
+        "confidence": 0.604
+      },
+      {
+        "label": "derivative/copycat",
+        "confidence": 0.55
+      },
+      {
+        "label": "celebrity/elon",
+        "confidence": 0.34
+      }
+    ],
+    "ticker_explanation": "$PNUT2 = ticker of Peanut the Squirrel (Peanut (squirrel)) (affixes 2)",
+    "copy_of": [
+      {
+        "ticker": "PNUT",
+        "name": "Peanut the Squirrel",
+        "mint": null,
+        "signals": ["ticker_base", "name_contains"]
+      },
+      {
+        "ticker": "Pnut2",
+        "name": "The Final Nut",
+        "mint": "F4UCk5MRjkNwMhogDrjfZnzaRKcHRV8CbK9PLosspump",
+        "signals": ["same_name_earlier", "earlier_count:2"]
+      }
+    ],
+    "image": {
+      "status": "ok",
+      "source_url": "https://ipfs.io/ipfs/bafkreignns4pa47e6yy3jiw7ua34gl3tagb4k2rmuxgly32zeku4abiukm",
+      "phash": "97686887659e9699",
+      "pdq": null,
+      "ocr": [],
+      "palette": ["#c87828", "#fadc28"],
+      "near_duplicates": [],
+      "labels": [],
+      "animated": false
+    },
+    "x": {
+      "ref": {
+        "kind": "tweet",
+        "tweet_id": "1791351500217754008",
+        "community_id": null,
+        "url_handle": "elonmusk",
+        "handle": null,
+        "user_id": null,
+        "query": null,
+        "url": null
+      },
+      "object_time": "2024-05-17T06:14:14.010000Z",
+      "predates_token_by_s": 75398037,
+      "author": {
+        "handle": "elonmusk",
+        "user_id": "44196397",
+        "name": "Elon Musk",
+        "verified_type": "blue",
+        "followers": 241704339,
+        "joined": "2009-06-02T20:12:29Z",
+        "username_changes": 0
+      },
+      "text": "All core systems are now on http://X.com",
+      "relation": "narrative_reference",
+      "reuse_count": 0,
+      "fetch_source": "fxtwitter",
+      "status": "ok",
+      "quoted": null,
+      "replied_to": null,
+      "accounts": [
+        {
+          "role": "author",
+          "handle": "elonmusk",
+          "name": "Elon Musk",
+          "followers": 241704339,
+          "verified_type": "blue"
+        }
+      ],
+      "match": {
+        "name": {
+          "score": 0.0,
+          "how": "none",
+          "detail": "the post does not mention the token name"
+        },
+        "ticker": {
+          "score": 0.0,
+          "how": "none",
+          "detail": "the post does not mention the ticker"
+        },
+        "image": {
+          "score": 0.0,
+          "best_distance": 32,
+          "media_checked": 1,
+          "detail": "best of 1 post image(s) is not similar to the logo (distance 32)"
+        },
+        "referent": {
+          "x_label": "Elon Musk",
+          "x_kind": "person",
+          "agrees": false,
+          "confidence": 0.54
+        },
+        "x_categories": [
+          {
+            "label": "celebrity",
+            "confidence": 0.51
+          },
+          {
+            "label": "celebrity/elon",
+            "confidence": 0.51
+          }
+        ],
+        "fit": 0.0,
+        "verdict": "unrelated"
+      }
+    },
+    "trend": {
+      "matched": false,
+      "terms": []
+    },
+    "flags": [
+      {
+        "code": "copycat",
+        "severity": "warn",
+        "detail": "same ticker base, name or logo as an existing coin"
+      },
+      {
+        "code": "earlier_same_name",
+        "severity": "warn",
+        "detail": "2 token(s) with this name/ticker were created earlier"
+      },
+      {
+        "code": "borrowed_narrative",
+        "severity": "info",
+        "detail": "@elonmusk is a large/verified account unrelated to the deployer; the coin borrows the narrative"
+      },
+      {
+        "code": "x_content_mismatch",
+        "severity": "warn",
+        "detail": "the linked X tweet does not match the token (fit 0.00: the post does not mention the token name; the post does not mention the ticker)"
+      }
+    ],
+    "summary": "Peanut the Squirrel 2.0 ($PNUT2) most likely refers to Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024 (confidence 0.97). Categories: animal/squirrel 0.97, derivative/sequel 0.96, derivative/copycat 0.55, celebrity/elon 0.34. $PNUT2 = ticker of Peanut the Squirrel (Peanut (squirrel)) (affixes 2). Why: copies $PNUT (Peanut the Squirrel) via ticker_base, name_contains; Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024; 'peanut the squirrel' refers to Peanut (squirrel) (pet squirrel euthanised by NY officials, 2024); name carries the marker '2.0' (version:2); 2 earlier token(s) share this name/ticker; the earliest (Pnut2, dexscreener) predates it by 24 d.",
+    "evidence": [
+      {
+        "kind": "onchain",
+        "label": "source",
+        "weight": 0.0,
+        "detail": "spl-token mint; pump.fun=True; on-chain metadata via metaplex; created_at via hints",
+        "source": "solana-rpc",
+        "url": null,
+        "where": null
+      },
+      {
+        "kind": "marker",
+        "label": "derivative/sequel",
+        "weight": 0.7,
+        "detail": "name carries the marker '2.0' (version:2)",
+        "source": "templates:version:2",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "x_timing",
+        "label": "news_event",
+        "weight": 0.25,
+        "detail": "the linked tweet (by @elonmusk) predates the token by 872.7 d",
+        "source": "x",
+        "url": null,
+        "where": "x"
+      },
+      {
+        "kind": "x_author",
+        "label": "celebrity",
+        "weight": 0.4,
+        "detail": "narrative tweet by a large account @elonmusk (241704339 followers, blue)",
+        "source": "x",
+        "url": null,
+        "where": "x"
+      },
+      {
+        "kind": "entity",
+        "label": "animal/squirrel",
+        "weight": 0.78,
+        "detail": "'peanut the squirrel' refers to Peanut (squirrel) (pet squirrel euthanised by NY officials, 2024)",
+        "source": "entities:Peanut (squirrel)",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "entity",
+        "label": "referent",
+        "weight": 0.81,
+        "detail": "Peanut (squirrel): pet squirrel euthanised by NY officials, 2024",
+        "source": "entities:Peanut (squirrel)",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "entity",
+        "label": "animal/squirrel",
+        "weight": 0.78,
+        "detail": "'peanut the squirrel' refers to Peanut (squirrel) (pet squirrel euthanised by NY officials, 2024)",
+        "source": "entities:Peanut (squirrel)",
+        "url": null,
+        "where": "description"
+      },
+      {
+        "kind": "entity",
+        "label": "referent",
+        "weight": 0.81,
+        "detail": "Peanut (squirrel): pet squirrel euthanised by NY officials, 2024",
+        "source": "entities:Peanut (squirrel)",
+        "url": null,
+        "where": "description"
+      },
+      {
+        "kind": "entity",
+        "label": "celebrity/elon",
+        "weight": 0.34,
+        "detail": "the posting account @elonmusk: 'elon musk' refers to Elon Musk (Tesla/SpaceX/X owner; frequent memecoin trigger)",
+        "source": "entities:Elon Musk",
+        "url": null,
+        "where": "x"
+      },
+      {
+        "kind": "entity",
+        "label": "referent",
+        "weight": 0.36,
+        "detail": "the posting account @elonmusk: Elon Musk: Tesla/SpaceX/X owner; frequent memecoin trigger",
+        "source": "entities:Elon Musk",
+        "url": null,
+        "where": "x"
+      },
+      {
+        "kind": "known_coin",
+        "label": "derivative/sequel",
+        "weight": 0.865,
+        "detail": "copies $PNUT (Peanut the Squirrel) via ticker_base, name_contains",
+        "source": "known_coins:PNUT",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "known_coin_inherit",
+        "label": "animal/squirrel",
+        "weight": 0.519,
+        "detail": "inherited from $PNUT: Peanut, an Instagram-famous pet squirrel seized and euthanised by New York officials in Oct-Nov 2024.",
+        "source": "known_coins:PNUT",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "known_coin_inherit",
+        "label": "news_event",
+        "weight": 0.519,
+        "detail": "inherited from $PNUT: Peanut, an Instagram-famous pet squirrel seized and euthanised by New York officials in Oct-Nov 2024.",
+        "source": "known_coins:PNUT",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "referent",
+        "label": "referent",
+        "weight": 0.865,
+        "detail": "Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024",
+        "source": "known_coins:PNUT",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "same_name",
+        "label": "derivative/copycat",
+        "weight": 0.55,
+        "detail": "2 earlier token(s) share this name/ticker; the earliest (Pnut2, dexscreener) predates it by 24 d",
+        "source": "same_name:dexscreener",
+        "url": null,
+        "where": "db"
+      }
+    ],
+    "caveats": [],
+    "depth": "full",
+    "analyzed_at": "2026-10-06T22:15:29.580069Z",
+    "versions": {
+      "rules": "0.8.0-full",
+      "lexicon": "2026-10-06",
+      "known_coins": "seed-2026-10-06",
+      "models": {}
+    }
+  },
+  "stale_analysis": null,
+  "freshness": {
+    "analyzed_at": "2026-10-06T22:15:29.580069Z",
+    "age_s": 0,
+    "max_age_s": 300,
+    "from_cache": false
+  },
+  "errors": [],
+  "job_id": null,
+  "request_id": "fe755785241e4bed"
+}

@@ -1,0 +1,165 @@
+{
+  "ca": "7XMik4ec5jeLHhXVReMpJEXyuWjEpqXdFbSaU1UaW4Bo",
+  "status": "partial",
+  "depth": "basic",
+  "analysis": {
+    "schema_version": "1",
+    "mint": "7XMik4ec5jeLHhXVReMpJEXyuWjEpqXdFbSaU1UaW4Bo",
+    "created_at": "2026-10-06T22:00:00Z",
+    "launchpad": "unknown",
+    "market": {
+      "complete": null,
+      "curve_progress": null,
+      "graduated_pool": null,
+      "creator": null,
+      "is_mayhem_mode": null,
+      "quote_mint": null,
+      "pair": null
+    },
+    "raw": {
+      "name": "Pepe Wizard",
+      "symbol": "PWIZ",
+      "description": "the wizard frog",
+      "image_url": null,
+      "twitter": "https://x.com/pwiz/status/1840000000000000000",
+      "telegram": null,
+      "website": null
+    },
+    "normalized": {
+      "name_tokens": ["pepe", "wizard"],
+      "ticker": "PWIZ",
+      "ticker_base": "PWIZ",
+      "markers": [],
+      "emoji_keywords": [],
+      "obfuscation": []
+    },
+    "referent": null,
+    "categories": [
+      {
+        "label": "animal",
+        "confidence": 0.946
+      },
+      {
+        "label": "animal/frog",
+        "confidence": 0.946
+      },
+      {
+        "label": "meme_template",
+        "confidence": 0.8
+      },
+      {
+        "label": "meme_template/pepe_wojak_chad",
+        "confidence": 0.8
+      }
+    ],
+    "ticker_explanation": "$PWIZ is spelled out inside 'pepewizard'",
+    "copy_of": [],
+    "image": {
+      "status": "missing",
+      "source_url": null,
+      "phash": null,
+      "pdq": null,
+      "ocr": [],
+      "palette": [],
+      "near_duplicates": [],
+      "labels": [],
+      "animated": null
+    },
+    "x": {
+      "ref": {
+        "kind": "tweet",
+        "tweet_id": "1840000000000000000",
+        "community_id": null,
+        "url_handle": "pwiz",
+        "handle": null,
+        "user_id": null,
+        "query": null,
+        "url": null
+      },
+      "object_time": "2024-09-28T12:06:00.203000Z",
+      "predates_token_by_s": 63798839,
+      "author": null,
+      "text": null,
+      "relation": null,
+      "reuse_count": 0,
+      "fetch_source": null,
+      "status": "not_fetched",
+      "quoted": null,
+      "replied_to": null,
+      "accounts": [],
+      "match": null
+    },
+    "trend": {
+      "matched": false,
+      "terms": []
+    },
+    "flags": [
+      {
+        "code": "non_pumpfun",
+        "severity": "info",
+        "detail": "no pump.fun bonding-curve account for this mint; analysed best-effort"
+      }
+    ],
+    "summary": "Pepe Wizard ($PWIZ) reads as an animal-mascot coin (confidence 0.95). Categories: animal/frog 0.95, meme_template/pepe_wojak_chad 0.80. $PWIZ is spelled out inside 'pepewizard'. Why: 'pepe' = Pepe the Frog (meme); 'frog' is a frog.",
+    "evidence": [
+      {
+        "kind": "provenance",
+        "label": "hints",
+        "weight": 0.0,
+        "detail": "caller-supplied hints used for: name, symbol, description, twitter, created_at; mint not yet visible on-chain",
+        "source": "hints:caller",
+        "url": null,
+        "where": null
+      },
+      {
+        "kind": "lexicon",
+        "label": "animal/frog",
+        "weight": 0.8,
+        "detail": "'pepe' = Pepe the Frog (meme)",
+        "source": "slang:pepe",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "lexicon",
+        "label": "meme_template/pepe_wojak_chad",
+        "weight": 0.8,
+        "detail": "'pepe' = Pepe the Frog (meme)",
+        "source": "slang:pepe",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "wordnet",
+        "label": "animal/frog",
+        "weight": 0.55,
+        "detail": "'frog' is a frog",
+        "source": "wordnet:animal/frog",
+        "url": null,
+        "where": "description"
+      }
+    ],
+    "caveats": [
+      "hints: metadata supplied by caller",
+      "partial: mint not yet visible on-chain; analysed from caller hints (market data missing)"
+    ],
+    "depth": "basic",
+    "analyzed_at": "2026-10-06T22:15:30.211628Z",
+    "versions": {
+      "rules": "0.8.0-full",
+      "lexicon": "2026-10-06",
+      "known_coins": "seed-2026-10-06",
+      "models": {}
+    }
+  },
+  "stale_analysis": null,
+  "freshness": {
+    "analyzed_at": "2026-10-06T22:15:30.211628Z",
+    "age_s": 0,
+    "max_age_s": 3600,
+    "from_cache": false
+  },
+  "errors": [],
+  "job_id": null,
+  "request_id": "128ff5a56b4443eb"
+}

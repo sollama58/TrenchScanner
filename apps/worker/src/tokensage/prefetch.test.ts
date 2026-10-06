@@ -1,5 +1,6 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
+import { readFileSync } from "node:fs";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, loadEnv, HttpError, type Env, type TokenSageClient } from "@trenchscanner/core";
 import {
@@ -242,5 +243,50 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     noteNarrativeWanted(m, "full", env);
     await flushNarrativeRequests(env, client);
     expect(batch).toHaveBeenCalledTimes(2);
+  });
+
+  it("stores a real TokenSage answer under the CA we asked about, and survives odd items", async () => {
+    const { client, batch } = fakeClient();
+    const real = JSON.parse(
+      readFileSync(
+        new URL("../../../../packages/core/src/datasources/fixtures/tokensage/full.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { analysis: Record<string, unknown> };
+    const n = `${TAG}-n`;
+    const p = `${TAG}-p`;
+    const q = `${TAG}-q`;
+    batch.mockResolvedValueOnce(
+      ok([
+        null,
+        // The document's own mint is TokenSage's; the row is keyed by our CA.
+        { ca: n, status: "complete", analysis: { ...real.analysis, summary: "nul\u0000here" } },
+        // Done but no document, and a status this version doesn't know: both cool off.
+        { ca: p, status: "complete", analysis: null },
+        { ca: q, status: "rejected" },
+      ]),
+    );
+    noteNarrativeWanted(n, "full", env);
+    noteNarrativeWanted(p, "full", env);
+    noteNarrativeWanted(q, "full", env);
+    await flushNarrativeRequests(env, client);
+    const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: n } });
+    expect(row).toMatchObject({
+      depth: "full",
+      status: "complete",
+      xFit: 0,
+      xVerdict: "unrelated",
+      referentLabel: "Peanut (squirrel)",
+      summary: "nulhere",
+    });
+    expect(row.flags).toContain("x_content_mismatch");
+    expect((row.analysis as { x: { match: { verdict: string } } }).x.match.verdict).toBe("unrelated");
+    expect(await prisma.tokenNarrative.count({ where: { mintAddress: { in: [p, q] } } })).toBe(0);
+    expect(takeTokenSageStats()).toMatchObject({ stored: 1, pending: 0, errors: 0 });
+
+    noteNarrativeWanted(p, "full", env);
+    noteNarrativeWanted(q, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch).toHaveBeenCalledTimes(1);
   });
 });

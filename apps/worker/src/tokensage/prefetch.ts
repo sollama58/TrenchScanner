@@ -6,6 +6,7 @@ import {
   TOKENSAGE_BATCH_MAX,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
+  storableAnalysis,
   type Env,
   type TokenSageAnalysis,
   type TokenSageDepth,
@@ -179,10 +180,15 @@ function isRefusal(err: unknown): boolean {
   return err instanceof HttpError && (err.status === 429 || err.status === 503);
 }
 
-async function storeAnalysis(analysis: TokenSageAnalysis, status: "complete" | "partial"): Promise<void> {
+/** Stored under the CA we asked about, not the document's own `mint` field. */
+async function storeAnalysis(
+  mint: string,
+  analysis: TokenSageAnalysis,
+  status: "complete" | "partial",
+): Promise<void> {
   const fields = narrativeFieldsFromAnalysis(analysis, status);
   const existing = await prisma.tokenNarrative.findUnique({
-    where: { mintAddress: analysis.mint },
+    where: { mintAddress: mint },
     select: { depth: true, status: true },
   });
   // A shallower answer that lands after a deeper one must not overwrite it, and neither may a
@@ -191,23 +197,23 @@ async function storeAnalysis(analysis: TokenSageAnalysis, status: "complete" | "
     const deeper = !narrativeDepthCovers(fields.depth, existing.depth as TokenSageDepth);
     const worse = existing.depth === fields.depth && existing.status === "complete" && status === "partial";
     if (deeper || worse) {
-      settle(analysis.mint, existing.depth as TokenSageDepth, false);
+      settle(mint, existing.depth as TokenSageDepth, false);
       return;
     }
   }
   const data = {
     ...fields,
     categories: fields.categories as unknown as Prisma.InputJsonValue,
-    analysis: analysis as unknown as Prisma.InputJsonValue,
+    analysis: (storableAnalysis(analysis) ?? {}) as Prisma.InputJsonValue,
     checkedAt: new Date(),
   };
   await prisma.tokenNarrative.upsert({
-    where: { mintAddress: analysis.mint },
-    create: { mintAddress: analysis.mint, ...data },
+    where: { mintAddress: mint },
+    create: { mintAddress: mint, ...data },
     update: data,
   });
   stats.stored += 1;
-  settle(analysis.mint, fields.depth, status === "partial");
+  settle(mint, fields.depth, status === "partial");
 }
 
 async function storeFailure(mintAddress: string, depth: TokenSageDepth): Promise<void> {
@@ -334,52 +340,67 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
         if (w && narrativeDepthCovers(depth, w.depth)) wanted.delete(e.ca);
       }
       for (const item of items) {
-        const entry = sent.get(item.ca);
+        const entry = typeof item?.ca === "string" ? sent.get(item.ca) : undefined;
         if (!entry) continue;
-        const wasPending = pending.has(item.ca);
-        if (!wasPending) {
-          stats.requested += 1;
-          if (depth === "full") fullSentToday += 1;
-        }
-        if ((item.status === "complete" || item.status === "partial") && item.analysis) {
-          pending.delete(item.ca);
-          await storeAnalysis(item.analysis, item.status);
-        } else if (item.status === "pending") {
-          const prev = pending.get(item.ca);
-          const jobId = typeof item.job_id === "number" ? item.job_id : undefined;
-          if (!prev || !narrativeDepthCovers(prev.depth, depth)) {
-            pending.set(item.ca, { depth, hints: entry.hints, since: prev?.since ?? Date.now(), jobId });
-          } else if (prev.jobId !== undefined && jobId !== undefined && jobId !== prev.jobId) {
-            // A re-send that comes back under a new job means the old one ended without an
-            // analysis; TokenSage's batch doesn't say why, so read the old job once.
-            const ended = prev.jobId;
-            prev.jobId = jobId;
-            if (jobChecks > 0) {
-              jobChecks -= 1;
-              await checkEndedJob(api, item.ca, prev, ended);
+        try {
+          const wasPending = pending.has(item.ca);
+          if (!wasPending) {
+            stats.requested += 1;
+            if (depth === "full") fullSentToday += 1;
+          }
+          if (
+            (item.status === "complete" || item.status === "partial") &&
+            item.analysis !== null &&
+            typeof item.analysis === "object"
+          ) {
+            pending.delete(item.ca);
+            await storeAnalysis(item.ca, item.analysis, item.status);
+          } else if (item.status === "pending") {
+            const prev = pending.get(item.ca);
+            const jobId = typeof item.job_id === "number" ? item.job_id : undefined;
+            if (!prev || !narrativeDepthCovers(prev.depth, depth)) {
+              pending.set(item.ca, { depth, hints: entry.hints, since: prev?.since ?? Date.now(), jobId });
+            } else if (prev.jobId !== undefined && jobId !== undefined && jobId !== prev.jobId) {
+              // A re-send that comes back under a new job means the old one ended without an
+              // analysis; TokenSage's batch doesn't say why, so read the old job once.
+              const ended = prev.jobId;
+              prev.jobId = jobId;
+              if (jobChecks > 0) {
+                jobChecks -= 1;
+                await checkEndedJob(api, item.ca, prev, ended);
+              }
             }
-          }
-        } else if (
-          item.status === "failed" &&
-          (item.error === "quota_exceeded" || item.error === "overloaded")
-        ) {
-          // Turned away, not analysed: ask again later (as basic, once full is out of quota).
-          pending.delete(item.ca);
-          stats.turnedAway += 1;
-          if (item.error === "quota_exceeded" && depth === "full") {
-            fullBlockedUntil = nextUtcMidnight(Date.now());
+          } else if (
+            item.status === "failed" &&
+            (item.error === "quota_exceeded" || item.error === "overloaded")
+          ) {
+            // Turned away, not analysed: ask again later (as basic, once full is out of quota).
+            pending.delete(item.ca);
+            stats.turnedAway += 1;
+            if (item.error === "quota_exceeded" && depth === "full") {
+              fullBlockedUntil = nextUtcMidnight(Date.now());
+            } else {
+              pausedUntil = Math.max(pausedUntil, Date.now() + Math.max(5, item.retry_after_s ?? 30) * 1000);
+            }
+            if (!wanted.has(item.ca)) wanted.set(item.ca, { depth, hints: entry.hints });
+          } else if (item.status === "invalid" || item.status === "failed") {
+            pending.delete(item.ca);
+            // token_not_found on a seconds-old mint can clear up; anything else is definitive.
+            if (String(item.error ?? "").startsWith("token_not_found")) {
+              notFoundUntil.set(item.ca, Date.now() + NOT_FOUND_COOLDOWN_MS);
+            } else {
+              await storeFailure(item.ca, depth);
+            }
           } else {
-            pausedUntil = Math.max(pausedUntil, Date.now() + Math.max(5, item.retry_after_s ?? 30) * 1000);
-          }
-          if (!wanted.has(item.ca)) wanted.set(item.ca, { depth, hints: entry.hints });
-        } else if (item.status === "invalid" || item.status === "failed") {
-          pending.delete(item.ca);
-          // token_not_found on a seconds-old mint can clear up; anything else is definitive.
-          if (String(item.error ?? "").startsWith("token_not_found")) {
+            // A done status without a document, or a status this version doesn't know: ask again
+            // after a cool-off rather than every cycle.
+            pending.delete(item.ca);
             notFoundUntil.set(item.ca, Date.now() + NOT_FOUND_COOLDOWN_MS);
-          } else {
-            await storeFailure(item.ca, depth);
           }
+        } catch (err) {
+          // One bad item (an odd document, a DB hiccup) must not lose the rest of the batch.
+          stats.errors += 1;
+          logger.warn("TokenSage item not stored", { mint: item.ca, error: (err as Error).message });
         }
       }
     }
