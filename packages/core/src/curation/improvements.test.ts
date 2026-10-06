@@ -448,6 +448,39 @@ describe("takeover evidence", () => {
     expect(pairedBootstrapConfidence(labels, new Uint8Array(400), poor, targets, seededRng(1))).toBeNull();
   });
 
+  it("scores resamples on run size and the 10x tier too, like the exam", () => {
+    // Two call sets with the same 2x and 4x record; only the runs behind them differ.
+    const n = 400;
+    const rowLabels = Float64Array.from({ length: n }, (_, i) => (i % 8 === 0 ? 1.2 : 0));
+    const left = Uint8Array.from({ length: n }, (_, i) => (i % 2 === 0 ? 1 : 0));
+    const right = Uint8Array.from({ length: n }, (_, i) => (i % 2 === 1 || i % 8 === 0 ? 1 : 0));
+    // Same record on labels alone: both sides call every winner, right calls more misses.
+    const onLabels = pairedBootstrapConfidence(rowLabels, right, left, targets, seededRng(2))!;
+    expect(onLabels).toBeLessThan(0.5);
+    // The right side's extra rows are late runners (survived, ran to 8x) that hit 10x - rows
+    // whose label is 0 but whose run and tier count: now it wins almost every resample.
+    const runs = Float64Array.from({ length: n }, (_, i) => (i % 8 === 0 ? 1.2 : i % 2 === 1 ? 3 : 0));
+    const tenX = Int8Array.from({ length: n }, (_, i) => (i % 2 === 1 ? 1 : 0));
+    const withRuns = pairedBootstrapConfidence(
+      { labels: rowLabels, runs, tenX },
+      right,
+      left,
+      targets,
+      seededRng(2),
+    )!;
+    expect(withRuns).toBeGreaterThan(0.95);
+    // Mismatched lengths are no evidence.
+    expect(
+      pairedBootstrapConfidence(
+        { labels: rowLabels, runs: new Float64Array(3) },
+        right,
+        left,
+        targets,
+        seededRng(2),
+      ),
+    ).toBeNull();
+  });
+
   it("refuses a takeover on thin wins, low confidence, or too soon after the last", () => {
     const now = new Date(T0 + 10 * 86_400_000);
     const lane = {

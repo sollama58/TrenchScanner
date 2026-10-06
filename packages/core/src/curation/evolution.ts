@@ -6,7 +6,7 @@ import {
   type CuratorRecipe,
 } from "./contestants.js";
 import { LEARNER_FEATURE_NAMES, type CandidateFeatureName } from "./features.js";
-import { recordScore, type CallRecord } from "./leaderboard.js";
+import { MIN_LIVE_CALLS_TO_RANK, recordScore, type CallRecord } from "./leaderboard.js";
 import { GOAL_MULTIPLE } from "./labels.js";
 import type { PrecisionTargets } from "./trainer.js";
 
@@ -317,13 +317,30 @@ export interface LaneFitness {
   lane: Lane;
   /** Live and exam blended, exactly as the leaderboard ranks it. Null = nothing graded anywhere. */
   composite: number | null;
+  /**
+   * Graded live calls behind the composite. Omitted = unknown, treated as seasoned. A lane under
+   * MIN_LIVE_CALLS_TO_RANK is warming up: its composite is mostly its exam, and a seat that just
+   * took over holds the exam that won it - the best of that run's challengers, which is the
+   * optimistic draw by construction. The leaderboard ranks such seats behind the seasoned ones for
+   * exactly that reason, and breeding ranks parents the same way.
+   */
+  liveGraded?: number;
+}
+
+/** Breeding order: seasoned lanes before warming-up ones, then by composite - the leaderboard's. */
+function rankForBreeding(fitness: readonly LaneFitness[]): LaneFitness[] {
+  const warming = (f: LaneFitness) =>
+    f.liveGraded !== undefined && f.liveGraded < MIN_LIVE_CALLS_TO_RANK ? 1 : 0;
+  return [...fitness].sort((a, b) => warming(a) - warming(b) || (b.composite ?? -1) - (a.composite ?? -1));
 }
 
 /**
  * Breeds `count` challengers from the strongest lanes. Parents come by tournament from the top
  * half (two drawn, the better one breeds), so the best recipes spread without one lane cloning
  * itself across the field; a cross takes a second top-half parent of the same family. Recipes
- * already on the roster, or already bred this run, are skipped.
+ * already on the roster, or already bred this run, are skipped. "Strongest" is the leaderboard's
+ * order (rankForBreeding): a seat still warming up on its exam alone can't be the parent of
+ * choice until live calls have backed that exam.
  */
 export function breedChallengers(
   fitness: readonly LaneFitness[],
@@ -332,7 +349,7 @@ export function breedChallengers(
   opts: { baseHalfLifeDays: number; nextGeneration: number },
 ): Challenger[] {
   if (count <= 0 || fitness.length === 0) return [];
-  const ranked = [...fitness].sort((a, b) => (b.composite ?? -1) - (a.composite ?? -1));
+  const ranked = rankForBreeding(fitness);
   const top = ranked.slice(0, Math.max(1, Math.ceil(ranked.length / 2)));
   const draw = () => top[Math.floor(rng() * top.length)]!;
   const seen = new Set(
@@ -418,22 +435,38 @@ const BOOTSTRAP_DRAWS = 200;
 const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
 /**
+ * The exam's reference rows as the bootstrap scores them: per row, in reference order, the label
+ * (doublings; 0 = a miss), the run size (runDoublings in labels.ts, what the exam's sumRun counts)
+ * and the 10x tier (1 = hit, 0 = miss, -1 = not settled, so it counts neither way). Runs and the
+ * tier are optional: without them a resample scores on the label alone, as older callers did.
+ */
+export interface BootstrapRows {
+  labels: ArrayLike<number>;
+  runs?: ArrayLike<number>;
+  tenX?: ArrayLike<number>;
+}
+
+/**
  * The share of bootstrap resamples (rows drawn with replacement, the SAME draw for both sides)
  * in which the challenger's call record scores higher than the lane's. Both sides are given as
  * their call masks over the same rows - "would it have called row i" - so the comparison is
- * paired: both see the same lucky and unlucky rows in every resample. Null when either side
- * called nothing (no record to compare).
+ * paired: both see the same lucky and unlucky rows in every resample. Each resample is scored
+ * with recordScore, the exam's own score, on all four of its parts (2x, 4x, 10x and run size),
+ * so a challenger that out-examines a lane on run size is judged on that too. Null when either
+ * side called nothing (no record to compare).
  */
 export function pairedBootstrapConfidence(
-  labels: ArrayLike<number>,
+  rows: BootstrapRows | ArrayLike<number>,
   challengerCalls: ArrayLike<number>,
   laneCalls: ArrayLike<number>,
   targets: PrecisionTargets,
   rng: Rng,
   draws = BOOTSTRAP_DRAWS,
 ): number | null {
+  const { labels, runs, tenX } = "labels" in rows ? rows : { labels: rows };
   const n = labels.length;
   if (n === 0 || challengerCalls.length !== n || laneCalls.length !== n) return null;
+  if ((runs !== undefined && runs.length !== n) || (tenX !== undefined && tenX.length !== n)) return null;
   let anyChallenger = false;
   let anyLane = false;
   for (let i = 0; i < n; i++) {
@@ -443,13 +476,16 @@ export function pairedBootstrapConfidence(
   if (!anyChallenger || !anyLane) return null;
   let challengerWins = 0;
   for (let d = 0; d < draws; d++) {
-    const c: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
-    const l: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
+    const c = bootstrapRecord(tenX !== undefined);
+    const l = bootstrapRecord(tenX !== undefined);
     for (let k = 0; k < n; k++) {
       const i = Math.floor(rng() * n);
+      if (!challengerCalls[i] && !laneCalls[i]) continue;
       const label = labels[i]!;
-      if (challengerCalls[i]) add(c, label);
-      if (laneCalls[i]) add(l, label);
+      const run = runs === undefined ? label : runs[i]!;
+      const ten = tenX === undefined ? undefined : tenX[i]!;
+      if (challengerCalls[i]) add(c, label, run, ten);
+      if (laneCalls[i]) add(l, label, run, ten);
     }
     const sc = recordScore(c, targets) ?? 0;
     const sl = recordScore(l, targets) ?? 0;
@@ -458,12 +494,26 @@ export function pairedBootstrapConfidence(
   return challengerWins / draws;
 }
 
-function add(record: CallRecord, label: number): void {
+function bootstrapRecord(tracksTenX: boolean): CallRecord {
+  const record: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0, sumRun: 0 };
+  if (tracksTenX) {
+    record.tenX = 0;
+    record.tenXGraded = 0;
+  }
+  return record;
+}
+
+function add(record: CallRecord, label: number, run: number, tenX: number | undefined): void {
   record.calls += 1;
   record.graded += 1;
   if (label > 0) record.wins += 1;
   if (label >= GOAL_LABEL) record.goals += 1;
   record.sumLabel += label;
+  record.sumRun! += run;
+  if (tenX !== undefined && tenX >= 0) {
+    record.tenXGraded! += 1;
+    if (tenX > 0) record.tenX! += 1;
+  }
 }
 
 export interface Replacement {

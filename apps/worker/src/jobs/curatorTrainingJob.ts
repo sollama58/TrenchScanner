@@ -195,6 +195,8 @@ export async function runCuratorTrainingJob(
     rows: trainingRows.length,
     decisionRows: budget.eventRows,
     historyDays: budget.historyDays,
+    // What the exam graded on: event rows alone, or with pseudo-events while those are too few.
+    examPopulation: learnerMetrics?.examPopulation ?? null,
     contestants: results.map((r) => ({
       contestant: r.contestant,
       modelId: modelIds.get(r.contestant),
@@ -429,6 +431,8 @@ async function evolutionPlan(
       lastExam.get(lane.slot) ?? emptyRecord(),
       targets,
     ).score,
+    // Seats still warming up breed last, as the leaderboard ranks them (see LaneFitness).
+    liveGraded: live.get(lane.slot)?.graded ?? 0,
   }));
   const seed = now.getTime() % 2_147_483_647;
   const challengers = breedChallengers(fitness, env.CURATOR_EVOLUTION_CHALLENGERS, seededRng(seed), {

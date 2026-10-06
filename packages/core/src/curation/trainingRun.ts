@@ -4,7 +4,6 @@ import {
   confidenceRanks,
   precisionCurve,
   probabilityAtRank,
-  thresholdAtRank,
   trainCuratorModel,
   walkForwardEvaluate,
   type CuratorLearner,
@@ -17,6 +16,7 @@ import {
   type TrainingRow,
   type UnthresholdedCuratorParams,
   type WalkForwardResult,
+  type ExamPopulation,
   type EvalFold,
   type ScoredOutcome,
   scoreCandidateWithModel,
@@ -136,6 +136,8 @@ export interface StoredEvalMetrics {
   runnerReport?: RunnerReport;
   /** Inputs this run held back as too new (or lately dead) to train on - see featureOnset.ts. */
   heldFeatures?: HeldFeature[];
+  /** Which decision moments the exam graded (event rows alone, or with pseudo-events) - see ExamPopulation. */
+  examPopulation?: ExamPopulation;
 }
 
 export interface CuratorTrainingOutcome {
@@ -320,21 +322,23 @@ async function examineRecipe(
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
   });
+  // The shipped model over the reference rows, scored once: the cutoff, the high-conviction line
+  // and the calibration table all read these same probabilities (a boosted model's are hundreds
+  // of trees per row; three passes here were a visible share of a run with no data behind it).
+  const shippedProbabilities = Float64Array.from(evaluation.decisionReference, (r) =>
+    scoreCandidateWithModel(trained, r.features),
+  );
+  const translate = (rank: number) => probabilityAtRank(shippedProbabilities, rank);
   // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
   // at its best-effort cutoff (see chooseCutoff) and still competes on its exam. Only an exam
   // with no judgeable cutoff at all leaves it without one.
   const deployedThreshold =
-    precisionCalibration.threshold === null
-      ? null
-      : thresholdAtRank(trained, evaluation.decisionReference, precisionCalibration.threshold);
-  const shippedProbabilities = Float64Array.from(evaluation.decisionReference, (r) =>
-    scoreCandidateWithModel(trained, r.features),
-  );
+    precisionCalibration.threshold === null ? null : translate(precisionCalibration.threshold);
   const { extras, highConviction } = servedExtras(
     cfg,
     evaluation.outOfSampleRanks,
     shippedProbabilities,
-    (rank) => thresholdAtRank(trained, evaluation.decisionReference, rank),
+    translate,
   );
   return {
     evaluation,
@@ -427,6 +431,7 @@ export async function runCuratorTraining(
     precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
     ...(chosen.highConviction ? { highConviction: chosen.highConviction } : {}),
     calibrationCalls: extras.calibration?.calls ?? 0,
+    examPopulation: evaluation.population,
     ...(cfg.featureOnsetGuard ? { heldFeatures: features.held } : {}),
     // Stored only when there was evidence to set a cutoff from. Without it the heuristic keeps
     // sending on its gate alone (see heuristicGate in curatedAlerts.ts).
@@ -505,6 +510,7 @@ async function examineLearner(
       exam: record,
       ...(exam.highConviction ? { highConviction: exam.highConviction } : {}),
       calibrationCalls: exam.extras.calibration?.calls ?? 0,
+      examPopulation: evaluation.population,
     },
   };
   // Every learner's exam cuts the same rows into the same folds, so their reference rows (and
@@ -535,6 +541,10 @@ async function examineLearner(
 export interface ExamEvidence {
   /** The reference rows' labels, in reference order. */
   labels: Float64Array;
+  /** Each reference row's run size in doublings (runDoublings), in reference order. */
+  runs: Float64Array;
+  /** Each reference row's 10x tier: 1 hit, 0 miss, -1 not settled (never counted), in reference order. */
+  tenX: Int8Array;
   /** Per lane slot: 1 where its exam called the row. Absent when its exam set no cutoff. */
   laneCalls: Map<string, Uint8Array>;
   /** Per challenger, in breeding order; null when its exam set no cutoff. */
@@ -651,6 +661,10 @@ export async function runEvolvingContest(
     plan && challengerScores.length > 0
       ? plan.decide(laneExamScores, challengerScores, {
           labels: Float64Array.from(reference ?? [], (r) => r.labelValue),
+          runs: Float64Array.from(reference ?? [], (r) => runDoublings(r)),
+          tenX: Int8Array.from(reference ?? [], (r) =>
+            r.labelValue <= 0 ? 0 : r.hit10x === undefined ? -1 : r.hit10x ? 1 : 0,
+          ),
           laneCalls,
           challengerCalls,
           challengerExamWins,
