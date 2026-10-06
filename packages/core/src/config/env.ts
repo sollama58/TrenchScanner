@@ -378,9 +378,12 @@ const envSchema = z.object({
   // Evolution (curation/evolution.ts): each training run breeds this many challengers - mutated
   // copies of the top lanes' recipes - and sits them in the same exam. The best one takes over
   // the weakest learner seat when its exam beats that seat's by CURATOR_EVOLUTION_MARGIN points,
-  // at most one takeover per run. Each challenger costs one more exam of run time (memory stays
-  // flat). 0 freezes the field.
-  CURATOR_EVOLUTION_CHALLENGERS: z.coerce.number().int().min(0).max(6).default(2),
+  // at most one takeover per run. Each challenger costs one more exam of run time (about 20 s on
+  // the trainer; memory stays flat). 0 freezes the field.
+  // 10 since 2026-10-06 (user decision; was 2). The takeover's bootstrap bar rises with the count
+  // (selectionAdjustedConfidence in evolution.ts), so the best of 10 is held to the same false-
+  // takeover rate as a single challenger.
+  CURATOR_EVOLUTION_CHALLENGERS: z.coerce.number().int().min(0).max(12).default(10),
   // A seat's recipe holds it at least this long before it can be replaced - time to build a live
   // record the leaderboard can judge it on.
   CURATOR_EVOLUTION_MIN_AGE_HOURS: z.coerce.number().min(0).default(12),

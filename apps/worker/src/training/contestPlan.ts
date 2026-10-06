@@ -1,4 +1,5 @@
 import {
+  bootstrapDrawsFor,
   chooseReplacement,
   pairedBootstrapConfidence,
   seededRng,
@@ -46,7 +47,7 @@ export function toEvolutionPlan(plan: ContestPlan): EvolutionPlan {
           lastTakeoverAt: ev.lastTakeoverAt,
           minTakeoverIntervalMs: ev.minTakeoverIntervalMs,
           challengerExamWins: exam.challengerExamWins,
-          pairedConfidence: (slot, challenger) => {
+          pairedConfidence: (slot, challenger, required) => {
             const lane = exam.laneCalls.get(slot);
             const bred = exam.challengerCalls[challenger];
             if (!lane || !bred) return null;
@@ -56,6 +57,7 @@ export function toEvolutionPlan(plan: ContestPlan): EvolutionPlan {
               lane,
               ev.targets,
               seededRng(ev.seed + challenger),
+              bootstrapDrawsFor(required),
             );
           },
         },

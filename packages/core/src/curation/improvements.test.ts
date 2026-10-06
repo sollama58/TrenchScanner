@@ -4,7 +4,9 @@ import { PricePathBook, clockContext } from "./pricePath.js";
 import { blendRanks, scoreBlend, trainBlendCurator } from "./blend.js";
 import { featureHealthReport, runnerTraitsReport } from "./featureReport.js";
 import {
+  bootstrapDrawsFor,
   chooseReplacement,
+  selectionAdjustedConfidence,
   pairedBootstrapConfidence,
   seededRng,
   traitName,
@@ -532,6 +534,58 @@ describe("takeover evidence", () => {
       "linear",
     );
     expect(chooseReplacement(base)?.reason).toContain("weakest of 1 seasoned");
+  });
+
+  it("raises the bootstrap bar for the best of many challengers", () => {
+    expect(selectionAdjustedConfidence(0.9, 1)).toBe(0.9);
+    expect(selectionAdjustedConfidence(0.9, 2)).toBeCloseTo(0.9487, 4);
+    expect(selectionAdjustedConfidence(0.9, 10)).toBeCloseTo(0.9895, 4);
+    expect(selectionAdjustedConfidence(0, 10)).toBe(0);
+    expect(bootstrapDrawsFor(0.9)).toBe(200);
+    expect(bootstrapDrawsFor(0.9895)).toBeGreaterThanOrEqual(1_900);
+    expect(bootstrapDrawsFor(1)).toBe(200);
+
+    const now = new Date(T0 + 10 * 86_400_000);
+    const lane = {
+      lane: {
+        slot: "linear",
+        name: "Linear",
+        description: "",
+        recipe: { learner: "logistic" as const },
+        generation: 0,
+        parentName: null,
+        bornAt: new Date(T0),
+      },
+      composite: 20,
+      examScore: 20,
+    };
+    const scores = [30, 40, 25, 31, 22, 28, 35, 29, null, 27];
+    const asked: number[] = [];
+    const input = (confidence: number) => ({
+      lanes: [lane],
+      challengerScores: scores,
+      now,
+      minAgeMs: 0,
+      margin: 3,
+      evidence: {
+        minExamWins: 15,
+        confidence: 0.9,
+        pairedConfidence: (_slot: string, challenger: number, required: number) => {
+          expect(challenger).toBe(1);
+          asked.push(required);
+          return confidence;
+        },
+        challengerExamWins: scores.map(() => 40),
+        lastTakeoverAt: null,
+        minTakeoverIntervalMs: 0,
+      },
+    });
+    // Nine scored challengers: 0.97 clears a lone challenger's 0.9 but not the best-of-9 bar.
+    expect(chooseReplacement(input(0.97))).toBeNull();
+    expect(asked[0]).toBeCloseTo(0.9 ** (1 / 9), 6);
+    const taken = chooseReplacement(input(0.995));
+    expect(taken?.challenger).toBe(1);
+    expect(taken?.reason).toContain("best of 9");
   });
 });
 
