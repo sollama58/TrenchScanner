@@ -415,3 +415,98 @@ export function SkeletonCards({ count = 4 }: { count?: number }) {
     </div>
   );
 }
+
+export interface MarkerBarDatum {
+  id: string;
+  label: string;
+  /** The rate in percent; null draws an empty track ("–"). */
+  value: number | null;
+  /** Shown at the end of the row; defaults to the value as a percent. */
+  display?: string;
+  /** Under the label, e.g. how many graded calls the rate rests on. */
+  sub?: string;
+  /** Drawn dimmer: a rate on too few calls to lean on. */
+  thin?: boolean;
+}
+
+export interface BarMarker {
+  label: string;
+  value: number;
+  /** "base" is the yardstick the bars are judged against, "goal" the target. */
+  kind: "base" | "goal";
+}
+
+/**
+ * Horizontal bars on a percent scale with vertical marker lines through every row - for "how far
+ * above the yardstick is each of these". Rows are buttons: hovering or tapping one picks it, and
+ * the caller shows the picked row's detail.
+ */
+export function MarkerBars({
+  data,
+  markers,
+  selected,
+  onSelect,
+}: {
+  data: MarkerBarDatum[];
+  markers: BarMarker[];
+  selected: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const values = [...data.map((d) => d.value ?? 0), ...markers.map((m) => m.value)];
+  // Headroom past the furthest bar or marker, on a 10% step, never past 100%.
+  const top = Math.min(100, Math.max(10, Math.ceil((Math.max(0, ...values) * 1.12) / 10) * 10));
+  const at = (v: number) => `${(Math.min(top, Math.max(0, v)) / top) * 100}%`;
+  return (
+    <figure className="chart">
+      <div className="legend">
+        <span className="key">
+          <i className="swatch s1" /> Hit rate
+        </span>
+        {markers.map((m) => (
+          <span className="key" key={m.kind}>
+            <i className={`marker-key ${m.kind}`} /> {m.label}
+          </span>
+        ))}
+      </div>
+      <div className="mbar" role="list">
+        {data.map((d) => (
+          <button
+            type="button"
+            role="listitem"
+            className={`mbar-row${selected === d.id ? " on" : ""}${d.thin ? " thin" : ""}`}
+            key={d.id}
+            onMouseEnter={() => onSelect(d.id)}
+            onFocus={() => onSelect(d.id)}
+            onClick={() => onSelect(d.id)}
+            aria-pressed={selected === d.id}
+          >
+            <span className="mbar-label">
+              {d.label}
+              {d.sub && <small>{d.sub}</small>}
+            </span>
+            <span className="mbar-track">
+              {d.value !== null && <span className="mbar-fill" style={{ width: at(d.value) }} />}
+              {markers.map((m) => (
+                <i key={m.kind} className={`mbar-marker ${m.kind}`} style={{ left: at(m.value) }} />
+              ))}
+            </span>
+            <span className="mbar-value num">
+              {d.display ?? (d.value === null ? "–" : `${d.value.toFixed(1)}%`)}
+            </span>
+          </button>
+        ))}
+        <div className="mbar-row axis-row" aria-hidden="true">
+          <span />
+          <span className="mbar-track bare">
+            {markers.map((m) => (
+              <span key={m.kind} className={`mbar-tag ${m.kind}`} style={{ left: at(m.value) }}>
+                {m.value.toFixed(1)}%
+              </span>
+            ))}
+          </span>
+          <span />
+        </div>
+      </div>
+    </figure>
+  );
+}

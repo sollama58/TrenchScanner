@@ -11,7 +11,7 @@ import {
   type LearningTrend,
   type AiJudgeState,
 } from "../api";
-import { HBarChart, Skeleton, TargetBars, TrendLines } from "../components/Charts";
+import { HBarChart, MarkerBars, Skeleton, TargetBars, TrendLines } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
@@ -162,6 +162,8 @@ export function ModelTab() {
         </div>
       </section>
 
+      <BaselinePanel board={lb} base={base ?? null} learning={data.learning} days={days} />
+
       <LeaderboardPanel
         board={lb}
         days={days}
@@ -263,38 +265,202 @@ export function ModelTab() {
           </section>
 
           <FeatureHealthPanel data={data} now={now} />
-
-          <section className="panel">
-            <span className="eyebrow">Baseline</span>
-            <h3>What a model has to beat</h3>
-            <p className="muted small">
-              Picking at random from the moments the models decide on would have earned this. Every
-              model&apos;s hit rate is only worth something above it.
-            </p>
-            {base ? (
-              <div className="family-figs">
-                <div>
-                  <label>Moments</label>
-                  <span className="num">{base.calls.toLocaleString()}</span>
-                </div>
-                <div>
-                  <label>Base 2x</label>
-                  <span className="num">{pct(base.hitRate2xPct, 1)}</span>
-                </div>
-                <div>
-                  <label>Base 4x</label>
-                  <span className="num">{pct(base.hitRate4xPct, 1)}</span>
-                </div>
-              </div>
-            ) : (
-              <p className="empty">No graded decision moments in this window yet.</p>
-            )}
-          </section>
         </div>
 
         <AiReviewerPanel data={data} now={now} />
       </UnderTheHood>
     </div>
+  );
+}
+
+/**
+ * Every model's hit rate against the baseline: the rate of the decision moments the models pick
+ * from (the "event" training rows, GET /curated/insights samples.byKind). A model is only adding
+ * anything above that line, so it sits up front, as a chart with the baseline drawn through it.
+ * The population is fixed in the worker: a moment is banked only after the safety screen passes
+ * (scanJob.ts returns before sampling on a fail) and the event pre-check (passesEventPreGate in
+ * packages/core curator.ts) - and the curators decide only at those same moments.
+ */
+function BaselinePanel({
+  board,
+  base,
+  learning,
+  days,
+}: {
+  board: Leaderboard;
+  base: (GradedRates & { kind: string }) | null;
+  learning: LearningCurve;
+  days: number;
+}) {
+  const [metric, setMetric] = useState<"2x" | "4x">("2x");
+  const [view, setView] = useState<"models" | "days">("models");
+  const [picked, setPicked] = useState<string | null>(null);
+  const t = board.targets;
+  const baseRate = base ? (metric === "2x" ? base.hitRate2xPct : base.hitRate4xPct) : null;
+  const goal = metric === "2x" ? t.hitRate2xPct : t.hitRate4xPct;
+  const rateOf = (e: LeaderboardEntry) =>
+    metric === "2x" ? e.composite.live.winRatePct : e.composite.live.goalRatePct;
+  // Seasoned records first: a 33% on three calls shouldn't sit above a 15% on a hundred.
+  const thin = (e: LeaderboardEntry) => e.composite.warmingUp === true || e.composite.live.graded === 0;
+  const rows = [...board.entries].sort(
+    (a, b) => Number(thin(a)) - Number(thin(b)) || (rateOf(b) ?? -1) - (rateOf(a) ?? -1),
+  );
+  const liftOf = (rate: number | null) =>
+    rate === null || baseRate === null || baseRate <= 0 ? null : rate / baseRate;
+  const selected = rows.find((e) => e.id === picked) ?? rows[0] ?? null;
+  const selRate = selected ? rateOf(selected) : null;
+  const selLift = liftOf(selRate);
+  const hit = metric === "2x" ? "doubled within 15 minutes" : "reached 4x within 30 minutes";
+  const days2 = learning.days.filter((d) => d.feed.calls > 0 || d.market.calls > 0);
+
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <TargetIcon size={13} /> Models vs baseline
+          </span>
+          <h3>Are the models beating a random pick?</h3>
+          <p className="muted small">
+            The baseline is how often a token {hit} if you picked at random from the same moments the models
+            choose from. A model is only adding value to the right of that line.
+          </p>
+        </div>
+        <div className="row baseline-controls">
+          <div className="segmented small" role="tablist" aria-label="View">
+            <button className={view === "models" ? "on" : ""} onClick={() => setView("models")}>
+              By model
+            </button>
+            <button className={view === "days" ? "on" : ""} onClick={() => setView("days")}>
+              By day
+            </button>
+          </div>
+          <div className="segmented small" role="tablist" aria-label="Hit">
+            <button className={metric === "2x" ? "on" : ""} onClick={() => setMetric("2x")}>
+              2x
+            </button>
+            <button className={metric === "4x" ? "on" : ""} onClick={() => setMetric("4x")}>
+              4x
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="family-figs">
+        <div>
+          <label>Baseline {metric}</label>
+          <span className="num">{pct(baseRate, 1)}</span>
+        </div>
+        <div>
+          <label>Moments it covers</label>
+          <span className="num">{base ? base.graded.toLocaleString() : "–"}</span>
+        </div>
+        <div>
+          <label>Goal</label>
+          <span className="num">{goal}%</span>
+        </div>
+      </div>
+
+      {view === "models" ? (
+        rows.length > 0 ? (
+          <>
+            <MarkerBars
+              data={rows.map((e) => {
+                const rate = rateOf(e);
+                const l = liftOf(rate);
+                return {
+                  id: e.id,
+                  label: e.name,
+                  value: rate,
+                  sub: `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
+                  display:
+                    rate === null ? "–" : `${rate.toFixed(1)}%${l === null ? "" : ` · ${l.toFixed(1)}x`}`,
+                  thin: thin(e),
+                };
+              })}
+              markers={[
+                ...(baseRate !== null ? [{ label: "Baseline", value: baseRate, kind: "base" as const }] : []),
+                { label: "Goal", value: goal, kind: "goal" as const },
+              ]}
+              selected={selected?.id ?? null}
+              onSelect={setPicked}
+            />
+            {selected && (
+              <p className="baseline-readout">
+                <strong>{selected.name}</strong>:{" "}
+                {selRate === null
+                  ? `no graded calls in the last ${days} days yet.`
+                  : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
+                      selLift === null
+                        ? "."
+                        : selLift >= 1
+                          ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
+                          : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
+                    }`}
+                {selected.composite.warmingUp ? " Still too few calls to lean on." : ""}
+              </p>
+            )}
+            <p className="faint small">
+              Live calls over the last {days} days. The figure after each rate is its lift: how many times the
+              baseline it hits. Hover or tap a model for its numbers; faded bars rest on too few calls.
+            </p>
+          </>
+        ) : (
+          <p className="empty">No models on the board yet.</p>
+        )
+      ) : days2.length > 1 ? (
+        <TrendLines
+          aLabel={`All model calls, ${metric} rate`}
+          bLabel={`Baseline ${metric} rate`}
+          data={days2.map((d) => {
+            const l = metric === "2x" ? d.lift2x : d.lift4x;
+            return {
+              label: shortDay(d.day),
+              a: metric === "2x" ? d.feed.rate2xPct : d.feed.rate4xPct,
+              b: metric === "2x" ? d.market.rate2xPct : d.market.rate4xPct,
+              sub: `${d.feed.graded} graded calls; ${d.market.graded.toLocaleString()} moments; lift ${lift(l)}`,
+            };
+          })}
+        />
+      ) : (
+        <p className="empty">Needs a couple of days of graded calls.</p>
+      )}
+
+      <details className="folds">
+        <summary>What exactly is the baseline?</summary>
+        <p className="muted small">
+          It is measured <strong>after</strong> the safety screen and the pre-check, and{" "}
+          <strong>before</strong> any model or your own filters. A token only becomes a baseline moment once
+          it gets through every one of these, in order:
+        </p>
+        <ol className="baseline-steps">
+          <li>
+            <strong>Seen by the scanner</strong> on Pump.fun and priced.
+          </li>
+          <li>
+            <strong>Passes the safety screen</strong>: mint and freeze authority renounced, liquidity burned
+            or locked, not a Mayhem Mode token, and no more than 70% of the top 10 holders on fresh wallets. A
+            token that fails is never sampled at all.
+          </li>
+          <li>
+            <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($10k to $1M),
+            under 6 hours old, buyers making at least 55% of the last hour&apos;s trades, price not falling
+            over the last 5 minutes, and the fresh and empty wallet checks done.
+          </li>
+          <li>
+            <strong>First time per token per hour</strong>: only the first moment a token passes counts, so a
+            token that hovers near the line isn&apos;t counted over and over.
+          </li>
+        </ol>
+        <p className="muted small">
+          Those moments are exactly where the models decide, so the comparison is like for like: same tokens,
+          same moment, same grading ({hit}, from the price at that moment, with a 50% drop first counting as a
+          loss). Your own filter settings (minimum market cap, wallet caps and the rest) play no part in it.
+          It is also not a raw average of every Pump.fun token: tokens the screen or pre-check turn away never
+          count, for or against.
+        </p>
+      </details>
+    </section>
   );
 }
 
