@@ -220,6 +220,10 @@ export function App() {
 
       <footer className="site-foot faint small">
         Alerts are for research, not financial advice. Memecoins can go to zero in minutes.
+        {" | "}
+        <a href="https://alonisthe.dev" target="_blank" rel="noopener noreferrer">
+          alonisthe.dev
+        </a>
       </footer>
     </div>
   );
