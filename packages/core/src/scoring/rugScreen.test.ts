@@ -29,10 +29,10 @@ describe("runRugScreen", () => {
     expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: undefined }).passed).toBe(true);
   });
 
-  it("rejects a token whose top-10 holders are over 70% empty wallets, and only once measured", () => {
-    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 80 }).passed).toBe(false);
-    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 80 }).reasons[0]).toMatch(/empty wallets/);
-    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 70 }).passed).toBe(true);
+  it("rejects a token whose top-10 holders are over 90% empty wallets, and only once measured", () => {
+    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 95 }).passed).toBe(false);
+    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 95 }).reasons[0]).toMatch(/empty wallets/);
+    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 90 }).passed).toBe(true);
     expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: undefined }).passed).toBe(true);
   });
 

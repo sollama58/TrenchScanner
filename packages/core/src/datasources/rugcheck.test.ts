@@ -45,6 +45,39 @@ describe("toProfile", () => {
     expect(toProfile(MINT, report).lpBurned).toBe(false);
   });
 
+  it("judges a Pump.fun token's LP on its own pool, not on side pools others opened", () => {
+    const report = baseReport({
+      markets: [
+        { pubkey: POOL_AUTHORITY, marketType: "pump_fun_amm", lp: { lpLockedPct: 100 } },
+        { pubkey: "dlmm-pool", marketType: "meteoraDlmm", lp: { lpLockedPct: 0 } },
+        { pubkey: "damm-pool", marketType: "meteora_damm_v2", lp: { lpLockedPct: 0 } },
+      ],
+    });
+    expect(toProfile(MINT, report).lpBurned).toBe(true);
+  });
+
+  it("still fails a Pump.fun token whose own pool is not locked", () => {
+    const report = baseReport({
+      markets: [
+        { pubkey: "curve", marketType: "pump_fun", lp: { lpLockedPct: 100 } },
+        { pubkey: POOL_AUTHORITY, marketType: "pump_fun_amm", lp: { lpLockedPct: 0 } },
+      ],
+    });
+    expect(toProfile(MINT, report).lpBurned).toBe(false);
+  });
+
+  it("ignores dust side pools on a non-Pump.fun token, but not a real unlocked pool", () => {
+    const pool = (pubkey: string, lpLockedPct: number, usd: number) => ({
+      pubkey,
+      marketType: "meteora_damm_v2",
+      lp: { lpLockedPct, baseUSD: usd / 2, quoteUSD: usd / 2 },
+    });
+    const dust = baseReport({ markets: [pool(POOL_AUTHORITY, 100, 50_000), pool("dust", 0, 1)] });
+    expect(toProfile(MINT, dust).lpBurned).toBe(true);
+    const real = baseReport({ markets: [pool(POOL_AUTHORITY, 100, 50_000), pool("real", 0, 20_000)] });
+    expect(toProfile(MINT, real).lpBurned).toBe(false);
+  });
+
   it("treats LP as not burned when there are no markets at all", () => {
     expect(toProfile(MINT, baseReport({ markets: [] })).lpBurned).toBe(false);
   });
