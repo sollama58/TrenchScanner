@@ -194,6 +194,7 @@ const REFLECTION_COLUMNS: { key: string; label: string; fmt: (v: number) => stri
   { key: "holderCount", label: "holders", fmt: (v) => v.toFixed(0) },
   { key: "top10HolderPct", label: "top 10 hold %", fmt: (v) => v.toFixed(0) },
   { key: "freshTop10WalletPct", label: "top-10 brand-new wallets %", fmt: (v) => v.toFixed(0) },
+  { key: "emptyTop10WalletPct", label: "top-10 empty wallets %", fmt: (v) => v.toFixed(0) },
   { key: "uniqueBuyers5m", label: "distinct buyers 5m", fmt: (v) => v.toFixed(0) },
   { key: "buysPerBuyer5m", label: "buys per buyer 5m", fmt: (v) => v.toFixed(1) },
   { key: "topBuyerShare5m", label: "biggest buyer share %", fmt: (v) => (v * 100).toFixed(0) },

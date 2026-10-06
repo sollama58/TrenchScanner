@@ -3,6 +3,9 @@ import type { OnChainProfile, RugScreenResult } from "../types.js";
 /** Above this share of the top-10 holders on wallets under a day old, a token is never alerted. */
 export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 
+/** Above this share of the top-10 holders on empty wallets (no other real holdings), a token is never alerted. */
+export const SAFETY_MAX_EMPTY_WALLET_PCT = 70;
+
 /**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
  * user, independent of their filter settings - this is the "auto-filter
@@ -54,6 +57,18 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
   ) {
     reasons.push(
       `${profile.freshTop10WalletPct.toFixed(0)}% of top-10 holders are fresh wallets (over ${SAFETY_MAX_FRESH_WALLET_PCT}%)`,
+    );
+  }
+
+  // Same rule for a holder list that is mostly empty wallets (funded only to hold this launch):
+  // the hallmark of a bundled or farmed launch. Same treatment as fresh wallets - applied only once
+  // the holdings lookups have measured it.
+  if (
+    profile.emptyTop10WalletPct !== undefined &&
+    profile.emptyTop10WalletPct > SAFETY_MAX_EMPTY_WALLET_PCT
+  ) {
+    reasons.push(
+      `${profile.emptyTop10WalletPct.toFixed(0)}% of top-10 holders are empty wallets (over ${SAFETY_MAX_EMPTY_WALLET_PCT}%)`,
     );
   }
 
