@@ -589,13 +589,13 @@ export async function buildHitRateReport(
     GROUP BY 1
     ORDER BY 1`;
 
-  // Match is the one table too large to scan by time alone; its (userId, matchedAt) index is the
-  // way in, and User is small enough to list. Same route loadFilterTrackRecords takes.
+  // Every user's matches over the window, through Match's own (matchedAt) index: this used to
+  // list every User id into an = ANY() just to reach the (userId, matchedAt) index, and that list
+  // grew with the user base.
   const matchRows = (
-    opts.includeFilterMatches === false ? Promise.resolve([]) : prisma.user.findMany({ select: { id: true } })
-  ).then((users) => {
-    const userIds = users.map((u) => u.id);
-    if (userIds.length === 0) return [];
+    opts.includeFilterMatches === false ? Promise.resolve(false) : Promise.resolve(true)
+  ).then((wanted) => {
+    if (!wanted) return [];
     // A match is anchored a moment after it is created (anchorMatchOutcome), so an unanchored one
     // only counts as ungradable once it is older than that gap could plausibly be. One whose
     // anchor row closed with no price inside the win window (an outage) is ungradable too, for as
@@ -617,15 +617,12 @@ export async function buildHitRateReport(
                                                 AND o."finalizedAt" IS NULL))) AS ungradable
       FROM "Match" m
       JOIN "UserFilter" f ON f."id" = m."filterId"
-      WHERE m."userId" = ANY(${userIds}) AND m."matchedAt" >= ${since} AND m."matchedAt" < ${until}
+      WHERE m."matchedAt" >= ${since} AND m."matchedAt" < ${until}
       GROUP BY 1, 2`;
   });
 
   // Every sampled moment by kind. "event" rows are the population curators choose from, so their
-  // rate is the base a pick has to beat. "match" rows (filter alerts' grading anchors) are left
-  // out: the cleanup job deletes graded ones 7 days after their watch ends and keeps ungraded
-  // ones, so over a longer window that kind would read as mostly pending. Filter alerts are
-  // reported from Match itself (filterMatches), which keeps every verdict.
+  // rate is the base a pick has to beat; "match" rows are filter alerts deduplicated per token.
   const sampleRows = prisma.$queryRaw<(RawCounts & { kind: string })[]>`
     SELECT co."sampleKind" AS kind,
            count(*) AS calls,
@@ -634,7 +631,12 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
     FROM "CandidateOutcome" co
-    WHERE co."anchorAt" >= ${since} AND co."anchorAt" < ${until} AND co."sampleKind" <> 'match'
+    WHERE co."anchorAt" >= ${since} AND co."anchorAt" < ${until}
+      -- Graded "match" rows are deleted MATCH_OUTCOME_RETENTION_DAYS after their watch ends
+      -- (cleanupJob) while ungraded ones stay, so over a longer window that kind would read as
+      -- mostly pending. Its row covers only the days its graded rows still exist.
+      AND (co."sampleKind" <> 'match'
+           OR co."anchorAt" >= now() - make_interval(days => ${env.MATCH_OUTCOME_RETENTION_DAYS}::int))
     GROUP BY 1
     ORDER BY 1`;
 

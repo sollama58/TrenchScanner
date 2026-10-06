@@ -44,11 +44,17 @@ export function outcomeAt(outcome: Outcome, alertedAt: string, now: number): Out
 }
 
 /**
- * A filter match's verdict, from the columns the outcome job writes onto the Match row. Before
- * they're written, a match inside its win window reads as live, the way a model call does.
+ * A filter match's verdict. The API grades it from its open grading row (`card.outcome`), ticked
+ * here like a model call's; a card from an older API build carries only the columns the outcome
+ * job writes onto the Match row when the window closes, and before they're written a match inside
+ * its win window reads as live.
  */
 export function matchOutcome(card: Card, now: number): Outcome | null {
   if (card.kind !== "match") return null;
+  // "unknown" and not final means the grading row doesn't exist yet (the match is seconds old):
+  // the window countdown below is the honest reading. A final "unknown" is a real ungraded alert.
+  if (card.outcome && (card.outcome.status !== "unknown" || card.outcome.finalized))
+    return outcomeAt(card.outcome, card.matchedAt, now);
   if (card.hit2xIn1h === undefined || card.hit2xIn1h === null) {
     const minutesLeft = minutesLeftAt(card.matchedAt, now);
     if (minutesLeft <= 0) return null;

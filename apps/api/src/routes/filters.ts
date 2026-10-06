@@ -6,6 +6,7 @@ import {
   buildFilterLeaderboard,
   criteriaChanged,
   filterLeaderboardCache,
+  KEEP_IF_EVER_RANKED_WITHIN,
 } from "../filterLeaderboard.js";
 
 // A factory (rather than a module-level constant) so mcapMin/mcapMax default to this deployment's
@@ -92,7 +93,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
 
   app.get("/", async (request) => {
     const filters = await prisma.userFilter.findMany({
-      where: { userId: request.user!.userId },
+      where: { userId: request.user!.userId, deletedAt: null },
       orderBy: { createdAt: "asc" },
     });
     // Each filter's last-30-day record on the curated feed's verdict (2x within 15 minutes of the alert
@@ -113,7 +114,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     const userId = request.user!.userId;
     const created = await prisma.$transaction(async (tx) => {
       await lockUserFilters(tx, userId);
-      if ((await tx.userFilter.count({ where: { userId } })) >= MAX_FILTERS_PER_USER) return null;
+      if ((await tx.userFilter.count({ where: { userId, deletedAt: null } })) >= MAX_FILTERS_PER_USER)
+        return null;
       const switchedOff = parsed.data.isActive ? await deactivateOthers(tx, userId, null) : false;
       const row = await tx.userFilter.create({ data: { ...parsed.data, userId } });
       return { row, boardChanged: row.shareOnLeaderboard || switchedOff };
@@ -134,7 +136,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     const activated = await prisma.$transaction(async (tx) => {
       await lockUserFilters(tx, userId);
       const existing = await tx.userFilter.findUnique({ where: { id } });
-      if (!existing || existing.userId !== userId) return null;
+      if (!existing || existing.userId !== userId || existing.deletedAt) return null;
       const switchedOff = await deactivateOthers(tx, userId, id);
       const row = await tx.userFilter.update({
         where: { id },
@@ -164,7 +166,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     const result = await prisma.$transaction(async (tx) => {
       await lockUserFilters(tx, userId);
       const existing = await tx.userFilter.findUnique({ where: { id } });
-      if (!existing || existing.userId !== userId) return { error: 404 as const };
+      if (!existing || existing.userId !== userId || existing.deletedAt) return { error: 404 as const };
       const merged = { ...existing, ...parsed.data };
       const rangeError = filterError(merged);
       if (rangeError) return { error: 400 as const, message: rangeError };
@@ -194,13 +196,29 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     return reply.code(400).send({ error: result.message });
   });
 
+  /**
+   * Deleting a filter deletes every alert it raised with it (Match cascades) - unless it ever
+   * ranked in the leaderboard's top KEEP_IF_EVER_RANKED_WITHIN. Such a filter is retired instead:
+   * hidden from its owner, switched off for good, no longer counted against their cap, but its
+   * alert history and record stay on the board (user decision 2026-10-06).
+   */
   app.delete("/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const existing = await prisma.userFilter.findUnique({ where: { id } });
-    if (!existing || existing.userId !== request.user!.userId) {
-      return reply.code(404).send({ error: "filter not found" });
-    }
-    await prisma.userFilter.delete({ where: { id } });
+    const userId = request.user!.userId;
+    // Under the same lock as the other filter writes, so a create counting toward the cap and a
+    // delete can't interleave, and a concurrent PATCH gets a 404 rather than a P2025 500.
+    const existing = await prisma.$transaction(async (tx) => {
+      await lockUserFilters(tx, userId);
+      const row = await tx.userFilter.findUnique({ where: { id } });
+      if (!row || row.userId !== userId || row.deletedAt) return null;
+      if (row.bestRank !== null && row.bestRank <= KEEP_IF_EVER_RANKED_WITHIN) {
+        await tx.userFilter.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
+      } else {
+        await tx.userFilter.delete({ where: { id } });
+      }
+      return row;
+    });
+    if (!existing) return reply.code(404).send({ error: "filter not found" });
     if (existing.shareOnLeaderboard) filterLeaderboardCache.clear();
     return reply.code(204).send();
   });
@@ -226,7 +244,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       const source = await tx.userFilter.findUnique({ where: { id } });
       if (!source || !source.shareOnLeaderboard) return { error: 404 as const };
       await lockUserFilters(tx, userId);
-      if ((await tx.userFilter.count({ where: { userId } })) >= MAX_FILTERS_PER_USER) {
+      if ((await tx.userFilter.count({ where: { userId, deletedAt: null } })) >= MAX_FILTERS_PER_USER) {
         return { error: 409 as const };
       }
       // Everything but identity, ownership and state: exactly the criteria (FILTER_CRITERIA_KEYS).
@@ -240,6 +258,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
         updatedAt: _updated,
         criteriaChangedAt: _changed,
         armedAt: _armed,
+        bestRank: _bestRank,
+        deletedAt: _deletedAt,
         ...criteria
       } = source;
       const created = await tx.userFilter.create({

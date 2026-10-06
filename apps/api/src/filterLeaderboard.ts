@@ -29,6 +29,11 @@ export const MIN_GRADED_TO_RANK = 30;
 export const FILTER_LEADERBOARD_SIZE = 50;
 /** Warming-up entries returned (most graded first). */
 const WARMING_UP_SIZE = 20;
+/**
+ * A filter that ever ranked this high is kept, retired, when its owner deletes it (user decision
+ * 2026-10-06): its alert history and record stay on the board instead of cascading away.
+ */
+export const KEEP_IF_EVER_RANKED_WITHIN = 3;
 
 /**
  * The fields that decide what a filter matches - what "Copy" copies, and what resets the
@@ -93,6 +98,8 @@ export interface FilterLeaderboardEntry {
   recordSince: string;
   /** Whether it is its owner's active filter now (only an active filter raises alerts). */
   isActive: boolean;
+  /** Its owner deleted it; kept for its record (it once ranked in the top few). Never alerts again. */
+  retired: boolean;
   criteria: FilterCriteria;
   /** The caller's own filter - set per request. */
   mine: boolean;
@@ -110,9 +117,10 @@ export interface FilterLeaderboard {
 }
 
 /** The board as cached: entries keep their owner id, stripped before anything is sent. */
+type CachedEntry = FilterLeaderboardEntry & { ownerId: string; bestRank: number | null };
 interface CachedBoard extends Omit<FilterLeaderboard, "ranked" | "warmingUp"> {
-  ranked: (FilterLeaderboardEntry & { ownerId: string })[];
-  warmingUp: (FilterLeaderboardEntry & { ownerId: string })[];
+  ranked: CachedEntry[];
+  warmingUp: CachedEntry[];
 }
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
@@ -123,6 +131,8 @@ type Row = {
   userId: string;
   name: string;
   isActive: boolean;
+  deletedAt: Date | null;
+  bestRank: number | null;
   criteriaChangedAt: Date;
   graded: bigint;
   won2x: bigint;
@@ -162,7 +172,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       LEFT JOIN "CandidateOutcome" co ON co."id" = m."candidateOutcomeId"
       WHERE sf."shareOnLeaderboard"
     )
-    SELECT f."id", f."userId", f."name", f."isActive", f."criteriaChangedAt",
+    SELECT f."id", f."userId", f."name", f."isActive", f."deletedAt", f."bestRank", f."criteriaChangedAt",
            f."mcapMin", f."mcapMax", f."minVolumeMcapRatio", f."minHolderGrowthPct",
            f."maxTop10HolderPct", f."maxDevWalletPct", f."maxRiskScore", f."excludeCriticalRiskFlags",
            f."minTokenAgeMinutes", f."maxTokenAgeMinutes", f."narrativeKeywords", f."minScore",
@@ -204,8 +214,10 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       provenRunDoublings: graded > 0 ? round2(provenRate(sumRun, graded)) : null,
       recordSince: recordSince.toISOString(),
       isActive: r.isActive,
+      retired: r.deletedAt !== null,
       criteria: pickCriteria(r),
       mine: false,
+      bestRank: r.bestRank,
     };
   });
 
@@ -214,6 +226,14 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || b.graded - a.graded || a.id.localeCompare(b.id))
     .slice(0, FILTER_LEADERBOARD_SIZE)
     .map((e, i) => ({ ...e, rank: i + 1 }));
+  // The best rank each filter ever held, so a deletion can tell whether it earned keeping. Only
+  // the top few matter (KEEP_IF_EVER_RANKED_WITHIN), so only those are written.
+  const improved = ranked.filter(
+    (e) => e.rank! <= KEEP_IF_EVER_RANKED_WITHIN && (e.bestRank === null || e.bestRank > e.rank!),
+  );
+  await Promise.all(
+    improved.map((e) => prisma.userFilter.updateMany({ where: { id: e.id }, data: { bestRank: e.rank } })),
+  );
   const warmingUp = entries
     .filter((e) => e.graded < MIN_GRADED_TO_RANK)
     .sort((a, b) => b.graded - a.graded || a.id.localeCompare(b.id))
@@ -244,7 +264,7 @@ export const filterLeaderboardCache = new SharedCache<CachedBoard>(CACHE_TTL_MS,
 
 /** The board for one reader: their own entries flagged, every owner id dropped. */
 export function boardFor(board: CachedBoard, userId: string): FilterLeaderboard {
-  const strip = ({ ownerId, ...e }: FilterLeaderboardEntry & { ownerId: string }) => ({
+  const strip = ({ ownerId, bestRank: _best, ...e }: CachedEntry) => ({
     ...e,
     mine: ownerId === userId,
   });

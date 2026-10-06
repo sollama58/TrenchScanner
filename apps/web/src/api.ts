@@ -196,6 +196,11 @@ export interface Card {
   currentMarketCapAt?: string | null;
   filter: { id: string; name: string } | null;
   curated: CuratedMeta | null;
+  /**
+   * A filter alert's outcome from its open grading row, so a 2x shows the moment it lands (API
+   * builds before it only send the columns below, written when the window closes).
+   */
+  outcome?: Outcome | null;
   // Match-only outcome columns.
   hit2xIn1h?: boolean | null;
   hit4xIn1h?: boolean | null;
@@ -584,6 +589,8 @@ export interface FilterBoardEntry {
   provenRunDoublings: number | null;
   recordSince: string;
   isActive: boolean;
+  /** Its owner deleted it; kept on the board for its record (absent from older API builds). */
+  retired?: boolean;
   criteria: FilterCriteria;
   mine: boolean;
 }

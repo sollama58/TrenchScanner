@@ -127,13 +127,22 @@ function BoardEntry({
           <strong>{e.name}</strong>
           <span className="faint small">#{e.tag}</span>
           {e.mine && <span className="pill pill-mine">Yours</span>}
-          {!e.isActive && (
+          {e.retired ? (
             <span
               className="pill"
-              title="Its owner has another filter active, so this one isn't alerting now"
+              title="Its owner deleted it; it stays here for its record and can still be copied"
             >
-              Paused
+              Retired
             </span>
+          ) : (
+            !e.isActive && (
+              <span
+                className="pill"
+                title="Its owner has another filter active, so this one isn't alerting now"
+              >
+                Paused
+              </span>
+            )
           )}
         </div>
         <ScoreBar
