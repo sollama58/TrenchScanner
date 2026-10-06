@@ -19,6 +19,13 @@ const CURATOR_MODEL_RETENTION_DAYS = 90;
 
 /** How long a retired CuratorModel keeps its weights before the sweep stubs them out. */
 const CURATOR_MODEL_PARAMS_RETENTION_DAYS = 7;
+/**
+ * TokenSage's raw Analysis document (TokenNarrative.analysis, several KB a mint) is kept this
+ * long - the models' training window (CURATOR_TRAINING_WINDOW_DAYS' default) - and then dropped;
+ * the row and its derived columns stay for the full RPC-cache horizon. At ~7,800 in-band mints
+ * a day, keeping the documents for 90 days would add about 4 GB.
+ */
+const NARRATIVE_DOC_RETENTION_DAYS = 21;
 
 /**
  * How long a revoked LinkedDevice row is kept after somebody switches it off.
@@ -529,6 +536,11 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // TokenSage narratives (tokensage/prefetch.ts): kept as long as the RPC caches, past the
   // models' training window, so new inputs can be derived from them later.
   const deletedNarratives = await sweepCache("TokenNarrative", "mintAddress");
+  const docCutoff = new Date(startedAt - NARRATIVE_DOC_RETENTION_DAYS * DAY_MS);
+  const strippedNarrativeDocs = await prisma.$executeRaw`
+    UPDATE "TokenNarrative" SET "analysis" = NULL
+    WHERE "checkedAt" < ${docCutoff} AND "analysis" IS NOT NULL
+  `;
 
   // Also the run's heartbeat meta, so GET /health/worker shows what the last sweep deleted - the
   // one view of it that needs no log access.
@@ -553,6 +565,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedMayhemCache: deletedMayhemCache.count,
     deletedRugCheckCache: deletedRugCheckCache.count,
     deletedNarratives: deletedNarratives.count,
+    strippedNarrativeDocs,
   };
   logger.info("cleanup job complete", { durationMs: Date.now() - startedAt, ...counts });
   return counts;
