@@ -10,6 +10,19 @@ import {
 const logger = createLogger("mint-authority");
 
 /**
+ * Mints whose lookup failed, and when they may be tried again. A failed answer is never cached
+ * (below), and without this a mint whose RPC read errors was re-queried every cycle for as long
+ * as it stayed in band - the same backoff the Mayhem and wallet lookups keep.
+ */
+const FAILURE_BACKOFF_MINUTES = 20;
+const failureBackoffUntil = new Map<string, number>();
+
+/** Test hook: forget every recorded failure so the next call retries immediately. */
+export function resetMintAuthorityFailureBackoff(): void {
+  failureBackoffUntil.clear();
+}
+
+/**
  * Resolves mint/freeze authority for mints RugCheck has no report for, in one batched, cached
  * pass - the fallback path that used to fire a separate un-batched RPC call from inside the
  * per-candidate loop.
@@ -54,9 +67,26 @@ export async function resolveMintAuthorities(
     });
   }
 
+  const now = Date.now();
+  for (const [mint, until] of failureBackoffUntil) {
+    if (until <= now) failureBackoffUntil.delete(mint);
+  }
+  let backedOff = 0;
+  for (const mint of unique) {
+    if (!result.has(mint) && (failureBackoffUntil.get(mint) ?? 0) > now) {
+      result.set(mint, { status: "failed" });
+      backedOff += 1;
+    }
+  }
+
   const uncached = unique.filter((mint) => !result.has(mint));
   if (uncached.length === 0) {
-    logger.info("resolved mint authorities", { requested: unique.length, cached: unique.length, fetched: 0 });
+    logger.info("resolved mint authorities", {
+      requested: unique.length,
+      cached: unique.length - backedOff,
+      backedOff,
+      fetched: 0,
+    });
     return result;
   }
 
@@ -74,6 +104,8 @@ export async function resolveMintAuthorities(
         mintAuthorityActive: outcome.mintAuthorityActive,
         freezeAuthorityActive: outcome.freezeAuthorityActive,
       });
+    } else {
+      failureBackoffUntil.set(mint, now + FAILURE_BACKOFF_MINUTES * 60_000);
     }
   }
 

@@ -70,9 +70,20 @@ export class DexScreenerClient {
      * long the whole lookup may take. Past it, the batches already answered are returned and no
      * more are started; mints are looked up in the order given, so put the important ones first.
      */
-    options: { timeoutMs?: number; retries?: number; deadlineMs?: number } = {},
+    options: {
+      timeoutMs?: number;
+      retries?: number;
+      deadlineMs?: number;
+      /**
+       * When supplied, records the moment each returned mint's batch answered. A lookup of many
+       * batches (the outcome watcher's, up to 2000 rows) spans seconds, more with retries: a
+       * caller timing price moves against a window reads the time its price was seen from here
+       * rather than stamping the whole lookup at its start or end.
+       */
+      seenAt?: Map<string, Date>;
+    } = {},
   ): Promise<CandidateToken[]> {
-    const { deadlineMs, ...fetchOptions } = options;
+    const { deadlineMs, seenAt, ...fetchOptions } = options;
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
 
@@ -99,7 +110,10 @@ export class DexScreenerClient {
           `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
           fetchOptions,
         );
-        results.push(...this.selectCanonicalPairs(pairs ?? [], new Set(chunk)));
+        const answered = new Date();
+        const tokens = this.selectCanonicalPairs(pairs ?? [], new Set(chunk));
+        if (seenAt) for (const t of tokens) seenAt.set(t.mintAddress, answered);
+        results.push(...tokens);
       } catch (err) {
         logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
       }

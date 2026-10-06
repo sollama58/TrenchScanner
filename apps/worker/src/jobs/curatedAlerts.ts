@@ -1,5 +1,6 @@
 import {
   prisma,
+  forEachWithConcurrency,
   createLogger,
   evaluateCandidateHeuristic,
   inMcapBand,
@@ -41,6 +42,9 @@ import {
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
 import { aiGateQualified, aiReviewEnabled, reviewPick, type AiReviewResult } from "../ai/reviewer.js";
 import { blendVetoes, usableAiBlend } from "../ai/blend.js";
+
+/** Gate-mode AI reviews in flight at once per ledger pass. */
+const GATE_REVIEW_CONCURRENCY = 3;
 
 const logger = createLogger("curated-alerts");
 
@@ -599,14 +603,19 @@ async function emitForModel(
     if (!picked.has(contender)) deferContender(contender, model, env, clock.now);
   }
 
-  // Gate mode asks before sending (in parallel - the governor allows at most a burst's worth
-  // per cycle). A failed review fails OPEN: an outage at the reviewer must not silence a feed
-  // the curator already vouched for, and the error is recorded against the pick. So does a pick
-  // the reviewer isn't pointed at or the day's AI budget can't pay for (reviewPick's null): it
-  // goes out unreviewed. Picks come best first, so the budget goes to the strongest of them.
-  const gateReviews: (AiReviewResult | null)[] = gating
-    ? await Promise.all(picks.map((p) => reviewPick(p.scored, p.decision, env, { gate: true })))
-    : picks.map(() => null);
+  // Gate mode asks before sending, a few at a time: with no pace on the pass (the default since
+  // #143) a busy cycle can hold dozens of picks, and every review in flight at once reserved
+  // against the same unspent budget and hit the API's rate limit together. A failed review
+  // fails OPEN: an outage at the reviewer must not silence a feed the curator already vouched
+  // for, and the error is recorded against the pick. So does a pick the reviewer isn't pointed
+  // at or the day's AI budget can't pay for (reviewPick's null): it goes out unreviewed. Picks
+  // come best first, so the budget goes to the strongest of them.
+  const gateReviews: (AiReviewResult | null)[] = picks.map(() => null);
+  if (gating) {
+    await forEachWithConcurrency([...picks.entries()], GATE_REVIEW_CONCURRENCY, async ([i, p]) => {
+      gateReviews[i] = await reviewPick(p.scored, p.decision, env, { gate: true });
+    });
+  }
 
   let emitted = 0;
   for (const [i, pick] of picks.entries()) {

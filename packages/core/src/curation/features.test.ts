@@ -79,6 +79,31 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(
       buildCandidateFeatures(scored({ volume5mUsd: 5_000, volume1hUsd: 5_000 })).volumeAccel,
     ).toBeCloseTo(12);
+    // The windows are per pair: an hour-old token whose canonical pair is a three-minute-old
+    // PumpSwap pool (just graduated) has every pool trade in both windows, so unknown again.
+    const now = new Date("2026-10-05T12:00:00Z");
+    expect(
+      buildCandidateFeatures(
+        scored({
+          volume5mUsd: 5_000,
+          volume1hUsd: 5_000,
+          ageMinutes: 60,
+          pairCreatedAt: new Date(now.getTime() - 3 * 60_000),
+        }),
+        now,
+      ).volumeAccel,
+    ).toBeNull();
+    expect(
+      buildCandidateFeatures(
+        scored({
+          volume5mUsd: 5_000,
+          volume1hUsd: 30_000,
+          ageMinutes: 60,
+          pairCreatedAt: new Date(now.getTime() - 6 * 60_000),
+        }),
+        now,
+      ).volumeAccel,
+    ).toBeCloseTo(2);
   });
 
   it("records every declared feature name, unknowns as null", () => {
