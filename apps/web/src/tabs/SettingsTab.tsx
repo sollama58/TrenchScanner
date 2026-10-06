@@ -8,11 +8,13 @@ import {
   requestNotifications,
   sendTestAlert,
   saveAlertPrefs,
+  loadSettings,
   useSettings,
   type NotificationState,
 } from "../alerts";
 import { saveFeedSettings } from "../components/ModelPicker";
 import { Skeleton } from "../components/Charts";
+import { BurnPanel } from "../components/BurnPanel";
 import { ArrowRightIcon, BellIcon, BrainIcon, ShieldIcon, VolumeIcon } from "../components/Icons";
 import { usePolling, useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
@@ -406,11 +408,6 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
           </span>
           <h2>Your access</h2>
         </div>
-        {(access?.level === "subscription" || access?.level === "none") && (
-          <a className="button" href="https://holdex.live/trenches/" target="_blank" rel="noreferrer">
-            {access.level === "subscription" ? "Extend on HolDEX" : "Subscribe on HolDEX"}
-          </a>
-        )}
       </header>
       {!account || !access ? (
         <Skeleton lines={3} />
@@ -469,6 +466,12 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
             <dd className="num">{date(account.memberSince)}</dd>
           </div>
         </dl>
+      )}
+      {account && (access?.level === "subscription" || access?.level === "none") && (
+        <div className="burn-section">
+          <h3>{access.level === "subscription" ? "Extend your access" : "Subscribe"}</h3>
+          <BurnPanel walletAddress={account.walletAddress} onCredited={() => void loadSettings(true)} />
+        </div>
       )}
     </section>
   );

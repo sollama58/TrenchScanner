@@ -175,4 +175,30 @@ describe.skipIf(!dbAvailable)("subscription routes", () => {
     expect(res.json().error).not.toMatch(/not burned/);
     expect(res.json().signature).toBe(tx.signature);
   });
+
+  it("offers only the SPL Token accounts a burn can come from, largest first", async () => {
+    const me = await signIn("balance");
+    vi.spyOn(SolanaRpc.prototype, "getTokenAccountsByOwner").mockResolvedValue([
+      { address: "small", programId: SPL_TOKEN_PROGRAM_ID, rawAmount: "5", state: "initialized" },
+      { address: "big", programId: SPL_TOKEN_PROGRAM_ID, rawAmount: "70000000000", state: "initialized" },
+      { address: "frozen", programId: SPL_TOKEN_PROGRAM_ID, rawAmount: "90000000000", state: "frozen" },
+      {
+        address: "t22",
+        programId: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        rawAmount: "1",
+        state: "initialized",
+      },
+    ]);
+    const res = await app.inject({ method: "GET", url: "/subscription/balance", cookies: me.cookies });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().accounts.map((a: { address: string }) => a.address)).toEqual(["big", "small"]);
+    expect(res.json().totalRaw).toBe("160000000006");
+  });
+
+  it("says so when the balance can't be read", async () => {
+    const me = await signIn("balance-down");
+    vi.spyOn(SolanaRpc.prototype, "getTokenAccountsByOwner").mockResolvedValue(null);
+    const res = await app.inject({ method: "GET", url: "/subscription/balance", cookies: me.cookies });
+    expect(res.statusCode).toBe(503);
+  });
 });

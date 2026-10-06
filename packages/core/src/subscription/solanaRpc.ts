@@ -59,6 +59,25 @@ interface RpcEnvelope<T> {
   error?: { code: number; message: string };
 }
 
+/** One token account as getTokenAccountsByOwner reports it - only the fields the burn needs. */
+export interface TokenAccountBalance {
+  address: string;
+  /** The program that owns the account: SPL Token or Token-2022. */
+  programId: string | null;
+  /** Balance in base units, as the decimal string the RPC sends (a u64 - never a float). */
+  rawAmount: string;
+  /** "initialized" or "frozen". */
+  state: string | null;
+}
+
+interface RawTokenAccount {
+  pubkey?: unknown;
+  account?: {
+    owner?: unknown;
+    data?: { parsed?: { info?: { state?: unknown; tokenAmount?: { amount?: unknown } } } };
+  };
+}
+
 export interface SolanaRpcOptions {
   apiKey?: string;
   rpcUrl?: string;
@@ -330,6 +349,37 @@ export class SolanaRpc {
       [{ commitment: "confirmed" }],
     );
     return result?.value ?? null;
+  }
+
+  /**
+   * The wallet's token accounts for one mint, with their balances, at `confirmed`.
+   *
+   * For the in-app burn: the dashboard builds the burn itself and needs the account to burn from
+   * and how much it holds, and it carries no RPC client of its own. Confirmed, not finalized - this
+   * only sizes a transaction the wallet is about to sign, and a balance seconds stale is fine,
+   * since the chain refuses a burn larger than the account. Null when the RPC failed (an empty list
+   * means the wallet genuinely holds none).
+   */
+  async getTokenAccountsByOwner(owner: string, mint: string): Promise<TokenAccountBalance[] | null> {
+    const result = await this.call<{ value?: RawTokenAccount[] }>("getTokenAccountsByOwner", [
+      owner,
+      { mint },
+      { encoding: "jsonParsed", commitment: "confirmed" },
+    ]);
+    if (!result || !Array.isArray(result.value)) return null;
+    const out: TokenAccountBalance[] = [];
+    for (const entry of result.value) {
+      const info = entry.account?.data?.parsed?.info;
+      const raw = info?.tokenAmount?.amount;
+      if (typeof entry.pubkey !== "string" || typeof raw !== "string" || !/^\d+$/.test(raw)) continue;
+      out.push({
+        address: entry.pubkey,
+        programId: typeof entry.account?.owner === "string" ? entry.account.owner : null,
+        rawAmount: raw,
+        state: typeof info?.state === "string" ? info.state : null,
+      });
+    }
+    return out;
   }
 
   /**
