@@ -1060,8 +1060,12 @@ img.avatar {
 .fig .delta {
   font-size: 11.5px;
 }
-.fig.peak.hot > .num {
+.fig.peak.hot > span.num {
   color: var(--good-ink);
+}
+.fig .ath {
+  font-size: 11.5px;
+  color: var(--ink-2);
 }
 .fig .verdict {
   font-size: 11.5px;
@@ -2338,6 +2342,9 @@ button.small-btn {
   color: var(--series-1);
   border-color: color-mix(in srgb, var(--series-1) 40%, transparent);
   background: color-mix(in srgb, var(--series-1) 12%, transparent);
+}
+.pill-icon {
+  padding: 3px 6px;
 }
 .card.src-mine {
   border-left: 3px solid color-mix(in srgb, var(--series-1) 70%, transparent);

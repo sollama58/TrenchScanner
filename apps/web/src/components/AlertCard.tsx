@@ -16,13 +16,11 @@ const LINKS = [
 export function AlertCard({
   card,
   now,
-  showFilter = false,
   compact = false,
   labelSource = false,
 }: {
   card: Card;
   now: number;
-  showFilter?: boolean;
   compact?: boolean;
   /** Label every card with where it came from (your filter, or which models) - the combined feed. */
   labelSource?: boolean;
@@ -48,6 +46,10 @@ export function AlertCard({
   const ai = curated?.aiReview;
   const mint = card.token.mintAddress;
   const hasPeak = peak !== null && peak !== undefined && peak > 0;
+  // The highest market cap since the alert: the alert mcap at the Peak multiple.
+  const athMcap = hasPeak && alertMcap > 0 ? alertMcap * (1 + peak / 100) : null;
+  // Still grading with nothing to say yet: no label until a result is in.
+  const showVerdict = outcome !== null && !(outcome.status === "watching" && !outcome.hit2x);
   // When the recorded run peak came - only while "Now" hasn't overtaken it.
   const runPeakAfter =
     !nowCounts || (recordedPeak ?? 0) >= (move ?? 0) ? (curated?.outcome.runPeakMinutes ?? null) : null;
@@ -88,9 +90,12 @@ export function AlertCard({
           </div>
           <div className="meta-row">
             {labelSource && card.kind === "match" && (
-              <span className="pill pill-mine" title="Caught by your own filter">
+              <span
+                className="pill pill-mine pill-icon"
+                title="Caught by your own filter"
+                aria-label="Your alert"
+              >
                 <SlidersIcon size={12} />
-                <span className="pill-text">Your alert{card.filter ? ` · ${card.filter.name}` : ""}</span>
               </span>
             )}
             {curated && (
@@ -124,9 +129,6 @@ export function AlertCard({
                 <span className="pill-text">≈{calibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
               </span>
             )}
-            {showFilter && !labelSource && card.kind === "match" && card.filter && (
-              <span className="pill">{card.filter.name}</span>
-            )}
             <span className="when">{ago(card.matchedAt, now)}</span>
           </div>
         </div>
@@ -158,7 +160,12 @@ export function AlertCard({
           >
             {hasPeak ? multiple(peak) : "–"}
           </span>
-          <small className={`verdict ${badge.tone}`}>{badge.text}</small>
+          {athMcap !== null && (
+            <small className="num ath" title="Highest market cap since the alert">
+              ATH {usd(athMcap)}
+            </small>
+          )}
+          {showVerdict && <small className={`verdict ${badge.tone}`}>{badge.text}</small>}
         </div>
       </div>
 
