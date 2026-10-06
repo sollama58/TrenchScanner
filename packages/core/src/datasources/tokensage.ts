@@ -25,42 +25,121 @@ export interface TokenSageFlag {
   detail?: string;
 }
 
+/** One X account the analysis names (post author, quoted or replied-to author). */
+export interface TokenSageXAccount {
+  role?: string;
+  handle?: string | null;
+  name?: string | null;
+  followers?: number | null;
+  verified_type?: string | null;
+}
+
+/** How well the linked post or profile matches the token (rules 0.6.0+, full depth only). */
+export interface TokenSageXMatch {
+  name?: { score?: number; how?: string; detail?: string } | null;
+  ticker?: { score?: number; how?: string; detail?: string } | null;
+  image?: { score?: number; best_distance?: number | null; media_checked?: number; detail?: string } | null;
+  referent?: {
+    x_label?: string | null;
+    x_kind?: string | null;
+    agrees?: boolean | null;
+    confidence?: number;
+  } | null;
+  x_categories?: TokenSageCategory[];
+  fit?: number;
+  /** "about_this_coin" | "related" | "unrelated" | "unknown"; kept open for new values. */
+  verdict?: string;
+}
+
+/**
+ * One Analysis document (schema_version "1"). Typed from TokenSage's openapi.v1.json and checked
+ * against real responses (fixtures/tokensage/). Every field is optional and may be null: a
+ * partial answer (mint not yet on-chain, analysed from our hints) has no market data, a basic
+ * answer has `x.status: "not_fetched"` and `x.match: null`, and new fields can appear at any
+ * time. `market.creator` is here for completeness only: creator history is not a model input.
+ */
 export interface TokenSageAnalysis {
   schema_version?: string;
-  mint: string;
-  referent?: { label: string; kind?: string; desc?: string | null; confidence?: number } | null;
+  mint?: string;
+  created_at?: string | null;
+  launchpad?: string;
+  market?: {
+    complete?: boolean | null;
+    curve_progress?: number | null;
+    graduated_pool?: string | null;
+    creator?: string | null;
+    is_mayhem_mode?: boolean | null;
+    quote_mint?: string | null;
+    pair?: {
+      symbol?: string | null;
+      name?: string | null;
+      kind?: string | null;
+      builds_on?: boolean | null;
+      categories?: TokenSageCategory[];
+    } | null;
+  } | null;
+  raw?: {
+    name?: string | null;
+    symbol?: string | null;
+    description?: string | null;
+    image_url?: string | null;
+    twitter?: string | null;
+    telegram?: string | null;
+    website?: string | null;
+  } | null;
+  referent?: {
+    label?: string;
+    kind?: string;
+    desc?: string | null;
+    source?: string | null;
+    confidence?: number;
+  } | null;
   categories?: TokenSageCategory[];
   ticker_explanation?: string | null;
   copy_of?: { ticker?: string | null; name?: string | null; mint?: string | null; signals?: string[] }[];
-  x?: {
-    relation?: string | null;
+  image?: {
     status?: string;
+    phash?: string | null;
+    ocr?: string[];
+    near_duplicates?: unknown[];
+    animated?: boolean | null;
+  } | null;
+  x?: {
+    ref?: {
+      kind?: string;
+      tweet_id?: string | null;
+      community_id?: string | null;
+      url_handle?: string | null;
+    } | null;
+    object_time?: string | null;
+    relation?: string | null;
+    /** "ok" | "not_fetched" | ...; anything but "ok" means the post was not read. */
+    status?: string;
+    text?: string | null;
     predates_token_by_s?: number | null;
     reuse_count?: number;
-    author?: { handle?: string | null; followers?: number | null; verified_type?: string | null } | null;
-    /** How well the linked post or profile matches the token (rules 0.6.0+, full depth only). */
-    match?: {
-      name?: { score: number; how?: string };
-      ticker?: { score: number; how?: string };
-      image?: { score: number; best_distance?: number | null; media_checked?: number };
-      referent?: {
-        x_label?: string | null;
-        x_kind?: string | null;
-        agrees?: boolean | null;
-        confidence?: number;
-      };
-      x_categories?: TokenSageCategory[];
-      fit?: number;
-      verdict?: "about_this_coin" | "related" | "unrelated" | "unknown";
-    } | null;
+    author?: (TokenSageXAccount & { user_id?: string | null; joined?: string | null }) | null;
+    quoted?: unknown;
+    replied_to?: unknown;
+    accounts?: TokenSageXAccount[];
+    match?: TokenSageXMatch | null;
   } | null;
-  trend?: { matched?: boolean; terms?: { term: string; spike?: number | null; source: string }[] };
+  trend?: { matched?: boolean; terms?: { term: string; spike?: number | null; source: string }[] } | null;
   flags?: TokenSageFlag[];
   summary?: string;
+  evidence?: {
+    kind?: string;
+    label?: string;
+    weight?: number;
+    detail?: string;
+    source?: string;
+    url?: string | null;
+    where?: string | null;
+  }[];
   caveats?: string[];
-  depth: TokenSageDepth;
-  analyzed_at: string;
-  versions?: { rules?: string; lexicon?: string };
+  depth?: TokenSageDepth;
+  analyzed_at?: string;
+  versions?: { rules?: string; lexicon?: string; known_coins?: string } | null;
 }
 
 export type TokenSageItemStatus = "complete" | "partial" | "pending" | "failed" | "invalid";
@@ -91,6 +170,13 @@ export interface TokenSageHints {
   created_at?: string;
 }
 
+export interface TokenSageJob {
+  job_id: number;
+  status: "pending" | "running" | "done" | "failed";
+  /** On a failed job: "<code>: <detail>", e.g. "token_not_found: no account found on-chain". */
+  error?: string | null;
+}
+
 export interface TokenSageBatchResult {
   items: TokenSageBatchItem[];
   /** X-Quota-Full-Remaining: full-depth analyses this key may still start today. Null if absent. */
@@ -115,7 +201,12 @@ export class TokenSageClient {
   private readonly timeoutMs: number;
 
   constructor(options: TokenSageClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    // A bare host ("tokensage-api.onrender.com") would be fetched as a relative URL and fail; an
+    // http:// one redirects to https, and a redirected POST loses its body and auth header.
+    const trimmed = options.baseUrl.trim().replace(/\/+$/, "");
+    this.baseUrl = /^https?:\/\//i.test(trimmed)
+      ? trimmed.replace(/^http:\/\/(?!localhost|127\.0\.0\.1)/i, "https://")
+      : `https://${trimmed}`;
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs ?? 8000;
   }
@@ -147,6 +238,18 @@ export class TokenSageClient {
       },
     });
     return { items: Array.isArray(body.items) ? body.items : [], fullRemaining };
+  }
+
+  /**
+   * One job's state. Used only when a re-sent mint comes back under a new job id: the old job
+   * ended without an analysis, and its error says whether asking again can help.
+   */
+  async job(jobId: number): Promise<TokenSageJob> {
+    return fetchJson<TokenSageJob>(`${this.baseUrl}/v1/jobs/${encodeURIComponent(String(jobId))}`, {
+      headers: this.headers(),
+      timeoutMs: this.timeoutMs,
+      retries: 0,
+    });
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -192,42 +295,96 @@ export interface TokenNarrativeFields {
   analyzedAt: Date | null;
 }
 
-function clip(text: string | null | undefined): string | null {
+/** Postgres text and jsonb reject NUL characters, and launcher text can carry them. */
+// eslint-disable-next-line no-control-regex
+const NUL = /\u0000/g;
+
+function clip(text: unknown): string | null {
   if (typeof text !== "string") return null;
-  const trimmed = text.trim();
+  const trimmed = text.replace(NUL, "").trim();
   return trimmed === "" ? null : trimmed.slice(0, MAX_TEXT);
 }
 
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function unit(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : null;
+}
+
+/**
+ * Reads the parts of one Analysis document that a TokenNarrative row stores. Built to survive
+ * anything TokenSage might send: missing, null or wrongly typed fields fall back to empty, and
+ * unknown fields are ignored. Throws on nothing.
+ */
 export function narrativeFieldsFromAnalysis(
   analysis: TokenSageAnalysis,
   status: "complete" | "partial",
 ): TokenNarrativeFields {
-  const categories = (analysis.categories ?? [])
-    .filter((c) => typeof c?.label === "string" && Number.isFinite(c.confidence))
-    .map((c) => ({ label: c.label.slice(0, 80), confidence: Math.min(1, Math.max(0, c.confidence)) }))
-    .slice(0, 20);
+  const doc = asRecord(analysis) ?? {};
+  const categories: TokenSageCategory[] = [];
+  for (const raw of asArray(doc.categories)) {
+    const c = asRecord(raw);
+    const label = clip(c?.label);
+    const confidence = unit(c?.confidence);
+    if (label !== null && confidence !== null) categories.push({ label: label.slice(0, 80), confidence });
+    if (categories.length >= 20) break;
+  }
   const flags = [
-    ...new Set((analysis.flags ?? []).map((f) => f?.code).filter((c): c is string => typeof c === "string")),
-  ]
-    .map((c) => c.slice(0, 60))
-    .slice(0, 30);
-  const analyzedAt = analysis.analyzed_at ? new Date(analysis.analyzed_at) : null;
-  const match = analysis.x?.match;
-  const known = match?.verdict !== undefined && match.verdict !== "unknown";
-  const fit = known && typeof match?.fit === "number" && Number.isFinite(match.fit) ? match.fit : null;
+    ...new Set(
+      asArray(doc.flags)
+        .map((f) => clip(asRecord(f)?.code))
+        .filter((c): c is string => c !== null)
+        .map((c) => c.slice(0, 60)),
+    ),
+  ].slice(0, 30);
+  const analyzedAt = typeof doc.analyzed_at === "string" ? new Date(doc.analyzed_at) : null;
+  const referent = asRecord(doc.referent);
+  const match = asRecord(asRecord(doc.x)?.match);
+  const verdict = clip(match?.verdict);
+  const known = verdict !== null && verdict !== "unknown" ? verdict.slice(0, 40) : null;
   return {
-    depth: analysis.depth === "full" ? "full" : "basic",
+    depth: doc.depth === "full" ? "full" : "basic",
     status,
     categories,
-    referentLabel: clip(analysis.referent?.label),
-    referentKind: clip(analysis.referent?.kind),
-    summary: clip(analysis.summary),
+    referentLabel: clip(referent?.label),
+    referentKind: clip(referent?.kind),
+    summary: clip(doc.summary),
     flags,
-    xFit: fit === null ? null : Math.min(1, Math.max(0, fit)),
-    xVerdict: known ? clip(match?.verdict) : null,
-    rulesVersion: clip(analysis.versions?.rules),
+    xFit: known !== null ? unit(match?.fit) : null,
+    xVerdict: known,
+    rulesVersion: clip(asRecord(doc.versions)?.rules),
     analyzedAt: analyzedAt && !Number.isNaN(analyzedAt.getTime()) ? analyzedAt : null,
   };
+}
+
+/**
+ * The Analysis document as it is kept in TokenNarrative.analysis: NUL characters removed (jsonb
+ * rejects them) and anything that isn't plain JSON dropped. Null if it isn't an object.
+ */
+export function storableAnalysis(analysis: unknown): Record<string, unknown> | null {
+  const clean = (value: unknown, depth: number): unknown => {
+    if (typeof value === "string") return value.replace(NUL, "");
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    if (typeof value === "boolean" || value === null) return value;
+    if (depth > 20) return null;
+    if (Array.isArray(value)) return value.map((v) => clean(v, depth + 1));
+    const record = asRecord(value);
+    if (!record) return null;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(record)) {
+      if (v !== undefined) out[k.replace(NUL, "")] = clean(v, depth + 1);
+    }
+    return out;
+  };
+  return asRecord(analysis) ? (clean(analysis, 0) as Record<string, unknown>) : null;
 }
 
 const DEPTH_RANK: Record<string, number> = { basic: 0, full: 1 };

@@ -1440,9 +1440,9 @@ interface AiReport {
   budget: AiBudget;
   budgetDays: { day: string; costUsd: number; calls: number; refused: number; capUsd: number | null }[];
   tokensage?: {
-    enabled: boolean;
-    urlSet: boolean;
-    apiKeySet: boolean;
+    on: boolean;
+    lastCycleAt: string | null;
+    lastCycle: Record<string, number> | null;
     last24h: { depth: string; status: string; count: number }[];
   };
   config: {
@@ -1526,11 +1526,20 @@ function Ai() {
             <Panel
               title="TokenSage narratives"
               note={
-                a.tokensage.enabled && a.tokensage.urlSet && a.tokensage.apiKeySet
+                a.tokensage.on
                   ? "On. The scanner asks TokenSage what each in-band coin is about, and reads the X link and trends at its first decision."
-                  : `Off. Set TOKENSAGE_ENABLED=true, TOKENSAGE_API_URL and TOKENSAGE_API_KEY on the worker to turn it on${a.tokensage.urlSet ? "" : " (no URL set)"}${a.tokensage.apiKeySet ? "" : " (no key set)"}.`
+                  : "Off. Set TOKENSAGE_ENABLED=true, TOKENSAGE_API_URL and TOKENSAGE_API_KEY on the scanner worker to turn it on."
               }
             >
+              {a.tokensage.lastCycle && (
+                <p className="muted small">
+                  Last scan cycle: {n(a.tokensage.lastCycle.requested ?? 0)} asked,{" "}
+                  {n(a.tokensage.lastCycle.stored ?? 0)} stored, {n(a.tokensage.lastCycle.pending ?? 0)}{" "}
+                  waiting on TokenSage, {n(a.tokensage.lastCycle.errors ?? 0)} errors,{" "}
+                  {n(a.tokensage.lastCycle.turnedAway ?? 0)} turned away ·{" "}
+                  {n(a.tokensage.lastCycle.fullToday ?? 0)} deep reads today.
+                </p>
+              )}
               <Table
                 head={["Depth", "Result", "Stored in the last 24h"]}
                 rows={a.tokensage.last24h.map((g) => [g.depth, g.status, n(g.count)])}

@@ -1,5 +1,6 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
+import { readFileSync } from "node:fs";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, loadEnv, HttpError, type Env, type TokenSageClient } from "@trenchscanner/core";
 import {
@@ -14,7 +15,8 @@ const TAG = `ts-test-${Date.now()}`;
 
 function fakeClient() {
   const batch = vi.fn();
-  return { client: { batch } as unknown as TokenSageClient, batch };
+  const job = vi.fn();
+  return { client: { batch, job } as unknown as TokenSageClient, batch, job };
 }
 
 const ok = (items: unknown[], fullRemaining: number | null = null) => ({ items, fullRemaining });
@@ -200,5 +202,91 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     await flushNarrativeRequests(capped, client);
     const fullCalls = batch.mock.calls.filter((c) => c[1] === "full");
     expect(fullCalls.map(cas)).toEqual([[`${TAG}-h1`]]);
+  });
+
+  it("reads why a re-sent mint's job ended, and stops asking for a definitive failure", async () => {
+    const { client, batch, job } = fakeClient();
+    const k = `${TAG}-k`;
+    const m = `${TAG}-m`;
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: k, status: "pending", job_id: 11 },
+        { ca: m, status: "pending", job_id: 21 },
+      ]),
+    );
+    noteNarrativeWanted(k, "full", env);
+    noteNarrativeWanted(m, "full", env);
+    await flushNarrativeRequests(env, client);
+
+    // Re-sent: both come back under new jobs, so the old ones ended without an analysis.
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: k, status: "pending", job_id: 12 },
+        { ca: m, status: "pending", job_id: 22 },
+      ]),
+    );
+    job.mockImplementation(async (id: number) =>
+      id === 11
+        ? { job_id: 11, status: "failed", error: "not_pumpfun: no bonding curve" }
+        : { job_id: 21, status: "failed", error: "token_not_found: no account found on-chain" },
+    );
+    await flushNarrativeRequests(env, client);
+    expect(job.mock.calls.map((c) => c[0]).sort()).toEqual([11, 21]);
+    expect((await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: k } })).status).toBe(
+      "failed",
+    );
+    expect(await prisma.tokenNarrative.count({ where: { mintAddress: m } })).toBe(0);
+    expect(takeTokenSageStats()).toMatchObject({ pending: 0 });
+
+    // Neither is sent again: k is settled, m is cooling off.
+    noteNarrativeWanted(k, "full", env);
+    noteNarrativeWanted(m, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch).toHaveBeenCalledTimes(2);
+  });
+
+  it("stores a real TokenSage answer under the CA we asked about, and survives odd items", async () => {
+    const { client, batch } = fakeClient();
+    const real = JSON.parse(
+      readFileSync(
+        new URL("../../../../packages/core/src/datasources/fixtures/tokensage/full.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { analysis: Record<string, unknown> };
+    const n = `${TAG}-n`;
+    const p = `${TAG}-p`;
+    const q = `${TAG}-q`;
+    batch.mockResolvedValueOnce(
+      ok([
+        null,
+        // The document's own mint is TokenSage's; the row is keyed by our CA.
+        { ca: n, status: "complete", analysis: { ...real.analysis, summary: "nul\u0000here" } },
+        // Done but no document, and a status this version doesn't know: both cool off.
+        { ca: p, status: "complete", analysis: null },
+        { ca: q, status: "rejected" },
+      ]),
+    );
+    noteNarrativeWanted(n, "full", env);
+    noteNarrativeWanted(p, "full", env);
+    noteNarrativeWanted(q, "full", env);
+    await flushNarrativeRequests(env, client);
+    const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: n } });
+    expect(row).toMatchObject({
+      depth: "full",
+      status: "complete",
+      xFit: 0,
+      xVerdict: "unrelated",
+      referentLabel: "Peanut (squirrel)",
+      summary: "nulhere",
+    });
+    expect(row.flags).toContain("x_content_mismatch");
+    expect((row.analysis as { x: { match: { verdict: string } } }).x.match.verdict).toBe("unrelated");
+    expect(await prisma.tokenNarrative.count({ where: { mintAddress: { in: [p, q] } } })).toBe(0);
+    expect(takeTokenSageStats()).toMatchObject({ stored: 1, pending: 0, errors: 0 });
+
+    noteNarrativeWanted(p, "full", env);
+    noteNarrativeWanted(q, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch).toHaveBeenCalledTimes(1);
   });
 });
