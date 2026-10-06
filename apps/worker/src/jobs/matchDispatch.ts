@@ -50,9 +50,15 @@ type Db = Pick<typeof prisma, "$executeRaw" | "filterBaseline">;
 /** Records that these filters already matched this token when they were armed - see FilterBaseline. */
 async function recordBaselines(db: Db, tokenId: string, filterIds: string[]): Promise<void> {
   if (filterIds.length === 0) return;
+  // Joined to UserFilter so a filter deleted since the cycle loaded its list (inside its arming
+  // window, the only time it is here) is dropped rather than failing the insert's FK - which, from
+  // resolveAlertTargets, failed the whole candidate: every other user's alert on the token, its
+  // training sample and its curated contender, for that cycle.
   await db.$executeRaw`
     INSERT INTO "FilterBaseline" ("filterId", "tokenId", "createdAt")
-    SELECT f, ${tokenId}, now() FROM unnest(${filterIds}::text[]) AS f
+    SELECT u."id", ${tokenId}, now()
+    FROM unnest(${filterIds}::text[]) AS f(id)
+    JOIN "UserFilter" u ON u."id" = f.id
     ON CONFLICT ("filterId", "tokenId") DO UPDATE SET "createdAt" = EXCLUDED."createdAt"`;
 }
 

@@ -147,6 +147,28 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     expect(count).toBe(2);
   });
 
+  it("still alerts everyone else when a just-applied filter was deleted inside its quiet window", async () => {
+    const { token, snapshot } = await seedToken("deleted-while-arming");
+    const kept = await seedUserWithFilter("kept-arming");
+    const deleted = await seedUserWithFilter("deleted-arming", new Date());
+    // Loaded as settling in; deleted before the candidate was dispatched. The baseline insert
+    // used to hit the filter's FK and fail the whole candidate - every other user's alert with it.
+    await prisma.userFilter.delete({ where: { id: deleted.id } });
+
+    const count = await createMatchesForCandidate({
+      token,
+      snapshot,
+      scored: scoredFixture(token.mintAddress),
+      activeFilters: [kept, deleted],
+    });
+
+    expect(count).toBe(1);
+    expect((await prisma.match.findMany({ where: { tokenId: token.id } })).map((m) => m.filterId)).toEqual([
+      kept.id,
+    ]);
+    expect(await prisma.filterBaseline.count({ where: { tokenId: token.id } })).toBe(0);
+  });
+
   it("doesn't alert on what a just-applied filter already matches, then cools it down", async () => {
     // The token was on the watchlist before the filter was applied: backlog, not news.
     const { token, snapshot } = await seedToken("backlog");

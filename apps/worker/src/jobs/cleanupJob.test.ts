@@ -478,6 +478,9 @@ describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () =
           finalizedAt: graded === true ? new Date(Date.now() - ageDays * DAY) : null,
           finalized24hAt: graded === false ? null : new Date(Date.now() - ageDays * DAY),
           peak24hReturnPct: graded === true ? 300 : null,
+          hit2xIn1h: graded === true ? true : null,
+          hit4xIn1h: graded === true ? false : null,
+          disqualified: graded === true ? false : null,
         },
       });
     const oldGraded = await row("match", 10, true);
@@ -495,7 +498,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () =
         snapshotId: snapshot.id,
         score: 50,
         candidateOutcomeId: oldGraded.id,
-        hit2xIn1h: true,
+        // Its verdict copy never landed either: the sweep hands that over too.
       },
     });
     const recentGraded = await row("match", 3, true);
@@ -522,7 +525,10 @@ describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () =
     expect(left.has(oldGraded.id)).toBe(false);
     expect([recentGraded.id, oldUngraded.id, oldEvent.id, shared.id].every((id) => left.has(id))).toBe(true);
     expect((meta as { deletedMatchOutcomes: number }).deletedMatchOutcomes).toBe(1);
-    expect((await prisma.match.findUniqueOrThrow({ where: { id: alert.id } })).peak24hReturnPct).toBe(300);
+    const copied = await prisma.match.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(copied.peak24hReturnPct).toBe(300);
+    expect(copied.hit2xIn1h).toBe(true);
+    expect(copied.hit4xIn1h).toBe(false);
     await prisma.user.delete({ where: { id: user.id } });
   });
 });
