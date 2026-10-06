@@ -256,6 +256,11 @@ model Token {
   /// minutesSinceFirstInBand feature: a token that entered the band hours ago and is still
   /// there is a different bet from one arriving now.
   firstInBandAt   DateTime?
+  /// The newest top-10 empty-wallet and fresh-wallet shares any scan measured, kept here because
+  /// the wallet checks are rationed: a card whose alert snapshot and newest snapshot both lack a
+  /// reading still shows the last one known. Written only when it changes. Null = never measured.
+  lastEmptyTop10WalletPct Float?
+  lastFreshTop10WalletPct Float?
   /// Claude's read of the launcher-written text (name, symbol, description), scored once per mint
   /// by apps/worker/src/ai/textScorer.ts - a TextScores object (curation/textFeatures.ts). These
   /// become model features, so the learners decide how much the read is worth. Null until scored.

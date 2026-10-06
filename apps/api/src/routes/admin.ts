@@ -215,6 +215,8 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       pumpPortalTradeFlow: env.PUMPPORTAL_TRADE_FLOW,
       rugCheckMaxLookupsPerCycle: env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
       walletFreshnessMaxLookupsPerCycle: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
+      walletHoldingsSource: env.WALLET_HOLDINGS_SOURCE,
+      walletBalanceLookupsPerCycle: env.WALLET_BALANCE_LOOKUPS_PER_CYCLE,
       walletHoldingsMaxLookupsPerCycle: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
       walletHoldingsCacheTtlMinutes: env.WALLET_HOLDINGS_CACHE_TTL_MINUTES,
       snapshotUntrackedRetentionHours: env.SNAPSHOT_UNTRACKED_RETENTION_HOURS,

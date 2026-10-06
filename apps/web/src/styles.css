@@ -398,14 +398,16 @@ input[type="checkbox"] {
   border: 1px solid var(--border);
   border-radius: 12px;
 }
-.tabs button {
+.tabs button,
+.tabs .tab-link {
   background: transparent;
   border: 1px solid transparent;
   color: var(--ink-2);
   border-radius: 9px;
   padding: 7px 14px;
 }
-.tabs button:hover:not(:disabled) {
+.tabs button:hover:not(:disabled),
+.tabs .tab-link:hover:not(:disabled) {
   background: transparent;
   border-color: transparent;
   color: var(--ink);
@@ -2086,7 +2088,8 @@ legend {
     order: 3;
     width: 100%;
   }
-  .tabs button {
+  .tabs button,
+  .tabs .tab-link {
     flex: 1;
     justify-content: center;
   }
@@ -2121,7 +2124,8 @@ legend {
     order: 3;
     width: 100%;
   }
-  .tabs button {
+  .tabs button,
+  .tabs .tab-link {
     flex: 1;
     justify-content: center;
     padding: 7px 6px;
@@ -2905,7 +2909,8 @@ button.small-btn {
     border-top: 1px solid var(--border);
     background: var(--surface-solid);
   }
-  .tabs button {
+  .tabs button,
+  .tabs .tab-link {
     flex: 1 1 0;
     min-width: 0;
     flex-direction: column;
@@ -2914,7 +2919,8 @@ button.small-btn {
     font-size: 11px;
     border: none;
   }
-  .tabs button .icon {
+  .tabs button .icon,
+  .tabs .tab-link .icon {
     width: 20px;
     height: 20px;
   }
@@ -2923,7 +2929,8 @@ button.small-btn {
     box-shadow: none;
     color: var(--ink);
   }
-  .tabs button span {
+  .tabs button span,
+  .tabs .tab-link span {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;

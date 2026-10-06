@@ -55,16 +55,17 @@ export function AboutModal({
           every 30 seconds: market cap, liquidity, volume, holders, how much the top 10 wallets hold, RugCheck
           risk, and the live trade flow (who is buying, snipers, bundles, whether the dev sold). Before
           anything can alert, a token must pass the safety screen: mint and freeze authority renounced,
-          liquidity burned or locked, not a Mayhem Mode launch, and no more than 70% of its top 10 holders on
-          fresh wallets or on empty wallets. Tokens that fail are dropped before your filters or the models
-          see them.
+          liquidity burned or locked, not a Mayhem Mode launch, no more than 70% of its top 10 holders on
+          fresh wallets, and no more than 90% on empty wallets. Tokens that fail are dropped before your
+          filters or the models see them.
         </p>
         <p>
           Every scanned token gets all of the checks above. Two checks on its top 10 holders are rationed: how
           many are fresh wallets, and how many are empty (under $25 of other tokens). Each one is a paid
           lookup per wallet, so the scanner checks a limited number of wallets per scan, starting with the
-          tokens closest to alerting. The rest are checked as room allows. Until then a card shows &ldquo;Not
-          checked&rdquo;, which means the check hasn&apos;t run yet, not that the wallets are clean.
+          tokens closest to alerting, then tokens already alerted on. The rest are checked as room allows.
+          Until then a card shows &ldquo;Not checked&rdquo;, which means the check hasn&apos;t run yet, not
+          that the wallets are clean. Once a token has been checked, its card keeps the latest reading.
         </p>
 
         <h3>Two kinds of alert</h3>

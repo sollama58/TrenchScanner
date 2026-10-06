@@ -1,4 +1,5 @@
 import { prisma, createLogger, type Env, type HeliusClient } from "@trenchscanner/core";
+import { valueWalletsFromBalances, type ValuationDeps, type ValuationResult } from "./walletValuation.js";
 
 const logger = createLogger("wallet-holdings");
 
@@ -44,6 +45,26 @@ export interface WalletHoldingsOptions {
   lookupGroups?: number;
   /** Told how many lookups this call is about to send, before it sends them. */
   onLookups?: (count: number) => void;
+  /**
+   * Prices wallets from their token balances and DexScreener instead of DAS - see
+   * walletValuation.ts. Used whenever given and WALLET_HOLDINGS_SOURCE is "balances".
+   */
+  valuation?: Pick<ValuationDeps, "dexScreener">;
+}
+
+/** Which route prices uncached wallets this call: the cheap balances one, or DAS. */
+function holdingsSource(env: Env, opts: WalletHoldingsOptions): "balances" | "das" {
+  return opts.valuation && env.WALLET_HOLDINGS_SOURCE === "balances" ? "balances" : "das";
+}
+
+/**
+ * Uncached wallets priced per scan cycle on the configured route. The balances route costs about
+ * 2 credits a wallet against DAS's 10, so it carries its own, larger budget.
+ */
+export function holdingsLookupBudget(env: Env): number {
+  return env.WALLET_HOLDINGS_SOURCE === "balances"
+    ? env.WALLET_BALANCE_LOOKUPS_PER_CYCLE
+    : env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE;
 }
 
 /**
@@ -125,7 +146,10 @@ export async function resolveWalletHoldings(
   // Checked after the cache read, not before it - bailing first made every token's empty-wallet
   // share unknown for the whole stand-down, cached wallets included, and with
   // CURATED_REQUIRE_WALLET_CHECKS on that held up every curated decision for ten minutes.
-  const budget = helius.holdingsLookupAvailable ? (opts.maxNewLookups ?? Number.POSITIVE_INFINITY) : 0;
+  // The balances route is standard RPC plus DexScreener, so a DAS stand-down doesn't touch it.
+  const source = holdingsSource(env, opts);
+  const available = source === "balances" || helius.holdingsLookupAvailable;
+  const budget = available ? (opts.maxNewLookups ?? Number.POSITIVE_INFINITY) : 0;
   const toFetch: string[] = [];
   const queued = new Set<string>();
   let skippedGroups = 0;
@@ -159,7 +183,15 @@ export async function resolveWalletHoldings(
     return result;
   }
 
-  const fetched = await helius.getOtherHoldingsUsdBatch(toFetch, mintsOfInterest);
+  const fetched: Map<string, ValuationResult> =
+    source === "balances" && opts.valuation
+      ? await valueWalletsFromBalances(
+          toFetch,
+          mintsOfInterest,
+          { helius, dexScreener: opts.valuation.dexScreener },
+          env.WALLET_HOLDINGS_MIN_USD,
+        )
+      : await helius.getOtherHoldingsUsdBatch(toFetch, mintsOfInterest);
 
   // Only definitive answers are written. A failure is left uncached so a later cycle retries it,
   // and "unsupported" means the whole path is off - neither is a fact about the wallet.
@@ -171,6 +203,7 @@ export async function resolveWalletHoldings(
   }[] = [];
   let failedCount = 0;
   let unsupported = 0;
+  let deferred = 0;
   for (const address of toFetch) {
     const outcome = fetched.get(address) ?? { status: "failed" as const };
     if (outcome.status === "found") {
@@ -184,6 +217,9 @@ export async function resolveWalletHoldings(
       });
     } else if (outcome.status === "unsupported") {
       unsupported += 1;
+    } else if (outcome.status === "deferred") {
+      // Ran out of this call's pricing budget - not the wallet's fault, so no back-off.
+      deferred += 1;
     } else {
       failureBackoffUntil.set(address, now + FAILURE_BACKOFF_MINUTES * 60_000);
       failedCount += 1;
@@ -231,6 +267,8 @@ export async function resolveWalletHoldings(
     newlyCached: resolved.length,
     failedWillRetryLater: failedCount,
     unsupported,
+    deferred,
+    source,
     skippedGroups,
   });
 

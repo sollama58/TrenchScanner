@@ -69,11 +69,12 @@ export function AlertCard({
   // Measured at alert time when the wallet lookups made it in time; otherwise from a later scan.
   const freshAtAlert = s.freshTop10WalletPct ?? null;
   const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
-  const freshPct = freshAtAlert ?? freshLater;
+  const freshPct = freshAtAlert ?? freshLater ?? card.token.lastFreshTop10WalletPct ?? null;
   // The empty-wallet share, with the same fallback. Both wallet checks are paid lookups with a
   // per-scan budget, so a token can go unchecked; the tile says so rather than showing a blank.
   const emptyAtAlert = s.emptyTop10WalletPct ?? null;
-  const emptyPct = emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? null;
+  const emptyPct =
+    emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? card.token.lastEmptyTop10WalletPct ?? null;
   // The same fallback for the first-buyers count, read from the launch's first transactions.
   const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
   const firstHolding = buyersFrom?.firstBuyersHolding ?? null;

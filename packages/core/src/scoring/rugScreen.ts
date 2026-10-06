@@ -3,8 +3,13 @@ import type { OnChainProfile, RugScreenResult } from "../types.js";
 /** Above this share of the top-10 holders on wallets under a day old, a token is never alerted. */
 export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 
-/** Above this share of the top-10 holders on empty wallets (no other real holdings), a token is never alerted. */
-export const SAFETY_MAX_EMPTY_WALLET_PCT = 70;
+/**
+ * Above this share of the top-10 holders on empty wallets (no other real holdings), a token is never
+ * alerted. 90, not the fresh-wallet 70: the figure is a floor (unpriced holdings count as nothing),
+ * and on graded event rows tokens at 70-90% empty doubled as often as the rest and crashed little
+ * more; only past 90% did they turn into rugs (notes/safety-precheck-review-2026-10-06.md).
+ */
+export const SAFETY_MAX_EMPTY_WALLET_PCT = 90;
 
 /**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
