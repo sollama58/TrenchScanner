@@ -143,6 +143,16 @@ const envSchema = z.object({
   // (10 credits a lookup). Below 10 it could never complete a top-10 holder group whose wallets
   // are all uncached, since a group is all-or-nothing.
   WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(10),
+  // How uncached wallets are priced for the empty-wallet signal. "balances" (default): two 1-credit
+  // getTokenAccountsByOwner calls a wallet, priced off DexScreener (free) - see the worker's
+  // walletValuation.ts. "das": one 10-credit searchAssets a wallet, the original route, kept as a
+  // switch-back. Measured 2026-10-06: on DAS's 10-wallet budget only 6.5% of user filter alerts
+  // ever got an empty-wallet reading.
+  WALLET_HOLDINGS_SOURCE: z.enum(["balances", "das"]).default("balances"),
+  // Uncached wallets priced per scan cycle on the balances route (WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
+  // is the DAS route's). About 2 credits a wallet plus a little for mint decimals: 40 a cycle is
+  // ~80 credits, under the ~100 the 10-wallet DAS budget spent, for four times the wallets.
+  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(40),
   // The snipers figure (first 25 buyers still holding), read from the chain - see the worker's
   // launchSnipers.ts. Who the first buyers were costs one 10-credit getTransactionsForAddress per
   // token, read once and cached; this many new tokens are read per scan cycle, contenders first.

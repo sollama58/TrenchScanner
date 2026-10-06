@@ -93,6 +93,9 @@ export interface Token {
   name: string | null;
   imageUrl: string | null;
   graduated?: boolean | null;
+  /** The last measured top-10 wallet shares, from any scan - for when the snapshots lack one. */
+  lastEmptyTop10WalletPct?: number | null;
+  lastFreshTop10WalletPct?: number | null;
 }
 
 export interface Snapshot {

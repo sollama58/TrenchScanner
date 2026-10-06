@@ -14,6 +14,7 @@ import { createMatchesForTargets, resolveAlertTargets, type FilterWithUser } fro
 import { snapshotDataFor } from "./snapshotData.js";
 import { recentScanVerdicts, type VettedEntry } from "./vettedTokens.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
+import { noteAlertWallets } from "./walletPriority.js";
 
 const logger = createLogger("fast-match");
 
@@ -311,5 +312,7 @@ async function alertForToken(
     data: snapshotDataFor(token.id, scored, "fast"),
   });
   noteFreshMarketData([token.id]);
-  return createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, env });
+  const created = await createMatchesForTargets({ token: fullToken, snapshot, scored, toAlert, env });
+  noteAlertWallets(token.mintAddress, created > 0, scored.emptyTop10WalletPct !== undefined);
+  return created;
 }

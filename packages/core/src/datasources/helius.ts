@@ -1,6 +1,7 @@
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
+import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
 
@@ -182,7 +183,7 @@ const DAS_CONCURRENCY = 3;
  * holders of a fresh launch rarely hold more than a few dozen priced tokens; the cap keeps a
  * whale's portfolio from bloating its cache row, which then just falls back to per-launch entries.
  */
-const COMPLETE_BREAKDOWN_MAX = 100;
+export const COMPLETE_BREAKDOWN_MAX = 100;
 
 /** searchAssets page size. 1000 is the documented maximum; see getOtherHoldingsUsdBatch. */
 const DAS_PAGE_LIMIT = 1000;
@@ -308,6 +309,36 @@ function itemPriceUsd(item: DasFungibleItem): number | null {
     return Number.isFinite(value) && value > 0 ? value : null;
   }
   return null;
+}
+
+/** The two SPL token programs a holding can live under. */
+const TOKEN_PROGRAM_IDS = [
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+] as const;
+
+/** Wallets per getTokenAccountsByOwner POST - see getTokenBalancesBatch. */
+const BALANCE_WALLETS_PER_POST = 5;
+
+/** One wallet's token balances: raw amounts by mint, zeroes dropped. See getTokenBalancesBatch. */
+export type TokenBalancesResult = { status: "found"; balances: Map<string, bigint> } | { status: "failed" };
+
+/** One getTokenAccountsByOwner entry under a base64 dataSlice. */
+interface TokenAccountSlice {
+  account?: { data?: unknown };
+}
+
+/** `[base64, "base64"]` account data to bytes, or null for any other shape. */
+function decodeBase64Data(data: unknown): Buffer | null {
+  if (!Array.isArray(data) || typeof data[0] !== "string") return null;
+  return Buffer.from(data[0], "base64");
+}
+
+/** Mint and raw amount from a token account's first 72 bytes; null when the slice is short. */
+export function parseTokenAccountSlice(entry: TokenAccountSlice): { mint: string; amount: bigint } | null {
+  const bytes = decodeBase64Data(entry.account?.data);
+  if (!bytes || bytes.length < 72) return null;
+  return { mint: bs58.encode(bytes.subarray(0, 32)), amount: bytes.readBigUInt64LE(64) };
 }
 
 export class HeliusClient {
@@ -874,6 +905,88 @@ export class HeliusClient {
     }
 
     this.gtfaBarrenRounds = 0;
+    return out;
+  }
+
+  /**
+   * Every token a wallet holds, as raw amounts by mint - the cheap half of the empty-wallet check
+   * (see apps/worker/src/jobs/walletValuation.ts, which prices them).
+   *
+   * Two getTokenAccountsByOwner calls per wallet, one per token program (Pump.fun launches now
+   * mint under Token-2022, older tokens and most majors under the original program), each a
+   * 1-credit standard call: a fifth of one 10-credit searchAssets. dataSlice keeps only the
+   * account's first 72 bytes - the mint (0..32) and the amount (64..72), laid out the same in both
+   * programs - so a wallet with thousands of token accounts stays a small response, which was the
+   * reason this route was once passed over.
+   *
+   * Zero balances are dropped. A wallet is "failed" unless BOTH programs answered: half a list
+   * would read a real trader as empty.
+   */
+  async getTokenBalancesBatch(addresses: string[]): Promise<Map<string, TokenBalancesResult>> {
+    const unique = [...new Set(addresses)];
+    const out = new Map<string, TokenBalancesResult>();
+    if (unique.length === 0) return out;
+    const callsFor = (address: string): RpcCall[] =>
+      TOKEN_PROGRAM_IDS.map((programId, p) => ({
+        id: `tabo-${p}-${address}`,
+        method: "getTokenAccountsByOwner",
+        params: [
+          address,
+          { programId },
+          { encoding: "base64", commitment: "confirmed", dataSlice: { offset: 0, length: 72 } },
+        ],
+      }));
+    // A few wallets per POST rather than RPC_BATCH_SIZE calls: an active trader's list runs to
+    // thousands of accounts (~1MB measured for 2,800), so a full batch of them could be tens of
+    // megabytes in one response.
+    const chunks: string[][] = [];
+    for (let i = 0; i < unique.length; i += BALANCE_WALLETS_PER_POST) {
+      chunks.push(unique.slice(i, i + BALANCE_WALLETS_PER_POST));
+    }
+    const responses = new Map<string, RpcResponse<{ value?: TokenAccountSlice[] }>>();
+    await forEachWithConcurrency(chunks, BATCH_CONCURRENCY, async (chunk) => {
+      const result = await this.sendBatch<{ value?: TokenAccountSlice[] }>(chunk.flatMap(callsFor), 15_000);
+      for (const [id, res] of result) responses.set(id, res);
+    });
+    for (const address of unique) {
+      const balances = new Map<string, bigint>();
+      let ok = true;
+      for (let p = 0; p < TOKEN_PROGRAM_IDS.length && ok; p += 1) {
+        const res = responses.get(`tabo-${p}-${address}`);
+        const value = res?.result?.value;
+        if (!res || res.error || !Array.isArray(value)) {
+          ok = false;
+          break;
+        }
+        for (const entry of value) {
+          const parsed = parseTokenAccountSlice(entry);
+          if (!parsed || parsed.amount === 0n) continue;
+          balances.set(parsed.mint, (balances.get(parsed.mint) ?? 0n) + parsed.amount);
+        }
+      }
+      out.set(address, ok ? { status: "found", balances } : { status: "failed" });
+    }
+    return out;
+  }
+
+  /**
+   * Each mint's decimals, read from the mint account's one decimals byte (offset 44, the same in
+   * both token programs) - 1 credit per 100 mints. A mint missing from the result was not read
+   * (failed chunk, or no such account).
+   */
+  async getMintDecimals(mints: string[]): Promise<Map<string, number>> {
+    const unique = [...new Set(mints)];
+    const out = new Map<string, number>();
+    if (unique.length === 0) return out;
+    const accounts = await this.getMultipleAccounts<{ data?: unknown }>(unique, {
+      encoding: "base64",
+      dataSlice: { offset: 44, length: 1 },
+    });
+    for (const [mint, account] of accounts) {
+      if (account === "failed" || !account.value) continue;
+      const bytes = decodeBase64Data(account.value.data);
+      if (bytes && bytes.length >= 1) out.set(mint, bytes[0]!);
+    }
     return out;
   }
 
