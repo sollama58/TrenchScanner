@@ -75,6 +75,25 @@ describe("matchOutcome", () => {
     expect(matchOutcome(match(16), now)).toBeNull();
   });
 
+  it("prefers the API's graded outcome and ticks its countdown locally", () => {
+    const live = watching({ hit2x: true, minutesLeft: 9 });
+    expect(matchOutcome(match(5, { outcome: live }), now)).toMatchObject({
+      status: "watching",
+      hit2x: true,
+      minutesLeft: 10,
+    });
+    const won = watching({ status: "won", hit2x: true, hitGoal: false, finalized: false, minutesLeft: null });
+    expect(matchOutcome(match(20, { outcome: won }), now)).toBe(won);
+    // The API's unknown-and-final is a real ungraded alert; unknown-and-open means no row yet.
+    const ungraded = watching({ status: "unknown", finalized: true, minutesLeft: null });
+    expect(matchOutcome(match(40, { outcome: ungraded }), now)).toBe(ungraded);
+    const noRow = watching({ status: "unknown", finalized: false, minutesLeft: null });
+    expect(matchOutcome(match(1, { outcome: noRow }), now)).toMatchObject({
+      status: "watching",
+      minutesLeft: 14,
+    });
+  });
+
   it("reads the written verdict", () => {
     expect(matchOutcome(match(40, { hit2xIn1h: true, hit4xIn1h: true }), now)).toMatchObject({
       status: "won",
