@@ -64,11 +64,11 @@ const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 // set it) - but SameSite=None is a third-party cookie, which Safari blocks outright and Chrome is
 // progressively restricting. So None is what makes cross-site work at all, and also what makes it
 // fail in some browsers. The real fix is to stop being cross-site: serve this API from a subdomain
-// of the dashboard's domain (api.holdex.live), at which point Lax is correct and third-party
+// of the dashboard's domain (api.trenchscanner.app), at which point Lax is correct and third-party
 // cookie policy stops applying.
 //
 // Derived rather than configured so that switch needs no code change, no redeploy, and no flag
-// day. Pointing api.holdex.live at this service is enough: requests arriving on the old
+// day. Pointing api.trenchscanner.app at this service is enough: requests arriving on the old
 // onrender.com host keep getting None while requests on the new one get Lax, so both work
 // simultaneously and the cutover can happen at whatever pace DNS propagates.
 //

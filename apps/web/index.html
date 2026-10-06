@@ -26,6 +26,11 @@
         var api = "%VITE_API_URL%";
         if (api.charAt(0) === "%") api = "http://localhost:4000";
         api = api.replace(/\/$/, "");
+        // Same table as SAME_SITE_APIS in src/api.ts: a page on trenchscanner.app talks to the
+        // API on its own subdomain, so the session cookie is first-party.
+        var host = location.hostname.toLowerCase();
+        if (host === "trenchscanner.app" || /\.trenchscanner\.app$/.test(host))
+          api = "https://api.trenchscanner.app";
         var h = location.hash.replace("#", "");
         var paths = ["/auth/me", "/subscription", "/health/worker", "/settings"].concat(
           h === "model"
