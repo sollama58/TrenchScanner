@@ -397,6 +397,13 @@ const envSchema = z.object({
   CURATOR_EVOLUTION_MIN_EXAM_WINS: z.coerce.number().int().min(0).default(15),
   CURATOR_EVOLUTION_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.9),
   CURATOR_EVOLUTION_MIN_TAKEOVER_INTERVAL_HOURS: z.coerce.number().min(0).default(24),
+  // Probation (curation/probation.ts, user decision 2026-10-06): a challenger that wins a seat on
+  // the exam waits this many hours, then takes it only if it also beats the seat on the decision
+  // moments that arrived since - the only rows that had no say in picking it - with at least
+  // MIN_WINS wins there and CURATOR_EVOLUTION_CONFIDENCE in paired resamples. No breeding while
+  // one is pending (seats change hands at most once a day anyway). 0 = seat it straight away.
+  CURATOR_EVOLUTION_PROBATION_HOURS: z.coerce.number().min(0).max(72).default(18),
+  CURATOR_EVOLUTION_PROBATION_MIN_WINS: z.coerce.number().int().min(0).default(8),
   // The default model is the leaderboard's best performer, re-chosen after each training run
   // (curation/champion.ts). A model needs this many graded live calls (30-day window) before it
   // can hold the default, and a challenger must beat the sitting champion by MARGIN points.

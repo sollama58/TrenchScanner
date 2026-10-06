@@ -311,6 +311,55 @@ function narrowRecipe(recipe: CuratorRecipe, usable: ReadonlySet<string> | null)
   return { ...recipe, featureNames: kept };
 }
 
+/**
+ * The shipped model's probabilities over the reference rows, each scored by a model that never
+ * trained on that row's token. The shipped model trains on the whole window, reference rows
+ * included, so its own scores there are in-sample: a tree model has memorized those rows, and a
+ * rank cutoff translated on them lands on a different share of new tokens than the exam
+ * graded (2026-10-06: tree seats called 1.4-3.2x their exam's volume live, and read 2-5 points
+ * lower). Cross-fitted instead: the reference tokens split in two, the recipe trains twice on
+ * everything but one half's tokens and scores that half - the same scale as the shipped model
+ * (same recipe, ~98% the same rows), seen the way it sees a live token. Two extra fits per
+ * recipe; a half that can't be fitted (too few rows) keeps the in-sample scores.
+ */
+async function crossFittedProbabilities(
+  rows: TrainingRow[],
+  reference: TrainingRow[],
+  shipped: UnthresholdedCuratorParams,
+  train: (rows: TrainingRow[]) => Promise<UnthresholdedCuratorParams>,
+): Promise<Float64Array> {
+  const out = Float64Array.from(reference, (r) => scoreCandidateWithModel(shipped, r.features));
+  if (reference.length < 2) return out;
+  // Tokens alternate between halves in order of first appearance; a row with no token is its own.
+  const half = new Map<string, number>();
+  const rowHalf = reference.map((r, i) => {
+    if (r.tokenId === undefined) return i % 2;
+    let h = half.get(r.tokenId);
+    if (h === undefined) {
+      h = half.size % 2;
+      half.set(r.tokenId, h);
+    }
+    return h;
+  });
+  for (const h of [0, 1]) {
+    const held = new Set<TrainingRow>();
+    for (let i = 0; i < reference.length; i++) if (rowHalf[i] === h) held.add(reference[i]!);
+    if (held.size === 0) continue;
+    const trainRows = rows.filter(
+      (r) => !held.has(r) && (r.tokenId === undefined || half.get(r.tokenId) !== h),
+    );
+    if (trainRows.length < MIN_CROSS_FIT_ROWS) continue;
+    const model = await train(trainRows);
+    for (let i = 0; i < reference.length; i++) {
+      if (rowHalf[i] === h) out[i] = scoreCandidateWithModel(model, reference[i]!.features);
+    }
+  }
+  return out;
+}
+
+/** Fewer training rows than this and a cross-fit half keeps the shipped model's own scores. */
+const MIN_CROSS_FIT_ROWS = 300;
+
 async function examineRecipe(
   rows: TrainingRow[],
   cfg: Omit<CuratorTrainingConfig, "learners">,
@@ -352,7 +401,7 @@ async function examineRecipe(
   );
   // The deployable model trains on the FULL window - the folds were the exam, this is the model
   // that ships, with strictly more (and newer) data than any fold saw.
-  const trained = await trainCuratorModel(rows, {
+  const trainOpts = {
     recencyHalfLifeDays,
     learner: recipe.learner,
     featureNames: recipe.featureNames,
@@ -360,12 +409,15 @@ async function examineRecipe(
     twoStage: recipe.twoStage,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
-  });
-  // The shipped model over the reference rows, scored once: the cutoff, the high-conviction line
-  // and the calibration table all read these same probabilities (a boosted model's are hundreds
-  // of trees per row; three passes here were a visible share of a run with no data behind it).
-  const shippedProbabilities = Float64Array.from(evaluation.decisionReference, (r) =>
-    scoreCandidateWithModel(trained, r.features),
+  };
+  const trained = await trainCuratorModel(rows, trainOpts);
+  // The shipped model's scale on tokens it has never seen: the cutoff, the high-conviction line,
+  // the calibration table and the combiners' quantile tables all read these same probabilities.
+  const shippedProbabilities = await crossFittedProbabilities(
+    rows,
+    evaluation.decisionReference,
+    trained,
+    (train) => trainCuratorModel(train, trainOpts),
   );
   const translate = (rank: number) => probabilityAtRank(shippedProbabilities, rank);
   // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
@@ -557,7 +609,11 @@ interface LearnerExam {
   /** Out-of-sample fold probabilities and the shipped model's probabilities, per reference row. */
   foldRanks: Float64Array | null;
   shipped: Float64Array | null;
-  /** 1 where the fold rank clears the exam's own rank cutoff (what the exam called), per reference row. */
+  /**
+   * 1 where the exam sent this model's call, per reference row: its fold's own cutoff and the
+   * cooldown, the calls its exam record counts (WalkForwardResult.examCalls). Null when it sent
+   * none.
+   */
   calls: Uint8Array | null;
   /** That rank cutoff (null when the exam set none) - what the combiners count a call against. */
   callRank: number | null;
@@ -613,10 +669,7 @@ async function examineLearner(
     evaluation,
     foldRanks: aligned ? Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability) : null,
     shipped: aligned ? exam.shippedProbabilities : null,
-    calls:
-      aligned && rankCutoff !== null
-        ? Uint8Array.from(evaluation.outOfSampleRanks, (c) => (c.probability >= rankCutoff ? 1 : 0))
-        : null,
+    calls: aligned && evaluation.examCalls.some((c) => c === 1) ? evaluation.examCalls : null,
     callRank: rankCutoff,
   };
 }
@@ -646,6 +699,12 @@ export interface ExamEvidence {
  */
 export interface EvolutionPlan {
   challengers: readonly Challenger[];
+  /**
+   * When true, a takeover this run decides does not take the seat: it comes back as
+   * ContestRunOutcome.probation, to be confirmed on decision moments that arrive later
+   * (curation/probation.ts).
+   */
+  probation?: boolean;
   decide: (
     laneExamScores: Map<string, number | null>,
     challengerScores: (number | null)[],
@@ -659,6 +718,22 @@ export interface ContestRunOutcome {
   challengerScores: (number | null)[];
   /** The takeover this run made, if any. */
   replacement: (Replacement & { bred: Challenger; examScore: number | null }) | null;
+  /**
+   * With a probation plan: the takeover this run decided, held back. Both models are frozen as
+   * they stand now - the challenger's and the seat's - to be scored later on fresh rows.
+   */
+  probation: ProbationStart | null;
+  /** A takeover the rule decided that this run could not carry out, and why (for the run log). */
+  dropped: string | null;
+}
+
+export interface ProbationStart extends Replacement {
+  bred: Challenger;
+  examScore: number | null;
+  challengerParams: ContestantParams;
+  /** The seat's model from this same run, and the name it ran under. */
+  laneParams: ContestantParams;
+  laneName: string;
 }
 
 /**
@@ -746,6 +821,8 @@ export async function runEvolvingContest(
     }
   }
   let replacement: ContestRunOutcome["replacement"] = null;
+  let probation: ContestRunOutcome["probation"] = null;
+  let dropped: string | null = null;
   const decided =
     plan && challengerScores.length > 0
       ? plan.decide(laneExamScores, challengerScores, {
@@ -759,11 +836,31 @@ export async function runEvolvingContest(
           challengerExamWins,
         })
       : null;
-  if (decided && bestChallenger && decided.challenger === bestChallenger.index) {
+  if (decided && (!bestChallenger || decided.challenger !== bestChallenger.index)) {
+    // Only the best exam is kept between challengers (memory), so a rule that picks another one
+    // can't be carried out; say so rather than drop it silently.
+    dropped =
+      bestChallenger === null
+        ? `takeover of ${decided.slot} decided, but no challenger set a cutoff this run`
+        : `takeover of ${decided.slot} decided for challenger ${decided.challenger}, not the best exam (${bestChallenger.index})`;
+  } else if (decided && bestChallenger && plan?.probation) {
+    const seat = results.find((r) => r.contestant === decided.slot);
+    if (seat) {
+      probation = {
+        ...decided,
+        bred: plan.challengers[decided.challenger]!,
+        examScore: bestChallenger.exam.examScore,
+        challengerParams: bestChallenger.exam.result.params,
+        laneParams: seat.params,
+        laneName: seat.metrics.contestantName ?? decided.slot,
+      };
+    } else dropped = `takeover of ${decided.slot} decided, but that seat didn't train this run`;
+  } else if (decided && bestChallenger) {
     const { exam } = bestChallenger;
     const slot = decided.slot;
     const seat = results.findIndex((r) => r.contestant === slot);
-    if (seat !== -1) {
+    if (seat === -1) dropped = `takeover of ${slot} decided, but that seat didn't train this run`;
+    else {
       results[seat] = {
         contestant: slot,
         params: exam.result.params,
@@ -949,7 +1046,7 @@ export async function runEvolvingContest(
   // Roster order, so storage and logs read the same way the leaderboard lists them.
   const order = new Map(cfg.contestants.map((c, i) => [c.id, i]));
   results.sort((a, b) => order.get(a.contestant)! - order.get(b.contestant)!);
-  return { results, challengerScores, replacement };
+  return { results, challengerScores, replacement, probation, dropped };
 }
 
 /** The learners' exam evidence the Rules seat can learn from (see rulesSeatResult). */

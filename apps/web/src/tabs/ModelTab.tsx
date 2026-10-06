@@ -1257,8 +1257,12 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           {board.evolution.challengersPerRun === 1 ? "" : "s"}: copies of the top half's recipes with one or
           two settings changed (memory, depth, learning rate, which signals it reads), sometimes crossed with
           another leader. They sit the same exam. When the best one beats the weakest model's exam by{" "}
-          {board.evolution.margin} points, it takes that seat under a new name and starts a fresh live record.
-          A model holds its seat at least {board.evolution.minAgeHours} hours first.
+          {board.evolution.margin} points (by a wider bar the more challengers there are)
+          {board.evolution.probationHours
+            ? `, it waits ${board.evolution.probationHours} hours and must beat that model again on the calls that came in since. Then it takes`
+            : ", it takes"}{" "}
+          that seat under a new name and starts a fresh live record. A model holds its seat at least{" "}
+          {board.evolution.minAgeHours} hours first.
         </li>
         <li>
           <strong>Consensus.</strong> A second-order model trained on the others' out-of-sample calls: it
@@ -1296,6 +1300,13 @@ function EvolutionPanel({ board, now }: { board: Leaderboard; now: number }) {
                   ev.challengersPerRun === 1 ? "" : "s"
                 } sit the exam. At most one takes a seat per run.`}
           </p>
+          {ev.probation && (
+            <p className="muted small">
+              On probation: <strong>{ev.probation.name}</strong> beat {ev.probation.seatName} on the exam{" "}
+              {ago(ev.probation.startedAt, now)} and takes its seat only if it beats it again on the calls
+              since.
+            </p>
+          )}
         </div>
         {best && (
           <div className="evo-best">

@@ -34,6 +34,9 @@ import {
   RULES_MODEL_KIND,
   type DerivedRuleSet,
   type RulesCuratorParams,
+  judgeProbation,
+  type Challenger,
+  type TrainedCuratorParams,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 import { runContestOffThread } from "../training/runContest.js";
@@ -107,7 +110,13 @@ export async function runCuratorTrainingJob(
   });
   const contestants = withLanes(roster, lanes);
 
-  const plan = await evolutionPlan(env, lanes, targets, now);
+  // A takeover on probation is settled first: confirmed (its challenger takes the seat this
+  // run), rejected or abandoned (breeding resumes), or still waiting (no breeding this run).
+  const probation = await settleProbation(env, lanes, trainingRows, targets, now);
+  const plan =
+    probation.kind === "wait"
+      ? null
+      : await evolutionPlan(env, lanes, targets, now, probation.kind === "confirm" ? probation : undefined);
   // The Rules seat learns its checks from the best model (curation/rulesDistill.ts).
   const [rulesTeachers, currentRules] = env.CURATOR_RULES_FROM_BEST
     ? await Promise.all([rulesTeacherOrder(lanes, targets, now), loadCurrentRules()])
@@ -179,6 +188,34 @@ export async function runCuratorTrainingJob(
     return { stored: false, heldBack: "models were replaced while this run trained" };
   }
 
+  if (probation.kind === "confirm") {
+    await resolveProbation(
+      probation.id,
+      outcome.replacement ? "confirmed" : "rejected",
+      outcome.replacement
+        ? probation.verdict
+        : `passed probation but couldn't take the seat this run (${outcome.dropped ?? "no cutoff"}); ${probation.verdict}`,
+    );
+  }
+  if (outcome.probation) {
+    const p = outcome.probation;
+    await prisma.curatorProbation.create({
+      data: {
+        slot: p.slot,
+        name: p.bred.name,
+        description: p.bred.description,
+        recipe: p.bred.recipe as unknown as Prisma.InputJsonValue,
+        generation: p.bred.generation,
+        parentName: p.bred.parentName,
+        examScore: p.examScore,
+        reason: p.reason,
+        challengerParams: p.challengerParams as unknown as Prisma.InputJsonValue,
+        laneParams: p.laneParams as unknown as Prisma.InputJsonValue,
+        laneName: p.laneName,
+        startedAt: new Date(startedAt),
+      },
+    });
+  }
   if (plan) {
     logger.info("curator evolution", {
       challengers: plan.challengers.map((c, i) => ({
@@ -193,6 +230,15 @@ export async function runCuratorTrainingJob(
             reason: outcome.replacement.reason,
           }
         : null,
+      probation: outcome.probation
+        ? {
+            slot: outcome.probation.slot,
+            name: outcome.probation.bred.name,
+            reason: outcome.probation.reason,
+            judgedAfterHours: env.CURATOR_EVOLUTION_PROBATION_HOURS,
+          }
+        : null,
+      dropped: outcome.dropped,
     });
   }
   const rulesInUse = results.find((r) => r.contestant === RULES_CONTESTANT)?.metrics.rulesInUse;
@@ -414,6 +460,99 @@ function laneData(lane: Lane, examScore: number | null): Prisma.CuratorLaneCreat
   };
 }
 
+type ProbationState =
+  | { kind: "none" }
+  | { kind: "wait" }
+  | { kind: "confirm"; id: string; slot: string; challenger: Challenger; reason: string; verdict: string };
+
+/**
+ * Settles the pending takeover probation, if any (curation/probation.ts). Once it has run
+ * CURATOR_EVOLUTION_PROBATION_HOURS, the challenger and the seat - both frozen as they stood when
+ * it was picked - are scored once on the decision moments that arrived since: a pass seats the
+ * challenger this run, anything else retires the probation. Before then the run waits (no
+ * breeding: one takeover is already in hand). A seat that changed hands meanwhile (a restore), or
+ * probation turned off, abandons it.
+ */
+async function settleProbation(
+  env: Env,
+  lanes: Lane[],
+  rows: TrainingRow[],
+  targets: PrecisionTargets,
+  now: Date,
+): Promise<ProbationState> {
+  const pending = await prisma.curatorProbation.findFirst({
+    where: { resolvedAt: null },
+    orderBy: { startedAt: "desc" },
+  });
+  if (!pending) return { kind: "none" };
+  const lane = lanes.find((l) => l.slot === pending.slot);
+  if (env.CURATOR_EVOLUTION_PROBATION_HOURS === 0) {
+    await resolveProbation(pending.id, "abandoned", "probation was turned off");
+    return { kind: "none" };
+  }
+  if (!lane || lane.bornAt > pending.startedAt) {
+    await resolveProbation(pending.id, "abandoned", "the seat changed hands while it waited");
+    return { kind: "none" };
+  }
+  const waitedHours = (now.getTime() - pending.startedAt.getTime()) / 3_600_000;
+  if (waitedHours < env.CURATOR_EVOLUTION_PROBATION_HOURS) {
+    logger.info("takeover on probation - waiting for fresh calls", {
+      slot: pending.slot,
+      challenger: pending.name,
+      waitedHours: Math.round(waitedHours * 10) / 10,
+      judgedAfterHours: env.CURATOR_EVOLUTION_PROBATION_HOURS,
+    });
+    return { kind: "wait" };
+  }
+  const verdict = judgeProbation({
+    rows,
+    startedAt: pending.startedAt,
+    challenger: pending.challengerParams as unknown as TrainedCuratorParams,
+    lane: pending.laneParams as unknown as TrainedCuratorParams,
+    mcapBand: { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX },
+    cooldownMs: env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000,
+    targets,
+    minWins: env.CURATOR_EVOLUTION_PROBATION_MIN_WINS,
+    confidence: env.CURATOR_EVOLUTION_CONFIDENCE,
+    rng: seededRng(pending.startedAt.getTime() % 2_147_483_647),
+  });
+  logger.info(verdict.confirm ? "takeover probation passed" : "takeover probation failed", {
+    slot: pending.slot,
+    challenger: pending.name,
+    seat: pending.laneName,
+    reason: verdict.reason,
+  });
+  if (!verdict.confirm) {
+    await resolveProbation(pending.id, "rejected", verdict.reason);
+    return { kind: "none" };
+  }
+  return {
+    kind: "confirm",
+    id: pending.id,
+    slot: pending.slot,
+    challenger: {
+      recipe: pending.recipe as unknown as Challenger["recipe"],
+      name: pending.name,
+      description: pending.description,
+      generation: pending.generation,
+      parentName: pending.parentName ?? "",
+    },
+    reason: `${pending.reason}; then on probation, ${verdict.reason}`,
+    verdict: verdict.reason,
+  };
+}
+
+async function resolveProbation(
+  id: string,
+  outcome: "confirmed" | "rejected" | "abandoned",
+  reason: string,
+): Promise<void> {
+  await prisma.curatorProbation.update({
+    where: { id },
+    data: { resolvedAt: new Date(), outcome, resolvedReason: reason },
+  });
+}
+
 /**
  * This run's evolution: score every learner seat the way the leaderboard does (live calls since
  * its lane took the seat, blended with its last exam), breed challengers from the strongest, and
@@ -424,21 +563,33 @@ async function evolutionPlan(
   lanes: Lane[],
   targets: PrecisionTargets,
   now: Date,
+  confirm?: Extract<ProbationState, { kind: "confirm" }>,
 ): Promise<ContestPlan | null> {
-  if (env.CURATOR_EVOLUTION_CHALLENGERS === 0 || lanes.length === 0) return null;
-  const [fitness, top, lastTakeover] = await Promise.all([
+  if (lanes.length === 0) return null;
+  if (!confirm && env.CURATOR_EVOLUTION_CHALLENGERS === 0) return null;
+  const [fitness, top, topProbation, lastTakeover] = await Promise.all([
     laneFitness(lanes, targets, now),
     prisma.curatorLane.aggregate({ _max: { generation: true } }),
+    prisma.curatorProbation.aggregate({ _max: { generation: true } }),
     prisma.curatorLane.aggregate({ _max: { bornAt: true }, where: { generation: { gt: 0 } } }),
   ]);
   const seed = now.getTime() % 2_147_483_647;
-  const challengers = breedChallengers(fitness, env.CURATOR_EVOLUTION_CHALLENGERS, seededRng(seed), {
-    baseHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
-    nextGeneration: (top._max.generation ?? 0) + 1,
-  });
+  // A confirmed probation's challenger is the run's only one: it sits the exam to train the
+  // model it will ship with, and takes the seat (ContestPlan.confirm).
+  const challengers = confirm
+    ? [confirm.challenger]
+    : breedChallengers(fitness, env.CURATOR_EVOLUTION_CHALLENGERS, seededRng(seed), {
+        baseHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
+        nextGeneration: Math.max(top._max.generation ?? 0, topProbation._max.generation ?? 0) + 1,
+      });
   if (challengers.length === 0) return null;
   return {
     challengers,
+    ...(confirm
+      ? { confirm: { slot: confirm.slot, reason: confirm.reason } }
+      : env.CURATOR_EVOLUTION_PROBATION_HOURS > 0
+        ? { probation: true }
+        : {}),
     rule: {
       lanes: fitness,
       now,

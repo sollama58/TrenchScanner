@@ -872,6 +872,12 @@ export interface WalkForwardResult {
    * (the newest half of the history). thresholdAtRank scores these with the shipped model.
    */
   decisionReference: TrainingRow[];
+  /**
+   * 1 where the exam sent the model's call on that decisionReference row: its fold's
+   * leave-one-fold-out cutoff, then the cooldown (and the pace, when set) - exactly the calls the
+   * folds' model records count. What a paired comparison of two exams must resample.
+   */
+  examCalls: Uint8Array;
   /** Which decision moments the exam graded - see ExamPopulation. */
   population: ExamPopulation;
 }
@@ -1197,6 +1203,7 @@ export async function walkForwardEvaluate(
   // hit-rate cutoff is calibrated from, exactly as the model's is from outOfSampleRanks.
   const heuristicOutOfSample = scoredFolds.flatMap((f) => f.heuristic.map((h) => call(h.row, h.confidence)));
 
+  const sentByModel = new Set<TrainingRow>();
   const folds: EvalFold[] = scoredFolds.map((fold, f) => {
     // Both sides play the GOVERNED policy production actually runs (curation/governor.ts):
     // clear your cutoff, then only the strongest targetPerHour x span picks make the feed,
@@ -1236,6 +1243,8 @@ export async function walkForwardEvaluate(
     }
 
     const { test, testEmittable } = fold;
+    const modelSent = takeBest(modelCalls);
+    for (const row of modelSent) sentByModel.add(row);
     return {
       testFrom: test[0]!.anchorAt.toISOString(),
       testTo: test[test.length - 1]!.anchorAt.toISOString(),
@@ -1251,18 +1260,20 @@ export async function walkForwardEvaluate(
         testEmittable.length > 0
           ? testEmittable.reduce((s, r) => s + r.labelValue, 0) / testEmittable.length
           : 0,
-      model: sideMetrics(takeBest(modelCalls), fold.spanHours),
+      model: sideMetrics(modelSent, fold.spanHours),
       heuristic: sideMetrics(takeBest(heuristicCalls), fold.spanHours),
     };
   });
 
+  const decisionReference = scoredFolds.flatMap((f) => f.testEmittable);
   return {
     folds,
     verdict: decidePromotion(folds, rows.length, minRowsToPromote, opts.minEmissionsToWin),
     outOfSample,
     heuristicOutOfSample,
     outOfSampleRanks,
-    decisionReference: scoredFolds.flatMap((f) => f.testEmittable),
+    decisionReference,
+    examCalls: Uint8Array.from(decisionReference, (r) => (sentByModel.has(r) ? 1 : 0)),
     population,
   };
 }

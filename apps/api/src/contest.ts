@@ -325,6 +325,10 @@ export interface Leaderboard {
     minAgeHours: number;
     margin: number;
     runEveryHours: number;
+    /** Hours a winning challenger waits for fresh calls before it takes the seat (0 = none). */
+    probationHours: number;
+    /** The challenger waiting on probation, if any. */
+    probation: { slot: string; name: string; seatName: string; startedAt: Date } | null;
     /** Recent takeovers and founding seats, newest first. */
     history: EvolutionEvent[];
   };
@@ -353,7 +357,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
   const state = await contestState(env);
-  const [live, liveHigh, history] = await Promise.all([
+  const [live, liveHigh, history, probation] = await Promise.all([
     liveCallRecords(
       state.roster.map((c) => c.id),
       since,
@@ -379,6 +383,11 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
         retiredAt: true,
         retiredReason: true,
       },
+    }),
+    prisma.curatorProbation.findFirst({
+      where: { resolvedAt: null },
+      orderBy: { startedAt: "desc" },
+      select: { slot: true, name: true, laneName: true, startedAt: true },
     }),
   ]);
   const laneBySlot = new Map(state.lanes.map((l) => [l.slot, l]));
@@ -484,6 +493,15 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       minAgeHours: env.CURATOR_EVOLUTION_MIN_AGE_HOURS,
       margin: env.CURATOR_EVOLUTION_MARGIN,
       runEveryHours: env.CURATOR_TRAINING_INTERVAL_HOURS,
+      probationHours: env.CURATOR_EVOLUTION_PROBATION_HOURS,
+      probation: probation
+        ? {
+            slot: probation.slot,
+            name: probation.name,
+            seatName: probation.laneName,
+            startedAt: probation.startedAt,
+          }
+        : null,
       history,
     },
   };

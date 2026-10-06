@@ -105,3 +105,59 @@ describe("runEvolvingContest", () => {
     expect(consensus.members.map((m) => m.contestant).sort()).toEqual(["linear", "order-flow"]);
   }, 60_000);
 });
+
+describe("takeover probation and the exam's calls", () => {
+  const cfg = {
+    targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+    targetPerHour: 6,
+    heuristicMinScore: 55,
+    minRowsToPromote: 1500,
+    recencyHalfLifeDays: 14,
+    cooldownHours: 24,
+    heuristicPrecisionGate: true,
+    contestants: enabledContestants(["linear", "order-flow"]),
+  };
+  const bred = {
+    recipe: { learner: "gbdt" as const, recencyHalfLifeDays: 10, boosting: { maxDepth: 4 } },
+    name: "Trees #1",
+    description: "test",
+    generation: 1,
+    parentName: "Trees",
+  };
+
+  it("holds a decided takeover on probation, with both models frozen, and leaves the seat alone", async () => {
+    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 12 });
+    let callsSeen: { lane: Map<string, Uint8Array>; challenger: (Uint8Array | null)[] } | null = null;
+    const outcome = await runEvolvingContest(rows, cfg, {
+      challengers: [bred],
+      probation: true,
+      decide: (_lanes, challengerScores, exam) => {
+        callsSeen = { lane: exam.laneCalls, challenger: exam.challengerCalls };
+        return challengerScores[0] === null ? null : { slot: "order-flow", challenger: 0, reason: "test" };
+      },
+    });
+    expect(outcome.replacement).toBeNull();
+    expect(outcome.dropped).toBeNull();
+    expect(outcome.probation).toMatchObject({ slot: "order-flow", bred: { name: "Trees #1" } });
+    expect(outcome.probation!.challengerParams.kind).toBe("gbdt-v1");
+    expect(outcome.probation!.laneName).toBe("Order Flow");
+    // The seat keeps its own model this run.
+    const seat = outcome.results.find((r) => r.contestant === "order-flow")!;
+    expect(seat.metrics.contestantName).toBe("Order Flow");
+    // The bootstrap's masks are the calls the exam record counts: one call per mask entry.
+    const linear = outcome.results.find((r) => r.contestant === "linear")!;
+    const mask = callsSeen!.lane.get("linear");
+    if (mask) expect(mask.reduce((n, c) => n + c, 0)).toBe(linear.metrics.exam!.calls);
+  }, 60_000);
+
+  it("reports a decided takeover it can't carry out instead of dropping it silently", async () => {
+    const rows = syntheticMarket({ tokens: 1500, days: 20, truth: "interactions", seed: 3 });
+    const outcome = await runEvolvingContest(rows, cfg, {
+      challengers: [bred, { ...bred, name: "Trees #2", generation: 2 }],
+      decide: (_lanes, scores) =>
+        scores.every((x) => x === null) ? null : { slot: "order-flow", challenger: 9, reason: "test" },
+    });
+    expect(outcome.replacement).toBeNull();
+    if (outcome.challengerScores.some((x) => x !== null)) expect(outcome.dropped).toMatch(/order-flow/);
+  }, 60_000);
+});
