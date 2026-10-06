@@ -5,7 +5,7 @@
   "analysis": {
     "schema_version": "1",
     "mint": "ERV8GnQeAgh3K4udtHBpJfwe7pJJ6RfCcCRVAuGXABvU",
-    "created_at": "2026-10-06T22:08:11.079000Z",
+    "created_at": null,
     "launchpad": "pump.fun",
     "market": {
       "complete": true,
@@ -19,6 +19,7 @@
         "symbol": "SOL",
         "name": "Solana",
         "kind": "sol",
+        "underlying": null,
         "source": "neutral",
         "builds_on": false,
         "builds_on_detail": null,
@@ -48,7 +49,8 @@
       "kind": "famous_animal",
       "desc": "pet squirrel seized and euthanised by NY officials, Oct 2024",
       "source": "known_coins:PNUT",
-      "confidence": 0.97
+      "confidence": 0.97,
+      "supported_by": ["name", "description"]
     },
     "categories": [
       {
@@ -61,7 +63,7 @@
       },
       {
         "label": "derivative",
-        "confidence": 0.97
+        "confidence": 0.96
       },
       {
         "label": "derivative/sequel",
@@ -69,15 +71,11 @@
       },
       {
         "label": "news_event",
-        "confidence": 0.719
+        "confidence": 0.519
       },
       {
         "label": "celebrity",
-        "confidence": 0.604
-      },
-      {
-        "label": "derivative/copycat",
-        "confidence": 0.55
+        "confidence": 0.34
       },
       {
         "label": "celebrity/elon",
@@ -90,13 +88,9 @@
         "ticker": "PNUT",
         "name": "Peanut the Squirrel",
         "mint": null,
-        "signals": ["ticker_base", "name_contains"]
-      },
-      {
-        "ticker": "Pnut2",
-        "name": "The Final Nut",
-        "mint": "F4UCk5MRjkNwMhogDrjfZnzaRKcHRV8CbK9PLosspump",
-        "signals": ["same_name_earlier", "earlier_count:2"]
+        "signals": ["ticker_base", "name_contains"],
+        "created_at": null,
+        "recent": false
       }
     ],
     "image": {
@@ -122,18 +116,18 @@
         "url": null
       },
       "object_time": "2024-05-17T06:14:14.010000Z",
-      "predates_token_by_s": 75398037,
+      "predates_token_by_s": null,
       "author": {
         "handle": "elonmusk",
         "user_id": "44196397",
         "name": "Elon Musk",
         "verified_type": "blue",
-        "followers": 241704339,
+        "followers": 241704623,
         "joined": "2009-06-02T20:12:29Z",
         "username_changes": 0
       },
       "text": "All core systems are now on http://X.com",
-      "relation": "narrative_reference",
+      "relation": "launch_announcement",
       "reuse_count": 0,
       "fetch_source": "fxtwitter",
       "status": "ok",
@@ -144,7 +138,7 @@
           "role": "author",
           "handle": "elonmusk",
           "name": "Elon Musk",
-          "followers": 241704339,
+          "followers": 241704623,
           "verified_type": "blue"
         }
       ],
@@ -191,19 +185,9 @@
     },
     "flags": [
       {
-        "code": "copycat",
-        "severity": "warn",
-        "detail": "same ticker base, name or logo as an existing coin"
-      },
-      {
-        "code": "earlier_same_name",
-        "severity": "warn",
-        "detail": "2 token(s) with this name/ticker were created earlier"
-      },
-      {
-        "code": "borrowed_narrative",
+        "code": "references_known_coin",
         "severity": "info",
-        "detail": "@elonmusk is a large/verified account unrelated to the deployer; the coin borrows the narrative"
+        "detail": "builds on the established coin $PNUT (Peanut the Squirrel); a reference, not a recent copy"
       },
       {
         "code": "x_content_mismatch",
@@ -211,13 +195,13 @@
         "detail": "the linked X tweet does not match the token (fit 0.00: the post does not mention the token name; the post does not mention the ticker)"
       }
     ],
-    "summary": "Peanut the Squirrel 2.0 ($PNUT2) most likely refers to Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024 (confidence 0.97). Categories: animal/squirrel 0.97, derivative/sequel 0.96, derivative/copycat 0.55, celebrity/elon 0.34. $PNUT2 = ticker of Peanut the Squirrel (Peanut (squirrel)) (affixes 2). Why: copies $PNUT (Peanut the Squirrel) via ticker_base, name_contains; Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024; 'peanut the squirrel' refers to Peanut (squirrel) (pet squirrel euthanised by NY officials, 2024); name carries the marker '2.0' (version:2); 2 earlier token(s) share this name/ticker; the earliest (Pnut2, dexscreener) predates it by 24 d.",
+    "summary": "Peanut the Squirrel 2.0 ($PNUT2) refers to Peanut (squirrel) (pet squirrel seized and euthanised by NY officials, Oct 2024) (confidence 0.97). Categories: animal/squirrel 0.97, derivative/sequel 0.96, celebrity/elon 0.34. $PNUT2 = ticker of Peanut the Squirrel (Peanut (squirrel)) (affixes 2). Why: Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024; builds on $PNUT (Peanut the Squirrel) via ticker_base, name_contains; name carries the marker '2.0' (version:2); inherited from $PNUT: Peanut, an Instagram-famous pet squirrel seized and euthanised by New York officials in Oct-Nov 2024; the posting account @elonmusk: Elon Musk: Tesla/SpaceX/X owner; frequent memecoin trigger.",
     "evidence": [
       {
         "kind": "onchain",
         "label": "source",
         "weight": 0.0,
-        "detail": "spl-token mint; pump.fun=True; on-chain metadata via metaplex; created_at via hints",
+        "detail": "spl-token mint; pump.fun=True; on-chain metadata via metaplex; created_at via unknown",
         "source": "solana-rpc",
         "url": null,
         "where": null
@@ -232,24 +216,6 @@
         "where": "name"
       },
       {
-        "kind": "x_timing",
-        "label": "news_event",
-        "weight": 0.25,
-        "detail": "the linked tweet (by @elonmusk) predates the token by 872.7 d",
-        "source": "x",
-        "url": null,
-        "where": "x"
-      },
-      {
-        "kind": "x_author",
-        "label": "celebrity",
-        "weight": 0.4,
-        "detail": "narrative tweet by a large account @elonmusk (241704339 followers, blue)",
-        "source": "x",
-        "url": null,
-        "where": "x"
-      },
-      {
         "kind": "entity",
         "label": "animal/squirrel",
         "weight": 0.78,
@@ -261,7 +227,7 @@
       {
         "kind": "entity",
         "label": "referent",
-        "weight": 0.81,
+        "weight": 0.891,
         "detail": "Peanut (squirrel): pet squirrel euthanised by NY officials, 2024",
         "source": "entities:Peanut (squirrel)",
         "url": null,
@@ -307,7 +273,7 @@
         "kind": "known_coin",
         "label": "derivative/sequel",
         "weight": 0.865,
-        "detail": "copies $PNUT (Peanut the Squirrel) via ticker_base, name_contains",
+        "detail": "builds on $PNUT (Peanut the Squirrel) via ticker_base, name_contains",
         "source": "known_coins:PNUT",
         "url": null,
         "where": "name"
@@ -333,40 +299,31 @@
       {
         "kind": "referent",
         "label": "referent",
-        "weight": 0.865,
+        "weight": 0.952,
         "detail": "Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024",
         "source": "known_coins:PNUT",
         "url": null,
         "where": "name"
-      },
-      {
-        "kind": "same_name",
-        "label": "derivative/copycat",
-        "weight": 0.55,
-        "detail": "2 earlier token(s) share this name/ticker; the earliest (Pnut2, dexscreener) predates it by 24 d",
-        "source": "same_name:dexscreener",
-        "url": null,
-        "where": "db"
       }
     ],
-    "caveats": [],
+    "caveats": ["token creation time could not be determined"],
     "depth": "full",
-    "analyzed_at": "2026-10-06T22:15:29.580069Z",
+    "analyzed_at": "2026-10-06T22:46:36.143115Z",
     "versions": {
-      "rules": "0.8.0-full",
-      "lexicon": "2026-10-06",
+      "rules": "0.10.0-full",
+      "lexicon": "2026-10-06.2",
       "known_coins": "seed-2026-10-06",
       "models": {}
     }
   },
   "stale_analysis": null,
   "freshness": {
-    "analyzed_at": "2026-10-06T22:15:29.580069Z",
+    "analyzed_at": "2026-10-06T22:46:36.143115Z",
     "age_s": 0,
-    "max_age_s": 300,
+    "max_age_s": 3600,
     "from_cache": false
   },
   "errors": [],
   "job_id": null,
-  "request_id": "fe755785241e4bed"
+  "request_id": "b61587fdde214b19"
 }

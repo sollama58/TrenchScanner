@@ -1,10 +1,10 @@
 {
-  "ca": "7XMik4ec5jeLHhXVReMpJEXyuWjEpqXdFbSaU1UaW4Bo",
+  "ca": "7aJaTAtTyrzdQyChoDKZzHf7etFomizL1PFNoMU7PK2T",
   "status": "partial",
   "depth": "basic",
   "analysis": {
     "schema_version": "1",
-    "mint": "7XMik4ec5jeLHhXVReMpJEXyuWjEpqXdFbSaU1UaW4Bo",
+    "mint": "7aJaTAtTyrzdQyChoDKZzHf7etFomizL1PFNoMU7PK2T",
     "created_at": "2026-10-06T22:00:00Z",
     "launchpad": "unknown",
     "market": {
@@ -33,27 +33,51 @@
       "emoji_keywords": [],
       "obfuscation": []
     },
-    "referent": null,
+    "referent": {
+      "label": "Pepe the Frog",
+      "kind": "meme",
+      "desc": "Pepe the Frog meme (Matt Furie)",
+      "source": "known_coins:PEPE",
+      "confidence": 0.468,
+      "supported_by": ["name"]
+    },
     "categories": [
       {
         "label": "animal",
-        "confidence": 0.946
+        "confidence": 0.97
       },
       {
         "label": "animal/frog",
-        "confidence": 0.946
+        "confidence": 0.97
       },
       {
         "label": "meme_template",
-        "confidence": 0.8
+        "confidence": 0.866
       },
       {
         "label": "meme_template/pepe_wojak_chad",
-        "confidence": 0.8
+        "confidence": 0.866
+      },
+      {
+        "label": "derivative",
+        "confidence": 0.55
+      },
+      {
+        "label": "derivative/reference",
+        "confidence": 0.55
       }
     ],
     "ticker_explanation": "$PWIZ is spelled out inside 'pepewizard'",
-    "copy_of": [],
+    "copy_of": [
+      {
+        "ticker": "PEPE",
+        "name": "Pepe",
+        "mint": null,
+        "signals": ["name_word"],
+        "created_at": null,
+        "recent": false
+      }
+    ],
     "image": {
       "status": "missing",
       "source_url": null,
@@ -98,9 +122,14 @@
         "code": "non_pumpfun",
         "severity": "info",
         "detail": "no pump.fun bonding-curve account for this mint; analysed best-effort"
+      },
+      {
+        "code": "references_known_coin",
+        "severity": "info",
+        "detail": "builds on the established coin $PEPE (Pepe); a reference, not a recent copy"
       }
     ],
-    "summary": "Pepe Wizard ($PWIZ) reads as an animal-mascot coin (confidence 0.95). Categories: animal/frog 0.95, meme_template/pepe_wojak_chad 0.80. $PWIZ is spelled out inside 'pepewizard'. Why: 'pepe' = Pepe the Frog (meme); 'frog' is a frog.",
+    "summary": "Pepe Wizard ($PWIZ) may refer to Pepe the Frog (Pepe the Frog meme (Matt Furie)) (confidence 0.47). Categories: animal/frog 0.97, meme_template/pepe_wojak_chad 0.87, derivative/reference 0.55. $PWIZ is spelled out inside 'pepewizard'. Why: 'pepe' = Pepe the Frog (meme); 'frog' is a frog; builds on $PEPE (Pepe) via name_word; Pepe the Frog: Pepe the Frog meme (Matt Furie); inherited from $PEPE: Pepe the Frog (Matt Furie) memecoin, Apr 2023.",
     "evidence": [
       {
         "kind": "provenance",
@@ -137,6 +166,42 @@
         "source": "wordnet:animal/frog",
         "url": null,
         "where": "description"
+      },
+      {
+        "kind": "known_coin",
+        "label": "derivative/reference",
+        "weight": 0.55,
+        "detail": "builds on $PEPE (Pepe) via name_word",
+        "source": "known_coins:PEPE",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "known_coin_inherit",
+        "label": "animal/frog",
+        "weight": 0.33,
+        "detail": "inherited from $PEPE: Pepe the Frog (Matt Furie) memecoin, Apr 2023.",
+        "source": "known_coins:PEPE",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "known_coin_inherit",
+        "label": "meme_template/pepe_wojak_chad",
+        "weight": 0.33,
+        "detail": "inherited from $PEPE: Pepe the Frog (Matt Furie) memecoin, Apr 2023.",
+        "source": "known_coins:PEPE",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "referent",
+        "label": "referent",
+        "weight": 0.468,
+        "detail": "Pepe the Frog: Pepe the Frog meme (Matt Furie)",
+        "source": "known_coins:PEPE",
+        "url": null,
+        "where": "name"
       }
     ],
     "caveats": [
@@ -144,22 +209,22 @@
       "partial: mint not yet visible on-chain; analysed from caller hints (market data missing)"
     ],
     "depth": "basic",
-    "analyzed_at": "2026-10-06T22:15:30.211628Z",
+    "analyzed_at": "2026-10-06T22:46:37.415347Z",
     "versions": {
-      "rules": "0.8.0-full",
-      "lexicon": "2026-10-06",
+      "rules": "0.10.0-full",
+      "lexicon": "2026-10-06.2",
       "known_coins": "seed-2026-10-06",
       "models": {}
     }
   },
   "stale_analysis": null,
   "freshness": {
-    "analyzed_at": "2026-10-06T22:15:30.211628Z",
+    "analyzed_at": "2026-10-06T22:46:37.415347Z",
     "age_s": 0,
     "max_age_s": 3600,
     "from_cache": false
   },
   "errors": [],
   "job_id": null,
-  "request_id": "128ff5a56b4443eb"
+  "request_id": "d449bb2a994d405e"
 }

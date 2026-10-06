@@ -5,7 +5,7 @@
   "analysis": {
     "schema_version": "1",
     "mint": "9awZqVY1Hy7nZj2wVcDpHb2WUwW1FbBjX8xJdZvtPFby",
-    "created_at": "2026-10-06T22:08:11.079000Z",
+    "created_at": null,
     "launchpad": "pump.fun",
     "market": {
       "complete": false,
@@ -19,6 +19,7 @@
         "symbol": "SOL",
         "name": "Solana",
         "kind": "sol",
+        "underlying": null,
         "source": "neutral",
         "builds_on": false,
         "builds_on_detail": null,
@@ -48,7 +49,8 @@
       "kind": "famous_animal",
       "desc": "pet squirrel seized and euthanised by NY officials, Oct 2024",
       "source": "known_coins:PNUT",
-      "confidence": 0.865
+      "confidence": 0.952,
+      "supported_by": ["name"]
     },
     "categories": [
       {
@@ -78,7 +80,9 @@
         "ticker": "PNUT",
         "name": "Peanut the Squirrel",
         "mint": null,
-        "signals": ["ticker_base", "name_contains"]
+        "signals": ["ticker_base", "name_word"],
+        "created_at": null,
+        "recent": false
       }
     ],
     "image": {
@@ -104,7 +108,7 @@
         "url": null
       },
       "object_time": "2024-05-17T06:14:14.010000Z",
-      "predates_token_by_s": 75398037,
+      "predates_token_by_s": null,
       "author": null,
       "text": null,
       "relation": null,
@@ -122,18 +126,18 @@
     },
     "flags": [
       {
-        "code": "copycat",
-        "severity": "warn",
-        "detail": "same ticker base, name or logo as an existing coin"
+        "code": "references_known_coin",
+        "severity": "info",
+        "detail": "builds on the established coin $PNUT (Peanut the Squirrel); a reference, not a recent copy"
       }
     ],
-    "summary": "Baby PNUT ($BPNUT) most likely refers to Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024 (confidence 0.86). Categories: derivative/template_family 0.97, animal/squirrel 0.52. $BPNUT = ticker of Peanut the Squirrel (Peanut (squirrel)) (affixes B). Why: copies $PNUT (Peanut the Squirrel) via ticker_base, name_contains; Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024; inherited from $PNUT: Peanut, an Instagram-famous pet squirrel seized and euthanised by New York officials in Oct-Nov 2024; name carries the marker 'Baby' (marker:baby); 'baby' = 'Baby X' derivative.",
+    "summary": "Baby PNUT ($BPNUT) refers to Peanut (squirrel) (pet squirrel seized and euthanised by NY officials, Oct 2024) (confidence 0.95). Categories: derivative/template_family 0.97, animal/squirrel 0.52. $BPNUT = ticker of Peanut the Squirrel (Peanut (squirrel)) (affixes B). Why: Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024; builds on $PNUT (Peanut the Squirrel) via ticker_base, name_word; inherited from $PNUT: Peanut, an Instagram-famous pet squirrel seized and euthanised by New York officials in Oct-Nov 2024; name carries the marker 'Baby' (marker:baby); 'baby' = 'Baby X' derivative.",
     "evidence": [
       {
         "kind": "onchain",
         "label": "source",
         "weight": 0.0,
-        "detail": "token-2022 mint; pump.fun=True; on-chain metadata via token2022; created_at via hints",
+        "detail": "token-2022 mint; pump.fun=True; on-chain metadata via token2022; created_at via unknown",
         "source": "solana-rpc",
         "url": null,
         "where": null
@@ -169,7 +173,7 @@
         "kind": "known_coin",
         "label": "derivative/template_family",
         "weight": 0.865,
-        "detail": "copies $PNUT (Peanut the Squirrel) via ticker_base, name_contains",
+        "detail": "builds on $PNUT (Peanut the Squirrel) via ticker_base, name_word",
         "source": "known_coins:PNUT",
         "url": null,
         "where": "name"
@@ -195,7 +199,7 @@
       {
         "kind": "referent",
         "label": "referent",
-        "weight": 0.865,
+        "weight": 0.952,
         "detail": "Peanut (squirrel): pet squirrel seized and euthanised by NY officials, Oct 2024",
         "source": "known_coins:PNUT",
         "url": null,
@@ -211,24 +215,24 @@
         "where": "name"
       }
     ],
-    "caveats": [],
+    "caveats": ["token creation time could not be determined"],
     "depth": "basic",
-    "analyzed_at": "2026-10-06T22:15:30.019215Z",
+    "analyzed_at": "2026-10-06T22:46:37.146951Z",
     "versions": {
-      "rules": "0.8.0-full",
-      "lexicon": "2026-10-06",
+      "rules": "0.10.0-full",
+      "lexicon": "2026-10-06.2",
       "known_coins": "seed-2026-10-06",
       "models": {}
     }
   },
   "stale_analysis": null,
   "freshness": {
-    "analyzed_at": "2026-10-06T22:15:30.019215Z",
+    "analyzed_at": "2026-10-06T22:46:37.146951Z",
     "age_s": 0,
-    "max_age_s": 300,
+    "max_age_s": 3600,
     "from_cache": false
   },
   "errors": [],
   "job_id": null,
-  "request_id": "666c7f804a4a4120"
+  "request_id": "7dab29d350314b35"
 }

@@ -289,4 +289,106 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     await flushNarrativeRequests(env, client);
     expect(batch).toHaveBeenCalledTimes(1);
   });
+
+  it("stores the new fields from a real paired-coin answer", async () => {
+    const { client, batch } = fakeClient();
+    const real = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../../packages/core/src/datasources/fixtures/tokensage/paired_token.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { analysis: Record<string, unknown> };
+    const r = `${TAG}-r`;
+    batch.mockResolvedValueOnce(ok([{ ca: r, status: "complete", analysis: real.analysis }]));
+    noteNarrativeWanted(r, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: r } })).toMatchObject({
+      referentLabel: "Bonk",
+      referentConfidence: 0.97,
+      referentSupport: ["name", "chain"],
+      pairKind: "token",
+      pairSymbol: "BONK",
+      copiesRecent: false,
+      failReason: null,
+    });
+  });
+
+  it("leaves a failed analysis alone for TokenSage's 10 minutes, and gives up after a few", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { client, batch } = fakeClient();
+      const s1 = `${TAG}-s1`;
+      const s2 = `${TAG}-s2`;
+      const rpcDown =
+        "tokensage.resolve.rpc.RpcError: rpc transport error; retried automatically after 600 s";
+      batch.mockResolvedValue(
+        ok([
+          { ca: s1, status: "failed", analysis: null, job_id: 7, error: rpcDown },
+          { ca: s2, status: "failed", analysis: null, job_id: 8, error: "not_pumpfun: no bonding curve" },
+        ]),
+      );
+      noteNarrativeWanted(s1, "basic", env);
+      noteNarrativeWanted(s2, "basic", env);
+      await flushNarrativeRequests(env, client);
+      // Definitive: cached with its reason. Transient: nothing stored yet.
+      expect(await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: s2 } })).toMatchObject({
+        status: "failed",
+        failReason: "not_pumpfun: no bonding curve",
+      });
+      expect(await prisma.tokenNarrative.count({ where: { mintAddress: s1 } })).toBe(0);
+
+      // Within the window: not asked again.
+      vi.setSystemTime(Date.now() + 5 * 60_000);
+      noteNarrativeWanted(s1, "basic", env);
+      await flushNarrativeRequests(env, client);
+      expect(batch).toHaveBeenCalledTimes(1);
+
+      // After it, asked again; the third failure is cached.
+      for (let i = 0; i < 2; i += 1) {
+        vi.setSystemTime(Date.now() + 12 * 60_000);
+        noteNarrativeWanted(s1, "basic", env);
+        await flushNarrativeRequests(env, client);
+      }
+      expect(batch).toHaveBeenCalledTimes(3);
+      expect(cas(batch.mock.calls[2]!)).toEqual([s1]);
+      const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: s1 } });
+      expect(row).toMatchObject({ status: "failed", failReason: rpcDown });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("finds the mint behind a batch TokenSage refused with 404, so the next batch goes through", async () => {
+    const { client, batch, job } = fakeClient();
+    const t1 = `${TAG}-t1`;
+    const t2 = `${TAG}-t2`;
+    const t3 = `${TAG}-t3`;
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: t1, status: "pending", job_id: 31 },
+        { ca: t2, status: "pending", job_id: 32 },
+      ]),
+    );
+    noteNarrativeWanted(t1, "basic", env);
+    noteNarrativeWanted(t2, "basic", env);
+    await flushNarrativeRequests(env, client);
+
+    // t2's job failed definitively: TokenSage now answers the whole batch 404.
+    batch.mockRejectedValueOnce(new HttpError(404, "https://ts.test/v1/tokens:batch"));
+    job.mockImplementation(async (id: number) =>
+      id === 32
+        ? { job_id: 32, status: "failed", error: "token_not_found: no account found on-chain" }
+        : { job_id: 31, status: "running" },
+    );
+    noteNarrativeWanted(t3, "basic", env);
+    await flushNarrativeRequests(env, client);
+    expect(job.mock.calls.map((c) => c[0]).sort()).toEqual([31, 32]);
+
+    batch.mockResolvedValueOnce(ok([]));
+    await flushNarrativeRequests(env, client);
+    expect(cas(batch.mock.calls.at(-1)!).sort()).toEqual([t1, t3].sort());
+  });
 });

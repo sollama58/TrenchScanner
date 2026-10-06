@@ -1069,6 +1069,17 @@ model TokenNarrative {
   /// "unknown" (nothing fetched), which is missing data, not a mismatch.
   xFit            Float?
   xVerdict        String?
+  /// referent.confidence and referent.supported_by (the inputs pointing at it, e.g. ["name","x"]).
+  referentConfidence Float?
+  referentSupport String[] @default([])
+  /// market.pair: what the coin trades against ("sol", "stablecoin", "token", "tokenized_stock", ...).
+  pairKind        String?
+  pairSymbol      String?
+  /// Copies a coin launched in the last 30 days (copy_of[].recent). Null on analyses from before
+  /// TokenSage rules 0.10.0, which didn't say.
+  copiesRecent    Boolean?
+  /// Why the analysis failed, on status "failed" rows.
+  failReason      String?
   rulesVersion    String?
   analysis        Json?
   analyzedAt      DateTime?
