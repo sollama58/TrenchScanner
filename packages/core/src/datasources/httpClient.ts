@@ -18,6 +18,8 @@ export interface FetchJsonOptions extends RequestInit {
   retries?: number;
   /** Base delay for exponential backoff on 429/5xx, in ms. */
   retryDelayMs?: number;
+  /** Called with the headers of the successful response, before its body is read. */
+  onHeaders?: (headers: Headers) => void;
 }
 
 // Query param names that commonly carry secrets in provider URLs (e.g. Helius's own
@@ -70,7 +72,7 @@ export function redactUrl(rawUrl: string): string {
  * never ends up in application logs, regardless of how a caller later logs the error it catches.
  */
 export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}): Promise<T> {
-  const { timeoutMs = 10_000, retries = 2, retryDelayMs = 500, ...init } = options;
+  const { timeoutMs = 10_000, retries = 2, retryDelayMs = 500, onHeaders, ...init } = options;
   const safeUrl = redactUrl(url);
 
   let attempt = 0;
@@ -84,6 +86,7 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       // res.json() with no deadline, so a provider stalling mid-body hung the calling job forever
       // (and the scheduler's overlap guard then skipped every later tick of it).
       if (res.ok) {
+        onHeaders?.(res.headers);
         return JSON.parse(await readCappedText(res, safeUrl)) as T;
       }
       void res.body?.cancel().catch(() => {});

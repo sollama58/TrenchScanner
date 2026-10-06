@@ -1,4 +1,5 @@
 import {
+  tokenSageHints,
   recordRunProgress,
   floatArrayParam,
   prisma,
@@ -1345,7 +1346,11 @@ async function processCandidate(
   }
   // TokenSage's read of what the coin is about, asked for at the same moment (basic depth) and
   // sent at the end of the cycle - see tokensage/prefetch.ts. A no-op while TOKENSAGE_ENABLED is off.
-  if (inCuratedBand) noteNarrativeWanted(token.mintAddress, "basic", env);
+  // Sent with what discovery already knows, so TokenSage can skip its own metadata fetch.
+  const narrativeHints = tokenSageEnabled(env)
+    ? tokenSageHints({ ...token, description: scored.description ?? token.description })
+    : undefined;
+  if (inCuratedBand) noteNarrativeWanted(token.mintAddress, "basic", env, narrativeHints);
 
   // User matching first, and nothing slower in front of it: this is the product, and every
   // millisecond here is a millisecond between the backend knowing about a token and the person
@@ -1394,7 +1399,7 @@ async function processCandidate(
       // a pick that lost on capacity keeps its retry for the next cycle.
       const retry = event ? takeContenderRetry(token.id) : null;
       // A decision moment asks for the deep read too (X link, trends) - see tokensage/prefetch.ts.
-      if (event?.created) noteNarrativeWanted(token.mintAddress, "full", env);
+      if (event?.created) noteNarrativeWanted(token.mintAddress, "full", env, narrativeHints);
       if (event?.created) {
         await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id);
       } else if (event && retry) {

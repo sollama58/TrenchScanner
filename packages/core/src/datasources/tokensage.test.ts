@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  tokenSageHints,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
   normalizeSocialUrl,
@@ -63,6 +64,16 @@ describe("narrativeFieldsFromAnalysis", () => {
     expect(f.analyzedAt?.toISOString()).toBe("2026-10-06T18:00:00.000Z");
   });
 
+  it("reads the X match, treating an unknown verdict as missing", () => {
+    const withMatch = { ...doc, x: { match: { fit: 0.55, verdict: "related" as const } } };
+    expect(narrativeFieldsFromAnalysis(withMatch, "complete")).toMatchObject({
+      xFit: 0.55,
+      xVerdict: "related",
+    });
+    const unknown = { ...doc, x: { match: { fit: 0, verdict: "unknown" as const } } };
+    expect(narrativeFieldsFromAnalysis(unknown, "complete")).toMatchObject({ xFit: null, xVerdict: null });
+  });
+
   it("tolerates a sparse document", () => {
     const f = narrativeFieldsFromAnalysis({ mint: "M", depth: "basic", analyzed_at: "bad" }, "partial");
     expect(f).toMatchObject({
@@ -81,5 +92,28 @@ describe("narrativeDepthCovers", () => {
     expect(narrativeDepthCovers("basic", "full")).toBe(false);
     expect(narrativeDepthCovers("basic", "basic")).toBe(true);
     expect(narrativeDepthCovers(null, "basic")).toBe(false);
+  });
+});
+
+describe("tokenSageHints", () => {
+  it("sends only what discovery stored", () => {
+    expect(
+      tokenSageHints({
+        name: "Dog",
+        symbol: "DOG",
+        description: null,
+        imageUrl: "https://ipfs.io/ipfs/x",
+        twitterUrl: "https://x.com/dog",
+        websiteUrl: null,
+        firstSeenAt: new Date("2026-10-06T18:00:00Z"),
+      }),
+    ).toEqual({
+      name: "Dog",
+      symbol: "DOG",
+      image_url: "https://ipfs.io/ipfs/x",
+      twitter: "https://x.com/dog",
+      created_at: "2026-10-06T18:00:00.000Z",
+    });
+    expect(tokenSageHints({ imageUrl: "http://insecure" })).toBeUndefined();
   });
 });
