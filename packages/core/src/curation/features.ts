@@ -1,4 +1,5 @@
 import type { ScoredToken } from "../types.js";
+import { scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
 import type { TextScores } from "./textFeatures.js";
 import {
@@ -330,7 +331,7 @@ export function scoredFromFeatures(
     const v = num(k);
     return v === undefined ? undefined : v === 1;
   };
-  return {
+  const replayed: ScoredToken = {
     mintAddress: "(replayed)",
     priceUsd: anchorPriceUsd,
     marketCapUsd: anchorMcapUsd,
@@ -377,14 +378,12 @@ export function scoredFromFeatures(
     ) as unknown as MarketContextFeatures,
     textScores: textScoresFromFeatures(features),
     rugScreen: { passed: true, reasons: [] },
-    score: {
-      momentum: num("scoreMomentum") ?? 0,
-      holderHealth: num("scoreHolderHealth") ?? 0,
-      age: num("scoreAge") ?? 0,
-      narrative: num("scoreNarrative") ?? 0,
-      total: num("scoreTotal") ?? 0,
-    },
+    // Filled in below from the replayed fields: the stored score* inputs are the first
+    // composite's, and the replayed rules must gate on today's score.
+    score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
   };
+  replayed.score = scoreToken(replayed);
+  return replayed;
 }
 
 /** The text read carried in a feature vector, or undefined when the vector has none. */
@@ -431,6 +430,8 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     scored.marketCapUsd > 0 && scored.volume1hUsd !== undefined
       ? scored.volume1hUsd / scored.marketCapUsd
       : null;
+
+  const legacyScore = scoreTokenLegacy(scored);
 
   // Is the churn speeding up or dying down: the last 5 minutes extrapolated to an hour's pace,
   // over the actual last hour. >1 means accelerating. Null when the hour had no volume to
@@ -493,11 +494,13 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     hasTelegram: scored.hasTelegram === undefined ? null : scored.hasTelegram ? 1 : 0,
     hasWebsite: scored.hasWebsite === undefined ? null : scored.hasWebsite ? 1 : 0,
     narrativeTagCount: scored.narrativeTags.length,
-    scoreMomentum: scored.score.momentum,
-    scoreHolderHealth: scored.score.holderHealth,
-    scoreAge: scored.score.age,
-    scoreNarrative: scored.score.narrative,
-    scoreTotal: scored.score.total,
+    // The first composite's parts, not today's score: these are stored model inputs, and stored
+    // models and rows keep the meaning they were trained on (scoring/scorer.ts).
+    scoreMomentum: legacyScore.momentum,
+    scoreHolderHealth: legacyScore.holderHealth,
+    scoreAge: legacyScore.age,
+    scoreNarrative: legacyScore.narrative,
+    scoreTotal: legacyScore.total,
     liquidityToMcapRatio:
       scored.marketCapUsd > 0 && scored.liquidityUsd !== undefined
         ? scored.liquidityUsd / scored.marketCapUsd

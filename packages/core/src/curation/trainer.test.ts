@@ -648,11 +648,15 @@ describe("walkForwardEvaluate at the hit-rate cutoffs", () => {
       ...r,
       features: {
         ...r.features,
-        scoreTotal: 90,
+        // The replayed score is rebuilt from these (scoring/scorer.ts): a hot 5-minute window.
+        priceChange5mPct: 50,
+        volume5mUsd: 1e9,
+        buys5m: 300,
+        sells5m: 100,
         buys24h: 700,
         sells24h: 300,
         volumeToMcapRatio: 1 + (r.features.volumeToMcapRatio as number),
-        ageMinutes: 120,
+        ageMinutes: 7,
         liquidityUsd: 40_000,
         graduated: 1,
         top10HolderPct: 20,

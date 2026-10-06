@@ -29,12 +29,13 @@ const TAG = `curator-training-test-${Date.now()}`;
 const n = CANDIDATE_FEATURE_NAMES.length;
 
 /**
- * Hand-built params whose only live weight is on scoreTotal (mean 50, stdev 10): a candidate
- * scoring 90 lands at sigmoid(4*2)≈0.9997, one scoring 30 at sigmoid(-8)≈0.0003 - a model whose
- * decisions a test can predict exactly.
+ * Hand-built params whose only live weight is on holderCount (mean 50, stdev 10): a candidate
+ * with 90 lands at sigmoid(4*2)≈0.9997, one with 30 at sigmoid(-8)≈0.0003 - a model whose
+ * decisions a test can predict exactly. (Not scoreTotal: that stored input is the first
+ * composite's, recomputed from the token, so a stub can't set it directly.)
  */
 function handParams(threshold: number): TrainedCuratorParams {
-  const scoreIdx = CANDIDATE_FEATURE_NAMES.indexOf("scoreTotal");
+  const scoreIdx = CANDIDATE_FEATURE_NAMES.indexOf("holderCount");
   const weights = new Array<number>(2 * n).fill(0);
   weights[scoreIdx] = 2;
   const means = new Array<number>(n).fill(0);
@@ -96,6 +97,7 @@ function scoredWithTotal(mintAddress: string, total: number): ScoredToken {
     priceUsd: 0.0001,
     marketCapUsd: 150_000,
     narrativeTags: [],
+    holderCount: total,
     rugScreen: { passed: true, reasons: [] },
     score: { momentum: 50, holderHealth: 50, age: 50, narrative: 50, total },
   };
@@ -233,7 +235,7 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     resetCuratorModelCache();
 
     const hot = await prisma.token.create({ data: { mintAddress: `${TAG}-model-hot` } });
-    // scoreTotal 90 -> probability ~0.9997, comfortably over the 0.9 threshold. Deliberately a
+    // holderCount 90 -> probability ~0.9997, comfortably over the 0.9 threshold. Deliberately a
     // candidate the HEURISTIC would reject (no liquidity/volume/age data) - proof the model, not
     // the heuristic, made this call.
     const emitted = await collectAndEmit(loadEnv(), hot, scoredWithTotal(hot.mintAddress, 90));
@@ -251,7 +253,7 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     resetCuratorModelCache();
 
     const cold = await prisma.token.create({ data: { mintAddress: `${TAG}-model-cold` } });
-    // scoreTotal 30 -> probability ~0.0003. The heuristic is not consulted at all.
+    // holderCount 30 -> probability ~0.0003. The heuristic is not consulted at all.
     const emitted = await collectAndEmit(loadEnv(), cold, scoredWithTotal(cold.mintAddress, 30));
     expect(emitted).toBe(false);
     expect(await prisma.curatedAlert.count({ where: { tokenId: cold.id } })).toBe(0);

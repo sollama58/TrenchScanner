@@ -268,6 +268,9 @@ const envSchema = z.object({
   // training set, but samples are banked before the curator gate runs (see scanJob), so it fed
   // nothing - it only diluted the feed. This floor is the gate's ENTRY requirement; the emission
   // governor's pace ceiling (curation/governor.ts) and the hit-rate cutoff sit on top of it.
+  // Kept at 55 when the score was rebuilt (2026-10-06): inside this gate's 5-minute-to-48-hour age
+  // window it passes about a third of decision moments at ~13% doubles (the old score's 55 passed
+  // half at ~4%).
   CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
 

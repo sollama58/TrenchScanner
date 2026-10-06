@@ -26,7 +26,11 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         step: 0.1,
       },
       { key: "minHolderGrowthPct", label: "Min holder growth", hint: "over the last 30 minutes", unit: "%" },
-      { key: "minScore", label: "Min composite score", hint: "0-100, the scanner's overall score" },
+      {
+        key: "minScore",
+        label: "Min composite score",
+        hint: "0-100, how much a token looks like the launches that double fast; most fresh launches score 60-88",
+      },
     ],
   },
   {
