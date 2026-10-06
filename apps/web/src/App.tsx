@@ -224,6 +224,7 @@ export function App() {
         <a href="https://alonisthe.dev" target="_blank" rel="noopener noreferrer">
           alonisthe.dev
         </a>
+        <div className="donation">Donation Wallet: 2wWTXhva24dQHoKRJzXAV98q8KeWL9oTRc3M7aLpvhaA</div>
       </footer>
     </div>
   );
