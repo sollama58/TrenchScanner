@@ -9,9 +9,7 @@ export function outcomeBadge(outcome: Outcome | null): { text: string; tone: str
   if (!outcome) return { text: "Grading", tone: "neutral" };
   switch (outcome.status) {
     case "watching":
-      return outcome.hit2x
-        ? { text: `✓ 2x hit · ${outcome.minutesLeft ?? 0}m left`, tone: "good" }
-        : { text: `◷ Live · ${outcome.minutesLeft ?? 0}m left`, tone: "info" };
+      return outcome.hit2x ? { text: "✓ 2x hit", tone: "good" } : { text: "◷ Pending", tone: "info" };
     case "won":
       if (outcome.hitTenX) return { text: "✓✓✓ 10x win", tone: "good" };
       return outcome.hitGoal ? { text: "✓✓ 4x win", tone: "good" } : { text: "✓ 2x win", tone: "good" };

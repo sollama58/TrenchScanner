@@ -57,8 +57,8 @@ describe("outcomeAt", () => {
 describe("outcomeBadge", () => {
   it("names each state in words", () => {
     expect(outcomeBadge(null).text).toBe("Grading");
-    expect(outcomeBadge(watching({ minutesLeft: 4 })).text).toBe("◷ Live · 4m left");
-    expect(outcomeBadge(watching({ hit2x: true, minutesLeft: 0 })).text).toBe("✓ 2x hit · 0m left");
+    expect(outcomeBadge(watching({ minutesLeft: 4 })).text).toBe("◷ Pending");
+    expect(outcomeBadge(watching({ hit2x: true, minutesLeft: 0 })).text).toBe("✓ 2x hit");
     expect(outcomeBadge(watching({ status: "won", hit2x: true, hitGoal: true })).text).toBe("✓✓ 4x win");
     expect(outcomeBadge(watching({ status: "won", hit2x: true, hitGoal: true, hitTenX: true })).text).toBe(
       "✓✓✓ 10x win",
