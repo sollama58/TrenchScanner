@@ -389,14 +389,19 @@ const envSchema = z.object({
   // exam must hold at least this many wins, it must out-score the seat it replaces in this share
   // of paired bootstrap resamples of the same exam rows (0 = off), and seats change hands at most
   // once per this many hours.
-  CURATOR_EVOLUTION_MIN_EXAM_WINS: z.coerce.number().int().min(0).default(30),
+  // 15 since 2026-10-06 (user decision): at 30, a precise challenger (100 exam calls at 28%) could
+  // never take a seat while a loose one (300 at 20%) could; the bootstrap already guards noise.
+  CURATOR_EVOLUTION_MIN_EXAM_WINS: z.coerce.number().int().min(0).default(15),
   CURATOR_EVOLUTION_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.9),
   CURATOR_EVOLUTION_MIN_TAKEOVER_INTERVAL_HOURS: z.coerce.number().min(0).default(24),
   // The default model is the leaderboard's best performer, re-chosen after each training run
   // (curation/champion.ts). A model needs this many graded live calls (30-day window) before it
   // can hold the default, and a challenger must beat the sitting champion by MARGIN points.
-  CURATOR_CHAMPION_MIN_LIVE_GRADED: z.coerce.number().int().min(0).default(10),
-  CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(2),
+  // 50 and 5 since 2026-10-06 (user decision; were 10 and 2): the seats sit within a few points
+  // of each other at 300-400 calls, so the default flipped on noise. 50 is the leaderboard's own
+  // rank floor (MIN_LIVE_CALLS_TO_RANK).
+  CURATOR_CHAMPION_MIN_LIVE_GRADED: z.coerce.number().int().min(0).default(50),
+  CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(5),
   // The training run's guard (curation/runGuard.ts): a run that would ship broken weights, train on
   // under half the rows the running models saw, or silence every seat that was calling is held
   // back and the running models kept. A held run is let through once the running models are this
