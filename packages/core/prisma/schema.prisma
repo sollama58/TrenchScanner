@@ -171,6 +171,12 @@ model UserFilter {
   /// The leaderboard record counts only alerts raised since, so it always belongs to the settings
   /// a copier would get. Filters from before 2026-10-05 start at createdAt.
   criteriaChangedAt  DateTime @default(now())
+  /// The best leaderboard rank it ever held, written as the board is built (null: never ranked).
+  bestRank           Int?
+  /// Retired: its owner deleted it, but it had ranked in the board's top few, so its alert
+  /// history and record are kept. Hidden from the owner, never active, still on the board (see
+  /// KEEP_IF_EVER_RANKED_WITHIN in apps/api/src/routes/filters.ts).
+  deletedAt          DateTime?
 
   matches   Match[]
   baselines FilterBaseline[]

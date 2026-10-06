@@ -589,6 +589,8 @@ export interface FilterBoardEntry {
   provenRunDoublings: number | null;
   recordSince: string;
   isActive: boolean;
+  /** Its owner deleted it; kept on the board for its record (absent from older API builds). */
+  retired?: boolean;
   criteria: FilterCriteria;
   mine: boolean;
 }
