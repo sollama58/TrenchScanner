@@ -69,12 +69,16 @@ describe("getTokensByAddresses deadline", () => {
     });
 
     const startedAt = Date.now();
+    const failed = new Set<string>();
     const result = await new DexScreenerClient().getTokensByAddresses(mints, 1, {
       timeoutMs: 5_000,
       retries: 0,
       deadlineMs: 200,
+      failed,
     });
     expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(result.map((t) => t.mintAddress)).toEqual(["mint0"]);
+    // The unanswered batch is reported as failed, not as "no pair"; the answered one is not.
+    expect(failed).toEqual(new Set(["mint30"]));
   });
 });

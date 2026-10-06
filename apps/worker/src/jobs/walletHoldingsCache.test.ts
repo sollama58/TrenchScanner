@@ -3,6 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { loadEnv, prisma, type HeliusClient } from "@trenchscanner/core";
 import { resetHoldingsFailureBackoff, resolveWalletHoldings } from "./walletHoldings.js";
+import { resetValuationCaches } from "./walletValuation.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -69,5 +70,82 @@ describe.skipIf(!dbAvailable)("resolveWalletHoldings cache coverage", () => {
     expect(calls).toEqual([[partial]]);
     const rewritten = await prisma.walletHoldingsCache.findUnique({ where: { address: partial } });
     expect(rewritten?.breakdownComplete).toBe(true);
+  });
+
+  it("prices through balances and DexScreener when given them, caching found wallets and retrying deferred ones", async () => {
+    resetValuationCaches();
+    const [shell, busy] = [wallet("shell"), wallet("busy")];
+    let dasCalls = 0;
+    let balanceCalls = 0;
+    const helius = {
+      holdingsLookupAvailable: false, // a DAS stand-down doesn't stop this route
+      async getOtherHoldingsUsdBatch() {
+        dasCalls += 1;
+        return new Map();
+      },
+      async getTokenBalancesBatch(addresses: string[]) {
+        balanceCalls += 1;
+        return new Map(
+          addresses.map((a) => [
+            a,
+            {
+              status: "found" as const,
+              balances: new Map(
+                a === busy
+                  ? [
+                      [NEW_LAUNCH, 1_000_000n],
+                      ["Unanswered", 1n],
+                    ]
+                  : [[NEW_LAUNCH, 1_000_000n]],
+              ),
+            },
+          ]),
+        );
+      },
+      async getMintDecimals(mints: string[]) {
+        return new Map(mints.map((m) => [m, 6]));
+      },
+    } as unknown as HeliusClient;
+    const dexScreener = {
+      async getTokensByAddresses(mints: string[], _c: number, o: { failed?: Set<string> }) {
+        if (mints.includes("Unanswered")) o.failed?.add("Unanswered");
+        return mints.includes(NEW_LAUNCH)
+          ? [
+              {
+                mintAddress: NEW_LAUNCH,
+                priceUsd: 2,
+                liquidityUsd: 10_000,
+                marketCapUsd: 50_000,
+                volume24hUsd: 900,
+              },
+            ]
+          : [];
+      },
+    } as never;
+    const groups = [{ mintAddress: NEW_LAUNCH, addresses: [shell, busy] }];
+
+    const result = await resolveWalletHoldings(
+      groups,
+      helius,
+      { ...env, WALLET_HOLDINGS_SOURCE: "balances" },
+      {
+        valuation: { dexScreener },
+      },
+    );
+    expect(dasCalls).toBe(0);
+    expect(result.get(shell)).toEqual({ otherHoldingsUsd: 2, perMintUsd: { [NEW_LAUNCH]: 2 } });
+    expect(result.has(busy)).toBe(false);
+    expect(await prisma.walletHoldingsCache.findUnique({ where: { address: busy } })).toBeNull();
+
+    // No failure back-off for a deferred wallet: the next call asks again (the shell is cached).
+    await resolveWalletHoldings(
+      groups,
+      helius,
+      { ...env, WALLET_HOLDINGS_SOURCE: "balances" },
+      {
+        valuation: { dexScreener },
+      },
+    );
+    expect(balanceCalls).toBe(2);
   });
 });

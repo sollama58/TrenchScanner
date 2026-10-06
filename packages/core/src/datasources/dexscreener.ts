@@ -82,9 +82,15 @@ export class DexScreenerClient {
        * rather than stamping the whole lookup at its start or end.
        */
       seenAt?: Map<string, Date>;
+      /**
+       * When supplied, collects the mints whose batch got no answer (an error, or skipped past
+       * the deadline) - so a caller can tell "DexScreener has no pair for this" from "we never
+       * heard back", which a missing entry in the result can't.
+       */
+      failed?: Set<string>;
     } = {},
   ): Promise<CandidateToken[]> {
-    const { deadlineMs, seenAt, ...fetchOptions } = options;
+    const { deadlineMs, seenAt, failed, ...fetchOptions } = options;
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
 
@@ -101,9 +107,12 @@ export class DexScreenerClient {
     const results: CandidateToken[] = [];
     const deadline = deadlineMs === undefined ? Infinity : Date.now() + deadlineMs;
     let skipped = 0;
+    // Mints whose batch came back, for `failed` - see the note at the return.
+    const settled = new Set<string>();
     const work = forEachWithConcurrency(chunks, concurrency, async (chunk) => {
       if (Date.now() >= deadline) {
         skipped += chunk.length;
+        for (const mint of chunk) failed?.add(mint);
         return;
       }
       try {
@@ -112,10 +121,12 @@ export class DexScreenerClient {
           fetchOptions,
         );
         const answered = new Date();
+        for (const mint of chunk) settled.add(mint);
         const tokens = this.selectCanonicalPairs(pairs ?? [], new Set(chunk));
         if (seenAt) for (const t of tokens) seenAt.set(t.mintAddress, answered);
         results.push(...tokens);
       } catch (err) {
+        for (const mint of chunk) failed?.add(mint);
         logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
       }
     });
@@ -137,6 +148,8 @@ export class DexScreenerClient {
         deadlineMs,
       });
     }
+    // Batches still in flight past the deadline never reach the caller, so they count as failed.
+    if (failed) for (const mint of unique) if (!settled.has(mint)) failed.add(mint);
     // A copy: batches still in flight past the deadline keep pushing into `results`.
     return [...results];
   }

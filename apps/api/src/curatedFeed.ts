@@ -92,6 +92,9 @@ export const TOKEN_CARD_SELECT = {
   liveDataAt: true,
   lastLiveAt: true,
   lastMcapUsd: true,
+  // The last measured wallet readings, for a card whose snapshots lack one (rationed checks).
+  lastEmptyTop10WalletPct: true,
+  lastFreshTop10WalletPct: true,
 } satisfies Prisma.TokenSelect;
 
 /** Everything a curated card needs, in one Prisma include - plus withLatestSnapshots. */

@@ -59,4 +59,16 @@ describe("tokenChanges", () => {
       narrativeTags: [],
     });
   });
+
+  it("keeps the last measured wallet readings, never clearing them with an unknown", () => {
+    const base = { narrativeTags: ["animal"] };
+    const withReadings = { ...existing, lastEmptyTop10WalletPct: 40, lastFreshTop10WalletPct: 10 } as Token;
+    expect(tokenChanges(withReadings, { ...base, emptyTop10WalletPct: 40, freshTop10WalletPct: 10 })).toEqual(
+      {},
+    );
+    expect(tokenChanges(withReadings, { ...base, emptyTop10WalletPct: 60 })).toEqual({
+      lastEmptyTop10WalletPct: 60,
+    });
+    expect(tokenChanges(withReadings, base)).toEqual({});
+  });
 });

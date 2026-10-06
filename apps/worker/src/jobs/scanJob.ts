@@ -45,7 +45,15 @@ import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser 
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
-import { resolveWalletHoldings, computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
+import {
+  resolveWalletHoldings,
+  computeEmptyPct,
+  holdingsLookupBudget,
+  type WalletHoldings,
+  type WalletHoldingsOptions,
+} from "./walletHoldings.js";
+import { seedQuotes } from "./walletValuation.js";
+import { alertAwaitingWallets, noteAlertWallets } from "./walletPriority.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import {
@@ -146,6 +154,7 @@ function startWalletBackfill(
   helius: HeliusClient,
   env: Env,
   budget: { freshness: number; holdings: number },
+  valuation?: WalletHoldingsOptions["valuation"],
 ): void {
   if (walletBackfillInFlight || groups.length === 0) return;
   const work: Promise<unknown>[] = [];
@@ -159,7 +168,7 @@ function startWalletBackfill(
     );
   }
   if (budget.holdings > 0) {
-    work.push(resolveWalletHoldings(groups, helius, env, { maxNewLookups: budget.holdings }));
+    work.push(resolveWalletHoldings(groups, helius, env, { maxNewLookups: budget.holdings, valuation }));
   }
   if (work.length === 0) return;
   const backfill = Promise.all(work).then(
@@ -499,10 +508,21 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       mintAddress: c.mintAddress,
       addresses: onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? [],
       contender: passesEventPreGate(c, curatedBand),
+      // Alerted on while its empty-wallet share was still unknown: next in line after the
+      // contenders, so the card gets its reading within a cycle or two of the alert.
+      alerted: alertAwaitingWallets(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
     .filter((g) => g.addresses.length > 0)
-    .sort((a, b) => Number(b.contender) - Number(a.contender) || b.churn - a.churn);
+    .sort(
+      (a, b) =>
+        Number(b.contender) - Number(a.contender) ||
+        Number(b.alerted) - Number(a.alerted) ||
+        b.churn - a.churn,
+    );
+  // Every candidate's own price is already in hand - the wallet valuation reuses it for free.
+  seedQuotes(candidates);
+  const valuation = { dexScreener: deps.dexScreener };
   // The snipers figure, read from the chain for every token that passed the screen (see
   // launchSnipers.ts) - started now so it overlaps the wallet stage, and given the same budget:
   // past it the cycle reads the cache and the reads finish behind it for the next cycle.
@@ -585,9 +605,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
         },
       ),
       resolveWalletHoldings(walletGroups, deps.helius, env, {
-        maxNewLookups: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE,
+        maxNewLookups: holdingsLookupBudget(env),
         lookupGroups: waitedGroups,
         onLookups: (n) => (holdingsUsed = n),
+        valuation,
       }),
     ]);
     const settled = work.then(
@@ -605,10 +626,16 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       });
       walletResults = await fromCacheOnly();
     } else {
-      startWalletBackfill(walletGroups, deps.helius, env, {
-        freshness: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE - freshnessUsed,
-        holdings: env.WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE - holdingsUsed,
-      });
+      startWalletBackfill(
+        walletGroups,
+        deps.helius,
+        env,
+        {
+          freshness: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE - freshnessUsed,
+          holdings: holdingsLookupBudget(env) - holdingsUsed,
+        },
+        valuation,
+      );
     }
   }
   const [earliestActivityByAddress, holdingsByAddress] = walletResults ?? [new Map(), new Map()];
@@ -1156,6 +1183,8 @@ interface TokenScanFields {
   hasWebsite?: boolean;
   firstInBandAt?: Date;
   narrativeTags: string[];
+  emptyTop10WalletPct?: number;
+  freshTop10WalletPct?: number;
 }
 
 /**
@@ -1185,6 +1214,17 @@ export function tokenChanges(existing: Token | null, f: TokenScanFields): Prisma
   if (f.hasTelegram && !existing?.hasTelegram) out.hasTelegram = true;
   if (f.hasWebsite && !existing?.hasWebsite) out.hasWebsite = true;
   if (f.firstInBandAt && !existing?.firstInBandAt) out.firstInBandAt = f.firstInBandAt;
+  // Only a measured reading is written; an unknown one never clears the last known.
+  if (
+    f.emptyTop10WalletPct !== undefined &&
+    differs(existing?.lastEmptyTop10WalletPct, f.emptyTop10WalletPct)
+  )
+    out.lastEmptyTop10WalletPct = f.emptyTop10WalletPct;
+  if (
+    f.freshTop10WalletPct !== undefined &&
+    differs(existing?.lastFreshTop10WalletPct, f.freshTop10WalletPct)
+  )
+    out.lastFreshTop10WalletPct = f.freshTop10WalletPct;
   const tags = existing?.narrativeTags ?? null;
   if (!tags || tags.length !== f.narrativeTags.length || tags.some((t, i) => t !== f.narrativeTags[i])) {
     out.narrativeTags = f.narrativeTags;
@@ -1301,6 +1341,8 @@ async function processCandidate(
     hasWebsite: candidate.hasWebsite,
     firstInBandAt,
     narrativeTags: scored.narrativeTags,
+    emptyTop10WalletPct: scored.emptyTop10WalletPct,
+    freshTop10WalletPct: scored.freshTop10WalletPct,
   });
   const token =
     existingToken && Object.keys(changes).length === 0
@@ -1318,6 +1360,8 @@ async function processCandidate(
             hasWebsite: candidate.hasWebsite ?? false,
             firstInBandAt,
             narrativeTags: scored.narrativeTags,
+            lastEmptyTop10WalletPct: scored.emptyTop10WalletPct,
+            lastFreshTop10WalletPct: scored.freshTop10WalletPct,
           },
           update: changes,
         });
@@ -1376,6 +1420,7 @@ async function processCandidate(
   } catch (err) {
     logger.error("failed to write matches", { mint: token.mintAddress, error: String(err) });
   }
+  noteAlertWallets(token.mintAddress, matchCount > 0, scored.emptyTop10WalletPct !== undefined);
 
   // Bank a curated-alerts training sample for every passing candidate - see recordCandidateSample
   // for why it's every candidate and not just matched ones. Then, if this is the token's first

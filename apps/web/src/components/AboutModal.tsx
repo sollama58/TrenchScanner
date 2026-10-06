@@ -63,8 +63,9 @@ export function AboutModal({
           Every scanned token gets all of the checks above. Two checks on its top 10 holders are rationed: how
           many are fresh wallets, and how many are empty (under $25 of other tokens). Each one is a paid
           lookup per wallet, so the scanner checks a limited number of wallets per scan, starting with the
-          tokens closest to alerting. The rest are checked as room allows. Until then a card shows &ldquo;Not
-          checked&rdquo;, which means the check hasn&apos;t run yet, not that the wallets are clean.
+          tokens closest to alerting, then tokens already alerted on. The rest are checked as room allows.
+          Until then a card shows &ldquo;Not checked&rdquo;, which means the check hasn&apos;t run yet, not
+          that the wallets are clean. Once a token has been checked, its card keeps the latest reading.
         </p>
 
         <h3>Two kinds of alert</h3>
