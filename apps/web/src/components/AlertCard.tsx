@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Card } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
@@ -51,14 +52,13 @@ export function AlertCard({
   const runPeakAfter =
     !nowCounts || (recordedPeak ?? 0) >= (move ?? 0) ? (curated?.outcome.runPeakMinutes ?? null) : null;
   // Measured at alert time when the wallet lookups made it in time; otherwise from a later scan.
-  const freshAtAlert = s.freshTop10WalletPct;
+  const freshAtAlert = s.freshTop10WalletPct ?? null;
   const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
   const freshPct = freshAtAlert ?? freshLater;
   // The empty-wallet share, with the same fallback. Both wallet checks are paid lookups with a
-  // per-scan budget, so a token can go unchecked; the card says so rather than showing a blank.
+  // per-scan budget, so a token can go unchecked; the tile says so rather than showing a blank.
   const emptyAtAlert = s.emptyTop10WalletPct ?? null;
   const emptyPct = emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? null;
-  const walletsChecked = freshPct !== null || emptyPct !== null;
   // The same fallback for the first-buyers count, read from the launch's first transactions.
   const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
   const firstHolding = buyersFrom?.firstBuyersHolding ?? null;
@@ -180,31 +180,18 @@ export function AlertCard({
             <dt>Top 10</dt>
             <dd className="num">{pct(s.top10HolderPct)}</dd>
           </div>
-          <div
-            className="wide"
-            title={
-              walletsChecked
-                ? `Fresh: top-10 holder wallets first used in the last 24h${
-                    freshPct === null
-                      ? " (not checked yet)"
-                      : freshAtAlert === null
-                        ? ", from a scan after the alert"
-                        : ", at alert time"
-                  }. Empty: top-10 holders with under $25 of other tokens${
-                    emptyPct === null
-                      ? " (not checked yet)"
-                      : emptyAtAlert === null
-                        ? ", from a scan after the alert"
-                        : ", at alert time"
-                  }.`
-                : "Wallet checks haven't run for this token yet. They're limited per scan, and tokens closest to alerting go first."
-            }
-          >
-            <dt>Fresh / Empty</dt>
-            <dd className={walletsChecked ? "num" : "muted"}>
-              {walletsChecked ? `${pct(freshPct)} / ${pct(emptyPct)}` : "Not checked"}
-            </dd>
-          </div>
+          <WalletStat
+            label="Fresh"
+            value={freshPct}
+            atAlert={freshAtAlert !== null}
+            explain="top-10 holder wallets first used in the last 24h"
+          />
+          <WalletStat
+            label="Empty"
+            value={emptyPct}
+            atAlert={emptyAtAlert !== null}
+            explain="top-10 holder wallets with under $25 of other tokens"
+          />
           <div
             title={
               firstHolding === null
@@ -284,32 +271,158 @@ export function AlertCard({
   );
 }
 
-/** The token's image as a small thumbnail, falling back to the original URL, then to its initials. */
+/** Over this share of the top 10 a wallet check fails the safety screen, so the tile turns red. */
+const SAFETY_WALLET_PCT = 70;
+
+/** One wallet-check tile (Fresh or Empty): the share, where it was read, or that it wasn't checked. */
+function WalletStat({
+  label,
+  value,
+  atAlert,
+  explain,
+}: {
+  label: string;
+  value: number | null;
+  atAlert: boolean;
+  explain: string;
+}) {
+  const title =
+    value === null
+      ? `${label}: not checked yet. Wallet checks are limited per scan, and tokens closest to alerting go first.`
+      : `${label}: ${explain}, ${atAlert ? "at alert time" : "from a scan after the alert"}.`;
+  return (
+    <div className={value !== null && value > SAFETY_WALLET_PCT ? "risky" : undefined} title={title}>
+      <dt>{label}</dt>
+      <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
+    </div>
+  );
+}
+
+/** Thumbnail size requested from the image host: covers the largest avatar (phones) at 2x density. */
+const THUMB_PX = 128;
+/** The desktop hover preview is this many times the avatar's size, kept inside the window. */
+const PREVIEW_SCALE = 6;
+const PREVIEW_GAP = 12;
+const EDGE = 8;
+/** Only a real mouse/trackpad gets the preview; touch screens fire hover on tap. */
+const HOVER_QUERY = "(hover: hover) and (pointer: fine)";
+
+type PreviewSpot = { left: number; top: number; size: number };
+
+/** Where the preview goes: beside the avatar (right, else left), clamped to the window. */
+function previewSpot(rect: DOMRect): PreviewSpot {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const size = Math.max(0, Math.min(rect.width * PREVIEW_SCALE, vw - 2 * EDGE, vh - 2 * EDGE));
+  let left = rect.right + PREVIEW_GAP;
+  if (left + size > vw - EDGE) left = rect.left - PREVIEW_GAP - size;
+  left = Math.min(Math.max(EDGE, left), vw - EDGE - size);
+  const top = Math.min(Math.max(EDGE, rect.top + rect.height / 2 - size / 2), vh - EDGE - size);
+  return { left, top, size };
+}
+
+/**
+ * The token's image as a small thumbnail, falling back to the original URL, then to its initials.
+ * On desktop, hovering it shows a large preview; phones get a bigger avatar instead.
+ */
 function TokenAvatar({ url, symbol }: { url: string | null; symbol: string | null }) {
   // 0: thumbnail, 1: original URL, 2: give up.
   const [attempt, setAttempt] = useState(0);
-  const thumb = url ? tokenThumb(url) : null;
-  const src = !url?.startsWith("https://")
-    ? null
-    : attempt === 0
-      ? thumb
-      : attempt === 1 && thumb !== url
-        ? url
-        : null;
+  const [spot, setSpot] = useState<PreviewSpot | null>(null);
+  const ref = useRef<HTMLImageElement>(null);
+  const safe = url?.startsWith("https://") ? url : null;
+  const thumb = safe ? tokenThumb(safe, THUMB_PX) : null;
+  const src = !safe ? null : attempt === 0 ? thumb : attempt === 1 && thumb !== safe ? safe : null;
+
+  // A scroll or resize moves the avatar out from under the preview; close it rather than chase it.
+  useEffect(() => {
+    if (!spot) return;
+    const close = () => setSpot(null);
+    window.addEventListener("scroll", close, { capture: true, passive: true });
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("scroll", close, { capture: true });
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [spot]);
+
   if (!src) return <span className="avatar placeholder">{(symbol ?? "?").slice(0, 2)}</span>;
+
+  const open = (e: React.PointerEvent) => {
+    if (e.pointerType !== "mouse" || !window.matchMedia?.(HOVER_QUERY).matches || !ref.current) return;
+    const s = previewSpot(ref.current.getBoundingClientRect());
+    setSpot(s.size >= 80 ? s : null);
+  };
+
   return (
-    // Launcher-supplied URL: https only, and no referrer sent to whoever hosts it.
-    <img
-      className="avatar"
-      src={src}
-      alt=""
-      width={40}
-      height={40}
-      loading="lazy"
-      decoding="async"
-      referrerPolicy="no-referrer"
-      onError={() => setAttempt((a) => a + 1)}
-    />
+    <>
+      {/* Launcher-supplied URL: https only, and no referrer sent to whoever hosts it. */}
+      <img
+        ref={ref}
+        className="avatar"
+        src={src}
+        alt=""
+        width={44}
+        height={44}
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        onError={() => {
+          setSpot(null);
+          setAttempt((a) => a + 1);
+        }}
+        onPointerEnter={open}
+        onPointerLeave={() => setSpot(null)}
+      />
+      {spot &&
+        safe &&
+        createPortal(
+          <AvatarPreview spot={spot} small={src} large={tokenThumb(safe, 512)} original={safe} />,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/**
+ * The hover preview, outside the card (whose overflow and hover transform would clip or shift a
+ * fixed child). The small thumbnail already loaded shows at once, and the sharp image covers it
+ * when it arrives; if that fails, the original URL, else the small one stays.
+ */
+function AvatarPreview({
+  spot,
+  small,
+  large,
+  original,
+}: {
+  spot: PreviewSpot;
+  small: string;
+  large: string;
+  original: string;
+}) {
+  const [sharp, setSharp] = useState<string | null>(large);
+  const [ready, setReady] = useState(false);
+  return (
+    <div
+      className="avatar-preview"
+      aria-hidden="true"
+      style={{ left: spot.left, top: spot.top, width: spot.size, height: spot.size }}
+    >
+      <img src={small} alt="" referrerPolicy="no-referrer" />
+      {sharp && (
+        <img
+          className={ready ? "ready" : undefined}
+          src={sharp}
+          alt=""
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onLoad={() => setReady(true)}
+          onError={() => setSharp(sharp !== original && sharp === large ? original : null)}
+        />
+      )}
+    </div>
   );
 }
 
