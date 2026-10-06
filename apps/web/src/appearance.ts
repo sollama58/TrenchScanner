@@ -290,9 +290,6 @@ async function save() {
   }
 }
 
-/** Set by the Live tab's Customize button so the Settings tab opens at the appearance section. */
-export const openAt = { appearance: false };
-
 // ---- Applying it ----
 
 const COLOR_SLOTS = ["win", "loss", "accent", "mine"] as const;

@@ -3389,16 +3389,27 @@ button.small-btn {
 .cards[data-cols="4"] {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-/* Fixed columns give way where the cards would get too narrow to read. */
-@media (max-width: 1180px) {
+/* Fixed columns give way where the cards would get too narrow to read. Measured on the feed
+   panel, not the window, so the Customize drawer narrowing the page counts too. */
+.panel.feed {
+  container: feed / inline-size;
+}
+@container feed (max-width: 1080px) {
   .cards[data-cols="4"] {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
-@media (max-width: 960px) {
+@container feed (max-width: 800px) {
   .cards[data-cols="3"],
   .cards[data-cols="4"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container feed (max-width: 520px) {
+  .cards[data-cols="2"],
+  .cards[data-cols="3"],
+  .cards[data-cols="4"] {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .cards[data-corners="square"] .card {
@@ -3707,13 +3718,115 @@ button.small-btn {
     padding: 6px 10px;
   }
 }
-/* Opened from the Live tab's Customize button: land below the sticky top bar. */
-#feed-appearance {
-  scroll-margin-top: 84px;
-}
 /* A phone card has no room to grow: big text would cut the numbers short, so it stops at 105%. */
 @media (max-width: 640px) {
   .cards .card {
     zoom: min(var(--card-zoom, 1), 1.05);
+  }
+}
+
+/* ---------- Live tab: Customize panel (CustomizeDrawer) ---------- */
+.stats-btn.on {
+  border-color: color-mix(in srgb, var(--brand-a) 60%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 14%, var(--surface-2));
+}
+.customize-drawer {
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 400px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-solid);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -24px 0 48px -24px rgba(0, 0, 0, 0.5);
+  animation: drawer-in 0.16s ease-out;
+  outline: none;
+}
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0.6;
+  }
+}
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.drawer-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  margin: 0 0 2px;
+}
+.drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 18px 24px;
+}
+/* The narrow panel stacks each label over its choices. */
+.drawer-body .choice-row,
+.drawer-body .color-row {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.drawer-body .preset-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.drawer-body .field-groups {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+/* Wide screens: the page makes room so the drawer sits beside the cards, not over them. */
+@media (min-width: 900px) {
+  body.drawer-open .content,
+  body.drawer-open .topbar-inner {
+    margin-right: 400px;
+  }
+}
+/* Narrower screens and phones: a short sheet along the bottom, the feed visible above it. */
+@media (max-width: 899px) {
+  .customize-drawer {
+    top: auto;
+    left: 0;
+    width: auto;
+    height: 50dvh;
+    border-left: none;
+    border-top: 1px solid var(--border-strong);
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -24px 48px -24px rgba(0, 0, 0, 0.5);
+    animation: sheet-up 0.18s ease-out;
+  }
+  .drawer-head {
+    padding: 12px 16px 8px;
+  }
+  .drawer-body {
+    padding: 10px 16px 20px;
+  }
+  body.drawer-open {
+    padding-bottom: 50dvh;
+  }
+}
+@media (max-width: 640px) {
+  /* Above the bottom tab bar. */
+  .customize-drawer {
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    height: 46dvh;
+  }
+  body.drawer-open {
+    padding-bottom: calc(46dvh + 64px + env(safe-area-inset-bottom));
   }
 }

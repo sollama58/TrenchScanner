@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   type CuratedStats,
   type FeedStats,
@@ -15,7 +15,8 @@ import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon 
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, useNow, useNudgeStream } from "../hooks";
 import { ago, pct } from "../format";
-import { feedGridProps, openAt, useAppearance } from "../appearance";
+import { feedGridProps, useAppearance } from "../appearance";
+import { CustomizeDrawer } from "../components/CustomizeDrawer";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
 const MIN_TEASER = 10;
@@ -33,6 +34,8 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [customizing, setCustomizing] = useState(false);
+  const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
   const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
   // "saved": the API mixes in model calls per this user's own switch and checked models.
@@ -107,6 +110,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
           )
         }
       />
+      <CustomizeDrawer open={customizing} onClose={closeCustomize} />
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} targets={t} />
       <section className="panel feed">
         <header className="section-head">
@@ -123,18 +127,6 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
               >
                 <InfoIcon size={16} />
               </button>
-              <button
-                type="button"
-                className="ghost icon-btn"
-                onClick={() => {
-                  openAt.appearance = true;
-                  goTo("settings");
-                }}
-                aria-label="Customize how your feed looks"
-                title="Customize how your feed looks"
-              >
-                <PaletteIcon size={16} />
-              </button>
             </div>
           </div>
           <div className="feed-controls">
@@ -149,6 +141,16 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
               {fs && fs.graded >= MIN_TEASER && fs.hit2xPct !== null && (
                 <span className="num stats-teaser">2x {pct(fs.hit2xPct, 0)}</span>
               )}
+            </button>
+            <button
+              type="button"
+              className={`ghost stats-btn${customizing ? " on" : ""}`}
+              aria-expanded={customizing}
+              onClick={() => setCustomizing((o) => !o)}
+              title="Colors, spacing, columns and what each card shows, changed right here on your feed"
+            >
+              <PaletteIcon size={14} />
+              Customize
             </button>
             <button
               type="button"

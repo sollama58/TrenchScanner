@@ -6,7 +6,6 @@ import {
   PRESETS,
   SWATCHES,
   feedGridProps,
-  openAt,
   sameAppearance,
   setAppearance,
   useAppearance,
@@ -27,25 +26,12 @@ export function AppearancePanel() {
   const save = useAppearanceSave();
   const now = useNow(60_000);
   const [sample, setSample] = useState<"won" | "missed">("won");
-  const ref = useRef<HTMLElement>(null);
   const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
   const cards = useMemo(() => sampleCards(now), [now]);
-
-  // Opened from the Live tab's Customize button: bring this section into view.
-  useEffect(() => {
-    if (!openAt.appearance) return;
-    openAt.appearance = false;
-    ref.current?.scrollIntoView({ block: "start" });
-  }, []);
-
-  const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
   const isDefault = sameAppearance(look, DEFAULT_APPEARANCE);
 
-  const toggleField = (f: CardField) =>
-    setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });
-
   return (
-    <section className="panel appearance" id="feed-appearance" ref={ref}>
+    <section className="panel appearance" id="feed-appearance">
       <header className="section-head">
         <div>
           <span className="eyebrow">
@@ -93,176 +79,192 @@ export function AppearancePanel() {
           </div>
         </div>
 
-        <div className="appearance-controls">
-          <fieldset>
-            <legend>Presets</legend>
-            <div className="preset-options">
-              {PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={`sound-option${activePreset === p.id ? " on" : ""}`}
-                  aria-pressed={activePreset === p.id}
-                  onClick={() => setAppearance(withPreset(look, p.look))}
-                >
-                  <strong>{p.label}</strong>
-                  <small className="muted">{p.hint}</small>
-                </button>
-              ))}
-            </div>
-            <p className="faint small">Presets keep your theme and colors.</p>
-          </fieldset>
-
-          <fieldset>
-            <legend>Theme and colors</legend>
-            <Choice
-              label="Theme"
-              value={look.theme}
-              options={[
-                ["auto", "Match device"],
-                ["dark", "Dark"],
-                ["light", "Light"],
-              ]}
-              onChange={(theme) => setAppearance({ theme })}
-            />
-            <ColorRow
-              label="Wins"
-              hint="Won cards, Peak and up moves"
-              value={look.win}
-              onChange={(win) => setAppearance({ win })}
-            />
-            <ColorRow
-              label="Losses"
-              hint="Missed cards, down moves and risky wallet tiles"
-              value={look.loss}
-              onChange={(loss) => setAppearance({ loss })}
-            />
-            <ColorRow
-              label="Model calls"
-              hint="Model pills, reasons and the model card edge"
-              value={look.accent}
-              onChange={(accent) => setAppearance({ accent })}
-            />
-            <ColorRow
-              label="Your filter"
-              hint="Your filter's pill and card edge"
-              value={look.mine}
-              onChange={(mine) => setAppearance({ mine })}
-            />
-          </fieldset>
-
-          <fieldset>
-            <legend>Layout and spacing</legend>
-            <Choice
-              label="Spacing"
-              value={look.density}
-              options={[
-                ["compact", "Compact"],
-                ["cozy", "Standard"],
-                ["roomy", "Roomy"],
-              ]}
-              onChange={(density) => setAppearance({ density })}
-            />
-            <Choice
-              label="Columns on a computer"
-              value={String(look.columns)}
-              options={[
-                ["0", "Auto"],
-                ["1", "1"],
-                ["2", "2"],
-                ["3", "3"],
-                ["4", "4"],
-              ]}
-              onChange={(c) => setAppearance({ columns: Number(c) })}
-            />
-            {look.columns === 0 && (
-              <Choice
-                label="Card width"
-                value={look.cardWidth}
-                options={[
-                  ["narrow", "Narrow"],
-                  ["normal", "Standard"],
-                  ["wide", "Wide"],
-                ]}
-                onChange={(cardWidth) => setAppearance({ cardWidth })}
-              />
-            )}
-            <Choice
-              label="Columns on a phone"
-              value={String(look.phoneColumns)}
-              options={[
-                ["1", "1"],
-                ["2", "2"],
-              ]}
-              onChange={(c) => setAppearance({ phoneColumns: Number(c) })}
-            />
-            <TextSize value={look.textSize} onCommit={(textSize) => setAppearance({ textSize })} />
-            <Choice
-              label="Corners"
-              value={look.corners}
-              options={[
-                ["square", "Square"],
-                ["rounded", "Rounded"],
-                ["round", "Round"],
-              ]}
-              onChange={(corners) => setAppearance({ corners })}
-            />
-            <Choice
-              label="Token image"
-              value={look.avatar}
-              options={[
-                ["small", "Small"],
-                ["normal", "Standard"],
-                ["large", "Large"],
-              ]}
-              onChange={(avatar) => setAppearance({ avatar })}
-            />
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={look.sourceStripe}
-                onChange={() => setAppearance({ sourceStripe: !look.sourceStripe })}
-              />
-              Colored edge for your filter vs model calls
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={look.learningNote}
-                onChange={() => setAppearance({ learningNote: !look.learningNote })}
-              />
-              &ldquo;Learning from…&rdquo; note under the feed
-            </label>
-          </fieldset>
-
-          <fieldset>
-            <legend>What cards show</legend>
-            <div className="field-groups">
-              {CARD_FIELD_GROUPS.map((g) => (
-                <div key={g.title} className="field-group">
-                  <h4>{g.title}</h4>
-                  {g.fields.map((f) => (
-                    <label key={f.id} className="check">
-                      <input type="checkbox" checked={!hidden.has(f.id)} onChange={() => toggleField(f.id)} />
-                      {f.label}
-                    </label>
-                  ))}
-                </div>
-              ))}
-            </div>
-            {look.hidden.length > 0 && (
-              <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
-                Show everything
-              </button>
-            )}
-          </fieldset>
-        </div>
+        <AppearanceControls />
       </div>
     </section>
   );
 }
 
-function SaveNote({ save }: { save: ReturnType<typeof useAppearanceSave> }) {
+/**
+ * Every appearance control (presets, theme and colors, layout, card fields). Shared by the Settings
+ * section and the Live tab's Customize panel, where the feed itself is the preview.
+ */
+export function AppearanceControls() {
+  const look = useAppearance();
+  const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
+  const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
+  const toggleField = (f: CardField) =>
+    setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });
+
+  return (
+    <div className="appearance-controls">
+      <fieldset>
+        <legend>Presets</legend>
+        <div className="preset-options">
+          {PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`sound-option${activePreset === p.id ? " on" : ""}`}
+              aria-pressed={activePreset === p.id}
+              onClick={() => setAppearance(withPreset(look, p.look))}
+            >
+              <strong>{p.label}</strong>
+              <small className="muted">{p.hint}</small>
+            </button>
+          ))}
+        </div>
+        <p className="faint small">Presets keep your theme and colors.</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Theme and colors</legend>
+        <Choice
+          label="Theme"
+          value={look.theme}
+          options={[
+            ["auto", "Match device"],
+            ["dark", "Dark"],
+            ["light", "Light"],
+          ]}
+          onChange={(theme) => setAppearance({ theme })}
+        />
+        <ColorRow
+          label="Wins"
+          hint="Won cards, Peak and up moves"
+          value={look.win}
+          onChange={(win) => setAppearance({ win })}
+        />
+        <ColorRow
+          label="Losses"
+          hint="Missed cards, down moves and risky wallet tiles"
+          value={look.loss}
+          onChange={(loss) => setAppearance({ loss })}
+        />
+        <ColorRow
+          label="Model calls"
+          hint="Model pills, reasons and the model card edge"
+          value={look.accent}
+          onChange={(accent) => setAppearance({ accent })}
+        />
+        <ColorRow
+          label="Your filter"
+          hint="Your filter's pill and card edge"
+          value={look.mine}
+          onChange={(mine) => setAppearance({ mine })}
+        />
+      </fieldset>
+
+      <fieldset>
+        <legend>Layout and spacing</legend>
+        <Choice
+          label="Spacing"
+          value={look.density}
+          options={[
+            ["compact", "Compact"],
+            ["cozy", "Standard"],
+            ["roomy", "Roomy"],
+          ]}
+          onChange={(density) => setAppearance({ density })}
+        />
+        <Choice
+          label="Columns on a computer"
+          value={String(look.columns)}
+          options={[
+            ["0", "Auto"],
+            ["1", "1"],
+            ["2", "2"],
+            ["3", "3"],
+            ["4", "4"],
+          ]}
+          onChange={(c) => setAppearance({ columns: Number(c) })}
+        />
+        {look.columns === 0 && (
+          <Choice
+            label="Card width"
+            value={look.cardWidth}
+            options={[
+              ["narrow", "Narrow"],
+              ["normal", "Standard"],
+              ["wide", "Wide"],
+            ]}
+            onChange={(cardWidth) => setAppearance({ cardWidth })}
+          />
+        )}
+        <Choice
+          label="Columns on a phone"
+          value={String(look.phoneColumns)}
+          options={[
+            ["1", "1"],
+            ["2", "2"],
+          ]}
+          onChange={(c) => setAppearance({ phoneColumns: Number(c) })}
+        />
+        <TextSize value={look.textSize} onCommit={(textSize) => setAppearance({ textSize })} />
+        <Choice
+          label="Corners"
+          value={look.corners}
+          options={[
+            ["square", "Square"],
+            ["rounded", "Rounded"],
+            ["round", "Round"],
+          ]}
+          onChange={(corners) => setAppearance({ corners })}
+        />
+        <Choice
+          label="Token image"
+          value={look.avatar}
+          options={[
+            ["small", "Small"],
+            ["normal", "Standard"],
+            ["large", "Large"],
+          ]}
+          onChange={(avatar) => setAppearance({ avatar })}
+        />
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.sourceStripe}
+            onChange={() => setAppearance({ sourceStripe: !look.sourceStripe })}
+          />
+          Colored edge for your filter vs model calls
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.learningNote}
+            onChange={() => setAppearance({ learningNote: !look.learningNote })}
+          />
+          &ldquo;Learning from…&rdquo; note under the feed
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>What cards show</legend>
+        <div className="field-groups">
+          {CARD_FIELD_GROUPS.map((g) => (
+            <div key={g.title} className="field-group">
+              <h4>{g.title}</h4>
+              {g.fields.map((f) => (
+                <label key={f.id} className="check">
+                  <input type="checkbox" checked={!hidden.has(f.id)} onChange={() => toggleField(f.id)} />
+                  {f.label}
+                </label>
+              ))}
+            </div>
+          ))}
+        </div>
+        {look.hidden.length > 0 && (
+          <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
+            Show everything
+          </button>
+        )}
+      </fieldset>
+    </div>
+  );
+}
+
+export function SaveNote({ save }: { save: ReturnType<typeof useAppearanceSave> }) {
   if (save.state === "idle") return null;
   return (
     <small
