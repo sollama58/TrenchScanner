@@ -867,8 +867,56 @@ export interface AlertPrefs {
   notifyOn: { filterMatches: boolean; modelCalls: boolean };
 }
 
+/** Card fields a user can hide (the API's CARD_FIELDS). */
+export type CardField =
+  | "tokenName"
+  | "time"
+  | "modelPill"
+  | "conviction"
+  | "calibrated"
+  | "result"
+  | "alert"
+  | "now"
+  | "peak"
+  | "ath"
+  | "vol"
+  | "holders"
+  | "age"
+  | "top10"
+  | "fresh"
+  | "empty"
+  | "snipers"
+  | "dev"
+  | "reasons"
+  | "mint"
+  | "links";
+
+/** How the Live feed looks for this user (apps/api/src/feedAppearance.ts). */
+export interface FeedAppearance {
+  theme: "auto" | "dark" | "light";
+  /** #rrggbb, or null for the theme's own color. */
+  accent: string | null;
+  mine: string | null;
+  win: string | null;
+  loss: string | null;
+  density: "compact" | "cozy" | "roomy";
+  /** Desktop columns; 0 fits as many as the width allows. */
+  columns: number;
+  cardWidth: "narrow" | "normal" | "wide";
+  phoneColumns: number;
+  /** Percent, 85-125. */
+  textSize: number;
+  corners: "square" | "rounded" | "round";
+  avatar: "small" | "normal" | "large";
+  sourceStripe: boolean;
+  learningNote: boolean;
+  hidden: CardField[];
+}
+
 export interface Settings {
   alerts: AlertPrefs;
+  /** Absent from API builds before feed appearance. */
+  appearance?: FeedAppearance;
   account: {
     walletAddress: string;
     memberSince: string;

@@ -47,6 +47,9 @@ model User {
   /// How alerts reach this user in the dashboard (sound, volume, browser notifications) - see
   /// alertPrefs.ts in apps/api for the shape. Null = defaults.
   alertPrefs      Json?
+  /// How the Live feed looks for this user (theme, colors, spacing, columns, which card fields
+  /// show) - see feedAppearance.ts in apps/api for the shape. Null = the default look.
+  feedAppearance  Json?
 
   filters      UserFilter[]
   matches      Match[]

@@ -69,6 +69,33 @@
   }
 }
 
+/* The theme picked in Settings › Feed appearance; "Match device" leaves data-theme unset. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #f4f5f9;
+  --surface: rgba(255, 255, 255, 0.86);
+  --surface-solid: #ffffff;
+  --surface-2: #f5f6fa;
+  --surface-3: #eceef4;
+  --ink: #0c0e14;
+  --ink-2: #4b5263;
+  --muted: #6b7280;
+  --grid: #e6e8ef;
+  --axis: #c9cdd8;
+  --border: rgba(12, 14, 20, 0.08);
+  --border-strong: rgba(12, 14, 20, 0.16);
+  --highlight: rgba(255, 255, 255, 0.9);
+  --brand-ink: #6d4ae6;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --good-ink: #067a2a;
+  --good-wash: rgba(12, 163, 12, 0.08);
+  --bad-ink: #b42626;
+  --bad-wash: rgba(208, 59, 59, 0.08);
+  --info-wash: rgba(42, 120, 214, 0.09);
+  --shadow: 0 1px 2px rgba(12, 14, 20, 0.04), 0 12px 32px -20px rgba(12, 14, 20, 0.25);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1019,7 +1046,7 @@ img.avatar {
 }
 .card-figures {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--fig-cols, 3), minmax(0, 1fr));
   gap: 6px;
 }
 .fig {
@@ -1076,7 +1103,7 @@ img.avatar {
 /* Eight small boxes, four to a row: market (Vol, Holders, Age, Top 10), then wallets and dev. */
 .card-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--stat-cols, 4), minmax(0, 1fr));
   gap: 6px;
   margin: 0;
   padding: 0;
@@ -3234,5 +3261,459 @@ button.small-btn {
   }
   .board-actions {
     grid-column: 2;
+  }
+}
+
+/* ---------- Live tab: Stats button and popup ---------- */
+.stats-btn {
+  gap: 6px;
+  padding: 6px 11px;
+}
+.stats-teaser {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+.stats-modal {
+  width: min(680px, calc(100vw - 32px));
+}
+.stats-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+.stats-grid .kpi {
+  min-height: 0;
+  padding: 16px;
+}
+.stats-grid .stats-wide {
+  grid-column: 1 / -1;
+}
+.stats-note {
+  margin: 12px 0 10px;
+}
+/* Phones: the popup rises from the bottom as a sheet, within thumb reach. */
+@media (max-width: 640px) {
+  .sheet-modal {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 88dvh;
+    margin: auto 0 0;
+    border-radius: 18px 18px 0 0;
+    border-bottom: none;
+    padding-bottom: env(safe-area-inset-bottom);
+    animation: sheet-up 0.18s ease-out;
+  }
+  .stats-grid {
+    gap: 8px;
+  }
+  .stats-grid .kpi {
+    padding: 12px;
+  }
+  .stats-grid .ring-svg {
+    width: 72px;
+    height: 72px;
+  }
+  .stats-grid .kpi-value {
+    font-size: 24px;
+  }
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+}
+
+/* ---------- Feed appearance (Settings › Feed appearance) ----------
+   The card grid carries data-* attributes and CSS variables (appearance.ts feedGridProps), set
+   only where the user's choice differs from the default, so the default look is the rules above. */
+.cards .card {
+  zoom: var(--card-zoom, 1);
+}
+.cards[data-density="compact"] {
+  gap: 8px;
+}
+.cards[data-density="compact"] .card {
+  padding: 10px 10px 8px;
+  gap: 8px;
+}
+.cards[data-density="compact"] .card-figures,
+.cards[data-density="compact"] .card-stats {
+  gap: 4px;
+}
+.cards[data-density="compact"] .fig {
+  padding: 6px 8px;
+}
+.cards[data-density="compact"] .card-stats div {
+  padding: 4px 6px;
+}
+.cards[data-density="compact"] .card-foot {
+  padding-top: 7px;
+}
+.cards[data-density="roomy"] {
+  gap: 20px;
+}
+.cards[data-density="roomy"] .card {
+  padding: 18px 18px 16px;
+  gap: 16px;
+}
+.cards[data-density="roomy"] .card-figures,
+.cards[data-density="roomy"] .card-stats {
+  gap: 8px;
+}
+.cards[data-density="roomy"] .fig {
+  padding: 12px 13px;
+}
+.cards[data-density="roomy"] .card-stats div {
+  padding: 8px 10px;
+}
+.cards[data-width="narrow"] {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.cards[data-width="wide"] {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr));
+}
+.cards[data-cols="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.cards[data-cols="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.cards[data-cols="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.cards[data-cols="4"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+/* Fixed columns give way where the cards would get too narrow to read. */
+@media (max-width: 1180px) {
+  .cards[data-cols="4"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 960px) {
+  .cards[data-cols="3"],
+  .cards[data-cols="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.cards[data-corners="square"] .card {
+  border-radius: 4px;
+}
+.cards[data-corners="square"] .fig,
+.cards[data-corners="square"] .card-stats div,
+.cards[data-corners="square"] .reasons li,
+.cards[data-corners="square"] .mint {
+  border-radius: 3px;
+}
+.cards[data-corners="round"] .card {
+  border-radius: 22px;
+}
+.cards[data-corners="round"] .fig {
+  border-radius: 14px;
+}
+.cards[data-corners="round"] .card-stats div {
+  border-radius: 11px;
+}
+.cards[data-avatar="small"] .avatar {
+  width: 34px;
+  height: 34px;
+}
+.cards[data-avatar="large"] .avatar {
+  width: 56px;
+  height: 56px;
+}
+.cards[data-stripe="off"] .card.src-mine,
+.cards[data-stripe="off"] .card.src-model {
+  border-left: 1px solid var(--border);
+}
+@media (max-width: 640px) {
+  .cards[data-width],
+  .cards[data-cols] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cards[data-avatar="small"] .avatar {
+    width: 44px;
+    height: 44px;
+  }
+  .cards[data-avatar="large"] .avatar {
+    width: 68px;
+    height: 68px;
+  }
+  /* Two cards side by side on a phone: everything inside packs down to fit half the width. */
+  .cards[data-phone-cols="2"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .cards[data-phone-cols="2"] .card {
+    padding: 9px 8px 8px;
+    gap: 7px;
+    border-radius: 11px;
+  }
+  .cards[data-phone-cols="2"] .card-head {
+    gap: 7px;
+    flex-wrap: wrap;
+  }
+  .cards[data-phone-cols="2"] .avatar {
+    width: 36px;
+    height: 36px;
+  }
+  .cards[data-phone-cols="2"][data-avatar="large"] .avatar {
+    width: 48px;
+    height: 48px;
+  }
+  .cards[data-phone-cols="2"][data-avatar="small"] .avatar {
+    width: 28px;
+    height: 28px;
+  }
+  .cards[data-phone-cols="2"] .symbol {
+    font-size: 14px;
+    max-width: 100%;
+  }
+  .cards[data-phone-cols="2"] .token-name {
+    display: none;
+  }
+  .cards[data-phone-cols="2"] .meta-row {
+    gap: 4px;
+  }
+  .cards[data-phone-cols="2"] .pill {
+    font-size: 10px;
+    padding: 1px 6px;
+    max-width: 100%;
+  }
+  .cards[data-phone-cols="2"] .card-result {
+    font-size: 13px;
+    padding: 1px 6px;
+  }
+  /* The three price boxes become three short rows. */
+  .cards[data-phone-cols="2"] .card-figures {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+  .cards[data-phone-cols="2"] .fig {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 6px;
+    row-gap: 0;
+    padding: 4px 7px;
+  }
+  .cards[data-phone-cols="2"] .fig > label {
+    flex: 1 0 auto;
+  }
+  .cards[data-phone-cols="2"] .fig > .num {
+    font-size: 13.5px;
+  }
+  .cards[data-phone-cols="2"] .fig .delta,
+  .cards[data-phone-cols="2"] .fig .ath {
+    flex-basis: 100%;
+    text-align: right;
+    font-size: 10.5px;
+  }
+  .cards[data-phone-cols="2"] .card-stats {
+    grid-template-columns: repeat(var(--stat-cols-narrow, 2), minmax(0, 1fr));
+    gap: 3px;
+    font-size: 12px;
+  }
+  .cards[data-phone-cols="2"] .card-stats div {
+    padding: 3px 6px;
+  }
+  .cards[data-phone-cols="2"] .reasons li {
+    font-size: 10.5px;
+  }
+  .cards[data-phone-cols="2"] .card-foot {
+    flex-wrap: wrap;
+    justify-content: center;
+    padding-top: 6px;
+  }
+  .cards[data-phone-cols="2"] .card-links {
+    gap: 9px;
+    font-size: 11px;
+    justify-content: center;
+  }
+  .cards[data-phone-cols="2"] .card-links a {
+    padding: 4px 0;
+  }
+  .cards[data-phone-cols="2"] .mint {
+    padding: 4px 7px;
+    font-size: 10.5px;
+  }
+}
+
+.appearance-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.save-note {
+  font-size: 12px;
+}
+.appearance-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+/* The preview stays in view while the controls beside it scroll. */
+.appearance-preview {
+  position: sticky;
+  top: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.preview-cards .card:hover {
+  transform: none;
+}
+.appearance-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.appearance-controls fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.appearance-controls .check {
+  margin-top: 0;
+}
+.preset-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.choice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+}
+.choice-row .segmented {
+  flex-wrap: wrap;
+}
+.text-size {
+  margin: 0;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.text-size-note {
+  flex-basis: 100%;
+}
+.color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+}
+.color-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.swatch {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--surface-solid);
+  box-shadow: 0 0 0 1px var(--border-strong);
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.swatch.on {
+  box-shadow: 0 0 0 2px var(--ink);
+}
+.swatch-default {
+  background: var(--surface-3);
+}
+.swatch-custom {
+  background: conic-gradient(#ef4444, #eab308, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899, #ef4444);
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.swatch-custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+.field-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 6px 16px;
+}
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.field-group h4 {
+  margin: 4px 0 0;
+}
+.small-btn {
+  align-self: flex-start;
+  padding: 5px 11px;
+  font-size: 12.5px;
+}
+@media (max-width: 860px) {
+  .appearance-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* On a phone the preview sits above the controls and scrolls away with the page. */
+  .appearance-preview {
+    position: static;
+  }
+}
+@media (max-width: 640px) {
+  .swatch {
+    width: 30px;
+    height: 30px;
+  }
+  .choice-row .segmented button {
+    padding: 6px 10px;
+  }
+}
+/* Opened from the Live tab's Customize button: land below the sticky top bar. */
+#feed-appearance {
+  scroll-margin-top: 84px;
+}
+/* A phone card has no room to grow: big text would cut the numbers short, so it stops at 105%. */
+@media (max-width: 640px) {
+  .cards .card {
+    zoom: min(var(--card-zoom, 1), 1.05);
   }
 }
