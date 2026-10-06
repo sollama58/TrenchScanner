@@ -80,8 +80,10 @@ export interface User {
 
 export interface Subscription {
   hasAccess: boolean;
-  reason: string | null;
+  reason: "admin" | "whitelist" | "subscription" | "none" | null;
   expiresAt: string | null;
+  /** What access costs, in $ASDFASDFA. */
+  price?: { mint: string; decimals: number; tokensPerMonth: number; daysPerMonth: number };
 }
 
 export interface Token {

@@ -87,7 +87,7 @@ const WALLET_TIMEOUT_MS = 90_000;
 
 export class WalletTimeoutError extends Error {}
 
-function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new WalletTimeoutError(what)), WALLET_TIMEOUT_MS);

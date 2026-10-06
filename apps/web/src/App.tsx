@@ -34,6 +34,8 @@ const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.Fil
 const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.SettingsTab })));
 const LazyAdminTab = lazy(() => loadAdminTab().then((m) => ({ default: m.AdminTab })));
 const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
+// The burn button (and its transaction builder) only matters to someone without access.
+const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ default: m.BurnPanel })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
@@ -189,7 +191,7 @@ export function App() {
           </Suspense>
         )}
         {signedIn && (
-          <AccessGate onSignedOut={signOut}>
+          <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
             <div className="tab-view" key={tab}>
               <Suspense fallback={<Boot />}>
@@ -234,8 +236,16 @@ function WorkerStatus() {
 }
 
 /** Feed routes answer 402 without a subscription; show that instead of three broken tabs. */
-function AccessGate({ children, onSignedOut }: { children: React.ReactNode; onSignedOut: () => void }) {
-  const { data, error } = usePolling<Subscription>("/subscription", 300_000);
+function AccessGate({
+  children,
+  walletAddress,
+  onSignedOut,
+}: {
+  children: React.ReactNode;
+  walletAddress: string;
+  onSignedOut: () => void;
+}) {
+  const { data, error, reload } = usePolling<Subscription>("/subscription", 300_000);
   const hasAccess = data?.hasAccess === true;
   const warmed = useRef(false);
   useEffect(() => {
@@ -278,11 +288,18 @@ function AccessGate({ children, onSignedOut }: { children: React.ReactNode; onSi
           {data.expiresAt
             ? `Your access ended ${ago(data.expiresAt)}.`
             : "This wallet has no active subscription."}{" "}
-          Subscribe by burning on the HolDEX Trenches page, then come back. Access follows your wallet.
+          Burn $ASDFASDFA below to subscribe. Access follows your wallet.
         </p>
-        <a className="button primary" href="https://holdex.live/trenches/" target="_blank" rel="noreferrer">
-          Subscribe on HolDEX
-        </a>
+        <Suspense fallback={<p className="muted small">Loading…</p>}>
+          <BurnPanel walletAddress={walletAddress} onCredited={reload} />
+        </Suspense>
+        <p className="faint small">
+          You can also burn on the{" "}
+          <a href="https://holdex.live/trenches/" target="_blank" rel="noreferrer">
+            HolDEX Trenches page
+          </a>
+          ; it counts the same.
+        </p>
       </section>
     );
   }

@@ -10,6 +10,7 @@ import {
   prisma,
   resolveAccess,
   SolanaRpc,
+  SPL_TOKEN_PROGRAM_ID,
   SUBSCRIPTION_DAYS,
   SUBSCRIPTION_MINT,
   SUBSCRIPTION_MINT_DECIMALS,
@@ -148,6 +149,38 @@ export async function registerSubscriptionRoutes(
         .send({ error: "Couldn't reach Solana just now. Nothing was burned - try again shortly." });
     }
     return result;
+  });
+
+  /**
+   * The signed-in wallet's $ASDFASDFA, for the dashboard's burn button.
+   *
+   * The dashboard builds the burn transaction itself and needs the token account to burn from; it
+   * carries no RPC client, and the browser asking a public RPC directly would be rate-limited off
+   * it. Only accounts the parser would credit are offered: owned by the classic SPL Token program
+   * (a Token-2022 burn of this mint is not a subscription payment) and not frozen (the chain
+   * refuses to burn from a frozen account, after the fee). Largest first, since the button burns
+   * from one account.
+   */
+  app.get("/balance", { config: { rateLimit: RPC_ROUTE_RATE_LIMIT } }, async (request, reply) => {
+    const accounts = await rpc.getTokenAccountsByOwner(request.user!.walletAddress, SUBSCRIPTION_MINT);
+    if (!accounts) {
+      return reply
+        .code(503)
+        .send({ error: "Couldn't read your balance from Solana just now. Try again shortly." });
+    }
+    const burnable = accounts
+      .filter((a) => a.programId === SPL_TOKEN_PROGRAM_ID && a.state === "initialized")
+      .sort((a, b) =>
+        BigInt(b.rawAmount) > BigInt(a.rawAmount) ? 1 : BigInt(b.rawAmount) < BigInt(a.rawAmount) ? -1 : 0,
+      );
+    const total = accounts.reduce((sum, a) => sum + BigInt(a.rawAmount), 0n);
+    return {
+      mint: SUBSCRIPTION_MINT,
+      decimals: SUBSCRIPTION_MINT_DECIMALS,
+      tokenProgram: SPL_TOKEN_PROGRAM_ID,
+      totalRaw: total.toString(),
+      accounts: burnable.map((a) => ({ address: a.address, rawAmount: a.rawAmount })),
+    };
   });
 
   /**

@@ -130,6 +130,10 @@ export function SignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
             {error}
           </p>
         )}
+        <p className="faint small signin-burn">
+          No subscription yet? Sign in, then burn $ASDFASDFA on the next screen to get access. Your wallet
+          shows the exact amount and asks before anything is burned.
+        </p>
       </div>
     </section>
   );
