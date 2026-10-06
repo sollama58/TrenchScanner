@@ -6,8 +6,7 @@ import type { Env } from "../config/env.js";
 import { s3PutObject, type S3Config } from "../storage/s3.js";
 import { liveCallRecords, loadCurrentLanes } from "./laneStore.js";
 import type { CallRecord } from "./leaderboard.js";
-import { STACKED_MODEL_KIND } from "./stacking.js";
-import { BLEND_MODEL_KIND } from "./blend.js";
+import { COMBINER_MODEL_KINDS } from "./agreement.js";
 import { firstNonFinite } from "./runGuard.js";
 
 /**
@@ -350,7 +349,7 @@ export function validateBackupPayload(value: unknown): ModelBackupPayload {
     if (bad !== null) {
       throw new ModelBackupError(`${m.contestant ?? m.id} has a weight that is not a number (${bad})`);
     }
-    if (m.kind !== STACKED_MODEL_KIND && m.kind !== BLEND_MODEL_KIND) continue;
+    if (!COMBINER_MODEL_KINDS.includes(m.kind)) continue;
     const members = membersSchema.safeParse(m.params.members ?? []);
     if (!members.success) throw new ModelBackupError(`${m.contestant}'s members list is malformed`);
     const missing = members.data.filter((x) => !seats.has(x.contestant));
@@ -625,7 +624,7 @@ function restoreUnderLock(
     }
 
     // Models: members before the consensus and blend that point at them.
-    const dependent = (kind: string) => kind === STACKED_MODEL_KIND || kind === BLEND_MODEL_KIND;
+    const dependent = (kind: string) => COMBINER_MODEL_KINDS.includes(kind);
     const ordered = [...payload.models].sort((a, b) => Number(dependent(a.kind)) - Number(dependent(b.kind)));
     const seats = ordered.flatMap((m) => (m.contestant ? [m.contestant] : []));
     await tx.curatorModel.updateMany({

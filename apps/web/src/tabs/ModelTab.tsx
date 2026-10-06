@@ -27,6 +27,7 @@ const LEARNER_NAME = { logistic: "Logistic regression", gbdt: "Gradient-boosted 
 const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
   stacked: "Stacked on the others",
   blend: "The others' ranks averaged",
+  agreement: "How many of the others call it",
   rules: "Hand-tuned rules",
   learner: "Trained model",
 };

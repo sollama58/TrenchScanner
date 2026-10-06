@@ -32,6 +32,7 @@ import { emptyRecord, recordScore, type CallRecord } from "./leaderboard.js";
 import type { Challenger, Replacement } from "./evolution.js";
 import { quantileTable, trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
 import { trainBlendCurator, type BlendCuratorParams } from "./blend.js";
+import { trainAgreementCurator, type AgreementCuratorParams, type AgreementCurvePoint } from "./agreement.js";
 import { buildCalibration } from "./calibration.js";
 import { runDoublings } from "./labels.js";
 import {
@@ -154,6 +155,8 @@ export interface StoredEvalMetrics {
   heldFeatures?: HeldFeature[];
   /** Which decision moments the exam graded (event rows alone, or with pseudo-events) - see ExamPopulation. */
   examPopulation?: ExamPopulation;
+  /** The Agreement seat only: out-of-sample win rate by how many learners called (curation/agreement.ts). */
+  agreementCurve?: AgreementCurvePoint[];
 }
 
 export interface CuratorTrainingOutcome {
@@ -516,7 +519,11 @@ export interface RulesInUse {
 }
 
 export type ContestantParams =
-  TrainedCuratorParams | StackedCuratorParams | BlendCuratorParams | RulesCuratorParams;
+  | TrainedCuratorParams
+  | StackedCuratorParams
+  | BlendCuratorParams
+  | AgreementCuratorParams
+  | RulesCuratorParams;
 
 export interface ContestantTrainingResult {
   contestant: string;
@@ -552,6 +559,8 @@ interface LearnerExam {
   shipped: Float64Array | null;
   /** 1 where the fold rank clears the exam's own rank cutoff (what the exam called), per reference row. */
   calls: Uint8Array | null;
+  /** That rank cutoff (null when the exam set none) - what the combiners count a call against. */
+  callRank: number | null;
 }
 
 async function examineLearner(
@@ -608,6 +617,7 @@ async function examineLearner(
       aligned && rankCutoff !== null
         ? Uint8Array.from(evaluation.outOfSampleRanks, (c) => (c.probability >= rankCutoff ? 1 : 0))
         : null,
+    callRank: rankCutoff,
   };
 }
 
@@ -678,13 +688,16 @@ export async function runEvolvingContest(
   let rulesEvidence: { folds: EvalFold[]; heuristicOutOfSample: ScoredOutcome[] } | null = null;
 
   const laneCalls = new Map<string, Uint8Array>();
+  const callRanks = new Map<string, number | null>();
   const keep = (slot: string, exam: LearnerExam) => {
     if (exam.foldRanks && exam.shipped) {
       foldRanks.set(slot, exam.foldRanks);
       shippedProbabilities.set(slot, exam.shipped);
+      callRanks.set(slot, exam.callRank);
     } else {
       foldRanks.delete(slot);
       shippedProbabilities.delete(slot);
+      callRanks.delete(slot);
     }
     if (exam.calls) laneCalls.set(slot, exam.calls);
     else laneCalls.delete(slot);
@@ -788,6 +801,7 @@ export async function runEvolvingContest(
         reference,
         memberFoldRanks: foldRanks,
         memberShippedProbabilities: shippedProbabilities,
+        memberCallRanks: callRanks,
         heuristicMinScore: cfg.heuristicMinScore,
         targets: cfg.targets,
         cooldownHours: cfg.cooldownHours,
@@ -872,6 +886,59 @@ export async function runEvolvingContest(
           precisionCurve: blend.precisionCurve,
           heuristicPrecisionCurve: [],
           exam: blend.exam,
+          ...(served.highConviction ? { highConviction: served.highConviction } : {}),
+          calibrationCalls: served.extras.calibration?.calls ?? 0,
+        },
+      });
+    }
+  }
+
+  const agreementSpec = cfg.contestants.find((c) => c.role === "agreement");
+  if (agreementSpec && reference !== null && foldRanks.size >= 2) {
+    const agreement = trainAgreementCurator(
+      {
+        reference,
+        memberFoldRanks: foldRanks,
+        memberShippedProbabilities: shippedProbabilities,
+        memberCallRanks: callRanks,
+        targets: cfg.targets,
+        cooldownHours: cfg.cooldownHours,
+        targetPerHour: cfg.targetPerHour,
+      },
+      NEVER_EMIT_THRESHOLD,
+    );
+    if (agreement) {
+      // Agreement scores bunch at each member count, so like the blend's they become their own
+      // percentiles for the tier line and the calibration (see the blend above).
+      const scores = agreement.outOfSample.map((c) => c.probability);
+      const percentiles = confidenceRanks(scores);
+      const cutoff = agreement.precisionCalibration.threshold;
+      const served = servedExtras(
+        cfg,
+        agreement.outOfSample.map((c, i) => ({ ...c, probability: percentiles[i]! })),
+        scores,
+        (rank) => probabilityAtRank(scores, rank),
+        cutoff === null ? null : scores.filter((p) => p < cutoff).length / scores.length,
+      );
+      const judged = agreement.curve.filter((p) => p.rows > 0);
+      const curveText = judged.map((p) => `${p.agreeing}: ${p.wins}/${p.rows}`).join(", ");
+      results.push({
+        contestant: agreementSpec.id,
+        params: { ...agreement.params, ...served.extras },
+        metrics: {
+          contestant: agreementSpec.id,
+          contestantName: agreementSpec.name,
+          folds: [],
+          verdict: {
+            promote: false,
+            reason: `${agreementSpec.name}: ${agreement.params.members.length} models' calls counted, judged on ${agreement.examChunks} chunk(s) of their out-of-sample calls; wins by models agreeing - ${curveText}`,
+          },
+          targets: cfg.targets,
+          precisionCalibration: agreement.precisionCalibration,
+          precisionCurve: agreement.precisionCurve,
+          heuristicPrecisionCurve: [],
+          exam: agreement.exam,
+          agreementCurve: agreement.curve,
           ...(served.highConviction ? { highConviction: served.highConviction } : {}),
           calibrationCalls: served.extras.calibration?.calls ?? 0,
         },

@@ -13,10 +13,9 @@ import {
   withLanes,
   NEVER_EMIT_THRESHOLD,
   MODEL_WRITE_TX_OPTIONS,
-  STACKED_MODEL_KIND,
+  COMBINER_MODEL_KINDS,
   assessTrainingRun,
   lockCuratorModelWrites,
-  BLEND_MODEL_KIND,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   type ContestRunOutcome,
   type ContestantTrainingResult,
@@ -24,6 +23,7 @@ import {
   type LaneFitness,
   type StackedCuratorParams,
   type BlendCuratorParams,
+  type AgreementCuratorParams,
   type Env,
   type TrainingRow,
   type PrecisionTargets,
@@ -325,7 +325,7 @@ export async function applyContestResults(
 ): Promise<Map<string, string> | null> {
   const now = new Date();
   // The consensus and the blend reference their members, so they go after them.
-  const dependent = (kind: string) => kind === STACKED_MODEL_KIND || kind === BLEND_MODEL_KIND;
+  const dependent = (kind: string) => COMBINER_MODEL_KINDS.includes(kind);
   const ordered = [...results].sort(
     (a, b) => Number(dependent(a.params.kind)) - Number(dependent(b.params.kind)),
   );
@@ -374,8 +374,8 @@ export async function applyContestResults(
     const ids = new Map<string, string>();
     for (const result of ordered) {
       let params = result.params;
-      if (params.kind === STACKED_MODEL_KIND || params.kind === BLEND_MODEL_KIND) {
-        const withMembers = params as StackedCuratorParams | BlendCuratorParams;
+      if (COMBINER_MODEL_KINDS.includes(params.kind)) {
+        const withMembers = params as StackedCuratorParams | BlendCuratorParams | AgreementCuratorParams;
         params = {
           ...withMembers,
           members: withMembers.members.map((m) => ({ ...m, modelId: ids.get(m.contestant) ?? "" })),

@@ -612,6 +612,58 @@ describe("the wider roster", () => {
   }, 120_000);
 });
 
+describe("the agreement seat", () => {
+  it("ships beside the consensus with its members' cutoffs and an out-of-sample curve by callers", async () => {
+    const rows = syntheticMarket({ tokens: 2000, days: 30, truth: "interactions", seed: 17 });
+    const results = await runContestTraining(rows, {
+      targets,
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1500,
+      recencyHalfLifeDays: 14,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      contestants: enabledContestants(["consensus", "agreement", "linear", "trees", "momentum"]),
+      highConvictionRank: 0.95,
+      calibrationWindowDays: 14,
+      minTestWins: 5,
+    });
+    expect(results.map((r) => r.contestant)).toEqual([
+      "consensus",
+      "agreement",
+      "rules",
+      "linear",
+      "trees",
+      "momentum",
+    ]);
+    const byId = new Map(results.map((r) => [r.contestant, r]));
+    type Members = { members: { contestant: string; callRank?: number }[] };
+    const learners = ["linear", "trees", "momentum"];
+    const cutoffs = new Map(
+      learners.map((id) => [id, byId.get(id)!.metrics.precisionCalibration.threshold] as const),
+    );
+    const agreement = byId.get("agreement")!;
+    const params = agreement.params as Members & {
+      kind: string;
+      threshold: number;
+      calibration?: { calls: number };
+    };
+    expect(params.kind).toBe("agreement-v1");
+    expect(params.members.map((m) => m.contestant)).toEqual(learners);
+    // Each member calls at the cutoff its own exam set; one that set none never counts.
+    for (const m of params.members) expect(m.callRank).toBe(cutoffs.get(m.contestant) ?? undefined);
+    const curve = agreement.metrics.agreementCurve!;
+    expect(curve.map((p) => p.agreeing)).toEqual([0, 1, 2, 3]);
+    expect(curve.reduce((n, p) => n + p.rows, 0)).toBeGreaterThan(0);
+    expect(agreement.metrics.exam).toBeDefined();
+    expect(params.calibration?.calls ?? 0).toBeGreaterThan(0);
+    // The consensus counts the same calls through the same cutoffs.
+    const consensus = byId.get("consensus")!.params as Members & { meta: { featureNames: string[] } };
+    for (const m of consensus.members) expect(m.callRank).toBe(cutoffs.get(m.contestant) ?? undefined);
+    expect(consensus.meta.featureNames).toContain("agreement:share");
+  }, 120_000);
+});
+
 describe("the feature onset guard", () => {
   it("trains no seat on an input that only the newest rows carry, and records why", async () => {
     const market = syntheticMarket({ tokens: 1500, days: 30, truth: "interactions", seed: 21 });

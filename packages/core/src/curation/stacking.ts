@@ -53,6 +53,12 @@ export interface StackedMember {
   modelId: string;
   /** Ascending sample of that model's probabilities over the reference rows. */
   quantiles: number[];
+  /**
+   * The member's own hit-rate cutoff in rank units: it "calls" a candidate whose rank clears it
+   * (the same line its shipped threshold translates). Absent when its exam set no cutoff, so it
+   * never counts as calling. Rows from before agreement was a signal have none.
+   */
+  callRank?: number;
 }
 
 export interface StackedCuratorParams extends ServedCuratorExtras {
@@ -67,13 +73,55 @@ export interface StackedCuratorParams extends ServedCuratorExtras {
 
 export const RULES_GATE_SIGNAL = "rules:gate";
 export const RULES_RANK_SIGNAL = "rules:rank";
+/**
+ * How many members call the candidate at their own cutoff, as a share of the members. The ranks
+ * alone can't say this to a linear meta model: "eight members each just over their line" and
+ * "two members far over theirs" can sum to the same stretched rank, while in production
+ * (2026-10-03..06) tokens called by six or more learners doubled at 22-33% against 8-14% for
+ * tokens called by three or fewer.
+ */
+export const AGREEMENT_SIGNAL = "agreement:share";
 
 export function memberSignalName(contestant: string): string {
   return `${contestant}:rank`;
 }
 
 export function stackedFeatureNames(members: readonly { contestant: string }[]): string[] {
-  return [...members.map((m) => memberSignalName(m.contestant)), RULES_RANK_SIGNAL, RULES_GATE_SIGNAL];
+  return [
+    ...members.map((m) => memberSignalName(m.contestant)),
+    RULES_RANK_SIGNAL,
+    RULES_GATE_SIGNAL,
+    AGREEMENT_SIGNAL,
+  ];
+}
+
+/** Whether a member calls at this rank: its cutoff exists and the rank clears it. */
+export function memberCalls(callRank: number | null | undefined, rank: number): boolean {
+  return callRank !== undefined && callRank !== null && rank >= callRank;
+}
+
+/**
+ * Each member's rank for one candidate at serve time, through its quantile table. A member
+ * missing from the map (failed to load) ranks at the bottom, so it can only make the ensemble
+ * more cautious.
+ */
+export function memberRanks(
+  members: readonly StackedMember[],
+  memberProbabilities: ReadonlyMap<string, number>,
+): number[] {
+  return members.map((m) => {
+    const p = memberProbabilities.get(m.contestant);
+    return p === undefined ? 0 : rankFromQuantiles(m.quantiles, p);
+  });
+}
+
+/** How many members call the candidate at their own cutoff. */
+export function agreementCount(members: readonly StackedMember[], ranks: readonly number[]): number {
+  let n = 0;
+  members.forEach((m, i) => {
+    if (memberCalls(m.callRank, ranks[i]!)) n += 1;
+  });
+  return n;
 }
 
 /** An ascending sample of `values` at QUANTILE_POINTS evenly spaced positions. */
@@ -129,13 +177,14 @@ export function scoreStacked(
   rules: { gate: boolean; rankScore: number },
 ): number {
   const features: Record<string, number> = {};
-  for (const m of params.members) {
-    const p = memberProbabilities.get(m.contestant);
-    features[memberSignalName(m.contestant)] =
-      p === undefined ? 0 : rankSignal(rankFromQuantiles(m.quantiles, p));
-  }
+  const ranks = memberRanks(params.members, memberProbabilities);
+  params.members.forEach((m, i) => {
+    features[memberSignalName(m.contestant)] = rankSignal(ranks[i]!);
+  });
   features[RULES_RANK_SIGNAL] = rankSignal(rankFromQuantiles(params.rules.quantiles, rules.rankScore));
   features[RULES_GATE_SIGNAL] = rules.gate ? 1 : 0;
+  // A meta model from before the signal existed doesn't list it, and vectorize ignores it then.
+  features[AGREEMENT_SIGNAL] = agreementCount(params.members, ranks) / params.members.length;
   return scoreCandidateWithModel(params.meta, features);
 }
 
@@ -146,6 +195,11 @@ export interface StackingInput {
   memberFoldRanks: ReadonlyMap<string, ArrayLike<number>>;
   /** Per member: its SHIPPED model's probability on each reference row - the quantile source. */
   memberShippedProbabilities: ReadonlyMap<string, ArrayLike<number>>;
+  /**
+   * Per member: its exam's rank cutoff (null = none set). A fold rank at or above it is a call
+   * the member would have made - the agreement signal. Members left out never count as calling.
+   */
+  memberCallRanks?: ReadonlyMap<string, number | null>;
   heuristicMinScore: number;
   targets: PrecisionTargets;
   cooldownHours: number;
@@ -192,11 +246,18 @@ export async function trainStackedCurator(
 
   // The meta model's training rows: the reference rows with their features swapped for member
   // signals. Fold ranks, not shipped-model ranks - the shipped models trained on these very rows.
+  const callRank = (c: string) => input.memberCallRanks?.get(c) ?? null;
   const metaRows: TrainingRow[] = input.reference.map((row, i) => {
     const features: Record<string, number> = {};
-    for (const c of members) features[memberSignalName(c)] = rankSignal(input.memberFoldRanks.get(c)![i]!);
+    let agreeing = 0;
+    for (const c of members) {
+      const rank = input.memberFoldRanks.get(c)![i]!;
+      features[memberSignalName(c)] = rankSignal(rank);
+      if (memberCalls(callRank(c), rank)) agreeing += 1;
+    }
     features[RULES_RANK_SIGNAL] = rankSignal(rankFromQuantiles(rulesQuantiles, rulesSignals[i]!.rankScore));
     features[RULES_GATE_SIGNAL] = rulesSignals[i]!.gate ? 1 : 0;
+    features[AGREEMENT_SIGNAL] = agreeing / members.length;
     return { ...row, features };
   });
   const train = (rows: TrainingRow[]) =>
@@ -274,6 +335,7 @@ export async function trainStackedCurator(
         contestant,
         modelId: "",
         quantiles: quantileTable(input.memberShippedProbabilities.get(contestant)!),
+        ...(callRank(contestant) !== null ? { callRank: callRank(contestant)! } : {}),
       })),
       rules: { quantiles: rulesQuantiles, minScore: input.heuristicMinScore },
       meta,
