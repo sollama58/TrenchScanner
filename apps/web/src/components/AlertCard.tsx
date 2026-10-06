@@ -48,7 +48,7 @@ export function AlertCard({
   const hasPeak = peak !== null && peak !== undefined && peak > 0;
   // The highest market cap since the alert: the alert mcap at the Peak multiple.
   const athMcap = hasPeak && alertMcap > 0 ? alertMcap * (1 + peak / 100) : null;
-  // Still grading with nothing to say yet: no label until a result is in.
+  // The result badge (top right) shows once a target hit or the window closed; nothing while grading.
   const showVerdict = outcome !== null && !(outcome.status === "watching" && !outcome.hit2x);
   // When the recorded run peak came - only while "Now" hasn't overtaken it.
   const runPeakAfter =
@@ -132,6 +132,7 @@ export function AlertCard({
             <span className="when">{ago(card.matchedAt, now)}</span>
           </div>
         </div>
+        {showVerdict && <span className={`badge card-result ${badge.tone}`}>{badge.text}</span>}
       </header>
 
       <div className="card-figures">
@@ -165,7 +166,6 @@ export function AlertCard({
               ATH {usd(athMcap)}
             </small>
           )}
-          {showVerdict && <small className={`verdict ${badge.tone}`}>{badge.text}</small>}
         </div>
       </div>
 
