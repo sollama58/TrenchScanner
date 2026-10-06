@@ -446,8 +446,9 @@ export interface ReplacementInput {
 }
 
 /**
- * What makes a challenger's exam win EVIDENCE rather than a point estimate. The margin absorbs
- * best-of-several luck among the challengers; this absorbs the exam's own noise: an exam of 12
+ * What makes a challenger's exam win EVIDENCE rather than a point estimate. The bootstrap bar
+ * rises with the number of challengers (selectionAdjustedConfidence), absorbing best-of-several
+ * luck; it and the wins floor absorb the exam's own noise: an exam of 12
  * calls can swing 20 points on two coin flips, so a lane is only unseated when the challenger's
  * exam has enough wins behind it and beats the lane's on the same rows in most paired bootstrap
  * resamples - and never twice in quick succession, so a seat is not churned run after run on
@@ -458,8 +459,12 @@ export interface TakeoverEvidence {
   minExamWins: number;
   /** Share of paired bootstrap resamples in which the challenger must score higher, 0-1 (0 = off). */
   confidence: number;
-  /** The paired bootstrap confidence that challenger `index` beats lane `slot` on the same rows, or null when unmeasurable. */
-  pairedConfidence: (slot: string, challenger: number) => number | null;
+  /**
+   * The paired bootstrap confidence that challenger `index` beats lane `slot` on the same rows, or
+   * null when unmeasurable. `required` is the bar it will be held to (selectionAdjustedConfidence),
+   * so the caller can draw enough resamples to resolve it (bootstrapDrawsFor).
+   */
+  pairedConfidence: (slot: string, challenger: number, required: number) => number | null;
   /** Wins in each challenger's exam record, in breeding order. */
   challengerExamWins: readonly number[];
   /** When the newest takeover happened, if any. */
@@ -470,6 +475,24 @@ export interface TakeoverEvidence {
 
 /** Paired bootstrap resamples. 200 resolves a 0.9 confidence to about +/-0.02. */
 const BOOTSTRAP_DRAWS = 200;
+
+/**
+ * The bootstrap bar for the best of `contenders` challengers. The takeover candidate is the one
+ * that scored highest on these very exam rows, so with ten in the field one of them looks ahead
+ * of a lane by luck far more often than a lone challenger would. Holding each of the k to
+ * confidence^(1/k) (Sidak) keeps the chance that ANY of them passes on luck alone where a single
+ * challenger at `confidence` would be: 0.9 alone, 0.949 for 2, 0.990 for 10.
+ */
+export function selectionAdjustedConfidence(confidence: number, contenders: number): number {
+  if (confidence <= 0 || contenders <= 1) return confidence;
+  return confidence ** (1 / contenders);
+}
+
+/** Enough resamples that the bar sits ~20 resamples from 100%: 200 at 0.9, 2,000 at 0.99. */
+export function bootstrapDrawsFor(required: number): number {
+  if (!(required > 0) || required >= 1) return BOOTSTRAP_DRAWS;
+  return Math.min(5_000, Math.max(BOOTSTRAP_DRAWS, Math.ceil(20 / (1 - required) - 1e-9)));
+}
 const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
 /**
@@ -563,15 +586,17 @@ export interface Replacement {
 /**
  * At most one takeover per run: the weakest seasoned lane (lowest blended score, never-graded
  * lanes weakest of all) gives its seat to the best challenger, when that challenger beat the
- * lane's own exam on this same run - same rows, same folds - by `margin` points. The margin
- * absorbs the best-of-several luck in picking the top challenger. With challengerLearners, every
+ * lane's own exam on this same run - same rows, same folds - by `margin` points, and (with
+ * evidence) clears a bootstrap bar raised for the number of challengers it was picked from. With challengerLearners, every
  * model family keeps at least one seat (see ReplacementInput.challengerLearners).
  */
 export function chooseReplacement(input: ReplacementInput): Replacement | null {
   let best = -1;
+  let contenders = 0;
   for (let i = 0; i < input.challengerScores.length; i++) {
     const s = input.challengerScores[i];
     if (s === null || s === undefined) continue;
+    contenders++;
     if (best === -1 || s > input.challengerScores[best]!) best = i;
   }
   if (best === -1) return null;
@@ -602,13 +627,15 @@ export function chooseReplacement(input: ReplacementInput): Replacement | null {
     const wins = ev.challengerExamWins[best] ?? 0;
     if (wins < ev.minExamWins) return null;
     if (ev.confidence > 0) {
-      const confidence = ev.pairedConfidence(weakest.lane.slot, best);
+      const required = selectionAdjustedConfidence(ev.confidence, contenders);
+      const confidence = ev.pairedConfidence(weakest.lane.slot, best, required);
       // A lane with no exam record of its own to pair against is beaten by the wins floor alone.
-      if (confidence !== null && confidence < ev.confidence) return null;
+      if (confidence !== null && confidence < required) return null;
       evidenceNote =
         confidence === null
           ? `, ${wins} exam wins`
-          : `, ${wins} exam wins, ahead in ${Math.round(confidence * 100)}% of paired resamples`;
+          : `, ${wins} exam wins, ahead in ${(confidence * 100).toFixed(1)}% of paired resamples ` +
+            `(bar ${(required * 100).toFixed(1)}% for the best of ${contenders})`;
     } else {
       evidenceNote = `, ${wins} exam wins`;
     }
