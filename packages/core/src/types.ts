@@ -87,6 +87,9 @@ export interface WatchlistCandidate {
   hasTwitter?: boolean;
   hasTelegram?: boolean;
   hasWebsite?: boolean;
+  /** The launcher's X link and website, https only - recorded as Token.twitterUrl/websiteUrl. */
+  twitterUrl?: string;
+  websiteUrl?: string;
   /** The launcher-written description, when the source has one (Pump.fun does). */
   description?: string;
   /** Which discovery source produced this entry - recorded as Token.discoverySource. */

@@ -1439,6 +1439,12 @@ const SOURCE_LABELS: Record<string, string> = {
 interface AiReport {
   budget: AiBudget;
   budgetDays: { day: string; costUsd: number; calls: number; refused: number; capUsd: number | null }[];
+  tokensage?: {
+    enabled: boolean;
+    urlSet: boolean;
+    apiKeySet: boolean;
+    last24h: { depth: string; status: string; count: number }[];
+  };
   config: {
     mode: string;
     apiKeySet: boolean;
@@ -1516,6 +1522,22 @@ function Ai() {
               />
             )}
           </Panel>
+          {a.tokensage && (
+            <Panel
+              title="TokenSage narratives"
+              note={
+                a.tokensage.enabled && a.tokensage.urlSet && a.tokensage.apiKeySet
+                  ? "On. The scanner asks TokenSage what each in-band coin is about, and reads the X link and trends at its first decision."
+                  : `Off. Set TOKENSAGE_ENABLED=true, TOKENSAGE_API_URL and TOKENSAGE_API_KEY on the worker to turn it on${a.tokensage.urlSet ? "" : " (no URL set)"}${a.tokensage.apiKeySet ? "" : " (no key set)"}.`
+              }
+            >
+              <Table
+                head={["Depth", "Result", "Stored in the last 24h"]}
+                rows={a.tokensage.last24h.map((g) => [g.depth, g.status, n(g.count)])}
+                empty="Nothing stored in the last 24 hours."
+              />
+            </Panel>
+          )}
           <Panel
             title="AI reviewer"
             note={`Mode ${a.config.mode} · model ${a.config.reviewModel} · text model ${a.config.textModel}`}

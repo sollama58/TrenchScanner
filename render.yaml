@@ -27,6 +27,9 @@
 #         (AI_TEXT_FEATURES). Left empty all three are off and alerts flow exactly as before.
 #         All three share a hard daily cap, AI_DAILY_BUDGET_USD ($10/day by default); once it is
 #         reached the AI stops until midnight UTC (see /health/worker and Admin > AI).
+#   - TOKENSAGE_API_URL, TOKENSAGE_API_KEY (worker)  optional: the user's TokenSage service
+#         TokenSage says what each in-band coin is about (tokensage/prefetch.ts), stored in
+#         TokenNarrative. Off until TOKENSAGE_ENABLED=true is also set; nothing waits on it.
 #   - SOLANA_RPC_URL (both api + worker)           optional: leave empty to use Helius
 #         Verifies and reconciles burns. Empty (or a public endpoint) means the Helius RPC built
 #         from HELIUS_API_KEY; set it only to use a different paid RPC.
@@ -161,6 +164,10 @@ services:
       - key: WORKER_ROLE
         value: scanner
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TOKENSAGE_API_URL
+        sync: false
+      - key: TOKENSAGE_API_KEY
         sync: false
       - key: HELIUS_API_KEY
         sync: false

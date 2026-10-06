@@ -1,5 +1,6 @@
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
+import { normalizeSocialUrl } from "./tokensage.js";
 
 const logger = createLogger("pumpfun");
 
@@ -38,6 +39,9 @@ export interface DiscoveredCoin {
   hasTwitter: boolean;
   hasTelegram: boolean;
   hasWebsite: boolean;
+  /** The launcher's X link and website, https only (normalizeSocialUrl). */
+  twitterUrl?: string;
+  websiteUrl?: string;
 }
 
 export interface PumpFunClientOptions {
@@ -173,5 +177,7 @@ function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {
     hasTwitter: Boolean(coin.twitter),
     hasTelegram: Boolean(coin.telegram),
     hasWebsite: Boolean(coin.website),
+    twitterUrl: normalizeSocialUrl(coin.twitter, "twitter") ?? undefined,
+    websiteUrl: normalizeSocialUrl(coin.website, "website") ?? undefined,
   };
 }

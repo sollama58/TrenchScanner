@@ -207,7 +207,19 @@ export async function registerAdminOpsRoutes(
       }),
     ]);
     const r = replays[0];
+    // TokenSage narratives stored in the last day (tokensage/prefetch.ts on the worker).
+    const narratives = await prisma.tokenNarrative.groupBy({
+      by: ["depth", "status"],
+      where: { checkedAt: { gt: new Date(now - DAY_MS) } },
+      _count: { _all: true },
+    });
     return {
+      tokensage: {
+        enabled: env.TOKENSAGE_ENABLED,
+        urlSet: env.TOKENSAGE_API_URL.length > 0,
+        apiKeySet: env.TOKENSAGE_API_KEY.length > 0,
+        last24h: narratives.map((g) => ({ depth: g.depth, status: g.status, count: g._count._all })),
+      },
       config: {
         mode: env.AI_REVIEW_MODE,
         apiKeySet: env.ANTHROPIC_API_KEY.length > 0,
