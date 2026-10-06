@@ -225,6 +225,90 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.labelValue).toBeCloseTo(Math.log2(5));
   });
 
+  it("grades the 10x tier at the 30-minute close when the run already got there", async () => {
+    const token = await createToken("ten-x-early");
+    const anchorAt = new Date(Date.now() - 31 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      peak1hPriceUsd: 12,
+      peakBeforeStopPriceUsd: 12,
+      peakBeforeStop60mPriceUsd: 12,
+      hit2xAt: new Date(anchorAt.getTime() + 3 * MINUTE),
+      lowBefore2xPriceUsd: 0.9,
+      low1hPriceUsd: 0.9,
+      peak24hPriceUsd: 12,
+    });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: row.id,
+        source: "heuristic-v1",
+        confidence: 80,
+        anchorPriceUsd: 1.0,
+        anchorMcapUsd: 100_000,
+      },
+    });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 8 }), env);
+
+    const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(updated.hit4xIn1h).toBe(true);
+    expect(updated.hit10xIn1h).toBe(true);
+    const updatedAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(updatedAlert.hit10xIn1h).toBe(true);
+  });
+
+  it("keeps a clean winner's 10x tier open through the hour, checked every minute, then settles it", async () => {
+    const token = await createToken("ten-x-late");
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-ten-x-user` } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id, name: "f" } });
+    const snapshot = await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 1, marketCapUsd: 100_000, rugScreenPassed: true },
+    });
+    const anchorAt = new Date(Date.now() - 31 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      sampleKind: "match",
+      peak1hPriceUsd: 3,
+      peakBeforeStopPriceUsd: 3,
+      peakBeforeStop60mPriceUsd: 3,
+      hit2xAt: new Date(anchorAt.getTime() + 5 * MINUTE),
+      lowBefore2xPriceUsd: 0.9,
+      low1hPriceUsd: 0.9,
+      peak24hPriceUsd: 3,
+    });
+    const match = await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        score: 60,
+        candidateOutcomeId: row.id,
+      },
+    });
+
+    // The 30-minute close: a clean 2x, short of 4x, with half its hour left.
+    const sweepAt = Date.now();
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.5 }), env);
+    const closed = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(closed.hit2xIn1h).toBe(true);
+    expect(closed.hit10xIn1h).toBeNull();
+    expect(closed.extended24h).toBe(true);
+    expect(closed.nextCheckAt.getTime()).toBeLessThan(sweepAt + 2 * MINUTE);
+    expect((await prisma.match.findUniqueOrThrow({ where: { id: match.id } })).hit10xIn1h).toBeNull();
+
+    // Past the hour: the run went on to 11x, but only after the hour (the tick lands at minute 61).
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { anchorAt: new Date(Date.now() - 61 * MINUTE), nextCheckAt: new Date(Date.now() - MINUTE) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 11 }), env);
+    const settled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(settled.hit10xIn1h).toBe(false);
+    expect(settled.peak24hPriceUsd).toBe(11);
+    expect((await prisma.match.findUniqueOrThrow({ where: { id: match.id } })).hit10xIn1h).toBe(false);
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
   it("finalizes a dud at the window edge and retires it in the same sweep", async () => {
     const token = await createToken("dud");
     const anchorAt = new Date(Date.now() - 61 * MINUTE);

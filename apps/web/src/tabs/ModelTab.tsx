@@ -99,8 +99,8 @@ export function ModelTab() {
             <p className="muted">
               {lb.entries.length} models compete to spot tokens that double within 15 minutes. Every call is
               graded the same way, and the goal is a 2x within 15 minutes on {t.hitRate2xPct}% of calls and a
-              4x within 30 minutes on {t.hitRate4xPct}%. Your feed shows calls from{" "}
-              <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
+              4x within 30 minutes on {t.hitRate4xPct}%, with 10x within an hour tracked as the big-run tier.
+              Your feed shows calls from <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
               {lb.followBest ? " (whichever model is doing best; it switches automatically)" : ""}
               {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
             </p>
@@ -143,6 +143,9 @@ export function ModelTab() {
             </span>
             <span className="muted small">
               Goal {t.hitRate2xPct}% · reached 4x on {pct(leadLive?.goalRatePct)} (goal {t.hitRate4xPct}%)
+              {leadLive?.tenXRatePct != null
+                ? ` · 10x within an hour on ${pct(leadLive.tenXRatePct, 1)}`
+                : ""}
               {leadLive ? ` · ${leadLive.graded} graded calls in ${days} days` : ""}
             </span>
           </div>
@@ -771,6 +774,12 @@ function LeaderboardPanel({
               <th className="r">{detailed ? "Live calls" : "Calls"}</th>
               <th className="r">{detailed ? "2x" : "Doubled"}</th>
               <th className="r">{detailed ? "4x" : "Hit 4x"}</th>
+              <th
+                className="r"
+                title="Share of graded live calls that reached 10x within an hour, before a 50% drop"
+              >
+                {detailed ? "10x" : "Hit 10x"}
+              </th>
               {detailed && (
                 <th className="r" title="Average doublings per call">
                   Avg doublings
@@ -862,6 +871,9 @@ function LeaderboardPanel({
                     data-label={detailed ? "4x" : "Hit 4x"}
                   >
                     {pct(live.goalRatePct)}
+                  </td>
+                  <td className="r num" data-label={detailed ? "10x" : "Hit 10x"}>
+                    {pct(live.tenXRatePct, live.tenXRatePct != null && live.tenXRatePct < 10 ? 1 : 0)}
                   </td>
                   {detailed && (
                     <td className="r num" data-label="Avg doublings">
@@ -1591,6 +1603,7 @@ const OUTCOME_TEXT: Record<ModelInsights["recentAiReviews"][number]["outcome"], 
   pending: "◷ in its window",
   won: "✓ 2x",
   won4x: "✓✓ 4x",
+  won10x: "✓✓✓ 10x",
   missed: "✕ missed",
   stopped: "✕ stopped out",
   unknown: "–",

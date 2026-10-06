@@ -317,7 +317,7 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
       data: { hit2xIn1h: true, hit4xIn1h: true, disqualified: false },
     });
     const records = await loadFilterTrackRecords(filters);
-    expect(records.get(filters[0]!.id)).toEqual({ graded: 1, won2x: 1, won4x: 1 });
-    expect(records.get(filters[1]!.id)).toEqual({ graded: 0, won2x: 0, won4x: 0 });
+    expect(records.get(filters[0]!.id)).toEqual({ graded: 1, won2x: 1, won4x: 1, won10x: 0 });
+    expect(records.get(filters[1]!.id)).toEqual({ graded: 0, won2x: 0, won4x: 0, won10x: 0 });
   });
 });

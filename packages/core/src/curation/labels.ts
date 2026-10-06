@@ -13,6 +13,9 @@
  *   - the WIN is a 2x inside WIN_WINDOW_MINUTES (15 minutes), without first breaching the stop.
  *   - the GOAL is a GOAL_MULTIPLE 4x inside GOAL_WINDOW_MINUTES (30 minutes), by a call that won,
  *     still before the stop.
+ *   - the third tier (2026-10-06) is a TEN_X_MULTIPLE 10x inside TEN_X_WINDOW_MINUTES (an hour),
+ *     by a call that won, before the stop. It is reported beside the 2x and 4x, not trained on or
+ *     scored (labelValue and the run-size score already reward big runs).
  *   - labelValue is log2 of the peak multiple inside the goal window (a 2x = 1.0, a 4x = 2.0, an
  *     8x = 3.0), capped at LABEL_LOG2_CAP (a 100x), and 0 for anything that missed the 2x or was
  *     disqualified - so labelValue >= 2 is exactly "reached the goal".
@@ -64,6 +67,15 @@ export const CANDIDATE_EXTENDED_WATCH_HOURS = 24;
 export const WIN_MULTIPLE = 2;
 /** The multiple a winner is aiming for by the end of the goal window (4x within 30 minutes). */
 export const GOAL_MULTIPLE = 4;
+/**
+ * The third tier (user request 2026-10-06): a win that reached TEN_X_MULTIPLE inside
+ * TEN_X_WINDOW_MINUTES of the alert, held to the same stop as the 4x. Its window outlasts the label
+ * window, so it is graded on the extended watch every clean winner is already on (see
+ * tenXVerdict) - nothing that misses the 2x can reach it, and those are the only rows that stop
+ * being watched at 30 minutes.
+ */
+export const TEN_X_MULTIPLE = 10;
+export const TEN_X_WINDOW_MINUTES = 60;
 /** Trading at or below this fraction of the anchor before the first 2x disqualifies the win. */
 export const DISQUALIFYING_DRAWDOWN_FRACTION = 0.5;
 /**
@@ -155,6 +167,13 @@ export interface OutcomeAggregates {
   peakBeforeStopPriceUsd?: number | null;
   /** When the price first fell to the stop inside the window; null while it hasn't. */
   stoppedAt?: Date | null;
+  /**
+   * The same pair over the 10x tier's hour (TEN_X_WINDOW_MINUTES): the highest price before the
+   * price first fell to the stop, and when it did. Null on rows from before the tier existed,
+   * which are never graded for it.
+   */
+  peakBeforeStop60mPriceUsd?: number | null;
+  stopped60mAt?: Date | null;
 }
 
 /** What a fresh row starts from: every extreme is the anchor itself, nothing observed yet. */
@@ -173,6 +192,8 @@ export function initialOutcomeAggregates(anchorPriceUsd: number, anchorAt: Date)
     peak24hAt: null,
     peakBeforeStopPriceUsd: anchorPriceUsd,
     stoppedAt: null,
+    peakBeforeStop60mPriceUsd: anchorPriceUsd,
+    stopped60mAt: null,
   };
 }
 
@@ -222,6 +243,13 @@ export function applyPriceTick(
     }
   }
 
+  // The 10x tier's hour, tracked like the label window's peak before the stop.
+  const withinTenXWindow = at.getTime() - agg.anchorAt.getTime() <= TEN_X_WINDOW_MINUTES * 60_000;
+  if (withinTenXWindow && agg.peakBeforeStop60mPriceUsd != null && agg.stopped60mAt == null) {
+    if (priceUsd <= agg.anchorPriceUsd * DISQUALIFYING_DRAWDOWN_FRACTION) updates.stopped60mAt = at;
+    else if (priceUsd > agg.peakBeforeStop60mPriceUsd) updates.peakBeforeStop60mPriceUsd = priceUsd;
+  }
+
   if (priceUsd > agg.peak24hPriceUsd) {
     updates.peak24hPriceUsd = priceUsd;
     updates.peak24hAt = at;
@@ -246,6 +274,13 @@ export interface OutcomeLabels {
    * stopped its buyer out before the 4x, so it is not a 4x anyone traded.
    */
   hit4xIn1h: boolean;
+  /**
+   * The third tier: a clean win that reached TEN_X_MULTIPLE inside the hour, before the stop.
+   * True or false when the label window closes if that already settles it, null while a clean
+   * winner still has time left in its hour (tenXVerdict settles it on the extended watch), and
+   * null on rows that don't track it.
+   */
+  hit10xIn1h: boolean | null;
   disqualified: boolean;
   labelValue: number;
 }
@@ -294,7 +329,24 @@ export function computeOutcomeLabels(agg: OutcomeAggregates): OutcomeLabels {
       agg.hit2xAt.getTime() - agg.anchorAt.getTime() <= FAST_2X_WINDOW_MINUTES * 60_000,
     hit2xIn1h: won,
     hit4xIn1h: won && !disqualified && cleanPeak >= anchor * GOAL_MULTIPLE,
+    hit10xIn1h: tenXVerdict(agg, won && !disqualified, false),
     disqualified,
     labelValue,
   };
+}
+
+/**
+ * The 10x tier's verdict: false for anything that isn't a clean win, true once the hour's peak
+ * before the stop reached TEN_X_MULTIPLE, false once the hour is over (hourClosed) without it, and
+ * null while it is still open - or on rows from before the tier was tracked.
+ */
+export function tenXVerdict(
+  agg: Pick<OutcomeAggregates, "anchorPriceUsd" | "peakBeforeStop60mPriceUsd">,
+  cleanWin: boolean,
+  hourClosed: boolean,
+): boolean | null {
+  if (agg.peakBeforeStop60mPriceUsd == null) return null;
+  if (!cleanWin) return false;
+  if (agg.peakBeforeStop60mPriceUsd >= agg.anchorPriceUsd * TEN_X_MULTIPLE) return true;
+  return hourClosed ? false : null;
 }

@@ -10,7 +10,7 @@ const card = (
   kind: "match",
   tokenId: `t-${Math.random()}`,
   symbol: "COIN",
-  outcome: { status, hitGoal, finalized: status !== "watching" },
+  outcome: { status, hitGoal, hitTenX: null, finalized: status !== "watching" },
   peakPct,
   ...extra,
 });
@@ -36,6 +36,26 @@ describe("summarizeFeed", () => {
     expect(s.medianPeakPct).toBe(110);
   });
 
+  it("counts the 10x tier over the calls it has settled", () => {
+    const tenX = (status: FeedStatsCard["outcome"]["status"], hitTenX: boolean | null) => {
+      const c = card(status, null, null);
+      return { ...c, outcome: { ...c.outcome, hitTenX } };
+    };
+    const s = summarizeFeed(
+      [
+        tenX("won", true),
+        tenX("won", false),
+        tenX("won", null),
+        tenX("missed", null),
+        tenX("watching", null),
+      ],
+      24,
+    );
+    // The open winner and the watching call aren't settled; the 2x miss is a settled 10x miss.
+    expect(s).toMatchObject({ tenXGraded: 3, hit10x: 1 });
+    expect(s.hit10xPct).toBeCloseTo(33.33, 1);
+  });
+
   it("reads empty, not zero, with nothing graded", () => {
     const s = summarizeFeed([card("watching", null, null)], 24);
     expect(s.hit2xPct).toBeNull();
@@ -46,7 +66,12 @@ describe("summarizeFeed", () => {
 
   it("counts a call closed with no price as neither graded nor pending", () => {
     const s = summarizeFeed(
-      [{ ...card("unknown", null, null), outcome: { status: "unknown", hitGoal: null, finalized: true } }],
+      [
+        {
+          ...card("unknown", null, null),
+          outcome: { status: "unknown", hitGoal: null, hitTenX: null, finalized: true },
+        },
+      ],
       24,
     );
     expect(s).toMatchObject({ alerts: 1, graded: 0, pending: 0 });

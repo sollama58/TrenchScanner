@@ -38,6 +38,7 @@ interface LiveRow {
   graded: bigint;
   wins: bigint;
   goals: bigint;
+  ten_x: bigint;
   sum_label: number | null;
   sim_calls: bigint;
   sum_sim: number | null;
@@ -70,6 +71,7 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
     WITH calls AS (
       SELECT COALESCE(a."hit2xIn1h", co."hit2xIn1h") AS hit2x,
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
+             COALESCE(a."hit10xIn1h", co."hit10xIn1h") AS hit10x,
              COALESCE(a."disqualified", co."disqualified", false) AS dq,
              co."labelValue" AS label,
              COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
@@ -84,6 +86,7 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
            count(*) FILTER (WHERE hit2x IS NOT NULL) AS graded,
            count(*) FILTER (WHERE hit2x AND NOT dq) AS wins,
            count(*) FILTER (WHERE hit4x AND NOT dq) AS goals,
+           count(*) FILTER (WHERE hit10x AND NOT dq) AS ten_x,
            sum(CASE WHEN hit2x AND NOT dq THEN
                  COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
                ELSE 0 END)::float8 AS sum_label,
@@ -96,6 +99,7 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
     graded: Number(r?.graded ?? 0),
     wins: Number(r?.wins ?? 0),
     goals: Number(r?.goals ?? 0),
+    tenX: Number(r?.ten_x ?? 0),
     sumLabel: r?.sum_label ?? 0,
     simCalls: Number(r?.sim_calls ?? 0),
     sumSimReturnPct: r?.sum_sim ?? 0,
@@ -138,6 +142,7 @@ export async function liveCallRecords(
       SELECT a."model" AS model,
              COALESCE(a."hit2xIn1h", co."hit2xIn1h") AS hit2x,
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
+             COALESCE(a."hit10xIn1h", co."hit10xIn1h") AS hit10x,
              COALESCE(a."disqualified", co."disqualified", false) AS dq,
              co."labelValue" AS label,
              COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
@@ -159,6 +164,7 @@ export async function liveCallRecords(
            count(*) FILTER (WHERE hit2x IS NOT NULL) AS graded,
            count(*) FILTER (WHERE hit2x AND NOT dq) AS wins,
            count(*) FILTER (WHERE hit4x AND NOT dq) AS goals,
+           count(*) FILTER (WHERE hit10x AND NOT dq) AS ten_x,
            sum(CASE WHEN hit2x AND NOT dq THEN
                  COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
                ELSE 0 END)::float8 AS sum_label,
@@ -175,6 +181,7 @@ export async function liveCallRecords(
       graded: Number(r?.graded ?? 0),
       wins: Number(r?.wins ?? 0),
       goals: Number(r?.goals ?? 0),
+      tenX: Number(r?.ten_x ?? 0),
       sumLabel: r?.sum_label ?? 0,
       simCalls: Number(r?.sim_calls ?? 0),
       sumSimReturnPct: r?.sum_sim ?? 0,

@@ -61,6 +61,12 @@ export interface GradedCounts {
   won2x: number;
   /** Reached 4x within 30 minutes from the alert price, stop respected. */
   won4x: number;
+  /**
+   * Reached 10x within an hour from the alert price, stop respected - the third tier. Absent where
+   * the source doesn't read it. A clean winner's tier settles up to an hour after the alert, so
+   * a call still inside its hour counts as not yet.
+   */
+  won10x?: number;
   /** Doubled only after first falling through the stop - counted as losses. */
   doubledAfterStop: number;
   /**
@@ -83,6 +89,8 @@ export interface GradedRates extends GradedCounts {
   pending: number;
   hitRate2xPct: number | null;
   hitRate4xPct: number | null;
+  /** won10x over graded calls; null where the source doesn't read it or nothing is graded. */
+  hitRate10xPct: number | null;
   /** Average simulated return per graded call under the exit plan, in percent; null with none. */
   avgSimReturnPct: number | null;
   /** Total simulated return, in percent of one stake (one stake per call); null with none. */
@@ -125,6 +133,7 @@ export function withRates(
     pending: c.calls - c.graded - (c.ungradable ?? 0),
     hitRate2xPct,
     hitRate4xPct,
+    hitRate10xPct: c.won10x !== undefined ? pct(c.won10x, c.graded) : null,
     avgSimReturnPct: simCalls > 0 ? Math.round((simSum / simCalls) * 10) / 10 : null,
     totalSimReturnPct: simCalls > 0 ? Math.round(simSum * 10) / 10 : null,
     verdict,
@@ -140,6 +149,9 @@ export function sumCounts(rows: GradedCounts[]): GradedCounts {
       won2x: acc.won2x + r.won2x,
       won4x: acc.won4x + r.won4x,
       doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
+      ...(acc.won10x !== undefined || r.won10x !== undefined
+        ? { won10x: (acc.won10x ?? 0) + (r.won10x ?? 0) }
+        : {}),
       ...(acc.ungradable !== undefined || r.ungradable !== undefined
         ? { ungradable: (acc.ungradable ?? 0) + (r.ungradable ?? 0) }
         : {}),
@@ -173,6 +185,8 @@ type RawCounts = {
   graded: bigint;
   won2x: bigint;
   won4x: bigint;
+  /** Only on the queries that read the 10x tier. */
+  won10x?: bigint;
   doubled_after_stop: bigint;
   /** Only on the queries that read a simulated return. */
   sim_calls?: bigint;
@@ -188,6 +202,7 @@ function toCounts(r: RawCounts): GradedCounts {
     won2x: Number(r.won2x),
     won4x: Number(r.won4x),
     doubledAfterStop: Number(r.doubled_after_stop),
+    ...(r.won10x !== undefined ? { won10x: Number(r.won10x) } : {}),
     ...(r.sim_calls !== undefined
       ? { simCalls: Number(r.sim_calls), sumSimReturnPct: Number(r.sim_sum ?? 0) }
       : {}),
@@ -416,6 +431,7 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                               AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
+           count(*) FILTER (WHERE COALESCE(a."hit10xIn1h", co."hit10xIn1h")) AS won10x,
            count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
@@ -438,6 +454,7 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                               AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
+           count(*) FILTER (WHERE COALESCE(a."hit10xIn1h", co."hit10xIn1h")) AS won10x,
            count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
@@ -461,6 +478,7 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                               AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
+           count(*) FILTER (WHERE COALESCE(a."hit10xIn1h", co."hit10xIn1h")) AS won10x,
            count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
@@ -489,6 +507,7 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop,
            count(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS sim_calls,
            sum(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
@@ -533,6 +552,7 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop,
            count(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS sim_calls,
            sum(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
@@ -549,6 +569,7 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
     FROM "AiReview" r
     LEFT JOIN "CandidateOutcome" co ON co."id" = r."candidateOutcomeId"
@@ -607,6 +628,7 @@ export async function buildHitRateReport(
              count(*) FILTER (WHERE m."hit2xIn1h" IS NOT NULL) AS graded,
              count(*) FILTER (WHERE m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)) AS won2x,
              count(*) FILTER (WHERE m."hit4xIn1h") AS won4x,
+             count(*) FILTER (WHERE m."hit10xIn1h") AS won10x,
              count(*) FILTER (WHERE m."disqualified") AS doubled_after_stop,
              count(*) FILTER (WHERE m."hit2xIn1h" IS NULL
                                 AND ((m."candidateOutcomeId" IS NULL
@@ -629,6 +651,7 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
     FROM "CandidateOutcome" co
     WHERE co."anchorAt" >= ${since} AND co."anchorAt" < ${until}

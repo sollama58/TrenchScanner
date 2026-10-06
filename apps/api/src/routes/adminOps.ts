@@ -272,6 +272,7 @@ export async function registerAdminOpsRoutes(
         runPeakMinutes: true,
         hit2xIn1h: true,
         hit4xIn1h: true,
+        hit10xIn1h: true,
         disqualified: true,
         simReturnPct: true,
         outcomeFinalizedAt: true,

@@ -149,6 +149,12 @@ export function FiltersTab() {
                     <span title="Last 30 days, graded alerts">
                       <strong className="num">{pct((rec.won2x / rec.graded) * 100)}</strong> 2x ·{" "}
                       <strong className="num">{pct((rec.won4x / rec.graded) * 100)}</strong> 4x
+                      {rec.won10x !== undefined && (
+                        <>
+                          {" "}
+                          · <strong className="num">{pct((rec.won10x / rec.graded) * 100)}</strong> 10x
+                        </>
+                      )}
                       <small className="muted block">{rec.graded} graded, 30d</small>
                     </span>
                   ) : (
@@ -210,8 +216,8 @@ export function FiltersTab() {
               one. Leave a field blank to ignore it.
             </p>
             <p className="muted small">
-              Each filter's 2x / 4x rate uses the same rule as the curated feed: 2x within 15 minutes (4x
-              within 30) of the alert price, before a 50% drop.
+              Each filter's 2x / 4x / 10x rate uses the same rule as the curated feed: 2x within 15 minutes
+              (4x within 30, 10x within an hour) of the alert price, before a 50% drop.
             </p>
           </div>
         )}

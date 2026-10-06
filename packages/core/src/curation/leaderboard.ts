@@ -45,6 +45,12 @@ export interface CallRecord {
   wins: number;
   /** Clean 4x within 30 minutes. */
   goals: number;
+  /**
+   * Clean 10x within an hour - the third tier, shown beside the rates but not scored (the run-size
+   * part already rewards it). Live records only; absent on exams, which don't watch past the label
+   * window.
+   */
+  tenX?: number;
   /** Sum of the graded calls' labels (doublings; 0 for a miss). */
   sumLabel: number;
   /**
@@ -111,6 +117,8 @@ export interface RecordSummary {
   proven2xPct: number | null;
   /** The 4x rate this record proves, the same way. */
   proven4xPct: number | null;
+  /** Share of graded calls that cleanly reached 10x within an hour; null when not tracked. */
+  tenXRatePct: number | null;
   /** Average doublings per graded call. */
   avgReturnDoublings: number | null;
   /** Average run size per graded call, in doublings (see CallRecord.sumRun). */
@@ -137,6 +145,7 @@ export function summarizeRecord(record: CallRecord, targets: PrecisionTargets): 
     goalRatePct: g > 0 ? (record.goals / g) * 100 : null,
     proven2xPct: g > 0 ? round1(provenRate(record.wins, g) * 100) : null,
     proven4xPct: g > 0 ? round1(provenRate(record.goals, g) * 100) : null,
+    tenXRatePct: g > 0 && record.tenX !== undefined ? (record.tenX / g) * 100 : null,
     avgReturnDoublings: g > 0 ? record.sumLabel / g : null,
     avgRunDoublings: g > 0 ? round2(runSum(record) / g) : null,
     provenRunDoublings: g > 0 ? round2(provenRate(runSum(record), g)) : null,

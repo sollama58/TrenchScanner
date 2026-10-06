@@ -346,6 +346,9 @@ model CuratedAlert {
   hit2xIn1h          Boolean?
   /// Cleared the 4x goal inside the 30-minute goal window.
   hit4xIn1h          Boolean?
+  /// The third tier: a clean win that reached 10x within an hour of the alert, before the stop.
+  /// Written when the hour closes (or at the 30-minute close when that already settles it).
+  hit10xIn1h         Boolean?
   disqualified       Boolean?
   /// The run peak: how far the call ultimately went over the 24h watch, on the fill.
   peak24hReturnPct   Float?
@@ -610,6 +613,10 @@ model CandidateOutcome {
   /// on rows from before it was tracked.
   peakBeforeStopPriceUsd Float?
   stoppedAt              DateTime?
+  /// The same pair over the 10x tier's hour (60 minutes from the alert): the 10x is graded on
+  /// this. Null on rows from before the tier existed (2026-10-06), which are never graded for it.
+  peakBeforeStop60mPriceUsd Float?
+  stopped60mAt              DateTime?
 
   // ---- Labels, written once when the goal window closes ----
   finalizedAt      DateTime?
@@ -625,6 +632,10 @@ model CandidateOutcome {
   hit2xIn1h        Boolean?
   /// The goal: a win that reached 4x inside the 30-minute goal window (the name predates it).
   hit4xIn1h        Boolean?
+  /// The third tier: a clean win that reached 10x within an hour, before the stop. Null while a
+  /// clean winner's hour is still open (it is on the extended watch), and on rows that don't track
+  /// it; see tenXVerdict in curation/labels.ts.
+  hit10xIn1h       Boolean?
   /// Hit 2x inside the win window, but only after first dropping through the disqualifying
   /// drawdown - see lowBefore2xPriceUsd. Disqualified rows train as losses.
   disqualified     Boolean?
@@ -839,6 +850,8 @@ model Match {
   hit2xIn1h          Boolean?
   /// 4x inside the 30-minute goal window without the stop - false whenever disqualified.
   hit4xIn1h          Boolean?
+  /// 10x within an hour of the alert without the stop - copied when the anchor's hour settles.
+  hit10xIn1h         Boolean?
   /// Hit 2x only after first falling through the 50% stop: a loss.
   disqualified       Boolean?
   /// The run peak over the anchor's watch (24h for clean winners, the label window otherwise), as a

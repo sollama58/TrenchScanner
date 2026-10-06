@@ -10,7 +10,7 @@ import { AlertCard } from "../components/AlertCard";
 import { RingGauge, SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
 import { AboutModal } from "../components/AboutModal";
-import { ArrowRightIcon, BoltIcon, BrainIcon, InfoIcon, RadarIcon } from "../components/Icons";
+import { ArrowRightIcon, BoltIcon, BrainIcon, InfoIcon, RadarIcon, TrophyIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, useNow, useNudgeStream } from "../hooks";
 import { ago, multiple, pct } from "../format";
@@ -84,7 +84,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
 
   return (
     <div className="stack">
-      <section className="kpis">
+      <section className="kpis kpis-five">
         <div className="panel kpi">
           <span className="eyebrow">
             <RadarIcon size={13} /> Your feed · {hours}h
@@ -118,6 +118,17 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
             minGraded={MIN_GRADED}
             series={2}
           />
+        </div>
+        <div className="panel kpi">
+          <span className="eyebrow">
+            <TrophyIcon size={13} /> Hit 10x within 1 hr
+          </span>
+          <span className="kpi-value num">{fs?.hit10xPct != null ? pct(fs.hit10xPct, 1) : "–"}</span>
+          <small className="muted">
+            {fs?.tenXGraded
+              ? `${fs.hit10x ?? 0} of ${fs.tenXGraded} settled alerts`
+              : "No settled alerts yet"}
+          </small>
         </div>
         <div className="panel kpi">
           <span className="eyebrow">

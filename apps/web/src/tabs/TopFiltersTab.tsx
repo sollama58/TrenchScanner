@@ -50,7 +50,8 @@ export function TopFiltersTab({ goTo }: { goTo: (t: Tab) => void }) {
               {data ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}%` : "75% / 50%"}), and 20
               for run size, how far the calls ran over their 24h watch (target a{" "}
               {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x). A win is 2x on the alert
-              price within 15 minutes (4x within 30) before a 50% drop.
+              price within 15 minutes (4x within 30) before a 50% drop; the 10x rate (10x within an hour) is
+              shown beside them but not scored, since run size already rewards it.
             </p>
             {data && (
               <p className="muted small">
@@ -163,6 +164,11 @@ function BoardEntry({
             {pct(e.goalRatePct)}
           </strong>{" "}
           4x ·{" "}
+          {e.tenXRatePct != null && (
+            <>
+              <strong className="num">{pct(e.tenXRatePct)}</strong> 10x ·{" "}
+            </>
+          )}
           <span title="How far the alerts ran on average over their 24h watch (stopped-out calls count as 0)">
             runs avg <strong className="num">{runMultiple(e.avgRunDoublings)}</strong>
           </span>{" "}
