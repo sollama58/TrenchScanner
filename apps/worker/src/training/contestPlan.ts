@@ -16,6 +16,13 @@ import {
  */
 export interface ContestPlan {
   challengers: readonly Challenger[];
+  /** Hold a decided takeover on probation instead of seating it (EvolutionPlan.probation). */
+  probation?: boolean;
+  /**
+   * A probation that passed: its one challenger takes `slot` this run, no rule asked. The
+   * takeover's evidence was weighed on fresh rows before the run (curation/probation.ts).
+   */
+  confirm?: { slot: string; reason: string };
   /** chooseReplacement's input, less what only the run itself knows. */
   rule: Omit<ReplacementInput, "lanes" | "challengerScores" | "evidence"> & {
     lanes: readonly Omit<ReplacementInput["lanes"][number], "examScore">[];
@@ -33,8 +40,16 @@ export interface ContestPlan {
 }
 
 export function toEvolutionPlan(plan: ContestPlan): EvolutionPlan {
+  const confirm = plan.confirm;
+  if (confirm) {
+    return {
+      challengers: plan.challengers,
+      decide: () => ({ slot: confirm.slot, challenger: 0, reason: confirm.reason }),
+    };
+  }
   return {
     challengers: plan.challengers,
+    ...(plan.probation ? { probation: true } : {}),
     decide: (laneExamScores, challengerScores, exam) => {
       const ev = plan.rule.evidence;
       return chooseReplacement({

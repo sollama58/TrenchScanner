@@ -537,6 +537,34 @@ model CuratorLane {
   @@index([bornAt])
 }
 
+/// A challenger that won a learner seat on the exam, waiting to be confirmed on decision moments
+/// that arrive after it was bred (curation/probation.ts). Both models are frozen as they stood in
+/// the run that picked it. At most one is pending (resolvedAt null) at a time.
+model CuratorProbation {
+  id               String    @id @default(cuid())
+  slot             String
+  name             String
+  description      String
+  /// The challenger's CuratorRecipe, seated (and retrained) if it is confirmed.
+  recipe           Json
+  generation       Int
+  parentName       String?
+  /// Its exam score, and the in-run evidence that won it probation.
+  examScore        Float?
+  reason           String
+  challengerParams Json
+  laneParams       Json
+  laneName         String
+  startedAt        DateTime  @default(now())
+  resolvedAt       DateTime?
+  /// "confirmed", "rejected" or "abandoned".
+  outcome          String?
+  resolvedReason   String?
+
+  @@index([resolvedAt])
+  @@index([startedAt])
+}
+
 /// One training sample for the curated-alerts learner: a rug-screen-passing candidate at a
 /// moment in time ("the anchor"), plus what its price actually did over the following hour.
 /// Written for EVERY scored candidate - not just ones a user filter matched - because a model

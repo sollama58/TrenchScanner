@@ -850,6 +850,10 @@ export interface Leaderboard {
     minAgeHours: number;
     margin: number;
     runEveryHours: number;
+    /** Hours a winning challenger waits for fresh calls before it takes the seat (0 = none). */
+    probationHours?: number;
+    /** The challenger waiting on probation, if any. */
+    probation?: { slot: string; name: string; seatName: string; startedAt: string } | null;
     history: EvolutionEvent[];
   };
 }
