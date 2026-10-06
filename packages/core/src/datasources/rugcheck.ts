@@ -14,7 +14,11 @@ export interface RugCheckReport {
   topHolders?: { pct: number; owner?: string; address: string }[];
   // NOTE: lpLockedPct only appears at the top level of the /report/summary endpoint. The full
   // /report endpoint (what we call) nests it per-market instead - see toProfile() below.
-  markets?: { pubkey: string; lp?: { lpLockedPct?: number } }[];
+  markets?: {
+    pubkey: string;
+    marketType?: string;
+    lp?: { lpLockedPct?: number; baseUSD?: number; quoteUSD?: number };
+  }[];
   score_normalised?: number;
   risks?: { name: string; level: string; description?: string }[];
 }
@@ -37,6 +41,12 @@ export interface RugCheckClientOptions {
 }
 
 const TOP_N_FOR_CONCENTRATION = 10;
+
+/** RugCheck's marketType for a Pump.fun bonding curve and for the PumpSwap pool a token graduates into. */
+const PUMP_MARKET_TYPES = new Set(["pump_fun", "pump_fun_amm"]);
+
+/** A non-Pump.fun token's pools holding less than this share of its pooled liquidity don't count for the LP check. */
+const SIDE_POOL_MAX_SHARE = 0.05;
 
 export class RugCheckClient {
   private readonly baseUrl: string;
@@ -142,9 +152,31 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   }
 
   // lpLockedPct lives per-market on the full /report endpoint (unlike /report/summary, which
-  // has it at the top level). Most tokens have exactly one market; if there are several, treat
-  // the LP as burned only when every one of them is - a single unlocked pool is still a rug vector.
-  const lpBurned = markets.length > 0 && markets.every((m) => (m.lp?.lpLockedPct ?? 0) >= 95);
+  // has it at the top level). A Pump.fun token's own venue - its bonding curve, then the PumpSwap
+  // pool it graduates into - is what holders sell into, and its liquidity is locked by the
+  // protocol; that is the market the rug question is about. Other pools are opened later by
+  // anyone (Meteora DLMM and DAMM pools mostly, a few dollars each to begin with), and RugCheck
+  // reads every one of them as 0% locked: a DLMM pool has no LP token at all, and a DAMM pool's
+  // LP belongs to whoever added the liquidity - pulling it takes that person's own money out,
+  // not the holders' exit. Judging every market rejected tokens the moment someone opened a side
+  // pool - which happens to the runners: 42% of a sample of event tokens that later failed this
+  // way had doubled, against 13% overall (notes/safety-precheck-review-2026-10-06.md). So when a
+  // Pump.fun market exists only Pump.fun markets count. Any other token (a Meteora or Raydium
+  // launchpad coin the trending feed found) gets the same treatment by size: pools holding under
+  // SIDE_POOL_MAX_SHARE of its pooled liquidity are ignored - in practice a few dollars of dust in
+  // pools nobody trades - and every remaining pool must be locked, as before.
+  const pumpMarkets = markets.filter(
+    (m) => m.marketType !== undefined && PUMP_MARKET_TYPES.has(m.marketType),
+  );
+  const poolUsd = (m: (typeof markets)[number]) => (m.lp?.baseUSD ?? 0) + (m.lp?.quoteUSD ?? 0);
+  const totalPoolUsd = markets.reduce((sum, m) => sum + poolUsd(m), 0);
+  const lpMarkets =
+    pumpMarkets.length > 0
+      ? pumpMarkets
+      : totalPoolUsd > 0
+        ? markets.filter((m) => poolUsd(m) >= SIDE_POOL_MAX_SHARE * totalPoolUsd)
+        : markets;
+  const lpBurned = lpMarkets.length > 0 && lpMarkets.every((m) => (m.lp?.lpLockedPct ?? 0) >= 95);
 
   const top10Holders = realHolders.slice(0, TOP_N_FOR_CONCENTRATION);
 
