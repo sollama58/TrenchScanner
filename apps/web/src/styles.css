@@ -880,8 +880,8 @@ input[type="checkbox"] {
   background: linear-gradient(135deg, #22d3ee, var(--series-1));
 }
 .avatar {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   object-fit: cover;
   display: grid;
@@ -893,6 +893,46 @@ input[type="checkbox"] {
   font-weight: 700;
   font-size: 13px;
   color: var(--ink-2);
+}
+img.avatar {
+  cursor: zoom-in;
+}
+@media (hover: none), (pointer: coarse) {
+  img.avatar {
+    cursor: default;
+  }
+}
+/* The desktop hover preview (AlertCard's AvatarPreview), placed by script beside the avatar. */
+.avatar-preview {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.7);
+  animation: preview-in 0.12s ease-out;
+}
+.avatar-preview img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar-preview img + img {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.avatar-preview img.ready {
+  opacity: 1;
+}
+@keyframes preview-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
 }
 .card-title {
   min-width: 0;
@@ -979,18 +1019,31 @@ input[type="checkbox"] {
 }
 .card-figures {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 1px;
-  background: var(--border);
-  border-radius: var(--radius-s);
-  overflow: hidden;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 .fig {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 9px 11px;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface-solid) 70%, var(--surface-2));
+}
+.fig > label,
+.fig > .num {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card.tone-good .fig.peak {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+  background: color-mix(in srgb, var(--good) 8%, var(--surface-solid));
+}
+.card.tone-bad .fig.peak {
+  border-color: color-mix(in srgb, var(--bad) 30%, var(--border));
 }
 .fig label,
 .family-figs label {
@@ -1030,27 +1083,55 @@ input[type="checkbox"] {
 .down {
   color: var(--bad-ink);
 }
+/* Eight small boxes, four to a row: market (Vol, Holders, Age, Top 10), then wallets and dev. */
 .card-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
   margin: 0;
-  padding: 0 2px;
-  font-size: 12.5px;
+  padding: 0;
+  font-size: 13px;
 }
 .card-stats div {
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  border: 1px solid transparent;
 }
-.card-stats .wide {
-  grid-column: span 2;
+.card-stats div.risky {
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  background: var(--bad-wash);
+}
+.card-stats div.risky dd {
+  color: var(--bad-ink);
 }
 .card-stats dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.card-stats dt,
+.card-stats dd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .card-stats dd {
   margin: 0;
+  font-weight: 600;
+}
+/* "Not checked" wraps onto two lines rather than being cut in a narrow box. */
+.card-stats dd.muted {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: normal;
 }
 .reasons {
   display: flex;
@@ -2013,8 +2094,7 @@ legend {
     padding-left: 28px;
   }
   .card-stats {
-    grid-template-columns: repeat(4, 1fr);
-    gap: 6px;
+    gap: 5px;
   }
   h1 {
     font-size: 30px;
@@ -2764,6 +2844,11 @@ button.small-btn {
   }
   .card:hover {
     transform: none;
+  }
+  /* Phones get no hover preview, so the image itself is bigger. */
+  .avatar {
+    width: 56px;
+    height: 56px;
   }
   .card-links {
     gap: 12px;
