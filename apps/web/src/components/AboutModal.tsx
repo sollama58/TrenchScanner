@@ -45,8 +45,8 @@ export function AboutModal({
         <p>
           TrenchScanner watches new Pump.fun launches on Solana and flags the few worth a manual look. The aim
           is that {targets.hitRate2xPct}% of alerts double within 15 minutes and {targets.hitRate4xPct}% reach
-          4x within 30 minutes. It finds tokens for you to inspect and trade yourself; it doesn&apos;t trade,
-          and nothing here is financial advice.
+          4x within 30 minutes, with 10x within an hour as the big-run tier. It finds tokens for you to
+          inspect and trade yourself; it doesn&apos;t trade, and nothing here is financial advice.
         </p>
 
         <h3>The scan</h3>

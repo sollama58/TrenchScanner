@@ -195,7 +195,7 @@ interface RecipeExam {
 
 /** The out-of-sample record of every call at or above a rank cutoff, cooldown replayed. */
 function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: number): CallRecord {
-  const record: CallRecord = { ...emptyRecord(), tenX: 0 };
+  const record: CallRecord = { ...emptyRecord(), tenX: 0, tenXGraded: 0 };
   const above = calls.filter((c) => c.probability >= rankCutoff);
   const byTime = [...above].sort((a, b) => (a.anchorAt?.getTime() ?? 0) - (b.anchorAt?.getTime() ?? 0));
   const lastSent = new Map<string, number>();
@@ -211,6 +211,7 @@ function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: num
     if (c.labelValue > 0) record.wins += 1;
     if (c.labelValue >= Math.log2(4)) record.goals += 1;
     if (c.hit10x === true) record.tenX! += 1;
+    if (c.labelValue <= 0 || c.hit10x !== undefined) record.tenXGraded! += 1;
     record.sumLabel += c.labelValue;
     record.sumRun = (record.sumRun ?? 0) + runDoublings(c);
   }
@@ -362,6 +363,7 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
   const record = emptyRecord();
   let sumRun: number | null = 0;
   let tenX: number | null = 0;
+  let tenXGraded: number | null = 0;
   for (const fold of folds) {
     const s = fold[side];
     record.calls += s.emitted;
@@ -376,9 +378,14 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
     // The same for the 10x tier: folds stored before it was counted leave the record without it.
     if (s.tenX !== undefined && tenX !== null) tenX += s.tenX;
     else tenX = null;
+    if (s.tenXGraded !== undefined && tenXGraded !== null) tenXGraded += s.tenXGraded;
+    else tenXGraded = null;
   }
   if (sumRun !== null) record.sumRun = sumRun;
-  if (tenX !== null && folds.length > 0) record.tenX = tenX;
+  if (tenX !== null && folds.length > 0) {
+    record.tenX = tenX;
+    if (tenXGraded !== null) record.tenXGraded = tenXGraded;
+  }
   return record;
 }
 

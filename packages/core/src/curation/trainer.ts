@@ -815,6 +815,12 @@ export interface FoldSide {
   sumRun?: number;
   /** Emissions that reached 10x within an hour (TrainingRow.hit10x). Absent on older stored folds. */
   tenX?: number;
+  /**
+   * Emissions whose 10x tier is settled: the losses, plus clean winners with a hit10x verdict. The
+   * 10x rate's denominator, so a winner the tier was never tracked for doesn't read as a miss.
+   * Absent on older stored folds.
+   */
+  tenXGraded?: number;
 }
 
 export interface EvalFold {
@@ -993,6 +999,7 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
     avgLabel: emitted > 0 ? emittedRows.reduce((s, r) => s + r.labelValue, 0) / emitted : null,
     sumRun: emittedRows.reduce((s, r) => s + runDoublings(r), 0),
     tenX: emittedRows.filter((r) => r.hit10x === true).length,
+    tenXGraded: emittedRows.filter((r) => r.labelValue <= 0 || r.hit10x !== undefined).length,
   };
 }
 

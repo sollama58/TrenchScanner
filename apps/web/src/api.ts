@@ -264,6 +264,7 @@ export interface CuratedStats {
     goalHits: number;
     goalRatePct: number | null;
     tenXHits?: number;
+    tenXGraded?: number;
     tenXRatePct?: number | null;
     bestPeak24hReturnPct: number | null;
   };
@@ -296,6 +297,8 @@ export interface GradedRates {
   hitRate4xPct: number | null;
   /** 10x within an hour (absent from older API builds and from sources that don't read it). */
   won10x?: number;
+  /** Calls whose 10x tier has settled - the 10x rate's denominator. */
+  tenXGraded?: number;
   hitRate10xPct?: number | null;
   /** Average / total simulated return under the fixed exit plan, in percent (absent from older API builds). */
   avgSimReturnPct?: number | null;
@@ -428,6 +431,10 @@ export interface LearningRates {
   doubledAfterStop: number;
   rate2xPct: number | null;
   rate4xPct: number | null;
+  /** 10x within an hour over the calls whose tier has settled (absent from older API builds). */
+  won10x?: number;
+  tenXGraded?: number;
+  rate10xPct?: number | null;
 }
 
 export interface LearningDay {
@@ -440,6 +447,7 @@ export interface LearningDay {
   /** feed 2x rate / market 2x rate; null when either side is too thin. */
   lift2x: number | null;
   lift4x: number | null;
+  lift10x?: number | null;
 }
 
 export interface LearningRunModel {
@@ -448,8 +456,10 @@ export interface LearningRunModel {
   calls: number;
   wins: number;
   goals: number;
+  tenX?: number | null;
   rate2xPct: number | null;
   rate4xPct: number | null;
+  rate10xPct?: number | null;
   lift2x: number | null;
   score: number | null;
 }
@@ -575,7 +585,7 @@ export interface Filter extends FilterInput {
   createdAt: string;
   /** When the matching criteria last changed: the leaderboard record starts here. */
   criteriaChangedAt: string;
-  trackRecord: { graded: number; won2x: number; won4x: number; won10x?: number } | null;
+  trackRecord: { graded: number; won2x: number; won4x: number; won10x?: number; tenXGraded?: number } | null;
 }
 
 /** The fields that decide what a filter matches: what "Copy" copies. */

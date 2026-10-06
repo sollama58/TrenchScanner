@@ -309,6 +309,57 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     await prisma.user.delete({ where: { id: user.id } });
   });
 
+  it("settles an open 10x the moment it lands inside the hour, and repairs a lost alert copy", async () => {
+    const token = await createToken("ten-x-mid-hour");
+    const anchorAt = new Date(Date.now() - 40 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      peak1hPriceUsd: 3,
+      peakBeforeStopPriceUsd: 3,
+      peakBeforeStop60mPriceUsd: 3,
+      hit2xAt: new Date(anchorAt.getTime() + 5 * MINUTE),
+      lowBefore2xPriceUsd: 0.9,
+      low1hPriceUsd: 0.9,
+      peak24hPriceUsd: 3,
+      finalizedAt: new Date(anchorAt.getTime() + 30 * MINUTE),
+      hit2xIn15m: true,
+      hit2xIn1h: true,
+      hit4xIn1h: false,
+      disqualified: false,
+      labelValue: Math.log2(3),
+      extended24h: true,
+    });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: row.id,
+        source: "heuristic-v1",
+        confidence: 80,
+        anchorPriceUsd: 1.0,
+        anchorMcapUsd: 100_000,
+        hit2xIn15m: true,
+        hit2xIn1h: true,
+        hit4xIn1h: false,
+        disqualified: false,
+      },
+    });
+
+    // Minute 40: 12x, before the hour is up - no need to wait for it to close.
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 12 }), env);
+    const settled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(settled.hit10xIn1h).toBe(true);
+    expect((await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } })).hit10xIn1h).toBe(true);
+
+    // A copy lost on the alert is put back by the repair pass.
+    await prisma.curatedAlert.update({ where: { id: alert.id }, data: { hit10xIn1h: null } });
+    // The repair rides a sweep that has rows due.
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - MINUTE) },
+    });
+    await runCandidateWatchJob(stubDexScreener({}), env);
+    expect((await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } })).hit10xIn1h).toBe(true);
+  });
+
   it("finalizes a dud at the window edge and retires it in the same sweep", async () => {
     const token = await createToken("dud");
     const anchorAt = new Date(Date.now() - 61 * MINUTE);

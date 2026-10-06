@@ -51,12 +51,21 @@ describe("the 10x-within-an-hour tier", () => {
       [12, 50],
     ]);
     expect(tenXVerdict(stopped, true, true)).toBe(false);
+    // The stop settles it at once: nothing later in the hour can count, so it needn't wait.
+    expect(tenXVerdict(stopped, true, false)).toBe(false);
+    const running = replay(1, [
+      [2.2, 5],
+      [3, 40],
+    ]);
+    expect(tenXVerdict(running, true, false)).toBeNull();
   });
 
   it("settles a non-winner as no at the close, and leaves untracked rows unknown", () => {
     const dud = replay(1, [[1.5, 5]]);
     expect(computeOutcomeLabels(dud).hit10xIn1h).toBe(false);
-    expect(tenXVerdict({ anchorPriceUsd: 1, peakBeforeStop60mPriceUsd: null }, true, true)).toBeNull();
+    expect(
+      tenXVerdict({ anchorPriceUsd: 1, peakBeforeStop60mPriceUsd: null, stopped60mAt: null }, true, true),
+    ).toBeNull();
   });
 });
 

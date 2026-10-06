@@ -256,6 +256,7 @@ function liveRow(
     peak24hAt: null as Date | null,
     peakBeforeStopPriceUsd: null as number | null,
     peakBeforeStop60mPriceUsd: null as number | null,
+    stopped60mAt: null as Date | null,
     hit2xAt: null,
     finalizedAt: null,
     finalized24hAt: null as Date | null,

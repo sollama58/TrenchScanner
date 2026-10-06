@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
-import { bearerMatches, buildDbReport, buildStorageReport, withRates } from "./stats.js";
+import { bearerMatches, buildDbReport, buildStorageReport, sumCounts, withRates } from "./stats.js";
 
 const TOKEN = "stats-test-token-0123456789abcdef0123456789";
 const TARGETS = { hitRate2xPct: 75, hitRate4xPct: 50 };
@@ -48,6 +48,17 @@ describe("withRates", () => {
 
   it("leaves calls that can never be graded out of pending", () => {
     expect(withRates({ ...counts, ungradable: 7 }, TARGETS)).toMatchObject({ pending: 3, ungradable: 7 });
+  });
+
+  it("reads the 10x rate over settled calls, so a winner inside its hour isn't a miss", () => {
+    expect(withRates({ ...counts, won10x: 4, tenXGraded: 32 }, TARGETS).hitRate10xPct).toBe(12.5);
+    expect(withRates(counts, TARGETS).hitRate10xPct).toBeNull();
+    expect(
+      sumCounts([
+        { ...counts, won10x: 4, tenXGraded: 32 },
+        { ...counts, won10x: 1, tenXGraded: 8 },
+      ]),
+    ).toMatchObject({ won10x: 5, tenXGraded: 40 });
   });
 });
 

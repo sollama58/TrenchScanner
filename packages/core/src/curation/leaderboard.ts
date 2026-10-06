@@ -13,8 +13,8 @@ import type { PrecisionTargets } from "./trainer.js";
  *  - 50 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
  *  - 30 points for the 4x rate: the same against the 4x target.
  *  - 10 points for the 10x rate (10x within an hour, the third tier, user decision 2026-10-06): the
- *    same against TEN_X_TARGET_RATE. A record that doesn't track it (older stored exams) has
- *    proven no 10x calls.
+ *    same against TEN_X_TARGET_RATE, proven over the calls whose 10x is settled (tenXGradedOf). A
+ *    record that doesn't track it (older stored exams) adds no 10x evidence either way.
  *  - 10 points for run size: how far its calls ultimately ran (the 24h run peak), in doublings
  *    per call, against RUN_SIZE_TARGET_DOUBLINGS. A 2x, 4x or 4x-in-30-minutes call earns the
  *    same 2x/4x points whether it stops there or runs to 50x; this part is what tells them apart.
@@ -49,11 +49,16 @@ export interface CallRecord {
   /** Clean 4x within 30 minutes. */
   goals: number;
   /**
-   * Clean 10x within an hour - the third tier, shown beside the rates but not scored (the run-size
-   * part already rewards it). Live records only; absent on exams, which don't watch past the label
-   * window.
+   * Clean 10x within an hour - the third tier (10 points of the score). Absent on records that
+   * don't track it (older stored exams and other backtests): those add no 10x evidence.
    */
   tenX?: number;
+  /**
+   * The calls tenX is a share of: graded calls whose 10x is settled - every loss, and every clean
+   * win with a verdict - so a winner still inside its hour, or graded before the tier existed,
+   * counts neither way. Absent = every graded call (exams, whose rows are all an hour old).
+   */
+  tenXGraded?: number;
   /** Sum of the graded calls' labels (doublings; 0 for a miss). */
   sumLabel: number;
   /**
@@ -85,6 +90,11 @@ export const TEN_X_TARGET_RATE = 0.1;
 export const RUN_SIZE_TARGET_DOUBLINGS = 2;
 /** Calls counted as misses on top of every record, so a short streak can't prove a high rate. */
 export const PRIOR_CALLS = 10;
+
+/** The calls a record's 10x rate is over: none when it doesn't track the tier. */
+export function tenXGradedOf(record: CallRecord): number {
+  return record.tenX === undefined ? 0 : (record.tenXGraded ?? record.graded);
+}
 
 /** A record's run-size sum: sumRun when it tracks one, else the label-window doublings. */
 export function runSum(record: CallRecord): number {
@@ -150,7 +160,10 @@ export function summarizeRecord(record: CallRecord, targets: PrecisionTargets): 
     goalRatePct: g > 0 ? (record.goals / g) * 100 : null,
     proven2xPct: g > 0 ? round1(provenRate(record.wins, g) * 100) : null,
     proven4xPct: g > 0 ? round1(provenRate(record.goals, g) * 100) : null,
-    tenXRatePct: g > 0 && record.tenX !== undefined ? (record.tenX / g) * 100 : null,
+    tenXRatePct:
+      record.tenX !== undefined && tenXGradedOf(record) > 0
+        ? (record.tenX / tenXGradedOf(record)) * 100
+        : null,
     avgReturnDoublings: g > 0 ? record.sumLabel / g : null,
     avgRunDoublings: g > 0 ? round2(runSum(record) / g) : null,
     provenRunDoublings: g > 0 ? round2(provenRate(runSum(record), g)) : null,
@@ -193,7 +206,7 @@ export function scoreParts(record: CallRecord, targets: PrecisionTargets): Score
   const proven2x = provenRate(record.wins, n);
   const proven4x = provenRate(record.goals, n);
   const provenRun = provenRate(runSum(record), n);
-  const proven10x = provenRate(record.tenX ?? 0, n);
+  const proven10x = provenRate(record.tenX ?? 0, tenXGradedOf(record));
   return {
     points2x: round1(100 * COMPOSITE_WEIGHTS.winRate * part(proven2x, targets.winRate)),
     points4x: round1(100 * COMPOSITE_WEIGHTS.goalRate * part(proven4x, targets.goalRate)),
@@ -286,6 +299,7 @@ export function pooledRecord(
       sumLabel: live.sumLabel + exam.sumLabel * k,
       sumRun: runSum(live) + runSum(exam) * k,
       tenX: (live.tenX ?? 0) + (exam.tenX ?? 0) * k,
+      tenXGraded: tenXGradedOf(live) + tenXGradedOf(exam) * k,
     },
   };
 }

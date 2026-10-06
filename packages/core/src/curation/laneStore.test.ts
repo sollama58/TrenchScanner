@@ -58,6 +58,7 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
       wins: 0,
       goals: 0,
       tenX: 0,
+      tenXGraded: 0,
       sumLabel: 0,
       simCalls: 0,
       sumSimReturnPct: 0,
@@ -79,6 +80,8 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
       wins: 1,
       goals: 0,
       tenX: 0,
+      // Its one graded call is a clean winner with no 10x verdict yet: not in the 10x denominator.
+      tenXGraded: 0,
       sumLabel: expect.any(Number),
       simCalls: 0,
       sumSimReturnPct: 0,

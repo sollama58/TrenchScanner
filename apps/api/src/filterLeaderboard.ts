@@ -142,6 +142,7 @@ type Row = {
   won2x: bigint;
   won4x: bigint;
   won10x: bigint;
+  ten_x_graded: bigint;
   sum_run: number | null;
 } & Record<FilterCriteriaKey, unknown>;
 
@@ -188,6 +189,9 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
            count(*) FILTER (WHERE c.hit2x AND NOT c.dq) AS won2x,
            count(*) FILTER (WHERE c.hit4x AND NOT c.dq) AS won4x,
            count(*) FILTER (WHERE c.hit10x AND NOT c.dq) AS won10x,
+           -- The 10x rate's denominator: losses plus clean winners whose tier has settled.
+           count(*) FILTER (WHERE c.hit2x IS NOT NULL
+                              AND (c.hit10x IS NOT NULL OR NOT (c.hit2x AND NOT c.dq))) AS ten_x_graded,
            COALESCE(sum(${RUN_DOUBLINGS}) FILTER (WHERE c.hit2x IS NOT NULL), 0)::float8 AS sum_run
     FROM "UserFilter" f
     LEFT JOIN calls c ON c."filterId" = f."id"
@@ -199,8 +203,18 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     const won2x = Number(r.won2x);
     const won4x = Number(r.won4x);
     const won10x = Number(r.won10x);
+    const tenXGraded = Number(r.ten_x_graded);
     const sumRun = Number(r.sum_run ?? 0);
-    const record = { calls: graded, graded, wins: won2x, goals: won4x, tenX: won10x, sumLabel: 0, sumRun };
+    const record = {
+      calls: graded,
+      graded,
+      wins: won2x,
+      goals: won4x,
+      tenX: won10x,
+      tenXGraded,
+      sumLabel: 0,
+      sumRun,
+    };
     const score = recordScore(record, targets);
     const recordSince = r.criteriaChangedAt > since ? r.criteriaChangedAt : since;
     return {
@@ -217,7 +231,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       won10x,
       winRatePct: graded > 0 ? round1((won2x / graded) * 100) : null,
       goalRatePct: graded > 0 ? round1((won4x / graded) * 100) : null,
-      tenXRatePct: graded > 0 ? round1((won10x / graded) * 100) : null,
+      tenXRatePct: tenXGraded > 0 ? round1((won10x / tenXGraded) * 100) : null,
       proven2xPct: graded > 0 ? round1(provenRate(won2x, graded) * 100) : null,
       proven4xPct: graded > 0 ? round1(provenRate(won4x, graded) * 100) : null,
       avgRunDoublings: graded > 0 ? round2(sumRun / graded) : null,

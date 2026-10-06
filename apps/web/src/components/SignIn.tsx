@@ -71,8 +71,8 @@ export function SignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
           Pump.fun alerts, <span className="grad">picked by a model</span> that grades itself.
         </h1>
         <p className="lead muted">
-          Every pick is measured against one goal in public: 2x within 15 minutes on 75% of alerts, and 4x
-          within 30 minutes on half, from the price at the alert.
+          Every pick is measured against one goal in public: 2x within 15 minutes on 75% of alerts, 4x within
+          30 minutes on half, and 10x within an hour on one in ten, from the price at the alert.
         </p>
         <div className="features">
           {FEATURES.map(({ Icon, title, body }) => (
