@@ -27,6 +27,7 @@ import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
 import { registerAdminOpsRoutes } from "./routes/adminOps.js";
+import { registerAdminInsightRoutes } from "./routes/adminInsights.js";
 import { registerAdminBackupRoutes } from "./routes/adminBackups.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
@@ -459,6 +460,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     async (instance) => {
       instance.addHook("preHandler", instance.authenticateAdmin);
       await registerAdminOpsRoutes(instance, { env, timings, liveRefresher });
+      // TokenSage, the safety screen, training history, filters and outside lookups.
+      await registerAdminInsightRoutes(instance);
     },
     { prefix: "/admin" },
   );

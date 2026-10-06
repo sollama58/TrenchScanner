@@ -60,6 +60,8 @@ export async function registerAdminOpsRoutes(
       dbSize,
       heartbeats,
       aiBudget,
+      narratives24h,
+      champion,
     ] = await Promise.all([
       prisma.user.count(),
       prisma.user.count({ where: { createdAt: { gt: dayAgo } } }),
@@ -75,7 +77,14 @@ export async function registerAdminOpsRoutes(
       prisma.$queryRaw<{ bytes: bigint }[]>`SELECT pg_database_size(current_database()) AS bytes`,
       prisma.systemHeartbeat.findMany(),
       readAiBudget(env, now),
+      prisma.tokenNarrative.count({ where: { checkedAt: { gt: dayAgo } } }),
+      prisma.curatorChampion.findFirst({
+        orderBy: { chosenAt: "desc" },
+        select: { name: true, chosenAt: true },
+      }),
     ]);
+    const scanMeta = heartbeats.find((h) => h.job === "scan")?.meta as
+      Record<string, unknown> | null | undefined;
     const jobs = heartbeats.map((h) => summarizeHeartbeat(h, now.getTime()));
     return {
       users: { total: users, new24h: newUsers24h, new7d: newUsers7d, admins: admins.size },
@@ -84,6 +93,12 @@ export async function registerAdminOpsRoutes(
       curatedAlerts: { last24h: alerts24h, last7d: alerts7d },
       aiReviews24h,
       aiBudget,
+      // On when the scanner's last cycle reported TokenSage counters (see /admin/tokensage).
+      tokensage: {
+        on: typeof scanMeta?.tokensage === "object" && scanMeta.tokensage !== null,
+        stored24h: narratives24h,
+      },
+      defaultModel: champion,
       databaseMb: Math.round((Number(dbSize[0]?.bytes ?? 0) / 1_048_576) * 10) / 10,
       worker: {
         jobs: jobs.length,
