@@ -39,6 +39,7 @@ interface LiveRow {
   wins: bigint;
   goals: bigint;
   ten_x: bigint;
+  ten_x_graded: bigint;
   sum_label: number | null;
   sim_calls: bigint;
   sum_sim: number | null;
@@ -87,6 +88,7 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
            count(*) FILTER (WHERE hit2x AND NOT dq) AS wins,
            count(*) FILTER (WHERE hit4x AND NOT dq) AS goals,
            count(*) FILTER (WHERE hit10x AND NOT dq) AS ten_x,
+           count(*) FILTER (WHERE hit2x IS NOT NULL AND (NOT (hit2x AND NOT dq) OR hit10x IS NOT NULL)) AS ten_x_graded,
            sum(CASE WHEN hit2x AND NOT dq THEN
                  COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
                ELSE 0 END)::float8 AS sum_label,
@@ -100,6 +102,7 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
     wins: Number(r?.wins ?? 0),
     goals: Number(r?.goals ?? 0),
     tenX: Number(r?.ten_x ?? 0),
+    tenXGraded: Number(r?.ten_x_graded ?? 0),
     sumLabel: r?.sum_label ?? 0,
     simCalls: Number(r?.sim_calls ?? 0),
     sumSimReturnPct: r?.sum_sim ?? 0,
@@ -165,6 +168,7 @@ export async function liveCallRecords(
            count(*) FILTER (WHERE hit2x AND NOT dq) AS wins,
            count(*) FILTER (WHERE hit4x AND NOT dq) AS goals,
            count(*) FILTER (WHERE hit10x AND NOT dq) AS ten_x,
+           count(*) FILTER (WHERE hit2x IS NOT NULL AND (NOT (hit2x AND NOT dq) OR hit10x IS NOT NULL)) AS ten_x_graded,
            sum(CASE WHEN hit2x AND NOT dq THEN
                  COALESCE(label, LEAST(log(2::numeric, GREATEST(1 + peak / 100, 1)::numeric)::float8, ${LABEL_LOG2_CAP}::float8))
                ELSE 0 END)::float8 AS sum_label,
@@ -182,6 +186,7 @@ export async function liveCallRecords(
       wins: Number(r?.wins ?? 0),
       goals: Number(r?.goals ?? 0),
       tenX: Number(r?.ten_x ?? 0),
+      tenXGraded: Number(r?.ten_x_graded ?? 0),
       sumLabel: r?.sum_label ?? 0,
       simCalls: Number(r?.sim_calls ?? 0),
       sumSimReturnPct: r?.sum_sim ?? 0,

@@ -52,6 +52,8 @@ export function chooseRuns(stamps: readonly Date[], everyRun: boolean): Date[] {
 export interface DayRates extends GradedCounts {
   rate2xPct: number | null;
   rate4xPct: number | null;
+  /** won10x over the calls whose 10x tier has settled (tenXGraded). */
+  rate10xPct: number | null;
 }
 
 export interface LearningDay {
@@ -64,6 +66,8 @@ export interface LearningDay {
   /** feed 2x rate / market 2x rate; null when either side has under MIN_GRADED_FOR_LIFT graded. */
   lift2x: number | null;
   lift4x: number | null;
+  /** The same for the 10x tier, over each side's settled calls. */
+  lift10x: number | null;
 }
 
 export interface LearningRunModel {
@@ -73,8 +77,11 @@ export interface LearningRunModel {
   calls: number;
   wins: number;
   goals: number;
+  /** Exam calls that reached 10x within an hour; null on exams stored before it was counted. */
+  tenX: number | null;
   rate2xPct: number | null;
   rate4xPct: number | null;
+  rate10xPct: number | null;
   /** The exam's lift over the run's base rate. */
   lift2x: number | null;
   /** The leaderboard's score of that exam record alone, 0-100. */
@@ -125,6 +132,8 @@ type RawDay = {
   graded: bigint;
   won2x: bigint;
   won4x: bigint;
+  won10x: bigint;
+  ten_x_graded: bigint;
   doubled_after_stop: bigint;
 };
 
@@ -137,6 +146,8 @@ type RawRun = {
   calls: number | null;
   wins: number | null;
   goals: number | null;
+  ten_x: number | null;
+  ten_x_graded: number | null;
   sum_label: number | null;
   decision_rows: number | null;
   decision_wins: number | null;
@@ -157,9 +168,20 @@ function dayRates(r: RawDay | undefined): DayRates {
     graded: Number(r?.graded ?? 0),
     won2x: Number(r?.won2x ?? 0),
     won4x: Number(r?.won4x ?? 0),
+    won10x: Number(r?.won10x ?? 0),
+    tenXGraded: Number(r?.ten_x_graded ?? 0),
     doubledAfterStop: Number(r?.doubled_after_stop ?? 0),
   };
-  return { ...c, rate2xPct: pct(c.won2x, c.graded), rate4xPct: pct(c.won4x, c.graded) };
+  return withDayRates(c);
+}
+
+function withDayRates(c: GradedCounts): DayRates {
+  return {
+    ...c,
+    rate2xPct: pct(c.won2x, c.graded),
+    rate4xPct: pct(c.won4x, c.graded),
+    rate10xPct: pct(c.won10x ?? 0, c.tenXGraded ?? 0),
+  };
 }
 
 function sumDays(rows: DayRates[]): DayRates {
@@ -169,11 +191,13 @@ function sumDays(rows: DayRates[]): DayRates {
       graded: acc.graded + r.graded,
       won2x: acc.won2x + r.won2x,
       won4x: acc.won4x + r.won4x,
+      won10x: (acc.won10x ?? 0) + (r.won10x ?? 0),
+      tenXGraded: (acc.tenXGraded ?? 0) + (r.tenXGraded ?? 0),
       doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
     }),
-    { calls: 0, graded: 0, won2x: 0, won4x: 0, doubledAfterStop: 0 },
+    { calls: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0, doubledAfterStop: 0 },
   );
-  return { ...c, rate2xPct: pct(c.won2x, c.graded), rate4xPct: pct(c.won4x, c.graded) };
+  return withDayRates(c);
 }
 
 function liftOf(feed: DayRates, market: DayRates, min = MIN_GRADED_FOR_LIFT): number | null {
@@ -194,6 +218,7 @@ export function buildLearningDays(marketRows: RawDay[], feedRows: RawDay[]): Lea
       feed: f,
       lift2x: liftOf(f, m),
       lift4x: ratio(f.won4x, f.graded, m.won4x, m.graded, MIN_GRADED_FOR_LIFT),
+      lift10x: ratio(f.won10x ?? 0, f.tenXGraded ?? 0, m.won10x ?? 0, m.tenXGraded ?? 0, MIN_GRADED_FOR_LIFT),
     };
   });
 }
@@ -261,18 +286,32 @@ export function buildLearningRuns(rows: RawRun[], targets: PrecisionTargets): Le
           const calls = m.calls ?? 0;
           const wins = m.wins ?? 0;
           const goals = m.goals ?? 0;
+          const tenX = m.ten_x;
+          const tenXGraded = tenX === null ? null : (m.ten_x_graded ?? calls);
           return {
             contestant: m.contestant,
             name: m.name,
             calls,
             wins,
             goals,
+            tenX,
             rate2xPct: pct(wins, calls),
             rate4xPct: pct(goals, calls),
+            rate10xPct: tenX === null || tenXGraded === null ? null : pct(tenX, tenXGraded),
             lift2x: ratio(wins, calls, decisionWins, decisionRows, MIN_GRADED_FOR_LIFT),
             score:
               calls > 0
-                ? recordScore({ calls, graded: calls, wins, goals, sumLabel: m.sum_label ?? 0 }, targets)
+                ? recordScore(
+                    {
+                      calls,
+                      graded: calls,
+                      wins,
+                      goals,
+                      sumLabel: m.sum_label ?? 0,
+                      ...(tenX !== null ? { tenX, ...(tenXGraded !== null ? { tenXGraded } : {}) } : {}),
+                    },
+                    targets,
+                  )
                 : null,
           };
         })
@@ -304,6 +343,10 @@ export async function buildLearningCurve(
            count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS won2x,
            count(*) FILTER (WHERE "hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE "hit10xIn1h") AS won10x,
+           count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL
+                              AND ("hit10xIn1h" IS NOT NULL
+                                   OR NOT ("hit2xIn1h" AND NOT COALESCE("disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE "disqualified") AS doubled_after_stop
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event'
@@ -320,6 +363,11 @@ export async function buildLearningCurve(
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                               AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
+           count(*) FILTER (WHERE COALESCE(a."hit10xIn1h", co."hit10xIn1h")) AS won10x,
+           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL
+                              AND (COALESCE(a."hit10xIn1h", co."hit10xIn1h") IS NOT NULL
+                                   OR NOT (COALESCE(a."hit2xIn1h", co."hit2xIn1h")
+                                           AND NOT COALESCE(a."disqualified", co."disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
@@ -353,6 +401,8 @@ export async function buildLearningCurve(
            (m."evalMetrics"->'exam'->>'calls')::int AS calls,
            (m."evalMetrics"->'exam'->>'wins')::int AS wins,
            (m."evalMetrics"->'exam'->>'goals')::int AS goals,
+           (m."evalMetrics"->'exam'->>'tenX')::int AS ten_x,
+           (m."evalMetrics"->'exam'->>'tenXGraded')::int AS ten_x_graded,
            (m."evalMetrics"->'exam'->>'sumLabel')::float8 AS sum_label,
            (SELECT sum((f->>'decisionRows')::int)::int
               FROM jsonb_array_elements(COALESCE(m."evalMetrics"->'folds', '[]'::jsonb)) f) AS decision_rows,

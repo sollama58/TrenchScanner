@@ -373,6 +373,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
       UPDATE "Match" m
       SET "hit2xIn1h" = o."hit2xIn1h",
           "hit4xIn1h" = o."hit4xIn1h",
+          "hit10xIn1h" = o."hit10xIn1h",
           "disqualified" = o."disqualified",
           "peak1hReturnPct" = o."peak1hReturnPct",
           "maxDrawdown1hPct" = o."maxDrawdown1hPct"
@@ -380,7 +381,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
       WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${matchOutcomeCutoff}
         AND o."finalizedAt" IS NOT NULL
         AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
-        AND m."hit2xIn1h" IS NULL`;
+        AND (m."hit2xIn1h" IS NULL OR (m."hit10xIn1h" IS NULL AND o."hit10xIn1h" IS NOT NULL))`;
   }
   const deletedCandidateOutcomes = {
     count: await deleteInBatches(

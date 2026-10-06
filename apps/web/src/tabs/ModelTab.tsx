@@ -8,6 +8,7 @@ import {
   type FeatureHealthReport,
   type ModelRun,
   type LearningCurve,
+  type LearningRates,
   type LearningTrend,
   type AiJudgeState,
 } from "../api";
@@ -216,7 +217,9 @@ export function ModelTab() {
               </span>
               <span className="stage-title">Goal</span>
               <span className="stage-rate num">{t.hitRate2xPct}%</span>
-              <span className="stage-caption">hit 2x · {t.hitRate4xPct}% hit 4x</span>
+              <span className="stage-caption">
+                hit 2x · {t.hitRate4xPct}% hit 4x · {lb.scoring.tenXTargetPct ?? 10}% hit 10x
+              </span>
             </li>
           </ol>
           <p className="faint small">
@@ -295,14 +298,25 @@ function BaselinePanel({
   learning: LearningCurve;
   days: number;
 }) {
-  const [metric, setMetric] = useState<"2x" | "4x">("2x");
+  const [metric, setMetric] = useState<"2x" | "4x" | "10x">("2x");
   const [view, setView] = useState<"models" | "days">("models");
   const [picked, setPicked] = useState<string | null>(null);
   const t = board.targets;
-  const baseRate = base ? (metric === "2x" ? base.hitRate2xPct : base.hitRate4xPct) : null;
-  const goal = metric === "2x" ? t.hitRate2xPct : t.hitRate4xPct;
+  const baseRate = base
+    ? metric === "2x"
+      ? base.hitRate2xPct
+      : metric === "4x"
+        ? base.hitRate4xPct
+        : (base.hitRate10xPct ?? null)
+    : null;
+  const goal =
+    metric === "2x" ? t.hitRate2xPct : metric === "4x" ? t.hitRate4xPct : (board.scoring.tenXTargetPct ?? 10);
   const rateOf = (e: LeaderboardEntry) =>
-    metric === "2x" ? e.composite.live.winRatePct : e.composite.live.goalRatePct;
+    metric === "2x"
+      ? e.composite.live.winRatePct
+      : metric === "4x"
+        ? e.composite.live.goalRatePct
+        : (e.composite.live.tenXRatePct ?? null);
   // Seasoned records first: a 33% on three calls shouldn't sit above a 15% on a hundred.
   const thin = (e: LeaderboardEntry) => e.composite.warmingUp === true || e.composite.live.graded === 0;
   const rows = [...board.entries].sort(
@@ -313,7 +327,12 @@ function BaselinePanel({
   const selected = rows.find((e) => e.id === picked) ?? rows[0] ?? null;
   const selRate = selected ? rateOf(selected) : null;
   const selLift = liftOf(selRate);
-  const hit = metric === "2x" ? "doubled within 15 minutes" : "reached 4x within 30 minutes";
+  const hit =
+    metric === "2x"
+      ? "doubled within 15 minutes"
+      : metric === "4x"
+        ? "reached 4x within 30 minutes"
+        : "reached 10x within an hour";
   const days2 = learning.days.filter((d) => d.feed.calls > 0 || d.market.calls > 0);
 
   return (
@@ -344,6 +363,9 @@ function BaselinePanel({
             </button>
             <button className={metric === "4x" ? "on" : ""} onClick={() => setMetric("4x")}>
               4x
+            </button>
+            <button className={metric === "10x" ? "on" : ""} onClick={() => setMetric("10x")}>
+              10x
             </button>
           </div>
         </div>
@@ -416,11 +438,13 @@ function BaselinePanel({
           aLabel={`All model calls, ${metric} rate`}
           bLabel={`Baseline ${metric} rate`}
           data={days2.map((d) => {
-            const l = metric === "2x" ? d.lift2x : d.lift4x;
+            const l = metric === "2x" ? d.lift2x : metric === "4x" ? d.lift4x : (d.lift10x ?? null);
+            const rateFor = (r: LearningRates) =>
+              metric === "2x" ? r.rate2xPct : metric === "4x" ? r.rate4xPct : (r.rate10xPct ?? null);
             return {
               label: shortDay(d.day),
-              a: metric === "2x" ? d.feed.rate2xPct : d.feed.rate4xPct,
-              b: metric === "2x" ? d.market.rate2xPct : d.market.rate4xPct,
+              a: rateFor(d.feed),
+              b: rateFor(d.market),
               sub: `${d.feed.graded} graded calls; ${d.market.graded.toLocaleString()} moments; lift ${lift(l)}`,
             };
           })}
@@ -796,7 +820,7 @@ function LeaderboardPanel({
                   >
                     Total profit
                   </th>
-                  <th className="r">Backtest 2x / 4x</th>
+                  <th className="r">Backtest 2x / 4x / 10x</th>
                   <th
                     className="r"
                     title="Live 2x rate of its high-conviction calls alone (its top half-percent of moments)"
@@ -897,7 +921,11 @@ function LeaderboardPanel({
                         {stakes(live.totalSimReturnPct)}
                       </td>
                       <td className="r num muted" data-label="Backtest">
-                        {exam.graded > 0 ? `${pct(exam.winRatePct)} / ${pct(exam.goalRatePct)}` : "–"}
+                        {exam.graded > 0
+                          ? `${pct(exam.winRatePct)} / ${pct(exam.goalRatePct)}${
+                              exam.tenXRatePct != null ? ` / ${pct(exam.tenXRatePct, 1)}` : ""
+                            }`
+                          : "–"}
                         {exam.graded > 0 && <span className="faint"> · {exam.graded}</span>}
                       </td>
                       <td
@@ -1660,6 +1688,7 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
                 <th className="r">Graded</th>
                 <th className="r">2x</th>
                 <th className="r">4x</th>
+                <th className="r">10x</th>
               </tr>
             </thead>
             <tbody>
@@ -1840,6 +1869,7 @@ function RateRow({ name, r }: { name: string; r: GradedRates }) {
       <td className="r num">{r.graded.toLocaleString()}</td>
       <td className="r num">{pct(r.hitRate2xPct, 1)}</td>
       <td className="r num">{pct(r.hitRate4xPct, 1)}</td>
+      <td className="r num">{pct(r.hitRate10xPct, 1)}</td>
     </tr>
   );
 }

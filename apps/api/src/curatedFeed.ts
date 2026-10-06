@@ -5,7 +5,7 @@ import {
   GOAL_WINDOW_MINUTES,
   TEN_X_WINDOW_MINUTES,
   GOAL_MULTIPLE,
-  TEN_X_MULTIPLE,
+  tenXVerdict,
   hit2xInWinWindow,
   disqualifiedByDrawdown,
   cleanPeakPriceUsd,
@@ -109,6 +109,7 @@ export const curatedAlertInclude = {
       peak24hAt: true,
       peakBeforeStopPriceUsd: true,
       peakBeforeStop60mPriceUsd: true,
+      stopped60mAt: true,
       hit2xAt: true,
       finalizedAt: true,
       finalized24hAt: true,
@@ -224,9 +225,11 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
 
   // The 10x tier settles up to an hour after the alert - past the 4x - so a clean winner's row can
   // carry its 2x/4x verdict while the 10x is still open; that part is read off the live aggregates.
+  // The same rule the watcher applies (tenXVerdict), for a clean win.
   const tenXOf = (storedTenX: boolean | null): boolean | null => {
-    if (storedTenX !== null || !live || live.peakBeforeStop60mPriceUsd == null) return storedTenX;
-    return live.peakBeforeStop60mPriceUsd >= live.anchorPriceUsd * TEN_X_MULTIPLE ? true : null;
+    if (storedTenX !== null || !live) return storedTenX;
+    const hourClosed = Date.now() - live.anchorAt.getTime() >= TEN_X_WINDOW_MINUTES * 60_000;
+    return tenXVerdict(live, true, hourClosed);
   };
 
   if (stored) {

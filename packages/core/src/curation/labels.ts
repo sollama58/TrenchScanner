@@ -14,8 +14,9 @@
  *   - the GOAL is a GOAL_MULTIPLE 4x inside GOAL_WINDOW_MINUTES (30 minutes), by a call that won,
  *     still before the stop.
  *   - the third tier (2026-10-06) is a TEN_X_MULTIPLE 10x inside TEN_X_WINDOW_MINUTES (an hour),
- *     by a call that won, before the stop. It is reported beside the 2x and 4x, not trained on or
- *     scored (labelValue and the run-size score already reward big runs).
+ *     by a call that won, before the stop. It is reported beside the 2x and 4x and is 10 points of
+ *     the model and filter score (leaderboard.ts); the fit doesn't train on it (labelValue and the
+ *     run weight already reward big runs).
  *   - labelValue is log2 of the peak multiple inside the goal window (a 2x = 1.0, a 4x = 2.0, an
  *     8x = 3.0), capped at LABEL_LOG2_CAP (a 100x), and 0 for anything that missed the 2x or was
  *     disqualified - so labelValue >= 2 is exactly "reached the goal".
@@ -338,15 +339,18 @@ export function computeOutcomeLabels(agg: OutcomeAggregates): OutcomeLabels {
 /**
  * The 10x tier's verdict: false for anything that isn't a clean win, true once the hour's peak
  * before the stop reached TEN_X_MULTIPLE, false once the hour is over (hourClosed) without it, and
- * null while it is still open - or on rows from before the tier was tracked.
+ * null while it is still open - or on rows from before the tier was tracked. A stop hit below
+ * 10x settles it as false at once.
  */
 export function tenXVerdict(
-  agg: Pick<OutcomeAggregates, "anchorPriceUsd" | "peakBeforeStop60mPriceUsd">,
+  agg: Pick<OutcomeAggregates, "anchorPriceUsd" | "peakBeforeStop60mPriceUsd" | "stopped60mAt">,
   cleanWin: boolean,
   hourClosed: boolean,
 ): boolean | null {
   if (agg.peakBeforeStop60mPriceUsd == null) return null;
   if (!cleanWin) return false;
   if (agg.peakBeforeStop60mPriceUsd >= agg.anchorPriceUsd * TEN_X_MULTIPLE) return true;
+  // The stop froze the peak below 10x: nothing later in the hour can count.
+  if (agg.stopped60mAt != null) return false;
   return hourClosed ? false : null;
 }

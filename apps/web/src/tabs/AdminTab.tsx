@@ -224,6 +224,8 @@ interface CallRecord {
   graded: number;
   wins: number;
   goals: number;
+  /** 10x within an hour (absent on records that don't track it). */
+  tenX?: number;
 }
 
 interface BackupSeat {
@@ -239,7 +241,11 @@ interface BackupSeat {
 }
 
 const record = (r: CallRecord | null) =>
-  r && r.graded > 0 ? `${r.wins}/${r.graded} 2x · ${r.goals} 4x` : <span className="faint">–</span>;
+  r && r.graded > 0 ? (
+    `${r.wins}/${r.graded} 2x · ${r.goals} 4x${r.tenX != null ? ` · ${r.tenX} 10x` : ""}`
+  ) : (
+    <span className="faint">–</span>
+  );
 
 /**
  * A model list with checkboxes and the actions that take a selection. A consensus or blend needs
@@ -641,7 +647,9 @@ function Overview() {
                 value={total ? `${pct(total.hitRate2xPct)} / ${pct(total.hitRate4xPct)}` : "–"}
                 sub={
                   total
-                    ? `${total.graded} graded · target ${o.targets.hitRate2xPct}% / ${o.targets.hitRate4xPct}%`
+                    ? `${total.graded} graded · target ${o.targets.hitRate2xPct}% / ${o.targets.hitRate4xPct}%${
+                        total.hitRate10xPct != null ? ` · 10x ${pct(total.hitRate10xPct, 1)}` : ""
+                      }`
                     : hits.error
                       ? "unavailable"
                       : "loading"

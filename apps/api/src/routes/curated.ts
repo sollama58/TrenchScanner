@@ -520,6 +520,7 @@ export async function registerCuratedRoutes(
           wins: bigint;
           goal_hits: bigint;
           ten_x_hits: bigint;
+          ten_x_graded: bigint;
           best_peak: number | null;
         }[]
       >`
@@ -530,6 +531,9 @@ export async function registerCuratedRoutes(
                count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins,
                count(*) FILTER (WHERE "hit4xIn1h" = true AND "disqualified" = false) AS goal_hits,
                count(*) FILTER (WHERE "hit10xIn1h" = true AND "disqualified" = false) AS ten_x_hits,
+               count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL
+                                  AND ("hit10xIn1h" IS NOT NULL
+                                       OR NOT ("hit2xIn1h" AND NOT COALESCE("disqualified", false)))) AS ten_x_graded,
                max("peak24hReturnPct") AS best_peak
         FROM "CuratedAlert"
         WHERE "model" = ${model}`,
@@ -543,6 +547,7 @@ export async function registerCuratedRoutes(
     const wins = Number(feedRow?.wins ?? 0);
     const goalHits = Number(feedRow?.goal_hits ?? 0);
     const tenXHits = Number(feedRow?.ten_x_hits ?? 0);
+    const tenXGraded = Number(feedRow?.ten_x_graded ?? 0);
     const bestPeak24hReturnPct = feedRow?.best_peak ?? null;
 
     // The training job stores its walk-forward verdict inside evalMetrics; surface just the
@@ -593,9 +598,11 @@ export async function registerCuratedRoutes(
         // the bar, counted separately so it can't be mistaken for the hit rate itself.
         goalHits,
         goalRatePct: graded > 0 ? (goalHits / graded) * 100 : null,
-        // The third tier: 10x within an hour of the alert, stop respected.
+        // The third tier: 10x within an hour of the alert, stop respected. Its rate is over the
+        // calls whose tier has settled, so a winner still inside its hour isn't read as a miss.
         tenXHits,
-        tenXRatePct: graded > 0 ? (tenXHits / graded) * 100 : null,
+        tenXGraded,
+        tenXRatePct: tenXGraded > 0 ? (tenXHits / tenXGraded) * 100 : null,
         bestPeak24hReturnPct,
       },
       // The two curators side by side on the last 30 days of PRODUCTION picks - each one's real

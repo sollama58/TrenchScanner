@@ -232,8 +232,14 @@ export async function runCandidateWatchJob(
     // Rows still inside their 30-minute window first (finalizedAt null), then the 24h-extended
     // ones: a late check inside the window can miss a 2x or a stop, while a winner's run peak only
     // gets recorded a little later. On 2026-10-05 the sweep hit its cap every minute (600 due),
-    // and under nextCheckAt order alone the window rows queued behind the extended watch.
-    orderBy: [{ finalizedAt: { sort: "asc", nulls: "first" } }, { nextCheckAt: "asc" }],
+    // and under nextCheckAt order alone the window rows queued behind the extended watch. Winners
+    // whose 10x hour is still open (hit10xIn1h null) come next: a missed minute there can miss a
+    // 10x the way a missed window minute misses a 2x.
+    orderBy: [
+      { finalizedAt: { sort: "asc", nulls: "first" } },
+      { hit10xIn1h: { sort: "asc", nulls: "first" } },
+      { nextCheckAt: "asc" },
+    ],
     take: env.CANDIDATE_WATCH_MAX_BATCH,
     // curatedAlerts: so closing a window can push outcome copies onto the feed row - see below.
     include: { token: { select: { mintAddress: true } }, curatedAlerts: { select: { id: true } } },
@@ -438,15 +444,15 @@ export async function runCandidateWatchJob(
         }
       }
 
-      // A clean winner whose hour was still open at the 30-minute close: settled on the first tick
-      // past it. Rows that don't track the tier (null peak) never get a verdict.
-      if (
-        row.finalizedAt !== null &&
-        row.hit10xIn1h === null &&
-        merged.peakBeforeStop60mPriceUsd != null &&
-        elapsedMs >= tenXWindowMs
-      ) {
-        tenX = tenXVerdict(merged, row.hit2xIn1h === true && row.disqualified === false, true);
+      // A clean winner whose hour was still open at the 30-minute close: settled the moment it
+      // reaches 10x or falls to the stop, else on the first tick past the hour. Rows that don't
+      // track the tier (null peak) never get a verdict.
+      if (row.finalizedAt !== null && row.hit10xIn1h === null && merged.peakBeforeStop60mPriceUsd != null) {
+        tenX = tenXVerdict(
+          merged,
+          row.hit2xIn1h === true && row.disqualified === false,
+          elapsedMs >= tenXWindowMs,
+        );
         if (tenX !== null) data.hit10xIn1h = tenX;
       }
 
@@ -620,8 +626,8 @@ async function repairUngradedAlerts(): Promise<number> {
 }
 
 /**
- * Backfills verdict columns onto curated alerts whose outcome row is finalized but whose copies
- * never landed.
+ * Backfills verdict columns onto curated alerts whose outcome row is finalized (or whose 10x tier
+ * has settled) but whose copies never landed.
  *
  * The copy is written in the same transaction as the finalization now, so nothing new should
  * arrive here - but rows stranded by the old split-write path are still out there, and a repair
@@ -635,8 +641,12 @@ async function repairCuratedVerdicts(): Promise<number> {
   const stranded = await prisma.curatedAlert.findMany({
     where: {
       createdAt: { gte: new Date(Date.now() - REPAIR_LOOKBACK_MS) },
-      hit2xIn15m: null,
-      candidateOutcome: { is: { finalizedAt: { not: null } } },
+      OR: [
+        { hit2xIn15m: null, candidateOutcome: { is: { finalizedAt: { not: null } } } },
+        // The 10x tier settles after the other verdicts, in its own write; one whose copy was
+        // lost is repaired the same way.
+        { hit10xIn1h: null, candidateOutcome: { is: { hit10xIn1h: { not: null } } } },
+      ],
     },
     select: {
       id: true,

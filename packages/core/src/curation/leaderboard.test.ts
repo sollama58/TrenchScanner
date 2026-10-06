@@ -9,6 +9,7 @@ import {
   recordScore,
   scoreBand,
   scoreParts,
+  tenXGradedOf,
   type CallRecord,
 } from "./leaderboard.js";
 
@@ -120,8 +121,30 @@ describe("pooledRecord", () => {
   it("uses a small backtest as it is", () => {
     const pooled = pooledRecord(emptyRecord(), record(12, 6, 3, 1));
     expect(pooled.backtestCalls).toBe(12);
-    expect(pooled.record).toEqual({ ...record(12, 6, 3, 1), sumRun: 12 });
+    expect(pooled.record).toEqual({ ...record(12, 6, 3, 1), sumRun: 12, tenXGraded: 12 });
     expect(pooledRecord(record(10, 5, 2, 1, 2), record(12, 6, 3, 1, 1)).record.tenX).toBe(3);
+  });
+
+  it("pools the 10x tier over settled calls only", () => {
+    const live = { ...record(10, 5, 2, 1, 2), tenXGraded: 8 };
+    // A record from before the tier was counted adds nothing to either side of the 10x rate.
+    const old = { calls: 12, graded: 12, wins: 6, goals: 3, sumLabel: 12 };
+    expect(pooledRecord(live, old).record).toMatchObject({ tenX: 2, tenXGraded: 8 });
+    expect(pooledRecord(live, record(12, 6, 3, 1, 1)).record).toMatchObject({ tenX: 3, tenXGraded: 20 });
+  });
+});
+
+describe("tenXGradedOf", () => {
+  it("reads the settled count, falls back to graded, and is 0 for a record with no 10x tier", () => {
+    expect(tenXGradedOf({ ...record(20, 10, 4, 1, 2), tenXGraded: 15 })).toBe(15);
+    expect(tenXGradedOf(record(20, 10, 4, 1, 2))).toBe(20);
+    expect(tenXGradedOf({ calls: 20, graded: 20, wins: 10, goals: 4, sumLabel: 20 })).toBe(0);
+  });
+
+  it("scores a winner still inside its hour as not yet, not as a 10x miss", () => {
+    const settled = { ...record(40, 20, 8, 1, 4), tenXGraded: 30 };
+    const unsettled = { ...record(40, 20, 8, 1, 4), tenXGraded: 40 };
+    expect(recordScore(settled, targets)).toBeGreaterThan(recordScore(unsettled, targets)!);
   });
 });
 

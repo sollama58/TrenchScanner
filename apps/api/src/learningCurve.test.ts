@@ -16,13 +16,23 @@ const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() =
 
 const TARGETS = { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 0 };
 
-function raw(day: string, calls: number, graded: number, won2x: number, won4x = 0) {
+function raw(
+  day: string,
+  calls: number,
+  graded: number,
+  won2x: number,
+  won4x = 0,
+  won10x = 0,
+  tenXGraded = graded,
+) {
   return {
     day,
     calls: BigInt(calls),
     graded: BigInt(graded),
     won2x: BigInt(won2x),
     won4x: BigInt(won4x),
+    won10x: BigInt(won10x),
+    ten_x_graded: BigInt(tenXGraded),
     doubled_after_stop: 0n,
   };
 }
@@ -45,6 +55,17 @@ describe("buildLearningDays", () => {
     expect(days[0]!.feed.graded).toBeLessThan(MIN_GRADED_FOR_LIFT);
     // A day with calls but no decision moments has rates but no lift.
     expect(days[2]).toMatchObject({ lift2x: null, market: { calls: 0, rate2xPct: null } });
+  });
+
+  it("reads the 10x rate over settled calls only, and its lift against the market's", () => {
+    // 20 feed calls, 4 of them clean winners still inside their hour: 2 of 16 settled hit 10x.
+    const [day] = buildLearningDays(
+      [raw("2026-10-01", 1000, 1000, 80, 20, 10, 1000)],
+      [raw("2026-10-01", 20, 20, 8, 4, 2, 16)],
+    );
+    expect(day!.feed.rate10xPct).toBe(12.5);
+    expect(day!.market.rate10xPct).toBe(1);
+    expect(day!.lift10x).toBe(12.5);
   });
 });
 
@@ -102,6 +123,8 @@ describe("buildLearningRuns", () => {
       wins,
       goals: Math.floor(wins / 3),
       sum_label: wins,
+      ten_x: contestant === "trees" ? 4 : null,
+      ten_x_graded: contestant === "trees" ? 32 : null,
       decision_rows: decisionRows,
       decision_wins: decisionRows === null ? null : Math.round(decisionRows * 0.08),
     });
@@ -126,6 +149,11 @@ describe("buildLearningRuns", () => {
     expect(newest!.models.find((m) => m.contestant === "consensus")).toMatchObject({
       rate2xPct: 35,
       lift2x: 4.38,
+    });
+    expect(newest!.models.find((m) => m.contestant === "trees")).toMatchObject({ tenX: 4, rate10xPct: 12.5 });
+    expect(newest!.models.find((m) => m.contestant === "linear")).toMatchObject({
+      tenX: null,
+      rate10xPct: null,
     });
     expect(newest!.models.find((m) => m.contestant === "trees")!.score).toBeGreaterThan(0);
     expect(older!.best).toMatchObject({ contestant: "linear", rate2xPct: 25, lift2x: 3.13 });

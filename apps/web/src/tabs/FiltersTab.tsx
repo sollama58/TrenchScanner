@@ -159,10 +159,14 @@ export function FiltersTab() {
                       <span title="Last 30 days, graded alerts">
                         <strong className="num">{pct((rec.won2x / rec.graded) * 100)}</strong> 2x ·{" "}
                         <strong className="num">{pct((rec.won4x / rec.graded) * 100)}</strong> 4x
-                        {rec.won10x !== undefined && (
+                        {rec.won10x !== undefined && (rec.tenXGraded ?? rec.graded) > 0 && (
                           <>
                             {" "}
-                            · <strong className="num">{pct((rec.won10x / rec.graded) * 100)}</strong> 10x
+                            ·{" "}
+                            <strong className="num">
+                              {pct((rec.won10x / (rec.tenXGraded ?? rec.graded)) * 100)}
+                            </strong>{" "}
+                            10x
                           </>
                         )}
                         <small className="muted block">{rec.graded} graded, 30d</small>
