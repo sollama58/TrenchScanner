@@ -65,3 +65,6 @@ export function setGuest(on: boolean): void {
     // Storage blocked: guest mode still works for this page load.
   }
 }
+
+/** How late guests see each call; the API's GUEST_DELAY_MINUTES (routes/guest.ts) sets the real delay. */
+export const GUEST_DELAY_MINUTES = 5;

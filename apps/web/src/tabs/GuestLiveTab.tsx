@@ -3,14 +3,17 @@ import type { MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
 import { AboutModal } from "../components/AboutModal";
-import { ChartIcon, InfoIcon, LockIcon, PaletteIcon, RadarIcon } from "../components/Icons";
+import { ChartIcon, ClockIcon, InfoIcon, LockIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
+import { GUEST_DELAY_MINUTES } from "../session";
 
 /** GET /guest/feed: the default model's calls, as feed cards, plus which model that is. */
 export interface GuestPage extends MatchPage {
   model: { id: string; name: string };
+  /** How long after each call guests see it (absent from API builds before the delay). */
+  delayMinutes?: number;
 }
 
 /** The API serves guests this many pages; older history is for signed-in readers. */
@@ -20,7 +23,8 @@ const TARGETS = { hitRate2xPct: 75, hitRate4xPct: 50 };
 
 /**
  * The Live tab for a visitor without a wallet: the recommended model's calls from the read-only
- * guest endpoint. Everything that is saved to a wallet (model picks, the model-alerts switch,
+ * guest endpoint, each one shown a few minutes after it was made (and said so, twice: in the
+ * banner and on the feed itself). Everything that is saved to a wallet (model picks, the model-alerts switch,
  * feed stats, the look of the feed) shows greyed out with a prompt to connect one, and nothing
  * here calls a route that needs a session, so a guest sees no errors.
  */
@@ -35,19 +39,20 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
   const data = feed.data;
   const hasMore = (data?.hasMore ?? false) && page < GUEST_MAX_PAGES;
   const modelName = data?.model.name ?? "the recommended model";
+  const delay = data?.delayMinutes ?? GUEST_DELAY_MINUTES;
   const lockTitle = "Connect a wallet to use this";
 
   return (
     <div className="stack">
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} targets={TARGETS} />
       <div className="guest-banner panel" role="note">
-        <LockIcon size={16} />
+        <ClockIcon size={16} />
         <p>
-          <strong>You&apos;re browsing as a guest.</strong>{" "}
+          <strong>Guest mode: calls are delayed {delay} minutes.</strong>{" "}
           <span className="muted">
             You see calls from {data ? <strong>{modelName}</strong> : "the recommended model"}
-            {data && ", the recommended model"}. Connect a wallet for your own filters, model picks, alerts
-            and stats.
+            {data && ", the recommended model"}, {delay} minutes after it makes them. Connect a wallet to get
+            them live, plus your own filters, model picks, alerts and stats.
           </span>
         </p>
         <button className="button primary" onClick={onConnect}>
@@ -57,7 +62,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
       <section className="panel feed">
         <header className="section-head">
           <div>
-            <span className="eyebrow">Live feed</span>
+            <span className="eyebrow">Guest feed · {delay} min delay</span>
             <div className="heading-row">
               <h2>Calls from {modelName}</h2>
               <button
@@ -90,7 +95,10 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
               <LockIcon size={13} />
               {data ? data.model.name : "Model"}
             </button>
-            <span className="live-dot">Polling</span>
+            <span className="delay-pill" title={`Guests see each call ${delay} minutes after it is made`}>
+              <ClockIcon size={13} />
+              Delayed {delay} min
+            </span>
           </div>
         </header>
         {feed.error && !data && <p className="error">Couldn&apos;t load the feed: {feed.error.message}</p>}
@@ -98,7 +106,9 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
         {data && data.matches.length === 0 && page === 1 && (
           <div className="empty-state">
             <RadarIcon size={28} />
-            <p>Nothing from {modelName} yet. Calls land here as they come in.</p>
+            <p>
+              Nothing from {modelName} yet. Calls land here {delay} minutes after the model makes them.
+            </p>
           </div>
         )}
         <div className={`cards${feed.stale ? " stale" : ""}`} aria-busy={feed.stale} {...feedGridProps(look)}>

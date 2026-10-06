@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { User } from "../api";
+import { GUEST_DELAY_MINUTES } from "../session";
 import { describeSignInError, onWalletsChanged, walletOptions, type WalletOption } from "../wallet";
 import { BrainIcon, RobotIcon, TargetIcon } from "./Icons";
 
@@ -146,8 +147,9 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
               Continue as guest
             </button>
             <p className="faint small">
-              Look around without a wallet: you see the recommended model&apos;s calls. Filters, model picks,
-              alerts and settings need a connected wallet.
+              Look around without a wallet: you see the recommended model&apos;s calls {GUEST_DELAY_MINUTES}{" "}
+              minutes late, and the model leaderboard. Live calls, filters, model picks, alerts and settings
+              need a connected wallet.
             </p>
           </div>
         )}
