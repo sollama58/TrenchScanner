@@ -335,14 +335,15 @@ export class SolanaRpc {
   /**
    * Relay an already-signed transaction.
    *
-   * Sent from the server rather than the browser so that the signature is known here the instant
-   * it exists. If the user's tab dies one millisecond later, the burn is still recoverable, because
-   * we recorded the signature before we ever told the client about it.
-   *
-   * Errors are surfaced rather than swallowed: this is the one call whose failure means the burn
-   * did NOT happen, and the frontend needs to say so rather than leave someone wondering.
+   * `rejected` says whether the failure is a definite "this was not sent": the RPC answered with
+   * an error (a failed preflight, an expired blockhash) or refused the request outright with a 4xx.
+   * A timeout, a dropped connection or a 5xx is not that - the RPC may have forwarded the
+   * transaction before the reply was lost - so it comes back with `rejected: false`, and the caller
+   * must not tell anyone their tokens are safe.
    */
-  async sendRawTransaction(base64Tx: string): Promise<{ signature: string } | { error: string }> {
+  async sendRawTransaction(
+    base64Tx: string,
+  ): Promise<{ signature: string } | { error: string; rejected: boolean }> {
     this.count("sendTransaction");
     try {
       const body = await fetchJson<RpcEnvelope<string>>(this.rpcUrl, {
@@ -361,11 +362,14 @@ export class SolanaRpc {
         // this call is not idempotent from the user's point of view.
         retries: 0,
       });
-      if (body.error) return { error: body.error.message };
-      if (!body.result) return { error: "RPC returned no signature" };
+      if (body.error) return { error: body.error.message, rejected: true };
+      if (!body.result) return { error: "RPC returned no signature", rejected: false };
       return { signature: body.result };
     } catch (err) {
-      return { error: String(err) };
+      // 408 is fetchJson's own timeout, which says nothing about whether the RPC got it.
+      const rejected =
+        err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 408;
+      return { error: String(err), rejected };
     }
   }
 }

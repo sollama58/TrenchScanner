@@ -1,0 +1,178 @@
+// Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
+import "../bootstrap-env.js";
+import bs58 from "bs58";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  loadEnv,
+  prisma,
+  SolanaRpc,
+  SPL_TOKEN_PROGRAM_ID,
+  SUBSCRIPTION_MINT,
+  SUBSCRIPTION_RAW_PER_MONTH,
+  type ParsedTransaction,
+} from "@trenchscanner/core";
+import type { FastifyInstance } from "fastify";
+import { buildServer } from "../server.js";
+import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
+import { firstSignature } from "./subscription.js";
+
+/** A signed-transaction-shaped payload: one 64-byte signature, then a body naming the mint. */
+function signedTx(signatureByte = 7): { base64: string; signature: string } {
+  const signature = Buffer.alloc(64, signatureByte);
+  const body = Buffer.concat([Buffer.from([1, 0, 0]), Buffer.from(bs58.decode(SUBSCRIPTION_MINT))]);
+  return {
+    base64: Buffer.concat([Buffer.from([1]), signature, body]).toString("base64"),
+    signature: bs58.encode(signature),
+  };
+}
+
+describe("firstSignature", () => {
+  it("reads the transaction id off the signed bytes", () => {
+    const { base64, signature } = signedTx();
+    expect(firstSignature(base64)).toBe(signature);
+  });
+
+  it("refuses an unsigned or truncated payload", () => {
+    expect(firstSignature(Buffer.concat([Buffer.from([1]), Buffer.alloc(64)]).toString("base64"))).toBeNull();
+    expect(firstSignature(Buffer.from([1, 2, 3]).toString("base64"))).toBeNull();
+    expect(firstSignature(Buffer.from([0]).toString("base64"))).toBeNull();
+  });
+});
+
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+const TAG = `subscription-route-test-${Date.now()}`;
+
+describe.skipIf(!dbAvailable)("subscription routes", () => {
+  let app: FastifyInstance;
+  const env = loadEnv({ ...process.env });
+  const signer = createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS);
+
+  beforeAll(async () => {
+    app = await buildServer(env);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    if (dbAvailable) {
+      await prisma.burnEvent.deleteMany({ where: { burnerWallet: { startsWith: TAG } } });
+      await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
+    }
+  });
+
+  async function signIn(name: string) {
+    const walletAddress = `${TAG}-${name}`;
+    const user = await prisma.user.create({ data: { walletAddress } });
+    const cookie = await signer.sign({ userId: user.id, walletAddress, sessionVersion: 0 });
+    return { userId: user.id, walletAddress, cookies: { [SESSION_COOKIE_NAME]: cookie } };
+  }
+
+  function burnTx(signature: string, authority: string): ParsedTransaction {
+    return {
+      slot: 1,
+      blockTime: Math.floor(Date.now() / 1000),
+      transaction: {
+        signatures: [signature],
+        message: {
+          instructions: [
+            {
+              program: "spl-token",
+              programId: SPL_TOKEN_PROGRAM_ID,
+              parsed: {
+                type: "burn",
+                info: { mint: SUBSCRIPTION_MINT, authority, amount: SUBSCRIPTION_RAW_PER_MONTH.toString() },
+              },
+            },
+          ],
+        },
+      },
+      meta: { err: null, innerInstructions: null },
+    };
+  }
+
+  /** A fresh signature-shaped string per test, so ledger rows never collide across runs. */
+  function newSignature(): string {
+    return bs58.encode(Buffer.from(Array.from({ length: 64 }, () => Math.floor(Math.random() * 256))));
+  }
+
+  it("credits the caller's own burn and reports their new access", async () => {
+    const me = await signIn("own");
+    const signature = newSignature();
+    vi.spyOn(SolanaRpc.prototype, "getParsedTransaction").mockResolvedValue(
+      burnTx(signature, me.walletAddress),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/subscription/claim",
+      cookies: me.cookies,
+      payload: { signature },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: "credited", hasAccess: true });
+  });
+
+  it("does not tell a caller a burn by another account counted for them", async () => {
+    const burner = await signIn("burner");
+    const caller = await signIn("caller");
+    const signature = newSignature();
+    vi.spyOn(SolanaRpc.prototype, "getParsedTransaction").mockResolvedValue(
+      burnTx(signature, burner.walletAddress),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/subscription/claim",
+      cookies: caller.cookies,
+      payload: { signature },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ status: "held" });
+
+    // The months went to the wallet that burned, and only to it.
+    const [burnerSub, callerSub] = await Promise.all([
+      prisma.subscription.findUnique({ where: { userId: burner.userId } }),
+      prisma.subscription.findUnique({ where: { userId: caller.userId } }),
+    ]);
+    expect(burnerSub?.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    expect(callerSub).toBeNull();
+  });
+
+  it("says a refused relay left the tokens alone", async () => {
+    const me = await signIn("relay-refused");
+    vi.spyOn(SolanaRpc.prototype, "sendRawTransaction").mockResolvedValue({
+      error: "Transaction simulation failed",
+      rejected: true,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/subscription/send",
+      cookies: me.cookies,
+      payload: { transaction: signedTx().base64 },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toMatch(/not burned/);
+    expect(res.json().signature).toBeUndefined();
+  });
+
+  it("does not promise the tokens are safe when the relay's reply was lost", async () => {
+    const me = await signIn("relay-lost");
+    vi.spyOn(SolanaRpc.prototype, "sendRawTransaction").mockResolvedValue({
+      error: "HTTP 408",
+      rejected: false,
+    });
+    const tx = signedTx(9);
+    const res = await app.inject({
+      method: "POST",
+      url: "/subscription/send",
+      cookies: me.cookies,
+      payload: { transaction: tx.base64 },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).not.toMatch(/not burned/);
+    expect(res.json().signature).toBe(tx.signature);
+  });
+});
