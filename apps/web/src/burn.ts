@@ -10,7 +10,7 @@ import bs58 from "bs58";
 import { api, ApiError, post } from "./api";
 import { buildBurnTransaction, toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
-import { solanaWallets, withTimeout, WalletTimeoutError } from "./wallet";
+import { signedInWalletName, solanaWallets, withTimeout, WalletTimeoutError } from "./wallet";
 
 /**
  * Burning $ASDFASDFA for access, from the dashboard.
@@ -40,14 +40,30 @@ export interface BurnWallet {
 }
 
 /**
- * Wallet Standard wallets that can sign a transaction. The older window.solana-style providers
- * aren't offered: their signTransaction wants a web3.js object, and every current wallet that
- * injects one also registers on the standard.
+ * The one wallet in this browser that may burn for `owner`: the extension this session signed in
+ * with, and only if it can sign a transaction. Other installed wallets are never offered - they
+ * would be burning from some other account, or for the right one from a second app.
+ *
+ * Matched by the wallet's name as remembered at sign-in; for a session signed in before that was
+ * remembered (or with storage blocked), a wallet that already has `owner` connected. Null when
+ * neither finds it: the person signs in again with the wallet they want to burn from. The older
+ * window.solana-style providers aren't offered: their signTransaction wants a web3.js object, and
+ * every current wallet that injects one also registers on the standard.
  */
-export function burnWallets(): BurnWallet[] {
-  return solanaWallets()
-    .filter((w) => SolanaSignTransaction in w.features || SolanaSignAndSendTransaction in w.features)
-    .map((w, i) => ({ key: `std:${w.name}:${i}`, name: w.name, icon: w.icon, wallet: w }));
+export function burnWallet(owner: string): BurnWallet | null {
+  const signers = solanaWallets().filter(
+    (w) => SolanaSignTransaction in w.features || SolanaSignAndSendTransaction in w.features,
+  );
+  const name = signedInWalletName(owner)?.toLowerCase();
+  const named = name
+    ? signers.filter((w) => {
+        const n = w.name.toLowerCase();
+        return n === name || n.includes(name) || name.includes(n);
+      })
+    : [];
+  const holds = (w: Wallet) => w.accounts.some((a) => a.address === owner);
+  const wallet = named.find(holds) ?? named[0] ?? signers.find(holds);
+  return wallet ? { key: `std:${wallet.name}`, name: wallet.name, icon: wallet.icon, wallet } : null;
 }
 
 // ---- A burn sent but not yet credited, kept across reloads ----

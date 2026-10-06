@@ -1979,7 +1979,8 @@ legend {
 .burn-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  gap: 8px 12px;
 }
 .burn-actions button {
   white-space: normal;
