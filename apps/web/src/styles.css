@@ -3033,7 +3033,14 @@ button.small-btn {
   }
 }
 
-/* ---------- Top filters: the shared-filter leaderboard ---------- */
+/* ---------- Top filters: the shared-filter leaderboard card on the Filters tab ---------- */
+/* Old #top links scroll here; keep the card's title clear of the sticky top bar. */
+#top-filters {
+  scroll-margin-top: 140px;
+}
+.board-warming {
+  margin-top: 14px;
+}
 .filter-board {
   list-style: none;
   margin: 12px 0 0;

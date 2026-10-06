@@ -56,7 +56,8 @@ export function AboutModal({
           risk, and the live trade flow (who is buying, snipers, bundles, whether the dev sold). Before
           anything can alert, a token must pass the safety screen: mint and freeze authority renounced,
           liquidity burned or locked, not a Mayhem Mode launch, and no more than 70% of its top 10 holders on
-          fresh wallets. Tokens that fail are dropped before your filters or the models see them.
+          fresh wallets or on empty wallets. Tokens that fail are dropped before your filters or the models
+          see them.
         </p>
         <p>
           Every scanned token gets all of the checks above. Two checks on its top 10 holders are rationed: how

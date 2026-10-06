@@ -83,7 +83,8 @@ const MAX_FRESH_TOP10_WALLET_PCT = 30;
  * price count as nothing - so it overstates emptiness, and illiquid brand-new memecoins are
  * exactly the assets most likely to be unpriced. A tight bar here would mostly reject tokens for
  * being hard to value. At 70 it only fires when the great majority of the list looks bare, which
- * is the shape it is meant to catch.
+ * is the shape it is meant to catch. The mandatory safety screen now rejects the same 70% for
+ * every token (SAFETY_MAX_EMPTY_WALLET_PCT in rugScreen.ts); kept here so the curator stands alone.
  */
 const MAX_EMPTY_TOP10_WALLET_PCT = 70;
 const MAX_RISK_SCORE = 60;

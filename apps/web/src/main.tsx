@@ -7,7 +7,6 @@ import {
   loadModelTab,
   loadSettingsTab,
   loadSignIn,
-  loadTopFiltersTab,
   tabFromHash,
 } from "./routes";
 import "./fonts.css";
@@ -17,7 +16,6 @@ import "./styles.css";
 const tab = tabFromHash();
 if (tab === "model") void loadModelTab();
 else if (tab === "filters") void loadFiltersTab();
-else if (tab === "top") void loadTopFiltersTab();
 else if (tab === "settings") void loadSettingsTab();
 else if (tab === "admin") void loadAdminTab();
 // A signed-out visitor needs the sign-in code next; fetch it as soon as the session check says so.
@@ -38,7 +36,6 @@ createRoot(document.getElementById("root")!).render(
 const warm = () => {
   void loadModelTab();
   void loadFiltersTab();
-  void loadTopFiltersTab();
   void loadSettingsTab();
   void loadSignIn();
 };

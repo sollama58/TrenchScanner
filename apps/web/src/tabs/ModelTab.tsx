@@ -442,8 +442,8 @@ function BaselinePanel({
           </li>
           <li>
             <strong>Passes the safety screen</strong>: mint and freeze authority renounced, liquidity burned
-            or locked, not a Mayhem Mode token, and no more than 70% of the top 10 holders on fresh wallets. A
-            token that fails is never sampled at all.
+            or locked, not a Mayhem Mode token, and no more than 70% of the top 10 holders on fresh wallets or
+            on empty wallets. A token that fails is never sampled at all.
           </li>
           <li>
             <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($10k to $1M),
