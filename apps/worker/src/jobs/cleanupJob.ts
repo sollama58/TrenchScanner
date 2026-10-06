@@ -526,6 +526,9 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // minutes - but a stale row is still *kept*, and rewritten in place, for as long as the mint
   // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
   const deletedRugCheckCache = await sweepCache("RugCheckCache", "mintAddress");
+  // TokenSage narratives (tokensage/prefetch.ts): kept as long as the RPC caches, past the
+  // models' training window, so new inputs can be derived from them later.
+  const deletedNarratives = await sweepCache("TokenNarrative", "mintAddress");
 
   // Also the run's heartbeat meta, so GET /health/worker shows what the last sweep deleted - the
   // one view of it that needs no log access.
@@ -549,6 +552,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,
     deletedMayhemCache: deletedMayhemCache.count,
     deletedRugCheckCache: deletedRugCheckCache.count,
+    deletedNarratives: deletedNarratives.count,
   };
   logger.info("cleanup job complete", { durationMs: Date.now() - startedAt, ...counts });
   return counts;

@@ -14,6 +14,7 @@ export * from "./datasources/pumpfun.js";
 export * from "./datasources/rugcheck.js";
 export * from "./datasources/helius.js";
 export * from "./datasources/launchBuyers.js";
+export * from "./datasources/tokensage.js";
 
 export * from "./discovery/refreshCandidates.js";
 export * from "./discovery/enrich.js";

@@ -32,6 +32,12 @@ import {
 } from "@trenchscanner/core";
 import type { Prisma, Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
+import {
+  flushNarrativeRequests,
+  noteNarrativeWanted,
+  takeTokenSageStats,
+  tokenSageEnabled,
+} from "../tokensage/prefetch.js";
 import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
@@ -673,6 +679,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     logger.error("curated emission pass failed", { error: String(err) });
   }
   lap("curated");
+  // Sends the narrative requests this cycle noted. Never awaited: nothing waits on TokenSage.
+  void flushNarrativeRequests(env);
   // Match peaks are no longer rolled forward here - they have their own job (createMatchPeaksRunner)
   // so they stop holding up the next cycle.
 
@@ -711,6 +719,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     matches: matchCount,
     samplesBanked,
     pricePathMints: deps.pricePath?.size ?? 0,
+    ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats() } : {}),
   };
 }
 
@@ -870,6 +879,8 @@ function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): Wa
     hasTwitter: coin.hasTwitter,
     hasTelegram: coin.hasTelegram,
     hasWebsite: coin.hasWebsite,
+    twitterUrl: coin.twitterUrl,
+    websiteUrl: coin.websiteUrl,
     // Kept even when empty: on a Pump.fun launch an empty description is a known "none", which
     // the hasDescription feature distinguishes from "this source never had one".
     description: coin.description ?? "",
@@ -983,6 +994,8 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       hasTwitter: coin.hasTwitter ?? false,
       hasTelegram: coin.hasTelegram ?? false,
       hasWebsite: coin.hasWebsite ?? false,
+      twitterUrl: coin.twitterUrl,
+      websiteUrl: coin.websiteUrl,
       description: coin.description?.slice(0, 2_000),
       discoverySource: coin.discoverySource,
       dexBoosted: coin.boosted ?? false,
@@ -1016,6 +1029,26 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
         .catch(() => undefined);
     });
     if (missing.length > 0) logger.info("backfilled token images", { count: missing.length });
+  }
+
+  // Same for the launcher's X link, recorded since the TokenSage groundwork: mints discovered
+  // before then pick it up the next time a source reports them. Touches only rows still missing it.
+  const linkBackfill = valid.filter((coin) => coin.twitterUrl);
+  if (linkBackfill.length > 0) {
+    const missing = await prisma.token.findMany({
+      where: { mintAddress: { in: linkBackfill.map((c) => c.mintAddress) }, twitterUrl: null },
+      select: { id: true, mintAddress: true },
+    });
+    const byMint = new Map(linkBackfill.map((c) => [c.mintAddress, c]));
+    await forEachWithConcurrency(missing, 4, async (token) => {
+      const coin = byMint.get(token.mintAddress);
+      await prisma.token
+        .update({
+          where: { id: token.id },
+          data: { twitterUrl: coin?.twitterUrl, websiteUrl: coin?.websiteUrl },
+        })
+        .catch(() => undefined);
+    });
   }
 }
 
@@ -1305,6 +1338,9 @@ async function processCandidate(
   if (inCuratedBand && !textScores) {
     void requestTextScores({ ...token, description: scored.description ?? token.description }, env);
   }
+  // TokenSage's read of what the coin is about, asked for at the same moment (basic depth) and
+  // sent at the end of the cycle - see tokensage/prefetch.ts. A no-op while TOKENSAGE_ENABLED is off.
+  if (inCuratedBand) noteNarrativeWanted(token.mintAddress, "basic", env);
 
   // User matching first, and nothing slower in front of it: this is the product, and every
   // millisecond here is a millisecond between the backend knowing about a token and the person
@@ -1352,6 +1388,8 @@ async function processCandidate(
       // Taken only once there is an event to contend on: with none (a zero-price moment, say)
       // a pick that lost on capacity keeps its retry for the next cycle.
       const retry = event ? takeContenderRetry(token.id) : null;
+      // A decision moment asks for the deep read too (X link, trends) - see tokensage/prefetch.ts.
+      if (event?.created) noteNarrativeWanted(token.mintAddress, "full", env);
       if (event?.created) {
         await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id);
       } else if (event && retry) {

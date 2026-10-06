@@ -1,6 +1,7 @@
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
+import { normalizeSocialUrl } from "./tokensage.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
 const logger = createLogger("dexscreener");
@@ -169,6 +170,9 @@ export class DexScreenerClient {
         hasTwitter: links.some((l) => l.type === "twitter"),
         hasTelegram: links.some((l) => l.type === "telegram"),
         hasWebsite: links.some((l) => !l.type || l.type === "website"),
+        twitterUrl: normalizeSocialUrl(links.find((l) => l.type === "twitter")?.url, "twitter") ?? undefined,
+        websiteUrl:
+          normalizeSocialUrl(links.find((l) => !l.type || l.type === "website")?.url, "website") ?? undefined,
         discoverySource: "dexscreener",
         boosted: boosted.has(entry.tokenAddress),
       });

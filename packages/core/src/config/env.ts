@@ -505,6 +505,24 @@ const envSchema = z.object({
   AI_TEXT_MODEL: z.string().default("claude-haiku-4-5"),
   AI_TEXT_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
   AI_TEXT_MAX_PER_HOUR: z.coerce.number().int().min(0).default(60),
+  // TokenSage (https://github.com/sollama58/TokenSage): the user's own API that reads a token's
+  // name, ticker, image and X link and says what the coin is about (referent, narrative
+  // categories, copycat and X-link signals). apps/worker/src/tokensage/prefetch.ts asks it once
+  // per in-band mint (basic depth) and again at the mint's first decision row (full depth, which
+  // reads the X link and trends), and stores the answer in TokenNarrative. Nothing in the scan,
+  // matching or alerting path waits on it. Off until TOKENSAGE_ENABLED=true and both the URL and
+  // the API key are set. TOKENSAGE_MAX_BATCHES_PER_CYCLE bounds the calls per scan cycle (each
+  // carries up to 50 mints) and TOKENSAGE_FULL_PER_DAY keeps full-depth requests under the key's
+  // daily quota on TokenSage's side.
+  TOKENSAGE_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  TOKENSAGE_API_URL: z.string().default(""),
+  TOKENSAGE_API_KEY: z.string().optional().default(""),
+  TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(2),
+  TOKENSAGE_FULL_PER_DAY: z.coerce.number().int().min(0).default(1500),
   // The hard daily cap on everything the AI spends (curation/aiSpend.ts): the reviewer, the text
   // reads and the playbook evolution share AI_DAILY_BUDGET_USD per UTC day. Every call reserves
   // its estimated cost before it runs and is trued up to the real cost afterwards; once the next

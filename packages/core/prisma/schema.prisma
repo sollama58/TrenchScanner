@@ -214,6 +214,12 @@ model Token {
   hasTwitter      Boolean   @default(false)
   hasTelegram     Boolean   @default(false)
   hasWebsite      Boolean   @default(false)
+  /// The launcher's X/Twitter and website links as found at discovery (Pump.fun's `twitter` /
+  /// `website`, or DexScreener's profile links). Only https URLs are kept; a bare X handle is
+  /// stored as its https://x.com/ URL. Null when the source had none. Kept so the AI reviewer,
+  /// the cards and TokenSage (see TokenNarrative) can look at what the coin links to.
+  twitterUrl      String?
+  websiteUrl      String?
   narrativeTags   String[]  @default([])
   /// The launcher-written description from Pump.fun, captured at discovery. Re-scans come from
   /// DexScreener, which has none, so this is the only copy - it feeds narrative tags and the AI
@@ -987,6 +993,33 @@ model RugCheckCache {
   mintAddress String   @id
   profile     Json?
   checkedAt   DateTime @default(now())
+
+  @@index([checkedAt])
+}
+
+/// TokenSage's read of what a mint is about (its referent, narrative categories, copycat signals,
+/// X link and trend matches) - one row per mint, written by apps/worker/src/tokensage/prefetch.ts
+/// when TOKENSAGE_ENABLED is on. `depth` is the deepest analysis stored ("basic" or "full"); a
+/// row is replaced when a deeper one arrives. `analysis` keeps the whole Analysis document so new
+/// model inputs can be derived from history later without asking TokenSage again.
+///
+/// `status` "failed" with a null `analysis` caches a definitive answer (unknown mint, not a token)
+/// so it is not re-requested every cycle. Transport failures are never written here.
+model TokenNarrative {
+  mintAddress     String   @id
+  depth           String
+  status          String
+  /// Top-level and sub-category labels with confidences, e.g. [{"label":"animal/dog","confidence":0.9}].
+  categories      Json?
+  referentLabel   String?
+  referentKind    String?
+  summary         String?
+  /// Flag codes, e.g. ["copycat","x_link_reused"].
+  flags           String[] @default([])
+  rulesVersion    String?
+  analysis        Json?
+  analyzedAt      DateTime?
+  checkedAt       DateTime @default(now())
 
   @@index([checkedAt])
 }
