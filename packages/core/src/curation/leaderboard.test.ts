@@ -25,7 +25,7 @@ describe("recordScore", () => {
   });
 
   it("is 100 for a long record that meets every target, and no more for beating them", () => {
-    expect(recordScore(record(1000, 900, 700, 2.5, 200), targets)).toBe(100);
+    expect(recordScore(record(1000, 900, 700, 2.5, 300), targets)).toBe(100);
     expect(recordScore(record(1000, 1000, 1000, 3, 1000), targets)).toBe(100);
     // Without a single 10x it can't: that part is 10 of the 100.
     expect(recordScore(record(1000, 900, 700, 2.5), targets)).toBe(90);
@@ -33,12 +33,12 @@ describe("recordScore", () => {
 
   it("discounts a short perfect streak below a long good record", () => {
     const streak = recordScore(record(3, 3, 3, 3, 3), targets)!;
-    const steady = recordScore(record(200, 150, 100, 1.6, 30), targets)!;
+    const steady = recordScore(record(200, 150, 100, 1.6, 60), targets)!;
     expect(streak).toBeLessThan(steady);
     // 3 of 3 proves 3 / (3 + 10) = 23% of each rate.
     expect(scoreParts(record(3, 3, 3, 3), targets)).toMatchObject({ proven2xPct: 23.1, proven4xPct: 23.1 });
     // 3 of 3 averaging 3 doublings proves 9 / 13 = 0.69 doublings a call.
-    expect(streak).toBeCloseTo(50 * (23.1 / 75) + 30 * (23.1 / 50) + 10 * 1 + 10 * (0.69 / 2), 0);
+    expect(streak).toBeCloseTo(50 * (23.1 / 75) + 30 * (23.1 / 50) + 10 * (23.1 / 25) + 10 * (0.69 / 2), 0);
     expect(steady).toBeGreaterThan(90);
   });
 
@@ -77,9 +77,9 @@ describe("recordScore", () => {
     expect(parts.points4x).toBeCloseTo(30 * (parts.proven4xPct / 50), 0);
     expect(parts.provenRunDoublings).toBeCloseTo(400 / 410, 2);
     expect(parts.pointsRun).toBeCloseTo(10 * (parts.provenRunDoublings / 2), 0);
-    // 20 of 400 proves 20/410 = 4.9% against the 10% target.
+    // 20 of 400 proves 20/410 = 4.9% against the 25% target.
     expect(parts.proven10xPct).toBeCloseTo(4.9, 1);
-    expect(parts.points10x).toBeCloseTo(10 * (parts.proven10xPct / 10), 0);
+    expect(parts.points10x).toBeCloseTo(10 * (parts.proven10xPct / 25), 0);
     expect(recordScore(record(400, 300, 100, 1, 20), targets)).toBeCloseTo(
       parts.points2x + parts.points4x + parts.points10x + parts.pointsRun,
       1,
