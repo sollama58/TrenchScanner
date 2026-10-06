@@ -8,6 +8,7 @@ import {
   TRACK_RECORD_DAYS,
   RUN_DOUBLINGS,
   RUN_SIZE_TARGET_DOUBLINGS,
+  TEN_X_TARGET_RATE,
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
 
@@ -112,7 +113,7 @@ export interface FilterLeaderboard {
   generatedAt: string;
   windowDays: number;
   minGradedToRank: number;
-  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number };
+  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number; tenXPct: number };
   ranked: FilterLeaderboardEntry[];
   warmingUp: FilterLeaderboardEntry[];
   /** Every shared filter, ranked or not (the lists above are capped). */
@@ -199,7 +200,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     const won4x = Number(r.won4x);
     const won10x = Number(r.won10x);
     const sumRun = Number(r.sum_run ?? 0);
-    const record = { calls: graded, graded, wins: won2x, goals: won4x, sumLabel: 0, sumRun };
+    const record = { calls: graded, graded, wins: won2x, goals: won4x, tenX: won10x, sumLabel: 0, sumRun };
     const score = recordScore(record, targets);
     const recordSince = r.criteriaChangedAt > since ? r.criteriaChangedAt : since;
     return {
@@ -256,6 +257,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
       hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
       runDoublings: RUN_SIZE_TARGET_DOUBLINGS,
+      tenXPct: TEN_X_TARGET_RATE * 100,
     },
     ranked,
     warmingUp,

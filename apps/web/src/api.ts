@@ -614,7 +614,7 @@ export interface FilterBoard {
   generatedAt: string;
   windowDays: number;
   minGradedToRank: number;
-  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number };
+  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number; tenXPct?: number };
   ranked: FilterBoardEntry[];
   warmingUp: FilterBoardEntry[];
   sharedCount: number;
@@ -676,6 +676,9 @@ export interface ScoreBand {
 export interface ScoreBasis {
   points2x: number;
   points4x: number;
+  /** Points from the 10x-within-an-hour rate (absent from older API builds). */
+  points10x?: number;
+  proven10xPct?: number;
   /** Points from run size (absent from an API that predates it). */
   pointsRun?: number;
   proven2xPct: number;
@@ -780,7 +783,9 @@ export interface Leaderboard {
   window: { days: number; since: string };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   scoring: {
-    weights: { winRate: number; goalRate: number; runSize?: number; avgReturn?: number };
+    weights: { winRate: number; goalRate: number; tenXRate?: number; runSize?: number; avgReturn?: number };
+    /** The 10x-within-an-hour rate target, in percent (absent from older API builds). */
+    tenXTargetPct?: number;
     /** Run-size target, in doublings per call (2 = a 4x average). */
     runTargetDoublings?: number;
     /** Calls' worth the backtest counts for at most; live weighs the same at this many graded calls. */

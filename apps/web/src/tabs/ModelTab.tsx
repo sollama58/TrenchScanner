@@ -1036,6 +1036,13 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
             <strong>{Math.round(w.goalRate * 100)} points for hitting 4x.</strong> The same, against the{" "}
             {t.hitRate4xPct}% target.
           </li>
+          {w.tenXRate != null && (
+            <li>
+              <strong>{Math.round(w.tenXRate * 100)} points for hitting 10x.</strong> The share of calls that
+              reached 10x within an hour of the alert (before a 50% drop), against a {sc.tenXTargetPct ?? 10}%
+              target.
+            </li>
+          )}
           {w.runSize != null && (
             <li>
               <strong>{Math.round(w.runSize * 100)} points for run size.</strong> How far its calls went over
@@ -1074,6 +1081,13 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
             points) and a 4x rate of <span className="num">{b.proven4xPct.toFixed(0)}%</span> (
             {Math.round(w.goalRate * 100)} × {b.proven4xPct.toFixed(0)}/{t.hitRate4xPct} ={" "}
             <span className="num">{b.points4x.toFixed(0)}</span> points)
+            {b.points10x != null && b.proven10xPct != null && w.tenXRate != null && (
+              <>
+                , a 10x rate of <span className="num">{b.proven10xPct.toFixed(0)}%</span> (
+                {Math.round(w.tenXRate * 100)} × {b.proven10xPct.toFixed(0)}/{sc.tenXTargetPct ?? 10} ={" "}
+                <span className="num">{b.points10x.toFixed(0)}</span> points)
+              </>
+            )}
             {b.pointsRun != null && b.provenRunDoublings != null && w.runSize != null && (
               <>
                 {" "}
@@ -1193,6 +1207,9 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           score is how far each has proven itself toward the goal, 0-100: {Math.round(w.winRate * 100)} points
           for its 2x rate against the {board.targets.hitRate2xPct}% target, {Math.round(w.goalRate * 100)} for
           its 4x rate against {board.targets.hitRate4xPct}%
+          {w.tenXRate != null
+            ? `, ${Math.round(w.tenXRate * 100)} for how often its calls hit 10x within an hour`
+            : ""}
           {w.runSize != null
             ? `, and ${Math.round(w.runSize * 100)} for run size, how far its calls run over the day after`
             : ""}
