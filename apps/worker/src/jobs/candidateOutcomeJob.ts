@@ -6,10 +6,12 @@ import {
   initialOutcomeAggregates,
   applyPriceTick,
   computeOutcomeLabels,
+  tenXVerdict,
   simulateExitPlan,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
   WIN_WINDOW_MINUTES,
+  TEN_X_WINDOW_MINUTES,
   CURRENT_LABEL_RULE,
   type Env,
   type DexScreenerClient,
@@ -167,6 +169,7 @@ export async function recordCandidateSample(
       lowBefore2xPriceUsd: agg.lowBefore2xPriceUsd,
       peak24hPriceUsd: agg.peak24hPriceUsd,
       peakBeforeStopPriceUsd: agg.peakBeforeStopPriceUsd,
+      peakBeforeStop60mPriceUsd: agg.peakBeforeStop60mPriceUsd,
     },
   });
   noteSampleBanked(kind, anchorAt.getTime());
@@ -367,6 +370,7 @@ export async function runCandidateWatchJob(
       const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
       const winWindowMs = WIN_WINDOW_MINUTES * 60_000;
       const extendedWindowMs = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
+      const tenXWindowMs = TEN_X_WINDOW_MINUTES * 60_000;
       // Never NaN: Postgres would store it, and a NaN run peak poisons the model score's sort.
       const peak24hReturnPct = () => {
         const pct = ((merged.peak24hPriceUsd - merged.anchorPriceUsd) / merged.anchorPriceUsd) * 100;
@@ -381,6 +385,10 @@ export async function runCandidateWatchJob(
       let finalPeak24hPct: number | null = null;
       let runPeakMinutes: number | null = null;
       let closedUngraded = false;
+      // The 10x tier's verdict, when this tick settles it - at the 30-minute close for anything it
+      // already decides, else on the first tick past the hour (the row is a clean winner on the
+      // extended watch by then). Null while it is still open.
+      let tenX: boolean | null = null;
       if (row.finalizedAt === null && elapsedMs > winWindowMs && merged.entryAt === null) {
         // The win window closed without a single price: the worker was down, or DexScreener had
         // nothing for the mint through it. A first price past the win window is refused
@@ -401,6 +409,10 @@ export async function runCandidateWatchJob(
         data.hit2xIn1h = closedLabels.hit2xIn1h;
         data.hit4xIn1h = closedLabels.hit4xIn1h;
         data.disqualified = closedLabels.disqualified;
+        if (closedLabels.hit10xIn1h !== null) {
+          tenX = closedLabels.hit10xIn1h;
+          data.hit10xIn1h = tenX;
+        }
         data.labelValue = closedLabels.labelValue;
         // The call's return under the fixed exit plan, closing at this tick's price (the first
         // seen at or after the window closed) or, without one, the last price the row saw.
@@ -426,6 +438,18 @@ export async function runCandidateWatchJob(
         }
       }
 
+      // A clean winner whose hour was still open at the 30-minute close: settled on the first tick
+      // past it. Rows that don't track the tier (null peak) never get a verdict.
+      if (
+        row.finalizedAt !== null &&
+        row.hit10xIn1h === null &&
+        merged.peakBeforeStop60mPriceUsd != null &&
+        elapsedMs >= tenXWindowMs
+      ) {
+        tenX = tenXVerdict(merged, row.hit2xIn1h === true && row.disqualified === false, true);
+        if (tenX !== null) data.hit10xIn1h = tenX;
+      }
+
       if (extended && data.finalized24hAt === undefined && elapsedMs >= extendedWindowMs) {
         finalPeak24hPct = peak24hReturnPct();
         runPeakMinutes = runPeakMinutesOf();
@@ -436,8 +460,16 @@ export async function runCandidateWatchJob(
       }
 
       if (data.finalized24hAt === undefined) {
+        // Every minute through the label window, and on through the hour while the 10x is still
+        // open - the tier is graded at the same cadence as the 2x and 4x.
+        const tenXOpen =
+          merged.peakBeforeStop60mPriceUsd != null &&
+          (data.hit10xIn1h ?? row.hit10xIn1h) === null &&
+          elapsedMs < tenXWindowMs;
         const stepMinutes =
-          elapsedMs < labelWindowMs ? env.CANDIDATE_WATCH_INTERVAL_MINUTES : EXTENDED_CHECK_INTERVAL_MINUTES;
+          elapsedMs < labelWindowMs || tenXOpen
+            ? env.CANDIDATE_WATCH_INTERVAL_MINUTES
+            : EXTENDED_CHECK_INTERVAL_MINUTES;
         data.nextCheckAt = new Date(sweepAt.getTime() + stepMinutes * 60_000 - RESCHEDULE_SLACK_MS);
       }
 
@@ -451,11 +483,12 @@ export async function runCandidateWatchJob(
       // degraded to "unknown" and dropped out of the hit-rate counters permanently. Match rows
       // got exactly this repair (repairOutcomeBookkeeping); curated alerts never did, so the
       // one ledger the product describes as permanent was the one with no safety net.
-      const copyVerdict = row.curatedAlerts.length > 0 && (closedLabels !== null || finalPeak24hPct !== null);
+      const copyVerdict =
+        row.curatedAlerts.length > 0 && (closedLabels !== null || finalPeak24hPct !== null || tenX !== null);
       // User-filter alerts anchored here get the same verdict, under the same all-or-nothing
       // rule. Found through the token (Match.tokenId is indexed; candidateOutcomeId deliberately
       // isn't - see schema.prisma).
-      const copyToMatches = row.sampleKind === "match" && closedLabels !== null;
+      const copyToMatches = row.sampleKind === "match" && (closedLabels !== null || tenX !== null);
       // An alert whose row closed with no price seen gets only the closing time: that is what tells the
       // feed and the hit-rate report "this one will never be graded" - without it the card kept
       // reading as a live miss off the unmoved anchor, and the report counted it as pending
@@ -497,6 +530,7 @@ export async function runCandidateWatchJob(
                     simReturnPct,
                   }
                 : {}),
+              ...(tenX !== null ? { hit10xIn1h: tenX } : {}),
               ...(finalPeak24hPct !== null
                 ? { peak24hReturnPct: finalPeak24hPct, runPeakMinutes, outcomeFinalizedAt: tickAt }
                 : {}),
@@ -509,15 +543,20 @@ export async function runCandidateWatchJob(
             data: { outcomeFinalizedAt: tickAt },
           });
         }
-        if (copyToMatches && closedLabels !== null) {
+        if (copyToMatches) {
           await tx.match.updateMany({
             where: { tokenId: row.tokenId, candidateOutcomeId: row.id },
             data: {
-              peak1hReturnPct: closedLabels.peak1hReturnPct,
-              maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
-              hit2xIn1h: closedLabels.hit2xIn1h,
-              hit4xIn1h: closedLabels.hit4xIn1h,
-              disqualified: closedLabels.disqualified,
+              ...(closedLabels !== null
+                ? {
+                    peak1hReturnPct: closedLabels.peak1hReturnPct,
+                    maxDrawdown1hPct: closedLabels.maxDrawdown1hPct,
+                    hit2xIn1h: closedLabels.hit2xIn1h,
+                    hit4xIn1h: closedLabels.hit4xIn1h,
+                    disqualified: closedLabels.disqualified,
+                  }
+                : {}),
+              ...(tenX !== null ? { hit10xIn1h: tenX } : {}),
             },
           });
         }
@@ -608,6 +647,7 @@ async function repairCuratedVerdicts(): Promise<number> {
           hit2xIn15m: true,
           hit2xIn1h: true,
           hit4xIn1h: true,
+          hit10xIn1h: true,
           disqualified: true,
           simReturnPct: true,
           peak24hReturnPct: true,
@@ -633,6 +673,7 @@ async function repairCuratedVerdicts(): Promise<number> {
           hit2xIn15m: outcome.hit2xIn15m,
           hit2xIn1h: outcome.hit2xIn1h,
           hit4xIn1h: outcome.hit4xIn1h,
+          hit10xIn1h: outcome.hit10xIn1h,
           disqualified: outcome.disqualified,
           simReturnPct: outcome.simReturnPct,
           ...(outcome.peak24hReturnPct !== null

@@ -111,6 +111,7 @@ const MATCH_OUTCOME_SELECT = {
   maxDrawdown1hPct: true,
   hit2xIn1h: true,
   hit4xIn1h: true,
+  hit10xIn1h: true,
   disqualified: true,
   peak24hReturnPct: true,
 } satisfies Prisma.MatchSelect;
@@ -122,9 +123,10 @@ type MatchOutcomeRow = Prisma.MatchGetPayload<{ select: typeof MATCH_OUTCOME_SEL
  * it lands and the card doesn't say "Live" for the whole window after the token doubled.
  */
 async function openOutcomeRows(matches: readonly MatchOutcomeRow[]) {
-  const openIds = matches.flatMap((m) =>
-    m.hit2xIn1h === null && m.candidateOutcomeId ? [m.candidateOutcomeId] : [],
-  );
+  // A clean winner's 10x tier stays open for the rest of its hour after the 2x/4x verdict lands.
+  const open = (m: MatchOutcomeRow) =>
+    m.hit2xIn1h === null || (m.hit2xIn1h && !m.disqualified && m.hit10xIn1h === null);
+  const openIds = matches.flatMap((m) => (open(m) && m.candidateOutcomeId ? [m.candidateOutcomeId] : []));
   const rows =
     openIds.length === 0
       ? []
@@ -144,6 +146,7 @@ function matchOutcome(m: MatchOutcomeRow, rowById: Awaited<ReturnType<typeof ope
     hit2xIn15m: null,
     hit2xIn1h: m.hit2xIn1h,
     hit4xIn1h: m.hit4xIn1h,
+    hit10xIn1h: m.hit10xIn1h,
     disqualified: m.disqualified,
     peak24hReturnPct: m.peak24hReturnPct,
     runPeakMinutes: null,
@@ -259,6 +262,7 @@ export async function registerMatchRoutes(
               hit2xIn15m: true,
               hit2xIn1h: true,
               hit4xIn1h: true,
+              hit10xIn1h: true,
               disqualified: true,
               peak24hReturnPct: true,
               runPeakMinutes: true,

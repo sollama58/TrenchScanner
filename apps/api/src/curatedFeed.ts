@@ -3,7 +3,9 @@ import {
   prisma,
   WIN_WINDOW_MINUTES,
   GOAL_WINDOW_MINUTES,
+  TEN_X_WINDOW_MINUTES,
   GOAL_MULTIPLE,
+  TEN_X_MULTIPLE,
   hit2xInWinWindow,
   disqualifiedByDrawdown,
   cleanPeakPriceUsd,
@@ -106,6 +108,7 @@ export const curatedAlertInclude = {
       peak24hPriceUsd: true,
       peak24hAt: true,
       peakBeforeStopPriceUsd: true,
+      peakBeforeStop60mPriceUsd: true,
       hit2xAt: true,
       finalizedAt: true,
       finalized24hAt: true,
@@ -114,6 +117,7 @@ export const curatedAlertInclude = {
       hit2xIn15m: true,
       hit2xIn1h: true,
       hit4xIn1h: true,
+      hit10xIn1h: true,
       disqualified: true,
       peak24hReturnPct: true,
       runPeakMinutes: true,
@@ -139,6 +143,11 @@ export interface OutcomeView {
   hit2x: boolean;
   /** Whether the run went on to clear the 4x goal within 30 minutes. Null until it's knowable. */
   hitGoal: boolean | null;
+  /**
+   * The third tier: whether the run reached 10x within an hour, before the stop. Null until it's
+   * knowable, and on calls from before the tier existed (they never tracked it).
+   */
+  hitTenX: boolean | null;
   /** Final once the goal window closes; the running peak-so-far before that. */
   peak1hReturnPct: number | null;
   maxDrawdown1hPct: number | null;
@@ -160,6 +169,7 @@ type OutcomeSources = Pick<
   | "hit2xIn15m"
   | "hit2xIn1h"
   | "hit4xIn1h"
+  | "hit10xIn1h"
   | "disqualified"
   | "peak24hReturnPct"
   | "runPeakMinutes"
@@ -201,20 +211,30 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
           won: live.hit2xIn1h,
           disqualified: live.disqualified,
           hitGoal: live.hit4xIn1h,
+          hitTenX: live.hit10xIn1h ?? alert.hit10xIn1h,
         }
       : alert.hit2xIn1h != null
         ? {
             won: alert.hit2xIn1h,
             disqualified: alert.disqualified,
             hitGoal: alert.hit4xIn1h,
+            hitTenX: alert.hit10xIn1h,
           }
         : null;
+
+  // The 10x tier settles up to an hour after the alert - past the 4x - so a clean winner's row can
+  // carry its 2x/4x verdict while the 10x is still open; that part is read off the live aggregates.
+  const tenXOf = (storedTenX: boolean | null): boolean | null => {
+    if (storedTenX !== null || !live || live.peakBeforeStop60mPriceUsd == null) return storedTenX;
+    return live.peakBeforeStop60mPriceUsd >= live.anchorPriceUsd * TEN_X_MULTIPLE ? true : null;
+  };
 
   if (stored) {
     return {
       status: stored.disqualified ? "disqualified" : stored.won ? "won" : "missed",
       hit2x: stored.won === true,
       hitGoal: stored.hitGoal,
+      hitTenX: stored.won === true && !stored.disqualified ? tenXOf(stored.hitTenX) : false,
       ...peaks,
       finalized: alert.outcomeFinalizedAt != null,
       minutesLeft: null,
@@ -233,6 +253,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
       status: "unknown",
       hit2x: false,
       hitGoal: null,
+      hitTenX: null,
       peak1hReturnPct: null,
       maxDrawdown1hPct: null,
       peak24hReturnPct: null,
@@ -253,6 +274,8 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
       !disqualifiedByDrawdown(live) &&
       cleanPeakPriceUsd(live) >= live.anchorPriceUsd * GOAL_MULTIPLE;
     const elapsedMin = (Date.now() - live.anchorAt.getTime()) / 60_000;
+    // Only a clean win can reach the tier - the peak alone would credit a stopped-out run.
+    const tenX = hit2x && !disqualifiedByDrawdown(live) ? tenXOf(null) : null;
 
     if (elapsedMin >= WIN_WINDOW_MINUTES) {
       const disqualified = hit2x && disqualifiedByDrawdown(live);
@@ -260,6 +283,12 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
         status: disqualified ? "disqualified" : hit2x ? "won" : "missed",
         hit2x,
         hitGoal: hitGoal ? true : elapsedMin >= GOAL_WINDOW_MINUTES ? false : null,
+        hitTenX:
+          live.peakBeforeStop60mPriceUsd == null
+            ? null
+            : !hit2x || disqualified
+              ? false
+              : (tenX ?? (elapsedMin >= TEN_X_WINDOW_MINUTES ? false : null)),
         ...peaks,
         finalized: false,
         minutesLeft: null,
@@ -272,6 +301,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
       status: "watching",
       hit2x,
       hitGoal: hitGoal ? true : null,
+      hitTenX: tenX,
       ...peaks,
       finalized: false,
       minutesLeft: Math.max(0, Math.round(WIN_WINDOW_MINUTES - elapsedMin)),
@@ -282,6 +312,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
     status: "unknown",
     hit2x: false,
     hitGoal: null,
+    hitTenX: null,
     peak1hReturnPct: null,
     maxDrawdown1hPct: null,
     peak24hReturnPct: null,

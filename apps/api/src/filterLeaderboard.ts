@@ -8,6 +8,7 @@ import {
   TRACK_RECORD_DAYS,
   RUN_DOUBLINGS,
   RUN_SIZE_TARGET_DOUBLINGS,
+  TEN_X_TARGET_RATE,
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
 
@@ -86,8 +87,11 @@ export interface FilterLeaderboardEntry {
   graded: number;
   won2x: number;
   won4x: number;
+  /** Clean 10x within an hour of the alert (the third tier; shown, not scored). */
+  won10x: number;
   winRatePct: number | null;
   goalRatePct: number | null;
+  tenXRatePct: number | null;
   proven2xPct: number | null;
   proven4xPct: number | null;
   /** Average run size per graded alert, in doublings (the model score's run-size measure). */
@@ -109,7 +113,7 @@ export interface FilterLeaderboard {
   generatedAt: string;
   windowDays: number;
   minGradedToRank: number;
-  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number };
+  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number; tenXPct: number };
   ranked: FilterLeaderboardEntry[];
   warmingUp: FilterLeaderboardEntry[];
   /** Every shared filter, ranked or not (the lists above are capped). */
@@ -137,6 +141,7 @@ type Row = {
   graded: bigint;
   won2x: bigint;
   won4x: bigint;
+  won10x: bigint;
   sum_run: number | null;
 } & Record<FilterCriteriaKey, unknown>;
 
@@ -158,6 +163,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       SELECT m."filterId",
              m."hit2xIn1h" AS hit2x,
              m."hit4xIn1h" AS hit4x,
+             COALESCE(m."hit10xIn1h", co."hit10xIn1h") AS hit10x,
              COALESCE(m."disqualified", false) AS dq,
              co."labelValue" AS label,
              m."peak1hReturnPct" AS peak,
@@ -181,6 +187,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
            count(c.hit2x) AS graded,
            count(*) FILTER (WHERE c.hit2x AND NOT c.dq) AS won2x,
            count(*) FILTER (WHERE c.hit4x AND NOT c.dq) AS won4x,
+           count(*) FILTER (WHERE c.hit10x AND NOT c.dq) AS won10x,
            COALESCE(sum(${RUN_DOUBLINGS}) FILTER (WHERE c.hit2x IS NOT NULL), 0)::float8 AS sum_run
     FROM "UserFilter" f
     LEFT JOIN calls c ON c."filterId" = f."id"
@@ -191,8 +198,9 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     const graded = Number(r.graded);
     const won2x = Number(r.won2x);
     const won4x = Number(r.won4x);
+    const won10x = Number(r.won10x);
     const sumRun = Number(r.sum_run ?? 0);
-    const record = { calls: graded, graded, wins: won2x, goals: won4x, sumLabel: 0, sumRun };
+    const record = { calls: graded, graded, wins: won2x, goals: won4x, tenX: won10x, sumLabel: 0, sumRun };
     const score = recordScore(record, targets);
     const recordSince = r.criteriaChangedAt > since ? r.criteriaChangedAt : since;
     return {
@@ -206,8 +214,10 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       graded,
       won2x,
       won4x,
+      won10x,
       winRatePct: graded > 0 ? round1((won2x / graded) * 100) : null,
       goalRatePct: graded > 0 ? round1((won4x / graded) * 100) : null,
+      tenXRatePct: graded > 0 ? round1((won10x / graded) * 100) : null,
       proven2xPct: graded > 0 ? round1(provenRate(won2x, graded) * 100) : null,
       proven4xPct: graded > 0 ? round1(provenRate(won4x, graded) * 100) : null,
       avgRunDoublings: graded > 0 ? round2(sumRun / graded) : null,
@@ -247,6 +257,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
       hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
       runDoublings: RUN_SIZE_TARGET_DOUBLINGS,
+      tenXPct: TEN_X_TARGET_RATE * 100,
     },
     ranked,
     warmingUp,

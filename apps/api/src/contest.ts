@@ -15,6 +15,7 @@ import {
   MIN_LIVE_CALLS_TO_RANK,
   COMPOSITE_WEIGHTS,
   RUN_SIZE_TARGET_DOUBLINGS,
+  TEN_X_TARGET_RATE,
   PRIOR_CALLS,
   SCORE_BANDS,
   explainScore,
@@ -276,6 +277,8 @@ export interface Leaderboard {
     weights: typeof COMPOSITE_WEIGHTS;
     /** Run-size target, in doublings per call (2 = a 4x average). */
     runTargetDoublings: number;
+    /** The 10x-within-an-hour rate target, in percent. */
+    tenXTargetPct: number;
     /** Calls' worth of evidence the backtest counts for at most; live weighs the same at this many graded calls. */
     livePivotCalls: number;
     /** Calls counted as misses on top of every record, so a short streak can't prove a high rate. */
@@ -418,6 +421,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     scoring: {
       weights: COMPOSITE_WEIGHTS,
       runTargetDoublings: RUN_SIZE_TARGET_DOUBLINGS,
+      tenXTargetPct: TEN_X_TARGET_RATE * 100,
       livePivotCalls: BACKTEST_EVIDENCE_CAP,
       priorCalls: PRIOR_CALLS,
       minLiveCallsToRank: MIN_LIVE_CALLS_TO_RANK,
@@ -425,7 +429,8 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       summary:
         `The score is how far a model has proven itself toward the goal, 0-100: ${Math.round(COMPOSITE_WEIGHTS.winRate * 100)} points ` +
         `for its 2x rate against ${env.CURATED_TARGET_WIN_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.goalRate * 100)} for its 4x rate against ` +
-        `${env.CURATED_TARGET_GOAL_RATE_PCT}%, and ${Math.round(COMPOSITE_WEIGHTS.runSize * 100)} for run size: how far its calls ran over 24h, ` +
+        `${env.CURATED_TARGET_GOAL_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.tenXRate * 100)} for its rate of 10x within an hour against ` +
+        `${TEN_X_TARGET_RATE * 100}%, and ${Math.round(COMPOSITE_WEIGHTS.runSize * 100)} for run size: how far its calls ran over 24h, ` +
         `in doublings per call, against ${RUN_SIZE_TARGET_DOUBLINGS} (a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average). Rates and run size are proven, not raw: ${PRIOR_CALLS} extra calls count as misses, so a short streak ` +
         `can't score like a long record. The backtest counts for at most ${BACKTEST_EVIDENCE_CAP} calls' worth; live calls take over from there. ` +
         `Models with fewer than ${MIN_LIVE_CALLS_TO_RANK} graded live calls are still warming up and rank below the rest.`,

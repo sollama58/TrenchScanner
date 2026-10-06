@@ -10,6 +10,7 @@ function standing(id: string, score: number | null, liveGraded: number, calling 
     goalRatePct: null,
     proven2xPct: null,
     proven4xPct: null,
+    tenXRatePct: null,
     avgReturnDoublings: null,
     avgRunDoublings: null,
     provenRunDoublings: null,

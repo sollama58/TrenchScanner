@@ -815,6 +815,8 @@ interface Rated {
   won4x: number;
   hitRate2xPct: number | null;
   hitRate4xPct: number | null;
+  /** 10x within an hour; absent where the source doesn't read it (and from older API builds). */
+  hitRate10xPct?: number | null;
   /** Simulated return under the fixed exit plan; absent where the source has none. */
   avgSimReturnPct?: number | null;
   totalSimReturnPct?: number | null;
@@ -865,6 +867,7 @@ interface AdminAlert {
   runPeakMinutes?: number | null;
   hit2xIn1h: boolean | null;
   hit4xIn1h: boolean | null;
+  hit10xIn1h?: boolean | null;
   disqualified: boolean | null;
   simReturnPct?: number | null;
   outcomeFinalizedAt: string | null;
@@ -873,7 +876,7 @@ interface AdminAlert {
   ai: { decision: string | null; probability2x: number | null } | null;
 }
 
-const rateHead = ["Calls", "Graded", "Pending", "2x", "4x", "Avg profit", "Total profit", "Verdict"];
+const rateHead = ["Calls", "Graded", "Pending", "2x", "4x", "10x", "Avg profit", "Total profit", "Verdict"];
 const profitClass = (v: number | null | undefined) =>
   `num ${v == null ? "" : v > 0 ? "up" : v < 0 ? "down" : ""}`;
 const rateCells = (r: Rated) => [
@@ -882,6 +885,7 @@ const rateCells = (r: Rated) => [
   n(r.pending),
   <span className="num">{pct(r.hitRate2xPct, 1)}</span>,
   <span className="num">{pct(r.hitRate4xPct, 1)}</span>,
+  <span className="num">{pct(r.hitRate10xPct, 1)}</span>,
   <span className={profitClass(r.avgSimReturnPct)}>{signedPct(r.avgSimReturnPct, 1)}</span>,
   <span className={profitClass(r.totalSimReturnPct)}>{stakes(r.totalSimReturnPct)}</span>,
   r.verdict === "meets-targets" ? (
@@ -1017,6 +1021,8 @@ function Alerts() {
                 <span className={profitClass(a.simReturnPct)}>{signedPct(a.simReturnPct)}</span>,
                 a.disqualified ? (
                   <Tag tone="muted">disqualified</Tag>
+                ) : a.hit10xIn1h ? (
+                  <Tag tone="ok">10x</Tag>
                 ) : a.hit4xIn1h ? (
                   <Tag tone="ok">4x</Tag>
                 ) : a.hit2xIn1h ? (

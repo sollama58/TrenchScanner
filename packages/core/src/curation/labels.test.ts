@@ -7,6 +7,7 @@ import {
   RUN_WEIGHT_PER_DOUBLING,
   runDoublings,
   runWeight,
+  tenXVerdict,
   type OutcomeAggregates,
 } from "./labels.js";
 
@@ -21,6 +22,43 @@ function replay(anchorPrice: number, ticks: [price: number, minute: number][]): 
   }
   return agg;
 }
+
+describe("the 10x-within-an-hour tier", () => {
+  it("credits a clean winner that reaches 10x after the label window but inside the hour", () => {
+    const atClose = replay(1, [
+      [2.2, 5],
+      [3, 25],
+    ]);
+    const labels = computeOutcomeLabels(atClose);
+    // At the 30-minute close the hour is still open.
+    expect(labels.hit4xIn1h).toBe(false);
+    expect(labels.hit10xIn1h).toBeNull();
+    const later = { ...atClose, ...applyPriceTick(atClose, 10.5, minutes(50)) };
+    expect(tenXVerdict(later, true, true)).toBe(true);
+    // The label window's own aggregates don't move past 30 minutes.
+    expect(later.peak1hPriceUsd).toBe(3);
+  });
+
+  it("refuses a 10x reached only after the hour, or after the stop", () => {
+    const late = replay(1, [
+      [2.2, 5],
+      [10.5, 61],
+    ]);
+    expect(tenXVerdict(late, true, true)).toBe(false);
+    const stopped = replay(1, [
+      [2.2, 5],
+      [0.4, 40],
+      [12, 50],
+    ]);
+    expect(tenXVerdict(stopped, true, true)).toBe(false);
+  });
+
+  it("settles a non-winner as no at the close, and leaves untracked rows unknown", () => {
+    const dud = replay(1, [[1.5, 5]]);
+    expect(computeOutcomeLabels(dud).hit10xIn1h).toBe(false);
+    expect(tenXVerdict({ anchorPriceUsd: 1, peakBeforeStop60mPriceUsd: null }, true, true)).toBeNull();
+  });
+});
 
 describe("candidate outcome labels", () => {
   it("labels a token that never ran as a zero, with its drawdown recorded", () => {

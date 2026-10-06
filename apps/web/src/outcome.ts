@@ -1,6 +1,6 @@
 import type { Card, Outcome } from "./api";
 
-/** The win window every alert is graded over: 2x within 15 minutes (the 4x goal gets 30). */
+/** The win window every alert is graded over: 2x within 15 minutes (the 4x goal gets 30, 10x an hour). */
 export const WIN_WINDOW_MIN = 15;
 
 /** What a card's verdict badge says. Words and an icon carry it; color only reinforces. */
@@ -13,6 +13,7 @@ export function outcomeBadge(outcome: Outcome | null): { text: string; tone: str
         ? { text: `✓ 2x hit · ${outcome.minutesLeft ?? 0}m left`, tone: "good" }
         : { text: `◷ Live · ${outcome.minutesLeft ?? 0}m left`, tone: "info" };
     case "won":
+      if (outcome.hitTenX) return { text: "✓✓✓ 10x win", tone: "good" };
       return outcome.hitGoal ? { text: "✓✓ 4x win", tone: "good" } : { text: "✓ 2x win", tone: "good" };
     case "disqualified":
       return { text: "✕ Stopped out", tone: "bad" };
@@ -73,6 +74,7 @@ export function matchOutcome(card: Card, now: number): Outcome | null {
     status: card.disqualified ? "disqualified" : card.hit2xIn1h ? "won" : "missed",
     hit2x: card.hit2xIn1h,
     hitGoal: card.hit4xIn1h ?? null,
+    hitTenX: card.hit10xIn1h ?? null,
     peak1hReturnPct: null,
     maxDrawdown1hPct: null,
     peak24hReturnPct: null,

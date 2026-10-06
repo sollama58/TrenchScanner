@@ -584,6 +584,7 @@ async function loadRowsOfKind(
         peak1hReturnPct: true,
         peak24hReturnPct: true,
         finalized24hAt: true,
+        hit10xIn1h: true,
       },
     });
     for (const r of page) {
@@ -606,6 +607,8 @@ async function loadRowsOfKind(
         // the fit's run weight). A loss that held above the stop keeps its window peak instead,
         // so the exam credits a late runner the way the live record does (runDoublings).
         ...runPeakOf(r),
+        // The 10x tier, for the exam's 10x part of the score; unknown until the row's hour settles.
+        ...(r.hit10xIn1h !== null ? { hit10x: r.hit10xIn1h } : {}),
       });
     }
     if (page.length < pageRows) break;

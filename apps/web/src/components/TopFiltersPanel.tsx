@@ -46,11 +46,13 @@ export function TopFiltersPanel({ onCopied }: { onCopied: () => void }) {
           <h2>Filters ranked by their alerts</h2>
           <p className="muted">
             Filters their owners chose to share, scored 0-100 the same way as the models: 50 points for the
-            proven 2x rate, 30 for the 4x rate (targets{" "}
-            {data ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}%` : "75% / 50%"}), and 20
-            for run size, how far the calls ran over their 24h watch (target a{" "}
+            proven 2x rate, 30 for the 4x rate, 10 for the 10x rate (targets{" "}
+            {data
+              ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}% / ${data.targets.tenXPct ?? 10}%`
+              : "75% / 50% / 10%"}
+            ), and 10 for run size, how far the calls ran over their 24h watch (target a{" "}
             {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x). A win is 2x on the alert
-            price within 15 minutes (4x within 30) before a 50% drop.
+            price within 15 minutes (4x within 30, 10x within an hour) before a 50% drop.
           </p>
           {data && (
             <p className="muted small">
@@ -157,6 +159,11 @@ function BoardEntry({
             {pct(e.goalRatePct)}
           </strong>{" "}
           4x ·{" "}
+          {e.tenXRatePct != null && (
+            <>
+              <strong className="num">{pct(e.tenXRatePct)}</strong> 10x ·{" "}
+            </>
+          )}
           <span title="How far the alerts ran on average over their 24h watch (stopped-out calls count as 0)">
             runs avg <strong className="num">{runMultiple(e.avgRunDoublings)}</strong>
           </span>{" "}

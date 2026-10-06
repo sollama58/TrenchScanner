@@ -255,6 +255,7 @@ function liveRow(
     peak24hPriceUsd: 1.4,
     peak24hAt: null as Date | null,
     peakBeforeStopPriceUsd: null as number | null,
+    peakBeforeStop60mPriceUsd: null as number | null,
     hit2xAt: null,
     finalizedAt: null,
     finalized24hAt: null as Date | null,
@@ -263,6 +264,7 @@ function liveRow(
     hit2xIn15m: null,
     hit2xIn1h: null,
     hit4xIn1h: null,
+    hit10xIn1h: null as boolean | null,
     disqualified: null,
     peak24hReturnPct: null,
     runPeakMinutes: null as number | null,
@@ -278,6 +280,7 @@ function alert(overrides: Partial<Parameters<typeof resolveOutcome>[0]> = {}) {
     hit2xIn15m: null,
     hit2xIn1h: null,
     hit4xIn1h: null,
+    hit10xIn1h: null,
     disqualified: null,
     peak24hReturnPct: null,
     runPeakMinutes: null,
@@ -290,6 +293,62 @@ function alert(overrides: Partial<Parameters<typeof resolveOutcome>[0]> = {}) {
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
 
 describe("resolveOutcome", () => {
+  it("credits the 10x tier live once a clean winner's hour peak reaches 10x", () => {
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(40),
+          hit2xAt: minutesAgo(35),
+          finalizedAt: minutesAgo(10),
+          hit2xIn1h: true,
+          hit4xIn1h: true,
+          disqualified: false,
+          peakBeforeStop60mPriceUsd: 11,
+        }),
+      }),
+    );
+    expect(view.status).toBe("won");
+    expect(view.hitTenX).toBe(true);
+  });
+
+  it("keeps the 10x tier open inside the hour, and settles a non-winner as no", () => {
+    const open = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(40),
+          hit2xAt: minutesAgo(35),
+          finalizedAt: minutesAgo(10),
+          hit2xIn1h: true,
+          hit4xIn1h: false,
+          disqualified: false,
+          peakBeforeStop60mPriceUsd: 3,
+        }),
+      }),
+    );
+    expect(open.hitTenX).toBeNull();
+    const miss = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(40),
+          finalizedAt: minutesAgo(10),
+          hit2xIn1h: false,
+          hit4xIn1h: false,
+          hit10xIn1h: false,
+          disqualified: false,
+          peakBeforeStop60mPriceUsd: 1.5,
+        }),
+      }),
+    );
+    expect(miss.hitTenX).toBe(false);
+  });
+
+  it("leaves the 10x tier unknown on calls from before it was tracked", () => {
+    const view = resolveOutcome(
+      alert({ candidateOutcome: null, hit2xIn1h: true, hit4xIn1h: true, disqualified: false }),
+    );
+    expect(view.hitTenX).toBeNull();
+  });
+
   it("shows a watching alert's running peaks from the live link", () => {
     const view = resolveOutcome(alert());
     expect(view.status).toBe("watching");

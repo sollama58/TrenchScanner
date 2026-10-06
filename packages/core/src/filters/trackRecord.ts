@@ -8,6 +8,8 @@ export interface FilterTrackRecord {
   won2x: number;
   /** Reached 4x within 30 minutes, stop respected. */
   won4x: number;
+  /** Reached 10x within an hour, stop respected (null-verdict alerts still inside their hour count as not yet). */
+  won10x: number;
 }
 
 /** The window a filter's record covers - recent enough to describe the filter as it stands. */
@@ -26,18 +28,26 @@ export async function loadFilterTrackRecords(
   const since = new Date(Date.now() - TRACK_RECORD_DAYS * 86_400_000);
   const userIds = [...new Set(filters.map((f) => f.userId))];
   const filterIds = filters.map((f) => f.id);
-  const rows = await prisma.$queryRaw<{ filterId: string; graded: bigint; won2x: bigint; won4x: bigint }[]>`
+  const rows = await prisma.$queryRaw<
+    { filterId: string; graded: bigint; won2x: bigint; won4x: bigint; won10x: bigint }[]
+  >`
     SELECT "filterId",
            count(*) AS graded,
            count(*) FILTER (WHERE "hit2xIn1h" AND NOT "disqualified") AS won2x,
-           count(*) FILTER (WHERE "hit4xIn1h") AS won4x
+           count(*) FILTER (WHERE "hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE "hit10xIn1h") AS won10x
     FROM "Match"
     WHERE "userId" = ANY(${userIds}) AND "matchedAt" > ${since}
       AND "filterId" = ANY(${filterIds}) AND "hit2xIn1h" IS NOT NULL
     GROUP BY "filterId"`;
-  for (const id of filterIds) out.set(id, { graded: 0, won2x: 0, won4x: 0 });
+  for (const id of filterIds) out.set(id, { graded: 0, won2x: 0, won4x: 0, won10x: 0 });
   for (const r of rows) {
-    out.set(r.filterId, { graded: Number(r.graded), won2x: Number(r.won2x), won4x: Number(r.won4x) });
+    out.set(r.filterId, {
+      graded: Number(r.graded),
+      won2x: Number(r.won2x),
+      won4x: Number(r.won4x),
+      won10x: Number(r.won10x),
+    });
   }
   return out;
 }

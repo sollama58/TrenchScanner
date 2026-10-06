@@ -80,6 +80,12 @@ export interface TrainingRow {
    * Read by the runner-traits report (featureReport.ts) and by the fit's run weight (runWeight).
    */
   runPeakMultiple?: number;
+  /**
+   * The third tier: a clean win that reached 10x within an hour of the alert, before the stop
+   * (CandidateOutcome.hit10xIn1h). Omitted while unknown, and on rows from before it was tracked.
+   * Read by the exam's record (the score's 10x part), never by the fit.
+   */
+  hit10x?: boolean;
 }
 
 /**
@@ -516,6 +522,8 @@ export interface ScoredOutcome {
   labelValue: number;
   /** The row's 24h run peak multiple, when known (TrainingRow.runPeakMultiple). */
   runPeakMultiple?: number;
+  /** TrainingRow.hit10x. */
+  hit10x?: boolean;
   /**
    * The row's token and moment. When both are present on every call and a cooldown is given,
    * calibration replays production's per-token alert cooldown (see calibrateThresholdForPrecision).
@@ -805,6 +813,8 @@ export interface FoldSide {
    * live one. Absent on folds stored before it was recorded.
    */
   sumRun?: number;
+  /** Emissions that reached 10x within an hour (TrainingRow.hit10x). Absent on older stored folds. */
+  tenX?: number;
 }
 
 export interface EvalFold {
@@ -982,6 +992,7 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
     goalPrecisionPct: emitted > 0 ? (goals / emitted) * 100 : null,
     avgLabel: emitted > 0 ? emittedRows.reduce((s, r) => s + r.labelValue, 0) / emitted : null,
     sumRun: emittedRows.reduce((s, r) => s + runDoublings(r), 0),
+    tenX: emittedRows.filter((r) => r.hit10x === true).length,
   };
 }
 
@@ -1130,6 +1141,7 @@ export async function walkForwardEvaluate(
     probability,
     labelValue: row.labelValue,
     ...(row.runPeakMultiple !== undefined ? { runPeakMultiple: row.runPeakMultiple } : {}),
+    ...(row.hit10x !== undefined ? { hit10x: row.hit10x } : {}),
     tokenId: row.tokenId,
     anchorAt: row.anchorAt,
   });

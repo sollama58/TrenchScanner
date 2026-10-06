@@ -198,9 +198,10 @@ export function reviewOutcome(
     finalized24hAt: Date | null;
     hit2xIn1h: boolean | null;
     hit4xIn1h: boolean | null;
+    hit10xIn1h?: boolean | null;
     disqualified: boolean | null;
   } | null,
-): "pending" | "won" | "won4x" | "missed" | "stopped" | "unknown" {
+): "pending" | "won" | "won4x" | "won10x" | "missed" | "stopped" | "unknown" {
   if (!co) return "unknown";
   if (co.hit2xIn1h === null) {
     // Book closed with no verdict: retired ungraded (no price seen inside the window), so it is
@@ -208,6 +209,7 @@ export function reviewOutcome(
     return co.finalizedAt === null && co.finalized24hAt !== null ? "unknown" : "pending";
   }
   if (co.disqualified) return "stopped";
+  if (co.hit10xIn1h) return "won10x";
   if (co.hit4xIn1h) return "won4x";
   return co.hit2xIn1h ? "won" : "missed";
 }
@@ -297,6 +299,7 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
             finalized24hAt: true,
             hit2xIn1h: true,
             hit4xIn1h: true,
+            hit10xIn1h: true,
             disqualified: true,
           },
         },

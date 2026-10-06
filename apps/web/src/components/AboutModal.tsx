@@ -103,16 +103,18 @@ export function AboutModal({
         <h3>How alerts are graded</h3>
         <p>
           Every alert, yours and the models&apos;, is graded the same way, from the price the token was at
-          when it was detected and alerted. It&apos;s a win if it reaches 2x within 15 minutes of the alert,
-          and a 4x win if it reaches 4x within 30 minutes. If it drops 50% before doubling, it&apos;s stopped
-          out and counts as a loss. Winners stay watched for a day after, so the card&apos;s Peak shows how
-          high they went.
+          when it was detected and alerted. It&apos;s a win if it reaches 2x within 15 minutes of the alert, a
+          4x win if it reaches 4x within 30 minutes, and a 10x win if it reaches 10x within an hour. If it
+          drops 50% before doubling, it&apos;s stopped out and counts as a loss. Winners stay watched for a
+          day after, so the card&apos;s Peak shows how high they went.
         </p>
         <dl className="about-terms">
           <dt>Live · 12m left</dt>
           <dd>Still inside its 15 minutes; the bar along the top of the card shows how much is gone.</dd>
-          <dt>✓ 2x win, ✓✓ 4x win</dt>
-          <dd>Doubled within 15 minutes; ✓✓ means it also reached 4x within 30.</dd>
+          <dt>✓ 2x win, ✓✓ 4x win, ✓✓✓ 10x win</dt>
+          <dd>
+            Doubled within 15 minutes; ✓✓ means it also reached 4x within 30, and ✓✓✓ 10x within an hour.
+          </dd>
           <dt>✕ Missed 2x</dt>
           <dd>The 15 minutes ran out before it doubled.</dd>
           <dt>✕ Stopped out</dt>

@@ -9,7 +9,7 @@ export interface FeedStatsCard {
   kind: "match" | "curated";
   tokenId: string;
   symbol: string | null;
-  outcome: Pick<OutcomeView, "status" | "hitGoal" | "finalized">;
+  outcome: Pick<OutcomeView, "status" | "hitGoal" | "hitTenX" | "finalized">;
   /** The run peak the card shows, as a return on the alert price. */
   peakPct: number | null;
 }
@@ -34,6 +34,10 @@ export interface FeedStats {
   goalGraded: number;
   hit4x: number;
   hit4xPct: number | null;
+  /** Cards whose 10x-within-an-hour tier is settled (a 2x miss is a 10x miss). */
+  tenXGraded: number;
+  hit10x: number;
+  hit10xPct: number | null;
   /** The card that ran furthest, by its run peak. */
   best: { tokenId: string; symbol: string | null; peakPct: number } | null;
   /** The middle run peak over cards with one: what a typical alert in this feed did. */
@@ -51,6 +55,10 @@ export function summarizeFeed(cards: FeedStatsCard[], hours: number): FeedStats 
     (c) => c.outcome.hitGoal !== null || c.outcome.status === "missed" || c.outcome.status === "disqualified",
   );
   const hit4x = goalSettled.filter((c) => c.outcome.hitGoal === true).length;
+  const tenXSettled = cards.filter(
+    (c) => c.outcome.hitTenX != null || c.outcome.status === "missed" || c.outcome.status === "disqualified",
+  );
+  const hit10x = tenXSettled.filter((c) => c.outcome.hitTenX === true).length;
 
   const peaks = cards
     .filter((c): c is FeedStatsCard & { peakPct: number } => c.peakPct !== null && Number.isFinite(c.peakPct))
@@ -80,6 +88,9 @@ export function summarizeFeed(cards: FeedStatsCard[], hours: number): FeedStats 
     goalGraded: goalSettled.length,
     hit4x,
     hit4xPct: rate(hit4x, goalSettled.length),
+    tenXGraded: tenXSettled.length,
+    hit10x,
+    hit10xPct: rate(hit10x, tenXSettled.length),
     best: top ? { tokenId: top.tokenId, symbol: top.symbol, peakPct: top.peakPct } : null,
     medianPeakPct,
   };

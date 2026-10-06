@@ -126,6 +126,8 @@ export interface Outcome {
   status: OutcomeStatus;
   hit2x: boolean;
   hitGoal: boolean | null;
+  /** Reached 10x within an hour, before the stop; null until known (absent from older API builds). */
+  hitTenX?: boolean | null;
   peak1hReturnPct: number | null;
   maxDrawdown1hPct: number | null;
   /** The run peak: winners stay watched for a day to see how high they go. */
@@ -204,6 +206,7 @@ export interface Card {
   // Match-only outcome columns.
   hit2xIn1h?: boolean | null;
   hit4xIn1h?: boolean | null;
+  hit10xIn1h?: boolean | null;
   disqualified?: boolean | null;
 }
 
@@ -229,6 +232,10 @@ export interface FeedStats {
   goalGraded: number;
   hit4x: number;
   hit4xPct: number | null;
+  /** The 10x-within-an-hour tier (absent from older API builds). */
+  tenXGraded?: number;
+  hit10x?: number;
+  hit10xPct?: number | null;
   best: { tokenId: string; symbol: string | null; peakPct: number } | null;
   medianPeakPct: number | null;
   showModelAlerts: boolean;
@@ -256,6 +263,8 @@ export interface CuratedStats {
     hitRatePct: number | null;
     goalHits: number;
     goalRatePct: number | null;
+    tenXHits?: number;
+    tenXRatePct?: number | null;
     bestPeak24hReturnPct: number | null;
   };
   /** Absent from older API builds mid-deploy, null when the reading failed. */
@@ -285,6 +294,9 @@ export interface GradedRates {
   pending: number;
   hitRate2xPct: number | null;
   hitRate4xPct: number | null;
+  /** 10x within an hour (absent from older API builds and from sources that don't read it). */
+  won10x?: number;
+  hitRate10xPct?: number | null;
   /** Average / total simulated return under the fixed exit plan, in percent (absent from older API builds). */
   avgSimReturnPct?: number | null;
   totalSimReturnPct?: number | null;
@@ -349,7 +361,7 @@ export interface AiReviewRow {
   anchorMcapUsd: number;
   alerted: boolean;
   token: { mintAddress: string; symbol: string | null; name: string | null; imageUrl: string | null };
-  outcome: "pending" | "won" | "won4x" | "missed" | "stopped" | "unknown";
+  outcome: "pending" | "won" | "won4x" | "won10x" | "missed" | "stopped" | "unknown";
   reasoning?: string | null;
   risks?: string[];
   error?: string | null;
@@ -563,7 +575,7 @@ export interface Filter extends FilterInput {
   createdAt: string;
   /** When the matching criteria last changed: the leaderboard record starts here. */
   criteriaChangedAt: string;
-  trackRecord: { graded: number; won2x: number; won4x: number } | null;
+  trackRecord: { graded: number; won2x: number; won4x: number; won10x?: number } | null;
 }
 
 /** The fields that decide what a filter matches: what "Copy" copies. */
@@ -580,8 +592,11 @@ export interface FilterBoardEntry {
   graded: number;
   won2x: number;
   won4x: number;
+  /** 10x within an hour (absent from older API builds). */
+  won10x?: number;
   winRatePct: number | null;
   goalRatePct: number | null;
+  tenXRatePct?: number | null;
   proven2xPct: number | null;
   proven4xPct: number | null;
   /** Average run size per graded alert, in doublings: 2 = calls ran to 4x on average. */
@@ -599,7 +614,7 @@ export interface FilterBoard {
   generatedAt: string;
   windowDays: number;
   minGradedToRank: number;
-  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number };
+  targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number; tenXPct?: number };
   ranked: FilterBoardEntry[];
   warmingUp: FilterBoardEntry[];
   sharedCount: number;
@@ -633,6 +648,8 @@ export interface RecordSummary {
   /** The 2x / 4x rate this record proves (after the score's prior misses), in percent. Absent from older API builds. */
   proven2xPct?: number | null;
   proven4xPct?: number | null;
+  /** Share of graded calls that reached 10x within an hour; null when not tracked (absent from older API builds). */
+  tenXRatePct?: number | null;
   /** Average doublings per graded call: a 2x is 1, a 4x is 2, a miss 0. */
   avgReturnDoublings: number | null;
   /**
@@ -659,6 +676,9 @@ export interface ScoreBand {
 export interface ScoreBasis {
   points2x: number;
   points4x: number;
+  /** Points from the 10x-within-an-hour rate (absent from older API builds). */
+  points10x?: number;
+  proven10xPct?: number;
   /** Points from run size (absent from an API that predates it). */
   pointsRun?: number;
   proven2xPct: number;
@@ -763,7 +783,9 @@ export interface Leaderboard {
   window: { days: number; since: string };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   scoring: {
-    weights: { winRate: number; goalRate: number; runSize?: number; avgReturn?: number };
+    weights: { winRate: number; goalRate: number; tenXRate?: number; runSize?: number; avgReturn?: number };
+    /** The 10x-within-an-hour rate target, in percent (absent from older API builds). */
+    tenXTargetPct?: number;
     /** Run-size target, in doublings per call (2 = a 4x average). */
     runTargetDoublings?: number;
     /** Calls' worth the backtest counts for at most; live weighs the same at this many graded calls. */

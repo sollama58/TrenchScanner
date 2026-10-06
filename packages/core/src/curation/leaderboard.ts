@@ -7,12 +7,15 @@ import type { PrecisionTargets } from "./trainer.js";
  *
  * THE SCORE IS HOW FAR A MODEL HAS PROVEN ITSELF TOWARD THE GOAL, 0-100. The goal is the two
  * hit-rate targets, 2x on 75% of calls and 4x on 50% (CURATED_TARGET_*), plus catching the big
- * runs these tokens make: a model that has shown, with confidence, that it meets all three scores
+ * runs these tokens make: a model that has shown, with confidence, that it meets all of them scores
  * 100; one that has shown nothing scores 0.
  *
  *  - 50 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
  *  - 30 points for the 4x rate: the same against the 4x target.
- *  - 20 points for run size: how far its calls ultimately ran (the 24h run peak), in doublings
+ *  - 10 points for the 10x rate (10x within an hour, the third tier, user decision 2026-10-06): the
+ *    same against TEN_X_TARGET_RATE. A record that doesn't track it (older stored exams) has
+ *    proven no 10x calls.
+ *  - 10 points for run size: how far its calls ultimately ran (the 24h run peak), in doublings
  *    per call, against RUN_SIZE_TARGET_DOUBLINGS. A 2x, 4x or 4x-in-30-minutes call earns the
  *    same 2x/4x points whether it stops there or runs to 50x; this part is what tells them apart.
  *
@@ -45,6 +48,12 @@ export interface CallRecord {
   wins: number;
   /** Clean 4x within 30 minutes. */
   goals: number;
+  /**
+   * Clean 10x within an hour - the third tier, shown beside the rates but not scored (the run-size
+   * part already rewards it). Live records only; absent on exams, which don't watch past the label
+   * window.
+   */
+  tenX?: number;
   /** Sum of the graded calls' labels (doublings; 0 for a miss). */
   sumLabel: number;
   /**
@@ -65,7 +74,9 @@ export interface CallRecord {
 /** labelValue is log2 of the peak multiple for clean wins: the 4x goal is labelValue >= 2. */
 export const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
-export const COMPOSITE_WEIGHTS = { winRate: 0.5, goalRate: 0.3, runSize: 0.2 } as const;
+export const COMPOSITE_WEIGHTS = { winRate: 0.5, goalRate: 0.3, tenXRate: 0.1, runSize: 0.1 } as const;
+/** The 10x tier's target rate: 10x within an hour on one call in ten. */
+export const TEN_X_TARGET_RATE = 0.1;
 /**
  * The run-size target, in doublings per call: 2 = calls average a 4x run. Hitting both rate
  * targets with every winner stopping at its 4x makes 1.25, so full points need runners that keep
@@ -111,6 +122,8 @@ export interface RecordSummary {
   proven2xPct: number | null;
   /** The 4x rate this record proves, the same way. */
   proven4xPct: number | null;
+  /** Share of graded calls that cleanly reached 10x within an hour; null when not tracked. */
+  tenXRatePct: number | null;
   /** Average doublings per graded call. */
   avgReturnDoublings: number | null;
   /** Average run size per graded call, in doublings (see CallRecord.sumRun). */
@@ -137,6 +150,7 @@ export function summarizeRecord(record: CallRecord, targets: PrecisionTargets): 
     goalRatePct: g > 0 ? (record.goals / g) * 100 : null,
     proven2xPct: g > 0 ? round1(provenRate(record.wins, g) * 100) : null,
     proven4xPct: g > 0 ? round1(provenRate(record.goals, g) * 100) : null,
+    tenXRatePct: g > 0 && record.tenX !== undefined ? (record.tenX / g) * 100 : null,
     avgReturnDoublings: g > 0 ? record.sumLabel / g : null,
     avgRunDoublings: g > 0 ? round2(runSum(record) / g) : null,
     provenRunDoublings: g > 0 ? round2(provenRate(runSum(record), g)) : null,
@@ -160,11 +174,14 @@ export interface ScoreParts {
   /** Points from the 2x rate: weight × min(1, proven / target) × 100. */
   points2x: number;
   points4x: number;
+  /** Points from the 10x rate, against TEN_X_TARGET_RATE. */
+  points10x: number;
   /** Points from run size: weight × min(1, proven run / RUN_SIZE_TARGET_DOUBLINGS) × 100. */
   pointsRun: number;
   /** The proven rates the points came from, in percent. */
   proven2xPct: number;
   proven4xPct: number;
+  proven10xPct: number;
   /** The proven run size the run points came from, in doublings per call. */
   provenRunDoublings: number;
 }
@@ -176,12 +193,15 @@ export function scoreParts(record: CallRecord, targets: PrecisionTargets): Score
   const proven2x = provenRate(record.wins, n);
   const proven4x = provenRate(record.goals, n);
   const provenRun = provenRate(runSum(record), n);
+  const proven10x = provenRate(record.tenX ?? 0, n);
   return {
     points2x: round1(100 * COMPOSITE_WEIGHTS.winRate * part(proven2x, targets.winRate)),
     points4x: round1(100 * COMPOSITE_WEIGHTS.goalRate * part(proven4x, targets.goalRate)),
+    points10x: round1(100 * COMPOSITE_WEIGHTS.tenXRate * part(proven10x, TEN_X_TARGET_RATE)),
     pointsRun: round1(100 * COMPOSITE_WEIGHTS.runSize * part(provenRun, RUN_SIZE_TARGET_DOUBLINGS)),
     proven2xPct: round1(proven2x * 100),
     proven4xPct: round1(proven4x * 100),
+    proven10xPct: round1(proven10x * 100),
     provenRunDoublings: round2(provenRun),
   };
 }
@@ -194,7 +214,7 @@ export function recordScore(record: CallRecord, targets: PrecisionTargets): numb
 }
 
 function partsTotal(parts: ScoreParts): number {
-  return round1(parts.points2x + parts.points4x + parts.pointsRun);
+  return round1(parts.points2x + parts.points4x + parts.points10x + parts.pointsRun);
 }
 
 /**
@@ -265,6 +285,7 @@ export function pooledRecord(
       goals: live.goals + exam.goals * k,
       sumLabel: live.sumLabel + exam.sumLabel * k,
       sumRun: runSum(live) + runSum(exam) * k,
+      tenX: (live.tenX ?? 0) + (exam.tenX ?? 0) * k,
     },
   };
 }
@@ -330,9 +351,10 @@ export function explainScore(composite: CompositeScore, targets: PrecisionTarget
       : `${b.liveCalls} graded live call${b.liveCalls === 1 ? "" : "s"}`;
   return (
     `Proven to hit 2x on at least ${b.proven2xPct.toFixed(0)}% of calls (target ${Math.round(targets.winRate * 100)}%) ` +
-    `and 4x on at least ${b.proven4xPct.toFixed(0)}% (target ${Math.round(targets.goalRate * 100)}%), ` +
+    `4x on at least ${b.proven4xPct.toFixed(0)}% (target ${Math.round(targets.goalRate * 100)}%) ` +
+    `and 10x within an hour on at least ${b.proven10xPct.toFixed(0)}% (target ${Math.round(TEN_X_TARGET_RATE * 100)}%), ` +
     `with runs worth ${b.provenRunDoublings.toFixed(2)} doublings a call (target ${RUN_SIZE_TARGET_DOUBLINGS}, a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average), ` +
-    `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} + ${b.pointsRun.toFixed(0)} = ` +
+    `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} + ${b.points10x.toFixed(0)} + ${b.pointsRun.toFixed(0)} = ` +
     `${composite.score.toFixed(0)} of 100.`
   );
 }
