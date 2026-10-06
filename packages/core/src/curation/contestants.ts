@@ -15,8 +15,9 @@ import type { CuratorLearner } from "./trainer.js";
  * in the codebase names a contestant.
  *
  * Three roles:
- *  - "rules": the hand-tuned heuristic gate (curator.ts). Untrained; its hit-rate cutoff comes
- *    from the same walk-forward exam as everyone else's.
+ *  - "rules": a few readable checks. The hand-tuned heuristic gate (curator.ts) until a points
+ *    table learned from the best model's picks (rulesDistill.ts) beats it on the exam; its
+ *    hit-rate cutoff comes from the same walk-forward exam as everyone else's.
  *  - "learner": a trained model - a family (logistic or boosted trees) plus the recipe that makes
  *    it see the market differently from its rivals (recency, depth, feature subset). Diversity is
  *    the point: near-identical members teach the consensus nothing.
@@ -122,8 +123,10 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   {
     id: RULES_CONTESTANT,
     name: "Rules",
-    description: "The hand-tuned score and safety gates, at the cutoff its record earned",
-    summary: "Hand-written checks on the token's score and safety. It doesn't learn, and it's the fallback.",
+    description:
+      "A short points table copied from the best model's picks each training run (kept only when it tests better), else the hand-tuned gates",
+    summary:
+      "A few simple checks, refreshed from the best model's picks whenever they test better. It's also the fallback.",
     role: "rules",
   },
   {

@@ -437,6 +437,13 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // Each training run learns a short points table for the Rules seat from the best model's picks
+  // (curation/rulesDistill.ts) and switches Rules to it only when it out-scores what Rules runs
+  // now on the same exam. "false" keeps Rules on the hand-tuned gates.
+  CURATOR_RULES_FROM_BEST: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // How long a curated pick that lost its slot to the governor (a full hour or burst window, or
   // stronger contenders) keeps re-contending. Curators decide only at a token's event moment,
   // and the event is spent for CANDIDATE_EVENT_SPACING_MINUTES, so without this a pick that

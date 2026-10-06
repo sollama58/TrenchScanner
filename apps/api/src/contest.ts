@@ -261,6 +261,18 @@ export interface LeaderboardEntry {
   highConviction: RecordSummary | null;
   /** Evolving seats only: the recipe holding the seat now, and where it came from. */
   lane: { generation: number; parentName: string | null; bornAt: Date } | null;
+  /**
+   * The Rules seat only: the checks it runs now - hand-tuned, or learned from the best model -
+   * and the last training run's reason. Null for other seats and before a run has recorded it.
+   */
+  rules: {
+    source: "hand-tuned" | "learned";
+    lines: string[];
+    teacherName: string | null;
+    derivedAt: string | null;
+    agreementPct: number | null;
+    reason: string;
+  } | null;
   model: {
     id: string;
     trainedAt: Date;
@@ -401,6 +413,19 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
         const lane = laneBySlot.get(spec.id);
         return lane
           ? { generation: lane.generation, parentName: lane.parentName, bornAt: lane.bornAt }
+          : null;
+      })(),
+      rules: (() => {
+        const r = spec.role === "rules" ? model?.metrics.rulesInUse : undefined;
+        return r
+          ? {
+              source: r.source,
+              lines: r.lines,
+              teacherName: r.teacher?.name ?? null,
+              derivedAt: r.derivedAt ?? null,
+              agreementPct: r.agreementPct ?? null,
+              reason: r.reason,
+            }
           : null;
       })(),
       model: model

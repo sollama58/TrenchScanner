@@ -869,6 +869,7 @@ function LeaderboardPanel({
                         In this seat since {ago(e.lane.bornAt, now)}; live record counts from then
                       </small>
                     )}
+                    {e.rules && <RulesInUse rules={e.rules} now={now} />}
                   </td>
                   <td data-label="Score" className="lb-score">
                     <ScoreBar
@@ -1905,5 +1906,33 @@ function PipelineStage({
       </span>
       <ArrowRightIcon size={16} className="stage-arrow" />
     </li>
+  );
+}
+
+/** The Rules seat's checks, under its leaderboard row: what it runs now and where they came from. */
+function RulesInUse({ rules, now }: { rules: NonNullable<LeaderboardEntry["rules"]>; now: number }) {
+  const learned = rules.source === "learned";
+  return (
+    <details className="rules-in-use">
+      <summary className="small">
+        {learned
+          ? `${rules.lines.length} checks learned from ${rules.teacherName ?? "the best model"}`
+          : "Hand-tuned checks"}
+      </summary>
+      <ul className="small">
+        {rules.lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <small className="faint">
+        {learned
+          ? `Calls when a token's points clear the cutoff its backtest earned. Learned ${rules.derivedAt ? ago(rules.derivedAt, now) : ""}` +
+            (rules.agreementPct != null
+              ? `; agrees with ${rules.teacherName ?? "its teacher"} on ${rules.agreementPct}% of its top picks.`
+              : ".")
+          : "Each training run also tries checks learned from the best model, and switches if they test better."}{" "}
+        {rules.reason}
+      </small>
+    </details>
   );
 }

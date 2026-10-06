@@ -2279,6 +2279,19 @@ button.small-btn {
   }
 }
 
+/* Rules seat: the checks it runs, under its leaderboard row */
+.rules-in-use {
+  margin-top: 4px;
+}
+.rules-in-use summary {
+  cursor: pointer;
+  color: var(--muted, inherit);
+}
+.rules-in-use ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
 /* Evolution panel */
 .lineage {
   display: block;

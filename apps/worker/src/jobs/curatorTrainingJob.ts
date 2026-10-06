@@ -28,6 +28,12 @@ import {
   type TrainingRow,
   type PrecisionTargets,
   type StoredEvalMetrics,
+  loadChampion,
+  MIN_LIVE_CALLS_TO_RANK,
+  RULES_CONTESTANT,
+  RULES_MODEL_KIND,
+  type DerivedRuleSet,
+  type RulesCuratorParams,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 import { runContestOffThread } from "../training/runContest.js";
@@ -102,6 +108,10 @@ export async function runCuratorTrainingJob(
   const contestants = withLanes(roster, lanes);
 
   const plan = await evolutionPlan(env, lanes, targets, now);
+  // The Rules seat learns its checks from the best model (curation/rulesDistill.ts).
+  const [rulesTeachers, currentRules] = env.CURATOR_RULES_FROM_BEST
+    ? await Promise.all([rulesTeacherOrder(lanes, targets, now), loadCurrentRules()])
+    : [[], null];
   // Every learner contestant sits the same walk-forward exam and ships its own model at its own
   // cutoff; challengers sit it too; the consensus is stacked on the final lineup's out-of-sample
   // calls (see runEvolvingContest in packages/core/src/curation/trainingRun.ts for all the math).
@@ -123,6 +133,9 @@ export async function runCuratorTrainingJob(
       highConvictionRank: env.CURATED_HIGH_CONVICTION_RANK,
       calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
       featureOnsetGuard: env.CURATOR_FEATURE_ONSET_GUARD,
+      rulesFromBest: env.CURATOR_RULES_FROM_BEST,
+      rulesTeachers,
+      currentRules,
     },
     plan ?? undefined,
   );
@@ -180,6 +193,17 @@ export async function runCuratorTrainingJob(
             reason: outcome.replacement.reason,
           }
         : null,
+    });
+  }
+  const rulesInUse = results.find((r) => r.contestant === RULES_CONTESTANT)?.metrics.rulesInUse;
+  if (rulesInUse) {
+    logger.info(rulesInUse.changed ? "rules seat changed its checks" : "rules seat kept its checks", {
+      source: rulesInUse.source,
+      teacher: rulesInUse.teacher?.name ?? null,
+      agreementPct: rulesInUse.agreementPct ?? null,
+      options: rulesInUse.options,
+      reason: rulesInUse.reason,
+      rules: rulesInUse.lines,
     });
   }
   // The new exams (and the live records since the last run) can change who leads: re-choose the
@@ -402,38 +426,11 @@ async function evolutionPlan(
   now: Date,
 ): Promise<ContestPlan | null> {
   if (env.CURATOR_EVOLUTION_CHALLENGERS === 0 || lanes.length === 0) return null;
-  const since = new Date(now.getTime() - FITNESS_WINDOW_DAYS * 86_400_000);
-  const [live, active, top, lastTakeover] = await Promise.all([
-    liveCallRecords(
-      lanes.map((l) => l.slot),
-      since,
-      lanes,
-    ),
-    prisma.curatorModel.findMany({
-      where: { status: "active", contestant: { in: lanes.map((l) => l.slot) } },
-      select: { contestant: true, evalMetrics: true },
-    }),
+  const [fitness, top, lastTakeover] = await Promise.all([
+    laneFitness(lanes, targets, now),
     prisma.curatorLane.aggregate({ _max: { generation: true } }),
     prisma.curatorLane.aggregate({ _max: { bornAt: true }, where: { generation: { gt: 0 } } }),
   ]);
-  const lastExam = new Map(
-    active.map((r) => [
-      r.contestant!,
-      (r.evalMetrics as Partial<StoredEvalMetrics> | null)?.exam ?? emptyRecord(),
-    ]),
-  );
-  const fitness: LaneFitness[] = lanes.map((lane) => ({
-    lane,
-    // A seat whose lane is newer than its active model (it just took over) has no exam of its own
-    // yet in storage - its live record alone, or nothing, judges it.
-    composite: compositeScore(
-      live.get(lane.slot) ?? emptyRecord(),
-      lastExam.get(lane.slot) ?? emptyRecord(),
-      targets,
-    ).score,
-    // Seats still warming up breed last, as the leaderboard ranks them (see LaneFitness).
-    liveGraded: live.get(lane.slot)?.graded ?? 0,
-  }));
   const seed = now.getTime() % 2_147_483_647;
   const challengers = breedChallengers(fitness, env.CURATOR_EVOLUTION_CHALLENGERS, seededRng(seed), {
     baseHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
@@ -458,6 +455,71 @@ async function evolutionPlan(
       },
     },
   };
+}
+
+/**
+ * Every learner seat scored the way the leaderboard does: live calls since its lane took the
+ * seat, blended with its last exam.
+ */
+async function laneFitness(lanes: Lane[], targets: PrecisionTargets, now: Date): Promise<LaneFitness[]> {
+  const since = new Date(now.getTime() - FITNESS_WINDOW_DAYS * 86_400_000);
+  const [live, active] = await Promise.all([
+    liveCallRecords(
+      lanes.map((l) => l.slot),
+      since,
+      lanes,
+    ),
+    prisma.curatorModel.findMany({
+      where: { status: "active", contestant: { in: lanes.map((l) => l.slot) } },
+      select: { contestant: true, evalMetrics: true },
+    }),
+  ]);
+  const lastExam = new Map(
+    active.map((r) => [
+      r.contestant!,
+      (r.evalMetrics as Partial<StoredEvalMetrics> | null)?.exam ?? emptyRecord(),
+    ]),
+  );
+  return lanes.map((lane) => ({
+    lane,
+    // A seat whose lane is newer than its active model (it just took over) has no exam of its own
+    // yet in storage - its live record alone, or nothing, judges it.
+    composite: compositeScore(
+      live.get(lane.slot) ?? emptyRecord(),
+      lastExam.get(lane.slot) ?? emptyRecord(),
+      targets,
+    ).score,
+    // Seats still warming up breed last, as the leaderboard ranks them (see LaneFitness).
+    liveGraded: live.get(lane.slot)?.graded ?? 0,
+  }));
+}
+
+/**
+ * Who the Rules seat learns its checks from this run, best first: the default model when it is a
+ * learner seat, then the learner seats in leaderboard order (seasoned seats first, then by score).
+ * runEvolvingContest takes the first one it examined.
+ */
+async function rulesTeacherOrder(lanes: Lane[], targets: PrecisionTargets, now: Date): Promise<string[]> {
+  const [fitness, champion] = await Promise.all([laneFitness(lanes, targets, now), loadChampion()]);
+  const ranked = [...fitness]
+    .sort(
+      (a, b) =>
+        Number((b.liveGraded ?? 0) >= MIN_LIVE_CALLS_TO_RANK) -
+          Number((a.liveGraded ?? 0) >= MIN_LIVE_CALLS_TO_RANK) || (b.composite ?? -1) - (a.composite ?? -1),
+    )
+    .map((f) => f.lane.slot);
+  const first = champion && ranked.includes(champion.contestant) ? [champion.contestant] : [];
+  return [...first, ...ranked.filter((slot) => !first.includes(slot))];
+}
+
+/** The learned rules the Rules seat runs now, if any (RulesCuratorParams.derived). */
+async function loadCurrentRules(): Promise<DerivedRuleSet | null> {
+  const row = await prisma.curatorModel.findFirst({
+    where: { status: "active", contestant: RULES_CONTESTANT, kind: RULES_MODEL_KIND },
+    orderBy: { createdAt: "desc" },
+    select: { params: true },
+  });
+  return (row?.params as Partial<RulesCuratorParams> | null)?.derived ?? null;
 }
 
 /** Rows fetched per query - keeps the driver's raw result for any one page small. */

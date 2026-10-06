@@ -779,6 +779,15 @@ export interface LeaderboardEntry {
   } | null;
   /** Evolving seats: the recipe holding the seat now (generation 0 = a founding recipe). */
   lane: { generation: number; parentName: string | null; bornAt: string } | null;
+  /** Rules only: the checks it runs now. Absent from older API builds; null before a run recorded it. */
+  rules?: {
+    source: "hand-tuned" | "learned";
+    lines: string[];
+    teacherName: string | null;
+    derivedAt: string | null;
+    agreementPct: number | null;
+    reason: string;
+  } | null;
 }
 
 export interface EvolutionEvent {

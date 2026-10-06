@@ -56,5 +56,6 @@ export * from "./curation/blend.js";
 export * from "./curation/featureReport.js";
 export * from "./curation/featureOnset.js";
 export * from "./curation/runGuard.js";
+export * from "./curation/rulesDistill.js";
 export * from "./curation/modelBackup.js";
 export * from "./storage/s3.js";
