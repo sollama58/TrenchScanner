@@ -192,6 +192,11 @@ describe("walkForwardEvaluate", () => {
     for (const fold of result.folds) {
       expect(new Date(fold.testFrom).getTime()).toBeGreaterThanOrEqual(T0);
       expect(fold.model.emitted).toBeGreaterThan(0);
+      // Each side's run size is recorded on the live record's scale: at least the winners' labels.
+      expect(fold.model.sumRun).toBeGreaterThanOrEqual(
+        (fold.model.avgLabel ?? 0) * fold.model.emitted - 1e-9,
+      );
+      expect(fold.heuristic.sumRun).toBeDefined();
       // The synthetic signal is strong: the model's picks should far outrun the base rate.
       expect(fold.model.precisionPct ?? 0).toBeGreaterThan(fold.baseWinRatePct * 1.5);
     }

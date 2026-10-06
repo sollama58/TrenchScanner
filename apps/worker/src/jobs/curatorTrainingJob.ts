@@ -529,6 +529,28 @@ export function describeRowBudget(
  * the query engine's raw result is never the whole window at once - only the mapped rows
  * accumulate.
  */
+/**
+ * TrainingRow.runPeakMultiple for a stored row: a clean winner's 24h run peak once its extended
+ * watch has ended (a partial run would understate it against finished ones), else the label
+ * window's peak for a row that is not a winner - what the live record counts for a late runner
+ * (RUN_DOUBLINGS in laneStore.ts reads the 24h peak only once written, the window peak before).
+ */
+function runPeakOf(r: {
+  labelValue: number | null;
+  finalized24hAt: Date | null;
+  peak24hReturnPct: number | null;
+  peak1hReturnPct: number | null;
+}): { runPeakMultiple?: number } {
+  if ((r.labelValue ?? 0) > 0) {
+    return r.finalized24hAt !== null && r.peak24hReturnPct !== null
+      ? { runPeakMultiple: 1 + r.peak24hReturnPct / 100 }
+      : {};
+  }
+  const peakPct =
+    r.finalized24hAt !== null && r.peak24hReturnPct !== null ? r.peak24hReturnPct : r.peak1hReturnPct;
+  return peakPct !== null ? { runPeakMultiple: 1 + peakPct / 100 } : {};
+}
+
 async function loadRowsOfKind(
   sampleKind: "hourly" | "event",
   windowStart: Date,
@@ -559,6 +581,7 @@ async function loadRowsOfKind(
         sampleKind: true,
         labelRule: true,
         maxDrawdown1hPct: true,
+        peak1hReturnPct: true,
         peak24hReturnPct: true,
         finalized24hAt: true,
       },
@@ -579,10 +602,10 @@ async function loadRowsOfKind(
         ...(r.maxDrawdown1hPct !== null
           ? { survived: r.maxDrawdown1hPct > -DISQUALIFYING_DRAWDOWN_FRACTION * 100 }
           : {}),
-        // How far a clean winner ran once its extended watch ended (the runner-traits report).
-        ...((r.labelValue ?? 0) > 0 && r.finalized24hAt !== null && r.peak24hReturnPct !== null
-          ? { runPeakMultiple: 1 + r.peak24hReturnPct / 100 }
-          : {}),
+        // How far a clean winner ran once its extended watch ended (the runner-traits report and
+        // the fit's run weight). A loss that held above the stop keeps its window peak instead,
+        // so the exam credits a late runner the way the live record does (runDoublings).
+        ...runPeakOf(r),
       });
     }
     if (page.length < pageRows) break;

@@ -359,6 +359,7 @@ function verdictWithCutoff(exam: RecipeExam): PromotionVerdict {
 /** One side of the walk-forward folds, summed into a call record. */
 function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord {
   const record = emptyRecord();
+  let sumRun: number | null = 0;
   for (const fold of folds) {
     const s = fold[side];
     record.calls += s.emitted;
@@ -366,7 +367,12 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
     record.wins += Math.round(((s.precisionPct ?? 0) * s.emitted) / 100);
     record.goals += Math.round(((s.goalPrecisionPct ?? 0) * s.emitted) / 100);
     record.sumLabel += (s.avgLabel ?? 0) * s.emitted;
+    // Run size on the live record's scale, when every fold recorded it; else the record carries
+    // none and runSum() falls back to the label-window doublings (older stored exams).
+    if (s.sumRun !== undefined && sumRun !== null) sumRun += s.sumRun;
+    else sumRun = null;
   }
+  if (sumRun !== null) record.sumRun = sumRun;
   return record;
 }
 

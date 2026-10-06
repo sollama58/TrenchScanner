@@ -563,6 +563,27 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect((summary as Record<string, number>).fromSnapshots).toBeGreaterThanOrEqual(1);
   });
 
+  it("treats a zero DexScreener price as no price: the snapshot fills in and lastPriceUsd stays real", async () => {
+    const token = await createToken("zero-dex-price");
+    const anchorAt = new Date(Date.now() - 2 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+      features: { graduated: 1 },
+    });
+    const takenAt = new Date(Date.now() - 20_000);
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, takenAt, priceUsd: 1.5, marketCapUsd: 150_000 },
+    });
+
+    // The pair came back with no price string, which the client reports as 0.
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 0 }), env);
+
+    const filled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(filled.entryAt?.getTime()).toBe(takenAt.getTime());
+    expect(filled.lastPriceUsd).toBe(1.5);
+  });
+
   it("ignores a snapshot older than one scan cycle", async () => {
     const token = await createToken("stale-snapshot");
     const row = await seedRow(token.id, new Date(Date.now() - 5 * MINUTE), 1.0, {

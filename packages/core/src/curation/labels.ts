@@ -83,29 +83,43 @@ export const LABEL_LOG2_CAP = Math.log2(LABEL_CAP_MULTIPLE);
 export const RUN_WEIGHT_PER_DOUBLING = 0.5;
 
 /**
- * How far a row ran, in doublings: the larger of its label (the clean peak inside the label
- * window) and its 24h run peak when that is known, capped like the label. 0 for a non-winner.
+ * How far a row ran, in doublings, the way the leaderboards count run size (RUN_DOUBLINGS in
+ * laneStore.ts is the SQL twin of this): a clean winner counts the larger of its label (the clean
+ * peak inside the label window) and its run peak when that is known; a loss that never fell
+ * through the stop inside the label window (survived) counts its run peak if that reached 2x - a
+ * late runner a holder still had; anything else is 0. Capped like the label.
  */
-export function runDoublings(row: { labelValue: number; runPeakMultiple?: number }): number {
-  if (!(row.labelValue > 0)) return 0;
+export function runDoublings(row: {
+  labelValue: number;
+  runPeakMultiple?: number;
+  survived?: boolean;
+}): number {
   const run =
     row.runPeakMultiple !== undefined && row.runPeakMultiple > 1 ? Math.log2(row.runPeakMultiple) : 0;
-  return Math.min(Math.max(row.labelValue, run), LABEL_LOG2_CAP);
+  if (row.labelValue > 0) return Math.min(Math.max(row.labelValue, run), LABEL_LOG2_CAP);
+  if (row.survived === true && run >= 1) return Math.min(run, LABEL_LOG2_CAP);
+  return 0;
 }
 
 /**
  * A row's weight for how far it ran: 1 for a loss or a plain 2x, plus perDoubling for every
- * doubling past the 2x. This tilts what the model learns toward the traits of the big runners
- * without changing what it predicts a probability OF (a clean 2x): cutoffs and the calibrated
- * rate shown on cards are read in confidence-rank units (thresholdAtRank in trainer.ts, calibration.ts), so the
- * upward drift this puts on raw probabilities doesn't move what the feed sends or what it claims.
+ * doubling a WINNER ran past its 2x. A late runner stays at 1: it is a loss under the label, and
+ * weighing it more would only teach the model harder that its traits lose. This tilts what the
+ * model learns toward the traits of the big runners without changing what it predicts a
+ * probability OF (a clean 2x): cutoffs and the calibrated rate shown on cards are read in
+ * confidence-rank units (thresholdAtRank in trainer.ts, calibration.ts), so the upward drift this
+ * puts on raw probabilities doesn't move what the feed sends or what it claims.
  */
 export function runWeight(
   row: { labelValue: number; runPeakMultiple?: number },
   perDoubling: number = RUN_WEIGHT_PER_DOUBLING,
 ): number {
-  if (!(perDoubling > 0)) return 1;
-  return 1 + perDoubling * Math.max(0, runDoublings(row) - 1);
+  if (!(perDoubling > 0) || !(row.labelValue > 0)) return 1;
+  return (
+    1 +
+    perDoubling *
+      Math.max(0, runDoublings({ labelValue: row.labelValue, runPeakMultiple: row.runPeakMultiple }) - 1)
+  );
 }
 
 /** The running aggregates a CandidateOutcome row carries between price ticks. */

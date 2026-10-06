@@ -308,4 +308,15 @@ describe("runWeight", () => {
     expect(runDoublings({ labelValue: 1, runPeakMultiple: 10_000 })).toBeCloseTo(LABEL_LOG2_CAP, 9);
     expect(runWeight({ labelValue: 3, runPeakMultiple: 64 }, 0)).toBe(1);
   });
+
+  it("counts a late runner's run for the score but not for the weight, like the live record", () => {
+    // Held above the stop and doubled after the window: run size 2 doublings (a 4x)...
+    expect(runDoublings({ labelValue: 0, survived: true, runPeakMultiple: 4 })).toBeCloseTo(2, 9);
+    // ...but it is a loss under the label, so it trains at one row.
+    expect(runWeight({ labelValue: 0, runPeakMultiple: 4 })).toBe(1);
+    // Fell through the stop first, or never reached 2x: nothing.
+    expect(runDoublings({ labelValue: 0, survived: false, runPeakMultiple: 4 })).toBe(0);
+    expect(runDoublings({ labelValue: 0, runPeakMultiple: 4 })).toBe(0);
+    expect(runDoublings({ labelValue: 0, survived: true, runPeakMultiple: 1.9 })).toBe(0);
+  });
 });

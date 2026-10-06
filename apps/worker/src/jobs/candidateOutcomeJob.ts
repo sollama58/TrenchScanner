@@ -266,7 +266,12 @@ export async function runCandidateWatchJob(
       deadlineMs: PRICE_FETCH_DEADLINE_MS,
       seenAt,
     })) {
-      priceByMint.set(candidate.mintAddress, candidate.priceUsd);
+      // A pair with no price string comes back as 0, which is "no price", not a price: it must
+      // fall through to the snapshot path below (not block it), and it must never become the
+      // row's lastPriceUsd, which the crash-tick guard reads as its reference.
+      if (Number.isFinite(candidate.priceUsd) && candidate.priceUsd > 0) {
+        priceByMint.set(candidate.mintAddress, candidate.priceUsd);
+      }
     }
   } catch (err) {
     // Still fall through to the per-row loop: advancing nextCheckAt (with no price) is what
