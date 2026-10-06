@@ -2007,6 +2007,65 @@ legend {
   margin: 14px 0 0;
 }
 
+/* ---------- Guest mode ---------- */
+.guest-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+.guest-entry p {
+  margin: 0;
+}
+.guest-or {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.guest-btn {
+  justify-content: center;
+}
+.tabs button.locked {
+  color: var(--muted);
+  opacity: 0.6;
+}
+.tabs button.locked.on {
+  opacity: 1;
+}
+.connect-btn {
+  white-space: nowrap;
+}
+.guest-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+}
+.guest-banner > .icon {
+  flex: none;
+  color: var(--brand-ink);
+}
+.guest-banner p {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+.guest-banner .button {
+  flex: none;
+}
+@media (max-width: 640px) {
+  .guest-banner {
+    flex-wrap: wrap;
+  }
+  .guest-banner .button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
   .kpis,

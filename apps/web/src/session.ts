@@ -41,3 +41,27 @@ export function authHeaders(headers: Headers): Headers {
   if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
   return headers;
 }
+
+/**
+ * Whether this browser chose to look around as a guest (no wallet). Remembered so a returning
+ * guest lands on the guest feed again instead of the sign-in page; connecting a wallet clears it.
+ * index.html reads the same key to pick its boot requests, so keep the two in step.
+ */
+const GUEST_KEY = "ts-guest";
+
+export function isGuest(): boolean {
+  try {
+    return localStorage.getItem(GUEST_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setGuest(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(GUEST_KEY, "1");
+    else localStorage.removeItem(GUEST_KEY);
+  } catch {
+    // Storage blocked: guest mode still works for this page load.
+  }
+}

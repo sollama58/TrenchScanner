@@ -23,6 +23,7 @@ import { registerDeviceLinkRoutes } from "./routes/deviceLink.js";
 import { registerFilterRoutes } from "./routes/filters.js";
 import { registerMatchRoutes } from "./routes/matches.js";
 import { registerCuratedRoutes } from "./routes/curated.js";
+import { registerGuestRoutes } from "./routes/guest.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
@@ -437,6 +438,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     viewStamps,
     warmers,
   });
+  // The read-only feed for visitors without a wallet: its own route, so no paid route's gate is loosened.
+  await app.register(registerGuestRoutes, { prefix: "/guest", env, matchStream, viewStamps });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });

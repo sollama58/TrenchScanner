@@ -129,6 +129,13 @@ export const EditIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const LockIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="5" y="11" width="14" height="10" rx="2" />
+    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </Svg>
+);
+
 export const LogoutIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 16l-4-4 4-4M6 12h10" />
