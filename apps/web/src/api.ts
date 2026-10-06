@@ -6,8 +6,30 @@ import { authHeaders } from "./session";
  * Browsers that drop that cookie as third-party send the token as a header instead (session.ts).
  */
 
-export const API_URL =
-  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "http://localhost:4000";
+/**
+ * Dashboard sites with an API on their own subdomain. A page on one of these (apex, www or any
+ * other subdomain) calls that API instead of VITE_API_URL: same site, so the session cookie is a
+ * first-party SameSite=Lax cookie that Safari, Brave and Edge's tracking prevention leave alone.
+ * Every other host (trenchscanner-web.onrender.com, localhost) keeps VITE_API_URL. index.html's
+ * boot prefetch repeats this table; keep the two in step.
+ */
+export const SAME_SITE_APIS: Readonly<Record<string, string>> = {
+  "trenchscanner.app": "https://api.trenchscanner.app",
+};
+
+/** The API base for a page served from `hostname`, falling back to `configured`. */
+export function apiUrlFor(hostname: string, configured: string | undefined): string {
+  const host = hostname.toLowerCase();
+  for (const [site, url] of Object.entries(SAME_SITE_APIS)) {
+    if (host === site || host.endsWith(`.${site}`)) return url;
+  }
+  return configured?.replace(/\/$/, "") || "http://localhost:4000";
+}
+
+export const API_URL = apiUrlFor(
+  typeof location === "undefined" ? "" : location.hostname,
+  import.meta.env.VITE_API_URL as string | undefined,
+);
 
 export class ApiError extends Error {
   constructor(

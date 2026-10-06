@@ -563,7 +563,7 @@ const envSchema = z.object({
   // changes (same caveat CORS_ORIGINS already has).
   //
   // May be a comma-separated list when more than one dashboard is live at once - the
-  // CultScreener/HolDEX /trenches/ tab and this repo's own apps/web on trenchscanner-web. Each
+  // CultScreener/HolDEX /trenches/ tab and this repo's own apps/web on trenchscanner.app. Each
   // sign-in is bound to the listed host its request came from (see appDomainForOrigin); a request
   // from anywhere else is bound to the FIRST entry, which a wallet on that other page will refuse.
   PUBLIC_APP_DOMAIN: z.string().default("localhost:5173"),

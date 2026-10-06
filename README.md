@@ -96,9 +96,9 @@ This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) 
 2. Render reads `render.yaml` and shows you the three services it's about to create. Deploy.
 3. Once the first deploy finishes, set the secrets that can't be auto-generated (Render will prompt for these since they're marked `sync: false` in the blueprint):
    - **`HELIUS_API_KEY`** on both `trenchscanner-api` and `trenchscanner-worker` - get one free at [dev.helius.xyz](https://dev.helius.xyz).
-4. `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` (on the API) point at wherever the dashboard is actually served from - `https://holdex.live,https://www.holdex.live` and `holdex.live` respectively. The dashboard is **not** deployed from this repo: it lives in [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) as the `/trenches/` tab, and that repo's build sets its own API base URL. If the dashboard's domain ever changes, update both to match - `PUBLIC_APP_DOMAIN` especially, since a mismatch there breaks sign-in entirely (wallets refuse to sign a message claiming a domain that doesn't match the page they're actually on).
+4. `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` (on the API) list every host a dashboard is served from: this repo's `apps/web` on `trenchscanner.app` (apex and www) and its old `trenchscanner-web.onrender.com` host, plus the [CultScreener/HolDEX](https://github.com/sollama58/CultScreener) `/trenches/` tab on `holdex.live` (apex and www). `render.yaml` has the exact values. If a dashboard's domain ever changes, update both to match - `PUBLIC_APP_DOMAIN` especially, since a mismatch there breaks sign-in entirely (wallets refuse to sign a message claiming a domain that doesn't match the page they're actually on).
 
-### Cookie policy and the API's domain (do this before promoting the dashboard)
+### Custom domain and the session cookie
 
 Sign-in stores an `httpOnly` session cookie. The API decides its `SameSite` per request, by
 comparing the host it was reached on against `PUBLIC_APP_DOMAIN`:
@@ -106,23 +106,24 @@ comparing the host it was reached on against `PUBLIC_APP_DOMAIN`:
 | API reached on                   | vs `PUBLIC_APP_DOMAIN` | Cookie                  |
 | -------------------------------- | ---------------------- | ----------------------- |
 | `trenchscanner-api.onrender.com` | cross-site             | `SameSite=None; Secure` |
-| `api.holdex.live`                | same-site              | `SameSite=Lax; Secure`  |
+| `api.trenchscanner.app`          | same-site              | `SameSite=Lax; Secure`  |
 | `localhost:4000` (dev)           | same-site              | `SameSite=Lax`          |
 
-`SameSite=None` is a **third-party cookie**, which Safari and Brave block by default - so while the
-API answers on `onrender.com`, sign-in simply does not work in those browsers. The fix is a DNS
-change, not a code change:
+`SameSite=None` is a **third-party cookie**, which Safari, Brave and Edge's tracking prevention
+block, so on `onrender.com` the dashboard falls back to a bearer token (`apps/web/src/session.ts`).
+A page served from `trenchscanner.app` calls `https://api.trenchscanner.app` instead of
+`VITE_API_URL` (`SAME_SITE_APIS` in `apps/web/src/api.ts`), so there the cookie is first-party.
+Setup, all on Render and at the DNS provider:
 
-1. Render → `trenchscanner-api` → **Settings → Custom Domains → Add** `api.holdex.live`.
-2. At your DNS provider, add the `CNAME` Render shows you (`api` → `<service>.onrender.com`).
-3. Wait for Render to issue the certificate.
-4. Point the dashboard at the new host: in the CultScreener repo, `frontend/js/config.js`
-   (`trenches.baseUrl`) and the `connect-src` entry in `frontend/_headers`.
+1. Render → `trenchscanner-web` → **Settings → Custom Domains → Add** `trenchscanner.app` (Render
+   adds `www` too).
+2. Render → `trenchscanner-api` → **Settings → Custom Domains → Add** `api.trenchscanner.app`.
+3. At the DNS provider, add the records Render shows for each, and wait for the certificates.
+4. Set `CORS_ORIGINS` and `PUBLIC_APP_DOMAIN` on `trenchscanner-api` to the values in `render.yaml`.
 
-Nothing needs redeploying here. Requests on the old host keep getting `SameSite=None` and requests
-on the new one get `Lax`, so both work while DNS propagates. `PUBLIC_APP_DOMAIN` stays
-`holdex.live` throughout - it names the _dashboard's_ domain, not the API's, and changing it would
-break Sign-In With Solana.
+The old onrender.com hosts keep working throughout. The HolDEX site should keep calling
+`trenchscanner-api.onrender.com`: on `api.trenchscanner.app` its cookie would be `Lax`, which a
+page on `holdex.live` never sends.
 
 Database migrations run automatically on every API deploy via `preDeployCommand` - no manual step needed after the first setup.
 

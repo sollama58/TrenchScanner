@@ -60,6 +60,13 @@ describe("sessionCookieAttrs", () => {
     expect(sessionCookieAttrs("trenchscanner-api.onrender.com", domains).sameSite).toBe("none");
   });
 
+  it("gives api.trenchscanner.app a first-party cookie with the production domain list", () => {
+    const domains = "trenchscanner.app,www.trenchscanner.app,holdex.live,trenchscanner-web.onrender.com";
+    expect(sessionCookieAttrs("api.trenchscanner.app", domains).sameSite).toBe("lax");
+    // The old onrender host keeps working cross-site during the switch.
+    expect(sessionCookieAttrs("trenchscanner-api.onrender.com", domains).sameSite).toBe("none");
+  });
+
   it("always sets path so set and clear agree", () => {
     expect(sessionCookieAttrs("api.holdex.live", "holdex.live").path).toBe("/");
   });

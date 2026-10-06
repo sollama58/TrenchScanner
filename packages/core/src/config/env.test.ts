@@ -65,6 +65,15 @@ describe("appDomainForOrigin", () => {
     expect(appDomainForOrigin(env, "https://holdex.live")).toBe("holdex.live");
   });
 
+  it("binds trenchscanner.app and its www host to themselves", () => {
+    const prod = baseEnv({
+      PUBLIC_APP_DOMAIN: "trenchscanner.app,www.trenchscanner.app,holdex.live,trenchscanner-web.onrender.com",
+    });
+    expect(appDomainForOrigin(prod, "https://trenchscanner.app")).toBe("trenchscanner.app");
+    expect(appDomainForOrigin(prod, "https://www.trenchscanner.app")).toBe("www.trenchscanner.app");
+    expect(appDomainForOrigin(prod, "https://holdex.live")).toBe("holdex.live");
+  });
+
   it("falls back to the first listed domain for an unlisted, missing or malformed origin", () => {
     expect(appDomainForOrigin(env, "https://evil.example")).toBe("holdex.live");
     expect(appDomainForOrigin(env, undefined)).toBe("holdex.live");
