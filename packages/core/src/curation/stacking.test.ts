@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGREEMENT_SIGNAL,
+  agreementCount,
   quantileTable,
   rankFromQuantiles,
   scoreStacked,
@@ -106,5 +108,48 @@ describe("trainStackedCurator", () => {
     );
     expect(high).toBeGreaterThan(low);
     expect(stacked!.examChunks).toBeGreaterThan(0);
+    // Without member cutoffs the agreement signal is flat and the member cutoffs are not stored.
+    expect(params.meta.featureNames).toContain("agreement:share");
+    expect(params.members.every((m) => m.callRank === undefined)).toBe(true);
+  });
+
+  it("stores each member's cutoff and reads how many members call at serve time", async () => {
+    const rows = syntheticMarket({ tokens: 2000, days: 20, truth: "linear", seed: 9 }).sort(
+      (a, b) => a.anchorAt.getTime() - b.anchorAt.getTime(),
+    );
+    const half = Math.floor(rows.length / 2);
+    const model = await trainCurator(rows.slice(0, half));
+    const reference: TrainingRow[] = rows.slice(half);
+    const ranks = Float64Array.from(
+      confidenceRanks(reference.map((r) => scoreCandidateWithModel(model, r.features))),
+    );
+    const stacked = await trainStackedCurator(
+      {
+        reference,
+        memberFoldRanks: new Map([
+          ["a", ranks],
+          ["b", ranks],
+        ]),
+        memberShippedProbabilities: new Map([
+          ["a", ranks],
+          ["b", ranks],
+        ]),
+        memberCallRanks: new Map([
+          ["a", 0.9],
+          ["b", null],
+        ]),
+        heuristicMinScore: 55,
+        targets,
+        cooldownHours: 24,
+        targetPerHour: 6,
+      },
+      1.01,
+    );
+    expect(stacked).not.toBeNull();
+    const { params } = stacked!;
+    expect(params.members.map((m) => m.callRank)).toEqual([0.9, undefined]);
+    expect(agreementCount(params.members, [0.95, 0.95])).toBe(1);
+    expect(agreementCount(params.members, [0.5, 0.95])).toBe(0);
+    expect(stackedFeatureNames(params.members)).toContain(AGREEMENT_SIGNAL);
   });
 });

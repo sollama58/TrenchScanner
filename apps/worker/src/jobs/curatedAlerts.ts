@@ -22,6 +22,10 @@ import {
   rulesSignal,
   scoreStacked,
   scoreBlend,
+  scoreAgreement,
+  agreeingFromScore,
+  memberCalls,
+  AGREEMENT_MODEL_KIND,
   calibratedWinRate,
   RULES_CONTESTANT,
   RULES_MODEL_KIND,
@@ -30,6 +34,7 @@ import {
   SUPPORTED_CURATOR_MODEL_KINDS,
   GOVERNOR_BURST_WINDOW_MINUTES,
   type BlendCuratorParams,
+  type AgreementCuratorParams,
   type ContestantSpec,
   type CurationDecision,
   type Env,
@@ -85,7 +90,8 @@ type RosterEntry =
     }
   | { role: "learner"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
   | { role: "stacked"; spec: ContestantSpec; model: ModelRef<StackedCuratorParams> }
-  | { role: "blend"; spec: ContestantSpec; model: ModelRef<BlendCuratorParams> };
+  | { role: "blend"; spec: ContestantSpec; model: ModelRef<BlendCuratorParams> }
+  | { role: "agreement"; spec: ContestantSpec; model: ModelRef<AgreementCuratorParams> };
 
 interface CuratorRoster {
   /** Enabled contestants that have what they need to decide, in roster order. */
@@ -168,10 +174,16 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
         spec,
         model: { id: row.id, params: row.params as unknown as BlendCuratorParams },
       });
+    } else if (spec.role === "agreement" && row?.kind === AGREEMENT_MODEL_KIND) {
+      entries.push({
+        role: "agreement",
+        spec,
+        model: { id: row.id, params: row.params as unknown as AgreementCuratorParams },
+      });
     }
   }
 
-  // The consensus and the blend read their members' probabilities through quantile tables built
+  // The combiners read their members' probabilities through quantile tables built
   // from exactly the models they were trained beside. If a member's current model is a different
   // generation (or missing), those tables describe the wrong scale - the combiner sits out until
   // the next run, and says so in the log (a silent sit-out looked like a model that never calls).
@@ -179,7 +191,7 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
     entries.flatMap((e) => (e.role === "learner" ? [[e.spec.id, e.model.id] as const] : [])),
   );
   const usable = entries.filter((e) => {
-    if (e.role !== "stacked" && e.role !== "blend") return true;
+    if (e.role !== "stacked" && e.role !== "blend" && e.role !== "agreement") return true;
     const stale = e.model.params.members.filter((m) => learnerIds.get(m.contestant) !== m.modelId);
     if (stale.length === 0) return true;
     logger.warn("combiner sitting out: its members' active models are not the ones it was trained beside", {
@@ -315,6 +327,38 @@ function decideCurations(
   }
 
   for (const entry of roster.entries) {
+    if (entry.role === "agreement") {
+      const { params, id } = entry.model;
+      const probability = scoreAgreement(params, probabilities);
+      const curate = probability >= params.threshold;
+      let reasons: string[] = [];
+      if (curate) {
+        const callers = params.members
+          .map((m) => ({
+            m,
+            rank: rankFromQuantiles(m.quantiles, probabilities.get(m.contestant) ?? -Infinity),
+          }))
+          .filter((r) => memberCalls(r.m.callRank, r.rank))
+          .sort((a, b) => b.rank - a.rank);
+        const named = callers
+          .map((r) => names.get(r.m.contestant))
+          .filter((b): b is string => b !== undefined);
+        reasons.push(
+          `${agreeingFromScore(probability, params.members.length)} of ${params.members.length} models call it` +
+            (named.length > 0 ? `: ${named.join(", ")}` : ""),
+        );
+        const strongest = callers[0] ? learners.get(callers[0].m.contestant) : undefined;
+        if (strongest) reasons = [...reasons, ...topModelReasons(strongest.params, features, 3)];
+      }
+      decisions.set(entry.spec.id, {
+        curate,
+        confidence: probability * 100,
+        reasons,
+        source: id,
+        ...servedFields(params, probability),
+      });
+      continue;
+    }
     if (entry.role === "blend") {
       const { params, id } = entry.model;
       const probability = scoreBlend(params, probabilities);

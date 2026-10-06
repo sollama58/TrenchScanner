@@ -25,12 +25,14 @@ import type { CuratorLearner } from "./trainer.js";
  *    out-of-sample calls (curation/stacking.ts). The default feed.
  *  - "blend": the learners' confidence ranks averaged, nothing fitted (curation/blend.ts) - the
  *    consensus's unlearned rival.
+ *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
+ *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
  *
  * Ids are stable storage keys (CuratedAlert.model, CuratorModel.contestant, User.curatedModel):
  * never rename one; retire it and add a new id instead.
  */
 
-export type ContestantRole = "rules" | "learner" | "stacked" | "blend";
+export type ContestantRole = "rules" | "learner" | "stacked" | "blend" | "agreement";
 
 /** What a learner contestant trains - the knobs that make it a different model. */
 export interface CuratorRecipe {
@@ -64,6 +66,7 @@ export interface ContestantSpec {
 export const CONSENSUS_CONTESTANT = "consensus";
 export const RULES_CONTESTANT = "rules";
 export const BLEND_CONTESTANT = "blend";
+export const AGREEMENT_CONTESTANT = "agreement";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
 export const RECENT_HALF_LIFE_DAYS = 3;
@@ -119,6 +122,15 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     description: "The trained models' confidence ranks averaged, with the extremes trimmed - nothing fitted",
     summary: "Averages how confident the other models are, with no learning of its own.",
     role: "blend",
+  },
+  {
+    id: AGREEMENT_CONTESTANT,
+    name: "Agreement",
+    description:
+      "Calls the tokens the most trained models call at their own cutoffs, most agreed first - nothing fitted",
+    summary:
+      "Counts how many of the other models would call a token, and calls the ones most of them agree on.",
+    role: "agreement",
   },
   {
     id: RULES_CONTESTANT,
@@ -206,16 +218,19 @@ export function isContestantId(id: string): boolean {
   return CONTESTANT_IDS.includes(id);
 }
 
+/** Roles that combine the learners' calls rather than read tokens themselves. */
+export const COMBINER_ROLES: readonly ContestantRole[] = ["stacked", "blend", "agreement"];
+
 /**
- * The enabled roster in canonical order, from CURATOR_CONTESTANTS. The consensus needs members,
- * so it is dropped when fewer than two learners are enabled; the rules contestant is always in
- * (it costs nothing to run and is the fallback default).
+ * The enabled roster in canonical order, from CURATOR_CONTESTANTS. The combiners need members,
+ * so they are dropped when fewer than two learners are enabled; the rules contestant is always
+ * in (it costs nothing to run and is the fallback default).
  */
 export function enabledContestants(ids: readonly string[]): ContestantSpec[] {
   const wanted = new Set(ids);
   wanted.add(RULES_CONTESTANT);
   const learners = CONTESTANTS.filter((c) => c.role === "learner" && wanted.has(c.id));
   return CONTESTANTS.filter(
-    (c) => wanted.has(c.id) && ((c.role !== "stacked" && c.role !== "blend") || learners.length >= 2),
+    (c) => wanted.has(c.id) && (!COMBINER_ROLES.includes(c.role) || learners.length >= 2),
   );
 }

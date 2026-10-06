@@ -109,49 +109,7 @@ export function trainBlendCurator(input: BlendInput, neverEmitThreshold: number)
   const outOfSample = input.reference.map((_, i) => call(i));
   const cooldownMs = input.cooldownHours * 3_600_000;
   const precisionCalibration = calibrateThresholdForPrecision(outOfSample, input.targets, { cooldownMs });
-
-  // The exam: the reference rows in time order, each chunk graded at the cutoff the OTHER chunks
-  // earned and governed like production. (Nothing is fitted, so every chunk is out of sample;
-  // the cross-chunk cutoff is what keeps the grade from choosing its own line.)
-  const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
-  const chunkSize = Math.floor(n / EXAM_CHUNKS);
-  const chunks: { indexes: number[]; spanHours: number }[] = [];
-  for (let k = 0; k < EXAM_CHUNKS && chunkSize > 0; k++) {
-    const start = k * chunkSize;
-    const end = k === EXAM_CHUNKS - 1 ? n : start + chunkSize;
-    const indexes: number[] = [];
-    for (let i = start; i < end; i++) indexes.push(i);
-    if (indexes.length === 0) continue;
-    const spanMs = input.reference[end - 1]!.anchorAt.getTime() - input.reference[start]!.anchorAt.getTime();
-    chunks.push({ indexes, spanHours: Math.max(1, spanMs / 3_600_000) });
-  }
-  const exam: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
-  for (const [k, chunk] of chunks.entries()) {
-    const chunkStart = input.reference[chunk.indexes[0]!]!.anchorAt.getTime();
-    const chunkEnd = input.reference[chunk.indexes[chunk.indexes.length - 1]!]!.anchorAt.getTime();
-    const others = chunks
-      .filter((_, j) => j !== k)
-      .flatMap((o) => o.indexes)
-      // A row whose watch window overlaps this chunk was graded on this chunk's prices.
-      .filter((i) => {
-        const t = input.reference[i]!.anchorAt.getTime();
-        return t + labelWindowMs <= chunkStart || t > chunkEnd;
-      })
-      .map(call);
-    if (others.length === 0) continue;
-    const cutoff = calibrateThresholdForPrecision(others, input.targets, { cooldownMs }).threshold;
-    if (cutoff === null) continue;
-    const budget = paceBudget(input.targetPerHour, chunk.spanHours);
-    const sent = applyCooldown(
-      chunk.indexes.flatMap((i) =>
-        scores[i]! >= cutoff ? [{ row: input.reference[i]!, confidence: scores[i]! }] : [],
-      ),
-      cooldownMs,
-    )
-      .sort((a, b) => b.confidence - a.confidence)
-      .slice(0, budget);
-    for (const { row } of sent) addCall(exam, row.labelValue);
-  }
+  const { exam, examChunks } = examUnfittedScores(input.reference, scores, input);
 
   return {
     params: {
@@ -167,6 +125,67 @@ export function trainBlendCurator(input: BlendInput, neverEmitThreshold: number)
     precisionCurve: precisionCurve(outOfSample),
     outOfSample,
     exam,
-    examChunks: chunks.length,
+    examChunks,
   };
+}
+
+/**
+ * The exam of a score nothing was fitted to: the reference rows in time order cut into chunks,
+ * each chunk graded at the cutoff the OTHER chunks earned and governed like production. Every
+ * chunk is out of sample already; the cross-chunk cutoff is what keeps the grade from choosing
+ * its own line. `scores` is one score per reference row, higher = more confident.
+ */
+export function examUnfittedScores(
+  reference: readonly TrainingRow[],
+  scores: readonly number[],
+  input: Pick<BlendInput, "targets" | "cooldownHours" | "targetPerHour">,
+): { exam: CallRecord; examChunks: number } {
+  const n = reference.length;
+  const cooldownMs = input.cooldownHours * 3_600_000;
+  const call = (i: number): ScoredOutcome => ({
+    probability: scores[i]!,
+    labelValue: reference[i]!.labelValue,
+    tokenId: reference[i]!.tokenId,
+    anchorAt: reference[i]!.anchorAt,
+  });
+  const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+  const chunkSize = Math.floor(n / EXAM_CHUNKS);
+  const chunks: { indexes: number[]; spanHours: number }[] = [];
+  for (let k = 0; k < EXAM_CHUNKS && chunkSize > 0; k++) {
+    const start = k * chunkSize;
+    const end = k === EXAM_CHUNKS - 1 ? n : start + chunkSize;
+    const indexes: number[] = [];
+    for (let i = start; i < end; i++) indexes.push(i);
+    if (indexes.length === 0) continue;
+    const spanMs = reference[end - 1]!.anchorAt.getTime() - reference[start]!.anchorAt.getTime();
+    chunks.push({ indexes, spanHours: Math.max(1, spanMs / 3_600_000) });
+  }
+  const exam: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
+  for (const [k, chunk] of chunks.entries()) {
+    const chunkStart = reference[chunk.indexes[0]!]!.anchorAt.getTime();
+    const chunkEnd = reference[chunk.indexes[chunk.indexes.length - 1]!]!.anchorAt.getTime();
+    const others = chunks
+      .filter((_, j) => j !== k)
+      .flatMap((o) => o.indexes)
+      // A row whose watch window overlaps this chunk was graded on this chunk's prices.
+      .filter((i) => {
+        const t = reference[i]!.anchorAt.getTime();
+        return t + labelWindowMs <= chunkStart || t > chunkEnd;
+      })
+      .map(call);
+    if (others.length === 0) continue;
+    const cutoff = calibrateThresholdForPrecision(others, input.targets, { cooldownMs }).threshold;
+    if (cutoff === null) continue;
+    const budget = paceBudget(input.targetPerHour, chunk.spanHours);
+    const sent = applyCooldown(
+      chunk.indexes.flatMap((i) =>
+        scores[i]! >= cutoff ? [{ row: reference[i]!, confidence: scores[i]! }] : [],
+      ),
+      cooldownMs,
+    )
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, budget);
+    for (const { row } of sent) addCall(exam, row.labelValue);
+  }
+  return { exam, examChunks: chunks.length };
 }
