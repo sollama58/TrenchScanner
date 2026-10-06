@@ -857,7 +857,12 @@ function LeaderboardPanel({
                         {ROLE_LABEL[e.role]} · {e.description}
                       </small>
                     ) : (
-                      e.status !== "calling" && <small className="muted">{STATUS_TEXT[e.status].text}</small>
+                      <>
+                        <small className="muted">{e.summary ?? e.description}</small>
+                        {e.status !== "calling" && (
+                          <small className="faint">{STATUS_TEXT[e.status].text}</small>
+                        )}
+                      </>
                     )}
                     {detailed && e.lane && e.lane.generation > 0 && (
                       <small className="faint lineage">

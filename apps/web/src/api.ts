@@ -747,6 +747,8 @@ export interface LeaderboardEntry {
   id: string;
   name: string;
   description: string;
+  /** The same in plain words. Absent from older API builds. */
+  summary?: string;
   role: ContestantRole;
   isDefault: boolean;
   status: "calling" | "silent" | "untrained";

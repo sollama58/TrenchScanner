@@ -50,6 +50,11 @@ export interface ContestantSpec {
   name: string;
   /** One line on how it sees the market. */
   description: string;
+  /**
+   * The same in plain words, for the Models tab's front leaderboard (no jargon). A bred seat gets
+   * one written from its recipe (evolution.ts plainSummary).
+   */
+  summary?: string;
   role: ContestantRole;
   recipe?: CuratorRecipe;
 }
@@ -103,24 +108,29 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: CONSENSUS_CONTESTANT,
     name: "Consensus",
     description: "Learns how far to trust each other model, and calls when the room agrees",
+    summary:
+      "Doesn't read tokens itself: it learns which of the other models to trust and calls when they agree.",
     role: "stacked",
   },
   {
     id: BLEND_CONTESTANT,
     name: "Blend",
     description: "The trained models' confidence ranks averaged, with the extremes trimmed - nothing fitted",
+    summary: "Averages how confident the other models are, with no learning of its own.",
     role: "blend",
   },
   {
     id: RULES_CONTESTANT,
     name: "Rules",
     description: "The hand-tuned score and safety gates, at the cutoff its record earned",
+    summary: "Hand-written checks on the token's score and safety. It doesn't learn, and it's the fallback.",
     role: "rules",
   },
   {
     id: "linear",
     name: "Linear",
     description: "Logistic regression on every feature, weighted toward the last two weeks",
+    summary: "Weighs every signal on a token in one simple formula, leaning on the last two weeks.",
     role: "learner",
     recipe: { learner: "logistic" },
   },
@@ -128,6 +138,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: "linear-recent",
     name: "Linear Recent",
     description: "Logistic regression that mostly forgets anything older than a few days",
+    summary: "The same simple formula, but it mostly remembers only the last few days.",
     role: "learner",
     recipe: { learner: "logistic", recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS },
   },
@@ -135,6 +146,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: "order-flow",
     name: "Order Flow",
     description: "Logistic regression on short-window volume, buys and momentum only",
+    summary: "Looks only at the last few minutes of trading: volume, buys against sells, and price moves.",
     role: "learner",
     recipe: { learner: "logistic", featureNames: ORDER_FLOW_FEATURES },
   },
@@ -142,6 +154,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: "trees",
     name: "Trees",
     description: "Gradient-boosted shallow trees that pick up thresholds and interactions",
+    summary: 'Learns if-then rules from every signal, like "lots of buyers and few fresh wallets".',
     role: "learner",
     recipe: { learner: "gbdt" },
   },
@@ -149,6 +162,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: "deep-trees",
     name: "Deep Trees",
     description: "Gradient-boosted deeper trees for three- and four-way interactions",
+    summary: "Like Trees, but with longer if-then chains to catch rarer combinations.",
     role: "learner",
     recipe: { learner: "gbdt", boosting: { maxDepth: 5, minLeafRows: 50, maxTrees: 200 } },
   },
@@ -156,6 +170,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: "trees-recent",
     name: "Trees Recent",
     description: "Gradient-boosted trees that mostly forget anything older than a few days",
+    summary: "If-then rules learned mostly from the last few days.",
     role: "learner",
     recipe: { learner: "gbdt", recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS },
   },
@@ -164,6 +179,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     name: "Momentum",
     description:
       "Logistic regression on the last half hour's price path, order flow and the market around it",
+    summary: "Reads the last half hour's price path and trading, plus the mood of the market around it.",
     role: "learner",
     recipe: { learner: "logistic", featureNames: MOMENTUM_FEATURES },
   },
@@ -171,6 +187,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: "survivor",
     name: "Survivor",
     description: "Two boosted-tree stages: first whether it holds above the stop, then whether it doubles",
+    summary: "Asks first whether a token will avoid a 50% drop, then whether it will double.",
     role: "learner",
     recipe: { learner: "gbdt", twoStage: true },
   },

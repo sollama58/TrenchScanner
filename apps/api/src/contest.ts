@@ -244,6 +244,8 @@ export interface LeaderboardEntry {
   id: string;
   name: string;
   description: string;
+  /** The same in plain words, for the Models tab's front leaderboard. */
+  summary: string;
   role: ContestantSpec["role"];
   isDefault: boolean;
   /**
@@ -385,6 +387,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       id: spec.id,
       name: spec.name,
       description: spec.description,
+      summary: spec.summary ?? spec.description,
       role: spec.role,
       isDefault: spec.id === state.defaultModel,
       status,
