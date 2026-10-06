@@ -119,7 +119,11 @@ export interface Snapshot {
   devHolding?: boolean | null;
   ageMinutes: number | null;
   graduated: boolean | null;
-  score: number;
+  /** The token's composite score (0-100) at this scan; null on a model card's stand-in snapshot. */
+  score: number | null;
+  /** Trading volume over the last 5 minutes and hour, as the scan saw it. */
+  volume5mUsd?: number | null;
+  volume1hUsd?: number | null;
 }
 
 export type OutcomeStatus = "watching" | "won" | "missed" | "disqualified" | "unknown";
@@ -884,6 +888,7 @@ export type CardField =
   | "peak"
   | "ath"
   | "vol"
+  | "score"
   | "holders"
   | "age"
   | "top10"
@@ -914,7 +919,23 @@ export interface FeedAppearance {
   avatar: "small" | "normal" | "large";
   sourceStripe: boolean;
   learningNote: boolean;
+  /** Volume tiles (5m / 1h / 24h) on the cards; off by default, the score tile takes their place. */
+  volume: boolean;
   hidden: CardField[];
+}
+
+/** The composite score's current weights (GET /config/score). */
+export interface ScoreWeightsInfo {
+  weights: { momentum: number; freshness: number; holderQuality: number; narrative: number };
+  adoptedAt: string | null;
+  history: {
+    at: string;
+    momentum: number;
+    freshness: number;
+    holderQuality: number;
+    narrative: number;
+    reason: string;
+  }[];
 }
 
 export interface Settings {

@@ -11,6 +11,7 @@ import {
   useAppearance,
   useAppearanceSave,
   withPreset,
+  cardHideSet,
 } from "../appearance";
 import { AlertCard } from "./AlertCard";
 import { PaletteIcon } from "./Icons";
@@ -26,7 +27,7 @@ export function AppearancePanel() {
   const save = useAppearanceSave();
   const now = useNow(60_000);
   const [sample, setSample] = useState<"won" | "missed">("won");
-  const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
+  const hidden = useMemo(() => cardHideSet(look), [look]);
   const cards = useMemo(() => sampleCards(now), [now]);
   const isDefault = sameAppearance(look, DEFAULT_APPEARANCE);
 
@@ -254,6 +255,17 @@ export function AppearanceControls() {
             </div>
           ))}
         </div>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.volume}
+            // Switching volume on also unhides it, in case an older preset hid the old tile.
+            onChange={() =>
+              setAppearance({ volume: !look.volume, hidden: look.hidden.filter((x) => x !== "vol") })
+            }
+          />
+          Volume tiles: 5m, 1h and 24h
+        </label>
         {look.hidden.length > 0 && (
           <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
             Show everything
@@ -434,6 +446,8 @@ function sampleCards(now: number): { won: Card; missed: Card } {
     marketCapUsd: mcap,
     liquidityUsd: 9_800,
     volume24hUsd: 61_400,
+    volume5mUsd: 18_200,
+    volume1hUsd: 47_900,
     volumeToMcapRatio: 2.4,
     buys24h: 412,
     sells24h: 233,
@@ -449,7 +463,7 @@ function sampleCards(now: number): { won: Card; missed: Card } {
     devHolding: false,
     ageMinutes: 14,
     graduated: false,
-    score: 71,
+    score: 82,
     ...extra,
   });
   const won: Card = {
@@ -508,7 +522,7 @@ function sampleCards(now: number): { won: Card; missed: Card } {
       name: "Demo Token",
       imageUrl: null,
     },
-    snapshot: snapshot(18_200, { freshTop10WalletPct: 80, holderCount: 97, devHolding: true }),
+    snapshot: snapshot(18_200, { freshTop10WalletPct: 80, holderCount: 97, devHolding: true, score: 64 }),
     latestSnapshot: null,
     currentMarketCapUsd: 11_300,
     filter: { id: "preview", name: "My filter" },

@@ -4,6 +4,7 @@ import type { Card, CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
+import { scoreTooltip, useScoreWeights } from "../scoreWeights";
 
 const DAY_MS = 86_400_000;
 
@@ -29,6 +30,7 @@ export function AlertCard({
   hide?: ReadonlySet<CardField>;
 }) {
   const show = (f: CardField) => !hide?.has(f);
+  const { weights } = useScoreWeights();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const s = card.snapshot;
@@ -76,9 +78,10 @@ export function AlertCard({
   const devHolding = card.latestSnapshot?.devHolding ?? s.devHolding ?? null;
 
   const figCount = (["alert", "now", "peak"] as const).filter(show).length;
-  const statCount = (["vol", "holders", "age", "top10", "fresh", "empty", "snipers", "dev"] as const).filter(
-    show,
-  ).length;
+  // The volume field is three tiles (5m / 1h / 24h).
+  const statCount =
+    (["score", "holders", "age", "top10", "fresh", "empty", "snipers", "dev"] as const).filter(show).length +
+    (show("vol") ? 3 : 0);
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -207,11 +210,27 @@ export function AlertCard({
             } as React.CSSProperties
           }
         >
-          {show("vol") && (
-            <div>
-              <dt>Vol 24h</dt>
-              <dd className="num">{usd(s.volume24hUsd)}</dd>
+          {show("score") && (
+            <div className="stat-score" title={scoreTooltip(s.score ?? null, weights)}>
+              <dt>Score</dt>
+              <dd className="num">{s.score == null ? "–" : Math.round(s.score)}</dd>
             </div>
+          )}
+          {show("vol") && (
+            <>
+              <div title="Trading volume over the 5 minutes before the alert">
+                <dt>Vol 5m</dt>
+                <dd className="num">{usd(s.volume5mUsd ?? null)}</dd>
+              </div>
+              <div title="Trading volume over the hour before the alert">
+                <dt>Vol 1h</dt>
+                <dd className="num">{usd(s.volume1hUsd ?? null)}</dd>
+              </div>
+              <div title="Trading volume over the 24 hours before the alert (since launch, for a younger token)">
+                <dt>Vol 24h</dt>
+                <dd className="num">{usd(s.volume24hUsd)}</dd>
+              </div>
+            </>
           )}
           {show("holders") && (
             <div>

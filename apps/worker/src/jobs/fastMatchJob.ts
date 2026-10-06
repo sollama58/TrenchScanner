@@ -3,6 +3,7 @@ import {
   createLogger,
   buildScoredToken,
   scoreToken,
+  refreshScoreWeights,
   forEachWithConcurrency,
   EMPTY_TRADE_FLOW,
   type Env,
@@ -118,6 +119,7 @@ export async function runFastMatchCycle(
   env: Env,
 ): Promise<{ stagesMs: Record<string, number>; tracked?: number; matches?: number }> {
   const startedAt = Date.now();
+  await refreshScoreWeights();
   const stagesMs: Record<string, number> = {};
   let lapStartedAt = startedAt;
   const lap = (stage: string) => {

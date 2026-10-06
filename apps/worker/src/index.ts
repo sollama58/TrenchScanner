@@ -22,6 +22,7 @@ import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
 import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
+import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
@@ -53,6 +54,8 @@ const MODEL_BACKUP_CHECK_MINUTES = 60;
  * SIGTERM and SIGKILL; the rest is kept for the heartbeat writes and the disconnect.
  */
 const SHUTDOWN_GRACE_MS = 20_000;
+/** How often the composite score's weights are refit (runScoreWeightsJob). */
+const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
 
 /**
  * One process runs the jobs its WORKER_ROLE owns - see HEARTBEAT_JOB_ROLE in core's heartbeat.ts
@@ -231,6 +234,17 @@ async function main() {
   schedule("model-backup", () =>
     scheduleInterval("model-backup", () => runModelBackupJob(env), MODEL_BACKUP_CHECK_MINUTES, {
       firstRunDelayMs: async () => 5 * 60_000,
+    }),
+  );
+  // The composite score's adaptive weights (scoring/scoreWeights.ts): refit on the newest graded
+  // outcomes, adopted only when they rank the newest tokens better.
+  schedule("score-weights", () =>
+    scheduleInterval("score-weights", () => runScoreWeightsJob(), SCORE_WEIGHTS_INTERVAL_HOURS * 60, {
+      firstRunDelayMs: async () => {
+        const last = await lastHeartbeatAt("score-weights");
+        if (!last) return 10 * 60_000;
+        return last.getTime() + SCORE_WEIGHTS_INTERVAL_HOURS * 3_600_000 - Date.now();
+      },
     }),
   );
   // The AI reviewer's learning loop: collects replay batches, runs playbook evolution and refits

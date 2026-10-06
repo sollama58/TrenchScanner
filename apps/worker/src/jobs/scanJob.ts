@@ -8,6 +8,7 @@ import {
   scanBand,
   buildScoredToken,
   scoreToken,
+  refreshScoreWeights,
   runRugScreen,
   passesLocalRugScreen,
   passesEventPreGate,
@@ -237,6 +238,8 @@ export function withLaunchSnipers(
 export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
   const startedAt = Date.now();
   logger.info("scan cycle starting");
+  // The composite score's newest adopted weights (cached; never fails the cycle).
+  await refreshScoreWeights();
   const stagesMs: Record<string, number> = {};
   let lapStartedAt = startedAt;
   const lap = (stage: string) => {

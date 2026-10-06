@@ -23,6 +23,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   avatar: "normal",
   sourceStripe: true,
   learningNote: true,
+  volume: false,
   hidden: [],
 };
 
@@ -51,7 +52,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
   {
     title: "Stat tiles",
     fields: [
-      { id: "vol", label: "Vol 24h" },
+      { id: "score", label: "Composite score" },
       { id: "holders", label: "Holders" },
       { id: "age", label: "Age" },
       { id: "top10", label: "Top 10" },
@@ -71,7 +72,15 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
   },
 ];
 
-const CARD_FIELDS = new Set<string>(CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)));
+// "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
+const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
+
+/** The card fields not to draw: the ones the user hid, plus the volume tiles unless switched on. */
+export function cardHideSet(look: Pick<FeedAppearance, "hidden" | "volume">): ReadonlySet<CardField> {
+  const out = new Set<CardField>(look.hidden);
+  if (!look.volume) out.add("vol");
+  return out;
+}
 
 /** Ready-made looks. Each keeps the user's theme and colors and sets the rest. */
 export const PRESETS: { id: string; label: string; hint: string; look: Partial<FeedAppearance> }[] = [
@@ -92,7 +101,7 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
         "tokenName",
         "calibrated",
         "ath",
-        "vol",
+        "score",
         "holders",
         "age",
         "top10",
@@ -162,6 +171,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     avatar: pick(r.avatar, ["small", "normal", "large"] as const, d.avatar),
     sourceStripe: typeof r.sourceStripe === "boolean" ? r.sourceStripe : d.sourceStripe,
     learningNote: typeof r.learningNote === "boolean" ? r.learningNote : d.learningNote,
+    volume: typeof r.volume === "boolean" ? r.volume : d.volume,
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : [],

@@ -43,6 +43,8 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "champion-refresh": 3 * 3_600_000,
   // Hourly: takes the weekly model backup when one is due and copies new ones off-site.
   "model-backup": 3 * 3_600_000,
+  // Every SCORE_WEIGHTS_INTERVAL_HOURS (6): refits the composite score's weights.
+  "score-weights": 14 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 const MAX_ERROR_LENGTH = 300;

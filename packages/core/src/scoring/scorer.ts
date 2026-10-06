@@ -10,37 +10,73 @@ import type { EnrichedToken, ScoreBreakdown } from "../types.js";
  * version ranked tokens backwards: it marked launches under 10 minutes lowest (they double most),
  * read 24-hour windows for a 15-minute question and rewarded a low top-10 share, which on a
  * pre-bond launch is a red flag. This one reads the 5-minute window, favors fresh launches and
- * flags thin pre-bond holder books. Breakpoints are fixed - nothing is fitted per run - so a
- * saved minimum keeps meaning the same thing from day to day.
+ * flags thin pre-bond holder books. Each part's breakpoints are fixed; only the weights between
+ * the parts adapt, a step at a time (below), so a saved minimum drifts slowly rather than jumping.
  *
  * The parts keep their old field names (ScoreBreakdown is stored on snapshots): `age` is the
  * freshness part, `holderHealth` the holder-quality part.
+ *
+ * The parts' WEIGHTS adapt (user ask 2026-10-06): every few hours the trainer refits them on the
+ * newest graded outcomes (scoring/scoreWeights.ts) and stores an adopted set in ScoreWeights;
+ * each process reads it back through setScoreWeights. The parts themselves stay fixed formulas,
+ * so a score is still "how much this looks like a fast double", just with the emphasis the
+ * latest data supports.
  */
-const WEIGHTS = {
+export interface ScoreWeights {
+  momentum: number;
+  freshness: number;
+  holderQuality: number;
+  narrative: number;
+}
+
+/** The hand-set starting weights (notes/token-score-review-2026-10-06.md). Sum to 1. */
+export const DEFAULT_SCORE_WEIGHTS: Readonly<ScoreWeights> = Object.freeze({
   momentum: 0.45,
   freshness: 0.3,
   holderQuality: 0.1,
   narrative: 0.15,
-};
+});
+
+let activeWeights: ScoreWeights = { ...DEFAULT_SCORE_WEIGHTS };
+
+/** The weights scoreToken uses when none are passed: the latest adopted set this process loaded. */
+export function getScoreWeights(): ScoreWeights {
+  return { ...activeWeights };
+}
+
+/** Installs a weight set (normalized to sum to 1); an unusable one leaves the current set. */
+export function setScoreWeights(w: ScoreWeights): void {
+  const parts = [w.momentum, w.freshness, w.holderQuality, w.narrative];
+  if (parts.some((v) => !Number.isFinite(v) || v < 0)) return;
+  const sum = parts.reduce((a, b) => a + b, 0);
+  if (sum <= 0) return;
+  activeWeights = {
+    momentum: w.momentum / sum,
+    freshness: w.freshness / sum,
+    holderQuality: w.holderQuality / sum,
+    narrative: w.narrative / sum,
+  };
+}
 
 /**
  * The narrative part until TokenSage data feeds it (notes/tokensage-integration-plan.md): a
  * constant, so switching TokenSage on doesn't move anyone's minimum on day one. Keyword tags and
- * social links, what it used to read, carry no signal.
+ * social links, what it used to read, carry no signal. Its weight is held out of the fit while
+ * it is a constant (scoreWeights.ts).
  */
 export const NARRATIVE_NEUTRAL = 50;
 
-export function scoreToken(token: EnrichedToken): ScoreBreakdown {
+export function scoreToken(token: EnrichedToken, weights: ScoreWeights = activeWeights): ScoreBreakdown {
   const momentum = scoreMomentum(token);
   const age = scoreFreshness(token);
   const holderHealth = scoreHolderQuality(token);
   const narrative = NARRATIVE_NEUTRAL;
 
   const total =
-    momentum * WEIGHTS.momentum +
-    age * WEIGHTS.freshness +
-    holderHealth * WEIGHTS.holderQuality +
-    narrative * WEIGHTS.narrative;
+    momentum * weights.momentum +
+    age * weights.freshness +
+    holderHealth * weights.holderQuality +
+    narrative * weights.narrative;
 
   return { momentum, holderHealth, age, narrative, total: clamp(total) };
 }
