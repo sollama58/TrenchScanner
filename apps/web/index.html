@@ -10,6 +10,15 @@
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%238b5cf6' stroke-width='4'/><circle cx='16' cy='16' r='4' fill='%238b5cf6'/></svg>"
     />
     <script>
+      // The theme picked in Settings › Feed appearance (src/appearance.ts keeps it under this key),
+      // set before the first paint so the page doesn't flash the other theme.
+      try {
+        var look = JSON.parse(localStorage.getItem("ts.feedAppearance") || "null");
+        if (look && (look.theme === "dark" || look.theme === "light"))
+          document.documentElement.setAttribute("data-theme", look.theme);
+      } catch (e) {}
+    </script>
+    <script>
       // Starts the first screen's API calls while the app bundle is still downloading, instead of
       // after it has run. src/cache.ts adopts these responses (window.__boot) rather than asking
       // again. Keep the per-tab lists in step with what each tab requests on mount.

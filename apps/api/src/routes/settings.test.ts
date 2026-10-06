@@ -7,6 +7,7 @@ import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
 import { DEFAULT_ALERT_PREFS, parseAlertPrefs } from "../alertPrefs.js";
+import { DEFAULT_FEED_APPEARANCE, parseFeedAppearance } from "../feedAppearance.js";
 
 /** The Settings tab's API: alert settings, access, and following the best performer. */
 
@@ -21,6 +22,22 @@ describe("parseAlertPrefs", () => {
       ...DEFAULT_ALERT_PREFS,
       notifyOn: { filterMatches: true, modelCalls: false },
     });
+  });
+});
+
+describe("parseFeedAppearance", () => {
+  it("fills missing or bad fields with the defaults and drops unknown card fields", () => {
+    expect(parseFeedAppearance(null)).toEqual(DEFAULT_FEED_APPEARANCE);
+    expect(
+      parseFeedAppearance({
+        theme: "neon",
+        win: "#00FF88",
+        loss: "red",
+        columns: 9,
+        textSize: 110,
+        hidden: ["reasons", "sparkles", "reasons", 4],
+      }),
+    ).toEqual({ ...DEFAULT_FEED_APPEARANCE, win: "#00ff88", textSize: 110, hidden: ["reasons"] });
   });
 });
 
@@ -63,6 +80,7 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.alerts).toEqual(DEFAULT_ALERT_PREFS);
+    expect(body.appearance).toEqual(DEFAULT_FEED_APPEARANCE);
     expect(body.account.walletAddress).toBe(WALLET);
     expect(body.account.access).toMatchObject({
       hasAccess: true,
@@ -115,6 +133,41 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     expect((await call("user", "PUT", "/settings/alerts", { volume: 101 })).statusCode).toBe(400);
     expect((await call("user", "PUT", "/settings/alerts", { extra: true })).statusCode).toBe(400);
     expect((await call("user", "PUT", "/settings/alerts", {})).statusCode).toBe(400);
+  });
+
+  it("saves the feed appearance whole and rejects anything out of bounds", async () => {
+    const look = {
+      ...DEFAULT_FEED_APPEARANCE,
+      theme: "light",
+      accent: "#FF00AA",
+      density: "compact",
+      columns: 3,
+      phoneColumns: 2,
+      textSize: 90,
+      hidden: ["reasons", "links"],
+    };
+    const res = await call("user", "PUT", "/settings/appearance", look);
+    expect(res.statusCode).toBe(200);
+    const saved = { ...look, accent: "#ff00aa" };
+    expect(res.json().appearance).toEqual(saved);
+    expect((await call("user", "GET", "/settings")).json().appearance).toEqual(saved);
+    // The alert settings live beside it and are untouched.
+    expect((await call("user", "GET", "/settings")).json().alerts.sound).toBeDefined();
+
+    const bad = [
+      { ...look, accent: "url(x)" },
+      { ...look, textSize: 300 },
+      { ...look, columns: 5 },
+      { ...look, hidden: ["reasons", "reasons"] },
+      { ...look, hidden: ["nope"] },
+      { ...look, extra: 1 },
+      { theme: "dark" },
+    ];
+    for (const b of bad) expect((await call("user", "PUT", "/settings/appearance", b)).statusCode).toBe(400);
+    expect((await call("user", "GET", "/settings")).json().appearance).toEqual(saved);
+    expect((await app.inject({ method: "PUT", url: "/settings/appearance", payload: look })).statusCode).toBe(
+      401,
+    );
   });
 
   it("needs a session", async () => {

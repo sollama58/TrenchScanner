@@ -187,3 +187,19 @@ export const VolumeIcon = (p: IconProps) => (
     <path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" />
   </Svg>
 );
+
+export const ChartIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 3v18h18" />
+    <path d="M8 16v-4M13 16V8M18 16v-7" />
+  </Svg>
+);
+
+export const PaletteIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.9 1.8-1.9 0-.5-.2-.9-.5-1.3-.3-.3-.5-.8-.5-1.3 0-1 .8-1.8 1.9-1.8H17a4 4 0 0 0 4-4c0-4.2-4-7.7-9-7.7z" />
+    <circle cx="7.5" cy="11" r="1" />
+    <circle cx="10" cy="7" r="1" />
+    <circle cx="15" cy="7.5" r="1" />
+  </Svg>
+);

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   type CuratedStats,
   type FeedStats,
@@ -7,22 +7,24 @@ import {
   type MatchPage,
 } from "../api";
 import { AlertCard } from "../components/AlertCard";
-import { RingGauge, SkeletonCards } from "../components/Charts";
+import { SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
 import { AboutModal } from "../components/AboutModal";
-import { ArrowRightIcon, BoltIcon, BrainIcon, InfoIcon, RadarIcon, TrophyIcon } from "../components/Icons";
+import { FeedStatsModal } from "../components/FeedStatsModal";
+import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, useNow, useNudgeStream } from "../hooks";
-import { ago, multiple, pct } from "../format";
+import { ago, pct } from "../format";
+import { feedGridProps, openAt, useAppearance } from "../appearance";
 
-/** Graded alerts below which a hit rate shows as "early" rather than as a verdict. */
-const MIN_GRADED = 10;
+/** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
+const MIN_TEASER = 10;
 
-/** The window the top tiles cover. */
+/** The window the feed stats cover. */
 const STATS_HOURS = 24;
 
 /** The main tab: your own filter's catches and the model calls you follow, in one stream. */
-export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) {
+export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings") => void }) {
   const now = useNow(15_000);
   const [page, setPage] = useState(1);
   // Bumped when the user changes their feed settings, so every view keyed on them refetches at once.
@@ -30,18 +32,21 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const look = useAppearance();
+  const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
   // "saved": the API mixes in model calls per this user's own switch and checked models.
   const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved`;
   const feedPage = usePolling<MatchPage>(feedPath(page), 30_000, String(pick));
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
-  // The tiles follow the same feed settings as the cards, so they refetch with them.
+  // The stats follow the same feed settings as the cards, so they refetch with them.
   const feedStats = usePolling<FeedStats>(`/matches/stats?hours=${STATS_HOURS}`, 30_000, String(pick));
   const fs = feedStats.data;
   const hours = fs?.hours ?? STATS_HOURS;
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
   const lb = board.data;
   const modelsOn = lb?.showModelAlerts ?? true;
-  // A new alert changes the tiles as well as the cards, so both refetch on a nudge.
+  // A new alert changes the stats as well as the cards, so both refetch on a nudge.
   const nudged = () => {
     feedPage.reload();
     feedStats.reload();
@@ -84,73 +89,24 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
 
   return (
     <div className="stack">
-      <section className="kpis kpis-five">
-        <div className="panel kpi">
-          <span className="eyebrow">
-            <RadarIcon size={13} /> Your feed · {hours}h
-          </span>
-          <span className="kpi-value num">{fs?.alerts ?? "–"}</span>
-          <small className="muted">
-            {fs
-              ? fs.alerts === 0
-                ? "No alerts yet"
-                : `${fs.fromFilter} from your filter${fs.showModelAlerts ? `, ${fs.fromModels} model calls` : ""}`
-              : " "}
-          </small>
-          {fs && fs.pending > 0 && <small className="faint">{fs.pending} still grading</small>}
-        </div>
-        <div className="panel kpi kpi-ring">
-          <RingGauge
-            label="Hit 2x within 15 min"
-            value={fs?.hit2xPct ?? null}
-            target={t.hitRate2xPct}
-            graded={fs?.graded ?? 0}
-            minGraded={MIN_GRADED}
-            series={1}
-          />
-        </div>
-        <div className="panel kpi kpi-ring">
-          <RingGauge
-            label="Hit 4x within 30 min"
-            value={fs?.hit4xPct ?? null}
-            target={t.hitRate4xPct}
-            graded={fs?.goalGraded ?? 0}
-            minGraded={MIN_GRADED}
-            series={2}
-          />
-        </div>
-        <div className="panel kpi">
-          <span className="eyebrow">
-            <TrophyIcon size={13} /> Hit 10x within 1 hr
-          </span>
-          <span className="kpi-value num">{fs?.hit10xPct != null ? pct(fs.hit10xPct, 1) : "–"}</span>
-          <small className="muted">
-            {fs?.tenXGraded
-              ? `${fs.hit10x ?? 0} of ${fs.tenXGraded} settled alerts`
-              : "No settled alerts yet"}
-          </small>
-        </div>
-        <div className="panel kpi">
-          <span className="eyebrow">
-            <BoltIcon size={13} /> Best run · {hours}h
-          </span>
-          <span className="kpi-value num">{fs?.best ? multiple(fs.best.peakPct) : "–"}</span>
-          <small className="muted">
-            {fs?.best ? (fs.best.symbol ? `$${fs.best.symbol}` : "unnamed token") : " "}
-          </small>
-          {fs?.medianPeakPct != null && (
-            <small className="faint">Typical alert peaked at {multiple(fs.medianPeakPct)}</small>
-          )}
-        </div>
-      </section>
-      <div className="window-row">
-        <p className="window-note faint small">
-          Coins alerted in your feed over the last {hours} hours, graded from the alert price. Alerts still
-          being graded don&apos;t count as misses.
-        </p>
-        {stats.data?.market && <WeatherChip weather={stats.data.market} onAbout={() => setAboutOpen(true)} />}
-      </div>
-
+      <FeedStatsModal
+        open={statsOpen}
+        onClose={() => setStatsOpen(false)}
+        stats={fs ?? null}
+        hours={hours}
+        targets={t}
+        weather={
+          stats.data?.market && (
+            <WeatherChip
+              weather={stats.data.market}
+              onAbout={() => {
+                setStatsOpen(false);
+                setAboutOpen(true);
+              }}
+            />
+          )
+        }
+      />
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} targets={t} />
       <section className="panel feed">
         <header className="section-head">
@@ -167,9 +123,33 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
               >
                 <InfoIcon size={16} />
               </button>
+              <button
+                type="button"
+                className="ghost icon-btn"
+                onClick={() => {
+                  openAt.appearance = true;
+                  goTo("settings");
+                }}
+                aria-label="Customize how your feed looks"
+                title="Customize how your feed looks"
+              >
+                <PaletteIcon size={16} />
+              </button>
             </div>
           </div>
           <div className="feed-controls">
+            <button
+              type="button"
+              className="ghost stats-btn"
+              onClick={() => setStatsOpen(true)}
+              title={`Your feed's hit rates and best run over the last ${hours} hours`}
+            >
+              <ChartIcon size={14} />
+              Stats
+              {fs && fs.graded >= MIN_TEASER && fs.hit2xPct !== null && (
+                <span className="num stats-teaser">2x {pct(fs.hit2xPct, 0)}</span>
+              )}
+            </button>
             <button
               type="button"
               role="switch"
@@ -205,9 +185,13 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
             </button>
           </div>
         )}
-        <div className={`cards${feedPage.stale ? " stale" : ""}`} aria-busy={feedPage.stale}>
+        <div
+          className={`cards${feedPage.stale ? " stale" : ""}`}
+          aria-busy={feedPage.stale}
+          {...feedGridProps(look)}
+        >
           {cards?.map((card) => (
-            <AlertCard key={card.id} card={card} now={now} labelSource />
+            <AlertCard key={card.id} card={card} now={now} labelSource hide={hidden} />
           ))}
         </div>
         {feedPage.data && feedPage.data.matches.length === 0 && page > 1 && (
@@ -230,7 +214,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters") => void }) 
             </button>
           </nav>
         )}
-        {stats.data && (
+        {stats.data && look.learningNote && (
           <div className="learning-note">
             <BrainIcon size={14} />
             <span>

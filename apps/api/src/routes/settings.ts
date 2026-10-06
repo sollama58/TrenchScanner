@@ -2,9 +2,10 @@ import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@prisma/client";
 import { adminWalletSet, prisma, resolveAccess, type Env } from "@trenchscanner/core";
 import { alertPrefsPatchSchema, applyAlertPrefsPatch, parseAlertPrefs } from "../alertPrefs.js";
+import { feedAppearanceSchema, parseFeedAppearance } from "../feedAppearance.js";
 
 /**
- * The Settings tab: how alerts reach this user, and their account and access. Needs a session but
+ * The Settings tab: how alerts reach this user, how their feed looks, and their account and access. Needs a session but
  * not a subscription - someone whose access lapsed can still see when it ended and change how
  * they are alerted.
  */
@@ -20,6 +21,7 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
         select: {
           createdAt: true,
           alertPrefs: true,
+          feedAppearance: true,
           subscription: { select: { createdAt: true, expiresAt: true, source: true } },
           _count: { select: { burns: true } },
         },
@@ -29,6 +31,7 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
     if (!user) return reply.code(401).send({ error: "unauthenticated" });
     return {
       alerts: parseAlertPrefs(user.alertPrefs),
+      appearance: parseFeedAppearance(user.feedAppearance),
       account: {
         walletAddress,
         memberSince: user.createdAt,
@@ -73,5 +76,22 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
     });
     if (!next) return reply.code(401).send({ error: "unauthenticated" });
     return { alerts: next };
+  });
+
+  /**
+   * Replaces the feed appearance. The dashboard always sends the whole thing (it holds it all,
+   * and a preset or reset changes most of it at once), so the last save wins with nothing to merge.
+   */
+  app.put("/appearance", async (request, reply) => {
+    const parsed = feedAppearanceSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { count } = await prisma.user.updateMany({
+      where: { id: request.user!.userId },
+      data: { feedAppearance: parsed.data as unknown as Prisma.InputJsonValue },
+    });
+    if (count === 0) return reply.code(401).send({ error: "unauthenticated" });
+    return { appearance: parsed.data };
   });
 }

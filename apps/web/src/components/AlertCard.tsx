@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Card } from "../api";
+import type { Card, CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
@@ -18,13 +18,17 @@ export function AlertCard({
   now,
   compact = false,
   labelSource = false,
+  hide,
 }: {
   card: Card;
   now: number;
   compact?: boolean;
   /** Label every card with where it came from (your filter, or which models) - the combined feed. */
   labelSource?: boolean;
+  /** Fields the user chose not to see (Settings › Feed appearance). */
+  hide?: ReadonlySet<CardField>;
 }) {
+  const show = (f: CardField) => !hide?.has(f);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const s = card.snapshot;
@@ -71,6 +75,11 @@ export function AlertCard({
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
   const devHolding = card.latestSnapshot?.devHolding ?? s.devHolding ?? null;
 
+  const figCount = (["alert", "now", "peak"] as const).filter(show).length;
+  const statCount = (["vol", "holders", "age", "top10", "fresh", "empty", "snipers", "dev"] as const).filter(
+    show,
+  ).length;
+
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
       setCopied(true);
@@ -89,7 +98,9 @@ export function AlertCard({
         <div className="card-title">
           <div className="title-row">
             <strong className="symbol">{tokenLabel(card.token)}</strong>
-            {card.token.name && card.token.symbol && <span className="token-name">{card.token.name}</span>}
+            {show("tokenName") && card.token.name && card.token.symbol && (
+              <span className="token-name">{card.token.name}</span>
+            )}
           </div>
           <div className="meta-row">
             {labelSource && card.kind === "match" && (
@@ -101,7 +112,7 @@ export function AlertCard({
                 <SlidersIcon size={12} />
               </span>
             )}
-            {curated && (
+            {curated && show("modelPill") && (
               <span
                 className={`pill ${isModel || labelSource ? "pill-model" : "pill-heur"}`}
                 title={
@@ -119,12 +130,14 @@ export function AlertCard({
                 </span>
               </span>
             )}
-            {curated && (calls.some((c) => c.tier === "high") || curated.tier === "high") && (
-              <span className="pill pill-model" title="In the model's top half-percent of decision moments">
-                <span className="pill-text">High conviction</span>
-              </span>
-            )}
-            {curated && calibratedRate(curated, calls) !== null && (
+            {curated &&
+              show("conviction") &&
+              (calls.some((c) => c.tier === "high") || curated.tier === "high") && (
+                <span className="pill pill-model" title="In the model's top half-percent of decision moments">
+                  <span className="pill-text">High conviction</span>
+                </span>
+              )}
+            {curated && show("calibrated") && calibratedRate(curated, calls) !== null && (
               <span
                 className="pill"
                 title="Of recent out-of-sample calls ranked like this one, the share that doubled within 15 minutes"
@@ -132,108 +145,140 @@ export function AlertCard({
                 <span className="pill-text">≈{calibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
               </span>
             )}
-            <span className="when">{ago(card.matchedAt, now)}</span>
+            {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
         </div>
-        {resultMark && (
+        {resultMark && show("result") && (
           <span className={`badge card-result ${badge.tone}`} title={badge.text} aria-label={badge.text}>
             {resultMark}
           </span>
         )}
       </header>
 
-      <div className="card-figures">
-        <div className="fig">
-          <label>Alert</label>
-          <span className="num">{usd(alertMcap)}</span>
-        </div>
-        <div className="fig">
-          <label>Now</label>
-          <span className="num">{usd(nowMcap)}</span>
-          {move !== null && (
-            <small className={`num delta ${move >= 0 ? "up" : "down"}`}>
-              {move >= 0 ? "▲" : "▼"} {pct(Math.abs(move))}
-            </small>
+      {figCount > 0 && (
+        <div className="card-figures" style={{ "--fig-cols": figCount } as React.CSSProperties}>
+          {show("alert") && (
+            <div className="fig">
+              <label>Alert</label>
+              <span className="num">{usd(alertMcap)}</span>
+            </div>
+          )}
+          {show("now") && (
+            <div className="fig">
+              <label>Now</label>
+              <span className="num">{usd(nowMcap)}</span>
+              {move !== null && (
+                <small className={`num delta ${move >= 0 ? "up" : "down"}`}>
+                  {move >= 0 ? "▲" : "▼"} {pct(Math.abs(move))}
+                </small>
+              )}
+            </div>
+          )}
+          {show("peak") && (
+            <div className={`fig peak ${hasPeak && peak >= 100 ? "hot" : ""}`}>
+              <label>Peak</label>
+              <span
+                className="num"
+                title={
+                  runPeakAfter !== null && runPeakAfter > 0
+                    ? `Highest since the alert, about ${Math.round(runPeakAfter)} minutes in`
+                    : undefined
+                }
+              >
+                {hasPeak ? multiple(peak) : "–"}
+              </span>
+              {athMcap !== null && show("ath") && (
+                <small className="num ath" title="Highest market cap since the alert">
+                  ATH {usd(athMcap)}
+                </small>
+              )}
+            </div>
           )}
         </div>
-        <div className={`fig peak ${hasPeak && peak >= 100 ? "hot" : ""}`}>
-          <label>Peak</label>
-          <span
-            className="num"
-            title={
-              runPeakAfter !== null && runPeakAfter > 0
-                ? `Highest since the alert, about ${Math.round(runPeakAfter)} minutes in`
-                : undefined
-            }
-          >
-            {hasPeak ? multiple(peak) : "–"}
-          </span>
-          {athMcap !== null && (
-            <small className="num ath" title="Highest market cap since the alert">
-              ATH {usd(athMcap)}
-            </small>
-          )}
-        </div>
-      </div>
+      )}
 
-      {!compact && (
-        <dl className="card-stats">
-          <div>
-            <dt>Vol 24h</dt>
-            <dd className="num">{usd(s.volume24hUsd)}</dd>
-          </div>
-          <div>
-            <dt>Holders</dt>
-            <dd className="num">{s.holderCount ?? "–"}</dd>
-          </div>
-          <div>
-            <dt>Age</dt>
-            <dd className="num">{minutes(s.ageMinutes)}</dd>
-          </div>
-          <div>
-            <dt>Top 10</dt>
-            <dd className="num">{pct(s.top10HolderPct)}</dd>
-          </div>
-          <WalletStat
-            label="Fresh"
-            value={freshPct}
-            atAlert={freshAtAlert !== null}
-            explain="top-10 holder wallets first used in the last 24h"
-          />
-          <WalletStat
-            label="Empty"
-            value={emptyPct}
-            atAlert={emptyAtAlert !== null}
-            explain="top-10 holder wallets with under $25 of other tokens"
-          />
-          <div
-            title={
-              firstHolding === null
-                ? "First 25 buyers still holding: not checked yet for this token"
-                : `${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
-                    buyersFrom === s ? ", at alert time" : ", from a scan after the alert"
-                  }`
-            }
-          >
-            <dt>Snipers</dt>
-            <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
-          </div>
-          <div
-            title={
-              devHolding === null
-                ? "Dev Holding / Dev Sold: not known for this token yet"
-                : devHolding
-                  ? "DH = Dev Holding: the creator's wallet still holds this token (as of the latest scan)"
-                  : "DS = Dev Sold: the creator's wallet holds none of this token (as of the latest scan)"
-            }
-          >
-            <dt>Dev</dt>
-            <dd className="num">{devHolding === null ? "–" : devHolding ? "DH" : "DS"}</dd>
-          </div>
+      {!compact && statCount > 0 && (
+        <dl
+          className="card-stats"
+          style={
+            {
+              "--stat-cols": Math.min(4, statCount),
+              "--stat-cols-narrow": Math.min(2, statCount),
+            } as React.CSSProperties
+          }
+        >
+          {show("vol") && (
+            <div>
+              <dt>Vol 24h</dt>
+              <dd className="num">{usd(s.volume24hUsd)}</dd>
+            </div>
+          )}
+          {show("holders") && (
+            <div>
+              <dt>Holders</dt>
+              <dd className="num">{s.holderCount ?? "–"}</dd>
+            </div>
+          )}
+          {show("age") && (
+            <div>
+              <dt>Age</dt>
+              <dd className="num">{minutes(s.ageMinutes)}</dd>
+            </div>
+          )}
+          {show("top10") && (
+            <div>
+              <dt>Top 10</dt>
+              <dd className="num">{pct(s.top10HolderPct)}</dd>
+            </div>
+          )}
+          {show("fresh") && (
+            <WalletStat
+              label="Fresh"
+              value={freshPct}
+              atAlert={freshAtAlert !== null}
+              explain="top-10 holder wallets first used in the last 24h"
+            />
+          )}
+          {show("empty") && (
+            <WalletStat
+              label="Empty"
+              value={emptyPct}
+              atAlert={emptyAtAlert !== null}
+              explain="top-10 holder wallets with under $25 of other tokens"
+            />
+          )}
+          {show("snipers") && (
+            <div
+              title={
+                firstHolding === null
+                  ? "First 25 buyers still holding: not checked yet for this token"
+                  : `${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
+                      buyersFrom === s ? ", at alert time" : ", from a scan after the alert"
+                    }`
+              }
+            >
+              <dt>Snipers</dt>
+              <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
+            </div>
+          )}
+          {show("dev") && (
+            <div
+              title={
+                devHolding === null
+                  ? "Dev Holding / Dev Sold: not known for this token yet"
+                  : devHolding
+                    ? "DH = Dev Holding: the creator's wallet still holds this token (as of the latest scan)"
+                    : "DS = Dev Sold: the creator's wallet holds none of this token (as of the latest scan)"
+              }
+            >
+              <dt>Dev</dt>
+              <dd className="num">{devHolding === null ? "–" : devHolding ? "DH" : "DS"}</dd>
+            </div>
+          )}
         </dl>
       )}
 
-      {curated && curated.reasons.length > 0 && (
+      {curated && show("reasons") && curated.reasons.length > 0 && (
         <ul className="reasons">
           {curated.reasons.slice(0, compact ? 2 : 4).map((r) => (
             <li key={r}>{r.replace(/^model signal: /, "")}</li>
@@ -267,20 +312,26 @@ export function AlertCard({
         </div>
       )}
 
-      <footer className="card-foot">
-        <button className="mint" onClick={copy} title="Copy mint address">
-          {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-          {copied ? "Copied" : shortAddress(mint)}
-        </button>
-        <nav className="card-links">
-          {LINKS.map((l) => (
-            <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
-              {l.label}
-              <ExternalIcon size={11} />
-            </a>
-          ))}
-        </nav>
-      </footer>
+      {(show("mint") || show("links")) && (
+        <footer className="card-foot">
+          {show("mint") && (
+            <button className="mint" onClick={copy} title="Copy mint address">
+              {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+              {copied ? "Copied" : shortAddress(mint)}
+            </button>
+          )}
+          {show("links") && (
+            <nav className="card-links">
+              {LINKS.map((l) => (
+                <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
+                  {l.label}
+                  <ExternalIcon size={11} />
+                </a>
+              ))}
+            </nav>
+          )}
+        </footer>
+      )}
     </article>
   );
 }

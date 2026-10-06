@@ -4,6 +4,7 @@ import { cachedGet, peek } from "./cache";
 import { useNudgeStream } from "./hooks";
 import { playAlertSound, unlockAudio } from "./alertSounds";
 import { usd } from "./format";
+import { adoptAppearance, appearanceVersion } from "./appearance";
 
 /**
  * Alert delivery in the dashboard: the user's alert settings (shared by the Settings tab and the
@@ -40,9 +41,12 @@ function subscribe(listener: () => void) {
 /** Loads (or reloads) the settings; errors leave the last ones in place. */
 export function loadSettings(force = false): Promise<void> {
   if (loading && !force) return loading;
+  const lookVersion = appearanceVersion();
   loading = cachedGet<Settings>(SETTINGS_PATH, force ? -1 : 0)
     .then((s) => {
       settings = s;
+      // The feed's look rides along; a change made on this device since the request wins.
+      adoptAppearance(s.appearance, lookVersion);
       emit();
     })
     .finally(() => {

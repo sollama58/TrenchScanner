@@ -15,13 +15,14 @@ import {
 import { saveFeedSettings } from "../components/ModelPicker";
 import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
+import { AppearancePanel } from "../components/AppearancePanel";
 import { ArrowRightIcon, BellIcon, BrainIcon, ShieldIcon, VolumeIcon } from "../components/Icons";
 import { usePolling, useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
 
 /**
  * Settings: how alerts reach you (a sound with its volume, browser notifications, and which
- * alerts do it), whether your feed follows the best-performing model, and your access.
+ * alerts do it), how your feed looks, whether your feed follows the best-performing model, and your access.
  */
 export function SettingsTab({ goTo }: { goTo: (tab: "live" | "model") => void }) {
   const settings = useSettings();
@@ -31,6 +32,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "live" | "model") => void })
   return (
     <div className="stack settings">
       <AlertsPanel prefs={settings?.alerts ?? null} />
+      <AppearancePanel />
       <ModelPanel
         board={board.data}
         stale={board.stale}
