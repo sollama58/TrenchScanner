@@ -3831,3 +3831,11 @@ button.small-btn {
     padding-bottom: calc(46dvh + 64px + env(safe-area-inset-bottom));
   }
 }
+
+/* Info button beside a label (the composite-score explainer) */
+.info-btn {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 4px;
+  padding: 2px;
+}

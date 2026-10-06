@@ -6,6 +6,7 @@ import {
   refreshAndFilterToBand,
   scanBand,
   buildScoredToken,
+  scoreToken,
   runRugScreen,
   passesLocalRugScreen,
   passesEventPreGate,
@@ -1266,7 +1267,11 @@ async function processCandidate(
       firstInBandAt,
     },
   );
-  if (tradeFlow) scored.tradeFlow = tradeFlow;
+  if (tradeFlow) {
+    scored.tradeFlow = tradeFlow;
+    // The score's holder-quality part reads the first buyers, which arrive with the trade flow.
+    scored.score = scoreToken(scored);
+  }
   // The price tape: this cycle's observation goes on first, then the path features read back
   // over the last hour of it.
   if (pricePath) {

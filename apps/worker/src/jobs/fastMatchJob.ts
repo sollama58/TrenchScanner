@@ -2,6 +2,7 @@ import {
   prisma,
   createLogger,
   buildScoredToken,
+  scoreToken,
   forEachWithConcurrency,
   EMPTY_TRADE_FLOW,
   type Env,
@@ -208,6 +209,7 @@ export async function runFastMatchCycle(
         firstBuyersHolding: entry.snapshot.firstBuyersHolding,
         firstBuyersSeen: entry.snapshot.firstBuyersSeen,
       };
+      scored.score = scoreToken(scored);
     }
     evaluated += 1;
     if (!scored.rugScreen.passed) return;

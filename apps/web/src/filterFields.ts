@@ -12,7 +12,12 @@ export interface FieldSpec {
   hint: string;
   unit?: string;
   step?: number;
+  /** Shows the composite-score explainer (components/ScoreExplainer.tsx) beside the label. */
+  explainScore?: boolean;
 }
+
+/** The composite-score setting's label, so lists that show it can attach the explainer. */
+export const MIN_SCORE_LABEL = "Min composite score";
 
 export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
   {
@@ -26,7 +31,12 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         step: 0.1,
       },
       { key: "minHolderGrowthPct", label: "Min holder growth", hint: "over the last 30 minutes", unit: "%" },
-      { key: "minScore", label: "Min composite score", hint: "0-100, the scanner's overall score" },
+      {
+        key: "minScore",
+        label: MIN_SCORE_LABEL,
+        hint: "0-100, how much a token looks like the launches that double fast; most fresh launches score 60-88",
+        explainScore: true,
+      },
     ],
   },
   {

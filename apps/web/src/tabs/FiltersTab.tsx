@@ -3,6 +3,7 @@ import { del, patch, post, ApiError, type AppConfig, type Filter, type FilterInp
 import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
 import { GROUPS } from "../filterFields";
+import { ScoreExplainer } from "../components/ScoreExplainer";
 import { EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
 import { TopFiltersPanel } from "../components/TopFiltersPanel";
 
@@ -327,12 +328,15 @@ function FilterEditor({
           <p className="muted small">{g.blurb}</p>
           <div className="grid2">
             {g.fields.map((f) => (
-              <label className="field" key={f.key}>
+              // htmlFor: a field with an info button inside its label still focuses its input.
+              <label className="field" key={f.key} htmlFor={`filter-${f.key}`}>
                 <span>
                   {f.label}
                   {f.unit ? ` (${f.unit})` : ""}
+                  {f.explainScore && <ScoreExplainer />}
                 </span>
                 <input
+                  id={`filter-${f.key}`}
                   type="number"
                   inputMode="decimal"
                   step={f.step ?? "any"}

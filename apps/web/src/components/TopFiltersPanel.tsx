@@ -3,7 +3,8 @@ import { post, ApiError, type FilterBoard, type FilterBoardEntry } from "../api"
 import { invalidate } from "../cache";
 import { usePolling } from "../hooks";
 import { pct } from "../format";
-import { criteriaLines } from "../filterFields";
+import { criteriaLines, MIN_SCORE_LABEL } from "../filterFields";
+import { ScoreExplainer } from "./ScoreExplainer";
 import { ScoreBar } from "./ScoreBar";
 import { CopyIcon, TrophyIcon } from "./Icons";
 import { Skeleton } from "./Charts";
@@ -173,7 +174,10 @@ function BoardEntry({
           <summary className="small">Settings</summary>
           <ul className="small muted">
             {criteriaLines(e.criteria).map((line) => (
-              <li key={line}>{line}</li>
+              <li key={line}>
+                {line}
+                {line.startsWith(MIN_SCORE_LABEL) && <ScoreExplainer />}
+              </li>
             ))}
           </ul>
         </details>

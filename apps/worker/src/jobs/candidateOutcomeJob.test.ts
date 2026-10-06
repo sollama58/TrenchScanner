@@ -3,6 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import type { Prisma } from "@prisma/client";
 import {
+  scoreTokenLegacy,
   prisma,
   loadEnv,
   initialOutcomeAggregates,
@@ -85,7 +86,10 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(banked.peak1hPriceUsd).toBe(0.002);
     expect(banked.lowBefore2xPriceUsd).toBe(0.002);
     expect(banked.extended24h).toBe(false);
-    expect((banked.features as Record<string, unknown>).scoreTotal).toBe(72);
+    // The stored score* inputs are the first composite's, recomputed from the token.
+    expect((banked.features as Record<string, unknown>).scoreTotal).toBe(
+      scoreTokenLegacy(scoredFixture(token.mintAddress, 0.002)).total,
+    );
 
     // An alert-anchoring sample bypasses the spacing window and starts on the 24h watch.
     const bypass = await recordCandidateSample(token.id, scoredFixture(token.mintAddress, 0.002), env, {
