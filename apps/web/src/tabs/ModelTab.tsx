@@ -101,8 +101,9 @@ export function ModelTab() {
             <p className="muted">
               {lb.entries.length} models compete to spot tokens that double within 15 minutes. Every call is
               graded the same way, and the goal is a 2x within 15 minutes on {t.hitRate2xPct}% of calls and a
-              4x within 30 minutes on {t.hitRate4xPct}%, with 10x within an hour tracked as the big-run tier.
-              Your feed shows calls from <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
+              4x within 30 minutes on {t.hitRate4xPct}%, with 10x within an hour on{" "}
+              {lb.scoring.tenXTargetPct ?? 25}% as the big-run tier. Your feed shows calls from{" "}
+              <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
               {lb.followBest ? " (whichever model is doing best; it switches automatically)" : ""}
               {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
             </p>
@@ -219,7 +220,7 @@ export function ModelTab() {
               <span className="stage-title">Goal</span>
               <span className="stage-rate num">{t.hitRate2xPct}%</span>
               <span className="stage-caption">
-                hit 2x · {t.hitRate4xPct}% hit 4x · {lb.scoring.tenXTargetPct ?? 10}% hit 10x
+                hit 2x · {t.hitRate4xPct}% hit 4x · {lb.scoring.tenXTargetPct ?? 25}% hit 10x
               </span>
             </li>
           </ol>
@@ -311,7 +312,7 @@ function BaselinePanel({
         : (base.hitRate10xPct ?? null)
     : null;
   const goal =
-    metric === "2x" ? t.hitRate2xPct : metric === "4x" ? t.hitRate4xPct : (board.scoring.tenXTargetPct ?? 10);
+    metric === "2x" ? t.hitRate2xPct : metric === "4x" ? t.hitRate4xPct : (board.scoring.tenXTargetPct ?? 25);
   const rateOf = (e: LeaderboardEntry) =>
     metric === "2x"
       ? e.composite.live.winRatePct
@@ -1074,7 +1075,7 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
           {w.tenXRate != null && (
             <li>
               <strong>{Math.round(w.tenXRate * 100)} points for hitting 10x.</strong> The share of calls that
-              reached 10x within an hour of the alert (before a 50% drop), against a {sc.tenXTargetPct ?? 10}%
+              reached 10x within an hour of the alert (before a 50% drop), against a {sc.tenXTargetPct ?? 25}%
               target.
             </li>
           )}
@@ -1119,7 +1120,7 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
             {b.points10x != null && b.proven10xPct != null && w.tenXRate != null && (
               <>
                 , a 10x rate of <span className="num">{b.proven10xPct.toFixed(0)}%</span> (
-                {Math.round(w.tenXRate * 100)} × {b.proven10xPct.toFixed(0)}/{sc.tenXTargetPct ?? 10} ={" "}
+                {Math.round(w.tenXRate * 100)} × {b.proven10xPct.toFixed(0)}/{sc.tenXTargetPct ?? 25} ={" "}
                 <span className="num">{b.points10x.toFixed(0)}</span> points)
               </>
             )}

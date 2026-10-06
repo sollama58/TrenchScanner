@@ -80,8 +80,8 @@ export interface CallRecord {
 export const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
 export const COMPOSITE_WEIGHTS = { winRate: 0.5, goalRate: 0.3, tenXRate: 0.1, runSize: 0.1 } as const;
-/** The 10x tier's target rate: 10x within an hour on one call in ten. */
-export const TEN_X_TARGET_RATE = 0.1;
+/** The 10x tier's target rate: 10x within an hour on one call in four (user decision 2026-10-06, was 10%). */
+export const TEN_X_TARGET_RATE = 0.25;
 /**
  * The run-size target, in doublings per call: 2 = calls average a 4x run. Hitting both rate
  * targets with every winner stopping at its 4x makes 1.25, so full points need runners that keep

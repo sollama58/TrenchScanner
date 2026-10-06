@@ -48,8 +48,8 @@ export function TopFiltersPanel({ onCopied }: { onCopied: () => void }) {
             Filters their owners chose to share, scored 0-100 the same way as the models: 50 points for the
             proven 2x rate, 30 for the 4x rate, 10 for the 10x rate (targets{" "}
             {data
-              ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}% / ${data.targets.tenXPct ?? 10}%`
-              : "75% / 50% / 10%"}
+              ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}% / ${data.targets.tenXPct ?? 25}%`
+              : "75% / 50% / 25%"}
             ), and 10 for run size, how far the calls ran over their 24h watch (target a{" "}
             {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x). A win is 2x on the alert
             price within 15 minutes (4x within 30, 10x within an hour) before a 50% drop.
