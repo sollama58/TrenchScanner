@@ -7,6 +7,7 @@ import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
 import {
   BrainIcon,
+  ExternalIcon,
   GearIcon,
   LogoMark,
   LogoutIcon,
@@ -141,6 +142,17 @@ export function App() {
                   <span>{label}</span>
                 </button>
               ))}
+              {/* A link out to HolDEX, not a tab of this app: it opens in a new browser tab. */}
+              <a
+                className="button tab-link"
+                href="https://holdex.live"
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open HolDEX in a new tab"
+              >
+                <ExternalIcon size={15} />
+                <span>HolDEX</span>
+              </a>
             </nav>
           )}
           <div className="topbar-right">
