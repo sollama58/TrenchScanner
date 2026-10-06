@@ -46,7 +46,7 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     await prisma.token.deleteMany({ where: { mintAddress: `${TAG}-mint` } });
   });
 
-  function call(cookie: string, method: "GET" | "POST" | "PATCH", url: string, payload?: object) {
+  function call(cookie: string, method: "GET" | "POST" | "PATCH" | "DELETE", url: string, payload?: object) {
     return app.inject({ method, url, payload, cookies: { [SESSION_COOKIE_NAME]: cookie } });
   }
 
@@ -181,6 +181,40 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     expect(await prisma.userFilter.count({ where: { userId: readerId } })).toBe(MAX_FILTERS_PER_USER);
   });
 
+  it("deleting a filter that ever ranked in the top few retires it; any other is gone with its alerts", async () => {
+    // "strong" led the board when it was built above, so its best rank is recorded; "weak" was
+    // second on a board of two, so it also qualifies - give it a rank it never had instead.
+    const strong = await prisma.userFilter.findFirstOrThrow({ where: { userId: ownerId, name: "strong!" } });
+    expect(strong.bestRank).toBe(1);
+    const weak = await prisma.userFilter.findFirstOrThrow({ where: { userId: ownerId, name: "weak" } });
+    await prisma.userFilter.update({ where: { id: weak.id }, data: { bestRank: 7 } });
+    const weakAlerts = await prisma.match.count({ where: { filterId: weak.id } });
+    expect(weakAlerts).toBeGreaterThan(0);
+
+    expect((await call(ownerCookie, "DELETE", `/filters/${strong.id}`)).statusCode).toBe(204);
+    expect((await call(ownerCookie, "DELETE", `/filters/${weak.id}`)).statusCode).toBe(204);
+
+    // Retired: hidden from its owner, off, out of their cap, but still on the board with its record.
+    const retired = await prisma.userFilter.findUniqueOrThrow({ where: { id: strong.id } });
+    expect(retired.deletedAt).not.toBeNull();
+    expect(retired.isActive).toBe(false);
+    const mine = (await call(ownerCookie, "GET", "/filters")).json() as { id: string }[];
+    expect(mine.map((f) => f.id)).not.toContain(strong.id);
+    expect((await call(ownerCookie, "PATCH", `/filters/${strong.id}`, { name: "x" })).statusCode).toBe(404);
+    expect((await call(ownerCookie, "DELETE", `/filters/${strong.id}`)).statusCode).toBe(404);
+    const b = await board();
+    // Its record restarted when its criteria changed above, so it is warming up again - still listed.
+    const entry = [...b.ranked, ...b.warmingUp].find((e) => e.id === strong.id) as
+      { retired?: boolean } | undefined;
+    expect(entry?.retired).toBe(true);
+    expect((await call(readerCookie, "POST", `/filters/leaderboard/${strong.id}/copy`)).statusCode).toBe(409);
+
+    // Gone, alerts and all.
+    expect(await prisma.userFilter.findUnique({ where: { id: weak.id } })).toBeNull();
+    expect(await prisma.match.count({ where: { filterId: weak.id } })).toBe(0);
+    expect(b.ranked.map((e) => e.id)).not.toContain(weak.id);
+  });
+
   it("covers every criterion column of UserFilter in FILTER_CRITERIA_KEYS", async () => {
     // A new filter field must be added to the copy list too, or copies would silently drop it.
     const row = await prisma.userFilter.findFirstOrThrow({ where: { userId: ownerId } });
@@ -194,6 +228,8 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
       "updatedAt",
       "criteriaChangedAt",
       "armedAt",
+      "bestRank",
+      "deletedAt",
     ]);
     const criteria = Object.keys(row).filter((k) => !notCriteria.has(k));
     expect(criteria.sort()).toEqual([...FILTER_CRITERIA_KEYS].sort());
