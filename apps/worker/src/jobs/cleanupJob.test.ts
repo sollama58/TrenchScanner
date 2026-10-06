@@ -532,3 +532,41 @@ describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () =
     await prisma.user.delete({ where: { id: user.id } });
   });
 });
+
+describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 3650,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 3650,
+  } as never;
+  const TAG = `cleanup-narrative-${Date.now()}`;
+  const day = 86_400_000;
+
+  afterAll(async () => {
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  it("drops the raw document after the training window, keeps the row, and deletes it at 90 days", async () => {
+    const row = (suffix: string, ageDays: number) =>
+      prisma.tokenNarrative.create({
+        data: {
+          mintAddress: `${TAG}-${suffix}`,
+          depth: "full",
+          status: "complete",
+          pairKind: "token",
+          analysis: { summary: "a dog coin" },
+          checkedAt: new Date(Date.now() - ageDays * day),
+        },
+      });
+    await Promise.all([row("fresh", 5), row("old", 30), row("gone", 100)]);
+    await runCleanupJob(env, { rowsPerBatch: 10, pauseMs: 0 });
+    const left = await prisma.tokenNarrative.findMany({
+      where: { mintAddress: { startsWith: TAG } },
+      orderBy: { mintAddress: "asc" },
+    });
+    expect(left.map((r) => [r.mintAddress.slice(TAG.length + 1), r.analysis, r.pairKind])).toEqual([
+      ["fresh", { summary: "a dog coin" }, "token"],
+      ["old", null, "token"],
+    ]);
+  });
+});
