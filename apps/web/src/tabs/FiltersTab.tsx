@@ -4,6 +4,7 @@ import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
 import { GROUPS } from "../filterFields";
 import { EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
+import { TopFiltersPanel } from "../components/TopFiltersPanel";
 
 /** Mirrors MAX_FILTERS_PER_USER in apps/api/src/routes/filters.ts. */
 const MAX_FILTERS = 10;
@@ -44,7 +45,10 @@ function toInput(f: Filter): FilterInput {
   };
 }
 
-/** The Filters tab: up to ten saved setups, one active at a time. */
+/**
+ * The Filters tab: up to ten saved setups, one active at a time, with the shared-filter
+ * leaderboard (Top filters) below them.
+ */
 export function FiltersTab() {
   const filters = usePolling<Filter[]>("/filters", 120_000);
   const config = usePolling<AppConfig>("/config", 600_000);
@@ -84,138 +88,146 @@ export function FiltersTab() {
     if (ok) setEditing(null);
   };
 
-  return (
-    <div className="columns filters-layout">
-      <section className="panel">
-        <header className="section-head">
-          <div>
-            <span className="eyebrow">Filters</span>
-            <h2>Your saved filters</h2>
-            <p className="muted">
-              {list.length} of {MAX_FILTERS} saved. Only the active one alerts; switch whenever you like.
-            </p>
-          </div>
-          <button
-            className="primary"
-            disabled={full || busy}
-            title={full ? "Delete a filter to add another" : undefined}
-            onClick={() =>
-              setEditing({ id: null, draft: blankFilter(config.data, list.length), opened: Date.now() })
-            }
-          >
-            <PlusIcon size={15} /> New filter
-          </button>
-        </header>
-        {message && <p className="notice">{message}</p>}
-        {filters.error && !filters.data && (
-          <p className="error">Couldn't load filters: {filters.error.message}</p>
-        )}
-        {list.length === 0 && filters.data && (
-          <div className="empty-state">
-            <SlidersIcon size={28} />
-            <p>No filters yet. Create one to get your own alerts.</p>
-          </div>
-        )}
-        <ul className="filter-list">
-          {list.map((f) => {
-            const rec = f.trackRecord;
-            return (
-              <li
-                key={f.id}
-                className={`filter-item ${f.isActive ? "active" : ""} ${editing?.id === f.id ? "editing" : ""}`}
-              >
-                <label className="radio">
-                  <input
-                    type="radio"
-                    name="active-filter"
-                    checked={f.isActive}
-                    disabled={busy}
-                    onChange={() =>
-                      run(() => post(`/filters/${f.id}/activate`), `“${f.name}” is now active.`)
-                    }
-                  />
-                  <span>
-                    <strong>{f.name}</strong>
-                    {f.isActive && <span className="pill pill-model">Active</span>}
-                    {f.shareOnLeaderboard && <span className="pill">Shared</span>}
-                    <small className="muted block">
-                      {usd(f.mcapMin)}–{usd(f.mcapMax)}
-                      {f.narrativeKeywords.length > 0 && ` · ${f.narrativeKeywords.slice(0, 3).join(", ")}`}
-                    </small>
-                  </span>
-                </label>
-                <div className="filter-record">
-                  {rec && rec.graded > 0 ? (
-                    <span title="Last 30 days, graded alerts">
-                      <strong className="num">{pct((rec.won2x / rec.graded) * 100)}</strong> 2x ·{" "}
-                      <strong className="num">{pct((rec.won4x / rec.graded) * 100)}</strong> 4x
-                      <small className="muted block">{rec.graded} graded, 30d</small>
-                    </span>
-                  ) : (
-                    <small className="muted">no graded alerts yet</small>
-                  )}
-                </div>
-                <div className="row gap-xs">
-                  <button
-                    className="icon-btn"
-                    title="Edit"
-                    aria-label={`Edit ${f.name}`}
-                    onClick={() => setEditing({ id: f.id, draft: toInput(f), opened: Date.now() })}
-                    disabled={busy}
-                  >
-                    <EditIcon size={15} />
-                  </button>
-                  <button
-                    className="icon-btn danger"
-                    title="Delete"
-                    aria-label={`Delete ${f.name}`}
-                    disabled={busy}
-                    onClick={() => {
-                      if (!window.confirm(`Delete “${f.name}”?`)) return;
-                      void run(() => del(`/filters/${f.id}`), "Filter deleted.").then((ok) => {
-                        // The editor can't save a filter that no longer exists.
-                        if (ok) setEditing((e) => (e?.id === f.id ? null : e));
-                      });
-                    }}
-                  >
-                    <TrashIcon size={15} />
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+  // Old #top links land here; bring the leaderboard card into view for them.
+  useEffect(() => {
+    if (window.location.hash === "#top") document.getElementById("top-filters")?.scrollIntoView();
+  }, []);
 
-      <section className="panel editor">
-        {editing ? (
-          <FilterEditor
-            key={`${editing.id ?? "new"}:${editing.opened}`}
-            draft={editing.draft}
-            isNew={editing.id === null}
-            config={config.data}
-            busy={busy}
-            onChange={(draft) => setEditing({ ...editing, draft })}
-            onCancel={() => setEditing(null)}
-            onSave={save}
-          />
-        ) : (
-          <div className="editor-empty">
-            <span className="feature-icon big">
-              <SlidersIcon size={22} />
-            </span>
-            <h3>Build a filter</h3>
-            <p className="muted">
-              A filter is your own screen over everything the scanner sees. Pick one to edit, or start a new
-              one. Leave a field blank to ignore it.
-            </p>
-            <p className="muted small">
-              Each filter's 2x / 4x rate uses the same rule as the curated feed: 2x within 15 minutes (4x
-              within 30) of the alert price, before a 50% drop.
-            </p>
-          </div>
-        )}
-      </section>
+  return (
+    <div className="stack">
+      <div className="columns filters-layout">
+        <section className="panel">
+          <header className="section-head">
+            <div>
+              <span className="eyebrow">Filters</span>
+              <h2>Your saved filters</h2>
+              <p className="muted">
+                {list.length} of {MAX_FILTERS} saved. Only the active one alerts; switch whenever you like.
+              </p>
+            </div>
+            <button
+              className="primary"
+              disabled={full || busy}
+              title={full ? "Delete a filter to add another" : undefined}
+              onClick={() =>
+                setEditing({ id: null, draft: blankFilter(config.data, list.length), opened: Date.now() })
+              }
+            >
+              <PlusIcon size={15} /> New filter
+            </button>
+          </header>
+          {message && <p className="notice">{message}</p>}
+          {filters.error && !filters.data && (
+            <p className="error">Couldn't load filters: {filters.error.message}</p>
+          )}
+          {list.length === 0 && filters.data && (
+            <div className="empty-state">
+              <SlidersIcon size={28} />
+              <p>No filters yet. Create one to get your own alerts.</p>
+            </div>
+          )}
+          <ul className="filter-list">
+            {list.map((f) => {
+              const rec = f.trackRecord;
+              return (
+                <li
+                  key={f.id}
+                  className={`filter-item ${f.isActive ? "active" : ""} ${editing?.id === f.id ? "editing" : ""}`}
+                >
+                  <label className="radio">
+                    <input
+                      type="radio"
+                      name="active-filter"
+                      checked={f.isActive}
+                      disabled={busy}
+                      onChange={() =>
+                        run(() => post(`/filters/${f.id}/activate`), `“${f.name}” is now active.`)
+                      }
+                    />
+                    <span>
+                      <strong>{f.name}</strong>
+                      {f.isActive && <span className="pill pill-model">Active</span>}
+                      {f.shareOnLeaderboard && <span className="pill">Shared</span>}
+                      <small className="muted block">
+                        {usd(f.mcapMin)}–{usd(f.mcapMax)}
+                        {f.narrativeKeywords.length > 0 && ` · ${f.narrativeKeywords.slice(0, 3).join(", ")}`}
+                      </small>
+                    </span>
+                  </label>
+                  <div className="filter-record">
+                    {rec && rec.graded > 0 ? (
+                      <span title="Last 30 days, graded alerts">
+                        <strong className="num">{pct((rec.won2x / rec.graded) * 100)}</strong> 2x ·{" "}
+                        <strong className="num">{pct((rec.won4x / rec.graded) * 100)}</strong> 4x
+                        <small className="muted block">{rec.graded} graded, 30d</small>
+                      </span>
+                    ) : (
+                      <small className="muted">no graded alerts yet</small>
+                    )}
+                  </div>
+                  <div className="row gap-xs">
+                    <button
+                      className="icon-btn"
+                      title="Edit"
+                      aria-label={`Edit ${f.name}`}
+                      onClick={() => setEditing({ id: f.id, draft: toInput(f), opened: Date.now() })}
+                      disabled={busy}
+                    >
+                      <EditIcon size={15} />
+                    </button>
+                    <button
+                      className="icon-btn danger"
+                      title="Delete"
+                      aria-label={`Delete ${f.name}`}
+                      disabled={busy}
+                      onClick={() => {
+                        if (!window.confirm(`Delete “${f.name}”?`)) return;
+                        void run(() => del(`/filters/${f.id}`), "Filter deleted.").then((ok) => {
+                          // The editor can't save a filter that no longer exists.
+                          if (ok) setEditing((e) => (e?.id === f.id ? null : e));
+                        });
+                      }}
+                    >
+                      <TrashIcon size={15} />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+
+        <section className="panel editor">
+          {editing ? (
+            <FilterEditor
+              key={`${editing.id ?? "new"}:${editing.opened}`}
+              draft={editing.draft}
+              isNew={editing.id === null}
+              config={config.data}
+              busy={busy}
+              onChange={(draft) => setEditing({ ...editing, draft })}
+              onCancel={() => setEditing(null)}
+              onSave={save}
+            />
+          ) : (
+            <div className="editor-empty">
+              <span className="feature-icon big">
+                <SlidersIcon size={22} />
+              </span>
+              <h3>Build a filter</h3>
+              <p className="muted">
+                A filter is your own screen over everything the scanner sees. Pick one to edit, or start a new
+                one. Leave a field blank to ignore it.
+              </p>
+              <p className="muted small">
+                Each filter's 2x / 4x rate uses the same rule as the curated feed: 2x within 15 minutes (4x
+                within 30) of the alert price, before a 50% drop.
+              </p>
+            </div>
+          )}
+        </section>
+      </div>
+      <TopFiltersPanel onCopied={filters.reload} />
     </div>
   );
 }

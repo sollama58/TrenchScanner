@@ -4,17 +4,17 @@ import { invalidate } from "../cache";
 import { usePolling } from "../hooks";
 import { pct } from "../format";
 import { criteriaLines } from "../filterFields";
-import { ScoreBar } from "../components/ScoreBar";
-import { CopyIcon, TrophyIcon } from "../components/Icons";
-import { Skeleton } from "../components/Charts";
-import type { Tab } from "../routes";
+import { ScoreBar } from "./ScoreBar";
+import { CopyIcon, TrophyIcon } from "./Icons";
+import { Skeleton } from "./Charts";
 
 /**
  * The public filter leaderboard: filters their owners chose to share, ranked by how far their
  * graded alerts have proven themselves toward the 75% / 50% targets (the model score), with a
- * one-click copy into the reader's own saved filters.
+ * one-click copy into the reader's own saved filters. A card on the Filters tab; `onCopied` lets
+ * the tab reload its list so the copy shows up straight away.
  */
-export function TopFiltersTab({ goTo }: { goTo: (t: Tab) => void }) {
+export function TopFiltersPanel({ onCopied }: { onCopied: () => void }) {
   const board = usePolling<FilterBoard>("/filters/leaderboard", 300_000);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
@@ -25,6 +25,7 @@ export function TopFiltersTab({ goTo }: { goTo: (t: Tab) => void }) {
     try {
       await post(`/filters/leaderboard/${e.id}/copy`);
       invalidate("/filters");
+      onCopied();
       setMessage({ text: `Copied “${e.name}” to your filters. It's saved but not active yet.`, ok: true });
     } catch (err) {
       setMessage({
@@ -38,72 +39,65 @@ export function TopFiltersTab({ goTo }: { goTo: (t: Tab) => void }) {
 
   const data = board.data;
   return (
-    <div className="stack">
-      <section className="panel">
-        <header className="section-head">
-          <div>
-            <span className="eyebrow">Top filters</span>
-            <h2>Filters ranked by their alerts</h2>
-            <p className="muted">
-              Filters their owners chose to share, scored 0-100 the same way as the models: 50 points for the
-              proven 2x rate, 30 for the 4x rate (targets{" "}
-              {data ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}%` : "75% / 50%"}), and 20
-              for run size, how far the calls ran over their 24h watch (target a{" "}
-              {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x). A win is 2x on the alert
-              price within 15 minutes (4x within 30) before a 50% drop.
+    <section className="panel" id="top-filters">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">Top filters</span>
+          <h2>Filters ranked by their alerts</h2>
+          <p className="muted">
+            Filters their owners chose to share, scored 0-100 the same way as the models: 50 points for the
+            proven 2x rate, 30 for the 4x rate (targets{" "}
+            {data ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}%` : "75% / 50%"}), and 20
+            for run size, how far the calls ran over their 24h watch (target a{" "}
+            {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x). A win is 2x on the alert
+            price within 15 minutes (4x within 30) before a 50% drop.
+          </p>
+          {data && (
+            <p className="muted small">
+              Each record covers the last {data.windowDays} days since the filter's settings last changed, and
+              a filter needs {data.minGradedToRank} graded alerts to rank. Owners' wallets are never shown.
+              Share one of yours from its settings above.
             </p>
-            {data && (
-              <p className="muted small">
-                Each record covers the last {data.windowDays} days since the filter's settings last changed,
-                and a filter needs {data.minGradedToRank} graded alerts to rank. Owners' wallets are never
-                shown. Share your own from the Filters tab.
-              </p>
-            )}
-          </div>
-          <button onClick={() => goTo("filters")}>Your filters</button>
-        </header>
-        {message && <p className={message.ok ? "notice" : "error"}>{message.text}</p>}
-        {board.error && !data && (
-          <p className="error">Couldn't load the leaderboard: {board.error.message}</p>
-        )}
-        {!data && !board.error && <Skeleton height={220} />}
-        {data && data.ranked.length === 0 && (
-          <div className="empty-state">
-            <TrophyIcon size={28} />
-            <p>
-              {data.sharedCount === 0
-                ? "No one has shared a filter yet. Turn on “Share on the filter leaderboard” in one of yours to be first."
-                : `No shared filter has ${data.minGradedToRank} graded alerts yet. They rank as soon as they do.`}
-            </p>
-          </div>
-        )}
-        {data && data.ranked.length > 0 && (
+          )}
+        </div>
+      </header>
+      {message && <p className={message.ok ? "notice" : "error"}>{message.text}</p>}
+      {board.error && !data && <p className="error">Couldn't load the leaderboard: {board.error.message}</p>}
+      {!data && !board.error && <Skeleton height={220} />}
+      {data && data.ranked.length === 0 && (
+        <div className="empty-state">
+          <TrophyIcon size={28} />
+          <p>
+            {data.sharedCount === 0
+              ? "No one has shared a filter yet. Turn on “Share on the filter leaderboard” in one of yours to be first."
+              : `No shared filter has ${data.minGradedToRank} graded alerts yet. They rank as soon as they do.`}
+          </p>
+        </div>
+      )}
+      {data && data.ranked.length > 0 && (
+        <ol className="filter-board">
+          {data.ranked.map((e) => (
+            <BoardEntry key={e.id} entry={e} busy={busy} onCopy={copy} targets={data.targets} />
+          ))}
+        </ol>
+      )}
+
+      {data && data.warmingUp.length > 0 && (
+        <details className="board-warming">
+          <summary>
+            <strong>Warming up</strong>{" "}
+            <span className="muted small">
+              shared filters with fewer than {data.minGradedToRank} graded alerts ({data.warmingUp.length})
+            </span>
+          </summary>
           <ol className="filter-board">
-            {data.ranked.map((e) => (
+            {data.warmingUp.map((e) => (
               <BoardEntry key={e.id} entry={e} busy={busy} onCopy={copy} targets={data.targets} />
             ))}
           </ol>
-        )}
-      </section>
-
-      {data && data.warmingUp.length > 0 && (
-        <section className="panel">
-          <details>
-            <summary>
-              <strong>Warming up</strong>{" "}
-              <span className="muted small">
-                shared filters with fewer than {data.minGradedToRank} graded alerts ({data.warmingUp.length})
-              </span>
-            </summary>
-            <ol className="filter-board">
-              {data.warmingUp.map((e) => (
-                <BoardEntry key={e.id} entry={e} busy={busy} onCopy={copy} targets={data.targets} />
-              ))}
-            </ol>
-          </details>
-        </section>
+        </details>
       )}
-    </div>
+    </section>
   );
 }
 
