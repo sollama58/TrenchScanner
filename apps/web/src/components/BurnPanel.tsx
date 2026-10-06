@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Subscription } from "../api";
 import {
   BurnUncertainError,
-  burnWallets,
+  burnWallet,
   claimBurn,
   clearPendingBurn,
   describeBurnError,
@@ -14,6 +14,7 @@ import {
   type PendingBurn,
 } from "../burn";
 import { usePolling } from "../hooks";
+import { shortAddress } from "../format";
 import { onWalletsChanged } from "../wallet";
 
 /** Most months one burn buys (the API's MAX_MONTHS_PER_BURN); more than that is lost. */
@@ -54,7 +55,7 @@ export function BurnPanel({
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [balanceKey, setBalanceKey] = useState(0);
   const [months, setMonths] = useState(1);
-  const [wallets, setWallets] = useState<BurnWallet[]>(burnWallets);
+  const [wallet, setWallet] = useState<BurnWallet | null>(() => burnWallet(walletAddress));
   const [stage, setStage] = useState<{ wallet: string; stage: Stage } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingBurn | null>(() => readPendingBurn(walletAddress));
@@ -67,14 +68,18 @@ export function BurnPanel({
   onCreditedRef.current = onCredited;
 
   useEffect(() => {
-    const refresh = () => setWallets(burnWallets());
+    const refresh = () => setWallet(burnWallet(walletAddress));
+    refresh();
     const off = onWalletsChanged(refresh);
     const late = setTimeout(refresh, 2_000);
+    // Coming back from unlocking or switching the wallet in its own window.
+    window.addEventListener("focus", refresh);
     return () => {
       off();
       clearTimeout(late);
+      window.removeEventListener("focus", refresh);
     };
-  }, []);
+  }, [walletAddress]);
 
   useEffect(() => {
     let live = true;
@@ -296,26 +301,21 @@ export function BurnPanel({
               <dd className="num">{stacks ? date(newExpiry) : `+${days} days`}</dd>
             </div>
           </dl>
-          {wallets.length === 0 ? (
+          {!wallet ? (
             <p className="muted small">
-              No wallet in this browser can sign transactions. Open this page where your wallet extension is
-              installed.
+              The wallet you signed in with ({shortAddress(walletAddress)}) isn&apos;t available in this
+              browser. Burning only works from that wallet: sign out, then sign in again with it here.
             </p>
           ) : (
             <div className="burn-actions">
-              {wallets.map((w) => (
-                <button
-                  key={w.key}
-                  type="button"
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => void burn(w)}
-                >
-                  {stage?.wallet === w.key
-                    ? STAGE_TEXT[stage.stage]
-                    : `Burn ${formatTokens(raw, decimals)} ${symbol}${wallets.length > 1 ? ` with ${w.name}` : ""}`}
-                </button>
-              ))}
+              <button type="button" className="primary" disabled={busy} onClick={() => void burn(wallet)}>
+                {stage
+                  ? STAGE_TEXT[stage.stage]
+                  : `Burn ${formatTokens(raw, decimals)} ${symbol} with ${wallet.name}`}
+              </button>
+              <span className="faint small">
+                From {shortAddress(walletAddress)}, the wallet you signed in with.
+              </span>
             </div>
           )}
         </>

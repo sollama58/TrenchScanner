@@ -43,7 +43,7 @@ export function walletOptions(): WalletOption[] {
     key: `std:${w.name}:${i}`,
     name: w.name,
     icon: w.icon,
-    signIn: () => signInWithWallet(w),
+    signIn: () => signInWithWallet(w).then((u) => remembered(u, w.name)),
   }));
   const names = standard.map((w) => w.name.toLowerCase());
   for (const legacy of legacyWallets()) {
@@ -53,10 +53,42 @@ export function walletOptions(): WalletOption[] {
     options.push({
       key: `legacy:${legacy.name}`,
       name: legacy.name,
-      signIn: () => signInWithLegacy(legacy.name, legacy.provider),
+      signIn: () => signInWithLegacy(legacy.name, legacy.provider).then((u) => remembered(u, legacy.name)),
     });
   }
   return options;
+}
+
+// ---- Which wallet this session signed in with ----
+
+const SIGNED_IN_WALLET_KEY = "ts-signed-in-wallet";
+
+function remembered(user: User, walletName: string): User {
+  try {
+    localStorage.setItem(
+      SIGNED_IN_WALLET_KEY,
+      JSON.stringify({ address: user.walletAddress, name: walletName }),
+    );
+  } catch {
+    // Blocked storage: the burn button falls back to wallets already connected to this address.
+  }
+  return user;
+}
+
+/**
+ * The name of the wallet extension `address` signed in with on this device, if known. The burn
+ * button offers only that wallet: with several installed, any other one would be signing for a
+ * different account (or the same account in a second app, which only confuses).
+ */
+export function signedInWalletName(address: string): string | null {
+  try {
+    const raw = localStorage.getItem(SIGNED_IN_WALLET_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as { address?: unknown; name?: unknown };
+    return saved.address === address && typeof saved.name === "string" ? saved.name : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Calls back whenever a wallet registers or unregisters (extensions load after the page). */
