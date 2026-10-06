@@ -20,9 +20,10 @@ const logger = createLogger("tokensage");
  * Asks TokenSage what each candidate is about and stores the answer in TokenNarrative.
  *
  * The scan notes the mints it wants (noteNarrativeWanted), with what discovery already knows
- * about them as hints: basic depth the first time a mint passes the rug screen inside the
- * curated band, full depth (which also reads the X link, its match with the token, and trends)
- * when the mint gets a decision ("event") row. At the end of each cycle flushNarrativeRequests
+ * about them as hints: basic depth the first time a mint passes the rug screen on the watchlist
+ * (any scanned mint, in band or still below it, so the read is usually stored before the band
+ * entry that most first decisions follow within a minute), full depth (which also reads the X
+ * link, its match with the token, and trends) when the mint gets a decision ("event") row. At the end of each cycle flushNarrativeRequests
  * sends them in batches and is never awaited: nothing in the scan, matching or alerting path
  * waits on TokenSage. A batch answers cached mints at once and queues the rest; a queued mint is
  * simply re-sent in the next cycle's batch, which joins its open job for free and returns the
@@ -39,7 +40,7 @@ const logger = createLogger("tokensage");
  *   asked again a little later, a few times;
  * - a mint still pending after PENDING_GIVE_UP_MS is dropped.
  * Everything here is in-process, so a restart forgets the queue and the day's count; mints still
- * in band are noted again on the next scan.
+ * on the watchlist are noted again on the next scan.
  */
 
 const PENDING_GIVE_UP_MS = 5 * 60_000;
