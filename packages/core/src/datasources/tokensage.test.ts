@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  TokenSageClient,
   tokenSageHints,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
@@ -115,5 +116,16 @@ describe("tokenSageHints", () => {
       created_at: "2026-10-06T18:00:00.000Z",
     });
     expect(tokenSageHints({ imageUrl: "http://insecure" })).toBeUndefined();
+  });
+});
+
+describe("TokenSageClient base URL", () => {
+  const base = (u: string) =>
+    (new TokenSageClient({ baseUrl: u, apiKey: "k" }) as unknown as { baseUrl: string }).baseUrl;
+  it("adds https to a bare host and upgrades http, keeping local test servers", () => {
+    expect(base("tokensage-api.onrender.com/")).toBe("https://tokensage-api.onrender.com");
+    expect(base("http://tokensage-api.onrender.com")).toBe("https://tokensage-api.onrender.com");
+    expect(base(" https://ts.example.com// ")).toBe("https://ts.example.com");
+    expect(base("http://127.0.0.1:10000")).toBe("http://127.0.0.1:10000");
   });
 });

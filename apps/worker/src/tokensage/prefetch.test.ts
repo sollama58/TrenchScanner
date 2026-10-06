@@ -14,7 +14,8 @@ const TAG = `ts-test-${Date.now()}`;
 
 function fakeClient() {
   const batch = vi.fn();
-  return { client: { batch } as unknown as TokenSageClient, batch };
+  const job = vi.fn();
+  return { client: { batch, job } as unknown as TokenSageClient, batch, job };
 }
 
 const ok = (items: unknown[], fullRemaining: number | null = null) => ({ items, fullRemaining });
@@ -200,5 +201,46 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     await flushNarrativeRequests(capped, client);
     const fullCalls = batch.mock.calls.filter((c) => c[1] === "full");
     expect(fullCalls.map(cas)).toEqual([[`${TAG}-h1`]]);
+  });
+
+  it("reads why a re-sent mint's job ended, and stops asking for a definitive failure", async () => {
+    const { client, batch, job } = fakeClient();
+    const k = `${TAG}-k`;
+    const m = `${TAG}-m`;
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: k, status: "pending", job_id: 11 },
+        { ca: m, status: "pending", job_id: 21 },
+      ]),
+    );
+    noteNarrativeWanted(k, "full", env);
+    noteNarrativeWanted(m, "full", env);
+    await flushNarrativeRequests(env, client);
+
+    // Re-sent: both come back under new jobs, so the old ones ended without an analysis.
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: k, status: "pending", job_id: 12 },
+        { ca: m, status: "pending", job_id: 22 },
+      ]),
+    );
+    job.mockImplementation(async (id: number) =>
+      id === 11
+        ? { job_id: 11, status: "failed", error: "not_pumpfun: no bonding curve" }
+        : { job_id: 21, status: "failed", error: "token_not_found: no account found on-chain" },
+    );
+    await flushNarrativeRequests(env, client);
+    expect(job.mock.calls.map((c) => c[0]).sort()).toEqual([11, 21]);
+    expect((await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: k } })).status).toBe(
+      "failed",
+    );
+    expect(await prisma.tokenNarrative.count({ where: { mintAddress: m } })).toBe(0);
+    expect(takeTokenSageStats()).toMatchObject({ pending: 0 });
+
+    // Neither is sent again: k is settled, m is cooling off.
+    noteNarrativeWanted(k, "full", env);
+    noteNarrativeWanted(m, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch).toHaveBeenCalledTimes(2);
   });
 });

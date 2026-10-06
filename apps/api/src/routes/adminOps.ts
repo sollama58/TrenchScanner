@@ -213,11 +213,23 @@ export async function registerAdminOpsRoutes(
       where: { checkedAt: { gt: new Date(now - DAY_MS) } },
       _count: { _all: true },
     });
+    // TokenSage's switches live on the scanner worker, not on this API service, so whether it is
+    // on is read from the worker: the scan's heartbeat carries TokenSage counters only when on.
+    const scanBeat = await prisma.systemHeartbeat.findUnique({
+      where: { job: "scan" },
+      select: { lastRunAt: true, meta: true },
+    });
+    const beatMeta = scanBeat?.meta as Record<string, unknown> | null | undefined;
+    const workerTokenSage =
+      beatMeta && typeof beatMeta.tokensage === "object" && beatMeta.tokensage !== null
+        ? (beatMeta.tokensage as Record<string, number>)
+        : null;
     return {
       tokensage: {
-        enabled: env.TOKENSAGE_ENABLED,
-        urlSet: env.TOKENSAGE_API_URL.length > 0,
-        apiKeySet: env.TOKENSAGE_API_KEY.length > 0,
+        // The scanner's last cycle had TokenSage on (with URL and key set), and its counters.
+        on: workerTokenSage !== null,
+        lastCycleAt: workerTokenSage ? (scanBeat?.lastRunAt ?? null) : null,
+        lastCycle: workerTokenSage,
         last24h: narratives.map((g) => ({ depth: g.depth, status: g.status, count: g._count._all })),
       },
       config: {

@@ -91,6 +91,13 @@ export interface TokenSageHints {
   created_at?: string;
 }
 
+export interface TokenSageJob {
+  job_id: number;
+  status: "pending" | "running" | "done" | "failed";
+  /** On a failed job: "<code>: <detail>", e.g. "token_not_found: no account found on-chain". */
+  error?: string | null;
+}
+
 export interface TokenSageBatchResult {
   items: TokenSageBatchItem[];
   /** X-Quota-Full-Remaining: full-depth analyses this key may still start today. Null if absent. */
@@ -115,7 +122,12 @@ export class TokenSageClient {
   private readonly timeoutMs: number;
 
   constructor(options: TokenSageClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    // A bare host ("tokensage-api.onrender.com") would be fetched as a relative URL and fail; an
+    // http:// one redirects to https, and a redirected POST loses its body and auth header.
+    const trimmed = options.baseUrl.trim().replace(/\/+$/, "");
+    this.baseUrl = /^https?:\/\//i.test(trimmed)
+      ? trimmed.replace(/^http:\/\/(?!localhost|127\.0\.0\.1)/i, "https://")
+      : `https://${trimmed}`;
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs ?? 8000;
   }
@@ -147,6 +159,18 @@ export class TokenSageClient {
       },
     });
     return { items: Array.isArray(body.items) ? body.items : [], fullRemaining };
+  }
+
+  /**
+   * One job's state. Used only when a re-sent mint comes back under a new job id: the old job
+   * ended without an analysis, and its error says whether asking again can help.
+   */
+  async job(jobId: number): Promise<TokenSageJob> {
+    return fetchJson<TokenSageJob>(`${this.baseUrl}/v1/jobs/${encodeURIComponent(String(jobId))}`, {
+      headers: this.headers(),
+      timeoutMs: this.timeoutMs,
+      retries: 0,
+    });
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
