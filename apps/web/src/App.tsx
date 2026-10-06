@@ -13,7 +13,6 @@ import {
   PulseIcon,
   ShieldIcon,
   SlidersIcon,
-  TrophyIcon,
 } from "./components/Icons";
 import {
   TAB_DATA,
@@ -22,7 +21,6 @@ import {
   loadModelTab,
   loadSettingsTab,
   loadSignIn,
-  loadTopFiltersTab,
   loaded,
   tabFromHash,
   type Tab,
@@ -33,7 +31,6 @@ import { AlertNotifier, resetSettings } from "./alerts";
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
 const LazyModelTab = lazy(() => loadModelTab().then((m) => ({ default: m.ModelTab })));
 const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
-const LazyTopFiltersTab = lazy(() => loadTopFiltersTab().then((m) => ({ default: m.TopFiltersTab })));
 const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.SettingsTab })));
 const LazyAdminTab = lazy(() => loadAdminTab().then((m) => ({ default: m.AdminTab })));
 const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
@@ -42,7 +39,6 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
   { id: "filters", label: "Filters", Icon: SlidersIcon },
-  { id: "top", label: "Top filters", Icon: TrophyIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
@@ -111,7 +107,6 @@ export function App() {
   const signedIn = session.state === "signed-in";
   const ModelTab = loaded.model?.ModelTab ?? LazyModelTab;
   const FiltersTab = loaded.filters?.FiltersTab ?? LazyFiltersTab;
-  const TopFiltersTab = loaded.top?.TopFiltersTab ?? LazyTopFiltersTab;
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
   const isAdmin = signedIn && session.user.isAdmin;
@@ -201,7 +196,6 @@ export function App() {
                 {tab === "live" && <LiveTab goTo={goTo} />}
                 {tab === "model" && <ModelTab />}
                 {tab === "filters" && <FiltersTab />}
-                {tab === "top" && <TopFiltersTab goTo={goTo} />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
