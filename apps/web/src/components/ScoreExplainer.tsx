@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CloseIcon, InfoIcon } from "./Icons";
+import { useScoreWeights } from "../scoreWeights";
 
 /** The composite score in one line, for hover titles. */
 export const SCORE_SUMMARY =
@@ -35,6 +36,8 @@ export function ScoreExplainer() {
 
 function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const { weights: w, adoptedAt, history } = useScoreWeights();
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
 
   useEffect(() => {
     const dialog = ref.current;
@@ -62,27 +65,46 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
           </button>
         </header>
         <p>
-          A 0-100 read, refreshed every scan, of how much a token looks like the launches that double within
-          15 minutes. It is built from four parts:
+          A 0-100 read, taken at each scan (cards show it at alert time), of how much a token looks like the
+          launches that double within 15 minutes. It is built from four parts:
         </p>
         <dl className="about-terms">
-          <dt>Momentum · 45%</dt>
+          <dt>Momentum · {pct(w.momentum)}</dt>
           <dd>
             The last 5 minutes: how far the price moved, trading volume against market cap, the share of
             trades that are buys, and holder growth over 10 minutes.
           </dd>
-          <dt>Freshness · 30%</dt>
+          <dt>Freshness · {pct(w.freshness)}</dt>
           <dd>Younger scores higher. Most fast doubles happen in a launch&apos;s first 10 minutes.</dd>
-          <dt>Holders · 10%</dt>
+          <dt>Holders · {pct(w.holderQuality)}</dt>
           <dd>
             Few empty wallets in the top 10, and the first buyers still holding. A launch still on the bonding
             curve whose top 10 hold 15% or less scores 0 here: those rarely double.
           </dd>
-          <dt>Narrative · 15%</dt>
+          <dt>Narrative · {pct(w.narrative)}</dt>
           <dd>
             Held at the midpoint for now. It will read what the coin is about once narrative data is added.
           </dd>
         </dl>
+        <h3>The weights adapt</h3>
+        <p>
+          Every 6 hours the weights are refit on the last week of graded tokens, rewarding the mix that best
+          picks out the 2x, 4x and 10x runners. Each change moves only half way and is kept only if it ranks
+          the newest tokens better, so scores drift slowly rather than jump.
+          {adoptedAt
+            ? ` Last changed ${new Date(adoptedAt).toLocaleString()}.`
+            : " Still on the starting weights."}
+        </p>
+        {history.length > 1 && (
+          <ul className="small muted">
+            {history.slice(0, 5).map((h) => (
+              <li key={h.at}>
+                {new Date(h.at).toLocaleDateString()}: momentum {pct(h.momentum)}, freshness{" "}
+                {pct(h.freshness)}, holders {pct(h.holderQuality)}, narrative {pct(h.narrative)}
+              </li>
+            ))}
+          </ul>
+        )}
         <h3>Reading the number</h3>
         <p>
           Most fresh launches score between 60 and 88. On recent filter matches, tokens scoring 80 or more

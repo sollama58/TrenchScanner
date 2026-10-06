@@ -384,6 +384,8 @@ export function serializeCuratedAlert(
     marketCapUsd: alert.anchorMcapUsd,
     liquidityUsd: null,
     volume24hUsd: null,
+    volume5mUsd: null,
+    volume1hUsd: null,
     volumeToMcapRatio: null,
     buys24h: null,
     sells24h: null,
@@ -404,7 +406,9 @@ export function serializeCuratedAlert(
     freezeAuthorityActive: null,
     lpBurned: null,
     ageMinutes: null,
-    score: alert.confidence,
+    // The token's composite score is a scan figure this synthesized snapshot doesn't hold (the
+    // card shows it under "Score"); the model's own confidence is on `curated`.
+    score: null,
     scoreMomentum: null,
     scoreHolderHealth: null,
     scoreAge: null,

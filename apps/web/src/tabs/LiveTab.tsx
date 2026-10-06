@@ -15,7 +15,7 @@ import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon 
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, useNow, useNudgeStream } from "../hooks";
 import { ago, pct } from "../format";
-import { feedGridProps, useAppearance } from "../appearance";
+import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
@@ -37,7 +37,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
-  const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
+  const hidden = useMemo(() => cardHideSet(look), [look]);
   // "saved": the API mixes in model calls per this user's own switch and checked models.
   const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved`;
   const feedPage = usePolling<MatchPage>(feedPath(page), 30_000, String(pick));

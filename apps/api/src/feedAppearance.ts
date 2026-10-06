@@ -22,6 +22,7 @@ export const CARD_FIELDS = [
   "peak",
   "ath",
   "vol",
+  "score",
   "holders",
   "age",
   "top10",
@@ -62,6 +63,8 @@ export const feedAppearanceSchema = z
     sourceStripe: z.boolean(),
     /** The "Learning from N graded moments" note under the feed. */
     learningNote: z.boolean(),
+    /** Volume tiles (5m / 1h / 24h) on the cards; off by default. */
+    volume: z.boolean(),
     /** Card fields not shown. */
     hidden: z
       .array(z.enum(CARD_FIELDS))
@@ -87,6 +90,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   avatar: "normal",
   sourceStripe: true,
   learningNote: true,
+  volume: false,
   hidden: [],
 };
 

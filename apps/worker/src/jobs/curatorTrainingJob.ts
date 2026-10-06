@@ -1,4 +1,5 @@
 import {
+  refreshScoreWeights,
   prisma,
   createLogger,
   breedChallengers,
@@ -68,6 +69,8 @@ export async function runCuratorTrainingJob(
 ): Promise<{ stored: boolean; heldBack?: string } | void> {
   const startedAt = Date.now();
   const windowStart = new Date(startedAt - env.CURATOR_TRAINING_WINDOW_DAYS * 86_400_000);
+  // The Rules seat's exam replays the composite score with today's weights (scoreWeights.ts).
+  await refreshScoreWeights();
 
   const trainingRows = await loadTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS);
   if (trainingRows.length < MIN_ROWS_TO_TRAIN) {

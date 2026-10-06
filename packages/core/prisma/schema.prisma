@@ -22,6 +22,23 @@ model SystemHeartbeat {
   updatedAt     DateTime  @updatedAt
 }
 
+/// One run of the composite score's weight fit (packages/core/src/scoring/scoreWeights.ts). The
+/// newest adopted row is the set every process scores with; rows that weren't adopted stay as
+/// the record of what the data said.
+model ScoreWeightRun {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  momentum      Float
+  freshness     Float
+  holderQuality Float
+  narrative     Float
+  adopted       Boolean
+  reason        String
+  metrics       Json
+
+  @@index([adopted, createdAt])
+}
+
 /// A person, identified by their Solana wallet (Sign-In With Solana).
 model User {
   id              String   @id @default(cuid())

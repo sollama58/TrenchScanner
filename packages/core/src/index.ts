@@ -23,6 +23,8 @@ export * from "./narratives/keywords.js";
 
 export * from "./scoring/rugScreen.js";
 export * from "./scoring/scorer.js";
+export * from "./scoring/scoreWeights.js";
+export * from "./scoring/scoreWeightsStore.js";
 export * from "./scoring/matchFilters.js";
 export * from "./scoring/alertGuard.js";
 
