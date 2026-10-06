@@ -282,6 +282,38 @@ export function describeRecipe(
   return parentName ? `${what}. Bred from ${parentName}.` : what;
 }
 
+/**
+ * A bred recipe in plain words, for the front leaderboard: what it reads and how, with no knob
+ * values (those are in `describeRecipe`, under the hood). A recipe without its own memory length
+ * trains on the run's default, so it says nothing about memory.
+ */
+export function plainSummary(recipe: CuratorRecipe, parentName?: string | null): string {
+  let what: string;
+  if (recipe.learner === "gbdt") {
+    const depth = recipe.boosting?.maxDepth ?? DEFAULT_BOOSTING_OPTIONS.maxDepth;
+    what =
+      depth >= 5
+        ? "Learns long if-then chains from every signal"
+        : depth <= 2
+          ? "Learns short if-then rules from every signal"
+          : "Learns if-then rules from every signal";
+  } else if (recipe.featureNames && isOrderFlow(recipe.featureNames)) {
+    what = "Weighs only the last few minutes of trading in one simple formula";
+  } else if (recipe.featureNames && isMomentum(recipe.featureNames)) {
+    what = "Weighs the last half hour's price path, trading and market mood in one simple formula";
+  } else if (recipe.featureNames) {
+    what = `Weighs ${recipe.featureNames.length} chosen signals in one simple formula`;
+  } else {
+    what = "Weighs every signal in one simple formula";
+  }
+  const hl = recipe.recencyHalfLifeDays;
+  if (hl != null && hl <= 4) what += ", mostly remembering the last few days";
+  else if (hl != null && hl >= 30) what += ", with a long memory";
+  if (recipe.twoStage)
+    what = `Asks first whether it avoids a 50% drop, then: ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
+  return parentName ? `${what}. A variant bred from ${parentName}.` : `${what}.`;
+}
+
 /** The founding lanes: each learner seat's hand-written recipe, under its roster name. */
 export function foundingLanes(specs: readonly ContestantSpec[], bornAt: Date): Lane[] {
   return specs
@@ -308,7 +340,13 @@ export function withLanes(specs: readonly ContestantSpec[], lanes: readonly Lane
     // A founding lane IS the roster spec: it follows the code (a new input added to Order Flow
     // reaches it) rather than the copy stored when it was seated.
     if (!lane || lane.generation === 0) return s;
-    return { ...s, name: lane.name, description: lane.description, recipe: lane.recipe };
+    return {
+      ...s,
+      name: lane.name,
+      description: lane.description,
+      summary: plainSummary(lane.recipe, lane.parentName),
+      recipe: lane.recipe,
+    };
   });
 }
 

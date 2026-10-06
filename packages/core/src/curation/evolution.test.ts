@@ -7,6 +7,7 @@ import {
   foundingLanes,
   mutateRecipe,
   normalizeRecipe,
+  plainSummary,
   seededRng,
   traitName,
   withLanes,
@@ -178,8 +179,27 @@ describe("withLanes", () => {
     expect(out.find((s) => s.id === "linear")).toMatchObject({
       name: "Trees Recent #4",
       recipe: bred.recipe,
+      summary:
+        "Learns if-then rules from every signal, mostly remembering the last few days. A variant bred from Trees.",
     });
     expect(out.find((s) => s.id === "trees")?.name).toBe("Trees");
     expect(out.map((s) => s.id)).toEqual(specs.map((s) => s.id));
+  });
+});
+
+describe("plainSummary", () => {
+  it("gives every founding contestant a plain summary", () => {
+    for (const c of CONTESTANTS) expect(c.summary, c.id).toBeTruthy();
+  });
+
+  it("describes a bred recipe without knob values", () => {
+    const order = CONTESTANTS.find((c) => c.id === "order-flow")!.recipe!;
+    expect(plainSummary(order, null)).toBe(
+      "Weighs only the last few minutes of trading in one simple formula.",
+    );
+    expect(plainSummary({ learner: "gbdt", twoStage: true, boosting: { maxDepth: 5 } }, "Survivor")).toBe(
+      "Asks first whether it avoids a 50% drop, then: learns long if-then chains from every signal. A variant bred from Survivor.",
+    );
+    expect(plainSummary({ learner: "logistic", recencyHalfLifeDays: 45 }, "Linear")).toMatch(/long memory/);
   });
 });
