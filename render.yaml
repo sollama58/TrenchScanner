@@ -29,7 +29,7 @@
 #         All three share a hard daily cap, AI_DAILY_BUDGET_USD ($10/day by default); once it is
 #         reached the AI stops until midnight UTC (see /health/worker and Admin > AI).
 #   - TOKENSAGE_API_URL, TOKENSAGE_API_KEY (worker)  optional: the user's TokenSage service
-#         TokenSage says what each in-band coin is about (tokensage/prefetch.ts), stored in
+#         TokenSage says what each scanned coin is about (tokensage/prefetch.ts), stored in
 #         TokenNarrative. Off until TOKENSAGE_ENABLED=true is also set; nothing waits on it.
 #   - SOLANA_RPC_URL (both api + worker)           optional: leave empty to use Helius
 #         Verifies and reconciles burns. Empty (or a public endpoint) means the Helius RPC built

@@ -1391,13 +1391,19 @@ async function processCandidate(
   if (inCuratedBand && !textScores) {
     void requestTextScores({ ...token, description: scored.description ?? token.description }, env);
   }
-  // TokenSage's read of what the coin is about, asked for at the same moment (basic depth) and
-  // sent at the end of the cycle - see tokensage/prefetch.ts. A no-op while TOKENSAGE_ENABLED is off.
-  // Sent with what discovery already knows, so TokenSage can skip its own metadata fetch.
+  // TokenSage's read of what the coin is about (basic depth), asked for on the first rug-screen
+  // pass anywhere on the watchlist - not only inside the band - and sent at the end of the cycle
+  // (see tokensage/prefetch.ts). A no-op while TOKENSAGE_ENABLED is off. Earlier than the text
+  // read on purpose (user decision 2026-10-06): a read asked at band entry is readable two cycles
+  // later, and on production decision rows 47% of the winners get their first decision under a
+  // minute after entering the band, so half of them would have carried no narrative. Asking on
+  // the first watchlist scan (mcap >= WATCHLIST_NEAR_BAND_MIN_MCAP_USD) buys that minute at
+  // roughly twice the volume. Sent with what discovery already knows, so TokenSage can skip its
+  // own metadata fetch.
   const narrativeHints = tokenSageEnabled(env)
     ? tokenSageHints({ ...token, description: scored.description ?? token.description })
     : undefined;
-  if (inCuratedBand) noteNarrativeWanted(token.mintAddress, "basic", env, narrativeHints);
+  noteNarrativeWanted(token.mintAddress, "basic", env, narrativeHints);
 
   // User matching first, and nothing slower in front of it: this is the product, and every
   // millisecond here is a millisecond between the backend knowing about a token and the person

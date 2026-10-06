@@ -531,7 +531,9 @@ const envSchema = z.object({
   // TokenSage (https://github.com/sollama58/TokenSage): the user's own API that reads a token's
   // name, ticker, image and X link and says what the coin is about (referent, narrative
   // categories, copycat and X-link signals). apps/worker/src/tokensage/prefetch.ts asks it once
-  // per in-band mint (basic depth) and again at the mint's first decision row (full depth, which
+  // per scanned mint (basic depth, from its first rug-screen pass on the watchlist, so the read
+  // is usually stored before the mint enters the band) and again at the mint's first decision
+  // row (full depth, which
   // reads the X link and trends), and stores the answer in TokenNarrative. Nothing in the scan,
   // matching or alerting path waits on it. Off until TOKENSAGE_ENABLED=true and both the URL and
   // the API key are set. TOKENSAGE_MAX_BATCHES_PER_CYCLE bounds the calls per scan cycle (each
