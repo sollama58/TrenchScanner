@@ -34,6 +34,18 @@ export interface TokenSageXAccount {
   verified_type?: string | null;
 }
 
+/** A quoted or replied-to post (rules 0.9.0+, full depth). */
+export interface TokenSageXPost {
+  id?: string | null;
+  url?: string | null;
+  /** "ok" | "deleted" | "failed"; a failed parent still names its author. */
+  status?: string;
+  author?: TokenSageXAccount | null;
+  text?: string | null;
+  created_at?: string | null;
+  predates_token_by_s?: number | null;
+}
+
 /** How well the linked post or profile matches the token (rules 0.6.0+, full depth only). */
 export interface TokenSageXMatch {
   name?: { score?: number; how?: string; detail?: string } | null;
@@ -70,11 +82,19 @@ export interface TokenSageAnalysis {
     creator?: string | null;
     is_mayhem_mode?: boolean | null;
     quote_mint?: string | null;
+    /** The token the coin trades against (rules 0.9.0+); null when the quote mint is unknown. */
     pair?: {
+      mint?: string | null;
       symbol?: string | null;
       name?: string | null;
+      /** "sol" | "stablecoin" | "lst" | "major" | "token" | "tokenized_stock"; kept open. */
       kind?: string | null;
+      /** The stock ticker of a tokenized stock (TSLAx -> TSLA). */
+      underlying?: string | null;
+      source?: string | null;
       builds_on?: boolean | null;
+      builds_on_detail?: string | null;
+      referent?: TokenSageAnalysis["referent"];
       categories?: TokenSageCategory[];
     } | null;
   } | null;
@@ -93,10 +113,24 @@ export interface TokenSageAnalysis {
     desc?: string | null;
     source?: string | null;
     confidence?: number;
+    /** Which inputs point at the referent: name, symbol, description, image, x, trend, chain, db. */
+    supported_by?: string[];
   } | null;
   categories?: TokenSageCategory[];
   ticker_explanation?: string | null;
-  copy_of?: { ticker?: string | null; name?: string | null; mint?: string | null; signals?: string[] }[];
+  /**
+   * Coins this one copies or builds on. `recent: true` = it copies a coin launched 5 min - 30
+   * days earlier (a live copycat, flag `copycat`); `false` = it references an established coin
+   * (flag `references_known_coin`, info only). Analyses before rules 0.10.0 have no `recent`.
+   */
+  copy_of?: {
+    ticker?: string | null;
+    name?: string | null;
+    mint?: string | null;
+    signals?: string[];
+    created_at?: string | null;
+    recent?: boolean;
+  }[];
   image?: {
     status?: string;
     phash?: string | null;
@@ -119,8 +153,8 @@ export interface TokenSageAnalysis {
     predates_token_by_s?: number | null;
     reuse_count?: number;
     author?: (TokenSageXAccount & { user_id?: string | null; joined?: string | null }) | null;
-    quoted?: unknown;
-    replied_to?: unknown;
+    quoted?: TokenSageXPost | null;
+    replied_to?: TokenSageXPost | null;
     accounts?: TokenSageXAccount[];
     match?: TokenSageXMatch | null;
   } | null;
@@ -287,10 +321,21 @@ export interface TokenNarrativeFields {
   categories: TokenSageCategory[];
   referentLabel: string | null;
   referentKind: string | null;
+  referentConfidence: number | null;
+  /** Inputs that point at the referent (referent.supported_by); two or more is far stronger. */
+  referentSupport: string[];
   summary: string | null;
   flags: string[];
   xFit: number | null;
   xVerdict: string | null;
+  /** market.pair.kind and symbol: what the coin trades against ("sol", "token", ...). */
+  pairKind: string | null;
+  pairSymbol: string | null;
+  /**
+   * True when the coin copies a coin launched in the last 30 days (copy_of[].recent), false
+   * when it copies nothing recent, null for analyses made before TokenSage said which.
+   */
+  copiesRecent: boolean | null;
   rulesVersion: string | null;
   analyzedAt: Date | null;
 }
@@ -319,6 +364,18 @@ function unit(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : null;
 }
 
+/** Distinct non-empty strings from a list, each at most 60 characters. */
+function labels(value: unknown, max: number): string[] {
+  return [
+    ...new Set(
+      asArray(value)
+        .map(clip)
+        .filter((v): v is string => v !== null)
+        .map((v) => v.slice(0, 60)),
+    ),
+  ].slice(0, max);
+}
+
 /**
  * Reads the parts of one Analysis document that a TokenNarrative row stores. Built to survive
  * anything TokenSage might send: missing, null or wrongly typed fields fall back to empty, and
@@ -337,29 +394,35 @@ export function narrativeFieldsFromAnalysis(
     if (label !== null && confidence !== null) categories.push({ label: label.slice(0, 80), confidence });
     if (categories.length >= 20) break;
   }
-  const flags = [
-    ...new Set(
-      asArray(doc.flags)
-        .map((f) => clip(asRecord(f)?.code))
-        .filter((c): c is string => c !== null)
-        .map((c) => c.slice(0, 60)),
-    ),
-  ].slice(0, 30);
+  const flags = labels(
+    asArray(doc.flags).map((f) => asRecord(f)?.code),
+    30,
+  );
   const analyzedAt = typeof doc.analyzed_at === "string" ? new Date(doc.analyzed_at) : null;
   const referent = asRecord(doc.referent);
   const match = asRecord(asRecord(doc.x)?.match);
   const verdict = clip(match?.verdict);
   const known = verdict !== null && verdict !== "unknown" ? verdict.slice(0, 40) : null;
+  const pair = asRecord(asRecord(doc.market)?.pair);
+  const copies = asArray(doc.copy_of).map(asRecord);
+  const marked = copies.filter((c) => typeof c?.recent === "boolean");
+  const copiesRecent =
+    copies.length === 0 ? false : marked.length > 0 ? marked.some((c) => c!.recent === true) : null;
   return {
     depth: doc.depth === "full" ? "full" : "basic",
     status,
     categories,
     referentLabel: clip(referent?.label),
     referentKind: clip(referent?.kind),
+    referentConfidence: referent ? unit(referent.confidence) : null,
+    referentSupport: labels(referent?.supported_by, 10),
     summary: clip(doc.summary),
     flags,
     xFit: known !== null ? unit(match?.fit) : null,
     xVerdict: known,
+    pairKind: clip(pair?.kind)?.slice(0, 40) ?? null,
+    pairSymbol: clip(pair?.symbol)?.slice(0, 40) ?? null,
+    copiesRecent,
     rulesVersion: clip(asRecord(doc.versions)?.rules),
     analyzedAt: analyzedAt && !Number.isNaN(analyzedAt.getTime()) ? analyzedAt : null,
   };
@@ -385,6 +448,106 @@ export function storableAnalysis(analysis: unknown): Record<string, unknown> | n
     return out;
   };
   return asRecord(analysis) ? (clean(analysis, 0) as Record<string, unknown>) : null;
+}
+
+/** What a narrative card shows besides the stored columns, read from the Analysis document. */
+export interface NarrativeDetails {
+  /** Only when the coin trades against another token or a tokenized stock (SOL/USDC pairs: null). */
+  pair: {
+    kind: string;
+    symbol: string | null;
+    name: string | null;
+    underlying: string | null;
+    buildsOn: boolean;
+  } | null;
+  /** The posts around the linked one: what it quotes and what it replies to. */
+  postContext: {
+    relation: "quoted" | "replied_to";
+    status: string | null;
+    handle: string | null;
+    name: string | null;
+    text: string | null;
+    url: string | null;
+  }[];
+  accounts: {
+    role: string | null;
+    handle: string | null;
+    name: string | null;
+    followers: number | null;
+    verifiedType: string | null;
+  }[];
+  /** Live copycat (recent: true, warn) vs reference to an established coin (false, info). */
+  copies: { ticker: string | null; name: string | null; recent: boolean | null }[];
+  referentSupport: string[];
+}
+
+/** Display text: NUL-free, trimmed, clipped. Still untrusted: render it as text, never as HTML. */
+function text(value: unknown, max: number): string | null {
+  return clip(value)?.slice(0, max) ?? null;
+}
+
+function httpsUrl(value: unknown): string | null {
+  const v = text(value, 300);
+  return v !== null && /^https:\/\//i.test(v) ? v : null;
+}
+
+const PAIR_KINDS_SHOWN = new Set(["token", "tokenized_stock"]);
+
+/** Reads the card details out of an Analysis document; never throws, whatever it is given. */
+export function narrativeDetails(analysis: unknown): NarrativeDetails {
+  const doc = asRecord(analysis) ?? {};
+  const pairRec = asRecord(asRecord(doc.market)?.pair);
+  const pairKind = text(pairRec?.kind, 40);
+  const x = asRecord(doc.x);
+  const account = (a: Record<string, unknown> | null) => ({
+    handle: text(a?.handle, 40),
+    name: text(a?.name, 80),
+  });
+  const postContext: NarrativeDetails["postContext"] = [];
+  for (const relation of ["replied_to", "quoted"] as const) {
+    const post = asRecord(x?.[relation]);
+    if (!post) continue;
+    postContext.push({
+      relation,
+      status: text(post.status, 20),
+      ...account(asRecord(post.author)),
+      text: text(post.text, 280),
+      url: httpsUrl(post.url),
+    });
+  }
+  return {
+    pair:
+      pairKind !== null && PAIR_KINDS_SHOWN.has(pairKind)
+        ? {
+            kind: pairKind,
+            symbol: text(pairRec?.symbol, 40),
+            name: text(pairRec?.name, 80),
+            underlying: text(pairRec?.underlying, 20),
+            buildsOn: pairRec?.builds_on === true,
+          }
+        : null,
+    postContext,
+    accounts: asArray(x?.accounts)
+      .map(asRecord)
+      .filter((a): a is Record<string, unknown> => a !== null)
+      .slice(0, 10)
+      .map((a) => ({
+        role: text(a.role, 30),
+        ...account(a),
+        followers: typeof a.followers === "number" && Number.isFinite(a.followers) ? a.followers : null,
+        verifiedType: text(a.verified_type, 20),
+      })),
+    copies: asArray(doc.copy_of)
+      .map(asRecord)
+      .filter((c): c is Record<string, unknown> => c !== null)
+      .slice(0, 5)
+      .map((c) => ({
+        ticker: text(c.ticker, 20),
+        name: text(c.name, 80),
+        recent: typeof c.recent === "boolean" ? c.recent : null,
+      })),
+    referentSupport: labels(asRecord(doc.referent)?.supported_by, 10),
+  };
 }
 
 const DEPTH_RANK: Record<string, number> = { basic: 0, full: 1 };

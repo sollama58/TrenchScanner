@@ -1,0 +1,274 @@
+{
+  "ca": "457V2vvjqXTMFzivq9tvBqhDaxfke2523hHDB6brpump",
+  "status": "complete",
+  "depth": "full",
+  "analysis": {
+    "schema_version": "1",
+    "mint": "457V2vvjqXTMFzivq9tvBqhDaxfke2523hHDB6brpump",
+    "created_at": null,
+    "launchpad": "pump.fun",
+    "market": {
+      "complete": false,
+      "curve_progress": 0.4,
+      "graduated_pool": null,
+      "creator": "CTfBTtxhtAyGEysdjp9owVQvjSwPjtrzEGB9ZgAKewsY",
+      "is_mayhem_mode": false,
+      "quote_mint": "SOL",
+      "pair": {
+        "mint": "So11111111111111111111111111111111111111112",
+        "symbol": "SOL",
+        "name": "Solana",
+        "kind": "sol",
+        "underlying": null,
+        "source": "neutral",
+        "builds_on": false,
+        "builds_on_detail": null,
+        "referent": null,
+        "categories": []
+      }
+    },
+    "raw": {
+      "name": "Did Nothing Wrong",
+      "symbol": "DNW",
+      "description": null,
+      "image_url": "https://ipfs.io/ipfs/bafkreignns4pa47e6yy3jiw7ua34gl3tagb4k2rmuxgly32zeku4abiukm",
+      "twitter": "https://x.com/nutdev/status/1850000000000000009",
+      "telegram": "https://t.me/dogwifcap",
+      "website": null
+    },
+    "normalized": {
+      "name_tokens": ["did", "nothing", "wrong"],
+      "ticker": "DNW",
+      "ticker_base": "DNW",
+      "markers": [],
+      "emoji_keywords": [],
+      "obfuscation": []
+    },
+    "referent": {
+      "label": "Peanut (squirrel)",
+      "kind": "famous_animal",
+      "desc": "pet squirrel euthanised by NY officials, 2024",
+      "source": "entities:Peanut (squirrel)",
+      "confidence": 0.81,
+      "supported_by": ["x"]
+    },
+    "categories": [
+      {
+        "label": "animal",
+        "confidence": 0.546
+      },
+      {
+        "label": "animal/squirrel",
+        "confidence": 0.546
+      },
+      {
+        "label": "celebrity",
+        "confidence": 0.425
+      },
+      {
+        "label": "celebrity/elon",
+        "confidence": 0.425
+      }
+    ],
+    "ticker_explanation": "$DNW = initials of 'did nothing wrong'",
+    "copy_of": [],
+    "image": {
+      "status": "ok",
+      "source_url": "https://ipfs.io/ipfs/bafkreignns4pa47e6yy3jiw7ua34gl3tagb4k2rmuxgly32zeku4abiukm",
+      "phash": "97686887659e9699",
+      "pdq": null,
+      "ocr": [],
+      "palette": ["#c87828", "#fadc28"],
+      "near_duplicates": [],
+      "labels": [],
+      "animated": false
+    },
+    "x": {
+      "ref": {
+        "kind": "tweet",
+        "tweet_id": "1850000000000000009",
+        "community_id": null,
+        "url_handle": "nutdev",
+        "handle": null,
+        "user_id": null,
+        "query": null,
+        "url": null
+      },
+      "object_time": "2024-10-26T02:22:25.994000Z",
+      "predates_token_by_s": null,
+      "author": {
+        "handle": "nutdev",
+        "user_id": "9",
+        "name": "nut dev",
+        "verified_type": null,
+        "followers": 40,
+        "joined": null,
+        "username_changes": null
+      },
+      "text": "this one's for him",
+      "relation": "launch_announcement",
+      "reuse_count": 0,
+      "fetch_source": "fxtwitter",
+      "status": "ok",
+      "quoted": null,
+      "replied_to": {
+        "id": "1791351500217754008",
+        "url": "https://x.com/elonmusk/status/1791351500217754008",
+        "status": "ok",
+        "author": {
+          "handle": "elonmusk",
+          "user_id": "44196397",
+          "name": "Elon Musk",
+          "verified_type": "blue",
+          "followers": 190000000,
+          "joined": "2009-06-02T20:12:29Z",
+          "username_changes": null
+        },
+        "text": "Peanut the squirrel did nothing wrong",
+        "created_at": "2024-05-15T19:06:40Z",
+        "predates_token_by_s": null
+      },
+      "accounts": [
+        {
+          "role": "author",
+          "handle": "nutdev",
+          "name": "nut dev",
+          "followers": 40,
+          "verified_type": null
+        },
+        {
+          "role": "replied_to_author",
+          "handle": "elonmusk",
+          "name": "Elon Musk",
+          "followers": 190000000,
+          "verified_type": "blue"
+        }
+      ],
+      "match": {
+        "name": {
+          "score": 1.0,
+          "how": "exact",
+          "detail": "the post contains the name 'Did Nothing Wrong'"
+        },
+        "ticker": {
+          "score": 0.0,
+          "how": "none",
+          "detail": "the post does not mention the ticker"
+        },
+        "image": {
+          "score": 0.0,
+          "best_distance": null,
+          "media_checked": 0,
+          "detail": "the post has no images"
+        },
+        "referent": {
+          "x_label": "Elon Musk",
+          "x_kind": "person",
+          "agrees": null,
+          "confidence": 0.54
+        },
+        "x_categories": [
+          {
+            "label": "celebrity",
+            "confidence": 0.51
+          },
+          {
+            "label": "celebrity/elon",
+            "confidence": 0.51
+          },
+          {
+            "label": "animal",
+            "confidence": 0.468
+          },
+          {
+            "label": "animal/squirrel",
+            "confidence": 0.468
+          }
+        ],
+        "fit": 0.85,
+        "verdict": "about_this_coin"
+      }
+    },
+    "trend": {
+      "matched": false,
+      "terms": []
+    },
+    "flags": [],
+    "summary": "Did Nothing Wrong ($DNW) refers to Peanut (squirrel) (pet squirrel euthanised by NY officials, 2024) (confidence 0.81). Categories: animal/squirrel 0.55, celebrity/elon 0.42. $DNW = initials of 'did nothing wrong'. Why: Peanut (squirrel): pet squirrel euthanised by NY officials, 2024; the replied-to account @elonmusk: Elon Musk: Tesla/SpaceX/X owner; frequent memecoin trigger; the posting account @nutdev: 'dev' = the token creator.",
+    "evidence": [
+      {
+        "kind": "onchain",
+        "label": "source",
+        "weight": 0.0,
+        "detail": "token-2022 mint; pump.fun=True; on-chain metadata via token2022; created_at via unknown",
+        "source": "solana-rpc",
+        "url": null,
+        "where": null
+      },
+      {
+        "kind": "entity",
+        "label": "animal/squirrel",
+        "weight": 0.546,
+        "detail": "'peanut the squirrel' refers to Peanut (squirrel) (pet squirrel euthanised by NY officials, 2024)",
+        "source": "entities:Peanut (squirrel)",
+        "url": null,
+        "where": "x"
+      },
+      {
+        "kind": "entity",
+        "label": "referent",
+        "weight": 0.81,
+        "detail": "Peanut (squirrel): pet squirrel euthanised by NY officials, 2024",
+        "source": "entities:Peanut (squirrel)",
+        "url": null,
+        "where": "x"
+      },
+      {
+        "kind": "lexicon",
+        "label": "crypto_native/pumpfun_meta",
+        "weight": 0.12,
+        "detail": "the posting account @nutdev: 'dev' = the token creator",
+        "source": "slang:dev",
+        "url": null,
+        "where": "x"
+      },
+      {
+        "kind": "entity",
+        "label": "celebrity/elon",
+        "weight": 0.425,
+        "detail": "the replied-to account @elonmusk: 'elon musk' refers to Elon Musk (Tesla/SpaceX/X owner; frequent memecoin trigger)",
+        "source": "entities:Elon Musk",
+        "url": null,
+        "where": "x"
+      },
+      {
+        "kind": "entity",
+        "label": "referent",
+        "weight": 0.45,
+        "detail": "the replied-to account @elonmusk: Elon Musk: Tesla/SpaceX/X owner; frequent memecoin trigger",
+        "source": "entities:Elon Musk",
+        "url": null,
+        "where": "x"
+      }
+    ],
+    "caveats": ["token creation time could not be determined"],
+    "depth": "full",
+    "analyzed_at": "2026-10-06T22:52:07.039195Z",
+    "versions": {
+      "rules": "0.10.0-full",
+      "lexicon": "2026-10-06.2",
+      "known_coins": "seed-2026-10-06",
+      "models": {}
+    }
+  },
+  "stale_analysis": null,
+  "freshness": {
+    "analyzed_at": "2026-10-06T22:52:07.039195Z",
+    "age_s": 0,
+    "max_age_s": 3600,
+    "from_cache": false
+  },
+  "errors": [],
+  "job_id": null,
+  "request_id": "96c7bfd93de6405c"
+}

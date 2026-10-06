@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "ca": "7H1YX77iwSwtEh4nQeWJCEPF7GNDmK5TUxF6AsbKfDfw",
+      "status": "failed",
+      "analysis": null,
+      "job_id": 7,
+      "error": "tokensage.resolve.rpc.RpcError: rpc transport error: ConnectError: All connection attempts failed; retried automatically after 600 s, or now with refresh=true",
+      "retry_after_s": null
+    },
+    {
+      "ca": "notavalidca",
+      "status": "invalid",
+      "analysis": null,
+      "job_id": null,
+      "error": "not a Solana address (length)",
+      "retry_after_s": null
+    }
+  ],
+  "request_id": "db54f7cd71fc43ec"
+}

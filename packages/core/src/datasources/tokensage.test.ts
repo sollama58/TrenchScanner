@@ -7,6 +7,7 @@ import {
   narrativeFieldsFromAnalysis,
   normalizeSocialUrl,
   storableAnalysis,
+  narrativeDetails,
   type TokenSageAnalysis,
   type TokenSageBatchItem,
 } from "./tokensage.js";
@@ -134,9 +135,11 @@ describe("TokenSageClient base URL", () => {
 });
 
 /**
- * Real responses captured from TokenSage (rules 0.8.0) running locally against its fake chain:
- * GET /v1/tokens/{ca} at full and basic depth, a hints-only mint that isn't on-chain yet (a
- * partial answer), and a batch with a complete, an invalid and a pending item.
+ * Real responses from TokenSage (rules 0.10.0): GET /v1/tokens/{ca} at full and basic depth
+ * against its fake chain, a hints-only mint not on-chain yet (a partial answer), a batch with a
+ * complete, an invalid and a pending item, a batch whose job failed (the RPC was down), and two
+ * answers from its own integration tests: a coin paired against $BONK, and one whose linked
+ * post replies to another account's post.
  */
 const fixture = (name: string) =>
   JSON.parse(readFileSync(new URL(`./fixtures/tokensage/${name}.json`, import.meta.url), "utf8")) as {
@@ -154,17 +157,23 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
       status: "complete",
       referentLabel: "Peanut (squirrel)",
       referentKind: "famous_animal",
+      referentConfidence: 0.97,
+      referentSupport: ["name", "description"],
       xFit: 0,
       xVerdict: "unrelated",
-      rulesVersion: "0.8.0-full",
+      pairKind: "sol",
+      pairSymbol: "SOL",
+      // It builds on the established $PNUT: a reference, not a live copycat.
+      copiesRecent: false,
+      rulesVersion: "0.10.0-full",
     });
     expect(f.categories.slice(0, 2)).toEqual([
       { label: "animal", confidence: 0.97 },
       { label: "animal/squirrel", confidence: 0.97 },
     ]);
-    expect(f.categories).toHaveLength(8);
-    expect(f.flags).toEqual(["copycat", "earlier_same_name", "borrowed_narrative", "x_content_mismatch"]);
-    expect(f.summary).toMatch(/^Peanut the Squirrel 2\.0 \(\$PNUT2\)/);
+    expect(f.categories).toHaveLength(7);
+    expect(f.flags).toEqual(["references_known_coin", "x_content_mismatch"]);
+    expect(f.summary).toMatch(/^Peanut the Squirrel 2\.0 \(\$PNUT2\) refers to Peanut/);
     expect(f.summary!.length).toBeLessThanOrEqual(500);
     expect(f.analyzedAt).toBeInstanceOf(Date);
   });
@@ -173,11 +182,17 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
     const { analysis } = fixture("basic");
     expect(analysis.x?.status).toBe("not_fetched");
     const f = narrativeFieldsFromAnalysis(analysis, "complete");
-    expect(f).toMatchObject({ depth: "basic", xFit: null, xVerdict: null, flags: ["copycat"] });
+    expect(f).toMatchObject({
+      depth: "basic",
+      xFit: null,
+      xVerdict: null,
+      flags: ["references_known_coin"],
+      referentSupport: ["name"],
+    });
     expect(f.categories[0]).toEqual({ label: "derivative", confidence: 0.97 });
   });
 
-  it("reads a partial answer made from our hints, with no market data and no referent", () => {
+  it("reads a partial answer made from our hints, with no market data", () => {
     const { status, analysis } = fixture("partial");
     expect(status).toBe("partial");
     expect(analysis.market?.pair).toBeNull();
@@ -186,12 +201,49 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
     expect(f).toMatchObject({
       depth: "basic",
       status: "partial",
-      referentLabel: null,
-      referentKind: null,
-      flags: ["non_pumpfun"],
+      referentLabel: "Pepe the Frog",
+      referentConfidence: 0.468,
+      flags: ["non_pumpfun", "references_known_coin"],
       xFit: null,
+      pairKind: null,
+      pairSymbol: null,
     });
-    expect(f.categories.map((c) => c.label)).toContain("animal/frog");
+    expect(f.categories.map((c) => c.label)).toContain("derivative/reference");
+  });
+
+  it("reads a coin paired against another token, which takes that token's referent", () => {
+    const f = narrativeFieldsFromAnalysis(fixture("paired_token").analysis, "complete");
+    expect(f).toMatchObject({
+      referentLabel: "Bonk",
+      referentSupport: ["name", "chain"],
+      pairKind: "token",
+      pairSymbol: "BONK",
+      flags: ["references_known_coin", "non_sol_pair"],
+      copiesRecent: false,
+    });
+  });
+
+  it("reads a coin whose post replies to another account's post", () => {
+    const f = narrativeFieldsFromAnalysis(fixture("reply_post").analysis, "complete");
+    expect(f).toMatchObject({
+      depth: "full",
+      referentLabel: "Peanut (squirrel)",
+      referentSupport: ["x"],
+      xFit: 0.85,
+      xVerdict: "about_this_coin",
+      copiesRecent: false,
+    });
+  });
+
+  it("tells a live copycat from a reference, and says nothing for analyses that didn't say", () => {
+    const { analysis } = fixture("full");
+    const copy = analysis.copy_of![0]!;
+    const withCopies = (copy_of: unknown) =>
+      narrativeFieldsFromAnalysis({ ...analysis, copy_of } as TokenSageAnalysis, "complete").copiesRecent;
+    expect(withCopies([copy, { ...copy, ticker: "PNUT2", recent: true }])).toBe(true);
+    expect(withCopies([{ ticker: "PNUT", signals: [] }])).toBeNull();
+    expect(withCopies([])).toBe(false);
+    expect(withCopies("nonsense")).toBe(false);
   });
 
   it("matches the batch item shapes we branch on", () => {
@@ -199,9 +251,12 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
     expect(items.map((i) => [i.status, i.error ?? null, i.job_id ?? null])).toEqual([
       ["complete", null, null],
       ["invalid", "not a Solana address (length)", null],
-      ["pending", null, 17],
+      ["pending", null, 4],
     ]);
     expect(narrativeFieldsFromAnalysis(items[0]!.analysis!, "complete").xVerdict).toBe("unrelated");
+    const failed = fixture("failed_batch").items[0]!;
+    expect(failed).toMatchObject({ status: "failed", analysis: null, job_id: 7 });
+    expect(failed.error).toMatch(/^tokensage\.resolve\.rpc\.RpcError: .*retried automatically after 600 s/);
   });
 
   it("survives nulls, wrong types and unknown fields anywhere in the document", () => {
@@ -271,5 +326,68 @@ describe("storableAnalysis", () => {
     ).toEqual({ a: "xy", b: [null, 1], k: true, d: null });
     expect(storableAnalysis("text")).toBeNull();
     expect(storableAnalysis([1])).toBeNull();
+  });
+});
+
+describe("narrativeDetails", () => {
+  it("shows the pair only when the coin trades against a token or a stock", () => {
+    expect(narrativeDetails(fixture("paired_token").analysis).pair).toEqual({
+      kind: "token",
+      symbol: "BONK",
+      name: "Bonk",
+      underlying: null,
+      buildsOn: true,
+    });
+    expect(narrativeDetails(fixture("full").analysis).pair).toBeNull();
+    expect(narrativeDetails(fixture("partial").analysis).pair).toBeNull();
+    const stock = {
+      market: {
+        pair: { kind: "tokenized_stock", symbol: "TSLAx", name: "Tesla xStock", underlying: "TSLA" },
+      },
+    };
+    expect(narrativeDetails(stock).pair).toMatchObject({ kind: "tokenized_stock", underlying: "TSLA" });
+  });
+
+  it("reads the replied-to post and everyone in the conversation", () => {
+    const d = narrativeDetails(fixture("reply_post").analysis);
+    expect(d.postContext).toEqual([
+      {
+        relation: "replied_to",
+        status: "ok",
+        handle: "elonmusk",
+        name: "Elon Musk",
+        text: "Peanut the squirrel did nothing wrong",
+        url: "https://x.com/elonmusk/status/1791351500217754008",
+      },
+    ]);
+    expect(d.accounts.map((a) => [a.role, a.handle, a.followers])).toEqual([
+      ["author", "nutdev", 40],
+      ["replied_to_author", "elonmusk", 190000000],
+    ]);
+    expect(d.referentSupport).toEqual(["x"]);
+  });
+
+  it("lists copies with whether each is recent", () => {
+    expect(narrativeDetails(fixture("full").analysis).copies).toEqual([
+      { ticker: "PNUT", name: "Peanut the Squirrel", recent: false },
+    ]);
+  });
+
+  it("never throws, drops non-https links and NUL characters", () => {
+    for (const junk of [null, 1, "x", [], { x: [] }, { market: { pair: "token" } }, { copy_of: [null, 3] }]) {
+      expect(() => narrativeDetails(junk)).not.toThrow();
+    }
+    const d = narrativeDetails({
+      x: {
+        quoted: { url: "javascript:alert(1)", text: "hi\u0000there", author: { handle: 5 } },
+        accounts: [null, { handle: "a", followers: "lots" }],
+      },
+    });
+    expect(d.postContext).toEqual([
+      { relation: "quoted", status: null, handle: null, name: null, text: "hithere", url: null },
+    ]);
+    expect(d.accounts).toEqual([
+      { role: null, handle: "a", name: null, followers: null, verifiedType: null },
+    ]);
   });
 });

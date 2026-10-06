@@ -1,0 +1,339 @@
+{
+  "ca": "457V2vvjqXTMFzivq9tvBqhDaxfke2523hHDB6brpump",
+  "status": "complete",
+  "depth": "basic",
+  "analysis": {
+    "schema_version": "1",
+    "mint": "457V2vvjqXTMFzivq9tvBqhDaxfke2523hHDB6brpump",
+    "created_at": null,
+    "launchpad": "pump.fun",
+    "market": {
+      "complete": false,
+      "curve_progress": 0.4,
+      "graduated_pool": null,
+      "creator": "CTfBTtxhtAyGEysdjp9owVQvjSwPjtrzEGB9ZgAKewsY",
+      "is_mayhem_mode": false,
+      "quote_mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+      "pair": {
+        "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "symbol": "BONK",
+        "name": "Bonk",
+        "kind": "token",
+        "underlying": null,
+        "source": "onchain",
+        "builds_on": true,
+        "builds_on_detail": "same ticker base as $BONK",
+        "referent": {
+          "label": "Bonk",
+          "kind": "coin",
+          "desc": "Solana dog coin; 'bonk' meme",
+          "confidence": 0.97
+        },
+        "categories": [
+          {
+            "label": "animal",
+            "confidence": 0.97
+          },
+          {
+            "label": "animal/dog",
+            "confidence": 0.97
+          },
+          {
+            "label": "meme_template",
+            "confidence": 0.97
+          },
+          {
+            "label": "meme_template/other",
+            "confidence": 0.97
+          }
+        ]
+      }
+    },
+    "raw": {
+      "name": "Baby Bonk",
+      "symbol": "BBONK",
+      "description": "just a dog wif a cap",
+      "image_url": "https://ipfs.io/ipfs/bafkreignns4pa47e6yy3jiw7ua34gl3tagb4k2rmuxgly32zeku4abiukm",
+      "twitter": null,
+      "telegram": "https://t.me/dogwifcap",
+      "website": null
+    },
+    "normalized": {
+      "name_tokens": ["baby", "bonk"],
+      "ticker": "BBONK",
+      "ticker_base": "BONK",
+      "markers": ["marker:baby"],
+      "emoji_keywords": [],
+      "obfuscation": []
+    },
+    "referent": {
+      "label": "Bonk",
+      "kind": "coin",
+      "desc": "Solana dog coin; 'bonk' meme",
+      "source": "known_coins:BONK",
+      "confidence": 0.97,
+      "supported_by": ["name", "chain"]
+    },
+    "categories": [
+      {
+        "label": "animal",
+        "confidence": 0.97
+      },
+      {
+        "label": "animal/dog",
+        "confidence": 0.97
+      },
+      {
+        "label": "derivative",
+        "confidence": 0.97
+      },
+      {
+        "label": "derivative/template_family",
+        "confidence": 0.97
+      },
+      {
+        "label": "meme_template",
+        "confidence": 0.97
+      },
+      {
+        "label": "meme_template/other",
+        "confidence": 0.97
+      },
+      {
+        "label": "derivative/pair_family",
+        "confidence": 0.75
+      },
+      {
+        "label": "crypto_native/paired_ecosystem",
+        "confidence": 0.55
+      },
+      {
+        "label": "meme_template/x_wif_hat",
+        "confidence": 0.42
+      }
+    ],
+    "ticker_explanation": "$BBONK = ticker of Bonk (Bonk) (affixes B)",
+    "copy_of": [
+      {
+        "ticker": "BONK",
+        "name": "Bonk",
+        "mint": null,
+        "signals": ["ticker_base", "name_word"],
+        "created_at": null,
+        "recent": false
+      }
+    ],
+    "image": {
+      "status": "ok",
+      "source_url": "https://ipfs.io/ipfs/bafkreignns4pa47e6yy3jiw7ua34gl3tagb4k2rmuxgly32zeku4abiukm",
+      "phash": "97686887659e9699",
+      "pdq": null,
+      "ocr": [],
+      "palette": ["#c87828", "#fadc28"],
+      "near_duplicates": [],
+      "labels": [],
+      "animated": false
+    },
+    "x": null,
+    "trend": {
+      "matched": false,
+      "terms": []
+    },
+    "flags": [
+      {
+        "code": "references_known_coin",
+        "severity": "info",
+        "detail": "builds on the established coin $BONK (Bonk); a reference, not a recent copy"
+      },
+      {
+        "code": "non_sol_pair",
+        "severity": "info",
+        "detail": "trades against $BONK (Bonk) instead of SOL; the name builds on it (same ticker base as $BONK)"
+      }
+    ],
+    "summary": "Baby Bonk ($BBONK) refers to Bonk (Solana dog coin; 'bonk' meme) (confidence 0.97). Categories: animal/dog 0.97, derivative/template_family 0.97, meme_template/other 0.97, derivative/pair_family 0.75. Context: trades against $BONK (Bonk) (that token), and its name builds on it. $BBONK = ticker of Bonk (Bonk) (affixes B). Why: Bonk: Solana dog coin; 'bonk' meme; builds on $BONK (Bonk) via ticker_base, name_word; the name builds on $BONK (Bonk), the token it trades against (same ticker base as $BONK); 'wif' = 'with' (dogwifhat spelling); marks the 'X wif hat' template; 'bonk' = bonk (dog hit with bat meme; $BONK).",
+    "evidence": [
+      {
+        "kind": "onchain",
+        "label": "source",
+        "weight": 0.0,
+        "detail": "token-2022 mint; pump.fun=True; on-chain metadata via token2022; created_at via unknown",
+        "source": "solana-rpc",
+        "url": null,
+        "where": null
+      },
+      {
+        "kind": "marker",
+        "label": "derivative/template_family",
+        "weight": 0.5,
+        "detail": "name carries the marker 'Baby' (marker:baby)",
+        "source": "templates:marker:baby",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "lexicon",
+        "label": "derivative/template_family",
+        "weight": 0.5,
+        "detail": "'baby' = 'Baby X' derivative",
+        "source": "slang:baby",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "lexicon",
+        "label": "animal/dog",
+        "weight": 0.6,
+        "detail": "'bonk' = bonk (dog hit with bat meme; $BONK)",
+        "source": "slang:bonk",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "lexicon",
+        "label": "meme_template/other",
+        "weight": 0.6,
+        "detail": "'bonk' = bonk (dog hit with bat meme; $BONK)",
+        "source": "slang:bonk",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "wordnet",
+        "label": "animal/dog",
+        "weight": 0.55,
+        "detail": "'dog' is a dog",
+        "source": "wordnet:animal/dog",
+        "url": null,
+        "where": "description"
+      },
+      {
+        "kind": "lexicon",
+        "label": "meme_template/x_wif_hat",
+        "weight": 0.7,
+        "detail": "'wif' = 'with' (dogwifhat spelling); marks the 'X wif hat' template",
+        "source": "slang:wif",
+        "url": null,
+        "where": "description"
+      },
+      {
+        "kind": "lexicon",
+        "label": "derivative/template_family",
+        "weight": 0.7,
+        "detail": "'wif' = 'with' (dogwifhat spelling); marks the 'X wif hat' template",
+        "source": "slang:wif",
+        "url": null,
+        "where": "description"
+      },
+      {
+        "kind": "known_coin",
+        "label": "derivative/template_family",
+        "weight": 0.865,
+        "detail": "builds on $BONK (Bonk) via ticker_base, name_word",
+        "source": "known_coins:BONK",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "known_coin_inherit",
+        "label": "animal/dog",
+        "weight": 0.519,
+        "detail": "inherited from $BONK: Solana's first big dog coin (Dec 2022); 'bonk' is the dog-hit-with-bat meme.",
+        "source": "known_coins:BONK",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "known_coin_inherit",
+        "label": "meme_template/other",
+        "weight": 0.519,
+        "detail": "inherited from $BONK: Solana's first big dog coin (Dec 2022); 'bonk' is the dog-hit-with-bat meme.",
+        "source": "known_coins:BONK",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "referent",
+        "label": "referent",
+        "weight": 0.952,
+        "detail": "Bonk: Solana dog coin; 'bonk' meme",
+        "source": "known_coins:BONK",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "template_family",
+        "label": "derivative/template_family",
+        "weight": 0.4,
+        "detail": "name follows the 'baby_x' template",
+        "source": "templates:baby_x",
+        "url": null,
+        "where": "name"
+      },
+      {
+        "kind": "pair",
+        "label": "crypto_native/paired_ecosystem",
+        "weight": 0.55,
+        "detail": "trades against $BONK (Bonk) instead of SOL: launched into that token's community",
+        "source": "pair:BONK",
+        "url": null,
+        "where": "chain"
+      },
+      {
+        "kind": "pair",
+        "label": "derivative/pair_family",
+        "weight": 0.75,
+        "detail": "the name builds on $BONK (Bonk), the token it trades against (same ticker base as $BONK)",
+        "source": "pair:BONK",
+        "url": null,
+        "where": "chain"
+      },
+      {
+        "kind": "referent",
+        "label": "referent",
+        "weight": 0.65,
+        "detail": "builds on the pair token $BONK (Bonk), which refers to Bonk",
+        "source": "pair:BONK",
+        "url": null,
+        "where": "chain"
+      },
+      {
+        "kind": "pair",
+        "label": "animal/dog",
+        "weight": 0.582,
+        "detail": "the pair token $BONK (Bonk) is animal/dog",
+        "source": "pair:BONK",
+        "url": null,
+        "where": "chain"
+      },
+      {
+        "kind": "pair",
+        "label": "meme_template/other",
+        "weight": 0.582,
+        "detail": "the pair token $BONK (Bonk) is meme_template/other",
+        "source": "pair:BONK",
+        "url": null,
+        "where": "chain"
+      }
+    ],
+    "caveats": ["token creation time could not be determined"],
+    "depth": "basic",
+    "analyzed_at": "2026-10-06T22:52:07.394259Z",
+    "versions": {
+      "rules": "0.10.0-full",
+      "lexicon": "2026-10-06.2",
+      "known_coins": "seed-2026-10-06",
+      "models": {}
+    }
+  },
+  "stale_analysis": null,
+  "freshness": {
+    "analyzed_at": "2026-10-06T22:52:07.394259Z",
+    "age_s": 0,
+    "max_age_s": 3600,
+    "from_cache": false
+  },
+  "errors": [],
+  "job_id": null,
+  "request_id": "bcca623578504758"
+}

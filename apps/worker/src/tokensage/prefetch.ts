@@ -74,9 +74,17 @@ const wanted = new Map<string, Wanted>();
 const pending = new Map<string, Pending>();
 /** Mints already stored at a depth (or cached as failed), so the scan's per-cycle notes are free. */
 const settled = new Map<string, Settled>();
-/** Mints TokenSage couldn't find on-chain yet, left alone until the time stored. */
+/**
+ * Mints whose last analysis failed without a definitive reason (or that weren't on-chain yet),
+ * left alone until the time stored. TokenSage answers any request within 10 minutes of a failed
+ * job with that failure, so asking sooner only wastes a request - and for a definitive failure
+ * it answers the whole batch 404/422 (see send), so the margin matters.
+ */
 const notFoundUntil = new Map<string, number>();
-const NOT_FOUND_COOLDOWN_MS = 5 * 60_000;
+const NOT_FOUND_COOLDOWN_MS = 11 * 60_000;
+/** Transient failures per mint; after this many it is cached as failed like a definitive one. */
+const failCounts = new Map<string, number>();
+const MAX_TRANSIENT_FAILURES = 3;
 /** Old-job lookups per flush (see checkEndedJob). */
 const MAX_JOB_CHECKS_PER_FLUSH = 5;
 const DEFINITIVE_FAILURES = ["not_a_token_mint", "not_pumpfun", "invalid_ca"];
@@ -103,6 +111,7 @@ export function resetTokenSage(): void {
   pending.clear();
   settled.clear();
   notFoundUntil.clear();
+  failCounts.clear();
   flushing = false;
   pausedUntil = 0;
   fullDay = "";
@@ -204,6 +213,7 @@ async function storeAnalysis(
   const data = {
     ...fields,
     categories: fields.categories as unknown as Prisma.InputJsonValue,
+    failReason: null,
     analysis: (storableAnalysis(analysis) ?? {}) as Prisma.InputJsonValue,
     checkedAt: new Date(),
   };
@@ -213,22 +223,49 @@ async function storeAnalysis(
     update: data,
   });
   stats.stored += 1;
+  failCounts.delete(mint);
   settle(mint, fields.depth, status === "partial");
 }
 
-async function storeFailure(mintAddress: string, depth: TokenSageDepth): Promise<void> {
+async function storeFailure(mintAddress: string, depth: TokenSageDepth, reason: string): Promise<void> {
+  failCounts.delete(mintAddress);
   const existing = await prisma.tokenNarrative.findUnique({
     where: { mintAddress },
     select: { status: true },
   });
-  if (existing && existing.status !== "failed") return;
+  if (existing && existing.status !== "failed") {
+    // A deeper read failed for a mint with an answer already stored: keep that one, stop asking.
+    settle(mintAddress, "full", false);
+    return;
+  }
+  const failReason = reason.split("\u0000").join("").trim().slice(0, 300) || null;
   await prisma.tokenNarrative.upsert({
     where: { mintAddress },
-    create: { mintAddress, depth, status: "failed", checkedAt: new Date() },
-    update: { depth, status: "failed", checkedAt: new Date() },
+    create: { mintAddress, depth, status: "failed", failReason, checkedAt: new Date() },
+    update: { depth, status: "failed", failReason, checkedAt: new Date() },
   });
   stats.failed += 1;
   settle(mintAddress, "full", false);
+}
+
+/**
+ * An analysis that failed. TokenSage's reason starts with its code ("not_pumpfun: ..."): a
+ * definitive one is cached for good; anything else (a mint not on-chain yet, an upstream
+ * outage) is left alone past TokenSage's 10-minute failure window, and cached as failed after
+ * a few tries.
+ */
+async function noteFailure(mint: string, depth: TokenSageDepth, error: unknown): Promise<void> {
+  pending.delete(mint);
+  const reason = typeof error === "string" && error.trim() !== "" ? error : "analysis failed";
+  const code = reason.split(":")[0]!.trim();
+  const tries = (failCounts.get(mint) ?? 0) + 1;
+  if (DEFINITIVE_FAILURES.includes(code) || tries >= MAX_TRANSIENT_FAILURES) {
+    await storeFailure(mint, depth, reason);
+    return;
+  }
+  if (failCounts.size >= 5_000) failCounts.clear();
+  failCounts.set(mint, tries);
+  notFoundUntil.set(mint, Date.now() + NOT_FOUND_COOLDOWN_MS);
 }
 
 /**
@@ -325,16 +362,33 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
 
   // Full first: those are the mints a model is deciding on right now.
   let batches = env.TOKENSAGE_MAX_BATCHES_PER_CYCLE;
+  let jobChecks = MAX_JOB_CHECKS_PER_FLUSH;
   for (const depth of ["full", "basic"] as const) {
     let list = byDepth[depth];
     while (list.length > 0 && batches > 0) {
       const chunk = list.slice(0, TOKENSAGE_BATCH_MAX);
       list = list.slice(TOKENSAGE_BATCH_MAX);
       batches -= 1;
-      const { items, fullRemaining } = await api.batch(chunk, depth);
+      let result;
+      try {
+        result = await api.batch(chunk, depth);
+      } catch (err) {
+        if (!(err instanceof HttpError) || (err.status !== 404 && err.status !== 422)) throw err;
+        // TokenSage answers the whole batch 404/422 when one re-sent mint's job failed
+        // definitively (token_not_found, not_pumpfun, ...) in the last 10 minutes. Find it by
+        // reading the queued mints' jobs, so the next batch goes through.
+        stats.errors += 1;
+        for (const e of chunk) {
+          const p = pending.get(e.ca);
+          if (p?.jobId === undefined || jobChecks <= 0) continue;
+          jobChecks -= 1;
+          await checkEndedJob(api, e.ca, p, p.jobId);
+        }
+        continue;
+      }
+      const { items, fullRemaining } = result;
       if (fullRemaining === 0) fullBlockedUntil = nextUtcMidnight(Date.now());
       const sent = new Map(chunk.map((e) => [e.ca, e]));
-      let jobChecks = MAX_JOB_CHECKS_PER_FLUSH;
       for (const e of chunk) {
         const w = wanted.get(e.ca);
         if (w && narrativeDepthCovers(depth, w.depth)) wanted.delete(e.ca);
@@ -383,14 +437,12 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
               pausedUntil = Math.max(pausedUntil, Date.now() + Math.max(5, item.retry_after_s ?? 30) * 1000);
             }
             if (!wanted.has(item.ca)) wanted.set(item.ca, { depth, hints: entry.hints });
-          } else if (item.status === "invalid" || item.status === "failed") {
+          } else if (item.status === "invalid") {
             pending.delete(item.ca);
-            // token_not_found on a seconds-old mint can clear up; anything else is definitive.
-            if (String(item.error ?? "").startsWith("token_not_found")) {
-              notFoundUntil.set(item.ca, Date.now() + NOT_FOUND_COOLDOWN_MS);
-            } else {
-              await storeFailure(item.ca, depth);
-            }
+            await storeFailure(item.ca, depth, `invalid_ca: ${item.error ?? "not a token address"}`);
+          } else if (item.status === "failed") {
+            // TokenSage reports a failed job for 10 minutes without starting a new one.
+            await noteFailure(item.ca, depth, item.error);
           } else {
             // A done status without a document, or a status this version doesn't know: ask again
             // after a cool-off rather than every cycle.
@@ -411,7 +463,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
  * A mint's previous job ended without an analysis. A definitive failure (not a token mint, not a
  * pump.fun coin) is cached so it is never asked again - otherwise every re-send would start a new
  * job, and at full depth each one costs a unit of the daily quota. A mint not on-chain yet is
- * left alone for a few minutes. Anything else (a transient upstream failure) keeps the new job.
+ * left alone past TokenSage's 10-minute failure window. Anything else keeps the new job.
  */
 async function checkEndedJob(
   api: TokenSageClient,
@@ -425,12 +477,8 @@ async function checkEndedJob(
     const code = String(job.error ?? "")
       .split(":")[0]!
       .trim();
-    if (code === "token_not_found") {
-      pending.delete(mint);
-      notFoundUntil.set(mint, Date.now() + NOT_FOUND_COOLDOWN_MS);
-    } else if (DEFINITIVE_FAILURES.includes(code)) {
-      pending.delete(mint);
-      await storeFailure(mint, p.depth);
+    if (code === "token_not_found" || DEFINITIVE_FAILURES.includes(code)) {
+      await noteFailure(mint, p.depth, job.error);
     }
   } catch (err) {
     logger.warn("TokenSage job lookup failed", { error: String(err) });
