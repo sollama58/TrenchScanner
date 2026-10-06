@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Card } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
-import { WIN_WINDOW_MIN, matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
+import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 
 const DAY_MS = 86_400_000;
 
@@ -33,7 +33,7 @@ export function AlertCard({
   const nowMcap = card.currentMarketCapUsd;
   const move = change(alertMcap, nowMcap);
   const curated = card.curated;
-  // The countdown ticks from the alert time rather than from the figure the feed was fetched with.
+  // Re-derived from the alert time, so a call whose window ran out by the clock stops reading as pending.
   const outcome = curated ? outcomeAt(curated.outcome, curated.alertedAt, now) : matchOutcome(card, now);
   const badge = outcomeBadge(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");
@@ -46,8 +46,6 @@ export function AlertCard({
   const peak = nowCounts ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
   const ai = curated?.aiReview;
   const mint = card.token.mintAddress;
-  const watching = outcome?.status === "watching" && outcome.minutesLeft !== null;
-  const elapsedPct = watching ? ((WIN_WINDOW_MIN - outcome.minutesLeft!) / WIN_WINDOW_MIN) * 100 : 0;
   const hasPeak = peak !== null && peak !== undefined && peak > 0;
   // When the recorded run peak came - only while "Now" hasn't overtaken it.
   const runPeakAfter =
@@ -79,11 +77,6 @@ export function AlertCard({
     <article
       className={`card tone-${badge.tone}${compact ? " compact" : ""}${labelSource ? (card.kind === "match" ? " src-mine" : " src-model") : ""}`}
     >
-      {watching && (
-        <div className="countdown" title={`${outcome.minutesLeft}m left in the 15-minute win window`}>
-          <span style={{ width: `${elapsedPct}%` }} />
-        </div>
-      )}
       <header className="card-head">
         <div className={`avatar-wrap tone-${badge.tone}`}>
           <TokenAvatar url={card.token.imageUrl} symbol={card.token.symbol} />
@@ -92,7 +85,6 @@ export function AlertCard({
           <div className="title-row">
             <strong className="symbol">{tokenLabel(card.token)}</strong>
             {card.token.name && card.token.symbol && <span className="token-name">{card.token.name}</span>}
-            <span className={`badge ${badge.tone}`}>{badge.text}</span>
           </div>
           <div className="meta-row">
             {labelSource && card.kind === "match" && (
@@ -166,15 +158,12 @@ export function AlertCard({
           >
             {hasPeak ? multiple(peak) : "–"}
           </span>
+          <small className={`verdict ${badge.tone}`}>{badge.text}</small>
         </div>
       </div>
 
       {!compact && (
         <dl className="card-stats">
-          <div>
-            <dt>Liq</dt>
-            <dd className="num">{usd(s.liquidityUsd)}</dd>
-          </div>
           <div>
             <dt>Vol 24h</dt>
             <dd className="num">{usd(s.volume24hUsd)}</dd>
@@ -191,11 +180,8 @@ export function AlertCard({
             <dt>Top 10</dt>
             <dd className="num">{pct(s.top10HolderPct)}</dd>
           </div>
-          <div>
-            <dt>Risk</dt>
-            <dd className="num">{s.riskScore ?? "–"}</dd>
-          </div>
           <div
+            className="wide"
             title={
               walletsChecked
                 ? `Fresh: top-10 holder wallets first used in the last 24h${

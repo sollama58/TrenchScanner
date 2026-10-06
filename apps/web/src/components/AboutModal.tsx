@@ -109,8 +109,8 @@ export function AboutModal({
           day after, so the card&apos;s Peak shows how high they went.
         </p>
         <dl className="about-terms">
-          <dt>Live · 12m left</dt>
-          <dd>Still inside its 15 minutes; the bar along the top of the card shows how much is gone.</dd>
+          <dt>◷ Pending</dt>
+          <dd>Still inside its 15 minutes. The result shows under Peak on the card.</dd>
           <dt>✓ 2x win, ✓✓ 4x win, ✓✓✓ 10x win</dt>
           <dd>
             Doubled within 15 minutes; ✓✓ means it also reached 4x within 30, and ✓✓✓ 10x within an hour.
@@ -130,8 +130,8 @@ export function AboutModal({
             Market cap when it was alerted, now (refreshed every few seconds while the page is open), and the
             best multiple it has reached since.
           </dd>
-          <dt>Liq, Vol 24h, Holders, Age</dt>
-          <dd>Liquidity, 24-hour volume, holder count and minutes since launch, at alert time.</dd>
+          <dt>Vol 24h, Holders, Age</dt>
+          <dd>24-hour volume, holder count and minutes since launch, at alert time.</dd>
           <dt>Top 10</dt>
           <dd>Share of supply held by the 10 largest wallets.</dd>
           <dt>Fresh / Empty</dt>
@@ -155,8 +155,6 @@ export function AboutModal({
             holds none. Read from the live trade stream when the scanner saw the launch, otherwise from
             RugCheck, and kept current as the token is rescanned.
           </dd>
-          <dt>Risk</dt>
-          <dd>RugCheck&apos;s risk score, 0-100, lower is safer.</dd>
           <dt>High conviction</dt>
           <dd>
             The call came from the model&apos;s most confident moments (its top half-percent). These are rarer
