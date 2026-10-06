@@ -162,4 +162,29 @@ describe("SolanaRpc", () => {
     expect([...out.values()].every((tx) => tx !== null)).toBe(true);
     expect(rpc.takeCallStats()).toEqual({ getSignaturesForAddress: 1, getTransaction: 3 });
   });
+
+  it("calls a relay the RPC answered with an error a definite rejection", async () => {
+    const { url } = await startServer(() => ({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32002, message: "Transaction simulation failed" },
+    }));
+    const rpc = new SolanaRpc({ rpcUrl: url });
+    expect(await rpc.sendRawTransaction("AQ==")).toEqual({
+      error: "Transaction simulation failed",
+      rejected: true,
+    });
+  });
+
+  it("does not call a relay whose reply was lost a rejection", async () => {
+    server = createServer((_req, res) => {
+      res.statusCode = 502;
+      res.end("bad gateway");
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as { port: number };
+    const rpc = new SolanaRpc({ rpcUrl: `http://127.0.0.1:${address.port}` });
+    const out = await rpc.sendRawTransaction("AQ==");
+    expect("rejected" in out && out.rejected).toBe(false);
+  });
 });

@@ -63,6 +63,31 @@ function mentionsSubscriptionMint(base64Transaction: string): boolean {
   }
 }
 
+/**
+ * The transaction's own id - its first signature - read straight off the signed wire bytes.
+ *
+ * A signed transaction opens with a compact-u16 count and then the 64-byte signatures, and the
+ * first one is the id the chain will know it by. Knowing it before the relay means a relay whose
+ * reply is lost (a timeout, a dropped connection) can still hand the client something to check on,
+ * instead of an answer nobody can act on. Null for anything that doesn't parse or isn't signed.
+ */
+export function firstSignature(base64Transaction: string): string | null {
+  const bytes = Buffer.from(base64Transaction, "base64");
+  let count = 0;
+  let offset = 0;
+  for (let shift = 0; shift < 21; shift += 7) {
+    const byte = bytes[offset];
+    if (byte === undefined) return null;
+    offset += 1;
+    count |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) break;
+  }
+  if (count < 1 || bytes.length < offset + 64) return null;
+  const signature = bytes.subarray(offset, offset + 64);
+  if (signature.every((b) => b === 0)) return null;
+  return bs58.encode(signature);
+}
+
 export interface SubscriptionRouteOptions {
   env: Env;
   rpc: SolanaRpc;
@@ -126,12 +151,13 @@ export async function registerSubscriptionRoutes(
   });
 
   /**
-   * Relay a signed burn, recording the signature before returning it.
+   * Relay a signed burn and return its signature.
    *
-   * The server sends it rather than the browser for one reason: the moment a signature exists, it
-   * is written down here. If the tab dies a millisecond later - closed, crashed, out of battery -
-   * the burn is still ours to find, because we knew about it before the client did. The client's
-   * later /claim call is then an optimisation, not the mechanism.
+   * Nothing is written to the ledger here: the transaction has not landed yet, and a row for it
+   * would have to be verified later anyway. What makes a dead tab safe is the burn reconciler,
+   * which reads every transaction on the mint and credits the burn whether or not the client ever
+   * calls /claim. The signature is logged here, so a support question can still be traced. /claim
+   * is the fast path, not the mechanism.
    */
   app.post("/send", { config: { rateLimit: SEND_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = sendSchema.safeParse(request.body);
@@ -149,14 +175,27 @@ export async function registerSubscriptionRoutes(
       return reply.code(400).send({ error: "That transaction doesn't burn $ASDFASDFA. Nothing was sent." });
     }
 
+    const signature = firstSignature(parsed.data.transaction);
     const result = await rpc.sendRawTransaction(parsed.data.transaction);
     if ("error" in result) {
-      // The transaction did not go out. Say so plainly - the user still has their tokens, and the
-      // frontend needs to be able to tell them that rather than leave them wondering.
-      request.log.warn({ error: result.error }, "burn relay failed");
-      return reply
-        .code(502)
-        .send({ error: "Transaction was rejected by the network. Your tokens were not burned." });
+      request.log.warn(
+        { error: result.error, rejected: result.rejected, signature, wallet: request.user!.walletAddress },
+        "burn relay failed",
+      );
+      if (result.rejected) {
+        // The RPC refused it: the transaction did not go out and the user still has their tokens.
+        return reply
+          .code(502)
+          .send({ error: "Transaction was rejected by the network. Your tokens were not burned." });
+      }
+      // The reply was lost, not refused: the RPC may well have sent it. "Your tokens were not
+      // burned" here was a guess, and a wrong one invites a second burn. The signature lets the
+      // client keep checking /claim; the reconciler credits it regardless if it landed.
+      return reply.code(502).send({
+        error:
+          "We couldn't confirm the network received that. Check your wallet before trying again - if it went through, your access arrives on its own.",
+        signature,
+      });
     }
 
     request.log.info(
@@ -220,9 +259,11 @@ export async function registerSubscriptionRoutes(
     }
 
     const outcome = await creditBurn(signature, verdict.credit, SUBSCRIPTION_MINT, "claim");
-    if (outcome.status === "held") {
-      // The burn was authorised by a wallet with no account here. Credited to that wallet the
-      // moment it signs in - not to whoever happened to submit the signature.
+    if (outcome.status === "held" || verdict.credit.burnerWallet !== request.user!.walletAddress) {
+      // The burn was authorised by another wallet: held for it if it has no account here yet,
+      // credited to it if it does. Either way none of it is this caller's, and answering
+      // "credited" with the caller's own access (as the fresh path used to, unlike the ledger path
+      // above) told them a burn counted when their access hadn't moved.
       return reply.code(202).send({
         status: "held",
         message: "That burn was made by a different wallet. Sign in with that wallet to use it.",
