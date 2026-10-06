@@ -12,6 +12,8 @@ const DAY_MS = 86_400_000;
 export const EXPORT_PAGE_SIZE = 1000;
 /** Outcome rows per price-path round trip - each one pulls up to a few hundred snapshots. */
 export const PATH_PAGE_SIZE = 200;
+/** Tokens per safety-screen round trip - same reasoning as PATH_PAGE_SIZE. */
+export const SCREEN_PAGE_SIZE = 200;
 /** Two exports at once per instance at most; a third gets a 429 rather than queueing on the pool. */
 export const MAX_CONCURRENT_EXPORTS = 2;
 /** Longest window one export may cover, however the caller spells it. */
@@ -31,7 +33,7 @@ function windowDays(q: { days: number; since?: Date; until?: Date }, now = new D
   return (until.getTime() - since.getTime()) / DAY_MS;
 }
 
-export const EXPORT_DATASETS = ["outcomes", "paths", "alerts", "shadow", "ai-reviews"] as const;
+export const EXPORT_DATASETS = ["outcomes", "paths", "alerts", "shadow", "ai-reviews", "screen"] as const;
 export type ExportDataset = (typeof EXPORT_DATASETS)[number];
 
 const SAMPLE_KINDS = ["hourly", "event", "emission", "match"] as const;
@@ -54,7 +56,7 @@ export const exportQuerySchema = z
       .enum(["true", "false", "1", "0"])
       .optional()
       .transform((v) => v === "true" || v === "1"),
-    /** paths: how far past the anchor to collect snapshot prices. */
+    /** paths: how far past the anchor to collect snapshot prices. screen: how far past first sight. */
     pathMinutes: z.coerce.number().int().min(5).max(360).default(120),
     /** Stop after this many records (paths: outcome rows). */
     limit: z.coerce.number().int().min(1).max(2_000_000).optional(),
@@ -222,6 +224,129 @@ async function* pathPages(q: ExportQuery, since: Date, until: Date, pageSize = P
   }
 }
 
+type ScreenToken = { id: string; mintAddress: string; symbol: string | null; firstSeenAt: Date };
+type ScreenTick = {
+  token_id: string;
+  taken_at: Date;
+  price_usd: number;
+  market_cap_usd: number;
+  source: string;
+  passed: boolean;
+  reasons: string[];
+  fresh_pct: number | null;
+  empty_pct: number | null;
+  top10_pct: number | null;
+  risk_score: number | null;
+  risk_flags: string[];
+  is_mayhem: boolean | null;
+  graduated: boolean | null;
+  lp_burned: boolean | null;
+  mint_authority: boolean | null;
+  freeze_authority: boolean | null;
+  age_minutes: number | null;
+  buys_1h: number | null;
+  sells_1h: number | null;
+  change_5m_pct: number | null;
+};
+
+/**
+ * What the mandatory safety screen (rugScreen.ts) did to every token first seen in the window, and
+ * what its price did afterwards: each token's snapshots from first sight to `pathMinutes` after,
+ * pass or fail, with the screen's reasons. The only export that reaches tokens the screen rejected
+ * - nothing else records them - so it is how a cut is judged by what it threw away.
+ *
+ * Walked through Token(firstSeenAt) and the (tokenId, takenAt) index, never TokenSnapshot by time
+ * (it has no takenAt index and is gigabytes). Rejected tokens are snapshotted every few minutes
+ * only (FAILING_SNAPSHOT_SPACING_MS in scanJob.ts), and a token nothing tracked keeps its
+ * snapshots for SNAPSHOT_UNTRACKED_RETENTION_HOURS - so rejected paths are coarse and only the
+ * last two days or so reach back. Tokens with no snapshot at all (never in band) are left out.
+ *
+ * `ticks`: [seconds after first sight, price, market cap, passed, snapshot source, reasons].
+ * `checks`: the screen's inputs, one entry each time they change.
+ */
+async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize = SCREEN_PAGE_SIZE) {
+  let last: { at: Date; id: string } | null = null;
+  for (;;) {
+    const tokens: ScreenToken[] = await prisma.token.findMany({
+      where: { AND: [{ firstSeenAt: { gte: since, lt: until } }, after("firstSeenAt", last)] },
+      orderBy: [{ firstSeenAt: "asc" }, { id: "asc" }],
+      take: pageSize,
+      select: { id: true, mintAddress: true, symbol: true, firstSeenAt: true },
+    });
+    if (tokens.length === 0) return;
+    const ids = tokens.map((t) => t.id);
+    const iso = (d: Date) => d.toISOString().replace("Z", "");
+    const tos = tokens.map((t) => iso(new Date(t.firstSeenAt.getTime() + q.pathMinutes * 60_000)));
+    const ticks = await prisma.$queryRaw<ScreenTick[]>`
+      SELECT s."tokenId" AS token_id, s."takenAt" AS taken_at, s."priceUsd" AS price_usd,
+             s."marketCapUsd" AS market_cap_usd, s."source" AS source,
+             s."rugScreenPassed" AS passed, s."rugScreenReasons" AS reasons,
+             s."freshTop10WalletPct" AS fresh_pct, s."emptyTop10WalletPct" AS empty_pct,
+             s."top10HolderPct" AS top10_pct, s."riskScore" AS risk_score, s."riskFlags" AS risk_flags,
+             s."isMayhemMode" AS is_mayhem, s."graduated" AS graduated, s."lpBurned" AS lp_burned,
+             s."mintAuthorityActive" AS mint_authority, s."freezeAuthorityActive" AS freeze_authority,
+             s."ageMinutes" AS age_minutes, s."buys1h" AS buys_1h, s."sells1h" AS sells_1h,
+             s."priceChange5mPct" AS change_5m_pct
+      FROM unnest(${ids}::text[], ${tos}::timestamp(3)[]) AS t(id, to_at)
+      JOIN "TokenSnapshot" s ON s."tokenId" = t.id AND s."takenAt" <= t.to_at
+      ORDER BY s."tokenId", s."takenAt"`;
+    const byToken = new Map<string, ScreenTick[]>();
+    for (const t of ticks) {
+      const list = byToken.get(t.token_id);
+      if (list) list.push(t);
+      else byToken.set(t.token_id, [t]);
+    }
+    const page: Rec[] = [];
+    for (const token of tokens) {
+      const rows = byToken.get(token.id);
+      if (!rows) continue;
+      const sec = (d: Date) => Math.round((d.getTime() - token.firstSeenAt.getTime()) / 1000);
+      const checks: Rec[] = [];
+      let prevKey = "";
+      for (const r of rows) {
+        const check = {
+          freshTop10WalletPct: r.fresh_pct,
+          emptyTop10WalletPct: r.empty_pct,
+          top10HolderPct: r.top10_pct,
+          riskScore: r.risk_score,
+          riskFlags: r.risk_flags,
+          isMayhemMode: r.is_mayhem,
+          graduated: r.graduated,
+          lpBurned: r.lp_burned,
+          mintAuthorityActive: r.mint_authority,
+          freezeAuthorityActive: r.freeze_authority,
+        };
+        const key = JSON.stringify(check);
+        if (key !== prevKey) checks.push({ tSec: sec(r.taken_at), ...check });
+        prevKey = key;
+      }
+      page.push({
+        tokenId: token.id,
+        mintAddress: token.mintAddress,
+        symbol: token.symbol,
+        firstSeenAt: token.firstSeenAt,
+        ticks: rows.map((r) => [
+          sec(r.taken_at),
+          r.price_usd,
+          r.market_cap_usd,
+          r.passed,
+          r.source,
+          r.reasons,
+          r.age_minutes,
+          r.buys_1h,
+          r.sells_1h,
+          r.change_5m_pct,
+        ]),
+        checks,
+      });
+    }
+    if (page.length > 0) yield page;
+    const tail = tokens[tokens.length - 1]!;
+    last = { at: tail.firstSeenAt, id: tail.id };
+    if (tokens.length < pageSize) return;
+  }
+}
+
 async function* createdAtPages<T extends { id: string; createdAt: Date }>(
   fetch: (where: Rec, take: number) => Promise<T[]>,
   since: Date,
@@ -306,6 +431,23 @@ const AI_REVIEW_COLUMNS = [
   "playbookId",
 ] as const;
 
+const SCREEN_COLUMNS = [
+  "tokenId",
+  "mintAddress",
+  "symbol",
+  "firstSeenAt",
+  "tSec",
+  "priceUsd",
+  "marketCapUsd",
+  "passed",
+  "source",
+  "reasons",
+  "ageMinutes",
+  "buys1h",
+  "sells1h",
+  "priceChange5mPct",
+];
+
 const PATH_COLUMNS = [
   "outcomeId",
   "tokenId",
@@ -323,6 +465,8 @@ function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): 
       return outcomePages(q, since, until, pageSize);
     case "paths":
       return pathPages(q, since, until, pageSize);
+    case "screen":
+      return screenPages(q, since, until, pageSize);
     case "alerts":
       return createdAtPages(
         async (where, take) =>
@@ -381,6 +525,8 @@ export function csvColumns(dataset: ExportDataset): string[] {
       return [...OUTCOME_COLUMNS, ...CANDIDATE_FEATURE_NAMES.map((n) => `f_${n}`)];
     case "paths":
       return PATH_COLUMNS;
+    case "screen":
+      return SCREEN_COLUMNS;
     case "alerts":
       return [...ALERT_COLUMNS];
     case "shadow":
@@ -413,6 +559,15 @@ export function csvLines(dataset: ExportDataset, rec: Rec, columns: string[]): s
         columns.map((c) => csvCell(({ tSec, priceUsd, marketCapUsd, source } as Rec)[c] ?? rec[c])).join(","),
       )
       .map((l) => `${l}\n`)
+      .join("");
+  }
+  if (dataset === "screen") {
+    const ticks = rec.ticks as unknown[][];
+    return ticks
+      .map((t) => {
+        const tick: Rec = Object.fromEntries(SCREEN_COLUMNS.slice(4).map((c, i) => [c, t[i]]));
+        return `${columns.map((c) => csvCell(c in tick ? tick[c] : rec[c])).join(",")}\n`;
+      })
       .join("");
   }
   const features = dataset === "outcomes" ? ((rec.features ?? {}) as Rec) : {};

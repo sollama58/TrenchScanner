@@ -232,6 +232,30 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
     expect(csv[1]).toContain(",5400,4,");
   });
 
+  it("returns each token's safety-screen verdicts and prices from first sight", async () => {
+    const { text } = await get("dataset=screen");
+    const rows = text
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ tokenId, symbol: "EXP" });
+    // Past the default 120 minutes is left out; the fixture snapshots never passed the screen.
+    expect(rows[0].ticks.map((t: unknown[]) => t.slice(0, 4))).toEqual([
+      [-300, 0.9, 45_000, false],
+      [0, 1, 50_000, false],
+      [60, 1.4, 70_000, false],
+      [1800, 2.5, 125_000, false],
+    ]);
+    // Nothing the screen reads changed between snapshots: one check entry.
+    expect(rows[0].checks).toHaveLength(1);
+
+    const csv = (await get("dataset=screen&format=csv&pathMinutes=360")).text.trim().split("\n");
+    expect(csv).toHaveLength(6);
+    expect(csv[0]).toContain("tSec,priceUsd,marketCapUsd,passed");
+    expect(csv[5]).toContain(",9000,4,200000,false,scan,");
+  });
+
   it("exports curated alerts with the token and quoted reasons", async () => {
     const { text } = await get("dataset=alerts&format=csv");
     const lines = text.trim().split("\n");
