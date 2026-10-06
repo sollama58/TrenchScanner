@@ -872,6 +872,27 @@ export interface WalkForwardResult {
    * (the newest half of the history). thresholdAtRank scores these with the shipped model.
    */
   decisionReference: TrainingRow[];
+  /** Which decision moments the exam graded - see ExamPopulation. */
+  population: ExamPopulation;
+}
+
+/**
+ * What the exam's decision rows were drawn from. "events": the moments live curators decided on
+ * (event rows) alone. "events+pseudo": those plus pseudo-events - hourly background samples that
+ * would have passed the event pre-gate (see isDecisionRow) - the fallback while event rows alone
+ * are too few to fill the folds. Pseudo-events are sampled on the hour, not at a token's first
+ * looks-ready moment, and in production they double at a higher base rate than real decision
+ * moments (10.6% against 7.9% over 2026-10-03..06), so an exam graded on them over-reads what
+ * the feed will do live; they are used only when there is no alternative.
+ */
+export interface ExamPopulation {
+  kind: "events" | "events+pseudo";
+  /** Decision rows the exam could grade (in band, current label rule), and how many were pseudo-events. */
+  decisionRows: number;
+  pseudoRows: number;
+  /** Wins in the newest half of the event rows alone, against the floor the folds needed. */
+  eventWinsNewestHalf: number;
+  eventWinsNeeded: number;
 }
 
 export interface WalkForwardOptions {
@@ -1032,10 +1053,28 @@ export async function walkForwardEvaluate(
   // background samples (or by legacy-rule rows), tiling every row put them all in the last fold
   // and left the others with nothing to grade. Rows that are not decision rows still train every
   // fold they precede.
-  const decisionSorted = sorted.filter(inBand);
-  const decisionWinsNewestHalf = decisionSorted
-    .slice(Math.floor(decisionSorted.length * 0.5))
-    .filter((r) => r.labelValue > 0).length;
+  // Event rows alone when they can fill every fold (see ExamPopulation); pseudo-events only
+  // while they can't. Rows with no sampleKind (tests, offline scripts) count as events.
+  const winsNewestHalf = (list: TrainingRow[]) =>
+    list.slice(Math.floor(list.length * 0.5)).filter((r) => r.labelValue > 0).length;
+  const withPseudo = sorted.filter(inBand);
+  const eventsOnly = withPseudo.filter((r) => r.sampleKind !== "hourly");
+  const eventWinsNewestHalf = winsNewestHalf(eventsOnly);
+  const eventWinsNeeded =
+    opts.minTestWins !== undefined && opts.minTestWins > 0 ? opts.minTestWins * (opts.folds ?? 3) : 0;
+  const eventsSuffice =
+    eventWinsNeeded > 0 &&
+    eventWinsNewestHalf >= eventWinsNeeded &&
+    eventsOnly.length >= minTestRows * (opts.folds ?? 3);
+  const decisionSorted = eventsSuffice ? eventsOnly : withPseudo;
+  const population: ExamPopulation = {
+    kind: eventsSuffice || withPseudo.length === eventsOnly.length ? "events" : "events+pseudo",
+    decisionRows: decisionSorted.length,
+    pseudoRows: decisionSorted.length - eventsOnly.length,
+    eventWinsNewestHalf,
+    eventWinsNeeded,
+  };
+  const decisionWinsNewestHalf = winsNewestHalf(decisionSorted);
   const foldCount =
     opts.minTestWins !== undefined && opts.minTestWins > 0
       ? Math.max(1, Math.min(opts.folds ?? 3, Math.floor(decisionWinsNewestHalf / opts.minTestWins)))
@@ -1224,6 +1263,7 @@ export async function walkForwardEvaluate(
     heuristicOutOfSample,
     outOfSampleRanks,
     decisionReference: scoredFolds.flatMap((f) => f.testEmittable),
+    population,
   };
 }
 

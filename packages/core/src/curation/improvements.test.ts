@@ -10,7 +10,13 @@ import {
   traitName,
   normalizeRecipe,
 } from "./evolution.js";
-import { compositeScore, emptyRecord, rankByComposite, MIN_LIVE_CALLS_TO_RANK } from "./leaderboard.js";
+import {
+  compositeScore,
+  emptyRecord,
+  rankByComposite,
+  recordScore,
+  MIN_LIVE_CALLS_TO_RANK,
+} from "./leaderboard.js";
 import { enabledContestants, BLEND_CONTESTANT } from "./contestants.js";
 import { runContestTraining, type ContestantTrainingResult } from "./trainingRun.js";
 import { syntheticMarket } from "./syntheticMarket.js";
@@ -448,6 +454,39 @@ describe("takeover evidence", () => {
     expect(pairedBootstrapConfidence(labels, new Uint8Array(400), poor, targets, seededRng(1))).toBeNull();
   });
 
+  it("scores resamples on run size and the 10x tier too, like the exam", () => {
+    // Two call sets with the same 2x and 4x record; only the runs behind them differ.
+    const n = 400;
+    const rowLabels = Float64Array.from({ length: n }, (_, i) => (i % 8 === 0 ? 1.2 : 0));
+    const left = Uint8Array.from({ length: n }, (_, i) => (i % 2 === 0 ? 1 : 0));
+    const right = Uint8Array.from({ length: n }, (_, i) => (i % 2 === 1 || i % 8 === 0 ? 1 : 0));
+    // Same record on labels alone: both sides call every winner, right calls more misses.
+    const onLabels = pairedBootstrapConfidence(rowLabels, right, left, targets, seededRng(2))!;
+    expect(onLabels).toBeLessThan(0.5);
+    // The right side's extra rows are late runners (survived, ran to 8x) that hit 10x - rows
+    // whose label is 0 but whose run and tier count: now it wins almost every resample.
+    const runs = Float64Array.from({ length: n }, (_, i) => (i % 8 === 0 ? 1.2 : i % 2 === 1 ? 3 : 0));
+    const tenX = Int8Array.from({ length: n }, (_, i) => (i % 2 === 1 ? 1 : 0));
+    const withRuns = pairedBootstrapConfidence(
+      { labels: rowLabels, runs, tenX },
+      right,
+      left,
+      targets,
+      seededRng(2),
+    )!;
+    expect(withRuns).toBeGreaterThan(0.95);
+    // Mismatched lengths are no evidence.
+    expect(
+      pairedBootstrapConfidence(
+        { labels: rowLabels, runs: new Float64Array(3) },
+        right,
+        left,
+        targets,
+        seededRng(2),
+      ),
+    ).toBeNull();
+  });
+
   it("refuses a takeover on thin wins, low confidence, or too soon after the last", () => {
     const now = new Date(T0 + 10 * 86_400_000);
     const lane = {
@@ -557,9 +596,14 @@ describe("the wider roster", () => {
     for (const id of ["linear", "trees", "momentum", "survivor", "blend"]) {
       const r = byId.get(id)! as ContestantTrainingResult;
       const params = r.params as { highConvictionThreshold?: number; calibration?: { calls: number } };
-      expect(params.highConvictionThreshold).toBeDefined();
       expect(params.calibration?.calls ?? 0).toBeGreaterThan(0);
-      expect(r.metrics.highConviction?.rank).toBe(0.95);
+      const hc = r.metrics.highConviction!;
+      expect(hc.rank).toBe(0.95);
+      expect(hc.cutoffRecord).toBeDefined();
+      // The high-conviction line ships only when the tier's exam record out-scores the cutoff's.
+      const earned = recordScore(hc.record, targets)! > recordScore(hc.cutoffRecord!, targets)!;
+      expect(hc.earned).toBe(earned);
+      expect(params.highConvictionThreshold !== undefined).toBe(earned);
       expect(r.metrics.calibrationCalls).toBeGreaterThan(0);
     }
     expect(byId.get("linear")!.metrics.featureReport?.features.length).toBe(CANDIDATE_FEATURE_NAMES.length);

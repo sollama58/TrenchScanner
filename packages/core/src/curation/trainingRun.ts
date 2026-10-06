@@ -4,7 +4,6 @@ import {
   confidenceRanks,
   precisionCurve,
   probabilityAtRank,
-  thresholdAtRank,
   trainCuratorModel,
   walkForwardEvaluate,
   type CuratorLearner,
@@ -17,6 +16,7 @@ import {
   type TrainingRow,
   type UnthresholdedCuratorParams,
   type WalkForwardResult,
+  type ExamPopulation,
   type EvalFold,
   type ScoredOutcome,
   scoreCandidateWithModel,
@@ -126,8 +126,13 @@ export interface StoredEvalMetrics {
   contestantName?: string;
   /** The exam's governed call record - what the leaderboard scores before live calls exist. */
   exam?: CallRecord;
-  /** The high-conviction tier's rank cutoff and its out-of-sample record, when tiering is on. */
-  highConviction?: { rank: number; record: CallRecord };
+  /**
+   * The high-conviction tier's rank cutoff and its out-of-sample record, when tiering is on.
+   * `earned` (absent on older rows = earned) says whether that record out-scored the model's
+   * cutoff record, which is what it takes for the shipped model to tier any call "high" (user
+   * decision 2026-10-06): the tier claims more than the cutoff, so it has to show more.
+   */
+  highConviction?: { rank: number; record: CallRecord; earned?: boolean; cutoffRecord?: CallRecord };
   /** How many recent out-of-sample calls the calibration table was fitted on (0 = no table). */
   calibrationCalls?: number;
   /** Per-feature null rates and decile lifts over the rows this run's exam graded. */
@@ -136,6 +141,8 @@ export interface StoredEvalMetrics {
   runnerReport?: RunnerReport;
   /** Inputs this run held back as too new (or lately dead) to train on - see featureOnset.ts. */
   heldFeatures?: HeldFeature[];
+  /** Which decision moments the exam graded (event rows alone, or with pseudo-events) - see ExamPopulation. */
+  examPopulation?: ExamPopulation;
 }
 
 export interface CuratorTrainingOutcome {
@@ -222,21 +229,41 @@ function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: num
  * What ships beside a model's cutoff: the high-conviction line (the probability at
  * cfg.highConvictionRank over the reference rows, the same way the cutoff is translated) and the
  * calibration table fitted on the newest out-of-sample calls (curation/calibration.ts).
+ *
+ * The line ships only when the tier EARNED it: its out-of-sample record (the calls at or above
+ * the high-conviction rank) out-scores the cutoff record (the calls at or above `cutoff`, in the
+ * same units as outOfSampleRanks). In production the top half-percent by rank doubled at 10.6%
+ * against 18.5% for standard calls over 2026-10-03..06 - the very top of a model's range is
+ * where extreme inputs live, not its best calls - so a tier that hasn't shown it beats the cutoff
+ * is not shown at all (user decision 2026-10-06). Both records are still stored.
  */
 function servedExtras(
-  cfg: Pick<CuratorTrainingConfig, "highConvictionRank" | "calibrationWindowDays" | "cooldownHours">,
+  cfg: Pick<
+    CuratorTrainingConfig,
+    "highConvictionRank" | "calibrationWindowDays" | "cooldownHours" | "targets"
+  >,
   outOfSampleRanks: ScoredOutcome[],
   shippedProbabilities: ArrayLike<number>,
   translate: (rank: number) => number | null,
+  cutoff: number | null,
 ): { extras: ServedCuratorExtras; highConviction: StoredEvalMetrics["highConviction"] } {
   const extras: ServedCuratorExtras = {};
   let highConviction: StoredEvalMetrics["highConviction"];
   if (cfg.highConvictionRank !== undefined && outOfSampleRanks.length > 0) {
-    const threshold = translate(cfg.highConvictionRank);
+    const cooldownMs = cfg.cooldownHours * 3_600_000;
+    const record = recordAbove(outOfSampleRanks, cfg.highConvictionRank, cooldownMs);
+    const cutoffRecord = cutoff === null ? undefined : recordAbove(outOfSampleRanks, cutoff, cooldownMs);
+    const earned =
+      cutoffRecord !== undefined &&
+      record.graded > 0 &&
+      (recordScore(record, cfg.targets) ?? 0) > (recordScore(cutoffRecord, cfg.targets) ?? 0);
+    const threshold = earned ? translate(cfg.highConvictionRank) : null;
     if (threshold !== null) extras.highConvictionThreshold = threshold;
     highConviction = {
       rank: cfg.highConvictionRank,
-      record: recordAbove(outOfSampleRanks, cfg.highConvictionRank, cfg.cooldownHours * 3_600_000),
+      record,
+      earned,
+      ...(cutoffRecord ? { cutoffRecord } : {}),
     };
   }
   const calibration = buildCalibration(
@@ -320,21 +347,24 @@ async function examineRecipe(
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
   });
+  // The shipped model over the reference rows, scored once: the cutoff, the high-conviction line
+  // and the calibration table all read these same probabilities (a boosted model's are hundreds
+  // of trees per row; three passes here were a visible share of a run with no data behind it).
+  const shippedProbabilities = Float64Array.from(evaluation.decisionReference, (r) =>
+    scoreCandidateWithModel(trained, r.features),
+  );
+  const translate = (rank: number) => probabilityAtRank(shippedProbabilities, rank);
   // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
   // at its best-effort cutoff (see chooseCutoff) and still competes on its exam. Only an exam
   // with no judgeable cutoff at all leaves it without one.
   const deployedThreshold =
-    precisionCalibration.threshold === null
-      ? null
-      : thresholdAtRank(trained, evaluation.decisionReference, precisionCalibration.threshold);
-  const shippedProbabilities = Float64Array.from(evaluation.decisionReference, (r) =>
-    scoreCandidateWithModel(trained, r.features),
-  );
+    precisionCalibration.threshold === null ? null : translate(precisionCalibration.threshold);
   const { extras, highConviction } = servedExtras(
     cfg,
     evaluation.outOfSampleRanks,
     shippedProbabilities,
-    (rank) => thresholdAtRank(trained, evaluation.decisionReference, rank),
+    translate,
+    precisionCalibration.threshold,
   );
   return {
     evaluation,
@@ -427,6 +457,7 @@ export async function runCuratorTraining(
     precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
     ...(chosen.highConviction ? { highConviction: chosen.highConviction } : {}),
     calibrationCalls: extras.calibration?.calls ?? 0,
+    examPopulation: evaluation.population,
     ...(cfg.featureOnsetGuard ? { heldFeatures: features.held } : {}),
     // Stored only when there was evidence to set a cutoff from. Without it the heuristic keeps
     // sending on its gate alone (see heuristicGate in curatedAlerts.ts).
@@ -505,6 +536,7 @@ async function examineLearner(
       exam: record,
       ...(exam.highConviction ? { highConviction: exam.highConviction } : {}),
       calibrationCalls: exam.extras.calibration?.calls ?? 0,
+      examPopulation: evaluation.population,
     },
   };
   // Every learner's exam cuts the same rows into the same folds, so their reference rows (and
@@ -535,6 +567,10 @@ async function examineLearner(
 export interface ExamEvidence {
   /** The reference rows' labels, in reference order. */
   labels: Float64Array;
+  /** Each reference row's run size in doublings (runDoublings), in reference order. */
+  runs: Float64Array;
+  /** Each reference row's 10x tier: 1 hit, 0 miss, -1 not settled (never counted), in reference order. */
+  tenX: Int8Array;
   /** Per lane slot: 1 where its exam called the row. Absent when its exam set no cutoff. */
   laneCalls: Map<string, Uint8Array>;
   /** Per challenger, in breeding order; null when its exam set no cutoff. */
@@ -651,6 +687,10 @@ export async function runEvolvingContest(
     plan && challengerScores.length > 0
       ? plan.decide(laneExamScores, challengerScores, {
           labels: Float64Array.from(reference ?? [], (r) => r.labelValue),
+          runs: Float64Array.from(reference ?? [], (r) => runDoublings(r)),
+          tenX: Int8Array.from(reference ?? [], (r) =>
+            r.labelValue <= 0 ? 0 : r.hit10x === undefined ? -1 : r.hit10x ? 1 : 0,
+          ),
           laneCalls,
           challengerCalls,
           challengerExamWins,
@@ -723,8 +763,12 @@ export async function runEvolvingContest(
       NEVER_EMIT_THRESHOLD,
     );
     if (stacked) {
-      const served = servedExtras(cfg, stacked.outOfSample, stacked.shippedProbabilities, (rank) =>
-        probabilityAtRank(stacked.shippedProbabilities, rank),
+      const served = servedExtras(
+        cfg,
+        stacked.outOfSample,
+        stacked.shippedProbabilities,
+        (rank) => probabilityAtRank(stacked.shippedProbabilities, rank),
+        stacked.precisionCalibration.threshold,
       );
       results.push({
         contestant: stackedSpec.id,
@@ -769,11 +813,14 @@ export async function runEvolvingContest(
       // line translates back to the blend score at that percentile.
       const blendScores = blend.outOfSample.map((c) => c.probability);
       const blendPercentiles = confidenceRanks(blendScores);
+      // The blend's cutoff is a blend score; in percentile units it is the share of scores below it.
+      const blendCutoff = blend.precisionCalibration.threshold;
       const served = servedExtras(
         cfg,
         blend.outOfSample.map((c, i) => ({ ...c, probability: blendPercentiles[i]! })),
         blendScores,
         (rank) => probabilityAtRank(blendScores, rank),
+        blendCutoff === null ? null : blendScores.filter((p) => p < blendCutoff).length / blendScores.length,
       );
       results.push({
         contestant: blendSpec.id,

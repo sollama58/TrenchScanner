@@ -259,6 +259,40 @@ describe("walkForwardEvaluate", () => {
     expect(silent.verdict.promote).toBe(false);
   });
 
+  it("grades on event rows alone once they can fill the folds, and on pseudo-events only until then", async () => {
+    const band = { min: 1, max: 10_000_000 };
+    // Every third row an event moment; the hourly rest all pass the event pre-gate (pseudo-events).
+    const rows = syntheticRows(3_000).map((r, i) => ({
+      ...r,
+      tokenId: `t${i}`,
+      sampleKind: i % 3 === 0 ? "event" : "hourly",
+      features: { ...r.features, mcapUsd: 100_000, buys1h: 60, sells1h: 40, priceChange5mPct: 1 },
+    }));
+    const opts = {
+      targetPerHour: 5,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1_500,
+      decisionRowsOnly: true,
+      mcapBand: band,
+      folds: 3,
+    };
+    const eventRows = rows.filter((r) => r.sampleKind === "event");
+    const eventWins = eventRows
+      .slice(Math.floor(eventRows.length / 2))
+      .filter((r) => r.labelValue > 0).length;
+    // Enough event wins for three folds: the exam never looks at an hourly row.
+    const events = await walkForwardEvaluate(rows, { ...opts, minTestWins: Math.floor(eventWins / 3) });
+    expect(events.population.kind).toBe("events");
+    expect(events.population.pseudoRows).toBe(0);
+    expect(events.decisionReference.every((r) => r.sampleKind === "event")).toBe(true);
+    // Too few: pseudo-events fill in, and the record says so.
+    const pseudo = await walkForwardEvaluate(rows, { ...opts, minTestWins: eventWins + 1 });
+    expect(pseudo.population.kind).toBe("events+pseudo");
+    expect(pseudo.population.pseudoRows).toBeGreaterThan(0);
+    expect(pseudo.decisionReference.some((r) => r.sampleKind === "hourly")).toBe(true);
+    expect(pseudo.decisionReference.length).toBeGreaterThan(events.decisionReference.length);
+  });
+
   it("caps each fold's emissions at the governed budget, keeping only the strongest picks", async () => {
     // Production runs the governor: at most targetPerHour x span picks make the feed, best
     // conviction first. The exam must play the same policy - an uncapped exam grades a firehose.

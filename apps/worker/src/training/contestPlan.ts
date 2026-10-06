@@ -51,7 +51,7 @@ export function toEvolutionPlan(plan: ContestPlan): EvolutionPlan {
             const bred = exam.challengerCalls[challenger];
             if (!lane || !bred) return null;
             return pairedBootstrapConfidence(
-              exam.labels,
+              { labels: exam.labels, runs: exam.runs, tenX: exam.tenX },
               bred,
               lane,
               ev.targets,

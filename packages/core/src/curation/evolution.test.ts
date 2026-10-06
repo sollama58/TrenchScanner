@@ -90,6 +90,29 @@ describe("breedChallengers", () => {
     for (const b of bred) expect(onRoster.has(JSON.stringify(b.recipe))).toBe(false);
   });
 
+  it("breeds from seasoned lanes before warming-up ones, whatever their score", () => {
+    // The newest seat holds the exam that won it a run earlier - the optimistic draw - and no
+    // live calls yet: it ranks behind every seasoned lane, as on the leaderboard.
+    const seasonedFirst: LaneFitness[] = lanes.map((l, i) => ({
+      lane: l,
+      composite: i === 0 ? 90 : 60 - i * 5,
+      liveGraded: i === 0 ? 3 : 120,
+    }));
+    const bred = breedChallengers(seasonedFirst, 6, seededRng(5), {
+      baseHalfLifeDays: BASE_HL,
+      nextGeneration: 1,
+    });
+    expect(bred.length).toBeGreaterThan(0);
+    const parents = new Set(bred.flatMap((b) => b.parentName.split(" × ")));
+    expect(parents.has(lanes[0]!.name)).toBe(false);
+    // Without live counts, score alone orders them (the founding runs, before any live call).
+    const byScore = breedChallengers(fitness, 6, seededRng(5), {
+      baseHalfLifeDays: BASE_HL,
+      nextGeneration: 1,
+    });
+    expect(byScore.some((b) => b.parentName.split(" × ").includes(lanes[0]!.name))).toBe(true);
+  });
+
   it("breeds nothing when asked for none", () => {
     expect(
       breedChallengers(fitness, 0, seededRng(1), { baseHalfLifeDays: BASE_HL, nextGeneration: 1 }),
