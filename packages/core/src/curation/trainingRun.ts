@@ -41,6 +41,15 @@ import {
   type RunnerReport,
 } from "./featureReport.js";
 import { featureOnset, type HeldFeature } from "./featureOnset.js";
+import {
+  describeRuleSet,
+  distillRuleSet,
+  examineRuleScores,
+  scoreRuleSet,
+  teacherAgreementPct,
+  type DerivedRuleSet,
+} from "./rulesDistill.js";
+import { HAND_TUNED_RULE_LINES } from "./curator.js";
 
 /**
  * One training run, minus the IO: examine every enabled model family on the same walk-forward
@@ -122,6 +131,8 @@ export interface StoredEvalMetrics {
   heuristicPrecisionCurve: PrecisionCurvePoint[];
   /** The contestant this row belongs to (contest runs only). */
   contestant?: string;
+  /** The Rules seat only: which rules it runs and why (see RulesInUse). */
+  rulesInUse?: RulesInUse;
   /** The name it trained under - an evolving seat's name changes with its recipe. */
   contestantName?: string;
   /** The exam's governed call record - what the leaderboard scores before live calls exist. */
@@ -473,8 +484,35 @@ export const RULES_MODEL_KIND = "rules-v1";
 export interface RulesCuratorParams {
   kind: typeof RULES_MODEL_KIND;
   minScore: number;
-  /** Rank-score cutoff, or null when the exam had no evidence for one (the gate stands alone). */
+  /**
+   * The cutoff the seat sends at: in rank-score units for the hand-tuned gates (null when the
+   * exam had no evidence for one - the gate stands alone), in table points for learned rules.
+   */
   rankCutoff: number | null;
+  /**
+   * The points table learned from the best model (curation/rulesDistill.ts), when one won the
+   * seat; absent = the hand-tuned gates.
+   */
+  derived?: DerivedRuleSet;
+}
+
+/**
+ * What the Rules seat is running and why - stored on its evalMetrics for the Models tab and the
+ * run log.
+ */
+export interface RulesInUse {
+  source: "hand-tuned" | "learned";
+  /** The checks in plain words, one per line. */
+  lines: string[];
+  /** Learned rules: the model they came from, when, and how closely they copy it. */
+  teacher?: { contestant: string; name: string };
+  derivedAt?: string;
+  agreementPct?: number | null;
+  /** True when this run changed the rules the seat runs. */
+  changed: boolean;
+  /** Every option this run weighed, with its exam score (null = no graded calls). */
+  options: { label: string; examScore: number | null }[];
+  reason: string;
 }
 
 export type ContestantParams =
@@ -489,6 +527,19 @@ export interface ContestantTrainingResult {
 export interface ContestTrainingConfig extends Omit<CuratorTrainingConfig, "learners"> {
   /** The enabled roster (enabledContestants). */
   contestants: readonly ContestantSpec[];
+  /**
+   * Learn the Rules seat's checks from the best model (env CURATOR_RULES_FROM_BEST). Off = the
+   * hand-tuned gates, as before.
+   */
+  rulesFromBest?: boolean;
+  /**
+   * The learner seats to learn the rules from, best first (the default model, then the
+   * leaderboard order). The first one this run examined is used; with none, the learner with the
+   * best exam this run.
+   */
+  rulesTeachers?: readonly string[];
+  /** The learned rules the seat runs now, if any - re-examined so it keeps them only on merit. */
+  currentRules?: DerivedRuleSet | null;
 }
 
 /** A learner's exam, packaged: its stored result plus the rank arrays the consensus stacks on. */
@@ -619,7 +670,6 @@ export async function runEvolvingContest(
   cfg: ContestTrainingConfig,
   plan?: EvolutionPlan,
 ): Promise<ContestRunOutcome> {
-  const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
   const results: ContestantTrainingResult[] = [];
   const foldRanks = new Map<string, Float64Array>();
   const shippedProbabilities = new Map<string, Float64Array>();
@@ -719,32 +769,16 @@ export async function runEvolvingContest(
 
   const rulesSpec = cfg.contestants.find((c) => c.role === "rules");
   if (rulesSpec && rulesEvidence) {
-    const calibration = calibrateThresholdForPrecision(
-      rulesEvidence.heuristicOutOfSample,
-      cfg.targets,
-      cooldown,
+    results.push(
+      rulesSeatResult(rulesSpec, cfg, rulesEvidence, {
+        reference: reference ?? [],
+        foldRanks,
+        laneExamScores,
+        names: new Map(results.map((r) => [r.contestant, r.metrics.contestantName ?? r.contestant])),
+        replacedSlot: replacement?.slot ?? null,
+        usable: features.usable,
+      }),
     );
-    const curve = precisionCurve(rulesEvidence.heuristicOutOfSample);
-    results.push({
-      contestant: rulesSpec.id,
-      params: {
-        kind: RULES_MODEL_KIND,
-        minScore: cfg.heuristicMinScore,
-        rankCutoff: cfg.heuristicPrecisionGate ? calibration.threshold : null,
-      },
-      metrics: {
-        contestant: rulesSpec.id,
-        contestantName: rulesSpec.name,
-        folds: rulesEvidence.folds,
-        verdict: { promote: false, reason: `${rulesSpec.name}: the hand-tuned gate, held to its own cutoff` },
-        targets: cfg.targets,
-        precisionCalibration: calibration,
-        precisionCurve: curve,
-        ...(calibration.threshold !== null ? { heuristicCalibration: calibration } : {}),
-        heuristicPrecisionCurve: curve,
-        exam: foldsRecord(rulesEvidence.folds, "heuristic"),
-      },
-    });
   }
 
   const stackedSpec = cfg.contestants.find((c) => c.role === "stacked");
@@ -849,6 +883,201 @@ export async function runEvolvingContest(
   const order = new Map(cfg.contestants.map((c, i) => [c.id, i]));
   results.sort((a, b) => order.get(a.contestant)! - order.get(b.contestant)!);
   return { results, challengerScores, replacement };
+}
+
+/** The learners' exam evidence the Rules seat can learn from (see rulesSeatResult). */
+interface RulesTeacherPool {
+  /** The exam's decision moments, fold after fold. */
+  reference: TrainingRow[];
+  /** Per learner seat, its out-of-sample rank on each reference row. */
+  foldRanks: ReadonlyMap<string, Float64Array>;
+  laneExamScores: ReadonlyMap<string, number | null>;
+  /** Seat -> the name it trained under this run. */
+  names: ReadonlyMap<string, string>;
+  /** A seat taken over this run: its ranks are the newcomer's, not the record that earned it the lead. */
+  replacedSlot: string | null;
+  usable: ReadonlySet<string> | null;
+}
+
+/** The seat to learn the rules from: the first named teacher examined this run, else the best exam. */
+function pickRulesTeacher(cfg: ContestTrainingConfig, pool: RulesTeacherPool): string | null {
+  const eligible = (slot: string) => slot !== pool.replacedSlot && pool.foldRanks.has(slot);
+  for (const slot of cfg.rulesTeachers ?? []) if (eligible(slot)) return slot;
+  let best: string | null = null;
+  let bestScore = -Infinity;
+  for (const [slot, score] of pool.laneExamScores) {
+    if (eligible(slot) && score !== null && score > bestScore) {
+      best = slot;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/**
+ * The Rules seat's result for this run. The hand-tuned gates get their cutoff from the exam as
+ * always; with CURATOR_RULES_FROM_BEST on, a points table is also learned from the best model
+ * (curation/rulesDistill.ts) and graded on the same exam beside the table the seat already runs.
+ * The seat keeps what it runs unless another option's exam scores strictly higher - ties keep
+ * the incumbent, so the rules don't churn on noise - and a table needs a cutoff to call at.
+ */
+function rulesSeatResult(
+  spec: ContestantSpec,
+  cfg: ContestTrainingConfig,
+  evidence: { folds: EvalFold[]; heuristicOutOfSample: ScoredOutcome[] },
+  pool: RulesTeacherPool,
+): ContestantTrainingResult {
+  const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
+  const handCalibration = calibrateThresholdForPrecision(
+    evidence.heuristicOutOfSample,
+    cfg.targets,
+    cooldown,
+  );
+  const handCurve = precisionCurve(evidence.heuristicOutOfSample);
+  const handExam = foldsRecord(evidence.folds, "heuristic");
+  const hand: ContestantTrainingResult = {
+    contestant: spec.id,
+    params: {
+      kind: RULES_MODEL_KIND,
+      minScore: cfg.heuristicMinScore,
+      rankCutoff: cfg.heuristicPrecisionGate ? handCalibration.threshold : null,
+    },
+    metrics: {
+      contestant: spec.id,
+      contestantName: spec.name,
+      folds: evidence.folds,
+      verdict: { promote: false, reason: `${spec.name}: the hand-tuned gate, held to its own cutoff` },
+      targets: cfg.targets,
+      precisionCalibration: handCalibration,
+      precisionCurve: handCurve,
+      ...(handCalibration.threshold !== null ? { heuristicCalibration: handCalibration } : {}),
+      heuristicPrecisionCurve: handCurve,
+      exam: handExam,
+    },
+  };
+  if (!cfg.rulesFromBest) return hand;
+
+  interface Option {
+    label: string;
+    result: ContestantTrainingResult;
+    examScore: number | null;
+    set: DerivedRuleSet | null;
+  }
+  const examTable = (set: DerivedRuleSet, label: string): Option | null => {
+    const scores = pool.reference.map((r) => scoreRuleSet(set, r.features));
+    const exam = examineRuleScores(
+      pool.reference,
+      evidence.folds,
+      scores.map((s) => (s > 0 ? s : null)),
+      cfg,
+    );
+    if (exam === null) return null;
+    const calibration = calibrateThresholdForPrecision(exam.outOfSample, cfg.targets, cooldown);
+    // A table with nowhere to send from can't hold the seat: Rules has to keep calling.
+    if (calibration.threshold === null) return null;
+    const curve = precisionCurve(exam.outOfSample);
+    return {
+      label,
+      set,
+      examScore: recordScore(exam.record, cfg.targets),
+      result: {
+        contestant: spec.id,
+        params: {
+          kind: RULES_MODEL_KIND,
+          minScore: cfg.heuristicMinScore,
+          rankCutoff: calibration.threshold,
+          derived: set,
+        },
+        metrics: {
+          contestant: spec.id,
+          contestantName: spec.name,
+          folds: evidence.folds,
+          verdict: {
+            promote: false,
+            reason: `${spec.name}: ${set.conditions.length} checks learned from ${set.teacher.name}, held to their own cutoff`,
+          },
+          targets: cfg.targets,
+          precisionCalibration: calibration,
+          precisionCurve: curve,
+          heuristicPrecisionCurve: [],
+          exam: exam.record,
+        },
+      },
+    };
+  };
+
+  const handOption: Option = {
+    label: "hand-tuned rules",
+    result: hand,
+    examScore: recordScore(handExam, cfg.targets),
+    set: null,
+  };
+  const current = cfg.currentRules
+    ? examTable(cfg.currentRules, `current rules (from ${cfg.currentRules.teacher.name})`)
+    : null;
+  let fresh: Option | null = null;
+  const teacher = pickRulesTeacher(cfg, pool);
+  if (teacher !== null && pool.reference.length > 0) {
+    const ranks = pool.foldRanks.get(teacher)!;
+    const featureNames = LEARNER_FEATURE_NAMES.filter((f) => pool.usable === null || pool.usable.has(f));
+    const conditions = distillRuleSet(pool.reference, ranks, featureNames);
+    if (conditions) {
+      const name = pool.names.get(teacher) ?? teacher;
+      const set: DerivedRuleSet = {
+        conditions,
+        teacher: { contestant: teacher, name },
+        derivedAt: new Date().toISOString(),
+        agreementPct: teacherAgreementPct(
+          ranks,
+          pool.reference.map((r) => scoreRuleSet({ conditions }, r.features)),
+        ),
+      };
+      fresh = examTable(set, `new rules from ${name}`);
+    }
+  }
+
+  // The incumbent: the table the seat runs, while it can still call; else the hand-tuned gates.
+  const incumbent = current ?? handOption;
+  const challengers = [current ? handOption : null, fresh].filter((o): o is Option => o !== null);
+  let chosen = incumbent;
+  for (const option of challengers) {
+    if (option.examScore !== null && (chosen.examScore === null || option.examScore > chosen.examScore)) {
+      chosen = option;
+    }
+  }
+  const options = [incumbent, ...challengers].map((o) => ({ label: o.label, examScore: o.examScore }));
+  const fmt = (score: number | null) => (score === null ? "no graded calls" : score.toFixed(1));
+  const reason =
+    chosen === incumbent
+      ? cfg.currentRules && !current
+        ? `The learned rules found nowhere to call this run, so Rules went back to the hand-tuned gates (exam ${fmt(handOption.examScore)}).`
+        : `Kept the ${incumbent.label} (exam ${fmt(incumbent.examScore)})` +
+          (challengers.length > 0
+            ? `: ${challengers.map((c) => `${c.label} scored ${fmt(c.examScore)}`).join(", ")}.`
+            : teacher === null
+              ? ": no trained model to learn from this run."
+              : ": couldn't learn a usable table this run.")
+      : `Switched to the ${chosen.label} (exam ${fmt(chosen.examScore)}, beating the ${incumbent.label} at ${fmt(incumbent.examScore)}).`;
+  const set = chosen.set;
+  const rulesInUse: RulesInUse = set
+    ? {
+        source: "learned",
+        lines: describeRuleSet(set),
+        teacher: set.teacher,
+        derivedAt: set.derivedAt,
+        agreementPct: set.agreementPct,
+        changed: cfg.currentRules?.derivedAt !== set.derivedAt,
+        options,
+        reason,
+      }
+    : {
+        source: "hand-tuned",
+        lines: [...HAND_TUNED_RULE_LINES],
+        changed: cfg.currentRules != null,
+        options,
+        reason,
+      };
+  return { ...chosen.result, metrics: { ...chosen.result.metrics, rulesInUse } };
 }
 
 /** A contest run with a fixed field - no challengers (offline scripts, tests). */

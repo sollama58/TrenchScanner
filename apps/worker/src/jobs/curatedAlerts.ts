@@ -34,6 +34,10 @@ import {
   type CurationDecision,
   type Env,
   type RulesCuratorParams,
+  type DerivedRuleSet,
+  scoreRuleSet,
+  ruleSetReasons,
+  HEURISTIC_CURATOR_SOURCE,
   type ScoredToken,
   type ServedCuratorExtras,
   type StackedCuratorParams,
@@ -73,6 +77,11 @@ type RosterEntry =
        * when no run produced one - the gate then sends on its own. See heuristicGate below.
        */
       rankCutoff: number | undefined;
+      /**
+       * The points table learned from the best model, when one holds the seat (rankCutoff is then
+       * in table points). Absent = the hand-tuned gates. See curation/rulesDistill.ts.
+       */
+      derived?: DerivedRuleSet;
     }
   | { role: "learner"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
   | { role: "stacked"; spec: ContestantSpec; model: ModelRef<StackedCuratorParams> }
@@ -137,6 +146,7 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
         role: "rules",
         spec,
         rankCutoff: params !== null ? (params.rankCutoff ?? undefined) : await legacyHeuristicCutoff(),
+        ...(params?.derived ? { derived: params.derived } : {}),
       });
     } else if (spec.role === "learner") {
       if (row && SUPPORTED_CURATOR_MODEL_KINDS.includes(row.kind)) {
@@ -241,6 +251,26 @@ function heuristicGate(scored: ScoredToken, rankCutoff: number | undefined, env:
   return decision.confidence >= rankCutoff ? decision : { ...decision, curate: false };
 }
 
+/**
+ * The Rules seat on a points table learned from the best model: the token's points against the
+ * cutoff the table's exam earned. A table always ships with a cutoff (one that can't set one
+ * never takes the seat); a missing one sends nothing rather than everything.
+ */
+function rulesTableDecision(
+  set: DerivedRuleSet,
+  features: Record<string, number | null | undefined>,
+  cutoff: number | undefined,
+): CurationDecision {
+  const score = scoreRuleSet(set, features);
+  const curate = cutoff !== undefined && score > 0 && score >= cutoff;
+  return {
+    curate,
+    confidence: score,
+    reasons: curate ? ruleSetReasons(set, features) : [],
+    source: HEURISTIC_CURATOR_SOURCE,
+  };
+}
+
 /** Share of the decision moments a consensus member must outrank to count as backing a call. */
 const BACKING_RANK = 0.9;
 
@@ -262,7 +292,12 @@ function decideCurations(
 
   for (const entry of roster.entries) {
     if (entry.role === "rules") {
-      decisions.set(entry.spec.id, heuristicGate(scored, entry.rankCutoff, env));
+      decisions.set(
+        entry.spec.id,
+        entry.derived
+          ? rulesTableDecision(entry.derived, features, entry.rankCutoff)
+          : heuristicGate(scored, entry.rankCutoff, env),
+      );
     } else if (entry.role === "learner") {
       const { params, id } = entry.model;
       const probability = scoreCandidateWithModel(params, features);

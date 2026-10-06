@@ -92,6 +92,23 @@ const MAX_DEV_WALLET_PCT = 10;
 
 export const HEURISTIC_CURATOR_SOURCE = "heuristic-v1";
 
+/**
+ * The hand-tuned gates in plain words, for the Models tab while Rules runs them (and not a
+ * table learned from the best model - see curation/rulesDistill.ts). Keep in step with the
+ * constants above.
+ */
+export const HAND_TUNED_RULE_LINES: readonly string[] = [
+  "Composite score at least the minimum (CURATED_MIN_SCORE)",
+  `Graduated tokens need $${MIN_LIQUIDITY_USD / 1000}k+ pool liquidity`,
+  `Last hour's volume at least ${MIN_VOLUME_1H_MCAP_RATIO}x market cap (24h: ${MIN_VOLUME_MCAP_RATIO}x)`,
+  `At least ${Math.round(MIN_BUY_RATIO * 100)}% of recent trades are buys`,
+  `${MIN_AGE_MINUTES} min to ${MAX_AGE_MINUTES / 60} h old`,
+  `Not down more than ${-MAX_5M_DUMP_PCT}% in 5 minutes`,
+  `Top 10 hold at most ${MAX_TOP10_HOLDER_PCT}%, fresh wallets at most ${MAX_FRESH_TOP10_WALLET_PCT}%, empty wallets at most ${MAX_EMPTY_TOP10_WALLET_PCT}%`,
+  `RugCheck risk at most ${MAX_RISK_SCORE}, dev wallet at most ${MAX_DEV_WALLET_PCT}%`,
+  "Ranked by short-term momentum, buy pressure and volume",
+];
+
 export interface CurationDecision {
   curate: boolean;
   /**
