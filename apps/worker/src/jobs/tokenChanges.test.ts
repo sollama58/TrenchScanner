@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Token } from "@prisma/client";
-import { tokenChanges } from "./scanJob.js";
+import { knownSocial, tokenChanges } from "./scanJob.js";
 
 const existing = {
   symbol: "DOG",
@@ -70,5 +70,21 @@ describe("tokenChanges", () => {
       lastEmptyTop10WalletPct: 60,
     });
     expect(tokenChanges(withReadings, base)).toEqual({});
+  });
+});
+
+describe("knownSocial", () => {
+  it("keeps a link the Token row holds when the re-scan's candidate lacks it", () => {
+    // DexScreener reports socials for almost nothing in the band; the Token row keeps Pump.fun's.
+    expect(knownSocial(false, true)).toBe(true);
+    expect(knownSocial(undefined, true)).toBe(true);
+    expect(knownSocial(true, false)).toBe(true);
+  });
+
+  it("is a known none only when the candidate said so, and unknown otherwise", () => {
+    expect(knownSocial(false, false)).toBe(false);
+    expect(knownSocial(false, undefined)).toBe(false);
+    expect(knownSocial(undefined, false)).toBeUndefined();
+    expect(knownSocial(undefined, undefined)).toBeUndefined();
   });
 });

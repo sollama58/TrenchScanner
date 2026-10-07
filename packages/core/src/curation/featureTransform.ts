@@ -39,6 +39,7 @@ const UNTRANSFORMED_FEATURES = new Set([
   "scoreAge",
   "scoreNarrative",
   "scoreTotal",
+  "scoreNarrativeV2",
   "topBuyerShare5m",
   "newBuyerShare5m",
   "earlyBuyerSoldShare",

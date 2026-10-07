@@ -1208,6 +1208,16 @@ export async function loadCandidatePriors(
   return out;
 }
 
+/**
+ * A social link as the scored token carries it: present if either the cycle's candidate or the
+ * stored Token row has it; a known "none" only when the candidate said so; unknown otherwise.
+ * Exported for tests.
+ */
+export function knownSocial(own: boolean | undefined, stored: boolean | undefined): boolean | undefined {
+  if (own || stored) return true;
+  return own;
+}
+
 /** What a re-scan may set on a Token row - see tokenChanges. */
 interface TokenScanFields {
   symbol?: string;
@@ -1338,6 +1348,20 @@ async function processCandidate(
       // Re-scans come from DexScreener, which carries neither of these; discovery stored them.
       description: candidate.description ?? existingToken?.description ?? undefined,
       dexBoosted: existingToken ? existingToken.dexBoosted : undefined,
+      // Socials too: DexScreener reports them for almost nothing in this band, while the Token
+      // row keeps what Pump.fun's metadata said at discovery (tokenChanges keeps them sticky).
+      // Read from the candidate alone, hasTwitter was 0 on 204 of the 240 coins whose X post
+      // TokenSage opened on the first live day, and the model input doubled as "old enough for
+      // DexScreener to have filled socials in" (notes/tokensage-data-eval-2026-10-07.md).
+      hasTwitter: knownSocial(
+        candidate.hasTwitter,
+        existingToken?.hasTwitter || Boolean(existingToken?.twitterUrl),
+      ),
+      hasTelegram: knownSocial(candidate.hasTelegram, existingToken?.hasTelegram),
+      hasWebsite: knownSocial(
+        candidate.hasWebsite,
+        existingToken?.hasWebsite || Boolean(existingToken?.websiteUrl),
+      ),
     },
     onChain,
     {

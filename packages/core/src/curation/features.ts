@@ -1,5 +1,5 @@
 import type { ScoredToken } from "../types.js";
-import { scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
+import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
 import type { TextScores } from "./textFeatures.js";
 import {
@@ -137,6 +137,12 @@ export const CANDIDATE_FEATURE_NAMES = [
   // match from the deep read. Null until TokenSage has answered for the mint, and on every row
   // banked before; never backfilled.
   ...NARRATIVE_FEATURES,
+  // Added 2026-10-07 (notes/tokensage-data-eval-2026-10-07.md): today's narrative part of the
+  // composite (scoring/scorer.ts scoreNarrative), from TokenSage's read. `scoreNarrative` above
+  // is the first composite's part (tags and social badges) and keeps that meaning; this one is
+  // recorded so the part's own lift can be read on the feature report and the weight fit's
+  // replays match what the live score did. The midpoint without a read.
+  "scoreNarrativeV2",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -174,6 +180,7 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "scoreAge",
   "scoreNarrative",
   "scoreTotal",
+  "scoreNarrativeV2",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -276,6 +283,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   scoreAge: "age score",
   scoreNarrative: "narrative score",
   scoreTotal: "composite score",
+  scoreNarrativeV2: "narrative score (TokenSage)",
   liquidityToMcapRatio: "liquidity vs market cap",
   volume5mToMcapRatio: "5m volume vs market cap",
   holderGrowth10mPct: "10m holder growth",
@@ -514,6 +522,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     scoreAge: legacyScore.age,
     scoreNarrative: legacyScore.narrative,
     scoreTotal: legacyScore.total,
+    scoreNarrativeV2: scoreNarrative(scored),
     liquidityToMcapRatio:
       scored.marketCapUsd > 0 && scored.liquidityUsd !== undefined
         ? scored.liquidityUsd / scored.marketCapUsd
