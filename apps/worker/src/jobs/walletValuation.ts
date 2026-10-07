@@ -160,7 +160,8 @@ export async function valueWalletsFromBalances(
     plans.push({
       address,
       mints: held.slice(0, MAX_PRICED_MINTS_PER_WALLET),
-      truncated: held.length > MAX_PRICED_MINTS_PER_WALLET,
+      // More mints than are priced, or more token accounts than one page read: a floor either way.
+      truncated: held.length > MAX_PRICED_MINTS_PER_WALLET || reading.truncated === true,
     });
   }
 

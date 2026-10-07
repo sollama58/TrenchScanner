@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import bs58 from "bs58";
-import { HeliusClient, parseTokenAccountSlice } from "./helius.js";
+import { HeliusClient, parseTokenAccountSlice, TOKEN_ACCOUNTS_PAGE_LIMIT } from "./helius.js";
 
 const client = () => new HeliusClient({ rpcUrl: "https://mainnet.helius-rpc.com/?api-key=test" });
 
@@ -73,6 +73,79 @@ describe("getTokenBalancesBatch", () => {
         : { error: { code: -32000, message: "busy" } },
     );
     expect((await client().getTokenBalancesBatch(["wallet"])).get("wallet")).toEqual({ status: "failed" });
+  });
+
+  it("reads one page per program on Helius and flags a wallet with more as truncated", async () => {
+    const fetchSpy = mockRpc((c) =>
+      (c.params[1] as { programId: string }).programId.startsWith("Tokenkeg")
+        ? {
+            result: {
+              value: Array.from({ length: TOKEN_ACCOUNTS_PAGE_LIMIT }, () => slice(MINT_A, 1n)),
+              paginationKey: "next",
+            },
+          }
+        : { result: { value: [slice(MINT_B, 3n)], paginationKey: "next" } },
+    );
+    const out = await client().getTokenBalancesBatch(["whale"]);
+    expect(out.get("whale")).toEqual({
+      status: "found",
+      balances: new Map([
+        [MINT_A, BigInt(TOKEN_ACCOUNTS_PAGE_LIMIT)],
+        [MINT_B, 3n],
+      ]),
+      truncated: true,
+    });
+    const body = JSON.parse(String((fetchSpy.mock.calls[0]![1] as RequestInit).body)) as Call[];
+    expect(body[0]!.method).toBe("getTokenAccountsByOwnerV2");
+    expect(body[0]!.params[2]).toMatchObject({ limit: TOKEN_ACCOUNTS_PAGE_LIMIT });
+  });
+
+  it("reads V2's context-wrapped shape too, and a short last page with a key is not truncated", async () => {
+    mockRpc(() => ({
+      result: { context: { slot: 1 }, value: { accounts: [slice(MINT_A, 2n)], paginationKey: "k" } },
+    }));
+    expect((await client().getTokenBalancesBatch(["wallet"])).get("wallet")).toEqual({
+      status: "found",
+      balances: new Map([[MINT_A, 4n]]),
+    });
+  });
+
+  it("falls back to the unpaged call for good when V2 is not served", async () => {
+    const fetchSpy = mockRpc((c) =>
+      c.method === "getTokenAccountsByOwnerV2"
+        ? { error: { code: -32601, message: "Method not found" } }
+        : { result: { value: [slice(MINT_A, 5n)] } },
+    );
+    const helius = client();
+    expect((await helius.getTokenBalancesBatch(["wallet"])).get("wallet")).toMatchObject({ status: "found" });
+    await helius.getTokenBalancesBatch(["other"]);
+    const methods = fetchSpy.mock.calls.map(
+      (call) => (JSON.parse(String((call[1] as RequestInit).body)) as Call[])[0]!.method,
+    );
+    expect(methods).toEqual([
+      "getTokenAccountsByOwnerV2",
+      "getTokenAccountsByOwner",
+      "getTokenAccountsByOwner",
+    ]);
+  });
+
+  it("stands V2 down when a round answers only errors, and reads the batch unpaged", async () => {
+    mockRpc((c) =>
+      c.method === "getTokenAccountsByOwnerV2"
+        ? { error: { code: -32000, message: "not on your plan" } }
+        : { result: { value: [slice(MINT_A, 5n)] } },
+    );
+    expect((await client().getTokenBalancesBatch(["wallet"])).get("wallet")).toMatchObject({
+      status: "found",
+    });
+  });
+
+  it("uses the unpaged call off Helius", async () => {
+    const fetchSpy = mockRpc(() => ({ result: { value: [] } }));
+    await new HeliusClient({ rpcUrl: "https://rpc.example.com" }).getTokenBalancesBatch(["wallet"]);
+    const body = JSON.parse(String((fetchSpy.mock.calls[0]![1] as RequestInit).body)) as Call[];
+    expect(body[0]!.method).toBe("getTokenAccountsByOwner");
+    expect(body[0]!.params[2]).not.toHaveProperty("limit");
   });
 
   it("reads decimals from the mint accounts' one byte", async () => {

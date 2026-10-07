@@ -6,20 +6,20 @@ import {
   type HeliusClient,
   type MintAuthorityResult,
 } from "@trenchscanner/core";
+import { FailureBackoff } from "./failureBackoff.js";
 
 const logger = createLogger("mint-authority");
 
 /**
- * Mints whose lookup failed, and when they may be tried again. A failed answer is never cached
- * (below), and without this a mint whose RPC read errors was re-queried every cycle for as long
- * as it stayed in band - the same backoff the Mayhem and wallet lookups keep.
+ * Mints whose lookup failed, backed off before they are tried again. A failed answer is never
+ * cached (below), and without this a mint whose RPC read errors was re-queried every cycle for as
+ * long as it stayed in band - the same escalating backoff the Mayhem and wallet lookups keep.
  */
-const FAILURE_BACKOFF_MINUTES = 20;
-const failureBackoffUntil = new Map<string, number>();
+const failureBackoff = new FailureBackoff();
 
 /** Test hook: forget every recorded failure so the next call retries immediately. */
 export function resetMintAuthorityFailureBackoff(): void {
-  failureBackoffUntil.clear();
+  failureBackoff.clear();
 }
 
 /**
@@ -68,12 +68,10 @@ export async function resolveMintAuthorities(
   }
 
   const now = Date.now();
-  for (const [mint, until] of failureBackoffUntil) {
-    if (until <= now) failureBackoffUntil.delete(mint);
-  }
+  failureBackoff.prune(now);
   let backedOff = 0;
   for (const mint of unique) {
-    if (!result.has(mint) && (failureBackoffUntil.get(mint) ?? 0) > now) {
+    if (!result.has(mint) && failureBackoff.blocked(mint, now)) {
       result.set(mint, { status: "failed" });
       backedOff += 1;
     }
@@ -99,13 +97,14 @@ export async function resolveMintAuthorities(
     // Every real answer is cached; how long it's trusted is decided on read (see above). A
     // failed lookup is never cached at all, so a transient RPC error isn't frozen in as a verdict.
     if (outcome.status === "found") {
+      failureBackoff.succeed(mint);
       toCache.push({
         mintAddress: mint,
         mintAuthorityActive: outcome.mintAuthorityActive,
         freezeAuthorityActive: outcome.freezeAuthorityActive,
       });
     } else {
-      failureBackoffUntil.set(mint, now + FAILURE_BACKOFF_MINUTES * 60_000);
+      failureBackoff.fail(mint, now);
     }
   }
 
