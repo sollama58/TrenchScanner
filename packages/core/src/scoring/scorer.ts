@@ -81,6 +81,8 @@ export const X_POST_PREDATES_MIN_S = 60;
 export const NAMED_REFERENT_MIN_CONFIDENCE = 0.5;
 /** ...and two or more independent inputs agreeing here. */
 export const AGREED_REFERENT_MIN_CONFIDENCE = 0.7;
+/** A kind-only referent (generic) starts here, whatever its exact confidence. */
+export const GENERIC_REFERENT_MIN_CONFIDENCE = 0.3;
 
 /**
  * TokenSage's read as a 0-100 part (notes/tokensage-models-filters-scoring-review-2026-10-06.md,
@@ -89,8 +91,9 @@ export const AGREED_REFERENT_MIN_CONFIDENCE = 0.7;
  *  - a named referent (TokenSage identified what the coin is about) lifts it, more when two or
  *    more independent inputs agree on it. TokenSage's confidence bands since rules 0.17.0 say
  *    which is which: 0.5-0.69 is a named referent from one input, 0.7+ two or more agreeing, and
- *    0.3-0.49 a kind only ("frog", `generic: true`) or a weak guess, which earns nothing: a kind
- *    says what sort of coin it is, not that the story is clear;
+ *    0.3-0.49 a kind only ("frog", `generic: true`) or a weak guess. A kind alone earns half
+ *    the single-input credit (user decision 2026-10-07): it says what sort of coin it is, not
+ *    that the story is clear;
  *  - a linked X post that announced the coin or is the thing it references lifts it, when the
  *    post went out before the coin (X_POST_PREDATES_MIN_S). How well the post fits earns nothing:
  *    on the first live day the perfect fits were the launcher's own profiles, named after the
@@ -111,7 +114,9 @@ export function scoreNarrative(token: EnrichedToken): number {
   if (!read) return NARRATIVE_NEUTRAL;
   let part = NARRATIVE_NEUTRAL;
   const referent = read.referentConfidence ?? 0;
-  if (narrativeReferentNamed(read) && referent >= NAMED_REFERENT_MIN_CONFIDENCE) {
+  if (read.referentGeneric === true) {
+    if (referent >= GENERIC_REFERENT_MIN_CONFIDENCE) part += 5;
+  } else if (narrativeReferentNamed(read) && referent >= NAMED_REFERENT_MIN_CONFIDENCE) {
     part += referent >= AGREED_REFERENT_MIN_CONFIDENCE || read.referentSupport.length >= 2 ? 15 : 10;
   }
   const xRead = read.depth === "full" && (read.xRelation !== null || read.xVerdict !== null);

@@ -170,7 +170,7 @@ describe("scoreNarrative", () => {
     expect(scoreNarrative(baseToken({ narrative: read() }))).toBe(NARRATIVE_NEUTRAL);
   });
 
-  it("credits a named referent, more when inputs agree, and nothing for a kind alone", () => {
+  it("credits a named referent, more when inputs agree, and half as much for a kind alone", () => {
     // TokenSage's bands (rules 0.17.0): 0.5-0.69 one input, 0.7+ two or more agreeing.
     const named = (referentConfidence: number, referentSupport: string[], referentGeneric = false) =>
       scoreNarrative(
@@ -181,9 +181,10 @@ describe("scoreNarrative", () => {
     expect(named(0.55, ["name", "x"])).toBe(65);
     expect(named(0.97, ["name", "description"])).toBe(65);
     expect(named(0.4, ["name"])).toBe(NARRATIVE_NEUTRAL);
-    // FROGMAN: a frog coin, generic at 0.38 - and even a generic read at 0.6 is a kind, not a story.
-    expect(named(0.38, ["name"], true)).toBe(NARRATIVE_NEUTRAL);
-    expect(named(0.6, ["name", "image"], true)).toBe(NARRATIVE_NEUTRAL);
+    // FROGMAN: a frog coin, generic at 0.38 - and a generic read at 0.6 is still a kind, not a story.
+    expect(named(0.38, ["name"], true)).toBe(55);
+    expect(named(0.6, ["name", "image"], true)).toBe(55);
+    expect(named(0.2, ["name"], true)).toBe(NARRATIVE_NEUTRAL);
     // A read from before 0.17.0 never says generic: a named referent at 0.5 counts as one.
     expect(
       scoreNarrative(baseToken({ narrative: read({ referentConfidence: 0.5, referentGeneric: null }) })),
