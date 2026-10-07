@@ -55,7 +55,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxEmptyTop10WalletPct",
         label: "Max empty holder wallets",
-        hint: "top-10 holders with nothing else",
+        hint: "top-10 holders with nothing else; 80% and over is always rejected",
         unit: "%",
       },
       {

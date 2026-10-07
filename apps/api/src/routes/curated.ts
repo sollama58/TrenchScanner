@@ -7,6 +7,7 @@ import {
   HEURISTIC_CURATOR_SOURCE,
   type Env,
   RULES_CONTESTANT,
+  walletSafetyCutsSql,
 } from "@trenchscanner/core";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { currentMarketCap } from "./matches.js";
@@ -521,7 +522,7 @@ export async function registerCuratedRoutes(
             SELECT count(*) FILTER (WHERE "finalizedAt" IS NOT NULL) AS finalized,
                    count(*) FILTER (WHERE "labelValue" > 0) AS winners
             FROM "CandidateOutcome"
-            WHERE "sampleKind" = 'event'`,
+            WHERE "sampleKind" = 'event' AND ${walletSafetyCutsSql()}`,
       ),
       prisma.candidateOutcome.count({ where: { anchorAt: { gte: day7 } } }),
       defaultRow

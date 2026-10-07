@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import type { OnChainProfile, RugScreenResult } from "../types.js";
 
 /** Above this share of the top-10 holders on wallets under a day old, a token is never alerted. */
@@ -144,3 +145,13 @@ export function passesLocalRugScreen(profile: OnChainProfile | null | undefined)
  * flag - see the comment in rugcheck.ts).
  */
 export const CRITICAL_RISK_FLAGS = new Set(["Creator history of rugged tokens", "Creator identity unknown"]);
+
+/**
+ * passesWalletSafetyCuts as a SQL condition on a CandidateOutcome features column (default
+ * "features"; pass e.g. `co."features"` for an aliased table), for the reports that count banked
+ * decision moments: rows the screen would reject today leave the base rates they are compared to.
+ */
+export function walletSafetyCutsSql(features: Prisma.Sql = Prisma.raw('"features"')): Prisma.Sql {
+  return Prisma.sql`COALESCE((${features}->>'emptyTop10WalletPct')::float8 < ${SAFETY_REJECT_EMPTY_WALLET_PCT}, true)
+    AND COALESCE((${features}->>'freshTop10WalletPct')::float8 <= ${SAFETY_MAX_FRESH_WALLET_PCT}, true)`;
+}

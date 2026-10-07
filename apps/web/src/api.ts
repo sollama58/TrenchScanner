@@ -1050,7 +1050,8 @@ export interface MarketLighthouse {
     }[];
     checks: {
       freshWalletMaxPct: number;
-      emptyWalletMaxPct: number;
+      /** Rejected at this share of empty top-10 wallets or more. */
+      emptyWalletRejectPct: number;
       mcapMinUsd: number;
       mcapMaxUsd: number;
       maxAgeMinutes: number;
