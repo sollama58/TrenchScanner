@@ -736,6 +736,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // each read, so this is everything the worker's Helius client sent since the last cycle ended
   // (the wallet backfill behind a cycle lands in the next one). Served on GET /health/worker.
   const rpcCalls = deps.helius.takeCallStats();
+  // Likewise for DexScreener: lookups every job in this process sent since the last cycle, the
+  // 429 pauses among them, and how long they queued for the shared budget.
+  const dexScreenerCalls = deps.dexScreener.takeCallStats?.();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
@@ -744,11 +747,13 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     curated: curatedEmitted,
     samplesBanked: samples.banked,
     rpcCalls,
+    dexScreenerCalls,
     stagesMs,
   });
   return {
     stagesMs,
     rpcCalls,
+    ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,

@@ -1,6 +1,7 @@
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
+import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import { normalizeSocialUrl } from "./tokensage.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
@@ -46,15 +47,40 @@ const SOLANA_CHAIN_ID = "solana";
 /** DexScreener's batch token lookup caps out at 30 addresses per call. */
 const BATCH_SIZE = 30;
 
+/**
+ * DexScreener allows 300 token lookups a minute per IP. A process's default share: the worker's,
+ * leaving the API's 120 a minute of live refreshes room if the two leave from one address.
+ */
+export const DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE = 180;
+/** Lookups that may go out back to back before the per-minute pace applies. */
+const GATE_BURST = 15;
+
 export interface DexScreenerClientOptions {
   baseUrl?: string;
+  /** This client's token-lookup budget a minute - see DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE. */
+  requestsPerMinute?: number;
 }
 
 export class DexScreenerClient {
   private readonly baseUrl: string;
+  /**
+   * Every token lookup this client makes, whichever job asked, shares this budget and backs off
+   * together on a 429 - see RateGate. One client per process, so one budget per process.
+   */
+  private readonly gate: RateGate;
 
   constructor(options: DexScreenerClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://api.dexscreener.com";
+    this.gate = new RateGate({
+      name: "dexscreener",
+      perMinute: options.requestsPerMinute ?? DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE,
+      burst: GATE_BURST,
+    });
+  }
+
+  /** Token lookups sent, 429 pauses and time spent queued since the last call, then reset. */
+  takeCallStats(): RateGateStats {
+    return this.gate.takeStats();
   }
 
   /**
@@ -107,6 +133,10 @@ export class DexScreenerClient {
     const results: CandidateToken[] = [];
     const deadline = deadlineMs === undefined ? Infinity : Date.now() + deadlineMs;
     let skipped = 0;
+    const gate = {
+      acquire: () => this.gate.acquire(deadline),
+      throttled: (delayMs: number) => this.gate.throttled(delayMs),
+    };
     // Mints whose batch came back, for `failed` - see the note at the return.
     const settled = new Set<string>();
     const work = forEachWithConcurrency(chunks, concurrency, async (chunk) => {
@@ -118,7 +148,7 @@ export class DexScreenerClient {
       try {
         const pairs = await fetchJson<DexScreenerPair[]>(
           `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${chunk.join(",")}`,
-          fetchOptions,
+          { ...fetchOptions, gate },
         );
         const answered = new Date();
         for (const mint of chunk) settled.add(mint);
@@ -127,6 +157,11 @@ export class DexScreenerClient {
         results.push(...tokens);
       } catch (err) {
         for (const mint of chunk) failed?.add(mint);
+        // Queued behind the budget past the deadline: the same as reaching the deadline unsent.
+        if (err instanceof RateGateDeadlineError) {
+          skipped += chunk.length;
+          return;
+        }
         logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
       }
     });

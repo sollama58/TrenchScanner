@@ -51,6 +51,10 @@ const envSchema = z.object({
 
   HELIUS_API_KEY: z.string().optional().default(""),
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
+  // The worker's DexScreener token lookups a minute, shared by every job in the process (scan,
+  // fast match, candidate watch, live prices, the empty-wallet check's pricing). DexScreener allows
+  // 300 a minute; the default leaves the API's live refreshes room. See DexScreenerClient.
+  DEXSCREENER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(180),
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api-v3.pump.fun"),
   // PumpPortal's public data websocket: Pump.fun launches and graduations as they land on chain
   // (apps/worker/src/discovery/pumpPortalStream.ts). Empty disables the stream; discovery then

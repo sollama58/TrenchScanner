@@ -362,7 +362,10 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // The API's only outbound data source. Used for one thing: refreshing the market caps on a page
   // the moment it's opened, instead of leaving them until the worker's next tick - see
   // liveRefresh.ts for how that's kept from becoming a per-request upstream call.
-  const dexScreener = new DexScreenerClient({ baseUrl: env.DEXSCREENER_BASE_URL });
+  const dexScreener = new DexScreenerClient({
+    baseUrl: env.DEXSCREENER_BASE_URL,
+    requestsPerMinute: LIVE_REFRESH_CALLS_PER_MINUTE,
+  });
   // One per process, shared by every route, so its in-flight sharing, cooldown and call budget
   // hold across the feeds and the live tick rather than per route.
   const liveRefresher = new OnDemandLiveRefresher(dexScreener, {
