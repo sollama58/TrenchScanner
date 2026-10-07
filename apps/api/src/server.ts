@@ -32,6 +32,7 @@ import { registerAdminOpsRoutes } from "./routes/adminOps.js";
 import { registerAdminInsightRoutes } from "./routes/adminInsights.js";
 import { registerAdminBackupRoutes } from "./routes/adminBackups.js";
 import { registerConfigRoutes } from "./routes/config.js";
+import { registerAdminAnnouncementRoutes, registerAnnouncementRoutes } from "./routes/announcements.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
@@ -416,6 +417,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
 
   await app.register(registerHealthRoutes, { prefix: "/health", env });
   await app.register(registerConfigRoutes, { prefix: "/config", env });
+  // Public like /config: the admin's banner shows to guests and the signed-out page too.
+  await app.register(registerAnnouncementRoutes, { prefix: "/announcement" });
 
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
 
@@ -463,6 +466,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     async (instance) => {
       instance.addHook("preHandler", instance.authenticateAdmin);
       await registerAdminSubscriptionRoutes(instance);
+      await registerAdminAnnouncementRoutes(instance);
     },
     { prefix: "/admin" },
   );

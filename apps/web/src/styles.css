@@ -4991,3 +4991,115 @@ button.small-btn {
     margin: 0 0 4px;
   }
 }
+
+/* ---------- Announcement bar (the Admin tab's broadcast) ---------- */
+.announcement {
+  --tone: var(--series-1);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 10px 8px 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--tone) 35%, var(--border));
+  border-left: 3px solid var(--tone);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--tone) 10%, var(--surface-solid));
+  box-shadow: var(--shadow);
+  animation: announcement-in 0.28s ease-out;
+}
+.announcement.warning {
+  --tone: var(--warn);
+}
+.announcement-icon {
+  display: inline-flex;
+  color: var(--tone);
+  padding-top: 2px;
+}
+.announcement-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-top: 1px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.announcement-text a {
+  color: var(--tone);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.announcement.warning .announcement-text a {
+  color: var(--ink);
+}
+.announcement-close,
+.announcement-close:hover:not(:disabled) {
+  flex: none;
+  margin: -4px 0;
+  padding: 6px;
+  border: none;
+  background: transparent;
+}
+@keyframes announcement-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .announcement {
+    animation: none;
+  }
+}
+@media (max-width: 640px) {
+  .announcement {
+    margin-bottom: 14px;
+    padding: 9px 4px 9px 12px;
+  }
+  .announcement-text {
+    font-size: 13.5px;
+  }
+  /* A full finger-sized target for the close button. */
+  .announcement-close {
+    padding: 10px;
+    margin: -8px 0;
+  }
+}
+
+.announce-form textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 9px 11px;
+}
+.announce-form textarea:focus {
+  outline: none;
+  border-color: var(--brand-b);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-b) 25%, transparent);
+}
+.announce-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+.announce-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.announce-cell {
+  display: inline-block;
+  min-width: 200px;
+  max-width: 420px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}

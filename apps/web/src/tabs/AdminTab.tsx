@@ -3,6 +3,7 @@ import { ApiError, api, del, downloadFile, patch, post } from "../api";
 import { ShieldIcon } from "../components/Icons";
 import { usePolling } from "../hooks";
 import { Kpi, Load, Panel, Table, Tag, Wallet, dollars, ms, n, when } from "./adminShared";
+import { AnnouncementsAdmin } from "./AdminAnnouncements";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
@@ -23,6 +24,7 @@ const SECTIONS = [
   { id: "filters", label: "Filters" },
   { id: "users", label: "Users" },
   { id: "access", label: "Access" },
+  { id: "announce", label: "Announcements" },
   { id: "ai", label: "AI" },
   { id: "backups", label: "Backups" },
   { id: "database", label: "Database" },
@@ -74,6 +76,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
       {section === "filters" && <FiltersAdmin />}
       {section === "users" && <Users />}
       {section === "access" && <Access />}
+      {section === "announce" && <AnnouncementsAdmin />}
       {section === "ai" && <Ai />}
       {section === "backups" && <Backups />}
       {section === "database" && <Database />}

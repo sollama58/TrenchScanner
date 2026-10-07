@@ -1469,3 +1469,21 @@ model AiSpend {
 
   @@id([day, source])
 }
+
+/// A message an admin posts from the Admin tab to every visitor's dashboard (signed in or guest).
+/// One shows at a time: posting a new one ends the one before it. It stops showing once `endedAt`
+/// is set (ended by hand or replaced) or `expiresAt` passes; old rows stay as the admin's history.
+/// Visitors dismiss an announcement by its id, so a new one shows again.
+model Announcement {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  message   String
+  /// "info" | "warning"
+  severity  String    @default("info")
+  expiresAt DateTime?
+  endedAt   DateTime?
+  /// The admin wallet that posted it.
+  createdBy String?
+
+  @@index([createdAt])
+}
