@@ -105,6 +105,15 @@ export const RadarIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** A lighthouse throwing its beam: the Market Lighthouse on the Models tab. */
+export const LighthouseIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M10 8h4l1.5 13h-7z" />
+    <path d="M9 8l3-4 3 4M8.5 21h7M10.6 13h2.8" />
+    <path d="M17 5l4-1.5M17 8h4.5M7 5L3 3.5M7 8H2.5" />
+  </Svg>
+);
+
 export const ArrowRightIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M5 12h14M13 6l6 6-6 6" />

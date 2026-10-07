@@ -8,6 +8,7 @@ import { buildModelInsights } from "../modelInsights.js";
 import { reportDaysSchema, type ReportCaches } from "./curated.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
+import { lighthouseQuerySchema } from "../marketLighthouse.js";
 
 /**
  * The guest feed: what a visitor who hasn't connected a wallet sees - the default model's calls
@@ -149,5 +150,17 @@ export async function registerGuestRoutes(
       .insightsFor(days, false)
       .get(() => buildModelInsights(opts.env, days, false));
     return { ...insights, recentAiReviews: [] };
+  });
+
+  /**
+   * The Market Lighthouse, the same answer subscribers get: aggregates only, with no token, mint or
+   * referent named, so it gives away no live coin ahead of the guest feed's delay.
+   */
+  app.get("/lighthouse", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = lighthouseQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.lighthouse(opts.env, parsed.data.days);
   });
 }

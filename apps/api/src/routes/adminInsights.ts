@@ -20,10 +20,10 @@ const recentSchema = z.object({
 });
 const mintSchema = z.object({ mint: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "not a valid mint") });
 
-type Count = { label: string; count: number };
+export type Count = { label: string; count: number };
 
 /** Rows from a `SELECT x AS label, count(*) AS count ... GROUP BY 1` as plain numbers. */
-const counts = (rows: { label: string | null; count: bigint | number }[]): Count[] =>
+export const counts = (rows: { label: string | null; count: bigint | number }[]): Count[] =>
   rows.map((r) => ({ label: r.label ?? "(none)", count: Number(r.count) }));
 
 /** One SharedCache per query value, so each window (1d, 7d...) caches on its own. */
@@ -40,7 +40,7 @@ function keyedCache<T>(ttlMs: number) {
 }
 
 /** TokenSage's switches live on the scanner worker: it is on when the scan heartbeat carries its counters. */
-async function tokenSageWorkerStatus() {
+export async function tokenSageWorkerStatus() {
   const beat = await prisma.systemHeartbeat.findUnique({
     where: { job: "scan" },
     select: { lastRunAt: true, meta: true },
@@ -59,7 +59,7 @@ async function tokenSageWorkerStatus() {
 }
 
 /** The category TokenSage is surest of, by its top-level part ("animal/dog" -> "animal"). */
-function topCategory(categories: unknown): string | null {
+export function topCategory(categories: unknown): string | null {
   if (!Array.isArray(categories)) return null;
   let best: { label: string; confidence: number } | null = null;
   for (const c of categories) {
@@ -71,7 +71,7 @@ function topCategory(categories: unknown): string | null {
   return best ? best.label.split("/")[0]!.trim() || best.label : null;
 }
 
-interface OutcomeTally {
+export interface OutcomeTally {
   label: string;
   alerts: number;
   graded: number;
@@ -80,7 +80,7 @@ interface OutcomeTally {
   won10x: number;
 }
 
-function tally(groups: Map<string, OutcomeTally>, label: string, row: AlertOutcomeRow) {
+export function tally(groups: Map<string, OutcomeTally>, label: string, row: AlertOutcomeRow) {
   let t = groups.get(label);
   if (!t) {
     t = { label, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0 };
@@ -95,9 +95,10 @@ function tally(groups: Map<string, OutcomeTally>, label: string, row: AlertOutco
   }
 }
 
-const sortedTallies = (m: Map<string, OutcomeTally>) => [...m.values()].sort((a, b) => b.alerts - a.alerts);
+export const sortedTallies = (m: Map<string, OutcomeTally>) =>
+  [...m.values()].sort((a, b) => b.alerts - a.alerts);
 
-interface AlertOutcomeRow {
+export interface AlertOutcomeRow {
   hit2x: boolean | null;
   hit4x: boolean | null;
   hit10x: boolean | null;

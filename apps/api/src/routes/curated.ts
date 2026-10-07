@@ -21,6 +21,7 @@ import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { buildModelInsights, type ModelInsights } from "../modelInsights.js";
+import { createLighthouseCache, lighthouseQuerySchema } from "../marketLighthouse.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import {
   buildLeaderboard,
@@ -164,7 +165,7 @@ export function createReportCaches() {
     }
     return cache;
   };
-  return { leaderboardFor, insightsFor };
+  return { leaderboardFor, insightsFor, lighthouse: createLighthouseCache() };
 }
 export type ReportCaches = ReturnType<typeof createReportCaches>;
 
@@ -662,6 +663,15 @@ export async function registerCuratedRoutes(
     return insightsFor(parsed.data.days, isAdmin).get(() =>
       buildModelInsights(opts.env, parsed.data.days, isAdmin),
     );
+  });
+
+  /** The Market Lighthouse on the Models tab: TokenSage's reads in aggregate (marketLighthouse.ts). */
+  app.get("/lighthouse", async (request, reply) => {
+    const parsed = lighthouseQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.lighthouse(opts.env, parsed.data.days);
   });
 
   // What the dashboard asks for first (index.html's boot list): the learning panel, and the Models
