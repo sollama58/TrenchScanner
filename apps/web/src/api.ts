@@ -1003,6 +1003,43 @@ export interface Settings {
   };
 }
 
+// ---- Telegram alerts (/telegram) ----
+
+/** A Telegram chat linked to this account (GET /telegram). Never carries Telegram's own chat id. */
+export interface TelegramChat {
+  id: string;
+  kind: "private" | "group" | "supergroup" | "channel" | string;
+  title: string | null;
+  linkedByName: string | null;
+  filterMatches: boolean;
+  modelCalls: boolean;
+  enabled: boolean;
+  lastSentAt: string | null;
+  /** What Telegram last answered when a send failed; null while all is well. */
+  lastError: string | null;
+  createdAt: string;
+}
+
+export interface TelegramState {
+  /** The server has a bot token; false means the feature is off for everyone. */
+  configured: boolean;
+  /** The bot's @username (without the @), or null while Telegram hasn't answered. */
+  botUsername: string | null;
+  chats: TelegramChat[];
+  linkTtlMs: number;
+}
+
+/** POST /telegram/link/code: a one-time code inside the two t.me deep links. */
+export interface TelegramLinkCode {
+  code: string;
+  expiresAt: string;
+  ttlMs: number;
+  /** Opens a private chat with the bot and sends the code. */
+  privateUrl: string;
+  /** Telegram asks which group to add the bot to, then sends the code there. */
+  groupUrl: string;
+}
+
 /**
  * GET /curated/lighthouse/history and /guest/lighthouse/history: the Lighthouse's kept-for-good
  * hourly sums per hour, day or week. Sums and counts only; the tab computes every rate.

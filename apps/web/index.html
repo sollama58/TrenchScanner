@@ -39,9 +39,9 @@
           h === "model"
             ? ["/curated/insights?days=30", "/curated/models?days=30"]
             : h === "filters" || h === "top"
-              ? ["/filters", "/config", "/filters/leaderboard"]
+              ? ["/filters", "/config", "/filters/leaderboard", "/curated/models?days=30", "/telegram"]
               : h === "settings"
-                ? ["/curated/models?days=30"]
+                ? []
                 : h === "admin"
                   ? []
                   : h === "lighthouse"

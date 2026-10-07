@@ -360,7 +360,7 @@ export function App() {
                 {tab === "live" && <LiveTab goTo={goTo} />}
                 {tab === "model" && <ModelTab />}
                 {tab === "lighthouse" && <LighthouseTab />}
-                {tab === "filters" && <FiltersTab />}
+                {tab === "filters" && <FiltersTab goTo={goTo} />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
