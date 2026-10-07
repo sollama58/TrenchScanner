@@ -243,9 +243,9 @@ function TokenSageSections({
 
       <Section
         title="Which narratives pay"
-        note={`Model calls in the last ${span} by their coin's narrative: the average return under the exit plan, and how many reached 2x, 4x and 10x. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
+        note={`Model calls in the last ${span} by their coin's narrative: the average return under the exit plan, and how many reached 2x and 10x. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
       >
-        <HitRates rows={bestFirst(d.outcomes.byCategory)} cls={cls} />
+        <HitRates rows={narratives(d.outcomes.byCategory)} cls={cls} />
         <p className="faint small lh-foot">
           {d.outcomes.described.toLocaleString()} of {d.outcomes.alerts.toLocaleString()} calls had a
           TokenSage read · {d.outcomes.graded.toLocaleString()} graded overall
@@ -308,7 +308,7 @@ function TokenSageSections({
  * confidence figures stay on the Lighthouse tab, where someone digging in wants them.
  */
 function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) {
-  const best = bestFirst(d.outcomes.byCategory).slice(0, 5);
+  const best = narratives(d.outcomes.byCategory).slice(0, 5);
   return (
     <>
       {!d.tokenSage.on && (
@@ -330,7 +330,7 @@ function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => 
         </Section>
         <Section
           title="Best-performing narratives"
-          note="By the average return of model calls under the exit plan, with how many reached 2x, 4x and 10x."
+          note="By the average return of model calls under the exit plan, with how many reached 2x and 10x."
         >
           <HitRates rows={best} cls={cls} />
         </Section>
@@ -624,6 +624,14 @@ const avgReturn = (t: LighthouseTally) => (t.returnN > 0 ? t.returnSum / t.retur
  * Best first: groups with a settled sample (five graded calls) ahead of thin ones, then by average
  * return under the exit plan, then by 2x rate, then by how many calls back it.
  */
+/**
+ * The narrative rows worth ranking: best first, without "uncategorized", which is the coins
+ * TokenSage couldn't file rather than a narrative. The API still tallies it, and the footer's
+ * overall counts still include it.
+ */
+export const narratives = (rows: LighthouseTally[]) =>
+  bestFirst(rows).filter((r) => r.label !== "uncategorized");
+
 export function bestFirst(rows: LighthouseTally[]): LighthouseTally[] {
   const settled = (t: LighthouseTally) => (t.graded >= MIN_GRADED ? 1 : 0);
   const rate2x = (t: LighthouseTally) => (t.graded > 0 ? t.won2x / t.graded : -1);
@@ -638,7 +646,7 @@ export function bestFirst(rows: LighthouseTally[]): LighthouseTally[] {
 
 /**
  * One row per group: the average return under the exit plan (the bar, against the best row's),
- * the share of graded calls that reached 2x, 4x and 10x, and how many calls that rests on.
+ * the share of graded calls that reached 2x and 10x, and how many calls that rests on.
  */
 function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) => string }) {
   if (!rows.length)
@@ -662,7 +670,7 @@ function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) =>
             </span>
             <span className="lh-hit-value num">{ret === null ? "–" : signedPct(ret)}</span>
             <span className="lh-hit-tiers muted">
-              2x {tier(r.won2x)} · 4x {tier(r.won4x)} · 10x {tier(r.won10x)}
+              2x {tier(r.won2x)} · 10x {tier(r.won10x)}
             </span>
             <span className="lh-hit-state muted">
               {early ? `${r.graded}/${MIN_GRADED} graded` : `${r.graded} graded`}
