@@ -49,6 +49,8 @@ const logger = createLogger("tokensage");
 
 const PENDING_GIVE_UP_MS = 5 * 60_000;
 const PAUSE_AFTER_REFUSAL_MS = 60_000;
+/** A rejected key (401/403) won't fix itself between polls: ask again only this often. */
+const PAUSE_AFTER_AUTH_FAILURE_MS = 5 * 60_000;
 /** TokenSage caches a partial answer for 60 s; ask again after that, at most this many times. */
 const PARTIAL_RETRY_MS = 90_000;
 const PARTIAL_MAX_RETRIES = 3;
@@ -320,7 +322,10 @@ export async function flushNarrativeRequests(env: Env, client?: TokenSageClient)
     await send(api, env, now);
   } catch (err) {
     stats.errors += 1;
-    if (isRefusal(err)) {
+    if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
+      pausedUntil = Date.now() + PAUSE_AFTER_AUTH_FAILURE_MS;
+      logger.warn("TokenSage rejected TOKENSAGE_API_KEY; pausing 5 minutes", { status: err.status });
+    } else if (isRefusal(err)) {
       pausedUntil = Date.now() + PAUSE_AFTER_REFUSAL_MS;
       logger.warn("TokenSage refused requests; pausing", { status: (err as HttpError).status });
     } else {
