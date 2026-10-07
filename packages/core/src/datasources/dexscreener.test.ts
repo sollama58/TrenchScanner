@@ -261,3 +261,33 @@ describe("parseGeckoTokens", () => {
     expect(t?.pairCreatedAt?.toISOString()).toBe("2026-10-07T20:00:00.000Z");
   });
 });
+
+describe("GeckoTerminalClient with a CoinGecko key", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("calls CoinGecko's on-chain API with the key, and does not cut background lookups short", async () => {
+    const calls: { url: string; key?: string }[] = [];
+    vi.stubGlobal("fetch", (url: string, init: { headers: Record<string, string> }) => {
+      calls.push({ url, key: init.headers["x-cg-pro-api-key"] });
+      return Promise.resolve(new Response(JSON.stringify({ data: [] })));
+    });
+    const client = new GeckoTerminalClient({
+      apiKey: "k",
+      priorityPerMinute: 6000,
+      backgroundPerMinute: 6000,
+    });
+    const failed = new Set<string>();
+    await client.getTokensByAddresses(
+      Array.from({ length: 120 }, (_, i) => `m${i}`),
+      { retries: 0, failed },
+    );
+    expect(calls).toHaveLength(4);
+    expect(calls[0]).toMatchObject({ key: "k" });
+    expect(
+      calls[0]!.url.startsWith("https://pro-api.coingecko.com/api/v3/onchain/networks/solana/tokens/multi/"),
+    ).toBe(true);
+    expect(failed.size).toBe(0);
+  });
+});
