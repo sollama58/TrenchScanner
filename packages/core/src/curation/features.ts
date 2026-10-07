@@ -8,6 +8,12 @@ import {
   type MarketContextFeatures,
   type PricePathFeatures,
 } from "./pricePath.js";
+import {
+  NARRATIVE_FEATURES,
+  NARRATIVE_FRIENDLY_LABELS,
+  narrativeFeatureValues,
+  narrativeFromFeatures,
+} from "./narrativeFeatures.js";
 
 /**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
@@ -126,6 +132,11 @@ export const CANDIDATE_FEATURE_NAMES = [
   "buys5m",
   "sells5m",
   "buyRatio5m",
+  // Added 2026-10-07: TokenSage's read of what the coin is about (curation/narrativeFeatures.ts):
+  // theme, referent, copycat and flag signals from the quick read, the linked X post and trend
+  // match from the deep read. Null until TokenSage has answered for the mint, and on every row
+  // banked before; never backfilled.
+  ...NARRATIVE_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -309,6 +320,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   buys5m: "5m buys",
   sells5m: "5m sells",
   buyRatio5m: "5m buy pressure",
+  ...NARRATIVE_FRIENDLY_LABELS,
 };
 
 /**
@@ -377,6 +389,7 @@ export function scoredFromFeatures(
       MARKET_CONTEXT_FEATURES.map((k) => [k, num(k) ?? null]),
     ) as unknown as MarketContextFeatures,
     textScores: textScoresFromFeatures(features),
+    narrative: narrativeFromFeatures(features),
     rugScreen: { passed: true, reasons: [] },
     // Filled in below from the replayed fields: the stored score* inputs are the first
     // composite's, and the replayed rules must gate on today's score.
@@ -532,6 +545,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     buys5m,
     sells5m,
     buyRatio5m,
+    ...narrativeFeatureValues(scored.narrative),
   };
 }
 

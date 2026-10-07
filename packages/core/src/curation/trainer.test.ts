@@ -681,7 +681,8 @@ describe("walkForwardEvaluate at the hit-rate cutoffs", () => {
     expect(ungated.folds.map((f) => f.heuristic.emitted)).toEqual(
       gateOnly.folds.map((f) => f.heuristic.emitted),
     );
-  });
+    // Three walk-forward runs over 3,000 rows and the full feature vector: well past the default 5 s.
+  }, 20_000);
 });
 
 describe("feature transform", () => {

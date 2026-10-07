@@ -1083,6 +1083,19 @@ model TokenNarrative {
   /// Copies a coin launched in the last 30 days (copy_of[].recent). Null on analyses from before
   /// TokenSage rules 0.10.0, which didn't say.
   copiesRecent    Boolean?
+  /// The linked X post, when the full read opened it (x.status "ok"): how it relates to the coin
+  /// ("launch_announcement", "official_account", "narrative_reference", "spoofed", ...), its
+  /// author's followers, how many seconds it predates the token, and how many other coins link
+  /// the same post. All null when the post was not read.
+  xRelation       String?
+  xAuthorFollowers Int?
+  xPredatesTokenS Int?
+  xReuseCount     Int?
+  /// The name matched a Wikipedia/news spike (trend.matched, full depth); null until read.
+  trendMatched    Boolean?
+  /// Flags by severity, so the models and score need no catalogue of codes.
+  highFlagCount   Int      @default(0)
+  warnFlagCount   Int      @default(0)
   /// Why the analysis failed, on status "failed" rows.
   failReason      String?
   rulesVersion    String?

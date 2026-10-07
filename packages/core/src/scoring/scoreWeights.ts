@@ -15,7 +15,9 @@ import type { ScoreWeights } from "./scorer.js";
  * - each run moves only STEP_SHARE of the way from today's weights toward the fit;
  * - adopted only when that step ranks the unseen rows better than today's weights do;
  * - every part keeps at least MIN_PART_WEIGHT, and the narrative part's weight stays where it is
- *   until narrative data exists (a constant part says nothing about what ranks well).
+ *   until TokenSage's read (scorer.ts scoreNarrative, live since 2026-10-07) has shown on graded
+ *   rows that it ranks winners; until then most rows carry the midpoint and a fit over it would
+ *   only measure how many rows had a read.
  *
  * Pure: the trainer job loads the rows and stores the result (apps/worker/src/jobs/scoreWeightsJob.ts).
  */

@@ -59,18 +59,67 @@ export function setScoreWeights(w: ScoreWeights): void {
 }
 
 /**
- * The narrative part until TokenSage data feeds it (notes/tokensage-integration-plan.md): a
- * constant, so switching TokenSage on doesn't move anyone's minimum on day one. Keyword tags and
- * social links, what it used to read, carry no signal. Its weight is held out of the fit while
- * it is a constant (scoreWeights.ts).
+ * The narrative part without a TokenSage read: the midpoint, so a coin TokenSage hasn't answered
+ * for (or every coin, while TokenSage is off) scores exactly as it did before the part existed
+ * and nobody's saved minimum moves on day one. Keyword tags and social links, what the part used
+ * to read, carry no signal and are not read. The part's weight stays pinned in the fit
+ * (scoreWeights.ts) until the read has shown it ranks winners (an AUC check on graded rows).
  */
 export const NARRATIVE_NEUTRAL = 50;
+
+/** The narrative part can't exceed this while TokenSage raised a high-severity flag. */
+export const NARRATIVE_RED_FLAG_CAP = 40;
+
+/** X post relations that say the post is the coin's own announcement or its subject. */
+const X_RELATIONS_CREDITED = new Set(["launch_announcement", "official_account", "narrative_reference"]);
+
+/**
+ * TokenSage's read as a 0-100 part (notes/tokensage-models-filters-scoring-review-2026-10-06.md,
+ * section 5). Starts at the midpoint and moves on what the read established:
+ *  - a confident referent (what the coin is about is clear) lifts it, more when several inputs
+ *    agree on it;
+ *  - a linked X post that is about this coin lifts it by its fit, and a little more when the post
+ *    is the launch announcement, the official account or the thing the coin references; a post
+ *    that is unrelated, spoofed or mismatched pulls it down. A bare X link earns nothing: within
+ *    an age band, having a link does not change the double rate;
+ *  - a live copycat or an earlier coin with this name pulls it down;
+ *  - a matched trend (the name is spiking on Wikipedia or in the news) lifts it;
+ *  - a high-severity flag caps the part at NARRATIVE_RED_FLAG_CAP whatever else it earned.
+ * The parts' breakpoints are hand-set like the other three; the weight between the parts is what
+ * the data tunes.
+ */
+export function scoreNarrative(token: EnrichedToken): number {
+  const read = token.narrative;
+  if (!read) return NARRATIVE_NEUTRAL;
+  let part = NARRATIVE_NEUTRAL;
+  const referent = read.referentConfidence ?? 0;
+  if (referent >= 0.6) part += read.referentSupport.length >= 2 ? 15 : 10;
+  const xRead = read.depth === "full" && (read.xRelation !== null || read.xVerdict !== null);
+  if (xRead) {
+    const spoofed = read.xRelation === "spoofed";
+    if (read.xVerdict === "about_this_coin" && !spoofed) {
+      part += 20 * (read.xFit ?? 0.5);
+      if (read.xRelation !== null && X_RELATIONS_CREDITED.has(read.xRelation)) part += 5;
+    } else if (read.xVerdict === "unrelated" || spoofed) {
+      part -= 25;
+    } else if (read.flags.includes("x_content_mismatch")) {
+      part -= 10;
+    }
+  }
+  const copycat = read.copiesRecent === true || read.flags.includes("copycat");
+  const sameName = read.flags.includes("earlier_same_name");
+  if (copycat) part -= 25;
+  else if (sameName) part -= 15;
+  if (read.trendMatched === true) part += 10;
+  part = clamp(part);
+  return read.highFlagCount > 0 ? Math.min(part, NARRATIVE_RED_FLAG_CAP) : part;
+}
 
 export function scoreToken(token: EnrichedToken, weights: ScoreWeights = activeWeights): ScoreBreakdown {
   const momentum = scoreMomentum(token);
   const age = scoreFreshness(token);
   const holderHealth = scoreHolderQuality(token);
-  const narrative = NARRATIVE_NEUTRAL;
+  const narrative = scoreNarrative(token);
 
   const total =
     momentum * weights.momentum +
