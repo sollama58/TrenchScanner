@@ -992,3 +992,79 @@ export interface Settings {
     };
   };
 }
+
+/** GET /curated/lighthouse and /guest/lighthouse: what TokenSage sees across new coins, aggregates only. */
+export interface LighthouseCount {
+  label: string;
+  count: number;
+}
+export interface LighthouseTally {
+  label: string;
+  alerts: number;
+  graded: number;
+  won2x: number;
+  won4x: number;
+}
+export interface MarketLighthouse {
+  window: { days: number; since: string; bucketHours: number };
+  tokenSage: { on: boolean; lastCycleAt: string | null };
+  reads: {
+    total: number;
+    described: number;
+    deep: number;
+    quick: number;
+    failed: number;
+    newestAt: string | null;
+  };
+  avgReferentConfidence: number | null;
+  avgXFit: number | null;
+  tide: { buckets: string[]; series: { label: string; values: number[] }[] };
+  topLevelCategories: LighthouseCount[];
+  categories: LighthouseCount[];
+  referentKinds: LighthouseCount[];
+  referentSupport: LighthouseCount[];
+  flags: LighthouseCount[];
+  xVerdicts: LighthouseCount[];
+  pairKinds: LighthouseCount[];
+  copies: LighthouseCount[];
+  news: LighthouseCount[];
+  /** Every token that passed the pre-checks, graded from its decision moment. */
+  screened: {
+    bucketHours: number;
+    calls: number;
+    graded: number;
+    hit2xPct: number | null;
+    hit4xPct: number | null;
+    hit10xPct: number | null;
+    tenXGraded: number;
+    avgReturnPct: number | null;
+    returnGraded: number;
+    exitPlan: string;
+    byBucket: {
+      at: string;
+      graded: number;
+      hit2xPct: number | null;
+      hit4xPct: number | null;
+      hit10xPct: number | null;
+      avgReturnPct: number | null;
+    }[];
+    checks: {
+      freshWalletMaxPct: number;
+      emptyWalletMaxPct: number;
+      mcapMinUsd: number;
+      mcapMaxUsd: number;
+      maxAgeMinutes: number;
+      minBuySharePct: number;
+    };
+  };
+  outcomes: {
+    alerts: number;
+    described: number;
+    graded: number;
+    won2x: number;
+    won4x: number;
+    byCategory: LighthouseTally[];
+    byXVerdict: LighthouseTally[];
+    byCopy: LighthouseTally[];
+  };
+}
