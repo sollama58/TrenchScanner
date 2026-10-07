@@ -135,6 +135,10 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
           No subscription yet? Sign in, then burn $ASDFASDFA on the next screen to get access. Your wallet
           shows the exact amount and asks before anything is burned.
         </p>
+        <p className="faint small signin-phone">
+          On your phone? Open Settings on your signed-in desktop, choose &quot;Show QR code&quot; and scan it.
+          No wallet needed on the phone.
+        </p>
         {onGuest && (
           <div className="guest-entry">
             <span className="guest-or faint small">or</span>

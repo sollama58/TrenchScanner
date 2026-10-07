@@ -32,6 +32,9 @@
         if (host === "trenchscanner.app" || /\.trenchscanner\.app$/.test(host))
           api = "https://api.trenchscanner.app";
         var h = location.hash.replace("#", "");
+        // Opened from a desktop's pairing QR (src/deviceLink.ts): this phone has no session yet,
+        // so every call would come back 401. The app redeems the code first.
+        if (h.indexOf("link=") === 0) return;
         var paths = ["/auth/me", "/subscription", "/health/worker", "/settings"].concat(
           h === "model"
             ? ["/curated/insights?days=30", "/curated/models?days=30"]

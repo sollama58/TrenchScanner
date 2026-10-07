@@ -217,3 +217,10 @@ export const PaletteIcon = (p: IconProps) => (
     <circle cx="15" cy="7.5" r="1" />
   </Svg>
 );
+
+export const PhoneIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="6" y="2" width="12" height="20" rx="2.5" />
+    <path d="M11 18h2" />
+  </Svg>
+);
