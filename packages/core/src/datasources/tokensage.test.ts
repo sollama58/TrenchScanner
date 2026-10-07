@@ -386,7 +386,29 @@ describe("narrativeDetails", () => {
 
   it("lists copies with whether each is recent", () => {
     expect(narrativeDetails(fixture("full").analysis).copies).toEqual([
-      { ticker: "PNUT", name: "Peanut the Squirrel", recent: false },
+      {
+        ticker: "PNUT",
+        name: "Peanut the Squirrel",
+        recent: false,
+        rank: null,
+        rankOf: null,
+        rankWindowHours: null,
+      },
+    ]);
+  });
+
+  it("reads a recent copy's rank among same-name launches, and drops a rank that doesn't fit", () => {
+    const d = narrativeDetails({
+      copy_of: [
+        { ticker: "PNUT2", recent: true, rank: 3, rank_of: 41, rank_window_hours: 24 },
+        { ticker: "X", recent: true, rank: 5, rank_of: 2, rank_window_hours: 24 },
+        { ticker: "Y", recent: true, rank: "1", rank_of: 2 },
+      ],
+    });
+    expect(d.copies.map((c) => [c.rank, c.rankOf, c.rankWindowHours])).toEqual([
+      [3, 41, 24],
+      [null, null, null],
+      [null, null, null],
     ]);
   });
 

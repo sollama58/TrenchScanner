@@ -130,6 +130,13 @@ export interface TokenSageAnalysis {
     signals?: string[];
     created_at?: string | null;
     recent?: boolean;
+    /**
+     * On a recent same-name copy: this coin's place by launch time among the coins with that
+     * name or ticker launched within rank_window_hours of it (1 = earliest), out of rank_of.
+     */
+    rank?: number | null;
+    rank_of?: number | null;
+    rank_window_hours?: number | null;
   }[];
   image?: {
     status?: string;
@@ -509,8 +516,18 @@ export interface NarrativeDetails {
     followers: number | null;
     verifiedType: string | null;
   }[];
-  /** Live copycat (recent: true, warn) vs reference to an established coin (false, info). */
-  copies: { ticker: string | null; name: string | null; recent: boolean | null }[];
+  /**
+   * Live copycat (recent: true, warn) vs reference to an established coin (false, info). On a
+   * recent same-name copy, rank / rankOf / rankWindowHours read "3rd of 41 within 24 h".
+   */
+  copies: {
+    ticker: string | null;
+    name: string | null;
+    recent: boolean | null;
+    rank: number | null;
+    rankOf: number | null;
+    rankWindowHours: number | null;
+  }[];
   referentSupport: string[];
 }
 
@@ -522,6 +539,22 @@ function text(value: unknown, max: number): string | null {
 function httpsUrl(value: unknown): string | null {
   const v = text(value, 300);
   return v !== null && /^https:\/\//i.test(v) ? v : null;
+}
+
+function positiveInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+/** A copycat rank, kept only when it is a whole place within its count ("3rd of 41"). */
+function copyRank(c: Record<string, unknown>) {
+  const rank = positiveInt(c.rank);
+  const rankOf = positiveInt(c.rank_of);
+  const ok = rank !== null && rankOf !== null && rank <= rankOf;
+  return {
+    rank: ok ? rank : null,
+    rankOf: ok ? rankOf : null,
+    rankWindowHours: ok ? positiveInt(c.rank_window_hours) : null,
+  };
 }
 
 const PAIR_KINDS_SHOWN = new Set(["token", "tokenized_stock"]);
@@ -578,6 +611,7 @@ export function narrativeDetails(analysis: unknown): NarrativeDetails {
         ticker: text(c.ticker, 20),
         name: text(c.name, 80),
         recent: typeof c.recent === "boolean" ? c.recent : null,
+        ...copyRank(c),
       })),
     referentSupport: labels(asRecord(doc.referent)?.supported_by, 10),
   };
