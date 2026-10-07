@@ -137,6 +137,27 @@ function read(overrides: Partial<NarrativeRead> = {}): NarrativeRead {
     xPredatesTokenS: null,
     xReuseCount: null,
     trendMatched: null,
+    lineageKind: null,
+    lineageRank: null,
+    lineageRankOf: null,
+    lineageOfMint: null,
+    originalAgeS: null,
+    originalCurveProgress: null,
+    originalComplete: null,
+    siblings1h: null,
+    siblings6h: null,
+    siblings24h: null,
+    logoReuse24h: null,
+    waveLaunches1h: null,
+    waveLaunches6h: null,
+    waveLaunches24h: null,
+    waveRank24h: null,
+    topCategoryInputs: null,
+    xCredibility: null,
+    xAccountAgeS: null,
+    xAccountMadeForCoin: null,
+    xReuseRank: null,
+    trendScore: null,
     ...overrides,
   };
 }
@@ -234,6 +255,15 @@ describe("scoreNarrative", () => {
         baseToken({ narrative: read({ copiesRecent: false, flags: ["references_known_coin"] }) }),
       ),
     ).toBe(NARRATIVE_NEUTRAL);
+  });
+
+  it("takes the penalty on a late copy, by lineage or by flag, and never on an early one", () => {
+    expect(scoreNarrative(baseToken({ narrative: read({ lineageKind: "late_copy" }) }))).toBe(25);
+    expect(scoreNarrative(baseToken({ narrative: read({ flags: ["copycat", "late_copy"] }) }))).toBe(25);
+    expect(
+      scoreNarrative(baseToken({ narrative: read({ lineageKind: "early_copy", copiesRecent: true }) })),
+    ).toBe(NARRATIVE_NEUTRAL);
+    expect(scoreNarrative(baseToken({ narrative: read({ lineageKind: "copy" }) }))).toBe(NARRATIVE_NEUTRAL);
   });
 
   it("credits a matched trend and caps the part under a red flag", () => {

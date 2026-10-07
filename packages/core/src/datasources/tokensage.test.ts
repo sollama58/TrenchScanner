@@ -430,3 +430,135 @@ describe("narrativeDetails", () => {
     ]);
   });
 });
+
+describe("narrativeFieldsFromAnalysis on a rules-0.15.0 document", () => {
+  // Shaped after TokenSage's report of 2026-10-07 (lineage, referent wave, categories[].inputs,
+  // x.account / credibility / reuse_rank, trend.score); no real document was to hand.
+  const doc: TokenSageAnalysis = {
+    mint: "CopyMint",
+    depth: "full",
+    analyzed_at: "2026-10-07T20:00:00Z",
+    referent: {
+      label: "Pepe the Frog",
+      kind: "meme",
+      confidence: 0.35,
+      supported_by: ["copy_of"],
+      wave: {
+        launches_1h: 3,
+        launches_6h: 13,
+        launches_24h: 15,
+        first_seen_at: "2026-10-06T19:00:00Z",
+        rank_24h: 13,
+      },
+    },
+    categories: [
+      { label: "animal", confidence: 0.49, inputs: ["copy_of"] },
+      { label: "animal/frog", confidence: 0.49, inputs: ["copy_of"] },
+      { label: "derivative", confidence: 0.9, inputs: ["name", "db"] },
+    ],
+    copy_of: [
+      {
+        ticker: "ZUBBO",
+        name: "Zubbo",
+        mint: "OriginalMint",
+        signals: ["name_exact"],
+        created_at: "2026-10-06T14:00:00Z",
+        recent: true,
+        rank: 15,
+        rank_of: 15,
+        rank_window_hours: 24,
+        original_age_s: 108000,
+        original_market: { complete: false, curve_progress: 0.62, graduated_pool: null },
+        match: ["name", "ticker"],
+        image_distance: 3,
+      },
+    ],
+    lineage: {
+      kind: "late_copy",
+      of_mint: "OriginalMint",
+      of_name: "Zubbo",
+      rank: 15,
+      rank_of: 15,
+      window_hours: 24,
+      siblings_1h: 2,
+      siblings_6h: 9,
+      siblings_24h: 15,
+      logo_reuse_24h: 4,
+    },
+    x: {
+      status: "ok",
+      relation: "official_account",
+      author: { handle: "zubbo", followers: 3 },
+      account: {
+        created_at: "2026-10-07T19:53:00Z",
+        age_at_launch_s: 420,
+        made_for_coin: true,
+        posts_total: 2,
+      },
+      credibility: 0.032,
+      reuse_count: 0,
+      reuse_rank: 1,
+      match: { fit: 0.55, verdict: "related", basis: ["profile_name"] },
+    },
+    trend: { matched: true, score: 0.4, terms: [{ term: "zubbo", source: "google_trends", score: 0.4 }] },
+    flags: [
+      { code: "copycat", severity: "warn" },
+      { code: "late_copy", severity: "warn" },
+      { code: "x_account_made_for_coin", severity: "info" },
+    ],
+    versions: { rules: "0.15.0-full" },
+  };
+
+  it("stores the lineage, the wave, the X account and the trend score", () => {
+    expect(narrativeFieldsFromAnalysis(doc, "complete")).toMatchObject({
+      lineageKind: "late_copy",
+      lineageRank: 15,
+      lineageRankOf: 15,
+      lineageOfMint: "OriginalMint",
+      originalAgeS: 108000,
+      originalCurveProgress: 0.62,
+      originalComplete: false,
+      siblings1h: 2,
+      siblings6h: 9,
+      siblings24h: 15,
+      logoReuse24h: 4,
+      waveLaunches1h: 3,
+      waveLaunches6h: 13,
+      waveLaunches24h: 15,
+      waveRank24h: 13,
+      // The surest category is "derivative", which two inputs agree on.
+      topCategoryInputs: 2,
+      xCredibility: 0.032,
+      xAccountAgeS: 420,
+      xAccountMadeForCoin: true,
+      xReuseRank: 1,
+      xVerdict: "related",
+      xFit: 0.55,
+      trendMatched: true,
+      trendScore: 0.4,
+      rulesVersion: "0.15.0-full",
+    });
+  });
+
+  it("leaves every new field null on a document from older rules, or without a readable post", () => {
+    const f = narrativeFieldsFromAnalysis(fixture("full").analysis, "complete");
+    for (const k of [
+      "lineageKind",
+      "lineageRank",
+      "originalAgeS",
+      "siblings24h",
+      "waveLaunches1h",
+      "topCategoryInputs",
+      "xCredibility",
+      "xAccountAgeS",
+      "xReuseRank",
+      "trendScore",
+    ] as const) {
+      expect(f[k]).toBeNull();
+    }
+    const unread = narrativeFieldsFromAnalysis({ ...doc, x: { ...doc.x, status: "failed" } }, "complete");
+    expect(unread.xCredibility).toBeNull();
+    expect(unread.xAccountMadeForCoin).toBeNull();
+    expect(unread.lineageKind).toBe("late_copy");
+  });
+});

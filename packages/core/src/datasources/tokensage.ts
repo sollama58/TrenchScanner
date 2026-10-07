@@ -17,6 +17,10 @@ export type TokenSageDepth = "basic" | "full";
 export interface TokenSageCategory {
   label: string;
   confidence: number;
+  /** Rules 0.15.0+: the inputs that agree on this label (name, symbol, description, image, x, trend, db). */
+  inputs?: string[];
+  /** Rules 0.15.0+: coins with this label in the hour before the read. */
+  wave_1h?: number | null;
 }
 
 export interface TokenSageFlag {
@@ -61,6 +65,8 @@ export interface TokenSageXMatch {
   fit?: number;
   /** "about_this_coin" | "related" | "unrelated" | "unknown"; kept open for new values. */
   verdict?: string;
+  /** Rules 0.15.0+: what the fit rests on (post_text, post_image, cashtag, profile_name, profile_bio, profile_image). */
+  basis?: string[];
 }
 
 /**
@@ -115,6 +121,14 @@ export interface TokenSageAnalysis {
     confidence?: number;
     /** Which inputs point at the referent: name, symbol, description, image, x, trend, chain, db. */
     supported_by?: string[];
+    /** Rules 0.15.0+: how many coins TokenSage resolved to this referent in the hours before the read. */
+    wave?: {
+      launches_1h?: number | null;
+      launches_6h?: number | null;
+      launches_24h?: number | null;
+      first_seen_at?: string | null;
+      rank_24h?: number | null;
+    } | null;
   } | null;
   categories?: TokenSageCategory[];
   ticker_explanation?: string | null;
@@ -137,7 +151,38 @@ export interface TokenSageAnalysis {
     rank?: number | null;
     rank_of?: number | null;
     rank_window_hours?: number | null;
+    /** Rules 0.15.0+: seconds from the copied coin's launch to this one's, and its curve at the read. */
+    original_age_s?: number | null;
+    original_market?: {
+      complete?: boolean | null;
+      curve_progress?: number | null;
+      graduated_pool?: string | null;
+      as_of?: string | null;
+    } | null;
+    match?: string[];
+    image_distance?: number | null;
   }[];
+  /**
+   * Rules 0.15.0+: which copy of what this coin is. `kind` is "original", "early_copy" (rank <= 3
+   * and the original under 6 h old), "late_copy" (rank > 10 or the original over 24 h old),
+   * "copy" (between), "reference" (builds on an established coin) or "unknown". The siblings
+   * counts take in same-name, same-ticker and near-identical-logo coins launched before this one.
+   */
+  lineage?: {
+    kind?: string;
+    of_mint?: string | null;
+    of_name?: string | null;
+    of_ticker?: string | null;
+    of_created_at?: string | null;
+    rank?: number | null;
+    rank_of?: number | null;
+    window_hours?: number | null;
+    siblings_1h?: number | null;
+    siblings_6h?: number | null;
+    siblings_24h?: number | null;
+    logo_reuse_24h?: number | null;
+    logo_first_seen_at?: string | null;
+  } | null;
   image?: {
     status?: string;
     phash?: string | null;
@@ -164,8 +209,46 @@ export interface TokenSageAnalysis {
     replied_to?: TokenSageXPost | null;
     accounts?: TokenSageXAccount[];
     match?: TokenSageXMatch | null;
+    /** Rules 0.15.0+: the author's or profile's account, apart from how well it fits the coin. */
+    account?: {
+      created_at?: string | null;
+      age_at_launch_s?: number | null;
+      posts_total?: number | null;
+      posts_about_coin?: number | null;
+      name_changes?: number | null;
+      verified_type?: string | null;
+      made_for_coin?: boolean | null;
+    } | null;
+    /** Rules 0.15.0+: 0-1 from account age, followers, posting history and verification. */
+    credibility?: number | null;
+    /** Rules 0.15.0+: this coin's place among the coins that linked the same post or profile (1 = first). */
+    reuse_rank?: number | null;
+    reuse_first_at?: string | null;
   } | null;
-  trend?: { matched?: boolean; terms?: { term: string; spike?: number | null; source: string }[] } | null;
+  trend?: {
+    matched?: boolean;
+    /** Rules 0.15.0+: strength of the hit, 0-1. */
+    score?: number | null;
+    /**
+     * One hit per source: "wikipedia", "google_trends", "news", and from rules 0.16.0 "x_trends"
+     * (X's trending topics: rank 1-50 and hours listed) and "bluesky" (posts in 24 h from at
+     * least 3 accounts). Kept open: TokenSage adds sources without a schema bump.
+     */
+    terms?: {
+      term: string;
+      source: string;
+      spike?: number | null;
+      score?: number | null;
+      seen_at?: string | null;
+      matched_on?: string | null;
+      searches?: number | null;
+      rank?: number | null;
+      hours?: number | null;
+      posts?: number | null;
+      headline?: string | null;
+    }[];
+    sources?: { source?: string; status?: string; as_of?: string | null }[];
+  } | null;
   flags?: TokenSageFlag[];
   summary?: string;
   evidence?: {
@@ -357,6 +440,33 @@ export interface TokenNarrativeFields {
   xReuseCount: number | null;
   /** The name matched a Wikipedia or news spike (trend.matched); null until the full read says. */
   trendMatched: boolean | null;
+  /**
+   * Rules 0.15.0+ (TokenNarrative's columns of the same names, all null on older reads): the
+   * coin's lineage, the coin it copies, how many coins shared its name, ticker or logo before
+   * it, the referent wave, how many inputs agree on the top category, the X account's
+   * credibility and age, and the trend score.
+   */
+  lineageKind: string | null;
+  lineageRank: number | null;
+  lineageRankOf: number | null;
+  lineageOfMint: string | null;
+  originalAgeS: number | null;
+  originalCurveProgress: number | null;
+  originalComplete: boolean | null;
+  siblings1h: number | null;
+  siblings6h: number | null;
+  siblings24h: number | null;
+  logoReuse24h: number | null;
+  waveLaunches1h: number | null;
+  waveLaunches6h: number | null;
+  waveLaunches24h: number | null;
+  waveRank24h: number | null;
+  topCategoryInputs: number | null;
+  xCredibility: number | null;
+  xAccountAgeS: number | null;
+  xAccountMadeForCoin: boolean | null;
+  xReuseRank: number | null;
+  trendScore: number | null;
   /** Flag counts by severity, so a reader needs no catalogue of codes. 0 when there are none. */
   highFlagCount: number;
   warnFlagCount: number;
@@ -441,7 +551,44 @@ export function narrativeFieldsFromAnalysis(
   const marked = copies.filter((c) => typeof c?.recent === "boolean");
   const copiesRecent =
     copies.length === 0 ? false : marked.length > 0 ? marked.some((c) => c!.recent === true) : null;
+  // Rules 0.15.0+. The lineage names the original; its age and curve ride on the matching
+  // copy_of item (or the first that carries them).
+  const lineage = asRecord(doc.lineage);
+  const lineageOfMint = clip(lineage?.of_mint)?.slice(0, 64) ?? null;
+  const original =
+    copies.find((c) => c !== null && lineageOfMint !== null && c.mint === lineageOfMint) ??
+    copies.find((c) => c !== null && typeof c.original_age_s === "number") ??
+    null;
+  const originalMarket = asRecord(original?.original_market);
+  const wave = asRecord(referent?.wave);
+  const top = asArray(doc.categories)
+    .map(asRecord)
+    .filter((c): c is Record<string, unknown> => c !== null && unit(c.confidence) !== null)
+    .sort((a, b) => unit(b.confidence)! - unit(a.confidence)!)[0];
+  const account = xRead ? asRecord(x.account) : null;
+  const bool = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null);
   return {
+    lineageKind: clip(lineage?.kind)?.slice(0, 40) ?? null,
+    lineageRank: count(lineage?.rank),
+    lineageRankOf: count(lineage?.rank_of),
+    lineageOfMint,
+    originalAgeS: count(original?.original_age_s),
+    originalCurveProgress: unit(originalMarket?.curve_progress),
+    originalComplete: bool(originalMarket?.complete),
+    siblings1h: count(lineage?.siblings_1h),
+    siblings6h: count(lineage?.siblings_6h),
+    siblings24h: count(lineage?.siblings_24h),
+    logoReuse24h: count(lineage?.logo_reuse_24h),
+    waveLaunches1h: count(wave?.launches_1h),
+    waveLaunches6h: count(wave?.launches_6h),
+    waveLaunches24h: count(wave?.launches_24h),
+    waveRank24h: count(wave?.rank_24h),
+    topCategoryInputs: top && Array.isArray(top.inputs) ? top.inputs.length : null,
+    xCredibility: xRead ? unit(x.credibility) : null,
+    xAccountAgeS: count(account?.age_at_launch_s),
+    xAccountMadeForCoin: bool(account?.made_for_coin),
+    xReuseRank: xRead ? count(x.reuse_rank) : null,
+    trendScore: unit(trend?.score),
     depth: doc.depth === "full" ? "full" : "basic",
     status,
     categories,
