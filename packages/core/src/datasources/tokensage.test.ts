@@ -462,6 +462,94 @@ describe("narrativeDetails", () => {
   });
 });
 
+describe("narrativeFieldsFromAnalysis on a rules-0.17.0 document", () => {
+  // Shaped after TokenSage's complete reply of 2026-10-07: a kind-only referent (FROGMAN), the
+  // crypto_native sub-labels, an unresolved lineage, and the trend sources 0.18.0 will add.
+  const doc: TokenSageAnalysis = {
+    mint: "FrogMint",
+    depth: "full",
+    analyzed_at: "2026-10-07T23:00:00Z",
+    referent: {
+      label: "frog",
+      kind: "animal",
+      generic: true,
+      confidence: 0.38,
+      supported_by: ["name"],
+      wave: null,
+    },
+    categories: [
+      { label: "animal", confidence: 0.55, inputs: ["name"] },
+      { label: "animal/frog", confidence: 0.55, inputs: ["name"] },
+      { label: "crypto_native", confidence: 0.5, inputs: ["description"] },
+      { label: "crypto_native/launchpad", confidence: 0.5, inputs: ["description"] },
+    ],
+    lineage: { kind: "unknown", of_mint: null, rank: null, rank_of: null, siblings_24h: 0 },
+    x: {
+      status: "ok",
+      relation: "official_account",
+      author: { handle: "frogman", followers: 12 },
+      // No account block: the flag alone says the profile was made for the coin.
+      credibility: 0.1,
+      match: { fit: 0.5, verdict: "related", basis: ["profile_image"] },
+    },
+    trend: {
+      matched: false,
+      score: 0,
+      terms: [{ term: "frogman", source: "bluesky", score: 0.12, posts: 3, headline: "frogman lives" }],
+      sources: [
+        { source: "wikipedia", status: "ok", as_of: "2026-10-07T22:50:00Z", terms: 0 },
+        { source: "news", status: "stale", as_of: "2026-10-07T20:00:00Z", terms: 0 },
+        { source: "x_trends", status: "unavailable", as_of: null, terms: 0 },
+        { source: "bluesky", status: "ok", as_of: "2026-10-07T22:55:00Z", terms: 1 },
+      ],
+    },
+    flags: [
+      { code: "x_account_made_for_coin", severity: "info" },
+      { code: "logo_reused", severity: "info" },
+    ],
+    versions: { rules: "0.17.0-full", lexicon: "2026-10-07.3" },
+  };
+
+  it("keeps the kind-only referent, the lexicon, the sub-labels and the info flags", () => {
+    const f = narrativeFieldsFromAnalysis(doc, "complete");
+    expect(f).toMatchObject({
+      referentLabel: "frog",
+      referentKind: "animal",
+      referentConfidence: 0.38,
+      referentSupport: ["name"],
+      referentGeneric: true,
+      lineageKind: "unknown",
+      lineageRank: null,
+      waveLaunches1h: null,
+      topCategoryInputs: 1,
+      xAccountMadeForCoin: true,
+      xAccountAgeS: null,
+      xCredibility: 0.1,
+      trendMatched: false,
+      trendScore: 0,
+      highFlagCount: 0,
+      warnFlagCount: 0,
+      rulesVersion: "0.17.0-full",
+      lexiconVersion: "2026-10-07.3",
+    });
+    expect(f.flags).toEqual(["x_account_made_for_coin", "logo_reused"]);
+    expect(f.categories.map((c) => c.label)).toContain("crypto_native/launchpad");
+  });
+
+  it("says named, not generic, on a referent that doesn't say, and nothing without one", () => {
+    const named = narrativeFieldsFromAnalysis(
+      { ...doc, referent: { label: "Zcash", kind: "coin", confidence: 0.57, supported_by: ["name"] } },
+      "complete",
+    );
+    expect(named.referentGeneric).toBe(false);
+    expect(narrativeFieldsFromAnalysis({ ...doc, referent: null }, "complete").referentGeneric).toBeNull();
+    // The made-for-coin flag only speaks for a post or profile that was read.
+    const unread = narrativeFieldsFromAnalysis({ ...doc, x: { status: "failed" } }, "complete");
+    expect(unread.xAccountMadeForCoin).toBeNull();
+    expect(narrativeFieldsFromAnalysis({ ...doc, versions: null }, "complete").lexiconVersion).toBeNull();
+  });
+});
+
 describe("narrativeFieldsFromAnalysis on a rules-0.15.0 document", () => {
   // Shaped after TokenSage's report of 2026-10-07 (lineage, referent wave, categories[].inputs,
   // x.account / credibility / reuse_rank, trend.score); no real document was to hand.

@@ -11,6 +11,7 @@ import {
 import {
   NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
+  NARRATIVE_FEATURES_V3,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -148,6 +149,10 @@ export const CANDIDATE_FEATURE_NAMES = [
   // the coin is, the referent wave, the X account's credibility and the trend score. Null on
   // reads made by older rules.
   ...NARRATIVE_FEATURES_V2,
+  // Added 2026-10-07, TokenSage rules 0.17.0 (curation/narrativeFeatures.ts): whether the
+  // referent is a kind only or a named thing, now that a referent comes back whenever the kind
+  // is plain.
+  ...NARRATIVE_FEATURES_V3,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];

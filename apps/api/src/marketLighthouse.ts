@@ -223,7 +223,8 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       WHERE n."checkedAt" > ${since} AND n.status <> 'failed' AND position('/' IN c->>'label') > 0
       GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
-      SELECT "referentKind" AS label, count(*) AS count FROM "TokenNarrative"
+      SELECT CASE WHEN "referentGeneric" THEN "referentKind" || ' (kind only)' ELSE "referentKind" END AS label, count(*) AS count
+      FROM "TokenNarrative"
       WHERE "checkedAt" > ${since} AND status <> 'failed' AND "referentKind" IS NOT NULL
       GROUP BY 1 ORDER BY 2 DESC LIMIT 8`,
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
@@ -266,7 +267,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
              a."simReturnPct"::float8 AS sim_return,
              n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
-             n."referentKind" AS referent_kind, n.flags
+             CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind, n.flags
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"

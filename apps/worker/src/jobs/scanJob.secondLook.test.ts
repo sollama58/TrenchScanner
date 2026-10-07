@@ -13,6 +13,7 @@ const read = (overrides: Partial<NarrativeRead> = {}): NarrativeRead => ({
   referentKind: null,
   referentConfidence: null,
   referentSupport: [],
+  referentGeneric: null,
   flags: [],
   highFlagCount: 0,
   warnFlagCount: 0,

@@ -170,6 +170,7 @@ describe("TokenSage narrative criteria", () => {
     referentKind: null,
     referentConfidence: null,
     referentSupport: [],
+    referentGeneric: null,
     flags: [],
     highFlagCount: 0,
     warnFlagCount: 0,

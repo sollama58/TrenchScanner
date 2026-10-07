@@ -118,7 +118,17 @@ export interface TokenSageAnalysis {
   } | null;
   referent?: {
     label?: string;
+    /**
+     * "famous_animal" | "meme" | "person" | "coin" | "event" | "concept" | "place" | "other", and
+     * from rules 0.17.0 "animal" | "media" | "project" | "object" | "organization"; kept open.
+     */
     kind?: string;
+    /**
+     * Rules 0.17.0+: only the kind is known ("frog", "cat", "launchpad"), at confidence 0.3-0.49
+     * and with no wave. Absent or false on a named referent (0.5-0.69 from one input, 0.7+ when
+     * two or more independent inputs agree).
+     */
+    generic?: boolean;
     desc?: string | null;
     source?: string | null;
     confidence?: number;
@@ -233,7 +243,7 @@ export interface TokenSageAnalysis {
     /** Rules 0.15.0+: strength of the hit, 0-1. */
     score?: number | null;
     /**
-     * One hit per source: "wikipedia", "google_trends", "news", and from rules 0.16.0 "x_trends"
+     * One hit per source: "wikipedia", "google_trends", "news", and from rules 0.18.0 (pending) "x_trends"
      * (X's trending topics: rank 1-50 and hours listed) and "bluesky" (posts in 24 h from at
      * least 3 accounts). Kept open: TokenSage adds sources without a schema bump.
      */
@@ -250,7 +260,8 @@ export interface TokenSageAnalysis {
       posts?: number | null;
       headline?: string | null;
     }[];
-    sources?: { source?: string; status?: string; as_of?: string | null }[];
+    /** Rules 0.15.0+, full reads: each source's status ("ok", "stale", "failed", "skipped", "unavailable"). */
+    sources?: { source?: string; status?: string; as_of?: string | null; terms?: number | null }[];
   } | null;
   flags?: TokenSageFlag[];
   summary?: string;
@@ -417,6 +428,12 @@ export interface TokenNarrativeFields {
   referentConfidence: number | null;
   /** Inputs that point at the referent (referent.supported_by); two or more is far stronger. */
   referentSupport: string[];
+  /**
+   * Rules 0.17.0+: true when only the referent's kind is known (referent.generic), false on a
+   * named referent (and on every referent from older rules, which were all named), null without
+   * a referent.
+   */
+  referentGeneric: boolean | null;
   summary: string | null;
   flags: string[];
   xFit: number | null;
@@ -474,6 +491,8 @@ export interface TokenNarrativeFields {
   highFlagCount: number;
   warnFlagCount: number;
   rulesVersion: string | null;
+  /** versions.lexicon: some TokenSage changes ship without a rules bump and split only on this. */
+  lexiconVersion: string | null;
   analyzedAt: Date | null;
 }
 
@@ -589,7 +608,9 @@ export function narrativeFieldsFromAnalysis(
     topCategoryInputs: top && Array.isArray(top.inputs) ? top.inputs.length : null,
     xCredibility: xRead ? unit(x.credibility) : null,
     xAccountAgeS: count(account?.age_at_launch_s),
-    xAccountMadeForCoin: bool(account?.made_for_coin),
+    // The account block says so directly; the x_account_made_for_coin flag (info) says the same.
+    xAccountMadeForCoin:
+      bool(account?.made_for_coin) ?? (xRead && flags.includes("x_account_made_for_coin") ? true : null),
     xReuseRank: xRead ? count(x.reuse_rank) : null,
     trendScore: unit(trend?.score),
     depth: doc.depth === "full" ? "full" : "basic",
@@ -599,6 +620,7 @@ export function narrativeFieldsFromAnalysis(
     referentKind: clip(referent?.kind),
     referentConfidence: referent ? unit(referent.confidence) : null,
     referentSupport: labels(referent?.supported_by, 10),
+    referentGeneric: referent ? referent.generic === true : null,
     summary: clip(doc.summary),
     flags,
     xFit: known !== null ? unit(match?.fit) : null,
@@ -614,6 +636,7 @@ export function narrativeFieldsFromAnalysis(
     highFlagCount: severityCount("high"),
     warnFlagCount: severityCount("warn"),
     rulesVersion: clip(asRecord(doc.versions)?.rules),
+    lexiconVersion: clip(asRecord(doc.versions)?.lexicon)?.slice(0, 40) ?? null,
     analyzedAt: analyzedAt && !Number.isNaN(analyzedAt.getTime()) ? analyzedAt : null,
   };
 }

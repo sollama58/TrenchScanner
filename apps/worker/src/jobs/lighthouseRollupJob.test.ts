@@ -71,6 +71,7 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
           categories: [{ label: "rlanimal/dog", confidence: 0.7 }],
           referentKind: "animal",
           referentConfidence: 0.4,
+          referentGeneric: true,
           copiesRecent: false,
           checkedAt: AT,
         },
@@ -217,7 +218,8 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
     });
     expect(find("subcategory", "rlanimal/dog")).toMatchObject({ count: 2, alerts: 2 });
     expect(find("flag", "copycat")).toMatchObject({ count: 1, alerts: 1, won2x: 1 });
-    expect(find("referentKind", "animal")?.count).toBe(2);
+    expect(find("referentKind", "animal")?.count).toBe(1);
+    expect(find("referentKind", "animal (kind only)")?.count).toBe(1);
     expect(find("referentSupport", "x")?.count).toBe(1);
     expect(find("xVerdict", "about_this_coin")).toMatchObject({ count: 1, alerts: 1 });
     expect(find("copy", "copies a recent coin")).toMatchObject({ count: 1, alerts: 1 });
