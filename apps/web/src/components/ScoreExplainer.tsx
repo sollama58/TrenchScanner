@@ -87,8 +87,8 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
             as &quot;a frog coin&quot;, half as much), and so does a linked X post that announced the coin or
             is what it references, when the post went out before the launch. An unrelated or spoofed post, or
             a red flag, pulls it down. The midpoint until the read lands. A bare X link, a launcher&apos;s own
-            profile and a copycat earn and lose nothing: on the first live day copycats doubled more often
-            than other coins, so the penalty waits until TokenSage says which copy a coin is.
+            profile and a copycat, early or late, earn and lose nothing: on the first live day copycats and
+            late copies both doubled more often than other coins, so a penalty waits on more data.
           </dd>
         </dl>
         <h3>The weights adapt</h3>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  LATE_COPY_PENALTY,
   NARRATIVE_NEUTRAL,
   NARRATIVE_RED_FLAG_CAP,
   X_POST_PREDATES_MIN_S,
@@ -265,9 +266,10 @@ describe("scoreNarrative", () => {
     ).toBe(NARRATIVE_NEUTRAL);
   });
 
-  it("takes the penalty on a late copy, by lineage or by flag, and never on an early one", () => {
-    expect(scoreNarrative(baseToken({ narrative: read({ lineageKind: "late_copy" }) }))).toBe(25);
-    expect(scoreNarrative(baseToken({ narrative: read({ flags: ["copycat", "late_copy"] }) }))).toBe(25);
+  it("holds a late copy neutral while LATE_COPY_PENALTY is 0, by lineage or by flag, like an early one", () => {
+    const late = NARRATIVE_NEUTRAL - LATE_COPY_PENALTY;
+    expect(scoreNarrative(baseToken({ narrative: read({ lineageKind: "late_copy" }) }))).toBe(late);
+    expect(scoreNarrative(baseToken({ narrative: read({ flags: ["copycat", "late_copy"] }) }))).toBe(late);
     expect(
       scoreNarrative(baseToken({ narrative: read({ lineageKind: "early_copy", copiesRecent: true }) })),
     ).toBe(NARRATIVE_NEUTRAL);

@@ -85,6 +85,13 @@ export const AGREED_REFERENT_MIN_CONFIDENCE = 0.7;
 export const GENERIC_REFERENT_MIN_CONFIDENCE = 0.3;
 
 /**
+ * Points a late copy loses. 0 until the lineage inputs have shown their direction on 1,000+
+ * graded decision rows (notes/tokensage-models-eval-2026-10-07.md, section 2): the first 50 rows
+ * had late copies doubling more often than originals, not less.
+ */
+export const LATE_COPY_PENALTY = 0;
+
+/**
  * TokenSage's read as a 0-100 part (notes/tokensage-models-filters-scoring-review-2026-10-06.md,
  * section 5, revised on the first live day's data in notes/tokensage-data-eval-2026-10-07.md).
  * Starts at the midpoint and moves on what the read established:
@@ -103,7 +110,9 @@ export const GENERIC_REFERENT_MIN_CONFIDENCE = 0.3;
  *  - a copycat as such is neutral: copycats doubled more often than other coins in every
  *    population on the first live day, because a copy of a coin that is running rides its
  *    narrative. A late copy (TokenSage's lineage: the 11th or later coin with the name, or a copy
- *    of a coin more than a day old) takes the penalty instead;
+ *    of a coin more than a day old) is neutral too for now (LATE_COPY_PENALTY, user decision
+ *    2026-10-07): on the first rows with lineage, late copies doubled more often than originals,
+ *    so the penalty waits until about 1,000 graded decision rows carry lineage;
  *  - a matched trend (the name is spiking on Wikipedia or in the news) lifts it;
  *  - a high-severity flag caps the part at NARRATIVE_RED_FLAG_CAP whatever else it earned.
  * The parts' breakpoints are hand-set like the other three; the weight between the parts is what
@@ -135,7 +144,7 @@ export function scoreNarrative(token: EnrichedToken): number {
       part += 15;
     }
   }
-  if (narrativeIsLateCopy(read) === true) part -= 25;
+  if (narrativeIsLateCopy(read) === true) part -= LATE_COPY_PENALTY;
   if (read.trendMatched === true) part += 10;
   part = clamp(part);
   return read.highFlagCount > 0 ? Math.min(part, NARRATIVE_RED_FLAG_CAP) : part;
