@@ -31,6 +31,7 @@ const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
   agreement: "How many of the others call it",
   rules: "Hand-tuned rules",
   learner: "Trained model",
+  narrative: "Trained model, waits for the deep narrative read",
 };
 
 /**

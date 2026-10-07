@@ -27,12 +27,18 @@ import type { CuratorLearner } from "./trainer.js";
  *    consensus's unlearned rival.
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
  *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
+ *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
+ *    stored (user decision 2026-10-07): on a decision moment that already carries it, and on a
+ *    "second look" the scan takes when the deep read lands after the first decision
+ *    (CandidateOutcome.sampleKind "second"). It trains on those rows alone, the ns* inputs beside
+ *    the usual ones. Not a "learner": the combiners don't stack on it, it doesn't breed, and the
+ *    other seats never train on its second-look rows. Lives behind TOKENSAGE_ENABLED.
  *
  * Ids are stable storage keys (CuratedAlert.model, CuratorModel.contestant, User.curatedModel):
  * never rename one; retire it and add a new id instead.
  */
 
-export type ContestantRole = "rules" | "learner" | "stacked" | "blend" | "agreement";
+export type ContestantRole = "rules" | "learner" | "stacked" | "blend" | "agreement" | "narrative";
 
 /** What a learner contestant trains - the knobs that make it a different model. */
 export interface CuratorRecipe {
@@ -67,6 +73,7 @@ export const CONSENSUS_CONTESTANT = "consensus";
 export const RULES_CONTESTANT = "rules";
 export const BLEND_CONTESTANT = "blend";
 export const AGREEMENT_CONTESTANT = "agreement";
+export const NARRATIVE_CONTESTANT = "narrative";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
 export const RECENT_HALF_LIFE_DAYS = 3;
@@ -205,6 +212,16 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary: "Asks first whether a token will avoid a 50% drop, then whether it will double.",
     role: "learner",
     recipe: { learner: "gbdt", twoStage: true },
+  },
+  {
+    id: NARRATIVE_CONTESTANT,
+    name: "Narrative",
+    description:
+      "Gradient-boosted trees that decide only once TokenSage's deep read of the coin is in, reading it beside every usual input",
+    summary:
+      "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides from that plus the usual signals.",
+    role: "narrative",
+    recipe: { learner: "gbdt" },
   },
 ];
 

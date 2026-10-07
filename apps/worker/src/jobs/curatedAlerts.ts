@@ -89,6 +89,8 @@ type RosterEntry =
       derived?: DerivedRuleSet;
     }
   | { role: "learner"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
+  /** Decides only with the deep read in hand - see DecisionPopulation. */
+  | { role: "narrative"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
   | { role: "stacked"; spec: ContestantSpec; model: ModelRef<StackedCuratorParams> }
   | { role: "blend"; spec: ContestantSpec; model: ModelRef<BlendCuratorParams> }
   | { role: "agreement"; spec: ContestantSpec; model: ModelRef<AgreementCuratorParams> };
@@ -154,10 +156,10 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
         rankCutoff: params !== null ? (params.rankCutoff ?? undefined) : await legacyHeuristicCutoff(),
         ...(params?.derived ? { derived: params.derived } : {}),
       });
-    } else if (spec.role === "learner") {
+    } else if (spec.role === "learner" || spec.role === "narrative") {
       if (row && SUPPORTED_CURATOR_MODEL_KINDS.includes(row.kind)) {
         entries.push({
-          role: "learner",
+          role: spec.role,
           spec,
           model: { id: row.id, params: row.params as unknown as TrainedCuratorParams },
         });
@@ -287,6 +289,14 @@ function rulesTableDecision(
 const BACKING_RANK = 0.9;
 
 /**
+ * Which moment a candidate is being decided at. "event" is the decision moment every seat
+ * decides on; "second" is the second look the scan takes when TokenSage's deep read lands after
+ * the token's last decision (CandidateOutcome.sampleKind "second"), where only the Narrative seat
+ * decides. The Narrative seat decides on either, but never without the deep read.
+ */
+export type DecisionPopulation = "event" | "second";
+
+/**
  * Every contestant's decision on this candidate, keyed by contestant id. A model decision's
  * source is its CuratorModel row id, so every call is traceable to the exact weights that made
  * it. Reasons are computed only for calls (they cost a pass over the model).
@@ -295,14 +305,31 @@ function decideCurations(
   scored: ScoredToken,
   roster: CuratorRoster,
   env: Env,
+  population: DecisionPopulation = "event",
 ): Map<string, CurationDecision> {
   const features = buildCandidateFeatures(scored);
   const decisions = new Map<string, CurationDecision>();
   const probabilities = new Map<string, number>();
   const learners = new Map<string, ModelRef<TrainedCuratorParams>>();
   const names = new Map(roster.entries.map((e) => [e.spec.id, e.spec.name]));
+  const deepRead = scored.narrative?.depth === "full";
 
   for (const entry of roster.entries) {
+    if (entry.role === "narrative") {
+      if (!deepRead) continue;
+      const { params, id } = entry.model;
+      const probability = scoreCandidateWithModel(params, features);
+      const curate = probability >= params.threshold;
+      decisions.set(entry.spec.id, {
+        curate,
+        confidence: probability * 100,
+        reasons: curate ? topModelReasons(params, features) : [],
+        source: id,
+        ...servedFields(params, probability),
+      });
+      continue;
+    }
+    if (population === "second") continue;
     if (entry.role === "rules") {
       decisions.set(
         entry.spec.id,
@@ -327,6 +354,7 @@ function decideCurations(
   }
 
   for (const entry of roster.entries) {
+    if (population === "second") break;
     if (entry.role === "agreement") {
       const { params, id } = entry.model;
       const probability = scoreAgreement(params, probabilities);
@@ -541,13 +569,15 @@ export async function collectCuratedContender(
    * that said no at the event moment pick the token at a later, better-looking one.
    */
   retry?: ContenderRetry,
+  /** The moment this is: a decision moment (every seat) or a second look (the Narrative seat only). */
+  population: DecisionPopulation = "event",
 ): Promise<void> {
   if (!inMcapBand(scored.marketCapUsd, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX })) {
     return;
   }
 
   const roster = await curatorRoster(env);
-  const decisions = decideCurations(scored, roster, env);
+  const decisions = decideCurations(scored, roster, env, population);
   const calling = [...decisions.entries()].filter(
     ([model, d]) => d.curate && (retry === undefined || retry.models.includes(model)),
   );

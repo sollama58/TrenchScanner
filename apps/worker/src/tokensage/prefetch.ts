@@ -7,6 +7,7 @@ import {
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
   storableAnalysis,
+  tokenSageEnabled,
   type Env,
   type TokenSageAnalysis,
   type TokenSageDepth,
@@ -128,9 +129,7 @@ export function resetTokenSage(): void {
   stats = { ...NO_STATS };
 }
 
-export function tokenSageEnabled(env: Env): boolean {
-  return env.TOKENSAGE_ENABLED && env.TOKENSAGE_API_URL !== "" && env.TOKENSAGE_API_KEY !== "";
-}
+export { tokenSageEnabled };
 
 function settledCovers(mintAddress: string, depth: TokenSageDepth, now: number): boolean {
   const s = settled.get(mintAddress);

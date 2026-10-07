@@ -616,6 +616,9 @@ model CandidateOutcome {
   ///  - "event": the first scan in each CANDIDATE_EVENT_SPACING_MINUTES window where the token
   ///    looked ready (passesEventPreGate). The live curators decide ONLY at these moments, so
   ///    these rows are exactly the distribution live picks come from.
+  ///  - "second": a second look the scan takes when TokenSage's deep read lands after the
+  ///    token's last decision moment (same pre-gate, same spacing). Only the Narrative seat
+  ///    decides here, and only it trains on these rows (curation/contestants.ts).
   ///  - "emission": a fresh anchor made for an alert or shadow pick. Chosen by a curator, so
   ///    kept out of training (a model learning from its own picks feeds back on itself).
   ///  - "match": the anchor a user-filter alert (Match.candidateOutcomeId) is graded from, shared

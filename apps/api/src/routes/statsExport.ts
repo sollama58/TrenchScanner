@@ -36,7 +36,7 @@ function windowDays(q: { days: number; since?: Date; until?: Date }, now = new D
 export const EXPORT_DATASETS = ["outcomes", "paths", "alerts", "shadow", "ai-reviews", "screen"] as const;
 export type ExportDataset = (typeof EXPORT_DATASETS)[number];
 
-const SAMPLE_KINDS = ["hourly", "event", "emission", "match"] as const;
+const SAMPLE_KINDS = ["hourly", "event", "second", "emission", "match"] as const;
 
 export const exportQuerySchema = z
   .object({
