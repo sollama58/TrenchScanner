@@ -34,6 +34,7 @@ import {
   type ScheduledJob,
 } from "./scheduler.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
+import { startNarrativePolling } from "./tokensage/prefetch.js";
 
 const logger = createLogger("worker");
 
@@ -80,6 +81,9 @@ async function main() {
       ? new PumpPortalStream(env.PUMPPORTAL_WS_URL, undefined, { tradeFlow: env.PUMPPORTAL_TRADE_FLOW })
       : undefined;
   stream?.start();
+  // TokenSage requests queued by the scan are re-sent between cycles too - see
+  // startNarrativePolling. The queue lives in the scanning process.
+  const stopNarrativePolling = scans ? startNarrativePolling(env) : undefined;
 
   const deps = {
     pumpFun: new PumpFunClient({ baseUrl: env.PUMPFUN_BASE_URL }),
@@ -283,6 +287,7 @@ async function main() {
     logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS });
     for (const { job } of jobs) job.stop();
     stream?.stop();
+    stopNarrativePolling?.();
     const outcomes = await Promise.all(
       jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
     );
