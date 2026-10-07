@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CONTESTANTS, CONTESTANT_IDS, ORDER_FLOW_FEATURES, enabledContestants } from "./contestants.js";
+import { NARRATIVE_MIN_ROWS } from "./trainingRun.js";
+import { STACKED_MODEL_KIND } from "./stacking.js";
 import {
   defaultContestant,
   NEVER_EMIT_THRESHOLD,
@@ -24,6 +26,44 @@ describe("contestant roster", () => {
       "trees",
     ]);
   });
+
+  it("seats the Narrative model without counting it as a learner the combiners stack on", () => {
+    expect(enabledContestants(["consensus", "linear", "narrative"]).map((c) => c.id)).toEqual([
+      "rules",
+      "linear",
+      "narrative",
+    ]);
+    expect(CONTESTANTS.find((c) => c.id === "narrative")?.role).toBe("narrative");
+  });
+});
+
+describe("the Narrative seat's exam", () => {
+  it("sits its own exam on its own rows, and sits out without enough of them", async () => {
+    const rows = syntheticMarket({ tokens: 1200, days: 20, truth: "linear", seed: 21 });
+    const cfg = {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 500,
+      recencyHalfLifeDays: 14,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      contestants: enabledContestants(["linear", "narrative"]),
+    };
+    const without = await runContestTraining(rows, {
+      ...cfg,
+      narrativeRows: rows.slice(0, NARRATIVE_MIN_ROWS - 1),
+    });
+    expect(without.map((r) => r.contestant)).toEqual(["rules", "linear"]);
+
+    // The seat's rows carry the deep read; everything else about them is the usual market.
+    const own = rows.map((r) => ({ ...r, features: { ...r.features, nsDepthFull: 1, nsCatAnimal: 1 } }));
+    const results = await runContestTraining(rows, { ...cfg, narrativeRows: own });
+    expect(results.map((r) => r.contestant)).toEqual(["rules", "linear", "narrative"]);
+    const narrative = results.find((r) => r.contestant === "narrative")!;
+    expect(narrative.metrics.exam).toBeDefined();
+    expect(narrative.params.kind).not.toBe(STACKED_MODEL_KIND);
+  }, 60_000);
 });
 
 describe("defaultContestant", () => {

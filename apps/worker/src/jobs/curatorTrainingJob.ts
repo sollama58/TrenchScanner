@@ -112,6 +112,11 @@ export async function runCuratorTrainingJob(
     return [l.generation === 0 && spec.recipe ? { ...l, recipe: spec.recipe } : l];
   });
   const contestants = withLanes(roster, lanes);
+  // The Narrative seat's own rows: every moment that carried the deep read (see
+  // narrativeTrainingRows). Only loaded while the seat is on the roster.
+  const narrativeRows = contestants.some((c) => c.role === "narrative")
+    ? await narrativeTrainingRows(trainingRows, windowStart, env.CURATOR_TRAINING_MAX_ROWS)
+    : [];
 
   // A takeover on probation is settled first: confirmed (its challenger takes the seat this
   // run), rejected or abandoned (breeding resumes), or still waiting (no breeding this run).
@@ -148,10 +153,16 @@ export async function runCuratorTrainingJob(
       rulesFromBest: env.CURATOR_RULES_FROM_BEST,
       rulesTeachers,
       currentRules,
+      narrativeRows,
     },
     plan ?? undefined,
   );
   const { results } = outcome;
+  // The Narrative seat sits out until it has rows enough (NARRATIVE_MIN_ROWS); its running
+  // model, if any, stays active rather than retiring with the generation.
+  const kept = contestants
+    .filter((c) => c.role === "narrative" && !results.some((r) => r.contestant === c.id))
+    .map((c) => c.id);
   if (results.length === 0) {
     logger.info("contest training produced nothing to store", { rows: trainingRows.length });
     return;
@@ -184,7 +195,7 @@ export async function runCuratorTrainingJob(
     trainingRows.length,
     trainingFrom,
     { founding, replacement: outcome.replacement },
-    { startedAt: new Date(startedAt) },
+    { startedAt: new Date(startedAt), keep: kept },
   );
   if (modelIds === null) {
     logger.warn("models were replaced while this run trained (a restore) - its results were not stored");
@@ -370,7 +381,11 @@ export async function applyContestResults(
    * run that got there first) win: this run's results are dropped and null is returned, rather
    * than overwriting a restore with models trained on the lanes it just replaced.
    */
-  opts: { startedAt?: Date } = {},
+  opts: {
+    startedAt?: Date;
+    /** Contestants whose active model stays as it is (a seat that sat this run out). */
+    keep?: readonly string[];
+  } = {},
 ): Promise<Map<string, string> | null> {
   const now = new Date();
   // The consensus and the blend reference their members, so they go after them.
@@ -417,7 +432,10 @@ export async function applyContestResults(
       });
     }
     await tx.curatorModel.updateMany({
-      where: { status: { in: ["active", "candidate"] } },
+      where: {
+        status: { in: ["active", "candidate"] },
+        ...(opts.keep && opts.keep.length > 0 ? { NOT: { contestant: { in: [...opts.keep] } } } : {}),
+      },
       data: { status: "retired", retiredAt: now },
     });
     const ids = new Map<string, string>();
@@ -704,6 +722,28 @@ export async function loadTrainingRows(
   return [...events, ...hourly].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
 }
 
+/**
+ * The Narrative seat's training set (curation/contestants.ts): the run's decision moments and
+ * hourly background that carried the deep read (nsDepthFull = 1), plus the second looks the scan
+ * took when a deep read landed after a token's last decision - those count as decision moments
+ * for this seat alone, so they are relabeled "event" here and nowhere else. Newest first, capped
+ * like the main set.
+ */
+export async function narrativeTrainingRows(
+  trainingRows: readonly TrainingRow[],
+  windowStart: Date,
+  maxRows: number,
+  pageRows = LOAD_PAGE_ROWS,
+): Promise<TrainingRow[]> {
+  const withRead = trainingRows.filter((r) => r.features.nsDepthFull === 1);
+  const seconds = (
+    await loadRowsOfKind("second", windowStart, Math.max(0, maxRows - withRead.length), pageRows)
+  )
+    .filter((r) => r.features.nsDepthFull === 1)
+    .map((r) => ({ ...r, sampleKind: "event" }));
+  return [...seconds, ...withRead].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
+}
+
 /** What loadTrainingRows kept, for the run's log: how deep each kind reaches and whether the cap bound. */
 export function describeRowBudget(
   rows: readonly TrainingRow[],
@@ -772,7 +812,7 @@ function runPeakOf(r: {
 }
 
 async function loadRowsOfKind(
-  sampleKind: "hourly" | "event",
+  sampleKind: "hourly" | "event" | "second",
   windowStart: Date,
   maxRows: number,
   pageRows: number,

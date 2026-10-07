@@ -599,7 +599,16 @@ export interface ContestTrainingConfig extends Omit<CuratorTrainingConfig, "lear
   rulesTeachers?: readonly string[];
   /** The learned rules the seat runs now, if any - re-examined so it keeps them only on merit. */
   currentRules?: DerivedRuleSet | null;
+  /**
+   * The Narrative seat's own training set (contestants.ts): the decision moments and second
+   * looks that carried the deep read, plus the hourly background that did. Absent or shorter
+   * than NARRATIVE_MIN_ROWS, the seat is not examined this run and keeps its running model.
+   */
+  narrativeRows?: TrainingRow[];
 }
+
+/** Fewest rows the Narrative seat's exam runs on: under this its cutoff would be a coin flip. */
+export const NARRATIVE_MIN_ROWS = 300;
 
 /** A learner's exam, packaged: its stored result plus the rank arrays the consensus stacks on. */
 interface LearnerExam {
@@ -802,6 +811,27 @@ export async function runEvolvingContest(
     results.push(exam.result);
     laneExamScores.set(spec.id, exam.examScore);
     keep(spec.id, exam);
+  }
+
+  // The Narrative seat sits its own exam on its own rows (the ones with the deep read): a seat
+  // on a different population shares no fold with the learners, so it feeds no combiner and
+  // breeds nothing. Skipped, with its running model kept, until it has rows enough.
+  const narrativeSpec = cfg.contestants.find((c) => c.role === "narrative");
+  if (narrativeSpec?.recipe && (cfg.narrativeRows?.length ?? 0) >= NARRATIVE_MIN_ROWS) {
+    const own = cfg.narrativeRows!;
+    const ownFeatures = runFeatures(own, cfg);
+    const exam = await examineLearner(
+      own,
+      cfg,
+      narrativeSpec.id,
+      narrativeSpec.name,
+      narrativeSpec.recipe,
+      null,
+      ownFeatures.usable,
+    );
+    exam.result.metrics.runnerReport = runnerTraitsReport(own);
+    if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
+    results.push(exam.result);
   }
 
   const challengerScores: (number | null)[] = [];

@@ -25,6 +25,7 @@ import {
   type MintAuthorityResult,
   type OnChainProfile,
   type CandidateToken,
+  type ScoredToken,
   type DiscoveredCoin,
   type WatchlistCandidate,
   type TradeFlowFeatures,
@@ -1104,6 +1105,11 @@ export interface CandidatePrior {
   alerted: boolean;
   /** TokenSage's stored read of the coin, when it has one and TokenSage is on. */
   narrative?: NarrativeRead;
+  /**
+   * When the token was last decided on (its newest "event" or "second" row), for the second look
+   * the Narrative seat takes once a deep read lands after it. Loaded only while TokenSage is on.
+   */
+  lastDecisionAt?: Date;
 }
 
 const NO_PRIORS: CandidatePrior = {
@@ -1136,7 +1142,7 @@ export async function loadCandidatePriors(
   const growthCutoff = new Date(now - env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000);
   const growth10mCutoff = new Date(now - 10 * 60_000);
   const spacingCutoff = new Date(now - env.CANDIDATE_SAMPLE_SPACING_MINUTES * 60_000);
-  const [baselines, recentHourly, alertedRows, narratives] = await Promise.all([
+  const [baselines, recentHourly, alertedRows, narratives, lastDecisions] = await Promise.all([
     prisma.$queryRaw<{ id: string; h: number | null; h10: number | null }[]>`
       SELECT t.id, b."holderCount" AS h, b10."holderCount" AS h10
       FROM unnest(${ids}::text[]) AS t(id)
@@ -1163,7 +1169,14 @@ export async function loadCandidatePriors(
       tokens.map((t) => t.mintAddress),
       env,
     ),
+    tokenSageEnabled(env)
+      ? prisma.$queryRaw<{ tokenId: string; at: Date }[]>`
+      SELECT co."tokenId", max(co."anchorAt") AS at FROM "CandidateOutcome" co
+      WHERE co."tokenId" = ANY(${ids}::text[]) AND co."sampleKind" IN ('event', 'second')
+      GROUP BY co."tokenId"`
+      : Promise.resolve([] as { tokenId: string; at: Date }[]),
   ]);
+  const lastDecisionById = new Map(lastDecisions.map((r) => [r.tokenId, r.at]));
   const baselineById = new Map(baselines.map((b) => [b.id, b]));
   const recent = new Set(recentHourly.map((r) => r.tokenId));
   const alerted = new Set(alertedRows.map((r) => r.tokenId));
@@ -1176,6 +1189,7 @@ export async function loadCandidatePriors(
       recentHourlySample: recent.has(token.id),
       alerted: alerted.has(token.id),
       narrative: narratives.get(token.mintAddress),
+      lastDecisionAt: lastDecisionById.get(token.id),
     });
   }
   return out;
@@ -1480,6 +1494,23 @@ async function processCandidate(
         await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id);
       } else if (event && retry) {
         await collectCuratedContender(curatedCycle, token, scored, event, env, snapshot.id, retry);
+      } else if (!event?.created && secondLookDue(scored, prior)) {
+        // The deep read landed after this token's last decision: the Narrative seat's second
+        // look, on its own row kind (user decision 2026-10-07). Only that seat decides here, and
+        // only it trains on these rows. Same pre-gate and spacing as a decision moment.
+        const second = await recordCandidateSample(token.id, scored, env, { kind: "second" });
+        if (second?.created) {
+          await collectCuratedContender(
+            curatedCycle,
+            token,
+            scored,
+            second,
+            env,
+            snapshot.id,
+            undefined,
+            "second",
+          );
+        }
       }
     }
   } catch (err) {
@@ -1490,6 +1521,20 @@ async function processCandidate(
   }
 
   return matchCount;
+}
+
+/**
+ * Whether a token that looks ready but has no fresh decision moment is due the Narrative seat's
+ * second look: TokenSage's deep read is stored and newer than the token's last decision row (so
+ * that row was decided without it, or there was none), and the read is dated.
+ */
+export function secondLookDue(
+  scored: Pick<ScoredToken, "narrative">,
+  prior: Pick<CandidatePrior, "lastDecisionAt">,
+): boolean {
+  const read = scored.narrative;
+  if (!read || read.depth !== "full" || !read.analyzedAt) return false;
+  return prior.lastDecisionAt === undefined || read.analyzedAt > prior.lastDecisionAt;
 }
 
 /**

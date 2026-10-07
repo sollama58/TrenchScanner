@@ -139,6 +139,31 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     expect(secondLinear.activatedAt).not.toBeNull();
   });
 
+  it("keeps a seat's running model when the run names it as sitting out", async () => {
+    const first = await applyContestResults(
+      [result("linear", handParams(0.5)), result("narrative", handParams(0.6))],
+      2_000,
+      new Date(),
+    );
+    await applyContestResults(
+      [result("linear", handParams(0.5))],
+      2_500,
+      new Date(),
+      {},
+      { keep: ["narrative"] },
+    );
+    const narrative = await prisma.curatorModel.findUniqueOrThrow({
+      where: { id: first!.get("narrative")! },
+    });
+    const linear = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first!.get("linear")! } });
+    expect(narrative.status).toBe("active");
+    expect(linear.status).toBe("retired");
+    // Named again once it trains: the kept row retires with the generation like any other.
+    await applyContestResults([result("narrative", handParams(0.7))], 3_000, new Date());
+    const kept = await prisma.curatorModel.findUniqueOrThrow({ where: { id: first!.get("narrative")! } });
+    expect(kept.status).toBe("retired");
+  });
+
   it("seats founding lanes, and a takeover retires the seat's lane for the bred one", async () => {
     const bornAt = new Date(Date.now() - 86_400_000);
     await applyContestResults([result("linear", handParams(0.5))], 2_000, new Date(), {

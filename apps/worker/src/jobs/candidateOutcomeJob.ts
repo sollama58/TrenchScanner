@@ -94,7 +94,7 @@ export interface CandidateSampleRef {
  * (they bypass spacing); "event", "hourly" and "match" rows each dedup against their own kind, so
  * an hourly sample never stops the token's looks-ready moment from being banked, or vice versa.
  */
-export type CandidateSampleKind = "hourly" | "event" | "emission" | "match";
+export type CandidateSampleKind = "hourly" | "event" | "second" | "emission" | "match";
 
 /**
  * How long one "match" anchor is shared. Several users' filters catching the same token a minute
@@ -132,7 +132,7 @@ export async function recordCandidateSample(
   const kind: CandidateSampleKind = opts.kind ?? (opts.bypassSpacing ? "emission" : "hourly");
   if (!opts.bypassSpacing) {
     const spacingMinutes =
-      kind === "event"
+      kind === "event" || kind === "second"
         ? env.CANDIDATE_EVENT_SPACING_MINUTES
         : kind === "match"
           ? MATCH_SAMPLE_SPACING_MINUTES

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CONTESTANT_IDS, isContestantId } from "../curation/contestants.js";
+import { CONTESTANT_IDS, NARRATIVE_CONTESTANT, isContestantId } from "../curation/contestants.js";
 
 /**
  * Central env schema shared by the api and worker apps. Each app calls
@@ -648,14 +648,27 @@ const envSchema = z.object({
  * confident 0% - which is not "no growth", it is "not measured", and nothing downstream can tell
  * the difference. Cheap to state here; expensive to diagnose in production.
  */
-const validatedEnvSchema = envSchema.refine(
-  (env) => env.HOLDER_GROWTH_WINDOW_MINUTES > env.RUGCHECK_CACHE_TTL_MINUTES,
-  {
+const validatedEnvSchema = envSchema
+  .refine((env) => env.HOLDER_GROWTH_WINDOW_MINUTES > env.RUGCHECK_CACHE_TTL_MINUTES, {
     path: ["HOLDER_GROWTH_WINDOW_MINUTES"],
     message:
       "HOLDER_GROWTH_WINDOW_MINUTES must be greater than RUGCHECK_CACHE_TTL_MINUTES, or holder growth is measured between two readings of the same cached report and always reads 0%",
-  },
-);
+  })
+  // The Narrative seat (curation/contestants.ts) only exists with TokenSage: without it there
+  // is no deep read to wait for, so the seat leaves the roster everywhere (worker, trainer, API)
+  // rather than sitting untrained on the leaderboard.
+  .transform((env) =>
+    tokenSageEnabled(env)
+      ? env
+      : { ...env, CURATOR_CONTESTANTS: env.CURATOR_CONTESTANTS.filter((id) => id !== NARRATIVE_CONTESTANT) },
+  );
+
+/** TokenSage is on and reachable: the flag, the URL and the key are all set. */
+export function tokenSageEnabled(
+  env: Pick<Env, "TOKENSAGE_ENABLED" | "TOKENSAGE_API_URL" | "TOKENSAGE_API_KEY">,
+): boolean {
+  return env.TOKENSAGE_ENABLED && env.TOKENSAGE_API_URL !== "" && env.TOKENSAGE_API_KEY !== "";
+}
 
 export type Env = z.infer<typeof envSchema>;
 

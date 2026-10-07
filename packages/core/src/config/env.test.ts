@@ -88,6 +88,25 @@ describe("appDomainForOrigin", () => {
 });
 
 describe("loadEnv", () => {
+  it("seats the Narrative model only with TokenSage on and configured", () => {
+    resetEnvCacheForTests();
+    expect(loadEnv({ DATABASE_URL: "postgres://x" }).CURATOR_CONTESTANTS).not.toContain("narrative");
+    resetEnvCacheForTests();
+    expect(
+      loadEnv({ DATABASE_URL: "postgres://x", TOKENSAGE_ENABLED: "true" }).CURATOR_CONTESTANTS,
+    ).not.toContain("narrative");
+    resetEnvCacheForTests();
+    const on = loadEnv({
+      DATABASE_URL: "postgres://x",
+      TOKENSAGE_ENABLED: "true",
+      TOKENSAGE_API_URL: "https://tokensage.example",
+      TOKENSAGE_API_KEY: "k",
+    });
+    expect(on.CURATOR_CONTESTANTS).toContain("narrative");
+    expect(on.CURATOR_CONTESTANTS).toContain("linear");
+    resetEnvCacheForTests();
+  });
+
   it("treats a blank numeric var as unset, not 0", () => {
     resetEnvCacheForTests();
     const env = loadEnv({

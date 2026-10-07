@@ -732,7 +732,7 @@ export interface ScoreBasis {
   liveCalls: number;
 }
 
-export type ContestantRole = "rules" | "learner" | "stacked" | "blend" | "agreement";
+export type ContestantRole = "rules" | "learner" | "stacked" | "blend" | "agreement" | "narrative";
 
 export interface WinnerRuns {
   population: "curated" | "samples" | string;
