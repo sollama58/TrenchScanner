@@ -157,8 +157,11 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.hit4xIn1h).toBe(false); // won, but short of the 4x goal
     expect(updated.extended24h).toBe(true);
     expect(updated.finalized24hAt).toBeNull(); // still on the 24h watch
-    // Under the exit plan: half sold at 2x, the rest closed at the window's close of 1.4.
-    expect(updated.simReturnPct).toBeCloseTo((0.5 * 2 + 0.5 * 1.4 - 1) * 100);
+    // Under the exit plan: half sold at 2x, the rest riding the trail from the window's peak -
+    // no return yet. The sale landed on a tick this sweep never saw, so the trail arms now.
+    expect(updated.simReturnPct).toBeNull();
+    expect(updated.trailHighPriceUsd).toBeCloseTo(2.6);
+    expect(updated.trailExitAt).toBeNull();
 
     // The verdict was copied onto the feed row the moment the window closed - the badge must
     // not wait out the 24h watch - but the outcome isn't stamped final until that watch ends.
@@ -166,28 +169,69 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updatedAlert.hit2xIn15m).toBe(true);
     expect(updatedAlert.peak1hReturnPct).toBeCloseTo(160);
     expect(updatedAlert.outcomeFinalizedAt).toBeNull();
-    expect(updatedAlert.simReturnPct).toBeCloseTo(updated.simReturnPct!);
+    expect(updatedAlert.simReturnPct).toBeNull();
+
+    // A new high lifts the trail; the next tick 35% under it fires the exit at the level, and
+    // the return lands on the row and the alert while the row stays on its 24h watch.
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 3.0 }), env);
+    const lifted = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(lifted.trailHighPriceUsd).toBeCloseTo(3.0);
+    expect(lifted.simReturnPct).toBeNull();
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.9 }), env);
+    const settled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(settled.trailExitAt).not.toBeNull();
+    expect(settled.trailExitPriceUsd).toBeCloseTo(3.0 * 0.65);
+    expect(settled.simReturnPct).toBeCloseTo((0.5 * 2 + 0.5 * 3.0 * 0.65 - 1) * 100);
+    expect(settled.finalized24hAt).toBeNull();
+    const settledAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(settledAlert.simReturnPct).toBeCloseTo(settled.simReturnPct!);
   });
 
-  it("grades a 2x after 15 minutes as a miss, and retires it at the window edge", async () => {
+  it("grades a 2x after 15 minutes as a miss, but keeps watching its trailing share to the hold cap", async () => {
     const token = await createToken("slow-double");
     const anchorAt = new Date(Date.now() - 31 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, {
       peak1hPriceUsd: 2.6,
+      peakBeforeStopPriceUsd: 2.6,
+      trailHighPriceUsd: 2.6,
       hit2xAt: new Date(anchorAt.getTime() + 20 * MINUTE),
       lowBefore2xPriceUsd: 0.8,
       low1hPriceUsd: 0.8,
       peak24hPriceUsd: 2.6,
     });
 
-    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.4 }), env);
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.2 }), env);
 
     const updated = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(updated.hit2xIn15m).toBe(false);
     expect(updated.hit2xIn1h).toBe(false);
     expect(updated.labelValue).toBe(0);
     expect(updated.extended24h).toBe(false);
-    expect(updated.finalized24hAt).not.toBeNull();
+    // A loss for the label, but the plan sold half at 2x and still holds the rest: not retired.
+    expect(updated.simReturnPct).toBeNull();
+    expect(updated.finalized24hAt).toBeNull();
+    expect(updated.nextCheckAt.getTime()).toBeGreaterThan(Date.now());
+
+    // Past the plan's hold cap with the trail never fired: the rest closes at that tick's price,
+    // and the row retires with its run peak.
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { anchorAt: new Date(Date.now() - 181 * MINUTE), nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.4 }), env);
+    const capped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(capped.trailExitAt).toBeNull();
+    expect(capped.simReturnPct).toBeCloseTo((0.5 * 2 + 0.5 * 2.4 - 1) * 100);
+    expect(capped.finalized24hAt).not.toBeNull();
+    expect(capped.peak24hReturnPct).toBeCloseTo(160);
   });
 
   it("retires a row that never doubled inside the window", async () => {

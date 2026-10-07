@@ -8,6 +8,10 @@ import {
   computeOutcomeLabels,
   tenXVerdict,
   simulateExitPlan,
+  applyTrailTick,
+  exitPlanPositionOpen,
+  cleanPeakPriceUsd,
+  EXIT_PLAN,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
   WIN_WINDOW_MINUTES,
@@ -363,11 +367,21 @@ export async function runCandidateWatchJob(
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
       const aggUpdates = price !== undefined ? applyPriceTick(row, price, priceAt) : {};
       const merged: OutcomeAggregates = { ...row, ...aggUpdates };
+      // The exit plan's trailing exit: armed by the plan's first sale (a tick at the first rung
+      // before the stop) inside the window or at its close, then moved by every tick until it
+      // fires or the hold cap. An unarmed row past its close never arms: the ladder is graded on
+      // the window's peak, and this tick's price is not in it.
+      const trailUpdates =
+        price !== undefined && (row.finalizedAt === null || row.trailHighPriceUsd != null)
+          ? applyTrailTick(merged, price, priceAt)
+          : {};
+      Object.assign(merged, trailUpdates);
 
       // lastCheckedAt is the bar a later snapshot has to clear ("newer" above), so it records the
       // moment of the price this row just folded in, never an earlier one.
       const data: Prisma.CandidateOutcomeUpdateInput = {
         ...aggUpdates,
+        ...trailUpdates,
         lastCheckedAt: priceAt > tickAt ? priceAt : tickAt,
       };
       if (price !== undefined) data.lastPriceUsd = price;
@@ -391,6 +405,8 @@ export async function runCandidateWatchJob(
       let finalPeak24hPct: number | null = null;
       let runPeakMinutes: number | null = null;
       let closedUngraded = false;
+      // The plan's return landing after the window: the trailing share fired or reached its cap.
+      let simSettled = false;
       // The 10x tier's verdict, when this tick settles it - at the 30-minute close for anything it
       // already decides, else on the first tick past the hour (the row is a clean winner on the
       // extended watch by then). Null while it is still open.
@@ -420,8 +436,17 @@ export async function runCandidateWatchJob(
           data.hit10xIn1h = tenX;
         }
         data.labelValue = closedLabels.labelValue;
-        // The call's return under the fixed exit plan, closing at this tick's price (the first
-        // seen at or after the window closed) or, without one, the last price the row saw.
+        // The call's return under the fixed exit plan, closing a call that never sold at this
+        // tick's price (the first seen at or after the window closed) or, without one, the last
+        // price the row saw. A call that sold is still holding its trailing share: its return
+        // lands when that share is out (below), and until then the row stays on watch.
+        if (merged.trailHighPriceUsd == null && exitPlanPositionOpen({ ...merged, simReturnPct: null })) {
+          // Sold inside the window on a tick this build never saw (a row open when the trail
+          // shipped): the trail arms now, from the window's peak, the highest price since the sale.
+          const high = cleanPeakPriceUsd(merged);
+          merged.trailHighPriceUsd = high;
+          data.trailHighPriceUsd = high;
+        }
         simReturnPct = simulateExitPlan(merged, price ?? row.lastPriceUsd);
         data.simReturnPct = simReturnPct;
         finalized += 1;
@@ -434,14 +459,40 @@ export async function runCandidateWatchJob(
           extended = true;
           data.extended24h = true;
         }
-        if (!extended) {
-          finalPeak24hPct = peak24hReturnPct();
-          runPeakMinutes = runPeakMinutesOf();
-          data.finalized24hAt = tickAt;
-          data.peak24hReturnPct = finalPeak24hPct;
-          data.runPeakMinutes = runPeakMinutes;
-          retired += 1;
+      }
+
+      // A call whose trailing share was still held at the close: out at the trail's level the
+      // tick it fired, else at this tick's price once the plan's hold cap has passed. Its return
+      // and, for a row not on the 24h watch, its retirement wait for that.
+      if (row.finalizedAt !== null && row.simReturnPct === null && exitPlanPositionOpen(row)) {
+        const capPassed = elapsedMs >= EXIT_PLAN.trailMaxHoldMinutes * 60_000;
+        const capPrice = capPassed ? (price ?? row.lastPriceUsd) : null;
+        const settled = simulateExitPlan(merged, null, EXIT_PLAN, capPrice);
+        if (settled !== null) {
+          simReturnPct = settled;
+          data.simReturnPct = settled;
+          simSettled = true;
         }
+      }
+      const positionOpen = exitPlanPositionOpen({
+        ...merged,
+        simReturnPct: simReturnPct ?? row.simReturnPct,
+      });
+      // A row not on the 24h watch retires the moment its labels and its return are both in: at
+      // the window close for a call that stopped or never sold, at the trail's exit for one that
+      // sold. (A row closed ungraded retired above.)
+      if (
+        !extended &&
+        !positionOpen &&
+        data.finalized24hAt === undefined &&
+        (closedLabels !== null || row.finalizedAt !== null)
+      ) {
+        finalPeak24hPct = peak24hReturnPct();
+        runPeakMinutes = runPeakMinutesOf();
+        data.finalized24hAt = tickAt;
+        data.peak24hReturnPct = finalPeak24hPct;
+        data.runPeakMinutes = runPeakMinutes;
+        retired += 1;
       }
 
       // A clean winner whose hour was still open at the 30-minute close: settled the moment it
@@ -490,7 +541,8 @@ export async function runCandidateWatchJob(
       // got exactly this repair (repairOutcomeBookkeeping); curated alerts never did, so the
       // one ledger the product describes as permanent was the one with no safety net.
       const copyVerdict =
-        row.curatedAlerts.length > 0 && (closedLabels !== null || finalPeak24hPct !== null || tenX !== null);
+        row.curatedAlerts.length > 0 &&
+        (closedLabels !== null || finalPeak24hPct !== null || tenX !== null || simSettled);
       // User-filter alerts anchored here get the same verdict, under the same all-or-nothing
       // rule. Found through the token (Match.tokenId is indexed; candidateOutcomeId deliberately
       // isn't - see schema.prisma).
@@ -536,6 +588,7 @@ export async function runCandidateWatchJob(
                     simReturnPct,
                   }
                 : {}),
+              ...(simSettled ? { simReturnPct } : {}),
               ...(tenX !== null ? { hit10xIn1h: tenX } : {}),
               ...(finalPeak24hPct !== null
                 ? { peak24hReturnPct: finalPeak24hPct, runPeakMinutes, outcomeFinalizedAt: tickAt }
@@ -580,7 +633,8 @@ export async function runCandidateWatchJob(
     }
   });
 
-  const repaired = (await repairCuratedVerdicts()) + (await repairUngradedAlerts());
+  const repaired =
+    (await repairCuratedVerdicts()) + (await repairUngradedAlerts()) + (await repairSettledReturns());
 
   // Returned as well as logged: it lands on the job's heartbeat, so GET /health/worker shows how
   // many due rows the fetch priced and how many closed with no price seen - the regression above was
@@ -599,6 +653,29 @@ export async function runCandidateWatchJob(
   };
   logger.info("candidate watch sweep complete", { durationMs: Date.now() - startedAt, ...summary });
   return summary;
+}
+
+/**
+ * Copies a return that settled after the window (the trailing exit, or the hold cap) onto curated
+ * alerts that still read null for it. The copy lands in the settling transaction, so in the steady
+ * state this matches nothing; it is the same safety net the verdict copies have, for the one copy
+ * that lands later than the rest.
+ */
+async function repairSettledReturns(): Promise<number> {
+  try {
+    return await prisma.$executeRaw`
+      UPDATE "CuratedAlert" a
+      SET "simReturnPct" = o."simReturnPct"
+      FROM "CandidateOutcome" o
+      WHERE o."id" = a."candidateOutcomeId"
+        AND a."createdAt" >= ${new Date(Date.now() - REPAIR_LOOKBACK_MS)}
+        AND a."simReturnPct" IS NULL
+        AND a."hit2xIn1h" IS NOT NULL
+        AND o."simReturnPct" IS NOT NULL`;
+  } catch (err) {
+    logger.warn("failed to copy settled returns", { error: String(err) });
+    return 0;
+  }
 }
 
 /**

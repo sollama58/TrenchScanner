@@ -843,7 +843,8 @@ function Alerts() {
             <div className="stack">
               <p className="muted small">
                 Profit follows every graded call with one fixed exit plan:{" "}
-                {h.rules?.exitPlan ?? "sell half at 2x, the rest at 4x, stop at -50%, close at 30 minutes."}{" "}
+                {h.rules?.exitPlan ??
+                  "sell half at 2x, let the rest ride with a trailing exit 35% off its high, out at 3 hours, stop at -50% before the first sale, close a call that never sold at 30 minutes."}{" "}
                 Total profit is in stakes, staking the same amount on every call. Filter matches have no
                 simulated result.
               </p>
