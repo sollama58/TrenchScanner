@@ -1,4 +1,5 @@
 import type { BoostingOptions } from "./boosting.js";
+import type { ForestOptions } from "./forest.js";
 import {
   learnerSubset,
   MARKET_CONTEXT_FEATURES,
@@ -18,9 +19,10 @@ import type { CuratorLearner } from "./trainer.js";
  *  - "rules": a few readable checks. The hand-tuned heuristic gate (curator.ts) until a points
  *    table learned from the best model's picks (rulesDistill.ts) beats it on the exam; its
  *    hit-rate cutoff comes from the same walk-forward exam as everyone else's.
- *  - "learner": a trained model - a family (logistic or boosted trees) plus the recipe that makes
- *    it see the market differently from its rivals (recency, depth, feature subset). Diversity is
- *    the point: near-identical members teach the consensus nothing.
+ *  - "learner": a trained model - a family (logistic, boosted trees under one of three objectives,
+ *    or a random forest) plus the recipe that makes it see the market differently from its rivals
+ *    (recency, depth, feature subset). Diversity is the point: near-identical members teach the
+ *    consensus nothing.
  *  - "stacked": the consensus - a second-order model trained on the other contestants' own
  *    out-of-sample calls (curation/stacking.ts). The default feed.
  *  - "blend": the learners' confidence ranks averaged, nothing fitted (curation/blend.ts) - the
@@ -47,8 +49,10 @@ export interface CuratorRecipe {
   recencyHalfLifeDays?: number;
   /** The features it reads (default: all). Training narrows it further to the run's usable inputs. */
   featureNames?: readonly CandidateFeatureName[];
-  /** Boosted only: hyperparameters over DEFAULT_BOOSTING_OPTIONS. */
+  /** Boosted only: hyperparameters over DEFAULT_BOOSTING_OPTIONS, the objective among them. */
   boosting?: BoostingOptions;
+  /** Forest only: hyperparameters over DEFAULT_FOREST_OPTIONS. */
+  forest?: ForestOptions;
   /** Survival-first two-stage shape (see TwoStageCuratorParams in trainer.ts), either family. */
   twoStage?: boolean;
 }
@@ -212,6 +216,34 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary: "Asks first whether a token will avoid a 50% drop, then whether it will double.",
     role: "learner",
     recipe: { learner: "gbdt", twoStage: true },
+  },
+  {
+    id: "forest",
+    name: "Forest",
+    description:
+      "A random forest: sixty deep trees, each grown on its own slice of rows and a third of the features, their votes averaged",
+    summary: "Sixty independent if-then trees, each shown a different slice of the data, voting together.",
+    role: "learner",
+    recipe: { learner: "forest" },
+  },
+  {
+    id: "ranker",
+    name: "Ranker",
+    description:
+      "Boosted trees trained to order each hour's tokens by how far they ran (miss, 2x, 4x, 10x), not to predict a probability",
+    summary:
+      "Learns to put each hour's biggest runners at the top of the list, rather than to guess the odds of a double.",
+    role: "learner",
+    recipe: { learner: "gbdt", boosting: { objective: "lambdarank" } },
+  },
+  {
+    id: "runner",
+    name: "Runner",
+    description:
+      "Boosted trees that predict how far a token runs - its peak in doublings, stop-outs counting against - not whether it doubles",
+    summary: "Predicts how big the run will be, so a likely 5x ranks above a sure 2x.",
+    role: "learner",
+    recipe: { learner: "gbdt", boosting: { objective: "runSize" } },
   },
   {
     id: NARRATIVE_CONTESTANT,

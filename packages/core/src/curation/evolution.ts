@@ -1,4 +1,5 @@
-import { DEFAULT_BOOSTING_OPTIONS, type BoostingOptions } from "./boosting.js";
+import { DEFAULT_BOOSTING_OPTIONS, type BoostingObjective, type BoostingOptions } from "./boosting.js";
+import { DEFAULT_FOREST_OPTIONS, type ForestOptions } from "./forest.js";
 import {
   MOMENTUM_FEATURES,
   ORDER_FLOW_FEATURES,
@@ -78,6 +79,14 @@ const TREE_BOUNDS = {
   featureSample: { min: 0.4, max: 1 },
   maxTrees: { min: 100, max: 400 },
 };
+const FOREST_BOUNDS = {
+  trees: { min: 30, max: 120 },
+  maxDepth: { min: 4, max: 9 },
+  minLeafRows: { min: 10, max: 100 },
+  featureSample: { min: 0.15, max: 0.6 },
+};
+type ForestKnob = keyof typeof FOREST_BOUNDS;
+const FOREST_KNOBS = Object.keys(FOREST_BOUNDS) as ForestKnob[];
 /** A linear lane never reads fewer features than this. */
 const MIN_FEATURES = 8;
 /** Chance a mutation jumps to the other model family (with that family's default knobs). */
@@ -97,7 +106,15 @@ export function normalizeRecipe(recipe: CuratorRecipe, baseHalfLifeDays: number)
   if (recipe.learner === "gbdt") {
     const boosting: BoostingOptions = {};
     for (const k of TREE_KNOBS) boosting[k] = recipe.boosting?.[k] ?? DEFAULT_BOOSTING_OPTIONS[k];
+    // The objective is inherited, never mutated: what the trees fit is the seat's question.
+    const objective = recipe.boosting?.objective;
+    if (objective !== undefined && objective !== "logistic") boosting.objective = objective;
     return { learner: "gbdt", recencyHalfLifeDays, boosting, ...shape };
+  }
+  if (recipe.learner === "forest") {
+    const forest: ForestOptions = {};
+    for (const k of FOREST_KNOBS) forest[k] = recipe.forest?.[k] ?? DEFAULT_FOREST_OPTIONS[k];
+    return { learner: "forest", recencyHalfLifeDays, forest, ...shape };
   }
   return {
     learner: "logistic",
@@ -129,6 +146,23 @@ function mutateTreeKnob(boosting: BoostingOptions, knob: TreeKnob, rng: Rng): vo
       next = roundTo(cur + 0.1 * gaussian(rng), 0.05);
   }
   boosting[knob] = clamp(next, b.min, b.max);
+}
+
+function mutateForestKnob(forest: ForestOptions, knob: ForestKnob, rng: Rng): void {
+  const b = FOREST_BOUNDS[knob];
+  const cur = forest[knob] ?? DEFAULT_FOREST_OPTIONS[knob];
+  let next: number;
+  switch (knob) {
+    case "maxDepth":
+      next = cur + (rng() < 0.5 ? -1 : 1);
+      break;
+    case "featureSample":
+      next = roundTo(cur + 0.1 * gaussian(rng), 0.05);
+      break;
+    default:
+      next = Math.round(cur * Math.exp(0.4 * gaussian(rng)));
+  }
+  forest[knob] = clamp(next, b.min, b.max);
 }
 
 function mutateFeatures(
@@ -174,6 +208,8 @@ export function mutateRecipe(
       if (rng() < 0.5) child.recencyHalfLifeDays = mate.recencyHalfLifeDays;
       if (child.learner === "gbdt") {
         for (const k of TREE_KNOBS) if (rng() < 0.5) child.boosting![k] = mate.boosting![k];
+      } else if (child.learner === "forest") {
+        for (const k of FOREST_KNOBS) if (rng() < 0.5) child.forest![k] = mate.forest![k];
       } else if (rng() < 0.5) {
         child = mate.featureNames
           ? { ...child, featureNames: [...mate.featureNames] }
@@ -187,7 +223,8 @@ export function mutateRecipe(
             );
       }
     }
-    if (rng() < FAMILY_SWITCH_P) {
+    // A forest stays a forest: it is its own family, with no near neighbour to jump to.
+    if (child.learner !== "forest" && rng() < FAMILY_SWITCH_P) {
       child = normalizeRecipe(
         {
           learner: child.learner === "gbdt" ? "logistic" : "gbdt",
@@ -207,6 +244,8 @@ export function mutateRecipe(
           );
         } else if (child.learner === "gbdt") {
           mutateTreeKnob(child.boosting!, TREE_KNOBS[Math.floor(rng() * TREE_KNOBS.length)]!, rng);
+        } else if (child.learner === "forest") {
+          mutateForestKnob(child.forest!, FOREST_KNOBS[Math.floor(rng() * FOREST_KNOBS.length)]!, rng);
         } else {
           const featureNames = mutateFeatures(child.featureNames, rng);
           child = featureNames
@@ -245,6 +284,12 @@ export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): stri
   if (r.learner === "gbdt") {
     const depth = r.boosting!.maxDepth!;
     family = depth >= 5 ? "Deep Trees" : depth <= 2 ? "Shallow Trees" : "Trees";
+    const objective = r.boosting!.objective;
+    if (objective === "lambdarank") family = `Ranked ${family}`;
+    else if (objective === "runSize") family = `Runner ${family}`;
+  } else if (r.learner === "forest") {
+    const depth = r.forest!.maxDepth!;
+    family = depth >= 8 ? "Deep Forest" : "Forest";
   } else if (r.featureNames && isOrderFlow(r.featureNames)) {
     family = "Order Flow";
   } else if (r.featureNames && isMomentum(r.featureNames)) {
@@ -270,9 +315,20 @@ export function describeRecipe(
   let what: string;
   if (r.learner === "gbdt") {
     const b = r.boosting!;
-    what = `Boosted trees, depth ${b.maxDepth}, learning rate ${b.learningRate}, each tree sees ${Math.round(
+    const fitted =
+      b.objective === "lambdarank"
+        ? "Boosted trees fitted to each hour's order by run size"
+        : b.objective === "runSize"
+          ? "Boosted trees fitted to the run size"
+          : "Boosted trees";
+    what = `${fitted}, depth ${b.maxDepth}, learning rate ${b.learningRate}, each tree sees ${Math.round(
       b.rowSample! * 100,
     )}% of rows and ${Math.round(b.featureSample! * 100)}% of features; ${memory}`;
+  } else if (r.learner === "forest") {
+    const f = r.forest!;
+    what = `Random forest of ${f.trees} trees, depth ${f.maxDepth}, at least ${f.minLeafRows} rows a leaf, each tree sees ${Math.round(
+      f.featureSample! * 100,
+    )}% of features; ${memory}`;
   } else {
     const n = r.featureNames?.length ?? LEARNER_FEATURE_NAMES.length;
     what = `Logistic regression on ${n === LEARNER_FEATURE_NAMES.length ? "every" : `${n} of ${LEARNER_FEATURE_NAMES.length}`} features; ${memory}`;
@@ -289,7 +345,11 @@ export function describeRecipe(
  */
 export function plainSummary(recipe: CuratorRecipe, parentName?: string | null): string {
   let what: string;
-  if (recipe.learner === "gbdt") {
+  if (recipe.learner === "gbdt" && recipe.boosting?.objective === "lambdarank") {
+    what = "Learns to put each hour's biggest runners at the top of the list";
+  } else if (recipe.learner === "gbdt" && recipe.boosting?.objective === "runSize") {
+    what = "Predicts how big the run will be rather than whether it doubles";
+  } else if (recipe.learner === "gbdt") {
     const depth = recipe.boosting?.maxDepth ?? DEFAULT_BOOSTING_OPTIONS.maxDepth;
     what =
       depth >= 5
@@ -297,6 +357,9 @@ export function plainSummary(recipe: CuratorRecipe, parentName?: string | null):
         : depth <= 2
           ? "Learns short if-then rules from every signal"
           : "Learns if-then rules from every signal";
+  } else if (recipe.learner === "forest") {
+    const trees = recipe.forest?.trees ?? DEFAULT_FOREST_OPTIONS.trees;
+    what = `${trees} independent if-then trees, each shown a different slice of the data, voting together`;
   } else if (recipe.featureNames && isOrderFlow(recipe.featureNames)) {
     what = "Weighs only the last few minutes of trading in one simple formula";
   } else if (recipe.featureNames && isMomentum(recipe.featureNames)) {
@@ -399,7 +462,9 @@ export function breedChallengers(
     const a = draw();
     const b = draw();
     const parent = (a.composite ?? -1) >= (b.composite ?? -1) ? a : b;
-    const mates = top.filter((f) => f !== parent && f.lane.recipe.learner === parent.lane.recipe.learner);
+    const mates = top.filter(
+      (f) => f !== parent && recipeFamily(f.lane.recipe) === recipeFamily(parent.lane.recipe),
+    );
     const mate =
       mates.length > 0 && rng() < CROSSOVER_P ? mates[Math.floor(rng() * mates.length)]! : undefined;
     const recipe = mutateRecipe(parent.lane.recipe, rng, {
@@ -433,11 +498,11 @@ export interface ReplacementInput {
   /** Points a challenger's exam must beat the weakest lane's same-run exam by. */
   margin: number;
   /**
-   * Each challenger's model family, in breeding order. When given, a family's last seat is never
-   * handed to the other family: the consensus learns from disagreement, and a field that has
-   * collapsed onto one family has no fallback when the market shifts under it.
+   * Each challenger's model family (recipeFamily), in breeding order. When given, a family's
+   * last seat is never handed to another family: the consensus learns from disagreement, and a
+   * field that has collapsed onto one family has no fallback when the market shifts under it.
    */
-  challengerLearners?: readonly CuratorRecipe["learner"][];
+  challengerLearners?: readonly string[];
   /**
    * The statistical gate on a takeover, when given (see TakeoverEvidence). Without it the margin
    * alone decides, as before.
@@ -471,6 +536,18 @@ export interface TakeoverEvidence {
   lastTakeoverAt: Date | null;
   /** A takeover sooner than this after the last one is refused. */
   minTakeoverIntervalMs: number;
+}
+
+/**
+ * The family a recipe belongs to for the seat guard: its learner, and for boosted trees what
+ * they fit - a ranker and a probability model share code but ask different questions, and the
+ * field should keep one of each.
+ */
+export function recipeFamily(recipe: CuratorRecipe): string {
+  const objective: BoostingObjective | undefined = recipe.boosting?.objective;
+  return recipe.learner === "gbdt" && objective !== undefined && objective !== "logistic"
+    ? `gbdt:${objective}`
+    : recipe.learner;
 }
 
 /** Paired bootstrap resamples. 200 resolves a 0.9 confidence to about +/-0.02. */
@@ -602,14 +679,16 @@ export function chooseReplacement(input: ReplacementInput): Replacement | null {
   if (best === -1) return null;
   const family = input.challengerLearners?.[best];
   const familySeats = new Map<string, number>();
-  for (const l of input.lanes)
-    familySeats.set(l.lane.recipe.learner, (familySeats.get(l.lane.recipe.learner) ?? 0) + 1);
+  for (const l of input.lanes) {
+    const f = recipeFamily(l.lane.recipe);
+    familySeats.set(f, (familySeats.get(f) ?? 0) + 1);
+  }
   const seasoned = input.lanes.filter(
     (l) =>
       input.now.getTime() - l.lane.bornAt.getTime() >= input.minAgeMs &&
       (family === undefined ||
-        l.lane.recipe.learner === family ||
-        familySeats.get(l.lane.recipe.learner)! > 1),
+        recipeFamily(l.lane.recipe) === family ||
+        familySeats.get(recipeFamily(l.lane.recipe))! > 1),
   );
   if (seasoned.length === 0) return null;
   const weakest = seasoned.reduce((w, l) => ((l.composite ?? -1) < (w.composite ?? -1) ? l : w));

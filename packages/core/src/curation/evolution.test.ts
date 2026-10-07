@@ -8,6 +8,7 @@ import {
   mutateRecipe,
   normalizeRecipe,
   plainSummary,
+  recipeFamily,
   seededRng,
   traitName,
   withLanes,
@@ -224,5 +225,55 @@ describe("plainSummary", () => {
       "Asks first whether it avoids a 50% drop, then: learns long if-then chains from every signal. A variant bred from Survivor.",
     );
     expect(plainSummary({ learner: "logistic", recencyHalfLifeDays: 45 }, "Linear")).toMatch(/long memory/);
+  });
+});
+
+describe("the forest and objective families", () => {
+  it("normalizes, names and describes them, and keeps a seat's objective through mutation", () => {
+    expect(traitName({ learner: "forest" }, BASE_HL)).toBe("Forest");
+    expect(traitName({ learner: "forest", forest: { maxDepth: 8 }, recencyHalfLifeDays: 2 }, BASE_HL)).toBe(
+      "Deep Forest Recent",
+    );
+    expect(traitName({ learner: "gbdt", boosting: { objective: "lambdarank" } }, BASE_HL)).toBe(
+      "Ranked Trees",
+    );
+    expect(traitName({ learner: "gbdt", boosting: { objective: "runSize", maxDepth: 5 } }, BASE_HL)).toBe(
+      "Runner Deep Trees",
+    );
+    expect(describeRecipe({ learner: "forest" }, BASE_HL)).toContain("Random forest of 60 trees");
+    expect(plainSummary({ learner: "gbdt", boosting: { objective: "runSize" } })).toContain(
+      "how big the run",
+    );
+    const ranker = normalizeRecipe({ learner: "gbdt", boosting: { objective: "lambdarank" } }, BASE_HL);
+    expect(ranker.boosting?.objective).toBe("lambdarank");
+    expect(ranker.boosting?.maxDepth).toBe(3);
+    const rng = seededRng(5);
+    for (let i = 0; i < 30; i++) {
+      const child = mutateRecipe(ranker, rng, { baseHalfLifeDays: BASE_HL });
+      if (child.learner === "gbdt") expect(child.boosting?.objective).toBe("lambdarank");
+      const forest = mutateRecipe({ learner: "forest" }, rng, { baseHalfLifeDays: BASE_HL });
+      expect(forest.learner).toBe("forest");
+      expect(forest.forest?.trees).toBeGreaterThanOrEqual(30);
+      expect(forest.forest?.maxDepth).toBeLessThanOrEqual(9);
+    }
+    expect(recipeFamily({ learner: "gbdt", boosting: { objective: "lambdarank" } })).toBe("gbdt:lambdarank");
+    expect(recipeFamily({ learner: "gbdt" })).toBe("gbdt");
+    expect(recipeFamily({ learner: "forest" })).toBe("forest");
+  });
+
+  it("guards a ranker's last seat like any other family's", () => {
+    const now = new Date(t0.getTime() + 48 * 3_600_000);
+    const lanes = [
+      {
+        lane: lane("rk", { learner: "gbdt", boosting: { objective: "lambdarank" } }),
+        composite: 10,
+        examScore: 20,
+      },
+      { lane: lane("t1", { learner: "gbdt" }), composite: 30, examScore: 20 },
+      { lane: lane("t2", { learner: "gbdt" }), composite: 40, examScore: 20 },
+    ];
+    const base = { lanes, challengerScores: [50], now, minAgeMs: 0, margin: 3 };
+    expect(chooseReplacement({ ...base, challengerLearners: ["gbdt"] })?.slot).toBe("t1");
+    expect(chooseReplacement({ ...base, challengerLearners: ["gbdt:lambdarank"] })?.slot).toBe("rk");
   });
 });

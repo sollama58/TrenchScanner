@@ -3,6 +3,7 @@ import {
   prisma,
   createLogger,
   breedChallengers,
+  recipeFamily,
   compositeScore,
   emptyRecord,
   enabledContestants,
@@ -617,7 +618,7 @@ async function evolutionPlan(
       now,
       minAgeMs: env.CURATOR_EVOLUTION_MIN_AGE_HOURS * 3_600_000,
       margin: env.CURATOR_EVOLUTION_MARGIN,
-      challengerLearners: challengers.map((c) => c.recipe.learner),
+      challengerLearners: challengers.map((c) => recipeFamily(c.recipe)),
       evidence: {
         minExamWins: env.CURATOR_EVOLUTION_MIN_EXAM_WINS,
         confidence: env.CURATOR_EVOLUTION_CONFIDENCE,

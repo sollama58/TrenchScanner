@@ -23,7 +23,11 @@ import { ago, pct, signedPct, stakes, tokenLabel, usd } from "../format";
 
 const WINDOWS = [7, 30, 90] as const;
 
-const LEARNER_NAME = { logistic: "Logistic regression", gbdt: "Gradient-boosted trees" } as const;
+const LEARNER_NAME = {
+  logistic: "Logistic regression",
+  gbdt: "Gradient-boosted trees",
+  forest: "Random forest",
+} as const;
 
 const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
   stacked: "Stacked on the others",
@@ -266,7 +270,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
                 <p className="muted small">
                   {runName(data.runs.find((r) => r.id === data.importance!.modelId)) ??
                     LEARNER_NAME[data.importance.learner]}{" "}
-                  {data.importance.learner === "gbdt"
+                  {data.importance.learner !== "logistic"
                     ? "- share of tree splits that use each signal."
                     : "- share of standardized weight; ▲ more is better, ▼ less is better."}
                 </p>

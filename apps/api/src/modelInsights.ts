@@ -216,7 +216,7 @@ export function reviewOutcome(
 
 type Importance = {
   modelId: string;
-  learner: "gbdt" | "logistic";
+  learner: "gbdt" | "logistic" | "forest";
   threshold: number;
   features: ReturnType<typeof featureImportance>;
 };
@@ -237,7 +237,8 @@ async function importanceFor(id: string): Promise<Importance | null> {
   const importance: Importance | null = params
     ? {
         modelId: id,
-        learner: params.kind === BOOSTED_MODEL_KIND ? "gbdt" : "logistic",
+        learner:
+          params.kind === BOOSTED_MODEL_KIND ? (params.family === "forest" ? "forest" : "gbdt") : "logistic",
         threshold: typeof threshold === "number" ? threshold : params.threshold,
         features: featureImportance(params),
       }
