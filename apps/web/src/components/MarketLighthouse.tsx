@@ -644,32 +644,49 @@ export function bestFirst(rows: LighthouseTally[]): LighthouseTally[] {
   );
 }
 
+/** The bar's reach either side of zero: an average return past this is drawn full. */
+const RETURN_SCALE = 100;
+
 /**
- * One row per group: the average return under the exit plan (the bar, against the best row's),
- * the share of graded calls that reached 2x and 10x, and how many calls that rests on.
+ * One row per group: the average return under the exit plan as a bar from zero, green to the
+ * right for a gain and red to the left for a loss on a -100% to +100% scale, then the share of
+ * graded calls that reached 2x and 10x, and how many calls that rests on.
  */
 function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) => string }) {
   if (!rows.length)
     return <p className="muted small">No model calls on described coins in this window yet.</p>;
-  const top = Math.max(0, ...rows.map((r) => avgReturn(r) ?? 0));
   return (
     <div className="lh-hits">
+      <div className="lh-hit lh-hit-axis" aria-hidden>
+        <span />
+        <span className="lh-hit-scale">
+          <i>-{RETURN_SCALE}%</i>
+          <i>0</i>
+          <i>+{RETURN_SCALE}%</i>
+        </span>
+      </div>
       {rows.map((r) => {
         const ret = avgReturn(r);
         const early = r.graded < MIN_GRADED;
         const tier = (won: number, over: number = r.graded) => (over > 0 ? pct(share(won, over)) : "–");
         const tenXOver = r.tenXGraded ?? r.graded;
-        const width = ret !== null && ret > 0 && top > 0 ? Math.max((ret / top) * 100, 1) : 1;
+        // Half the track is one side of zero; a hair of bar stays visible for a flat return.
+        const reach =
+          ret === null ? 0 : Math.max(0.5, (Math.min(Math.abs(ret), RETURN_SCALE) / RETURN_SCALE) * 50);
+        const tone = ret === null ? "" : ret < 0 ? "loss" : "gain";
         return (
           <div key={r.label} className={`lh-hit${early ? " early" : ""}`}>
             <span className="lh-hit-label">
               {cls && <span className={`lh-swatch ${cls(r.label)}`} />}
               {words(r.label)}
             </span>
-            <span className="lh-hit-track">
-              <span className="lh-hit-fill" style={{ width: `${width}%` }} />
+            <span className="lh-hit-track diverging">
+              <span className="lh-hit-zero" />
+              {ret !== null && <span className={`lh-hit-fill ${tone}`} style={{ width: `${reach}%` }} />}
             </span>
-            <span className="lh-hit-value num">{ret === null ? "–" : signedPct(ret)}</span>
+            <span className={`lh-hit-value num ${ret === null ? "" : ret < 0 ? "lh-down" : "lh-up"}`}>
+              {ret === null ? "–" : signedPct(ret)}
+            </span>
             <span className="lh-hit-tiers muted">
               2x {tier(r.won2x)} · 10x {tier(r.won10x, tenXOver)}
             </span>

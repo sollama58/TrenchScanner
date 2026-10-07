@@ -4451,6 +4451,76 @@ button.small-btn {
 .lh-hit.early .lh-hit-fill {
   opacity: 0.4;
 }
+.lh-hit-track.diverging .lh-hit-fill {
+  inset: 0 auto;
+}
+.lh-hit-fill.gain {
+  left: 50%;
+  border-radius: 0 5px 5px 0;
+  background: var(--good);
+}
+.lh-hit-fill.loss {
+  right: 50%;
+  border-radius: 5px 0 0 5px;
+  background: var(--bad);
+}
+.lh-hit-zero {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: 50%;
+  border-left: 1px solid var(--ink-2);
+}
+.lh-hit-axis {
+  margin-bottom: -4px;
+}
+.lh-hit-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.lh-hit-scale i {
+  font-style: normal;
+}
+/* In a half-width section (the modal's grid) the row stacks: label, then bar and figures, then tiers. */
+.lh-grid .lh-hit {
+  grid-template-columns: 1fr 52px auto;
+  grid-template-areas:
+    "label label label"
+    "track value state"
+    "tiers tiers tiers";
+  gap: 2px 8px;
+}
+.lh-grid .lh-hit-label {
+  grid-area: label;
+}
+.lh-grid .lh-hit-track {
+  grid-area: track;
+}
+.lh-grid .lh-hit-axis {
+  grid-template-areas: "track track track";
+  margin-bottom: -6px;
+}
+.lh-grid .lh-hit-axis > span:first-child {
+  display: none;
+}
+.lh-grid .lh-hit-scale {
+  grid-area: track;
+}
+.lh-grid .lh-hit-value {
+  grid-area: value;
+}
+.lh-grid .lh-hit-tiers {
+  grid-area: tiers;
+  font-size: 11.5px;
+}
+.lh-grid .lh-hit-state {
+  grid-area: state;
+  font-size: 11.5px;
+}
 .lh-hit-value {
   text-align: right;
   font-weight: 600;
@@ -4580,6 +4650,16 @@ button.small-btn {
     grid-area: label;
   }
   .lh-hit-track {
+    grid-area: track;
+  }
+  .lh-hit-axis {
+    grid-template-areas: "track track track";
+    margin-bottom: -6px;
+  }
+  .lh-hit-axis > span:first-child {
+    display: none;
+  }
+  .lh-hit-scale {
     grid-area: track;
   }
   .lh-hit-value {
