@@ -166,7 +166,7 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     // Other suites may bank event rows too, so check this test's rows are counted, not exact totals.
     expect(s.graded).toBeGreaterThanOrEqual(3);
     expect(s.bucketHours).toBe(3);
-    expect(s.checks).toMatchObject({ freshWalletMaxPct: 70, emptyWalletMaxPct: 90 });
+    expect(s.checks).toMatchObject({ freshWalletMaxPct: 70, emptyWalletRejectPct: 80 });
     expect(s.exitPlan).toMatch(/2x/);
     const mine = await prisma.candidateOutcome.findMany({
       where: { token: { mintAddress: { in: MINTS } }, sampleKind: "event" },

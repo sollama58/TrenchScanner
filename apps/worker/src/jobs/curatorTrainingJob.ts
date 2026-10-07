@@ -18,6 +18,7 @@ import {
   assessTrainingRun,
   lockCuratorModelWrites,
   DISQUALIFYING_DRAWDOWN_FRACTION,
+  passesWalletSafetyCuts,
   type ContestRunOutcome,
   type ContestantTrainingResult,
   type Lane,
@@ -820,6 +821,7 @@ async function loadRowsOfKind(
   const out: TrainingRow[] = [];
   let cursor: string | undefined;
   while (out.length < maxRows) {
+    const take = Math.min(pageRows, maxRows - out.length);
     const page = await prisma.candidateOutcome.findMany({
       where: {
         finalizedAt: { not: null },
@@ -827,7 +829,7 @@ async function loadRowsOfKind(
         sampleKind,
       },
       orderBy: [{ anchorAt: "desc" }, { id: "desc" }],
-      take: Math.min(pageRows, maxRows - out.length),
+      take,
       ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
         id: true,
@@ -848,10 +850,14 @@ async function loadRowsOfKind(
       },
     });
     for (const r of page) {
+      const features = r.features as Record<string, number | null>;
+      // A token the safety screen rejects today never reaches a curator, so a row banked before
+      // the cut was tightened (mostly farm launches that pump, then rug) neither trains nor grades.
+      if (!passesWalletSafetyCuts(features)) continue;
       out.push({
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,
-        features: r.features as Record<string, number | null>,
+        features,
         labelValue: r.labelValue ?? 0,
         // The price the features were observed at (the alert price the label is graded from).
         anchorPriceUsd: r.signalPriceUsd ?? r.anchorPriceUsd,
@@ -871,7 +877,7 @@ async function loadRowsOfKind(
         ...(r.hit10xIn1h !== null ? { hit10x: r.hit10xIn1h } : {}),
       });
     }
-    if (page.length < pageRows) break;
+    if (page.length < take) break;
     cursor = page[page.length - 1]!.id;
   }
   return out;

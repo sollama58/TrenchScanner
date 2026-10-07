@@ -1,4 +1,10 @@
-import { prisma, recordScore, CURRENT_LABEL_RULE, type PrecisionTargets } from "@trenchscanner/core";
+import {
+  prisma,
+  recordScore,
+  walletSafetyCutsSql,
+  CURRENT_LABEL_RULE,
+  type PrecisionTargets,
+} from "@trenchscanner/core";
 import { MIN_GRADED_FOR_VERDICT, type GradedCounts, type Targets } from "./routes/stats.js";
 
 /**
@@ -351,6 +357,7 @@ export async function buildLearningCurve(
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event'
       AND "anchorAt" >= ${since} AND "anchorAt" < ${until}
+      AND ${walletSafetyCutsSql()}
       AND "labelRule" >= ${CURRENT_LABEL_RULE}
     GROUP BY 1`;
   // Every model's calls by UTC day, graded the same way (see buildHitRateReport for the label

@@ -9,6 +9,7 @@ import {
   buildCandidateFeatures,
   nearestOutcomes,
   inMcapBand,
+  passesWalletSafetyCuts,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   clampProbability,
   type ComparableOutcome,
@@ -117,7 +118,9 @@ export async function loadGradedPool(
     },
   });
   const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
-  return rows
+  // A token the safety screen rejects today never reaches the reviewer, so it is no comparable.
+  const screened = rows.filter((r) => passesWalletSafetyCuts(r.features as Record<string, number | null>));
+  return screened
     .filter((r) => inMcapBand(r.anchorMcapUsd, band))
     .map((r) => ({
       anchorAt: r.anchorAt,

@@ -1,4 +1,4 @@
-import { prisma, type Env } from "@trenchscanner/core";
+import { prisma, walletSafetyCutsSql, type Env } from "@trenchscanner/core";
 
 /**
  * "Market weather": how often launches are doubling right now against the last week.
@@ -89,6 +89,7 @@ export async function loadMarketWeather(env: Env, now = new Date()): Promise<Mar
     FROM "CandidateOutcome"
     WHERE "finalizedAt" >= ${trailingFrom}
       AND "sampleKind" IN ('hourly', 'event')
+      AND ${walletSafetyCutsSql()}
       AND "anchorMcapUsd" BETWEEN ${env.MCAP_FILTER_MIN} AND ${env.MCAP_FILTER_MAX}`;
   const r = rows[0];
   return classifyMarketWeather({

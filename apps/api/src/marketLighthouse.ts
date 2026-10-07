@@ -4,7 +4,9 @@ import {
   MAX_EVENT_AGE_MINUTES,
   MIN_BUY_RATIO,
   prisma,
-  SAFETY_MAX_EMPTY_WALLET_PCT,
+  Prisma,
+  SAFETY_REJECT_EMPTY_WALLET_PCT,
+  walletSafetyCutsSql,
   SAFETY_MAX_FRESH_WALLET_PCT,
   type Env,
 } from "@trenchscanner/core";
@@ -105,6 +107,7 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
            sum(co."simReturnPct")::float8 AS sim_sum
     FROM "CandidateOutcome" co
     WHERE co."sampleKind" = 'event' AND co."anchorAt" > ${since}
+      AND ${walletSafetyCutsSql(Prisma.raw('co."features"'))}
     GROUP BY 1 ORDER BY 1`;
   const n = (v: bigint | number | null) => Number(v ?? 0);
   const total = { calls: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0, simCalls: 0, simSum: 0 };
@@ -144,7 +147,7 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
     // What a token has to clear to count here, for the dashboard's explainer.
     checks: {
       freshWalletMaxPct: SAFETY_MAX_FRESH_WALLET_PCT,
-      emptyWalletMaxPct: SAFETY_MAX_EMPTY_WALLET_PCT,
+      emptyWalletRejectPct: SAFETY_REJECT_EMPTY_WALLET_PCT,
       mcapMinUsd: env.MCAP_FILTER_MIN,
       mcapMaxUsd: env.MCAP_FILTER_MAX,
       maxAgeMinutes: MAX_EVENT_AGE_MINUTES,

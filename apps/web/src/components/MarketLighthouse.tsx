@@ -643,7 +643,7 @@ function Screened({ s, span }: { s: ScreenedData; span: string }) {
   const latest = buckets.length - 1;
   const shown = hover !== null && hover <= latest ? hover : latest;
   const focus = buckets[shown];
-  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh or ${s.checks.emptyWalletMaxPct}% empty top-10 wallets) and looks ready to decide on.`;
+  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh and under ${s.checks.emptyWalletRejectPct}% empty top-10 wallets) and looks ready to decide on.`;
 
   return (
     <section className="lh-section lh-screened">
@@ -809,7 +809,7 @@ function PreChecks({ s }: { s: ScreenedData }) {
           <li>Liquidity burned or locked on its own pool, so it can&apos;t be pulled.</li>
           <li>Not a Pump.fun Mayhem Mode token, whose early trading is run by bots.</li>
           <li>No more than {c.freshWalletMaxPct}% of the top 10 holders on wallets under a day old.</li>
-          <li>No more than {c.emptyWalletMaxPct}% of the top 10 holders on otherwise empty wallets.</li>
+          <li>Under {c.emptyWalletRejectPct}% of the top 10 holders on otherwise empty wallets.</li>
         </ul>
         <p className="faint small">Anything that can&apos;t be checked fails.</p>
       </div>
