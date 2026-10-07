@@ -39,6 +39,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     excludeNarrativeRedFlags: false,
     excludeUnrelatedX: false,
     requireTrendMatch: false,
+    excludeLateCopies: false,
     isActive: count === 0,
     shareOnLeaderboard: false,
   };
@@ -56,6 +57,7 @@ function toInput(f: Filter): FilterInput {
     excludeNarrativeRedFlags: rest.excludeNarrativeRedFlags ?? false,
     excludeUnrelatedX: rest.excludeUnrelatedX ?? false,
     requireTrendMatch: rest.requireTrendMatch ?? false,
+    excludeLateCopies: rest.excludeLateCopies ?? false,
   };
 }
 
@@ -423,6 +425,14 @@ function FilterEditor({
             onChange={(e) => set("excludeCopycats", e.target.checked)}
           />
           Skip copycats and reused names
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.excludeLateCopies}
+            onChange={(e) => set("excludeLateCopies", e.target.checked)}
+          />
+          Skip late copies (the 11th or later coin with a name, or a copy of one more than a day old)
         </label>
         <label className="check">
           <input

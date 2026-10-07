@@ -58,6 +58,7 @@ function buildFilterInputSchema(env: Env) {
     excludeNarrativeRedFlags: z.boolean().default(false),
     excludeUnrelatedX: z.boolean().default(false),
     requireTrendMatch: z.boolean().default(false),
+    excludeLateCopies: z.boolean().default(false),
     isActive: z.boolean().default(true),
     // Opt-in to the public filter leaderboard; off unless the owner turns it on.
     shareOnLeaderboard: z.boolean().default(false),

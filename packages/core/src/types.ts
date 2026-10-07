@@ -255,4 +255,6 @@ export interface FilterCriteria {
   excludeUnrelatedX?: boolean;
   /** Deep read: the name must be spiking on Wikipedia or in the news. */
   requireTrendMatch?: boolean;
+  /** No late copy: the 11th or later coin with its name, or a copy of a coin over a day old. */
+  excludeLateCopies?: boolean;
 }

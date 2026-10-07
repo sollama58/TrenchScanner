@@ -1,4 +1,5 @@
 import type { EnrichedToken, ScoreBreakdown } from "../types.js";
+import { narrativeIsLateCopy } from "../curation/narrativeFeatures.js";
 
 /**
  * Composite score (0-100): how much a token looks like the launches that double fast. It ranks
@@ -88,10 +89,10 @@ export const X_POST_PREDATES_MIN_S = 60;
  *    coin and made with it, and they doubled least of any X read. So a profile link ("official
  *    account") is neutral, and a bare X link still earns nothing;
  *  - a post that is unrelated, spoofed or mismatched pulls it down;
- *  - a copycat is neutral: copycats doubled more often than other coins in every population on
- *    the first live day, because a copy of a coin that is running rides its narrative. The
- *    penalty comes back for late copies once TokenSage says which copy this is (its rank among
- *    its siblings and whether the original is still running);
+ *  - a copycat as such is neutral: copycats doubled more often than other coins in every
+ *    population on the first live day, because a copy of a coin that is running rides its
+ *    narrative. A late copy (TokenSage's lineage: the 11th or later coin with the name, or a copy
+ *    of a coin more than a day old) takes the penalty instead;
  *  - a matched trend (the name is spiking on Wikipedia or in the news) lifts it;
  *  - a high-severity flag caps the part at NARRATIVE_RED_FLAG_CAP whatever else it earned.
  * The parts' breakpoints are hand-set like the other three; the weight between the parts is what
@@ -119,6 +120,7 @@ export function scoreNarrative(token: EnrichedToken): number {
       part += 15;
     }
   }
+  if (narrativeIsLateCopy(read) === true) part -= 25;
   if (read.trendMatched === true) part += 10;
   part = clamp(part);
   return read.highFlagCount > 0 ? Math.min(part, NARRATIVE_RED_FLAG_CAP) : part;

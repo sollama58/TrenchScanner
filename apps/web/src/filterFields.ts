@@ -119,5 +119,6 @@ export function narrativeCriteriaLines(c: Partial<FilterCriteria>): string[] {
   if (c.excludeNarrativeRedFlags) lines.push("Skips narrative red flags");
   if (c.excludeUnrelatedX) lines.push("X post must be about the coin");
   if (c.requireTrendMatch) lines.push("Trending topic only");
+  if (c.excludeLateCopies) lines.push("Skips late copies");
   return lines;
 }

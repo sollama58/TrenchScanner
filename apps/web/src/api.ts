@@ -613,6 +613,7 @@ export interface FilterInput {
   excludeNarrativeRedFlags: boolean;
   excludeUnrelatedX: boolean;
   requireTrendMatch: boolean;
+  excludeLateCopies: boolean;
   isActive: boolean;
   /** Listed on the public filter leaderboard (off by default). */
   shareOnLeaderboard: boolean;

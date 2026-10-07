@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALL_NARRATIVE_FEATURES,
   NARRATIVE_FEATURES,
+  NARRATIVE_FEATURES_V2,
   narrativeFeatureValues,
+  narrativeIsLateCopy,
   narrativeFromFeatures,
   narrativeReadFromRow,
   type NarrativeRead,
@@ -35,11 +38,32 @@ function row(overrides: Partial<NarrativeRow> = {}): NarrativeRow {
     xPredatesTokenS: null,
     xReuseCount: null,
     trendMatched: null,
+    lineageKind: null,
+    lineageRank: null,
+    lineageRankOf: null,
+    lineageOfMint: null,
+    originalAgeS: null,
+    originalCurveProgress: null,
+    originalComplete: null,
+    siblings1h: null,
+    siblings6h: null,
+    siblings24h: null,
+    logoReuse24h: null,
+    waveLaunches1h: null,
+    waveLaunches6h: null,
+    waveLaunches24h: null,
+    waveRank24h: null,
+    topCategoryInputs: null,
+    xCredibility: null,
+    xAccountAgeS: null,
+    xAccountMadeForCoin: null,
+    xReuseRank: null,
+    trendScore: null,
     ...overrides,
   };
 }
 
-const fullRow = (): NarrativeRow =>
+const fullRow = (overrides: Partial<NarrativeRow> = {}): NarrativeRow =>
   row({
     depth: "full",
     xFit: 0.85,
@@ -51,6 +75,35 @@ const fullRow = (): NarrativeRow =>
     trendMatched: true,
     flags: ["references_known_coin", "copycat"],
     warnFlagCount: 1,
+    ...overrides,
+  });
+
+/** A deep read made by TokenSage rules 0.15.0: a late copy with a self-made X account. */
+const lineageRow = (overrides: Partial<NarrativeRow> = {}): NarrativeRow =>
+  fullRow({
+    flags: ["copycat", "late_copy", "x_account_made_for_coin"],
+    lineageKind: "late_copy",
+    lineageRank: 15,
+    lineageRankOf: 15,
+    lineageOfMint: "OriginalMint",
+    originalAgeS: 108_000,
+    originalCurveProgress: 0.62,
+    originalComplete: false,
+    siblings1h: 2,
+    siblings6h: 9,
+    siblings24h: 15,
+    logoReuse24h: 4,
+    waveLaunches1h: 3,
+    waveLaunches6h: 13,
+    waveLaunches24h: 15,
+    waveRank24h: 13,
+    topCategoryInputs: 2,
+    xCredibility: 0.032,
+    xAccountAgeS: 43_200,
+    xAccountMadeForCoin: true,
+    xReuseRank: 1,
+    trendScore: 0.4,
+    ...overrides,
   });
 
 describe("narrativeReadFromRow", () => {
@@ -71,7 +124,7 @@ describe("narrativeReadFromRow", () => {
 describe("narrativeFeatureValues", () => {
   it("is null across the board without a read", () => {
     const v = narrativeFeatureValues(undefined);
-    expect(Object.keys(v)).toEqual([...NARRATIVE_FEATURES]);
+    expect(Object.keys(v)).toEqual([...ALL_NARRATIVE_FEATURES]);
     expect(Object.values(v).every((x) => x === null)).toBe(true);
   });
 
@@ -149,8 +202,52 @@ describe("round trip through a stored feature vector", () => {
     score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
   });
 
+  it("reads the lineage, wave, X account and trend score of a rules-0.15.0 row, and leaves older rows unknown", () => {
+    const old = narrativeFeatureValues(narrativeReadFromRow(fullRow()));
+    for (const name of NARRATIVE_FEATURES_V2) expect(old[name]).toBeNull();
+    const v2 = narrativeFeatureValues(narrativeReadFromRow(lineageRow()));
+    expect(v2).toMatchObject({
+      nsLineageOriginal: 0,
+      nsLineageEarlyCopy: 0,
+      nsLineageLateCopy: 1,
+      nsCopyRank: 15,
+      nsCopyRankOf: 15,
+      nsOriginalAgeMin: 1800,
+      nsOriginalCurveProgress: 0.62,
+      nsOriginalGraduated: 0,
+      nsSiblings1h: 2,
+      nsSiblings6h: 9,
+      nsSiblings24h: 15,
+      nsLogoReuse24h: 4,
+      nsWaveLaunches1h: 3,
+      nsWaveLaunches6h: 13,
+      nsWaveLaunches24h: 15,
+      nsWaveRank24h: 13,
+      nsTopCategoryInputs: 2,
+      nsXCredibility: 0.032,
+      nsXAccountAgeDays: 0.5,
+      nsXAccountMadeForCoin: 1,
+      nsXReuseRank: 1,
+      nsTrendScore: 0.4,
+    });
+    // The X account facts need the post or profile read; the lineage does not.
+    const basic = narrativeFeatureValues(
+      narrativeReadFromRow(lineageRow({ depth: "basic", xRelation: null, xVerdict: null })),
+    );
+    expect(basic.nsLineageLateCopy).toBe(1);
+    expect(basic.nsXCredibility).toBeNull();
+    expect(basic.nsTrendScore).toBeNull();
+    expect(narrativeIsLateCopy(narrativeReadFromRow(lineageRow())!)).toBe(true);
+    expect(narrativeIsLateCopy(narrativeReadFromRow(fullRow())!)).toBeNull();
+    expect(
+      narrativeIsLateCopy(narrativeReadFromRow(lineageRow({ lineageKind: "copy", flags: ["copycat"] }))!),
+    ).toBe(false);
+    expect(narrativeIsLateCopy(narrativeReadFromRow(row({ flags: ["late_copy"] }))!)).toBe(true);
+  });
+
   it("records every ns* input on the vector", () => {
-    for (const name of NARRATIVE_FEATURES) expect(CANDIDATE_FEATURE_NAMES).toContain(name);
+    for (const name of ALL_NARRATIVE_FEATURES) expect(CANDIDATE_FEATURE_NAMES).toContain(name);
+    expect(CANDIDATE_FEATURE_NAMES.indexOf("nsTrendScore")).toBe(CANDIDATE_FEATURE_NAMES.length - 1);
     const features = buildCandidateFeatures(scoredWith(narrativeReadFromRow(fullRow())));
     expect(features.nsXFit).toBe(0.85);
     expect(features.nsCatAnimal).toBe(1);
@@ -158,7 +255,7 @@ describe("round trip through a stored feature vector", () => {
   });
 
   it("replays the same inputs from the vector", () => {
-    for (const r of [row(), fullRow(), row({ depth: "full", trendMatched: false })]) {
+    for (const r of [row(), fullRow(), row({ depth: "full", trendMatched: false }), lineageRow()]) {
       const features = buildCandidateFeatures(scoredWith(narrativeReadFromRow(r)));
       const replayed = scoredFromFeatures(features, 0.001, 20_000);
       expect(narrativeFeatureValues(replayed.narrative)).toEqual(

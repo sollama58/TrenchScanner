@@ -93,12 +93,69 @@ export const NARRATIVE_FEATURES = [
   "nsXReuseCount",
 ] as const;
 
-export type NarrativeFeatureName = (typeof NARRATIVE_FEATURES)[number];
+/**
+ * The second wave (TokenSage rules 0.15.0, 2026-10-07): which copy of what the coin is, the
+ * referent wave, the X account's credibility and the trend score. Recorded after every older
+ * feature (features.ts spreads this list last), so the vector stays add-only. Null on reads made
+ * by older rules, which is "unknown", not 0.
+ */
+export const NARRATIVE_FEATURES_V2 = [
+  // Lineage, on any read.
+  "nsLineageOriginal",
+  "nsLineageEarlyCopy",
+  "nsLineageLateCopy",
+  "nsCopyRank",
+  "nsCopyRankOf",
+  "nsOriginalAgeMin",
+  "nsOriginalCurveProgress",
+  "nsOriginalGraduated",
+  "nsSiblings1h",
+  "nsSiblings6h",
+  "nsSiblings24h",
+  "nsLogoReuse24h",
+  "nsWaveLaunches1h",
+  "nsWaveLaunches6h",
+  "nsWaveLaunches24h",
+  "nsWaveRank24h",
+  "nsTopCategoryInputs",
+  // Full read only, and only when the post or profile was read.
+  "nsXCredibility",
+  "nsXAccountAgeDays",
+  "nsXAccountMadeForCoin",
+  "nsXReuseRank",
+  "nsTrendScore",
+] as const;
+
+export type NarrativeFeatureName =
+  (typeof NARRATIVE_FEATURES)[number] | (typeof NARRATIVE_FEATURES_V2)[number];
+
+/** Every narrative feature, first wave then second. */
+export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
+  ...NARRATIVE_FEATURES,
+  ...NARRATIVE_FEATURES_V2,
+];
+
+/** Second-wave features that are counts, ranks or ages: everything else is a 0/1 bit or a 0-1 share. */
+const NARRATIVE_V2_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<NarrativeFeatureName>([
+  "nsCopyRank",
+  "nsCopyRankOf",
+  "nsOriginalAgeMin",
+  "nsSiblings1h",
+  "nsSiblings6h",
+  "nsSiblings24h",
+  "nsLogoReuse24h",
+  "nsWaveLaunches1h",
+  "nsWaveLaunches6h",
+  "nsWaveLaunches24h",
+  "nsWaveRank24h",
+  "nsTopCategoryInputs",
+  "nsXAccountAgeDays",
+  "nsXReuseRank",
+]);
 
 /** Narrative features on a raw scale under the log transform: 0/1 flags, 0-1 confidences, small counts. */
-export const NARRATIVE_UNTRANSFORMED_FEATURES: readonly NarrativeFeatureName[] = NARRATIVE_FEATURES.filter(
-  (name) => name !== "nsXPredatesTokenMin",
-);
+export const NARRATIVE_UNTRANSFORMED_FEATURES: readonly NarrativeFeatureName[] =
+  ALL_NARRATIVE_FEATURES.filter((name) => name !== "nsXPredatesTokenMin" && !NARRATIVE_V2_SCALED.has(name));
 
 export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsDepthFull: "deep narrative read",
@@ -134,6 +191,28 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsXAuthorFollowersLog: "X author followers",
   nsXPredatesTokenMin: "X post age at launch",
   nsXReuseCount: "X post reused",
+  nsLineageOriginal: "first of its name",
+  nsLineageEarlyCopy: "early copy",
+  nsLineageLateCopy: "late copy",
+  nsCopyRank: "place among namesakes",
+  nsCopyRankOf: "namesakes in the window",
+  nsOriginalAgeMin: "age of the coin it copies",
+  nsOriginalCurveProgress: "copied coin's curve progress",
+  nsOriginalGraduated: "copied coin graduated",
+  nsSiblings1h: "look-alikes in the last hour",
+  nsSiblings6h: "look-alikes in 6 hours",
+  nsSiblings24h: "look-alikes in 24 hours",
+  nsLogoReuse24h: "logo reused in 24 hours",
+  nsWaveLaunches1h: "same-referent launches, 1 hour",
+  nsWaveLaunches6h: "same-referent launches, 6 hours",
+  nsWaveLaunches24h: "same-referent launches, 24 hours",
+  nsWaveRank24h: "place in the referent wave",
+  nsTopCategoryInputs: "inputs agreeing on the theme",
+  nsXCredibility: "X account credibility",
+  nsXAccountAgeDays: "X account age at launch",
+  nsXAccountMadeForCoin: "X account made for the coin",
+  nsXReuseRank: "place among coins linking the post",
+  nsTrendScore: "trend strength",
 };
 
 /**
@@ -160,6 +239,28 @@ export interface NarrativeRead {
   xPredatesTokenS: number | null;
   xReuseCount: number | null;
   trendMatched: boolean | null;
+  /** Rules 0.15.0+ (see TokenNarrativeFields in datasources/tokensage.ts); null on older reads. */
+  lineageKind: string | null;
+  lineageRank: number | null;
+  lineageRankOf: number | null;
+  lineageOfMint: string | null;
+  originalAgeS: number | null;
+  originalCurveProgress: number | null;
+  originalComplete: boolean | null;
+  siblings1h: number | null;
+  siblings6h: number | null;
+  siblings24h: number | null;
+  logoReuse24h: number | null;
+  waveLaunches1h: number | null;
+  waveLaunches6h: number | null;
+  waveLaunches24h: number | null;
+  waveRank24h: number | null;
+  topCategoryInputs: number | null;
+  xCredibility: number | null;
+  xAccountAgeS: number | null;
+  xAccountMadeForCoin: boolean | null;
+  xReuseRank: number | null;
+  trendScore: number | null;
 }
 
 /** The TokenNarrative columns a read is built from (categories is a Json column). */
@@ -183,6 +284,27 @@ export interface NarrativeRow {
   xPredatesTokenS: number | null;
   xReuseCount: number | null;
   trendMatched: boolean | null;
+  lineageKind: string | null;
+  lineageRank: number | null;
+  lineageRankOf: number | null;
+  lineageOfMint: string | null;
+  originalAgeS: number | null;
+  originalCurveProgress: number | null;
+  originalComplete: boolean | null;
+  siblings1h: number | null;
+  siblings6h: number | null;
+  siblings24h: number | null;
+  logoReuse24h: number | null;
+  waveLaunches1h: number | null;
+  waveLaunches6h: number | null;
+  waveLaunches24h: number | null;
+  waveRank24h: number | null;
+  topCategoryInputs: number | null;
+  xCredibility: number | null;
+  xAccountAgeS: number | null;
+  xAccountMadeForCoin: boolean | null;
+  xReuseRank: number | null;
+  trendScore: number | null;
 }
 
 /** The columns narrativeReadFromRow needs, for a Prisma `select`. */
@@ -207,6 +329,27 @@ export const NARRATIVE_ROW_SELECT = {
   xPredatesTokenS: true,
   xReuseCount: true,
   trendMatched: true,
+  lineageKind: true,
+  lineageRank: true,
+  lineageRankOf: true,
+  lineageOfMint: true,
+  originalAgeS: true,
+  originalCurveProgress: true,
+  originalComplete: true,
+  siblings1h: true,
+  siblings6h: true,
+  siblings24h: true,
+  logoReuse24h: true,
+  waveLaunches1h: true,
+  waveLaunches6h: true,
+  waveLaunches24h: true,
+  waveRank24h: true,
+  topCategoryInputs: true,
+  xCredibility: true,
+  xAccountAgeS: true,
+  xAccountMadeForCoin: true,
+  xReuseRank: true,
+  trendScore: true,
 } as const;
 
 /**
@@ -246,6 +389,27 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     xPredatesTokenS: row.xPredatesTokenS,
     xReuseCount: row.xReuseCount,
     trendMatched: row.trendMatched,
+    lineageKind: row.lineageKind ?? null,
+    lineageRank: row.lineageRank ?? null,
+    lineageRankOf: row.lineageRankOf ?? null,
+    lineageOfMint: row.lineageOfMint ?? null,
+    originalAgeS: row.originalAgeS ?? null,
+    originalCurveProgress: row.originalCurveProgress ?? null,
+    originalComplete: row.originalComplete ?? null,
+    siblings1h: row.siblings1h ?? null,
+    siblings6h: row.siblings6h ?? null,
+    siblings24h: row.siblings24h ?? null,
+    logoReuse24h: row.logoReuse24h ?? null,
+    waveLaunches1h: row.waveLaunches1h ?? null,
+    waveLaunches6h: row.waveLaunches6h ?? null,
+    waveLaunches24h: row.waveLaunches24h ?? null,
+    waveRank24h: row.waveRank24h ?? null,
+    topCategoryInputs: row.topCategoryInputs ?? null,
+    xCredibility: row.xCredibility ?? null,
+    xAccountAgeS: row.xAccountAgeS ?? null,
+    xAccountMadeForCoin: row.xAccountMadeForCoin ?? null,
+    xReuseRank: row.xReuseRank ?? null,
+    trendScore: row.trendScore ?? null,
   };
 }
 
@@ -277,7 +441,27 @@ export const NARRATIVE_FLAG = {
   earlierSameName: "earlier_same_name",
   referencesKnownCoin: "references_known_coin",
   xContentMismatch: "x_content_mismatch",
+  lateCopy: "late_copy",
 } as const;
+
+/** TokenSage's lineage kinds (rules 0.15.0+). */
+export const LINEAGE_KIND = {
+  original: "original",
+  earlyCopy: "early_copy",
+  copy: "copy",
+  lateCopy: "late_copy",
+  reference: "reference",
+} as const;
+
+/**
+ * A late copy: the 11th or later coin with this name, or a copy of a coin more than a day old
+ * (TokenSage's thresholds). Null when the read predates lineage, which is "unknown", not "no".
+ */
+export function narrativeIsLateCopy(read: NarrativeRead): boolean | null {
+  if (read.flags.includes(NARRATIVE_FLAG.lateCopy)) return true;
+  if (read.lineageKind === null) return null;
+  return read.lineageKind === LINEAGE_KIND.lateCopy;
+}
 
 /** A live copycat: TokenSage marked a recent copy, or raised the copycat flag. */
 export function narrativeIsCopycat(read: NarrativeRead): boolean {
@@ -296,13 +480,14 @@ export function narrativeFeatureValues(
   read: NarrativeRead | undefined,
 ): Record<NarrativeFeatureName, number | null> {
   if (!read) {
-    return Object.fromEntries(NARRATIVE_FEATURES.map((k) => [k, null])) as Record<
+    return Object.fromEntries(ALL_NARRATIVE_FEATURES.map((k) => [k, null])) as Record<
       NarrativeFeatureName,
       number | null
     >;
   }
   const full = read.depth === "full";
   const xRead = narrativeXRead(read);
+  const lineage = read.lineageKind;
   const relation = (name: string) => (full ? bit(xRead && read.xRelation === name) : null);
   const topConf = read.categories.reduce((max, c) => Math.max(max, c.confidence), 0);
   const categoryBits = Object.fromEntries(
@@ -338,6 +523,29 @@ export function narrativeFeatureValues(
       xRead && read.xAuthorFollowers !== null ? Math.log10(1 + Math.max(0, read.xAuthorFollowers)) : null,
     nsXPredatesTokenMin: xRead && read.xPredatesTokenS !== null ? read.xPredatesTokenS / 60 : null,
     nsXReuseCount: xRead && read.xReuseCount !== null ? read.xReuseCount : null,
+    // Rules 0.15.0+: null on older reads (unknown), never 0.
+    nsLineageOriginal: lineage === null ? null : bit(lineage === LINEAGE_KIND.original),
+    nsLineageEarlyCopy: lineage === null ? null : bit(lineage === LINEAGE_KIND.earlyCopy),
+    nsLineageLateCopy: lineage === null ? null : bit(lineage === LINEAGE_KIND.lateCopy),
+    nsCopyRank: read.lineageRank,
+    nsCopyRankOf: read.lineageRankOf,
+    nsOriginalAgeMin: read.originalAgeS === null ? null : read.originalAgeS / 60,
+    nsOriginalCurveProgress: read.originalCurveProgress,
+    nsOriginalGraduated: read.originalComplete === null ? null : bit(read.originalComplete),
+    nsSiblings1h: read.siblings1h,
+    nsSiblings6h: read.siblings6h,
+    nsSiblings24h: read.siblings24h,
+    nsLogoReuse24h: read.logoReuse24h,
+    nsWaveLaunches1h: read.waveLaunches1h,
+    nsWaveLaunches6h: read.waveLaunches6h,
+    nsWaveLaunches24h: read.waveLaunches24h,
+    nsWaveRank24h: read.waveRank24h,
+    nsTopCategoryInputs: read.topCategoryInputs,
+    nsXCredibility: xRead ? read.xCredibility : null,
+    nsXAccountAgeDays: xRead && read.xAccountAgeS !== null ? read.xAccountAgeS / 86_400 : null,
+    nsXAccountMadeForCoin: xRead && read.xAccountMadeForCoin !== null ? bit(read.xAccountMadeForCoin) : null,
+    nsXReuseRank: xRead ? read.xReuseRank : null,
+    nsTrendScore: full ? read.trendScore : null,
   };
 }
 
@@ -374,6 +582,19 @@ export function narrativeFromFeatures(
     : null;
   const followersLog = num("nsXAuthorFollowersLog");
   const predatesMin = num("nsXPredatesTokenMin");
+  const lineageKind =
+    num("nsLineageOriginal") === null
+      ? null
+      : num("nsLineageOriginal") === 1
+        ? LINEAGE_KIND.original
+        : num("nsLineageEarlyCopy") === 1
+          ? LINEAGE_KIND.earlyCopy
+          : num("nsLineageLateCopy") === 1
+            ? LINEAGE_KIND.lateCopy
+            : LINEAGE_KIND.copy;
+  if (lineageKind === LINEAGE_KIND.lateCopy) flags.push(NARRATIVE_FLAG.lateCopy);
+  const originalAgeMin = num("nsOriginalAgeMin");
+  const accountAgeDays = num("nsXAccountAgeDays");
   return {
     depth: full ? "full" : "basic",
     status: "complete",
@@ -402,9 +623,30 @@ export function narrativeFromFeatures(
     xPredatesTokenS: predatesMin === null ? null : Math.round(predatesMin * 60),
     xReuseCount: num("nsXReuseCount"),
     trendMatched: full ? num("nsTrendMatched") === 1 : null,
+    lineageKind,
+    lineageRank: num("nsCopyRank"),
+    lineageRankOf: num("nsCopyRankOf"),
+    lineageOfMint: null,
+    originalAgeS: originalAgeMin === null ? null : Math.round(originalAgeMin * 60),
+    originalCurveProgress: num("nsOriginalCurveProgress"),
+    originalComplete: num("nsOriginalGraduated") === null ? null : num("nsOriginalGraduated") === 1,
+    siblings1h: num("nsSiblings1h"),
+    siblings6h: num("nsSiblings6h"),
+    siblings24h: num("nsSiblings24h"),
+    logoReuse24h: num("nsLogoReuse24h"),
+    waveLaunches1h: num("nsWaveLaunches1h"),
+    waveLaunches6h: num("nsWaveLaunches6h"),
+    waveLaunches24h: num("nsWaveLaunches24h"),
+    waveRank24h: num("nsWaveRank24h"),
+    topCategoryInputs: num("nsTopCategoryInputs"),
+    xCredibility: num("nsXCredibility"),
+    xAccountAgeS: accountAgeDays === null ? null : Math.round(accountAgeDays * 86_400),
+    xAccountMadeForCoin: num("nsXAccountMadeForCoin") === null ? null : num("nsXAccountMadeForCoin") === 1,
+    xReuseRank: num("nsXReuseRank"),
+    trendScore: num("nsTrendScore"),
   };
 }
 
 // The names below must stay in CANDIDATE_FEATURE_NAMES; this line fails to compile if one is dropped.
-const _check: readonly CandidateFeatureName[] = NARRATIVE_FEATURES;
+const _check: readonly CandidateFeatureName[] = ALL_NARRATIVE_FEATURES;
 void _check;

@@ -3,6 +3,7 @@ import { matchesNarrativeKeywords } from "../narratives/keywords.js";
 import { CRITICAL_RISK_FLAGS } from "./rugScreen.js";
 import {
   narrativeIsCopycat,
+  narrativeIsLateCopy,
   narrativeMatchesLabel,
   type NarrativeRead,
 } from "../curation/narrativeFeatures.js";
@@ -134,7 +135,8 @@ export function usesNarrativeCriteria(filter: FilterCriteria): boolean {
     filter.excludeCopycats === true ||
     filter.excludeNarrativeRedFlags === true ||
     filter.excludeUnrelatedX === true ||
-    filter.requireTrendMatch === true
+    filter.requireTrendMatch === true ||
+    filter.excludeLateCopies === true
   );
 }
 
@@ -154,6 +156,8 @@ export function matchesNarrativeCriteria(read: NarrativeRead | undefined, filter
     return false;
   }
   if (filter.excludeNarrativeRedFlags && read.highFlagCount > 0) return false;
+  // A read from before TokenSage said which copy a coin is can't be checked: fail closed.
+  if (filter.excludeLateCopies && narrativeIsLateCopy(read) !== false) return false;
   if (filter.excludeUnrelatedX) {
     if (read.depth !== "full") return false;
     if (read.xVerdict === "unrelated" || read.xRelation === "spoofed") return false;

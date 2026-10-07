@@ -183,6 +183,7 @@ model UserFilter {
   excludeNarrativeRedFlags   Boolean  @default(false)
   excludeUnrelatedX          Boolean  @default(false)
   requireTrendMatch          Boolean  @default(false)
+  excludeLateCopies          Boolean  @default(false)
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -1116,6 +1117,36 @@ model TokenNarrative {
   xReuseCount     Int?
   /// The name matched a Wikipedia/news spike (trend.matched, full depth); null until read.
   trendMatched    Boolean?
+  /// TokenSage rules 0.15.0+: which copy of what this coin is (lineage.kind "original",
+  /// "early_copy", "copy", "late_copy", "reference", "unknown"), its launch-order rank among its
+  /// namesakes, the coin it copies and that coin's age and curve state at the read, how many
+  /// coins shared its name, ticker or logo in the hours before it, and how many coins TokenSage
+  /// resolved to the same referent (the wave). All null on reads made by older rules.
+  lineageKind     String?
+  lineageRank     Int?
+  lineageRankOf   Int?
+  lineageOfMint   String?
+  originalAgeS    Int?
+  originalCurveProgress Float?
+  originalComplete Boolean?
+  siblings1h      Int?
+  siblings6h      Int?
+  siblings24h     Int?
+  logoReuse24h    Int?
+  waveLaunches1h  Int?
+  waveLaunches6h  Int?
+  waveLaunches24h Int?
+  waveRank24h     Int?
+  /// How many inputs (name, symbol, description, image, x, trend, db) agree on the top category.
+  topCategoryInputs Int?
+  /// The linked X account's worth apart from its fit (x.credibility 0-1), its age at the coin's
+  /// launch, whether it was made for the coin, and this coin's place among the coins linking it.
+  xCredibility    Float?
+  xAccountAgeS    Int?
+  xAccountMadeForCoin Boolean?
+  xReuseRank      Int?
+  /// Strength of the trend hit (trend.score 0-1); null until read or on older rules.
+  trendScore      Float?
   /// Flags by severity, so the models and score need no catalogue of codes.
   highFlagCount   Int      @default(0)
   warnFlagCount   Int      @default(0)

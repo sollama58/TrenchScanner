@@ -181,6 +181,27 @@ describe("TokenSage narrative criteria", () => {
     xPredatesTokenS: null,
     xReuseCount: null,
     trendMatched: null,
+    lineageKind: null,
+    lineageRank: null,
+    lineageRankOf: null,
+    lineageOfMint: null,
+    originalAgeS: null,
+    originalCurveProgress: null,
+    originalComplete: null,
+    siblings1h: null,
+    siblings6h: null,
+    siblings24h: null,
+    logoReuse24h: null,
+    waveLaunches1h: null,
+    waveLaunches6h: null,
+    waveLaunches24h: null,
+    waveRank24h: null,
+    topCategoryInputs: null,
+    xCredibility: null,
+    xAccountAgeS: null,
+    xAccountMadeForCoin: null,
+    xReuseRank: null,
+    trendScore: null,
     ...overrides,
   });
 
@@ -199,6 +220,7 @@ describe("TokenSage narrative criteria", () => {
       { ...baseFilter, excludeNarrativeRedFlags: true },
       { ...baseFilter, excludeUnrelatedX: true },
       { ...baseFilter, requireTrendMatch: true },
+      { ...baseFilter, excludeLateCopies: true },
     ]) {
       expect(matchesFilter(baseToken(), filter)).toBe(false);
     }
@@ -223,6 +245,19 @@ describe("TokenSage narrative criteria", () => {
     expect(matchesFilter(baseToken({ narrative: read({ flags: ["earlier_same_name"] }) }), f)).toBe(false);
     expect(matchesFilter(baseToken({ narrative: read({ highFlagCount: 1 }) }), f)).toBe(false);
     expect(matchesFilter(baseToken({ narrative: read({ warnFlagCount: 3 }) }), f)).toBe(true);
+  });
+
+  it("skips late copies, and fails closed on a read that predates lineage", () => {
+    const f = { ...baseFilter, excludeLateCopies: true };
+    expect(matchesFilter(baseToken({ narrative: read() }), f)).toBe(false);
+    expect(matchesFilter(baseToken({ narrative: read({ lineageKind: "original" }) }), f)).toBe(true);
+    expect(
+      matchesFilter(baseToken({ narrative: read({ lineageKind: "early_copy", copiesRecent: true }) }), f),
+    ).toBe(true);
+    expect(matchesFilter(baseToken({ narrative: read({ lineageKind: "late_copy" }) }), f)).toBe(false);
+    expect(
+      matchesFilter(baseToken({ narrative: read({ lineageKind: "copy", flags: ["late_copy"] }) }), f),
+    ).toBe(false);
   });
 
   it("needs the deep read for the X post and the trend", () => {

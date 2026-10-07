@@ -63,6 +63,7 @@ export const FILTER_CRITERIA_KEYS = [
   "excludeNarrativeRedFlags",
   "excludeUnrelatedX",
   "requireTrendMatch",
+  "excludeLateCopies",
 ] as const;
 
 export type FilterCriteriaKey = (typeof FILTER_CRITERIA_KEYS)[number];
