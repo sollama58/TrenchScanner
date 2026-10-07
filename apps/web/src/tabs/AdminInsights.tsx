@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from "react";
+import { narrativeCriteriaLines } from "../filterFields";
+import type { FilterCriteria } from "../api";
 import { usePolling } from "../hooks";
 import { pct, shortAddress, usd } from "../format";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
@@ -921,6 +923,7 @@ function criteria(f: AdminFilter): string {
   if (f.excludeCriticalRiskFlags) parts.push("no critical flags");
   const words = f.narrativeKeywords as string[] | undefined;
   if (words?.length) parts.push(`words: ${words.join(", ")}`);
+  parts.push(...narrativeCriteriaLines(f as Partial<FilterCriteria>).map((l) => l.toLowerCase()));
   return parts.join(" · ");
 }
 

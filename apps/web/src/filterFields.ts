@@ -106,5 +106,18 @@ export function criteriaLines(c: FilterCriteria): string[] {
   }
   if (c.excludeCriticalRiskFlags) lines.push("Skips critical RugCheck flags");
   if (c.narrativeKeywords.length > 0) lines.push(`Keywords: ${c.narrativeKeywords.join(", ")}`);
+  lines.push(...narrativeCriteriaLines(c));
+  return lines;
+}
+
+/** The TokenSage criteria a filter sets, in short words (older API builds send none of them). */
+export function narrativeCriteriaLines(c: Partial<FilterCriteria>): string[] {
+  const lines: string[] = [];
+  if (c.narrativeCategories?.length) lines.push(`Themes: ${c.narrativeCategories.join(", ")}`);
+  if (c.excludeNarrativeCategories?.length) lines.push(`Not: ${c.excludeNarrativeCategories.join(", ")}`);
+  if (c.excludeCopycats) lines.push("Skips copycats");
+  if (c.excludeNarrativeRedFlags) lines.push("Skips narrative red flags");
+  if (c.excludeUnrelatedX) lines.push("X post must be about the coin");
+  if (c.requireTrendMatch) lines.push("Trending topic only");
   return lines;
 }

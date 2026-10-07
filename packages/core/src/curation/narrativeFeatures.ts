@@ -30,6 +30,27 @@ export const NARRATIVE_TOP_CATEGORIES = {
   nsCatHumorCrude: "humor_crude_offensive",
 } as const;
 
+/** The top-level categories as a filter editor lists them: id (the TokenSage label) and a plain name. */
+export const NARRATIVE_CATEGORY_LABELS: Record<
+  (typeof NARRATIVE_TOP_CATEGORIES)[keyof typeof NARRATIVE_TOP_CATEGORIES],
+  string
+> = {
+  animal: "Animals",
+  meme_template: "Meme templates",
+  ai_agent: "AI agents",
+  political: "Politics",
+  celebrity: "Celebrities",
+  news_event: "News events",
+  food_object_abstract: "Food, objects, abstract",
+  regional_language: "Regional and language",
+  crypto_native: "Crypto-native",
+  derivative: "Derivatives of other coins",
+  humor_crude_offensive: "Crude humor",
+};
+
+/** Every top-level category id, in the order the editor shows them. */
+export const NARRATIVE_CATEGORY_IDS: readonly string[] = Object.values(NARRATIVE_TOP_CATEGORIES);
+
 /** A category counts for its 0/1 input from this confidence. */
 export const NARRATIVE_CATEGORY_MIN_CONFIDENCE = 0.5;
 
@@ -239,6 +260,15 @@ export function narrativeHasCategory(read: NarrativeRead, top: string): boolean 
   return read.categories.some(
     (c) => topCategory(c.label) === top && c.confidence >= NARRATIVE_CATEGORY_MIN_CONFIDENCE,
   );
+}
+
+/**
+ * True when the read puts the coin under `label` at the confidence floor: a top-level id
+ * ("animal") matches every label under it, a full label ("animal/dog") only itself.
+ */
+export function narrativeMatchesLabel(read: NarrativeRead, label: string): boolean {
+  if (!label.includes("/")) return narrativeHasCategory(read, label);
+  return read.categories.some((c) => c.label === label && c.confidence >= NARRATIVE_CATEGORY_MIN_CONFIDENCE);
 }
 
 /** The flag codes the features and score name. Everything else counts only through the severity totals. */

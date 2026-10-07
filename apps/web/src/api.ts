@@ -606,6 +606,13 @@ export interface FilterInput {
   maxEmptyTop10WalletPct: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
+  /** TokenSage narrative criteria; every one fails closed until the coin has a read. */
+  narrativeCategories: string[];
+  excludeNarrativeCategories: string[];
+  excludeCopycats: boolean;
+  excludeNarrativeRedFlags: boolean;
+  excludeUnrelatedX: boolean;
+  requireTrendMatch: boolean;
   isActive: boolean;
   /** Listed on the public filter leaderboard (off by default). */
   shareOnLeaderboard: boolean;
@@ -666,6 +673,8 @@ export interface AppConfig {
   mcapFilterMax: number;
   scanBandMin: number;
   scanBandMax: number;
+  /** TokenSage's top-level themes, for the narrative criteria (absent from older API builds). */
+  narrativeCategories?: { id: string; label: string }[];
 }
 
 export interface WorkerHealth {

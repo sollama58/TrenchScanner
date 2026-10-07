@@ -54,6 +54,18 @@ describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
     const badBuyers = await call("POST", "/filters", { minFirstBuyersHolding: 20, maxFirstBuyersHolding: 5 });
     expect(badBuyers.statusCode).toBe(400);
     expect((await call("POST", "/filters", { narrativeKeywords: ["ai", "  "] })).statusCode).toBe(400);
+    // Narrative labels are TokenSage slugs: a top-level one or one level under it.
+    expect((await call("POST", "/filters", { narrativeCategories: ["Animal Coins"] })).statusCode).toBe(400);
+    const themed = await call("POST", "/filters", {
+      name: "themed",
+      narrativeCategories: ["animal", "animal/dog"],
+      excludeCopycats: true,
+    });
+    expect(themed.statusCode).toBe(201);
+    expect(themed.json()).toMatchObject({
+      narrativeCategories: ["animal", "animal/dog"],
+      excludeCopycats: true,
+    });
 
     const ok = await call("POST", "/filters", { name: "pairs", maxFirstBuyersHolding: 5 });
     expect(ok.statusCode).toBe(201);

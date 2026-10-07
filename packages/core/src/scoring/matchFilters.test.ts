@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { matchesFilter } from "./matchFilters.js";
 import { EMPTY_TRADE_FLOW } from "../curation/tradeFlow.js";
+import type { NarrativeRead } from "../curation/narrativeFeatures.js";
 import type { FilterCriteria, ScoredToken } from "../types.js";
 
 function baseToken(overrides: Partial<ScoredToken> = {}): ScoredToken {
@@ -152,5 +153,95 @@ describe("first buyers still holding", () => {
   it("fails the floor but skips the ceiling when the launch wasn't seen", () => {
     expect(matchesFilter(withHolding(null), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);
     expect(matchesFilter(withHolding(null), { ...baseFilter, maxFirstBuyersHolding: 15 })).toBe(true);
+  });
+});
+
+describe("TokenSage narrative criteria", () => {
+  const read = (overrides: Partial<NarrativeRead> = {}): NarrativeRead => ({
+    depth: "basic",
+    status: "complete",
+    analyzedAt: null,
+    categories: [
+      { label: "animal", confidence: 0.9 },
+      { label: "animal/dog", confidence: 0.9 },
+      { label: "derivative", confidence: 0.3 },
+    ],
+    referentLabel: null,
+    referentKind: null,
+    referentConfidence: null,
+    referentSupport: [],
+    flags: [],
+    highFlagCount: 0,
+    warnFlagCount: 0,
+    copiesRecent: false,
+    xFit: null,
+    xVerdict: null,
+    xRelation: null,
+    xAuthorFollowers: null,
+    xPredatesTokenS: null,
+    xReuseCount: null,
+    trendMatched: null,
+    ...overrides,
+  });
+
+  it("is inert when the filter sets none of them, read or no read", () => {
+    expect(matchesFilter(baseToken(), baseFilter)).toBe(true);
+    expect(
+      matchesFilter(baseToken({ narrative: read({ copiesRecent: true, highFlagCount: 2 }) }), baseFilter),
+    ).toBe(true);
+  });
+
+  it("fails closed without a read, whichever criterion is set", () => {
+    for (const filter of [
+      { ...baseFilter, narrativeCategories: ["animal"] },
+      { ...baseFilter, excludeNarrativeCategories: ["political"] },
+      { ...baseFilter, excludeCopycats: true },
+      { ...baseFilter, excludeNarrativeRedFlags: true },
+      { ...baseFilter, excludeUnrelatedX: true },
+      { ...baseFilter, requireTrendMatch: true },
+    ]) {
+      expect(matchesFilter(baseToken(), filter)).toBe(false);
+    }
+  });
+
+  it("matches themes by top-level id or full label, at the confidence floor", () => {
+    const token = baseToken({ narrative: read() });
+    expect(matchesFilter(token, { ...baseFilter, narrativeCategories: ["animal"] })).toBe(true);
+    expect(matchesFilter(token, { ...baseFilter, narrativeCategories: ["animal/dog"] })).toBe(true);
+    expect(matchesFilter(token, { ...baseFilter, narrativeCategories: ["animal/cat"] })).toBe(false);
+    expect(matchesFilter(token, { ...baseFilter, narrativeCategories: ["political", "animal"] })).toBe(true);
+    // Below the floor, "derivative" does not count, for or against.
+    expect(matchesFilter(token, { ...baseFilter, narrativeCategories: ["derivative"] })).toBe(false);
+    expect(matchesFilter(token, { ...baseFilter, excludeNarrativeCategories: ["derivative"] })).toBe(true);
+    expect(matchesFilter(token, { ...baseFilter, excludeNarrativeCategories: ["animal"] })).toBe(false);
+  });
+
+  it("skips copycats, reused names and red flags", () => {
+    const f = { ...baseFilter, excludeCopycats: true, excludeNarrativeRedFlags: true };
+    expect(matchesFilter(baseToken({ narrative: read() }), f)).toBe(true);
+    expect(matchesFilter(baseToken({ narrative: read({ copiesRecent: true }) }), f)).toBe(false);
+    expect(matchesFilter(baseToken({ narrative: read({ flags: ["earlier_same_name"] }) }), f)).toBe(false);
+    expect(matchesFilter(baseToken({ narrative: read({ highFlagCount: 1 }) }), f)).toBe(false);
+    expect(matchesFilter(baseToken({ narrative: read({ warnFlagCount: 3 }) }), f)).toBe(true);
+  });
+
+  it("needs the deep read for the X post and the trend", () => {
+    const x = { ...baseFilter, excludeUnrelatedX: true };
+    expect(matchesFilter(baseToken({ narrative: read() }), x)).toBe(false);
+    expect(matchesFilter(baseToken({ narrative: read({ depth: "full" }) }), x)).toBe(true);
+    expect(matchesFilter(baseToken({ narrative: read({ depth: "full", xVerdict: "unrelated" }) }), x)).toBe(
+      false,
+    );
+    expect(matchesFilter(baseToken({ narrative: read({ depth: "full", xRelation: "spoofed" }) }), x)).toBe(
+      false,
+    );
+    const trend = { ...baseFilter, requireTrendMatch: true };
+    expect(matchesFilter(baseToken({ narrative: read({ trendMatched: true }) }), trend)).toBe(false);
+    expect(matchesFilter(baseToken({ narrative: read({ depth: "full", trendMatched: true }) }), trend)).toBe(
+      true,
+    );
+    expect(matchesFilter(baseToken({ narrative: read({ depth: "full", trendMatched: false }) }), trend)).toBe(
+      false,
+    );
   });
 });
