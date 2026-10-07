@@ -191,6 +191,12 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "scoreNarrative",
   "scoreTotal",
   "scoreNarrativeV2",
+  // TokenSage inputs that repeat another on today's rows (notes/tokensage-models-eval-2026-10-07.md,
+  // section 3): the reused-name flag equals the copycat bit on 98% of reads, the copy's rank is
+  // the 24 h sibling count (r = 1.00), and the wave rank is the 24 h wave size (r = 0.98).
+  "nsEarlierSameName",
+  "nsCopyRank",
+  "nsWaveRank24h",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
