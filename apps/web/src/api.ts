@@ -361,7 +361,7 @@ export interface ModelRun {
   contestantName: string | null;
   createdAt: string;
   kind: string;
-  learner: "logistic" | "gbdt";
+  learner: "logistic" | "gbdt" | "forest";
   status: string;
   trainingRows: number;
   trainingFrom: string;
@@ -369,7 +369,7 @@ export interface ModelRun {
   activatedAt: string | null;
   verdict: { promote: boolean; reason: string } | null;
   familyComparison: {
-    learner: "logistic" | "gbdt";
+    learner: "logistic" | "gbdt" | "forest";
     verdict: { promote: boolean; reason: string };
     precisionCalibration: Calibration;
   }[];
@@ -546,7 +546,7 @@ export interface ModelInsights {
   };
   importance: {
     modelId: string;
-    learner: "logistic" | "gbdt";
+    learner: "logistic" | "gbdt" | "forest";
     threshold: number;
     features: { feature: string; label: string; sharePct: number; direction: 1 | -1 | null }[];
   } | null;

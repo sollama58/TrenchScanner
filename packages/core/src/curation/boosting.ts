@@ -1,5 +1,5 @@
 import { LEARNER_FEATURE_NAMES } from "./features.js";
-import { isCurrentLabelRule, runWeight } from "./labels.js";
+import { isCurrentLabelRule, LABEL_LOG2_CAP, runWeight, TEN_X_MULTIPLE } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 
 /**
@@ -50,7 +50,32 @@ export interface BoostedCuratorParams {
   trees: BoostedTree[];
   /** Emit when predicted probability >= this - set by the training job from the hit-rate exam. */
   threshold: number;
+  /**
+   * What the trees were fitted to when it wasn't the win probability (see BoostingObjective);
+   * their sum is then a learned ordering, mapped onto a probability scale by plattScale. Absent
+   * = logistic.
+   */
+  objective?: Exclude<BoostingObjective, "logistic">;
+  /** Set when the trees are a random forest (forest.ts) rather than a boosted sequence. */
+  family?: "forest";
 }
+
+/**
+ * What a boosted forest is fitted to:
+ *  - "logistic": the probability of a clean 2x (log loss) - the default.
+ *  - "lambdarank": the ORDER of the tokens seen in the same hour, by how far each ran (a miss,
+ *    2x, 4x, 10x). LambdaRank: pairwise logistic loss on every (better, worse) pair in the hour,
+ *    each pair weighted by how much swapping them would move the hour's NDCG, truncated to pairs
+ *    that touch the top of the hour's current ranking - so the fit spends itself on getting the
+ *    top of each hour right, which is the only part of the ranking the feed ever acts on.
+ *  - "runSize": how far the token runs - its peak over the label window in doublings (losses
+ *    count their peak too, a stop-out as -1) - by squared error. A model of the run, not of the
+ *    win: it ranks a likely 5x above a sure 2x.
+ * Either non-default objective leaves the tree sum on its own scale; trainBoostedCurator then
+ * fits a one-dimensional logistic map from that sum to the clean-2x label (Platt scaling) and
+ * folds it into the trees, so every stored model still scores as a probability of a clean 2x.
+ */
+export type BoostingObjective = "logistic" | "lambdarank" | "runSize";
 
 export interface BoostingRow {
   anchorAt: Date;
@@ -61,6 +86,8 @@ export interface BoostingRow {
   labelRule?: number;
   /** Same meaning as TrainingRow.runPeakMultiple in trainer.ts: weighs the row by how far it ran. */
   runPeakMultiple?: number;
+  /** Same meaning as TrainingRow.hit10x: the "lambdarank" objective's top relevance tier. */
+  hit10x?: boolean;
 }
 
 export interface BoostingOptions {
@@ -80,6 +107,8 @@ export interface BoostingOptions {
   featureSample?: number;
   /** Histogram resolution per feature (quantile bins), at most 255. */
   maxBins?: number;
+  /** What the trees fit - see BoostingObjective. Default "logistic". */
+  objective?: BoostingObjective;
   /** Newest share of rows held out to choose the number of trees. */
   validationFraction?: number;
   /** Stop after this many trees without a validation improvement. */
@@ -112,6 +141,7 @@ export const DEFAULT_BOOSTING_OPTIONS: Required<
   rowSample: 0.8,
   featureSample: 0.8,
   maxBins: 32,
+  objective: "logistic",
   validationFraction: 0.2,
   patience: 30,
   seed: 1,
@@ -134,7 +164,7 @@ function sigmoid(z: number): number {
 }
 
 /** Deterministic PRNG (mulberry32) - the same rows and seed always grow the same forest. */
-function prng(seed: number): () => number {
+export function prng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
@@ -146,7 +176,7 @@ function prng(seed: number): () => number {
 }
 
 /** Transformed feature matrix, column-major; NaN = missing. */
-function featureColumns(
+export function featureColumns(
   rows: BoostingRow[],
   featureNames: string[],
   transform: FeatureTransform,
@@ -169,7 +199,7 @@ function featureColumns(
  * each row's bin: 0 = missing, k >= 1 = value <= edges[k-1] (and > edges[k-2]). A split "after
  * bin k" therefore means value <= edges[k-1], which is the threshold stored in the tree.
  */
-function binColumn(col: Float64Array, maxBins: number): { edges: number[]; bins: Uint8Array } {
+export function binColumn(col: Float64Array, maxBins: number): { edges: number[]; bins: Uint8Array } {
   const present: number[] = [];
   for (const v of col) if (!Number.isNaN(v)) present.push(v);
   present.sort((a, b) => a - b);
@@ -207,18 +237,23 @@ interface Split {
   missingLeft: boolean;
 }
 
-interface GrowContext {
+export type ResolvedBoostingOptions = Required<
+  Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames">
+>;
+
+export interface GrowContext {
   bins: Uint8Array[];
   edges: number[][];
   grad: Float64Array;
   hess: Float64Array;
-  opts: Required<
-    Omit<
-      BoostingOptions,
-      "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames"
-    >
-  >;
+  opts: ResolvedBoostingOptions;
   features: number[];
+  /**
+   * What a node outputs, given its rows' gradient and hessian sums and the rows themselves.
+   * Default: the Newton step the boosting takes (leafValue). A random forest (forest.ts) puts
+   * the node's own smoothed win rate here instead.
+   */
+  nodeValue?: (g: number, h: number, rows: Uint32Array) => number;
 }
 
 function leafValue(g: number, h: number, ctx: GrowContext): number {
@@ -273,7 +308,7 @@ function bestSplit(rows: Uint32Array, gSum: number, hSum: number, ctx: GrowConte
   return best;
 }
 
-function growTree(rows: Uint32Array, ctx: GrowContext): BoostedTree {
+export function growTree(rows: Uint32Array, ctx: GrowContext): BoostedTree {
   const tree: BoostedTree = { feature: [], threshold: [], missingLeft: [], left: [], right: [], value: [] };
   const grow = (nodeRows: Uint32Array, depth: number): number => {
     let g = 0;
@@ -288,7 +323,7 @@ function growTree(rows: Uint32Array, ctx: GrowContext): BoostedTree {
     tree.missingLeft.push(0);
     tree.left.push(-1);
     tree.right.push(-1);
-    tree.value.push(leafValue(g, h, ctx));
+    tree.value.push(ctx.nodeValue ? ctx.nodeValue(g, h, nodeRows) : leafValue(g, h, ctx));
     if (depth >= ctx.opts.maxDepth) return id;
     const split = bestSplit(nodeRows, g, h, ctx);
     if (split === null) return id;
@@ -312,7 +347,7 @@ function growTree(rows: Uint32Array, ctx: GrowContext): BoostedTree {
 }
 
 /** The leaf a (transformed, NaN-for-missing) vector lands in. */
-function leafOf(tree: BoostedTree, x: ArrayLike<number>): number {
+export function leafOf(tree: BoostedTree, x: ArrayLike<number>): number {
   let node = 0;
   while (tree.feature[node]! >= 0) {
     const v = x[tree.feature[node]!]!;
@@ -326,7 +361,7 @@ function leafOf(tree: BoostedTree, x: ArrayLike<number>): number {
  * Per-row weights (run weight x recency decay x legacy-label discount - see rowWeight in
  * trainer.ts), mean 1.
  */
-function recencyWeights(
+export function recencyWeights(
   rows: BoostingRow[],
   halfLifeDays: number | undefined,
   legacyLabelWeight: number | undefined,
@@ -358,41 +393,133 @@ function recencyWeights(
   return w;
 }
 
+/** A row's target under the "runSize" objective: its run in doublings, a stop-out counting -1. */
+function runSizeTarget(row: BoostingRow): number {
+  if (row.runPeakMultiple !== undefined && row.runPeakMultiple > 0) {
+    return Math.min(LABEL_LOG2_CAP, Math.max(-1, Math.log2(row.runPeakMultiple)));
+  }
+  return row.labelValue > 0 ? Math.min(LABEL_LOG2_CAP, row.labelValue) : 0;
+}
+
+const TEN_X_LABEL = Math.log2(TEN_X_MULTIPLE);
+
+/** A row's relevance tier under "lambdarank": 0 a miss, 1 a 2x, 2 a 4x, 3 a 10x. */
+function relevanceTier(row: BoostingRow): number {
+  if (!(row.labelValue > 0)) return 0;
+  if (row.hit10x === true || row.labelValue >= TEN_X_LABEL) return 3;
+  return row.labelValue >= 2 ? 2 : 1;
+}
+
+/** Pairs are only formed between rows that touch the top of their hour's current ranking. */
+const LAMBDARANK_TRUNCATION = 30;
+const HOUR_MS = 3_600_000;
+
+/** Rows grouped by the hour they were sampled in - the "query" a ranking objective orders within. */
+function hourGroups(rows: BoostingRow[]): Uint32Array[] {
+  const byHour = new Map<number, number[]>();
+  for (let i = 0; i < rows.length; i++) {
+    const h = Math.floor(rows[i]!.anchorAt.getTime() / HOUR_MS);
+    let g = byHour.get(h);
+    if (!g) byHour.set(h, (g = []));
+    g.push(i);
+  }
+  return [...byHour.values()].map((g) => Uint32Array.from(g));
+}
+
+const discount = (rank: number) => 1 / Math.log2(rank + 2);
+
 /**
- * Grows the forest on `fit` rows, tracking weighted log loss on `valid` rows after each tree.
- * Returns the trees and how many of them gave the best validation loss (all of them when there
- * is no validation set).
+ * The LambdaRank gradients for one group (see BoostingObjective). `gains` is 2^tier - 1 per row;
+ * the group's rows are ranked by their current margin and each (better, worse) pair that reaches
+ * into the top LAMBDARANK_TRUNCATION contributes its pairwise logistic gradient scaled by the NDCG
+ * the swap is worth. Returns the group's NDCG under the current ranking (for early stopping).
+ */
+function lambdaRankGroup(
+  group: Uint32Array,
+  margin: Float64Array,
+  gains: Float64Array,
+  weights: Float64Array,
+  grad: Float64Array | null,
+  hess: Float64Array | null,
+): number {
+  const order = Array.from(group).sort((a, b) => margin[b]! - margin[a]!);
+  const ideal = Array.from(group)
+    .map((i) => gains[i]!)
+    .sort((a, b) => b - a);
+  let idcg = 0;
+  for (let r = 0; r < ideal.length; r++) idcg += ideal[r]! * discount(r);
+  if (idcg <= 0) return 1;
+  let dcg = 0;
+  for (let r = 0; r < order.length; r++) dcg += gains[order[r]!]! * discount(r);
+  if (grad === null || hess === null) return dcg / idcg;
+  const top = Math.min(order.length, LAMBDARANK_TRUNCATION);
+  for (let ri = 0; ri < top; ri++) {
+    const i = order[ri]!;
+    for (let rj = ri + 1; rj < order.length; rj++) {
+      const j = order[rj]!;
+      if (gains[i] === gains[j]) continue;
+      const delta = (Math.abs(gains[i]! - gains[j]!) * Math.abs(discount(ri) - discount(rj))) / idcg;
+      const w = (delta * (weights[i]! + weights[j]!)) / 2;
+      // hi is the better one of the pair; the loss is log(1 + exp(-(m_hi - m_lo))).
+      const [hi, lo] = gains[i]! > gains[j]! ? [i, j] : [j, i];
+      const rho = 1 / (1 + Math.exp(margin[hi]! - margin[lo]!));
+      grad[hi] = grad[hi]! - rho * w;
+      grad[lo] = grad[lo]! + rho * w;
+      const curvature = Math.max(1e-6, rho * (1 - rho)) * w;
+      hess[hi] = hess[hi]! + curvature;
+      hess[lo] = hess[lo]! + curvature;
+    }
+  }
+  return dcg / idcg;
+}
+
+/**
+ * Grows the forest on `fit` rows, tracking the objective's own loss on `valid` rows after each
+ * tree (weighted log loss, squared error, or one minus the mean hourly NDCG). Returns the trees
+ * and how many of them gave the best validation loss (all of them when there is no validation set).
  */
 async function boost(
   fit: BoostingRow[],
   valid: BoostingRow[],
   treeLimit: number,
-  opts: Required<
-    Omit<
-      BoostingOptions,
-      "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames"
-    >
-  >,
+  opts: ResolvedBoostingOptions,
   halfLifeDays: number | undefined,
   legacyLabelWeight: number | undefined,
   runWeightPerDoubling: number | undefined,
   featureNames: string[],
 ): Promise<{ baseScore: number; trees: BoostedTree[]; bestTrees: number }> {
   const transform = CURRENT_FEATURE_TRANSFORM;
+  const objective = opts.objective;
   const cols = featureColumns(fit, featureNames, transform);
   const binned = cols.map((c) => binColumn(c, opts.maxBins));
   const ys = Float64Array.from(fit, (r) => (r.labelValue > 0 ? 1 : 0));
-  const weights = recencyWeights(fit, halfLifeDays, legacyLabelWeight, runWeightPerDoubling);
+  // The ranking objective orders by how far each row ran; the run weight would count that twice.
+  const weights = recencyWeights(
+    fit,
+    halfLifeDays,
+    legacyLabelWeight,
+    objective === "lambdarank" ? 0 : runWeightPerDoubling,
+  );
+  const targets = objective === "runSize" ? Float64Array.from(fit, runSizeTarget) : null;
+  const gains = objective === "lambdarank" ? Float64Array.from(fit, (r) => 2 ** relevanceTier(r) - 1) : null;
+  const groups = objective === "lambdarank" ? hourGroups(fit) : null;
 
   let wSum = 0;
   let wPos = 0;
   for (let i = 0; i < fit.length; i++) {
     wSum += weights[i]!;
-    wPos += weights[i]! * ys[i]!;
+    wPos += weights[i]! * (targets ? targets[i]! : ys[i]!);
   }
-  // Clamped so an all-loss (or all-win) slice still starts from a finite log-odds.
-  const baseRate = Math.min(1 - 1e-4, Math.max(1e-4, wPos / wSum));
-  const baseScore = Math.log(baseRate / (1 - baseRate));
+  let baseScore: number;
+  if (objective === "runSize") {
+    baseScore = wPos / wSum;
+  } else if (objective === "lambdarank") {
+    baseScore = 0;
+  } else {
+    // Clamped so an all-loss (or all-win) slice still starts from a finite log-odds.
+    const baseRate = Math.min(1 - 1e-4, Math.max(1e-4, wPos / wSum));
+    baseScore = Math.log(baseRate / (1 - baseRate));
+  }
 
   const margin = new Float64Array(fit.length).fill(baseScore);
   const grad = new Float64Array(fit.length);
@@ -401,7 +528,16 @@ async function boost(
   const validCols = valid.length > 0 ? featureColumns(valid, featureNames, transform) : [];
   const validX = valid.map((_, i) => validCols.map((c) => c[i]!));
   const validY = valid.map((r) => (r.labelValue > 0 ? 1 : 0));
-  const validW = recencyWeights(valid, halfLifeDays, legacyLabelWeight, runWeightPerDoubling);
+  const validW = recencyWeights(
+    valid,
+    halfLifeDays,
+    legacyLabelWeight,
+    objective === "lambdarank" ? 0 : runWeightPerDoubling,
+  );
+  const validTargets = objective === "runSize" ? Float64Array.from(valid, runSizeTarget) : null;
+  const validGains =
+    objective === "lambdarank" ? Float64Array.from(valid, (r) => 2 ** relevanceTier(r) - 1) : null;
+  const validGroups = objective === "lambdarank" ? hourGroups(valid) : null;
   const validMargin = new Float64Array(valid.length).fill(baseScore);
 
   const rand = prng(opts.seed);
@@ -412,10 +548,21 @@ async function boost(
 
   for (let t = 0; t < treeLimit; t++) {
     if (t > 0 && t % YIELD_EVERY_TREES === 0) await yieldToEventLoop();
-    for (let i = 0; i < fit.length; i++) {
-      const p = sigmoid(margin[i]!);
-      grad[i] = (p - ys[i]!) * weights[i]!;
-      hess[i] = Math.max(1e-6, p * (1 - p)) * weights[i]!;
+    if (groups && gains) {
+      grad.fill(0);
+      hess.fill(0);
+      for (const g of groups) lambdaRankGroup(g, margin, gains, weights, grad, hess);
+    } else if (targets) {
+      for (let i = 0; i < fit.length; i++) {
+        grad[i] = (margin[i]! - targets[i]!) * weights[i]!;
+        hess[i] = weights[i]!;
+      }
+    } else {
+      for (let i = 0; i < fit.length; i++) {
+        const p = sigmoid(margin[i]!);
+        grad[i] = (p - ys[i]!) * weights[i]!;
+        hess[i] = Math.max(1e-6, p * (1 - p)) * weights[i]!;
+      }
     }
     const sampled: number[] = [];
     for (let i = 0; i < fit.length; i++) if (rand() < opts.rowSample) sampled.push(i);
@@ -438,11 +585,21 @@ async function boost(
       bestTrees = trees.length;
       continue;
     }
-    let loss = 0;
     for (let i = 0; i < valid.length; i++) {
       validMargin[i] = validMargin[i]! + tree.value[leafOf(tree, validX[i]!)]!;
-      const p = Math.min(1 - 1e-12, Math.max(1e-12, sigmoid(validMargin[i]!)));
-      loss -= validW[i]! * (validY[i]! * Math.log(p) + (1 - validY[i]!) * Math.log(1 - p));
+    }
+    let loss = 0;
+    if (validGroups && validGains) {
+      let ndcg = 0;
+      for (const g of validGroups) ndcg += lambdaRankGroup(g, validMargin, validGains, validW, null, null);
+      loss = 1 - ndcg / Math.max(1, validGroups.length);
+    } else if (validTargets) {
+      for (let i = 0; i < valid.length; i++) loss += validW[i]! * (validMargin[i]! - validTargets[i]!) ** 2;
+    } else {
+      for (let i = 0; i < valid.length; i++) {
+        const p = Math.min(1 - 1e-12, Math.max(1e-12, sigmoid(validMargin[i]!)));
+        loss -= validW[i]! * (validY[i]! * Math.log(p) + (1 - validY[i]!) * Math.log(1 - p));
+      }
     }
     if (loss < bestLoss - 1e-9) {
       bestLoss = loss;
@@ -455,10 +612,64 @@ async function boost(
 }
 
 /**
+ * Platt scaling: the one-dimensional logistic map (slope, intercept) from a model's raw score
+ * to the clean-2x label, fitted by Newton's method on the given rows. Folded into a forest by
+ * scaling every tree value by the slope and moving the base score, so the stored model scores
+ * as a probability through the same sigmoid as every other one. The slope is floored just above
+ * zero: a fit that came out anti-correlated must not have its ordering flipped.
+ */
+export function plattScale(
+  raw: ArrayLike<number>,
+  labels: ArrayLike<number>,
+  weights: ArrayLike<number>,
+): { slope: number; intercept: number } {
+  const n = raw.length;
+  let a = 1;
+  let b = 0;
+  // Centre the input so the two parameters are near-orthogonal and Newton converges in a few steps.
+  let mean = 0;
+  let wSum = 0;
+  for (let i = 0; i < n; i++) {
+    mean += weights[i]! * raw[i]!;
+    wSum += weights[i]!;
+  }
+  mean = wSum > 0 ? mean / wSum : 0;
+  const L2 = 1e-3;
+  for (let iter = 0; iter < 25; iter++) {
+    let ga = L2 * a;
+    let gb = 0;
+    let haa = L2;
+    let hab = 0;
+    let hbb = 0;
+    for (let i = 0; i < n; i++) {
+      const x = raw[i]! - mean;
+      const p = sigmoid(a * x + b);
+      const e = (p - labels[i]!) * weights[i]!;
+      const h = Math.max(1e-9, p * (1 - p)) * weights[i]!;
+      ga += e * x;
+      gb += e;
+      haa += h * x * x;
+      hab += h * x;
+      hbb += h;
+    }
+    const det = haa * hbb - hab * hab;
+    if (!(Math.abs(det) > 1e-12)) break;
+    const da = (hbb * ga - hab * gb) / det;
+    const db = (haa * gb - hab * ga) / det;
+    a -= da;
+    b -= db;
+    if (Math.abs(da) < 1e-9 && Math.abs(db) < 1e-9) break;
+  }
+  if (!(a > 1e-3) || !Number.isFinite(a) || !Number.isFinite(b))
+    return { slope: 1e-3, intercept: Number.isFinite(b) ? b : 0 };
+  return { slope: a, intercept: b - a * mean };
+}
+
+/**
  * leafOf for a training row, read from its bins rather than its values: identical routing
  * (a bin k row has value <= edges[k-1] exactly when k <= binCut), without re-reading features.
  */
-function leafOfBinned(
+export function leafOfBinned(
   tree: BoostedTree,
   binned: { edges: number[]; bins: Uint8Array }[],
   row: number,
@@ -528,12 +739,29 @@ export async function trainBoostedCurator(
     options.runWeightPerDoubling,
     featureNames,
   );
+  let baseScore = final.baseScore;
+  let trees = final.trees;
+  if (opts.objective !== "logistic") {
+    // The sum of the trees is an ordering, not a log-odds: map it onto the clean-2x label.
+    const cols = featureColumns(sorted, featureNames, CURRENT_FEATURE_TRANSFORM);
+    const binned = cols.map((c) => binColumn(c, opts.maxBins));
+    const raw = new Float64Array(sorted.length).fill(baseScore);
+    for (const tree of trees) {
+      for (let i = 0; i < sorted.length; i++) raw[i] = raw[i]! + tree.value[leafOfBinned(tree, binned, i)]!;
+    }
+    const labels = Float64Array.from(sorted, (r) => (r.labelValue > 0 ? 1 : 0));
+    const weights = recencyWeights(sorted, options.recencyHalfLifeDays, options.legacyLabelWeight, 0);
+    const { slope, intercept } = plattScale(raw, labels, weights);
+    trees = trees.map((t) => ({ ...t, value: t.value.map((v) => v * slope) }));
+    baseScore = baseScore * slope + intercept;
+  }
   return {
     kind: BOOSTED_MODEL_KIND,
     featureNames,
     transform: CURRENT_FEATURE_TRANSFORM,
-    baseScore: final.baseScore,
-    trees: final.trees,
+    baseScore,
+    trees,
+    ...(opts.objective !== "logistic" ? { objective: opts.objective } : {}),
   };
 }
 

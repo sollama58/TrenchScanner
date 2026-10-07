@@ -26,6 +26,7 @@ import {
   type BoostedCuratorParams,
   type BoostingOptions,
 } from "./boosting.js";
+import { trainForestCurator, type ForestOptions } from "./forest.js";
 
 export { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform };
 
@@ -194,16 +195,19 @@ export const SUPPORTED_CURATOR_MODEL_KINDS: readonly string[] = [
 ];
 
 /**
- * The model families the training job can fit: "logistic" (trainCurator below) and "gbdt"
- * (boosting.ts). Each run examines every enabled family and ships the one with the better
- * out-of-sample hit rate - see pickCuratorFamily.
+ * The model families the training job can fit: "logistic" (trainCurator below), "gbdt"
+ * (boosting.ts, with its objective choosing what the trees fit) and "forest" (forest.ts). The
+ * single-model path examines CURATOR_LEARNERS and ships the one with the better out-of-sample
+ * hit rate - see pickCuratorFamily; the contest seats every family by recipe (contestants.ts).
  */
-export type CuratorLearner = "logistic" | "gbdt";
+export type CuratorLearner = "logistic" | "gbdt" | "forest";
 export const CURATOR_LEARNERS: readonly CuratorLearner[] = ["logistic", "gbdt"];
 
 export interface ModelTrainOptions extends TrainOptions {
   learner?: CuratorLearner;
   boosting?: BoostingOptions;
+  /** The forest family's knobs (defaults: DEFAULT_FOREST_OPTIONS). */
+  forest?: ForestOptions;
   /** Train the survival-first two-stage model (TWO_STAGE_MODEL_KIND) with this family for both stages. */
   twoStage?: boolean;
 }
@@ -221,15 +225,15 @@ async function trainSingleStage(
   rows: TrainingRow[],
   opts: ModelTrainOptions,
 ): Promise<Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">> {
-  return opts.learner === "gbdt"
-    ? trainBoostedCurator(rows, {
-        ...opts.boosting,
-        recencyHalfLifeDays: opts.recencyHalfLifeDays,
-        legacyLabelWeight: opts.legacyLabelWeight,
-        runWeightPerDoubling: opts.runWeightPerDoubling,
-        featureNames: opts.featureNames,
-      })
-    : trainCurator(rows, opts);
+  const shared = {
+    recencyHalfLifeDays: opts.recencyHalfLifeDays,
+    legacyLabelWeight: opts.legacyLabelWeight,
+    runWeightPerDoubling: opts.runWeightPerDoubling,
+    featureNames: opts.featureNames,
+  };
+  if (opts.learner === "gbdt") return trainBoostedCurator(rows, { ...opts.boosting, ...shared });
+  if (opts.learner === "forest") return trainForestCurator(rows, { ...opts.forest, ...shared });
+  return trainCurator(rows, opts);
 }
 
 /** Fewest rows (and positives) a two-stage stage trains on before falling back to one stage. */
@@ -961,6 +965,8 @@ export interface WalkForwardOptions {
   featureNames?: readonly string[];
   /** The boosted family's hyperparameters (defaults: DEFAULT_BOOSTING_OPTIONS). */
   boosting?: BoostingOptions;
+  /** The forest family's hyperparameters (defaults: DEFAULT_FOREST_OPTIONS). */
+  forest?: ForestOptions;
   /** Train the two-stage survival-first shape - see TwoStageCuratorParams. */
   twoStage?: boolean;
   /** Weight multiplier for legacy-rule rows in every fold's training - see TrainOptions. */
@@ -1155,6 +1161,7 @@ export async function walkForwardEvaluate(
         learner: opts.learner,
         featureNames: opts.featureNames,
         boosting: opts.boosting,
+        forest: opts.forest,
         twoStage: opts.twoStage,
         legacyLabelWeight: opts.legacyLabelWeight,
         runWeightPerDoubling: opts.runWeightPerDoubling,
