@@ -1115,6 +1115,8 @@ export interface MarketLighthouse {
     deep: number;
     quick: number;
     failed: number;
+    /** Described coins TokenSage could not say what they are about (no referent). */
+    noReferent: number;
     newestAt: string | null;
   };
   avgReferentConfidence: number | null;
