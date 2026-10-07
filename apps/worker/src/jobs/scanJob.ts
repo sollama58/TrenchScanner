@@ -1403,7 +1403,17 @@ async function processCandidate(
   const narrativeHints = tokenSageEnabled(env)
     ? tokenSageHints({ ...token, description: scored.description ?? token.description })
     : undefined;
-  noteNarrativeWanted(token.mintAddress, "basic", env, narrativeHints);
+  // A young coin with an X link gets the deep read straight away (user decision 2026-10-07): the
+  // deep read is the one that opens the X post, and asked at the first decision it lands after
+  // that decision for most coins. Held to its own daily budget (TOKENSAGE_EARLY_FULL_PER_DAY).
+  const earlyDeep =
+    narrativeHints?.twitter !== undefined &&
+    env.TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES > 0 &&
+    createdAt !== undefined &&
+    Date.now() - createdAt.getTime() <= env.TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES * 60_000;
+  noteNarrativeWanted(token.mintAddress, earlyDeep ? "full" : "basic", env, narrativeHints, {
+    early: earlyDeep,
+  });
 
   // User matching first, and nothing slower in front of it: this is the product, and every
   // millisecond here is a millisecond between the backend knowing about a token and the person

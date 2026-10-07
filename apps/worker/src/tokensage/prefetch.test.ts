@@ -7,6 +7,7 @@ import {
   flushNarrativeRequests,
   noteNarrativeWanted,
   resetTokenSage,
+  startNarrativePolling,
   takeTokenSageStats,
 } from "./prefetch.js";
 
@@ -390,5 +391,44 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     batch.mockResolvedValueOnce(ok([]));
     await flushNarrativeRequests(env, client);
     expect(cas(batch.mock.calls.at(-1)!).sort()).toEqual([t1, t3].sort());
+  });
+
+  it("sends early deep reads on their own budget, then falls back to the quick read", async () => {
+    const { client, batch } = fakeClient();
+    batch.mockImplementation(async (entries: { ca: string }[]) =>
+      ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 1 }))),
+    );
+    const capped = { ...env, TOKENSAGE_EARLY_FULL_PER_DAY: 1 };
+    const u1 = `${TAG}-u1`;
+    const u2 = `${TAG}-u2`;
+    const u3 = `${TAG}-u3`;
+    noteNarrativeWanted(u1, "full", capped, undefined, { early: true });
+    noteNarrativeWanted(u2, "full", capped, undefined, { early: true });
+    // A decision-row read isn't held to the early budget, and outranks an early note.
+    noteNarrativeWanted(u3, "full", capped, undefined, { early: true });
+    noteNarrativeWanted(u3, "full", capped);
+    await flushNarrativeRequests(capped, client);
+    const sent = Object.fromEntries(batch.mock.calls.map((c) => [c[1], cas(c).sort()]));
+    expect(sent).toEqual({ full: [u1, u3].sort(), basic: [u2] });
+    expect(takeTokenSageStats()).toMatchObject({ fullToday: 2, earlyFullToday: 1 });
+  });
+
+  it("re-sends queued requests between scans when polling is on", async () => {
+    const { client, batch } = fakeClient();
+    expect(startNarrativePolling({ ...env, TOKENSAGE_POLL_SECONDS: 0 }, client)).toBeUndefined();
+    const v = `${TAG}-v`;
+    batch.mockResolvedValueOnce(ok([{ ca: v, status: "pending", job_id: 41 }]));
+    noteNarrativeWanted(v, "basic", env);
+    await flushNarrativeRequests(env, client);
+    batch.mockResolvedValueOnce(ok([{ ca: v, status: "complete", analysis: analysis(v, "basic") }]));
+    const stop = startNarrativePolling({ ...env, TOKENSAGE_POLL_SECONDS: 0.05 }, client)!;
+    try {
+      await vi.waitFor(async () => {
+        expect(await prisma.tokenNarrative.count({ where: { mintAddress: v } })).toBe(1);
+      });
+    } finally {
+      stop();
+    }
+    expect(cas(batch.mock.calls[1]!)).toEqual([v]);
   });
 });

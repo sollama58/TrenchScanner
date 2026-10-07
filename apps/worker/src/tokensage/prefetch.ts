@@ -23,7 +23,10 @@ const logger = createLogger("tokensage");
  * about them as hints: basic depth the first time a mint passes the rug screen on the watchlist
  * (any scanned mint, in band or still below it, so the read is usually stored before the band
  * entry that most first decisions follow within a minute), full depth (which also reads the X
- * link, its match with the token, and trends) when the mint gets a decision ("event") row. At the end of each cycle flushNarrativeRequests
+ * link, its match with the token, and trends) when the mint gets a decision ("event") row.
+ * A coin with an X link that reaches the watchlist young gets the full read at once instead
+ * (its own daily budget, TOKENSAGE_EARLY_FULL_PER_DAY), and startNarrativePolling re-sends
+ * what is queued between cycles. At the end of each cycle flushNarrativeRequests
  * sends them in batches and is never awaited: nothing in the scan, matching or alerting path
  * waits on TokenSage. A batch answers cached mints at once and queues the rest; a queued mint is
  * simply re-sent in the next cycle's batch, which joins its open job for free and returns the
@@ -55,6 +58,8 @@ const MAX_SETTLED = 20_000;
 interface Wanted {
   depth: TokenSageDepth;
   hints?: TokenSageHints;
+  /** A full read asked early (a young coin with an X link), on its own daily budget. */
+  early?: boolean;
 }
 
 interface Pending {
@@ -93,6 +98,7 @@ let flushing = false;
 let pausedUntil = 0;
 let fullDay = "";
 let fullSentToday = 0;
+let earlySentToday = 0;
 /** Full-depth requests fall back to basic until this time (TokenSage's daily quota is spent). */
 let fullBlockedUntil = 0;
 
@@ -117,6 +123,7 @@ export function resetTokenSage(): void {
   pausedUntil = 0;
   fullDay = "";
   fullSentToday = 0;
+  earlySentToday = 0;
   fullBlockedUntil = 0;
   stats = { ...NO_STATS };
 }
@@ -141,6 +148,7 @@ export function noteNarrativeWanted(
   depth: TokenSageDepth,
   env: Env,
   hints?: TokenSageHints,
+  opts: { early?: boolean } = {},
 ): void {
   if (!tokenSageEnabled(env)) return;
   const now = Date.now();
@@ -151,17 +159,41 @@ export function noteNarrativeWanted(
     notFoundUntil.delete(mintAddress);
   }
   const have = wanted.get(mintAddress);
-  if (have?.depth === "full") return;
+  const early = depth === "full" && opts.early === true;
+  // A decision-row full read outranks an early one (it isn't held to the early budget).
+  if (have?.depth === "full" && (!have.early || early)) return;
   if (!have && wanted.size >= MAX_WANTED) {
     const oldest = wanted.keys().next().value;
     if (oldest !== undefined) wanted.delete(oldest);
   }
-  wanted.set(mintAddress, { depth, hints: hints ?? have?.hints });
+  wanted.set(mintAddress, { depth, hints: hints ?? have?.hints, ...(early ? { early } : {}) });
+}
+
+/**
+ * Re-sends what is queued every TOKENSAGE_POLL_SECONDS between scan cycles, so a finished read is
+ * stored within seconds instead of at the next scan. Same flush as the scan's (a flush already
+ * running makes it a no-op), so it adds requests only while something is waiting. Runs in the
+ * process that scans, which holds the queue. Returns the stop function, or undefined when off.
+ */
+export function startNarrativePolling(env: Env, client?: TokenSageClient): (() => void) | undefined {
+  if (!tokenSageEnabled(env) || env.TOKENSAGE_POLL_SECONDS <= 0) return undefined;
+  const timer = setInterval(() => {
+    if (pending.size === 0 && wanted.size === 0) return;
+    void flushNarrativeRequests(env, client);
+  }, env.TOKENSAGE_POLL_SECONDS * 1000);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 
 /** Counters since the last read, for the scan cycle's summary on /health/worker. */
 export function takeTokenSageStats(): Record<string, number> {
-  const out = { ...stats, waiting: wanted.size, pending: pending.size, fullToday: fullSentToday };
+  const out = {
+    ...stats,
+    waiting: wanted.size,
+    pending: pending.size,
+    fullToday: fullSentToday,
+    earlyFullToday: earlySentToday,
+  };
   stats = { ...NO_STATS };
   return out;
 }
@@ -306,6 +338,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
   if (day !== fullDay) {
     fullDay = day;
     fullSentToday = 0;
+    earlySentToday = 0;
   }
   const fullOpen = now >= fullBlockedUntil;
 
@@ -332,6 +365,8 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
       : [];
   const storedByMint = new Map(stored.map((r) => [r.mintAddress, r]));
   let fullBudget = fullOpen ? Math.max(0, env.TOKENSAGE_FULL_PER_DAY - fullSentToday) : 0;
+  let earlyBudget = Math.max(0, env.TOKENSAGE_EARLY_FULL_PER_DAY - earlySentToday);
+  const earlyMints = new Set<string>();
   for (const [mint, w] of wanted) {
     const queued = pending.get(mint);
     if (queued && narrativeDepthCovers(queued.depth, w.depth)) {
@@ -349,9 +384,17 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
         continue;
       }
     }
-    if (w.depth === "full" && fullBudget > 0) {
+    if (w.depth === "full" && fullBudget > 0 && (!w.early || earlyBudget > 0)) {
       fullBudget -= 1;
+      if (w.early) {
+        earlyBudget -= 1;
+        earlyMints.add(mint);
+      }
       byDepth.full.push({ ca: mint, hints: w.hints });
+    } else if (w.early) {
+      // Out of early budget: the basic read, as for any other coin, unless one is on its way.
+      if (queued || row) wanted.delete(mint);
+      else byDepth.basic.push({ ca: mint, hints: w.hints });
     } else if (queued || (w.depth === "full" && row && row.status !== "failed")) {
       // Out of full-depth quota with a basic answer stored or on its way: the full request
       // stays noted for when the quota is back.
@@ -402,6 +445,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
           if (!wasPending) {
             stats.requested += 1;
             if (depth === "full") fullSentToday += 1;
+            if (depth === "full" && earlyMints.has(item.ca)) earlySentToday += 1;
           }
           if (
             (item.status === "complete" || item.status === "partial") &&

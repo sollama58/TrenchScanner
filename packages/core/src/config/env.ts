@@ -538,7 +538,15 @@ const envSchema = z.object({
   // matching or alerting path waits on it. Off until TOKENSAGE_ENABLED=true and both the URL and
   // the API key are set. TOKENSAGE_MAX_BATCHES_PER_CYCLE bounds the calls per scan cycle (each
   // carries up to 50 mints) and TOKENSAGE_FULL_PER_DAY keeps full-depth requests under the key's
-  // daily quota on TokenSage's side.
+  // daily quota on TokenSage's side (20,000/day on the deployed service).
+  //
+  // Early deep read (user decision 2026-10-07): a coin with an X link that reaches the watchlist
+  // under TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES old gets the full read at once instead of the
+  // basic one, so the X match is usually in before its first decision. Those early reads are
+  // capped at TOKENSAGE_EARLY_FULL_PER_DAY, so at least TOKENSAGE_FULL_PER_DAY minus that is left
+  // for the decision-row reads; past the cap a young coin gets the basic read as before. 0 turns
+  // it off. TOKENSAGE_POLL_SECONDS re-sends queued requests between scan cycles, so a finished
+  // read is picked up within seconds rather than at the next 30-second scan (0: scan only).
   TOKENSAGE_ENABLED: z
     .enum(["true", "false"])
     .default("false")
@@ -547,7 +555,10 @@ const envSchema = z.object({
   TOKENSAGE_API_KEY: z.string().optional().default(""),
   TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(2),
-  TOKENSAGE_FULL_PER_DAY: z.coerce.number().int().min(0).default(1500),
+  TOKENSAGE_FULL_PER_DAY: z.coerce.number().int().min(0).default(6000),
+  TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES: z.coerce.number().min(0).default(10),
+  TOKENSAGE_EARLY_FULL_PER_DAY: z.coerce.number().int().min(0).default(4500),
+  TOKENSAGE_POLL_SECONDS: z.coerce.number().min(0).default(8),
   // The hard daily cap on everything the AI spends (curation/aiSpend.ts): the reviewer, the text
   // reads and the playbook evolution share AI_DAILY_BUDGET_USD per UTC day. Every call reserves
   // its estimated cost before it runs and is trued up to the real cost afterwards; once the next
