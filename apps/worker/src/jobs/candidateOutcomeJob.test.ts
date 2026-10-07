@@ -171,8 +171,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updatedAlert.outcomeFinalizedAt).toBeNull();
     expect(updatedAlert.simReturnPct).toBeNull();
 
-    // A new high lifts the trail; the next tick 35% under it fires the exit at the level, and
-    // the return lands on the row and the alert while the row stays on its 24h watch.
+    // A new high lifts the trail; the next tick 35% or more under it fires the exit at that tick's
+    // price, and the return lands on the row and the alert while the row stays on its 24h watch.
     await prisma.candidateOutcome.update({
       where: { id: row.id },
       data: { nextCheckAt: new Date(Date.now() - 1000) },
@@ -188,8 +188,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.9 }), env);
     const settled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(settled.trailExitAt).not.toBeNull();
-    expect(settled.trailExitPriceUsd).toBeCloseTo(3.0 * 0.65);
-    expect(settled.simReturnPct).toBeCloseTo((0.5 * 2 + 0.5 * 3.0 * 0.65 - 1) * 100);
+    expect(settled.trailExitPriceUsd).toBeCloseTo(1.9);
+    expect(settled.simReturnPct).toBeCloseTo((0.5 * 2 + 0.5 * 1.9 - 1) * 100);
     expect(settled.finalized24hAt).toBeNull();
     const settledAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
     expect(settledAlert.simReturnPct).toBeCloseTo(settled.simReturnPct!);

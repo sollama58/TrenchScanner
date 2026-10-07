@@ -16,9 +16,10 @@ import {
  *   - sell a share of the position at each take-profit multiple, lowest first (half at 2x: the
  *     stake is back, so the worst case from there is breakeven),
  *   - sell whatever is left at the stop if the price falls to it before the first sale,
- *   - once something has been sold, let the rest ride on a trailing exit: it sells when the price
- *     falls a set fraction below the highest price seen since the sale (a ratchet can tighten
- *     the fraction as the high climbs), or at the trailing hold cap,
+ *   - once something has been sold, let the rest ride on a trailing exit: it sells the first time
+ *     the price is seen a set fraction or more below the highest price since the sale (a ratchet
+ *     can tighten the fraction as the high climbs), at that seen price, or at the trailing hold
+ *     cap,
  *   - and close a call that never sold at the label window's price (30 minutes).
  *
  * The ladder-then-sell-at-4x plan it replaces (user decision 2026-10-07) capped every runner at
@@ -31,9 +32,12 @@ import {
  * constants. The trailing exit has its own state on the row (trailHighPriceUsd, trailExitAt,
  * trailExitPriceUsd), kept by applyTrailTick on every price the watcher sees from the first sale
  * on, through the extended watch. The watcher samples about once a minute inside the window and
- * every few minutes after it, so like the labels this assumes the trader fills at the level
- * itself (a sale at exactly 2x, a stop at exactly -50%, the trailing exit at exactly its level)
- * rather than at a gap through it.
+ * every few minutes after it, so like the labels the sale and the stop fill at the level itself
+ * (a sale at exactly 2x, a stop at exactly -50%) rather than at a gap through it. The trailing
+ * exit does not: it fills at the price the watcher actually saw under its level (user decision
+ * 2026-10-07). A trail fires on a sharp drop by construction, and on three days of price paths
+ * the tick that crossed the level sat a quarter below it on average, so booking the level
+ * overstated the trailing leg by about that much.
  *
  * The window's close is the first price seen at or after the window closed, which the window's
  * aggregates never fold in. The plan still applies to it: a close at or under the stop fills at
@@ -57,7 +61,7 @@ export interface TakeProfit {
 export interface TrailTier {
   /** Applies once the running high (since the first sale) reaches this multiple of the alert price. */
   fromMultiple: number;
-  /** The exit sits this fraction below the running high. */
+  /** The exit fires once a price is seen this fraction or more below the running high. */
   fraction: number;
 }
 
@@ -87,8 +91,8 @@ export interface ExitPlan {
 /**
  * The plan every call is simulated under (user decision 2026-10-07): half at 2x, the rest on a
  * trailing exit 35% below its high, out at 3 hours; stop at -50% before the sale; a call that
- * never sold closes at 30 minutes. From a 2x high the trail sits at 1.3x, so once the sale has
- * landed the call can no longer lose.
+ * never sold closes at 30 minutes. The sale at 2x is the stake back, so once it has landed the
+ * call can no longer lose, whatever price the trailing share fetches.
  */
 export const EXIT_PLAN: ExitPlan = {
   takeProfits: [{ multiple: 2, sellFraction: 0.5 }],
@@ -176,9 +180,10 @@ export type TrailState = Pick<
 >;
 
 /**
- * The trailing exit's level for a running high, under the ratchet: the tier with the highest
- * fromMultiple the high has reached. Null while the high is below every tier (the trail is armed
- * at the first sale, so with a tier at the first rung this never happens under EXIT_PLAN).
+ * The trailing exit's trigger level for a running high, under the ratchet: the tier with the
+ * highest fromMultiple the high has reached. A price at or under it fires the exit (at that price,
+ * not the level). Null while the high is below every tier (the trail is armed at the first sale,
+ * so with a tier at the first rung this never happens under EXIT_PLAN).
  */
 export function trailLevelPriceUsd(
   entryPriceUsd: number,
@@ -197,8 +202,9 @@ export function trailLevelPriceUsd(
  * (shaped for a Prisma update, like applyPriceTick). The trail arms the tick the price first
  * reaches the ladder's first rung without the stop having been hit (the sale), with that price as
  * its running high; from then on every tick lifts the high or, at or under the level the high
- * sets, fires the exit at that level. A row with no state (null high) and the stop already hit
- * never arms: the stop sold everything. Nothing moves once the exit has fired.
+ * sets, fires the exit at the tick's own price (the price seen, not the level: see the module
+ * comment). A row with no state (null high) and the stop already hit never arms: the stop sold
+ * everything. Nothing moves once the exit has fired.
  *
  * The caller decides which ticks count: the sale must land inside the label window (the ladder
  * is graded on the window's peak), so the watcher stops passing ticks to an unarmed row once the
@@ -229,7 +235,7 @@ export function applyTrailTick(
   const level = trailLevelPriceUsd(entry, high, plan);
   if (level !== null && priceUsd <= level) {
     updates.trailExitAt = at;
-    updates.trailExitPriceUsd = level;
+    updates.trailExitPriceUsd = priceUsd;
   }
   return updates;
 }
@@ -318,7 +324,7 @@ export function simulateExitPlan(
     // one, the trail's level sits above the stop from the sale on).
     if (stopped && (!sold || plan.trail.length === 0)) proceeds += held * plan.stopFraction;
     else if (sold && plan.trail.length > 0) {
-      // The rest rode the trail: out at its level, else at the hold cap, else still open.
+      // The rest rode the trail: out at the price that fired it, else at the hold cap, else still open.
       if (row.trailExitAt != null && row.trailExitPriceUsd != null && row.trailExitPriceUsd > 0)
         proceeds += held * (row.trailExitPriceUsd / entry);
       else if (trailCapPriceUsd !== null && Number.isFinite(trailCapPriceUsd) && trailCapPriceUsd > 0)

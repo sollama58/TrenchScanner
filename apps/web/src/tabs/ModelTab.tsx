@@ -1205,9 +1205,11 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
             stakes means the model's calls made three times that amount over the window, after the losers.
           </li>
           <li>
-            <strong>It is a simulation, not a promise.</strong> Prices are checked about once a minute, so a
-            sale is assumed to fill at the level itself; in a fast dump a real stop can fill lower. Calls
-            whose last price is unknown are left out rather than guessed.
+            <strong>It is a simulation, not a promise.</strong> Prices are checked about once a minute. The
+            sale at 2x and the -50% stop are assumed to fill at the level itself; in a fast dump a real stop
+            can fill lower. The trailing exit books the price actually seen under its level, since a trail
+            fires on a sharp drop by construction. Calls whose last price is unknown are left out rather than
+            guessed.
           </li>
         </ol>
         {example && live && (
