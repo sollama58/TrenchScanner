@@ -4065,3 +4065,13 @@ button.small-btn {
   margin-left: 4px;
   padding: 2px;
 }
+
+/* Filter editor: the narrative theme pickers (one checkbox per TokenSage top-level theme). */
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.check-list .check {
+  margin: 0;
+}

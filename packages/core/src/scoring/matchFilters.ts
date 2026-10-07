@@ -1,6 +1,11 @@
 import type { FilterCriteria, ScoredToken } from "../types.js";
 import { matchesNarrativeKeywords } from "../narratives/keywords.js";
 import { CRITICAL_RISK_FLAGS } from "./rugScreen.js";
+import {
+  narrativeIsCopycat,
+  narrativeMatchesLabel,
+  type NarrativeRead,
+} from "../curation/narrativeFeatures.js";
 
 /**
  * Checks a scored, rug-screened token against one user's saved filter.
@@ -20,6 +25,9 @@ import { CRITICAL_RISK_FLAGS } from "./rugScreen.js";
  *    can't measure can't be shown to clear that floor. Treating unknown as
  *    passing would alert on exactly the thin, unmeasurable tokens a floor
  *    exists to screen out.
+ *  - NARRATIVE criteria (the TokenSage ones, matchesNarrativeCriteria) all fail closed, ceilings
+ *    included: the user chose it (2026-10-06), and the read is the whole point of the criterion.
+ *    The two that read the X post or the trend need the deep read, so they fail on a quick one.
  */
 export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boolean {
   if (token.marketCapUsd < filter.mcapMin || token.marketCapUsd > filter.mcapMax) {
@@ -107,9 +115,49 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  if (!matchesNarrativeCriteria(token.narrative, filter)) {
+    return false;
+  }
+
   if (filter.minScore != null && token.score.total < filter.minScore) {
     return false;
   }
 
+  return true;
+}
+
+/** True when the filter sets any TokenSage criterion, so a token without a read can't match it. */
+export function usesNarrativeCriteria(filter: FilterCriteria): boolean {
+  return (
+    (filter.narrativeCategories?.length ?? 0) > 0 ||
+    (filter.excludeNarrativeCategories?.length ?? 0) > 0 ||
+    filter.excludeCopycats === true ||
+    filter.excludeNarrativeRedFlags === true ||
+    filter.excludeUnrelatedX === true ||
+    filter.requireTrendMatch === true
+  );
+}
+
+/**
+ * The TokenSage criteria, every one failing closed: no read, no match, and the X-post and trend
+ * criteria need the deep read. An exclusion that can't be checked is not "passed": the filter
+ * asked to be shown only coins TokenSage cleared.
+ */
+export function matchesNarrativeCriteria(read: NarrativeRead | undefined, filter: FilterCriteria): boolean {
+  if (!usesNarrativeCriteria(filter)) return true;
+  if (!read) return false;
+  const only = filter.narrativeCategories ?? [];
+  if (only.length > 0 && !only.some((label) => narrativeMatchesLabel(read, label))) return false;
+  const not = filter.excludeNarrativeCategories ?? [];
+  if (not.some((label) => narrativeMatchesLabel(read, label))) return false;
+  if (filter.excludeCopycats && (narrativeIsCopycat(read) || read.flags.includes("earlier_same_name"))) {
+    return false;
+  }
+  if (filter.excludeNarrativeRedFlags && read.highFlagCount > 0) return false;
+  if (filter.excludeUnrelatedX) {
+    if (read.depth !== "full") return false;
+    if (read.xVerdict === "unrelated" || read.xRelation === "spoofed") return false;
+  }
+  if (filter.requireTrendMatch && !(read.depth === "full" && read.trendMatched === true)) return false;
   return true;
 }

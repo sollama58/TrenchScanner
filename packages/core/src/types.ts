@@ -237,4 +237,22 @@ export interface FilterCriteria {
   /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */
   minFirstBuyersHolding?: number | null;
   maxFirstBuyersHolding?: number | null;
+  /**
+   * TokenSage narrative criteria (curation/narrativeFeatures.ts). Unlike the others these all
+   * FAIL CLOSED without a read (user decision 2026-10-06): a token TokenSage hasn't answered
+   * for yet matches none of them, and the two that need the deep read (the X post, the trend)
+   * don't match on a quick read either. Empty / false means "don't check this".
+   */
+  /** Only coins whose read puts them under one of these labels ("animal", or "animal/dog"). */
+  narrativeCategories?: string[];
+  /** No coin whose read puts it under one of these labels. */
+  excludeNarrativeCategories?: string[];
+  /** No live copycat and no reused name. */
+  excludeCopycats?: boolean;
+  /** No high-severity TokenSage flag. */
+  excludeNarrativeRedFlags?: boolean;
+  /** Deep read: the linked X post must not be unrelated to the coin or spoofed. */
+  excludeUnrelatedX?: boolean;
+  /** Deep read: the name must be spiking on Wikipedia or in the news. */
+  requireTrendMatch?: boolean;
 }

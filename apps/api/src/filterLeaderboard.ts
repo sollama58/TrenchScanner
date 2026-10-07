@@ -57,6 +57,12 @@ export const FILTER_CRITERIA_KEYS = [
   "maxEmptyTop10WalletPct",
   "minFirstBuyersHolding",
   "maxFirstBuyersHolding",
+  "narrativeCategories",
+  "excludeNarrativeCategories",
+  "excludeCopycats",
+  "excludeNarrativeRedFlags",
+  "excludeUnrelatedX",
+  "requireTrendMatch",
 ] as const;
 
 export type FilterCriteriaKey = (typeof FILTER_CRITERIA_KEYS)[number];

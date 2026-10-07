@@ -33,6 +33,12 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxEmptyTop10WalletPct: 60,
     minFirstBuyersHolding: null,
     maxFirstBuyersHolding: null,
+    narrativeCategories: [],
+    excludeNarrativeCategories: [],
+    excludeCopycats: false,
+    excludeNarrativeRedFlags: false,
+    excludeUnrelatedX: false,
+    requireTrendMatch: false,
     isActive: count === 0,
     shareOnLeaderboard: false,
   };
@@ -43,6 +49,13 @@ function toInput(f: Filter): FilterInput {
   return {
     ...rest,
     narrativeKeywords: rest.narrativeKeywords ?? [],
+    // Absent from filters saved by older API builds.
+    narrativeCategories: rest.narrativeCategories ?? [],
+    excludeNarrativeCategories: rest.excludeNarrativeCategories ?? [],
+    excludeCopycats: rest.excludeCopycats ?? false,
+    excludeNarrativeRedFlags: rest.excludeNarrativeRedFlags ?? false,
+    excludeUnrelatedX: rest.excludeUnrelatedX ?? false,
+    requireTrendMatch: rest.requireTrendMatch ?? false,
   };
 }
 
@@ -261,6 +274,7 @@ function FilterEditor({
   onSave: () => void;
 }) {
   const [keywords, setKeywords] = useState(draft.narrativeKeywords.join(", "));
+  const themes = config?.narrativeCategories ?? [];
   const set = <K extends keyof FilterInput>(key: K, value: FilterInput[K]) =>
     onChange({ ...draft, [key]: value });
   const num = (v: string): number | null => (v.trim() === "" ? null : Number(v));
@@ -381,6 +395,59 @@ function FilterEditor({
             }}
           />
         </label>
+        <p className="muted small">
+          The settings below use TokenSage&apos;s read of what each coin is about. They only match coins that
+          have been read: a coin without a read yet is skipped, and the X-post and trend settings wait for the
+          deep read.
+        </p>
+        {themes.length > 0 && (
+          <div className="grid2">
+            <ThemePicker
+              title="Only these themes"
+              themes={themes}
+              chosen={draft.narrativeCategories}
+              onChange={(v) => set("narrativeCategories", v)}
+            />
+            <ThemePicker
+              title="Never these themes"
+              themes={themes}
+              chosen={draft.excludeNarrativeCategories}
+              onChange={(v) => set("excludeNarrativeCategories", v)}
+            />
+          </div>
+        )}
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.excludeCopycats}
+            onChange={(e) => set("excludeCopycats", e.target.checked)}
+          />
+          Skip copycats and reused names
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.excludeNarrativeRedFlags}
+            onChange={(e) => set("excludeNarrativeRedFlags", e.target.checked)}
+          />
+          Skip coins with a narrative red flag
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.excludeUnrelatedX}
+            onChange={(e) => set("excludeUnrelatedX", e.target.checked)}
+          />
+          Skip coins whose linked X post is unrelated or spoofed (needs the deep read)
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.requireTrendMatch}
+            onChange={(e) => set("requireTrendMatch", e.target.checked)}
+          />
+          Only coins whose name is trending on Wikipedia or in the news (needs the deep read)
+        </label>
       </fieldset>
 
       <label className="check">
@@ -409,5 +476,38 @@ function FilterEditor({
         </button>
       </div>
     </form>
+  );
+}
+
+/** A list of theme checkboxes; a theme ticked here is a top-level TokenSage category id. */
+function ThemePicker({
+  title,
+  themes,
+  chosen,
+  onChange,
+}: {
+  title: string;
+  themes: { id: string; label: string }[];
+  chosen: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const toggle = (id: string, on: boolean) =>
+    onChange(on ? [...chosen.filter((c) => c !== id), id] : chosen.filter((c) => c !== id));
+  return (
+    <div className="field">
+      <span>{title}</span>
+      <div className="check-list">
+        {themes.map((t) => (
+          <label className="check small" key={t.id}>
+            <input
+              type="checkbox"
+              checked={chosen.includes(t.id)}
+              onChange={(e) => toggle(t.id, e.target.checked)}
+            />
+            {t.label}
+          </label>
+        ))}
+      </div>
+    </div>
   );
 }

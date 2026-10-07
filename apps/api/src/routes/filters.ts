@@ -13,6 +13,17 @@ import {
 // own MCAP_FILTER_MIN/MAX instead of a hardcoded literal that could drift out of sync with them -
 // only matters for a POST that omits mcapMin/mcapMax entirely, but there's no reason to duplicate
 // the number when env already has it.
+const narrativeLabelList = z
+  .array(
+    z
+      .string()
+      .trim()
+      .regex(/^[a-z0-9_]+(\/[a-z0-9_]+)?$/, "narrative labels are lowercase slugs like animal or animal/dog")
+      .max(60),
+  )
+  .max(20)
+  .default([]);
+
 function buildFilterInputSchema(env: Env) {
   return z.object({
     name: z.string().min(1).max(60).default("Default"),
@@ -38,6 +49,15 @@ function buildFilterInputSchema(env: Env) {
     maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     minFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
     maxFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
+    // TokenSage narrative criteria (core matchFilters.ts). Labels are TokenSage's own slugs, a
+    // top-level one ("animal") or a full one ("animal/dog"); the taxonomy can grow on their side,
+    // so the shape is checked rather than the list.
+    narrativeCategories: narrativeLabelList,
+    excludeNarrativeCategories: narrativeLabelList,
+    excludeCopycats: z.boolean().default(false),
+    excludeNarrativeRedFlags: z.boolean().default(false),
+    excludeUnrelatedX: z.boolean().default(false),
+    requireTrendMatch: z.boolean().default(false),
     isActive: z.boolean().default(true),
     // Opt-in to the public filter leaderboard; off unless the owner turns it on.
     shareOnLeaderboard: z.boolean().default(false),
