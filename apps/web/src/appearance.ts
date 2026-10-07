@@ -78,7 +78,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
     fields: [
       { id: "reasons", label: "Model reasons" },
       { id: "mint", label: "Copy mint button" },
-      { id: "links", label: "Dex / Pump / RugCheck links" },
+      { id: "links", label: "Dex / Pump links" },
     ],
   },
 ];
