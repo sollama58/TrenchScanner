@@ -224,7 +224,8 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
       SELECT "referentKind" AS label, count(*) AS count FROM "TokenNarrative"
-      WHERE "checkedAt" > ${since} AND status <> 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`,
+      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "referentKind" IS NOT NULL
+      GROUP BY 1 ORDER BY 2 DESC LIMIT 8`,
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
       SELECT s AS label, count(*) AS count FROM "TokenNarrative", unnest("referentSupport") s
       WHERE "checkedAt" > ${since} AND status <> 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`,
@@ -251,9 +252,13 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       FROM "TokenNarrative"
       WHERE "checkedAt" > ${since} AND status <> 'failed' AND "trendMatched" IS NOT NULL
       GROUP BY 1 ORDER BY 2 DESC`,
-    prisma.$queryRaw<{ referent_confidence: number | null; x_fit: number | null; newest: Date | null }[]>`
+    // Reads where TokenSage resolved no referent at all (null kind) are counted, not labelled:
+    // "(none)" is not a kind of thing a coin can be about.
+    prisma.$queryRaw<
+      { referent_confidence: number | null; x_fit: number | null; newest: Date | null; no_referent: bigint }[]
+    >`
       SELECT avg("referentConfidence")::float8 AS referent_confidence, avg("xFit")::float8 AS x_fit,
-             max("checkedAt") AS newest
+             max("checkedAt") AS newest, count(*) FILTER (WHERE "referentKind" IS NULL) AS no_referent
       FROM "TokenNarrative" WHERE "checkedAt" > ${since} AND status <> 'failed'`,
     // Model alerts in the window with what TokenSage says about their coin now. Same bound and
     // cap as the Admin report; only the columns the tallies need, never the mint.
@@ -327,7 +332,15 @@ export async function buildMarketLighthouse(env: Env, days: number) {
   return {
     window: { days, since, bucketHours },
     tokenSage: { on: status.on, lastCycleAt: status.lastCycleAt },
-    reads: { total, described, deep, quick: described - deep, failed, newestAt: avg?.newest ?? null },
+    reads: {
+      total,
+      described,
+      deep,
+      quick: described - deep,
+      failed,
+      noReferent: Number(avg?.no_referent ?? 0),
+      newestAt: avg?.newest ?? null,
+    },
     avgReferentConfidence: avg?.referent_confidence ?? null,
     avgXFit: avg?.x_fit ?? null,
     tide: {

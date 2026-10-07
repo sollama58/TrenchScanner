@@ -256,19 +256,19 @@ function TokenSageSections({
 
       <div className="lh-grid">
         <Section
-          title="Where the story comes from"
-          note="The inputs that pointed TokenSage at what a coin is about."
+          title="What the coins are about"
+          note={
+            d.reads.noReferent > 0
+              ? `The kind of thing each coin refers to, where TokenSage could tell. It couldn't for ${d.reads.noReferent.toLocaleString()} of ${d.reads.described.toLocaleString()} coins (${pct(share(d.reads.noReferent, d.reads.described))}).`
+              : "The kind of thing each coin refers to."
+          }
         >
-          <CountBars rows={d.referentSupport} empty="Nothing in this window." />
+          <CountBars rows={d.referentKinds} empty="TokenSage couldn't tell for any coin in this window." />
         </Section>
-        <Section title="What the coins are about" note="The kind of thing each coin refers to.">
-          <CountBars rows={d.referentKinds} empty="Nothing in this window." />
+        <Section title="Flags raised" note="Warnings TokenSage attached to the coins it read.">
+          <CountBars rows={d.flags} empty="No flags raised in this window." tone="warn" />
         </Section>
       </div>
-
-      <Section title="Flags raised" note="Warnings TokenSage attached to the coins it read.">
-        <CountBars rows={d.flags} empty="No flags raised in this window." tone="warn" />
-      </Section>
 
       <Section title="Signals at a glance" note="Each bar is 100% of the coins that had that signal read.">
         <div className="lh-splits">
