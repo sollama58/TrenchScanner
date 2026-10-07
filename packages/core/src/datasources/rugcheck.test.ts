@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { toProfile, type RugCheckReport } from "./rugcheck.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { RugCheckClient, toProfile, type RugCheckReport } from "./rugcheck.js";
 
 const MINT = "9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump";
 const POOL_AUTHORITY = "FnzKY6x7entQ1eR3D225dQyT7ybfka4PskBMQhb8L3CC";
@@ -133,5 +133,30 @@ describe("toProfile", () => {
     const profile = toProfile(MINT, baseReport());
     expect(profile.top10HolderAddresses).toEqual(["wallet-2", "wallet-3"]);
     expect(profile.top10HolderAddresses).not.toContain(POOL_AUTHORITY);
+  });
+});
+
+describe("RugCheckClient.getProfileResult", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const answer = (status: number, body: unknown) =>
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify(body), { status }));
+
+  it("reads RugCheck's 400 'not found' for an unindexed mint as absent, so it gets cached", async () => {
+    answer(400, { error: "not found" });
+    await expect(new RugCheckClient().getProfileResult(MINT)).resolves.toEqual({ status: "absent" });
+  });
+
+  it("still reads a 404 as absent", async () => {
+    answer(404, { error: "not found" });
+    await expect(new RugCheckClient().getProfileResult(MINT)).resolves.toEqual({ status: "absent" });
+  });
+
+  it("keeps a 429 a failure, never cached", async () => {
+    answer(429, { error: "rate limited" });
+    const client = new RugCheckClient();
+    await expect(client.getProfileResult(MINT)).resolves.toEqual({ status: "failed" });
   });
 });

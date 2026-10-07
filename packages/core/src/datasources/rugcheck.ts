@@ -84,9 +84,13 @@ export class RugCheckClient {
       });
       return { status: "found", profile: toProfile(mintAddress, report) };
     } catch (err) {
-      if (err instanceof HttpError && err.status === 404) {
-        // Not yet indexed by RugCheck (very new token) - a real answer, not an error.
-        logger.debug("no rugcheck report yet", { mintAddress });
+      // Not yet indexed by RugCheck (very new token) - a real answer, not an error. RugCheck
+      // answers that with a 400 {"error":"not found"} now (checked 2026-10-07: 25 of the 30
+      // newest Pump.fun mints), not the 404 it used to. A 400 is the same answer every time for
+      // the same mint, so it counts as absent too: read as a failure it was never cached, and
+      // every unindexed in-band mint went back to RugCheck on every 30-second cycle.
+      if (err instanceof HttpError && (err.status === 404 || err.status === 400)) {
+        logger.debug("no rugcheck report yet", { mintAddress, status: err.status });
         return { status: "absent" };
       }
       logger.warn("failed to fetch rugcheck report", { mintAddress, error: String(err) });
