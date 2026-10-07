@@ -1186,7 +1186,7 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
         <p className="small">
           <strong>
             {board.exitPlan ??
-              "Buy at the alert price, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 30 minutes."}
+              "Buy at the alert price, sell half at 2x, let the rest ride with a trailing exit 35% off its high, out at 3 hours, stop out at -50% before the first sale, and close a call that never sold at 30 minutes."}
           </strong>
         </p>
         <ol className="steps small">

@@ -688,6 +688,13 @@ model CandidateOutcome {
   /// this. Null on rows from before the tier existed (2026-10-06), which are never graded for it.
   peakBeforeStop60mPriceUsd Float?
   stopped60mAt              DateTime?
+  /// The exit plan's trailing exit (applyTrailTick in curation/profitSim.ts): the highest price
+  /// since the plan's first sale (null until it sold, before the stop), and when and at what level
+  /// the trail fired. Kept through the extended watch; a row with an open trailing share stays on
+  /// watch until the exit or the plan's hold cap.
+  trailHighPriceUsd         Float?
+  trailExitAt               DateTime?
+  trailExitPriceUsd         Float?
 
   // ---- Labels, written once when the goal window closes ----
   finalizedAt      DateTime?
@@ -723,9 +730,12 @@ model CandidateOutcome {
   /// Minutes from the alert to the run peak (peak24hAt). Written with peak24hReturnPct.
   runPeakMinutes   Float?
   /// Simulated return of the call under the fixed exit plan (EXIT_PLAN in curation/profitSim.ts:
-  /// half at 2x, the rest at 4x, stop at -50%, out at 30 minutes; 1 hour on rows graded before
-  /// 2026-10-05), in percent of the stake. Written when the label window closes; null when
-  /// ungraded or when the close price is unknown.
+  /// half at 2x, the rest on a trailing exit out at 3 hours, stop at -50% before the sale, a call
+  /// that never sold closes at 30 minutes; rows graded before 2026-10-07 sold the rest at 4x and
+  /// closed at 30 minutes, 1 hour before 2026-10-05), in percent of the stake. Written when the
+  /// position is fully out: at the window close for a call that stopped or never sold, at the
+  /// trailing exit or the hold cap for one that sold. Null until then, when ungraded, or when the
+  /// close price is unknown.
   simReturnPct     Float?
 
   curatedAlerts   CuratedAlert[]

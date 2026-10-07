@@ -175,6 +175,13 @@ export interface OutcomeAggregates {
    */
   peakBeforeStop60mPriceUsd?: number | null;
   stopped60mAt?: Date | null;
+  /**
+   * The exit plan's trailing exit (curation/profitSim.ts, applyTrailTick): the highest price since
+   * the plan's first sale (null until it sold), and when and at what level the trail fired.
+   */
+  trailHighPriceUsd?: number | null;
+  trailExitAt?: Date | null;
+  trailExitPriceUsd?: number | null;
 }
 
 /** What a fresh row starts from: every extreme is the anchor itself, nothing observed yet. */
