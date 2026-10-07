@@ -198,7 +198,7 @@ export function LighthouseBody({
           </p>
         </div>
       ) : compact ? (
-        <TokenSageKpis d={d} span={span} quickOnly={quickOnly} />
+        <TokenSageGlance d={d} cls={cls} target2xPct={target2xPct} />
       ) : (
         <TokenSageSections d={d} span={span} cls={cls} quickOnly={quickOnly} target2xPct={target2xPct} />
       )}
@@ -313,7 +313,62 @@ function TokenSageSections({
   );
 }
 
-/** TokenSage's headline numbers for the window - the whole of the modal's TokenSage half. */
+/**
+ * The modal's TokenSage half: what the coins are (original or copy, what they trade against),
+ * the narrative mix, and the narratives whose calls are doubling most. The read counts and
+ * confidence figures stay on the Lighthouse tab, where someone digging in wants them.
+ */
+function TokenSageGlance({
+  d,
+  cls,
+  target2xPct,
+}: {
+  d: MarketLighthouse;
+  cls: (l: string) => string;
+  target2xPct: number;
+}) {
+  // Best first: a settled rate ahead of a thin one, then by rate, then by how many calls back it.
+  const best = [...d.outcomes.byCategory]
+    .sort((a, b) => {
+      const ea = a.graded >= MIN_GRADED ? 1 : 0;
+      const eb = b.graded >= MIN_GRADED ? 1 : 0;
+      if (ea !== eb) return eb - ea;
+      const ra = a.graded > 0 ? a.won2x / a.graded : -1;
+      const rb = b.graded > 0 ? b.won2x / b.graded : -1;
+      return rb - ra || b.graded - a.graded;
+    })
+    .slice(0, 5);
+  return (
+    <>
+      {!d.tokenSage.on && (
+        <p className="notice">
+          TokenSage isn&apos;t reading new coins right now. These are the reads it stored before it went quiet
+          {d.reads.newestAt ? <> (newest {ago(d.reads.newestAt)})</> : null}.
+        </p>
+      )}
+      <div className="lh-splits">
+        <Split title="Original or copy" rows={d.copies} empty="Not said yet" />
+        <Split title="Trades against" rows={d.pairKinds} empty="Not said yet" />
+      </div>
+      <div className="lh-grid">
+        <Section
+          title="Narrative mix"
+          note={`Share of the ${d.reads.described.toLocaleString()} coins read.`}
+        >
+          <Donut d={d} cls={cls} />
+        </Section>
+        <Section
+          title="Best-performing narratives"
+          note={`Model calls that reached 2x, by their coin's narrative. The line is the ${target2xPct}% goal.`}
+        >
+          <HitRates rows={best} target={target2xPct} cls={cls} />
+        </Section>
+      </div>
+    </>
+  );
+}
+
+/** TokenSage's headline numbers for the window. */
 function TokenSageKpis({ d, span, quickOnly }: { d: MarketLighthouse; span: string; quickOnly: boolean }) {
   return (
     <>
