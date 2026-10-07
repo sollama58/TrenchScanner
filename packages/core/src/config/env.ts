@@ -552,7 +552,19 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   TOKENSAGE_API_URL: z.string().default(""),
-  TOKENSAGE_API_KEY: z.string().optional().default(""),
+  // Trimmed, with surrounding quotes or a pasted "Bearer " dropped: a stray space or quote from
+  // the Render dashboard otherwise makes every call a 401.
+  TOKENSAGE_API_KEY: z
+    .string()
+    .optional()
+    .default("")
+    .transform((v) =>
+      v
+        .trim()
+        .replace(/^(["'])(.*)\1$/, "$2")
+        .replace(/^bearer\s+/i, "")
+        .trim(),
+    ),
   TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(2),
   TOKENSAGE_FULL_PER_DAY: z.coerce.number().int().min(0).default(6000),

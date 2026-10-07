@@ -171,6 +171,15 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     );
   });
 
+  it("pauses after TokenSage rejects the key, instead of retrying every poll", async () => {
+    const { client, batch } = fakeClient();
+    batch.mockRejectedValueOnce(new HttpError(401, "https://ts.test/v1/tokens:batch"));
+    noteNarrativeWanted(`${TAG}-k`, "basic", env);
+    await flushNarrativeRequests(env, client);
+    await flushNarrativeRequests(env, client);
+    expect(batch).toHaveBeenCalledTimes(1);
+  });
+
   it("asks again for a partial answer, a few times", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
