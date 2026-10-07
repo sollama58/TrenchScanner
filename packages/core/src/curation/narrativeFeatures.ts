@@ -51,6 +51,24 @@ export const NARRATIVE_CATEGORY_LABELS: Record<
 /** Every top-level category id, in the order the editor shows them. */
 export const NARRATIVE_CATEGORY_IDS: readonly string[] = Object.values(NARRATIVE_TOP_CATEGORIES);
 
+/**
+ * The sub-labels the filter editor offers on their own (TokenSage lexicon 2026-10-07.2 split
+ * crypto_native by kind; the parent scores as before). A filter on "crypto_native/chain_or_coin"
+ * matches that label only; one on "crypto_native" still matches every sub-label under it.
+ */
+export const NARRATIVE_SUB_LABELS: readonly { id: string; label: string }[] = [
+  { id: "crypto_native/slang", label: "Crypto-native: slang" },
+  { id: "crypto_native/person", label: "Crypto-native: founders and figures" },
+  { id: "crypto_native/chain_or_coin", label: "Crypto-native: chains and coins" },
+  { id: "crypto_native/company", label: "Crypto-native: exchanges and companies" },
+  { id: "crypto_native/trading", label: "Crypto-native: trading" },
+  { id: "crypto_native/tech", label: "Crypto-native: tech" },
+  { id: "crypto_native/launchpad", label: "Crypto-native: launchpads" },
+  { id: "crypto_native/pumpfun_meta", label: "Crypto-native: pump.fun meta" },
+  { id: "crypto_native/cto", label: "Crypto-native: community takeovers" },
+  { id: "crypto_native/utility_claim", label: "Crypto-native: utility claims" },
+];
+
 /** A category counts for its 0/1 input from this confidence. */
 export const NARRATIVE_CATEGORY_MIN_CONFIDENCE = 0.5;
 
@@ -126,13 +144,24 @@ export const NARRATIVE_FEATURES_V2 = [
   "nsTrendScore",
 ] as const;
 
-export type NarrativeFeatureName =
-  (typeof NARRATIVE_FEATURES)[number] | (typeof NARRATIVE_FEATURES_V2)[number];
+/**
+ * The third wave (TokenSage rules 0.17.0, 2026-10-07): a referent now comes back whenever the
+ * kind is plain, with `generic: true` when only the kind is known ("frog", not a named frog).
+ * nsReferentConf alone can no longer tell "clear what it is about" from "a kind, at most 0.49",
+ * so both bits are recorded. 0 on older reads (every referent then was named), never null.
+ */
+export const NARRATIVE_FEATURES_V3 = ["nsReferentGeneric", "nsReferentNamed"] as const;
 
-/** Every narrative feature, first wave then second. */
+export type NarrativeFeatureName =
+  | (typeof NARRATIVE_FEATURES)[number]
+  | (typeof NARRATIVE_FEATURES_V2)[number]
+  | (typeof NARRATIVE_FEATURES_V3)[number];
+
+/** Every narrative feature, first wave, then second, then third. */
 export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
   ...NARRATIVE_FEATURES,
   ...NARRATIVE_FEATURES_V2,
+  ...NARRATIVE_FEATURES_V3,
 ];
 
 /** Second-wave features that are counts, ranks or ages: everything else is a 0/1 bit or a 0-1 share. */
@@ -213,6 +242,8 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsXAccountMadeForCoin: "X account made for the coin",
   nsXReuseRank: "place among coins linking the post",
   nsTrendScore: "trend strength",
+  nsReferentGeneric: "referent is a kind only",
+  nsReferentNamed: "named referent",
 };
 
 /**
@@ -235,6 +266,8 @@ export interface NarrativeRead {
   referentKind: string | null;
   referentConfidence: number | null;
   referentSupport: string[];
+  /** Rules 0.17.0+: only the kind is known; false on a named referent, null without one. */
+  referentGeneric: boolean | null;
   flags: string[];
   highFlagCount: number;
   warnFlagCount: number;
@@ -281,6 +314,8 @@ export interface NarrativeRow {
   referentKind: string | null;
   referentConfidence: number | null;
   referentSupport: string[];
+  /** Rules 0.17.0+: only the kind is known; false on a named referent, null without one. */
+  referentGeneric: boolean | null;
   flags: string[];
   highFlagCount: number;
   warnFlagCount: number;
@@ -327,6 +362,7 @@ export const NARRATIVE_ROW_SELECT = {
   referentKind: true,
   referentConfidence: true,
   referentSupport: true,
+  referentGeneric: true,
   flags: true,
   highFlagCount: true,
   warnFlagCount: true,
@@ -388,6 +424,7 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     referentKind: row.referentKind,
     referentConfidence: row.referentConfidence,
     referentSupport: Array.isArray(row.referentSupport) ? row.referentSupport : [],
+    referentGeneric: row.referentGeneric ?? null,
     flags: Array.isArray(row.flags) ? row.flags : [],
     highFlagCount: row.highFlagCount ?? 0,
     warnFlagCount: row.warnFlagCount ?? 0,
@@ -452,7 +489,35 @@ export const NARRATIVE_FLAG = {
   referencesKnownCoin: "references_known_coin",
   xContentMismatch: "x_content_mismatch",
   lateCopy: "late_copy",
+  /** Info flags from rules 0.15.0: the facts behind them ride on their own columns. */
+  logoReused: "logo_reused",
+  xAccountMadeForCoin: "x_account_made_for_coin",
 } as const;
+
+/**
+ * TokenSage's referent kinds (rules 0.17.0 added the last five, which mostly come generic) and a
+ * plain name for each. Kept open: a kind this list doesn't know shows as its slug.
+ */
+export const REFERENT_KIND_LABELS: Readonly<Record<string, string>> = {
+  famous_animal: "famous animal",
+  meme: "meme",
+  person: "person",
+  coin: "coin",
+  event: "event",
+  concept: "concept",
+  place: "place",
+  other: "other",
+  animal: "animal",
+  media: "film, game or show",
+  project: "crypto or AI project",
+  object: "food, object or idea",
+  organization: "company or exchange",
+};
+
+/** A named referent: TokenSage identified what the coin is about, not only what kind of thing. */
+export function narrativeReferentNamed(read: NarrativeRead): boolean {
+  return (read.referentConfidence ?? 0) > 0 && read.referentGeneric !== true;
+}
 
 /** TokenSage's lineage kinds (rules 0.15.0+). */
 export const LINEAGE_KIND = {
@@ -500,7 +565,8 @@ export function narrativeFeatureValues(
   }
   const full = read.depth === "full";
   const xRead = narrativeXRead(read);
-  const lineage = read.lineageKind;
+  // An unresolved lineage ("unknown": no launch time) says nothing, like a read from older rules.
+  const lineage = read.lineageKind === LINEAGE_KIND.unknown ? null : read.lineageKind;
   const relation = (name: string) => (full ? bit(xRead && read.xRelation === name) : null);
   const topConf = read.categories.reduce((max, c) => Math.max(max, c.confidence), 0);
   const categoryBits = Object.fromEntries(
@@ -559,6 +625,9 @@ export function narrativeFeatureValues(
     nsXAccountMadeForCoin: xRead && read.xAccountMadeForCoin !== null ? bit(read.xAccountMadeForCoin) : null,
     nsXReuseRank: xRead ? read.xReuseRank : null,
     nsTrendScore: full ? read.trendScore : null,
+    // Rules 0.17.0+: 0 on older reads, whose referents were all named.
+    nsReferentGeneric: bit(read.referentGeneric === true),
+    nsReferentNamed: bit(narrativeReferentNamed(read)),
   };
 }
 
@@ -619,6 +688,7 @@ export function narrativeFromFeatures(
     referentKind: null,
     referentConfidence: num("nsReferentConf"),
     referentSupport: Array.from({ length: num("nsReferentSupportCount") ?? 0 }, () => "(replayed)"),
+    referentGeneric: num("nsReferentGeneric") === 1 ? true : (num("nsReferentConf") ?? 0) > 0 ? false : null,
     flags,
     highFlagCount: num("nsHighFlagCount") ?? 0,
     warnFlagCount: num("nsWarnFlagCount") ?? 0,

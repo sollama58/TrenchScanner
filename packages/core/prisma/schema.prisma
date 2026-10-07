@@ -1109,6 +1109,9 @@ model TokenNarrative {
   /// referent.confidence and referent.supported_by (the inputs pointing at it, e.g. ["name","x"]).
   referentConfidence Float?
   referentSupport    String[]  @default([])
+  /// TokenSage rules 0.17.0+: only the referent's kind is known (referent.generic; "frog", not
+  /// a named frog). False on a named referent, null without one or on older rules.
+  referentGeneric    Boolean?
   /// market.pair: what the coin trades against ("sol", "stablecoin", "token", "tokenized_stock", ...).
   pairKind           String?
   pairSymbol         String?
@@ -1161,6 +1164,8 @@ model TokenNarrative {
   /// Why the analysis failed, on status "failed" rows.
   failReason         String?
   rulesVersion       String?
+  /// versions.lexicon: TokenSage's category lexicon, which moves without a rules bump.
+  lexiconVersion     String?
   analysis           Json?
   analyzedAt         DateTime?
   checkedAt          DateTime  @default(now())

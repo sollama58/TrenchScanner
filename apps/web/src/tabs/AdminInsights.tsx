@@ -430,6 +430,7 @@ interface Narrative {
   referentKind: string | null;
   referentConfidence: number | null;
   referentSupport: string[];
+  referentGeneric?: boolean | null;
   summary: string | null;
   flags: string[];
   xFit: number | null;
@@ -678,7 +679,13 @@ function RecentNarratives() {
                 ) : r.referentLabel ? (
                   <span title={r.referentSupport.length ? `from ${r.referentSupport.join(", ")}` : undefined}>
                     {r.referentLabel}
-                    {r.referentKind ? <span className="faint"> · {r.referentKind}</span> : null}
+                    {r.referentKind ? (
+                      <span className="faint">
+                        {" "}
+                        · {r.referentKind}
+                        {r.referentGeneric ? " (kind only)" : ""}
+                      </span>
+                    ) : null}
                     {r.referentConfidence !== null ? (
                       <span className="faint"> · {pct(r.referentConfidence * 100)}</span>
                     ) : null}

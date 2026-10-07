@@ -11,6 +11,7 @@ import {
 import {
   NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
+  NARRATIVE_FEATURES_V3,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -148,6 +149,10 @@ export const CANDIDATE_FEATURE_NAMES = [
   // the coin is, the referent wave, the X account's credibility and the trend score. Null on
   // reads made by older rules.
   ...NARRATIVE_FEATURES_V2,
+  // Added 2026-10-07, TokenSage rules 0.17.0 (curation/narrativeFeatures.ts): whether the
+  // referent is a kind only or a named thing, now that a referent comes back whenever the kind
+  // is plain.
+  ...NARRATIVE_FEATURES_V3,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -186,6 +191,12 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "scoreNarrative",
   "scoreTotal",
   "scoreNarrativeV2",
+  // TokenSage inputs that repeat another on today's rows (notes/tokensage-models-eval-2026-10-07.md,
+  // section 3): the reused-name flag equals the copycat bit on 98% of reads, the copy's rank is
+  // the 24 h sibling count (r = 1.00), and the wave rank is the 24 h wave size (r = 0.98).
+  "nsEarlierSameName",
+  "nsCopyRank",
+  "nsWaveRank24h",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
