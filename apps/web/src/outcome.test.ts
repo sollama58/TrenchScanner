@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card, Outcome } from "./api";
-import { matchOutcome, minutesLeftAt, outcomeAt, outcomeBadge } from "./outcome";
+import { matchOutcome, minutesLeftAt, outcomeAt, outcomeBadge, ranLater } from "./outcome";
 
 const MIN = 60_000;
 const now = Date.UTC(2026, 9, 5, 12, 0, 0);
@@ -66,6 +66,19 @@ describe("outcomeBadge", () => {
     expect(outcomeBadge(watching({ status: "won", hit2x: true, hitGoal: false })).text).toBe("✓ 2x win");
     expect(outcomeBadge(watching({ status: "missed" })).text).toBe("✕ Missed 2x");
     expect(outcomeBadge(watching({ status: "disqualified" })).text).toBe("✕ Stopped out");
+  });
+
+  it("marks a miss that ran 2x later without breaching the stop", () => {
+    const late = watching({ status: "missed", maxDrawdown1hPct: -30, peak24hReturnPct: 250 });
+    expect(ranLater(late)).toBe(true);
+    expect(outcomeBadge(late)).toEqual({ text: "↗ Ran later", tone: "info" });
+    // Fell through the stop in the window first: a buyer was out, so it stays a plain miss.
+    expect(outcomeBadge({ ...late, maxDrawdown1hPct: -60 }).text).toBe("✕ Missed 2x");
+    // Never reached 2x, or the run peak isn't known.
+    expect(outcomeBadge({ ...late, peak24hReturnPct: 90 }).text).toBe("✕ Missed 2x");
+    expect(outcomeBadge({ ...late, peak24hReturnPct: null }).text).toBe("✕ Missed 2x");
+    // Only misses: a stopped-out call that ran later is still stopped out.
+    expect(ranLater({ ...late, status: "disqualified" })).toBe(false);
   });
 });
 

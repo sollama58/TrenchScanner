@@ -551,7 +551,7 @@ function Overview() {
                   total
                     ? `${total.graded} graded · target ${o.targets.hitRate2xPct}% / ${o.targets.hitRate4xPct}%${
                         total.hitRate10xPct != null ? ` · 10x ${pct(total.hitRate10xPct, 1)}` : ""
-                      }`
+                      }${total.ranLaterPct != null ? ` · ${pct(total.ranLaterPct, 1)} ran later` : ""}`
                     : hits.error
                       ? "unavailable"
                       : "loading"
@@ -743,6 +743,8 @@ interface Rated {
   hitRate4xPct: number | null;
   /** 10x within an hour; absent where the source doesn't read it (and from older API builds). */
   hitRate10xPct?: number | null;
+  /** Misses that never fell 50% in the window and still ran 2x+ on the 24h watch; curated calls only. */
+  ranLaterPct?: number | null;
   /** Simulated return under the fixed exit plan; absent where the source has none. */
   avgSimReturnPct?: number | null;
   totalSimReturnPct?: number | null;
@@ -802,7 +804,18 @@ interface AdminAlert {
   ai: { decision: string | null; probability2x: number | null } | null;
 }
 
-const rateHead = ["Calls", "Graded", "Pending", "2x", "4x", "10x", "Avg profit", "Total profit", "Verdict"];
+const rateHead = [
+  "Calls",
+  "Graded",
+  "Pending",
+  "2x",
+  "4x",
+  "10x",
+  "Ran later",
+  "Avg profit",
+  "Total profit",
+  "Verdict",
+];
 const profitClass = (v: number | null | undefined) =>
   `num ${v == null ? "" : v > 0 ? "up" : v < 0 ? "down" : ""}`;
 const rateCells = (r: Rated) => [
@@ -812,6 +825,7 @@ const rateCells = (r: Rated) => [
   <span className="num">{pct(r.hitRate2xPct, 1)}</span>,
   <span className="num">{pct(r.hitRate4xPct, 1)}</span>,
   <span className="num">{pct(r.hitRate10xPct, 1)}</span>,
+  <span className="num">{pct(r.ranLaterPct, 1)}</span>,
   <span className={profitClass(r.avgSimReturnPct)}>{signedPct(r.avgSimReturnPct, 1)}</span>,
   <span className={profitClass(r.totalSimReturnPct)}>{stakes(r.totalSimReturnPct)}</span>,
   r.verdict === "meets-targets" ? (

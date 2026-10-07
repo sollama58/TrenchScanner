@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   prisma,
+  Prisma,
   createLogger,
   describeExitPlan,
   HEURISTIC_CURATOR_SOURCE,
@@ -76,6 +77,13 @@ export interface GradedCounts {
   /** Doubled only after first falling through the stop - counted as losses. */
   doubledAfterStop: number;
   /**
+   * Late runners: graded calls that missed the 2x inside the win window, never fell through the
+   * stop inside the label window, and still reached 2x on the 24h watch. Counted as losses like
+   * any miss; reported beside the rate so the calls that ran anyway aren't lost. Absent where the
+   * source doesn't read it.
+   */
+  ranLater?: number;
+  /**
    * Graded calls with a simulated return under the fixed exit plan (curation/profitSim.ts), and
    * the sum of those returns in percent of a stake. Absent where the source has no such number.
    */
@@ -97,6 +105,8 @@ export interface GradedRates extends GradedCounts {
   hitRate4xPct: number | null;
   /** won10x over the calls whose 10x tier is settled (tenXGraded); null where the source doesn't read it or nothing is graded. */
   hitRate10xPct: number | null;
+  /** ranLater over the graded calls; null where the source doesn't read it or nothing is graded. */
+  ranLaterPct: number | null;
   /** Average simulated return per graded call under the exit plan, in percent; null with none. */
   avgSimReturnPct: number | null;
   /** Total simulated return, in percent of one stake (one stake per call); null with none. */
@@ -140,6 +150,7 @@ export function withRates(
     hitRate2xPct,
     hitRate4xPct,
     hitRate10xPct: c.won10x !== undefined ? pct(c.won10x, c.tenXGraded ?? c.graded) : null,
+    ranLaterPct: c.ranLater !== undefined ? pct(c.ranLater, c.graded) : null,
     avgSimReturnPct: simCalls > 0 ? Math.round((simSum / simCalls) * 10) / 10 : null,
     totalSimReturnPct: simCalls > 0 ? Math.round(simSum * 10) / 10 : null,
     verdict,
@@ -163,6 +174,9 @@ export function sumCounts(rows: GradedCounts[]): GradedCounts {
         : {}),
       ...(acc.ungradable !== undefined || r.ungradable !== undefined
         ? { ungradable: (acc.ungradable ?? 0) + (r.ungradable ?? 0) }
+        : {}),
+      ...(acc.ranLater !== undefined || r.ranLater !== undefined
+        ? { ranLater: (acc.ranLater ?? 0) + (r.ranLater ?? 0) }
         : {}),
       ...(acc.simCalls !== undefined || r.simCalls !== undefined
         ? {
@@ -203,6 +217,8 @@ type RawCounts = {
   sim_sum?: number | null;
   /** Only on the queries whose calls can close with no verdict. */
   ungradable?: bigint;
+  /** Only on the curated queries, which watch every call for 24h (see RAN_LATER). */
+  ran_later?: bigint;
 };
 
 function toCounts(r: RawCounts): GradedCounts {
@@ -222,8 +238,23 @@ function toCounts(r: RawCounts): GradedCounts {
       ? { simCalls: Number(r.sim_calls), sumSimReturnPct: Number(r.sim_sum ?? 0) }
       : {}),
     ...(r.ungradable !== undefined ? { ungradable: Number(r.ungradable) } : {}),
+    ...(r.ran_later !== undefined ? { ranLater: Number(r.ran_later) } : {}),
   };
 }
+
+/**
+ * A curated call counted as a late runner (GradedCounts.ranLater), over the CuratedAlert `a` /
+ * CandidateOutcome `co` join: graded, missed the 2x, stayed above the stop through the label
+ * window, and its 24h run peak still reached 2x. The same "survived" test as RUN_DOUBLINGS
+ * (curation/laneStore.ts). Curated alerts are on the 24h watch from the start, so their run peak
+ * is known; a call still inside its day counts once its peak so far gets there.
+ */
+const RAN_LATER = Prisma.sql`
+  count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS FALSE
+                     AND COALESCE(a."maxDrawdown1hPct",
+                                  (co."low1hPriceUsd" / NULLIF(co."anchorPriceUsd", 0) - 1) * 100, -100) > -50
+                     AND COALESCE(a."peak24hReturnPct", co."peak24hReturnPct",
+                                  (co."peak24hPriceUsd" / NULLIF(co."anchorPriceUsd", 0) - 1) * 100, 0) >= 100)`;
 
 /**
  * The read-only hit-rate report: how production alerts grade under the current rules - a win is
@@ -456,7 +487,8 @@ export async function buildHitRateReport(
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
                               AND (a."outcomeFinalizedAt" IS NOT NULL
-                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable
+                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable,
+           ${RAN_LATER} AS ran_later
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
@@ -481,7 +513,8 @@ export async function buildHitRateReport(
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
                               AND (a."outcomeFinalizedAt" IS NOT NULL
-                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable
+                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable,
+           ${RAN_LATER} AS ran_later
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
@@ -507,7 +540,8 @@ export async function buildHitRateReport(
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
                               AND (a."outcomeFinalizedAt" IS NOT NULL
-                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable
+                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable,
+           ${RAN_LATER} AS ran_later
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}

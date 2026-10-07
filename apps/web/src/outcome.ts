@@ -16,10 +16,26 @@ export function outcomeBadge(outcome: Outcome | null): { text: string; tone: str
     case "disqualified":
       return { text: "✕ Stopped out", tone: "bad" };
     case "missed":
+      if (ranLater(outcome)) return { text: "↗ Ran later", tone: "info" };
       return { text: "✕ Missed 2x", tone: "bad" };
     default:
       return { text: "Ungraded", tone: "neutral" };
   }
+}
+
+/**
+ * A late runner: missed the 2x inside the win window, never fell 50% inside the label window, and
+ * its run peak (curated calls are watched for a day) still reached 2x. Still a miss in the hit
+ * rate; the badge just doesn't hide that it ran. The same test as the stats report's ranLater.
+ */
+export function ranLater(outcome: Outcome): boolean {
+  return (
+    outcome.status === "missed" &&
+    outcome.maxDrawdown1hPct !== null &&
+    outcome.maxDrawdown1hPct > -50 &&
+    outcome.peak24hReturnPct !== null &&
+    outcome.peak24hReturnPct >= 100
+  );
 }
 
 /** Whole minutes left in the win window at `now`, never below zero. */

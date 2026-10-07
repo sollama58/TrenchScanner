@@ -60,6 +60,15 @@ describe("withRates", () => {
       ]),
     ).toMatchObject({ won10x: 5, tenXGraded: 40 });
   });
+
+  it("reports late runners beside the rate, over graded calls, without moving the hit rate", () => {
+    const r = withRates({ ...counts, ranLater: 6 }, TARGETS);
+    expect(r.ranLaterPct).toBe(15);
+    expect(r.hitRate2xPct).toBe(80);
+    expect(withRates(counts, TARGETS).ranLaterPct).toBeNull();
+    expect(sumCounts([{ ...counts, ranLater: 6 }, counts]).ranLater).toBe(6);
+    expect(sumCounts([counts, counts]).ranLater).toBeUndefined();
+  });
 });
 
 describe("GET /stats/routes", () => {
