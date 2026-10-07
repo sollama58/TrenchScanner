@@ -689,9 +689,10 @@ model CandidateOutcome {
   peakBeforeStop60mPriceUsd Float?
   stopped60mAt              DateTime?
   /// The exit plan's trailing exit (applyTrailTick in curation/profitSim.ts): the highest price
-  /// since the plan's first sale (null until it sold, before the stop), and when and at what level
-  /// the trail fired. Kept through the extended watch; a row with an open trailing share stays on
-  /// watch until the exit or the plan's hold cap.
+  /// since the plan's first sale (null until it sold, before the stop), and when the trail fired
+  /// and the price it sold at (the price seen under its level; the level itself before
+  /// 2026-10-07 20:30 UTC). Kept through the extended watch; a row with an open trailing share
+  /// stays on watch until the exit or the plan's hold cap.
   trailHighPriceUsd         Float?
   trailExitAt               DateTime?
   trailExitPriceUsd         Float?

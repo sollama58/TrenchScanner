@@ -177,7 +177,7 @@ export interface OutcomeAggregates {
   stopped60mAt?: Date | null;
   /**
    * The exit plan's trailing exit (curation/profitSim.ts, applyTrailTick): the highest price since
-   * the plan's first sale (null until it sold), and when and at what level the trail fired.
+   * the plan's first sale (null until it sold), and when the trail fired and the price it sold at.
    */
   trailHighPriceUsd?: number | null;
   trailExitAt?: Date | null;

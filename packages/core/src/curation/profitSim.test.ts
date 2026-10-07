@@ -49,7 +49,7 @@ describe("simulateExitPlan (half at 2x, rest trails 35% off its high, stop -50% 
     expect(simulateExitPlan(row({ low1hPriceUsd: 0.6 }), 0.7)).toBeCloseTo(-30);
   });
 
-  it("a sale whose trail has fired pays half at 2x and the rest at the trail's level", () => {
+  it("a sale whose trail has fired pays half at 2x and the rest at the price the trail sold at", () => {
     const r = row({
       peakBeforeStopPriceUsd: 3,
       peak1hPriceUsd: 3,
@@ -155,10 +155,17 @@ describe("applyTrailTick", () => {
     expect(applyTrailTick(state({ stoppedAt: at }), 2.1, later)).toEqual({});
   });
 
-  it("lifts the high, and fires at the level the high sets", () => {
+  it("lifts the high, and fires at or under the level the high sets, at the price seen", () => {
     expect(applyTrailTick(state({ trailHighPriceUsd: 2.1 }), 3, at)).toEqual({ trailHighPriceUsd: 3 });
     expect(applyTrailTick(state({ trailHighPriceUsd: 3 }), 2.1, at)).toEqual({});
-    expect(applyTrailTick(state({ trailHighPriceUsd: 3 }), 1.9, later)).toEqual({
+    // A gap through the level books the gap, not the level: a trader with a trailing stop at 1.95
+    // whose next print is 1.5 sold at 1.5.
+    expect(applyTrailTick(state({ trailHighPriceUsd: 3 }), 1.5, later)).toEqual({
+      trailExitAt: later,
+      trailExitPriceUsd: 1.5,
+    });
+    // A tick exactly at the level fills at the level.
+    expect(applyTrailTick(state({ trailHighPriceUsd: 3 }), 3 * 0.65, later)).toEqual({
       trailExitAt: later,
       trailExitPriceUsd: 3 * 0.65,
     });
@@ -185,7 +192,7 @@ describe("applyTrailTick", () => {
     expect(applyTrailTick(state({ trailHighPriceUsd: 12 }), 9.2, at, plan)).toEqual({});
     expect(applyTrailTick(state({ trailHighPriceUsd: 12 }), 8.9, at, plan)).toEqual({
       trailExitAt: at,
-      trailExitPriceUsd: 9,
+      trailExitPriceUsd: 8.9,
     });
   });
 });
