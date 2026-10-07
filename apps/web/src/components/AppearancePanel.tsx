@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Card, CardField } from "../api";
+import type { Card, CardField, QuickLink } from "../api";
 import {
   CARD_FIELD_GROUPS,
   DEFAULT_APPEARANCE,
   PRESETS,
+  QUICK_LINK_SITES,
   SWATCHES,
   feedGridProps,
   sameAppearance,
@@ -94,8 +95,19 @@ export function AppearanceControls() {
   const look = useAppearance();
   const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
   const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
+  const shown = (f: CardField) => !hidden.has(f) && (f !== "reasons" || look.reasons);
   const toggleField = (f: CardField) =>
-    setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });
+    f === "reasons"
+      ? // Opt-in: switching it on also unhides it, in case an older preset hid it.
+        setAppearance({ reasons: !shown(f), hidden: look.hidden.filter((x) => x !== f) })
+      : setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });
+  const toggleQuickLink = (id: QuickLink) =>
+    setAppearance({
+      // Kept in the listed order, so the card's links don't shuffle as they're switched.
+      quickLinks: QUICK_LINK_SITES.map((l) => l.id).filter((x) =>
+        x === id ? !look.quickLinks.includes(id) : look.quickLinks.includes(x),
+      ),
+    });
 
   return (
     <div className="appearance-controls">
@@ -248,7 +260,7 @@ export function AppearanceControls() {
               <h4>{g.title}</h4>
               {g.fields.map((f) => (
                 <label key={f.id} className="check">
-                  <input type="checkbox" checked={!hidden.has(f.id)} onChange={() => toggleField(f.id)} />
+                  <input type="checkbox" checked={shown(f.id)} onChange={() => toggleField(f.id)} />
                   {f.label}
                 </label>
               ))}
@@ -274,6 +286,19 @@ export function AppearanceControls() {
           />
           Color the score: red for the lowest 10% of recent alerts, green for the top 10%
         </label>
+        <div className="field-group">
+          <h4>Quick links</h4>
+          {QUICK_LINK_SITES.map((l) => (
+            <label key={l.id} className="check">
+              <input
+                type="checkbox"
+                checked={look.quickLinks.includes(l.id)}
+                onChange={() => toggleQuickLink(l.id)}
+              />
+              {l.id === "terminal" ? "Trading Terminal (Padre)" : l.label}
+            </label>
+          ))}
+        </div>
         {look.hidden.length > 0 && (
           <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
             Show everything

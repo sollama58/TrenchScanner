@@ -934,6 +934,9 @@ export type CardField =
   | "mint"
   | "links";
 
+/** Trading sites a card can link the token to (the API's QUICK_LINKS). */
+export type QuickLink = "terminal" | "axiom" | "gmgn";
+
 /** How the Live feed looks for this user (apps/api/src/feedAppearance.ts). */
 export interface FeedAppearance {
   theme: "auto" | "dark" | "light";
@@ -957,6 +960,10 @@ export interface FeedAppearance {
   volume: boolean;
   /** Color the Score tile red to green against recent alerts' scores; on by default. */
   scoreColor: boolean;
+  /** The model's reasons under a model call; off by default. */
+  reasons: boolean;
+  /** Trading sites each card links to; Padre's Trading Terminal by default. */
+  quickLinks: QuickLink[];
   hidden: CardField[];
 }
 

@@ -1264,6 +1264,11 @@ img.avatar {
   color: var(--ink);
   text-decoration: none;
 }
+/* Trading sites (Settings › Quick links) read as the card's main action. */
+.card-links a.trade {
+  color: var(--brand-ink);
+  font-weight: 600;
+}
 .card.compact .card-figures {
   grid-template-columns: 1fr 1fr 1fr;
 }

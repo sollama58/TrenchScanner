@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type CSSProperties } from "react";
-import { put, type CardField, type FeedAppearance } from "./api";
+import { put, type CardField, type FeedAppearance, type QuickLink } from "./api";
 
 /**
  * How the Live feed looks: theme, colors, spacing, columns and which card fields show. Saved to
@@ -25,8 +25,18 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   learningNote: true,
   volume: false,
   scoreColor: true,
+  reasons: false,
+  quickLinks: ["terminal"],
   hidden: [],
 };
+
+/** Trading sites a card can open the token in, as Settings lists them. */
+export const QUICK_LINK_SITES: { id: QuickLink; label: string; href: (mint: string) => string }[] = [
+  { id: "terminal", label: "Terminal", href: (m) => `https://trade.padre.gg/trade/solana/${m}` },
+  { id: "axiom", label: "Axiom", href: (m) => `https://axiom.trade/t/${m}` },
+  { id: "gmgn", label: "GMGN", href: (m) => `https://gmgn.ai/sol/token/${m}` },
+];
+const QUICK_LINK_IDS = new Set<string>(QUICK_LINK_SITES.map((l) => l.id));
 
 /** Every hideable card field, grouped as the Settings tab lists them. */
 export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label: string }[] }[] = [
@@ -74,12 +84,16 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
+// "reasons" is listed in the groups but is opt-in too (FeedAppearance.reasons).
 const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
 
-/** The card fields not to draw: the ones the user hid, plus the volume tiles unless switched on. */
-export function cardHideSet(look: Pick<FeedAppearance, "hidden" | "volume">): ReadonlySet<CardField> {
+/** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
+export function cardHideSet(
+  look: Pick<FeedAppearance, "hidden" | "volume" | "reasons">,
+): ReadonlySet<CardField> {
   const out = new Set<CardField>(look.hidden);
   if (!look.volume) out.add("vol");
+  if (!look.reasons) out.add("reasons");
   return out;
 }
 
@@ -90,7 +104,7 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
     id: "compact",
     label: "Compact",
     hint: "Tighter cards, more on screen",
-    look: { density: "compact", cardWidth: "narrow", textSize: 95, avatar: "small", hidden: ["reasons"] },
+    look: { density: "compact", cardWidth: "narrow", textSize: 95, avatar: "small" },
   },
   {
     id: "minimal",
@@ -98,18 +112,7 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
     hint: "Price boxes and the key wallet checks",
     look: {
       density: "compact",
-      hidden: [
-        "tokenName",
-        "calibrated",
-        "ath",
-        "score",
-        "holders",
-        "age",
-        "top10",
-        "snipers",
-        "reasons",
-        "mint",
-      ],
+      hidden: ["tokenName", "calibrated", "ath", "score", "holders", "age", "top10", "snipers", "mint"],
       learningNote: false,
     },
   },
@@ -129,7 +132,7 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
       phoneColumns: 2,
       textSize: 90,
       corners: "square",
-      hidden: ["tokenName", "reasons", "calibrated"],
+      hidden: ["tokenName", "calibrated"],
     },
   },
 ];
@@ -174,6 +177,14 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     learningNote: typeof r.learningNote === "boolean" ? r.learningNote : d.learningNote,
     volume: typeof r.volume === "boolean" ? r.volume : d.volume,
     scoreColor: typeof r.scoreColor === "boolean" ? r.scoreColor : d.scoreColor,
+    reasons: typeof r.reasons === "boolean" ? r.reasons : d.reasons,
+    quickLinks: Array.isArray(r.quickLinks)
+      ? [
+          ...new Set(
+            r.quickLinks.filter((l): l is QuickLink => typeof l === "string" && QUICK_LINK_IDS.has(l)),
+          ),
+        ]
+      : d.quickLinks,
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : [],
@@ -182,8 +193,8 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
 
 /** A preset applied on top of the default, keeping the user's theme and colors. */
 export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance>): FeedAppearance {
-  const { theme, accent, mine, win, loss } = current;
-  return normalizeAppearance({ ...DEFAULT_APPEARANCE, ...look, theme, accent, mine, win, loss });
+  const { theme, accent, mine, win, loss, quickLinks } = current;
+  return normalizeAppearance({ ...DEFAULT_APPEARANCE, ...look, theme, accent, mine, win, loss, quickLinks });
 }
 
 /** Whether two appearances look the same (hidden fields in any order). */

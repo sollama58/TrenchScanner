@@ -35,6 +35,9 @@ export const CARD_FIELDS = [
   "links",
 ] as const;
 
+/** Trading sites a card can link the token to (apps/web/src/appearance.ts has their URLs). */
+export const QUICK_LINKS = ["terminal", "axiom", "gmgn"] as const;
+
 /** A color the user picked, as #rrggbb; null keeps the theme's own. */
 const color = z
   .string()
@@ -69,6 +72,14 @@ export const feedAppearanceSchema = z
     volume: z.boolean().default(false),
     /** Color the Score tile red to green against recent alerts' scores; on by default. */
     scoreColor: z.boolean().default(true),
+    /** The model's reasons under a model call; hidden by default, as are accounts saved before it. */
+    reasons: z.boolean().default(false),
+    /** Trading sites each card links to, in this order; Padre's Trading Terminal by default. */
+    quickLinks: z
+      .array(z.enum(QUICK_LINKS))
+      .max(QUICK_LINKS.length)
+      .refine((l) => new Set(l).size === l.length, "quick links repeat")
+      .default(["terminal"]),
     /** Card fields not shown. */
     hidden: z
       .array(z.enum(CARD_FIELDS))
@@ -96,6 +107,8 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   learningNote: true,
   volume: false,
   scoreColor: true,
+  reasons: false,
+  quickLinks: ["terminal"],
   hidden: [],
 };
 
@@ -104,7 +117,7 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   const raw = typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(DEFAULT_FEED_APPEARANCE) as (keyof FeedAppearance)[]) {
-    if (key === "hidden") continue;
+    if (key === "hidden" || key === "quickLinks") continue;
     const parsed = feedAppearanceSchema.shape[key].safeParse(raw[key]);
     out[key] = parsed.success ? parsed.data : DEFAULT_FEED_APPEARANCE[key];
   }
@@ -113,5 +126,9 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   out.hidden = Array.isArray(raw.hidden)
     ? [...new Set(raw.hidden.filter((f): f is string => typeof f === "string" && known.has(f)))]
     : [];
+  const sites = new Set<string>(QUICK_LINKS);
+  out.quickLinks = Array.isArray(raw.quickLinks)
+    ? [...new Set(raw.quickLinks.filter((l): l is string => typeof l === "string" && sites.has(l)))]
+    : DEFAULT_FEED_APPEARANCE.quickLinks;
   return out as FeedAppearance;
 }
