@@ -153,7 +153,8 @@ describe.skipIf(!dbAvailable)("runCleanupJob: stale tokens vs the curated record
 
   it("keeps a token the AI reviewer has a verdict on", async () => {
     // Token -> AiReview is onDelete: Cascade too, and a "no buy" on a token no curator alerted is
-    // held by nothing else once its outcome row ages out.
+    // held by nothing else once its outcome row ages out. (The review itself is inside the
+    // outcome horizon here; the sweep that takes it past that is tested below.)
     const old = new Date(Date.now() - 400 * 86_400_000);
     const token = await prisma.token.create({
       data: { mintAddress: `${TAG}-reviewed-ancient`, firstSeenAt: old },
@@ -188,6 +189,69 @@ describe.skipIf(!dbAvailable)("runCleanupJob: stale tokens vs the curated record
     await runCleanupJob(env);
 
     expect(await prisma.token.findUnique({ where: { id: token.id } })).toBeNull();
+  });
+});
+
+/**
+ * The AI reviewer's ledger goes on the outcome horizon, and a token it alone was holding goes in
+ * the same run.
+ */
+describe.skipIf(!dbAvailable)("runCleanupJob: AI reviewer ledger", () => {
+  const TAG = "CleanupAiReviewTest";
+
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 3650,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 90,
+    STALE_TOKEN_RETENTION_DAYS: 90,
+  } as never;
+
+  beforeEach(async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  afterAll(async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  const review = (tokenId: string, createdAt: Date) =>
+    prisma.aiReview.create({
+      data: {
+        tokenId,
+        createdAt,
+        mode: "shadow",
+        model: "test",
+        decision: "no_buy",
+        latencyMs: 1,
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 100_000,
+      },
+    });
+
+  it("deletes reviews past the outcome horizon, in batches, and keeps the ones inside it", async () => {
+    const old = new Date(Date.now() - 400 * 86_400_000);
+    // Still being reviewed: the old verdicts go, the fresh one keeps the token.
+    const live = await prisma.token.create({
+      data: { mintAddress: `${TAG}-still-reviewed`, firstSeenAt: old },
+    });
+    await review(live.id, old);
+    await review(live.id, new Date(old.getTime() + 86_400_000));
+    await review(live.id, new Date(Date.now() - 86_400_000));
+    // Held by its reviews alone: once they are gone, the token sweep in the same run takes it.
+    const stale = await prisma.token.create({
+      data: { mintAddress: `${TAG}-only-old-reviews`, firstSeenAt: old },
+    });
+    await review(stale.id, old);
+    await review(stale.id, new Date(old.getTime() + 86_400_000));
+
+    // Four old rows at two a statement, so the loop's "fewer than a batch" exit is crossed.
+    const meta = await runCleanupJob(env, { rowsPerBatch: 2, pauseMs: 0 });
+
+    expect(meta.deletedAiReviews).toBe(4);
+    const kept = await prisma.aiReview.findMany({ where: { tokenId: live.id }, select: { createdAt: true } });
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.createdAt.getTime()).toBeGreaterThan(Date.now() - 2 * 86_400_000);
+    expect(await prisma.token.findUnique({ where: { id: live.id } })).not.toBeNull();
+    expect(await prisma.token.findUnique({ where: { id: stale.id } })).toBeNull();
   });
 });
 

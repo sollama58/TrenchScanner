@@ -59,6 +59,26 @@ describe("secondLookDue", () => {
     );
   });
 
+  it("measures newness by our own store time, not TokenSage's analyzedAt", () => {
+    // Analyzed (by TokenSage's clock) before our decision, but stored after it: the decision was
+    // made without the read, so a second look is due.
+    const storedLater = read({
+      analyzedAt: new Date("2026-10-07T09:50:00Z"),
+      checkedAt: new Date("2026-10-07T10:05:00Z"),
+    });
+    expect(
+      secondLookDue({ narrative: storedLater }, { lastDecisionAt: new Date("2026-10-07T10:00:00Z") }),
+    ).toBe(true);
+    // Stored before the decision - the decision already saw it, whatever TokenSage's clock says.
+    const storedEarlier = read({
+      analyzedAt: new Date("2026-10-07T10:30:00Z"),
+      checkedAt: new Date("2026-10-07T09:55:00Z"),
+    });
+    expect(
+      secondLookDue({ narrative: storedEarlier }, { lastDecisionAt: new Date("2026-10-07T10:00:00Z") }),
+    ).toBe(false);
+  });
+
   it("is never due without a dated deep read", () => {
     expect(secondLookDue({}, {})).toBe(false);
     expect(secondLookDue({ narrative: read({ depth: "basic" }) }, {})).toBe(false);

@@ -101,6 +101,8 @@ export class MatchStream {
   private readonly subscribers = new Set<Subscriber>();
   /** Work to run on this instance when a curated alert is announced - see onCuratedAlert. */
   private readonly curatedListeners = new Set<() => void>();
+  /** Work to run on this instance when a match is announced, given its user - see onMatch. */
+  private readonly matchListeners = new Set<(userId: string) => void>();
   private client: Client | undefined;
   private heartbeat: NodeJS.Timeout | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
@@ -253,6 +255,17 @@ export class MatchStream {
     }
     if (!notification?.userId || !notification.matchId) return;
 
+    // Before the nudge, for the same reason dispatchCurated() runs its listeners first: the
+    // client this wakes refetches at once, and must not be answered from a cache filled before
+    // the match existed.
+    for (const listener of this.matchListeners) {
+      try {
+        listener(notification.userId);
+      } catch (err) {
+        logger.warn("match notification listener failed", { error: String(err) });
+      }
+    }
+
     // Scoped to the owning user. A match belongs to one user's filter, and leaking another user's
     // alerts - even just their existence and timing - is not something a stream should ever do.
     const frame = `event: match\ndata: ${JSON.stringify({ matchId: notification.matchId })}\n\n`;
@@ -321,6 +334,12 @@ export class MatchStream {
   onCuratedAlert(listener: () => void): () => void {
     this.curatedListeners.add(listener);
     return () => this.curatedListeners.delete(listener);
+  }
+
+  /** As onCuratedAlert(), for a match: called with the user it belongs to, before their nudge. */
+  onMatch(listener: (userId: string) => void): () => void {
+    this.matchListeners.add(listener);
+    return () => this.matchListeners.delete(listener);
   }
 
   /** Same contract as subscribe(), for the broadcast curated feed - shares the same capacity cap. */

@@ -219,12 +219,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     // A browser session is only as good as the user's current sessionVersion: signing out bumps
     // it, so a copied cookie stops working everywhere at once instead of living out its TTL.
     // The feed settings ride along on the same row so the feeds don't look the user up again.
+    // The columns /auth/me returns ride along too: that route used to read the row again.
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { sessionVersion: true, ...SAVED_FEED_SELECT },
+      select: { sessionVersion: true, id: true, walletAddress: true, createdAt: true, ...SAVED_FEED_SELECT },
     });
     if (!user || user.sessionVersion !== (session.sessionVersion ?? 0)) return false;
     request.savedFeed = toSavedFeed(user);
+    request.sessionUser = { id: user.id, walletAddress: user.walletAddress, createdAt: user.createdAt };
     return true;
   }
 

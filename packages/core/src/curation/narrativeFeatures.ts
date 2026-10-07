@@ -222,7 +222,14 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
 export interface NarrativeRead {
   depth: "basic" | "full";
   status: "complete" | "partial";
+  /** When TokenSage says it analyzed the token - its clock. */
   analyzedAt: Date | null;
+  /**
+   * When the row was last written - our clock, comparable with everything else we stamp (the
+   * scan's secondLookDue measures it against the token's last decision moment). Absent on a read
+   * replayed from stored features.
+   */
+  checkedAt?: Date | null;
   categories: { label: string; confidence: number }[];
   referentLabel: string | null;
   referentKind: string | null;
@@ -268,6 +275,7 @@ export interface NarrativeRow {
   depth: string;
   status: string;
   analyzedAt: Date | null;
+  checkedAt?: Date | null;
   categories: unknown;
   referentLabel: string | null;
   referentKind: string | null;
@@ -313,6 +321,7 @@ export const NARRATIVE_ROW_SELECT = {
   depth: true,
   status: true,
   analyzedAt: true,
+  checkedAt: true,
   categories: true,
   referentLabel: true,
   referentKind: true,
@@ -373,6 +382,7 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     depth: row.depth === "full" ? "full" : "basic",
     status: row.status,
     analyzedAt: row.analyzedAt,
+    checkedAt: row.checkedAt ?? null,
     categories,
     referentLabel: row.referentLabel,
     referentKind: row.referentKind,

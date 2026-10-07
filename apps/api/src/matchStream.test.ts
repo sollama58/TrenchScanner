@@ -82,6 +82,27 @@ describe("MatchStream.dispatch", () => {
     expect(tabTwo.written).toHaveLength(1);
   });
 
+  it("tells match listeners which user's feed changed, before the nudge goes out", () => {
+    const s = stream();
+    const alice = sink();
+    const order: string[] = [];
+    s.subscribe("alice", {
+      ...alice.sink,
+      write(chunk, callback) {
+        order.push("frame");
+        return alice.sink.write(chunk, callback);
+      },
+    });
+    const stop = s.onMatch((userId) => order.push(`listener:${userId}`));
+    s.dispatch(notification("alice", "match-1"));
+    // The feed caches this clears must be empty by the time the client's refetch arrives.
+    expect(order).toEqual(["listener:alice", "frame"]);
+
+    stop();
+    s.dispatch(notification("alice", "match-2"));
+    expect(order).toEqual(["listener:alice", "frame", "frame"]);
+  });
+
   it("ignores an unparseable payload rather than throwing into the pg callback", () => {
     const s = stream();
     const alice = sink();

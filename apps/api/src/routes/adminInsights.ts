@@ -78,6 +78,8 @@ export interface OutcomeTally {
   won2x: number;
   won4x: number;
   won10x: number;
+  /** Calls whose 10x verdict is in: the 10x rate's denominator (a loss at 2x settles it). */
+  tenXGraded: number;
   /** Calls with a simulated return under the exit plan, and their sum (percent). */
   returnN: number;
   returnSum: number;
@@ -86,7 +88,17 @@ export interface OutcomeTally {
 export function tally(groups: Map<string, OutcomeTally>, label: string, row: AlertOutcomeRow) {
   let t = groups.get(label);
   if (!t) {
-    t = { label, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0, returnN: 0, returnSum: 0 };
+    t = {
+      label,
+      alerts: 0,
+      graded: 0,
+      won2x: 0,
+      won4x: 0,
+      won10x: 0,
+      tenXGraded: 0,
+      returnN: 0,
+      returnSum: 0,
+    };
     groups.set(label, t);
   }
   t.alerts += 1;
@@ -95,6 +107,7 @@ export function tally(groups: Map<string, OutcomeTally>, label: string, row: Ale
     if (row.hit2x) t.won2x += 1;
     if (row.hit4x) t.won4x += 1;
     if (row.hit10x) t.won10x += 1;
+    if (row.hit10x !== null || !row.hit2x) t.tenXGraded += 1;
   }
   if (row.sim_return !== null && row.sim_return !== undefined) {
     t.returnN += 1;

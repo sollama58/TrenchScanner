@@ -304,7 +304,9 @@ async function deleteExpiredSnapshots(
  *     to would silently destroy real match history. Rows of tokens nothing else points at (see
  *     untrackedTokenIds) go on the much shorter SNAPSHOT_UNTRACKED_RETENTION_HOURS when it is set.
  *  2. CandidateOutcome rows older than CANDIDATE_OUTCOME_RETENTION_DAYS - the curated-alerts
- *     training set, on its own deliberately-long horizon (see env.ts).
+ *     training set, on its own deliberately-long horizon (see env.ts) - and, on the same horizon,
+ *     the bench curator's shadow ledger and the AI reviewer's call ledger that are graded
+ *     against it.
  *  3. Token rows older than STALE_TOKEN_RETENTION_DAYS with nothing referencing them - mints that were added to the watchlist, never did anything
  *     interesting, and have long since aged off it (WATCHLIST_TTL_HOURS is much shorter than
  *     this). Safe to forget entirely.
@@ -457,6 +459,22 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     ),
   };
 
+  // The AI reviewer's ledger (AiReview, one row per judge call, each carrying the brief it was
+  // shown), on the same horizon for the same reason: it is graded against the outcome row it
+  // points at, and once that has been pruned the verdict can neither be scored nor replayed. Every
+  // reader (the stats panels, the AI blend fit, the veto cooldown) looks back far less than this.
+  // Before the token sweep below, so a token held only by its reviews goes in the same run.
+  const deletedAiReviews = {
+    count: await stage("aiReviews", 0, () =>
+      deleteInBatches(
+        `SELECT "id" FROM "AiReview" WHERE "createdAt" < $1`,
+        "AiReview",
+        [candidateOutcomeCutoff],
+        batch,
+      ),
+    ),
+  };
+
   // Old non-active curator models: one is minted every CURATOR_TRAINING_INTERVAL_HOURS (several a
   // day), so keep the recent history (which the learning panel and any postmortem want) and drop
   // the deep past. The active model is never touched here, whatever its age.
@@ -494,8 +512,9 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   //    public, self-grading track record (PLANNING 7b, /curated/stats) with it.
   //  - CuratedShadowEmission: pruned on its own horizon above, but only by age - a row still
   //    inside it must not be destroyed by a token sweep either.
-  //  - AiReview: the reviewer's ledger has no horizon of its own, and a "no buy" on a token no
-  //    curator alerted is held by nothing else once the token's outcome row ages out.
+  //  - AiReview: pruned on the outcome horizon above, but a "no buy" on a token no curator alerted
+  //    is held by nothing else once the token's outcome row ages out, so a row still inside that
+  //    horizon must keep its token too.
   const tokenCutoff = new Date(startedAt - env.STALE_TOKEN_RETENTION_DAYS * DAY_MS);
   const deletedTokens = { count: await stage("staleTokens", 0, () => deleteStaleTokens(tokenCutoff, batch)) };
 
@@ -597,6 +616,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedMatchOutcomes,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
+    deletedAiReviews: deletedAiReviews.count,
     deletedCuratorModels: deletedCuratorModels.count,
     strippedCuratorModels,
     deletedLinkCodes: deletedLinkCodes.count,

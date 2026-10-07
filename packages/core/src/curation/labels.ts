@@ -100,7 +100,8 @@ export const RUN_WEIGHT_PER_DOUBLING = 0.5;
  * laneStore.ts is the SQL twin of this): a clean winner counts the larger of its label (the clean
  * peak inside the label window) and its run peak when that is known; a loss that never fell
  * through the stop inside the label window (survived) counts its run peak if that reached 2x - a
- * late runner a holder still had; anything else is 0. Capped like the label.
+ * late runner a holder still had; anything else is 0. Capped like the label. The run peak is the
+ * 24h peak on live calls and the label window's peak on exam rows (TrainingRow.runPeakMultiple).
  */
 export function runDoublings(row: {
   labelValue: number;

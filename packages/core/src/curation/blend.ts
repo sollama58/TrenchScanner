@@ -11,7 +11,7 @@ import {
   type ServedCuratorExtras,
   type TrainingRow,
 } from "./trainer.js";
-import { addCall, quantileTable, rankFromQuantiles, type StackedMember } from "./stacking.js";
+import { addCall, examRecord, quantileTable, rankFromQuantiles, type StackedMember } from "./stacking.js";
 import type { CallRecord } from "./leaderboard.js";
 
 /**
@@ -160,7 +160,7 @@ export function examUnfittedScores(
     const spanMs = reference[end - 1]!.anchorAt.getTime() - reference[start]!.anchorAt.getTime();
     chunks.push({ indexes, spanHours: Math.max(1, spanMs / 3_600_000) });
   }
-  const exam: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
+  const exam = examRecord();
   for (const [k, chunk] of chunks.entries()) {
     const chunkStart = reference[chunk.indexes[0]!]!.anchorAt.getTime();
     const chunkEnd = reference[chunk.indexes[chunk.indexes.length - 1]!]!.anchorAt.getTime();
@@ -185,7 +185,7 @@ export function examUnfittedScores(
     )
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, budget);
-    for (const { row } of sent) addCall(exam, row.labelValue);
+    for (const { row } of sent) addCall(exam, row);
   }
   return { exam, examChunks: chunks.length };
 }

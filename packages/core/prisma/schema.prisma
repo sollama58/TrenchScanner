@@ -146,34 +146,34 @@ model UserFilter {
   mcapMin Float  @default(50000)
   mcapMax Float  @default(500000)
 
-  minVolumeMcapRatio       Float? // volume24h / marketCap, momentum signal
-  minHolderGrowthPct       Float? // % holder growth over the lookback window
+  minVolumeMcapRatio         Float? // volume24h / marketCap, momentum signal
+  minHolderGrowthPct         Float? // % holder growth over the lookback window
   // These four used to be part of the mandatory automatic rug screen (packages/core/src/scoring/
   // rugScreen.ts) - different users legitimately want different thresholds here, unlike mint/
   // freeze authority or LP lock, so they moved to being opt-in criteria instead. Unset (null/
   // false) means "don't check this," not "reject unless known" - see matchFilters.ts.
-  maxTop10HolderPct        Float? // top-10 holder concentration, %
-  maxDevWalletPct          Float? // creator's own holding, % (only if they rank in the top 10)
-  maxRiskScore             Float? // RugCheck's own composite risk score, 0-100 (higher = riskier)
-  excludeCriticalRiskFlags Boolean  @default(false) // e.g. "Creator history of rugged tokens"
+  maxTop10HolderPct          Float? // top-10 holder concentration, %
+  maxDevWalletPct            Float? // creator's own holding, % (only if they rank in the top 10)
+  maxRiskScore               Float? // RugCheck's own composite risk score, 0-100 (higher = riskier)
+  excludeCriticalRiskFlags   Boolean  @default(false) // e.g. "Creator history of rugged tokens"
   /// Float, not Int: people filtering the very freshest launches think in seconds, and 0.25 is
   /// how you say fifteen of them without inventing a second unit. See TokenSnapshot.ageMinutes,
   /// which carries matching precision - a fractional bound compared against a whole-minute age
   /// would quietly round away and do nothing.
-  minTokenAgeMinutes       Float?
-  maxTokenAgeMinutes       Float?
-  narrativeKeywords        String[] @default([])
-  minScore                 Float? // minimum composite score, 0-100
-  maxFreshTop10WalletPct   Float? // % of top-10 holders funded <24h ago (sniper/insider signal)
+  minTokenAgeMinutes         Float?
+  maxTokenAgeMinutes         Float?
+  narrativeKeywords          String[] @default([])
+  minScore                   Float? // minimum composite score, 0-100
+  maxFreshTop10WalletPct     Float? // % of top-10 holders funded <24h ago (sniper/insider signal)
   /// % of top-10 holders whose non-cash token holdings are worth less than
   /// WALLET_HOLDINGS_MIN_USD - wallets that exist only to hold this launch (see
   /// apps/worker/src/jobs/walletHoldings.ts). The substance counterpart to
   /// maxFreshTop10WalletPct's wallet-age test: a sniper farm can age its wallets, but funding
   /// each one with a real portfolio costs real money.
-  maxEmptyTop10WalletPct   Float?
+  maxEmptyTop10WalletPct     Float?
   /// Bounds on how many of the launch's first 25 buyers still hold it (TokenSnapshot.firstBuyersHolding).
-  minFirstBuyersHolding    Int?
-  maxFirstBuyersHolding    Int?
+  minFirstBuyersHolding      Int?
+  maxFirstBuyersHolding      Int?
   /// TokenSage narrative criteria (packages/core/src/scoring/matchFilters.ts): only / never these
   /// category labels, no copycats, no high-severity flags, no unrelated or spoofed X post, trend
   /// match required. All fail closed without a read.
@@ -196,11 +196,11 @@ model UserFilter {
 
   /// Opted in to the public filter leaderboard by its owner (off by default). The board shows the
   /// filter's name and settings, never the owner's wallet - see apps/api/src/filterLeaderboard.ts.
-  shareOnLeaderboard Boolean  @default(false)
+  shareOnLeaderboard Boolean   @default(false)
   /// When the matching criteria last changed (a name, active or sharing change doesn't count).
   /// The leaderboard record counts only alerts raised since, so it always belongs to the settings
   /// a copier would get. Filters from before 2026-10-05 start at createdAt.
-  criteriaChangedAt  DateTime @default(now())
+  criteriaChangedAt  DateTime  @default(now())
   /// The best leaderboard rank it ever held, written as the board is built (null: never ranked).
   bestRank           Int?
   /// Retired: its owner deleted it, but it had ranked in the board's top few, so its alert
@@ -230,42 +230,42 @@ model FilterBaseline {
 
 /// A distinct Solana token being tracked.
 model Token {
-  id              String    @id @default(cuid())
-  mintAddress     String    @unique
-  symbol          String?
-  name            String?
-  pairAddress     String? // primary DexScreener pair used for pricing
+  id                      String    @id @default(cuid())
+  mintAddress             String    @unique
+  symbol                  String?
+  name                    String?
+  pairAddress             String? // primary DexScreener pair used for pricing
   /// The token's logo, as hosted by DexScreener. Read from the pair response the scan already
   /// fetches rather than derived from the mint address: CDN URL shapes are undocumented and
   /// change, and a guessed one 404s silently for every mint that has no artwork - which is a lot
   /// of them. Null means DexScreener has no image, not that we failed to look.
-  imageUrl        String?
-  firstSeenAt     DateTime  @default(now())
-  hasTwitter      Boolean   @default(false)
-  hasTelegram     Boolean   @default(false)
-  hasWebsite      Boolean   @default(false)
+  imageUrl                String?
+  firstSeenAt             DateTime  @default(now())
+  hasTwitter              Boolean   @default(false)
+  hasTelegram             Boolean   @default(false)
+  hasWebsite              Boolean   @default(false)
   /// The launcher's X/Twitter and website links as found at discovery (Pump.fun's `twitter` /
   /// `website`, or DexScreener's profile links). Only https URLs are kept; a bare X handle is
   /// stored as its https://x.com/ URL. Null when the source had none. Kept so the AI reviewer,
   /// the cards and TokenSage (see TokenNarrative) can look at what the coin links to.
-  twitterUrl      String?
-  websiteUrl      String?
-  narrativeTags   String[]  @default([])
+  twitterUrl              String?
+  websiteUrl              String?
+  narrativeTags           String[]  @default([])
   /// The launcher-written description from Pump.fun, captured at discovery. Re-scans come from
   /// DexScreener, which has none, so this is the only copy - it feeds narrative tags and the AI
   /// reviewer's brief.
-  description     String?
+  description             String?
   /// Which discovery source first added the mint: "pumpfun", "pumpfun-active" (the
   /// recently-traded list), "pumpfun-koth" (king of the hill), "pumpportal" (live new-token
   /// stream) or "dexscreener". Null for rows added before this was recorded.
-  discoverySource String?
+  discoverySource         String?
   /// Whether the mint has ever appeared on DexScreener's paid-boost feed. Sticky (false -> true
   /// only); a model feature, so the learner can say whether a paid boost helps or hurts.
-  dexBoosted      Boolean   @default(false)
+  dexBoosted              Boolean   @default(false)
   /// The first scan that saw the mint inside the curated mcap band. Feeds the
   /// minutesSinceFirstInBand feature: a token that entered the band hours ago and is still
   /// there is a different bet from one arriving now.
-  firstInBandAt   DateTime?
+  firstInBandAt           DateTime?
   /// The newest top-10 empty-wallet and fresh-wallet shares any scan measured, kept here because
   /// the wallet checks are rationed: a card whose alert snapshot and newest snapshot both lack a
   /// reading still shows the last one known. Written only when it changes. Null = never measured.
@@ -274,8 +274,8 @@ model Token {
   /// Claude's read of the launcher-written text (name, symbol, description), scored once per mint
   /// by apps/worker/src/ai/textScorer.ts - a TextScores object (curation/textFeatures.ts). These
   /// become model features, so the learners decide how much the read is worth. Null until scored.
-  aiTextScores    Json?
-  aiTextScoredAt  DateTime?
+  aiTextScores            Json?
+  aiTextScoredAt          DateTime?
 
   // Stamped by GET /matches (see apps/api/src/routes/matches.ts) whenever this token appears on
   // a page someone actually fetched - not per-user, just "is anyone currently looking at this."
@@ -398,6 +398,14 @@ model CuratedAlert {
   outcomeFinalizedAt DateTime?
   /// Copy of CandidateOutcome.simReturnPct: the call's return under the fixed exit plan.
   simReturnPct       Float?
+
+  /// The Narrative seat's view of a coin another seat already called: "agrees" when its deep
+  /// read would have called it too, "warns" when it would not. The seat decides when TokenSage's
+  /// deep read lands, usually after the call went out, and instead of a second card it leaves
+  /// this note on the one already showing (decided 2026-10-07). Null until the deep read decides,
+  /// and on the Narrative seat's own calls.
+  narrativeVerdict String?
+  narrativeNotedAt DateTime?
 
   aiReviews AiReview[]
 
@@ -666,25 +674,25 @@ model CandidateOutcome {
   // ---- Running aggregates, initialized to the anchor price at creation ----
   /// Highest price seen within the label window (30 minutes since 2026-10-05, 1 hour before; the
   /// "1h" in this and the other column names predates the change).
-  peak1hPriceUsd         Float
-  peak1hAt               DateTime?
+  peak1hPriceUsd            Float
+  peak1hAt                  DateTime?
   /// Lowest price seen within the label window - the worst drawdown a buyer at the anchor endured.
-  low1hPriceUsd          Float
+  low1hPriceUsd             Float
   /// Lowest price seen BEFORE the first observed 2x - frozen the tick the price first reaches
   /// 2x the anchor. This is what decides disqualification: a token that dropped 50%+ and then
   /// "2x'd from the bottom" stopped out anyone who actually bought the alert.
-  lowBefore2xPriceUsd    Float
+  lowBefore2xPriceUsd       Float
   /// First tick at which price >= 2x anchor was observed, anywhere inside the label window. The
   /// WIN test is this landing inside the 15-minute win window (see curation/labels.ts).
-  hit2xAt                DateTime?
+  hit2xAt                   DateTime?
   /// Highest price seen over the whole watch (up to 24h for extended rows).
-  peak24hPriceUsd        Float
-  peak24hAt              DateTime?
+  peak24hPriceUsd           Float
+  peak24hAt                 DateTime?
   /// The label window's highest price before it first fell to the stop, frozen at that moment -
   /// what the 4x and labelValue are graded on (see cleanPeakPriceUsd in curation/labels.ts). Null
   /// on rows from before it was tracked.
-  peakBeforeStopPriceUsd Float?
-  stoppedAt              DateTime?
+  peakBeforeStopPriceUsd    Float?
+  stoppedAt                 DateTime?
   /// The same pair over the 10x tier's hour (60 minutes from the alert): the 10x is graded on
   /// this. Null on rows from before the tier existed (2026-10-06), which are never graded for it.
   peakBeforeStop60mPriceUsd Float?
@@ -1083,38 +1091,38 @@ model RugCheckCache {
 /// `status` "failed" with a null `analysis` caches a definitive answer (unknown mint, not a token)
 /// so it is not re-requested every cycle. Transport failures are never written here.
 model TokenNarrative {
-  mintAddress     String   @id
-  depth           String
-  status          String
+  mintAddress        String    @id
+  depth              String
+  status             String
   /// Top-level and sub-category labels with confidences, e.g. [{"label":"animal/dog","confidence":0.9}].
-  categories      Json?
-  referentLabel   String?
-  referentKind    String?
-  summary         String?
+  categories         Json?
+  referentLabel      String?
+  referentKind       String?
+  summary            String?
   /// Flag codes, e.g. ["copycat","x_link_reused"].
-  flags           String[] @default([])
+  flags              String[]  @default([])
   /// How well the linked X post/profile matches the token (TokenSage's x.match, full depth):
   /// fit 0-1 and verdict "about_this_coin" / "related" / "unrelated". Null when not read or
   /// "unknown" (nothing fetched), which is missing data, not a mismatch.
-  xFit            Float?
-  xVerdict        String?
+  xFit               Float?
+  xVerdict           String?
   /// referent.confidence and referent.supported_by (the inputs pointing at it, e.g. ["name","x"]).
   referentConfidence Float?
-  referentSupport String[] @default([])
+  referentSupport    String[]  @default([])
   /// market.pair: what the coin trades against ("sol", "stablecoin", "token", "tokenized_stock", ...).
-  pairKind        String?
-  pairSymbol      String?
+  pairKind           String?
+  pairSymbol         String?
   /// Copies a coin launched in the last 30 days (copy_of[].recent). Null on analyses from before
   /// TokenSage rules 0.10.0, which didn't say.
-  copiesRecent    Boolean?
+  copiesRecent       Boolean?
   /// The linked X post, when the full read opened it (x.status "ok"): how it relates to the coin
   /// ("launch_announcement", "official_account", "narrative_reference", "spoofed", ...), its
   /// author's followers, how many seconds it predates the token, and how many other coins link
   /// the same post. All null when the post was not read.
-  xRelation       String?
-  xAuthorFollowers Int?
-  xPredatesTokenS Int?
-  xReuseCount     Int?
+  xRelation          String?
+  xAuthorFollowers   Int?
+  xPredatesTokenS    Int?
+  xReuseCount        Int?
   /// The name matched a Wikipedia/news spike (trend.matched, full depth); null until read.
   trendMatched    Boolean?
   /// TokenSage rules 0.15.0+: which copy of what this coin is (lineage.kind "original",
@@ -1148,14 +1156,14 @@ model TokenNarrative {
   /// Strength of the trend hit (trend.score 0-1); null until read or on older rules.
   trendScore      Float?
   /// Flags by severity, so the models and score need no catalogue of codes.
-  highFlagCount   Int      @default(0)
-  warnFlagCount   Int      @default(0)
+  highFlagCount      Int       @default(0)
+  warnFlagCount      Int       @default(0)
   /// Why the analysis failed, on status "failed" rows.
-  failReason      String?
-  rulesVersion    String?
-  analysis        Json?
-  analyzedAt      DateTime?
-  checkedAt       DateTime @default(now())
+  failReason         String?
+  rulesVersion       String?
+  analysis           Json?
+  analyzedAt         DateTime?
+  checkedAt          DateTime  @default(now())
 
   @@index([checkedAt])
 }
@@ -1196,14 +1204,16 @@ model LighthouseHour {
   trendAnswered         Int   @default(0)
 
   /// The models' calls (CuratedAlert) made in the hour, and how they graded.
-  alerts          Int   @default(0)
-  alertsDescribed Int   @default(0)
-  alertsGraded    Int   @default(0)
-  alertsWon2x     Int   @default(0)
-  alertsWon4x     Int   @default(0)
-  alertsWon10x    Int   @default(0)
-  alertsReturnN   Int   @default(0)
-  alertsReturnSum Float @default(0)
+  alerts           Int   @default(0)
+  alertsDescribed  Int   @default(0)
+  alertsGraded     Int   @default(0)
+  alertsWon2x      Int   @default(0)
+  alertsWon4x      Int   @default(0)
+  alertsWon10x     Int   @default(0)
+  /// Calls whose 10x verdict is in (a loss at 2x settles it at once): the 10x rate's denominator.
+  alertsTenXGraded Int   @default(0)
+  alertsReturnN    Int   @default(0)
+  alertsReturnSum  Float @default(0)
 
   computedAt DateTime @default(now())
 }
@@ -1212,19 +1222,20 @@ model LighthouseHour {
 /// narrative, flag, referent kind and so on, and how the models' calls on those coins graded.
 /// Same rollup and the same keep-for-good rule as LighthouseHour.
 model LighthouseDayLabel {
-  day       DateTime
+  day        DateTime
   /// "category" (the top-level narrative each coin is surest of, one per coin), "subcategory",
   /// "flag", "referentKind", "referentSupport", "xVerdict", "pairKind", "copy", "news".
-  dimension String
-  label     String
+  dimension  String
+  label      String
   /// Coins read under the label that day.
-  count     Int    @default(0)
+  count      Int      @default(0)
   /// Model calls on coins carrying the label, and how they graded.
-  alerts    Int    @default(0)
-  graded    Int    @default(0)
-  won2x     Int    @default(0)
-  won4x     Int    @default(0)
-  won10x    Int    @default(0)
+  alerts     Int      @default(0)
+  graded     Int      @default(0)
+  won2x      Int      @default(0)
+  won4x      Int      @default(0)
+  won10x     Int      @default(0)
+  tenXGraded Int      @default(0)
 
   @@id([day, dimension, label])
 }
@@ -1292,8 +1303,10 @@ model BurnEvent {
   slot      BigInt
   blockTime DateTime?
 
-  /// The `authority` on the burn instruction - the wallet that signed the burn away. This, not
-  /// "some signer on the transaction", is who the month belongs to.
+  /// The wallet whose tokens were burned: the owner of the token account on the burn instruction
+  /// (its `authority` when the transaction carries no token balances to resolve the owner from).
+  /// A delegate may sign the burn, but the tokens were the owner's, so the month is theirs
+  /// (decided 2026-10-07).
   burnerWallet String
   mint         String
 
@@ -1395,27 +1408,27 @@ model AiPlaybook {
 /// Batches API: either a "baseline" run of the active playbook (to give it a record to learn
 /// from) or an "evolution" run that pits candidate playbooks against it on the same alerts.
 model AiReplayRun {
-  id           String    @id @default(cuid())
+  id               String    @id @default(cuid())
   /// "baseline" | "evolution"
-  purpose      String
+  purpose          String
   /// "submitted" | "scored" | "failed"
-  status       String
-  batchId      String?
-  model        String
+  status           String
+  batchId          String?
+  model            String
   /// The playbooks replayed, in custom_id order.
-  playbookIds  String[]
-  windowStart  DateTime
-  windowEnd    DateTime
-  requestCount Int
+  playbookIds      String[]
+  windowStart      DateTime
+  windowEnd        DateTime
+  requestCount     Int
   /// What the run was expected to cost when it was submitted (charged to the daily AI budget then),
   /// and what its results actually cost once they came back (the budget is trued up to this).
   estimatedCostUsd Float?
   costUsd          Float?
-  createdAt    DateTime  @default(now())
-  scoredAt     DateTime?
+  createdAt        DateTime  @default(now())
+  scoredAt         DateTime?
   /// Per-playbook JudgeRecordSummary, keyed by playbook id.
-  metrics      Json?
-  error        String?
+  metrics          Json?
+  error            String?
 
   verdicts AiReplayVerdict[]
 

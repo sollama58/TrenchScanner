@@ -273,6 +273,47 @@ describe.skipIf(!dbAvailable)("model backups", () => {
     expect(await prisma.modelBackup.count({ where: { pinned: true } })).toBe(1);
   });
 
+  it("caps manual, pre-restore and imported backups by count as well as by age", async () => {
+    // A restore writes a pre-restore row every time and "back up now" is one click, so without
+    // a cap a busy admin's week would hold the full payload dozens of times over inside the 90
+    // days. Each kind has its own cap, and pinned rows and weekly rows are outside it.
+    await seedGeneration(0.25, "Linear");
+    const seed = async (
+      kind: "manual" | "pre-restore" | "imported" | "weekly",
+      daysAgo: number,
+      pinned = false,
+    ) => {
+      const b = (await saveModelBackup(kind))!;
+      await prisma.modelBackup.update({
+        where: { id: b.id },
+        data: { createdAt: new Date(Date.now() - daysAgo * 86_400_000), pinned },
+      });
+      return b.id;
+    };
+    // 23 manual backups, newest first, the oldest of them pinned; two pre-restore rows, one past
+    // the age horizon; a couple of weekly rows well inside their count.
+    const manual: string[] = [];
+    for (let i = 0; i < 23; i++) manual.push(await seed("manual", i, i === 22));
+    const preRestoreRecent = await seed("pre-restore", 1);
+    const preRestoreAncient = await seed("pre-restore", 91);
+    await seed("weekly", 0);
+    await seed("weekly", 7);
+
+    // Two unpinned manual rows past the newest 20, plus the pre-restore row past 90 days.
+    expect(await pruneModelBackups(12)).toBe(3);
+    const left = new Set((await prisma.modelBackup.findMany({ select: { id: true } })).map((r) => r.id));
+    for (const id of manual.slice(0, 20)) expect(left.has(id)).toBe(true);
+    expect(left.has(manual[20]!)).toBe(false);
+    expect(left.has(manual[21]!)).toBe(false);
+    // The pinned one is the oldest, and stays.
+    expect(left.has(manual[22]!)).toBe(true);
+    expect(left.has(preRestoreRecent)).toBe(true);
+    expect(left.has(preRestoreAncient)).toBe(false);
+    expect(await prisma.modelBackup.count({ where: { kind: "weekly" } })).toBe(2);
+    // Running it again finds nothing more to do.
+    expect(await pruneModelBackups(12)).toBe(0);
+  });
+
   it("copies new backups off-site when a bucket is configured, and records a failure for retry", async () => {
     await seedGeneration(0.25, "Linear");
     const backup = (await saveModelBackup("manual"))!;

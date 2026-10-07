@@ -1,13 +1,13 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   prisma,
   type RugCheckClient,
   type RugCheckProfile,
   type RugCheckProfileResult,
 } from "@trenchscanner/core";
-import { resolveRugProfiles, settleRugCheckRefresh } from "./rugCheckProfiles.js";
+import { resetRugCheckBackoff, resolveRugProfiles, settleRugCheckRefresh } from "./rugCheckProfiles.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -47,6 +47,7 @@ function fakeClient(answers: Record<string, RugCheckProfileResult>) {
 
 describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
   beforeEach(async () => {
+    resetRugCheckBackoff();
     await prisma.rugCheckCache.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
   afterAll(async () => {
@@ -126,18 +127,47 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("never caches a failed lookup", async () => {
+  it("never caches a failed lookup, but holds the mint off for an escalating minute or few", async () => {
     // A cached transport blip would keep the token out of every user's feed for the whole TTL -
     // the rug screen fails closed on missing data, so the error would be silent and expensive.
-    const a = mint("flaky");
-    const { client, calls } = fakeClient({ [a]: { status: "failed" } });
+    // Held off in process instead, briefly, so a mint RugCheck keeps choking on is not asked
+    // again every cycle ahead of the stale refreshes.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const a = mint("flaky");
+      const answers: Record<string, RugCheckProfileResult> = { [a]: { status: "failed" } };
+      const { client, calls } = fakeClient(answers);
 
-    const first = await resolveRugProfiles([a], client, 5);
-    expect(first.stats).toMatchObject({ fetched: 0, failed: 1 });
-    expect(await prisma.rugCheckCache.findUnique({ where: { mintAddress: a } })).toBeNull();
+      const first = await resolveRugProfiles([a], client, 5);
+      expect(first.stats).toMatchObject({ fetched: 0, failed: 1 });
+      expect(await prisma.rugCheckCache.findUnique({ where: { mintAddress: a } })).toBeNull();
 
-    await resolveRugProfiles([a], client, 5);
-    expect(calls).toHaveLength(2); // retried immediately, not held off for the TTL
+      // The next cycle: held off, counted as failed, nothing sent.
+      const second = await resolveRugProfiles([a], client, 5);
+      expect(second.stats).toMatchObject({ fetched: 0, failed: 1, heldOff: 1 });
+      expect(calls).toHaveLength(1);
+
+      // A minute on: tried again; it fails again, and the wait doubles.
+      vi.setSystemTime(Date.now() + 61_000);
+      await resolveRugProfiles([a], client, 5);
+      expect(calls).toHaveLength(2);
+      vi.setSystemTime(Date.now() + 61_000);
+      await resolveRugProfiles([a], client, 5);
+      expect(calls).toHaveLength(2);
+      vi.setSystemTime(Date.now() + 61_000);
+      answers[a] = { status: "found", profile: profile(a, 7) };
+      const answered = await resolveRugProfiles([a], client, 5);
+      expect(calls).toHaveLength(3);
+      expect(answered.profiles.get(a)?.holderCount).toBe(7);
+
+      // A real answer clears the hold: a later miss (the TTL lapsed) goes straight out.
+      await prisma.rugCheckCache.deleteMany({ where: { mintAddress: a } });
+      answers[a] = { status: "failed" };
+      await resolveRugProfiles([a], client, 5);
+      expect(calls).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("only fetches the mints that are actually stale", async () => {

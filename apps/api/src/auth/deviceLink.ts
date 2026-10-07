@@ -61,25 +61,36 @@ export type RedeemResult =
  * expired is not something a caller needs to know, and saying so distinguishes "never existed"
  * from "existed and was spent".
  */
-export async function redeemLinkCode(code: string, userAgent?: string): Promise<RedeemResult> {
+export async function redeemLinkCode(
+  code: string,
+  userAgent?: string,
+  /** Test seam: the client whose transaction the pairing runs in. */
+  db: Pick<typeof prisma, "$transaction"> = prisma,
+): Promise<RedeemResult> {
   if (!/^[a-f0-9]{64}$/.test(code)) return { ok: false };
 
-  const claimed = await prisma.mobileLinkCode.updateMany({
-    where: { codeHash: hashCode(code), claimedAt: null, expiresAt: { gt: new Date() } },
-    data: { claimedAt: new Date() },
-  });
-  if (claimed.count !== 1) return { ok: false };
+  // One transaction: the claim, the re-read and the device row commit together or not at all.
+  // Three separate statements consumed the code on a failed device create (a pool timeout, a
+  // database blip) and left the phone with nothing - the user then had to go back to the desktop
+  // for a fresh QR, when the honest outcome is "that scan failed, scan again".
+  return db.$transaction(async (tx) => {
+    const claimed = await tx.mobileLinkCode.updateMany({
+      where: { codeHash: hashCode(code), claimedAt: null, expiresAt: { gt: new Date() } },
+      data: { claimedAt: new Date() },
+    });
+    if (claimed.count !== 1) return { ok: false };
 
-  const row = await prisma.mobileLinkCode.findUnique({
-    where: { codeHash: hashCode(code) },
-    include: { user: { select: { id: true, walletAddress: true } } },
-  });
-  if (!row) return { ok: false };
+    const row = await tx.mobileLinkCode.findUnique({
+      where: { codeHash: hashCode(code) },
+      include: { user: { select: { id: true, walletAddress: true } } },
+    });
+    if (!row) return { ok: false };
 
-  const device = await prisma.linkedDevice.create({
-    data: { userId: row.userId, userAgent: userAgent?.slice(0, 300) ?? null },
+    const device = await tx.linkedDevice.create({
+      data: { userId: row.userId, userAgent: userAgent?.slice(0, 300) ?? null },
+    });
+    return { ok: true, userId: row.user.id, walletAddress: row.user.walletAddress, deviceId: device.id };
   });
-  return { ok: true, userId: row.user.id, walletAddress: row.user.walletAddress, deviceId: device.id };
 }
 
 /**

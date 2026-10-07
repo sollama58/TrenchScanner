@@ -28,6 +28,7 @@ import {
   AGREEMENT_MODEL_KIND,
   calibratedWinRate,
   RULES_CONTESTANT,
+  NARRATIVE_CONTESTANT,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
   BLEND_MODEL_KIND,
@@ -578,6 +579,13 @@ export async function collectCuratedContender(
 
   const roster = await curatorRoster(env);
   const decisions = decideCurations(scored, roster, env, population);
+  const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
+  const narrative = decisions.get(NARRATIVE_CONTESTANT);
+  if (narrative && retry === undefined && (await noteNarrativeVerdict(token.id, narrative, cooldownCutoff))) {
+    // Another seat's card is already showing this coin: the Narrative seat's view went onto it
+    // as a note, so it files no call of its own (a second card on one coin was decided against).
+    decisions.delete(NARRATIVE_CONTESTANT);
+  }
   const calling = [...decisions.entries()].filter(
     ([model, d]) => d.curate && (retry === undefined || retry.models.includes(model)),
   );
@@ -585,7 +593,6 @@ export async function collectCuratedContender(
 
   // The per-token cooldown is per ledger: one contestant having called this token says nothing
   // about whether another may.
-  const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
   const recent = await prisma.curatedAlert.findMany({
     where: { tokenId: token.id, createdAt: { gt: cooldownCutoff }, model: { in: calling.map(([m]) => m) } },
     select: { model: true },
@@ -606,6 +613,41 @@ export async function collectCuratedContender(
       retryUntil: retry?.until,
     });
   }
+}
+
+/**
+ * The Narrative seat decides when TokenSage's deep read lands, usually after another seat has
+ * already called the coin. Rather than a second card inside the cooldown, its verdict goes onto
+ * the cards already out: "agrees" when it would have called the coin too, "warns" when it would
+ * not. A card is noted once, by the first deep read to decide; the Narrative seat's own calls
+ * carry no note. Returns true when at least one other seat's card was showing (noted now or
+ * earlier), which is when the seat stays off its own ledger for this coin.
+ */
+async function noteNarrativeVerdict(
+  tokenId: string,
+  decision: CurationDecision,
+  cooldownCutoff: Date,
+): Promise<boolean> {
+  const others = await prisma.curatedAlert.findMany({
+    where: { tokenId, createdAt: { gt: cooldownCutoff }, NOT: { model: NARRATIVE_CONTESTANT } },
+    select: { id: true, narrativeVerdict: true },
+  });
+  if (others.length === 0) return false;
+  const unnoted = others.filter((a) => a.narrativeVerdict === null).map((a) => a.id);
+  if (unnoted.length > 0) {
+    const verdict = decision.curate ? "agrees" : "warns";
+    await prisma.curatedAlert.updateMany({
+      where: { id: { in: unnoted }, narrativeVerdict: null },
+      data: { narrativeVerdict: verdict, narrativeNotedAt: new Date() },
+    });
+    logger.info("narrative seat noted another seat's card", {
+      tokenId,
+      verdict,
+      cards: unnoted.length,
+      confidence: Math.round(decision.confidence),
+    });
+  }
+  return true;
 }
 
 /**
@@ -842,22 +884,52 @@ async function emitCuratedAlert(
   }
   if (!anchor) return null;
 
-  const alert = await prisma.curatedAlert.create({
-    data: {
-      tokenId: token.id,
-      candidateOutcomeId: anchor.id,
-      snapshotId: pick.snapshotId ?? null,
-      model,
-      modelName,
-      source: decision.source,
-      confidence: decision.confidence,
-      tier: decision.tier ?? null,
-      calibratedPct: decision.calibratedPct ?? null,
-      reasons: decision.reasons,
-      anchorPriceUsd: scored.priceUsd,
-      anchorMcapUsd: scored.marketCapUsd,
+  // The per-ledger cooldown was read when the contender was collected, a governor pass (and in
+  // gate mode an AI review) ago, with nothing holding it. One process is the normal case, but a
+  // deploy runs the old scanner and the new one side by side for a minute, and both collecting
+  // the same token in the same cycle would both read "no recent call" and both file it. So the
+  // cooldown is re-checked here, under a per-token advisory lock, in the same transaction as
+  // the create: the second process finds the first's row and stands down. Transaction-scoped,
+  // so the lock releases on commit or rollback with no cleanup path to get wrong.
+  const anchored = anchor;
+  const alert = await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"curated:" + token.id}))`;
+      const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
+      const recent = await tx.curatedAlert.findFirst({
+        where: { tokenId: token.id, model, createdAt: { gt: cooldownCutoff } },
+        select: { id: true },
+      });
+      if (recent) return null;
+      return tx.curatedAlert.create({
+        data: {
+          tokenId: token.id,
+          candidateOutcomeId: anchored.id,
+          snapshotId: pick.snapshotId ?? null,
+          model,
+          modelName,
+          source: decision.source,
+          confidence: decision.confidence,
+          tier: decision.tier ?? null,
+          calibratedPct: decision.calibratedPct ?? null,
+          reasons: decision.reasons,
+          anchorPriceUsd: scored.priceUsd,
+          anchorMcapUsd: scored.marketCapUsd,
+        },
+      });
     },
-  });
+    // Same posture as createMatchesForTargets: this runs behind the scan's candidate fan-out,
+    // and a pool timeout here would defer a pick the curator already vouched for.
+    { maxWait: 10_000, timeout: 15_000 },
+  );
+  if (!alert) {
+    logger.info("curated alert already emitted by another process", {
+      model,
+      mint: token.mintAddress,
+      symbol: scored.symbol,
+    });
+    return null;
+  }
   // After the create, never before - same contract as notifyMatchCreated: the row must exist by
   // the time a connected dashboard reacts to the nudge. Failure is its own logged non-event.
   await notifyCuratedAlert({ alertId: alert.id, model });

@@ -59,6 +59,8 @@ export interface LighthouseTally {
   won2x: number;
   won4x: number;
   won10x: number;
+  /** Calls whose 10x verdict is in: the 10x rate's denominator. */
+  tenXGraded: number;
   /** Calls with a simulated return under the exit plan, and their sum (percent). */
   returnN: number;
   returnSum: number;
@@ -71,6 +73,7 @@ const slimTally = (t: OutcomeTally): LighthouseTally => ({
   won2x: t.won2x,
   won4x: t.won4x,
   won10x: t.won10x,
+  tenXGraded: t.tenXGraded,
   returnN: t.returnN,
   returnSum: t.returnSum,
 });

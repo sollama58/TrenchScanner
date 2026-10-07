@@ -109,6 +109,9 @@ describe("trainAgreementCurator", () => {
     expect(curve[1]!.rows).toBeGreaterThan(0);
     expect(curve[1]!.wins / curve[1]!.rows).toBeGreaterThan(curve[0]!.wins / curve[0]!.rows);
     expect(result!.examChunks).toBeGreaterThan(0);
+    // Synthetic rows carry no 10x verdict, so only the losses settle the 10x tier.
+    expect(result!.exam.tenXGraded).toBe(result!.exam.graded - result!.exam.wins);
+    expect(result!.exam.sumRun).toBeGreaterThanOrEqual(result!.exam.sumLabel - 1e-9);
     expect(result!.outOfSample).toHaveLength(reference.length);
     for (const c of result!.outOfSample) expect(c.probability).toBeLessThan(1);
   });

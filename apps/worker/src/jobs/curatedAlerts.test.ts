@@ -24,6 +24,7 @@ import {
   takeContenderRetry,
 } from "./curatedAlerts.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
+import type { NarrativeRead } from "@trenchscanner/core";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -194,6 +195,21 @@ describe.skipIf(!dbAvailable)("curated alert emission", () => {
     });
     expect(await collectAndEmit(env, token, scored, null)).toBe(true);
     expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(2);
+  });
+
+  it("lets only one of two processes emitting the same token in one cycle file it", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-two-procs` } });
+    const scored = curatableFixture(token.mintAddress);
+    const sample = await recordCandidateSample(token.id, scored, env);
+
+    // Two scanners (a deploy's old and new process) collect the token in the same cycle: both
+    // read an empty cooldown before either has written. The locked re-check at emission is what
+    // keeps the second one from filing a duplicate call.
+    const cycles = [newCuratedCycle(), newCuratedCycle()];
+    for (const cycle of cycles) await collectCuratedContender(cycle, token, scored, sample, env);
+    const emitted = await Promise.all(cycles.map((cycle) => emitCuratedCycle(cycle, env)));
+    expect(emitted.reduce((a, b) => a + b, 0)).toBe(1);
+    expect(await prisma.curatedAlert.count({ where: { tokenId: token.id } })).toBe(1);
   });
 
   it("never curates outside the mcap band, however good the candidate looks", async () => {
@@ -465,6 +481,95 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     await collectCuratedContender(cycle, token, scored, null, env);
     expect([...cycle.byModel.keys()]).toEqual(["linear"]);
     expect(await emitCuratedCycle(cycle, env)).toBe(1);
+  });
+
+  it("the Narrative seat notes a card another seat already called instead of a second alert", async () => {
+    const withNarrative = { ...env, CURATOR_CONTESTANTS: [...env.CURATOR_CONTESTANTS, "narrative"] };
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-narrative-note` } });
+    const scored = curatableFixture(token.mintAddress);
+    // Rules calls it on the basic read, alone.
+    expect(await collectAndEmit(withNarrative, token, scored, null)).toBe(true);
+    // The deep read lands and the Narrative seat (trained to say yes) decides.
+    await activeModel("narrative", CURATOR_MODEL_KIND, alwaysYesParams());
+    resetCuratorModelCache();
+    await freeGovernorBudget();
+    const deep: NarrativeRead = {
+      depth: "full",
+      status: "complete",
+      analyzedAt: new Date(),
+      checkedAt: new Date(),
+      categories: [],
+      referentLabel: null,
+      referentKind: null,
+      referentConfidence: null,
+      referentSupport: [],
+      flags: [],
+      highFlagCount: 0,
+      warnFlagCount: 0,
+      copiesRecent: null,
+      xFit: null,
+      xVerdict: null,
+      xRelation: null,
+      xAuthorFollowers: null,
+      xPredatesTokenS: null,
+      xReuseCount: null,
+      trendMatched: null,
+      lineageKind: null,
+      lineageRank: null,
+      lineageRankOf: null,
+      lineageOfMint: null,
+      originalAgeS: null,
+      originalCurveProgress: null,
+      originalComplete: null,
+      siblings1h: null,
+      siblings6h: null,
+      siblings24h: null,
+      logoReuse24h: null,
+      waveLaunches1h: null,
+      waveLaunches6h: null,
+      waveLaunches24h: null,
+      waveRank24h: null,
+      topCategoryInputs: null,
+      xCredibility: null,
+      xAccountAgeS: null,
+      xAccountMadeForCoin: null,
+      xReuseRank: null,
+      trendScore: null,
+    };
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(
+      cycle,
+      token,
+      { ...scored, narrative: deep },
+      null,
+      withNarrative,
+      undefined,
+      undefined,
+      "second",
+    );
+    expect([...cycle.byModel.keys()]).toEqual([]);
+    expect(await emitCuratedCycle(cycle, withNarrative)).toBe(0);
+
+    const alerts = await prisma.curatedAlert.findMany({ where: { tokenId: token.id } });
+    expect(alerts.map((a) => a.model)).toEqual([RULES_CONTESTANT]);
+    expect(alerts[0]).toMatchObject({ narrativeVerdict: "agrees" });
+    expect(alerts[0]!.narrativeNotedAt).not.toBeNull();
+
+    // A later deep read does not overwrite the note; a coin nobody called gets no note and
+    // the seat's own call.
+    const fresh = await prisma.token.create({ data: { mintAddress: `${TAG}-narrative-own` } });
+    const own = newCuratedCycle();
+    await collectCuratedContender(
+      own,
+      fresh,
+      { ...scored, narrative: deep },
+      null,
+      withNarrative,
+      undefined,
+      undefined,
+      "second",
+    );
+    expect([...own.byModel.keys()]).toEqual(["narrative"]);
   });
 
   it("governs each ledger against its own budget", async () => {

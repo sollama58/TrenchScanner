@@ -95,7 +95,9 @@ export const METRICS = [
     label: "10x rate, model calls",
     group: "Model calls",
     unit: "pct",
-    value: (s) => rate(s.alerts.won10x, s.alerts.graded),
+    // Over the calls whose 10x verdict is in, like the screened side: a clean 2x winner whose
+    // 10x hour is still open is not a miss yet. Older sums without the count fall back to graded.
+    value: (s) => rate(s.alerts.won10x, s.alerts.tenXGraded ?? s.alerts.graded),
   },
   {
     id: "callsReturn",

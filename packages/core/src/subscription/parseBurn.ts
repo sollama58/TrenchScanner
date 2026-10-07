@@ -1,9 +1,12 @@
+import { createLogger } from "../logger.js";
 import {
   MAX_MONTHS_PER_BURN,
   SPL_TOKEN_PROGRAM_ID,
   SUBSCRIPTION_MINT,
   SUBSCRIPTION_RAW_PER_MONTH,
 } from "./constants.js";
+
+const logger = createLogger("parse-burn");
 
 /**
  * The slice of a `jsonParsed` transaction this module reads. Hand-written rather than pulled from
@@ -19,21 +22,37 @@ export interface ParsedInstruction {
   };
 }
 
+/** A `jsonParsed` token balance: which account (by index into accountKeys) and whose it is. */
+export interface ParsedTokenBalance {
+  accountIndex?: number;
+  mint?: string;
+  owner?: string;
+}
+
 export interface ParsedTransaction {
   slot?: number;
   blockTime?: number | null;
   transaction?: {
     signatures?: string[];
-    message?: { instructions?: ParsedInstruction[] };
+    message?: {
+      /** jsonParsed gives `{ pubkey, signer, writable }`; older shapes a bare base58 string. */
+      accountKeys?: ({ pubkey?: string } | string)[];
+      instructions?: ParsedInstruction[];
+    };
   };
   meta?: {
     err?: unknown;
     innerInstructions?: { instructions?: ParsedInstruction[] }[] | null;
+    preTokenBalances?: ParsedTokenBalance[] | null;
+    postTokenBalances?: ParsedTokenBalance[] | null;
   } | null;
 }
 
 export interface BurnCredit {
-  /** The wallet that authorised the burn. This is who the access belongs to. */
+  /**
+   * The wallet whose tokens were burned: the burned token account's owner. This is who the access
+   * belongs to - whoever signed (an SPL delegate can burn from an account it was approved on).
+   */
   burnerWallet: string;
   /** Total qualifying base units burned in this transaction. */
   rawAmount: bigint;
@@ -94,6 +113,31 @@ function allInstructions(tx: ParsedTransaction): ParsedInstruction[] {
   return [...outer, ...inner];
 }
 
+/**
+ * The owner of a token account the transaction touched, from the token balances the RPC reports
+ * beside a `jsonParsed` transaction (each names its account by index into accountKeys and carries
+ * the owner the account had). Null when the transaction doesn't carry them - an older shape, or a
+ * hand-built fixture.
+ */
+function tokenAccountOwner(tx: ParsedTransaction, account: string): string | null {
+  const keys = (tx.transaction?.message?.accountKeys ?? []).map((k) =>
+    typeof k === "string" ? k : readString(k.pubkey),
+  );
+  const index = keys.indexOf(account);
+  if (index < 0) return null;
+  // Post first: a burn can close out an account, but its owner is the same on both sides, and
+  // the post balance is what the chain settled.
+  for (const balances of [tx.meta?.postTokenBalances, tx.meta?.preTokenBalances]) {
+    for (const b of balances ?? []) {
+      if (b.accountIndex === index) {
+        const owner = readString(b.owner);
+        if (owner !== null) return owner;
+      }
+    }
+  }
+  return null;
+}
+
 /** Is this instruction a burn of the subscription mint, issued by the SPL Token program? */
 function isSubscriptionBurn(ix: ParsedInstruction): boolean {
   const type = ix.parsed?.type;
@@ -115,13 +159,17 @@ function isSubscriptionBurn(ix: ParsedInstruction): boolean {
 /**
  * Decide what a transaction bought, if anything.
  *
- * Deliberately strict about attribution: the months go to the burn instruction's `authority`, not
- * to "a signer on the transaction". Those are different things - a transaction can carry several
- * signers, and the fee payer in particular need not be the person whose tokens were destroyed.
- * Crediting a signer would let someone who merely co-signs collect a month bought with another
- * wallet's tokens.
+ * Deliberately strict about attribution: the months go to the wallet whose tokens were destroyed -
+ * the burned token account's owner - not to "a signer on the transaction". Those are different
+ * things - a transaction can carry several signers, and the fee payer in particular need not be
+ * the person whose tokens were destroyed. Crediting a signer would let someone who merely co-signs
+ * collect a month bought with another wallet's tokens. Nor to the burn's `authority` as such: an
+ * SPL Token delegate (someone the owner `approve`d on the account) can sign a burn of the owner's
+ * tokens, and the tokens were still the owner's (user decision 2026-10-07). The owner comes from
+ * the transaction's token balances; when those are missing the authority stands in, which for a
+ * burn the owner signed is the same wallet.
  *
- * Burns *within one transaction* by the same authority are summed, so a wallet holding its balance
+ * Burns *within one transaction* from the same owner are summed, so a wallet holding its balance
  * across two token accounts still qualifies in one go. Amounts are not accumulated across separate
  * transactions: that turns a simple "did this pay" question into a running-balance system, and the
  * first thing anyone would ask of it is a refund.
@@ -146,23 +194,33 @@ export function parseBurnTransaction(tx: ParsedTransaction, signature?: string):
   const ofOurMint = burns.filter(isSubscriptionBurn);
   if (ofOurMint.length === 0) return { ok: false, reason: "wrong_mint" };
 
-  // Sum per authority, then take the best one. A transaction burning from two different wallets'
-  // accounts credits whichever authority actually cleared the price, rather than adding strangers'
+  // Sum per owner, then take the best one. A transaction burning from two different wallets'
+  // accounts credits whichever wallet actually cleared the price, rather than adding strangers'
   // tokens together into one qualifying total.
-  const byAuthority = new Map<string, bigint>();
+  const byOwner = new Map<string, bigint>();
   for (const ix of ofOurMint) {
     const info = ix.parsed?.info ?? {};
     // `authority` for a single-owner account; `multisigAuthority` when the account is owned by an
-    // SPL multisig, in which case that address is the owner of record.
+    // SPL multisig, in which case that address is the owner of record. Either may be a delegate.
     const authority = readString(info.authority) ?? readString(info.multisigAuthority);
     const amount = readRawAmount(info);
     if (authority === null || amount === null) continue;
-    byAuthority.set(authority, (byAuthority.get(authority) ?? 0n) + amount);
+    const account = readString(info.account);
+    const owner = (account === null ? null : tokenAccountOwner(tx, account)) ?? authority;
+    if (owner !== authority) {
+      logger.info("burn signed by a delegate - crediting the token account's owner", {
+        signature: id ?? signature ?? null,
+        account,
+        owner,
+        signer: authority,
+      });
+    }
+    byOwner.set(owner, (byOwner.get(owner) ?? 0n) + amount);
   }
-  if (byAuthority.size === 0) return { ok: false, reason: "no_authority" };
+  if (byOwner.size === 0) return { ok: false, reason: "no_authority" };
 
   let best: { wallet: string; amount: bigint } | null = null;
-  for (const [wallet, amount] of byAuthority) {
+  for (const [wallet, amount] of byOwner) {
     if (best === null || amount > best.amount) best = { wallet, amount };
   }
   if (best === null || best.amount < SUBSCRIPTION_RAW_PER_MONTH) {

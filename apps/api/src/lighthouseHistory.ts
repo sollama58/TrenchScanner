@@ -89,6 +89,7 @@ interface SumRow {
   alerts_won2x: bigint;
   alerts_won4x: bigint;
   alerts_won10x: bigint;
+  alerts_ten_x_graded: bigint;
   alerts_return_n: bigint;
   alerts_return_sum: number | null;
 }
@@ -129,6 +130,7 @@ function sums(r: SumRow | undefined) {
       won2x: n(r?.alerts_won2x),
       won4x: n(r?.alerts_won4x),
       won10x: n(r?.alerts_won10x),
+      tenXGraded: n(r?.alerts_ten_x_graded),
       returnN: n(r?.alerts_return_n),
       returnSum: r?.alerts_return_sum ?? 0,
     },
@@ -171,6 +173,7 @@ async function sumHours(from: Date | null, to: Date, bucket: HistoryBucket | nul
            sum(h."alertsWon2x") AS alerts_won2x,
            sum(h."alertsWon4x") AS alerts_won4x,
            sum(h."alertsWon10x") AS alerts_won10x,
+           sum(h."alertsTenXGraded") AS alerts_ten_x_graded,
            sum(h."alertsReturnN") AS alerts_return_n,
            sum(h."alertsReturnSum")::float8 AS alerts_return_sum
     FROM "LighthouseHour" h
@@ -187,6 +190,7 @@ interface LabelRow {
   won2x: bigint;
   won4x: bigint;
   won10x: bigint;
+  ten_x_graded: bigint;
 }
 
 export interface LighthouseLabelTally {
@@ -197,6 +201,8 @@ export interface LighthouseLabelTally {
   won2x: number;
   won4x: number;
   won10x: number;
+  /** Calls whose 10x verdict is in: the 10x rate's denominator. */
+  tenXGraded: number;
 }
 
 /** The start of the bucket holding `ms`: hours and days on the clock, weeks on Monday as date_trunc does. */
@@ -227,7 +233,8 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
     prisma.$queryRaw<LabelRow[]>`
       SELECT date_trunc(${labelBucket}, l."day") AS bucket, l."label",
              sum(l."count") AS count, sum(l."alerts") AS alerts, sum(l."graded") AS graded,
-             sum(l."won2x") AS won2x, sum(l."won4x") AS won4x, sum(l."won10x") AS won10x
+             sum(l."won2x") AS won2x, sum(l."won4x") AS won4x, sum(l."won10x") AS won10x,
+             sum(l."tenXGraded") AS ten_x_graded
       FROM "LighthouseDayLabel" l
       WHERE l."dimension" = ${dimension} AND l."day" >= ${labelSince ?? new Date(0)} AND l."day" < ${to}
       GROUP BY 1, 2`,
@@ -260,7 +267,7 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
     const label = top.includes(r.label) ? r.label : "other";
     let t = rows.get(label);
     if (!t) {
-      t = { label, count: 0, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0 };
+      t = { label, count: 0, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0 };
       rows.set(label, t);
     }
     t.count += n(r.count);
@@ -269,6 +276,7 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
     t.won2x += n(r.won2x);
     t.won4x += n(r.won4x);
     t.won10x += n(r.won10x);
+    t.tenXGraded += n(r.ten_x_graded);
   }
 
   return {

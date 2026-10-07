@@ -40,6 +40,13 @@ export interface BandRefreshResult {
   liveMints: string[];
   /** The same mints with the market cap each one was just seen at - see Token.lastMcapUsd. */
   liveMarketCaps: { mintAddress: string; marketCapUsd: number }[];
+  /**
+   * True when at least one requested mint got no answer - its batch failed or was still in
+   * flight at the deadline. `inBand` is then a subset of what the band holds, and a caller that
+   * treats one refresh as "every in-band token was looked at" (the settling-in pass of a newly
+   * armed filter - see markFilterPassComplete) must not.
+   */
+  partial: boolean;
 }
 
 /**
@@ -55,7 +62,7 @@ export async function refreshAndFilterToBand(
   mintAddresses: string[],
   options: BandFilterOptions,
 ): Promise<BandRefreshResult> {
-  if (mintAddresses.length === 0) return { inBand: [], liveMints: [], liveMarketCaps: [] };
+  if (mintAddresses.length === 0) return { inBand: [], liveMints: [], liveMarketCaps: [], partial: false };
 
   const { mcapMin, mcapMax, bandPaddingRatio } = options;
   const { min: lowerBound, max: upperBound } = scanBand(mcapMin, mcapMax, bandPaddingRatio);
@@ -66,14 +73,17 @@ export async function refreshAndFilterToBand(
   // cycle is seconds away. The deadline bounds the whole refresh the same way: on 2026-10-04 a
   // throttled DexScreener still held cycles for 20-50s at five seconds a batch. Callers pass the
   // mints that matter most first (selectWatchlist puts the near-band tier ahead).
+  const failed = new Set<string>();
   const marketData = await dexScreener.getTokensByAddresses(mintAddresses, 5, {
     timeoutMs: 5000,
     retries: 1,
     deadlineMs: 10_000,
     // What puts a coin in front of the safety screen: first call on a fallback's budget.
     priority: true,
+    failed,
   });
   return {
+    partial: failed.size > 0,
     inBand: marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound),
     liveMints: marketData.map((t) => t.mintAddress),
     // A pair with no market cap (or fdv) reads as 0; stamped, that would drop a live mint out of

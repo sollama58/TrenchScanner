@@ -403,6 +403,42 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     expect(cas(batch.mock.calls.at(-1)!).sort()).toEqual([t1, t3].sort());
   });
 
+  it("cools a refused batch's unsent mints for one window when no queued job is to blame", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-07T12:00:00Z"));
+      const { client, batch, job } = fakeClient();
+      const n1 = `${TAG}-n1`;
+      const n2 = `${TAG}-n2`;
+      batch.mockResolvedValueOnce(ok([{ ca: n1, status: "pending", job_id: 41 }]));
+      noteNarrativeWanted(n1, "basic", env);
+      await flushNarrativeRequests(env, client);
+
+      // The culprit's entry is gone (given up on, or never ours): the 404 names nobody. n2 was
+      // never sent, so re-sending it each flush would only be refused again - it waits out the
+      // window. n1 keeps its place: re-sending it is how a culprit gets found.
+      batch.mockRejectedValueOnce(new HttpError(404, "https://ts.test/v1/tokens:batch"));
+      job.mockResolvedValue({ job_id: 41, status: "running" });
+      noteNarrativeWanted(n2, "basic", env);
+      await flushNarrativeRequests(env, client);
+      expect(job).toHaveBeenCalledWith(41);
+
+      batch.mockResolvedValueOnce(ok([{ ca: n1, status: "pending", job_id: 41 }]));
+      noteNarrativeWanted(n2, "basic", env);
+      await flushNarrativeRequests(env, client);
+      expect(cas(batch.mock.calls.at(-1)!)).toEqual([n1]);
+
+      // Past the window it is asked for again.
+      vi.setSystemTime(Date.now() + 12 * 60_000);
+      batch.mockResolvedValueOnce(ok([]));
+      noteNarrativeWanted(n2, "basic", env);
+      await flushNarrativeRequests(env, client);
+      expect(cas(batch.mock.calls.at(-1)!)).toContain(n2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sends early deep reads on their own budget, then falls back to the quick read", async () => {
     const { client, batch } = fakeClient();
     batch.mockImplementation(async (entries: { ca: string }[]) =>

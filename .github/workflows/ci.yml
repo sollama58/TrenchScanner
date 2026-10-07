@@ -51,10 +51,19 @@ jobs:
 
       - run: npm ci
 
+      # Fails on a high or critical advisory in what ships (dev tooling is checked separately by
+      # Dependabot) - a known-vulnerable runtime dependency should not reach a deploy unnoticed.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       # Builds the Prisma client + compiles packages/core - every other workspace's typecheck/
       # build/test imports @trenchscanner/core's dist output, so this has to happen first.
       - name: Build packages/core
         run: npm run build -w @trenchscanner/core
+
+      # Every key render.yaml sets must be one the config schema reads - see the script.
+      - name: Check render.yaml keys against the env schema
+        run: ./scripts/check-env-keys.sh
 
       - name: Apply migrations to the CI database
         run: npm run prisma:deploy

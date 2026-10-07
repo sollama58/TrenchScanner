@@ -49,6 +49,8 @@ describe.skipIf(!dbAvailable)("buildFeatureFillReport", () => {
       { kind: "hourly", features: { uniqueBuyers5m: null, devSoldShare: 0, mcapUsd: 50 } },
       // Banked before the trade-flow inputs existed: the keys are missing entirely.
       { kind: "hourly", features: { mcapUsd: 70 } },
+      // No features at all: jsonb_each yields nothing for it, but it is still a row of the window.
+      { kind: "hourly", features: {} },
     ];
     for (const [i, r] of rows.entries()) {
       await prisma.candidateOutcome.create({
@@ -78,20 +80,21 @@ describe.skipIf(!dbAvailable)("buildFeatureFillReport", () => {
 
   it("reports each input's fill rate, zeros and range over the window's rows", async () => {
     const report = await buildFeatureFillReport(at(0), at(60));
-    expect(report.rows).toBe(4);
-    expect(report.rowsByKind).toEqual({ event: 2, hourly: 2 });
+    expect(report.rows).toBe(5);
+    expect(report.rowsByKind).toEqual({ event: 2, hourly: 3 });
     const byName = new Map(report.features.map((f) => [f.feature, f]));
     expect(byName.get("uniqueBuyers5m")).toMatchObject({
       tradeFlow: true,
-      presentPct: 50,
+      presentPct: 40,
       zeroPct: 0,
       min: 12,
       max: 30,
       avg: 21,
     });
-    // Present on three rows of four, but zero on all of them: as dead as a null input.
-    expect(byName.get("devSoldShare")).toMatchObject({ presentPct: 75, zeroPct: 100 });
-    expect(byName.get("mcapUsd")).toMatchObject({ tradeFlow: false, presentPct: 100 });
+    // Present on three rows of five, but zero on all of them: as dead as a null input.
+    expect(byName.get("devSoldShare")).toMatchObject({ presentPct: 60, zeroPct: 100 });
+    // Four of five: the `{}` row counts against every input, not just the ones it would have had.
+    expect(byName.get("mcapUsd")).toMatchObject({ tradeFlow: false, presentPct: 80 });
     expect(report.dead).toContain("devSoldShare");
     expect(report.dead).not.toContain("uniqueBuyers5m");
     expect(report.dead).not.toContain("mcapUsd");

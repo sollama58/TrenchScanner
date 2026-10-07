@@ -15,9 +15,12 @@ import type { PrecisionTargets } from "./trainer.js";
  *  - 10 points for the 10x rate (10x within an hour, the third tier, user decision 2026-10-06): the
  *    same against TEN_X_TARGET_RATE, proven over the calls whose 10x is settled (tenXGradedOf). A
  *    record that doesn't track it (older stored exams) adds no 10x evidence either way.
- *  - 10 points for run size: how far its calls ultimately ran (the 24h run peak), in doublings
- *    per call, against RUN_SIZE_TARGET_DOUBLINGS. A 2x, 4x or 4x-in-30-minutes call earns the
- *    same 2x/4x points whether it stops there or runs to 50x; this part is what tells them apart.
+ *  - 10 points for run size: how far its calls ran, in doublings per call, against
+ *    RUN_SIZE_TARGET_DOUBLINGS. A 2x, 4x or 4x-in-30-minutes call earns the same 2x/4x points
+ *    whether it stops there or runs to 50x; this part is what tells them apart. A live call's run
+ *    is its 24h run peak; an exam call's is the label window's peak, the 30-minute watch every
+ *    decision row has (user decision 2026-10-07: a 24h peak existed only where an earlier champion
+ *    had alerted the token, which tilted every exam toward the incumbent's picks).
  *
  * "Proven" means the hit rate after PRIOR_CALLS extra calls are counted as misses: wins divided by
  * (graded calls + PRIOR_CALLS). Every model starts with the same handful of misses to call its
@@ -62,10 +65,11 @@ export interface CallRecord {
   /** Sum of the graded calls' labels (doublings; 0 for a miss). */
   sumLabel: number;
   /**
-   * Sum of the graded calls' run sizes: doublings to the run peak (log2 of the 24h peak multiple,
-   * capped), for calls that ran to 2x+ without being stopped out first; 0 otherwise (see the
-   * module comment). Absent on records that don't track it (backtests, older stored records):
-   * those fall back to sumLabel, the clean winners' doublings inside the label window.
+   * Sum of the graded calls' run sizes: doublings to the run peak (log2 of the peak multiple,
+   * capped - the 24h peak on live records, the label window's on exams), for calls that ran to 2x+
+   * without being stopped out first; 0 otherwise (see the module comment). Absent on records that
+   * don't track it (older stored records): those fall back to sumLabel, the clean winners'
+   * doublings inside the label window.
    */
   sumRun?: number;
   /**

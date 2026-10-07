@@ -193,6 +193,8 @@ export interface CuratedMeta {
   reasons: string[];
   alertedAt: string;
   outcome: Outcome;
+  /** The Narrative seat's later view of the call, once the deep read decided; null until then. */
+  narrative?: { verdict: "agrees" | "warns"; at: string } | null;
   aiReview?: AdminAiReview;
   /** On the combined feed: every model that called this token, first call first. */
   calledBy?: ModelCall[];
@@ -1048,6 +1050,8 @@ export interface LighthouseSums {
     won2x: number;
     won4x: number;
     won10x: number;
+    /** Calls whose 10x verdict is in: the 10x rate's denominator. Absent from older API builds. */
+    tenXGraded?: number;
     returnN: number;
     returnSum: number;
   };
@@ -1060,6 +1064,7 @@ export interface LighthouseLabelTally {
   won2x: number;
   won4x: number;
   won10x: number;
+  tenXGraded?: number;
 }
 export interface LighthouseHistory {
   window: {
@@ -1095,6 +1100,8 @@ export interface LighthouseTally {
   won2x: number;
   won4x: number;
   won10x: number;
+  /** Calls whose 10x verdict is in: the 10x rate's denominator. Absent from older API builds. */
+  tenXGraded?: number;
   /** Calls with a simulated return under the exit plan, and their sum (percent). */
   returnN: number;
   returnSum: number;

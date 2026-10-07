@@ -48,7 +48,13 @@ const logger = createLogger("tokensage");
  * on the watchlist are noted again on the next scan.
  */
 
-const PENDING_GIVE_UP_MS = 5 * 60_000;
+/**
+ * At least NOT_FOUND_COOLDOWN_MS: TokenSage answers a whole batch 404/422 for up to 10 minutes
+ * after one of its mints' jobs failed definitively, and the culprit is found by its pending
+ * entry's job id (see checkEndedJob). Dropping the entry sooner than that window left the chunk
+ * refused with nothing to look up.
+ */
+const PENDING_GIVE_UP_MS = 11 * 60_000;
 const PAUSE_AFTER_REFUSAL_MS = 60_000;
 /** A rejected key (401/403) won't fix itself between polls: ask again only this often. */
 const PAUSE_AFTER_AUTH_FAILURE_MS = 5 * 60_000;
@@ -481,11 +487,33 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
         // definitively (token_not_found, not_pumpfun, ...) in the last 10 minutes. Find it by
         // reading the queued mints' jobs, so the next batch goes through.
         stats.errors += 1;
+        let culprits = 0;
         for (const e of chunk) {
           const p = pending.get(e.ca);
           if (p?.jobId === undefined || jobChecks <= 0) continue;
           jobChecks -= 1;
-          await checkEndedJob(api, e.ca, p, p.jobId);
+          if (await checkEndedJob(api, e.ca, p, p.jobId)) culprits += 1;
+        }
+        if (culprits === 0) {
+          // No queued job to blame (the culprit's pending entry is gone, or there were more
+          // than this flush could look up): the chunk's never-sent mints would otherwise be
+          // re-sent, and refused, every flush for the rest of TokenSage's window, holding up
+          // every other read behind them. Left alone for one window instead; the queued ones
+          // keep their place, since re-sending those is what finds the culprit.
+          const now = Date.now();
+          const cooled: string[] = [];
+          for (const e of chunk) {
+            if (pending.has(e.ca)) continue;
+            wanted.delete(e.ca);
+            rememberNotFound(e.ca, now + NOT_FOUND_COOLDOWN_MS);
+            cooled.push(e.ca);
+          }
+          logger.warn("TokenSage refused a batch with no culprit found; cooling its unsent mints", {
+            status: err.status,
+            depth,
+            chunk: chunk.length,
+            cooled: cooled.length,
+          });
         }
         continue;
       }
@@ -567,24 +595,27 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
  * A mint's previous job ended without an analysis. A definitive failure (not a token mint, not a
  * pump.fun coin) is cached so it is never asked again - otherwise every re-send would start a new
  * job, and at full depth each one costs a unit of the daily quota. A mint not on-chain yet is
- * left alone past TokenSage's 10-minute failure window. Anything else keeps the new job.
+ * left alone past TokenSage's 10-minute failure window. Anything else keeps the new job. True
+ * when the job had failed that way - the mint is what got its batch refused.
  */
 async function checkEndedJob(
   api: TokenSageClient,
   mint: string,
   p: Pending,
   endedJobId: number,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const job = await api.job(endedJobId);
-    if (job.status !== "failed") return;
+    if (job.status !== "failed") return false;
     const code = String(job.error ?? "")
       .split(":")[0]!
       .trim();
     if (code === "token_not_found" || DEFINITIVE_FAILURES.includes(code)) {
       await noteFailure(mint, p.depth, job.error);
+      return true;
     }
   } catch (err) {
     logger.warn("TokenSage job lookup failed", { error: String(err) });
   }
+  return false;
 }

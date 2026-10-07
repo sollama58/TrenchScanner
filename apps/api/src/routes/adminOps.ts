@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { adminWalletSet, prisma, readAiBudget, type Env } from "@trenchscanner/core";
+import { adminWalletSet, prisma, Prisma, readAiBudget, type Env } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { SharedCache } from "../sharedCache.js";
@@ -316,18 +316,29 @@ export async function registerAdminOpsRoutes(
         simReturnPct: true,
         outcomeFinalizedAt: true,
         token: { select: { symbol: true, mintAddress: true } },
-        aiReviews: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: { decision: true, probability2x: true },
-        },
       },
     });
-    return alerts.map(({ token, aiReviews, ...a }) => ({
+    // The newest review per alert, read in one statement over the page's ids. A nested
+    // `aiReviews: { take: 1 }` on the query above is not a LIMIT: Prisma emits it as a window
+    // function over every review of every listed alert, which grows with the review history.
+    const latestReview = new Map<string, { decision: string | null; probability2x: number | null }>();
+    if (alerts.length > 0) {
+      const reviews = await prisma.$queryRaw<
+        { curatedAlertId: string; decision: string | null; probability2x: number | null }[]
+      >`
+        SELECT DISTINCT ON ("curatedAlertId") "curatedAlertId", "decision", "probability2x"
+        FROM "AiReview"
+        WHERE "curatedAlertId" IN (${Prisma.join(alerts.map((a) => a.id))})
+        ORDER BY "curatedAlertId", "createdAt" DESC`;
+      for (const r of reviews) {
+        latestReview.set(r.curatedAlertId, { decision: r.decision, probability2x: r.probability2x });
+      }
+    }
+    return alerts.map(({ token, ...a }) => ({
       ...a,
       symbol: token.symbol,
       mint: token.mintAddress,
-      ai: aiReviews[0] ?? null,
+      ai: latestReview.get(a.id) ?? null,
     }));
   });
 

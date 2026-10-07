@@ -75,9 +75,11 @@ export interface TrainingRow {
    */
   survived?: boolean;
   /**
-   * For a clean winner whose extended watch has ended: its run peak, the highest price over the
-   * whole watch as a multiple of the alert price - how far it went after the call. Omitted otherwise.
-   * Read by the runner-traits report (featureReport.ts) and by the fit's run weight (runWeight).
+   * The row's run peak as a multiple of the alert price - how far it went after the call. Stored
+   * rows carry the label window's peak (the 30-minute watch every row has; see runPeakOf in the
+   * worker's curatorTrainingJob.ts for why not the 24h one). Omitted when unknown. Read by the
+   * exam's run size (runDoublings), the runner-traits report (featureReport.ts) and the fit's run
+   * weight (runWeight).
    */
   runPeakMultiple?: number;
   /**
@@ -520,7 +522,7 @@ export function calibrateThreshold(
 export interface ScoredOutcome {
   probability: number;
   labelValue: number;
-  /** The row's 24h run peak multiple, when known (TrainingRow.runPeakMultiple). */
+  /** The row's run peak multiple, when known (TrainingRow.runPeakMultiple). */
   runPeakMultiple?: number;
   /** TrainingRow.hit10x. */
   hit10x?: boolean;
@@ -1122,9 +1124,11 @@ export async function walkForwardEvaluate(
       const testStartMs = test[0]!.anchorAt.getTime();
       const testTokens = new Set(test.flatMap((r) => (r.tokenId === undefined ? [] : [r.tokenId])));
       // A third leak runs through the weights: a winner's run peak (runPeakMultiple, read by
-      // runWeight) is measured over its 24h watch, so a training row anchored inside that span
+      // runWeight) may be measured over a 24h watch, so a training row anchored inside that span
       // before the fold starts was weighed by prices from inside the fold. Its weight falls
-      // back to its label, which the purge above already keeps out of the fold.
+      // back to its label, which the purge above already keeps out of the fold. (Stored rows
+      // carry the label window's peak since 2026-10-07, which the purge above covers; this stays
+      // for rows built any other way.)
       const train = sorted
         .filter(
           (r) =>

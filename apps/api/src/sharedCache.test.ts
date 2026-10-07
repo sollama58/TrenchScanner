@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SharedCache } from "./sharedCache.js";
+import { SharedCache, SharedCacheMap } from "./sharedCache.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -177,5 +177,37 @@ describe("SharedCache", () => {
     failing.warm(async () => Promise.reject(new Error("boom")));
     await tick();
     await expect(failing.get(async () => "after")).resolves.toBe("after");
+  });
+});
+
+describe("SharedCacheMap", () => {
+  it("shares one fill per key and evicts the least recently used key past its cap", async () => {
+    const caches = new SharedCacheMap<number>(60_000, 2);
+    let fills = 0;
+    const fill = async () => ++fills;
+    expect(await caches.for("a").get(fill)).toBe(1);
+    expect(await caches.for("a").get(fill)).toBe(1);
+    expect(await caches.for("b").get(fill)).toBe(2);
+    // Touching "a" makes "b" the oldest, so a third key evicts "b", not "a".
+    expect(await caches.for("a").get(fill)).toBe(1);
+    expect(await caches.for("c").get(fill)).toBe(3);
+    expect(caches.size).toBe(2);
+    expect(await caches.for("a").get(fill)).toBe(1);
+    expect(await caches.for("b").get(fill)).toBe(4);
+  });
+
+  it("clears only the keys under a prefix", async () => {
+    const caches = new SharedCacheMap<number>(60_000, 10);
+    let fills = 0;
+    const fill = async () => ++fills;
+    await caches.for("alice:24").get(fill);
+    await caches.for("alice:48").get(fill);
+    await caches.for("bob:24").get(fill);
+    caches.clear("alice:");
+    expect(await caches.for("alice:24").get(fill)).toBe(4);
+    expect(await caches.for("alice:48").get(fill)).toBe(5);
+    expect(await caches.for("bob:24").get(fill)).toBe(3);
+    caches.clear();
+    expect(await caches.for("bob:24").get(fill)).toBe(6);
   });
 });

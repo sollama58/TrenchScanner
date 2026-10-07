@@ -409,6 +409,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       : Promise.resolve([] as CandidateToken[]);
 
   let candidates: CandidateToken[];
+  let refreshPartial: boolean;
   try {
     const refreshed = await refreshAndFilterToBand(
       deps.dexScreener,
@@ -416,6 +417,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       { mcapMin: env.MCAP_FILTER_MIN, mcapMax: env.MCAP_FILTER_MAX },
     );
     candidates = refreshed.inBand;
+    refreshPartial = refreshed.partial;
     // The stamp the liveness-prioritized selection above runs on.
     await stampLiveMarketCaps(refreshed.liveMarketCaps, env);
   } catch (err) {
@@ -709,8 +711,18 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
   markScanVerdictsPopulated();
   // Every in-band token has now been evaluated against these filters: a filter armed before
-  // this cycle loaded them has its backlog baselined and alerts from here on.
-  markFilterPassComplete(activeFilters);
+  // this cycle loaded them has its backlog baselined and alerts from here on. Unless the refresh
+  // lost a batch (a DexScreener timeout past its deadline): the tokens in it were never looked
+  // at, and calling the pass complete would alert a settling filter on them next cycle as if
+  // they were new. The next full cycle completes it; FILTER_ARM_QUIET_MINUTES bounds the wait
+  // through a long outage.
+  if (refreshPartial) {
+    logger.info("watchlist refresh was partial - filter settling pass not marked complete", {
+      settling: activeFilters.length,
+    });
+  } else {
+    markFilterPassComplete(activeFilters);
+  }
   lap("candidates");
 
   // The cycle's governor pass: of everything the curators would emit, the strongest contenders
@@ -1568,6 +1580,12 @@ async function processCandidate(
  * Whether a token that looks ready but has no fresh decision moment is due the Narrative seat's
  * second look: TokenSage's deep read is stored and newer than the token's last decision row (so
  * that row was decided without it, or there was none), and the read is dated.
+ *
+ * "Newer" is by our own clock on both sides: the moment we stored the read (checkedAt) against
+ * the moment we anchored the decision. TokenSage's analyzedAt is its clock, not ours - a read it
+ * finished a minute before our decision but delivered a minute after would never look newer,
+ * and a skewed clock there would make every read look newer. It is only the fallback for a read
+ * carried without its store time.
  */
 export function secondLookDue(
   scored: Pick<ScoredToken, "narrative">,
@@ -1575,7 +1593,8 @@ export function secondLookDue(
 ): boolean {
   const read = scored.narrative;
   if (!read || read.depth !== "full" || !read.analyzedAt) return false;
-  return prior.lastDecisionAt === undefined || read.analyzedAt > prior.lastDecisionAt;
+  const storedAt = read.checkedAt ?? read.analyzedAt;
+  return prior.lastDecisionAt === undefined || storedAt > prior.lastDecisionAt;
 }
 
 /**

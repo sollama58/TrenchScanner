@@ -41,6 +41,26 @@ describe("refreshAndFilterToBand", () => {
     });
     expect(result.inBand.map((t) => t.mintAddress)).toEqual(["in-band"]);
     expect(result.liveMints.sort()).toEqual(["below", "in-band"]);
+    // "dead" was asked about and answered (no pair): a complete refresh, not a partial one.
+    expect(result.partial).toBe(false);
+  });
+
+  it("reports the refresh as partial when a requested mint got no answer", async () => {
+    // A batch that failed or was still in flight at the deadline lands its mints in the
+    // client's `failed` set; the scan must then not take this cycle as a full pass.
+    const dexScreener = {
+      getTokensByAddresses: async (mints: string[], _chunk: number, options: { failed?: Set<string> }) => {
+        options.failed?.add(mints[1]!);
+        return [candidate(mints[0]!, 100_000)];
+      },
+    } as unknown as DexScreenerClient;
+
+    const result = await refreshAndFilterToBand(dexScreener, ["answered", "timed-out"], {
+      mcapMin: 50_000,
+      mcapMax: 500_000,
+    });
+    expect(result.inBand.map((t) => t.mintAddress)).toEqual(["answered"]);
+    expect(result.partial).toBe(true);
   });
 
   it("returns empty for an empty watchlist without touching the client", async () => {
@@ -53,6 +73,7 @@ describe("refreshAndFilterToBand", () => {
       inBand: [],
       liveMints: [],
       liveMarketCaps: [],
+      partial: false,
     });
   });
 });

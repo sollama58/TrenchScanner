@@ -28,7 +28,8 @@ import {
  *    exists to screen out.
  *  - NARRATIVE criteria (the TokenSage ones, matchesNarrativeCriteria) all fail closed, ceilings
  *    included: the user chose it (2026-10-06), and the read is the whole point of the criterion.
- *    The two that read the X post or the trend need the deep read, so they fail on a quick one.
+ *    The trend criterion needs the deep read, so it fails on a quick one; so does "exclude
+ *    unrelated X", unless the coin has no X link for the deep read to judge (2026-10-07).
  */
 export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boolean {
   if (token.marketCapUsd < filter.mcapMin || token.marketCapUsd > filter.mcapMax) {
@@ -116,7 +117,8 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
-  if (!matchesNarrativeCriteria(token.narrative, filter)) {
+  // hasTwitter is the scan's "has an X link" (the stored Token.twitterUrl folds into it).
+  if (!matchesNarrativeCriteria(token.narrative, filter, token.hasTwitter)) {
     return false;
   }
 
@@ -141,11 +143,21 @@ export function usesNarrativeCriteria(filter: FilterCriteria): boolean {
 }
 
 /**
- * The TokenSage criteria, every one failing closed: no read, no match, and the X-post and trend
- * criteria need the deep read. An exclusion that can't be checked is not "passed": the filter
- * asked to be shown only coins TokenSage cleared.
+ * The TokenSage criteria, every one failing closed: no read, no match, and the trend criterion
+ * needs the deep read. An exclusion that can't be checked is not "passed": the filter asked to be
+ * shown only coins TokenSage cleared.
+ *
+ * "Exclude unrelated X" is the one exception, on a basic read of a coin with no X link
+ * (`hasXLink` false - the scan's hasTwitter; unknown fails closed like the rest). The
+ * deep read exists to open the linked post, and there is none: the criterion asks not to be shown
+ * coins whose X post is about something else, which a coin without one can't be (user decision
+ * 2026-10-07). A full read keeps judging the post's verdict and relation as before.
  */
-export function matchesNarrativeCriteria(read: NarrativeRead | undefined, filter: FilterCriteria): boolean {
+export function matchesNarrativeCriteria(
+  read: NarrativeRead | undefined,
+  filter: FilterCriteria,
+  hasXLink?: boolean,
+): boolean {
   if (!usesNarrativeCriteria(filter)) return true;
   if (!read) return false;
   const only = filter.narrativeCategories ?? [];
@@ -159,7 +171,7 @@ export function matchesNarrativeCriteria(read: NarrativeRead | undefined, filter
   // A read from before TokenSage said which copy a coin is can't be checked: fail closed.
   if (filter.excludeLateCopies && narrativeIsLateCopy(read) !== false) return false;
   if (filter.excludeUnrelatedX) {
-    if (read.depth !== "full") return false;
+    if (read.depth !== "full" && hasXLink !== false) return false;
     if (read.xVerdict === "unrelated" || read.xRelation === "spoofed") return false;
   }
   if (filter.requireTrendMatch && !(read.depth === "full" && read.trendMatched === true)) return false;
