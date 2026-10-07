@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { passesLocalRugScreen, runRugScreen } from "./rugScreen.js";
+import { passesLocalRugScreen, passesWalletSafetyCuts, runRugScreen } from "./rugScreen.js";
 import type { OnChainProfile } from "../types.js";
 
 const safeProfile: OnChainProfile = {
@@ -29,10 +29,12 @@ describe("runRugScreen", () => {
     expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: undefined }).passed).toBe(true);
   });
 
-  it("rejects a token whose top-10 holders are over 90% empty wallets, and only once measured", () => {
-    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 95 }).passed).toBe(false);
-    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 95 }).reasons[0]).toMatch(/empty wallets/);
-    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 90 }).passed).toBe(true);
+  it("rejects a token whose top-10 holders are 80% or more empty wallets, and only once measured", () => {
+    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 90 }).passed).toBe(false);
+    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 80 }).passed).toBe(false);
+    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 80 }).reasons[0]).toMatch(/empty wallets/);
+    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 77.78 }).passed).toBe(true);
+    expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: 70 }).passed).toBe(true);
     expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: undefined }).passed).toBe(true);
   });
 
@@ -152,5 +154,19 @@ describe("passesLocalRugScreen", () => {
   it("ignores Mayhem status entirely - that is the full screen's job", () => {
     expect(passesLocalRugScreen({ ...safeProfile, isMayhemMode: true })).toBe(true);
     expect(runRugScreen({ ...safeProfile, isMayhemMode: true }).passed).toBe(false);
+  });
+});
+
+describe("passesWalletSafetyCuts", () => {
+  it("applies today's wallet cuts to a banked row's stored features", () => {
+    expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 90, freshTop10WalletPct: 0 })).toBe(false);
+    expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 80 })).toBe(false);
+    expect(passesWalletSafetyCuts({ freshTop10WalletPct: 80 })).toBe(false);
+    expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
+  });
+
+  it("keeps a row whose wallet checks were never measured", () => {
+    expect(passesWalletSafetyCuts({})).toBe(true);
+    expect(passesWalletSafetyCuts({ emptyTop10WalletPct: null, freshTop10WalletPct: null })).toBe(true);
   });
 });

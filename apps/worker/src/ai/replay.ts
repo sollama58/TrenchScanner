@@ -6,6 +6,7 @@ import {
   aiReviewSystemPrompt,
   buildAiReviewBrief,
   nearestOutcomes,
+  passesWalletSafetyCuts,
   scoredFromFeatures,
   summarizeJudgeRecord,
   aiSpendDay,
@@ -98,6 +99,8 @@ export async function loadReplayItems(
   const picked = alerts.filter((a) => {
     const id = a.candidateOutcome?.id;
     if (!id || seen.has(id)) return false;
+    // A token the safety screen now rejects is never put to the reviewer live, so it is not replayed.
+    if (!passesWalletSafetyCuts(a.candidateOutcome!.features as Record<string, number | null>)) return false;
     seen.add(id);
     return true;
   });

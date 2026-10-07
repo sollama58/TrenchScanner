@@ -4,12 +4,18 @@ import type { OnChainProfile, RugScreenResult } from "../types.js";
 export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 
 /**
- * Above this share of the top-10 holders on empty wallets (no other real holdings), a token is never
- * alerted. 90, not the fresh-wallet 70: the figure is a floor (unpriced holdings count as nothing),
- * and on graded event rows tokens at 70-90% empty doubled as often as the rest and crashed little
- * more; only past 90% did they turn into rugs (notes/safety-precheck-review-2026-10-06.md).
+ * At or above this share of the top-10 holders on empty wallets (no other real holdings), a token
+ * is never alerted. "At or above", unlike the fresh-wallet "over": top-10 lists come in steps of
+ * 10%, so the old "over 90" rejected 100% only and let 9-of-10-empty through.
+ *
+ * 80 since 2026-10-07. The figure is a floor (unpriced holdings count as nothing), and under the
+ * DAS pricing 70-90% empty did as well as the rest (notes/safety-precheck-review-2026-10-06.md).
+ * The balances pricing (#196) reads the same wallets differently: on its first day of event rows
+ * 80% empty fell 80% inside the hour 35% of the time and 90% did 42%, against 6-9% under 70%,
+ * and the models were calling them because they pump first. 70% (19%) is left to the models and
+ * to user filters.
  */
-export const SAFETY_MAX_EMPTY_WALLET_PCT = 90;
+export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 
 /**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
@@ -53,31 +59,44 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
     );
   }
 
-  // A holder list that is mostly brand-new wallets is a sniper or insider farm, whatever anyone's
-  // filter says. Only applied once measured: until the wallet lookups land the figure is unknown,
-  // and model calls wait for it anyway (CURATED_REQUIRE_WALLET_CHECKS).
-  if (
-    profile.freshTop10WalletPct !== undefined &&
-    profile.freshTop10WalletPct > SAFETY_MAX_FRESH_WALLET_PCT
-  ) {
-    reasons.push(
-      `${profile.freshTop10WalletPct.toFixed(0)}% of top-10 holders are fresh wallets (over ${SAFETY_MAX_FRESH_WALLET_PCT}%)`,
-    );
-  }
-
-  // Same rule for a holder list that is mostly empty wallets (funded only to hold this launch):
-  // the hallmark of a bundled or farmed launch. Same treatment as fresh wallets - applied only once
-  // the holdings lookups have measured it.
-  if (
-    profile.emptyTop10WalletPct !== undefined &&
-    profile.emptyTop10WalletPct > SAFETY_MAX_EMPTY_WALLET_PCT
-  ) {
-    reasons.push(
-      `${profile.emptyTop10WalletPct.toFixed(0)}% of top-10 holders are empty wallets (over ${SAFETY_MAX_EMPTY_WALLET_PCT}%)`,
-    );
-  }
+  reasons.push(...walletScreenReasons(profile.freshTop10WalletPct, profile.emptyTop10WalletPct));
 
   return { passed: reasons.length === 0, reasons };
+}
+
+/**
+ * The screen's two top-10 wallet cuts. A holder list that is mostly brand-new wallets is a sniper
+ * or insider farm, and one that is mostly empty wallets (funded only to hold this launch) is a
+ * bundled or farmed launch - whatever anyone's filter says. Each applies only once measured: until
+ * the wallet lookups land the figure is unknown, and model calls wait for it anyway
+ * (CURATED_REQUIRE_WALLET_CHECKS).
+ */
+function walletScreenReasons(
+  freshPct: number | null | undefined,
+  emptyPct: number | null | undefined,
+): string[] {
+  const reasons: string[] = [];
+  if (typeof freshPct === "number" && freshPct > SAFETY_MAX_FRESH_WALLET_PCT) {
+    reasons.push(
+      `${freshPct.toFixed(0)}% of top-10 holders are fresh wallets (over ${SAFETY_MAX_FRESH_WALLET_PCT}%)`,
+    );
+  }
+  if (typeof emptyPct === "number" && emptyPct >= SAFETY_REJECT_EMPTY_WALLET_PCT) {
+    reasons.push(
+      `${emptyPct.toFixed(0)}% of top-10 holders are empty wallets (${SAFETY_REJECT_EMPTY_WALLET_PCT}% or more)`,
+    );
+  }
+  return reasons;
+}
+
+/**
+ * Whether a banked row's stored features clear the screen's wallet cuts as they stand now. Rows
+ * banked before a cut existed or was tightened passed the screen of their day, and a token the
+ * live screen now rejects is not one a curator is ever asked about - so training, the exam and
+ * the score's fit leave such rows out rather than learn from tokens that are mostly farm rugs.
+ */
+export function passesWalletSafetyCuts(features: Record<string, number | null | undefined>): boolean {
+  return walletScreenReasons(features.freshTop10WalletPct, features.emptyTop10WalletPct).length === 0;
 }
 
 /** The screen's conditions that are already in hand from the RugCheck profile - no network call. */

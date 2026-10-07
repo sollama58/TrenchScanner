@@ -8,6 +8,7 @@ import {
   decidePlaybookPromotion,
   sanitizePlaybookText,
   DISQUALIFYING_DRAWDOWN_FRACTION,
+  passesWalletSafetyCuts,
   REFLECTION_SYSTEM_PROMPT,
   type Env,
   type JudgeRecordSummary,
@@ -269,7 +270,11 @@ async function reflectionRecord(active: ActivePlaybook, before: Date): Promise<R
     );
   }
   const stopLevel = -(1 - DISQUALIFYING_DRAWDOWN_FRACTION) * 100;
-  return outcomes.map((o) => {
+  // Calls on tokens the safety screen now rejects stay out of the record the playbook learns from.
+  const screened = outcomes.filter((o) =>
+    passesWalletSafetyCuts(o.features as Record<string, number | null>),
+  );
+  return screened.map((o) => {
     const call = calls.get(o.id)!;
     const labelValue = o.labelValue ?? 0;
     return {

@@ -319,6 +319,14 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
         })),
         // Out of the training set: not finalized, and a selection-biased kind.
         { ...base, anchorAt: anchors[6]!, sampleKind: "hourly" },
+        // A farm launch the safety screen now rejects (90% empty wallets), banked before the cut.
+        {
+          ...base,
+          anchorAt: anchors[5]!,
+          finalizedAt: anchors[5]!,
+          sampleKind: "event",
+          features: { emptyTop10WalletPct: 90 },
+        },
         { ...base, anchorAt: anchors[6]!, finalizedAt: anchors[6]!, sampleKind: "emission" },
         // Before the window.
         {

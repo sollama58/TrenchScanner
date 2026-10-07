@@ -8,6 +8,7 @@ import {
   scoredFromFeatures,
   CURRENT_LABEL_RULE,
   MAX_EVENT_AGE_MINUTES,
+  passesWalletSafetyCuts,
   type ScoreFitRow,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
@@ -93,6 +94,8 @@ async function loadFitRows(population: "event" | "match", since: Date): Promise<
       const features = r.features as Record<string, number | null>;
       const age = features.ageMinutes;
       if (population === "event" && typeof age === "number" && age > MAX_EVENT_AGE_MINUTES) continue;
+      // A token the safety screen now rejects (mostly farm launches that pump, then rug).
+      if (!passesWalletSafetyCuts(features)) continue;
       const parts = scoredFromFeatures(features, r.signalPriceUsd ?? r.anchorPriceUsd, r.anchorMcapUsd).score;
       const row: ScoreFitRow = {
         anchorAt: r.anchorAt,
