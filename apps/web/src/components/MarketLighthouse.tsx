@@ -254,21 +254,16 @@ function TokenSageSections({
         </p>
       </Section>
 
-      <div className="lh-grid">
-        <Section
-          title="What the coins are about"
-          note={
-            d.reads.noReferent > 0
-              ? `The kind of thing each coin refers to, where TokenSage could tell. It couldn't for ${d.reads.noReferent.toLocaleString()} of ${d.reads.described.toLocaleString()} coins (${pct(share(d.reads.noReferent, d.reads.described))}).`
-              : "The kind of thing each coin refers to."
-          }
-        >
-          <CountBars rows={d.referentKinds} empty="TokenSage couldn't tell for any coin in this window." />
-        </Section>
-        <Section title="Flags raised" note="Warnings TokenSage attached to the coins it read.">
-          <CountBars rows={d.flags} empty="No flags raised in this window." tone="warn" />
-        </Section>
-      </div>
+      <Section
+        title="What the coins are about"
+        note={
+          d.reads.noReferent > 0
+            ? `The kind of thing each coin refers to, where TokenSage could tell. It couldn't for ${d.reads.noReferent.toLocaleString()} of ${d.reads.described.toLocaleString()} coins (${pct(share(d.reads.noReferent, d.reads.described))}).`
+            : "The kind of thing each coin refers to."
+        }
+      >
+        <CountBars rows={d.referentKinds} empty="TokenSage couldn't tell for any coin in this window." />
+      </Section>
 
       <Section title="Signals at a glance" note="Each bar is 100% of the coins that had that signal read.">
         <div className="lh-splits">
@@ -285,12 +280,6 @@ function TokenSageSections({
           <Split title="Original or copy" rows={d.copies} empty="Not said yet" />
           <Split title="Trades against" rows={d.pairKinds} empty="Not said yet" />
         </div>
-        {d.outcomes.byXVerdict.length > 0 && (
-          <div className="lh-mini">
-            <h4>Calls by X link verdict</h4>
-            <HitRates rows={d.outcomes.byXVerdict} />
-          </div>
-        )}
         {d.outcomes.byCopy.length > 0 && (
           <div className="lh-mini">
             <h4>Calls on originals vs copies</h4>
