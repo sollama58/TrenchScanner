@@ -4412,7 +4412,8 @@ button.small-btn {
 }
 .lh-hit {
   display: grid;
-  grid-template-columns: minmax(90px, 160px) 1fr 56px auto 80px;
+  /* Fixed widths, so every row's track (and the scale above them) lines up. */
+  grid-template-columns: minmax(90px, 160px) 1fr 56px 118px 80px;
   align-items: center;
   gap: 10px;
   font-size: 13px;
@@ -4446,16 +4447,14 @@ button.small-btn {
 .lh-hit.early .lh-hit-fill {
   opacity: 0.4;
 }
-.lh-hit-track.diverging .lh-hit-fill {
-  inset: 0 auto;
-}
-.lh-hit-fill.gain {
-  left: 50%;
+/* A diverging bar grows from the zero line in the middle: right for a gain, left for a loss. */
+.lh-hit-track.diverging .lh-hit-fill.gain {
+  inset: 0 auto 0 50%;
   border-radius: 0 5px 5px 0;
   background: var(--good);
 }
-.lh-hit-fill.loss {
-  right: 50%;
+.lh-hit-track.diverging .lh-hit-fill.loss {
+  inset: 0 50% 0 auto;
   border-radius: 5px 0 0 5px;
   background: var(--bad);
 }
@@ -4469,20 +4468,34 @@ button.small-btn {
 .lh-hit-axis {
   margin-bottom: -4px;
 }
+/* The scale sits in the track's column: its ends on the track's ends, its zero over the zero line. */
 .lh-hit-scale {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
+  height: 11px;
   font-size: 10.5px;
   line-height: 1;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 .lh-hit-scale i {
+  position: absolute;
+  top: 0;
   font-style: normal;
+  white-space: nowrap;
+}
+.lh-hit-scale i:nth-child(1) {
+  left: 0;
+}
+.lh-hit-scale i:nth-child(2) {
+  left: 50%;
+  transform: translateX(-50%);
+}
+.lh-hit-scale i:nth-child(3) {
+  right: 0;
 }
 /* In a half-width section (the modal's grid) the row stacks: label, then bar and figures, then tiers. */
 .lh-grid .lh-hit {
-  grid-template-columns: 1fr 52px auto;
+  grid-template-columns: 1fr 52px 76px;
   grid-template-areas:
     "label label label"
     "track value state"
@@ -4496,7 +4509,7 @@ button.small-btn {
   grid-area: track;
 }
 .lh-grid .lh-hit-axis {
-  grid-template-areas: "track track track";
+  grid-template-areas: "track value state";
   margin-bottom: -6px;
 }
 .lh-grid .lh-hit-axis > span:first-child {
@@ -4634,7 +4647,7 @@ button.small-btn {
     margin-top: 8px;
   }
   .lh-hit {
-    grid-template-columns: 1fr 52px auto;
+    grid-template-columns: 1fr 52px 76px;
     grid-template-areas:
       "label label label"
       "track value state"
@@ -4648,7 +4661,7 @@ button.small-btn {
     grid-area: track;
   }
   .lh-hit-axis {
-    grid-template-areas: "track track track";
+    grid-template-areas: "track value state";
     margin-bottom: -6px;
   }
   .lh-hit-axis > span:first-child {
