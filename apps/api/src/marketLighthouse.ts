@@ -166,6 +166,61 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
   };
 }
 
+interface HourOfDayRow {
+  hour: number;
+  calls: bigint;
+  graded: bigint;
+  won2x: bigint;
+  return_n: bigint;
+  return_sum: number | null;
+  first_hour: Date | null;
+  last_hour: Date | null;
+}
+
+/**
+ * The screened field by hour of the day (UTC), over everything the hourly rollup has kept
+ * (LighthouseHour, apps/worker/src/jobs/lighthouseRollupJob.ts): which hours launch the most
+ * decision-ready tokens and which hours' tokens pay. Always all 24 hours, zero where nothing
+ * was screened, so the chart's columns never shift.
+ */
+async function buildScreenedByHourOfDay() {
+  const rows = await prisma.$queryRaw<HourOfDayRow[]>`
+    SELECT extract(hour FROM h."hour" AT TIME ZONE 'UTC')::int AS hour,
+           sum(h."screenedCalls") AS calls,
+           sum(h."screenedGraded") AS graded,
+           sum(h."screenedWon2x") AS won2x,
+           sum(h."screenedReturnN") AS return_n,
+           sum(h."screenedReturnSum")::float8 AS return_sum,
+           min(h."hour") AS first_hour,
+           max(h."hour") AS last_hour
+    FROM "LighthouseHour" h
+    GROUP BY 1 ORDER BY 1`;
+  const n = (v: bigint | number | null | undefined) => Number(v ?? 0);
+  const byHour = new Map(rows.map((r) => [r.hour, r]));
+  let oldest: Date | null = null;
+  let newest: Date | null = null;
+  for (const r of rows) {
+    if (r.first_hour && (!oldest || r.first_hour < oldest)) oldest = r.first_hour;
+    if (r.last_hour && (!newest || r.last_hour > newest)) newest = r.last_hour;
+  }
+  return {
+    /** Days of hourly history behind the figures (0 before the rollup has run). */
+    days: oldest && newest ? Math.max(1, Math.round((newest.getTime() - oldest.getTime()) / DAY_MS + 1)) : 0,
+    hours: Array.from({ length: 24 }, (_, hour) => {
+      const r = byHour.get(hour);
+      const returnN = n(r?.return_n);
+      return {
+        hour,
+        calls: n(r?.calls),
+        graded: n(r?.graded),
+        hit2xPct: rate(n(r?.won2x), n(r?.graded)),
+        avgReturnPct: returnN > 0 ? (r?.return_sum ?? 0) / returnN : null,
+        returnGraded: returnN,
+      };
+    }),
+  };
+}
+
 export async function buildMarketLighthouse(env: Env, days: number) {
   const now = Date.now();
   const since = new Date(now - days * DAY_MS);
@@ -188,6 +243,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     averages,
     alertRows,
     screened,
+    byHourOfDay,
   ] = await Promise.all([
     tokenSageWorkerStatus(),
     prisma.tokenNarrative.groupBy({
@@ -275,6 +331,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,
     buildScreenedOutcomes(env, since, days),
+    buildScreenedByHourOfDay(),
   ]);
 
   // ---- Reads ----
@@ -359,7 +416,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     pairKinds: counts(pairKinds),
     copies: counts(copies),
     news: counts(news),
-    screened,
+    screened: { ...screened, byHourOfDay },
     outcomes: {
       alerts: alertRows.length,
       described: alertsDescribed,

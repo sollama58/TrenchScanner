@@ -1151,6 +1151,22 @@ export interface MarketLighthouse {
       hit10xPct: number | null;
       avgReturnPct: number | null;
     }[];
+    /**
+     * The screened field by hour of the day (UTC) over all the hourly history kept, always 24
+     * entries. Absent from older API builds.
+     */
+    byHourOfDay?: {
+      /** Days of history behind the figures; 0 before the rollup has run. */
+      days: number;
+      hours: {
+        hour: number;
+        calls: number;
+        graded: number;
+        hit2xPct: number | null;
+        avgReturnPct: number | null;
+        returnGraded: number;
+      }[];
+    };
     checks: {
       freshWalletMaxPct: number;
       /** Rejected at this share of empty top-10 wallets or more. */

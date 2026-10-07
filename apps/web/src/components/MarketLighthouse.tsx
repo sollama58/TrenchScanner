@@ -875,11 +875,136 @@ function Screened({ s, span, compact = false }: { s: ScreenedData; span: string;
           </div>
         </div>
       )}
+      {!compact && s.byHourOfDay && <HourOfDay h={s.byHourOfDay} />}
     </section>
   );
 }
 
 const retTone = (v: number | null) => (v === null ? "" : v >= 0 ? "lh-up" : "lh-down");
+
+/** Hours with fewer graded tokens than this are drawn faded: too few to read a rate from. */
+const MIN_HOUR_GRADED = 30;
+
+const hourLabel = (h: number) => `${String(h % 24).padStart(2, "0")}:00`;
+
+/**
+ * The screened field by hour of the day over everything the hourly rollup has kept: which
+ * hours (UTC) screen the most tokens, and which hours' tokens double and pay. Three charts on
+ * one column per hour, so a reader lines up busy against good.
+ */
+function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const hours = h.hours;
+  const total = hours.reduce((sum, x) => sum + x.calls, 0);
+  if (h.days === 0 || total === 0) return null;
+  const callsMax = Math.max(1, ...hours.map((x) => x.calls));
+  const rateMax = Math.max(10, ...hours.map((x) => x.hit2xPct ?? 0));
+  const top = Math.ceil(rateMax / 10) * 10;
+  const retAbs = Math.max(5, ...hours.map((x) => Math.abs(x.avgReturnPct ?? 0)));
+  const busiest = hours.reduce((b, x) => (x.calls > b.calls ? x : b), hours[0]!);
+  const focus = hover !== null ? (hours[hover] ?? busiest) : busiest;
+  const thin = (x: { graded: number }) => x.graded < MIN_HOUR_GRADED;
+  const col = (x: { hour: number }, i: number) =>
+    `${hover === i ? " is-hover" : ""}${thin(hours[i]!) ? " is-thin" : ""}`;
+  const hoverProps = (i: number) => ({ onMouseEnter: () => setHover(i), onClick: () => setHover(i) });
+
+  return (
+    <div className="lh-hod" onMouseLeave={() => setHover(null)}>
+      <h4 className="lh-subchart">By hour of the day, all {h.days.toLocaleString()} days kept</h4>
+      <p className="faint small">
+        Every screened token in our history by the UTC hour it was decided on: how many each hour brings, how
+        often they doubled, and what they returned on the exit plan. Hours with fewer than {MIN_HOUR_GRADED}{" "}
+        graded tokens are faded.
+      </p>
+      <div className="lh-readout" aria-live="polite">
+        <strong>
+          {hourLabel(focus.hour)}–{hourLabel(focus.hour + 1)} UTC
+        </strong>
+        <span className="num">{focus.calls.toLocaleString()} screened</span>
+        <span className="lh-readout-item">
+          <span className="lh-swatch lh-s1" />
+          2x <span className="num">{pct(focus.hit2xPct, 1)}</span>
+        </span>
+        <span className="lh-readout-item">
+          avg return <span className="num">{signedPct(focus.avgReturnPct, 1)}</span>
+        </span>
+        <span className="muted">
+          {focus.graded.toLocaleString()} graded{thin(focus) ? " · too few to judge" : ""}
+        </span>
+      </div>
+      <h5 className="lh-subchart">2x rate</h5>
+      <div className="lh-rate-chart">
+        <span className="lh-yaxis" aria-hidden>
+          <span>{top}%</span>
+          <span>{top / 2}%</span>
+          <span>0%</span>
+        </span>
+        <div className="lh-groups" role="img" aria-label="2x rate of screened tokens by hour of the day, UTC">
+          {hours.map((x, i) => (
+            <div key={x.hour} className={`lh-group${col(x, i)}`} {...hoverProps(i)}>
+              {x.hit2xPct !== null && (
+                <span
+                  className="lh-gbar lh-s1"
+                  style={{ height: `${Math.max(0.5, (x.hit2xPct / top) * 100)}%` }}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      <h5 className="lh-subchart">Average return</h5>
+      <div className="lh-rate-chart">
+        <span className="lh-yaxis" aria-hidden>
+          <span>+{Math.round(retAbs)}%</span>
+          <span>0%</span>
+          <span>−{Math.round(retAbs)}%</span>
+        </span>
+        <div
+          className="lh-ret"
+          role="img"
+          aria-label="Average exit-plan return of screened tokens by hour of the day, UTC"
+        >
+          {hours.map((x, i) => {
+            const v = x.avgReturnPct ?? 0;
+            return (
+              <div key={x.hour} className={`lh-ret-col${col(x, i)}`} {...hoverProps(i)}>
+                {x.avgReturnPct !== null && (
+                  <span
+                    className={`lh-ret-bar ${v >= 0 ? "up" : "down"}`}
+                    style={{ height: `${Math.max(0.5, (Math.abs(v) / retAbs) * 50)}%` }}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <h5 className="lh-subchart">Tokens screened</h5>
+      <div className="lh-rate-chart">
+        <span className="lh-yaxis" aria-hidden>
+          <span>{callsMax.toLocaleString()}</span>
+          <span>{Math.round(callsMax / 2).toLocaleString()}</span>
+          <span>0</span>
+        </span>
+        <div className="lh-groups" role="img" aria-label="Tokens screened by hour of the day, UTC">
+          {hours.map((x, i) => (
+            <div key={x.hour} className={`lh-group${hover === i ? " is-hover" : ""}`} {...hoverProps(i)}>
+              <span
+                className="lh-gbar lh-other"
+                style={{ height: `${Math.max(0.5, (x.calls / callsMax) * 100)}%` }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="lh-axis lh-axis-inset" aria-hidden>
+        {hours.map((x) => (
+          <span key={x.hour}>{x.hour % 3 === 0 ? `${x.hour}h` : ""}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** The pre-checks in words, from the numbers the API actually applies. */
 function PreChecks({ s }: { s: ScreenedData }) {
