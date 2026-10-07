@@ -188,6 +188,9 @@ export async function valueWalletsFromBalances(
       retries: 1,
       deadlineMs: 10_000,
       failed,
+      // These are whatever else the holders own, most of it with no pair anywhere: an all-empty
+      // answer is the usual case, not DexScreener going blank (the watchlist refresh decides that).
+      mayBeUnindexed: true,
     });
     // Not one pair for a large request is a broken pipe, not a wallet full of dead coins: left
     // alone it would value every wallet at $0 and read every holder list as empty.

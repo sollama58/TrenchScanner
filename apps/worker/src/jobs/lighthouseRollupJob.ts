@@ -470,13 +470,19 @@ async function labelRowsForDay(day: Date): Promise<Prisma.LighthouseDayLabelCrea
   });
 }
 
-/** Replaces the day's label rows with a fresh sum: labels that vanished go with them. */
+/**
+ * Replaces the day's label rows with a fresh sum: labels that vanished go with them. Under a
+ * per-day advisory lock: a deploy runs the old trainer and the new one side by side, both
+ * summing on boot, and without it the second's createMany lands on the first's rows (the hour
+ * rows are upserts and need none). Transaction-scoped, so it releases on commit or rollback.
+ */
 async function writeDay(day: Date): Promise<number> {
   const rows = await labelRowsForDay(day);
-  await prisma.$transaction([
-    prisma.lighthouseDayLabel.deleteMany({ where: { day } }),
-    prisma.lighthouseDayLabel.createMany({ data: rows }),
-  ]);
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"lighthouse-day:" + day.toISOString()}))`;
+    await tx.lighthouseDayLabel.deleteMany({ where: { day } });
+    await tx.lighthouseDayLabel.createMany({ data: rows });
+  });
   return rows.length;
 }
 

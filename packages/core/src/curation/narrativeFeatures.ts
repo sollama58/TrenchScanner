@@ -461,15 +461,18 @@ export const LINEAGE_KIND = {
   copy: "copy",
   lateCopy: "late_copy",
   reference: "reference",
+  unknown: "unknown",
 } as const;
 
 /**
  * A late copy: the 11th or later coin with this name, or a copy of a coin more than a day old
- * (TokenSage's thresholds). Null when the read predates lineage, which is "unknown", not "no".
+ * (TokenSage's thresholds). Null when the read predates lineage, or TokenSage could not resolve
+ * it ("unknown"): both are "unknown", not "no", and a filter that excludes late copies fails
+ * closed on them.
  */
 export function narrativeIsLateCopy(read: NarrativeRead): boolean | null {
   if (read.flags.includes(NARRATIVE_FLAG.lateCopy)) return true;
-  if (read.lineageKind === null) return null;
+  if (read.lineageKind === null || read.lineageKind === LINEAGE_KIND.unknown) return null;
   return read.lineageKind === LINEAGE_KIND.lateCopy;
 }
 

@@ -198,6 +198,24 @@ describe("getTokensByAddresses fallback while DexScreener is blank", () => {
     expect(client.usingFallback).toBe(false);
   });
 
+  it("leaves a large blank lookup alone when its mints may be unindexed", async () => {
+    // The empty-wallet check prices holders' other holdings - airdrops and NFTs with no pair -
+    // and such a lookup answering empty must not route the scan's refresh onto the fallback.
+    const dexCalls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      if (url.includes("geckoterminal")) throw new Error("should not be called");
+      dexCalls.push(url);
+      return Promise.resolve(new Response("[]"));
+    });
+    const client = new DexScreenerClient({
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+    const junk = Array.from({ length: 60 }, (_, i) => `junk${i}`);
+    expect(await client.getTokensByAddresses(junk, 5, { retries: 0, mayBeUnindexed: true })).toEqual([]);
+    expect(dexCalls).toHaveLength(2);
+    expect(client.usingFallback).toBe(false);
+  });
+
   it("leaves a small blank lookup alone: a few unindexed mints are not an outage", async () => {
     vi.stubGlobal("fetch", (url: string) => {
       if (url.includes("geckoterminal")) throw new Error("should not be called");

@@ -7,6 +7,23 @@ import { CONTESTANT_IDS, NARRATIVE_CONTESTANT, isContestantId } from "../curatio
  * `loadEnv()` once at startup; failing fast with a clear message beats a
  * confusing runtime crash three layers down.
  */
+/**
+ * An API key as pasted into a dashboard: trimmed, with surrounding quotes or a pasted "Bearer "
+ * dropped. A stray space or quote otherwise makes every call a 401 (TokenSage, 2026-10-07), or
+ * spends a paid budget on rejected calls.
+ */
+const pastedKey = z
+  .string()
+  .optional()
+  .default("")
+  .transform((v) =>
+    v
+      .trim()
+      .replace(/^(["'])(.*)\1$/, "$2")
+      .replace(/^bearer\s+/i, "")
+      .trim(),
+  );
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
@@ -52,7 +69,7 @@ const envSchema = z.object({
     .default("dev-insecure-default-jwt-secret-change-me"),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(168),
 
-  HELIUS_API_KEY: z.string().optional().default(""),
+  HELIUS_API_KEY: pastedKey,
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   // The worker's DexScreener token lookups a minute, shared by every job in the process (scan,
   // fast match, candidate watch, live prices, the empty-wallet check's pricing). DexScreener allows
@@ -61,7 +78,7 @@ const envSchema = z.object({
   // A CoinGecko paid-plan key. Market data falls back to GeckoTerminal whenever DexScreener answers
   // lookups blank (datasources/geckoterminal.ts); with this key it uses CoinGecko's on-chain API
   // instead, on the plan's limit rather than the free 30 calls a minute. Empty: the free tier.
-  COINGECKO_API_KEY: z.string().default(""),
+  COINGECKO_API_KEY: pastedKey,
   // The worker's share of the plan's calls a minute (the API process takes a small fixed share on
   // top). Only read with COINGECKO_API_KEY. 250 is the Basic plan's limit, less the API's.
   COINGECKO_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(200),
@@ -571,17 +588,7 @@ const envSchema = z.object({
   TOKENSAGE_API_URL: z.string().default(""),
   // Trimmed, with surrounding quotes or a pasted "Bearer " dropped: a stray space or quote from
   // the Render dashboard otherwise makes every call a 401.
-  TOKENSAGE_API_KEY: z
-    .string()
-    .optional()
-    .default("")
-    .transform((v) =>
-      v
-        .trim()
-        .replace(/^(["'])(.*)\1$/, "$2")
-        .replace(/^bearer\s+/i, "")
-        .trim(),
-    ),
+  TOKENSAGE_API_KEY: pastedKey,
   TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(2),
   TOKENSAGE_FULL_PER_DAY: z.coerce.number().int().min(0).default(6000),

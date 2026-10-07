@@ -53,6 +53,16 @@ export function AnnouncementBar() {
   }, [reload]);
   const [dismissed, setDismissed] = useState(readDismissed);
   const a = data?.announcement;
+  // Nothing re-renders at the expiry on its own, and the next poll is up to two minutes off:
+  // re-read as it passes, so an announcement posted "for an hour" leaves on the hour.
+  const expiresAt = a?.expiresAt ?? null;
+  useEffect(() => {
+    if (!expiresAt) return;
+    const wait = new Date(expiresAt).getTime() - Date.now();
+    if (!Number.isFinite(wait)) return;
+    const timer = setTimeout(reload, Math.min(Math.max(wait, 0), 2_147_000_000));
+    return () => clearTimeout(timer);
+  }, [expiresAt, reload]);
   if (!a || a.id === dismissed) return null;
   if (a.expiresAt && new Date(a.expiresAt).getTime() <= Date.now()) return null;
 

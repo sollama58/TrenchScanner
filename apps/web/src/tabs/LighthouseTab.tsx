@@ -177,7 +177,7 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
             {d.coverage.oldestHour
               ? `History kept since ${new Date(d.coverage.oldestHour).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`
               : "No history summed yet"}
-            {d.coverage.newestHour ? ` · last summed ${ago(d.coverage.newestHour)}` : ""}
+            {d.coverage.summedAt ? ` · last summed ${ago(d.coverage.summedAt)}` : ""}
             {" · "}
             exit plan: {d.exitPlan}
           </p>

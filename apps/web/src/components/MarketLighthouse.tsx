@@ -429,7 +429,8 @@ function Tide({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) {
   if (totals.every((t) => t === 0)) return <p className="muted small">No coins described in this window.</p>;
   // At rest the readout shows the newest bucket with reads in it (the current one may be empty yet).
   const latest = totals.reduce((last, t, i) => (t > 0 ? i : last), totals.length - 1);
-  const shown = hover ?? latest;
+  // A hover from before the window switched (7 days has more buckets than 24 hours) is stale.
+  const shown = hover !== null && hover < buckets.length ? hover : latest;
   // Bottom-up: the biggest narrative sits on the baseline.
   const stack = series;
   const tickEvery = Math.ceil(buckets.length / 6);
@@ -712,7 +713,10 @@ const TIERS = [
 
 function screenedBucketLabel(iso: string, bucketHours: number) {
   const t = new Date(iso);
-  if (bucketHours >= 24) return t.toLocaleDateString([], { weekday: "short", day: "numeric" });
+  // Day buckets are UTC-aligned on the API; named in UTC so a browser west of it doesn't label
+  // today's bucket with yesterday's date (the Lighthouse tab's ticks do the same).
+  if (bucketHours >= 24)
+    return t.toLocaleDateString([], { timeZone: "UTC", weekday: "short", day: "numeric" });
   return t.toLocaleTimeString([], { hour: "numeric" });
 }
 

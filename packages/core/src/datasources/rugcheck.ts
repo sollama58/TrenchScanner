@@ -111,8 +111,10 @@ export class RugCheckClient {
 
   /**
    * getProfiles, keeping "no report" and "lookup failed" apart for every mint. With `deadlineMs`,
-   * mints still queued when it passes are reported failed without a request (the ones in flight
-   * finish); `sink` receives each answer as it lands, for a caller that stops waiting earlier.
+   * mints still queued when it passes are not requested and get no entry at all (the ones in
+   * flight finish): they were never asked, so they are neither an answer nor a failure, and a
+   * caller must not back them off as one. `sink` receives each answer as it lands, for a caller
+   * that stops waiting earlier.
    */
   async getProfileResults(
     mintAddresses: string[],
@@ -123,8 +125,8 @@ export class RugCheckClient {
     const results = new Map<string, RugCheckProfileResult>();
     const deadline = opts.deadlineMs === undefined ? Infinity : Date.now() + opts.deadlineMs;
     await forEachWithConcurrency(unique, concurrency, async (mint) => {
-      const result: RugCheckProfileResult =
-        Date.now() >= deadline ? { status: "failed" } : await this.getProfileResult(mint);
+      if (Date.now() >= deadline) return;
+      const result = await this.getProfileResult(mint);
       results.set(mint, result);
       opts.sink?.set(mint, result);
     });

@@ -673,9 +673,18 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
   const hourAgo = new Date(now - 3_600_000);
   const burstAgo = new Date(now - GOVERNOR_BURST_WINDOW_MINUTES * 60_000);
   const roster = await curatorRoster(env);
+  // The Narrative seat goes last: when the deep read is in hand at the decision moment it files
+  // beside the other seats, and its view then goes onto their cards as a note rather than out
+  // as a second card (see emitForModel), which needs their calls written first.
   const order = [
     roster.defaultModel,
-    ...roster.entries.map((e) => e.spec.id).filter((m) => m !== roster.defaultModel),
+    ...roster.entries
+      .map((e) => e.spec.id)
+      .filter((m) => m !== roster.defaultModel && m !== NARRATIVE_CONTESTANT),
+    ...(roster.entries.some((e) => e.spec.id === NARRATIVE_CONTESTANT) &&
+    roster.defaultModel !== NARRATIVE_CONTESTANT
+      ? [NARRATIVE_CONTESTANT]
+      : []),
   ];
 
   // Anchors created by calls this pass, so another ledger's call on the same token grades from
@@ -797,6 +806,19 @@ async function emitForModel(
         reasoning: review.verdict.reasoning,
       });
     }
+    // Another ledger called this coin in this very pass (the deep read was in hand at the
+    // decision moment, so every seat filed it together): the Narrative seat's view goes onto
+    // that card as a note, as it does for a card already out, not out as a second card.
+    if (model === NARRATIVE_CONTESTANT && anchors.has(pick.token.id)) {
+      const cooldownCutoff = new Date(clock.now - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
+      await noteNarrativeVerdict(pick.token.id, pick.decision, cooldownCutoff).catch((err) =>
+        logger.warn("failed to note another seat's card", {
+          mint: pick.token.mintAddress,
+          error: String(err),
+        }),
+      );
+      continue;
+    }
     // One pick's write failing (a pool timeout, say) must not take the rest of the cycle's picks
     // down with it. The failed pick tries again next cycle.
     let result: Awaited<ReturnType<typeof emitCuratedAlert>>;
@@ -858,41 +880,16 @@ async function emitCuratedAlert(
 ): Promise<{ anchor: CandidateSampleRef; alertId: string } | null> {
   const { token, scored, decision } = pick;
 
-  let anchor = sharedAnchor ?? (pick.cycleSample?.created ? pick.cycleSample : null);
-  if (anchor && !sharedAnchor) {
-    // The windows run from the alert, and the alert is going out now - after the rest of the scan
-    // cycle, the governor and (in gate mode) the AI review, which can take most of a minute - so
-    // the anchor's clock moves to now. Its price stays the one the token was detected and alerted
-    // at. Only while the row has seen no price yet: once it has, that price predates the alert,
-    // and the alert gets a fresh row like a stale sample would.
-    const now = new Date();
-    const moved = await prisma.candidateOutcome.updateMany({
-      where: { id: anchor.id, entryAt: null },
-      data: {
-        extended24h: true,
-        anchorAt: now,
-        nextCheckAt: new Date(now.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
-      },
-    });
-    if (moved.count === 0) anchor = null;
-  }
-  if (!anchor) {
-    anchor = await recordCandidateSample(token.id, scored, env, {
-      bypassSpacing: true,
-      extended24h: true,
-    });
-  }
-  if (!anchor) return null;
-
   // The per-ledger cooldown was read when the contender was collected, a governor pass (and in
   // gate mode an AI review) ago, with nothing holding it. One process is the normal case, but a
   // deploy runs the old scanner and the new one side by side for a minute, and both collecting
   // the same token in the same cycle would both read "no recent call" and both file it. So the
   // cooldown is re-checked here, under a per-token advisory lock, in the same transaction as
-  // the create: the second process finds the first's row and stands down. Transaction-scoped,
-  // so the lock releases on commit or rollback with no cleanup path to get wrong.
-  const anchored = anchor;
-  const alert = await prisma.$transaction(
+  // the anchor and the create: the second process finds the first's row and stands down with
+  // nothing written - an anchor moved or created before the check would be left behind as a
+  // 24h-watched row no alert refers to. Transaction-scoped, so the lock releases on commit or
+  // rollback with no cleanup path to get wrong.
+  const written = await prisma.$transaction(
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"curated:" + token.id}))`;
       const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
@@ -900,11 +897,39 @@ async function emitCuratedAlert(
         where: { tokenId: token.id, model, createdAt: { gt: cooldownCutoff } },
         select: { id: true },
       });
-      if (recent) return null;
-      return tx.curatedAlert.create({
+      if (recent) return "recent" as const;
+
+      let anchor = sharedAnchor ?? (pick.cycleSample?.created ? pick.cycleSample : null);
+      if (anchor && !sharedAnchor) {
+        // The windows run from the alert, and the alert is going out now - after the rest of the
+        // scan cycle, the governor and (in gate mode) the AI review, which can take most of a
+        // minute - so the anchor's clock moves to now. Its price stays the one the token was
+        // detected and alerted at. Only while the row has seen no price yet: once it has, that
+        // price predates the alert, and the alert gets a fresh row like a stale sample would.
+        const now = new Date();
+        const moved = await tx.candidateOutcome.updateMany({
+          where: { id: anchor.id, entryAt: null },
+          data: {
+            extended24h: true,
+            anchorAt: now,
+            nextCheckAt: new Date(now.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
+          },
+        });
+        if (moved.count === 0) anchor = null;
+      }
+      if (!anchor) {
+        anchor = await recordCandidateSample(token.id, scored, env, {
+          bypassSpacing: true,
+          extended24h: true,
+          db: tx,
+        });
+      }
+      if (!anchor) return null;
+
+      const alert = await tx.curatedAlert.create({
         data: {
           tokenId: token.id,
-          candidateOutcomeId: anchored.id,
+          candidateOutcomeId: anchor.id,
           snapshotId: pick.snapshotId ?? null,
           model,
           modelName,
@@ -917,12 +942,13 @@ async function emitCuratedAlert(
           anchorMcapUsd: scored.marketCapUsd,
         },
       });
+      return { anchor, alert };
     },
     // Same posture as createMatchesForTargets: this runs behind the scan's candidate fan-out,
     // and a pool timeout here would defer a pick the curator already vouched for.
     { maxWait: 10_000, timeout: 15_000 },
   );
-  if (!alert) {
+  if (written === "recent") {
     logger.info("curated alert already emitted by another process", {
       model,
       mint: token.mintAddress,
@@ -930,6 +956,8 @@ async function emitCuratedAlert(
     });
     return null;
   }
+  if (!written) return null;
+  const { anchor, alert } = written;
   // After the create, never before - same contract as notifyMatchCreated: the row must exist by
   // the time a connected dashboard reacts to the nudge. Failure is its own logged non-event.
   await notifyCuratedAlert({ alertId: alert.id, model });

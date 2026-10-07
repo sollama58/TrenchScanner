@@ -159,4 +159,21 @@ describe("RugCheckClient.getProfileResult", () => {
     const client = new RugCheckClient();
     await expect(client.getProfileResult(MINT)).resolves.toEqual({ status: "failed" });
   });
+
+  it("records nothing for a mint still queued at the deadline: never asked is not a failure", async () => {
+    // One slow answer holds the only worker past the deadline; the mint behind it is skipped,
+    // and must not come back as "failed" (the scan job would back it off for a strike it never
+    // earned).
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      asked.push(url);
+      await new Promise((r) => setTimeout(r, 30));
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    });
+    const client = new RugCheckClient();
+    const results = await client.getProfileResults(["first", "second"], 1, { deadlineMs: 10 });
+    expect(results.get("first")).toEqual({ status: "absent" });
+    expect(results.has("second")).toBe(false);
+    expect(asked).toHaveLength(1);
+  });
 });

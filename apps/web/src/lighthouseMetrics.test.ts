@@ -58,7 +58,11 @@ const sums = (
 
 const history = (): LighthouseHistory => ({
   window: { days: 7, since: "2026-10-01T00:00:00.000Z", bucket: "day", dimension: "category" },
-  coverage: { oldestHour: "2026-09-01T00:00:00.000Z", newestHour: "2026-10-07T12:00:00.000Z" },
+  coverage: {
+    oldestHour: "2026-09-01T00:00:00.000Z",
+    newestHour: "2026-10-07T12:00:00.000Z",
+    summedAt: "2026-10-07T12:05:00.000Z",
+  },
   exitPlan: "half at 2x",
   totals: sums(),
   previous: sums({ won2x: 2 }),
