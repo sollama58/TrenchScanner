@@ -4,6 +4,7 @@ import {
   defaultContestant,
   loadChampion,
   resolveDefaultModel,
+  resolveFeedModels as resolveFeedModelsShared,
   emptyRecord,
   enabledContestants,
   liveCallRecords,
@@ -217,20 +218,19 @@ export async function savedFeedModel(request: FastifyRequest): Promise<string | 
 }
 
 /**
- * The ledgers the combined feed reads, in roster order: the default (the best performer) while the
- * user follows it; else their checked models that are still on the roster, else their single
- * pick, else the default. `followsDefault` is true when the feed is showing the default.
+ * The ledgers the combined feed reads - the rule lives in core (curation/feedModels.ts), shared
+ * with the worker's Telegram dispatcher so both decide "is this call in this person's feed" the
+ * same way. `followsDefault` is true when the feed is showing the default.
  */
 export function resolveFeedModels(
   state: ContestState,
   saved: Pick<SavedFeed, "model" | "models"> & Partial<SavedFeed>,
 ): { models: string[]; followsDefault: boolean } {
-  if (saved.followBest) return { models: [state.defaultModel], followsDefault: true };
-  const checked = new Set(saved.models);
-  const models = state.roster.filter((c) => checked.has(c.id)).map((c) => c.id);
-  if (models.length > 0) return { models, followsDefault: false };
-  const single = resolveFeedModel(state, undefined, saved.model);
-  return { models: [single], followsDefault: single !== saved.model };
+  return resolveFeedModelsShared(state, {
+    model: saved.model,
+    models: saved.models,
+    followBest: saved.followBest === true,
+  });
 }
 
 /** The display block a feed response carries for the model it is showing. */

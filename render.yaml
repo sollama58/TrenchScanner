@@ -39,6 +39,9 @@
 #         Verifies and reconciles burns. Empty (or a public endpoint) means the Helius RPC built
 #         from HELIUS_API_KEY; set it only to use a different paid RPC.
 #   - ADMIN_WALLET_ADDRESSES (api only)            your own wallet's base58 address, to reach /admin
+#   - TELEGRAM_BOT_TOKEN (api + worker)            optional: a bot token from @BotFather
+#         Turns on Telegram alerts (Filters tab -> Telegram alerts): the api runs the bot's webhook
+#         and link codes, the worker sends each linked chat its alerts. Empty, the feature is off.
 #   - MODEL_BACKUP_S3_ENDPOINT, _BUCKET, _ACCESS_KEY_ID, _SECRET_ACCESS_KEY (trainer only, optional)
 #         Off-site copies of the weekly model backups to any S3-compatible bucket (Cloudflare R2,
 #         Backblaze B2, AWS S3); MODEL_BACKUP_S3_REGION defaults to "auto" (R2). Unset, backups
@@ -142,6 +145,13 @@ services:
       # least 32 characters; empty leaves the route switched off (404).
       - key: STATS_API_TOKEN
         sync: false
+      # Telegram alerts (see packages/core/src/telegram): the bot token from @BotFather. Empty
+      # leaves the feature off. Set on this service and the worker below.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      # Where Telegram delivers the bot's updates: this service's public webhook route.
+      - key: TELEGRAM_WEBHOOK_URL
+        value: https://trenchscanner-api.onrender.com/telegram/webhook
 
   - type: worker
     name: trenchscanner-worker
@@ -235,6 +245,15 @@ services:
         value: "1"
       - key: LIVE_PRICE_MAX_TRACKED
         value: "150"
+      # The same bot token as on the api: this process sends the alerts (telegram-dispatch).
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_DASHBOARD_URL
+        value: https://trenchscanner.app
+      # The same list as on the api: the dispatcher sends real-time alerts only to accounts with
+      # access (admin, whitelist or subscription), and this is how it recognises the admin wallets.
+      - key: ADMIN_WALLET_ADDRESSES
+        sync: false
 
   # The model trainer: the same worker build, running only the batch jobs (curator-training,
   # champion-refresh, ai-judge, cleanup, outcome-tracking, lighthouse-rollup). Its own instance so

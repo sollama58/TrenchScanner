@@ -13,6 +13,7 @@ import {
   lastHeartbeatAt,
   recordHeartbeat,
   runsJob,
+  runTelegramDispatch,
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { runScanCycle } from "./jobs/scanJob.js";
@@ -149,6 +150,16 @@ async function main() {
       "fast-match",
       () => runFastMatchCycle(deps.dexScreener, env),
       env.FAST_MATCH_INTERVAL_SECONDS / 60,
+      { deadlineMinutes: 10 },
+    ),
+  );
+  // Sends each linked Telegram chat the alerts its account got since the chat's cursor - see
+  // packages/core/src/telegram/dispatch.ts. Nothing to do until TELEGRAM_BOT_TOKEN is set.
+  schedule("telegram-dispatch", () =>
+    scheduleInterval(
+      "telegram-dispatch",
+      async () => ({ ...(await runTelegramDispatch(env)) }),
+      env.TELEGRAM_DISPATCH_INTERVAL_SECONDS / 60,
       { deadlineMinutes: 10 },
     ),
   );

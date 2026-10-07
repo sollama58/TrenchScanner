@@ -1,0 +1,187 @@
+import { createHash } from "node:crypto";
+import { createLogger } from "../logger.js";
+
+/**
+ * The slice of Telegram's Bot API this app uses, over plain fetch. Deliberately not fetchJson:
+ * that helper retries on 5xx and timeouts, which for sendMessage means a duplicate alert, and it
+ * drops the body of a non-2xx answer, which is where Telegram says why ("bot was blocked by the
+ * user", "retry after 7"). Every method here returns a typed result instead of throwing, so a
+ * caller decides what a refusal means for the chat it was talking to.
+ */
+
+const logger = createLogger("telegram-api");
+
+const API_BASE = "https://api.telegram.org";
+const TIMEOUT_MS = 10_000;
+
+export interface TelegramUser {
+  id: number;
+  is_bot: boolean;
+  first_name: string;
+  last_name?: string;
+  username?: string;
+}
+
+export interface TelegramChatInfo {
+  id: number;
+  type: "private" | "group" | "supergroup" | "channel";
+  title?: string;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+}
+
+export interface TelegramMessage {
+  message_id: number;
+  from?: TelegramUser;
+  chat: TelegramChatInfo;
+  date: number;
+  text?: string;
+  entities?: { type: string; offset: number; length: number }[];
+}
+
+export interface TelegramChatMemberUpdated {
+  chat: TelegramChatInfo;
+  from: TelegramUser;
+  date: number;
+  new_chat_member: { status: string; user: TelegramUser };
+}
+
+/** An incoming update, as Telegram POSTs it to the webhook. Only the kinds this app asked for. */
+export interface TelegramUpdate {
+  update_id: number;
+  message?: TelegramMessage;
+  my_chat_member?: TelegramChatMemberUpdated;
+}
+
+export type TelegramResult<T> =
+  | { ok: true; result: T }
+  | {
+      ok: false;
+      /** Telegram's error_code, or 0 when the request never got an answer. */
+      code: number;
+      description: string;
+      /** From a 429: how long Telegram wants us to wait, in seconds. */
+      retryAfter?: number;
+      /** From a 400 on a group that became a supergroup: its new chat id. */
+      migrateToChatId?: number;
+    };
+
+/** The bot's token: non-empty means Telegram is configured. */
+export function telegramConfigured(token: string): boolean {
+  return token.trim().length > 0;
+}
+
+/**
+ * The secret Telegram sends back in X-Telegram-Bot-Api-Secret-Token on every webhook call, so
+ * nobody else can POST updates at the route. Derived from the token rather than a second env var:
+ * anyone holding the token already owns the bot, so this is exactly as secret as it needs to be
+ * and one less thing to set. Hex, which is inside Telegram's [A-Za-z0-9_-] alphabet.
+ */
+export function webhookSecret(token: string): string {
+  return createHash("sha256").update(`trenchscanner-telegram-webhook:${token}`).digest("hex");
+}
+
+export class TelegramApi {
+  constructor(
+    private readonly token: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {}
+
+  /** One Bot API call. Never throws: a network failure is `{ ok: false, code: 0 }`. */
+  async call<T>(method: string, params: Record<string, unknown> = {}): Promise<TelegramResult<T>> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const res = await this.fetchImpl(`${API_BASE}/bot${this.token}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(params),
+        signal: controller.signal,
+      });
+      const body = (await res.json().catch(() => null)) as
+        | { ok: true; result: T }
+        | {
+            ok: false;
+            error_code?: number;
+            description?: string;
+            parameters?: { retry_after?: number; migrate_to_chat_id?: number };
+          }
+        | null;
+      if (body && body.ok === true) return { ok: true, result: body.result };
+      const code = body?.ok === false ? (body.error_code ?? res.status) : res.status;
+      const description = (body?.ok === false && body.description) || `HTTP ${res.status}`;
+      const failure: Extract<TelegramResult<T>, { ok: false }> = { ok: false, code, description };
+      if (body?.ok === false) {
+        if (typeof body.parameters?.retry_after === "number")
+          failure.retryAfter = body.parameters.retry_after;
+        if (typeof body.parameters?.migrate_to_chat_id === "number") {
+          failure.migrateToChatId = body.parameters.migrate_to_chat_id;
+        }
+      }
+      return failure;
+    } catch (err) {
+      const description = err instanceof Error && err.name === "AbortError" ? "timed out" : String(err);
+      logger.warn("telegram call failed", { method, error: description });
+      return { ok: false, code: 0, description };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  getMe(): Promise<TelegramResult<TelegramUser>> {
+    return this.call<TelegramUser>("getMe");
+  }
+
+  /** Sends HTML text; link previews are off so a card stays one card. */
+  sendMessage(
+    chatId: number | bigint,
+    html: string,
+    opts: { silent?: boolean } = {},
+  ): Promise<TelegramResult<TelegramMessage>> {
+    return this.call<TelegramMessage>("sendMessage", {
+      chat_id: String(chatId),
+      text: html,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      disable_notification: opts.silent === true,
+    });
+  }
+
+  getChatMember(chatId: number | bigint, userId: number): Promise<TelegramResult<{ status: string }>> {
+    return this.call<{ status: string }>("getChatMember", { chat_id: String(chatId), user_id: userId });
+  }
+
+  setWebhook(url: string): Promise<TelegramResult<boolean>> {
+    return this.call<boolean>("setWebhook", {
+      url,
+      secret_token: webhookSecret(this.token),
+      allowed_updates: ["message", "my_chat_member"],
+      drop_pending_updates: false,
+    });
+  }
+
+  /** The bot's description under the chat list, and its command menu. Best effort. */
+  async describeBot(): Promise<void> {
+    await this.call("setMyCommands", {
+      commands: [
+        { command: "start", description: "Link this chat with a code from the Filters tab" },
+        { command: "status", description: "Which account this chat is linked to" },
+        { command: "stop", description: "Stop alerts in this chat" },
+      ],
+    });
+  }
+}
+
+/** The name a chat shows in the dashboard: a group's title, or the person's name. */
+export function chatTitle(chat: TelegramChatInfo): string | null {
+  if (chat.title) return chat.title.slice(0, 120);
+  const name = [chat.first_name, chat.last_name].filter(Boolean).join(" ").trim();
+  if (name) return name.slice(0, 120);
+  return chat.username ? `@${chat.username}`.slice(0, 120) : null;
+}
+
+export function userDisplayName(user: TelegramUser): string {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  return (name || (user.username ? `@${user.username}` : `user ${user.id}`)).slice(0, 120);
+}

@@ -18,7 +18,8 @@ export type HeartbeatJob =
   | "champion-refresh"
   | "model-backup"
   | "score-weights"
-  | "lighthouse-rollup";
+  | "lighthouse-rollup"
+  | "telegram-dispatch";
 
 /**
  * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
@@ -38,6 +39,7 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "candidate-watch": "scanner",
   "burn-scan": "scanner",
   "match-peaks": "scanner",
+  "telegram-dispatch": "scanner",
   cleanup: "trainer",
   "outcome-tracking": "trainer",
   "curator-training": "trainer",
