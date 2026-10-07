@@ -32,6 +32,7 @@ import {
   type Tab,
 } from "./routes";
 import { AlertNotifier, resetSettings } from "./alerts";
+import { AnnouncementBar } from "./components/AnnouncementBar";
 import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
@@ -274,6 +275,8 @@ export function App() {
       </header>
 
       <main className="content">
+        {/* The Admin tab's broadcast: for everyone, signed in, guest or signed out. */}
+        {session.state !== "linking" && <AnnouncementBar />}
         {session.state === "loading" && <Boot />}
         {session.state === "linking" &&
           (session.error ? (
