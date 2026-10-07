@@ -158,21 +158,35 @@ export const LogoutIcon = (p: IconProps) => (
   </Svg>
 );
 
-/** The brand mark: a radar sweep over a target. */
+/**
+ * The brand mark: a radar sweeping over a trench, with a blip where it finds a runner. The small
+ * variant of the logo in public/favicon.svg (thicker strokes, no inner arcs) so it reads at 24 px.
+ */
 export function LogoMark({ size = 26 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden className="logo-mark">
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden className="logo-mark">
       <defs>
         <linearGradient id="lm" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="var(--brand-a)" />
           <stop offset="1" stopColor="var(--brand-b)" />
         </linearGradient>
       </defs>
-      <rect x="1" y="1" width="30" height="30" rx="9" fill="url(#lm)" />
-      <circle cx="16" cy="16" r="8.5" fill="none" stroke="#fff" strokeOpacity="0.55" strokeWidth="1.6" />
-      <circle cx="16" cy="16" r="4" fill="none" stroke="#fff" strokeOpacity="0.8" strokeWidth="1.6" />
-      <path d="M16 16L23 9" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-      <circle cx="16" cy="16" r="1.8" fill="#fff" />
+      <rect width="64" height="64" rx="15" fill="url(#lm)" />
+      <g transform="translate(32 35.627) scale(0.093)" fill="none" stroke="#fff" strokeWidth="40">
+        <path
+          d="M0 0L180 -174A250 250 0 0 0 -250 0L-250 17L-85 17L-80 0Z"
+          fill="#fff"
+          fillOpacity="0.22"
+          stroke="none"
+        />
+        <path d="M250 0A250 250 0 0 0 200 -150" strokeOpacity="0.6" strokeWidth="34" />
+        <path
+          d="M180 -174A250 250 0 0 0 -250 0L-250 17L-85 17L-40 172L40 172L85 17L267 17"
+          strokeLinejoin="round"
+        />
+        <path d="M0 0L180 -174" strokeLinecap="round" />
+        <circle cx="0" cy="88" r="22" fill="#fff" stroke="none" />
+      </g>
     </svg>
   );
 }
