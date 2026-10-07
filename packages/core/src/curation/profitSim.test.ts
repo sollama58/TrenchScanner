@@ -40,6 +40,21 @@ describe("simulateExitPlan (half at 2x, rest at 4x, stop -50%, out at 30 min)", 
     expect(simulateExitPlan(row({ low1hPriceUsd: 0.6 }), 0.7)).toBeCloseTo(-30);
   });
 
+  it("a close through the stop fills at the stop, not below it", () => {
+    // The closing tick is the first past the window; the window's aggregates never folded it in.
+    expect(simulateExitPlan(row({ peakBeforeStopPriceUsd: 1.4, low1hPriceUsd: 0.8 }), 0.01)).toBeCloseTo(-50);
+    const doubled = row({ peakBeforeStopPriceUsd: 2.5, peak1hPriceUsd: 2.5, low1hPriceUsd: 0.9 });
+    expect(simulateExitPlan(doubled, 0.3)).toBeCloseTo(25);
+    expect(simulateExitPlan(doubled, 0.5)).toBeCloseTo(25);
+  });
+
+  it("a close through a take-profit fills that rung, not above it", () => {
+    expect(simulateExitPlan(row({ peakBeforeStopPriceUsd: 1.5 }), 4.5)).toBeCloseTo(200);
+    expect(simulateExitPlan(row({ peakBeforeStopPriceUsd: 1.5 }), 2.2)).toBeCloseTo(110); // 0.5*2 + 0.5*2.2
+    const older = row({ peakBeforeStopPriceUsd: null, peak1hPriceUsd: 3, low1hPriceUsd: 0.9 });
+    expect(simulateExitPlan(older, 5)).toBeCloseTo(200);
+  });
+
   it("is unknown without a close price only when part of the position was still held", () => {
     expect(simulateExitPlan(row({ peakBeforeStopPriceUsd: 1.4 }), null)).toBeNull();
     expect(simulateExitPlan(row({ peakBeforeStopPriceUsd: 4 }), null)).toBeCloseTo(200);
