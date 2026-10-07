@@ -117,6 +117,16 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
         { ...row, tokenId: tokens[2]!.id, hit2xIn1h: false, hit4xIn1h: false, simReturnPct: -20 },
         { ...row, tokenId: tokens[3]!.id },
         { ...row, tokenId: tokens[3]!.id, sampleKind: "hourly", hit2xIn1h: true, simReturnPct: 900 },
+        // A decision moment the safety screen rejects today (empty-wallet cut): out of the
+        // screened field, as on the Live tab.
+        {
+          ...row,
+          tokenId: tokens[2]!.id,
+          features: { emptyTop10WalletPct: 85 },
+          hit2xIn1h: true,
+          hit4xIn1h: true,
+          simReturnPct: 500,
+        },
       ],
     });
     const base = { source: TAG, confidence: 80, anchorPriceUsd: 1, anchorMcapUsd: 50_000, createdAt: AT };
@@ -125,6 +135,15 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
         { ...base, tokenId: tokens[0]!.id, hit2xIn1h: true, hit4xIn1h: false, simReturnPct: 40 },
         { ...base, tokenId: tokens[1]!.id, hit2xIn1h: false, hit4xIn1h: false, simReturnPct: -50 },
         { ...base, tokenId: tokens[3]!.id },
+        // A 2x reached after the stop is graded, and a loss.
+        {
+          ...base,
+          tokenId: tokens[2]!.id,
+          hit2xIn1h: true,
+          disqualified: true,
+          hit4xIn1h: false,
+          simReturnPct: -40,
+        },
       ],
     });
   });
@@ -158,13 +177,13 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
       copiesAnswered: 2,
       trendMatched: 1,
       trendAnswered: 1,
-      alerts: 3,
-      alertsDescribed: 2,
-      alertsGraded: 2,
+      alerts: 4,
+      alertsDescribed: 3,
+      alertsGraded: 3,
       alertsWon2x: 1,
       alertsWon4x: 0,
-      alertsReturnN: 2,
-      alertsReturnSum: -10,
+      alertsReturnN: 3,
+      alertsReturnSum: -50,
     });
     expect(hour.referentConfidenceSum).toBeCloseTo(1.2);
 
@@ -179,6 +198,9 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
     expect(find("category", "rlanimal")).toMatchObject({ count: 2, alerts: 2, graded: 2, won2x: 1 });
     // A malformed confidence still files the coin under its only label.
     expect(find("category", "rltech")).toMatchObject({ count: 1, alerts: 0 });
+    // The call on that coin files under "uncategorized" (no usable confidence), graded as a loss:
+    // its 2x came after the stop.
+    expect(find("category", "uncategorized")).toMatchObject({ alerts: 1, graded: 1, won2x: 0 });
     expect(find("subcategory", "rlanimal/dog")).toMatchObject({ count: 2, alerts: 2 });
     expect(find("flag", "copycat")).toMatchObject({ count: 1, alerts: 1, won2x: 1 });
     expect(find("referentKind", "animal")?.count).toBe(2);

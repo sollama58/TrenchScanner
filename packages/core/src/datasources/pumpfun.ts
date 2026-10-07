@@ -164,12 +164,22 @@ export class PumpFunClient {
   }
 }
 
+/** Same caps as the PumpPortal stream applies (discovery/pumpPortalStream.ts). */
+const MAX_SYMBOL_CHARS = 40;
+const MAX_NAME_CHARS = 120;
+const MAX_IMAGE_URL_CHARS = 500;
+const clip = (v: string | undefined, max: number): string | undefined =>
+  typeof v === "string" ? v.slice(0, max) : undefined;
+
 function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {
+  const imageUrl = clip(coin.image_uri, MAX_IMAGE_URL_CHARS);
   return {
     mintAddress: coin.mint,
-    symbol: coin.symbol,
-    name: coin.name,
-    imageUrl: coin.image_uri,
+    symbol: clip(coin.symbol, MAX_SYMBOL_CHARS),
+    name: clip(coin.name, MAX_NAME_CHARS),
+    // Only an https image is ever rendered (the dashboard refuses anything else), so nothing else
+    // is stored.
+    imageUrl: imageUrl?.startsWith("https://") ? imageUrl : undefined,
     description: coin.description,
     createdAt: coin.created_timestamp ? new Date(coin.created_timestamp) : undefined,
     graduated: coin.complete ?? false,

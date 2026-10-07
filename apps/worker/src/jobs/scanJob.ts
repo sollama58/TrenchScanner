@@ -6,6 +6,7 @@ import {
   createLogger,
   refreshAndFilterToBand,
   scanBand,
+  inMcapBand,
   buildScoredToken,
   scoreToken,
   refreshScoreWeights,
@@ -1512,8 +1513,11 @@ async function processCandidate(
   try {
     // Skipped outright when the cycle's prefetch already saw an hourly sample inside its spacing
     // window - recordCandidateSample would only look that row up again and return it.
-    if (!prior.recentHourlySample) await recordCandidateSample(token.id, scored, env);
+    // Only inside the band the models decide in: an actively-viewed token kept on the watchlist
+    // outside it (see viewedMarketData) is scanned for its live card, not sampled for training.
     const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
+    const inScanBand = inMcapBand(scored.marketCapUsd, scanBand(band.min, band.max));
+    if (!prior.recentHourlySample && inScanBand) await recordCandidateSample(token.id, scored, env);
     // An event waits for the sniper checks when they're required: deciding without them would
     // skip the curator's wallet caps, and an event spent now can't be reopened until the
     // spacing window passes. The contender-first wallet ordering above resolves them quickly.

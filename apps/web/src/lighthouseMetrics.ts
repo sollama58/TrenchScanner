@@ -436,15 +436,24 @@ export function bucketLabel(iso: string, bucket: LighthouseHistoryBucket): { sho
       full: t.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric" }),
     };
   }
-  const day = t.toLocaleDateString([], { month: "short", day: "numeric" });
+  // Day and week buckets start at 00:00 UTC (Mondays for weeks), so their labels are UTC dates:
+  // in local time a browser west of UTC would show the day before.
+  const utc = { timeZone: "UTC" } as const;
+  const day = t.toLocaleDateString([], { ...utc, month: "short", day: "numeric" });
   if (bucket === "day")
     return {
       short: day,
-      full: t.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" }),
+      full: t.toLocaleDateString([], {
+        ...utc,
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
     };
   return {
     short: day,
-    full: `Week of ${t.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`,
+    full: `Week of ${t.toLocaleDateString([], { ...utc, month: "short", day: "numeric", year: "numeric" })}`,
   };
 }
 

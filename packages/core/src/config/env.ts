@@ -680,9 +680,12 @@ const validatedEnvSchema = envSchema
   })
   // The Narrative seat (curation/contestants.ts) only exists with TokenSage: without it there
   // is no deep read to wait for, so the seat leaves the roster everywhere (worker, trainer, API)
-  // rather than sitting untrained on the leaderboard.
+  // rather than sitting untrained on the leaderboard. The flag alone decides, not the URL and
+  // key as well: only the scanner calls TokenSage (tokenSageEnabled), while the trainer and the
+  // API read its stored answers from the database - and render.yaml gives them no key, so a
+  // roster keyed on the key would have the scanner wait on a seat the trainer never trains.
   .transform((env) =>
-    tokenSageEnabled(env)
+    env.TOKENSAGE_ENABLED
       ? env
       : { ...env, CURATOR_CONTESTANTS: env.CURATOR_CONTESTANTS.filter((id) => id !== NARRATIVE_CONTESTANT) },
   );

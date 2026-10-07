@@ -92,6 +92,15 @@ const settled = new Map<string, Settled>();
  */
 const notFoundUntil = new Map<string, number>();
 const NOT_FOUND_COOLDOWN_MS = 11 * 60_000;
+/** Entries are only deleted when their mint is asked for again, so expired ones are swept here. */
+function rememberNotFound(mint: string, until: number): void {
+  if (notFoundUntil.size >= 5_000) {
+    const now = Date.now();
+    for (const [m, t] of notFoundUntil) if (t <= now) notFoundUntil.delete(m);
+    if (notFoundUntil.size >= 5_000) notFoundUntil.clear();
+  }
+  notFoundUntil.set(mint, until);
+}
 /** Transient failures per mint; after this many it is cached as failed like a definitive one. */
 const failCounts = new Map<string, number>();
 const MAX_TRANSIENT_FAILURES = 3;
@@ -162,8 +171,9 @@ export function noteNarrativeWanted(
   }
   const have = wanted.get(mintAddress);
   const early = depth === "full" && opts.early === true;
-  // A decision-row full read outranks an early one (it isn't held to the early budget).
-  if (have?.depth === "full" && (!have.early || early)) return;
+  // A queued deep read is never downgraded: a decision-row full read outranks an early one (it
+  // isn't held to the early budget), and a basic request adds nothing to either.
+  if (have?.depth === "full" && (depth === "basic" || !have.early || early)) return;
   if (!have && wanted.size >= MAX_WANTED) {
     const oldest = wanted.keys().next().value;
     if (oldest !== undefined) wanted.delete(oldest);
@@ -344,7 +354,7 @@ async function noteFailure(mint: string, depth: TokenSageDepth, error: unknown):
   }
   if (failCounts.size >= 5_000) failCounts.clear();
   failCounts.set(mint, tries);
-  notFoundUntil.set(mint, Date.now() + NOT_FOUND_COOLDOWN_MS);
+  rememberNotFound(mint, Date.now() + NOT_FOUND_COOLDOWN_MS);
 }
 
 /**

@@ -788,7 +788,13 @@ async function emitForModel(
 
   // The pace is a promise per ledger; this line is how a log reader checks it's being kept - and
   // how a contested minute (contenders > emitted) stays visible after the fact.
-  logger.info("curated governor", { model, contenders: contendersIn.length, capacity, emitted, lastHour });
+  logger.info("curated governor", {
+    model,
+    contenders: contendersIn.length,
+    capacity: Number.isFinite(capacity) ? capacity : "unpaced",
+    emitted,
+    lastHour,
+  });
   return emitted;
 }
 

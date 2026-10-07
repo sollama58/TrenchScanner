@@ -105,7 +105,9 @@ export const reportDaysSchema = z.coerce
 const insightsQuerySchema = z.object({ days: reportDaysSchema });
 
 const listQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  // Pages past MAX_CACHED_PAGES run an uncached OFFSET plus a count; 500 pages is 6,000 alerts
+  // of history, the same bound as /matches.
+  page: z.coerce.number().int().min(1).max(500).default(1),
   /** A contestant id (curation/contestants.ts); omitted = the user's saved pick, else the default. */
   model: z.string().max(64).optional(),
 });

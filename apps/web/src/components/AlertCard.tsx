@@ -264,6 +264,7 @@ export function AlertCard({
             <WalletStat
               label="Fresh"
               value={freshPct}
+              failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
               atAlert={freshAtAlert !== null}
               explain="top-10 holder wallets first used in the last 24h"
             />
@@ -272,6 +273,7 @@ export function AlertCard({
             <WalletStat
               label="Empty"
               value={emptyPct}
+              failsAt={SAFETY_REJECT_EMPTY_WALLET_PCT}
               atAlert={emptyAtAlert !== null}
               explain="top-10 holder wallets with under $25 of other tokens"
             />
@@ -372,8 +374,13 @@ export function AlertCard({
   );
 }
 
-/** Over this share of the top 10 a wallet check fails the safety screen, so the tile turns red. */
-const SAFETY_WALLET_PCT = 70;
+/**
+ * The safety screen's wallet cuts (packages/core/src/scoring/rugScreen.ts, SAFETY_MAX_FRESH_WALLET_PCT
+ * and SAFETY_REJECT_EMPTY_WALLET_PCT): fresh wallets fail over 70%, empty wallets fail at 80% or
+ * more. A tile turns red only when its reading would fail the screen.
+ */
+const SAFETY_MAX_FRESH_WALLET_PCT = 70;
+const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 
 /** One wallet-check tile (Fresh or Empty): the share, where it was read, or that it wasn't checked. */
 function WalletStat({
@@ -381,18 +388,27 @@ function WalletStat({
   value,
   atAlert,
   explain,
+  failsAbove,
+  failsAt,
 }: {
   label: string;
   value: number | null;
   atAlert: boolean;
   explain: string;
+  /** The screen rejects strictly above this share. */
+  failsAbove?: number;
+  /** The screen rejects at or above this share. */
+  failsAt?: number;
 }) {
+  const risky =
+    value !== null &&
+    ((failsAbove !== undefined && value > failsAbove) || (failsAt !== undefined && value >= failsAt));
   const title =
     value === null
       ? `${label}: not checked yet. Wallet checks are limited per scan, and tokens closest to alerting go first.`
       : `${label}: ${explain}, ${atAlert ? "at alert time" : "from a scan after the alert"}.`;
   return (
-    <div className={value !== null && value > SAFETY_WALLET_PCT ? "risky" : undefined} title={title}>
+    <div className={risky ? "risky" : undefined} title={title}>
       <dt>{label}</dt>
       <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
     </div>

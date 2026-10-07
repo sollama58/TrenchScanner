@@ -52,6 +52,20 @@ const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 const MAX_ERROR_LENGTH = 300;
 
 /**
+ * The public shape of a job's last error: its first line, clipped, with hosts and URLs blanked.
+ * Prisma's connection errors name the database host and port and upstream errors carry the URL
+ * they called; this route needs no sign-in, so neither belongs in it (the admin route has the
+ * full text).
+ */
+export function publicErrorText(error: string): string {
+  return (error.split("\n")[0] ?? "")
+    .replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/\b[a-z0-9.-]+\.[a-z]{2,}:\d{2,5}\b/gi, "<host>")
+    .replace(/\b[a-z0-9-]+:\d{2,5}\b/gi, "<host>")
+    .slice(0, MAX_ERROR_LENGTH);
+}
+
+/**
  * How long one read of the heartbeats answers /health/worker. The route is public and was a
  * database query per call, so anyone could spend the API's twelve pool connections on it at the
  * global rate limit; heartbeats move once a job finishes, so a few seconds hide nothing.
@@ -134,7 +148,7 @@ export function summarizeHeartbeat(h: HeartbeatRow, now: number, opts: { fullErr
     role: HEARTBEAT_JOB_ROLE[h.job as HeartbeatJob] ?? null,
     lastRunAt: h.lastRunAt,
     lastSuccessAt: h.lastSuccessAt,
-    lastError: h.lastError ? (opts.fullError ? h.lastError : h.lastError.slice(0, MAX_ERROR_LENGTH)) : null,
+    lastError: h.lastError ? (opts.fullError ? h.lastError : publicErrorText(h.lastError)) : null,
     stale: now - h.lastRunAt.getTime() > threshold,
     staleAfterMs: threshold,
     runningForMs,

@@ -1,4 +1,4 @@
-import { prisma, createLogger, type Prisma } from "@trenchscanner/core";
+import { prisma, createLogger, walletSafetyCutsSql, Prisma } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("lighthouse-rollup");
@@ -149,8 +149,9 @@ interface AlertsHourRow {
 /** The hourly sums over [from, to), as rows keyed by the hour's epoch ms; hours with nothing stay absent. */
 async function sumHours(from: Date, to: Date): Promise<Map<number, HourRow>> {
   const [screened, reads, alerts] = await Promise.all([
-    // The same counting as the Live tab's Lighthouse: a 2x after the stop is a loss, and the 10x
-    // rate's denominator is every row whose 10x verdict is in (a loss settles it at once).
+    // The same counting and the same population as the Live tab's Lighthouse: rows the safety
+    // screen would reject today (wallet cuts) stay out, a 2x after the stop is a loss, and the
+    // 10x rate's denominator is every row whose 10x verdict is in (a loss settles it at once).
     prisma.$queryRaw<ScreenedHourRow[]>`
       SELECT date_trunc('hour', co."anchorAt") AS hour,
              count(*) AS calls,
@@ -164,6 +165,7 @@ async function sumHours(from: Date, to: Date): Promise<Map<number, HourRow>> {
              sum(co."simReturnPct")::float8 AS ret_sum
       FROM "CandidateOutcome" co
       WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${from} AND co."anchorAt" < ${to}
+        AND ${walletSafetyCutsSql(Prisma.raw('co."features"'))}
       GROUP BY 1`,
     prisma.$queryRaw<ReadsHourRow[]>`
       SELECT date_trunc('hour', n."checkedAt") AS hour,
@@ -187,7 +189,7 @@ async function sumHours(from: Date, to: Date): Promise<Map<number, HourRow>> {
              count(*) AS alerts,
              count(*) FILTER (WHERE n.status IS NOT NULL AND n.status <> 'failed') AS described,
              count(*) FILTER (WHERE a."hit2xIn1h" IS NOT NULL) AS graded,
-             count(*) FILTER (WHERE a."hit2xIn1h") AS won2x,
+             count(*) FILTER (WHERE a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS won2x,
              count(*) FILTER (WHERE a."hit4xIn1h") AS won4x,
              count(*) FILTER (WHERE a."hit10xIn1h") AS won10x,
              count(a."simReturnPct") AS ret_n,
@@ -326,14 +328,25 @@ function subLabels(categories: unknown): string[] {
 const COPY_LABEL = (v: boolean) => (v ? "copies a recent coin" : "original");
 const NEWS_LABEL = (v: boolean) => (v ? "in the news" : "not in the news");
 
+async function inTurn<T extends readonly (() => Promise<unknown>)[]>(
+  queries: [...T],
+): Promise<{ [K in keyof T]: Awaited<ReturnType<T[K]>> }> {
+  const out: unknown[] = [];
+  for (const run of queries) out.push(await run());
+  return out as { [K in keyof T]: Awaited<ReturnType<T[K]>> };
+}
+
 /** How many coins TokenSage read under each label of each dimension on the day. */
 async function readCounts(from: Date, to: Date): Promise<Record<LabelDimension, LabelCount[]>> {
   const described = (strings: TemplateStringsArray, ...values: unknown[]) =>
     prisma.$queryRaw<LabelCount[]>(strings, ...values);
+  // One query at a time: the trainer's pool is small (DATABASE_CONNECTION_LIMIT=6 in render.yaml)
+  // and this runs alongside training and the nightly sweeps; nine at once would queue on the pool
+  // and could time the whole run out. Each is cheap on its own.
   const [category, subcategory, flag, referentKind, referentSupport, xVerdict, pairKind, copy, news] =
-    await Promise.all([
+    await inTurn([
       // Each coin once, under the top-level part of the category it is surest of (the tide's rule).
-      described`
+      () => described`
         SELECT split_part(top.label, '/', 1) AS label, count(*) AS count
         FROM "TokenNarrative" n
         LEFT JOIN LATERAL (
@@ -345,37 +358,37 @@ async function readCounts(from: Date, to: Date): Promise<Record<LabelDimension, 
         ) top ON true
         WHERE n."checkedAt" >= ${from} AND n."checkedAt" < ${to} AND n.status <> 'failed'
         GROUP BY 1`,
-      described`
+      () => described`
         SELECT c->>'label' AS label, count(DISTINCT n."mintAddress") AS count
         FROM "TokenNarrative" n,
              jsonb_array_elements(CASE WHEN jsonb_typeof(n.categories) = 'array' THEN n.categories ELSE '[]'::jsonb END) c
         WHERE n."checkedAt" >= ${from} AND n."checkedAt" < ${to} AND n.status <> 'failed'
           AND jsonb_typeof(c->'label') = 'string' AND position('/' IN c->>'label') > 0
         GROUP BY 1`,
-      described`
+      () => described`
         SELECT f AS label, count(*) AS count FROM "TokenNarrative", unnest(flags) f
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' GROUP BY 1`,
-      described`
+      () => described`
         SELECT "referentKind" AS label, count(*) AS count FROM "TokenNarrative"
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' AND "referentKind" IS NOT NULL
         GROUP BY 1`,
-      described`
+      () => described`
         SELECT s AS label, count(*) AS count FROM "TokenNarrative", unnest("referentSupport") s
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' GROUP BY 1`,
-      described`
+      () => described`
         SELECT "xVerdict" AS label, count(*) AS count FROM "TokenNarrative"
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' AND depth = 'full' AND "xVerdict" IS NOT NULL
         GROUP BY 1`,
-      described`
+      () => described`
         SELECT "pairKind" AS label, count(*) AS count FROM "TokenNarrative"
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' AND "pairKind" IS NOT NULL
         GROUP BY 1`,
-      described`
+      () => described`
         SELECT CASE WHEN "copiesRecent" THEN 'copies a recent coin' ELSE 'original' END AS label, count(*) AS count
         FROM "TokenNarrative"
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' AND "copiesRecent" IS NOT NULL
         GROUP BY 1`,
-      described`
+      () => described`
         SELECT CASE WHEN "trendMatched" THEN 'in the news' ELSE 'not in the news' END AS label, count(*) AS count
         FROM "TokenNarrative"
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' AND "trendMatched" IS NOT NULL
@@ -387,7 +400,7 @@ async function readCounts(from: Date, to: Date): Promise<Record<LabelDimension, 
 /** The models' calls made on the day with what TokenSage says about their coin now - no mint. */
 function alertRows(from: Date, to: Date) {
   return prisma.$queryRaw<AlertRow[]>`
-    SELECT a."hit2xIn1h" AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
+    SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
            n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
            n."trendMatched" AS trend_matched, n."referentKind" AS referent_kind,
            n."referentSupport" AS referent_support, n.flags, n."pairKind" AS pair_kind

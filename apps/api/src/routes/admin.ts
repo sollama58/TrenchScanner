@@ -49,15 +49,9 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       prisma.$queryRaw<{ relname: string; rows: number }[]>`
         SELECT relname, GREATEST(reltuples, 0)::float8 AS rows
         FROM pg_class WHERE relname IN ('Token', 'Match') AND relkind = 'r'`,
-      // Through the (userId, matchedAt) index, one range per user - Match has no index on
-      // matchedAt alone, so a bare time filter scanned the table.
-      prisma.user.findMany({ select: { id: true } }).then((users) =>
-        users.length === 0
-          ? 0
-          : prisma.match.count({
-              where: { userId: { in: users.map((u) => u.id) }, matchedAt: { gt: dayAgo } },
-            }),
-      ),
+      // One range on Match(matchedAt) (migration 20261005020100); the old per-user IN-list only
+      // grew with the user table.
+      prisma.match.count({ where: { matchedAt: { gt: dayAgo } } }),
     ]);
     const estimate = (table: string) => Math.round(estimates.find((r) => r.relname === table)?.rows ?? 0);
     const totalTrackedTokens = estimate("Token");

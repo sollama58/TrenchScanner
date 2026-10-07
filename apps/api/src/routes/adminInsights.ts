@@ -204,7 +204,7 @@ async function buildTokenSageReport(days: number) {
     // Every model alert in the window with what TokenSage says about its coin now. Bounded by the
     // window (CuratedAlert has a createdAt index) and capped, newest first.
     prisma.$queryRaw<AlertOutcomeRow[]>`
-      SELECT a."hit2xIn1h" AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
+      SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
              a."simReturnPct"::float8 AS sim_return,
              n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
              n."referentKind" AS referent_kind, n.flags
