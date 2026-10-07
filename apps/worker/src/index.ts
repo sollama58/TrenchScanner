@@ -25,6 +25,7 @@ import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrain
 import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
+import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import {
   scheduleInterval,
@@ -50,6 +51,8 @@ const AI_JUDGE_INTERVAL_MINUTES = 10;
  */
 const CHAMPION_REFRESH_MINUTES = 60;
 const MODEL_BACKUP_CHECK_MINUTES = 60;
+/** How often the Lighthouse's history is summed (runLighthouseRollupJob re-sums the trailing days). */
+const LIGHTHOUSE_ROLLUP_MINUTES = 60;
 /**
  * How long a shutdown waits for the runs in flight. Render allows about 30 seconds between
  * SIGTERM and SIGKILL; the rest is kept for the heartbeat writes and the disconnect.
@@ -191,6 +194,13 @@ async function main() {
   // Both daily jobs catch up on boot when overdue - see scheduleDailyAt. Cleanup's deletes are
   // batched (see runCleanupJob), so a boot-time run after a long gap is many short statements,
   // not one huge delete racing the first scan cycles.
+  // The Lighthouse tab's months of trends, summed from rows the sweeps below delete after weeks.
+  // Immediate on boot: the first run backfills, and every later one is a few short queries.
+  schedule("lighthouse-rollup", () =>
+    scheduleInterval("lighthouse-rollup", () => runLighthouseRollupJob(), LIGHTHOUSE_ROLLUP_MINUTES, {
+      deadlineMinutes: 30,
+    }),
+  );
   schedule("cleanup", () =>
     scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC, {
       catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS,

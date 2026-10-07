@@ -9,6 +9,7 @@ import { reportDaysSchema, type ReportCaches } from "./curated.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { lighthouseQuerySchema } from "../marketLighthouse.js";
+import { lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 
 /**
  * The guest feed: what a visitor who hasn't connected a wallet sees - the default model's calls
@@ -162,5 +163,14 @@ export async function registerGuestRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     return opts.reports.lighthouse(opts.env, parsed.data.days);
+  });
+
+  /** The Lighthouse tab's trends, the same aggregates-only answer subscribers get. */
+  app.get("/lighthouse/history", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = lighthouseHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.lighthouseHistory(parsed.data);
   });
 }

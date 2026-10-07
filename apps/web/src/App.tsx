@@ -10,6 +10,7 @@ import {
   BrainIcon,
   ExternalIcon,
   GearIcon,
+  LighthouseIcon,
   LogoMark,
   LockIcon,
   LogoutIcon,
@@ -22,6 +23,7 @@ import {
   TAB_DATA,
   loadAdminTab,
   loadFiltersTab,
+  loadLighthouseTab,
   loadModelTab,
   loadSettingsTab,
   loadSignIn,
@@ -35,6 +37,7 @@ import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
 const LazyModelTab = lazy(() => loadModelTab().then((m) => ({ default: m.ModelTab })));
+const LazyLighthouseTab = lazy(() => loadLighthouseTab().then((m) => ({ default: m.LighthouseTab })));
 const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
 const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.SettingsTab })));
 const LazyAdminTab = lazy(() => loadAdminTab().then((m) => ({ default: m.AdminTab })));
@@ -45,6 +48,7 @@ const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ def
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
+  { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
@@ -180,6 +184,7 @@ export function App() {
   const signedIn = session.state === "signed-in";
   const guest = session.state === "guest";
   const ModelTab = loaded.model?.ModelTab ?? LazyModelTab;
+  const LighthouseTab = loaded.lighthouse?.LighthouseTab ?? LazyLighthouseTab;
   const FiltersTab = loaded.filters?.FiltersTab ?? LazyFiltersTab;
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
@@ -202,8 +207,9 @@ export function App() {
           {guest && (
             <nav className="tabs" role="tablist">
               {TABS.map(({ id, label, Icon }) => {
-                // Live and Models work read-only without a wallet; the rest are saved to one.
-                const locked = id !== "live" && id !== "model";
+                // Live, Models and the Lighthouse work read-only without a wallet; the rest are
+                // saved to one.
+                const locked = id !== "live" && id !== "model" && id !== "lighthouse";
                 return (
                   <button
                     key={id}
@@ -331,6 +337,10 @@ export function App() {
               <Suspense fallback={<Boot />}>
                 <ModelTab guest />
               </Suspense>
+            ) : tab === "lighthouse" ? (
+              <Suspense fallback={<Boot />}>
+                <LighthouseTab guest />
+              </Suspense>
             ) : (
               <GuestLocked
                 label={TABS.find((t) => t.id === tab)?.label ?? "this"}
@@ -346,6 +356,7 @@ export function App() {
               <Suspense fallback={<Boot />}>
                 {tab === "live" && <LiveTab goTo={goTo} />}
                 {tab === "model" && <ModelTab />}
+                {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}

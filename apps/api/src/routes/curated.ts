@@ -22,6 +22,7 @@ import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { buildModelInsights, type ModelInsights } from "../modelInsights.js";
 import { createLighthouseCache, lighthouseQuerySchema } from "../marketLighthouse.js";
+import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import {
   buildLeaderboard,
@@ -165,7 +166,12 @@ export function createReportCaches() {
     }
     return cache;
   };
-  return { leaderboardFor, insightsFor, lighthouse: createLighthouseCache() };
+  return {
+    leaderboardFor,
+    insightsFor,
+    lighthouse: createLighthouseCache(),
+    lighthouseHistory: createLighthouseHistoryCache(),
+  };
 }
 export type ReportCaches = ReturnType<typeof createReportCaches>;
 
@@ -672,6 +678,15 @@ export async function registerCuratedRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     return opts.reports.lighthouse(opts.env, parsed.data.days);
+  });
+
+  /** The Lighthouse tab's trends: the kept-for-good hourly sums per hour, day or week (lighthouseHistory.ts). */
+  app.get("/lighthouse/history", async (request, reply) => {
+    const parsed = lighthouseHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.lighthouseHistory(parsed.data);
   });
 
   // What the dashboard asks for first (index.html's boot list): the learning panel, and the Models

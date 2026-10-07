@@ -227,12 +227,12 @@ services:
         value: "150"
 
   # The model trainer: the same worker build, running only the batch jobs (curator-training,
-  # champion-refresh, ai-judge, cleanup, outcome-tracking). Its own instance so that a training
-  # run - 5 to 6 minutes of a full core every CURATOR_TRAINING_INTERVAL_HOURS - never competes
-  # with the scan for the one CPU, the training set (CURATOR_TRAINING_MAX_ROWS, held twice while
-  # the training thread runs) has 2GB to itself, and a run that dies takes nothing on the alert
-  # path with it. Needs no Helius or RPC key: everything it reads is already in Postgres, plus
-  # DexScreener for the nightly outcome sweep.
+  # champion-refresh, ai-judge, cleanup, outcome-tracking, lighthouse-rollup). Its own instance so
+  # that a training run - 5 to 6 minutes of a full core every CURATOR_TRAINING_INTERVAL_HOURS -
+  # never competes with the scan for the one CPU, the training set (CURATOR_TRAINING_MAX_ROWS,
+  # held twice while the training thread runs) has 2GB to itself, and a run that dies takes
+  # nothing on the alert path with it. Needs no Helius or RPC key: everything it reads is already
+  # in Postgres, plus DexScreener for the nightly outcome sweep.
   - type: worker
     name: trenchscanner-trainer
     runtime: node
