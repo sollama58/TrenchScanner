@@ -83,10 +83,12 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
           </dd>
           <dt>Narrative · {pct(w.narrative)}</dt>
           <dd>
-            What the coin is about, from TokenSage&apos;s read. A clear referent lifts it, a linked X post
-            that is really about this coin lifts it by how well it fits, and a copycat, an unrelated or
-            spoofed post, or a red flag pulls it down. The midpoint until the read lands. A bare X link earns
-            nothing.
+            What the coin is about, from TokenSage&apos;s read. A clear referent lifts it, and so does a
+            linked X post that announced the coin or is what it references, when the post went out before the
+            launch. An unrelated or spoofed post, or a red flag, pulls it down. The midpoint until the read
+            lands. A bare X link, a launcher&apos;s own profile and a copycat earn and lose nothing: on the
+            first live day copycats doubled more often than other coins, so the penalty waits until TokenSage
+            says which copy a coin is.
           </dd>
         </dl>
         <h3>The weights adapt</h3>

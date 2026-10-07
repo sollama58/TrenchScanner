@@ -70,19 +70,28 @@ export const NARRATIVE_NEUTRAL = 50;
 /** The narrative part can't exceed this while TokenSage raised a high-severity flag. */
 export const NARRATIVE_RED_FLAG_CAP = 40;
 
-/** X post relations that say the post is the coin's own announcement or its subject. */
-const X_RELATIONS_CREDITED = new Set(["launch_announcement", "official_account", "narrative_reference"]);
+/** X post relations that say the post announced the coin or is the thing it references. */
+const X_RELATIONS_CREDITED = new Set(["launch_announcement", "narrative_reference"]);
+
+/** A linked post counts as predating the coin when it went out at least this long before it. */
+export const X_POST_PREDATES_MIN_S = 60;
 
 /**
  * TokenSage's read as a 0-100 part (notes/tokensage-models-filters-scoring-review-2026-10-06.md,
- * section 5). Starts at the midpoint and moves on what the read established:
+ * section 5, revised on the first live day's data in notes/tokensage-data-eval-2026-10-07.md).
+ * Starts at the midpoint and moves on what the read established:
  *  - a confident referent (what the coin is about is clear) lifts it, more when several inputs
  *    agree on it;
- *  - a linked X post that is about this coin lifts it by its fit, and a little more when the post
- *    is the launch announcement, the official account or the thing the coin references; a post
- *    that is unrelated, spoofed or mismatched pulls it down. A bare X link earns nothing: within
- *    an age band, having a link does not change the double rate;
- *  - a live copycat or an earlier coin with this name pulls it down;
+ *  - a linked X post that announced the coin or is the thing it references lifts it, when the
+ *    post went out before the coin (X_POST_PREDATES_MIN_S). How well the post fits earns nothing:
+ *    on the first live day the perfect fits were the launcher's own profiles, named after the
+ *    coin and made with it, and they doubled least of any X read. So a profile link ("official
+ *    account") is neutral, and a bare X link still earns nothing;
+ *  - a post that is unrelated, spoofed or mismatched pulls it down;
+ *  - a copycat is neutral: copycats doubled more often than other coins in every population on
+ *    the first live day, because a copy of a coin that is running rides its narrative. The
+ *    penalty comes back for late copies once TokenSage says which copy this is (its rank among
+ *    its siblings and whether the original is still running);
  *  - a matched trend (the name is spiking on Wikipedia or in the news) lifts it;
  *  - a high-severity flag caps the part at NARRATIVE_RED_FLAG_CAP whatever else it earned.
  * The parts' breakpoints are hand-set like the other three; the weight between the parts is what
@@ -97,19 +106,19 @@ export function scoreNarrative(token: EnrichedToken): number {
   const xRead = read.depth === "full" && (read.xRelation !== null || read.xVerdict !== null);
   if (xRead) {
     const spoofed = read.xRelation === "spoofed";
-    if (read.xVerdict === "about_this_coin" && !spoofed) {
-      part += 20 * (read.xFit ?? 0.5);
-      if (read.xRelation !== null && X_RELATIONS_CREDITED.has(read.xRelation)) part += 5;
-    } else if (read.xVerdict === "unrelated" || spoofed) {
+    if (read.xVerdict === "unrelated" || spoofed) {
       part -= 25;
     } else if (read.flags.includes("x_content_mismatch")) {
       part -= 10;
+    } else if (
+      read.xVerdict === "about_this_coin" &&
+      read.xRelation !== null &&
+      X_RELATIONS_CREDITED.has(read.xRelation) &&
+      (read.xPredatesTokenS ?? 0) >= X_POST_PREDATES_MIN_S
+    ) {
+      part += 15;
     }
   }
-  const copycat = read.copiesRecent === true || read.flags.includes("copycat");
-  const sameName = read.flags.includes("earlier_same_name");
-  if (copycat) part -= 25;
-  else if (sameName) part -= 15;
   if (read.trendMatched === true) part += 10;
   part = clamp(part);
   return read.highFlagCount > 0 ? Math.min(part, NARRATIVE_RED_FLAG_CAP) : part;

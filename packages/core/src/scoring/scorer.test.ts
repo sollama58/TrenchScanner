@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   NARRATIVE_NEUTRAL,
   NARRATIVE_RED_FLAG_CAP,
+  X_POST_PREDATES_MIN_S,
   scoreNarrative,
   scoreToken,
   scoreTokenLegacy,
@@ -161,21 +162,44 @@ describe("scoreNarrative", () => {
     );
   });
 
-  it("credits a post about this coin by its fit, and punishes an unrelated or spoofed one", () => {
-    const about = read({
+  it("credits a post that announced the coin before it launched, and nothing for a fit alone", () => {
+    const announced = read({
       depth: "full",
       xVerdict: "about_this_coin",
       xFit: 0.8,
       xRelation: "launch_announcement",
+      xPredatesTokenS: 600,
     });
-    expect(scoreNarrative(baseToken({ narrative: about }))).toBe(71);
+    expect(scoreNarrative(baseToken({ narrative: announced }))).toBe(65);
+    const referenced = read({
+      ...announced,
+      xRelation: "narrative_reference",
+      xPredatesTokenS: X_POST_PREDATES_MIN_S,
+    });
+    expect(scoreNarrative(baseToken({ narrative: referenced }))).toBe(65);
+    // Posted with the launch: nothing yet says anyone cared before the coin existed.
+    const withLaunch = read({ ...announced, xPredatesTokenS: 12 });
+    expect(scoreNarrative(baseToken({ narrative: withLaunch }))).toBe(NARRATIVE_NEUTRAL);
+    // The launcher's own profile, named after the coin: a perfect fit that means nothing.
+    const profile = read({
+      depth: "full",
+      xVerdict: "about_this_coin",
+      xFit: 1,
+      xRelation: "official_account",
+      xPredatesTokenS: null,
+    });
+    expect(scoreNarrative(baseToken({ narrative: profile }))).toBe(NARRATIVE_NEUTRAL);
     const aboutSearch = read({
       depth: "full",
       xVerdict: "about_this_coin",
       xFit: 0.8,
       xRelation: "search_only",
+      xPredatesTokenS: 600,
     });
-    expect(scoreNarrative(baseToken({ narrative: aboutSearch }))).toBe(66);
+    expect(scoreNarrative(baseToken({ narrative: aboutSearch }))).toBe(NARRATIVE_NEUTRAL);
+  });
+
+  it("punishes an unrelated, spoofed or mismatched post", () => {
     const unrelated = read({
       depth: "full",
       xVerdict: "unrelated",
@@ -185,16 +209,26 @@ describe("scoreNarrative", () => {
     expect(scoreNarrative(baseToken({ narrative: unrelated }))).toBe(25);
     const spoofed = read({ depth: "full", xVerdict: "about_this_coin", xFit: 1, xRelation: "spoofed" });
     expect(scoreNarrative(baseToken({ narrative: spoofed }))).toBe(25);
+    const mismatch = read({
+      depth: "full",
+      xVerdict: "related",
+      xFit: 0.4,
+      xRelation: "narrative_reference",
+      flags: ["x_content_mismatch"],
+    });
+    expect(scoreNarrative(baseToken({ narrative: mismatch }))).toBe(40);
     // A basic read says nothing about the post even when the document carries a verdict.
     expect(scoreNarrative(baseToken({ narrative: read({ xVerdict: "unrelated" }) }))).toBe(NARRATIVE_NEUTRAL);
   });
 
-  it("punishes copycats and earlier coins with the same name", () => {
-    expect(scoreNarrative(baseToken({ narrative: read({ copiesRecent: true }) }))).toBe(25);
+  it("holds copycats and earlier coins with the same name neutral until the copy's rank is known", () => {
+    expect(scoreNarrative(baseToken({ narrative: read({ copiesRecent: true }) }))).toBe(NARRATIVE_NEUTRAL);
     expect(scoreNarrative(baseToken({ narrative: read({ flags: ["copycat", "earlier_same_name"] }) }))).toBe(
-      25,
+      NARRATIVE_NEUTRAL,
     );
-    expect(scoreNarrative(baseToken({ narrative: read({ flags: ["earlier_same_name"] }) }))).toBe(35);
+    expect(scoreNarrative(baseToken({ narrative: read({ flags: ["earlier_same_name"] }) }))).toBe(
+      NARRATIVE_NEUTRAL,
+    );
     expect(
       scoreNarrative(
         baseToken({ narrative: read({ copiesRecent: false, flags: ["references_known_coin"] }) }),
@@ -206,7 +240,9 @@ describe("scoreNarrative", () => {
     expect(scoreNarrative(baseToken({ narrative: read({ depth: "full", trendMatched: true }) }))).toBe(60);
     const flagged = read({ referentConfidence: 0.9, referentSupport: ["name", "x"], highFlagCount: 1 });
     expect(scoreNarrative(baseToken({ narrative: flagged }))).toBe(NARRATIVE_RED_FLAG_CAP);
-    expect(scoreNarrative(baseToken({ narrative: read({ copiesRecent: true, highFlagCount: 2 }) }))).toBe(25);
+    expect(scoreNarrative(baseToken({ narrative: read({ copiesRecent: true, highFlagCount: 2 }) }))).toBe(
+      NARRATIVE_RED_FLAG_CAP,
+    );
   });
 
   it("feeds the composite through the narrative weight", () => {
