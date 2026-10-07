@@ -15,15 +15,21 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { firstSignature } from "./subscription.js";
+import { buildWireTransaction, burnInstruction, toBase64 } from "../burnWire.fixture.js";
 
-/** A signed-transaction-shaped payload: one 64-byte signature, then a body naming the mint. */
-function signedTx(signatureByte = 7): { base64: string; signature: string } {
-  const signature = Buffer.alloc(64, signatureByte);
-  const body = Buffer.concat([Buffer.from([1, 0, 0]), Buffer.from(bs58.decode(SUBSCRIPTION_MINT))]);
-  return {
-    base64: Buffer.concat([Buffer.from([1]), signature, body]).toString("base64"),
-    signature: bs58.encode(signature),
-  };
+const FIXTURE_OWNER = bs58.encode(Uint8Array.from({ length: 32 }, (_, i) => i + 1));
+const FIXTURE_ACCOUNT = bs58.encode(Uint8Array.from({ length: 32 }, (_, i) => 200 - i));
+const FIXTURE_BLOCKHASH = bs58.encode(Uint8Array.from({ length: 32 }, () => 9));
+
+/** A signed burn of the subscription mint on the wire, the way the dashboard builds one. */
+function signedTx(signatureByte = 7, mint = SUBSCRIPTION_MINT): { base64: string; signature: string } {
+  const bytes = buildWireTransaction({
+    owner: FIXTURE_OWNER,
+    blockhash: FIXTURE_BLOCKHASH,
+    instructions: [burnInstruction(FIXTURE_ACCOUNT, mint, FIXTURE_OWNER, SUBSCRIPTION_RAW_PER_MONTH)],
+    signatures: [signatureByte],
+  });
+  return { base64: toBase64(bytes), signature: bs58.encode(Buffer.alloc(64, signatureByte)) };
 }
 
 describe("firstSignature", () => {
@@ -139,6 +145,21 @@ describe.skipIf(!dbAvailable)("subscription routes", () => {
     ]);
     expect(burnerSub?.expiresAt.getTime()).toBeGreaterThan(Date.now());
     expect(callerSub).toBeNull();
+  });
+
+  it("relays only a transaction that burns the mint", async () => {
+    const me = await signIn("relay-not-a-burn");
+    const send = vi.spyOn(SolanaRpc.prototype, "sendRawTransaction");
+    const otherMint = bs58.encode(Uint8Array.from({ length: 32 }, (_, i) => 100 + i));
+    const res = await app.inject({
+      method: "POST",
+      url: "/subscription/send",
+      cookies: me.cookies,
+      payload: { transaction: signedTx(7, otherMint).base64 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/doesn't burn/);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("says a refused relay left the tokens alone", async () => {

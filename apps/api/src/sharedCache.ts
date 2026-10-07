@@ -121,3 +121,49 @@ export class SharedCache<T> {
     this.inFlight = undefined;
   }
 }
+
+/**
+ * A bounded family of SharedCaches, one per key - for answers that are the same for every
+ * reader of the same key (one user's feed stats, say) rather than for everyone.
+ *
+ * Bounded because the keys come from requests: left unbounded, a map keyed by user and window
+ * is a slow leak driven by whoever asks. Past `maxEntries` the least recently used key goes;
+ * losing one costs that reader a single refill. Each entry's TTL is `ttlMs`, strict (no
+ * stale-while-revalidate): these are the feed caches, cleared the moment a new alert lands.
+ */
+export class SharedCacheMap<T> {
+  private readonly caches = new Map<string, SharedCache<T>>();
+
+  constructor(
+    private readonly ttlMs: number,
+    private readonly maxEntries: number,
+  ) {}
+
+  /** The cache for `key`, created on first use. Marks it most recently used. */
+  for(key: string): SharedCache<T> {
+    const existing = this.caches.get(key);
+    if (existing) {
+      // Map iteration is insertion order, so re-inserting is what makes eviction below LRU.
+      this.caches.delete(key);
+      this.caches.set(key, existing);
+      return existing;
+    }
+    const cache = new SharedCache<T>(this.ttlMs);
+    this.caches.set(key, cache);
+    if (this.caches.size > this.maxEntries) {
+      const oldest = this.caches.keys().next().value;
+      if (oldest !== undefined) this.caches.delete(oldest);
+    }
+    return cache;
+  }
+
+  /** Forgets every value whose key starts with `keyPrefix` (all of them by default). */
+  clear(keyPrefix = ""): void {
+    for (const [key, cache] of this.caches) if (key.startsWith(keyPrefix)) cache.clear();
+  }
+
+  /** Test seam: how many keys are held. */
+  get size(): number {
+    return this.caches.size;
+  }
+}

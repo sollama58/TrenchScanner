@@ -493,6 +493,23 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(kinds).toEqual({ [hourly!.id]: "hourly", [event!.id]: "event", [emission!.id]: "emission" });
   });
 
+  it("hands two concurrent match anchors for one token the same row", async () => {
+    const token = await createToken("match-race");
+    const scored = scoredFixture(token.mintAddress, 0.002);
+    // The scan lane and the fast lane anchoring the same alert at the same moment: without the
+    // per-token lock both read "no recent match row" and both create one.
+    const [a, b] = await Promise.all([
+      recordCandidateSample(token.id, scored, env, { kind: "match" }),
+      recordCandidateSample(token.id, scored, env, { kind: "match" }),
+    ]);
+    expect(a).not.toBeNull();
+    expect(a!.id).toBe(b!.id);
+    expect([a!.created, b!.created].sort()).toEqual([false, true]);
+    expect(await prisma.candidateOutcome.count({ where: { tokenId: token.id, sampleKind: "match" } })).toBe(
+      1,
+    );
+  });
+
   it("grades from the alert price, whatever the first price seen", async () => {
     const token = await createToken("fill");
     const anchorAt = new Date(Date.now() - 2 * MINUTE);

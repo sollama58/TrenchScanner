@@ -2,6 +2,7 @@ import type { SessionSigner, SessionPayload } from "./auth/session.js";
 import type { MatchStream } from "./matchStream.js";
 import type { AccessState } from "@trenchscanner/core";
 import type { SavedFeed } from "./contest.js";
+import type { User } from "@prisma/client";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -26,5 +27,11 @@ declare module "fastify" {
      * Undefined when they weren't loaded (device sessions) - see savedFeed() in contest.ts.
      */
     savedFeed?: SavedFeed;
+    /**
+     * The columns /auth/me answers with, read by the same sessionVersion lookup that validates a
+     * browser session - so that route does not read the User row a second time. Undefined when
+     * the session was validated some other way (device sessions, the subscriber gate's joined read).
+     */
+    sessionUser?: Pick<User, "id" | "walletAddress" | "createdAt">;
   }
 }

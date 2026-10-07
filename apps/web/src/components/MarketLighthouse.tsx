@@ -657,7 +657,8 @@ function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) =>
       {rows.map((r) => {
         const ret = avgReturn(r);
         const early = r.graded < MIN_GRADED;
-        const tier = (won: number) => (r.graded > 0 ? pct(share(won, r.graded)) : "–");
+        const tier = (won: number, over: number = r.graded) => (over > 0 ? pct(share(won, over)) : "–");
+        const tenXOver = r.tenXGraded ?? r.graded;
         const width = ret !== null && ret > 0 && top > 0 ? Math.max((ret / top) * 100, 1) : 1;
         return (
           <div key={r.label} className={`lh-hit${early ? " early" : ""}`}>
@@ -670,7 +671,7 @@ function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) =>
             </span>
             <span className="lh-hit-value num">{ret === null ? "–" : signedPct(ret)}</span>
             <span className="lh-hit-tiers muted">
-              2x {tier(r.won2x)} · 10x {tier(r.won10x)}
+              2x {tier(r.won2x)} · 10x {tier(r.won10x, tenXOver)}
             </span>
             <span className="lh-hit-state muted">
               {early ? `${r.graded}/${MIN_GRADED} graded` : `${r.graded} graded`}

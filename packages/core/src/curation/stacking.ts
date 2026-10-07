@@ -1,7 +1,7 @@
 import { paceBudget } from "./governor.js";
 import { scoredFromFeatures } from "./features.js";
 import { curationRankScore, evaluateCandidateHeuristic } from "./curator.js";
-import { CANDIDATE_WATCH_WINDOW_MINUTES } from "./labels.js";
+import { CANDIDATE_WATCH_WINDOW_MINUTES, runDoublings } from "./labels.js";
 import type { ScoredToken } from "../types.js";
 import {
   applyCooldown,
@@ -19,7 +19,7 @@ import {
   type ServedCuratorExtras,
   type TrainingRow,
 } from "./trainer.js";
-import { GOAL_LABEL, type CallRecord } from "./leaderboard.js";
+import { emptyRecord, GOAL_LABEL, type CallRecord } from "./leaderboard.js";
 
 /**
  * The consensus contestant: a second-order model whose inputs are the other contestants' calls.
@@ -303,7 +303,7 @@ export async function trainStackedCurator(
   const precisionCalibration = calibrateThresholdForPrecision(outOfSample, input.targets, { cooldownMs });
 
   // Each judged chunk graded at the cutoff the OTHER chunks earned, governed like production.
-  const exam: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0 };
+  const exam = examRecord();
   for (const [k, chunk] of judged.entries()) {
     const others = judged.filter((_, j) => j !== k);
     if (others.length === 0) continue;
@@ -318,7 +318,7 @@ export async function trainStackedCurator(
     )
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, budget);
-    for (const { row } of sent) addCall(exam, row.labelValue);
+    for (const { row } of sent) addCall(exam, row);
   }
 
   const meta = await train(metaRows);
@@ -350,11 +350,27 @@ export async function trainStackedCurator(
   };
 }
 
-/** Adds one graded call to a record. */
-export function addCall(record: CallRecord, labelValue: number): void {
+/** An empty exam record that tracks every part of the score, for addCall to fill. */
+export function examRecord(): CallRecord {
+  return { ...emptyRecord(), tenX: 0, tenXGraded: 0, sumRun: 0 };
+}
+
+/**
+ * Adds one graded call to an exam record, with the 10x and run-size evidence a single model's
+ * exam carries (recordAbove in trainingRun.ts): a combiner's picks are graded from the same
+ * decision rows, so its exam earns the same 20 points the same way (user decision 2026-10-07;
+ * before, those parts stayed 0 until live calls accrued).
+ */
+export function addCall(
+  record: CallRecord,
+  row: { labelValue: number; runPeakMultiple?: number; survived?: boolean; hit10x?: boolean },
+): void {
   record.calls += 1;
   record.graded += 1;
-  if (labelValue > 0) record.wins += 1;
-  if (labelValue >= GOAL_LABEL) record.goals += 1;
-  record.sumLabel += labelValue;
+  if (row.labelValue > 0) record.wins += 1;
+  if (row.labelValue >= GOAL_LABEL) record.goals += 1;
+  if (row.hit10x === true) record.tenX! += 1;
+  if (row.labelValue <= 0 || row.hit10x !== undefined) record.tenXGraded! += 1;
+  record.sumLabel += row.labelValue;
+  record.sumRun! += runDoublings(row);
 }

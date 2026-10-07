@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   TokenSageClient,
   tokenSageHints,
@@ -7,6 +7,7 @@ import {
   narrativeFieldsFromAnalysis,
   normalizeSocialUrl,
   storableAnalysis,
+  STORED_ANALYSIS_MAX_BYTES,
   narrativeDetails,
   type TokenSageAnalysis,
   type TokenSageBatchItem,
@@ -343,6 +344,36 @@ describe("storableAnalysis", () => {
     ).toEqual({ a: "xy", b: [null, 1], k: true, d: null });
     expect(storableAnalysis("text")).toBeNull();
     expect(storableAnalysis([1])).toBeNull();
+  });
+
+  it("drops the free-text members of an oversized document, and the whole document past that", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { analysis } = fixture("full");
+      const big = "x".repeat(STORED_ANALYSIS_MAX_BYTES);
+      const oversized = {
+        ...analysis,
+        evidence: [{ kind: "k", detail: big }],
+        image: { ...analysis.image, ocr: [big] },
+        x: { ...analysis.x, text: big },
+      };
+      const stored = storableAnalysis(oversized)!;
+      expect(stored).not.toBeNull();
+      expect(stored.evidence).toBeUndefined();
+      expect((stored.image as Record<string, unknown>).ocr).toBeUndefined();
+      expect((stored.x as Record<string, unknown>).text).toBeUndefined();
+      // Everything the stored columns and the card derive from is still there.
+      expect(stored.summary).toEqual(analysis.summary);
+      expect((stored.x as Record<string, unknown>).match).toEqual(analysis.x?.match);
+      expect(JSON.stringify(stored).length).toBeLessThanOrEqual(STORED_ANALYSIS_MAX_BYTES);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // Oversized in a member nothing trims: not stored at all.
+      expect(storableAnalysis({ ...analysis, flags: [{ code: big }] })).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

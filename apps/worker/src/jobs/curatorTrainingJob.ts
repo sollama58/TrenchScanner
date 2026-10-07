@@ -18,7 +18,8 @@ import {
   assessTrainingRun,
   lockCuratorModelWrites,
   DISQUALIFYING_DRAWDOWN_FRACTION,
-  passesWalletSafetyCuts,
+  walletSafetyCutsSql,
+  Prisma,
   type ContestRunOutcome,
   type ContestantTrainingResult,
   type Lane,
@@ -40,7 +41,6 @@ import {
   type Challenger,
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
-import type { Prisma } from "@prisma/client";
 import { runContestOffThread } from "../training/runContest.js";
 import type { ContestPlan } from "../training/contestPlan.js";
 
@@ -791,25 +791,43 @@ export function describeRowBudget(
  * accumulate.
  */
 /**
- * TrainingRow.runPeakMultiple for a stored row: a clean winner's 24h run peak once its extended
- * watch has ended (a partial run would understate it against finished ones), else the label
- * window's peak for a row that is not a winner - what the live record counts for a late runner
- * (RUN_DOUBLINGS in laneStore.ts reads the 24h peak only once written, the window peak before).
+ * TrainingRow.runPeakMultiple for a stored row: the label window's peak (peak1hReturnPct - the
+ * 30-minute watch every row has), as a multiple of the alert price.
+ *
+ * Not the 24h run peak, on purpose (user decision 2026-10-07). Only rows a champion alerted live
+ * get the extended watch (CandidateOutcome.extendedWatch), so a 24h peak here depended on whether
+ * an EARLIER champion called the token, not on the token - and every contestant's exam run size
+ * (runDoublings, 10 points of the score) leaned toward recipes that agree with the incumbent. The
+ * window peak is measured the same way for every decision row, so the exam grades contestants on
+ * the same evidence; the live record keeps the 24h peak (RUN_DOUBLINGS in laneStore.ts), where
+ * every call was watched for it. The 10x tier (hit10x below) was never affected: its hour is on
+ * the extended watch every clean winner gets, alerted or not. The fit's run weight (runWeight)
+ * and the runner-traits report read this field too, so they see the window peak now as well.
  */
-function runPeakOf(r: {
+function runPeakOf(r: { peak1hReturnPct: number | null }): { runPeakMultiple?: number } {
+  return r.peak1hReturnPct !== null ? { runPeakMultiple: 1 + r.peak1hReturnPct / 100 } : {};
+}
+
+/**
+ * Hard stop on pages per kind: the keyset loop below ends when the window runs dry or the cap
+ * is met, and this bounds it against a window that is mostly screen-rejected rows.
+ */
+const LOAD_MAX_PAGES = 200;
+
+interface LoadedRow {
+  id: string;
+  tokenId: string;
+  anchorAt: Date;
+  features: unknown;
   labelValue: number | null;
-  finalized24hAt: Date | null;
-  peak24hReturnPct: number | null;
+  anchorPriceUsd: number;
+  signalPriceUsd: number | null;
+  anchorMcapUsd: number;
+  sampleKind: string;
+  labelRule: number;
+  maxDrawdown1hPct: number | null;
   peak1hReturnPct: number | null;
-}): { runPeakMultiple?: number } {
-  if ((r.labelValue ?? 0) > 0) {
-    return r.finalized24hAt !== null && r.peak24hReturnPct !== null
-      ? { runPeakMultiple: 1 + r.peak24hReturnPct / 100 }
-      : {};
-  }
-  const peakPct =
-    r.finalized24hAt !== null && r.peak24hReturnPct !== null ? r.peak24hReturnPct : r.peak1hReturnPct;
-  return peakPct !== null ? { runPeakMultiple: 1 + peakPct / 100 } : {};
+  hit10xIn1h: boolean | null;
 }
 
 async function loadRowsOfKind(
@@ -819,41 +837,31 @@ async function loadRowsOfKind(
   pageRows: number,
 ): Promise<TrainingRow[]> {
   const out: TrainingRow[] = [];
-  let cursor: string | undefined;
-  while (out.length < maxRows) {
+  let cursor: { anchorAt: Date; id: string } | undefined;
+  let pages = 0;
+  while (out.length < maxRows && pages < LOAD_MAX_PAGES) {
+    pages += 1;
     const take = Math.min(pageRows, maxRows - out.length);
-    const page = await prisma.candidateOutcome.findMany({
-      where: {
-        finalizedAt: { not: null },
-        anchorAt: { gte: windowStart },
-        sampleKind,
-      },
-      orderBy: [{ anchorAt: "desc" }, { id: "desc" }],
-      take,
-      ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
-      select: {
-        id: true,
-        tokenId: true,
-        anchorAt: true,
-        features: true,
-        labelValue: true,
-        anchorPriceUsd: true,
-        signalPriceUsd: true,
-        anchorMcapUsd: true,
-        sampleKind: true,
-        labelRule: true,
-        maxDrawdown1hPct: true,
-        peak1hReturnPct: true,
-        peak24hReturnPct: true,
-        finalized24hAt: true,
-        hit10xIn1h: true,
-      },
-    });
+    // A token the safety screen rejects today never reaches a curator, so a row banked before
+    // the cut was tightened (mostly farm launches that pump, then rug) neither trains nor grades.
+    // The cut is in the query (walletSafetyCutsSql - the same condition the reports count by),
+    // not applied to the page afterwards: filtered client-side, each page came back short of
+    // `take` by however many it dropped, and a window of mostly rejected rows cost its pages
+    // in full for a few rows kept. Keyset-paged on (anchorAt, id), newest first.
+    const page = await prisma.$queryRaw<LoadedRow[]>`
+      SELECT "id", "tokenId", "anchorAt", "features", "labelValue", "anchorPriceUsd",
+             "signalPriceUsd", "anchorMcapUsd", "sampleKind", "labelRule", "maxDrawdown1hPct",
+             "peak1hReturnPct", "hit10xIn1h"
+      FROM "CandidateOutcome"
+      WHERE "finalizedAt" IS NOT NULL
+        AND "anchorAt" >= ${windowStart}
+        AND "sampleKind" = ${sampleKind}
+        AND ${walletSafetyCutsSql()}
+        ${cursor !== undefined ? Prisma.sql`AND ("anchorAt", "id") < (${cursor.anchorAt}, ${cursor.id})` : Prisma.empty}
+      ORDER BY "anchorAt" DESC, "id" DESC
+      LIMIT ${take}`;
     for (const r of page) {
       const features = r.features as Record<string, number | null>;
-      // A token the safety screen rejects today never reaches a curator, so a row banked before
-      // the cut was tightened (mostly farm launches that pump, then rug) neither trains nor grades.
-      if (!passesWalletSafetyCuts(features)) continue;
       out.push({
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,
@@ -869,16 +877,19 @@ async function loadRowsOfKind(
         ...(r.maxDrawdown1hPct !== null
           ? { survived: r.maxDrawdown1hPct > -DISQUALIFYING_DRAWDOWN_FRACTION * 100 }
           : {}),
-        // How far a clean winner ran once its extended watch ended (the runner-traits report and
-        // the fit's run weight). A loss that held above the stop keeps its window peak instead,
-        // so the exam credits a late runner the way the live record does (runDoublings).
+        // The label window's peak, for the exam's run size (runDoublings credits a clean winner
+        // and a late runner that held above the stop), the fit's run weight and the runner-traits
+        // report - see runPeakOf for why not the 24h peak.
         ...runPeakOf(r),
         // The 10x tier, for the exam's 10x part of the score; unknown until the row's hour settles.
         ...(r.hit10xIn1h !== null ? { hit10x: r.hit10xIn1h } : {}),
       });
     }
     if (page.length < take) break;
-    cursor = page[page.length - 1]!.id;
+    const last = page[page.length - 1]!;
+    cursor = { anchorAt: last.anchorAt, id: last.id };
   }
+  // The count that is true after the screen's cut, which is the set that trains.
+  logger.info("loaded training rows", { sampleKind, rows: out.length, pages, capped: out.length >= maxRows });
   return out;
 }

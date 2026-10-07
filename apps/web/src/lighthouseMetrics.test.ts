@@ -93,6 +93,9 @@ describe("lighthouse metrics", () => {
     expect(metricById("storyConfidence").value(s)).toBe(50);
     expect(metricById("copycatShare").value(s)).toBe(25);
     expect(metricById("calls2x").value(s)).toBe(50);
+    // 10x is measured over the calls whose 10x window has closed, not every graded call.
+    expect(metricById("calls10x").value(sums({}, { won10x: 1, tenXGraded: 1 }))).toBe(100);
+    expect(metricById("calls10x").value(sums({}, { won10x: 1 }))).toBe(50);
     expect(metricById("field2x").value(sums({ graded: 0 }))).toBeNull();
     expect(metricById("fieldReturn").value(sums({ returnN: 0 }))).toBeNull();
   });

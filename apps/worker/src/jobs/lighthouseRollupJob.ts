@@ -79,6 +79,7 @@ const emptyHour = (): HourRow => ({
   alertsWon2x: 0,
   alertsWon4x: 0,
   alertsWon10x: 0,
+  alertsTenXGraded: 0,
   alertsReturnN: 0,
   alertsReturnSum: 0,
 });
@@ -142,6 +143,7 @@ interface AlertsHourRow {
   won2x: bigint;
   won4x: bigint;
   won10x: bigint;
+  ten_x_graded: bigint;
   ret_n: bigint;
   ret_sum: number | null;
 }
@@ -192,6 +194,8 @@ async function sumHours(from: Date, to: Date): Promise<Map<number, HourRow>> {
              count(*) FILTER (WHERE a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS won2x,
              count(*) FILTER (WHERE a."hit4xIn1h") AS won4x,
              count(*) FILTER (WHERE a."hit10xIn1h") AS won10x,
+             count(*) FILTER (WHERE a."hit2xIn1h" IS NOT NULL
+                                AND (a."hit10xIn1h" IS NOT NULL OR NOT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)))) AS ten_x_graded,
              count(a."simReturnPct") AS ret_n,
              sum(a."simReturnPct")::float8 AS ret_sum
       FROM "CuratedAlert" a
@@ -244,6 +248,7 @@ async function sumHours(from: Date, to: Date): Promise<Map<number, HourRow>> {
     h.alertsWon2x = n(r.won2x);
     h.alertsWon4x = n(r.won4x);
     h.alertsWon10x = n(r.won10x);
+    h.alertsTenXGraded = n(r.ten_x_graded);
     h.alertsReturnN = n(r.ret_n);
     h.alertsReturnSum = r.ret_sum ?? 0;
   }
@@ -298,6 +303,8 @@ interface LabelTally {
   won2x: number;
   won4x: number;
   won10x: number;
+  /** Calls whose 10x verdict is in - the 10x rate's denominator (a loss at 2x settles it). */
+  tenXGraded: number;
 }
 
 /** The top-level part of the category TokenSage is surest of - adminInsights.topCategory's rule. */
@@ -421,7 +428,7 @@ async function labelRowsForDay(day: Date): Promise<Prisma.LighthouseDayLabelCrea
     const key = `${dimension}\n${label}`;
     let t = tallies.get(key);
     if (!t) {
-      t = { count: 0, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0 };
+      t = { count: 0, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0 };
       tallies.set(key, t);
     }
     return t;
@@ -441,6 +448,8 @@ async function labelRowsForDay(day: Date): Promise<Prisma.LighthouseDayLabelCrea
       if (row.hit2x) t.won2x += 1;
       if (row.hit4x) t.won4x += 1;
       if (row.hit10x) t.won10x += 1;
+      // The 10x verdict is in once it lands, or at once for a call that did not cleanly 2x.
+      if (row.hit10x !== null || !row.hit2x) t.tenXGraded += 1;
     }
   };
   for (const row of alerts) {

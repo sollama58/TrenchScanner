@@ -152,6 +152,38 @@ describe("parseBurnTransaction", () => {
     if (result.ok) expect(result.credit.burnerWallet).toBe(OTHER);
   });
 
+  it("credits the token account's owner, not the delegate who signed the burn", () => {
+    const ACCOUNT = "9BTvwo4Ci2Qui8A8F8iqAeBjv7TGW23H9nSvTcTLzAeg";
+    const ix = burnIx({ authority: OTHER });
+    ix.parsed!.info!.account = ACCOUNT;
+    const delegated = tx([ix], {
+      transaction: {
+        signatures: ["sig"],
+        message: {
+          accountKeys: [{ pubkey: OTHER }, { pubkey: ACCOUNT }, { pubkey: SUBSCRIPTION_MINT }],
+          instructions: [ix],
+        },
+      },
+      meta: {
+        err: null,
+        innerInstructions: null,
+        preTokenBalances: [{ accountIndex: 1, mint: SUBSCRIPTION_MINT, owner: WALLET }],
+        postTokenBalances: [{ accountIndex: 1, mint: SUBSCRIPTION_MINT, owner: WALLET }],
+      },
+    });
+    const result = parseBurnTransaction(delegated, "sig");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.credit.burnerWallet).toBe(WALLET);
+  });
+
+  it("falls back to the authority when the transaction carries no token balances", () => {
+    const ix = burnIx({ authority: OTHER });
+    ix.parsed!.info!.account = "9BTvwo4Ci2Qui8A8F8iqAeBjv7TGW23H9nSvTcTLzAeg";
+    const result = parseBurnTransaction(tx([ix]));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.credit.burnerWallet).toBe(OTHER);
+  });
+
   it("rejects a burn with no authority at all", () => {
     expect(parseBurnTransaction(tx([burnIx({ authority: null })]))).toEqual({
       ok: false,

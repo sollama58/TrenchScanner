@@ -8,6 +8,7 @@ import {
   type RugCheckProfile,
   type RugCheckProfileResult,
 } from "@trenchscanner/core";
+import { FailureBackoff } from "./failureBackoff.js";
 
 /** Cache upserts in flight at once - see the write loop below. */
 const CACHE_WRITE_CONCURRENCY = 4;
@@ -68,6 +69,21 @@ export async function settleRugCheckRefresh(): Promise<void> {
 
 /** How long the scan waits on RugCheck for mints with no usable report - see resolveRugProfiles. */
 export const DEFAULT_AWAIT_DEADLINE_MS = 10_000;
+
+/**
+ * Mints whose awaited lookup last came back "failed" (a transport error, a 429, a 5xx - never a
+ * real answer, which is cached), held off for 1, 2, 4 then 5 minutes between tries. Failures are
+ * never cached in the DB (see resolveRugProfiles), and before this a never-checked mint sorted
+ * first in every cycle's lookup budget, so one RugCheck kept choking on was re-requested every
+ * cycle ahead of every stale refresh. In process only: a transient condition, forgotten on
+ * restart. A real answer clears the mint.
+ */
+const lookupBackoff = new FailureBackoff(1, 5);
+
+/** Test hook: forgets every held-off mint. */
+export function resetRugCheckBackoff(): void {
+  lookupBackoff.clear();
+}
 
 /** Looks `mints` up and caches every real answer ("found" or "absent", never a failure). */
 async function fetchAndCache(
@@ -171,8 +187,13 @@ export async function resolveRugProfiles(
   // "hung" scan of 2026-10-04 15:16 was 166s+ in this stage alone. So: never-checked mints first
   // (they are the new arrivals the feed is waiting on), then the oldest answers; past the budget a
   // mint keeps its last answer for one more cycle, and the next cycle refreshes it.
+  const now = Date.now();
+  lookupBackoff.prune(now);
+  // Held off after a failed lookup: this cycle keeps whatever stale answer there is, and counts
+  // the mint as failed - the screen fails closed on it exactly as it did on the failure itself.
+  const heldOff = unique.filter((mint) => !hit.has(mint) && lookupBackoff.blocked(mint, now));
   const needed = unique
-    .filter((mint) => !hit.has(mint))
+    .filter((mint) => !hit.has(mint) && !lookupBackoff.blocked(mint, now))
     .sort(
       (a, b) =>
         (staleRows.get(a)?.checkedAt.getTime() ?? -Infinity) -
@@ -196,6 +217,7 @@ export async function resolveRugProfiles(
     return true;
   };
   for (const mint of needed.slice(maxLookups)) reuseStale(mint);
+  for (const mint of heldOff) reuseStale(mint);
 
   // Stale-while-revalidate. Waiting on refreshes of answers already in hand was most of a scan
   // cycle in production (~11s of a ~20s cycle on 2026-10-04, every cycle: ~800 in-band mints on a
@@ -223,7 +245,7 @@ export async function resolveRugProfiles(
   // answered is used, the rest count as failed this cycle (the screen fails closed on a missing
   // report, exactly as for a lookup error), and the lookups still in flight finish behind the
   // cycle and land in the cache for the next one.
-  let failed = 0;
+  let failed = heldOff.length;
   let timedOut = 0;
   if (awaited.length > 0) {
     const deadlineMs = opts.awaitDeadlineMs ?? DEFAULT_AWAIT_DEADLINE_MS;
@@ -250,12 +272,19 @@ export async function resolveRugProfiles(
     }
     for (const mint of awaited) {
       const result = results.get(mint);
-      if (result?.status === "found") profiles.set(mint, result.profile);
-      else if (result?.status === "absent") absent.add(mint);
-      // "failed", or no entry at all. Left uncached so the next cycle retries immediately.
-      else {
+      if (result?.status === "found") {
+        profiles.set(mint, result.profile);
+        lookupBackoff.succeed(mint);
+      } else if (result?.status === "absent") {
+        absent.add(mint);
+        lookupBackoff.succeed(mint);
+      } else {
+        // "failed", or no entry at all. Left uncached. A failure is held off before the next
+        // try (lookupBackoff); a lookup that merely outran the wait is still in flight and
+        // lands in the cache for the next cycle, so it is retried as soon as that misses.
         failed += 1;
         if (result === undefined) timedOut += 1;
+        else lookupBackoff.fail(mint, now);
       }
     }
     if (late)
@@ -281,9 +310,10 @@ export async function resolveRugProfiles(
   const stats = {
     requested: unique.length,
     cached: hit.size,
-    fetched: awaited.length - failed,
+    fetched: awaited.length - (failed - heldOff.length),
     failed,
     ...(timedOut > 0 ? { timedOut } : {}),
+    ...(heldOff.length > 0 ? { heldOff: heldOff.length } : {}),
     reused,
     ...(background.length > 0 ? { refreshing: background.length } : {}),
   };

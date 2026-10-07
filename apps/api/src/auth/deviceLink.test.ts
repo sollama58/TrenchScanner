@@ -69,6 +69,39 @@ describe.skipIf(!dbAvailable)("mobile link codes", () => {
     expect(await prisma.linkedDevice.count({ where: { userId } })).toBe(1);
   });
 
+  it("leaves the code claimable when the device row cannot be written", async () => {
+    // The claim and the device create are one transaction: a create that fails (a pool timeout,
+    // a database blip) must roll the claim back, or the scan consumed the code for nothing and
+    // the phone has to go back to the desktop for a fresh QR.
+    const { code } = await issueLinkCode(userId);
+    const failing: Pick<typeof prisma, "$transaction"> = {
+      $transaction: ((fn: (tx: unknown) => Promise<unknown>) =>
+        prisma.$transaction((tx) =>
+          fn(
+            new Proxy(tx, {
+              get(target, prop, receiver) {
+                if (prop === "linkedDevice") {
+                  return {
+                    create: async () => {
+                      throw new Error("simulated device create failure");
+                    },
+                  };
+                }
+                return Reflect.get(target, prop, receiver);
+              },
+            }),
+          ),
+        )) as typeof prisma.$transaction,
+    };
+    await expect(redeemLinkCode(code, "iPhone Safari", failing)).rejects.toThrow("simulated");
+
+    const row = await prisma.mobileLinkCode.findUnique({ where: { codeHash: hashCode(code) } });
+    expect(row?.claimedAt).toBeNull();
+    expect(await prisma.linkedDevice.count({ where: { userId } })).toBe(0);
+    // And the same code still pairs once the database is behaving again.
+    expect((await redeemLinkCode(code)).ok).toBe(true);
+  });
+
   it("expires, so a QR left on a screen stops being a key", async () => {
     const { code } = await issueLinkCode(userId);
     await prisma.mobileLinkCode.updateMany({

@@ -268,7 +268,10 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
   });
 
   app.get("/me", { preHandler: app.authenticate }, async (request) => {
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: request.user!.userId } });
+    // A browser session's row was already read to check its sessionVersion; only a device
+    // session (validated on its device row instead) needs the User row read here.
+    const user =
+      request.sessionUser ?? (await prisma.user.findUniqueOrThrow({ where: { id: request.user!.userId } }));
     return toUserResponse(user, opts.env);
   });
 }

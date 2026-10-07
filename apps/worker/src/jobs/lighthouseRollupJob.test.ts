@@ -180,6 +180,9 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
       alerts: 4,
       alertsDescribed: 3,
       alertsGraded: 3,
+      // 10x is settled on two calls: the stopped-out loss and the disqualified 2x. The clean
+      // 2x still has its 10x window open.
+      alertsTenXGraded: 2,
       alertsWon2x: 1,
       alertsWon4x: 0,
       alertsReturnN: 3,
@@ -195,12 +198,23 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
     const rows = await prisma.lighthouseDayLabel.findMany({ where: { day: DAY } });
     const find = (dimension: string, label: string) =>
       rows.find((r) => r.dimension === dimension && r.label === label);
-    expect(find("category", "rlanimal")).toMatchObject({ count: 2, alerts: 2, graded: 2, won2x: 1 });
+    expect(find("category", "rlanimal")).toMatchObject({
+      count: 2,
+      alerts: 2,
+      graded: 2,
+      tenXGraded: 1,
+      won2x: 1,
+    });
     // A malformed confidence still files the coin under its only label.
     expect(find("category", "rltech")).toMatchObject({ count: 1, alerts: 0 });
     // The call on that coin files under "uncategorized" (no usable confidence), graded as a loss:
     // its 2x came after the stop.
-    expect(find("category", "uncategorized")).toMatchObject({ alerts: 1, graded: 1, won2x: 0 });
+    expect(find("category", "uncategorized")).toMatchObject({
+      alerts: 1,
+      graded: 1,
+      tenXGraded: 1,
+      won2x: 0,
+    });
     expect(find("subcategory", "rlanimal/dog")).toMatchObject({ count: 2, alerts: 2 });
     expect(find("flag", "copycat")).toMatchObject({ count: 1, alerts: 1, won2x: 1 });
     expect(find("referentKind", "animal")?.count).toBe(2);

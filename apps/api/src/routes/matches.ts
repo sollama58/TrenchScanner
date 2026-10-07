@@ -20,6 +20,7 @@ import { summarizeFeed, type FeedStatsCard } from "../feedStats.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { contestState, resolveFeedModels, savedFeed } from "../contest.js";
+import { SharedCacheMap } from "../sharedCache.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
@@ -54,6 +55,9 @@ const CALL_SELECT = {
 type CallRow = Prisma.CuratedAlertGetPayload<{ select: typeof CALL_SELECT }>;
 
 type CuratedCardMeta = ReturnType<typeof serializeCuratedAlert>["curated"] & { calledBy: ModelCall[] };
+
+/** What GET /matches/stats answers with - cached per reader, see FEED_STATS_CACHE_TTL_MS. */
+type FeedStatsResponse = ReturnType<typeof summarizeFeed> & { showModelAlerts: boolean; truncated: boolean };
 
 /**
  * Only the latest snapshot per token, not the whole history - lets the dashboard show "now"
@@ -102,6 +106,22 @@ export const feedStatsQuerySchema = z.object({
 
 /** Per source: far above any real feed's day, so it only bounds a runaway window. */
 const FEED_STATS_MAX_ROWS = 5_000;
+
+/**
+ * How long one reader's /stats answer stands. Every open Live tab asks every 30 seconds and
+ * again on each SSE nudge, and each answer read up to 5,000 matches and 5,000 calls; the tiles
+ * it feeds move when an outcome lands, not per second. Cleared outright when a match or curated
+ * alert is announced, so the nudge still shows the new card's effect at once.
+ */
+const FEED_STATS_CACHE_TTL_MS = 10_000;
+/**
+ * How long a reader's merged-run count (where the matches-only tail starts, past
+ * MAX_MERGE_DEPTH) stands. Walking it read 300 matches plus 300 calls per model for every deep
+ * page; the count only changes when a match or call lands, and both clear it.
+ */
+const MERGED_RUN_CACHE_TTL_MS = 60_000;
+/** Readers' caches held per process: a few hundred keys, each a few kilobytes at most. */
+const MAX_CACHED_READER_KEYS = 500;
 
 /** The match columns resolveOutcome reads, plus the link to the row grading it. */
 const MATCH_OUTCOME_SELECT = {
@@ -168,6 +188,23 @@ export async function registerMatchRoutes(
   // The feed itself, and the live stream that pushes to it. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
 
+  // Both keyed by user first, so one user's new match clears only their own entries; a curated
+  // alert is in every follower's feed, so it clears everything.
+  const statsCache = new SharedCacheMap<FeedStatsResponse>(FEED_STATS_CACHE_TTL_MS, MAX_CACHED_READER_KEYS);
+  const mergedRunCache = new SharedCacheMap<number>(MERGED_RUN_CACHE_TTL_MS, MAX_CACHED_READER_KEYS);
+  const stopCuratedListener = opts.matchStream.onCuratedAlert(() => {
+    statsCache.clear();
+    mergedRunCache.clear();
+  });
+  const stopMatchListener = opts.matchStream.onMatch((userId) => {
+    statsCache.clear(`${userId}:`);
+    mergedRunCache.clear(`${userId}:`);
+  });
+  app.addHook("onClose", async () => {
+    stopCuratedListener();
+    stopMatchListener();
+  });
+
   /**
    * Server-sent events: a nudge the instant a match is created for this user, rather than waiting
    * out the client's poll. See MatchStream for how the worker's notification gets here.
@@ -232,13 +269,25 @@ export async function registerMatchRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const { hours } = parsed.data;
-    const since = new Date(Date.now() - hours * 3_600_000);
     const saved = await savedFeed(request);
     const models = saved.showModelAlerts ? resolveFeedModels(await contestState(opts.env), saved).models : [];
+    const userId = request.user!.userId;
+    // Everything the answer depends on, so a settings change never reads a stale answer.
+    const key = `${userId}:${hours}:${saved.showModelAlerts ? "on" : "off"}:${models.join(",")}`;
+    return statsCache.for(key).get(() => buildFeedStats(userId, hours, models, saved.showModelAlerts));
+  });
+
+  async function buildFeedStats(
+    userId: string,
+    hours: number,
+    models: string[],
+    showModelAlerts: boolean,
+  ): Promise<FeedStatsResponse> {
+    const since = new Date(Date.now() - hours * 3_600_000);
 
     const [matches, calls] = await Promise.all([
       prisma.match.findMany({
-        where: { userId: request.user!.userId, matchedAt: { gte: since } },
+        where: { userId, matchedAt: { gte: since } },
         orderBy: { matchedAt: "desc" },
         take: FEED_STATS_MAX_ROWS,
         select: {
@@ -316,11 +365,11 @@ export async function registerMatchRoutes(
 
     return {
       ...summarizeFeed(cards, hours),
-      showModelAlerts: saved.showModelAlerts,
+      showModelAlerts,
       // The caps bound a pathological window; a real feed is far below them.
       truncated: matches.length === FEED_STATS_MAX_ROWS || calls.length === FEED_STATS_MAX_ROWS,
     };
-  });
+  }
 
   /** The live feed: this user's matches, newest first, 12 per page. */
   app.get("/", async (request, reply) => {
@@ -389,6 +438,10 @@ export async function registerMatchRoutes(
     // How many of the first MAX_MERGE_DEPTH merged items were matches: where the matches-only
     // tail starts. The same two bare reads page MAX_MERGE_DEPTH / PAGE_SIZE itself makes.
     const matchesInMergedRun = async (): Promise<number> => {
+      const models = await feedModels();
+      return mergedRunCache.for(`${where.userId}:${models.join(",")}`).get(() => countMatchesInMergedRun());
+    };
+    const countMatchesInMergedRun = async (): Promise<number> => {
       const [run, calls] = await Promise.all([
         prisma.match.findMany({
           where,

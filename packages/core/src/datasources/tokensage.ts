@@ -1,4 +1,7 @@
 import { fetchJson } from "./httpClient.js";
+import { createLogger } from "../logger.js";
+
+const logger = createLogger("tokensage");
 
 /**
  * Client for TokenSage (https://github.com/sollama58/TokenSage), the user's own API that reads a
@@ -616,8 +619,33 @@ export function narrativeFieldsFromAnalysis(
 }
 
 /**
+ * The most of one Analysis document TokenNarrative.analysis keeps, as serialized JSON. A read is
+ * a few KB; the free-text members (the launcher's own text, echoed back) are the only ones that
+ * grow without bound, and one oversized row would be read back on every card and admin view of
+ * the token. Over the cap the document is stored without them (STORED_ANALYSIS_TRIMMED_PATHS);
+ * still over it, not at all - the columns narrativeFieldsFromAnalysis derived are kept either way.
+ */
+export const STORED_ANALYSIS_MAX_BYTES = 64 * 1024;
+/**
+ * Dropped first from an oversized document, in order: the free-text members nothing stored
+ * derives from (narrativeFieldsFromAnalysis reads none of them; narrativeDetails reads the quoted
+ * and replied-to post text, clipped to 280 chars, so those go last).
+ */
+const STORED_ANALYSIS_TRIMMED_PATHS: readonly (readonly string[])[] = [
+  ["raw"],
+  ["evidence"],
+  ["caveats"],
+  ["image", "ocr"],
+  ["image", "near_duplicates"],
+  ["x", "text"],
+  ["x", "quoted", "text"],
+  ["x", "replied_to", "text"],
+];
+
+/**
  * The Analysis document as it is kept in TokenNarrative.analysis: NUL characters removed (jsonb
- * rejects them) and anything that isn't plain JSON dropped. Null if it isn't an object.
+ * rejects them), anything that isn't plain JSON dropped, and no larger than
+ * STORED_ANALYSIS_MAX_BYTES. Null if it isn't an object, or can't be brought under the cap.
  */
 export function storableAnalysis(analysis: unknown): Record<string, unknown> | null {
   const clean = (value: unknown, depth: number): unknown => {
@@ -634,7 +662,38 @@ export function storableAnalysis(analysis: unknown): Record<string, unknown> | n
     }
     return out;
   };
-  return asRecord(analysis) ? (clean(analysis, 0) as Record<string, unknown>) : null;
+  if (!asRecord(analysis)) return null;
+  const doc = clean(analysis, 0) as Record<string, unknown>;
+  const size = JSON.stringify(doc).length;
+  if (size <= STORED_ANALYSIS_MAX_BYTES) return doc;
+
+  let dropped = 0;
+  for (const path of STORED_ANALYSIS_TRIMMED_PATHS) {
+    let holder: Record<string, unknown> | null = doc;
+    for (const key of path.slice(0, -1)) holder = holder ? asRecord(holder[key]) : null;
+    const leaf = path[path.length - 1]!;
+    if (holder && holder[leaf] !== undefined) {
+      delete holder[leaf];
+      dropped += 1;
+    }
+  }
+  const trimmedSize = JSON.stringify(doc).length;
+  const mint = typeof doc.mint === "string" ? doc.mint : undefined;
+  if (trimmedSize <= STORED_ANALYSIS_MAX_BYTES) {
+    logger.warn("TokenSage analysis over the stored size cap; stored without its free text", {
+      mint,
+      bytes: size,
+      trimmedBytes: trimmedSize,
+      dropped,
+    });
+    return doc;
+  }
+  logger.warn("TokenSage analysis over the stored size cap even trimmed; not stored", {
+    mint,
+    bytes: size,
+    trimmedBytes: trimmedSize,
+  });
+  return null;
 }
 
 /** What a narrative card shows besides the stored columns, read from the Analysis document. */

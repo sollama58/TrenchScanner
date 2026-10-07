@@ -108,6 +108,11 @@ describe("trainStackedCurator", () => {
     );
     expect(high).toBeGreaterThan(low);
     expect(stacked!.examChunks).toBeGreaterThan(0);
+    // The exam carries the 10x and run-size evidence a single model's does, on the same scale.
+    expect(stacked!.exam.graded).toBeGreaterThan(0);
+    // Synthetic rows carry no 10x verdict, so only the losses settle the 10x tier.
+    expect(stacked!.exam.tenXGraded).toBe(stacked!.exam.graded - stacked!.exam.wins);
+    expect(stacked!.exam.sumRun).toBeGreaterThanOrEqual(stacked!.exam.sumLabel - 1e-9);
     // Without member cutoffs the agreement signal is flat and the member cutoffs are not stored.
     expect(params.meta.featureNames).toContain("agreement:share");
     expect(params.members.every((m) => m.callRank === undefined)).toBe(true);

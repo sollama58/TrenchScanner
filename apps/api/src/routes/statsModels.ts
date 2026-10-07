@@ -115,6 +115,14 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
  * that is present but always zero is as dead as a null one, hence the zero share and range.
  */
 export async function buildFeatureFillReport(since: Date, until: Date = new Date()) {
+  // The denominator is counted on its own: jsonb_each yields nothing for a row whose features
+  // are `{}`, so counting rows through the join below left those rows out and overstated every
+  // input's fill rate - which is exactly the case the "under 10%" flag exists to catch.
+  const kindCounts = await prisma.$queryRaw<{ kind: string; rows: bigint }[]>`
+    SELECT co."sampleKind" AS kind, count(*) AS rows
+    FROM "CandidateOutcome" co
+    WHERE co."anchorAt" >= ${since} AND co."anchorAt" < ${until}
+    GROUP BY 1`;
   const rows = await prisma.$queryRaw<
     {
       kind: string;
@@ -145,10 +153,9 @@ export async function buildFeatureFillReport(since: Date, until: Date = new Date
     string,
     { rows: number; present: number; zeros: number; min: number | null; max: number | null; sum: number }
   >();
-  const rowsByKind = new Map<string, number>();
+  const rowsByKind = new Map<string, number>(kindCounts.map((k) => [k.kind, Number(k.rows)]));
   for (const r of rows) {
     const rowCount = Number(r.rows);
-    rowsByKind.set(r.kind, Math.max(rowsByKind.get(r.kind) ?? 0, rowCount));
     const present = Number(r.present);
     const p = pooled.get(r.feature) ?? { rows: 0, present: 0, zeros: 0, min: null, max: null, sum: 0 };
     p.rows += rowCount;

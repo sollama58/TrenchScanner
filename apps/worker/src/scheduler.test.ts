@@ -85,8 +85,13 @@ describe("scheduleInterval", () => {
     await vi.advanceTimersByTimeAsync(6_000);
     job.stop();
     expect(starts).toEqual(["scan"]);
+    // intervalMs is the job's effective cadence, which /health/worker reads its stale threshold from.
     expect(heartbeats).toEqual([
-      { job: "scan", success: true, meta: { stagesMs: { discovery: 5_000 }, durationMs: 5_000 } },
+      {
+        job: "scan",
+        success: true,
+        meta: { stagesMs: { discovery: 5_000 }, durationMs: 5_000, intervalMs: 60_000 },
+      },
     ]);
   });
 
@@ -369,7 +374,7 @@ describe("scheduleDailyAt", () => {
     expect(heartbeats[0]).toMatchObject({
       job: "outcome-tracking",
       success: true,
-      meta: { durationMs: 30 * HOUR },
+      meta: { durationMs: 30 * HOUR, dailyAtHourUtc: 5 },
     });
   });
 });

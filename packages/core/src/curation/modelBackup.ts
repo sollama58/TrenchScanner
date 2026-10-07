@@ -38,6 +38,14 @@ export type ModelBackupKind = "weekly" | "manual" | "pre-restore" | "imported";
 export const WEEKLY_BACKUP_INTERVAL_MS = 7 * 86_400_000 - 3_600_000;
 /** Manual, pre-restore and imported backups are pruned after this long unless pinned. */
 export const OTHER_BACKUP_RETENTION_DAYS = 90;
+/**
+ * ...and, whatever their age, only the newest this many of each kind are kept. Each row is the
+ * full gzipped payload, and a restore writes a pre-restore row every time, so an admin trying
+ * restores and "back up now" a few times a day would otherwise stack hundreds of MB inside the
+ * 90 days. Pinned backups do not count against it.
+ */
+export const OTHER_BACKUP_KEEP_COUNT = 20;
+const OTHER_BACKUP_KINDS: readonly ModelBackupKind[] = ["manual", "pre-restore", "imported"];
 /** The live-record window stored with each seat - the leaderboard's. */
 const RECORD_WINDOW_DAYS = 30;
 /**
@@ -725,26 +733,32 @@ export async function weeklyBackupDue(now = new Date()): Promise<boolean> {
 }
 
 /**
- * Keeps the newest `keepWeeks` weekly backups and every other kind for 90 days; pinned backups
- * stay whatever their age. Off-site copies are never deleted from here - the bucket's own
- * lifecycle rules decide those.
+ * Keeps the newest `keepWeeks` weekly backups, and of every other kind the newest
+ * OTHER_BACKUP_KEEP_COUNT for at most OTHER_BACKUP_RETENTION_DAYS; pinned backups stay whatever
+ * their age or number. Off-site copies are never deleted from here - the bucket's own lifecycle
+ * rules decide those.
  */
 export async function pruneModelBackups(keepWeeks: number, now = new Date()): Promise<number> {
-  const surplus = await prisma.modelBackup.findMany({
-    where: { kind: "weekly", pinned: false },
-    orderBy: { createdAt: "desc" },
-    skip: keepWeeks,
-    select: { id: true },
-  });
-  const weekly = await prisma.modelBackup.deleteMany({ where: { id: { in: surplus.map((r) => r.id) } } });
-  const others = await prisma.modelBackup.deleteMany({
+  // The count rule, per kind: unpinned rows past the newest N.
+  const surplusOf = async (kind: ModelBackupKind, keep: number) =>
+    prisma.modelBackup.findMany({
+      where: { kind, pinned: false },
+      orderBy: { createdAt: "desc" },
+      skip: keep,
+      select: { id: true },
+    });
+  const surplus = await surplusOf("weekly", keepWeeks);
+  for (const kind of OTHER_BACKUP_KINDS) surplus.push(...(await surplusOf(kind, OTHER_BACKUP_KEEP_COUNT)));
+  const byCount = await prisma.modelBackup.deleteMany({ where: { id: { in: surplus.map((r) => r.id) } } });
+  // The age rule, for everything but weekly rows.
+  const byAge = await prisma.modelBackup.deleteMany({
     where: {
       kind: { not: "weekly" },
       pinned: false,
       createdAt: { lt: new Date(now.getTime() - OTHER_BACKUP_RETENTION_DAYS * 86_400_000) },
     },
   });
-  return weekly.count + others.count;
+  return byCount.count + byAge.count;
 }
 
 /** The off-site bucket from MODEL_BACKUP_S3_*, or null when it isn't fully configured. */

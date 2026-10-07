@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   adminWalletSet,
   appDomainForOrigin,
   appDomainList,
   corsOriginList,
+  disabledGuards,
   loadEnv,
   resetEnvCacheForTests,
 } from "./env.js";
@@ -116,6 +117,38 @@ describe("loadEnv", () => {
     expect(on.CURATOR_CONTESTANTS).toContain("narrative");
     expect(on.CURATOR_CONTESTANTS).toContain("linear");
     resetEnvCacheForTests();
+  });
+
+  it("accepts 0 on the training guards, naming each one as off", () => {
+    resetEnvCacheForTests();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const env = loadEnv({
+        DATABASE_URL: "postgres://x",
+        CURATOR_EVOLUTION_MIN_AGE_HOURS: "0",
+        CURATOR_CHAMPION_MIN_LIVE_GRADED: "0",
+      });
+      expect(env.CURATOR_EVOLUTION_MIN_AGE_HOURS).toBe(0);
+      expect(env.CURATOR_CHAMPION_MIN_LIVE_GRADED).toBe(0);
+      expect(disabledGuards(env)).toEqual([
+        "CURATOR_EVOLUTION_MIN_AGE_HOURS",
+        "CURATOR_CHAMPION_MIN_LIVE_GRADED",
+      ]);
+      const warned = warn.mock.calls.map((c) => String(c[0]));
+      expect(warned.filter((line) => line.includes("CURATOR_EVOLUTION_MIN_AGE_HOURS is 0"))).toHaveLength(1);
+      expect(warned.filter((line) => line.includes("CURATOR_CHAMPION_MIN_LIVE_GRADED is 0"))).toHaveLength(1);
+      expect(warned.some((line) => line.includes("CURATOR_GUARD_MAX_HOLD_HOURS"))).toBe(false);
+    } finally {
+      warn.mockRestore();
+      resetEnvCacheForTests();
+    }
+  });
+
+  it("refuses a JWT secret under 32 characters, the HS256 floor", () => {
+    expect(() => loadEnv({ DATABASE_URL: "postgres://x", JWT_SECRET: "a".repeat(31) })).toThrow(
+      /32 characters/,
+    );
+    expect(loadEnv({ DATABASE_URL: "postgres://x", JWT_SECRET: "a".repeat(32) }).JWT_SECRET).toHaveLength(32);
   });
 
   it("treats a blank numeric var as unset, not 0", () => {

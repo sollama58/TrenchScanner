@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import bs58 from "bs58";
 import { z } from "zod";
+import { burnsMint } from "../burnWire.js";
 import {
   adminWalletSet,
   claimHeldBurns,
@@ -40,29 +41,6 @@ const SEND_ROUTE_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 // /blockhash and /claim each spend a paid RPC call (getTransaction retries on top) and need only a
 // free sign-in, so they get their own limit instead of the global 300/min.
 const RPC_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
-
-/** The mint's raw 32 bytes, for the payload check below. Decoded once. */
-const SUBSCRIPTION_MINT_BYTES = Buffer.from(bs58.decode(SUBSCRIPTION_MINT));
-
-/**
- * Whether a serialized transaction so much as mentions the subscription mint.
- *
- * Not a parse - the API deliberately carries no web3.js - but it is the specific thing that makes
- * this endpoint a burn relay rather than an open one. Every account a transaction touches appears
- * in its message as a raw 32-byte public key, so a burn of this mint necessarily contains these
- * bytes and an unrelated swap, transfer or bot submission does not. Anything that fails this was
- * never a subscription payment, whatever else it might be.
- *
- * The burn itself is still verified properly after the fact, on-chain, by /claim and the
- * reconciler; this only decides what we are willing to put our RPC credentials behind.
- */
-function mentionsSubscriptionMint(base64Transaction: string): boolean {
-  try {
-    return Buffer.from(base64Transaction, "base64").includes(SUBSCRIPTION_MINT_BYTES);
-  } catch {
-    return false;
-  }
-}
 
 /**
  * The transaction's own id - its first signature - read straight off the signed wire bytes.
@@ -198,13 +176,18 @@ export async function registerSubscriptionRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
 
-    // This endpoint exists to relay ONE kind of transaction. Nothing here previously required the
+    // This endpoint exists to relay ONE kind of transaction. Nothing here originally required the
     // payload to have anything to do with the subscription - not the mint, not the caller's own
     // wallet - so any signed-in wallet (and signing in is free) could push arbitrary transactions
     // through the operator's paid RPC key, at the global rate limit, with the traffic attributed
-    // to us. See mentionsSubscriptionMint for what this check is and is not.
-    if (!mentionsSubscriptionMint(parsed.data.transaction)) {
-      request.log.warn({ wallet: request.user!.walletAddress }, "refused to relay a non-burn transaction");
+    // to us. The payload is decoded and relayed only when it burns the mint (burnWire.ts says what
+    // that does and does not check); the burn itself is verified on-chain afterwards by /claim.
+    const wire = burnsMint(parsed.data.transaction, SUBSCRIPTION_MINT);
+    if (!wire.ok) {
+      request.log.warn(
+        { wallet: request.user!.walletAddress, reason: wire.reason },
+        "refused to relay a non-burn transaction",
+      );
       return reply.code(400).send({ error: "That transaction doesn't burn $ASDFASDFA. Nothing was sent." });
     }
 
@@ -242,7 +225,7 @@ export async function registerSubscriptionRoutes(
    * Verify a burn and turn it into access.
    *
    * Deliberately does NOT require the caller to be the burner: the signature identifies the burn,
-   * the burn's own authority identifies who gets the months. Someone pasting a signature they did
+   * the burned token account's owner identifies who gets the months (parseBurnTransaction). Someone pasting a signature they did
    * not sign therefore gives access to the wallet that actually paid, not to themselves.
    *
    * Also deliberately has no recency limit. The obvious version rejects transactions older than a
@@ -293,7 +276,7 @@ export async function registerSubscriptionRoutes(
 
     const outcome = await creditBurn(signature, verdict.credit, SUBSCRIPTION_MINT, "claim");
     if (outcome.status === "held" || verdict.credit.burnerWallet !== request.user!.walletAddress) {
-      // The burn was authorised by another wallet: held for it if it has no account here yet,
+      // The burn was another wallet's tokens: held for it if it has no account here yet,
       // credited to it if it does. Either way none of it is this caller's, and answering
       // "credited" with the caller's own access (as the fresh path used to, unlike the ledger path
       // above) told them a burn counted when their access hadn't moved.

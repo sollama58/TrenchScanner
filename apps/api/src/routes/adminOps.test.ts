@@ -72,6 +72,41 @@ describe.skipIf(!dbAvailable)("admin panel routes", () => {
     expect(rows.find((r) => r.walletAddress === OTHER_WALLET)?.access).toBe("none");
   });
 
+  it("attaches each alert's newest AI review, not its first", async () => {
+    // One statement over the page's ids rather than a nested take: 1, which Prisma emits as a
+    // window function over every review the listed alerts ever had.
+    const tag = `admin-ops-alerts-${Date.now()}`;
+    const token = await prisma.token.create({ data: { mintAddress: `${tag}-mint`, symbol: "ADM" } });
+    const alert = await prisma.curatedAlert.create({
+      data: { tokenId: token.id, source: tag, confidence: 80, anchorPriceUsd: 1, anchorMcapUsd: 50_000 },
+    });
+    const review = (decision: string, createdAt: Date) =>
+      prisma.aiReview.create({
+        data: {
+          tokenId: token.id,
+          curatedAlertId: alert.id,
+          createdAt,
+          mode: "shadow",
+          model: "test",
+          decision,
+          latencyMs: 1,
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 50_000,
+        },
+      });
+    try {
+      await review("skip", new Date(Date.now() - 60_000));
+      await review("buy", new Date());
+      const res = await call("/admin/alerts?limit=200", "admin");
+      const rows = res.json() as { id: string; ai: { decision: string } | null }[];
+      expect(rows.find((r) => r.id === alert.id)?.ai).toEqual({ decision: "buy", probability2x: null });
+    } finally {
+      await prisma.aiReview.deleteMany({ where: { tokenId: token.id } });
+      await prisma.curatedAlert.delete({ where: { id: alert.id } });
+      await prisma.token.delete({ where: { id: token.id } });
+    }
+  });
+
   it("reports the worker's full error text, which the public route truncates", async () => {
     const job = `admin-ops-test-${Date.now()}`;
     const long = "x".repeat(500);

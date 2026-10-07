@@ -134,50 +134,70 @@ export async function recordCandidateSample(
   if (!Number.isFinite(scored.priceUsd) || scored.priceUsd <= 0) return null;
 
   const kind: CandidateSampleKind = opts.kind ?? (opts.bypassSpacing ? "emission" : "hourly");
-  if (!opts.bypassSpacing) {
-    const spacingMinutes =
-      kind === "event" || kind === "second"
-        ? env.CANDIDATE_EVENT_SPACING_MINUTES
-        : kind === "match"
-          ? MATCH_SAMPLE_SPACING_MINUTES
-          : env.CANDIDATE_SAMPLE_SPACING_MINUTES;
-    const spacingCutoff = new Date(Date.now() - spacingMinutes * 60_000);
-    const recent = await prisma.candidateOutcome.findFirst({
-      where: { tokenId, sampleKind: kind, anchorAt: { gt: spacingCutoff } },
-      select: { id: true, anchorPriceUsd: true },
-    });
-    const sameAlertPrice =
-      recent !== null &&
-      (kind !== "match" ||
-        Math.abs(recent.anchorPriceUsd - scored.priceUsd) <=
-          recent.anchorPriceUsd * MATCH_ANCHOR_SHARE_TOLERANCE);
-    if (recent && sameAlertPrice) return { id: recent.id, created: false };
-  }
 
-  const anchorAt = new Date();
-  const agg = initialOutcomeAggregates(scored.priceUsd, anchorAt);
-  const row = await prisma.candidateOutcome.create({
-    data: {
-      tokenId,
-      anchorAt,
-      anchorPriceUsd: scored.priceUsd,
-      anchorMcapUsd: scored.marketCapUsd,
-      sampleKind: kind,
-      labelRule: CURRENT_LABEL_RULE,
-      features: buildCandidateFeatures(scored) as Prisma.InputJsonValue,
-      score: scored.score.total,
-      nextCheckAt: new Date(anchorAt.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
-      extended24h: opts.extended24h ?? false,
-      peak1hPriceUsd: agg.peak1hPriceUsd,
-      low1hPriceUsd: agg.low1hPriceUsd,
-      lowBefore2xPriceUsd: agg.lowBefore2xPriceUsd,
-      peak24hPriceUsd: agg.peak24hPriceUsd,
-      peakBeforeStopPriceUsd: agg.peakBeforeStopPriceUsd,
-      peakBeforeStop60mPriceUsd: agg.peakBeforeStop60mPriceUsd,
-    },
-  });
-  noteSampleBanked(kind, anchorAt.getTime());
-  return { id: row.id, created: true };
+  const sample = async (db: Prisma.TransactionClient | typeof prisma): Promise<CandidateSampleRef> => {
+    if (!opts.bypassSpacing) {
+      const spacingMinutes =
+        kind === "event" || kind === "second"
+          ? env.CANDIDATE_EVENT_SPACING_MINUTES
+          : kind === "match"
+            ? MATCH_SAMPLE_SPACING_MINUTES
+            : env.CANDIDATE_SAMPLE_SPACING_MINUTES;
+      const spacingCutoff = new Date(Date.now() - spacingMinutes * 60_000);
+      const recent = await db.candidateOutcome.findFirst({
+        where: { tokenId, sampleKind: kind, anchorAt: { gt: spacingCutoff } },
+        select: { id: true, anchorPriceUsd: true },
+      });
+      const sameAlertPrice =
+        recent !== null &&
+        (kind !== "match" ||
+          Math.abs(recent.anchorPriceUsd - scored.priceUsd) <=
+            recent.anchorPriceUsd * MATCH_ANCHOR_SHARE_TOLERANCE);
+      if (recent && sameAlertPrice) return { id: recent.id, created: false };
+    }
+
+    const anchorAt = new Date();
+    const agg = initialOutcomeAggregates(scored.priceUsd, anchorAt);
+    const row = await db.candidateOutcome.create({
+      data: {
+        tokenId,
+        anchorAt,
+        anchorPriceUsd: scored.priceUsd,
+        anchorMcapUsd: scored.marketCapUsd,
+        sampleKind: kind,
+        labelRule: CURRENT_LABEL_RULE,
+        features: buildCandidateFeatures(scored) as Prisma.InputJsonValue,
+        score: scored.score.total,
+        nextCheckAt: new Date(anchorAt.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
+        extended24h: opts.extended24h ?? false,
+        peak1hPriceUsd: agg.peak1hPriceUsd,
+        low1hPriceUsd: agg.low1hPriceUsd,
+        lowBefore2xPriceUsd: agg.lowBefore2xPriceUsd,
+        peak24hPriceUsd: agg.peak24hPriceUsd,
+        peakBeforeStopPriceUsd: agg.peakBeforeStopPriceUsd,
+        peakBeforeStop60mPriceUsd: agg.peakBeforeStop60mPriceUsd,
+      },
+    });
+    noteSampleBanked(kind, anchorAt.getTime());
+    return { id: row.id, created: true };
+  };
+
+  // A "match" anchor is shared by every filter alert raised on the token inside the spacing
+  // window, and two lanes raise them - the minutely scan and the 15-second fast pass (see
+  // createMatchesForTargets) - each anchoring after its own locked match insert. Both would read
+  // "no recent match row" and both would create one, so the spacing check and the create are
+  // serialized under a per-token advisory lock; transaction-scoped, so it releases on commit or
+  // rollback with no cleanup path. The other kinds are written by one lane each and need none.
+  if (kind === "match" && !opts.bypassSpacing) {
+    return prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"match-anchor:" + tokenId}))`;
+        return sample(tx);
+      },
+      { maxWait: 10_000, timeout: 15_000 },
+    );
+  }
+  return sample(prisma);
 }
 
 /** Rows banked since the counters were last read, by kind - the scan cycle's data-continuity line. */

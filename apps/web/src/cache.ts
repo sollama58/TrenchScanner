@@ -16,6 +16,8 @@ interface Entry {
   /** When `data` arrived (ms). */
   at: number;
   inflight?: Promise<unknown>;
+  /** When `inflight` was sent (ms) - see NUDGE_SHARE_MS. */
+  inflightAt?: number;
   /** Request number of `data`, so an older request landing late can't overwrite a newer answer. */
   n?: number;
   /** `data` came from localStorage (an earlier visit), not from this page's own requests. */
@@ -100,14 +102,25 @@ export function peek<T>(path: string): { data: T; at: number; restored: boolean 
 }
 
 /**
+ * A "something changed" request (negative `maxAgeMs`) still shares a request in flight that was
+ * sent this recently. One SSE nudge wakes several views at once - the Live tab reloads its feed
+ * and the alert notifier checks the same path - and each wanting its own request meant two
+ * identical GETs for one event. A request this young started after whatever prompted the nudge,
+ * or so close to it that the server's own few seconds of caching make no difference between them.
+ */
+const NUDGE_SHARE_MS = 250;
+
+/**
  * GETs `path`. With `maxAgeMs` >= 0 it shares a request already in flight, and with `maxAgeMs` > 0
- * a cached response from this visit younger than that is returned without a request. A negative `maxAgeMs` always
- * sends a new request (for "something changed since that request started").
+ * a cached response from this visit younger than that is returned without a request. A negative `maxAgeMs`
+ * sends a new request (for "something changed since that request started") unless one was sent
+ * within the last NUDGE_SHARE_MS, which it joins.
  */
 export function cachedGet<T>(path: string, maxAgeMs = 0): Promise<T> {
   const e = entries.get(path) ?? { at: 0 };
   entries.set(path, e);
-  if (e.inflight && maxAgeMs >= 0) return e.inflight as Promise<T>;
+  if (e.inflight && (maxAgeMs >= 0 || Date.now() - (e.inflightAt ?? 0) < NUDGE_SHARE_MS))
+    return e.inflight as Promise<T>;
   // An answer kept from an earlier visit is never fresh enough: it is only for painting early.
   if (maxAgeMs > 0 && e.data !== undefined && !e.restored && Date.now() - e.at < maxAgeMs)
     return Promise.resolve(e.data as T);
@@ -123,6 +136,7 @@ export function cachedGet<T>(path: string, maxAgeMs = 0): Promise<T> {
     return data;
   });
   e.inflight = p;
+  e.inflightAt = Date.now();
   const clear = () => {
     if (e.inflight === p) e.inflight = undefined;
   };

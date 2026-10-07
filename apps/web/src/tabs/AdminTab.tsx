@@ -322,7 +322,8 @@ function Backups() {
           {(d) => (
             <div className="stack">
               <p className="small muted">
-                Keeping the newest {d.keepWeeks} weekly backups. Off-site copies:{" "}
+                Keeping the newest {d.keepWeeks} weekly backups, and the newest 20 of each other kind for 90
+                days. Off-site copies:{" "}
                 {d.offsiteConfigured === true ? (
                   <Tag tone="ok">on</Tag>
                 ) : d.offsiteConfigured === false ? (

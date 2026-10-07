@@ -49,7 +49,36 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "lighthouse-rollup": 3 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
+/**
+ * A job whose heartbeat says how often it runs (the scheduler writes `intervalMs`, see
+ * apps/worker/src/scheduler.ts) is stale after this many of its own intervals - the table above
+ * is only a floor for it. The intervals are env-tunable (CURATOR_TRAINING_INTERVAL_HOURS, say),
+ * and a table alone drifts from them: a job set to run every six hours read as stale after four.
+ */
+const STALE_AFTER_INTERVALS = 3;
 const MAX_ERROR_LENGTH = 300;
+
+/**
+ * How stale a job may get before /health/worker says so: the table's figure, raised to
+ * STALE_AFTER_INTERVALS of the cadence the job's own heartbeat reports when it reports one.
+ * A daily job's row carries `dailyAtHourUtc` instead, and the table's 26 hours already fits it.
+ */
+export function staleThresholdMs(job: string, meta: unknown): number {
+  const table = STALE_THRESHOLD_MS[job] ?? DEFAULT_STALE_THRESHOLD_MS;
+  const intervalMs = numberField(meta, "intervalMs");
+  if (intervalMs === null || intervalMs <= 0) return table;
+  return Math.max(table, intervalMs * STALE_AFTER_INTERVALS);
+}
+
+/** One numeric field of a heartbeat's meta, or null. */
+function numberField(meta: unknown, key: string): number | null {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const value = (meta as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Meta fields that describe the schedule, not the run - kept out of `lastRun`. */
+const SCHEDULE_META_KEYS = new Set(["intervalMs", "dailyAtHourUtc"]);
 
 /**
  * The public shape of a job's last error: its first line, clipped, with hosts and URLs blanked.
@@ -134,7 +163,7 @@ type HeartbeatRow = Awaited<ReturnType<typeof prisma.systemHeartbeat.findMany>>[
  * `fullError` for the untruncated message - it is behind the admin gate, this route is public.
  */
 export function summarizeHeartbeat(h: HeartbeatRow, now: number, opts: { fullError?: boolean } = {}) {
-  const threshold = STALE_THRESHOLD_MS[h.job] ?? DEFAULT_STALE_THRESHOLD_MS;
+  const threshold = staleThresholdMs(h.job, h.meta);
   // A run in flight for longer than the stale threshold is a hung run, not a slow one -
   // reported separately because "last finished Sep 21, running since 20:33" and "last
   // finished Sep 21, nothing running" call for different fixes.
@@ -167,7 +196,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   const m = meta as Record<string, unknown>;
   const out: { durationMs?: number; stagesMs?: Record<string, number>; [count: string]: unknown } = {};
   // Every top-level number the job reported (duration, and counts such as tracked/inBand).
-  for (const [key, value] of Object.entries(m)) if (typeof value === "number") out[key] = value;
+  for (const [key, value] of Object.entries(m)) {
+    if (typeof value === "number" && !SCHEDULE_META_KEYS.has(key)) out[key] = value;
+  }
   const stages = stageTimings(meta, "stagesMs");
   if (stages) out.stagesMs = stages;
   // The scan's paid RPC calls per method ({ method: count }) - what the Helius plan bills on.

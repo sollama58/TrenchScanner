@@ -37,7 +37,16 @@ export async function refreshLiveMarketData(
 ): Promise<LiveMarketDataRefresh> {
   if (tokens.length === 0) return { requested: 0, updated: 0 };
 
-  const live = await dexScreener.getTokensByAddresses(tokens.map((t) => t.mintAddress));
+  // When each reading was taken, per mint: a lookup of several batches spans seconds, and the
+  // reading's own time is what liveDataAt (and a peak recorded from it) should carry, not the
+  // moment the write happened to land.
+  const seenAt = new Map<string, Date>();
+  const live = await dexScreener.getTokensByAddresses(
+    tokens.map((t) => t.mintAddress),
+    5,
+    { seenAt },
+  );
+  const fetchedAt = new Date();
   const byMint = new Map(live.map((c) => [c.mintAddress, c]));
   // Not in the response (delisted, liquidity pulled, DexScreener hasn't indexed it) - leave
   // whatever was last recorded rather than blanking it, exactly as outcomeTrackingJob does.
@@ -55,6 +64,7 @@ export async function refreshLiveMarketData(
               id: t.id,
               mcap: data.marketCapUsd > 0 ? data.marketCapUsd : NaN,
               price: data.priceUsd > 0 ? data.priceUsd : NaN,
+              at: seenAt.get(t.mintAddress) ?? fetchedAt,
             },
           ]
         : [];
@@ -71,12 +81,13 @@ export async function refreshLiveMarketData(
     // token deleted mid-refresh simply matches no row.
     updated = await prisma.$executeRaw`
       UPDATE "Token" AS t
-      SET "liveMarketCapUsd" = v.mcap, "livePriceUsd" = v.price, "liveDataAt" = now()
+      SET "liveMarketCapUsd" = v.mcap, "livePriceUsd" = v.price, "liveDataAt" = v.at
       FROM unnest(
         ${rows.map((r) => r.id)}::text[],
         ${floatArrayParam(rows.map((r) => r.mcap))}::text::float8[],
-        ${floatArrayParam(rows.map((r) => r.price))}::text::float8[]
-      ) AS v(id, mcap, price)
+        ${floatArrayParam(rows.map((r) => r.price))}::text::float8[],
+        ${rows.map((r) => r.at.toISOString())}::text[]::timestamptz[]
+      ) AS v(id, mcap, price, at)
       WHERE t.id = v.id`;
   } catch (err) {
     logger.warn("failed to persist live market data", { count: rows.length, error: String(err) });
@@ -97,22 +108,25 @@ export async function refreshLiveMarketData(
  * and with the dashboard's live tick reading every few seconds, most readings were thrown away
  * that way. Doing it here records each one as it is taken. Same rule as the live-ping statement in
  * matchPeaks.ts: a peak only counts above the alert market cap. peakReturnPct and hitHundredPctAt
- * follow on the worker's next pass (repairOutcomeBookkeeping keys off peakMcapAt).
+ * follow on the worker's next pass (repairOutcomeBookkeeping keys off peakMcapAt). The peak is
+ * stamped with the reading's time - the same liveDataAt just written - as the worker's own
+ * live-ping statement stamps it, so "when it peaked" is when the price was seen, not written.
  *
  * Failures are logged, not thrown: the market data itself is already saved.
  */
 async function raiseMatchPeaks(
-  rows: readonly { id: string; mcap: number }[],
+  rows: readonly { id: string; mcap: number; at: Date }[],
   windowDays: number,
 ): Promise<void> {
   try {
     await prisma.$executeRaw`
       UPDATE "Match" m
-      SET "peakMcapUsd" = v.mcap, "peakMcapAt" = now()
+      SET "peakMcapUsd" = v.mcap, "peakMcapAt" = v.at
       FROM unnest(
         ${rows.map((r) => r.id)}::text[],
-        ${floatArrayParam(rows.map((r) => r.mcap))}::text::float8[]
-      ) AS v(id, mcap),
+        ${floatArrayParam(rows.map((r) => r.mcap))}::text::float8[],
+        ${rows.map((r) => r.at.toISOString())}::text[]::timestamptz[]
+      ) AS v(id, mcap, at),
       "TokenSnapshot" alert
       WHERE m."tokenId" = v.id
         AND alert.id = m."snapshotId"

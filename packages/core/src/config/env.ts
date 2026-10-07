@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createLogger } from "../logger.js";
 import { CONTESTANT_IDS, NARRATIVE_CONTESTANT, isContestantId } from "../curation/contestants.js";
 
 /**
@@ -43,9 +44,11 @@ const envSchema = z.object({
   // doesn't need, this falls back to an obviously-insecure default and apps/api itself checks
   // for and warns loudly about that default at startup (see apps/api/src/index.ts) - so a real
   // deployment can't silently ship with it, but the worker's startup is never blocked by it.
+  // 32 bytes is the HS256 floor: a shorter secret is cheaper to brute-force than the signature
+  // it protects. Raised from 16 on 2026-10-07 once the Render secret was confirmed long enough.
   JWT_SECRET: z
     .string()
-    .min(16, "JWT_SECRET must be at least 16 characters")
+    .min(32, "JWT_SECRET must be at least 32 characters")
     .default("dev-insecure-default-jwt-secret-change-me"),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(168),
 
@@ -409,13 +412,14 @@ const envSchema = z.object({
   // takeover rate as a single challenger.
   CURATOR_EVOLUTION_CHALLENGERS: z.coerce.number().int().min(0).max(12).default(10),
   // A seat's recipe holds it at least this long before it can be replaced - time to build a live
-  // record the leaderboard can judge it on.
+  // record the leaderboard can judge it on. 0 = off (a seat can be replaced the run it is seated).
   CURATOR_EVOLUTION_MIN_AGE_HOURS: z.coerce.number().min(0).default(12),
   CURATOR_EVOLUTION_MARGIN: z.coerce.number().min(0).max(50).default(3),
   // A takeover also needs evidence (curation/evolution.ts, TakeoverEvidence): the challenger's
   // exam must hold at least this many wins, it must out-score the seat it replaces in this share
   // of paired bootstrap resamples of the same exam rows (0 = off), and seats change hands at most
-  // once per this many hours.
+  // once per this many hours. MIN_EXAM_WINS 0 = off (no wins needed); MIN_TAKEOVER_INTERVAL 0 =
+  // off (a takeover every run).
   // 15 since 2026-10-06 (user decision): at 30, a precise challenger (100 exam calls at 28%) could
   // never take a seat while a loose one (300 at 20%) could; the bootstrap already guards noise.
   CURATOR_EVOLUTION_MIN_EXAM_WINS: z.coerce.number().int().min(0).default(15),
@@ -426,6 +430,7 @@ const envSchema = z.object({
   // moments that arrived since - the only rows that had no say in picking it - with at least
   // MIN_WINS wins there and CURATOR_EVOLUTION_CONFIDENCE in paired resamples. No breeding while
   // one is pending (seats change hands at most once a day anyway). 0 = seat it straight away.
+  // PROBATION_MIN_WINS 0 = off (the probation needs no wins).
   CURATOR_EVOLUTION_PROBATION_HOURS: z.coerce.number().min(0).max(72).default(18),
   CURATOR_EVOLUTION_PROBATION_MIN_WINS: z.coerce.number().int().min(0).default(8),
   // The default model is the leaderboard's best performer, re-chosen after each training run
@@ -433,14 +438,15 @@ const envSchema = z.object({
   // can hold the default, and a challenger must beat the sitting champion by MARGIN points.
   // 50 and 5 since 2026-10-06 (user decision; were 10 and 2): the seats sit within a few points
   // of each other at 300-400 calls, so the default flipped on noise. 50 is the leaderboard's own
-  // rank floor (MIN_LIVE_CALLS_TO_RANK).
+  // rank floor (MIN_LIVE_CALLS_TO_RANK). MIN_LIVE_GRADED 0 = off (an ungraded model can hold it).
   CURATOR_CHAMPION_MIN_LIVE_GRADED: z.coerce.number().int().min(0).default(50),
   CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(5),
   // The training run's guard (curation/runGuard.ts): a run that would ship broken weights, train on
   // under half the rows the running models saw, or silence every seat that was calling is held
   // back and the running models kept. A held run is let through once the running models are this
   // many hours old, so a real change in the data can't freeze the models forever. "false" stores
-  // every run as before.
+  // every run as before. MAX_HOLD_HOURS 0 = off (a held run is let through at once, which is
+  // the guard off).
   CURATOR_TRAINING_GUARD: z
     .enum(["true", "false"])
     .default("true")
@@ -706,7 +712,29 @@ export function tokenSageEnabled(
 
 export type Env = z.infer<typeof envSchema>;
 
+const logger = createLogger("env");
+
 let cached: Env | undefined;
+
+/**
+ * The training guards that 0 switches off. Accepted - each is a documented setting and may be
+ * set in production on purpose - but 0 here is the one value that silently disables a guard,
+ * and a stray "0" (or a knob set to it long ago and forgotten) would otherwise look like any
+ * other number in the log. loadEnv names each one that is off, once, at startup.
+ */
+const ZERO_DISABLES_GUARD = [
+  "CURATOR_EVOLUTION_MIN_AGE_HOURS",
+  "CURATOR_EVOLUTION_MIN_TAKEOVER_INTERVAL_HOURS",
+  "CURATOR_CHAMPION_MIN_LIVE_GRADED",
+  "CURATOR_EVOLUTION_MIN_EXAM_WINS",
+  "CURATOR_EVOLUTION_PROBATION_MIN_WINS",
+  "CURATOR_GUARD_MAX_HOLD_HOURS",
+] as const satisfies readonly (keyof Env)[];
+
+/** The guard knobs set to 0 in `env` - each one is off. */
+export function disabledGuards(env: Env): string[] {
+  return ZERO_DISABLES_GUARD.filter((knob) => env[knob] === 0);
+}
 
 /** Parses `process.env` once and caches the result. Throws with a readable message on failure. */
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
@@ -724,6 +752,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
   cached = parsed.data;
+  for (const knob of disabledGuards(cached)) {
+    logger.warn(`${knob} is 0: this guard is off`, { knob });
+  }
   return cached;
 }
 

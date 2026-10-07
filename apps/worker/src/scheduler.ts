@@ -142,16 +142,18 @@ export function scheduleInterval(
         // Visibility only - never worth not running the job over.
       });
       const meta = await fn();
+      // The effective cadence rides on the row: the intervals are env-tunable, so /health/worker
+      // derives its stale threshold from this rather than a table that drifts from the env.
       await recordHeartbeat(name, {
         success: true,
-        meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt },
+        meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt, intervalMs },
       });
     } catch (err) {
       logger.error("job threw an unhandled error", { job: name, error: String(err) });
       await recordHeartbeat(name, {
         success: false,
         error: String(err),
-        meta: { durationMs: Date.now() - startedAt },
+        meta: { durationMs: Date.now() - startedAt, intervalMs },
       }).catch(() => {
         // If the DB itself is unreachable, the heartbeat write will fail too - nothing more we
         // can do here, the original error is already logged above.
@@ -273,16 +275,17 @@ export function scheduleDailyAt(
         throw err;
       }
       failuresInARow = 0;
+      // The slot rides on the row, as intervalMs does for interval jobs - see scheduleInterval.
       await recordHeartbeat(name, {
         success: true,
-        meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt },
+        meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt, dailyAtHourUtc: hourUtc },
       });
     } catch (err) {
       logger.error("job threw an unhandled error", { job: name, error: String(err) });
       await recordHeartbeat(name, {
         success: false,
         error: String(err),
-        meta: { durationMs: Date.now() - startedAt },
+        meta: { durationMs: Date.now() - startedAt, dailyAtHourUtc: hourUtc },
       }).catch(() => {});
     } finally {
       clearInterval(watchdog);

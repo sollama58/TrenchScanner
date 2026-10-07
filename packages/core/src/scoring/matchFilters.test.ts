@@ -263,6 +263,7 @@ describe("TokenSage narrative criteria", () => {
   it("needs the deep read for the X post and the trend", () => {
     const x = { ...baseFilter, excludeUnrelatedX: true };
     expect(matchesFilter(baseToken({ narrative: read() }), x)).toBe(false);
+    expect(matchesFilter(baseToken({ narrative: read(), hasTwitter: true }), x)).toBe(false);
     expect(matchesFilter(baseToken({ narrative: read({ depth: "full" }) }), x)).toBe(true);
     expect(matchesFilter(baseToken({ narrative: read({ depth: "full", xVerdict: "unrelated" }) }), x)).toBe(
       false,
@@ -272,11 +273,32 @@ describe("TokenSage narrative criteria", () => {
     );
     const trend = { ...baseFilter, requireTrendMatch: true };
     expect(matchesFilter(baseToken({ narrative: read({ trendMatched: true }) }), trend)).toBe(false);
+    // No X link: nothing for the deep read to open, so the trend still needs it...
+    expect(
+      matchesFilter(baseToken({ narrative: read({ trendMatched: true }), hasTwitter: false }), trend),
+    ).toBe(false);
     expect(matchesFilter(baseToken({ narrative: read({ depth: "full", trendMatched: true }) }), trend)).toBe(
       true,
     );
     expect(matchesFilter(baseToken({ narrative: read({ depth: "full", trendMatched: false }) }), trend)).toBe(
       false,
     );
+  });
+
+  it("passes 'exclude unrelated X' on a basic read when the coin has no X link", () => {
+    const x = { ...baseFilter, excludeUnrelatedX: true };
+    // ...but a coin without a link has no X post to be unrelated: the basic read is enough.
+    expect(matchesFilter(baseToken({ narrative: read(), hasTwitter: false }), x)).toBe(true);
+    // An unknown flag fails closed like the rest.
+    expect(matchesFilter(baseToken({ narrative: read(), hasTwitter: undefined }), x)).toBe(false);
+    // Still no read, no match.
+    expect(matchesFilter(baseToken({ hasTwitter: false }), x)).toBe(false);
+    // A full read keeps judging the post, link or not.
+    expect(
+      matchesFilter(
+        baseToken({ narrative: read({ depth: "full", xVerdict: "unrelated" }), hasTwitter: false }),
+        x,
+      ),
+    ).toBe(false);
   });
 });

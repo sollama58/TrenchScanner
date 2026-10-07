@@ -145,6 +145,18 @@ export function AlertCard({
                   <span className="pill-text">High conviction</span>
                 </span>
               )}
+            {curated?.narrative && show("modelPill") && (
+              <span
+                className={`pill ${curated.narrative.verdict === "agrees" ? "pill-model" : "pill-warn"}`}
+                title={
+                  curated.narrative.verdict === "agrees"
+                    ? "The Narrative seat's deep read would have called this coin too"
+                    : "The Narrative seat's deep read would not have called this coin"
+                }
+              >
+                <span className="pill-text">Narrative: {curated.narrative.verdict}</span>
+              </span>
+            )}
             {curated && show("calibrated") && calibratedRate(curated, calls) !== null && (
               <span
                 className="pill"

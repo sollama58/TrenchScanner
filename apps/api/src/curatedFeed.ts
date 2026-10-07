@@ -351,6 +351,14 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
     reasons: alert.reasons.filter((r) => !r.startsWith("AI: ")),
     alertedAt: alert.createdAt,
     outcome: resolveOutcome(alert),
+    /**
+     * The Narrative seat's later view of this call, once TokenSage's deep read decided: "agrees"
+     * or "warns". Null until then, and on the Narrative seat's own calls.
+     */
+    narrative:
+      alert.narrativeVerdict === "agrees" || alert.narrativeVerdict === "warns"
+        ? { verdict: alert.narrativeVerdict, at: alert.narrativeNotedAt ?? alert.createdAt }
+        : null,
   };
 }
 

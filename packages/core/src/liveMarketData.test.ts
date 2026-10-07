@@ -109,6 +109,10 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
       // Without a window the caller leaves peaks to the worker.
       expect(await peakAfter(5000)).toBeNull();
       expect(await peakAfter(2500, 30)).toBe(2500);
+      // Stamped with the reading's time - the liveDataAt just written - not the write's.
+      const peaked = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+      const read = await prisma.token.findUniqueOrThrow({ where: { id: token.id } });
+      expect(peaked.peakMcapAt).toEqual(read.liveDataAt);
       // A lower reading never lowers it.
       expect(await peakAfter(2000, 30)).toBe(2500);
       expect(await peakAfter(3000, 30)).toBe(3000);
