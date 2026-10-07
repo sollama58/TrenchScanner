@@ -1,32 +1,30 @@
 import { prisma, createLogger, type HeliusClient } from "@trenchscanner/core";
+import { FailureBackoff } from "./failureBackoff.js";
 
 const logger = createLogger("wallet-freshness");
 
 const FRESH_WITHIN_HOURS = 24;
 
 /**
- * How long a wallet whose lookup FAILED (transport error, rate limit, RPC error - never a real
- * answer) is left alone before being tried again.
+ * Wallets whose lookup FAILED (transport error, rate limit, RPC error - never a real answer),
+ * backed off before they are tried again.
  *
  * Failures are deliberately never cached as verdicts, which is right, but without this they were
  * also retried every single scan cycle forever: a wallet the RPC consistently chokes on cost a
  * lookup a minute, indefinitely, and crowded out the per-cycle budget that new wallets need.
- * Process-local rather than a table because it describes a transient condition, and losing it on
- * restart is exactly the right behavior.
+ * Escalating from a couple of minutes (see FailureBackoff), so one blip doesn't hold every token
+ * the wallet is a top-10 holder of for long.
  */
-const FAILURE_BACKOFF_MINUTES = 20;
-const failureBackoffUntil = new Map<string, number>();
-
-/** Bounds the backoff map: expired entries are dead weight, and it is keyed by wallet address. */
-function pruneFailureBackoff(now: number): void {
-  for (const [address, until] of failureBackoffUntil) {
-    if (until <= now) failureBackoffUntil.delete(address);
-  }
-}
+const failureBackoff = new FailureBackoff();
+/**
+ * A busy wallet the signatures-only path can't settle answers the same way every time it is
+ * asked, so it waits the full stretch straight away.
+ */
+const BUSY_WALLET_BACKOFF_MINUTES = 20;
 
 /** Test hook: forget every recorded failure so the next call retries immediately. */
 export function resetWalletFailureBackoff(): void {
-  failureBackoffUntil.clear();
+  failureBackoff.clear();
 }
 
 export interface WalletFreshnessOptions {
@@ -75,7 +73,7 @@ export async function resolveEarliestActivity(
   opts: WalletFreshnessOptions = {},
 ): Promise<Map<string, Date | null>> {
   const now = Date.now();
-  pruneFailureBackoff(now);
+  failureBackoff.prune(now);
 
   const result = new Map<string, Date | null>();
   const unique = [...new Set(groups.flat())];
@@ -95,7 +93,7 @@ export async function resolveEarliestActivity(
   for (const [index, group] of groups.entries()) {
     if (index >= lookupGroups) break;
     const needed = [...new Set(group)].filter((a) => !result.has(a) && !queued.has(a));
-    if (needed.some((a) => (failureBackoffUntil.get(a) ?? 0) > now)) {
+    if (needed.some((a) => failureBackoff.blocked(a, now))) {
       skippedGroups += 1;
       continue;
     }
@@ -139,6 +137,7 @@ export async function resolveEarliestActivity(
   let failedCount = 0;
   for (const address of toFetch) {
     const outcome = fetched.get(address) ?? { status: "failed" as const };
+    if (outcome.status !== "failed") failureBackoff.succeed(address);
     if (outcome.status === "found") {
       result.set(address, outcome.earliestActivityAt);
       toCache.push({ address, earliestActivityAt: outcome.earliestActivityAt });
@@ -155,14 +154,14 @@ export async function resolveEarliestActivity(
         // busy wallet may well have been funded this very day - a sniper bot that has fired a
         // few hundred transactions since is exactly the wallet this check exists for - and this
         // used to be written to the cache as "not fresh" for good. Unknown instead, retried later.
-        failureBackoffUntil.set(address, now + FAILURE_BACKOFF_MINUTES * 60_000);
+        failureBackoff.fail(address, now, BUSY_WALLET_BACKOFF_MINUTES);
         failedCount += 1;
       }
     } else if (outcome.status === "indeterminate") {
       result.set(address, null);
       toCache.push({ address, earliestActivityAt: null });
     } else {
-      failureBackoffUntil.set(address, now + FAILURE_BACKOFF_MINUTES * 60_000);
+      failureBackoff.fail(address, now);
       failedCount += 1;
     }
   }

@@ -1,26 +1,18 @@
 import { prisma, createLogger, type Env, type HeliusClient } from "@trenchscanner/core";
+import { FailureBackoff } from "./failureBackoff.js";
 import { valueWalletsFromBalances, type ValuationDeps, type ValuationResult } from "./walletValuation.js";
 
 const logger = createLogger("wallet-holdings");
 
 /**
- * How long a wallet whose lookup FAILED (transport error, rate limit, RPC error - never a real
- * answer) is left alone before being tried again. Same reasoning, and the same process-local
- * storage, as the identically-named guard in walletFreshness.ts: a wallet the API consistently
- * chokes on must not cost a lookup every cycle forever, crowding out the budget new wallets need.
+ * Wallets whose lookup FAILED, backed off before they are tried again - escalating from a couple
+ * of minutes, see FailureBackoff. Same reasoning as the identical guard in walletFreshness.ts.
  */
-const FAILURE_BACKOFF_MINUTES = 20;
-const failureBackoffUntil = new Map<string, number>();
-
-function pruneFailureBackoff(now: number): void {
-  for (const [address, until] of failureBackoffUntil) {
-    if (until <= now) failureBackoffUntil.delete(address);
-  }
-}
+const failureBackoff = new FailureBackoff();
 
 /** Test hook: forget every recorded failure so the next call retries immediately. */
 export function resetHoldingsFailureBackoff(): void {
-  failureBackoffUntil.clear();
+  failureBackoff.clear();
 }
 
 /**
@@ -110,7 +102,7 @@ export async function resolveWalletHoldings(
   opts: WalletHoldingsOptions = {},
 ): Promise<Map<string, WalletHoldings>> {
   const now = Date.now();
-  pruneFailureBackoff(now);
+  failureBackoff.prune(now);
 
   const result = new Map<string, WalletHoldings>();
   const unique = [...new Set(groups.flatMap((g) => g.addresses))];
@@ -157,7 +149,7 @@ export async function resolveWalletHoldings(
   for (const [index, group] of groups.entries()) {
     if (index >= lookupGroups) break;
     const needed = [...new Set(group.addresses)].filter((a) => !result.has(a) && !queued.has(a));
-    if (needed.some((a) => (failureBackoffUntil.get(a) ?? 0) > now)) {
+    if (needed.some((a) => failureBackoff.blocked(a, now))) {
       skippedGroups += 1;
       continue;
     }
@@ -207,6 +199,7 @@ export async function resolveWalletHoldings(
   for (const address of toFetch) {
     const outcome = fetched.get(address) ?? { status: "failed" as const };
     if (outcome.status === "found") {
+      failureBackoff.succeed(address);
       const perMintUsd = compactPerMint(outcome.perMintUsd, ownMints.get(address));
       result.set(address, { otherHoldingsUsd: outcome.otherHoldingsUsd, perMintUsd });
       resolved.push({
@@ -221,7 +214,7 @@ export async function resolveWalletHoldings(
       // Ran out of this call's pricing budget - not the wallet's fault, so no back-off.
       deferred += 1;
     } else {
-      failureBackoffUntil.set(address, now + FAILURE_BACKOFF_MINUTES * 60_000);
+      failureBackoff.fail(address, now);
       failedCount += 1;
     }
   }

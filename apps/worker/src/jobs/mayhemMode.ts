@@ -1,25 +1,26 @@
 import { prisma, createLogger, type HeliusClient, type MayhemModeResult } from "@trenchscanner/core";
+import { FailureBackoff } from "./failureBackoff.js";
 
 const logger = createLogger("mayhem-mode");
 
 /**
- * How long a mint whose Mayhem lookup FAILED is left alone before being retried. Without it a
- * mint the RPC consistently chokes on cost a lookup every cycle forever - and, because the rug
- * screen rejects unverified mints, it was being rejected every one of those cycles anyway.
- * Process-local: it describes a transient condition, so losing it on restart is correct.
+ * Mints whose Mayhem lookup FAILED, backed off before they are retried. Without it a mint the RPC
+ * consistently chokes on cost a lookup every cycle forever - and, because the rug screen rejects
+ * unverified mints, it was being rejected every one of those cycles anyway. Escalating from a
+ * couple of minutes (see FailureBackoff): the screen rejects the mint for as long as it waits, so
+ * one blip must not cost a fresh launch its first 20 minutes.
  */
-const FAILURE_BACKOFF_MINUTES = 20;
+const failureBackoff = new FailureBackoff();
 /**
  * A mint the RPC doesn't see yet (confirmed-commitment lag on a seconds-old token) is a different
  * wait: the account appears within a slot or two, and a token that reached the band this fast is
- * exactly one worth re-checking on the next cycle rather than screening out for 20 minutes.
+ * exactly one worth re-checking on the next cycle.
  */
 const MINT_PENDING_BACKOFF_MINUTES = 1;
-const failureBackoffUntil = new Map<string, number>();
 
 /** Test hook: forget every recorded failure so the next call retries immediately. */
 export function resetMayhemFailureBackoff(): void {
-  failureBackoffUntil.clear();
+  failureBackoff.clear();
 }
 
 /**
@@ -47,9 +48,7 @@ export async function resolveMayhemMode(
   if (unique.length === 0) return result;
 
   const now = Date.now();
-  for (const [mint, until] of failureBackoffUntil) {
-    if (until <= now) failureBackoffUntil.delete(mint);
-  }
+  failureBackoff.prune(now);
 
   const cached = await prisma.mayhemModeCache.findMany({ where: { mintAddress: { in: unique } } });
   for (const row of cached) {
@@ -60,7 +59,7 @@ export async function resolveMayhemMode(
   // at no cost. The rug screen rejects it either way until the backoff lapses.
   let backedOff = 0;
   for (const mint of unique) {
-    if (!result.has(mint) && (failureBackoffUntil.get(mint) ?? 0) > now) {
+    if (!result.has(mint) && failureBackoff.blocked(mint, now)) {
       result.set(mint, { status: "failed" });
       backedOff += 1;
     }
@@ -86,9 +85,9 @@ export async function resolveMayhemMode(
     result.set(mint, outcome);
     if (outcome.status === "found") {
       toCache.push({ mintAddress: mint, isMayhemMode: outcome.isMayhemMode });
+      failureBackoff.succeed(mint);
     } else {
-      const minutes = outcome.mintPending ? MINT_PENDING_BACKOFF_MINUTES : FAILURE_BACKOFF_MINUTES;
-      failureBackoffUntil.set(mint, now + minutes * 60_000);
+      failureBackoff.fail(mint, now, outcome.mintPending ? MINT_PENDING_BACKOFF_MINUTES : undefined);
       failed += 1;
     }
   }

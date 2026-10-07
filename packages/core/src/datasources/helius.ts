@@ -320,8 +320,46 @@ const TOKEN_PROGRAM_IDS = [
 /** Wallets per getTokenAccountsByOwner POST - see getTokenBalancesBatch. */
 const BALANCE_WALLETS_PER_POST = 5;
 
-/** One wallet's token balances: raw amounts by mint, zeroes dropped. See getTokenBalancesBatch. */
-export type TokenBalancesResult = { status: "found"; balances: Map<string, bigint> } | { status: "failed" };
+/**
+ * Token accounts read per wallet and program on Helius's paged getTokenAccountsByOwnerV2 - the
+ * first page only. An exchange or aggregator wallet holds millions (one listed 141MB unpaged on
+ * 2026-10-07), and on the unpaged call those never finished: the wallet failed every time, took
+ * the four wallets sharing its request down with it, and every token it was a top-10 holder of
+ * never got an empty-wallet figure (nearly half of the long-lived passing tokens still missing one
+ * that day). A full first page is read as a floor, flagged `truncated`, like any wallet holding
+ * more mints than the valuation prices.
+ */
+export const TOKEN_ACCOUNTS_PAGE_LIMIT = 1000;
+
+/** How long the unpaged balances call stands in after a round of paged calls all erred. */
+const TABO_V2_STANDDOWN_MS = 30 * 60_000;
+
+/**
+ * One wallet's token balances: raw amounts by mint, zeroes dropped. `truncated` when the wallet
+ * holds more token accounts than one page read. See getTokenBalancesBatch.
+ */
+export type TokenBalancesResult =
+  { status: "found"; balances: Map<string, bigint>; truncated?: boolean } | { status: "failed" };
+
+/** getTokenAccountsByOwner's value (an array), or V2's, which can also come wrapped with context. */
+function tokenAccountsPage(result: unknown): { accounts: TokenAccountSlice[]; more: boolean } | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as { value?: unknown; paginationKey?: unknown };
+  const inner = r.value && !Array.isArray(r.value) && typeof r.value === "object" ? r.value : null;
+  const accounts = Array.isArray(r.value)
+    ? (r.value as TokenAccountSlice[])
+    : inner && Array.isArray((inner as { accounts?: unknown }).accounts)
+      ? (inner as { accounts: TokenAccountSlice[] }).accounts
+      : null;
+  if (!accounts) return null;
+  const key = r.paginationKey ?? (inner as { paginationKey?: unknown } | null)?.paginationKey;
+  // V2 can hand back a key on the last page too (its end is an empty page), so a key only means
+  // more when the page came back full.
+  return {
+    accounts,
+    more: typeof key === "string" && key.length > 0 && accounts.length >= TOKEN_ACCOUNTS_PAGE_LIMIT,
+  };
+}
 
 /** One getTokenAccountsByOwner entry under a base64 dataSlice. */
 interface TokenAccountSlice {
@@ -384,6 +422,14 @@ export class HeliusClient {
    * signal off indefinitely.
    */
   private dasBarrenRounds = 0;
+  /** Set once the endpoint answers "method not found" to getTokenAccountsByOwnerV2 - permanent. */
+  private taboV2Unavailable = false;
+  /**
+   * Set when a whole round of getTokenAccountsByOwnerV2 calls was answered with nothing but
+   * errors - a plan tier that refuses it some other way, say. The unpaged method stands in until
+   * then (TABO_V2_STANDDOWN_MS), so the empty-wallet check never stops on the paged one's account.
+   */
+  private taboV2StoodDownUntil = 0;
   /** RPC method invocations issued since the last takeCallStats() - the number a plan bills on. */
   private readonly callCounts = new Map<string, number>();
 
@@ -917,7 +963,8 @@ export class HeliusClient {
    * 1-credit standard call: a fifth of one 10-credit searchAssets. dataSlice keeps only the
    * account's first 72 bytes - the mint (0..32) and the amount (64..72), laid out the same in both
    * programs - so a wallet with thousands of token accounts stays a small response, which was the
-   * reason this route was once passed over.
+   * reason this route was once passed over. On Helius the paged V2 method reads one page of
+   * TOKEN_ACCOUNTS_PAGE_LIMIT, so a wallet with millions doesn't fail the lookup.
    *
    * Zero balances are dropped. A wallet is "failed" unless BOTH programs answered: half a list
    * would read a real trader as empty.
@@ -926,45 +973,77 @@ export class HeliusClient {
     const unique = [...new Set(addresses)];
     const out = new Map<string, TokenBalancesResult>();
     if (unique.length === 0) return out;
+    const paged = this.usingHelius && !this.taboV2Unavailable && Date.now() >= this.taboV2StoodDownUntil;
     const callsFor = (address: string): RpcCall[] =>
       TOKEN_PROGRAM_IDS.map((programId, p) => ({
         id: `tabo-${p}-${address}`,
-        method: "getTokenAccountsByOwner",
+        method: paged ? "getTokenAccountsByOwnerV2" : "getTokenAccountsByOwner",
         params: [
           address,
           { programId },
-          { encoding: "base64", commitment: "confirmed", dataSlice: { offset: 0, length: 72 } },
+          {
+            encoding: "base64",
+            commitment: "confirmed",
+            dataSlice: { offset: 0, length: 72 },
+            ...(paged ? { limit: TOKEN_ACCOUNTS_PAGE_LIMIT } : {}),
+          },
         ],
       }));
     // A few wallets per POST rather than RPC_BATCH_SIZE calls: an active trader's list runs to
     // thousands of accounts (~1MB measured for 2,800), so a full batch of them could be tens of
-    // megabytes in one response.
+    // megabytes in one response. Paged, a wallet is at most one page per program.
     const chunks: string[][] = [];
     for (let i = 0; i < unique.length; i += BALANCE_WALLETS_PER_POST) {
       chunks.push(unique.slice(i, i + BALANCE_WALLETS_PER_POST));
     }
-    const responses = new Map<string, RpcResponse<{ value?: TokenAccountSlice[] }>>();
+    const responses = new Map<string, RpcResponse<unknown>>();
     await forEachWithConcurrency(chunks, BATCH_CONCURRENCY, async (chunk) => {
-      const result = await this.sendBatch<{ value?: TokenAccountSlice[] }>(chunk.flatMap(callsFor), 15_000);
+      const result = await this.sendBatch<unknown>(chunk.flatMap(callsFor), 15_000);
       for (const [id, res] of result) responses.set(id, res);
     });
+    // An endpoint that doesn't serve the paged method says so per call; it never will, so the
+    // rest of this process uses the unpaged one - starting with this batch.
+    // Answered, yet not one call succeeded, stands it down for a while instead.
+    if (paged) {
+      const answers = [...responses.values()];
+      if (answers.some((res) => res.error?.code === RPC_METHOD_NOT_FOUND)) {
+        this.taboV2Unavailable = true;
+        logger.warn("getTokenAccountsByOwnerV2 not served - reading token balances unpaged");
+        return this.getTokenBalancesBatch(unique);
+      }
+      if (answers.length > 0 && answers.every((res) => res.error)) {
+        this.taboV2StoodDownUntil = Date.now() + TABO_V2_STANDDOWN_MS;
+        logger.warn(
+          "getTokenAccountsByOwnerV2 answered only errors - reading token balances unpaged for now",
+          {
+            error: answers[0]?.error,
+          },
+        );
+        return this.getTokenBalancesBatch(unique);
+      }
+    }
     for (const address of unique) {
       const balances = new Map<string, bigint>();
       let ok = true;
+      let truncated = false;
       for (let p = 0; p < TOKEN_PROGRAM_IDS.length && ok; p += 1) {
         const res = responses.get(`tabo-${p}-${address}`);
-        const value = res?.result?.value;
-        if (!res || res.error || !Array.isArray(value)) {
+        const page = res && !res.error ? tokenAccountsPage(res.result) : null;
+        if (!page) {
           ok = false;
           break;
         }
-        for (const entry of value) {
+        if (page.more) truncated = true;
+        for (const entry of page.accounts) {
           const parsed = parseTokenAccountSlice(entry);
           if (!parsed || parsed.amount === 0n) continue;
           balances.set(parsed.mint, (balances.get(parsed.mint) ?? 0n) + parsed.amount);
         }
       }
-      out.set(address, ok ? { status: "found", balances } : { status: "failed" });
+      out.set(
+        address,
+        ok ? { status: "found", balances, ...(truncated ? { truncated } : {}) } : { status: "failed" },
+      );
     }
     return out;
   }
