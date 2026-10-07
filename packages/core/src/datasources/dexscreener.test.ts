@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DexScreenerClient, pickCanonicalPair } from "./dexscreener.js";
+import { GeckoTerminalClient, parseGeckoTokens } from "./geckoterminal.js";
 
 describe("pickCanonicalPair", () => {
   const curve = { dexId: "pumpfun", volume: { h1: 20_000 } };
@@ -136,5 +137,127 @@ describe("getTokensByAddresses rate limiting", () => {
     await new DexScreenerClient().getTokensByAddresses(mints, 1, { retries: 0, deadlineMs: 500, failed });
     expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(failed.size).toBe(60);
+  });
+});
+
+describe("getTokensByAddresses fallback while DexScreener is blank", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const geckoBody = (mints: string[]) => ({
+    data: mints.map((mint) => ({
+      attributes: { address: mint, symbol: "X", fdv_usd: "40000", market_cap_usd: null },
+      relationships: { top_pools: { data: [{ id: `solana_pool_${mint}` }] } },
+    })),
+    included: mints.map((mint) => ({
+      id: `solana_pool_${mint}`,
+      attributes: { base_token_price_usd: "0.00004", reserve_in_usd: "9000" },
+      relationships: { base_token: { data: { id: `solana_${mint}` } }, dex: { data: { id: "pump-fun" } } },
+    })),
+  });
+
+  it("answers from GeckoTerminal when DexScreener returns no pairs, then probes until it recovers", async () => {
+    // 2026-10-07: DexScreener answered every lookup with [] and the scan saw nothing in band.
+    const mints = Array.from({ length: 60 }, (_, i) => `mint${i}`);
+    let dexBlank = true;
+    const dexCalls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = url.split("/").pop()!.split("?")[0]!.split(",");
+      if (url.includes("geckoterminal"))
+        return Promise.resolve(new Response(JSON.stringify(geckoBody(list))));
+      dexCalls.push(url);
+      const pairs = dexBlank
+        ? []
+        : list.map((mint) => ({
+            chainId: "solana",
+            dexId: "raydium",
+            baseToken: { address: mint },
+            marketCap: 1,
+          }));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+    const client = new DexScreenerClient({
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+
+    const first = await client.getTokensByAddresses(mints, 5, { retries: 0 });
+    expect(first).toHaveLength(60);
+    expect(first[0]).toMatchObject({ marketCapUsd: 40_000, dexId: "pumpfun", liquidityUsd: undefined });
+    expect(client.usingFallback).toBe(true);
+
+    // While blank, DexScreener gets one probe batch, not the whole lookup.
+    dexCalls.length = 0;
+    expect(await client.getTokensByAddresses(mints, 5, { retries: 0 })).toHaveLength(60);
+    expect(dexCalls).toHaveLength(1);
+
+    // The probe finds pairs again: its answers win and the fallback stands down.
+    dexBlank = false;
+    const recovered = await client.getTokensByAddresses(mints, 5, { retries: 0 });
+    expect(recovered.find((t) => t.mintAddress === "mint0")?.dexId).toBe("raydium");
+    expect(client.usingFallback).toBe(false);
+  });
+
+  it("leaves a small blank lookup alone: a few unindexed mints are not an outage", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      if (url.includes("geckoterminal")) throw new Error("should not be called");
+      return Promise.resolve(new Response("[]"));
+    });
+    const client = new DexScreenerClient({
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+    expect(await client.getTokensByAddresses(["a", "b", "c"], 5, { retries: 0 })).toEqual([]);
+    expect(client.usingFallback).toBe(false);
+  });
+});
+
+describe("parseGeckoTokens", () => {
+  it("prices only off a top pool the mint is the base of", () => {
+    const body = {
+      data: [
+        {
+          attributes: { address: "m1", price_usd: "2", market_cap_usd: "1000" },
+          relationships: { top_pools: { data: [{ id: "p_quote" }, { id: "p_base" }] } },
+        },
+        { attributes: { address: "unrequested", fdv_usd: "5" } },
+      ],
+      included: [
+        {
+          id: "p_quote",
+          attributes: { base_token_price_usd: "99", reserve_in_usd: "1" },
+          relationships: { base_token: { data: { id: "solana_other" } }, dex: { data: { id: "raydium" } } },
+        },
+        {
+          id: "p_base",
+          attributes: {
+            address: "pool1",
+            base_token_price_usd: "1.5",
+            reserve_in_usd: "50000",
+            pool_created_at: "2026-10-07T20:00:00Z",
+            price_change_percentage: { m5: "3.5", h1: "-2" },
+            transactions: { m5: { buys: 4, sells: 2 } },
+            volume_usd: { m5: "120", h24: "9000" },
+          },
+          relationships: { base_token: { data: { id: "solana_m1" } }, dex: { data: { id: "pumpswap" } } },
+        },
+      ],
+    };
+    const [t, ...rest] = parseGeckoTokens(body, new Set(["m1"]));
+    expect(rest).toHaveLength(0);
+    expect(t).toMatchObject({
+      mintAddress: "m1",
+      pairAddress: "pool1",
+      priceUsd: 1.5,
+      marketCapUsd: 1000,
+      liquidityUsd: 50_000,
+      dexId: "pumpswap",
+      priceChange5mPct: 3.5,
+      priceChange1hPct: -2,
+      buys5m: 4,
+      sells5m: 2,
+      volume5mUsd: 120,
+      volume24hUsd: 9000,
+    });
+    expect(t?.pairCreatedAt?.toISOString()).toBe("2026-10-07T20:00:00.000Z");
   });
 });

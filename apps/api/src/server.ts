@@ -10,6 +10,7 @@ import {
   adminWalletSet,
   createLogger,
   DexScreenerClient,
+  GeckoTerminalClient,
   SolanaRpc,
   resolveAccess,
   decideAccess,
@@ -365,6 +366,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const dexScreener = new DexScreenerClient({
     baseUrl: env.DEXSCREENER_BASE_URL,
     requestsPerMinute: LIVE_REFRESH_CALLS_PER_MINUTE,
+    // A small share of GeckoTerminal's 30 a minute: the worker takes the rest.
+    fallback: new GeckoTerminalClient({ priorityPerMinute: 1, backgroundPerMinute: 6 }),
   });
   // One per process, shared by every route, so its in-flight sharing, cooldown and call budget
   // hold across the feeds and the live tick rather than per route.

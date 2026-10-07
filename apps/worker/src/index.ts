@@ -5,6 +5,7 @@ import {
   createLogger,
   prisma,
   DexScreenerClient,
+  GeckoTerminalClient,
   PumpFunClient,
   RugCheckClient,
   HeliusClient,
@@ -93,6 +94,8 @@ async function main() {
     dexScreener: new DexScreenerClient({
       baseUrl: env.DEXSCREENER_BASE_URL,
       requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
+      // Answers token lookups while DexScreener answers them blank (2026-10-07).
+      fallback: new GeckoTerminalClient(),
     }),
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),

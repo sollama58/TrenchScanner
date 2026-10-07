@@ -70,6 +70,8 @@ export async function refreshAndFilterToBand(
     timeoutMs: 5000,
     retries: 1,
     deadlineMs: 10_000,
+    // What puts a coin in front of the safety screen: first call on a fallback's budget.
+    priority: true,
   });
   return {
     inBand: marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound),

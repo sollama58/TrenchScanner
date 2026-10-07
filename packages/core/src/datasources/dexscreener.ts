@@ -3,6 +3,7 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import { normalizeSocialUrl } from "./tokensage.js";
+import type { GeckoTerminalClient } from "./geckoterminal.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
 const logger = createLogger("dexscreener");
@@ -59,6 +60,48 @@ export interface DexScreenerClientOptions {
   baseUrl?: string;
   /** This client's token-lookup budget a minute - see DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE. */
   requestsPerMinute?: number;
+  /**
+   * Answers token lookups while DexScreener answers them blank - see getTokensByAddresses. Unset,
+   * a blank DexScreener stays blank.
+   */
+  fallback?: GeckoTerminalClient;
+}
+
+/**
+ * A lookup whose answered batches covered at least this many mints and found not one pair reads as
+ * DexScreener being blank, not as that many unindexed mints.
+ */
+const BLANK_MIN_MINTS = 25;
+/** How long a blank DexScreener is routed around before it must prove blank again. */
+const BLANK_HOLD_MS = 10 * 60_000;
+
+/** getTokensByAddresses' options. */
+export interface TokenLookupOptions {
+  timeoutMs?: number;
+  retries?: number;
+  /**
+   * How long the whole lookup may take. Past it, the batches already answered are returned and no
+   * more are started; mints are looked up in the order given, so put the important ones first.
+   */
+  deadlineMs?: number;
+  /**
+   * When supplied, records the moment each returned mint's batch answered. A lookup of many
+   * batches (the outcome watcher's, up to 2000 rows) spans seconds, more with retries: a
+   * caller timing price moves against a window reads the time its price was seen from here
+   * rather than stamping the whole lookup at its start or end.
+   */
+  seenAt?: Map<string, Date>;
+  /**
+   * When supplied, collects the mints whose batch got no answer (an error, or skipped past
+   * the deadline) - so a caller can tell "DexScreener has no pair for this" from "we never
+   * heard back", which a missing entry in the result can't.
+   */
+  failed?: Set<string>;
+  /**
+   * The scan's own watchlist refresh: first call on the fallback's budget while DexScreener is
+   * blank (see GeckoTerminalClient). DexScreener itself ignores it.
+   */
+  priority?: boolean;
 }
 
 export class DexScreenerClient {
@@ -68,6 +111,9 @@ export class DexScreenerClient {
    * together on a 429 - see RateGate. One client per process, so one budget per process.
    */
   private readonly gate: RateGate;
+  private readonly fallback?: GeckoTerminalClient;
+  /** Until when DexScreener is treated as blank (epoch ms); 0 while it answers. */
+  private blankUntil = 0;
 
   constructor(options: DexScreenerClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://api.dexscreener.com";
@@ -76,6 +122,12 @@ export class DexScreenerClient {
       perMinute: options.requestsPerMinute ?? DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE,
       burst: GATE_BURST,
     });
+    this.fallback = options.fallback;
+  }
+
+  /** Whether lookups are currently being answered by the fallback. */
+  get usingFallback(): boolean {
+    return this.fallback !== undefined && Date.now() < this.blankUntil;
   }
 
   /** Token lookups sent, 429 pauses and time spent queued since the last call, then reset. */
@@ -92,33 +144,66 @@ export class DexScreenerClient {
   async getTokensByAddresses(
     mintAddresses: string[],
     concurrency = 5,
-    /**
-     * Per-batch timeout and retries (fetchJson's defaults when omitted), and `deadlineMs`: how
-     * long the whole lookup may take. Past it, the batches already answered are returned and no
-     * more are started; mints are looked up in the order given, so put the important ones first.
-     */
-    options: {
-      timeoutMs?: number;
-      retries?: number;
-      deadlineMs?: number;
-      /**
-       * When supplied, records the moment each returned mint's batch answered. A lookup of many
-       * batches (the outcome watcher's, up to 2000 rows) spans seconds, more with retries: a
-       * caller timing price moves against a window reads the time its price was seen from here
-       * rather than stamping the whole lookup at its start or end.
-       */
-      seenAt?: Map<string, Date>;
-      /**
-       * When supplied, collects the mints whose batch got no answer (an error, or skipped past
-       * the deadline) - so a caller can tell "DexScreener has no pair for this" from "we never
-       * heard back", which a missing entry in the result can't.
-       */
-      failed?: Set<string>;
-    } = {},
+    /** Per-batch timeout and retries (fetchJson's defaults when omitted) - see TokenLookupOptions. */
+    options: TokenLookupOptions = {},
   ): Promise<CandidateToken[]> {
-    const { deadlineMs, seenAt, failed, ...fetchOptions } = options;
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
+    const fallback = this.fallback;
+    if (!fallback) return this.lookup(unique, concurrency, options);
+    const deadline = options.deadlineMs === undefined ? undefined : Date.now() + options.deadlineMs;
+    const remaining = () => (deadline === undefined ? undefined : Math.max(0, deadline - Date.now()));
+
+    // On 2026-10-07 DexScreener began answering every token lookup with an empty list - HTTP 200,
+    // no error - so nothing had a market cap, nothing reached the band, and the safety screen and
+    // alerts went quiet for every user while discovery carried on. While it is blank, one batch
+    // probes it and GeckoTerminal answers the lookup; the first probe with a pair in it ends that.
+    if (Date.now() < this.blankUntil) {
+      const [probe, gecko] = await Promise.all([
+        this.lookup(unique.slice(0, BATCH_SIZE), concurrency, {
+          timeoutMs: options.timeoutMs,
+          retries: options.retries,
+          deadlineMs: options.deadlineMs,
+        }),
+        fallback.getTokensByAddresses(unique, { ...options, deadlineMs: remaining() }),
+      ]);
+      if (probe.length > 0) {
+        this.blankUntil = 0;
+        logger.info("dexscreener is answering again - back off the fallback");
+      } else {
+        this.blankUntil = Date.now() + BLANK_HOLD_MS;
+      }
+      const byMint = new Map(gecko.map((t) => [t.mintAddress, t]));
+      for (const t of probe) byMint.set(t.mintAddress, t);
+      return [...byMint.values()];
+    }
+
+    const answered = new Set<string>();
+    const results = await this.lookup(unique, concurrency, options, answered);
+    if (results.length > 0 || answered.size < BLANK_MIN_MINTS) return results;
+    this.blankUntil = Date.now() + BLANK_HOLD_MS;
+    logger.warn("dexscreener answered a lookup with no pairs at all - using geckoterminal", {
+      answered: answered.size,
+    });
+    // The mints DexScreener answered blank were marked heard-from; GeckoTerminal decides now.
+    const geckoFailed = new Set<string>();
+    const gecko = await fallback.getTokensByAddresses(unique, {
+      ...options,
+      deadlineMs: remaining(),
+      failed: geckoFailed,
+    });
+    if (options.failed) for (const mint of geckoFailed) options.failed.add(mint);
+    return gecko;
+  }
+
+  /** One DexScreener lookup; `answeredOut` collects the mints whose batch came back. */
+  private async lookup(
+    unique: string[],
+    concurrency: number,
+    options: TokenLookupOptions,
+    answeredOut?: Set<string>,
+  ): Promise<CandidateToken[]> {
+    const { deadlineMs, seenAt, failed, priority: _priority, ...fetchOptions } = options;
 
     const chunks: string[][] = [];
     for (let i = 0; i < unique.length; i += BATCH_SIZE) {
@@ -152,6 +237,7 @@ export class DexScreenerClient {
         );
         const answered = new Date();
         for (const mint of chunk) settled.add(mint);
+        for (const mint of chunk) answeredOut?.add(mint);
         const tokens = this.selectCanonicalPairs(pairs ?? [], new Set(chunk));
         if (seenAt) for (const t of tokens) seenAt.set(t.mintAddress, answered);
         results.push(...tokens);
