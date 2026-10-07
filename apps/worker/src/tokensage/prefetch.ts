@@ -8,6 +8,7 @@ import {
   narrativeFieldsFromAnalysis,
   storableAnalysis,
   tokenSageEnabled,
+  tokenSageHints,
   type Env,
   type TokenSageAnalysis,
   type TokenSageDepth,
@@ -168,6 +169,50 @@ export function noteNarrativeWanted(
     if (oldest !== undefined) wanted.delete(oldest);
   }
   wanted.set(mintAddress, { depth, hints: hints ?? have?.hints, ...(early ? { early } : {}) });
+}
+
+/** A launch older than this when discovery lists it is left to the scan's own request. */
+export const LAUNCH_READ_MAX_AGE_MS = 5 * 60_000;
+
+/** A brand-new launch as discovery sees it: the Pump.fun newest-coins feed or the PumpPortal stream. */
+export interface LaunchSighting {
+  mintAddress: string;
+  name?: string;
+  symbol?: string;
+  description?: string;
+  imageUrl?: string;
+  twitterUrl?: string;
+  websiteUrl?: string;
+  createdAt?: Date;
+}
+
+/**
+ * Notes the quick read for every new launch discovery saw this cycle, when
+ * TOKENSAGE_BASIC_AT_DISCOVERY is on. The scan's own request comes at the coin's first
+ * watchlist scan, which on the first day of live reads was also its first decision for most
+ * coins (median ~1 min old), so the read landed after it. Asking at launch buys that minute
+ * at the cost of a read for every launch, including the ones that never trade. A coin listed
+ * by both sources keeps the richer hints (the feed's: description, image, X link).
+ * Returns how many were noted.
+ */
+export function noteLaunchNarratives(launches: LaunchSighting[], env: Env, now = Date.now()): number {
+  if (!env.TOKENSAGE_BASIC_AT_DISCOVERY || !tokenSageEnabled(env)) return 0;
+  const byMint = new Map<string, LaunchSighting>();
+  for (const l of launches) {
+    if (l.createdAt !== undefined && now - l.createdAt.getTime() > LAUNCH_READ_MAX_AGE_MS) continue;
+    const prev = byMint.get(l.mintAddress);
+    if (!prev || (l.description !== undefined && prev.description === undefined))
+      byMint.set(l.mintAddress, l);
+  }
+  for (const l of byMint.values()) {
+    noteNarrativeWanted(
+      l.mintAddress,
+      "basic",
+      env,
+      tokenSageHints({ ...l, firstSeenAt: l.createdAt ?? null }),
+    );
+  }
+  return byMint.size;
 }
 
 /**
