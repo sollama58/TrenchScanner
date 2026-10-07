@@ -25,6 +25,13 @@ import {
  * assumes the trader fills at the level itself (a sell at exactly 2x, a stop at exactly -50%)
  * rather than at a gap through it.
  *
+ * The close is the first price seen at or after the window closed, which the window's aggregates
+ * never fold in. The plan still applies to it: a close at or under the stop fills at the stop,
+ * and a close at or over a take-profit level fills that rung, the same "at the level" fill the
+ * window's own ticks get. Without that, the one tick past the window escaped both the stop and the
+ * ladder, and a plan that promises "-50% at worst, +200% at best" reported a -99% rug and a +450%
+ * close on about one call in 400.
+ *
  * The result is written once, when a row's label window closes (candidateOutcomeJob.ts), and copied onto
  * any curated alert anchored to the row, like the other verdicts. Changing the plan changes rows
  * graded from then on; rows already graded keep the number they were graded with.
@@ -97,6 +104,8 @@ export type SimulationInput = Pick<
  * The return of one call under the plan, in percent of the stake (+200 = tripled, -50 = halved).
  * `closePriceUsd` is the price when the label window closed; null when unknown, in which case the result
  * is null unless the plan was already fully out (every share sold at a take-profit or the stop).
+ * The close is subject to the plan like any other price: at or under the stop it fills at the
+ * stop, at or over a take-profit level it fills that rung (see the module comment).
  */
 export function simulateExitPlan(
   row: SimulationInput,
@@ -105,13 +114,21 @@ export function simulateExitPlan(
 ): number | null {
   const entry = row.anchorPriceUsd;
   if (!Number.isFinite(entry) || entry <= 0) return null;
+  const close =
+    closePriceUsd !== null && Number.isFinite(closePriceUsd) && closePriceUsd > 0 ? closePriceUsd : null;
   // The highest price the trader was still holding for: the peak before the stop. Rows from
   // before it was tracked fall back to the window's peak and judge the stop off the window's low.
-  const peak = cleanPeakPriceUsd(row);
-  const stopped =
+  let peak = cleanPeakPriceUsd(row);
+  let stopped =
     row.peakBeforeStopPriceUsd != null
       ? row.stoppedAt != null
       : row.low1hPriceUsd <= entry * plan.stopFraction;
+  // The close lies past the window, so the aggregates never saw it: the stop and the ladder
+  // still apply to it. A close through the stop is the stop; a close through a rung is the rung.
+  if (!stopped && close !== null) {
+    if (close <= entry * plan.stopFraction) stopped = true;
+    else if (close > peak) peak = close;
+  }
 
   let held = 1;
   let proceeds = 0; // in multiples of the stake
@@ -123,8 +140,7 @@ export function simulateExitPlan(
   }
   if (held > 1e-9) {
     if (stopped) proceeds += held * plan.stopFraction;
-    else if (closePriceUsd !== null && Number.isFinite(closePriceUsd) && closePriceUsd > 0)
-      proceeds += held * (closePriceUsd / entry);
+    else if (close !== null) proceeds += held * (close / entry);
     else return null;
   }
   return (proceeds - 1) * 100;
