@@ -39,6 +39,7 @@ import type { Prisma, Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
 import {
   flushNarrativeRequests,
+  noteLaunchNarratives,
   noteNarrativeWanted,
   takeTokenSageStats,
   tokenSageEnabled,
@@ -337,6 +338,13 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     ...(koth ? [toWatchlistCandidate(koth, "pumpfun-koth")] : []),
   ];
   await addNewMintsToWatchlist(discovered);
+  // TokenSage's quick read for each new launch, sent now rather than at the cycle's end so it
+  // has the cycle's whole run to land (TOKENSAGE_BASIC_AT_DISCOVERY; off by default).
+  const launchReads = noteLaunchNarratives(
+    [...newMints, ...streamed.filter((e) => e.kind === "create").map((e) => ({ ...e, createdAt: e.at }))],
+    env,
+  );
+  if (launchReads > 0) void flushNarrativeRequests(env);
 
   // Moving mints jump the watchlist queue: Pump.fun's own market cap for the recently-traded and
   // king-of-the-hill coins, and the near-band floor for a graduation (a mint that just bonded is

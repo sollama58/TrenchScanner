@@ -5,6 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, loadEnv, HttpError, type Env, type TokenSageClient } from "@trenchscanner/core";
 import {
   flushNarrativeRequests,
+  noteLaunchNarratives,
   noteNarrativeWanted,
   resetTokenSage,
   startNarrativePolling,
@@ -420,6 +421,42 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     const sent = Object.fromEntries(batch.mock.calls.map((c) => [c[1], cas(c).sort()]));
     expect(sent).toEqual({ full: [u1, u3].sort(), basic: [u2] });
     expect(takeTokenSageStats()).toMatchObject({ fullToday: 2, earlyFullToday: 1 });
+  });
+
+  it("asks for the quick read at launch only when switched on, with the richer hints", async () => {
+    const { client, batch } = fakeClient();
+    const now = Date.now();
+    const fresh = `${TAG}-launch`;
+    const old = `${TAG}-launch-old`;
+    const launches = [
+      { mintAddress: fresh, name: "Dog", symbol: "DOG", createdAt: new Date(now - 5_000) },
+      {
+        mintAddress: fresh,
+        name: "Dog",
+        symbol: "DOG",
+        description: "a dog",
+        twitterUrl: "https://x.com/dog",
+        createdAt: new Date(now - 5_000),
+      },
+      { mintAddress: old, name: "Old", createdAt: new Date(now - 30 * 60_000) },
+    ];
+    expect(noteLaunchNarratives(launches, env, now)).toBe(0);
+    expect(noteLaunchNarratives(launches, { ...env, TOKENSAGE_BASIC_AT_DISCOVERY: true }, now)).toBe(1);
+    batch.mockResolvedValueOnce(ok([{ ca: fresh, status: "pending", job_id: 1 }]));
+    await flushNarrativeRequests(env, client);
+    expect(batch.mock.calls[0]![1]).toBe("basic");
+    expect(batch.mock.calls[0]![0]).toEqual([
+      {
+        ca: fresh,
+        hints: {
+          name: "Dog",
+          symbol: "DOG",
+          description: "a dog",
+          twitter: "https://x.com/dog",
+          created_at: new Date(now - 5_000).toISOString(),
+        },
+      },
+    ]);
   });
 
   it("re-sends queued requests between scans when polling is on", async () => {

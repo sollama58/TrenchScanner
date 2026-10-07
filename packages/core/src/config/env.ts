@@ -575,6 +575,14 @@ const envSchema = z.object({
   TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES: z.coerce.number().min(0).default(10),
   TOKENSAGE_EARLY_FULL_PER_DAY: z.coerce.number().int().min(0).default(4500),
   TOKENSAGE_POLL_SECONDS: z.coerce.number().min(0).default(8),
+  // Quick read at launch instead of at the first watchlist scan (tokensage/prefetch.ts,
+  // noteLaunchNarratives). On the first day of live reads the first scan was also the first
+  // decision for most coins, so their decision rows carried no narrative. Costs a basic read
+  // for every launch (~25/min) on TokenSage's side. Off by default: the user's load call.
+  TOKENSAGE_BASIC_AT_DISCOVERY: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // The hard daily cap on everything the AI spends (curation/aiSpend.ts): the reviewer, the text
   // reads and the playbook evolution share AI_DAILY_BUDGET_USD per UTC day. Every call reserves
   // its estimated cost before it runs and is trued up to the real cost afterwards; once the next
