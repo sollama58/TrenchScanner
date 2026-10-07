@@ -178,7 +178,7 @@ export type BreakdownMode = "count" | "share" | "calls" | "rate2x";
 
 export type Panel =
   | { id: string; kind: ChartKind; metrics: MetricId[] }
-  | { id: string; kind: ChartKind; breakdown: BreakdownMode };
+  | { id: string; kind: ChartKind; breakdown: BreakdownMode; dimension: LighthouseDimension };
 
 export const BREAKDOWN_MODES: { id: BreakdownMode; label: string; unit: Unit; kind: ChartKind }[] = [
   { id: "count", label: "Coins read", unit: "count", kind: "bars" },
@@ -230,8 +230,8 @@ export function defaultPanels(): Panel[] {
     { id: panelId(), kind: "bars", metrics: ["fieldReturn", "callsReturn"] },
     { id: panelId(), kind: "line", metrics: ["calls2x", "field2x"] },
     { id: panelId(), kind: "bars", metrics: ["coinsRead", "calls"] },
-    { id: panelId(), kind: "bars", breakdown: "count" },
-    { id: panelId(), kind: "line", breakdown: "rate2x" },
+    { id: panelId(), kind: "bars", breakdown: "count", dimension: "category" },
+    { id: panelId(), kind: "line", breakdown: "rate2x", dimension: "category" },
   ];
 }
 
@@ -265,23 +265,29 @@ export const PRESETS: { label: string; make: () => Panel }[] = [
     label: "Copycats and the news",
     make: () => ({ id: panelId(), kind: "line", metrics: ["copycatShare", "newsShare"] }),
   },
-  { label: "Breakdown: coins read", make: () => ({ id: panelId(), kind: "bars", breakdown: "count" }) },
+  {
+    label: "Breakdown: coins read",
+    make: () => ({ id: panelId(), kind: "bars", breakdown: "count", dimension: "category" }),
+  },
   {
     label: "Breakdown: share of coins read",
-    make: () => ({ id: panelId(), kind: "bars", breakdown: "share" }),
+    make: () => ({ id: panelId(), kind: "bars", breakdown: "share", dimension: "category" }),
   },
-  { label: "Breakdown: model calls", make: () => ({ id: panelId(), kind: "bars", breakdown: "calls" }) },
+  {
+    label: "Breakdown: model calls",
+    make: () => ({ id: panelId(), kind: "bars", breakdown: "calls", dimension: "category" }),
+  },
   {
     label: "Breakdown: 2x rate of model calls",
-    make: () => ({ id: panelId(), kind: "line", breakdown: "rate2x" }),
+    make: () => ({ id: panelId(), kind: "line", breakdown: "rate2x", dimension: "category" }),
   },
   { label: "Empty chart", make: () => ({ id: panelId(), kind: "line", metrics: [] }) },
 ];
 
-/** Whether two panels draw the same thing: the same breakdown, or the same metrics in the same order. */
+/** Whether two panels draw the same thing: the same breakdown of the same dimension, or the same metrics in the same order. */
 export const samePanel = (a: Panel, b: Panel): boolean => {
   if ("breakdown" in a || "breakdown" in b)
-    return "breakdown" in a && "breakdown" in b && a.breakdown === b.breakdown;
+    return "breakdown" in a && "breakdown" in b && a.breakdown === b.breakdown && a.dimension === b.dimension;
   return a.metrics.length === b.metrics.length && a.metrics.every((m, i) => m === b.metrics[i]);
 };
 
@@ -364,10 +370,12 @@ export function breakdownSeries(h: LighthouseHistory, mode: BreakdownMode): Seri
 /** TokenSage's codes ("x_link_reused", "about_this_coin") as words. */
 export const words = (code: string) => code.replace(/[_-]+/g, " ").replace("/", " › ").trim();
 
-export function panelTitle(p: Panel, dimension: LighthouseDimension): string {
+export const dimensionLabel = (id: LighthouseDimension) => DIMENSIONS.find((d) => d.id === id)?.label ?? id;
+
+export function panelTitle(p: Panel): string {
   if ("breakdown" in p) {
     const mode = BREAKDOWN_MODES.find((m) => m.id === p.breakdown)!.label;
-    const dim = DIMENSIONS.find((d) => d.id === dimension)?.label ?? dimension;
+    const dim = dimensionLabel(p.dimension);
     return `${mode} by ${dim.toLowerCase()}`;
   }
   if (p.metrics.length === 0) return "Empty chart";
@@ -383,7 +391,14 @@ export function loadPanels(): Panel[] {
     if (!raw) return defaultPanels();
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return defaultPanels();
-    const panels = parsed.filter(isPanel);
+    // Breakdowns saved before each chart carried its own dimension split by narrative.
+    const panels = parsed
+      .map((p: unknown) =>
+        typeof p === "object" && p !== null && "breakdown" in p && !("dimension" in p)
+          ? { ...p, dimension: "category" }
+          : p,
+      )
+      .filter(isPanel);
     return panels.length ? panels : defaultPanels();
   } catch {
     return defaultPanels();
@@ -402,7 +417,8 @@ export function isPanel(v: unknown): v is Panel {
   if (typeof v !== "object" || v === null) return false;
   const p = v as Record<string, unknown>;
   if (typeof p.id !== "string" || (p.kind !== "line" && p.kind !== "bars")) return false;
-  if ("breakdown" in p) return BREAKDOWN_MODES.some((m) => m.id === p.breakdown);
+  if ("breakdown" in p)
+    return BREAKDOWN_MODES.some((m) => m.id === p.breakdown) && DIMENSIONS.some((d) => d.id === p.dimension);
   return (
     Array.isArray(p.metrics) &&
     p.metrics.every((m) => (METRIC_IDS as string[]).includes(m as string)) &&

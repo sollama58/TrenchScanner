@@ -242,10 +242,10 @@ function TokenSageSections({
       </div>
 
       <Section
-        title="Which narratives double"
-        note={`Model calls in the last ${span} that reached 2x, by their coin's narrative. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
+        title="Which narratives pay"
+        note={`Model calls in the last ${span} by their coin's narrative: the average return under the exit plan, and how many reached 2x, 4x and 10x. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
       >
-        <HitRates rows={d.outcomes.byCategory} cls={cls} />
+        <HitRates rows={bestFirst(d.outcomes.byCategory)} cls={cls} />
         <p className="faint small lh-foot">
           {d.outcomes.described.toLocaleString()} of {d.outcomes.alerts.toLocaleString()} calls had a
           TokenSage read · {d.outcomes.graded.toLocaleString()} graded overall
@@ -308,17 +308,7 @@ function TokenSageSections({
  * confidence figures stay on the Lighthouse tab, where someone digging in wants them.
  */
 function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) {
-  // Best first: a settled rate ahead of a thin one, then by rate, then by how many calls back it.
-  const best = [...d.outcomes.byCategory]
-    .sort((a, b) => {
-      const ea = a.graded >= MIN_GRADED ? 1 : 0;
-      const eb = b.graded >= MIN_GRADED ? 1 : 0;
-      if (ea !== eb) return eb - ea;
-      const ra = a.graded > 0 ? a.won2x / a.graded : -1;
-      const rb = b.graded > 0 ? b.won2x / b.graded : -1;
-      return rb - ra || b.graded - a.graded;
-    })
-    .slice(0, 5);
+  const best = bestFirst(d.outcomes.byCategory).slice(0, 5);
   return (
     <>
       {!d.tokenSage.on && (
@@ -340,7 +330,7 @@ function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => 
         </Section>
         <Section
           title="Best-performing narratives"
-          note="Share of model calls that reached 2x, by their coin's narrative."
+          note="By the average return of model calls under the exit plan, with how many reached 2x, 4x and 10x."
         >
           <HitRates rows={best} cls={cls} />
         </Section>
@@ -627,16 +617,40 @@ function Split({ title, rows, empty }: { title: string; rows: LighthouseCount[];
   );
 }
 
-/** Hit rates against the goal, one row per group; thin samples say so instead of a verdict. */
-/** One bar per label: the share of its graded calls that reached 2x, and how many calls that rests on. */
+/** A group's average return under the exit plan, once any of its calls has one. */
+const avgReturn = (t: LighthouseTally) => (t.returnN > 0 ? t.returnSum / t.returnN : null);
+
+/**
+ * Best first: groups with a settled sample (five graded calls) ahead of thin ones, then by average
+ * return under the exit plan, then by 2x rate, then by how many calls back it.
+ */
+export function bestFirst(rows: LighthouseTally[]): LighthouseTally[] {
+  const settled = (t: LighthouseTally) => (t.graded >= MIN_GRADED ? 1 : 0);
+  const rate2x = (t: LighthouseTally) => (t.graded > 0 ? t.won2x / t.graded : -1);
+  return [...rows].sort(
+    (a, b) =>
+      settled(b) - settled(a) ||
+      (avgReturn(b) ?? -Infinity) - (avgReturn(a) ?? -Infinity) ||
+      rate2x(b) - rate2x(a) ||
+      b.graded - a.graded,
+  );
+}
+
+/**
+ * One row per group: the average return under the exit plan (the bar, against the best row's),
+ * the share of graded calls that reached 2x, 4x and 10x, and how many calls that rests on.
+ */
 function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) => string }) {
   if (!rows.length)
     return <p className="muted small">No model calls on described coins in this window yet.</p>;
+  const top = Math.max(0, ...rows.map((r) => avgReturn(r) ?? 0));
   return (
     <div className="lh-hits">
       {rows.map((r) => {
-        const rate = r.graded > 0 ? (r.won2x / r.graded) * 100 : null;
+        const ret = avgReturn(r);
         const early = r.graded < MIN_GRADED;
+        const tier = (won: number) => (r.graded > 0 ? pct(share(won, r.graded)) : "–");
+        const width = ret !== null && ret > 0 && top > 0 ? Math.max((ret / top) * 100, 1) : 1;
         return (
           <div key={r.label} className={`lh-hit${early ? " early" : ""}`}>
             <span className="lh-hit-label">
@@ -644,9 +658,12 @@ function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) =>
               {words(r.label)}
             </span>
             <span className="lh-hit-track">
-              <span className="lh-hit-fill" style={{ width: `${Math.max(rate ?? 0, 1)}%` }} />
+              <span className="lh-hit-fill" style={{ width: `${width}%` }} />
             </span>
-            <span className="lh-hit-value num">{rate === null ? "–" : pct(rate)}</span>
+            <span className="lh-hit-value num">{ret === null ? "–" : signedPct(ret)}</span>
+            <span className="lh-hit-tiers muted">
+              2x {tier(r.won2x)} · 4x {tier(r.won4x)} · 10x {tier(r.won10x)}
+            </span>
             <span className="lh-hit-state muted">
               {early ? `${r.graded}/${MIN_GRADED} graded` : `${r.graded} graded`}
             </span>

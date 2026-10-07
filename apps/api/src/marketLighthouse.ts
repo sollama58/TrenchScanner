@@ -58,6 +58,10 @@ export interface LighthouseTally {
   graded: number;
   won2x: number;
   won4x: number;
+  won10x: number;
+  /** Calls with a simulated return under the exit plan, and their sum (percent). */
+  returnN: number;
+  returnSum: number;
 }
 
 const slimTally = (t: OutcomeTally): LighthouseTally => ({
@@ -66,6 +70,9 @@ const slimTally = (t: OutcomeTally): LighthouseTally => ({
   graded: t.graded,
   won2x: t.won2x,
   won4x: t.won4x,
+  won10x: t.won10x,
+  returnN: t.returnN,
+  returnSum: t.returnSum,
 });
 
 interface ScreenedRow {
@@ -249,6 +256,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     // cap as the Admin report; only the columns the tallies need, never the mint.
     prisma.$queryRaw<AlertOutcomeRow[]>`
       SELECT a."hit2xIn1h" AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
+             a."simReturnPct"::float8 AS sim_return,
              n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
              n."referentKind" AS referent_kind, n.flags
       FROM "CuratedAlert" a

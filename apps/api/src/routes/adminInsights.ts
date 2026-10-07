@@ -78,12 +78,15 @@ export interface OutcomeTally {
   won2x: number;
   won4x: number;
   won10x: number;
+  /** Calls with a simulated return under the exit plan, and their sum (percent). */
+  returnN: number;
+  returnSum: number;
 }
 
 export function tally(groups: Map<string, OutcomeTally>, label: string, row: AlertOutcomeRow) {
   let t = groups.get(label);
   if (!t) {
-    t = { label, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0 };
+    t = { label, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0, returnN: 0, returnSum: 0 };
     groups.set(label, t);
   }
   t.alerts += 1;
@@ -92,6 +95,10 @@ export function tally(groups: Map<string, OutcomeTally>, label: string, row: Ale
     if (row.hit2x) t.won2x += 1;
     if (row.hit4x) t.won4x += 1;
     if (row.hit10x) t.won10x += 1;
+  }
+  if (row.sim_return !== null && row.sim_return !== undefined) {
+    t.returnN += 1;
+    t.returnSum += row.sim_return;
   }
 }
 
@@ -102,6 +109,8 @@ export interface AlertOutcomeRow {
   hit2x: boolean | null;
   hit4x: boolean | null;
   hit10x: boolean | null;
+  /** The call's simulated return under the exit plan, once graded. */
+  sim_return: number | null;
   status: string | null;
   categories: unknown;
   x_verdict: string | null;
@@ -196,6 +205,7 @@ async function buildTokenSageReport(days: number) {
     // window (CuratedAlert has a createdAt index) and capped, newest first.
     prisma.$queryRaw<AlertOutcomeRow[]>`
       SELECT a."hit2xIn1h" AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
+             a."simReturnPct"::float8 AS sim_return,
              n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
              n."referentKind" AS referent_kind, n.flags
       FROM "CuratedAlert" a

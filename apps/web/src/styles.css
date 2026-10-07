@@ -4412,10 +4412,15 @@ button.small-btn {
 }
 .lh-hit {
   display: grid;
-  grid-template-columns: minmax(90px, 160px) 1fr 44px 96px;
+  grid-template-columns: minmax(90px, 160px) 1fr 56px auto 80px;
   align-items: center;
   gap: 10px;
   font-size: 13px;
+}
+.lh-hit-tiers {
+  white-space: nowrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .lh-hit-label {
   display: inline-flex;
@@ -4559,10 +4564,11 @@ button.small-btn {
     margin-top: 8px;
   }
   .lh-hit {
-    grid-template-columns: 1fr 40px auto;
+    grid-template-columns: 1fr 52px auto;
     grid-template-areas:
       "label label label"
-      "track value state";
+      "track value state"
+      "tiers tiers tiers";
     gap: 2px 8px;
   }
   .lh-hit-label {
@@ -4573,6 +4579,10 @@ button.small-btn {
   }
   .lh-hit-value {
     grid-area: value;
+  }
+  .lh-hit-tiers {
+    grid-area: tiers;
+    font-size: 11.5px;
   }
   .lh-hit-state {
     grid-area: state;
@@ -4872,6 +4882,12 @@ button.small-btn {
 .lht-panel-tools .segmented {
   margin-right: 4px;
 }
+.lht-dimension {
+  min-width: 0;
+  max-width: 170px;
+  margin-right: 6px;
+  font-size: 12.5px;
+}
 .lht-panel-tools .icon-btn.on {
   color: var(--brand-ink);
 }
@@ -4964,5 +4980,14 @@ button.small-btn {
   }
   .lht-panel-head {
     flex-direction: column;
+  }
+  .lht-panel-tools {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+  .lht-dimension {
+    flex: 1 1 100%;
+    max-width: none;
+    margin: 0 0 4px;
   }
 }
