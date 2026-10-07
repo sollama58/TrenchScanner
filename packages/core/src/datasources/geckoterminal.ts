@@ -63,6 +63,12 @@ const GATE_BURST = 4;
 
 export interface GeckoTerminalClientOptions {
   baseUrl?: string;
+  /**
+   * A CoinGecko paid-plan key (COINGECKO_API_KEY). With one, lookups go to CoinGecko's on-chain
+   * API - GeckoTerminal's data and response shape, on the plan's rate limit rather than the free
+   * 30 a minute - and background lookups are no longer cut short.
+   */
+  apiKey?: string;
   /** Calls a minute for lookups marked `priority` (the scan's watchlist refresh). */
   priorityPerMinute?: number;
   /** Calls a minute for every other lookup. */
@@ -82,9 +88,18 @@ export class GeckoTerminalClient {
   private readonly baseUrl: string;
   private readonly priorityGate: RateGate;
   private readonly backgroundGate: RateGate;
+  private readonly headers: Record<string, string>;
+  private readonly backgroundMaxMints: number;
 
   constructor(options: GeckoTerminalClientOptions = {}) {
-    this.baseUrl = options.baseUrl ?? "https://api.geckoterminal.com/api/v2";
+    const keyed = Boolean(options.apiKey);
+    this.baseUrl =
+      options.baseUrl ??
+      (keyed ? "https://pro-api.coingecko.com/api/v3/onchain" : "https://api.geckoterminal.com/api/v2");
+    this.headers = keyed
+      ? { accept: "application/json", "x-cg-pro-api-key": options.apiKey! }
+      : { accept: "application/json" };
+    this.backgroundMaxMints = keyed ? Infinity : BACKGROUND_MAX_MINTS;
     this.priorityGate = new RateGate({
       name: "geckoterminal",
       perMinute: options.priorityPerMinute ?? DEFAULT_GECKOTERMINAL_PRIORITY_PER_MINUTE,
@@ -99,7 +114,8 @@ export class GeckoTerminalClient {
 
   /**
    * Same contract as DexScreenerClient.getTokensByAddresses (deadline, seenAt, failed). A lookup
-   * not marked `priority` is cut to its first BACKGROUND_MAX_MINTS; the rest count as failed.
+   * not marked `priority` is cut to its first BACKGROUND_MAX_MINTS without a key; the rest count
+   * as failed.
    */
   async getTokensByAddresses(
     mintAddresses: string[],
@@ -114,7 +130,7 @@ export class GeckoTerminalClient {
   ): Promise<CandidateToken[]> {
     const { deadlineMs, seenAt, failed, priority, ...fetchOptions } = options;
     const all = [...new Set(mintAddresses)];
-    const unique = priority ? all : all.slice(0, BACKGROUND_MAX_MINTS);
+    const unique = priority ? all : all.slice(0, this.backgroundMaxMints);
     if (failed) for (const mint of all.slice(unique.length)) failed.add(mint);
     if (unique.length === 0) return [];
     const budget = priority ? this.priorityGate : this.backgroundGate;
@@ -137,7 +153,7 @@ export class GeckoTerminalClient {
       try {
         const body = await fetchJson<GeckoMultiResponse>(
           `${this.baseUrl}/networks/${SOLANA}/tokens/multi/${chunk.join(",")}?include=top_pools`,
-          { ...fetchOptions, gate, headers: { accept: "application/json" } },
+          { ...fetchOptions, gate, headers: this.headers },
         );
         const answered = new Date();
         for (const mint of chunk) settled.add(mint);

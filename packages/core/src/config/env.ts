@@ -55,6 +55,13 @@ const envSchema = z.object({
   // fast match, candidate watch, live prices, the empty-wallet check's pricing). DexScreener allows
   // 300 a minute; the default leaves the API's live refreshes room. See DexScreenerClient.
   DEXSCREENER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(180),
+  // A CoinGecko paid-plan key. Market data falls back to GeckoTerminal whenever DexScreener answers
+  // lookups blank (datasources/geckoterminal.ts); with this key it uses CoinGecko's on-chain API
+  // instead, on the plan's limit rather than the free 30 calls a minute. Empty: the free tier.
+  COINGECKO_API_KEY: z.string().default(""),
+  // The worker's share of the plan's calls a minute (the API process takes a small fixed share on
+  // top). Only read with COINGECKO_API_KEY. 250 is the Basic plan's limit, less the API's.
+  COINGECKO_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(200),
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api-v3.pump.fun"),
   // PumpPortal's public data websocket: Pump.fun launches and graduations as they land on chain
   // (apps/worker/src/discovery/pumpPortalStream.ts). Empty disables the stream; discovery then

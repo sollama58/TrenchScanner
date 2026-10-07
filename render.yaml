@@ -31,6 +31,10 @@
 #   - TOKENSAGE_API_URL, TOKENSAGE_API_KEY (worker)  optional: the user's TokenSage service
 #         TokenSage says what each scanned coin is about (tokensage/prefetch.ts), stored in
 #         TokenNarrative. Off until TOKENSAGE_ENABLED=true is also set; nothing waits on it.
+#   - COINGECKO_API_KEY (both api + worker)        optional: a CoinGecko paid-plan key
+#         Market data falls back to GeckoTerminal whenever DexScreener answers lookups blank (it
+#         did on 2026-10-07). Free, that is 30 calls a minute; with this key it is CoinGecko's
+#         on-chain API on the plan's limit (COINGECKO_REQUESTS_PER_MINUTE, 200 by default).
 #   - SOLANA_RPC_URL (both api + worker)           optional: leave empty to use Helius
 #         Verifies and reconciles burns. Empty (or a public endpoint) means the Helius RPC built
 #         from HELIUS_API_KEY; set it only to use a different paid RPC.
@@ -97,6 +101,9 @@ services:
       - key: DATABASE_CONNECTION_LIMIT
         value: "12"
       - key: HELIUS_API_KEY
+        sync: false
+      # Optional: a CoinGecko paid-plan key for the market-data fallback (see .env.example).
+      - key: COINGECKO_API_KEY
         sync: false
       # Verifies burns for /subscription/claim and mints the blockhash the burn is signed
       # against. Empty (or a public endpoint) uses the Helius RPC built from HELIUS_API_KEY, so it
@@ -171,6 +178,9 @@ services:
       - key: TOKENSAGE_API_KEY
         sync: false
       - key: HELIUS_API_KEY
+        sync: false
+      # Optional: a CoinGecko paid-plan key for the market-data fallback (see .env.example).
+      - key: COINGECKO_API_KEY
         sync: false
       # The burn reconciler's endpoint - see the note on this var on the API above. Empty means
       # Helius via HELIUS_API_KEY.

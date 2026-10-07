@@ -95,7 +95,15 @@ async function main() {
       baseUrl: env.DEXSCREENER_BASE_URL,
       requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
       // Answers token lookups while DexScreener answers them blank (2026-10-07).
-      fallback: new GeckoTerminalClient(),
+      fallback: new GeckoTerminalClient(
+        env.COINGECKO_API_KEY
+          ? {
+              apiKey: env.COINGECKO_API_KEY,
+              priorityPerMinute: Math.ceil(env.COINGECKO_REQUESTS_PER_MINUTE * 0.6),
+              backgroundPerMinute: Math.floor(env.COINGECKO_REQUESTS_PER_MINUTE * 0.4),
+            }
+          : {},
+      ),
     }),
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
