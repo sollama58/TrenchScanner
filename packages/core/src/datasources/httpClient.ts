@@ -20,6 +20,15 @@ export interface FetchJsonOptions extends RequestInit {
   retryDelayMs?: number;
   /** Called with the headers of the successful response, before its body is read. */
   onHeaders?: (headers: Headers) => void;
+  /**
+   * A shared request budget (see RateGate): waited on before every attempt, and told about a 429
+   * so every caller sharing it backs off, not just this one. A 429 retry then waits on the gate
+   * rather than sleeping on its own, and the gate logs the throttle once instead of each request.
+   */
+  gate?: {
+    acquire(): Promise<void>;
+    throttled(delayMs: number): void;
+  };
 }
 
 // Query param names that commonly carry secrets in provider URLs (e.g. Helius's own
@@ -72,11 +81,12 @@ export function redactUrl(rawUrl: string): string {
  * never ends up in application logs, regardless of how a caller later logs the error it catches.
  */
 export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}): Promise<T> {
-  const { timeoutMs = 10_000, retries = 2, retryDelayMs = 500, onHeaders, ...init } = options;
+  const { timeoutMs = 10_000, retries = 2, retryDelayMs = 500, onHeaders, gate, ...init } = options;
   const safeUrl = redactUrl(url);
 
   let attempt = 0;
   while (true) {
+    await gate?.acquire();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -92,7 +102,15 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       void res.body?.cancel().catch(() => {});
 
       const retryable = res.status === 429 || res.status >= 500;
-      if (retryable && attempt < retries) {
+      if (gate && res.status === 429) {
+        // Paused whether or not this request retries: the other callers sharing the gate are
+        // about to hit the same limit.
+        gate.throttled(backoffDelay(retryDelayMs, attempt, res.headers.get("retry-after")));
+        if (attempt < retries) {
+          attempt += 1;
+          continue;
+        }
+      } else if (retryable && attempt < retries) {
         const delay = backoffDelay(retryDelayMs, attempt, res.headers.get("retry-after"));
         logger.warn("retrying after non-2xx response", { url: safeUrl, status: res.status, attempt, delay });
         await sleep(delay);

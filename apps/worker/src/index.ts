@@ -87,7 +87,10 @@ async function main() {
 
   const deps = {
     pumpFun: new PumpFunClient({ baseUrl: env.PUMPFUN_BASE_URL }),
-    dexScreener: new DexScreenerClient({ baseUrl: env.DEXSCREENER_BASE_URL }),
+    dexScreener: new DexScreenerClient({
+      baseUrl: env.DEXSCREENER_BASE_URL,
+      requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
+    }),
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     stream,

@@ -82,3 +82,59 @@ describe("getTokensByAddresses deadline", () => {
     expect(failed).toEqual(new Set(["mint30"]));
   });
 });
+
+describe("getTokensByAddresses rate limiting", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("pauses every batch on a 429, not just the one that got it", async () => {
+    // 2026-10-07: each batch retried on its own while the others kept firing into the same limit.
+    const mints = Array.from({ length: 90 }, (_, i) => `mint${i}`);
+    const calls: number[] = [];
+    let throttledOnce = false;
+    vi.stubGlobal("fetch", (url: string) => {
+      calls.push(Date.now());
+      if (!throttledOnce) {
+        throttledOnce = true;
+        return Promise.resolve(new Response("", { status: 429, headers: { "retry-after": "0.3" } }));
+      }
+      const chunk = url.split("/").pop()!.split(",");
+      const pairs = chunk.map((mint) => ({
+        chainId: "solana",
+        dexId: "raydium",
+        baseToken: { address: mint },
+        marketCap: 50_000,
+      }));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+
+    const client = new DexScreenerClient();
+    const startedAt = Date.now();
+    // One batch at a time until the 429 lands, so the pause is the only thing holding the rest.
+    const result = await client.getTokensByAddresses(mints, 1, { retries: 1 });
+    expect(result).toHaveLength(90);
+    // The 429, its retry and the two other batches - none of the later ones before the pause ran out.
+    expect(calls).toHaveLength(4);
+    for (const at of calls.slice(1)) expect(at - startedAt).toBeGreaterThanOrEqual(290);
+    expect(client.takeCallStats()).toMatchObject({ requests: 4, throttled: 1 });
+  });
+
+  it("counts a batch still queued behind the budget at its deadline as failed", async () => {
+    const mints = Array.from({ length: 60 }, (_, i) => `mint${i}`);
+    let first = true;
+    vi.stubGlobal("fetch", () => {
+      if (first) {
+        first = false;
+        // A long pause: the second batch can't get a slot before the deadline.
+        return Promise.resolve(new Response("", { status: 429, headers: { "retry-after": "10" } }));
+      }
+      return Promise.resolve(new Response("[]"));
+    });
+    const failed = new Set<string>();
+    const startedAt = Date.now();
+    await new DexScreenerClient().getTokensByAddresses(mints, 1, { retries: 0, deadlineMs: 500, failed });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(failed.size).toBe(60);
+  });
+});
