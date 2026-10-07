@@ -12,7 +12,6 @@ const DAY_MS = 86_400_000;
 const LINKS = [
   { label: "Dex", href: (m: string) => `https://dexscreener.com/solana/${m}` },
   { label: "Pump", href: (m: string) => `https://pump.fun/coin/${m}` },
-  { label: "RugCheck", href: (m: string) => `https://rugcheck.xyz/tokens/${m}` },
 ];
 
 export function AlertCard({
