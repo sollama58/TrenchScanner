@@ -255,6 +255,8 @@ describe("TokenSage narrative criteria", () => {
       matchesFilter(baseToken({ narrative: read({ lineageKind: "early_copy", copiesRecent: true }) }), f),
     ).toBe(true);
     expect(matchesFilter(baseToken({ narrative: read({ lineageKind: "late_copy" }) }), f)).toBe(false);
+    // TokenSage could not place the coin: not checkable, so the exclusion fails closed.
+    expect(matchesFilter(baseToken({ narrative: read({ lineageKind: "unknown" }) }), f)).toBe(false);
     expect(
       matchesFilter(baseToken({ narrative: read({ lineageKind: "copy", flags: ["late_copy"] }) }), f),
     ).toBe(false);

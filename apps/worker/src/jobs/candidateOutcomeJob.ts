@@ -128,6 +128,12 @@ export async function recordCandidateSample(
     extended24h?: boolean;
     /** Defaults to "emission" with bypassSpacing, else "hourly". */
     kind?: CandidateSampleKind;
+    /**
+     * A caller's own transaction to write the row in (a curated alert anchors inside the locked
+     * transaction that creates it, so a stand-down leaves no anchor behind). Not for "match"
+     * rows, which take their own lock here.
+     */
+    db?: Prisma.TransactionClient;
   } = {},
 ): Promise<CandidateSampleRef | null> {
   // A label is "did the price multiply from the anchor" - a zero/absent anchor has no multiples.
@@ -197,7 +203,7 @@ export async function recordCandidateSample(
       { maxWait: 10_000, timeout: 15_000 },
     );
   }
-  return sample(prisma);
+  return sample(opts.db ?? prisma);
 }
 
 /** Rows banked since the counters were last read, by kind - the scan cycle's data-continuity line. */
@@ -390,9 +396,13 @@ export async function runCandidateWatchJob(
       // The exit plan's trailing exit: armed by the plan's first sale (a tick at the first rung
       // before the stop) inside the window or at its close, then moved by every tick until it
       // fires or the hold cap. An unarmed row past its close never arms: the ladder is graded on
-      // the window's peak, and this tick's price is not in it.
+      // the window's peak, and this tick's price is not in it. And a trail the hold cap already
+      // closed (the return is written, the exit never fired) stops moving: a row kept on the 24h
+      // watch past the cap would otherwise go on raising its high and could book an exit hours
+      // after the return it no longer describes.
       const trailUpdates =
-        price !== undefined && (row.finalizedAt === null || row.trailHighPriceUsd != null)
+        price !== undefined &&
+        (row.finalizedAt === null || (row.trailHighPriceUsd != null && row.simReturnPct === null))
           ? applyTrailTick(merged, price, priceAt)
           : {};
       Object.assign(merged, trailUpdates);

@@ -51,6 +51,10 @@ export interface RugProfileResolution {
     fetched: number;
     failed: number;
     reused?: number;
+    /** Awaited lookups that outran the cycle's wait: never sent, or still in flight. */
+    timedOut?: number;
+    /** Mints not looked up this cycle because an earlier lookup of them failed (lookupBackoff). */
+    heldOff?: number;
     /** Stale answers served this cycle and being refreshed behind it. */
     refreshing?: number;
   };
@@ -280,8 +284,10 @@ export async function resolveRugProfiles(
         lookupBackoff.succeed(mint);
       } else {
         // "failed", or no entry at all. Left uncached. A failure is held off before the next
-        // try (lookupBackoff); a lookup that merely outran the wait is still in flight and
-        // lands in the cache for the next cycle, so it is retried as soon as that misses.
+        // try (lookupBackoff); a lookup that merely outran the wait was either never sent (the
+        // client skips what is still queued at the deadline) or is still in flight and lands in
+        // the cache for the next cycle. Neither is a failure: it is retried as soon as the cache
+        // misses, with no strike against the mint.
         failed += 1;
         if (result === undefined) timedOut += 1;
         else lookupBackoff.fail(mint, now);

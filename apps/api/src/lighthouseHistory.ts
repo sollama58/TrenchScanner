@@ -226,10 +226,15 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
   const labelSince = since ? new Date(bucketStart(since.getTime(), labelBucket)) : null;
 
   const [coverage, perBucket, whole, previous, labelRows] = await Promise.all([
-    prisma.lighthouseHour.aggregate({ _min: { hour: true }, _max: { hour: true } }),
+    prisma.lighthouseHour.aggregate({ _min: { hour: true }, _max: { hour: true, computedAt: true } }),
     sumHours(since, to, bucket),
     sumHours(since, to, null),
-    since ? sumHours(new Date(since.getTime() - days * DAY_MS), since, null) : Promise.resolve([]),
+    // The window runs from its bucket's start through the current hour, so it is `days` plus
+    // today's elapsed hours long; the span before it is the same length, not a flat `days`, or
+    // every count's "vs before" would lean up by those hours.
+    since
+      ? sumHours(new Date(since.getTime() - (to.getTime() - since.getTime())), since, null)
+      : Promise.resolve([]),
     prisma.$queryRaw<LabelRow[]>`
       SELECT date_trunc(${labelBucket}, l."day") AS bucket, l."label",
              sum(l."count") AS count, sum(l."alerts") AS alerts, sum(l."graded") AS graded,
@@ -281,7 +286,12 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
 
   return {
     window: { days, since, bucket, dimension },
-    coverage: { oldestHour: coverage._min.hour, newestHour: coverage._max.hour },
+    coverage: {
+      oldestHour: coverage._min.hour,
+      newestHour: coverage._max.hour,
+      /** When the rollup last ran: the newest hour is the current, partial one, re-summed every run. */
+      summedAt: coverage._max.computedAt,
+    },
     exitPlan: describeExitPlan(),
     totals: sums(whole[0]),
     /** The same span just before the window; null when the window is everything. */

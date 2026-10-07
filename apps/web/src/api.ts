@@ -1073,7 +1073,7 @@ export interface LighthouseHistory {
     bucket: LighthouseHistoryBucket;
     dimension: LighthouseDimension;
   };
-  coverage: { oldestHour: string | null; newestHour: string | null };
+  coverage: { oldestHour: string | null; newestHour: string | null; summedAt: string | null };
   exitPlan: string;
   totals: LighthouseSums;
   /** The same span just before the window; null when the window is everything. */

@@ -289,9 +289,11 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
           else if (m === slow) {
             await stalled;
             result = { status: "found", profile: profile(m, 7) };
-          } else
-            result =
-              Date.now() >= deadline ? { status: "failed" } : { status: "found", profile: profile(m, 9) };
+          } else {
+            // Still queued at the deadline: the real client never sends it and records nothing.
+            if (Date.now() >= deadline) continue;
+            result = { status: "found", profile: profile(m, 9) };
+          }
           results.set(m, result);
           opts.sink?.set(m, result);
         }
@@ -312,6 +314,14 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     await new Promise((r) => setTimeout(r, 50));
     const cached = await prisma.rugCheckCache.findUnique({ where: { mintAddress: slow } });
     expect(cached?.profile).toMatchObject({ holderCount: 7 });
+
+    // The mint that was only ever queued was never asked, so it is not a failure to hold off:
+    // the next cycle looks it up straight away.
+    const next = fakeClient({ [queued]: { status: "found", profile: profile(queued, 9) } });
+    const again = await resolveRugProfiles([queued], next.client, 5);
+    expect(again.profiles.has(queued)).toBe(true);
+    expect(again.stats.heldOff).toBeUndefined();
+    expect(next.calls.flat()).toContain(queued);
   });
 
   it("makes no request at all for an empty candidate list", async () => {

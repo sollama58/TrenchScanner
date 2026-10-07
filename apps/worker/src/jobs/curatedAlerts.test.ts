@@ -51,6 +51,53 @@ function curatableFixture(mintAddress: string, overrides: Partial<ScoredToken> =
   };
 }
 
+/** A complete deep read with nothing in it, as the Narrative seat needs to decide. */
+function deepRead(): NarrativeRead {
+  return {
+    depth: "full",
+    status: "complete",
+    analyzedAt: new Date(),
+    checkedAt: new Date(),
+    categories: [],
+    referentLabel: null,
+    referentKind: null,
+    referentConfidence: null,
+    referentSupport: [],
+    flags: [],
+    highFlagCount: 0,
+    warnFlagCount: 0,
+    copiesRecent: null,
+    xFit: null,
+    xVerdict: null,
+    xRelation: null,
+    xAuthorFollowers: null,
+    xPredatesTokenS: null,
+    xReuseCount: null,
+    trendMatched: null,
+    lineageKind: null,
+    lineageRank: null,
+    lineageRankOf: null,
+    lineageOfMint: null,
+    originalAgeS: null,
+    originalCurveProgress: null,
+    originalComplete: null,
+    siblings1h: null,
+    siblings6h: null,
+    siblings24h: null,
+    logoReuse24h: null,
+    waveLaunches1h: null,
+    waveLaunches6h: null,
+    waveLaunches24h: null,
+    waveRank24h: null,
+    topCategoryInputs: null,
+    xCredibility: null,
+    xAccountAgeS: null,
+    xAccountMadeForCoin: null,
+    xReuseRank: null,
+    trendScore: null,
+  };
+}
+
 /** The old single-shot flow, as the simple tests still want it: one candidate through both
  * phases. True when the live ledger actually emitted. */
 async function collectAndEmit(
@@ -493,49 +540,7 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     await activeModel("narrative", CURATOR_MODEL_KIND, alwaysYesParams());
     resetCuratorModelCache();
     await freeGovernorBudget();
-    const deep: NarrativeRead = {
-      depth: "full",
-      status: "complete",
-      analyzedAt: new Date(),
-      checkedAt: new Date(),
-      categories: [],
-      referentLabel: null,
-      referentKind: null,
-      referentConfidence: null,
-      referentSupport: [],
-      flags: [],
-      highFlagCount: 0,
-      warnFlagCount: 0,
-      copiesRecent: null,
-      xFit: null,
-      xVerdict: null,
-      xRelation: null,
-      xAuthorFollowers: null,
-      xPredatesTokenS: null,
-      xReuseCount: null,
-      trendMatched: null,
-      lineageKind: null,
-      lineageRank: null,
-      lineageRankOf: null,
-      lineageOfMint: null,
-      originalAgeS: null,
-      originalCurveProgress: null,
-      originalComplete: null,
-      siblings1h: null,
-      siblings6h: null,
-      siblings24h: null,
-      logoReuse24h: null,
-      waveLaunches1h: null,
-      waveLaunches6h: null,
-      waveLaunches24h: null,
-      waveRank24h: null,
-      topCategoryInputs: null,
-      xCredibility: null,
-      xAccountAgeS: null,
-      xAccountMadeForCoin: null,
-      xReuseRank: null,
-      trendScore: null,
-    };
+    const deep = deepRead();
     const cycle = newCuratedCycle();
     await collectCuratedContender(
       cycle,
@@ -570,6 +575,28 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
       "second",
     );
     expect([...own.byModel.keys()]).toEqual(["narrative"]);
+  });
+
+  it("the Narrative seat notes a card another seat calls in the same pass instead of a second alert", async () => {
+    // The deep read is in hand at the decision moment (a launch-time quick read followed by the
+    // early deep read), so Rules and the Narrative seat file the coin together.
+    const withNarrative = { ...env, CURATOR_CONTESTANTS: [...env.CURATOR_CONTESTANTS, "narrative"] };
+    await activeModel("narrative", CURATOR_MODEL_KIND, alwaysYesParams());
+    resetCuratorModelCache();
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-narrative-same-pass` } });
+    const scored = { ...curatableFixture(token.mintAddress), narrative: deepRead() };
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, null, withNarrative);
+    expect([...cycle.byModel.keys()].sort()).toEqual([RULES_CONTESTANT, "narrative"].sort());
+    expect(await emitCuratedCycle(cycle, withNarrative)).toBe(1);
+
+    const alerts = await prisma.curatedAlert.findMany({ where: { tokenId: token.id } });
+    expect(alerts.map((a) => a.model)).toEqual([RULES_CONTESTANT]);
+    expect(alerts[0]).toMatchObject({ narrativeVerdict: "agrees" });
+    // One anchor, on the 24h watch, and nothing left behind.
+    const anchors = await prisma.candidateOutcome.findMany({ where: { tokenId: token.id } });
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0]).toMatchObject({ id: alerts[0]!.candidateOutcomeId, extended24h: true });
   });
 
   it("governs each ledger against its own budget", async () => {

@@ -22,8 +22,9 @@ IGNORE=(
 
 # Top-level schema keys: the lines of the z.object literal indented by exactly two spaces. A
 # chained schema may break the line after `z` (`JWT_SECRET: z` then `.string()`), so the match
-# stops at `z` and allows the dot on the same line or the next.
-schema_keys=$(grep -E '^  [A-Z][A-Z0-9_]*: z(\.|\s*$)' "$ENV_TS" | sed -E 's/^  ([A-Z0-9_]+):.*/\1/' | sort -u)
+# stops at `z` and allows the dot on the same line or the next. A key may also take a schema
+# defined once and shared (`HELIUS_API_KEY: pastedKey,`).
+schema_keys=$(grep -E '^  [A-Z][A-Z0-9_]*: (z(\.|\s*$)|[A-Za-z_][A-Za-z0-9_]*,?\s*$)' "$ENV_TS" | sed -E 's/^  ([A-Z0-9_]+):.*/\1/' | sort -u)
 if [ -z "$schema_keys" ]; then
   echo "check-env-keys: found no schema keys in $ENV_TS - has its layout changed?" >&2
   exit 1

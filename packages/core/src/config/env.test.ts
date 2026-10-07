@@ -89,12 +89,18 @@ describe("appDomainForOrigin", () => {
 });
 
 describe("loadEnv", () => {
-  it("cleans a TokenSage key pasted with spaces, quotes or a Bearer prefix", () => {
+  it("cleans an API key pasted with spaces, quotes or a Bearer prefix", () => {
     for (const raw of ["  abc123 ", '"abc123"', "'abc123'", "Bearer abc123", " bearer  abc123\n"]) {
       resetEnvCacheForTests();
-      expect(loadEnv({ DATABASE_URL: "postgres://x", TOKENSAGE_API_KEY: raw }).TOKENSAGE_API_KEY).toBe(
-        "abc123",
-      );
+      const env = loadEnv({
+        DATABASE_URL: "postgres://x",
+        TOKENSAGE_API_KEY: raw,
+        COINGECKO_API_KEY: raw,
+        HELIUS_API_KEY: raw,
+      });
+      expect(env.TOKENSAGE_API_KEY).toBe("abc123");
+      expect(env.COINGECKO_API_KEY).toBe("abc123");
+      expect(env.HELIUS_API_KEY).toBe("abc123");
     }
     resetEnvCacheForTests();
   });

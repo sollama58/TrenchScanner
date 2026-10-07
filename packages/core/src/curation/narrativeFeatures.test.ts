@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   ALL_NARRATIVE_FEATURES,
-  NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
   narrativeFeatureValues,
   narrativeIsLateCopy,

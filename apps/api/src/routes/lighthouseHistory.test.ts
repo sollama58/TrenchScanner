@@ -64,6 +64,13 @@ describe.skipIf(!dbAvailable)("lighthouse history", () => {
           screenedWon2x: 10,
         },
         {
+          // 15 days and 3.5 hours back: outside a flat "7 days before" the 7-day window, inside
+          // the span before it (the window runs from its day's start through the current hour).
+          hour: new Date(Date.UTC(2023, 4, 30, 12)),
+          screenedCalls: 3,
+          screenedGraded: 1,
+        },
+        {
           hour: new Date(NOW.getTime() - 40 * DAY_MS),
           screenedCalls: 1000,
           screenedGraded: 500,
@@ -106,8 +113,9 @@ describe.skipIf(!dbAvailable)("lighthouse history", () => {
     expect(today.alerts).toMatchObject({ total: 3, graded: 2, won2x: 1 });
     expect(d.series[0]!.screened.calls).toBe(0);
     expect(d.totals.screened.calls).toBe(16);
-    // 10 days back is outside the 7-day window but inside the 7 days before it.
-    expect(d.previous?.screened.calls).toBe(100);
+    // 10 days back is outside the 7-day window but inside the span before it, which is as long
+    // as the window: 7 days plus today's hours (the row of 2023-05-30 12:00 is in it too).
+    expect(d.previous?.screened.calls).toBe(103);
     expect(d.exitPlan).toMatch(/2x/);
   });
 
@@ -139,6 +147,7 @@ describe.skipIf(!dbAvailable)("lighthouse history", () => {
     const d = res.json<LighthouseHistory>();
     expect(d.window).toMatchObject({ days: 30, bucket: "day", dimension: "category" });
     expect(d.coverage.oldestHour).not.toBeNull();
+    expect(d.coverage.summedAt).not.toBeNull();
     expect((await app.inject({ method: "GET", url: "/guest/lighthouse/history?days=12" })).statusCode).toBe(
       400,
     );

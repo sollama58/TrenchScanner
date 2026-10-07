@@ -102,6 +102,13 @@ export interface TokenLookupOptions {
    * blank (see GeckoTerminalClient). DexScreener itself ignores it.
    */
   priority?: boolean;
+  /**
+   * The mints asked for may well have no pair at all (a holder's other holdings: airdrops,
+   * NFTs, dead coins - see walletValuation). An all-empty answer to such a lookup is then not
+   * evidence DexScreener is blank, and never switches the process onto the fallback; while the
+   * fallback is on, the lookup still goes through it.
+   */
+  mayBeUnindexed?: boolean;
 }
 
 export class DexScreenerClient {
@@ -180,7 +187,7 @@ export class DexScreenerClient {
 
     const answered = new Set<string>();
     const results = await this.lookup(unique, concurrency, options, answered);
-    if (results.length > 0 || answered.size < BLANK_MIN_MINTS) return results;
+    if (results.length > 0 || answered.size < BLANK_MIN_MINTS || options.mayBeUnindexed) return results;
     this.blankUntil = Date.now() + BLANK_HOLD_MS;
     logger.warn("dexscreener answered a lookup with no pairs at all - using geckoterminal", {
       answered: answered.size,
