@@ -1118,6 +1118,75 @@ model TokenNarrative {
   @@index([checkedAt])
 }
 
+/// The Market Lighthouse's history: one row per UTC hour, written by the hourly rollup
+/// (apps/worker/src/jobs/lighthouseRollupJob.ts) and kept for good. The rows it is summed from -
+/// CandidateOutcome (CANDIDATE_OUTCOME_RETENTION_DAYS), TokenNarrative (the RPC-cache horizon) -
+/// are swept after weeks, so this is what the Lighthouse tab's trends over months read. Sums and
+/// counts only, never rates, so any span of hours adds up; a few hundred bytes a row.
+model LighthouseHour {
+  hour DateTime @id
+
+  /// Screened decision moments: the "event" CandidateOutcome rows anchored in the hour, graded the
+  /// way the stats route grades them (a 2x after the stop is a loss).
+  screenedCalls      Int   @default(0)
+  screenedGraded     Int   @default(0)
+  screenedWon2x      Int   @default(0)
+  screenedWon4x      Int   @default(0)
+  screenedWon10x     Int   @default(0)
+  /// Rows whose 10x verdict is in: the 10x rate's denominator.
+  screenedTenXGraded Int   @default(0)
+  /// Rows with a return under the exit plan, and their returns summed (percent of the stake).
+  screenedReturnN    Int   @default(0)
+  screenedReturnSum  Float @default(0)
+
+  /// TokenSage reads checked in the hour.
+  readsTotal            Int   @default(0)
+  readsDescribed        Int   @default(0)
+  readsDeep             Int   @default(0)
+  readsFailed           Int   @default(0)
+  referentConfidenceSum Float @default(0)
+  referentConfidenceN   Int   @default(0)
+  xFitSum               Float @default(0)
+  xFitN                 Int   @default(0)
+  copiesRecent          Int   @default(0)
+  copiesAnswered        Int   @default(0)
+  trendMatched          Int   @default(0)
+  trendAnswered         Int   @default(0)
+
+  /// The models' calls (CuratedAlert) made in the hour, and how they graded.
+  alerts          Int   @default(0)
+  alertsDescribed Int   @default(0)
+  alertsGraded    Int   @default(0)
+  alertsWon2x     Int   @default(0)
+  alertsWon4x     Int   @default(0)
+  alertsWon10x    Int   @default(0)
+  alertsReturnN   Int   @default(0)
+  alertsReturnSum Float @default(0)
+
+  computedAt DateTime @default(now())
+}
+
+/// The Lighthouse's label breakdowns per UTC day: how many coins TokenSage read under each
+/// narrative, flag, referent kind and so on, and how the models' calls on those coins graded.
+/// Same rollup and the same keep-for-good rule as LighthouseHour.
+model LighthouseDayLabel {
+  day       DateTime
+  /// "category" (the top-level narrative each coin is surest of, one per coin), "subcategory",
+  /// "flag", "referentKind", "referentSupport", "xVerdict", "pairKind", "copy", "news".
+  dimension String
+  label     String
+  /// Coins read under the label that day.
+  count     Int    @default(0)
+  /// Model calls on coins carrying the label, and how they graded.
+  alerts    Int    @default(0)
+  graded    Int    @default(0)
+  won2x     Int    @default(0)
+  won4x     Int    @default(0)
+  won10x    Int    @default(0)
+
+  @@id([day, dimension, label])
+}
+
 model MayhemModeCache {
   mintAddress String @id
 

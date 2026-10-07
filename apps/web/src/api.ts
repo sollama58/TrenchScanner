@@ -993,6 +993,88 @@ export interface Settings {
   };
 }
 
+/**
+ * GET /curated/lighthouse/history and /guest/lighthouse/history: the Lighthouse's kept-for-good
+ * hourly sums per hour, day or week. Sums and counts only; the tab computes every rate.
+ */
+export type LighthouseHistoryBucket = "hour" | "day" | "week";
+export type LighthouseDimension =
+  | "category"
+  | "subcategory"
+  | "flag"
+  | "referentKind"
+  | "referentSupport"
+  | "xVerdict"
+  | "pairKind"
+  | "copy"
+  | "news";
+export interface LighthouseSums {
+  screened: {
+    calls: number;
+    graded: number;
+    won2x: number;
+    won4x: number;
+    won10x: number;
+    tenXGraded: number;
+    returnN: number;
+    returnSum: number;
+  };
+  reads: {
+    total: number;
+    described: number;
+    deep: number;
+    failed: number;
+    referentConfidenceSum: number;
+    referentConfidenceN: number;
+    xFitSum: number;
+    xFitN: number;
+    copiesRecent: number;
+    copiesAnswered: number;
+    trendMatched: number;
+    trendAnswered: number;
+  };
+  alerts: {
+    total: number;
+    described: number;
+    graded: number;
+    won2x: number;
+    won4x: number;
+    won10x: number;
+    returnN: number;
+    returnSum: number;
+  };
+}
+export interface LighthouseLabelTally {
+  label: string;
+  count: number;
+  alerts: number;
+  graded: number;
+  won2x: number;
+  won4x: number;
+  won10x: number;
+}
+export interface LighthouseHistory {
+  window: {
+    days: number;
+    since: string | null;
+    bucket: LighthouseHistoryBucket;
+    dimension: LighthouseDimension;
+  };
+  coverage: { oldestHour: string | null; newestHour: string | null };
+  exitPlan: string;
+  totals: LighthouseSums;
+  /** The same span just before the window; null when the window is everything. */
+  previous: LighthouseSums | null;
+  series: ({ at: string } & LighthouseSums)[];
+  labels: {
+    dimension: LighthouseDimension;
+    bucket: LighthouseHistoryBucket;
+    /** The labels drawn as their own series; everything else is "other". */
+    top: string[];
+    buckets: { at: string; rows: LighthouseLabelTally[] }[];
+  };
+}
+
 /** GET /curated/lighthouse and /guest/lighthouse: what TokenSage sees across new coins, aggregates only. */
 export interface LighthouseCount {
   label: string;

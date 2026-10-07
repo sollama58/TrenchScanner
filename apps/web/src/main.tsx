@@ -4,6 +4,7 @@ import { App } from "./App";
 import {
   loadAdminTab,
   loadFiltersTab,
+  loadLighthouseTab,
   loadModelTab,
   loadSettingsTab,
   loadSignIn,
@@ -15,6 +16,7 @@ import "./styles.css";
 // index.html has already started this screen's API calls (window.__boot); start its code too.
 const tab = tabFromHash();
 if (tab === "model") void loadModelTab();
+else if (tab === "lighthouse") void loadLighthouseTab();
 else if (tab === "filters") void loadFiltersTab();
 else if (tab === "settings") void loadSettingsTab();
 else if (tab === "admin") void loadAdminTab();
@@ -35,6 +37,7 @@ createRoot(document.getElementById("root")!).render(
 // Once the first screen is up, fetch the other tabs' code in the background so switching is instant.
 const warm = () => {
   void loadModelTab();
+  void loadLighthouseTab();
   void loadFiltersTab();
   void loadSettingsTab();
   void loadSignIn();

@@ -17,8 +17,8 @@ import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
  * legend or a label beside the mark, never color alone.
  */
 
-const WINDOWS = [1, 7] as const;
-type Days = (typeof WINDOWS)[number];
+export const WINDOWS = [1, 7] as const;
+export type Days = (typeof WINDOWS)[number];
 
 /** Graded alerts below which a narrative's hit rate shows as early rather than as a verdict. */
 const MIN_GRADED = 5;
@@ -107,8 +107,8 @@ export function MarketLighthouseModal({
             <div className="lh-head-text">
               <h2 id="lh-title">Market Lighthouse</h2>
               <p className="muted small">
-                How the tokens that pass our pre-checks are doing, and what TokenSage sees across the new
-                coins the scanner reads.
+                At a glance: how the tokens that pass our pre-checks are doing, and what TokenSage sees across
+                new coins. The Lighthouse tab has the charts, breakdowns and months of history.
               </p>
             </div>
             <button className="ghost icon-btn" onClick={onClose} aria-label="Close">
@@ -129,13 +129,36 @@ export function MarketLighthouseModal({
             ))}
           </div>
         </header>
-        {open && <LighthouseBody base={base} days={days} target2xPct={target2xPct} />}
+        {open && <LighthouseBody base={base} days={days} target2xPct={target2xPct} compact />}
+        <p className="lh-more">
+          <a className="button" href="#lighthouse" onClick={onClose}>
+            <LighthouseIcon size={14} />
+            Open the Lighthouse tab
+          </a>
+          <span className="faint small">
+            charts per hour, day or week, breakdowns by narrative, CSV export
+          </span>
+        </p>
       </div>
     </dialog>
   );
 }
 
-function LighthouseBody({ base, days, target2xPct }: { base: string; days: Days; target2xPct: number }) {
+/**
+ * One window's answer. The Lighthouse tab's "right now" shows the whole of it; the Live tab's
+ * modal shows the compact form - the headline numbers only, with the tab a click away.
+ */
+export function LighthouseBody({
+  base,
+  days,
+  target2xPct,
+  compact = false,
+}: {
+  base: string;
+  days: Days;
+  target2xPct: number;
+  compact?: boolean;
+}) {
   const q = usePolling<MarketLighthouse>(path(base, days), 300_000);
   if (!q.data) {
     if (q.error) return <p className="error">Couldn&apos;t load the Lighthouse: {q.error.message}</p>;
@@ -154,7 +177,7 @@ function LighthouseBody({ base, days, target2xPct }: { base: string; days: Days;
   const quickOnly = d.reads.deep === 0;
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
-      <Screened s={d.screened} span={span} />
+      <Screened s={d.screened} span={span} compact={compact} />
       <h3 className="lh-part">
         What TokenSage sees
         <span className={`lh-pill ${d.tokenSage.on ? "on" : "off"}`}>
@@ -174,6 +197,8 @@ function LighthouseBody({ base, days, target2xPct }: { base: string; days: Days;
               : "TokenSage isn't reading coins right now, so there is nothing to show here. This part fills in as soon as it is switched on."}
           </p>
         </div>
+      ) : compact ? (
+        <TokenSageKpis d={d} span={span} quickOnly={quickOnly} />
       ) : (
         <TokenSageSections d={d} span={span} cls={cls} quickOnly={quickOnly} target2xPct={target2xPct} />
       )}
@@ -196,43 +221,7 @@ function TokenSageSections({
 }) {
   return (
     <>
-      {!d.tokenSage.on && (
-        <p className="notice">
-          TokenSage isn&apos;t reading new coins right now. These are the reads it stored before it went quiet
-          {d.reads.newestAt ? <> (newest {ago(d.reads.newestAt)})</> : null}.
-        </p>
-      )}
-
-      <section className="lh-kpis" aria-label="Headline numbers">
-        <Kpi
-          label="Coins read"
-          value={d.reads.described.toLocaleString()}
-          sub={
-            <>
-              last {span}
-              {d.reads.newestAt ? <> · newest {ago(d.reads.newestAt)}</> : null}
-            </>
-          }
-        />
-        <Kpi
-          label="Deep reads"
-          value={pct(share(d.reads.deep, d.reads.described))}
-          sub={
-            quickOnly ? "quick reads only for now" : `${d.reads.deep.toLocaleString()} with X and news checks`
-          }
-        />
-        <Kpi
-          label="Story confidence"
-          value={d.avgReferentConfidence === null ? "–" : pct(d.avgReferentConfidence * 100)}
-          sub="how sure TokenSage is what a coin is about"
-          meter={d.avgReferentConfidence}
-        />
-        <Kpi
-          label="Copycats"
-          value={pct(share(countOf(d.copies, "copies a recent coin"), sumOf(d.copies)))}
-          sub="copy a coin launched in the last 30 days"
-        />
-      </section>
+      <TokenSageKpis d={d} span={span} quickOnly={quickOnly} />
 
       <Section
         title="Narrative tide"
@@ -320,6 +309,50 @@ function TokenSageSections({
           </div>
         )}
       </Section>
+    </>
+  );
+}
+
+/** TokenSage's headline numbers for the window - the whole of the modal's TokenSage half. */
+function TokenSageKpis({ d, span, quickOnly }: { d: MarketLighthouse; span: string; quickOnly: boolean }) {
+  return (
+    <>
+      {!d.tokenSage.on && (
+        <p className="notice">
+          TokenSage isn&apos;t reading new coins right now. These are the reads it stored before it went quiet
+          {d.reads.newestAt ? <> (newest {ago(d.reads.newestAt)})</> : null}.
+        </p>
+      )}
+      <section className="lh-kpis" aria-label="Headline numbers">
+        <Kpi
+          label="Coins read"
+          value={d.reads.described.toLocaleString()}
+          sub={
+            <>
+              last {span}
+              {d.reads.newestAt ? <> · newest {ago(d.reads.newestAt)}</> : null}
+            </>
+          }
+        />
+        <Kpi
+          label="Deep reads"
+          value={pct(share(d.reads.deep, d.reads.described))}
+          sub={
+            quickOnly ? "quick reads only for now" : `${d.reads.deep.toLocaleString()} with X and news checks`
+          }
+        />
+        <Kpi
+          label="Story confidence"
+          value={d.avgReferentConfidence === null ? "–" : pct(d.avgReferentConfidence * 100)}
+          sub="how sure TokenSage is what a coin is about"
+          meter={d.avgReferentConfidence}
+        />
+        <Kpi
+          label="Copycats"
+          value={pct(share(countOf(d.copies, "copies a recent coin"), sumOf(d.copies)))}
+          sub="copy a coin launched in the last 30 days"
+        />
+      </section>
     </>
   );
 }
@@ -629,7 +662,7 @@ function screenedBucketLabel(iso: string, bucketHours: number) {
  * and the average return under the fixed exit plan, overall and per bucket. One axis per chart:
  * the rates share a 0-100% scale, the return gets its own chart around zero.
  */
-function Screened({ s, span }: { s: ScreenedData; span: string }) {
+function Screened({ s, span, compact = false }: { s: ScreenedData; span: string; compact?: boolean }) {
   const [hover, setHover] = useState<number | null>(null);
   const [explain, setExplain] = useState(false);
   const buckets = s.byBucket.filter((b) => b.graded > 0);
@@ -692,7 +725,7 @@ function Screened({ s, span }: { s: ScreenedData; span: string }) {
         </div>
       </div>
 
-      {buckets.length === 0 ? (
+      {compact ? null : buckets.length === 0 ? (
         <p className="muted small">No screened tokens have been graded in this window yet.</p>
       ) : (
         <div className="lh-screened-charts" onMouseLeave={() => setHover(null)}>

@@ -47,6 +47,10 @@ It is for scripts and cloud sessions that can reach the API but not the database
 curl -H "Authorization: Bearer $STATS_API_TOKEN" "$TRENCHSCANNER_API_URL/stats/hit-rates?days=7"
 ```
 
+### Market Lighthouse and its history
+
+The Live tab's **Lighthouse** button shows how every token that passed the pre-checks did (2x/4x/10x hit rates and the average return under the exit plan) and what TokenSage sees across new coins, over the last day or week. The **Lighthouse tab** keeps that history for good: the trainer worker's hourly `lighthouse-rollup` job sums the same figures into `LighthouseHour` (one row an hour) and `LighthouseDayLabel` (one row per narrative, flag, referent kind and so on per day), which the nightly cleanup never touches, so trends can be read over weeks and months after the rows they were summed from (CandidateOutcome, TokenNarrative) are swept. The first run backfills from the oldest rows still present; every run re-sums the trailing three days so late grades land. `GET /curated/lighthouse/history` and `GET /guest/lighthouse/history` (`days` 7/30/90/365/0, `bucket` hour/day/week, `dimension` for the breakdown) serve the sums per bucket; the tab computes every rate, lets a reader compose charts from any metrics or breakdowns, remembers the layout in the browser, and exports the window as CSV. Aggregates only, so guests read the same answer.
+
 ## Admin Panel
 
 A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; empty by default) sees an extra **Admin** tab in the dashboard, backed by `GET`/`POST /admin/*` on the API (every route 403s anyone else - see `apps/api/src/routes/admin.ts`). Admin status is config, not a DB column, so promoting/demoting an admin is a one-line env change rather than a manual DB write. It covers:
