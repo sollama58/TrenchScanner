@@ -206,7 +206,37 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
             <Kpi d={d} id="calls2x" label="2x rate, model calls" span={win.long} />
             <Kpi d={d} id="coinsRead" label="Coins TokenSage read" span={win.long} />
           </section>
+        </>
+      )}
 
+      <section className="panel lht-now">
+        <header className="section-head">
+          <div>
+            <span className="eyebrow">Right now</span>
+            <h2>The last {nowDays === 1 ? "24 hours" : "7 days"} in full</h2>
+            <p className="faint small">
+              Everything behind the headline numbers the Live tab&apos;s Lighthouse button shows.
+            </p>
+          </div>
+          <div className="segmented small" role="tablist" aria-label="Window">
+            {NOW_WINDOWS.map((w) => (
+              <button
+                key={w}
+                role="tab"
+                aria-selected={w === nowDays}
+                className={w === nowDays ? "on" : ""}
+                onClick={() => setNowDays(w)}
+              >
+                {w === 1 ? "24h" : "7d"}
+              </button>
+            ))}
+          </div>
+        </header>
+        <LighthouseBody base={api} days={nowDays} />
+      </section>
+
+      {d && (
+        <>
           <section className={`panel lht-charts${history.stale ? " stale" : ""}`} aria-busy={history.stale}>
             <header className="section-head">
               <div>
@@ -272,32 +302,6 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
           </section>
         </>
       )}
-
-      <section className="panel lht-now">
-        <header className="section-head">
-          <div>
-            <span className="eyebrow">Right now</span>
-            <h2>The last {nowDays === 1 ? "24 hours" : "7 days"} in full</h2>
-            <p className="faint small">
-              Everything behind the headline numbers the Live tab&apos;s Lighthouse button shows.
-            </p>
-          </div>
-          <div className="segmented small" role="tablist" aria-label="Window">
-            {NOW_WINDOWS.map((w) => (
-              <button
-                key={w}
-                role="tab"
-                aria-selected={w === nowDays}
-                className={w === nowDays ? "on" : ""}
-                onClick={() => setNowDays(w)}
-              >
-                {w === 1 ? "24h" : "7d"}
-              </button>
-            ))}
-          </div>
-        </header>
-        <LighthouseBody base={api} days={nowDays} />
-      </section>
     </div>
   );
 }
