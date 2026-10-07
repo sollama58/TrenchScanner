@@ -22,6 +22,10 @@
   --brand-ink: #b9a6ff;
   --series-1: #3987e5;
   --series-2: #d95926;
+  /* Slots 3-5 of the categorical order, for charts with more than two series (Market Lighthouse). */
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
   --good: #0ca30c;
   --good-ink: #4ade80;
   --good-wash: rgba(34, 197, 94, 0.1);
@@ -60,6 +64,9 @@
     --brand-ink: #6d4ae6;
     --series-1: #2a78d6;
     --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
     --good-ink: #067a2a;
     --good-wash: rgba(12, 163, 12, 0.08);
     --bad-ink: #b42626;
@@ -88,6 +95,9 @@
   --brand-ink: #6d4ae6;
   --series-1: #2a78d6;
   --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
   --good-ink: #067a2a;
   --good-wash: rgba(12, 163, 12, 0.08);
   --bad-ink: #b42626;
@@ -4074,4 +4084,609 @@ button.small-btn {
 }
 .check-list .check {
   margin: 0;
+}
+
+/* ---------- Market Lighthouse (Models tab strip + modal) ----------
+   Narratives take the categorical slots --series-1..5 in fixed order, "other" a neutral gray. */
+.lh-s1 {
+  --lh-c: var(--series-1);
+}
+.lh-s2 {
+  --lh-c: var(--series-2);
+}
+.lh-s3 {
+  --lh-c: var(--series-3);
+}
+.lh-s4 {
+  --lh-c: var(--series-4);
+}
+.lh-s5 {
+  --lh-c: var(--series-5);
+}
+.lh-other {
+  --lh-c: var(--axis);
+}
+.lh-strip {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 18px;
+  text-align: left;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--brand-a) 28%, var(--border));
+  background:
+    linear-gradient(100deg, color-mix(in srgb, var(--brand-a) 14%, transparent), transparent 55%),
+    var(--surface);
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+.lh-strip:hover {
+  border-color: color-mix(in srgb, var(--brand-a) 55%, var(--border));
+}
+.lh-strip:focus-visible {
+  outline: 2px solid var(--brand-ink);
+  outline-offset: 2px;
+}
+.lh-strip::before {
+  /* the beam */
+  content: "";
+  position: absolute;
+  left: 28px;
+  top: 50%;
+  width: 260px;
+  height: 120px;
+  transform: translateY(-50%);
+  background: conic-gradient(
+    from 62deg at 0 50%,
+    transparent 0deg,
+    color-mix(in srgb, var(--brand-ink) 16%, transparent) 14deg,
+    transparent 56deg
+  );
+  pointer-events: none;
+  animation: lh-sweep 6s ease-in-out infinite alternate;
+}
+@keyframes lh-sweep {
+  from {
+    transform: translateY(-50%) rotate(-10deg);
+  }
+  to {
+    transform: translateY(-50%) rotate(10deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lh-strip::before {
+    animation: none;
+  }
+}
+.lh-strip-icon,
+.lh-head-icon {
+  position: relative;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--brand-a) 80%, transparent);
+}
+.lh-strip-text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.lh-strip-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.lh-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--surface-3);
+  color: var(--ink-2);
+}
+.lh-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.lh-pill.on {
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+.lh-pill.on .lh-pill-dot {
+  background: var(--good-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--good-ink) 25%, transparent);
+}
+.lh-spark {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 34px;
+  width: 140px;
+  flex-shrink: 0;
+}
+.lh-spark span {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--series-1) 70%, transparent);
+}
+.lh-strip-cta {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+
+.lh-modal {
+  width: min(860px, calc(100vw - 32px));
+}
+.lh-body {
+  padding-top: 0;
+}
+.lh-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -24px 14px;
+  padding: 20px 24px 12px;
+  overflow: hidden;
+  background: var(--surface-solid);
+  border-bottom: 1px solid var(--border);
+}
+.lh-beam {
+  position: absolute;
+  inset: -60% auto auto -10%;
+  width: 520px;
+  height: 260px;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--brand-a) 22%, transparent), transparent);
+  pointer-events: none;
+}
+.lh-head-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.lh-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.lh-head-text h2 {
+  margin: 0 0 2px;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+.lh-head-text p {
+  margin: 0;
+}
+.lh-window {
+  position: relative;
+  margin-top: 12px;
+}
+.lh-content {
+  gap: 18px;
+}
+.lh-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.lh-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  min-width: 0;
+}
+.lh-kpi-label {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.lh-kpi-value {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.lh-meter {
+  height: 4px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.lh-meter span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--series-1);
+}
+.lh-section h3 {
+  margin: 0 0 2px;
+  font-size: 15px;
+}
+.lh-section > p {
+  margin: 0 0 10px;
+}
+.lh-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.lh-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--lh-c);
+  flex-shrink: 0;
+}
+/* .about-body ul lays lists out as a grid; these are inline legends. */
+.about-body .lh-legend,
+.about-body .lh-split-legend,
+.about-body .lh-donut-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.about-body .lh-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-bottom: 8px;
+}
+.lh-legend li,
+.lh-split-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lh-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-height: 22px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-bottom: 6px;
+}
+.lh-readout strong {
+  color: var(--ink);
+}
+.lh-readout-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.lh-cols {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 150px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--axis);
+  background: repeating-linear-gradient(
+    to top,
+    transparent 0,
+    transparent calc(25% - 1px),
+    var(--grid) calc(25% - 1px),
+    var(--grid) 25%
+  );
+}
+.lh-col {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+}
+.lh-col.is-hover {
+  background: var(--highlight);
+}
+.lh-col-stack {
+  width: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 1px;
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
+  min-height: 0;
+}
+.lh-col-stack > span {
+  display: block;
+  min-height: 1px;
+  background: var(--lh-c);
+}
+.lh-cols:hover .lh-col:not(.is-hover) .lh-col-stack {
+  opacity: 0.6;
+}
+.lh-axis {
+  display: flex;
+  gap: 2px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.lh-axis span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: visible;
+}
+.lh-donut {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.lh-donut svg {
+  width: 150px;
+  height: 150px;
+  flex-shrink: 0;
+}
+.lh-donut-track {
+  fill: none;
+  stroke: var(--surface-3);
+  stroke-width: 14;
+}
+.lh-donut-seg {
+  fill: none;
+  stroke: var(--lh-c);
+  stroke-width: 14;
+  transition: opacity 0.15s;
+  cursor: pointer;
+}
+.lh-donut-seg.dim {
+  opacity: 0.35;
+}
+.lh-donut-value {
+  fill: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+.lh-donut-sub {
+  fill: var(--muted);
+  font-size: 7.5px;
+}
+.about-body .lh-donut-list {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+.lh-donut-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.lh-donut-list li.is-hover {
+  background: var(--surface-2);
+}
+.lh-donut-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lh-hits {
+  display: grid;
+  gap: 8px;
+}
+.lh-hit {
+  display: grid;
+  grid-template-columns: minmax(90px, 160px) 1fr 44px 96px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.lh-hit-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lh-hit-track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+.lh-hit-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 5px;
+  background: var(--series-1);
+}
+.lh-hit.early .lh-hit-fill {
+  opacity: 0.4;
+}
+.lh-hit-goal {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: var(--lh-target);
+  border-left: 2px dashed var(--ink-2);
+}
+.lh-hit-value {
+  text-align: right;
+  font-weight: 600;
+}
+.lh-hit-state {
+  white-space: nowrap;
+}
+.lh-foot {
+  margin: 10px 0 0;
+}
+.lh-warnbars .hbar-fill {
+  background: var(--series-2);
+}
+.lh-splits {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+.lh-split-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.lh-split-bar {
+  display: flex;
+  gap: 2px;
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.lh-split-bar > span {
+  background: var(--lh-c);
+  min-width: 2px;
+}
+.lh-split-bar.empty {
+  align-items: center;
+  height: auto;
+  min-height: 14px;
+  padding: 2px 8px;
+  background: repeating-linear-gradient(135deg, var(--surface-2) 0 6px, var(--surface-3) 6px 12px);
+}
+.about-body .lh-split-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.lh-mini {
+  margin-top: 16px;
+}
+.lh-mini h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.lh-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 28px 8px 12px;
+}
+.lh-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface-2);
+  margin-bottom: 8px;
+}
+.lh-empty h3 {
+  margin: 6px 0 4px;
+}
+.lh-empty p {
+  max-width: 420px;
+}
+@media (max-width: 640px) {
+  .lh-strip {
+    flex-wrap: wrap;
+    padding: 12px 14px;
+  }
+  .lh-spark {
+    display: none;
+  }
+  .lh-strip-cta {
+    margin-left: auto;
+  }
+  .lh-head {
+    margin: 0 -16px 12px;
+    padding: 16px 16px 10px;
+  }
+  .lh-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .lh-kpi-value {
+    font-size: 20px;
+  }
+  .lh-grid,
+  .lh-splits {
+    grid-template-columns: 1fr;
+  }
+  .lh-cols {
+    height: 120px;
+  }
+  .lh-donut svg {
+    width: 120px;
+    height: 120px;
+  }
+  .lh-head-text p {
+    display: none;
+  }
+  .lh-head-icon {
+    width: 34px;
+    height: 34px;
+  }
+  .lh-window {
+    margin-top: 8px;
+  }
+  .lh-hit {
+    grid-template-columns: 1fr 40px auto;
+    grid-template-areas:
+      "label label label"
+      "track value state";
+    gap: 2px 8px;
+  }
+  .lh-hit-label {
+    grid-area: label;
+  }
+  .lh-hit-track {
+    grid-area: track;
+  }
+  .lh-hit-value {
+    grid-area: value;
+  }
+  .lh-hit-state {
+    grid-area: state;
+    font-size: 11.5px;
+  }
 }
