@@ -161,6 +161,6 @@ export async function registerGuestRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    return opts.reports.lighthouse(parsed.data.days);
+    return opts.reports.lighthouse(opts.env, parsed.data.days);
   });
 }

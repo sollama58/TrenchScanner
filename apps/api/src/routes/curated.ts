@@ -671,7 +671,7 @@ export async function registerCuratedRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    return opts.reports.lighthouse(parsed.data.days);
+    return opts.reports.lighthouse(opts.env, parsed.data.days);
   });
 
   // What the dashboard asks for first (index.html's boot list): the learning panel, and the Models

@@ -3,6 +3,7 @@ import type { MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
 import { AboutModal } from "../components/AboutModal";
+import { LighthouseButton } from "../components/MarketLighthouse";
 import { ChartIcon, ClockIcon, InfoIcon, LockIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
@@ -81,6 +82,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
               <ChartIcon size={14} />
               Stats
             </button>
+            <LighthouseButton base="/guest" target2xPct={TARGETS.hitRate2xPct} />
             <button type="button" className="ghost stats-btn" disabled title={lockTitle}>
               <PaletteIcon size={14} />
               Customize

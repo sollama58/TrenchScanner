@@ -14,7 +14,6 @@ import {
 } from "../api";
 import { HBarChart, MarkerBars, Skeleton, TargetBars, TrendLines } from "../components/Charts";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
-import { MarketLighthouseStrip } from "../components/MarketLighthouse";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
 import { prefetch } from "../cache";
@@ -177,8 +176,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
           </div>
         </div>
       </section>
-
-      <MarketLighthouseStrip base={api} target2xPct={t.hitRate2xPct} />
 
       <BaselinePanel board={lb} base={base ?? null} learning={data.learning} days={days} />
 

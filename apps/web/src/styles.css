@@ -4106,65 +4106,6 @@ button.small-btn {
 .lh-other {
   --lh-c: var(--axis);
 }
-.lh-strip {
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  padding: 14px 18px;
-  text-align: left;
-  color: var(--ink);
-  font: inherit;
-  cursor: pointer;
-  border: 1px solid color-mix(in srgb, var(--brand-a) 28%, var(--border));
-  background:
-    linear-gradient(100deg, color-mix(in srgb, var(--brand-a) 14%, transparent), transparent 55%),
-    var(--surface);
-  transition:
-    border-color 0.15s,
-    transform 0.15s;
-}
-.lh-strip:hover {
-  border-color: color-mix(in srgb, var(--brand-a) 55%, var(--border));
-}
-.lh-strip:focus-visible {
-  outline: 2px solid var(--brand-ink);
-  outline-offset: 2px;
-}
-.lh-strip::before {
-  /* the beam */
-  content: "";
-  position: absolute;
-  left: 28px;
-  top: 50%;
-  width: 260px;
-  height: 120px;
-  transform: translateY(-50%);
-  background: conic-gradient(
-    from 62deg at 0 50%,
-    transparent 0deg,
-    color-mix(in srgb, var(--brand-ink) 16%, transparent) 14deg,
-    transparent 56deg
-  );
-  pointer-events: none;
-  animation: lh-sweep 6s ease-in-out infinite alternate;
-}
-@keyframes lh-sweep {
-  from {
-    transform: translateY(-50%) rotate(-10deg);
-  }
-  to {
-    transform: translateY(-50%) rotate(10deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lh-strip::before {
-    animation: none;
-  }
-}
-.lh-strip-icon,
 .lh-head-icon {
   position: relative;
   flex-shrink: 0;
@@ -4176,23 +4117,6 @@ button.small-btn {
   color: #fff;
   background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
   box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--brand-a) 80%, transparent);
-}
-.lh-strip-text {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-.lh-strip-title {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: -0.01em;
 }
 .lh-pill {
   display: inline-flex;
@@ -4219,30 +4143,6 @@ button.small-btn {
   background: var(--good-ink);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--good-ink) 25%, transparent);
 }
-.lh-spark {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 34px;
-  width: 140px;
-  flex-shrink: 0;
-}
-.lh-spark span {
-  flex: 1;
-  border-radius: 2px 2px 0 0;
-  background: color-mix(in srgb, var(--series-1) 70%, transparent);
-}
-.lh-strip-cta {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  color: var(--brand-ink);
-  font-weight: 600;
-}
-
 .lh-modal {
   width: min(860px, calc(100vw - 32px));
 }
@@ -4627,16 +4527,6 @@ button.small-btn {
   max-width: 420px;
 }
 @media (max-width: 640px) {
-  .lh-strip {
-    flex-wrap: wrap;
-    padding: 12px 14px;
-  }
-  .lh-spark {
-    display: none;
-  }
-  .lh-strip-cta {
-    margin-left: auto;
-  }
   .lh-head {
     margin: 0 -16px 12px;
     padding: 16px 16px 10px;
@@ -4688,5 +4578,189 @@ button.small-btn {
   .lh-hit-state {
     grid-area: state;
     font-size: 11.5px;
+  }
+}
+
+/* ---------- Market Lighthouse: screened tokens ---------- */
+.lh-btn .icon {
+  color: var(--brand-ink);
+}
+.lh-part {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 17px;
+}
+.lh-screened-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.lh-screened-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.lh-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  padding: 4px 10px;
+  color: var(--brand-ink);
+}
+.lh-checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 22px;
+  margin: 4px 0 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--info-wash);
+  border: 1px solid color-mix(in srgb, var(--series-1) 25%, transparent);
+}
+.lh-checks h4 {
+  margin: 0 0 2px;
+  font-size: 13.5px;
+}
+.lh-checks p {
+  margin: 0 0 6px;
+}
+.about-body .lh-checks ul {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 6px;
+  padding-left: 18px;
+  list-style: disc;
+  font-size: 13px;
+}
+.lh-checks-foot {
+  grid-column: 1 / -1;
+}
+.lh-tier-kpis {
+  margin-bottom: 14px;
+}
+.lh-tier-kpis .lh-kpi-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lh-up {
+  color: var(--good-ink);
+}
+.lh-down {
+  color: var(--bad-ink);
+}
+.lh-rate-chart {
+  display: flex;
+  gap: 6px;
+}
+.lh-yaxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 40px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+}
+.lh-groups,
+.lh-ret {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  height: 140px;
+  border-bottom: 1px solid var(--axis);
+  background: repeating-linear-gradient(
+    to top,
+    transparent 0,
+    transparent calc(50% - 1px),
+    var(--grid) calc(50% - 1px),
+    var(--grid) 50%
+  );
+}
+.lh-group {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 2px;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+.lh-group.is-hover,
+.lh-ret-col.is-hover {
+  background: var(--highlight);
+}
+.lh-gbar {
+  flex: 1;
+  max-width: 14px;
+  border-radius: 4px 4px 0 0;
+  background: var(--lh-c);
+}
+.lh-subchart {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.lh-ret {
+  height: 100px;
+  border-bottom: none;
+  position: relative;
+}
+.lh-ret::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--axis);
+}
+.lh-ret-col {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.lh-ret-bar {
+  position: absolute;
+  left: 20%;
+  right: 20%;
+  max-width: 28px;
+  margin: 0 auto;
+}
+.lh-ret-bar.up {
+  bottom: 50%;
+  border-radius: 4px 4px 0 0;
+  background: var(--series-1);
+}
+.lh-ret-bar.down {
+  top: 50%;
+  border-radius: 0 0 4px 4px;
+  background: var(--series-2);
+}
+.lh-axis-inset {
+  padding-left: 46px;
+  gap: 6px;
+}
+@media (max-width: 640px) {
+  .lh-checks {
+    grid-template-columns: 1fr;
+  }
+  .lh-groups,
+  .lh-ret {
+    gap: 3px;
+  }
+  .lh-group {
+    gap: 1px;
+    padding: 0;
   }
 }

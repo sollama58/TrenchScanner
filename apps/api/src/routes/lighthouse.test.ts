@@ -21,6 +21,7 @@ const MINTS = [MINT_DOG, MINT_DOG2, MINT_AI, MINT_BAD];
 
 async function cleanup() {
   await prisma.curatedAlert.deleteMany({ where: { source: TAG } });
+  await prisma.candidateOutcome.deleteMany({ where: { token: { mintAddress: { in: MINTS } } } });
   await prisma.token.deleteMany({ where: { mintAddress: { in: MINTS } } });
   await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { in: MINTS } } });
 }
@@ -45,7 +46,7 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
           status: "complete",
           categories: [
             { label: "meme", confidence: 0.4 },
-            { label: "animal/dog", confidence: 0.9 },
+            { label: "lhanimal/dog", confidence: 0.9 },
           ],
           referentLabel: "Secret Referent",
           referentKind: "animal",
@@ -61,7 +62,7 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
           mintAddress: MINT_DOG2,
           depth: "basic",
           status: "complete",
-          categories: [{ label: "animal/dog", confidence: 0.7 }],
+          categories: [{ label: "lhanimal/dog", confidence: 0.7 }],
           referentKind: "animal",
           copiesRecent: false,
         },
@@ -70,10 +71,48 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
           depth: "basic",
           status: "partial",
           // A malformed confidence must not break the query.
-          categories: [{ label: "tech/ai", confidence: "high" }],
+          categories: [{ label: "lhtech/ai", confidence: "high" }],
           referentConfidence: 0.5,
         },
         { mintAddress: MINT_BAD, depth: "basic", status: "failed", failReason: "not_pumpfun: secret reason" },
+      ],
+    });
+    // Decision moments for screened tokens: one clean 4x, one 2x after the stop (a loss), one
+    // dud, one still open; and an hourly row, which isn't a decision moment.
+    const at = new Date(Date.now() - 2 * 3_600_000);
+    const row = {
+      anchorAt: at,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 50_000,
+      features: {},
+      nextCheckAt: at,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+      sampleKind: "event",
+    };
+    await prisma.candidateOutcome.createMany({
+      data: [
+        {
+          ...row,
+          tokenId: tokens[0]!.id,
+          hit2xIn1h: true,
+          hit4xIn1h: true,
+          hit10xIn1h: false,
+          simReturnPct: 150,
+        },
+        {
+          ...row,
+          tokenId: tokens[1]!.id,
+          hit2xIn1h: true,
+          disqualified: true,
+          hit4xIn1h: false,
+          simReturnPct: -50,
+        },
+        { ...row, tokenId: tokens[2]!.id, hit2xIn1h: false, hit4xIn1h: false, simReturnPct: -20 },
+        { ...row, tokenId: tokens[3]!.id },
+        { ...row, tokenId: tokens[3]!.id, sampleKind: "hourly", hit2xIn1h: true, simReturnPct: 900 },
       ],
     });
     const base = { source: TAG, confidence: 80, anchorPriceUsd: 1, anchorMcapUsd: 50_000 };
@@ -99,25 +138,43 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
       expect(res.body).not.toContain(secret);
     }
     const d = res.json<MarketLighthouse>();
-    expect(d.reads).toMatchObject({ total: 4, described: 3, deep: 1, quick: 2, failed: 1 });
+    // Other suites share the database, so this test's rows are checked as a floor, and its
+    // narratives carry labels no other suite uses.
+    expect(d.reads.total).toBeGreaterThanOrEqual(4);
+    expect(d.reads.failed).toBeGreaterThanOrEqual(1);
+    expect(d.reads.deep).toBeGreaterThanOrEqual(1);
+    expect(d.reads.described).toBe(d.reads.total - d.reads.failed);
     expect(d.window.bucketHours).toBe(1);
     expect(d.tide.buckets.length).toBeGreaterThanOrEqual(24);
-    const animal = d.tide.series.find((s) => s.label === "animal");
-    const tech = d.tide.series.find((s) => s.label === "tech");
-    expect(animal?.values.reduce((a, b) => a + b, 0)).toBe(2);
-    expect(tech?.values.reduce((a, b) => a + b, 0)).toBe(1);
-    expect(d.tide.series[0]!.label).toBe("animal");
-    expect(d.categories.find((c) => c.label === "animal/dog")?.count).toBe(2);
-    expect(d.xVerdicts).toEqual([{ label: "about_this_coin", count: 1 }]);
-    expect(d.copies).toEqual(
-      expect.arrayContaining([
-        { label: "copies a recent coin", count: 1 },
-        { label: "original", count: 1 },
-      ]),
+    const sum = (label: string) =>
+      d.tide.series.find((s) => s.label === label)?.values.reduce((a, b) => a + b, 0);
+    expect(sum("lhanimal")).toBe(2);
+    expect(sum("lhtech")).toBe(1);
+    expect(d.categories.find((c) => c.label === "lhanimal/dog")?.count).toBe(2);
+    expect(d.xVerdicts.find((v) => v.label === "about_this_coin")?.count).toBeGreaterThanOrEqual(1);
+    expect(d.copies.map((c) => c.label)).toEqual(
+      expect.arrayContaining(["copies a recent coin", "original"]),
     );
-    expect(d.news).toEqual([{ label: "in the news", count: 1 }]);
-    const animalCalls = d.outcomes.byCategory.find((t) => t.label === "animal");
+    expect(d.news.find((n) => n.label === "in the news")?.count).toBeGreaterThanOrEqual(1);
+    const animalCalls = d.outcomes.byCategory.find((t) => t.label === "lhanimal");
     expect(animalCalls).toMatchObject({ alerts: 2, graded: 2, won2x: 1 });
+  });
+
+  it("grades every screened decision moment and says what the pre-checks are", async () => {
+    const d = (await app.inject({ method: "GET", url: "/guest/lighthouse?days=1" })).json<MarketLighthouse>();
+    const s = d.screened;
+    // Other suites may bank event rows too, so check this test's rows are counted, not exact totals.
+    expect(s.graded).toBeGreaterThanOrEqual(3);
+    expect(s.bucketHours).toBe(3);
+    expect(s.checks).toMatchObject({ freshWalletMaxPct: 70, emptyWalletMaxPct: 90 });
+    expect(s.exitPlan).toMatch(/2x/);
+    const mine = await prisma.candidateOutcome.findMany({
+      where: { token: { mintAddress: { in: MINTS } }, sampleKind: "event" },
+    });
+    expect(mine).toHaveLength(4);
+    const bucket = s.byBucket.find((b) => b.graded >= 3);
+    expect(bucket).toBeDefined();
+    expect(s.hit2xPct).not.toBeNull();
   });
 
   it("serves the 7-day window and rejects others", async () => {

@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { LighthouseCount, LighthouseTally, MarketLighthouse } from "../api";
 import { usePolling } from "../hooks";
-import { ago, pct } from "../format";
+import { ago, pct, signedPct, usd } from "../format";
 import { HBarChart, Skeleton } from "./Charts";
-import { ArrowRightIcon, CloseIcon, LighthouseIcon } from "./Icons";
+import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
 
 /**
- * The Market Lighthouse: what TokenSage sees across the new coins the scanner reads - which
- * narratives are rising, where their stories come from, what gets flagged - and how the models'
- * calls did by narrative. Aggregates only (see the API's marketLighthouse.ts), so guests read
+ * The Market Lighthouse, beside Stats on the Live tab: how every token that passed the pre-checks
+ * did, then what TokenSage sees across the new coins the scanner reads - which narratives are
+ * rising, where their stories come from, what gets flagged - and how the models' calls did by
+ * narrative. Aggregates only (see the API's marketLighthouse.ts), so guests read
  * the same answer as subscribers without seeing any live coin early.
  *
  * Colors: the tide and the mix share one mapping, the categorical slots --series-1..5 in fixed
@@ -38,82 +39,22 @@ function seriesClassFor(order: string[]) {
 }
 
 /**
- * The strip near the top of the Models tab: today's reads and the leading narrative, opening the
- * full Lighthouse. It reads the same 1-day answer the modal opens on.
+ * The Live tab's Lighthouse button, beside Stats, and the modal it opens. Guests get it too: the
+ * answer is aggregates only, so it gives nothing away ahead of their delayed feed.
  */
-export function MarketLighthouseStrip({ base, target2xPct }: { base: string; target2xPct: number }) {
+export function LighthouseButton({ base, target2xPct }: { base: string; target2xPct: number }) {
   const [open, setOpen] = useState(false);
-  const q = usePolling<MarketLighthouse>(path(base, 1), 300_000);
-  const d = q.data;
-  const totals = d
-    ? d.tide.series.map((s) => ({ label: s.label, n: s.values.reduce((a, b) => a + b, 0) }))
-    : [];
-  const described = totals.reduce((s, t) => s + t.n, 0);
-  const lead = totals.filter((t) => t.label !== "other").sort((a, b) => b.n - a.n)[0];
-  const spark = d
-    ? d.tide.buckets.map((_, i) => d.tide.series.reduce((s, x) => s + (x.values[i] ?? 0), 0))
-    : [];
-  const sparkMax = Math.max(1, ...spark);
-
   return (
     <>
       <button
         type="button"
-        className="panel lh-strip"
+        className="ghost stats-btn lh-btn"
         onClick={() => setOpen(true)}
         aria-haspopup="dialog"
-        aria-label="Open the Market Lighthouse"
+        title="Market Lighthouse: how screened tokens are doing and what TokenSage sees across new coins"
       >
-        <span className="lh-strip-icon" aria-hidden>
-          <LighthouseIcon size={20} />
-        </span>
-        <span className="lh-strip-text">
-          <span className="lh-strip-title">
-            Market Lighthouse
-            {d && (
-              <span className={`lh-pill ${d.tokenSage.on ? "on" : "off"}`}>
-                <span className="lh-pill-dot" aria-hidden />
-                {d.tokenSage.on ? "TokenSage live" : "TokenSage off"}
-              </span>
-            )}
-          </span>
-          <span className="muted small">
-            {!d ? (
-              q.error ? (
-                "What TokenSage sees across new coins"
-              ) : (
-                "Reading the market…"
-              )
-            ) : d.reads.total === 0 ? (
-              d.tokenSage.on ? (
-                "TokenSage is on; its first reads of the day will show here."
-              ) : (
-                "What TokenSage sees across new coins, once it is switched on."
-              )
-            ) : (
-              <>
-                <strong className="num">{d.reads.described.toLocaleString()}</strong> coins read in the last
-                24h
-                {lead && described > 0 ? (
-                  <>
-                    {" "}
-                    · leading narrative <strong>{words(lead.label)}</strong> ({pct(share(lead.n, described))})
-                  </>
-                ) : null}
-              </>
-            )}
-          </span>
-        </span>
-        {spark.length > 1 && spark.some((v) => v > 0) && (
-          <span className="lh-spark" aria-hidden>
-            {spark.map((v, i) => (
-              <span key={i} style={{ height: `${Math.max(4, (v / sparkMax) * 100)}%` }} />
-            ))}
-          </span>
-        )}
-        <span className="lh-strip-cta">
-          Open <ArrowRightIcon size={14} />
-        </span>
+        <LighthouseIcon size={14} />
+        Lighthouse
       </button>
       <MarketLighthouseModal
         open={open}
@@ -166,8 +107,8 @@ export function MarketLighthouseModal({
             <div className="lh-head-text">
               <h2 id="lh-title">Market Lighthouse</h2>
               <p className="muted small">
-                What TokenSage sees across the new coins the scanner reads, and which narratives the
-                models&apos; calls win on.
+                How the tokens that pass our pre-checks are doing, and what TokenSage sees across the new
+                coins the scanner reads.
               </p>
             </div>
             <button className="ghost icon-btn" onClick={onClose} aria-label="Close">
@@ -210,25 +151,51 @@ function LighthouseBody({ base, days, target2xPct }: { base: string; days: Days;
   const cls = seriesClassFor(order);
   const span = days === 1 ? "24 hours" : "7 days";
 
-  if (d.reads.total === 0) {
-    return (
-      <div className="lh-empty">
-        <span className="lh-empty-icon" aria-hidden>
-          <LighthouseIcon size={34} />
-        </span>
-        <h3>{d.tokenSage.on ? "No reads yet in this window" : "The light is off"}</h3>
-        <p className="muted">
-          {d.tokenSage.on
-            ? `TokenSage is on, but nothing was read in the last ${span}. New coins show here as the scanner asks about them.`
-            : "TokenSage isn't reading coins right now, so there is nothing to show. The Lighthouse fills in as soon as it is switched on."}
-        </p>
-      </div>
-    );
-  }
-
   const quickOnly = d.reads.deep === 0;
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
+      <Screened s={d.screened} span={span} />
+      <h3 className="lh-part">
+        What TokenSage sees
+        <span className={`lh-pill ${d.tokenSage.on ? "on" : "off"}`}>
+          <span className="lh-pill-dot" aria-hidden />
+          {d.tokenSage.on ? "live" : "off"}
+        </span>
+      </h3>
+      {d.reads.total === 0 ? (
+        <div className="lh-empty">
+          <span className="lh-empty-icon" aria-hidden>
+            <LighthouseIcon size={34} />
+          </span>
+          <h3>{d.tokenSage.on ? "No reads yet in this window" : "The light is off"}</h3>
+          <p className="muted">
+            {d.tokenSage.on
+              ? `TokenSage is on, but nothing was read in the last ${span}. New coins show here as the scanner asks about them.`
+              : "TokenSage isn't reading coins right now, so there is nothing to show here. This part fills in as soon as it is switched on."}
+          </p>
+        </div>
+      ) : (
+        <TokenSageSections d={d} span={span} cls={cls} quickOnly={quickOnly} target2xPct={target2xPct} />
+      )}
+    </div>
+  );
+}
+
+function TokenSageSections({
+  d,
+  span,
+  cls,
+  quickOnly,
+  target2xPct,
+}: {
+  d: MarketLighthouse;
+  span: string;
+  cls: (l: string) => string;
+  quickOnly: boolean;
+  target2xPct: number;
+}) {
+  return (
+    <>
       {!d.tokenSage.on && (
         <p className="notice">
           TokenSage isn&apos;t reading new coins right now. These are the reads it stored before it went quiet
@@ -353,7 +320,7 @@ function LighthouseBody({ base, days, target2xPct }: { base: string; days: Days;
           </div>
         )}
       </Section>
-    </div>
+    </>
   );
 }
 
@@ -637,6 +604,231 @@ function HitRates({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ---------- Screened tokens ----------
+
+type ScreenedData = MarketLighthouse["screened"];
+
+const TIERS = [
+  { key: "hit2xPct", label: "2x within 15 min", short: "2x", cls: "lh-s1" },
+  { key: "hit4xPct", label: "4x within 30 min", short: "4x", cls: "lh-s2" },
+  { key: "hit10xPct", label: "10x within 1 hr", short: "10x", cls: "lh-s3" },
+] as const;
+
+function screenedBucketLabel(iso: string, bucketHours: number) {
+  const t = new Date(iso);
+  if (bucketHours >= 24) return t.toLocaleDateString([], { weekday: "short", day: "numeric" });
+  return t.toLocaleTimeString([], { hour: "numeric" });
+}
+
+/**
+ * How every token that cleared the pre-checks did from its decision moment: hit rates per tier
+ * and the average return under the fixed exit plan, overall and per bucket. One axis per chart:
+ * the rates share a 0-100% scale, the return gets its own chart around zero.
+ */
+function Screened({ s, span }: { s: ScreenedData; span: string }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const [explain, setExplain] = useState(false);
+  const buckets = s.byBucket.filter((b) => b.graded > 0);
+  const per = s.bucketHours >= 24 ? "day" : `${s.bucketHours} hours`;
+  const rateMax = Math.max(
+    10,
+    ...buckets.flatMap((b) => [b.hit2xPct ?? 0, b.hit4xPct ?? 0, b.hit10xPct ?? 0]),
+  );
+  const top = Math.ceil(rateMax / 10) * 10;
+  const retAbs = Math.max(5, ...buckets.map((b) => Math.abs(b.avgReturnPct ?? 0)));
+  const latest = buckets.length - 1;
+  const shown = hover !== null && hover <= latest ? hover : latest;
+  const focus = buckets[shown];
+  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh or ${s.checks.emptyWalletMaxPct}% empty top-10 wallets) and looks ready to decide on.`;
+
+  return (
+    <section className="lh-section lh-screened">
+      <div className="lh-screened-head">
+        <h3>How screened tokens did</h3>
+        <button
+          type="button"
+          className="ghost lh-info"
+          aria-expanded={explain}
+          aria-controls="lh-checks"
+          title={summary}
+          onClick={() => setExplain((o) => !o)}
+        >
+          <InfoIcon size={14} />
+          {explain ? "Hide the pre-checks" : "What are the pre-checks?"}
+        </button>
+      </div>
+      <p className="faint small">
+        Every token that passed our pre-checks in the last {span}, graded from the price when it first looked
+        ready. This is the whole field the models pick from, not their calls.
+      </p>
+      {explain && <PreChecks s={s} />}
+
+      <div className="lh-kpis lh-tier-kpis">
+        {TIERS.map((t) => (
+          <div key={t.key} className="lh-kpi">
+            <span className="lh-kpi-label">
+              <span className={`lh-swatch ${t.cls}`} /> Hit {t.label}
+            </span>
+            <span className="lh-kpi-value num">{pct(s[t.key], 1)}</span>
+            <span className="muted small">
+              {t.key === "hit10xPct"
+                ? `${s.tenXGraded.toLocaleString()} settled`
+                : `${s.graded.toLocaleString()} graded`}
+            </span>
+          </div>
+        ))}
+        <div className="lh-kpi">
+          <span className="lh-kpi-label">Average return</span>
+          <span className={`lh-kpi-value num ${retTone(s.avgReturnPct)}`}>
+            {signedPct(s.avgReturnPct, 1)}
+          </span>
+          <span className="muted small" title={`Exit plan: ${s.exitPlan}`}>
+            on the exit plan · {s.returnGraded.toLocaleString()} graded
+          </span>
+        </div>
+      </div>
+
+      {buckets.length === 0 ? (
+        <p className="muted small">No screened tokens have been graded in this window yet.</p>
+      ) : (
+        <div className="lh-screened-charts" onMouseLeave={() => setHover(null)}>
+          <ul className="lh-legend">
+            {TIERS.map((t) => (
+              <li key={t.key}>
+                <span className={`lh-swatch ${t.cls}`} />
+                {t.short} rate
+              </li>
+            ))}
+          </ul>
+          {focus && (
+            <div className="lh-readout" aria-live="polite">
+              <strong>{screenedBucketLabel(focus.at, s.bucketHours)}</strong>
+              <span className="num">{focus.graded.toLocaleString()} graded</span>
+              {TIERS.map((t) => (
+                <span key={t.key} className="lh-readout-item">
+                  <span className={`lh-swatch ${t.cls}`} />
+                  {t.short} <span className="num">{pct(focus[t.key], 1)}</span>
+                </span>
+              ))}
+              <span className="lh-readout-item">
+                avg return <span className="num">{signedPct(focus.avgReturnPct, 1)}</span>
+              </span>
+            </div>
+          )}
+          <div className="lh-rate-chart">
+            <span className="lh-yaxis" aria-hidden>
+              <span>{top}%</span>
+              <span>{top / 2}%</span>
+              <span>0%</span>
+            </span>
+            <div
+              className="lh-groups"
+              role="img"
+              aria-label={`Hit rates of screened tokens per ${per}: 2x ${pct(s.hit2xPct, 1)}, 4x ${pct(s.hit4xPct, 1)}, 10x ${pct(s.hit10xPct, 1)} overall`}
+            >
+              {buckets.map((b, i) => (
+                <div
+                  key={b.at}
+                  className={`lh-group${hover === i ? " is-hover" : ""}`}
+                  onMouseEnter={() => setHover(i)}
+                  onClick={() => setHover(i)}
+                >
+                  {TIERS.map((t) => (
+                    <span
+                      key={t.key}
+                      className={`lh-gbar ${t.cls}`}
+                      style={{ height: `${Math.max(0.5, ((b[t.key] ?? 0) / top) * 100)}%` }}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+          <h4 className="lh-subchart">Average return per {per}</h4>
+          <div className="lh-rate-chart">
+            <span className="lh-yaxis" aria-hidden>
+              <span>+{Math.round(retAbs)}%</span>
+              <span>0%</span>
+              <span>−{Math.round(retAbs)}%</span>
+            </span>
+            <div
+              className="lh-ret"
+              role="img"
+              aria-label={`Average return of screened tokens per ${per}, ${signedPct(s.avgReturnPct, 1)} overall`}
+            >
+              {buckets.map((b, i) => {
+                const v = b.avgReturnPct ?? 0;
+                const h = (Math.abs(v) / retAbs) * 50;
+                return (
+                  <div
+                    key={b.at}
+                    className={`lh-ret-col${hover === i ? " is-hover" : ""}`}
+                    onMouseEnter={() => setHover(i)}
+                    onClick={() => setHover(i)}
+                  >
+                    {b.avgReturnPct !== null && (
+                      <span
+                        className={`lh-ret-bar ${v >= 0 ? "up" : "down"}`}
+                        style={{ height: `${Math.max(0.5, h)}%` }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="lh-axis lh-axis-inset" aria-hidden>
+            {buckets.map((b, i) => (
+              <span key={b.at}>
+                {i % Math.ceil(buckets.length / 7) === 0 ? screenedBucketLabel(b.at, s.bucketHours) : ""}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const retTone = (v: number | null) => (v === null ? "" : v >= 0 ? "lh-up" : "lh-down");
+
+/** The pre-checks in words, from the numbers the API actually applies. */
+function PreChecks({ s }: { s: ScreenedData }) {
+  const c = s.checks;
+  return (
+    <div id="lh-checks" className="lh-checks">
+      <div>
+        <h4>1. Safety screen</h4>
+        <p className="muted small">Every token, before anyone sees it. It can&apos;t be switched off.</p>
+        <ul>
+          <li>Mint and freeze authority renounced, so supply can&apos;t be inflated or holders frozen.</li>
+          <li>Liquidity burned or locked on its own pool, so it can&apos;t be pulled.</li>
+          <li>Not a Pump.fun Mayhem Mode token, whose early trading is run by bots.</li>
+          <li>No more than {c.freshWalletMaxPct}% of the top 10 holders on wallets under a day old.</li>
+          <li>No more than {c.emptyWalletMaxPct}% of the top 10 holders on otherwise empty wallets.</li>
+        </ul>
+        <p className="faint small">Anything that can&apos;t be checked fails.</p>
+      </div>
+      <div>
+        <h4>2. Ready to decide on</h4>
+        <p className="muted small">The moment a token is graded from, once per window.</p>
+        <ul>
+          <li>
+            Market cap between {usd(c.mcapMinUsd)} and {usd(c.mcapMaxUsd)}.
+          </li>
+          <li>Under {Math.round(c.maxAgeMinutes / 60)} hours old.</li>
+          <li>At least {c.minBuySharePct}% of the last hour&apos;s trades are buys.</li>
+          <li>Price not falling over the last 5 minutes.</li>
+          <li>Holder wallet checks finished.</li>
+        </ul>
+      </div>
+      <p className="faint small lh-checks-foot">
+        Average return is what each token would have made on our fixed exit plan. {s.exitPlan}
+      </p>
     </div>
   );
 }

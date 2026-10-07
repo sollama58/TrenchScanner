@@ -1028,6 +1028,35 @@ export interface MarketLighthouse {
   pairKinds: LighthouseCount[];
   copies: LighthouseCount[];
   news: LighthouseCount[];
+  /** Every token that passed the pre-checks, graded from its decision moment. */
+  screened: {
+    bucketHours: number;
+    calls: number;
+    graded: number;
+    hit2xPct: number | null;
+    hit4xPct: number | null;
+    hit10xPct: number | null;
+    tenXGraded: number;
+    avgReturnPct: number | null;
+    returnGraded: number;
+    exitPlan: string;
+    byBucket: {
+      at: string;
+      graded: number;
+      hit2xPct: number | null;
+      hit4xPct: number | null;
+      hit10xPct: number | null;
+      avgReturnPct: number | null;
+    }[];
+    checks: {
+      freshWalletMaxPct: number;
+      emptyWalletMaxPct: number;
+      mcapMinUsd: number;
+      mcapMaxUsd: number;
+      maxAgeMinutes: number;
+      minBuySharePct: number;
+    };
+  };
   outcomes: {
     alerts: number;
     described: number;
