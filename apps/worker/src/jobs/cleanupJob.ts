@@ -319,6 +319,22 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   const batch = { ...DEFAULT_BATCH, ...opts };
   logger.info("cleanup job starting");
 
+  // Each sweep below runs on its own: one that fails (a statement_timeout on the weekly snapshot
+  // walk, a lock it could not get) is logged and the rest still run, because every stage guards
+  // its own references and none depends on another having finished. The run is still reported
+  // failed at the end, so the heartbeat shows it and the scheduler's retry re-runs it - and a
+  // stage that already did its work is a no-op the second time.
+  const failedStages: Record<string, string> = {};
+  const stage = async <T>(name: string, fallback: T, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (err) {
+      failedStages[name] = err instanceof Error ? err.message : String(err);
+      logger.error("cleanup stage failed - continuing with the rest", { stage: name, error: String(err) });
+      return fallback;
+    }
+  };
+
   // Every big sweep below deletes in bounded batches rather than one statement. On the 256MB
   // production database a single DELETE over weeks of backlog (the worker was down for most of
   // September, so the first sweep after it came back is exactly that) holds one transaction open
@@ -344,12 +360,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         bucketSeconds: env.SNAPSHOT_DOWNSAMPLE_BUCKET_MINUTES * 60,
       }
     : null;
-  const snapshotSweep = await deleteExpiredSnapshots(
-    snapshotCutoff,
-    batch,
-    fullWalk,
-    untrackedCutoff,
-    downsample,
+  const snapshotSweep = await stage("snapshots", { expired: 0, untracked: 0, downsampled: 0 }, () =>
+    deleteExpiredSnapshots(snapshotCutoff, batch, fullWalk, untrackedCutoff, downsample),
   );
   const deletedSnapshots = { count: snapshotSweep.expired };
 
@@ -363,8 +375,10 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // Match's tokenId index; candidateOutcomeId has none. A no-op once every alert has its copy.
   // Ahead of the age sweep below too: with MATCH_OUTCOME_RETENTION_DAYS set past the general
   // horizon, that sweep would otherwise take the anchors before this copy saw them.
-  if (env.MATCH_OUTCOME_RETENTION_DAYS > 0) {
-    await prisma.$executeRaw`
+  const matchCopiesLanded =
+    env.MATCH_OUTCOME_RETENTION_DAYS > 0 &&
+    (await stage("matchOutcomeCopies", false, async () => {
+      await prisma.$executeRaw`
       UPDATE "Match" m
       SET "peak24hReturnPct" = o."peak24hReturnPct"
       FROM "CandidateOutcome" o
@@ -372,11 +386,11 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         AND o."peak24hReturnPct" IS NOT NULL
         AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
         AND m."peak24hReturnPct" IS NULL`;
-    // The verdict too, for an alert whose copy never landed (a crash between the old split writes,
-    // or an anchor attached after its window closed). The watcher repairs curated alerts this
-    // way every sweep; match alerts had no such pass, and once the anchor below was gone the
-    // alert counted as pending in every hit rate forever.
-    await prisma.$executeRaw`
+      // The verdict too, for an alert whose copy never landed (a crash between the old split writes,
+      // or an anchor attached after its window closed). The watcher repairs curated alerts this
+      // way every sweep; match alerts had no such pass, and once the anchor below was gone the
+      // alert counted as pending in every hit rate forever.
+      await prisma.$executeRaw`
       UPDATE "Match" m
       SET "hit2xIn1h" = o."hit2xIn1h",
           "hit4xIn1h" = o."hit4xIn1h",
@@ -389,14 +403,22 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         AND o."finalizedAt" IS NOT NULL
         AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
         AND (m."hit2xIn1h" IS NULL OR (m."hit10xIn1h" IS NULL AND o."hit10xIn1h" IS NOT NULL))`;
-  }
+      return true;
+    }));
+  // Only once the copies above landed (or were not needed): the age sweep would otherwise take
+  // match anchors whose verdict never reached their Match.
   const deletedCandidateOutcomes = {
-    count: await deleteInBatches(
-      `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
-      "CandidateOutcome",
-      [candidateOutcomeCutoff],
-      batch,
-    ),
+    count:
+      env.MATCH_OUTCOME_RETENTION_DAYS > 0 && !matchCopiesLanded
+        ? 0
+        : await stage("candidateOutcomes", 0, () =>
+            deleteInBatches(
+              `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
+              "CandidateOutcome",
+              [candidateOutcomeCutoff],
+              batch,
+            ),
+          ),
   };
 
   // Graded filter-alert anchors go much sooner (user decision 2026-10-05: 7 days after their watch
@@ -405,17 +427,19 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // nothing but Match references; an ungraded one stays, as it is what tells the hit-rate report
   // that its alerts will never be graded.
   let deletedMatchOutcomes = 0;
-  if (env.MATCH_OUTCOME_RETENTION_DAYS > 0) {
-    deletedMatchOutcomes = await deleteInBatches(
-      `SELECT o."id" FROM "CandidateOutcome" o
+  if (matchCopiesLanded) {
+    deletedMatchOutcomes = await stage("matchOutcomes", 0, () =>
+      deleteInBatches(
+        `SELECT o."id" FROM "CandidateOutcome" o
        WHERE o."sampleKind" = 'match' AND o."anchorAt" < $1
          AND o."finalizedAt" IS NOT NULL AND o."finalized24hAt" < $1
          AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."candidateOutcomeId" = o."id")
          AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."candidateOutcomeId" = o."id")
          AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."candidateOutcomeId" = o."id")`,
-      "CandidateOutcome",
-      [matchOutcomeCutoff],
-      batch,
+        "CandidateOutcome",
+        [matchOutcomeCutoff],
+        batch,
+      ),
     );
   }
 
@@ -423,11 +447,13 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // set it grades against: unlike CuratedAlert rows these are evaluation data, not a public
   // track record, and a shadow row whose outcome link has been pruned can't be graded anyway.
   const deletedShadowEmissions = {
-    count: await deleteInBatches(
-      `SELECT "id" FROM "CuratedShadowEmission" WHERE "createdAt" < $1`,
-      "CuratedShadowEmission",
-      [candidateOutcomeCutoff],
-      batch,
+    count: await stage("shadowEmissions", 0, () =>
+      deleteInBatches(
+        `SELECT "id" FROM "CuratedShadowEmission" WHERE "createdAt" < $1`,
+        "CuratedShadowEmission",
+        [candidateOutcomeCutoff],
+        batch,
+      ),
     ),
   };
 
@@ -435,21 +461,27 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // day), so keep the recent history (which the learning panel and any postmortem want) and drop
   // the deep past. The active model is never touched here, whatever its age.
   const curatorModelCutoff = new Date(startedAt - CURATOR_MODEL_RETENTION_DAYS * DAY_MS);
-  const deletedCuratorModels = await prisma.curatorModel.deleteMany({
-    where: { status: { not: "active" }, createdAt: { lt: curatorModelCutoff } },
-  });
+  const deletedCuratorModels = await stage("curatorModels", { count: 0 }, () =>
+    prisma.curatorModel.deleteMany({
+      where: { status: { not: "active" }, createdAt: { lt: curatorModelCutoff } },
+    }),
+  );
   // A contest run stores a model per contestant, and a boosted forest's params run to a few
   // hundred KB - at several runs a day, 90 days of weights would be most of a gigabyte nobody
   // reads. A retired row's exam (evalMetrics) is the history; its weights stop mattering a week
   // after it retires, so they are dropped to a stub that keeps the kind.
   const paramsCutoff = new Date(startedAt - CURATOR_MODEL_PARAMS_RETENTION_DAYS * DAY_MS);
-  const strippedCuratorModels = await prisma.$executeRaw`
+  const strippedCuratorModels = await stage(
+    "curatorModelParams",
+    0,
+    () => prisma.$executeRaw`
     UPDATE "CuratorModel"
     SET "params" = jsonb_build_object('kind', "kind", 'pruned', true)
     WHERE "status" = 'retired'
       AND "retiredAt" < ${paramsCutoff}
       AND NOT ("params" ? 'pruned')
-  `;
+  `,
+  );
 
   // Tokens older than STALE_TOKEN_RETENTION_DAYS that nothing references any more. Every relation
   // on Token is onDelete: Cascade, so each NOT EXISTS below is a record this sweep would otherwise
@@ -465,7 +497,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   //  - AiReview: the reviewer's ledger has no horizon of its own, and a "no buy" on a token no
   //    curator alerted is held by nothing else once the token's outcome row ages out.
   const tokenCutoff = new Date(startedAt - env.STALE_TOKEN_RETENTION_DAYS * DAY_MS);
-  const deletedTokens = { count: await deleteStaleTokens(tokenCutoff, batch) };
+  const deletedTokens = { count: await stage("staleTokens", 0, () => deleteStaleTokens(tokenCutoff, batch)) };
 
   /**
    * Mobile Connect leaves two kinds of debris.
@@ -478,13 +510,18 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
    *
    * Revoked devices are the smaller kind, kept a month first - see above.
    */
+  const none = { count: 0 };
   const [deletedLinkCodes, deletedRevokedDevices, deletedNonces, deletedFilterBaselines] = await Promise.all([
-    prisma.mobileLinkCode.deleteMany({
-      where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
-    }),
-    prisma.linkedDevice.deleteMany({
-      where: { revokedAt: { lt: new Date(startedAt - REVOKED_DEVICE_RETENTION_DAYS * DAY_MS) } },
-    }),
+    stage("linkCodes", none, () =>
+      prisma.mobileLinkCode.deleteMany({
+        where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
+      }),
+    ),
+    stage("revokedDevices", none, () =>
+      prisma.linkedDevice.deleteMany({
+        where: { revokedAt: { lt: new Date(startedAt - REVOKED_DEVICE_RETENTION_DAYS * DAY_MS) } },
+      }),
+    ),
     // Sign-in nonces, which had no sweep at all. GET /auth/nonce is unauthenticated and writes a
     // row per call - every sign-in, every abandoned wallet-connect, and every bot that sends a
     // syntactically valid address - and they expired logically after five minutes but physically
@@ -492,25 +529,25 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     // same 256MB instance that holds the feed. Safe on sight for the same reason a spent link
     // code is: findValidNonce refuses anything past expiresAt, so a row this removes could not
     // have been used anyway. An hour of slack keeps it clear of nonces still in flight.
-    prisma.authNonce.deleteMany({
-      where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
-    }),
+    stage("nonces", none, () =>
+      prisma.authNonce.deleteMany({
+        where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
+      }),
+    ),
     // What a filter already matched when it was armed only counts for the alert cooldown, so a
     // day is plenty (ALERT_COOLDOWN_HOURS is 12).
-    prisma.filterBaseline.deleteMany({
-      where: { createdAt: { lt: new Date(startedAt - DAY_MS) } },
-    }),
+    stage("filterBaselines", none, () =>
+      prisma.filterBaseline.deleteMany({
+        where: { createdAt: { lt: new Date(startedAt - DAY_MS) } },
+      }),
+    ),
   ]);
 
   // One row per distinct wallet/mint ever looked up, so these can be large; same batching.
   const rpcCacheCutoff = new Date(startedAt - RPC_CACHE_RETENTION_DAYS * DAY_MS);
   const sweepCache = async (table: string, key: string, cutoff: Date = rpcCacheCutoff) => ({
-    count: await deleteInBatches(
-      `SELECT "${key}" FROM "${table}" WHERE "checkedAt" < $1`,
-      table,
-      [cutoff],
-      batch,
-      key,
+    count: await stage(table, 0, () =>
+      deleteInBatches(`SELECT "${key}" FROM "${table}" WHERE "checkedAt" < $1`, table, [cutoff], batch, key),
     ),
   });
   // Sequential on purpose: five concurrent sweeps would be five long-running deleters at once.
@@ -536,11 +573,18 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // TokenSage narratives (tokensage/prefetch.ts): kept as long as the RPC caches, past the
   // models' training window, so new inputs can be derived from them later.
   const deletedNarratives = await sweepCache("TokenNarrative", "mintAddress");
+  // Nightly, only the few days that newly crossed the line: re-reading every older row for a NULL
+  // this already set would be most of the statement's work. The weekly full walk covers the rest.
   const docCutoff = new Date(startedAt - NARRATIVE_DOC_RETENTION_DAYS * DAY_MS);
-  const strippedNarrativeDocs = await prisma.$executeRaw`
+  const docSince = fullWalk ? new Date(0) : new Date(docCutoff.getTime() - 3 * DAY_MS);
+  const strippedNarrativeDocs = await stage(
+    "narrativeDocs",
+    0,
+    () => prisma.$executeRaw`
     UPDATE "TokenNarrative" SET "analysis" = NULL
-    WHERE "checkedAt" < ${docCutoff} AND "analysis" IS NOT NULL
-  `;
+    WHERE "checkedAt" >= ${docSince} AND "checkedAt" < ${docCutoff} AND "analysis" IS NOT NULL
+  `,
+  );
 
   // Also the run's heartbeat meta, so GET /health/worker shows what the last sweep deleted - the
   // one view of it that needs no log access.
@@ -567,6 +611,15 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedNarratives: deletedNarratives.count,
     strippedNarrativeDocs,
   };
+  const failed = Object.keys(failedStages);
+  if (failed.length > 0) {
+    logger.error("cleanup job finished with failed stages", {
+      durationMs: Date.now() - startedAt,
+      failedStages,
+      ...counts,
+    });
+    throw new Error(`cleanup: ${failed.length} stage(s) failed: ${failed.join(", ")}`);
+  }
   logger.info("cleanup job complete", { durationMs: Date.now() - startedAt, ...counts });
   return counts;
 }

@@ -55,6 +55,9 @@ export interface RugProfileResolution {
   };
 }
 
+/** Added to the awaited lookups' deadline for the requests already in flight when it passes. */
+const AWAIT_GRACE_MS = 2_000;
+
 /** The background refresh of stale answers still in flight, if any - see resolveRugProfiles. */
 let backgroundRefresh: Promise<void> | null = null;
 
@@ -63,12 +66,16 @@ export async function settleRugCheckRefresh(): Promise<void> {
   await backgroundRefresh;
 }
 
+/** How long the scan waits on RugCheck for mints with no usable report - see resolveRugProfiles. */
+export const DEFAULT_AWAIT_DEADLINE_MS = 10_000;
+
 /** Looks `mints` up and caches every real answer ("found" or "absent", never a failure). */
 async function fetchAndCache(
   mints: string[],
   rugCheck: RugCheckClient,
+  opts: { deadlineMs?: number; sink?: Map<string, RugCheckProfileResult> } = {},
 ): Promise<Map<string, RugCheckProfileResult>> {
-  const results = await rugCheck.getProfileResults(mints);
+  const results = await rugCheck.getProfileResults(mints, 5, opts);
   const writes: { mintAddress: string; profile: RugCheckProfile | null }[] = [];
   for (const mint of mints) {
     const result = results.get(mint);
@@ -123,7 +130,7 @@ export async function resolveRugProfiles(
   ttlMinutes: number,
   /** Most network lookups this call makes - see the budget note below. */
   maxLookups: number = Infinity,
-  opts: { refreshStaleInBackground?: boolean } = {},
+  opts: { refreshStaleInBackground?: boolean; awaitDeadlineMs?: number } = {},
 ): Promise<RugProfileResolution> {
   const unique = [...new Set(mintAddresses)];
   const profiles = new Map<string, RugCheckProfile>();
@@ -210,16 +217,53 @@ export async function resolveRugProfiles(
     // cycle, and piling another batch on top would only queue behind it at RugCheck.
     if (backgroundRefresh) background = [];
   }
+  // The awaited lookups are the one stage of the cycle with no clock of its own: with RugCheck
+  // accepting connections but stalling, 150 mints at 5 a time and ~20s each is ten minutes of
+  // held alerts, under the scan's own deadline. So the wait is bounded: past it, whatever has
+  // answered is used, the rest count as failed this cycle (the screen fails closed on a missing
+  // report, exactly as for a lookup error), and the lookups still in flight finish behind the
+  // cycle and land in the cache for the next one.
   let failed = 0;
+  let timedOut = 0;
   if (awaited.length > 0) {
-    const results = await fetchAndCache(awaited, rugCheck);
+    const deadlineMs = opts.awaitDeadlineMs ?? DEFAULT_AWAIT_DEADLINE_MS;
+    const results = new Map<string, RugCheckProfileResult>();
+    const fetching = fetchAndCache(awaited, rugCheck, { deadlineMs, sink: results });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<boolean>((resolve) => {
+      // The client stops starting lookups at the deadline; the grace is for the ones in flight.
+      timer = setTimeout(() => resolve(true), deadlineMs + AWAIT_GRACE_MS);
+    });
+    const late = await Promise.race([
+      fetching.then((answered) => {
+        // In time: the full answer (a client without the sink hands it back only here).
+        for (const [m, r] of answered) results.set(m, r);
+        return false;
+      }),
+      expired,
+    ]);
+    clearTimeout(timer);
+    if (late) {
+      void fetching.catch((err: unknown) =>
+        logger.warn("rugcheck lookups failed after the cycle stopped waiting", { error: String(err) }),
+      );
+    }
     for (const mint of awaited) {
       const result = results.get(mint);
       if (result?.status === "found") profiles.set(mint, result.profile);
       else if (result?.status === "absent") absent.add(mint);
       // "failed", or no entry at all. Left uncached so the next cycle retries immediately.
-      else failed += 1;
+      else {
+        failed += 1;
+        if (result === undefined) timedOut += 1;
+      }
     }
+    if (late)
+      logger.warn("rugcheck lookups outran the cycle's wait", {
+        awaited: awaited.length,
+        timedOut,
+        deadlineMs,
+      });
   }
 
   // Started only once the awaited lookups are done, so they don't share RugCheck's rate with it.
@@ -239,6 +283,7 @@ export async function resolveRugProfiles(
     cached: hit.size,
     fetched: awaited.length - failed,
     failed,
+    ...(timedOut > 0 ? { timedOut } : {}),
     reused,
     ...(background.length > 0 ? { refreshing: background.length } : {}),
   };

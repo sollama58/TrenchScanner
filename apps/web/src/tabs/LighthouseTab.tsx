@@ -326,8 +326,11 @@ function Kpi({ d, id, label, span }: { d: LighthouseHistory; id: MetricId; label
   );
 }
 
-const historyPath = (api: string, view: View, dimension?: LighthouseDimension) =>
-  `${api}/lighthouse/history?days=${view.days}&bucket=${view.bucket}${dimension ? `&dimension=${dimension}` : ""}`;
+// The dimension is always spelled out, so the tab's own request, a category breakdown's and the
+// boot prefetch (index.html, routes.ts) share one cache entry instead of fetching the same answer
+// under two keys.
+const historyPath = (api: string, view: View, dimension: LighthouseDimension = "category") =>
+  `${api}/lighthouse/history?days=${view.days}&bucket=${view.bucket}&dimension=${dimension}`;
 
 function ChartPanel({
   panel,

@@ -44,12 +44,17 @@
                 ? ["/curated/models?days=30"]
                 : h === "admin"
                   ? []
-                  : [
-                      "/matches?page=1&includeCurated=saved",
-                      "/matches/stats?hours=24",
-                      "/curated/stats",
-                      "/curated/models?days=30",
-                    ],
+                  : h === "lighthouse"
+                    ? [
+                        "/curated/lighthouse/history?days=30&bucket=day&dimension=category",
+                        "/curated/models?days=30",
+                      ]
+                    : [
+                        "/matches?page=1&includeCurated=saved",
+                        "/matches/stats?hours=24",
+                        "/curated/stats",
+                        "/curated/models?days=30",
+                      ],
         );
         var boot = (window.__boot = {});
         if (!window.fetch) return;

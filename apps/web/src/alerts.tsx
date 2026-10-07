@@ -3,7 +3,7 @@ import { put, type AlertPrefs, type Card, type MatchPage, type Settings } from "
 import { cachedGet, peek } from "./cache";
 import { useNudgeStream } from "./hooks";
 import { playAlertSound, unlockAudio } from "./alertSounds";
-import { usd } from "./format";
+import { tokenThumb, usd } from "./format";
 import { adoptAppearance, appearanceVersion } from "./appearance";
 
 /**
@@ -323,7 +323,11 @@ export function AlertNotifier() {
           } else {
             for (const c of toAnnounce) {
               const d = describe(c);
-              void showNotification(d.title, d.body, c.token.imageUrl ?? undefined, cardKey(c));
+              // The same gate as the card's avatar: https only, and the thumbnail, not the original.
+              const icon = c.token.imageUrl?.startsWith("https://")
+                ? tokenThumb(c.token.imageUrl, 128)
+                : undefined;
+              void showNotification(d.title, d.body, icon, cardKey(c));
             }
           }
         }

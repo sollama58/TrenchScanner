@@ -237,6 +237,53 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     await settleRugCheckRefresh();
   });
 
+  it("stops waiting at the deadline: answered mints are used, the rest fail closed this cycle", async () => {
+    const quick = mint("quick");
+    const slow = mint("slow");
+    const queued = mint("queued");
+    let release!: () => void;
+    const stalled = new Promise<void>((resolve) => (release = resolve));
+    // A client that honours the sink and the deadline the way the real one does: "quick" answers
+    // at once, "slow" is in flight past the deadline, "queued" is still queued when it passes.
+    const client = {
+      async getProfileResults(
+        mints: string[],
+        _concurrency: number | undefined,
+        opts: { deadlineMs?: number; sink?: Map<string, RugCheckProfileResult> } = {},
+      ) {
+        const results = new Map<string, RugCheckProfileResult>();
+        const deadline = Date.now() + (opts.deadlineMs ?? Infinity);
+        for (const m of mints) {
+          let result: RugCheckProfileResult;
+          if (m === quick) result = { status: "found", profile: profile(m, 5) };
+          else if (m === slow) {
+            await stalled;
+            result = { status: "found", profile: profile(m, 7) };
+          } else
+            result =
+              Date.now() >= deadline ? { status: "failed" } : { status: "found", profile: profile(m, 9) };
+          results.set(m, result);
+          opts.sink?.set(m, result);
+        }
+        return results;
+      },
+    } as unknown as RugCheckClient;
+
+    const started = Date.now();
+    const out = await resolveRugProfiles([quick, slow, queued], client, 5, Infinity, { awaitDeadlineMs: 50 });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(out.profiles.has(quick)).toBe(true);
+    expect(out.profiles.has(slow)).toBe(false);
+    expect(out.absent.has(slow)).toBe(false);
+    expect(out.stats).toMatchObject({ requested: 3, fetched: 1, failed: 2, timedOut: 2 });
+
+    // The lookup in flight finishes behind the cycle and lands in the cache for the next one.
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    const cached = await prisma.rugCheckCache.findUnique({ where: { mintAddress: slow } });
+    expect(cached?.profile).toMatchObject({ holderCount: 7 });
+  });
+
   it("makes no request at all for an empty candidate list", async () => {
     const { client, calls } = fakeClient({});
     const result = await resolveRugProfiles([], client, 5);

@@ -4,8 +4,11 @@ import { z } from "zod";
 import { Prisma, prisma } from "../db.js";
 import type { Env } from "../config/env.js";
 import { s3PutObject, type S3Config } from "../storage/s3.js";
+import { createLogger } from "../logger.js";
 import { liveCallRecords, loadCurrentLanes } from "./laneStore.js";
 import type { CallRecord } from "./leaderboard.js";
+
+const logger = createLogger("model-backup");
 import { COMBINER_MODEL_KINDS } from "./agreement.js";
 import { firstNonFinite } from "./runGuard.js";
 
@@ -42,7 +45,7 @@ const RECORD_WINDOW_DAYS = 30;
  * thousandfold, so an uncapped gunzip of a crafted file could ask for tens of gigabytes and take
  * the API process down with it. A real backup is a few MB unzipped.
  */
-const MAX_DECODED_BYTES = 512 * 1024 * 1024;
+const MAX_DECODED_BYTES = 128 * 1024 * 1024;
 
 /**
  * Every write that replaces the active models (a training run storing its results, a restore)
@@ -157,9 +160,12 @@ export async function captureModelSnapshot(
   const lanes = snapshot.lanes.filter((l) => (seen.has(l.slot) ? false : (seen.add(l.slot), true)));
   const slots = [...new Set(snapshot.models.flatMap((m) => (m.contestant ? [m.contestant] : [])))];
   const since = new Date(now.getTime() - RECORD_WINDOW_DAYS * 86_400_000);
-  const records = await liveCallRecords(slots, since, await loadCurrentLanes()).catch(
-    () => new Map<string, CallRecord>(),
-  );
+  // A backup without its live records is still worth taking, but an empty record must not pass
+  // for "no calls": say so in the log.
+  const records = await liveCallRecords(slots, since, await loadCurrentLanes()).catch((err: unknown) => {
+    logger.warn("model backup: live call records unavailable, shipping none", { slots, error: String(err) });
+    return new Map<string, CallRecord>();
+  });
 
   const body: Omit<ModelBackupPayload, "integrity"> = {
     format: MODEL_BACKUP_FORMAT,

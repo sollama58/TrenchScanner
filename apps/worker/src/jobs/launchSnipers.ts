@@ -135,13 +135,19 @@ export async function resolveLaunchSnipers(
       const r = results.get(mint);
       if (r?.status === "found") {
         const prev = entries.get(mint);
+        // A re-read that found more buyers makes the old holding count (over the shorter list)
+        // stale: unknown until the refresh below reads the new list.
+        const sameBuyers =
+          prev !== undefined &&
+          prev.buyers.length === r.buyers.length &&
+          prev.buyers.every((b, i) => b.tokenAccount === r.buyers[i]?.tokenAccount);
         remember(mint, {
           buyers: r.buyers,
           complete: r.complete,
           readAt: now,
           rereads: prev ? prev.rereads + 1 : 0,
-          holding: prev?.holding ?? null,
-          holdingAt: prev?.holdingAt ?? 0,
+          holding: sameBuyers ? prev.holding : null,
+          holdingAt: sameBuyers ? prev.holdingAt : 0,
         });
         fresh.add(mint);
       } else if (r?.status !== "unsupported") {
@@ -160,7 +166,8 @@ export async function resolveLaunchSnipers(
     if (!e || e.buyers.length === 0) continue;
     const maxAge = g.contender ? opts.contenderRefreshMs : opts.refreshMs;
     if (!fresh.has(g.mintAddress) && e.holding !== null && now - e.holdingAt < maxAge) continue;
-    if (accounts + e.buyers.length > opts.maxRefreshAccounts) break;
+    // Past the cap this group waits for the next call; a smaller one behind it may still fit.
+    if (accounts + e.buyers.length > opts.maxRefreshAccounts) continue;
     accounts += e.buyers.length;
     refresh.push(g.mintAddress);
   }

@@ -255,7 +255,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     // Model alerts in the window with what TokenSage says about their coin now. Same bound and
     // cap as the Admin report; only the columns the tallies need, never the mint.
     prisma.$queryRaw<AlertOutcomeRow[]>`
-      SELECT a."hit2xIn1h" AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
+      SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
              a."simReturnPct"::float8 AS sim_return,
              n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
              n."referentKind" AS referent_kind, n.flags
@@ -349,7 +349,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       graded: overall?.graded ?? 0,
       won2x: overall?.won2x ?? 0,
       won4x: overall?.won4x ?? 0,
-      byCategory: sortedTallies(byCategory).slice(0, 8).map(slimTally),
+      byCategory: sortedTallies(byCategory).map(slimTally),
       byXVerdict: sortedTallies(byXVerdict).map(slimTally),
       byCopy: sortedTallies(byCopy).map(slimTally),
     },

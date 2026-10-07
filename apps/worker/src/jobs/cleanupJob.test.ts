@@ -558,8 +558,20 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
           checkedAt: new Date(Date.now() - ageDays * day),
         },
       });
-    await Promise.all([row("fresh", 5), row("old", 30), row("gone", 100)]);
-    await runCleanupJob(env, { rowsPerBatch: 10, pauseMs: 0 });
+    // "old" crossed the 21-day line recently (the nightly strip only looks a few days back);
+    // "older" is a row the nightly pass missed, which the weekly full walk picks up.
+    await Promise.all([row("fresh", 5), row("old", 22), row("older", 40), row("gone", 100)]);
+    await runCleanupJob(env, { rowsPerBatch: 10, pauseMs: 0, fullSnapshotWalk: false });
+    const nightly = await prisma.tokenNarrative.findMany({
+      where: { mintAddress: { startsWith: TAG } },
+      orderBy: { mintAddress: "asc" },
+    });
+    expect(nightly.map((r) => [r.mintAddress.slice(TAG.length + 1), r.analysis !== null])).toEqual([
+      ["fresh", true],
+      ["old", false],
+      ["older", true],
+    ]);
+    await runCleanupJob(env, { rowsPerBatch: 10, pauseMs: 0, fullSnapshotWalk: true });
     const left = await prisma.tokenNarrative.findMany({
       where: { mintAddress: { startsWith: TAG } },
       orderBy: { mintAddress: "asc" },
@@ -567,6 +579,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
     expect(left.map((r) => [r.mintAddress.slice(TAG.length + 1), r.analysis, r.pairKind])).toEqual([
       ["fresh", { summary: "a dog coin" }, "token"],
       ["old", null, "token"],
+      ["older", null, "token"],
     ]);
   });
 });
