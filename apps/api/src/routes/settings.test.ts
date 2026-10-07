@@ -40,10 +40,27 @@ describe("parseFeedAppearance", () => {
     ).toEqual({ ...DEFAULT_FEED_APPEARANCE, win: "#00ff88", textSize: 110, hidden: ["reasons"] });
   });
 
+  it("hides model reasons and links only Terminal for accounts saved before those options", () => {
+    const saved = parseFeedAppearance({
+      ...DEFAULT_FEED_APPEARANCE,
+      reasons: undefined,
+      quickLinks: undefined,
+    });
+    expect(saved.reasons).toBe(false);
+    expect(saved.quickLinks).toEqual(["terminal"]);
+    expect(
+      parseFeedAppearance({ reasons: true, quickLinks: ["gmgn", "padre", "gmgn", "axiom"] }),
+    ).toMatchObject({
+      reasons: true,
+      quickLinks: ["gmgn", "axiom"],
+    });
+    expect(parseFeedAppearance({ quickLinks: [] }).quickLinks).toEqual([]);
+  });
+
   it("lets an older dashboard build save without the options added since", () => {
-    const { volume, scoreColor, ...older } = DEFAULT_FEED_APPEARANCE;
+    const { volume, scoreColor, reasons, quickLinks, ...older } = DEFAULT_FEED_APPEARANCE;
     const parsed = feedAppearanceSchema.safeParse(older);
-    expect(parsed.success && parsed.data).toEqual({ ...older, volume, scoreColor });
+    expect(parsed.success && parsed.data).toEqual({ ...older, volume, scoreColor, reasons, quickLinks });
   });
 });
 

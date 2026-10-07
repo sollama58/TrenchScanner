@@ -4,7 +4,7 @@ import type { Card, CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
-import { useAppearance } from "../appearance";
+import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 
 const DAY_MS = 86_400_000;
@@ -34,7 +34,8 @@ export function AlertCard({
   const s = card.snapshot;
   const { weights, scale } = useScoreWeights();
   // Red at recent alerts' 10th percentile through to green at their 90th (Customize can turn it off).
-  const { scoreColor } = useAppearance();
+  const { scoreColor, quickLinks } = useAppearance();
+  const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -341,7 +342,7 @@ export function AlertCard({
         </div>
       )}
 
-      {(show("mint") || show("links")) && (
+      {(show("mint") || show("links") || trade.length > 0) && (
         <footer className="card-foot">
           {show("mint") && (
             <button className="mint" onClick={copy} title="Copy mint address">
@@ -349,14 +350,21 @@ export function AlertCard({
               {copied ? "Copied" : shortAddress(mint)}
             </button>
           )}
-          {show("links") && (
+          {(show("links") || trade.length > 0) && (
             <nav className="card-links">
-              {LINKS.map((l) => (
-                <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
+              {trade.map((l) => (
+                <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
                   {l.label}
                   <ExternalIcon size={11} />
                 </a>
               ))}
+              {show("links") &&
+                LINKS.map((l) => (
+                  <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
+                    {l.label}
+                    <ExternalIcon size={11} />
+                  </a>
+                ))}
             </nav>
           )}
         </footer>
