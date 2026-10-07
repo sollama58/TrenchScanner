@@ -10,7 +10,7 @@ import {
 } from "@solana/wallet-standard-features";
 import bs58 from "bs58";
 import { api, ApiError, post, type User } from "./api";
-import { setSessionToken } from "./session";
+import { adoptSession } from "./sessionCheck";
 
 /**
  * Wallet sign-in over the Wallet Standard - the registry Phantom, Solflare, Backpack and the rest
@@ -172,43 +172,10 @@ export async function signInWithWallet(wallet: Wallet): Promise<User> {
   );
 }
 
-/**
- * Makes sure the session actually sticks before calling sign-in done.
- *
- * The API's cookie is third-party while it lives on another site, and some browsers (Edge with
- * strict tracking prevention or InPrivate, Safari, Brave, anything blocking third-party cookies)
- * drop it without an error. So ask who we are with the cookie alone; if that fails, keep the token
- * the API returned and send it as a header from now on (session.ts), and check again.
- */
+/** Makes sure the session actually sticks before calling sign-in done (sessionCheck.ts). */
 async function finishSignIn({ sessionToken, ...user }: VerifyResponse): Promise<User> {
-  setSessionToken(null);
-  try {
-    await api<User>("/auth/me");
-    return user;
-  } catch (e) {
-    if (!(e instanceof ApiError && e.status === 401)) throw e;
-    // The signature verified (the API answered sign-in); only the session failed to stick. An
-    // API without the token fallback leaves nothing to retry with, and saying "didn't verify"
-    // would send the user back to re-sign for nothing.
-    if (!sessionToken)
-      throw new Error(
-        "Your wallet signed, but this browser blocked the session cookie. Allow cookies for this site, " +
-          "or turn tracking prevention to Balanced, then try again.",
-        { cause: e },
-      );
-  }
-  setSessionToken(sessionToken);
-  try {
-    await api<User>("/auth/me");
-    return user;
-  } catch (e) {
-    setSessionToken(null);
-    throw new Error(
-      `Your wallet signed, but this browser blocked the session (${e instanceof Error ? e.message : String(e)}). ` +
-        "Allow cookies for this site, or turn tracking prevention to Balanced, then try again.",
-      { cause: e },
-    );
-  }
+  await adoptSession(sessionToken, "Your wallet signed");
+  return user;
 }
 
 // ---- Legacy injected providers (window.solana and friends) ----

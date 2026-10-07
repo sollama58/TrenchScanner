@@ -13,6 +13,7 @@ import {
   LogoMark,
   LockIcon,
   LogoutIcon,
+  PhoneIcon,
   PulseIcon,
   ShieldIcon,
   SlidersIcon,
@@ -29,6 +30,7 @@ import {
   type Tab,
 } from "./routes";
 import { AlertNotifier, resetSettings } from "./alerts";
+import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -55,12 +57,16 @@ type Session =
   /** Looking around without a wallet: the default model's feed, everything else locked. */
   | { state: "guest" }
   | { state: "unreachable"; message: string }
+  /** Opened from a desktop's pairing QR: redeeming the code, or saying why it didn't work. */
+  | { state: "linking"; error?: string }
   | { state: "signed-in"; user: User };
 
 export function App() {
   // A returning visitor starts signed in as last time (src/cache.ts keeps the answer), so their
   // feed paints at once; the check below signs them out if the session has since ended.
   const [session, setSession] = useState<Session>(() => {
+    // A pairing link wins over whatever this browser remembered: scanning is asking to sign in.
+    if (hasPendingLink()) return { state: "linking" };
     const user = peek<User>("/auth/me")?.data;
     if (user) return { state: "signed-in", user };
     return isGuest() ? { state: "guest" } : { state: "loading" };
@@ -92,12 +98,53 @@ export function App() {
   };
 
   useEffect(() => {
+    // takeLinkCode hands the code out once, so StrictMode's second run finds nothing to redeem
+    // (and, still "linking", checks no session either).
+    const linkCode = takeLinkCode();
+    if (linkCode !== undefined) redeem(linkCode);
     // A guest has no session to check: asking would only fetch a 401.
-    if (session.state !== "guest") checkSession(10_000);
+    else if (session.state !== "guest" && session.state !== "linking") checkSession(10_000);
     const onHash = () => setTab(tabFromHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  /** Phone side of pairing: the code from the desktop's QR becomes this phone's own session. */
+  const redeem = (code: string | null) => {
+    const failed =
+      "This QR code has expired or was already used. On your desktop, open Settings, press " +
+      '"Show QR code" and scan the new one.';
+    if (code === null) {
+      setSession({ state: "linking", error: failed });
+      return;
+    }
+    redeemLinkCode(code)
+      .then((user) => {
+        setGuest(false);
+        invalidate();
+        resetSettings();
+        setSession({ state: "signed-in", user });
+      })
+      .catch((e: unknown) => {
+        setSession({
+          state: "linking",
+          // Every refusal from the API reads the same (expired, used or wrong); anything else is
+          // the network or a blocked cookie, whose own message says more.
+          error:
+            e instanceof ApiError && e.status === 400 ? failed : e instanceof Error ? e.message : String(e),
+        });
+      });
+  };
+
+  /** Out of a failed pairing: whatever this browser was before, or the sign-in page. */
+  const leaveLinking = () => {
+    if (isGuest()) {
+      setSession({ state: "guest" });
+      return;
+    }
+    setSession({ state: "loading" });
+    checkSession(-1);
+  };
 
   const goTo = (t: Tab) => {
     window.location.hash = t === "live" ? "" : t;
@@ -222,6 +269,27 @@ export function App() {
 
       <main className="content">
         {session.state === "loading" && <Boot />}
+        {session.state === "linking" &&
+          (session.error ? (
+            <section className="panel paywall" role="alert">
+              <span className="paywall-icon">
+                <PhoneIcon size={26} />
+              </span>
+              <h2>Couldn&apos;t sign this phone in</h2>
+              <p className="muted">{session.error}</p>
+              <button className="button primary" onClick={leaveLinking}>
+                Continue
+              </button>
+            </section>
+          ) : (
+            <section className="panel paywall" aria-busy>
+              <span className="paywall-icon">
+                <PhoneIcon size={26} />
+              </span>
+              <h2>Signing this phone in…</h2>
+              <p className="muted">Pairing with your desktop session.</p>
+            </section>
+          ))}
         {session.state === "unreachable" && (
           <section className="panel paywall">
             <h2>Can&apos;t reach TrenchScanner</h2>

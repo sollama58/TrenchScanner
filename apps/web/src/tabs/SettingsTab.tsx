@@ -16,6 +16,7 @@ import { saveFeedSettings } from "../components/ModelPicker";
 import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
 import { AppearancePanel } from "../components/AppearancePanel";
+import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { ArrowRightIcon, BellIcon, BrainIcon, ShieldIcon, VolumeIcon } from "../components/Icons";
 import { usePolling, useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
@@ -39,6 +40,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "live" | "model") => void })
         onChanged={() => setPick((n) => n + 1)}
         goTo={goTo}
       />
+      <ConnectPhonePanel />
       <AccountPanel account={settings?.account ?? null} />
     </div>
   );

@@ -2823,6 +2823,121 @@ button.small-btn {
   }
 }
 
+/* ---------- Connect your phone (Settings) ---------- */
+.cp-pair {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+}
+.cp-qr-wrap {
+  flex: none;
+  width: 196px;
+  height: 196px;
+  border-radius: var(--radius-s);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.cp-qr {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.cp-qr-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.cp-steps {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cp-steps ol {
+  margin: 0;
+  padding-left: 18px;
+}
+.cp-status {
+  margin: 0;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cp-status.good {
+  color: var(--good-ink);
+}
+.cp-status.urgent {
+  color: var(--warn);
+}
+.cp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cp-steps .faint {
+  margin: 0;
+}
+.cp-devices {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.cp-devices h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.cp-device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cp-device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+.cp-device-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cp-device-name {
+  color: var(--ink);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cp-device .button {
+  flex: none;
+}
+@media (max-width: 640px) {
+  .cp-pair {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .cp-qr-wrap {
+    align-self: center;
+  }
+}
+
 /* ---------- Badge in the card's title row ---------- */
 /*
  * A long symbol or name gives way to the badge: the name shrinks first, and only a very long
