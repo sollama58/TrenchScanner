@@ -34,6 +34,7 @@ export * from "./scoring/pipeline.js";
 export * from "./subscription/index.js";
 
 export * from "./curation/features.js";
+export * from "./curation/narrativeFeatures.js";
 export * from "./curation/labels.js";
 export * from "./curation/profitSim.js";
 export * from "./curation/curator.js";

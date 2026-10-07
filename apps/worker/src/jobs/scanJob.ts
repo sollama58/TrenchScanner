@@ -32,6 +32,7 @@ import {
   type PricePathBook,
   parseTextScores,
   EMPTY_TRADE_FLOW,
+  type NarrativeRead,
 } from "@trenchscanner/core";
 import type { Prisma, Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
@@ -41,6 +42,7 @@ import {
   takeTokenSageStats,
   tokenSageEnabled,
 } from "../tokensage/prefetch.js";
+import { loadNarrativeReads } from "../tokensage/narrativeReads.js";
 import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
@@ -1100,6 +1102,8 @@ export interface CandidatePrior {
   recentHourlySample: boolean;
   /** Has a user match or a curated alert, so the feeds read its newest snapshot - see persistSnapshot. */
   alerted: boolean;
+  /** TokenSage's stored read of the coin, when it has one and TokenSage is on. */
+  narrative?: NarrativeRead;
 }
 
 const NO_PRIORS: CandidatePrior = {
@@ -1132,7 +1136,7 @@ export async function loadCandidatePriors(
   const growthCutoff = new Date(now - env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000);
   const growth10mCutoff = new Date(now - 10 * 60_000);
   const spacingCutoff = new Date(now - env.CANDIDATE_SAMPLE_SPACING_MINUTES * 60_000);
-  const [baselines, recentHourly, alertedRows] = await Promise.all([
+  const [baselines, recentHourly, alertedRows, narratives] = await Promise.all([
     prisma.$queryRaw<{ id: string; h: number | null; h10: number | null }[]>`
       SELECT t.id, b."holderCount" AS h, b10."holderCount" AS h10
       FROM unnest(${ids}::text[]) AS t(id)
@@ -1155,6 +1159,10 @@ export async function loadCandidatePriors(
       SELECT m."tokenId" FROM "Match" m WHERE m."tokenId" = ANY(${ids}::text[])
       UNION
       SELECT c."tokenId" FROM "CuratedAlert" c WHERE c."tokenId" = ANY(${ids}::text[])`,
+    loadNarrativeReads(
+      tokens.map((t) => t.mintAddress),
+      env,
+    ),
   ]);
   const baselineById = new Map(baselines.map((b) => [b.id, b]));
   const recent = new Set(recentHourly.map((r) => r.tokenId));
@@ -1167,6 +1175,7 @@ export async function loadCandidatePriors(
       holderCount10m: b?.h10 ?? null,
       recentHourlySample: recent.has(token.id),
       alerted: alerted.has(token.id),
+      narrative: narratives.get(token.mintAddress),
     });
   }
   return out;
@@ -1311,11 +1320,14 @@ async function processCandidate(
       firstInBandAt,
     },
   );
-  if (tradeFlow) {
-    scored.tradeFlow = tradeFlow;
-    // The score's holder-quality part reads the first buyers, which arrive with the trade flow.
-    scored.score = scoreToken(scored);
-  }
+  if (tradeFlow) scored.tradeFlow = tradeFlow;
+  // TokenSage's read, as stored when this cycle began: the ns* model inputs, the narrative
+  // filter criteria and the score's narrative part all read it from here. Never looked up
+  // later for a row that was recorded without it.
+  if (prior.narrative) scored.narrative = prior.narrative;
+  // The score's holder-quality part reads the first buyers, which arrive with the trade flow,
+  // and its narrative part the read.
+  if (tradeFlow || prior.narrative) scored.score = scoreToken(scored);
   // The price tape: this cycle's observation goes on first, then the path features read back
   // over the last hour of it.
   if (pricePath) {

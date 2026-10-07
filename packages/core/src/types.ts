@@ -1,5 +1,6 @@
 import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
+import type { NarrativeRead } from "./curation/narrativeFeatures.js";
 import type { TextScores } from "./curation/textFeatures.js";
 /**
  * Domain types shared across data source clients, the scoring engine, the
@@ -181,6 +182,13 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   pricePath?: PricePathFeatures;
   /** What the market as a whole is doing right now, and the clock (curation/pricePath.ts). */
   marketContext?: MarketContextFeatures;
+  /**
+   * TokenSage's read of what the coin is about (curation/narrativeFeatures.ts), as stored in
+   * TokenNarrative when the coin was scored. Undefined until the read lands, and whenever
+   * TokenSage is off. Feeds the ns* model inputs, the narrative filter criteria and the score's
+   * narrative part.
+   */
+  narrative?: NarrativeRead;
 }
 
 export interface RugScreenResult {

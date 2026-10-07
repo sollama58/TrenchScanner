@@ -336,6 +336,23 @@ export interface TokenNarrativeFields {
    * when it copies nothing recent, null for analyses made before TokenSage said which.
    */
   copiesRecent: boolean | null;
+  /**
+   * How the linked X post relates to the coin (x.relation: "launch_announcement",
+   * "official_account", "narrative_reference", "spoofed", "search_only"; kept open). Null when
+   * the post was not read (basic depth, no link, or a fetch that failed).
+   */
+  xRelation: string | null;
+  /** The post author's follower count, when the post was read. */
+  xAuthorFollowers: number | null;
+  /** Seconds the linked post predates the token's creation (negative: posted after launch). */
+  xPredatesTokenS: number | null;
+  /** How many other coins have linked the same post (x.reuse_count). */
+  xReuseCount: number | null;
+  /** The name matched a Wikipedia or news spike (trend.matched); null until the full read says. */
+  trendMatched: boolean | null;
+  /** Flag counts by severity, so a reader needs no catalogue of codes. 0 when there are none. */
+  highFlagCount: number;
+  warnFlagCount: number;
   rulesVersion: string | null;
   analyzedAt: Date | null;
 }
@@ -394,14 +411,23 @@ export function narrativeFieldsFromAnalysis(
     if (label !== null && confidence !== null) categories.push({ label: label.slice(0, 80), confidence });
     if (categories.length >= 20) break;
   }
+  const flagRecords = asArray(doc.flags).map(asRecord);
   const flags = labels(
-    asArray(doc.flags).map((f) => asRecord(f)?.code),
+    flagRecords.map((f) => f?.code),
     30,
   );
+  const severityCount = (severity: string) =>
+    flagRecords.filter((f) => f !== null && f.severity === severity).length;
   const analyzedAt = typeof doc.analyzed_at === "string" ? new Date(doc.analyzed_at) : null;
   const referent = asRecord(doc.referent);
-  const match = asRecord(asRecord(doc.x)?.match);
+  const x = asRecord(doc.x);
+  const match = asRecord(x?.match);
   const verdict = clip(match?.verdict);
+  // Only a post that was actually read says anything about the link; anything else is unknown.
+  const xRead = x !== null && x.status === "ok";
+  const count = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null;
+  const trend = asRecord(doc.trend);
   const known = verdict !== null && verdict !== "unknown" ? verdict.slice(0, 40) : null;
   const pair = asRecord(asRecord(doc.market)?.pair);
   const copies = asArray(doc.copy_of).map(asRecord);
@@ -423,6 +449,13 @@ export function narrativeFieldsFromAnalysis(
     pairKind: clip(pair?.kind)?.slice(0, 40) ?? null,
     pairSymbol: clip(pair?.symbol)?.slice(0, 40) ?? null,
     copiesRecent,
+    xRelation: xRead ? (clip(x.relation)?.slice(0, 40) ?? null) : null,
+    xAuthorFollowers: xRead ? count(asRecord(x.author)?.followers) : null,
+    xPredatesTokenS: xRead ? count(x.predates_token_by_s) : null,
+    xReuseCount: xRead ? count(x.reuse_count) : null,
+    trendMatched: trend !== null && typeof trend.matched === "boolean" ? trend.matched : null,
+    highFlagCount: severityCount("high"),
+    warnFlagCount: severityCount("warn"),
     rulesVersion: clip(asRecord(doc.versions)?.rules),
     analyzedAt: analyzedAt && !Number.isNaN(analyzedAt.getTime()) ? analyzedAt : null,
   };

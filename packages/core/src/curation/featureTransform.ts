@@ -1,3 +1,5 @@
+import { NARRATIVE_UNTRANSFORMED_FEATURES } from "./narrativeFeatures.js";
+
 /**
  * Feature reshaping shared by every curator model family (trainer.ts, boosting.ts). Kept in its
  * own module so the families can share it without importing each other.
@@ -49,6 +51,7 @@ const UNTRANSFORMED_FEATURES = new Set([
   "ctxHourSin",
   "ctxHourCos",
   "ctxWeekend",
+  ...NARRATIVE_UNTRANSFORMED_FEATURES,
 ]);
 
 /** Applies a model's feature transform to one raw value. */

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { NARRATIVE_NEUTRAL, scoreToken, scoreTokenLegacy } from "./scorer.js";
+import {
+  NARRATIVE_NEUTRAL,
+  NARRATIVE_RED_FLAG_CAP,
+  scoreNarrative,
+  scoreToken,
+  scoreTokenLegacy,
+} from "./scorer.js";
+import type { NarrativeRead } from "../curation/narrativeFeatures.js";
 import type { EnrichedToken } from "../types.js";
 import { EMPTY_TRADE_FLOW } from "../curation/tradeFlow.js";
 
@@ -105,5 +112,112 @@ describe("scoreTokenLegacy", () => {
     expect(score.narrative).toBe(100);
     expect(score.total).toBeCloseTo(92 * 0.35 + 87.5 * 0.3 + 15 + 20, 6);
     expect(scoreTokenLegacy(baseToken({ ageMinutes: undefined })).age).toBe(50);
+  });
+});
+
+function read(overrides: Partial<NarrativeRead> = {}): NarrativeRead {
+  return {
+    depth: "basic",
+    status: "complete",
+    analyzedAt: null,
+    categories: [],
+    referentLabel: null,
+    referentKind: null,
+    referentConfidence: null,
+    referentSupport: [],
+    flags: [],
+    highFlagCount: 0,
+    warnFlagCount: 0,
+    copiesRecent: null,
+    xFit: null,
+    xVerdict: null,
+    xRelation: null,
+    xAuthorFollowers: null,
+    xPredatesTokenS: null,
+    xReuseCount: null,
+    trendMatched: null,
+    ...overrides,
+  };
+}
+
+describe("scoreNarrative", () => {
+  it("is the midpoint without a read, and a bare X link earns nothing", () => {
+    expect(scoreNarrative(baseToken())).toBe(NARRATIVE_NEUTRAL);
+    expect(scoreNarrative(baseToken({ hasTwitter: true, narrativeTags: ["dog"] }))).toBe(NARRATIVE_NEUTRAL);
+    expect(scoreNarrative(baseToken({ narrative: read() }))).toBe(NARRATIVE_NEUTRAL);
+  });
+
+  it("credits a clear referent, more when several inputs agree", () => {
+    expect(
+      scoreNarrative(baseToken({ narrative: read({ referentConfidence: 0.7, referentSupport: ["name"] }) })),
+    ).toBe(60);
+    expect(
+      scoreNarrative(
+        baseToken({ narrative: read({ referentConfidence: 0.7, referentSupport: ["name", "x"] }) }),
+      ),
+    ).toBe(65);
+    expect(scoreNarrative(baseToken({ narrative: read({ referentConfidence: 0.4 }) }))).toBe(
+      NARRATIVE_NEUTRAL,
+    );
+  });
+
+  it("credits a post about this coin by its fit, and punishes an unrelated or spoofed one", () => {
+    const about = read({
+      depth: "full",
+      xVerdict: "about_this_coin",
+      xFit: 0.8,
+      xRelation: "launch_announcement",
+    });
+    expect(scoreNarrative(baseToken({ narrative: about }))).toBe(71);
+    const aboutSearch = read({
+      depth: "full",
+      xVerdict: "about_this_coin",
+      xFit: 0.8,
+      xRelation: "search_only",
+    });
+    expect(scoreNarrative(baseToken({ narrative: aboutSearch }))).toBe(66);
+    const unrelated = read({
+      depth: "full",
+      xVerdict: "unrelated",
+      xFit: 0,
+      xRelation: "narrative_reference",
+    });
+    expect(scoreNarrative(baseToken({ narrative: unrelated }))).toBe(25);
+    const spoofed = read({ depth: "full", xVerdict: "about_this_coin", xFit: 1, xRelation: "spoofed" });
+    expect(scoreNarrative(baseToken({ narrative: spoofed }))).toBe(25);
+    // A basic read says nothing about the post even when the document carries a verdict.
+    expect(scoreNarrative(baseToken({ narrative: read({ xVerdict: "unrelated" }) }))).toBe(NARRATIVE_NEUTRAL);
+  });
+
+  it("punishes copycats and earlier coins with the same name", () => {
+    expect(scoreNarrative(baseToken({ narrative: read({ copiesRecent: true }) }))).toBe(25);
+    expect(scoreNarrative(baseToken({ narrative: read({ flags: ["copycat", "earlier_same_name"] }) }))).toBe(
+      25,
+    );
+    expect(scoreNarrative(baseToken({ narrative: read({ flags: ["earlier_same_name"] }) }))).toBe(35);
+    expect(
+      scoreNarrative(
+        baseToken({ narrative: read({ copiesRecent: false, flags: ["references_known_coin"] }) }),
+      ),
+    ).toBe(NARRATIVE_NEUTRAL);
+  });
+
+  it("credits a matched trend and caps the part under a red flag", () => {
+    expect(scoreNarrative(baseToken({ narrative: read({ depth: "full", trendMatched: true }) }))).toBe(60);
+    const flagged = read({ referentConfidence: 0.9, referentSupport: ["name", "x"], highFlagCount: 1 });
+    expect(scoreNarrative(baseToken({ narrative: flagged }))).toBe(NARRATIVE_RED_FLAG_CAP);
+    expect(scoreNarrative(baseToken({ narrative: read({ copiesRecent: true, highFlagCount: 2 }) }))).toBe(25);
+  });
+
+  it("feeds the composite through the narrative weight", () => {
+    const plain = scoreToken(baseToken({ ageMinutes: 3 }));
+    const strong = scoreToken(
+      baseToken({
+        ageMinutes: 3,
+        narrative: read({ referentConfidence: 0.9, referentSupport: ["name", "x"] }),
+      }),
+    );
+    expect(strong.narrative).toBe(65);
+    expect(strong.total).toBeGreaterThan(plain.total);
   });
 });

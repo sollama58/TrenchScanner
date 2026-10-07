@@ -9,12 +9,14 @@ import {
   type Env,
   type DexScreenerClient,
   type OnChainProfile,
+  type NarrativeRead,
 } from "@trenchscanner/core";
 import { createMatchesForTargets, resolveAlertTargets, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { recentScanVerdicts, type VettedEntry } from "./vettedTokens.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
 import { noteAlertWallets } from "./walletPriority.js";
+import { loadNarrativeReads } from "../tokensage/narrativeReads.js";
 
 const logger = createLogger("fast-match");
 
@@ -166,6 +168,11 @@ export async function runFastMatchCycle(
   if (vetted.length === 0) return { stagesMs };
 
   const byMint = new Map(vetted.map((v) => [v.token.mintAddress, v]));
+  // Alongside the price fetch: one primary-key read, empty while TokenSage is off.
+  const narrativesPromise = loadNarrativeReads([...byMint.keys()], env).catch((err: unknown) => {
+    logger.warn("fast match narrative read failed", { error: String(err) });
+    return new Map<string, NarrativeRead>();
+  });
   let fresh;
   try {
     // Bounded like the scan's own refresh: this lane runs every 15 seconds and a throttled
@@ -182,6 +189,7 @@ export async function runFastMatchCycle(
     return { stagesMs };
   }
   lap("price");
+  const narratives = await narrativesPromise;
 
   let matched = 0;
   let evaluated = 0;
@@ -212,8 +220,12 @@ export async function runFastMatchCycle(
         firstBuyersHolding: entry.snapshot.firstBuyersHolding,
         firstBuyersSeen: entry.snapshot.firstBuyersSeen,
       };
-      scored.score = scoreToken(scored);
     }
+    // TokenSage's read too, so a narrative criterion and the score's narrative part are applied
+    // here exactly as the full cycle applies them (a narrative criterion fails closed without it).
+    const narrative = narratives.get(candidate.mintAddress);
+    if (narrative) scored.narrative = narrative;
+    if (scored.tradeFlow || narrative) scored.score = scoreToken(scored);
     evaluated += 1;
     if (!scored.rugScreen.passed) return;
 

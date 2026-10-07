@@ -166,6 +166,14 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
       // It builds on the established $PNUT: a reference, not a live copycat.
       copiesRecent: false,
       rulesVersion: "0.10.0-full",
+      // The post was read: Elon's own tweet, linked as the launch announcement.
+      xRelation: "launch_announcement",
+      xAuthorFollowers: 241704623,
+      xPredatesTokenS: null,
+      xReuseCount: 0,
+      trendMatched: false,
+      highFlagCount: 0,
+      warnFlagCount: 1,
     });
     expect(f.categories.slice(0, 2)).toEqual([
       { label: "animal", confidence: 0.97 },
@@ -188,6 +196,12 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
       xVerdict: null,
       flags: ["references_known_coin"],
       referentSupport: ["name"],
+      // Nothing about the post is known until it is read, whatever the document carries.
+      xRelation: null,
+      xAuthorFollowers: null,
+      xReuseCount: null,
+      highFlagCount: 0,
+      warnFlagCount: 0,
     });
     expect(f.categories[0]).toEqual({ label: "derivative", confidence: 0.97 });
   });
@@ -232,6 +246,9 @@ describe("narrativeFieldsFromAnalysis on real TokenSage responses", () => {
       xFit: 0.85,
       xVerdict: "about_this_coin",
       copiesRecent: false,
+      xRelation: "launch_announcement",
+      xAuthorFollowers: 40,
+      xReuseCount: 0,
     });
   });
 

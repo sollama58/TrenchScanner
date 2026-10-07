@@ -83,7 +83,10 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
           </dd>
           <dt>Narrative · {pct(w.narrative)}</dt>
           <dd>
-            Held at the midpoint for now. It will read what the coin is about once narrative data is added.
+            What the coin is about, from TokenSage&apos;s read. A clear referent lifts it, a linked X post
+            that is really about this coin lifts it by how well it fits, and a copycat, an unrelated or
+            spoofed post, or a red flag pulls it down. The midpoint until the read lands. A bare X link earns
+            nothing.
           </dd>
         </dl>
         <h3>The weights adapt</h3>
