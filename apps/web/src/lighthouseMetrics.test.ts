@@ -5,6 +5,7 @@ import {
   canAdd,
   defaultPanels,
   delta,
+  hasPanel,
   historyCsv,
   isPanel,
   metricById,
@@ -117,6 +118,20 @@ describe("lighthouse metrics", () => {
     expect(defaultPanels().every(isPanel)).toBe(true);
   });
 
+  it("knows when a chart is already on the page, so it is not added twice", () => {
+    const panels = defaultPanels();
+    expect(hasPanel(panels, { id: "x", kind: "bars", metrics: ["field2x", "field4x", "field10x"] })).toBe(
+      true,
+    );
+    expect(hasPanel(panels, { id: "x", kind: "line", metrics: ["field4x", "field2x", "field10x"] })).toBe(
+      false,
+    );
+    expect(hasPanel(panels, { id: "x", kind: "line", breakdown: "count" })).toBe(true);
+    expect(hasPanel(panels, { id: "x", kind: "bars", breakdown: "share" })).toBe(false);
+    expect(hasPanel([], { id: "x", kind: "line", metrics: [] })).toBe(false);
+    expect(defaultPanels().every((p, i, all) => all.findIndex((q) => hasPanel([q], p)) === i)).toBe(true);
+  });
+
   it("breaks a dimension down per label, with thin 2x rates withheld", () => {
     const h = history();
     const counts = breakdownSeries(h, "count");
@@ -146,6 +161,7 @@ describe("lighthouse metrics", () => {
     const lines = csv.trim().split("\n");
     expect(lines).toHaveLength(3);
     expect(lines[0]).toMatch(/^bucket_start_utc,field2x,/);
+    expect(lines[0]).not.toContain("deep");
     expect(lines[1]).toMatch(/^2026-10-06T00:00:00.000Z,50,25,20,15,10,8,/);
     // Nothing graded on the 7th: the rate cells are empty, not zero.
     expect(lines[2]!.split(",")[1]).toBe("");

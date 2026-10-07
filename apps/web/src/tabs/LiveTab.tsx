@@ -143,7 +143,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
                 <span className="num stats-teaser">2x {pct(fs.hit2xPct, 0)}</span>
               )}
             </button>
-            <LighthouseButton base="/curated" target2xPct={t.hitRate2xPct} />
+            <LighthouseButton base="/curated" />
             <button
               type="button"
               className={`ghost stats-btn${customizing ? " on" : ""}`}

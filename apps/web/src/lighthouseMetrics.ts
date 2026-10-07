@@ -120,13 +120,6 @@ export const METRICS = [
     value: (s) => s.reads.described,
   },
   {
-    id: "deepShare",
-    label: "Deep read share",
-    group: "TokenSage",
-    unit: "pct",
-    value: (s) => rate(s.reads.deep, s.reads.described),
-  },
-  {
     id: "failedReads",
     label: "Failed reads",
     group: "TokenSage",
@@ -236,7 +229,7 @@ export function defaultPanels(): Panel[] {
     { id: panelId(), kind: "line", metrics: ["field2x", "field4x", "field10x"] },
     { id: panelId(), kind: "bars", metrics: ["fieldReturn", "callsReturn"] },
     { id: panelId(), kind: "line", metrics: ["calls2x", "field2x"] },
-    { id: panelId(), kind: "bars", metrics: ["coinsRead", "deepShare"] },
+    { id: panelId(), kind: "bars", metrics: ["coinsRead", "calls"] },
     { id: panelId(), kind: "bars", breakdown: "count" },
     { id: panelId(), kind: "line", breakdown: "rate2x" },
   ];
@@ -261,8 +254,8 @@ export const PRESETS: { label: string; make: () => Panel }[] = [
     make: () => ({ id: panelId(), kind: "bars", metrics: ["calls", "fieldCalls"] }),
   },
   {
-    label: "Coins read and how deeply",
-    make: () => ({ id: panelId(), kind: "bars", metrics: ["coinsRead", "deepShare"] }),
+    label: "Coins read and model calls",
+    make: () => ({ id: panelId(), kind: "bars", metrics: ["coinsRead", "calls"] }),
   },
   {
     label: "Story confidence and X fit",
@@ -284,6 +277,16 @@ export const PRESETS: { label: string; make: () => Panel }[] = [
   },
   { label: "Empty chart", make: () => ({ id: panelId(), kind: "line", metrics: [] }) },
 ];
+
+/** Whether two panels draw the same thing: the same breakdown, or the same metrics in the same order. */
+export const samePanel = (a: Panel, b: Panel): boolean => {
+  if ("breakdown" in a || "breakdown" in b)
+    return "breakdown" in a && "breakdown" in b && a.breakdown === b.breakdown;
+  return a.metrics.length === b.metrics.length && a.metrics.every((m, i) => m === b.metrics[i]);
+};
+
+/** Whether a chart like `p` is already on the page, so adding it again would only repeat it. */
+export const hasPanel = (panels: Panel[], p: Panel) => panels.some((q) => samePanel(q, p));
 
 /** The units a set of metrics needs, in the order they first appear (left axis first). */
 export const unitsOf = (ids: MetricId[]): Unit[] => {
@@ -440,7 +443,6 @@ export function historyCsv(h: LighthouseHistory): string {
     "screened_won4x",
     "screened_won10x",
     "coins_read",
-    "deep_reads",
     "failed_reads",
     "model_calls",
     "model_calls_graded",
@@ -458,7 +460,6 @@ export function historyCsv(h: LighthouseHistory): string {
       s.screened.won4x,
       s.screened.won10x,
       s.reads.described,
-      s.reads.deep,
       s.reads.failed,
       s.alerts.total,
       s.alerts.graded,

@@ -4441,19 +4441,13 @@ button.small-btn {
 .lh-hit.early .lh-hit-fill {
   opacity: 0.4;
 }
-.lh-hit-goal {
-  position: absolute;
-  top: -3px;
-  bottom: -3px;
-  left: var(--lh-target);
-  border-left: 2px dashed var(--ink-2);
-}
 .lh-hit-value {
   text-align: right;
   font-weight: 600;
 }
 .lh-hit-state {
   white-space: nowrap;
+  font-size: 12.5px;
 }
 .lh-foot {
   margin: 10px 0 0;

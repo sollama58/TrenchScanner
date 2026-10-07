@@ -17,6 +17,7 @@ import {
   bucketAllowed,
   bucketLabel,
   canAdd,
+  hasPanel,
   defaultBucketFor,
   defaultPanels,
   delta,
@@ -240,17 +241,23 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
                     aria-label="Add a chart"
                     onChange={(e) => {
                       const preset = PRESETS[Number(e.target.value)];
-                      if (preset) setPanels((ps) => [...ps, preset.make()]);
+                      if (!preset) return;
+                      const made = preset.make();
+                      setPanels((ps) => (hasPanel(ps, made) ? ps : [...ps, made]));
                     }}
                   >
                     <option value="" disabled>
                       Add chart…
                     </option>
-                    {PRESETS.map((p, i) => (
-                      <option key={p.label} value={i}>
-                        {p.label}
-                      </option>
-                    ))}
+                    {PRESETS.map((p, i) => {
+                      const active = hasPanel(panels, p.make());
+                      return (
+                        <option key={p.label} value={i} disabled={active}>
+                          {p.label}
+                          {active ? " (on the page)" : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                 </label>
                 <button type="button" className="ghost stats-btn" onClick={() => setPanels(defaultPanels())}>
@@ -304,7 +311,7 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
             ))}
           </div>
         </header>
-        <LighthouseBody base={api} days={nowDays} target2xPct={targets.hitRate2xPct} />
+        <LighthouseBody base={api} days={nowDays} />
       </section>
     </div>
   );

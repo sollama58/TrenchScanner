@@ -42,7 +42,7 @@ function seriesClassFor(order: string[]) {
  * The Live tab's Lighthouse button, beside Stats, and the modal it opens. Guests get it too: the
  * answer is aggregates only, so it gives nothing away ahead of their delayed feed.
  */
-export function LighthouseButton({ base, target2xPct }: { base: string; target2xPct: number }) {
+export function LighthouseButton({ base }: { base: string }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -56,12 +56,7 @@ export function LighthouseButton({ base, target2xPct }: { base: string; target2x
         <LighthouseIcon size={14} />
         Lighthouse
       </button>
-      <MarketLighthouseModal
-        open={open}
-        onClose={() => setOpen(false)}
-        base={base}
-        target2xPct={target2xPct}
-      />
+      <MarketLighthouseModal open={open} onClose={() => setOpen(false)} base={base} />
     </>
   );
 }
@@ -70,12 +65,10 @@ export function MarketLighthouseModal({
   open,
   onClose,
   base,
-  target2xPct,
 }: {
   open: boolean;
   onClose: () => void;
   base: string;
-  target2xPct: number;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [days, setDays] = useState<Days>(1);
@@ -129,7 +122,7 @@ export function MarketLighthouseModal({
             ))}
           </div>
         </header>
-        {open && <LighthouseBody base={base} days={days} target2xPct={target2xPct} compact />}
+        {open && <LighthouseBody base={base} days={days} compact />}
         <p className="lh-more">
           <a className="button" href="#lighthouse" onClick={onClose}>
             <LighthouseIcon size={14} />
@@ -151,12 +144,10 @@ export function MarketLighthouseModal({
 export function LighthouseBody({
   base,
   days,
-  target2xPct,
   compact = false,
 }: {
   base: string;
   days: Days;
-  target2xPct: number;
   compact?: boolean;
 }) {
   const q = usePolling<MarketLighthouse>(path(base, days), 300_000);
@@ -198,9 +189,9 @@ export function LighthouseBody({
           </p>
         </div>
       ) : compact ? (
-        <TokenSageGlance d={d} cls={cls} target2xPct={target2xPct} />
+        <TokenSageGlance d={d} cls={cls} />
       ) : (
-        <TokenSageSections d={d} span={span} cls={cls} quickOnly={quickOnly} target2xPct={target2xPct} />
+        <TokenSageSections d={d} span={span} cls={cls} quickOnly={quickOnly} />
       )}
     </div>
   );
@@ -211,17 +202,15 @@ function TokenSageSections({
   span,
   cls,
   quickOnly,
-  target2xPct,
 }: {
   d: MarketLighthouse;
   span: string;
   cls: (l: string) => string;
   quickOnly: boolean;
-  target2xPct: number;
 }) {
   return (
     <>
-      <TokenSageKpis d={d} span={span} quickOnly={quickOnly} />
+      <TokenSageKpis d={d} span={span} />
 
       <Section
         title="Narrative tide"
@@ -254,9 +243,9 @@ function TokenSageSections({
 
       <Section
         title="Which narratives double"
-        note={`Model calls in the last ${span} that reached 2x, by their coin's narrative. The line is the ${target2xPct}% goal. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
+        note={`Model calls in the last ${span} that reached 2x, by their coin's narrative. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
       >
-        <HitRates rows={d.outcomes.byCategory} target={target2xPct} cls={cls} />
+        <HitRates rows={d.outcomes.byCategory} cls={cls} />
         <p className="faint small lh-foot">
           {d.outcomes.described.toLocaleString()} of {d.outcomes.alerts.toLocaleString()} calls had a
           TokenSage read · {d.outcomes.graded.toLocaleString()} graded overall
@@ -299,13 +288,13 @@ function TokenSageSections({
         {d.outcomes.byXVerdict.length > 0 && (
           <div className="lh-mini">
             <h4>Calls by X link verdict</h4>
-            <HitRates rows={d.outcomes.byXVerdict} target={target2xPct} />
+            <HitRates rows={d.outcomes.byXVerdict} />
           </div>
         )}
         {d.outcomes.byCopy.length > 0 && (
           <div className="lh-mini">
             <h4>Calls on originals vs copies</h4>
-            <HitRates rows={d.outcomes.byCopy} target={target2xPct} />
+            <HitRates rows={d.outcomes.byCopy} />
           </div>
         )}
       </Section>
@@ -318,15 +307,7 @@ function TokenSageSections({
  * the narrative mix, and the narratives whose calls are doubling most. The read counts and
  * confidence figures stay on the Lighthouse tab, where someone digging in wants them.
  */
-function TokenSageGlance({
-  d,
-  cls,
-  target2xPct,
-}: {
-  d: MarketLighthouse;
-  cls: (l: string) => string;
-  target2xPct: number;
-}) {
+function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) {
   // Best first: a settled rate ahead of a thin one, then by rate, then by how many calls back it.
   const best = [...d.outcomes.byCategory]
     .sort((a, b) => {
@@ -359,9 +340,9 @@ function TokenSageGlance({
         </Section>
         <Section
           title="Best-performing narratives"
-          note={`Model calls that reached 2x, by their coin's narrative. The line is the ${target2xPct}% goal.`}
+          note="Share of model calls that reached 2x, by their coin's narrative."
         >
-          <HitRates rows={best} target={target2xPct} cls={cls} />
+          <HitRates rows={best} cls={cls} />
         </Section>
       </div>
     </>
@@ -369,7 +350,7 @@ function TokenSageGlance({
 }
 
 /** TokenSage's headline numbers for the window. */
-function TokenSageKpis({ d, span, quickOnly }: { d: MarketLighthouse; span: string; quickOnly: boolean }) {
+function TokenSageKpis({ d, span }: { d: MarketLighthouse; span: string }) {
   return (
     <>
       {!d.tokenSage.on && (
@@ -387,13 +368,6 @@ function TokenSageKpis({ d, span, quickOnly }: { d: MarketLighthouse; span: stri
               last {span}
               {d.reads.newestAt ? <> · newest {ago(d.reads.newestAt)}</> : null}
             </>
-          }
-        />
-        <Kpi
-          label="Deep reads"
-          value={pct(share(d.reads.deep, d.reads.described))}
-          sub={
-            quickOnly ? "quick reads only for now" : `${d.reads.deep.toLocaleString()} with X and news checks`
           }
         />
         <Kpi
@@ -654,23 +628,15 @@ function Split({ title, rows, empty }: { title: string; rows: LighthouseCount[];
 }
 
 /** Hit rates against the goal, one row per group; thin samples say so instead of a verdict. */
-function HitRates({
-  rows,
-  target,
-  cls,
-}: {
-  rows: LighthouseTally[];
-  target: number;
-  cls?: (l: string) => string;
-}) {
+/** One bar per label: the share of its graded calls that reached 2x, and how many calls that rests on. */
+function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) => string }) {
   if (!rows.length)
     return <p className="muted small">No model calls on described coins in this window yet.</p>;
   return (
-    <div className="lh-hits" style={{ ["--lh-target" as string]: `${target}%` }}>
+    <div className="lh-hits">
       {rows.map((r) => {
         const rate = r.graded > 0 ? (r.won2x / r.graded) * 100 : null;
         const early = r.graded < MIN_GRADED;
-        const met = !early && rate !== null && rate >= target;
         return (
           <div key={r.label} className={`lh-hit${early ? " early" : ""}`}>
             <span className="lh-hit-label">
@@ -679,15 +645,10 @@ function HitRates({
             </span>
             <span className="lh-hit-track">
               <span className="lh-hit-fill" style={{ width: `${Math.max(rate ?? 0, 1)}%` }} />
-              <span className="lh-hit-goal" aria-hidden />
             </span>
             <span className="lh-hit-value num">{rate === null ? "–" : pct(rate)}</span>
-            <span className={`lh-hit-state state ${early ? "early" : met ? "met" : "below"}`}>
-              {early
-                ? `${r.graded}/${MIN_GRADED} graded`
-                : met
-                  ? `✓ ${r.graded} graded`
-                  : `▼ ${r.graded} graded`}
+            <span className="lh-hit-state muted">
+              {early ? `${r.graded}/${MIN_GRADED} graded` : `${r.graded} graded`}
             </span>
           </div>
         );
