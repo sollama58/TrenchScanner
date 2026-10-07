@@ -3,8 +3,9 @@ import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
 import { currentMarketCap } from "./matches.js";
 import { curatedAlertInclude, serializeCuratedAlert, withLatestSnapshots } from "../curatedFeed.js";
-import { contestState, modelLabel } from "../contest.js";
-import type { MatchStream } from "../matchStream.js";
+import { buildLeaderboard, contestState, modelLabel } from "../contest.js";
+import { buildModelInsights } from "../modelInsights.js";
+import { reportDaysSchema, type ReportCaches } from "./curated.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 
@@ -24,7 +25,16 @@ const PAGE_SIZE = 12;
 /** History browsing is what the paid feed is for; guests see the most recent few pages. */
 export const GUEST_MAX_PAGES = 5;
 
-/** Every guest reads the same pages, so one fill serves a burst of them. */
+/**
+ * Guests see each call this long after the model made it (user decision 2026-10-06): calls in
+ * real time are what access buys, so the guest feed is a delayed look at the same ledger.
+ */
+export const GUEST_DELAY_MINUTES = 5;
+
+/**
+ * Every guest reads the same pages, so one fill serves a burst of them. Short enough that a call
+ * appears within seconds of its delay running out.
+ */
 const FEED_CACHE_TTL_MS = 5_000;
 
 /**
@@ -34,6 +44,8 @@ const FEED_CACHE_TTL_MS = 5_000;
  */
 const GUEST_RATE_LIMIT = { max: 90, timeWindow: "1 minute" };
 
+const reportQuerySchema = z.object({ days: reportDaysSchema });
+
 const querySchema = z.object({
   page: z.coerce.number().int().min(1).max(GUEST_MAX_PAGES).default(1),
 });
@@ -41,9 +53,10 @@ const querySchema = z.object({
 type GuestPage = { rows: Awaited<ReturnType<typeof loadRows>>; hasMore: boolean };
 
 async function loadRows(model: string, page: number) {
+  const cutoff = new Date(Date.now() - GUEST_DELAY_MINUTES * 60_000);
   // One extra row says whether an older page exists, without a count over the whole ledger.
   const rows = await prisma.curatedAlert.findMany({
-    where: { model },
+    where: { model, createdAt: { lte: cutoff } },
     orderBy: { createdAt: "desc" },
     skip: (page - 1) * PAGE_SIZE,
     take: PAGE_SIZE + 1,
@@ -54,15 +67,12 @@ async function loadRows(model: string, page: number) {
 
 export async function registerGuestRoutes(
   app: FastifyInstance,
-  opts: { env: Env; matchStream: MatchStream; viewStamps: ViewStampBuffer },
+  opts: { env: Env; viewStamps: ViewStampBuffer; reports: ReportCaches },
 ) {
   // Keyed by model and page; bounded by GUEST_MAX_PAGES per model, and the model comes from the
-  // roster, never the request.
+  // roster, never the request. A new alert needs no invalidation: guests only see it once its
+  // delay has run out, and the short TTL picks it up then.
   const pageCache = new Map<string, SharedCache<GuestPage>>();
-  const stopListening = opts.matchStream.onCuratedAlert(() => {
-    for (const cache of pageCache.values()) cache.clear();
-  });
-  app.addHook("onClose", async () => stopListening());
 
   app.get("/feed", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);
@@ -97,6 +107,47 @@ export async function registerGuestRoutes(
       totalCount: (page - 1) * PAGE_SIZE + matches.length + (hasMore ? 1 : 0),
       hasMore,
       model: modelLabel(state, model),
+      delayMinutes: GUEST_DELAY_MINUTES,
     };
+  });
+
+  /**
+   * The Models tab's leaderboard, as a reader who follows the best performer sees it: guests have
+   * no picks of their own, so the "in your feed" marks all point at the default model.
+   */
+  app.get("/models", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = reportQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { days } = parsed.data;
+    const [board, state] = await Promise.all([
+      opts.reports.leaderboardFor(days).get(() => buildLeaderboard(opts.env, days)),
+      contestState(opts.env),
+    ]);
+    return {
+      ...board,
+      selectedModel: state.defaultModel,
+      selectedModels: [state.defaultModel],
+      followsDefault: true,
+      showModelAlerts: true,
+      followBest: true,
+    };
+  });
+
+  /**
+   * The Models tab's reports, as a subscriber (never an admin) sees them, minus the AI reviewer's
+   * recent calls: those name live tokens with no delay, which would undo the guest feed's.
+   */
+  app.get("/insights", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = reportQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { days } = parsed.data;
+    const insights = await opts.reports
+      .insightsFor(days, false)
+      .get(() => buildModelInsights(opts.env, days, false));
+    return { ...insights, recentAiReviews: [] };
   });
 }

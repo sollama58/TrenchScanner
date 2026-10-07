@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { ApiError, post, type Subscription, type User, type WorkerHealth } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
-import { isGuest, setGuest, setSessionToken } from "./session";
+import { GUEST_DELAY_MINUTES, isGuest, setGuest, setSessionToken } from "./session";
 import { usePolling } from "./hooks";
 import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
@@ -155,7 +155,8 @@ export function App() {
           {guest && (
             <nav className="tabs" role="tablist">
               {TABS.map(({ id, label, Icon }) => {
-                const locked = id !== "live";
+                // Live and Models work read-only without a wallet; the rest are saved to one.
+                const locked = id !== "live" && id !== "model";
                 return (
                   <button
                     key={id}
@@ -258,6 +259,10 @@ export function App() {
           <div className="tab-view" key={tab}>
             {tab === "live" ? (
               <GuestLiveTab onConnect={connectWallet} />
+            ) : tab === "model" ? (
+              <Suspense fallback={<Boot />}>
+                <ModelTab guest />
+              </Suspense>
             ) : (
               <GuestLocked
                 label={TABS.find((t) => t.id === tab)?.label ?? "this"}
@@ -396,8 +401,9 @@ function GuestLocked({ label, onConnect }: { label: string; onConnect: () => voi
       </span>
       <h2>Connect a wallet to use {label}</h2>
       <p className="muted">
-        You&apos;re looking around as a guest, so you see the recommended model&apos;s calls on the Live tab.
-        Your own filters, model picks, alerts and settings are saved to your wallet.
+        You&apos;re in guest mode: the Live tab shows the recommended model&apos;s calls {GUEST_DELAY_MINUTES}{" "}
+        minutes late, and the Models tab shows how every model is doing. Your own filters, model picks, alerts
+        and settings are saved to your wallet.
       </p>
       <button className="button primary" onClick={onConnect}>
         Connect wallet

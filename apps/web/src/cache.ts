@@ -33,6 +33,8 @@ const PERSIST = new Set([
   "/health/worker",
   "/matches?page=1&includeCurated=saved",
   "/guest/feed?page=1",
+  "/guest/models?days=30",
+  "/guest/insights?days=30",
   "/matches/stats?hours=24",
   "/curated/stats",
   "/curated/models?days=30",

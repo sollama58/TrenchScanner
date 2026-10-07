@@ -22,7 +22,7 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerDeviceLinkRoutes } from "./routes/deviceLink.js";
 import { registerFilterRoutes } from "./routes/filters.js";
 import { registerMatchRoutes } from "./routes/matches.js";
-import { registerCuratedRoutes } from "./routes/curated.js";
+import { createReportCaches, registerCuratedRoutes } from "./routes/curated.js";
 import { registerGuestRoutes } from "./routes/guest.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -430,8 +430,11 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     for (const warm of warmers) warm();
   });
 
+  // The Models tab's reports, read by subscribers (/curated) and guests (/guest) from one fill.
+  const reports = createReportCaches();
   await app.register(registerCuratedRoutes, {
     prefix: "/curated",
+    reports,
     env,
     liveRefresher,
     matchStream,
@@ -439,7 +442,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     warmers,
   });
   // The read-only feed for visitors without a wallet: its own route, so no paid route's gate is loosened.
-  await app.register(registerGuestRoutes, { prefix: "/guest", env, matchStream, viewStamps });
+  await app.register(registerGuestRoutes, { prefix: "/guest", env, viewStamps, reports });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });

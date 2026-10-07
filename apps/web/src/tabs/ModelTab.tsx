@@ -18,6 +18,7 @@ import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
 import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
+import { GUEST_DELAY_MINUTES } from "../session";
 import { ago, pct, signedPct, stakes, tokenLabel, usd } from "../format";
 
 const WINDOWS = [7, 30, 90] as const;
@@ -38,12 +39,14 @@ const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
  * the rest. The field evolves: each run breeds challengers from the leaders, and the best one
  * takes the weakest seat when it clearly out-examines it. The AI reviewer sits at the bottom, collapsed - it is a later focus.
  */
-export function ModelTab() {
+export function ModelTab({ guest = false }: { guest?: boolean }) {
   const now = useNow(60_000);
   const [days, setDays] = useState<(typeof WINDOWS)[number]>(30);
   const [pick, setPick] = useState(0);
-  const insights = usePolling<ModelInsights>(`/curated/insights?days=${days}`, 120_000);
-  const board = usePolling<Leaderboard>(`/curated/models?days=${days}`, 120_000, String(pick));
+  // A guest reads the same reports from the read-only guest routes; the /curated ones need access.
+  const api = guest ? "/guest" : "/curated";
+  const insights = usePolling<ModelInsights>(`${api}/insights?days=${days}`, 120_000);
+  const board = usePolling<Leaderboard>(`${api}/models?days=${days}`, 120_000, String(pick));
 
   const error = insights.error ?? board.error;
   if (error && (!insights.data || !board.data))
@@ -73,6 +76,7 @@ export function ModelTab() {
   )[0];
   // Same list, same save, as the Live tab's model checkboxes.
   const setFeedModels = async (models: string[] | null) => {
+    if (guest) return;
     await saveFeedSettings({ models });
     setPick((n) => n + 1);
   };
@@ -87,7 +91,7 @@ export function ModelTab() {
         <div className="hero-top">
           <div>
             <span className="eyebrow">
-              <BrainIcon size={13} /> Your models at a glance
+              <BrainIcon size={13} /> {guest ? "The models" : "Your models"} at a glance
             </span>
             <h2 className="hero-title">
               {leader && leader.composite.score !== null ? (
@@ -102,9 +106,13 @@ export function ModelTab() {
               {lb.entries.length} models compete to spot tokens that double within 15 minutes. Every call is
               graded the same way, and the goal is a 2x within 15 minutes on {t.hitRate2xPct}% of calls and a
               4x within 30 minutes on {t.hitRate4xPct}%, with 10x within an hour on{" "}
-              {lb.scoring.tenXTargetPct ?? 25}% as the big-run tier. Your feed shows calls from{" "}
+              {lb.scoring.tenXTargetPct ?? 25}% as the big-run tier.{" "}
+              {guest ? "As a guest you see calls from" : "Your feed shows calls from"}{" "}
               <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
               {lb.followBest ? " (whichever model is doing best; it switches automatically)" : ""}
+              {guest
+                ? `, ${GUEST_DELAY_MINUTES} minutes after each call. Connect a wallet to pick models`
+                : ""}
               {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
             </p>
           </div>
@@ -114,8 +122,8 @@ export function ModelTab() {
                 key={w}
                 className={w === days ? "on" : ""}
                 onPointerEnter={() => {
-                  prefetch(`/curated/insights?days=${w}`);
-                  prefetch(`/curated/models?days=${w}`);
+                  prefetch(`${api}/insights?days=${w}`);
+                  prefetch(`${api}/models?days=${w}`);
                 }}
                 onClick={() => setDays(w)}
               >
@@ -174,6 +182,7 @@ export function ModelTab() {
         board={lb}
         days={days}
         onSetModels={setFeedModels}
+        guest={guest}
         refreshing={board.stale}
         now={now}
       />
@@ -233,6 +242,7 @@ export function ModelTab() {
           board={lb}
           days={days}
           onSetModels={setFeedModels}
+          guest={guest}
           refreshing={board.stale}
           now={now}
           detailed
@@ -733,6 +743,7 @@ function LeaderboardPanel({
   board,
   days,
   onSetModels,
+  guest = false,
   refreshing,
   now,
   detailed = false,
@@ -740,6 +751,8 @@ function LeaderboardPanel({
   board: Leaderboard;
   days: number;
   onSetModels: (models: string[] | null) => Promise<void>;
+  /** No wallet: the feed picks show, greyed out, with a prompt to connect one. */
+  guest?: boolean;
   /** `board` is from before the last change and its fresh copy is loading: hold further clicks. */
   refreshing: boolean;
   now: number;
@@ -774,12 +787,20 @@ function LeaderboardPanel({
           ) : (
             <p className="muted small">
               The score runs from 0 to 100: 100 means a model&apos;s calls have reliably hit the goal. Profit
-              is what following every call with one fixed exit plan would have returned. Tick{" "}
-              <strong>In feed</strong> to get a model&apos;s alerts on the Live tab.
+              is what following every call with one fixed exit plan would have returned.{" "}
+              {guest ? (
+                <>
+                  Connect a wallet to pick which models&apos; alerts you get with <strong>In feed</strong>.
+                </>
+              ) : (
+                <>
+                  Tick <strong>In feed</strong> to get a model&apos;s alerts on the Live tab.
+                </>
+              )}
             </p>
           )}
         </div>
-        {!detailed && board.followBest === false && (
+        {!detailed && !guest && board.followBest === false && (
           <button
             className="ghost"
             disabled={busy !== null || refreshing}
@@ -852,7 +873,7 @@ function LeaderboardPanel({
                           best
                         </span>
                       )}
-                      {mine && <span className="chip">your feed</span>}
+                      {mine && <span className="chip">{guest ? "guest feed" : "your feed"}</span>}
                     </div>
                     {detailed ? (
                       <small className="muted">
@@ -961,17 +982,19 @@ function LeaderboardPanel({
                   {!detailed && (
                     <td className="r lb-feed">
                       <label
-                        className="in-feed"
+                        className={`in-feed${guest ? " locked" : ""}`}
                         title={
-                          onlyOne
-                            ? "Your feed needs at least one model"
-                            : "Show this model's calls in your feed"
+                          guest
+                            ? "Connect a wallet to pick models"
+                            : onlyOne
+                              ? "Your feed needs at least one model"
+                              : "Show this model's calls in your feed"
                         }
                       >
                         <input
                           type="checkbox"
                           checked={mine}
-                          disabled={busy !== null || refreshing || onlyOne}
+                          disabled={guest || busy !== null || refreshing || onlyOne}
                           onChange={() => void use(e.id, toggledModels(board, e.id))}
                         />
                         In feed

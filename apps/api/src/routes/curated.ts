@@ -91,7 +91,7 @@ const INSIGHTS_CACHE_TTL_MS = 5 * 60_000;
  */
 const REPORT_WINDOWS_DAYS = [7, 30, 90] as const;
 
-const reportDaysSchema = z.coerce
+export const reportDaysSchema = z.coerce
   .number()
   .int()
   .refine((d) => (REPORT_WINDOWS_DAYS as readonly number[]).includes(d), {
@@ -133,6 +133,41 @@ const feedSettingsSchema = z
     "nothing to change",
   );
 
+/**
+ * The report caches behind the Models tab, shared by the subscriber routes here and the guest
+ * routes (routes/guest.ts), so a guest opening the tab reads the same fill instead of a second one.
+ */
+export function createReportCaches() {
+  const leaderboardCache = new Map<number, SharedCache<Leaderboard>>();
+  const leaderboardFor = (days: number) => {
+    let cache = leaderboardCache.get(days);
+    if (!cache) {
+      cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS, {
+        staleWhileRevalidateMs: REPORT_STALE_MS,
+      });
+      // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
+      leaderboardCache.set(days, cache);
+    }
+    return cache;
+  };
+
+  const insightsCache = new Map<string, SharedCache<ModelInsights>>();
+  const insightsFor = (days: number, isAdmin: boolean) => {
+    const key = `${days}:${isAdmin ? "admin" : "subscriber"}`;
+    let cache = insightsCache.get(key);
+    if (!cache) {
+      cache = new SharedCache<ModelInsights>(INSIGHTS_CACHE_TTL_MS, {
+        staleWhileRevalidateMs: REPORT_STALE_MS,
+      });
+      // Bounded by the schema: REPORT_WINDOWS_DAYS x 2 audiences.
+      insightsCache.set(key, cache);
+    }
+    return cache;
+  };
+  return { leaderboardFor, insightsFor };
+}
+export type ReportCaches = ReturnType<typeof createReportCaches>;
+
 export async function registerCuratedRoutes(
   app: FastifyInstance,
   opts: {
@@ -140,12 +175,15 @@ export async function registerCuratedRoutes(
     liveRefresher: OnDemandLiveRefresher;
     matchStream: MatchStream;
     viewStamps: ViewStampBuffer;
+    /** The Models tab's report caches, shared with the guest routes. */
+    reports: ReportCaches;
     /** Startup warm-ups: each one starts a report fill so the first reader after a deploy doesn't wait. */
     warmers?: (() => void)[];
   },
 ) {
   // Part of what the subscription buys - same gate as the Live Feed.
   app.addHook("preHandler", app.authenticateSubscriber);
+  const { leaderboardFor, insightsFor } = opts.reports;
 
   /**
    * One cache per page, because this feed is genuinely shared: every subscriber sees the same
@@ -282,18 +320,6 @@ export async function registerCuratedRoutes(
    * with its live calls), with the same ids and names the model selector uses. `selectedModel`
    * is the ledger this user's feed shows.
    */
-  const leaderboardCache = new Map<number, SharedCache<Leaderboard>>();
-  const leaderboardFor = (days: number) => {
-    let cache = leaderboardCache.get(days);
-    if (!cache) {
-      cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS, {
-        staleWhileRevalidateMs: REPORT_STALE_MS,
-      });
-      // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
-      leaderboardCache.set(days, cache);
-    }
-    return cache;
-  };
   app.get("/models", async (request, reply) => {
     const parsed = leaderboardQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -627,19 +653,6 @@ export async function registerCuratedRoutes(
    * Cached per window and audience - admins also get the reviewer's reasoning, which never
    * reaches anyone else's response.
    */
-  const insightsCache = new Map<string, SharedCache<ModelInsights>>();
-  const insightsFor = (days: number, isAdmin: boolean) => {
-    const key = `${days}:${isAdmin ? "admin" : "subscriber"}`;
-    let cache = insightsCache.get(key);
-    if (!cache) {
-      cache = new SharedCache<ModelInsights>(INSIGHTS_CACHE_TTL_MS, {
-        staleWhileRevalidateMs: REPORT_STALE_MS,
-      });
-      // Bounded by the schema: REPORT_WINDOWS_DAYS x 2 audiences.
-      insightsCache.set(key, cache);
-    }
-    return cache;
-  };
   app.get("/insights", async (request, reply) => {
     const parsed = insightsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
