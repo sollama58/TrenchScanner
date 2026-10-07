@@ -10,6 +10,7 @@ import {
   BREAKDOWN_MODES,
   BUCKETS,
   DIMENSIONS,
+  dimensionLabel,
   METRICS,
   PRESETS,
   WINDOWS,
@@ -17,6 +18,7 @@ import {
   bucketAllowed,
   bucketLabel,
   canAdd,
+  hasPanel,
   defaultBucketFor,
   defaultPanels,
   delta,
@@ -26,6 +28,7 @@ import {
   metricSeries,
   panelTitle,
   savePanels,
+  type BreakdownMode,
   type ChartKind,
   type MetricId,
   type Panel,
@@ -46,7 +49,6 @@ const VIEW_KEY = "trenchscanner.lighthouse.view.v1";
 interface View {
   days: number;
   bucket: LighthouseHistoryBucket;
-  dimension: LighthouseDimension;
 }
 function loadView(): View {
   try {
@@ -57,10 +59,9 @@ function loadView(): View {
       BUCKETS.some((b) => b.id === v.bucket) && bucketAllowed(v.bucket!, days)
         ? v.bucket!
         : defaultBucketFor(days);
-    const dimension = DIMENSIONS.some((d) => d.id === v.dimension) ? v.dimension! : "category";
-    return { days, bucket, dimension };
+    return { days, bucket };
   } catch {
-    return { days: 30, bucket: "day", dimension: "category" };
+    return { days: 30, bucket: "day" };
   }
 }
 
@@ -78,10 +79,7 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
   }, [view]);
   useEffect(() => savePanels(panels), [panels]);
 
-  const history = usePolling<LighthouseHistory>(
-    `${api}/lighthouse/history?days=${view.days}&bucket=${view.bucket}&dimension=${view.dimension}`,
-    300_000,
-  );
+  const history = usePolling<LighthouseHistory>(historyPath(api, view), 300_000);
   // The goals the models are held to, from the leaderboard every other tab already fetched.
   const board = usePolling<Leaderboard>(`${api}/models?days=30`, 600_000);
   const targets = board.data?.targets ?? DEFAULT_TARGETS;
@@ -163,19 +161,6 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
               })}
             </div>
           </div>
-          <label className="lht-control">
-            <span className="lht-control-label">Break down by</span>
-            <select
-              value={view.dimension}
-              onChange={(e) => setView((v) => ({ ...v, dimension: e.target.value as LighthouseDimension }))}
-            >
-              {DIMENSIONS.map((dim) => (
-                <option key={dim.id} value={dim.id}>
-                  {dim.label}
-                </option>
-              ))}
-            </select>
-          </label>
           <button
             type="button"
             className="ghost stats-btn lht-csv"
@@ -240,17 +225,23 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
                     aria-label="Add a chart"
                     onChange={(e) => {
                       const preset = PRESETS[Number(e.target.value)];
-                      if (preset) setPanels((ps) => [...ps, preset.make()]);
+                      if (!preset) return;
+                      const made = preset.make();
+                      setPanels((ps) => (hasPanel(ps, made) ? ps : [...ps, made]));
                     }}
                   >
                     <option value="" disabled>
                       Add chart…
                     </option>
-                    {PRESETS.map((p, i) => (
-                      <option key={p.label} value={i}>
-                        {p.label}
-                      </option>
-                    ))}
+                    {PRESETS.map((p, i) => {
+                      const active = hasPanel(panels, p.make());
+                      return (
+                        <option key={p.label} value={i} disabled={active}>
+                          {p.label}
+                          {active ? " (on the page)" : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                 </label>
                 <button type="button" className="ghost stats-btn" onClick={() => setPanels(defaultPanels())}>
@@ -267,8 +258,9 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
                   key={p.id}
                   panel={p}
                   history={d}
+                  api={api}
+                  view={view}
                   targets={targets}
-                  dimension={view.dimension}
                   first={i === 0}
                   last={i === panels.length - 1}
                   onChange={(f) => update(p.id, f)}
@@ -304,7 +296,7 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
             ))}
           </div>
         </header>
-        <LighthouseBody base={api} days={nowDays} target2xPct={targets.hitRate2xPct} />
+        <LighthouseBody base={api} days={nowDays} />
       </section>
     </div>
   );
@@ -334,11 +326,15 @@ function Kpi({ d, id, label, span }: { d: LighthouseHistory; id: MetricId; label
   );
 }
 
+const historyPath = (api: string, view: View, dimension?: LighthouseDimension) =>
+  `${api}/lighthouse/history?days=${view.days}&bucket=${view.bucket}${dimension ? `&dimension=${dimension}` : ""}`;
+
 function ChartPanel({
   panel,
   history,
+  api,
+  view,
   targets,
-  dimension,
   first,
   last,
   onChange,
@@ -347,8 +343,9 @@ function ChartPanel({
 }: {
   panel: Panel;
   history: LighthouseHistory;
+  api: string;
+  view: View;
   targets: { hitRate2xPct: number; hitRate4xPct: number };
-  dimension: LighthouseDimension;
   first: boolean;
   last: boolean;
   onChange: (f: (p: Panel) => Panel) => void;
@@ -357,16 +354,9 @@ function ChartPanel({
 }) {
   const [editing, setEditing] = useState(false);
   const breakdown = "breakdown" in panel;
-  const bucket = breakdown ? history.labels.bucket : history.window.bucket;
-  const points = breakdown ? history.labels.buckets : history.series;
-  const labels = useMemo(() => points.map((p) => bucketLabel(p.at, bucket)), [points, bucket]);
-  const series = useMemo(
-    () =>
-      breakdown ? breakdownSeries(history, panel.breakdown) : metricSeries(history, panel.metrics, targets),
-    [history, panel, targets, breakdown],
-  );
-  const kind: "line" | "bars" | "stacked" = breakdown && panel.kind === "bars" ? "stacked" : panel.kind;
   const setKind = (k: ChartKind) => onChange((p) => ({ ...p, kind: k }));
+  const setDimension = (dimension: LighthouseDimension) =>
+    onChange((p) => ("breakdown" in p ? { ...p, dimension } : p));
   const toggle = (id: MetricId) =>
     onChange((p) => {
       if ("breakdown" in p) return p;
@@ -384,8 +374,23 @@ function ChartPanel({
   return (
     <article className="lht-panel">
       <header className="lht-panel-head">
-        <h3>{panelTitle(panel, dimension)}</h3>
+        <h3>{panelTitle(panel)}</h3>
         <div className="lht-panel-tools">
+          {breakdown && (
+            <select
+              className="lht-dimension"
+              value={panel.dimension}
+              aria-label="Break down by"
+              title="Break down by"
+              onChange={(e) => setDimension(e.target.value as LighthouseDimension)}
+            >
+              {DIMENSIONS.map((dim) => (
+                <option key={dim.id} value={dim.id}>
+                  {dim.label}
+                </option>
+              ))}
+            </select>
+          )}
           <div className="segmented small" role="tablist" aria-label="Chart type">
             {(["line", "bars"] as const).map((k) => (
               <button
@@ -443,7 +448,7 @@ function ChartPanel({
         (breakdown ? (
           <div className="lht-picker">
             <span className="lht-picker-group">
-              Draw, for each {DIMENSIONS.find((x) => x.id === dimension)?.label.toLowerCase()}
+              Draw, for each {dimensionLabel(panel.dimension).toLowerCase()}
             </span>
             <div className="lht-chips">
               {BREAKDOWN_MODES.map((m) => (
@@ -452,15 +457,23 @@ function ChartPanel({
                   type="button"
                   className={`chip lht-chip${panel.breakdown === m.id ? " on" : ""}`}
                   aria-pressed={panel.breakdown === m.id}
-                  onClick={() => onChange((p) => ({ id: p.id, kind: m.kind, breakdown: m.id }))}
+                  onClick={() =>
+                    onChange((p) => ({
+                      id: p.id,
+                      kind: m.kind,
+                      breakdown: m.id,
+                      dimension: "breakdown" in p ? p.dimension : "category",
+                    }))
+                  }
                 >
                   {m.label}
                 </button>
               ))}
             </div>
             <p className="faint small">
-              The biggest five labels get their own series; the rest are &quot;other&quot;. Change the
-              dimension at the top. A label&apos;s 2x rate shows once it has five graded calls in a bucket.
+              The biggest five labels get their own series; the rest are &quot;other&quot;. The menu beside
+              the chart type picks what to break down by. A label&apos;s 2x rate shows once it has five graded
+              calls in a bucket.
             </p>
           </div>
         ) : (
@@ -491,8 +504,66 @@ function ChartPanel({
             ))}
           </div>
         ))}
-      <TrendChart labels={labels} series={series} kind={kind} partialLast />
+      {"breakdown" in panel ? (
+        <BreakdownChart panel={panel} api={api} view={view} fallback={history} />
+      ) : (
+        <MetricsChart panel={panel} history={history} targets={targets} />
+      )}
     </article>
+  );
+}
+
+function MetricsChart({
+  panel,
+  history,
+  targets,
+}: {
+  panel: Extract<Panel, { metrics: MetricId[] }>;
+  history: LighthouseHistory;
+  targets: { hitRate2xPct: number; hitRate4xPct: number };
+}) {
+  const bucket = history.window.bucket;
+  const labels = useMemo(() => history.series.map((p) => bucketLabel(p.at, bucket)), [history, bucket]);
+  const series = useMemo(() => metricSeries(history, panel.metrics, targets), [history, panel, targets]);
+  return <TrendChart labels={labels} series={series} kind={panel.kind} partialLast />;
+}
+
+/**
+ * A breakdown chart fetches the window for its own dimension (the API serves one dimension per
+ * answer, from a five-minute cache), so two breakdown charts can split by different things. The
+ * tab's own answer, which is the narrative split, stands in while the first fetch is out.
+ */
+function BreakdownChart({
+  panel,
+  api,
+  view,
+  fallback,
+}: {
+  panel: Extract<Panel, { breakdown: BreakdownMode }>;
+  api: string;
+  view: View;
+  fallback: LighthouseHistory;
+}) {
+  const own = usePolling<LighthouseHistory>(historyPath(api, view, panel.dimension), 300_000);
+  const history = own.data ?? (panel.dimension === fallback.window.dimension ? fallback : null);
+  const h = history ?? fallback;
+  const bucket = h.labels.bucket;
+  const labels = useMemo(() => h.labels.buckets.map((p) => bucketLabel(p.at, bucket)), [h, bucket]);
+  const series = useMemo(() => breakdownSeries(h, panel.breakdown), [h, panel.breakdown]);
+  if (!history) {
+    if (own.error) return <p className="error">Couldn&apos;t load this breakdown: {own.error.message}</p>;
+    return <Skeleton lines={5} />;
+  }
+  const stale = own.stale || (!own.data && !!history);
+  return (
+    <div className={stale ? "stale" : undefined} aria-busy={stale}>
+      <TrendChart
+        labels={labels}
+        series={series}
+        kind={panel.kind === "bars" ? "stacked" : "line"}
+        partialLast
+      />
+    </div>
   );
 }
 

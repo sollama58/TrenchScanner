@@ -82,7 +82,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
               <ChartIcon size={14} />
               Stats
             </button>
-            <LighthouseButton base="/guest" target2xPct={TARGETS.hitRate2xPct} />
+            <LighthouseButton base="/guest" />
             <button type="button" className="ghost stats-btn" disabled title={lockTitle}>
               <PaletteIcon size={14} />
               Customize

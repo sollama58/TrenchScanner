@@ -118,8 +118,8 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     const base = { source: TAG, confidence: 80, anchorPriceUsd: 1, anchorMcapUsd: 50_000 };
     await prisma.curatedAlert.createMany({
       data: [
-        { ...base, tokenId: tokens[0]!.id, hit2xIn1h: true, hit4xIn1h: false },
-        { ...base, tokenId: tokens[1]!.id, hit2xIn1h: false, hit4xIn1h: false },
+        { ...base, tokenId: tokens[0]!.id, hit2xIn1h: true, hit4xIn1h: false, simReturnPct: 40 },
+        { ...base, tokenId: tokens[1]!.id, hit2xIn1h: false, hit4xIn1h: false, simReturnPct: -50 },
         { ...base, tokenId: tokens[2]!.id },
       ],
     });
@@ -157,7 +157,14 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     );
     expect(d.news.find((n) => n.label === "in the news")?.count).toBeGreaterThanOrEqual(1);
     const animalCalls = d.outcomes.byCategory.find((t) => t.label === "lhanimal");
-    expect(animalCalls).toMatchObject({ alerts: 2, graded: 2, won2x: 1 });
+    expect(animalCalls).toMatchObject({
+      alerts: 2,
+      graded: 2,
+      won2x: 1,
+      won10x: 0,
+      returnN: 2,
+      returnSum: -10,
+    });
   });
 
   it("grades every screened decision moment and says what the pre-checks are", async () => {

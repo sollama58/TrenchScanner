@@ -1093,6 +1093,10 @@ export interface LighthouseTally {
   graded: number;
   won2x: number;
   won4x: number;
+  won10x: number;
+  /** Calls with a simulated return under the exit plan, and their sum (percent). */
+  returnN: number;
+  returnSum: number;
 }
 export interface MarketLighthouse {
   window: { days: number; since: string; bucketHours: number };
