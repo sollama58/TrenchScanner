@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { FeedReturns as FeedReturnsData } from "../api";
 import { usePolling } from "../hooks";
-import { pct, signedPct } from "../format";
+import { multiple, pct, signedPct } from "../format";
+import { PnlShare } from "./PnlShare";
 
 const LABELS: Record<number, string> = { 1: "1h", 6: "6h", 24: "24h", 168: "7d" };
 
@@ -26,6 +27,7 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
   const { data, error } = usePolling<FeedReturnsData>("/matches/returns", 60_000, pollKey);
   const [hours, setHours] = useState(24);
   const [hover, setHover] = useState<number | null>(null);
+  const [sharing, setSharing] = useState<number | null>(null);
   const win = data?.windows.find((w) => w.hours === hours) ?? null;
   const retAbs = Math.max(5, ...(win?.buckets ?? []).map((b) => Math.abs(b.avgReturnPct ?? 0)));
   const focus = win && hover !== null ? (win.buckets[hover] ?? null) : null;
@@ -115,6 +117,45 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
               </span>
             ))}
           </div>
+        </>
+      )}
+      {data?.top && data.top.length > 0 && (
+        <>
+          <span className="eyebrow returns-top-head">Top 3 · last 7 days</span>
+          <ol className="returns-top">
+            {data.top.map((t, i) => (
+              <li key={t.tokenId}>
+                <span className="returns-rank num">{i + 1}</span>
+                <span className="returns-token">
+                  <strong>{t.symbol ? `$${t.symbol}` : "Unnamed token"}</strong>
+                  <small className="faint">
+                    {new Date(t.at).toLocaleString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </small>
+                </span>
+                <span className={`returns-x num ${tone(t.returnPct)}`}>{multiple(t.returnPct)}</span>
+                <button
+                  type="button"
+                  className="ghost small"
+                  aria-expanded={sharing === i}
+                  onClick={() => setSharing(sharing === i ? null : i)}
+                >
+                  {sharing === i ? "Close" : "Share"}
+                </button>
+              </li>
+            ))}
+          </ol>
+          {sharing !== null && data.top[sharing] && (
+            <PnlShare
+              key={data.top[sharing]!.tokenId}
+              data={{ ...data.top[sharing]!, rank: sharing + 1 }}
+              onClose={() => setSharing(null)}
+            />
+          )}
         </>
       )}
       <p className="faint small stats-note">

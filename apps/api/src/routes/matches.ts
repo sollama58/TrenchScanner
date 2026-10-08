@@ -20,6 +20,7 @@ import {
   RETURN_WINDOW_MAX_HOURS,
   summarizeFeed,
   summarizeReturns,
+  topReturns,
   type FeedReturnWindow,
   type FeedStatsCard,
   type ReturnCard,
@@ -69,6 +70,15 @@ type FeedStatsResponse = ReturnType<typeof summarizeFeed> & { showModelAlerts: b
 /** What GET /matches/returns answers with - cached per reader, see FEED_RETURNS_CACHE_TTL_MS. */
 interface FeedReturnsResponse {
   windows: FeedReturnWindow[];
+  /** The week's three best settled returns, one per token, best first - for the share cards. */
+  top: {
+    tokenId: string;
+    symbol: string | null;
+    name: string | null;
+    mintAddress: string;
+    at: string;
+    returnPct: number;
+  }[];
   showModelAlerts: boolean;
   truncated: boolean;
 }
@@ -485,10 +495,38 @@ export async function registerMatchRoutes(
       },
     );
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
-      (c): ReturnCard => (c.kind === "match" && c.curated ? { at: c.at, returnPct: c.curated.returnPct } : c),
+      (c): ReturnCard & { tokenId: string } =>
+        c.kind === "match" && c.curated
+          ? { at: c.at, tokenId: c.tokenId, returnPct: c.curated.returnPct }
+          : c,
     );
+    // Names only for the three shown, not for the week's every card.
+    const best = topReturns(cards, now);
+    const tokens =
+      best.length === 0
+        ? []
+        : await prisma.token.findMany({
+            where: { id: { in: best.map((b) => b.tokenId) } },
+            select: { id: true, symbol: true, name: true, mintAddress: true },
+          });
+    const tokenById = new Map(tokens.map((t) => [t.id, t]));
     return {
       windows: summarizeReturns(cards, now),
+      top: best.flatMap((b) => {
+        const t = tokenById.get(b.tokenId);
+        return t
+          ? [
+              {
+                tokenId: b.tokenId,
+                symbol: t.symbol,
+                name: t.name,
+                mintAddress: t.mintAddress,
+                at: b.at.toISOString(),
+                returnPct: b.returnPct,
+              },
+            ]
+          : [];
+      }),
       showModelAlerts,
       truncated: matches.length === FEED_STATS_MAX_ROWS || calls.length === FEED_STATS_MAX_ROWS,
     };

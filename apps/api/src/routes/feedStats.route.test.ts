@@ -190,6 +190,11 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
     expect(on[24]).toMatchObject({ alerts: 3, settled: 1, avgReturnPct: 60 });
     expect(on[168]).toMatchObject({ alerts: 4, settled: 2, avgReturnPct: 20 });
     expect(on[168]!.buckets).toHaveLength(28);
+    const top = (await call("GET", "/matches/returns")).json().top as { symbol: string; returnPct: number }[];
+    expect(top.map((t) => [t.symbol, t.returnPct])).toEqual([
+      ["BBB", 60],
+      ["OLD", -20],
+    ]);
 
     await call("PUT", "/curated/feed", { showModelAlerts: false });
     const off = await windows();
