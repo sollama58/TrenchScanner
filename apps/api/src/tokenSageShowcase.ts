@@ -10,12 +10,7 @@ import { SharedCache } from "./sharedCache.js";
  */
 
 const HOUR_MS = 3_600_000;
-const DAY_MS = 24 * HOUR_MS;
 
-/** The daily chart's span, at most; it starts at the first day with a read. */
-export const SHOWCASE_DAYS = 30;
-/** The hourly chart's span, at most - the page draws it while there are only a few days of reads. */
-export const SHOWCASE_HOURS = 72;
 /** Labels listed per breakdown; the rest are summed into "other". */
 const TOP_LABELS = 8;
 
@@ -92,22 +87,11 @@ interface TotalsRow {
   alerts_won2x: bigint | null;
 }
 
-interface DayRow {
-  day: Date;
-  reads: bigint;
-  described: bigint;
-  deep: bigint;
-  failed: bigint;
-}
-
 export async function buildTokenSageShowcase(now = new Date()) {
   const to = new Date(Math.floor(now.getTime() / HOUR_MS) * HOUR_MS + HOUR_MS);
-  const dayStart = Math.floor(now.getTime() / DAY_MS) * DAY_MS;
-  const since = new Date(dayStart - (SHOWCASE_DAYS - 1) * DAY_MS);
   const last24 = new Date(to.getTime() - 24 * HOUR_MS);
-  const hoursSince = new Date(to.getTime() - SHOWCASE_HOURS * HOUR_MS);
 
-  const [whole, recent, days, hours, labelRows, anatomyRows, latest] = await Promise.all([
+  const [whole, recent, labelRows, anatomyRows, latest] = await Promise.all([
     prisma.$queryRaw<TotalsRow[]>`
       SELECT min(h."hour") AS oldest,
              sum(h."readsTotal") AS reads_total,
@@ -132,17 +116,6 @@ export async function buildTokenSageShowcase(now = new Date()) {
     prisma.lighthouseHour.aggregate({
       where: { hour: { gte: last24, lt: to } },
       _sum: { readsTotal: true, readsDescribed: true, readsDeep: true },
-    }),
-    prisma.$queryRaw<DayRow[]>`
-      SELECT date_trunc('day', h."hour") AS day,
-             sum(h."readsTotal") AS reads, sum(h."readsDescribed") AS described,
-             sum(h."readsDeep") AS deep, sum(h."readsFailed") AS failed
-      FROM "LighthouseHour" h
-      WHERE h."hour" >= ${since} AND h."hour" < ${to}
-      GROUP BY 1`,
-    prisma.lighthouseHour.findMany({
-      where: { hour: { gte: hoursSince, lt: to } },
-      select: { hour: true, readsTotal: true, readsDescribed: true, readsDeep: true, readsFailed: true },
     }),
     prisma.$queryRaw<
       { dimension: string; label: string; count: bigint; alerts: bigint; graded: bigint; won2x: bigint }[]
@@ -176,42 +149,6 @@ export async function buildTokenSageShowcase(now = new Date()) {
 
   const t = whole[0];
   const ratio = (num: number, den: number) => (den > 0 ? num / den : null);
-
-  // Both charts start at the first read: nothing before it is TokenSage's to show.
-  const firstRead = t?.oldest?.getTime() ?? to.getTime();
-  const byDay = new Map(days.map((d) => [d.day.getTime(), d]));
-  const daily = [];
-  for (
-    let d = Math.max(since.getTime(), Math.floor(firstRead / DAY_MS) * DAY_MS);
-    d <= dayStart;
-    d += DAY_MS
-  ) {
-    const r = byDay.get(d);
-    daily.push({
-      at: new Date(d).toISOString(),
-      reads: n(r?.reads),
-      described: n(r?.described),
-      deep: n(r?.deep),
-      failed: n(r?.failed),
-    });
-  }
-  const byHour = new Map<number, (typeof hours)[number]>();
-  for (const h of hours) byHour.set(Math.floor(h.hour.getTime() / HOUR_MS) * HOUR_MS, h);
-  const hourly = [];
-  for (
-    let h = Math.max(hoursSince.getTime(), Math.floor(firstRead / HOUR_MS) * HOUR_MS);
-    h < to.getTime();
-    h += HOUR_MS
-  ) {
-    const r = byHour.get(h);
-    hourly.push({
-      at: new Date(h).toISOString(),
-      reads: r?.readsTotal ?? 0,
-      described: r?.readsDescribed ?? 0,
-      deep: r?.readsDeep ?? 0,
-      failed: r?.readsFailed ?? 0,
-    });
-  }
 
   const labelsByDim = new Map<string, ShowcaseLabel[]>();
   for (const r of labelRows) {
@@ -271,8 +208,6 @@ export async function buildTokenSageShowcase(now = new Date()) {
       described: recent._sum.readsDescribed ?? 0,
       deep: recent._sum.readsDeep ?? 0,
     },
-    daily,
-    hourly,
     labels,
     anatomy,
     rules: latest
