@@ -300,6 +300,8 @@ export interface FeedReturns {
     /** What alerted it (absent from older API builds; null when the filter has been deleted). */
     source?: { kind: "filter" | "model"; name: string } | null;
   }[];
+  /** The same, from the followed models' calls alone and the reader's own filters' alerts alone (absent from older API builds). */
+  topBySource?: { model: NonNullable<FeedReturns["top"]>; filter: NonNullable<FeedReturns["top"]> };
   showModelAlerts: boolean;
   truncated: boolean;
 }

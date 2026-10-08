@@ -204,6 +204,18 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
       ["OLD", 900, { kind: "filter", name: "mine" }],
       ["AAA", 400, { kind: "filter", name: "mine" }],
     ]);
+    // Split by source: the models' calls alone, and the reader's own filters' alerts alone (B's
+    // filter alert counts there with its own 30% run).
+    const bySource = (await call("GET", "/matches/returns")).json().topBySource as Record<
+      "model" | "filter",
+      { symbol: string; peakPct: number }[]
+    >;
+    expect(bySource.model.map((t) => [t.symbol, Math.round(t.peakPct)])).toEqual([["BBB", 1100]]);
+    expect(bySource.filter.map((t) => [t.symbol, Math.round(t.peakPct)])).toEqual([
+      ["OLD", 900],
+      ["AAA", 400],
+      ["CCC", 150],
+    ]);
 
     await call("PUT", "/curated/feed", { showModelAlerts: false });
     const off = await windows();

@@ -6,6 +6,14 @@ import { PnlShare } from "./PnlShare";
 
 const LABELS: Record<number, string> = { 1: "1h", 6: "6h", 24: "24h", 168: "7d" };
 
+/** Which calls the Top 3 is drawn from: the whole feed, the followed models', or the reader's own filters'. */
+type TopBy = "all" | "model" | "filter";
+const TOP_BY: { id: TopBy; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "model", label: "AI KOL" },
+  { id: "filter", label: "Custom Filter" },
+];
+
 const tone = (v: number | null) => (v === null ? "" : v >= 0 ? "lh-up" : "lh-down");
 
 /** A bucket's start as the chart's axis reads it: a clock time inside a day, a weekday past it. */
@@ -28,6 +36,8 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
   const [hours, setHours] = useState(24);
   const [hover, setHover] = useState<number | null>(null);
   const [sharing, setSharing] = useState<number | null>(null);
+  const [topBy, setTopBy] = useState<TopBy>("all");
+  const top = (topBy === "all" ? data?.top : data?.topBySource?.[topBy]) ?? [];
   const win = data?.windows.find((w) => w.hours === hours) ?? null;
   const retAbs = Math.max(5, ...(win?.buckets ?? []).map((b) => Math.abs(b.avgReturnPct ?? 0)));
   const focus = win && hover !== null ? (win.buckets[hover] ?? null) : null;
@@ -121,9 +131,39 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
       )}
       {data?.top && data.top.length > 0 && (
         <>
-          <span className="eyebrow returns-top-head">Top 3 · last 7 days</span>
+          <div className="returns-top-head">
+            <span className="eyebrow">Top 3 · last 7 days</span>
+            {data.topBySource && (
+              <div className="segmented small" role="tablist" aria-label="Calls from">
+                {TOP_BY.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={o.id === topBy}
+                    className={o.id === topBy ? "on" : ""}
+                    onClick={() => {
+                      setTopBy(o.id);
+                      setSharing(null);
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {top.length === 0 && (
+            <p className="small muted returns-focus">
+              {topBy === "model"
+                ? data.showModelAlerts
+                  ? "No AI KOL call in your feed has run above its alert this week."
+                  : "Model alerts are off on your feed, so it has no AI KOL calls."
+                : "No alert from your filters has run above its alert price this week."}
+            </p>
+          )}
           <ol className="returns-top">
-            {data.top.map((t, i) => (
+            {top.map((t, i) => (
               <li key={t.tokenId}>
                 <span className="returns-rank num">{i + 1}</span>
                 <span className="returns-token">
@@ -150,10 +190,10 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
               </li>
             ))}
           </ol>
-          {sharing !== null && data.top[sharing] && (
+          {sharing !== null && top[sharing] && (
             <PnlShare
-              key={data.top[sharing]!.tokenId}
-              data={{ ...data.top[sharing]!, source: data.top[sharing]!.source ?? null }}
+              key={`${topBy}:${top[sharing]!.tokenId}`}
+              data={{ ...top[sharing]!, source: top[sharing]!.source ?? null }}
               onClose={() => setSharing(null)}
             />
           )}
