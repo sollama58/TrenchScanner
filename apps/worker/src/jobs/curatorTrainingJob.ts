@@ -22,6 +22,8 @@ import {
   walletSafetyCutsSql,
   maskKnownBadInputs,
   MAX_EVENT_AGE_MINUTES,
+  CANDIDATE_FEATURE_NAMES,
+  ALL_NARRATIVE_FEATURES,
   Prisma,
   type ContestRunOutcome,
   type ContestantTrainingResult,
@@ -867,6 +869,34 @@ interface LoadedRow {
   hit10xIn1h: boolean | null;
 }
 
+/** Every name a stored vector can carry, in vector order: the shape withFixedShape builds. */
+const STORED_FEATURE_NAMES: readonly string[] = [
+  ...new Set<string>([...CANDIDATE_FEATURE_NAMES, ...ALL_NARRATIVE_FEATURES]),
+];
+const STORED_FEATURE_SET: ReadonlySet<string> = new Set(STORED_FEATURE_NAMES);
+/** Spread per row, so every row starts from the one hidden class with all the names in place. */
+const FEATURES_TEMPLATE: Readonly<Record<string, undefined>> = Object.fromEntries(
+  STORED_FEATURE_NAMES.map((name) => [name, undefined]),
+);
+
+/**
+ * A stored vector rebuilt with one fixed shape. Parsed from jsonb, a vector of ~148 keys is a
+ * dictionary-mode object in V8: about 7.8KB a row against 2.8KB with one shape (a synthetic full
+ * vector, node 22), several hundred MB at the 100k row cap on a 2GB trainer. Copied onto a
+ * template of every feature name, each row is a plain object sharing one hidden class. Reads are
+ * unchanged: a name the row never stored reads undefined, as it did before (it is now an own key
+ * holding undefined, which nothing over the rows tells apart, and JSON drops). Keys outside the
+ * lists - a retired input on an old row - are kept as they were.
+ */
+export function withFixedShape<T>(stored: T): T {
+  if (typeof stored !== "object" || stored === null) return stored;
+  const src = stored as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...FEATURES_TEMPLATE };
+  for (const name of STORED_FEATURE_NAMES) out[name] = src[name];
+  for (const key of Object.keys(src)) if (!STORED_FEATURE_SET.has(key)) out[key] = src[key];
+  return out as T;
+}
+
 async function loadRowsOfKind(
   sampleKind: "hourly" | "event" | "second",
   windowStart: Date,
@@ -912,7 +942,10 @@ async function loadRowsOfKind(
       LIMIT ${take}`;
     for (const r of page) {
       // Inputs known to be wrong on old rows (fake order-flow zeros) read as missing.
-      const features = maskKnownBadInputs(r.anchorAt, r.features as Record<string, number | null>);
+      const features = maskKnownBadInputs(
+        r.anchorAt,
+        withFixedShape(r.features as Record<string, number | null>),
+      );
       out.push({
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,

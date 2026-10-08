@@ -278,7 +278,7 @@ async function dispatchPass(
 
   const matchUsers = [...new Set(chats.filter((c) => c.filterMatches).map((c) => c.user.id))];
   const wantsCalls = chats.some((c) => c.modelCalls && c.user.showModelAlerts);
-  const [matches, calls, state] = await Promise.all([
+  const [matches, calls] = await Promise.all([
     matchUsers.length === 0
       ? []
       : prisma.match.findMany({
@@ -313,7 +313,6 @@ async function dispatchPass(
             snapshot: { select: SNAPSHOT_SELECT },
           },
         }),
-    wantsCalls ? (deps.feedModelState ?? (() => loadFeedModelState(env)))() : Promise.resolve(null),
   ]);
   if (matches.length === 0 && calls.length === 0) {
     // Nothing new for anyone: move every cursor up so the next pass reads a short window. Only
@@ -324,6 +323,9 @@ async function dispatchPass(
     });
     return summary;
   }
+  // The roster and default only decide which calls go to whom, so they are read only when there
+  // are calls to route: most passes are empty, and this runs every few seconds.
+  const state = calls.length > 0 ? await (deps.feedModelState ?? (() => loadFeedModelState(env)))() : null;
 
   const access = new Map<string, Promise<boolean>>();
   const accessOf = (wallet: string) => {

@@ -767,6 +767,7 @@ interface ScreenRow {
   marketCapUsd: number | null;
   freshTop10WalletPct: number | null;
   emptyTop10WalletPct: number | null;
+  sniperTop10WalletPct?: number | null;
   top10HolderPct: number | null;
   riskScore: number | null;
 }
@@ -859,7 +860,18 @@ export function SafetyScreen() {
               }
             >
               <Table
-                head={["Checked", "Token", "Mcap", "Verdict", "Fresh", "Empty", "Top 10", "Risk", "Reasons"]}
+                head={[
+                  "Checked",
+                  "Token",
+                  "Mcap",
+                  "Verdict",
+                  "Fresh",
+                  "Empty",
+                  "Snipers",
+                  "Top 10",
+                  "Risk",
+                  "Reasons",
+                ]}
                 rows={rows.map((r) => [
                   when(r.takenAt),
                   token(r.mint, r.symbol),
@@ -867,6 +879,7 @@ export function SafetyScreen() {
                   r.passed ? <Tag tone="ok">pass</Tag> : <Tag tone="bad">reject</Tag>,
                   walletPct(r.freshTop10WalletPct),
                   walletPct(r.emptyTop10WalletPct),
+                  walletPct(r.sniperTop10WalletPct ?? null),
                   r.top10HolderPct === null ? "–" : pct(r.top10HolderPct),
                   r.riskScore === null ? "–" : n(Math.round(r.riskScore)),
                   r.reasons.length ? (
@@ -925,6 +938,7 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["maxTokenAgeMinutes", "age ≤", (v) => `${v}m`],
   ["maxFreshTop10WalletPct", "fresh ≤", (v) => `${v}%`],
   ["maxEmptyTop10WalletPct", "empty ≤", (v) => `${v}%`],
+  ["maxSniperTop10WalletPct", "snipers in top 10 ≤", (v) => `${v}%`],
   ["maxTop10HolderPct", "top10 ≤", (v) => `${v}%`],
   ["maxDevWalletPct", "dev ≤", (v) => `${v}%`],
   ["maxRiskScore", "risk ≤", (v) => String(v)],

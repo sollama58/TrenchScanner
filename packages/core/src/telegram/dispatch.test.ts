@@ -144,13 +144,18 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       data: { sentThrough: new Date(Date.now() - 60_000) },
     });
 
+  /** How many times a pass read the feed model state. */
+  let stateLoads = 0;
   const run = (api: FakeTelegramApi, hasAccess = true, now = Date.now()) =>
     runTelegramDispatch(env, {
       api,
       now: () => now,
       sleep: noSleep,
       hasAccess: async () => hasAccess,
-      feedModelState: async () => state,
+      feedModelState: async () => {
+        stateLoads += 1;
+        return state;
+      },
     });
 
   it("does nothing without a token", async () => {
@@ -190,8 +195,10 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
         },
       ],
     });
+    stateLoads = 0;
     const summary = await run(api);
     expect(summary).toMatchObject({ chats: 1, sent: 1, digests: 0, failed: 0 });
+    expect(stateLoads).toBe(1);
     const sent = api.sent();
     expect(sent).toHaveLength(1);
     expect(sent[0]!.chatId).toBe(String(chatId));
@@ -208,6 +215,15 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     const again = await run(api);
     expect(again.sent).toBe(0);
     expect(api.sent()).toHaveLength(1);
+  });
+
+  it("never reads the model state on a pass with nothing new", async () => {
+    const api = new FakeTelegramApi();
+    await prisma.telegramChat.update({ where: { id: chatRowId }, data: { sentThrough: new Date() } });
+    stateLoads = 0;
+    const summary = await run(api);
+    expect(summary.sent + summary.digests).toBe(0);
+    expect(stateLoads).toBe(0);
   });
 
   it("skips accounts without access and still moves their cursor", async () => {

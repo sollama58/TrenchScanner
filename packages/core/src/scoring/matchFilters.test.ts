@@ -113,6 +113,15 @@ describe("matchesFilter", () => {
   });
 });
 
+describe("maxSniperTop10WalletPct", () => {
+  it("rejects a token whose top 10 are mostly its launch snipers, and skips an unknown share", () => {
+    const filter = { ...baseFilter, maxSniperTop10WalletPct: 30 };
+    expect(matchesFilter(baseToken({ sniperTop10WalletPct: 40 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ sniperTop10WalletPct: 30 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ sniperTop10WalletPct: undefined }), filter)).toBe(true);
+  });
+});
+
 describe("maxEmptyTop10WalletPct", () => {
   it("rejects a token whose top-10 are mostly wallets holding nothing else", () => {
     const token = baseToken({ emptyTop10WalletPct: 80 });

@@ -182,6 +182,7 @@ export function buildAiReviewBrief(
     `- dev wallet holds: ${devWalletText(scored)}; dev still holding: ${devHoldingText(resolveDevHolding(scored))}`,
     `- top-10 wallets that are brand new: ${fmtPct(scored.freshTop10WalletPct)}`,
     `- top-10 wallets holding almost nothing else: ${fmtPct(scored.emptyTop10WalletPct)}`,
+    `- top-10 wallets that were among the launch's first 25 buyers: ${fmtPct(scored.sniperTop10WalletPct)}`,
     `- RugCheck risk score (higher is riskier): ${fmtNum(scored.riskScore)}`,
     `- RugCheck flags: ${scored.riskFlags && scored.riskFlags.length > 0 ? scored.riskFlags.join("; ") : "none"}`,
     ``,

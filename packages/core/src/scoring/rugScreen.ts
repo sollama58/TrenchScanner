@@ -19,6 +19,13 @@ export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 
 /**
+ * At or above this share of the top-10 holders (pool and LP aside) being the launch's own first 25
+ * buyers, a token is never alerted (user decision 2026-10-08): the snipers still own the book, and
+ * they sell into whoever buys next. "At or above" for the same 10%-steps reason as the empty cut.
+ */
+export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
+
+/**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
  * user, independent of their filter settings - this is the "auto-filter
  * scams" behavior chosen in planning, not something users can turn off.
@@ -60,21 +67,29 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
     );
   }
 
-  reasons.push(...walletScreenReasons(profile.freshTop10WalletPct, profile.emptyTop10WalletPct));
+  reasons.push(
+    ...walletScreenReasons(
+      profile.freshTop10WalletPct,
+      profile.emptyTop10WalletPct,
+      profile.sniperTop10WalletPct,
+    ),
+  );
 
   return { passed: reasons.length === 0, reasons };
 }
 
 /**
- * The screen's two top-10 wallet cuts. A holder list that is mostly brand-new wallets is a sniper
- * or insider farm, and one that is mostly empty wallets (funded only to hold this launch) is a
- * bundled or farmed launch - whatever anyone's filter says. Each applies only once measured: until
+ * The screen's three top-10 wallet cuts. A holder list that is mostly brand-new wallets is a sniper
+ * or insider farm, one that is mostly empty wallets (funded only to hold this launch) is a
+ * bundled or farmed launch, and one that is mostly the launch's first buyers is still the snipers'
+ * book - whatever anyone's filter says. Each applies only once measured: until
  * the wallet lookups land the figure is unknown, and model calls wait for it anyway
  * (CURATED_REQUIRE_WALLET_CHECKS).
  */
 function walletScreenReasons(
   freshPct: number | null | undefined,
   emptyPct: number | null | undefined,
+  sniperPct?: number | null,
 ): string[] {
   const reasons: string[] = [];
   if (typeof freshPct === "number" && freshPct > SAFETY_MAX_FRESH_WALLET_PCT) {
@@ -87,6 +102,11 @@ function walletScreenReasons(
       `${emptyPct.toFixed(0)}% of top-10 holders are empty wallets (${SAFETY_REJECT_EMPTY_WALLET_PCT}% or more)`,
     );
   }
+  if (typeof sniperPct === "number" && sniperPct >= SAFETY_REJECT_SNIPER_WALLET_PCT) {
+    reasons.push(
+      `${sniperPct.toFixed(0)}% of top-10 holders are launch snipers (${SAFETY_REJECT_SNIPER_WALLET_PCT}% or more)`,
+    );
+  }
   return reasons;
 }
 
@@ -97,7 +117,13 @@ function walletScreenReasons(
  * the score's fit leave such rows out rather than learn from tokens that are mostly farm rugs.
  */
 export function passesWalletSafetyCuts(features: Record<string, number | null | undefined>): boolean {
-  return walletScreenReasons(features.freshTop10WalletPct, features.emptyTop10WalletPct).length === 0;
+  return (
+    walletScreenReasons(
+      features.freshTop10WalletPct,
+      features.emptyTop10WalletPct,
+      features.sniperTop10WalletPct,
+    ).length === 0
+  );
 }
 
 /** The screen's conditions that are already in hand from the RugCheck profile - no network call. */
@@ -153,5 +179,6 @@ export const CRITICAL_RISK_FLAGS = new Set(["Creator history of rugged tokens", 
  */
 export function walletSafetyCutsSql(features: Prisma.Sql = Prisma.raw('"features"')): Prisma.Sql {
   return Prisma.sql`COALESCE((${features}->>'emptyTop10WalletPct')::float8 < ${SAFETY_REJECT_EMPTY_WALLET_PCT}, true)
-    AND COALESCE((${features}->>'freshTop10WalletPct')::float8 <= ${SAFETY_MAX_FRESH_WALLET_PCT}, true)`;
+    AND COALESCE((${features}->>'freshTop10WalletPct')::float8 <= ${SAFETY_MAX_FRESH_WALLET_PCT}, true)
+    AND COALESCE((${features}->>'sniperTop10WalletPct')::float8 < ${SAFETY_REJECT_SNIPER_WALLET_PCT}, true)`;
 }

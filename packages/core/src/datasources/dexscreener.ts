@@ -106,7 +106,7 @@ export interface TokenLookupOptions {
    * The mints asked for may well have no pair at all (a holder's other holdings: airdrops,
    * NFTs, dead coins - see walletValuation). An all-empty answer to such a lookup is then not
    * evidence DexScreener is blank, and never switches the process onto the fallback; while the
-   * fallback is on, the lookup still goes through it.
+   * fallback is on, the lookup is not sent at all and every mint counts as failed.
    */
   mayBeUnindexed?: boolean;
 }
@@ -166,6 +166,14 @@ export class DexScreenerClient {
     // alerts went quiet for every user while discovery carried on. While it is blank, one batch
     // probes it and GeckoTerminal answers the lookup; the first probe with a pair in it ends that.
     if (Date.now() < this.blankUntil) {
+      // A holder's other holdings (walletValuation) are mostly airdrops and dead coins: on the
+      // fallback they spend paid CoinGecko credits and the background budget fast-match needs, to
+      // price nothing. They count as unanswered instead, so the caller retries once DexScreener is
+      // back; an empty answer from them proves nothing about DexScreener either way.
+      if (options.mayBeUnindexed) {
+        if (options.failed) for (const mint of unique) options.failed.add(mint);
+        return [];
+      }
       const [probe, gecko] = await Promise.all([
         this.lookup(unique.slice(0, BATCH_SIZE), concurrency, {
           timeoutMs: options.timeoutMs,

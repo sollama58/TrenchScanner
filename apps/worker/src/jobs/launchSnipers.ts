@@ -106,6 +106,18 @@ export function launchSnipersFromCache(
 }
 
 /**
+ * The launch's first buyers' wallets, once read - what the top-10 snipers share
+ * (sniperTop10WalletPct) is measured against. Undefined until the read, and for a launch with no
+ * buyers found (unknown, never "no snipers"). Who the first buyers were never changes, so no
+ * freshness limit applies.
+ */
+export function sniperWalletsFromCache(mint: string): ReadonlySet<string> | undefined {
+  const e = entries.get(mint);
+  if (!e || e.buyers.length === 0) return undefined;
+  return new Set(e.buyers.map((b) => b.wallet));
+}
+
+/**
  * Reads what's missing or stale for `groups` (in priority order: contenders first) within the
  * budgets, then returns every mint with a usable figure. A mint without one reads as unknown -
  * never as zero snipers.

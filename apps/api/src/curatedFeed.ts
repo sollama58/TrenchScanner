@@ -476,6 +476,7 @@ export function serializeCuratedAlert(
     riskFlags: [],
     freshTop10WalletPct: null,
     emptyTop10WalletPct: null,
+    sniperTop10WalletPct: null,
     firstBuyersHolding: null,
     firstBuyersSeen: null,
     devHolding: null,

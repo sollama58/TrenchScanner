@@ -132,6 +132,19 @@ export function parseLaunchBuyers(
 export const LAUNCH_HOLDING_DUST_SHARE = 0.01;
 
 /**
+ * The share of `top10Holders` (wallet addresses, pool and LP already excluded) that are among
+ * `sniperWallets` - the launch's first buyers - as a 0-100 percentage. Null with no holder list.
+ */
+export function sniperShareOfTop10(
+  top10Holders: readonly string[],
+  sniperWallets: ReadonlySet<string>,
+): number | null {
+  if (top10Holders.length === 0) return null;
+  const snipers = top10Holders.filter((w) => sniperWallets.has(w)).length;
+  return (snipers / top10Holders.length) * 100;
+}
+
+/**
  * How many of `buyers` still hold, from their token accounts' current balances (base units; a
  * closed account is 0). Null when any balance is missing - a partial count would read low.
  */

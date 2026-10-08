@@ -163,6 +163,16 @@ describe("passesWalletSafetyCuts", () => {
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ freshTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
+    expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);
+    expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 70 })).toBe(true);
+  });
+
+  it("rejects a live token when 80% or more of its top 10 are the launch's first buyers", () => {
+    const sniped = runRugScreen({ ...safeProfile, sniperTop10WalletPct: 80 });
+    expect(sniped.passed).toBe(false);
+    expect(sniped.reasons).toEqual(["80% of top-10 holders are launch snipers (80% or more)"]);
+    expect(runRugScreen({ ...safeProfile, sniperTop10WalletPct: 70 }).passed).toBe(true);
+    expect(runRugScreen({ ...safeProfile, sniperTop10WalletPct: undefined }).passed).toBe(true);
   });
 
   it("keeps a row whose wallet checks were never measured", () => {

@@ -6,6 +6,7 @@ import {
   prisma,
   Prisma,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
+  SAFETY_REJECT_SNIPER_WALLET_PCT,
   walletSafetyCutsSql,
   SAFETY_MAX_FRESH_WALLET_PCT,
   type Env,
@@ -178,6 +179,7 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
     checks: {
       freshWalletMaxPct: SAFETY_MAX_FRESH_WALLET_PCT,
       emptyWalletRejectPct: SAFETY_REJECT_EMPTY_WALLET_PCT,
+      sniperWalletRejectPct: SAFETY_REJECT_SNIPER_WALLET_PCT,
       mcapMinUsd: env.MCAP_FILTER_MIN,
       mcapMaxUsd: env.MCAP_FILTER_MAX,
       maxAgeMinutes: MAX_EVENT_AGE_MINUTES,

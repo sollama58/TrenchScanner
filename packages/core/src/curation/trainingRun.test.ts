@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   pickCuratorFamily,
   runCuratorTraining,
+  runEvolvingContest,
   NEVER_EMIT_THRESHOLD,
   type FamilyResult,
 } from "./trainingRun.js";
 import { calibrateThresholdForPrecision, wilsonLowerBound, type ScoredOutcome } from "./trainer.js";
 import { syntheticMarket } from "./syntheticMarket.js";
+import { enabledContestants } from "./contestants.js";
 
 const family = (
   learner: FamilyResult["learner"],
@@ -84,4 +86,46 @@ describe("runCuratorTraining", () => {
     expect(run.metrics.verdict.promote).toBe(false);
     // Two full walk-forward trainings on 2,500 tokens: seconds of CPU, more on a shared CI runner.
   }, 30_000);
+});
+
+describe("runEvolvingContest's challengers", () => {
+  // Challengers sit only the exam; the winner's model is fitted after the contest. A challenger
+  // bred as an exact copy of a seat must still ship exactly the model that seat ships.
+  it("ship the winner's model exactly as a seat examined in full would", async () => {
+    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 12 });
+    const cfg = {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1500,
+      recencyHalfLifeDays: 14,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      highConvictionRank: 0.99,
+      contestants: enabledContestants(["linear"]),
+    };
+    const twin = {
+      recipe: { learner: "logistic" as const },
+      name: "Linear",
+      description: "test",
+      generation: 1,
+      parentName: "Linear",
+    };
+    const run = (takeover: boolean, probation = false) =>
+      runEvolvingContest(rows, cfg, {
+        challengers: [twin],
+        probation,
+        decide: (_lanes, scores) =>
+          takeover && scores[0] !== null ? { slot: "linear", challenger: 0, reason: "test" } : null,
+      });
+    const kept = await run(false);
+    const taken = await run(true);
+    const held = await run(true, true);
+    const seat = kept.results.find((r) => r.contestant === "linear")!;
+    expect(taken.challengerScores[0]).not.toBeNull();
+    expect(taken.challengerScores).toEqual(kept.challengerScores);
+    expect(taken.replacement).toMatchObject({ slot: "linear", examScore: kept.challengerScores[0] });
+    expect(taken.results.find((r) => r.contestant === "linear")).toEqual(seat);
+    expect(held.probation!.challengerParams).toEqual(seat.params);
+  }, 60_000);
 });

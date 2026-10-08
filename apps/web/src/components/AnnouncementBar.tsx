@@ -46,14 +46,15 @@ export function linkify(text: string): (string | { href: string })[] {
  * announcement shows at a time, so that is the only one that could come back.
  */
 export function AnnouncementBar() {
-  const { data, reload } = usePolling<{ announcement: Announcement | null }>("/announcement", 120_000);
+  // Every 30 s: the automatic restart warnings (worker pipelineWatchJob.ts) come a minute ahead.
+  const { data, reload } = usePolling<{ announcement: Announcement | null }>("/announcement", 30_000);
   useEffect(() => {
     window.addEventListener(REFRESH_EVENT, reload);
     return () => window.removeEventListener(REFRESH_EVENT, reload);
   }, [reload]);
   const [dismissed, setDismissed] = useState(readDismissed);
   const a = data?.announcement;
-  // Nothing re-renders at the expiry on its own, and the next poll is up to two minutes off:
+  // Nothing re-renders at the expiry on its own, and the next poll is up to half a minute off:
   // re-read as it passes, so an announcement posted "for an hour" leaves on the hour.
   const expiresAt = a?.expiresAt ?? null;
   useEffect(() => {

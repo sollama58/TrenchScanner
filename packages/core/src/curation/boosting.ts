@@ -202,14 +202,30 @@ export function featureColumns(
  * bin k" therefore means value <= edges[k-1], which is the threshold stored in the tree.
  */
 export function binColumn(col: Float64Array, maxBins: number): { edges: number[]; bins: Uint8Array } {
-  const present: number[] = [];
-  for (const v of col) if (!Number.isNaN(v)) present.push(v);
-  present.sort((a, b) => a - b);
+  // A typed array and its native numeric sort rather than a number[] and a comparator: this runs
+  // once per feature per fit, over every row, and the comparator call dominated it.
+  let count = 0;
+  let negatives = 0;
+  for (const v of col) {
+    if (Number.isNaN(v)) continue;
+    count++;
+    if (v < 0) negatives++;
+  }
+  const present = new Float64Array(count);
+  let k = 0;
+  for (const v of col) if (!Number.isNaN(v)) present[k++] = v;
+  present.sort();
   const edges: number[] = [];
   if (present.length > 0) {
     for (let q = 1; q < maxBins; q++) {
-      const v = present[Math.min(present.length - 1, Math.floor((q * present.length) / maxBins))]!;
-      if (edges.length === 0 || v > edges[edges.length - 1]!) edges.push(v);
+      const idx = Math.min(present.length - 1, Math.floor((q * present.length) / maxBins));
+      const v = present[idx]!;
+      if (edges.length === 0 || v > edges[edges.length - 1]!) {
+        // The native sort puts -0 before +0 where the comparator sort kept them in row order;
+        // they bin the same, but take the zero the old sort would have so the stored threshold
+        // is unchanged to the bit. The zeros start right after the negatives.
+        edges.push(v === 0 ? nthZero(col, idx - negatives) : v);
+      }
     }
     // The top edge never splits anything off (nothing is above the max), so drop an edge equal to
     // the max and let the last bin hold it.
@@ -229,6 +245,13 @@ export function binColumn(col: Float64Array, maxBins: number): { edges: number[]
     bins[i] = lo + 1;
   }
   return { edges, bins };
+}
+
+/** The nth (0-based) zero of the column in row order, keeping its sign. */
+function nthZero(col: Float64Array, n: number): number {
+  let seen = 0;
+  for (const v of col) if (v === 0 && seen++ === n) return v;
+  return 0;
 }
 
 interface Split {
@@ -495,7 +518,12 @@ async function boost(
   legacyLabelWeight: number | undefined,
   runWeightPerDoubling: number | undefined,
   featureNames: string[],
-): Promise<{ baseScore: number; trees: BoostedTree[]; bestTrees: number }> {
+): Promise<{
+  baseScore: number;
+  trees: BoostedTree[];
+  bestTrees: number;
+  binned: { edges: number[]; bins: Uint8Array }[];
+}> {
   const transform = CURRENT_FEATURE_TRANSFORM;
   const objective = opts.objective;
   const cols = featureColumns(fit, featureNames, transform);
@@ -616,7 +644,7 @@ async function boost(
       break;
     }
   }
-  return { baseScore, trees, bestTrees };
+  return { baseScore, trees, bestTrees, binned };
 }
 
 /**
@@ -775,9 +803,9 @@ export async function trainBoostedCurator(
   let baseScore = final.baseScore;
   let trees = final.trees;
   if (opts.objective !== "logistic") {
-    // The sum of the trees is an ordering, not a log-odds: map it onto the clean-2x label.
-    const cols = featureColumns(sorted, featureNames, CURRENT_FEATURE_TRANSFORM);
-    const binned = cols.map((c) => binColumn(c, opts.maxBins));
+    // The sum of the trees is an ordering, not a log-odds: map it onto the clean-2x label. The
+    // final fit already binned exactly these rows, so its bins are reused rather than rebuilt.
+    const binned = final.binned;
     const raw = new Float64Array(sorted.length).fill(baseScore);
     for (const tree of trees) {
       for (let i = 0; i < sorted.length; i++) raw[i] = raw[i]! + tree.value[leafOfBinned(tree, binned, i)]!;
