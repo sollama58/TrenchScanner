@@ -46,19 +46,15 @@ export const lighthouseQuerySchema = z.object({
     .default(1),
   /**
    * The reader's IANA zone, for the hour-of-day chart (screenedByHourOfDay). Canonicalized, so
-   * "europe/berlin" and "Europe/Berlin" share one cache. Absent means UTC.
+   * "europe/berlin" and "Europe/Berlin" share one cache. Absent means UTC, and so does a zone
+   * this server's ICU doesn't know ("Etc/Unknown", which Chrome reports when it can't tell, or
+   * a zone newer than our tzdata): the answer says UTC and the web shifts by today's offset, rather
+   * than the whole Lighthouse failing over a hint for one chart.
    */
   tz: z
     .string()
     .max(64)
-    .transform((tz, ctx) => {
-      const zone = canonicalTimeZone(tz);
-      if (!zone) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "tz must be an IANA time zone" });
-        return z.NEVER;
-      }
-      return zone;
-    })
+    .transform((tz) => canonicalTimeZone(tz) ?? "UTC")
     .default("UTC"),
 });
 

@@ -236,7 +236,10 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     // A half-hour zone: 13:00 UTC is 18:30 in Kolkata, so hour 18.
     const ist = (await app.inject({ method: "GET", url: url("Asia/Kolkata") })).json<MarketLighthouse>();
     expect(ist.screened.byHourOfDay.hours[18]!.calls).toBeGreaterThanOrEqual(SUMMER_CALLS + 10);
-    expect((await app.inject({ method: "GET", url: url("Not/A_Zone") })).statusCode).toBe(400);
+    // A zone this server can't read gets UTC hours (the web then shifts them), not a failed page.
+    const unknown = await app.inject({ method: "GET", url: url("Etc/Unknown") });
+    expect(unknown.statusCode).toBe(200);
+    expect(unknown.json<MarketLighthouse>().screened.byHourOfDay.timeZone).toBe("UTC");
   });
 
   it("serves the 7-day window and rejects others", async () => {
