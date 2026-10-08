@@ -70,3 +70,15 @@ describe("PumpFunClient.currentlyLive", () => {
     expect(await new PumpFunClient({ baseUrl: url }).currentlyLive()).toBeNull();
   });
 });
+
+describe("PumpFunClient discovery paging", () => {
+  it("asks for pages under Pump.fun's 70-a-page cap, at back-to-back offsets", async () => {
+    const { url, paths } = await serve([]);
+    await new PumpFunClient({ baseUrl: url }).discoverNewMints();
+    const asked = paths.map((p) => new URL(p, "http://x").searchParams);
+    expect(asked.every((q) => Number(q.get("limit")) <= 70)).toBe(true);
+    const offsets = asked.map((q) => Number(q.get("offset"))).sort((a, b) => a - b);
+    const limit = Number(asked[0]!.get("limit"));
+    expect(offsets).toEqual(offsets.map((_, i) => i * limit));
+  });
+});
