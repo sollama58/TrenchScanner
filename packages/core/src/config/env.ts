@@ -200,6 +200,11 @@ const envSchema = z.object({
   // CURATED_REQUIRE_WALLET_CHECKS on, a curated decision waits for the top-10 snipers share, which
   // needs the first buyers. Contenders are a handful a cycle; this caps a burst.
   SNIPER_CONTENDER_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(15),
+  // The longest a curated decision waits for that share once the token looks ready and its other
+  // wallet checks are in. Past it the token is decided with the share unknown: a read that is slow
+  // or keeps failing must not hold decisions back (on 2026-10-08 an unbounded wait cut decisions
+  // from about ten every ten minutes to one). 0 = don't wait at all.
+  SNIPER_SHARE_MAX_WAIT_SECONDS: z.coerce.number().nonnegative().default(90),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
   // every few minutes for the band, every minute for a token about to be decided on.
   SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(300),

@@ -7,7 +7,7 @@ import {
   sniperShareUnobtainable,
   sniperWalletsFromCache,
 } from "./launchSnipers.js";
-import { sniperShareReady, withLaunchSnipers, withWalletSignals } from "./scanJob.js";
+import { resetSniperWaits, sniperShareReady, withLaunchSnipers, withWalletSignals } from "./scanJob.js";
 
 const buyers = (mint: string, n: number) =>
   Array.from({ length: n }, (_, i) => ({
@@ -212,6 +212,18 @@ describe("snipers in the top 10", () => {
     expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["A", "B", "C"], 25);
   });
 
+  it("reads a contender with no list before re-reading one with an incomplete list", async () => {
+    const f = fakeHelius({ found: { A: 10, B: 25 } });
+    await resolveLaunchSnipers([{ mintAddress: "A", contender: true }], f.helius, { ...opts, now: 0 });
+    const groups = [
+      { mintAddress: "A", contender: true },
+      { mintAddress: "B", contender: true },
+    ];
+    // A's 10-buyer list is due a re-read, but B has no list at all and its decision waits on one.
+    await resolveLaunchSnipers(groups, f.helius, { ...opts, maxContenderLookups: 1, now: 180_000 });
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["B"], 25);
+  });
+
   it("retries a contender's failed read after a minute, the rest after five", async () => {
     const f = fakeHelius({});
     const groups = [
@@ -248,13 +260,28 @@ describe("snipers in the top 10", () => {
 });
 
 describe("sniperShareReady", () => {
-  beforeEach(() => resetLaunchSnipersCache());
+  beforeEach(() => {
+    resetLaunchSnipersCache();
+    resetSniperWaits();
+  });
+  const unknown = { mintAddress: "A", sniperTop10WalletPct: undefined };
 
   it("holds a decision until the share is in, unless it can't come", () => {
-    const unknown = { mintAddress: "A", sniperTop10WalletPct: undefined };
-    expect(sniperShareReady(unknown, true)).toBe(false);
-    expect(sniperShareReady({ ...unknown, sniperTop10WalletPct: 0 }, true)).toBe(true);
+    expect(sniperShareReady(unknown, true, 90_000, 0)).toBe(false);
+    expect(sniperShareReady({ ...unknown, sniperTop10WalletPct: 0 }, true, 90_000, 1_000)).toBe(true);
     // The chain read is off or the endpoint is standing down: nothing to wait for.
-    expect(sniperShareReady(unknown, false)).toBe(true);
+    expect(sniperShareReady(unknown, false, 90_000, 2_000)).toBe(true);
+  });
+
+  it("stops waiting once the token has waited the longest allowed", () => {
+    expect(sniperShareReady(unknown, true, 90_000, 0)).toBe(false);
+    expect(sniperShareReady(unknown, true, 90_000, 60_000)).toBe(false);
+    expect(sniperShareReady(unknown, true, 90_000, 90_000)).toBe(true);
+    // Another token's wait is its own.
+    expect(sniperShareReady({ ...unknown, mintAddress: "B" }, true, 90_000, 90_000)).toBe(false);
+  });
+
+  it("doesn't wait at all with the bound at 0", () => {
+    expect(sniperShareReady(unknown, true, 0, 0)).toBe(true);
   });
 });

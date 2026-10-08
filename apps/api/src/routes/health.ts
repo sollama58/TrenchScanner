@@ -106,6 +106,12 @@ export function publicErrorText(error: string): string {
  */
 const WORKER_HEALTH_CACHE_MS = 5_000;
 
+/** The later of two optional times. */
+function latest(a: Date | null, b: Date | null): Date | null {
+  if (!a || !b) return a ?? b;
+  return a > b ? a : b;
+}
+
 export async function registerHealthRoutes(
   app: FastifyInstance,
   opts: { env?: Pick<Env, "AI_DAILY_BUDGET_USD" | "AI_BUDGET_REVIEW_RESERVE_PCT"> } = {},
@@ -131,13 +137,15 @@ export async function registerHealthRoutes(
    * light defense-in-depth measure against dumping internal detail to an unauthenticated caller.
    */
   const readHeartbeats = async () => {
-    const [heartbeats, aiBudget, lastAlert, lastRead, lastDecision] = await Promise.all([
+    const [heartbeats, aiBudget, lastAlert, lastRead, lastDecision, lastSecondLook] = await Promise.all([
       prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
       readAiBudget(budgetEnv),
       // Newest row of each, each one a backward step down its own index.
       prisma.curatedAlert.aggregate({ _max: { createdAt: true } }),
       prisma.tokenNarrative.aggregate({ _max: { checkedAt: true } }),
       prisma.candidateOutcome.aggregate({ where: { sampleKind: "event" }, _max: { anchorAt: true } }),
+      // The Narrative seat's second look is a model considering a token too.
+      prisma.candidateOutcome.aggregate({ where: { sampleKind: "second" }, _max: { anchorAt: true } }),
     ]);
     const scanMeta = heartbeats.find((h) => h.job === "scan")?.meta as Record<string, unknown> | null;
     const screenPass = scanMeta?.lastScreenPassAt;
@@ -146,7 +154,7 @@ export async function registerHealthRoutes(
       lastAlertAt: lastAlert._max.createdAt,
       lastPreCheckPassAt: typeof screenPass === "number" ? new Date(screenPass) : null,
       lastTokenSageAt: lastRead._max.checkedAt,
-      lastDecisionAt: lastDecision._max.anchorAt,
+      lastDecisionAt: latest(lastDecision._max.anchorAt, lastSecondLook._max.anchorAt),
     };
     return { heartbeats, aiBudget, pipeline };
   };
