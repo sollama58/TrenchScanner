@@ -76,3 +76,39 @@ export function loadNarrativeNoteReadiness(now: number = Date.now()): Promise<Na
   });
   return value;
 }
+
+/**
+ * What the Narrative seat's verdict on a coin rests on, as stored with it
+ * (CuratedAlert.narrativeRationale) and shown in the TokenSage view: its own probability, the
+ * calibrated 2x rate of its past calls ranked like this one, and the inputs that moved it most
+ * each way, in plain words.
+ */
+export interface NarrativeRationale {
+  probabilityPct: number;
+  calibratedPct: number | null;
+  for: string[];
+  against: string[];
+}
+
+const RATIONALE_MAX_ITEMS = 5;
+
+/** A stored rationale read back defensively (a JSON column); null when it isn't one. */
+export function parseNarrativeRationale(value: unknown): NarrativeRationale | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const list = (x: unknown): string[] | null =>
+    Array.isArray(x)
+      ? x.filter((s): s is string => typeof s === "string").slice(0, RATIONALE_MAX_ITEMS)
+      : null;
+  const pros = list(v.for);
+  const cons = list(v.against);
+  if (!pros || !cons || typeof v.probabilityPct !== "number" || !Number.isFinite(v.probabilityPct))
+    return null;
+  return {
+    probabilityPct: v.probabilityPct,
+    calibratedPct:
+      typeof v.calibratedPct === "number" && Number.isFinite(v.calibratedPct) ? v.calibratedPct : null,
+    for: pros,
+    against: cons,
+  };
+}

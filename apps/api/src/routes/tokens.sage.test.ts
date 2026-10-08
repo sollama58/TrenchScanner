@@ -56,6 +56,24 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
         analysis: full.analysis,
       },
     });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        source: TAG,
+        model: "runner",
+        confidence: 60,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 10_000,
+        narrativeVerdict: "agrees",
+        narrativeNotedAt: new Date(),
+        narrativeRationale: {
+          probabilityPct: 47,
+          calibratedPct: 41,
+          for: ["X post fit"],
+          against: ["token age"],
+        },
+      },
+    });
     // Read more than three weeks ago: the cleanup dropped the document and kept the row.
     await prisma.tokenNarrative.create({
       data: {
@@ -96,11 +114,17 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
     expect(view.read!.referent!.label).toBe("Peanut (squirrel)");
     expect(view.marketCap.map((p) => p.usd)).toEqual([10_000, 20_000, 30_000]);
     expect(res.body).not.toContain("CTfBTtxhtAyGEysdjp9owVQvjSwPjtrzEGB9ZgAKewsY");
+    expect(view.narrative).toMatchObject({
+      verdict: "agrees",
+      calibratedPct: 41,
+      for: ["X post fit"],
+      against: ["token age"],
+    });
   });
 
   it("says when there is no read, and turns away bad mints and visitors", async () => {
     const none = (await get(NONE)).json() as SageView;
-    expect(none).toMatchObject({ status: "none", read: null, token: null, marketCap: [] });
+    expect(none).toMatchObject({ status: "none", read: null, token: null, marketCap: [], narrative: null });
     const expired = (await get(EXPIRED)).json() as SageView;
     expect(expired).toMatchObject({ status: "expired", read: null });
     expect((await get("not-a-mint")).statusCode).toBe(400);

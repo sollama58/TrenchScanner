@@ -478,6 +478,11 @@ model CuratedAlert {
   /// and on the Narrative seat's own calls.
   narrativeVerdict String?
   narrativeNotedAt DateTime?
+  /// What the Narrative seat's verdict rests on (curation/narrativeNote.ts NarrativeRationale): its
+  /// probability, calibrated 2x rate, and the inputs that moved it most each way. Written with
+  /// narrativeVerdict on a noted card and on the seat's own calls, for the TokenSage view. Null on
+  /// other seats' calls nobody noted, and on rows from before it was stored (2026-10-08).
+  narrativeRationale Json?
 
   aiReviews AiReview[]
 

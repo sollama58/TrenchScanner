@@ -6,7 +6,13 @@ import {
   trainBoostedCurator,
   type BoostingRow,
 } from "./boosting.js";
-import { scoreCandidateWithModel, topModelReasons, trainCurator, trainCuratorModel } from "./trainer.js";
+import {
+  modelRationale,
+  scoreCandidateWithModel,
+  topModelReasons,
+  trainCurator,
+  trainCuratorModel,
+} from "./trainer.js";
 
 const T0 = new Date("2026-08-01T00:00:00Z").getTime();
 
@@ -132,6 +138,27 @@ describe("trainBoostedCurator", () => {
     const p = scoreBoosted(params, features);
     expect(params.baseScore + rootSum + total).toBeCloseTo(Math.log(p / (1 - p)), 9);
     expect(topModelReasons({ ...params }, features).length).toBeGreaterThan(0);
+  });
+
+  it("explains a score both ways in plain words", async () => {
+    // Snipers alone decide here: a clean holder list wins, a sniped one loses; age is noise.
+    const rand = rng(9);
+    const rows: BoostingRow[] = Array.from({ length: 2000 }, (_, i) => {
+      const snipers = rand() * 60;
+      return {
+        tokenId: `r${i}`,
+        anchorAt: new Date(T0 + i * 60_000),
+        features: { freshTop10WalletPct: snipers, ageMinutes: rand() * 300 },
+        labelValue: rand() < (snipers < 30 ? 0.6 : 0.05) ? 1 : 0,
+      };
+    });
+    const params = await trainBoostedCurator(rows);
+    const good = modelRationale({ ...params }, { freshTop10WalletPct: 5, ageMinutes: 100 });
+    const bad = modelRationale({ ...params }, { freshTop10WalletPct: 50, ageMinutes: 100 });
+    expect(good.for[0]).toBe("fresh-wallet snipers");
+    expect(bad.against[0]).toBe("fresh-wallet snipers");
+    expect(bad.for).not.toContain("fresh-wallet snipers");
+    expect(good.for.length).toBeLessThanOrEqual(3);
   });
 
   it("is reachable through trainCuratorModel", async () => {
