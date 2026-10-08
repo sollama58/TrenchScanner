@@ -187,15 +187,27 @@ function sageLink(mint: string, links: AlertLinks, text: string): string | null 
   return url ? `<a href="${escapeHtml(url)}">${text}</a>` : null;
 }
 
-function tradeLinks(mint: string, links: AlertLinks): string {
+/** The rule under an alert's title: a visual break that costs a handful of caption characters. */
+export const DIVIDER = "━━━━━━━━━━━━━━";
+
+function dashboardLink(links: AlertLinks, text: string): string | null {
+  const base = links.dashboardUrl.replace(/\/$/, "");
+  return base ? `<a href="${escapeHtml(base)}/#live">${text}</a>` : null;
+}
+
+function tradeLinks(mint: string): string {
   const m = encodeURIComponent(mint);
-  const out: string[] = [];
-  if (links.dashboardUrl)
-    out.push(`<a href="${escapeHtml(links.dashboardUrl.replace(/\/$/, ""))}/#live">TrenchScanner</a>`);
-  out.push(`<a href="https://trade.padre.gg/trade/solana/${m}">Terminal</a>`);
-  out.push(`<a href="https://axiom.trade/t/${m}">Axiom</a>`);
-  out.push(`<a href="https://gmgn.ai/sol/token/${m}">GMGN</a>`);
-  return out.join(" · ");
+  return [
+    `<a href="https://trade.padre.gg/trade/solana/${m}">Terminal</a>`,
+    `<a href="https://axiom.trade/t/${m}">Axiom</a>`,
+    `<a href="https://gmgn.ai/sol/token/${m}">GMGN</a>`,
+  ].join("  │  ");
+}
+
+/** A 0-100 conviction as ten blocks, e.g. ▰▰▰▰▰▰▰▱▱▱ for 72. */
+export function convictionBar(pct: number): string {
+  const filled = Math.max(0, Math.min(10, Math.round(pct / 10)));
+  return "▰".repeat(filled) + "▱".repeat(10 - filled);
 }
 
 /** The one-line "who raised it" headline. */
@@ -219,32 +231,39 @@ function strongestFirst(card: AlertCard): AlertCard {
   };
 }
 
-function factsLine(card: AlertCard, now: number): string | null {
+/** The numbers, two to a line so they read as a small grid on a phone. */
+function factsLines(card: AlertCard, now: number): string | null {
   const facts: string[] = [];
-  if (card.snapshot) facts.push(`💰 ${usd(card.snapshot.marketCapUsd)} mcap`);
-  if (card.snapshot?.holderCount != null) facts.push(`👥 ${card.snapshot.holderCount} holders`);
-  if (card.snapshot?.volume1hUsd != null) facts.push(`📊 ${usd(card.snapshot.volume1hUsd)} vol 1h`);
+  if (card.snapshot) facts.push(`💰 MC <b>${usd(card.snapshot.marketCapUsd)}</b>`);
+  if (card.snapshot?.holderCount != null) facts.push(`👥 <b>${card.snapshot.holderCount}</b> holders`);
+  if (card.snapshot?.volume1hUsd != null) facts.push(`📊 Vol 1h <b>${usd(card.snapshot.volume1hUsd)}</b>`);
   const age = ageText(card.token.firstSeenAt, now);
   if (age) facts.push(`⏱ ${age}`);
-  return facts.length > 0 ? facts.join("  ·  ") : null;
+  if (facts.length === 0) return null;
+  const lines: string[] = [];
+  for (let i = 0; i < facts.length; i += 2) lines.push(facts.slice(i, i + 2).join("   ·   "));
+  return lines.join("\n");
 }
 
 function callLines(call: AlertCall, withReasons: boolean): string[] {
-  const bits = [`🤖 <b>${escapeHtml(call.modelName)}</b>`, `${Math.round(call.confidence)}% conviction`];
-  if (call.tier === "high") bits.push("🔥 high conviction");
-  if (call.calibratedPct !== null) bits.push(`${Math.round(call.calibratedPct)}% of calls like it 2x'd`);
-  if (call.narrativeVerdict === "agrees") bits.push("📝 Narrative agrees");
-  if (call.narrativeVerdict === "warns") bits.push("⚠️ Narrative warns");
-  const lines = [bits.join(" · ")];
-  const reasons = withReasons ? call.reasons.slice(0, MAX_REASONS).map((r) => `• ${escapeHtml(r)}`) : [];
+  const pct = Math.round(call.confidence);
+  let head = `🤖 <b>${escapeHtml(call.modelName)}</b>  ${convictionBar(pct)}  <b>${pct}%</b> conviction`;
+  if (call.tier === "high") head += "  🔥 high";
+  const lines = [head];
+  if (call.calibratedPct !== null)
+    lines.push(`     ${Math.round(call.calibratedPct)}% of calls like it 2x'd`);
+  if (call.narrativeVerdict === "agrees") lines.push("     📝 Narrative agrees");
+  if (call.narrativeVerdict === "warns") lines.push("     ⚠️ Narrative warns");
+  const reasons = withReasons ? call.reasons.slice(0, MAX_REASONS).map((r) => `▸ ${escapeHtml(r)}`) : [];
   if (reasons.length > 0) lines.push(`<blockquote>${reasons.join("\n")}</blockquote>`);
   return lines;
 }
 
 /**
- * One alert as a Telegram HTML message: the token and who raised it, the numbers, each model's
- * call (strongest first) with its reasons, each filter that caught it (highest score first), then
- * the mint to copy and the places to trade. Short enough to ride as a photo caption.
+ * One alert as a Telegram HTML message: the token and who raised it over a rule, the numbers,
+ * each model's call (strongest first, with a conviction bar) and its reasons, each filter that
+ * caught it (highest score first), then the mint to copy, the places to trade and the reads.
+ * Blank lines between the blocks; short enough to ride as a photo caption.
  */
 export function formatAlert(
   card: AlertCard,
@@ -257,30 +276,42 @@ export function formatAlert(
   const icon = c.calls.length > 0 ? "🟢" : "🎯";
   const title =
     t.name && t.symbol
-      ? `${icon} <b>${escapeHtml(tokenLabel(t))}</b> · ${escapeHtml(t.name)}`
+      ? `${icon} <b>${escapeHtml(tokenLabel(t))}</b>  ·  ${escapeHtml(t.name)}`
       : `${icon} <b>${escapeHtml(tokenLabel(t))}</b>`;
-  const sections: string[] = [`${title}\n<i>${escapeHtml(headline(c))}</i>`];
+  const sections: string[] = [`${title}\n<i>${escapeHtml(headline(c))}</i>\n${DIVIDER}`];
 
-  const facts = parts.stats ? factsLine(c, now) : null;
+  const facts = parts.stats ? factsLines(c, now) : null;
   if (facts) sections.push(facts);
 
-  const raised: string[] = [];
-  // The strongest call carries the reasons; the others are one line each, which keeps the whole
+  // The strongest call carries the reasons; the others go without, which keeps the whole
   // message inside a photo caption.
+  const calls: string[] = [];
   if (parts.conviction)
-    c.calls.forEach((call, i) => raised.push(...callLines(call, i === 0 && parts.reasons)));
-  else if (parts.reasons && c.calls[0]) raised.push(...callLines(c.calls[0], true).slice(1));
-  if (parts.filters)
-    for (const f of c.filters) raised.push(`🎯 “${escapeHtml(f.name)}” · score ${Math.round(f.score)}`);
-  if (raised.length > 0) sections.push(raised.join("\n"));
+    c.calls.forEach((call, i) => calls.push(...callLines(call, i === 0 && parts.reasons)));
+  else if (parts.reasons && c.calls[0])
+    calls.push(...callLines(c.calls[0], true).filter((l) => l.startsWith("<blockquote>")));
+  if (calls.length > 0) sections.push(calls.join("\n"));
+
+  if (parts.filters && c.filters.length > 0)
+    sections.push(
+      c.filters
+        .map((f) => `🎯 <b>“${escapeHtml(f.name)}”</b>  ·  score <b>${Math.round(f.score)}</b>`)
+        .join("\n"),
+    );
 
   const tail: string[] = [];
   if (parts.mint) tail.push(`<code>${escapeHtml(t.mintAddress)}</code>`);
-  if (parts.links) tail.push(tradeLinks(t.mintAddress, links));
-  const sage = parts.sage ? sageLink(t.mintAddress, links, "🔮 TokenSage read") : null;
-  if (sage) tail.push(sage);
+  if (parts.links) tail.push(tradeLinks(t.mintAddress));
+  const reads: string[] = [];
+  const dash = parts.links ? dashboardLink(links, "TrenchScanner") : null;
+  if (dash) reads.push(dash);
+  const sage = parts.sage ? sageLink(t.mintAddress, links, "TokenSage read") : null;
+  if (sage) reads.push(`🔮 ${sage}`);
+  if (reads.length > 0) tail.push(reads.join("   "));
   if (tail.length > 0) sections.push(tail.join("\n"));
-  return sections.join("\n\n");
+  // The rule closes the title block, so the numbers sit right under it; blank lines elsewhere.
+  const [head, ...body] = sections;
+  return body.length > 0 ? `${head}\n${body.join("\n\n")}` : head!;
 }
 
 /** One alert, with the token's picture above it when there is one. */
@@ -310,30 +341,29 @@ function digestWho(card: AlertCard): string {
 
 /**
  * Many alerts at once become one message, so a burst never floods a chat. Best first, so the
- * strongest call is the first line a person reads, and each line links straight to the terminal.
+ * strongest call is the first line a person reads, and each entry
+ * links straight to the terminal.
  */
 export function formatDigest(cards: AlertCard[], links: AlertLinks, parts: AlertParts = ALL_PARTS): string {
   const ranked = sortCards(cards);
-  const lines = [`⚡ <b>${cards.length} new alerts</b> · strongest first`, ""];
+  const lines = [`⚡ <b>${cards.length} new alerts</b>  ·  strongest first`, DIVIDER];
   ranked.slice(0, DIGEST_MAX_ENTRIES).forEach((card, i) => {
     const icon = card.calls.length > 0 ? "🟢" : "🎯";
+    const rank = `<b>${i + 1}.</b>`;
     const bits = [
-      `${i + 1}. ${icon} <b>${escapeHtml(tokenLabel(card.token))}</b>`,
+      `${rank} ${icon} <b>${escapeHtml(tokenLabel(card.token))}</b>`,
       escapeHtml(digestWho(card)),
     ];
     if (parts.stats && card.snapshot) bits.push(usd(card.snapshot.marketCapUsd));
     const m = encodeURIComponent(card.token.mintAddress);
-    if (parts.links) bits.push(`<a href="https://trade.padre.gg/trade/solana/${m}">trade</a>`);
+    if (parts.links) bits.push(`<a href="https://trade.padre.gg/trade/solana/${m}">trade ↗</a>`);
     else if (parts.mint) bits.push(`<code>${escapeHtml(card.token.mintAddress)}</code>`);
-    lines.push(bits.join(" · "));
+    // A blank line between entries, so a wrapped entry doesn't run into the next one.
+    lines.push(...(i > 0 ? [""] : []), bits.join(" · "));
   });
   if (ranked.length > DIGEST_MAX_ENTRIES) lines.push(`… and ${ranked.length - DIGEST_MAX_ENTRIES} more`);
-  if (links.dashboardUrl) {
-    lines.push(
-      "",
-      `<a href="${escapeHtml(links.dashboardUrl.replace(/\/$/, ""))}/#live">Open the Live feed</a>`,
-    );
-  }
+  const dash = dashboardLink(links, "Open the Live feed");
+  if (dash) lines.push("", dash);
   return lines.join("\n");
 }
 
@@ -367,6 +397,6 @@ export function formatTestMessage(links: AlertLinks, parts: AlertParts = ALL_PAR
     links,
     Date.now(),
     parts,
-  ).replace("🎯 <b>", "🔔 <b>");
+  ).replace(/^🎯 <b>/, "🔔 <b>");
   return { html, imageUrl: parts.image && base.startsWith("https://") ? `${base}/icon-512.png` : null };
 }
