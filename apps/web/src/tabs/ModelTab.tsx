@@ -200,18 +200,18 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
 
       <LearningPanel learning={data.learning} board={lb} days={days} now={now} />
 
-      <LeaderboardPanel
-        board={lb}
-        days={days}
-        onSetModels={setFeedModels}
-        guest={guest}
-        refreshing={board.stale}
-        now={now}
-      />
-
       <WinnerRunsPanel data={data} days={days} />
 
       <UnderTheHood>
+        <LeaderboardPanel
+          board={lb}
+          days={days}
+          onSetModels={setFeedModels}
+          guest={guest}
+          refreshing={board.stale}
+          now={now}
+        />
+
         <section className="panel">
           <span className="eyebrow">The contest</span>
           <h3>How a call is made</h3>
@@ -680,8 +680,8 @@ function UnderTheHood({ children }: { children: ReactNode }) {
         <span>
           <strong>Under the hood</strong>
           <span className="muted small">
-            The full leaderboard, how scores and profit are worked out, whether the models are learning,
-            training exams, evolution, the signals they read, and the AI reviewer.
+            The leaderboard and every figure behind it, how scores and profit are worked out, training exams,
+            evolution, the signals the models read, and the AI reviewer.
           </span>
         </span>
         <span className="under-hood-toggle small">{open ? "Hide" : "Show"}</span>
