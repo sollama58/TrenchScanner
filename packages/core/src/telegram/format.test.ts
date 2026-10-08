@@ -4,7 +4,11 @@ import {
   alertImage,
   alertMessage,
   alertParts,
+  CAPTION_MAX_CHARS,
+  captionLength,
   cardRank,
+  convictionBar,
+  DIGEST_MAX_ENTRIES,
   digestMessage,
   escapeHtml,
   formatAlert,
@@ -38,7 +42,7 @@ describe("telegram alert text", () => {
     const text = formatAlert(card({ filters: [{ name: "<script>", score: 70 }] }), links);
     expect(text).not.toContain("<b>Coin</b>");
     expect(text).toContain("Doge &lt;b&gt;Coin&lt;/b&gt;");
-    expect(text).toContain("“&lt;script&gt;”");
+    expect(text).toContain("<b>“&lt;script&gt;”</b>");
     expect(escapeHtml("a&b")).toBe("a&amp;b");
   });
 
@@ -57,15 +61,21 @@ describe("telegram alert text", () => {
       "Forest called it and your filter caught it",
     );
     const text = formatAlert(card({ calls: [call] }), links);
-    expect(text).toContain("🟢 <b>$DOGE</b> · Doge &lt;b&gt;Coin&lt;/b&gt;\n<i>Forest called it</i>");
     expect(text).toContain(
-      "🤖 <b>Forest</b> · 72% conviction · 🔥 high conviction · 41% of calls like it 2x'd · ⚠️ Narrative warns",
+      "🟢 <b>$DOGE</b>  ·  Doge &lt;b&gt;Coin&lt;/b&gt;\n<i>Forest called it</i>\n━━━━━━━━━━━━━━\n💰 MC",
     );
-    expect(text).toContain("<blockquote>• r1\n• r2\n• r3</blockquote>");
-    expect(text).not.toContain("• r4");
-    expect(text).toContain("💰 $45.2k mcap  ·  👥 130 holders  ·  📊 $22.0k vol 1h  ·  ⏱ 4m old");
-    expect(text).toContain(`<code>${token.mintAddress}</code>`);
-    expect(text).toContain('<a href="https://trenchscanner.app/#live">TrenchScanner</a>');
+    expect(text).toContain(
+      "🤖 <b>Forest</b>  ▰▰▰▰▰▰▰▱▱▱  <b>72%</b> conviction  🔥 high\n" +
+        "     📈 41% of calls like it 2x'd\n" +
+        "     ⚠️ Narrative warns\n" +
+        "<blockquote>▸ r1\n▸ r2\n▸ r3</blockquote>",
+    );
+    expect(text).not.toContain("▸ r4");
+    expect(text).toContain(
+      "💰 MC <b>$45.2k</b>   ·   👥 <b>130</b> holders\n📊 Vol 1h <b>$22.0k</b>   ·   ⏱ 4m old",
+    );
+    expect(text).toContain(`📋 <code>${token.mintAddress}</code>`);
+    expect(text).toContain('🔭 <a href="https://trenchscanner.app/#live">TrenchScanner</a>');
     expect(text).toContain("https://axiom.trade/t/");
   });
 
@@ -88,10 +98,10 @@ describe("telegram alert text", () => {
       ],
       links,
     );
-    expect(text.startsWith("⚡ <b>2 new alerts</b> · strongest first")).toBe(true);
+    expect(text.startsWith("⚡ <b>2 new alerts</b>  ·  strongest first\n━━━━━━━━━━━━━━")).toBe(true);
     // The model call outranks the filter-only match, so it is line 1.
-    expect(text).toContain("1. 🟢 <b>$DOGE</b> · Rules 50% · $45.2k");
-    expect(text).toContain("2. 🎯 <b>$DOGE</b> · “A” score 1 · $45.2k");
+    expect(text).toContain("🥇 🟢 <b>$DOGE</b> · Rules 50% · $45.2k");
+    expect(text).toContain("🥈 🎯 <b>$DOGE</b> · “A” score 1 · $45.2k");
     expect(text).toContain('<a href="https://trade.padre.gg/trade/solana/');
   });
 
@@ -177,8 +187,8 @@ describe("telegram alert text", () => {
       filters: true,
     });
     const text = formatAlert(full, links, Date.now(), parts);
-    expect(text).toContain("🤖 <b>Forest</b> · 72% conviction");
-    expect(text).toContain("🎯 “Mine” · score 70");
+    expect(text).toContain("🤖 <b>Forest</b>  ▰▰▰▰▰▰▰▱▱▱  <b>72%</b> conviction");
+    expect(text).toContain("🎯 <b>“Mine”</b>  ·  score <b>70</b>");
     expect(text).not.toContain("blockquote");
     expect(text).not.toContain("mcap");
     expect(text).not.toContain("<code>");
@@ -186,10 +196,10 @@ describe("telegram alert text", () => {
     expect(alertMessage(full, links, Date.now(), parts).imageUrl).toBeNull();
     // Reasons without the conviction line: just the quote.
     const quoteOnly = formatAlert(full, links, Date.now(), alertParts(["conviction"]));
-    expect(quoteOnly).toContain("<blockquote>• r1</blockquote>");
-    expect(quoteOnly).not.toContain("72% conviction");
+    expect(quoteOnly).toContain("<blockquote>▸ r1</blockquote>");
+    expect(quoteOnly).not.toContain("conviction");
     const digest = formatDigest([full], links, alertParts(["links", "stats", "sage"]));
-    expect(digest).not.toContain("trade</a>");
+    expect(digest).not.toContain("trade ↗</a>");
     expect(digest).toContain(`<code>${token.mintAddress}</code>`);
     expect(formatTestMessage(links, alertParts(["image"])).imageUrl).toBeNull();
   });
@@ -198,11 +208,41 @@ describe("telegram alert text", () => {
     const url = `https://trenchscanner.app/?sage=${token.mintAddress}`;
     expect(sageUrl(token.mintAddress, links)).toBe(url);
     expect(sageUrl(token.mintAddress, { dashboardUrl: "" })).toBeNull();
-    expect(formatAlert(card(), links)).toContain(`<a href="${url}">🔮 TokenSage read</a>`);
+    expect(formatAlert(card(), links)).toContain(`🔮 <a href="${url}">TokenSage read</a>`);
     expect(formatAlert(card(), links, Date.now(), alertParts(["sage"]))).not.toContain("?sage=");
     expect(formatAlert(card(), { dashboardUrl: "" })).not.toContain("TokenSage");
     // A digest stays short enough to keep its picture: its lines carry no per-token read link.
     expect(formatDigest([card()], links)).not.toContain("?sage=");
+  });
+
+  it("keeps a crowded alert and a full digest inside a photo caption", () => {
+    const call = (modelName: string, confidence: number) => ({
+      modelName,
+      confidence,
+      tier: "high",
+      calibratedPct: 46,
+      reasons: [
+        "a reason about as long as the models usually write one, give or take",
+        "x".repeat(60),
+        "y".repeat(60),
+      ],
+      narrativeVerdict: "agrees",
+    });
+    const crowded = card({
+      token: { ...token, symbol: "WOJAKMAXXING", name: "Wojak Maxxing The Trenches Forever" },
+      calls: [call("Forest", 81), call("Rules", 64), call("Boost", 58)],
+      filters: [
+        { name: "Fresh launches under 100k with volume", score: 88 },
+        { name: "Low snipers", score: 74 },
+      ],
+    });
+    expect(captionLength(formatAlert(crowded, links))).toBeLessThanOrEqual(CAPTION_MAX_CHARS);
+    const burst = Array.from({ length: DIGEST_MAX_ENTRIES + 3 }, (_, i) =>
+      card({ token: { ...token, symbol: `TOKEN${i}` }, calls: [call("Forest", 70 - i), call("Rules", 50)] }),
+    );
+    expect(captionLength(formatDigest(burst, links))).toBeLessThanOrEqual(CAPTION_MAX_CHARS);
+    expect(convictionBar(72)).toBe("▰▰▰▰▰▰▰▱▱▱");
+    expect(convictionBar(140)).toBe("▰▰▰▰▰▰▰▰▰▰");
   });
 
   it("has a test message and an age formatter", () => {
