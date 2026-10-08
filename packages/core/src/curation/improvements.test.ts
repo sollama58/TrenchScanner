@@ -487,7 +487,7 @@ describe("narrative blend model", () => {
     expect(hotStory).toBeGreaterThan(hotFlat);
     expect(hotStory).toBeGreaterThan(coldStory);
     expect(hotStory).toBeLessThanOrEqual(1);
-    const why = modelRationale({ ...params, threshold: 0.5 }, { heat: 0.9, nsDepthFull: 1, nsStory: 0.9 });
+    const why = modelRationale(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.9 });
     expect(JSON.stringify(why)).not.toContain(MARKET_SCORE_INPUT);
   });
 
