@@ -264,24 +264,30 @@ describe("sniperShareReady", () => {
     resetLaunchSnipersCache();
     resetSniperWaits();
   });
-  const unknown = { mintAddress: "A", sniperTop10WalletPct: undefined };
+  const unknown = { mintAddress: "A", sniperTop10WalletPct: undefined, ageMinutes: 30 };
+  const W = { maxMs: 90_000, minAgeMinutes: 10 };
 
   it("holds a decision until the share is in, unless it can't come", () => {
-    expect(sniperShareReady(unknown, true, 90_000, 0)).toBe(false);
-    expect(sniperShareReady({ ...unknown, sniperTop10WalletPct: 0 }, true, 90_000, 1_000)).toBe(true);
+    expect(sniperShareReady(unknown, true, W, 0)).toBe(false);
+    expect(sniperShareReady({ ...unknown, sniperTop10WalletPct: 0 }, true, W, 1_000)).toBe(true);
     // The chain read is off or the endpoint is standing down: nothing to wait for.
-    expect(sniperShareReady(unknown, false, 90_000, 2_000)).toBe(true);
+    expect(sniperShareReady(unknown, false, W, 2_000)).toBe(true);
   });
 
   it("stops waiting once the token has waited the longest allowed", () => {
-    expect(sniperShareReady(unknown, true, 90_000, 0)).toBe(false);
-    expect(sniperShareReady(unknown, true, 90_000, 60_000)).toBe(false);
-    expect(sniperShareReady(unknown, true, 90_000, 90_000)).toBe(true);
+    expect(sniperShareReady(unknown, true, W, 0)).toBe(false);
+    expect(sniperShareReady(unknown, true, W, 60_000)).toBe(false);
+    expect(sniperShareReady(unknown, true, W, 90_000)).toBe(true);
     // Another token's wait is its own.
-    expect(sniperShareReady({ ...unknown, mintAddress: "B" }, true, 90_000, 90_000)).toBe(false);
+    expect(sniperShareReady({ ...unknown, mintAddress: "B" }, true, W, 90_000)).toBe(false);
+  });
+
+  it("doesn't make a young coin wait; an unknown age waits", () => {
+    expect(sniperShareReady({ ...unknown, ageMinutes: 2 }, true, W, 0)).toBe(true);
+    expect(sniperShareReady({ ...unknown, ageMinutes: undefined }, true, W, 0)).toBe(false);
   });
 
   it("doesn't wait at all with the bound at 0", () => {
-    expect(sniperShareReady(unknown, true, 0, 0)).toBe(true);
+    expect(sniperShareReady(unknown, true, { ...W, maxMs: 0 }, 0)).toBe(true);
   });
 });
