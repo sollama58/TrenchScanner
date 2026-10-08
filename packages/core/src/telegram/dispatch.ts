@@ -26,6 +26,13 @@ const logger = createLogger("telegram-dispatch");
  * the row commits a moment later, and a cursor that moved past the stamp in between would skip it.
  */
 export const COMMIT_GRACE_MS = 5_000;
+/**
+ * A transaction still open in the database may yet commit a row stamped as early as its start
+ * (matchedAt defaults to the transaction's own now()), so the horizon also stays behind the oldest
+ * one open. Bounded: the alert writes give up after 15 s, and a long training query must not hold
+ * every alert back.
+ */
+export const MAX_COMMIT_WAIT_MS = 20_000;
 /** An alert older than this when the job gets to it is not news; the cursor steps over it. */
 export const MAX_ALERT_AGE_MS = 15 * 60_000;
 /** More than this many alerts for one chat in one pass become a single digest message. */
@@ -57,6 +64,20 @@ export interface DispatchDeps {
    * such alerts go out as text.
    */
   lookupImages?: (mints: string[]) => Promise<Map<string, string>>;
+  /** Test seam: when the oldest transaction open in the database began. */
+  oldestOpenTransaction?: () => Promise<Date | null>;
+}
+
+/** When the oldest other transaction open in this database began, or null if none is (or unknown). */
+async function oldestOpenTransaction(): Promise<Date | null> {
+  try {
+    const [row] = await prisma.$queryRaw<{ oldest: Date | null }[]>`
+      SELECT min(xact_start) AS oldest FROM pg_stat_activity
+      WHERE datname = current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL`;
+    return row?.oldest ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** The most imageless tokens looked up in one pass: one DexScreener batch. */
@@ -270,7 +291,13 @@ async function dispatchPass(
   if (chats.length === 0) return summary;
 
   const startedAt = now();
-  const horizon = new Date(startedAt - COMMIT_GRACE_MS);
+  const openSince = await (deps.oldestOpenTransaction ?? oldestOpenTransaction)();
+  const horizon = new Date(
+    Math.max(
+      startedAt - MAX_COMMIT_WAIT_MS,
+      Math.min(startedAt - COMMIT_GRACE_MS, openSince ? openSince.getTime() - 1 : Infinity),
+    ),
+  );
   const oldest = new Date(startedAt - MAX_ALERT_AGE_MS);
   // A chat whose cursor fell behind the window (the worker was down) skips the stale backlog.
   for (const chat of chats) if (chat.sentThrough < oldest) chat.sentThrough = oldest;
