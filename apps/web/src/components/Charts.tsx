@@ -423,6 +423,8 @@ export interface MarkerBarDatum {
   value: number | null;
   /** Shown at the end of the row; defaults to the value as a percent. */
   display?: string;
+  /** A second, smaller line under the value, e.g. the rate's lift over the baseline. */
+  note?: string;
   /** Under the label, e.g. how many graded calls the rate rests on. */
   sub?: string;
   /** Drawn dimmer: a rate on too few calls to lean on. */
@@ -438,19 +440,24 @@ export interface BarMarker {
 
 /**
  * Horizontal bars on a percent scale with vertical marker lines through every row - for "how far
- * above the yardstick is each of these". Rows are buttons: hovering or tapping one picks it, and
- * the caller shows the picked row's detail.
+ * above the yardstick is each of these". Rows are buttons: hovering or focusing one picks it, and
+ * the caller shows the picked row's detail; with `onOpen`, a click opens the row (a chevron says so).
  */
 export function MarkerBars({
   data,
   markers,
   selected,
   onSelect,
+  onOpen,
+  columns,
 }: {
   data: MarkerBarDatum[];
   markers: BarMarker[];
   selected: string | null;
   onSelect: (id: string) => void;
+  onOpen?: (id: string) => void;
+  /** Headings over the label and value columns. */
+  columns?: { label: string; value: string; note?: string };
 }) {
   const values = [...data.map((d) => d.value ?? 0), ...markers.map((m) => m.value)];
   // Headroom past the furthest bar or marker, on a 10% step, never past 100%.
@@ -468,7 +475,18 @@ export function MarkerBars({
           </span>
         ))}
       </div>
-      <div className="mbar" role="list">
+      <div className={`mbar${onOpen ? " opens" : ""}`} role="list">
+        {columns && (
+          <div className="mbar-row head-row" aria-hidden="true">
+            <span>{columns.label}</span>
+            <span />
+            <span className="mbar-value">
+              {columns.value}
+              {columns.note && <small>{columns.note}</small>}
+            </span>
+            {onOpen && <span />}
+          </div>
+        )}
         {data.map((d) => (
           <button
             type="button"
@@ -477,8 +495,13 @@ export function MarkerBars({
             key={d.id}
             onMouseEnter={() => onSelect(d.id)}
             onFocus={() => onSelect(d.id)}
-            onClick={() => onSelect(d.id)}
-            aria-pressed={selected === d.id}
+            onClick={() => {
+              onSelect(d.id);
+              onOpen?.(d.id);
+            }}
+            aria-pressed={onOpen ? undefined : selected === d.id}
+            aria-haspopup={onOpen ? "dialog" : undefined}
+            aria-label={onOpen ? `${d.label}: open its details` : undefined}
           >
             <span className="mbar-label">
               {d.label}
@@ -492,7 +515,24 @@ export function MarkerBars({
             </span>
             <span className="mbar-value num">
               {d.display ?? (d.value === null ? "–" : `${d.value.toFixed(1)}%`)}
+              {d.note && <small>{d.note}</small>}
             </span>
+            {onOpen && (
+              <span className="mbar-open" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M9 6l6 6-6 6" />
+                </svg>
+              </span>
+            )}
           </button>
         ))}
         <div className="mbar-row axis-row" aria-hidden="true">
@@ -505,6 +545,7 @@ export function MarkerBars({
             ))}
           </span>
           <span />
+          {onOpen && <span />}
         </div>
       </div>
     </figure>

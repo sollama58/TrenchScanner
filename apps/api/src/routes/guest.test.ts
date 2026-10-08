@@ -104,10 +104,24 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
     expect(res.body).not.toContain("secret reasoning");
   });
 
+  it("serves one model's training runs, and 404s a model off the roster", async () => {
+    const res = await app.inject({ method: "GET", url: `/guest/models/${defaultModel}/runs` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { contestant: string; runs: { contestant: string }[] };
+    expect(body.contestant).toBe(defaultModel);
+    expect(body.runs.every((r) => r.contestant === defaultModel)).toBe(true);
+    expect((await app.inject({ method: "GET", url: "/guest/models/no-such-model/runs" })).statusCode).toBe(
+      404,
+    );
+  });
+
   it("leaves the paid feeds gated", async () => {
     expect((await app.inject({ method: "GET", url: "/curated" })).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/matches" })).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/curated/models" })).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/curated/insights" })).statusCode).toBe(401);
+    expect(
+      (await app.inject({ method: "GET", url: `/curated/models/${defaultModel}/runs` })).statusCode,
+    ).toBe(401);
   });
 });

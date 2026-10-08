@@ -20,23 +20,17 @@ import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { GUEST_DELAY_MINUTES } from "../session";
 import { ago, pct, signedPct, stakes, tokenLabel, usd } from "../format";
-
-const WINDOWS = [7, 30, 90] as const;
-
-const LEARNER_NAME = {
-  logistic: "Logistic regression",
-  gbdt: "Gradient-boosted trees",
-  forest: "Random forest",
-} as const;
-
-const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
-  stacked: "Stacked on the others",
-  blend: "The others' ranks averaged",
-  agreement: "How many of the others call it",
-  rules: "Hand-tuned rules",
-  learner: "Trained model",
-  narrative: "Trained model, waits for the deep narrative read",
-};
+import {
+  LEARNER_NAME,
+  ROLE_LABEL,
+  RulesInUse,
+  STATUS_TEXT,
+  WINDOWS,
+  doublings,
+  profitTone,
+  rateTone,
+} from "./modelShared";
+import { ModelDetailModal } from "./ModelDetail";
 
 /**
  * The Model tab: the curator contest. Several models train on the same graded history, each calls
@@ -46,7 +40,7 @@ const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
  */
 export function ModelTab({ guest = false }: { guest?: boolean }) {
   const now = useNow(60_000);
-  const [days, setDays] = useState<(typeof WINDOWS)[number]>(30);
+  const [days, setDays] = useState<(typeof WINDOWS)[number]>(7);
   const [pick, setPick] = useState(0);
   // A guest reads the same reports from the read-only guest routes; the /curated ones need access.
   const api = guest ? "/guest" : "/curated";
@@ -181,7 +175,18 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         </div>
       </section>
 
-      <BaselinePanel board={lb} base={base ?? null} learning={data.learning} days={days} />
+      <BaselinePanel
+        board={lb}
+        base={base ?? null}
+        learning={data.learning}
+        runs={data.runs}
+        days={days}
+        api={api}
+        guest={guest}
+        now={now}
+        onSetModels={setFeedModels}
+        refreshing={board.stale}
+      />
 
       <LeaderboardPanel
         board={lb}
@@ -308,16 +313,30 @@ function BaselinePanel({
   board,
   base,
   learning,
+  runs,
   days,
+  api,
+  guest,
+  now,
+  onSetModels,
+  refreshing,
 }: {
   board: Leaderboard;
   base: (GradedRates & { kind: string }) | null;
   learning: LearningCurve;
+  runs: ModelRun[];
   days: number;
+  api: string;
+  guest: boolean;
+  now: number;
+  onSetModels: (models: string[] | null) => Promise<void>;
+  refreshing: boolean;
 }) {
   const [metric, setMetric] = useState<"2x" | "4x" | "10x">("2x");
   const [view, setView] = useState<"models" | "days">("models");
   const [picked, setPicked] = useState<string | null>(null);
+  // The model whose detail dialog is open (it follows the board, so a window switch refreshes it).
+  const [opened, setOpened] = useState<string | null>(null);
   const t = board.targets;
   const baseRate = base
     ? metric === "2x"
@@ -415,8 +434,8 @@ function BaselinePanel({
                   label: e.name,
                   value: rate,
                   sub: `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
-                  display:
-                    rate === null ? "–" : `${rate.toFixed(1)}%${l === null ? "" : ` · ${l.toFixed(1)}x`}`,
+                  display: rate === null ? "–" : `${rate.toFixed(1)}%`,
+                  note: l === null ? undefined : `${l.toFixed(1)}x random`,
                   thin: thin(e),
                 };
               })}
@@ -426,6 +445,8 @@ function BaselinePanel({
               ]}
               selected={selected?.id ?? null}
               onSelect={setPicked}
+              onOpen={setOpened}
+              columns={{ label: "Model", value: `${metric} hit rate`, note: "vs a random pick" }}
             />
             {selected && (
               <p className="baseline-readout">
@@ -443,9 +464,24 @@ function BaselinePanel({
               </p>
             )}
             <p className="faint small">
-              Live calls over the last {days} days. The figure after each rate is its lift: how many times the
-              baseline it hits. Hover or tap a model for its numbers; faded bars rest on too few calls.
+              Live calls over the last {days} days (the window picked at the top of the page). Under each rate
+              is its lift: how many times as often its calls hit as a random pick does, so 1.0x is no better
+              than random. Faded bars rest on too few calls. <strong>Tap or click a model</strong> for its
+              full record, past versions and exam results.
             </p>
+            <ModelDetailModal
+              entry={board.entries.find((e) => e.id === opened) ?? null}
+              board={board}
+              base={base}
+              runs={runs}
+              days={days}
+              api={api}
+              guest={guest}
+              now={now}
+              onClose={() => setOpened(null)}
+              onSetModels={onSetModels}
+              refreshing={refreshing}
+            />
           </>
         ) : (
           <p className="empty">No models on the board yet.</p>
@@ -737,12 +773,6 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
     </section>
   );
 }
-
-const STATUS_TEXT: Record<LeaderboardEntry["status"], { text: string; tone: string }> = {
-  calling: { text: "calling", tone: "good" },
-  silent: { text: "no cutoff yet", tone: "neutral" },
-  untrained: { text: "not trained yet", tone: "neutral" },
-};
 
 function LeaderboardPanel({
   board,
@@ -1228,21 +1258,6 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
       </div>
     </details>
   );
-}
-
-function profitTone(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "";
-  return value > 0 ? "up" : value < 0 ? "down" : "";
-}
-
-function rateTone(value: number | null, target: number): string {
-  if (value === null) return "";
-  return value >= target ? "up" : "";
-}
-
-function doublings(value: number | null): string {
-  if (value === null) return "–";
-  return value.toFixed(2);
 }
 
 function HowItWorks({ board }: { board: Leaderboard }) {
@@ -1949,33 +1964,5 @@ function PipelineStage({
       </span>
       <ArrowRightIcon size={16} className="stage-arrow" />
     </li>
-  );
-}
-
-/** The Rules seat's checks, under its leaderboard row: what it runs now and where they came from. */
-function RulesInUse({ rules, now }: { rules: NonNullable<LeaderboardEntry["rules"]>; now: number }) {
-  const learned = rules.source === "learned";
-  return (
-    <details className="rules-in-use">
-      <summary className="small">
-        {learned
-          ? `${rules.lines.length} checks learned from ${rules.teacherName ?? "the best model"}`
-          : "Hand-tuned checks"}
-      </summary>
-      <ul className="small">
-        {rules.lines.map((line) => (
-          <li key={line}>{line}</li>
-        ))}
-      </ul>
-      <small className="faint">
-        {learned
-          ? `Calls when a token's points clear the cutoff its backtest earned. Learned ${rules.derivedAt ? ago(rules.derivedAt, now) : ""}` +
-            (rules.agreementPct != null
-              ? `; agrees with ${rules.teacherName ?? "its teacher"} on ${rules.agreementPct}% of its top picks.`
-              : ".")
-          : "Each training run also tries checks learned from the best model, and switches if they test better."}{" "}
-        {rules.reason}
-      </small>
-    </details>
   );
 }
