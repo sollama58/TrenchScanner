@@ -8,7 +8,7 @@ import { buildModelInsights } from "../modelInsights.js";
 import { modelRunsRoute, reportDaysSchema, type ReportCaches } from "./curated.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
-import { lighthouseQuerySchema } from "../marketLighthouse.js";
+import { lighthouseQuerySchema, lighthouseSignalsQuerySchema } from "../marketLighthouse.js";
 import { lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 import { loadMarketWeather } from "../marketWeather.js";
 
@@ -175,6 +175,15 @@ export async function registerGuestRoutes(
   app.get("/weather", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () =>
     opts.reports.weather.get(() => loadMarketWeather(opts.env)),
   );
+
+  /** "Signals at a glance" alone, over a day, a week or a month (marketLighthouse.ts). */
+  app.get("/lighthouse/signals", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = lighthouseSignalsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.lighthouse.signals(opts.env, parsed.data.days);
+  });
 
   /** The Lighthouse tab's trends, the same aggregates-only answer subscribers get. */
   app.get("/lighthouse/history", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
-import type { MarketLighthouse } from "../marketLighthouse.js";
+import type { LighthouseSignals, MarketLighthouse } from "../marketLighthouse.js";
 
 /**
  * GET /guest/lighthouse and /curated/lighthouse: TokenSage's reads in aggregate for the Models
@@ -245,7 +245,42 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     expect((await app.inject({ method: "GET", url: "/guest/lighthouse?days=2" })).statusCode).toBe(400);
   });
 
+  it("serves Signals at a glance over a month, and a day's from the full answer", async () => {
+    const res = await app.inject({ method: "GET", url: "/guest/lighthouse/signals?days=30" });
+    expect(res.statusCode).toBe(200);
+    for (const secret of [...MINTS, "SECRET", "Secret Referent", "secret summary", "secret reason"]) {
+      expect(res.body).not.toContain(secret);
+    }
+    const month = res.json<LighthouseSignals>();
+    expect(month.window.days).toBe(30);
+    // Floors: other suites share the database. The failed read is never counted.
+    expect(month.reads.described).toBeGreaterThanOrEqual(3);
+    expect(month.reads.deep).toBeGreaterThanOrEqual(1);
+    expect(month.xVerdicts.find((v) => v.label === "about_this_coin")?.count).toBeGreaterThanOrEqual(1);
+    expect(month.news.find((n) => n.label === "in the news")?.count).toBeGreaterThanOrEqual(1);
+    expect(month.copies.map((c) => c.label)).toEqual(
+      expect.arrayContaining(["copies a recent coin", "original"]),
+    );
+    const copyCalls = month.outcomes.byCopy.find((t) => t.label === "copies a recent coin");
+    expect(copyCalls?.won2x).toBeGreaterThanOrEqual(1);
+    expect(month.outcomes.byCopy.find((t) => t.label === "original")?.graded).toBeGreaterThanOrEqual(1);
+
+    const day = (
+      await app.inject({ method: "GET", url: "/guest/lighthouse/signals?days=1" })
+    ).json<LighthouseSignals>();
+    const full = (
+      await app.inject({ method: "GET", url: "/guest/lighthouse?days=1" })
+    ).json<MarketLighthouse>();
+    expect(day.window.days).toBe(1);
+    expect(day.copies).toEqual(full.copies);
+    expect(day.outcomes.byCopy).toEqual(full.outcomes.byCopy);
+    expect((await app.inject({ method: "GET", url: "/guest/lighthouse/signals?days=2" })).statusCode).toBe(
+      400,
+    );
+  });
+
   it("keeps the subscriber route behind access", async () => {
     expect((await app.inject({ method: "GET", url: "/curated/lighthouse" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/curated/lighthouse/signals" })).statusCode).toBe(401);
   });
 });

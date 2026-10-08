@@ -1214,6 +1214,20 @@ export interface LighthouseHistory {
   };
 }
 
+/**
+ * GET /curated/lighthouse/signals and /guest/lighthouse/signals: the Lighthouse's "Signals at a
+ * glance" alone, over 1, 7 or 30 days.
+ */
+export interface LighthouseSignals {
+  window: { days: number; since: string };
+  reads: { described: number; deep: number };
+  xVerdicts: LighthouseCount[];
+  news: LighthouseCount[];
+  copies: LighthouseCount[];
+  pairKinds: LighthouseCount[];
+  outcomes: { byCopy: LighthouseTally[] };
+}
+
 /** GET /curated/lighthouse and /guest/lighthouse: what TokenSage sees across new coins, aggregates only. */
 export interface LighthouseCount {
   label: string;

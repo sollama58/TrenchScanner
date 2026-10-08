@@ -4512,6 +4512,17 @@ button.small-btn {
   margin: 0 0 2px;
   font-size: 15px;
 }
+.lh-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.lh-section-head h3 {
+  margin: 0;
+}
 .lh-section > p {
   margin: 0 0 10px;
 }
