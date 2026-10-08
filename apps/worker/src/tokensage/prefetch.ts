@@ -3,7 +3,7 @@ import {
   createLogger,
   HttpError,
   TokenSageClient,
-  TOKENSAGE_BATCH_MAX,
+  TOKENSAGE_PREFETCH_CHUNK,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
   storableAnalysis,
@@ -525,8 +525,8 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
   for (const depth of ["full", "basic"] as const) {
     let list = byDepth[depth];
     while (list.length > 0 && batches > 0) {
-      const chunk = list.slice(0, TOKENSAGE_BATCH_MAX);
-      list = list.slice(TOKENSAGE_BATCH_MAX);
+      const chunk = list.slice(0, TOKENSAGE_PREFETCH_CHUNK);
+      list = list.slice(TOKENSAGE_PREFETCH_CHUNK);
       batches -= 1;
       let result;
       try {
