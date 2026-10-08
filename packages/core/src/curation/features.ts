@@ -153,6 +153,11 @@ export const CANDIDATE_FEATURE_NAMES = [
   // referent is a kind only or a named thing, now that a referent comes back whenever the kind
   // is plain.
   ...NARRATIVE_FEATURES_V3,
+  // Added 2026-10-08: whether the coin had a Pump.fun livestream on at the decision moment, and
+  // how many were watching (0 when not live). Read from Pump.fun's currently-live feed once per
+  // scan cycle; null when that read failed and on every row banked before. Never backfilled.
+  "livestreamLive",
+  "livestreamViewers",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -344,6 +349,8 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   buys5m: "5m buys",
   sells5m: "5m sells",
   buyRatio5m: "5m buy pressure",
+  livestreamLive: "live on Pump.fun",
+  livestreamViewers: "livestream viewers",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -414,6 +421,10 @@ export function scoredFromFeatures(
     ) as unknown as MarketContextFeatures,
     textScores: textScoresFromFeatures(features),
     narrative: narrativeFromFeatures(features),
+    livestream:
+      num("livestreamLive") === undefined
+        ? undefined
+        : { live: num("livestreamLive") === 1, viewers: num("livestreamViewers") ?? null },
     rugScreen: { passed: true, reasons: [] },
     // Filled in below from the replayed fields: the stored score* inputs are the first
     // composite's, and the replayed rules must gate on today's score.
@@ -571,6 +582,10 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     sells5m,
     buyRatio5m,
     ...narrativeFeatureValues(scored.narrative),
+    livestreamLive: scored.livestream === undefined ? null : scored.livestream.live ? 1 : 0,
+    // Nobody watches a stream that isn't on; a live stream whose count the feed left out is unknown.
+    livestreamViewers:
+      scored.livestream === undefined ? null : scored.livestream.live ? scored.livestream.viewers : 0,
   };
 }
 

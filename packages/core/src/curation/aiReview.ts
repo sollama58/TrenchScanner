@@ -122,6 +122,12 @@ export const clip = (s: string | undefined, max: number) => {
   return flat.length > max ? `${flat.slice(0, max)}...` : flat;
 };
 
+function livestreamText(stream: ScoredToken["livestream"]): string {
+  if (stream === undefined) return "unknown";
+  if (!stream.live) return "not live";
+  return stream.viewers === null ? "live now" : `live now, ${stream.viewers} watching`;
+}
+
 /** The per-alert brief - plain labeled lines, every unknown spelled out as "unknown". */
 export function buildAiReviewBrief(
   scored: ScoredToken,
@@ -147,6 +153,7 @@ export function buildAiReviewBrief(
     `- market cap: ${fmtUsd(scored.marketCapUsd)}`,
     `- age: ${scored.ageMinutes === undefined ? "unknown" : `${Math.round(scored.ageMinutes)} minutes`}`,
     `- graduated from bonding curve: ${fmtBool(scored.graduated)}`,
+    `- Pump.fun livestream: ${livestreamText(scored.livestream)}`,
     `- pool liquidity: ${fmtUsd(scored.liquidityUsd)}`,
     `- price change: 5m ${fmtPct(scored.priceChange5mPct)}, 1h ${fmtPct(scored.priceChange1hPct)}, 6h ${fmtPct(scored.priceChange6hPct)}, 24h ${fmtPct(scored.priceChange24hPct)}`,
     `- volume: 5m ${fmtUsd(scored.volume5mUsd)}, 1h ${fmtUsd(scored.volume1hUsd)}, 24h ${fmtUsd(scored.volume24hUsd)}`,

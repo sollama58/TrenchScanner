@@ -183,6 +183,12 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   /** What the market as a whole is doing right now, and the clock (curation/pricePath.ts). */
   marketContext?: MarketContextFeatures;
   /**
+   * Whether the coin had a Pump.fun livestream on when it was scored, and how many were watching
+   * (PumpFunClient.currentlyLive, read once per scan cycle). Undefined when that read failed: then
+   * nobody knows, which is not the same as "not live".
+   */
+  livestream?: { live: boolean; viewers: number | null };
+  /**
    * TokenSage's read of what the coin is about (curation/narrativeFeatures.ts), as stored in
    * TokenNarrative when the coin was scored. Undefined until the read lands, and whenever
    * TokenSage is off. Feeds the ns* model inputs, the narrative filter criteria and the score's

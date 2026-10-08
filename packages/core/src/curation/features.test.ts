@@ -196,3 +196,20 @@ describe("buildCandidateFeatures - audit additions", () => {
     expect(f.hasDescription).toBeNull();
   });
 });
+
+describe("buildCandidateFeatures - livestream", () => {
+  it("records live and viewers, 0 for a coin that isn't live, null when the feed wasn't read", () => {
+    const live = buildCandidateFeatures(scored({ livestream: { live: true, viewers: 42 } }));
+    expect(live.livestreamLive).toBe(1);
+    expect(live.livestreamViewers).toBe(42);
+    const off = buildCandidateFeatures(scored({ livestream: { live: false, viewers: null } }));
+    expect(off.livestreamLive).toBe(0);
+    expect(off.livestreamViewers).toBe(0);
+    const unknown = buildCandidateFeatures(scored({}));
+    expect(unknown.livestreamLive).toBeNull();
+    expect(unknown.livestreamViewers).toBeNull();
+    expect(LEARNER_FEATURE_NAMES).toContain("livestreamLive");
+    expect(scoredFromFeatures(live, 1, 100_000).livestream).toEqual({ live: true, viewers: 42 });
+    expect(scoredFromFeatures(unknown, 1, 100_000).livestream).toBeUndefined();
+  });
+});

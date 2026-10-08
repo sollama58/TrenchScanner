@@ -25,6 +25,16 @@ interface PumpFunCoin {
   twitter?: string;
   telegram?: string;
   website?: string;
+  /** True while the coin's Pump.fun livestream is on. */
+  is_currently_live?: boolean;
+  /** People watching the livestream right now (the currently-live feed only). */
+  num_participants?: number;
+}
+
+/** One coin's Pump.fun livestream as the currently-live feed reports it. */
+export interface LiveStream {
+  /** People watching right now; null when the feed didn't say. */
+  viewers: number | null;
 }
 
 export interface DiscoveredCoin {
@@ -137,6 +147,52 @@ export class PumpFunClient {
       logger.warn("king-of-the-hill failed", { error: String(err) });
       return null;
     }
+  }
+
+  /**
+   * Which coins have a Pump.fun livestream on right now, with how many people are watching each
+   * (`num_participants`). About 75 coins were live at once on 2026-10-08, so two pages on most
+   * cycles; a further page is read only while one comes back full. The page size stays under the
+   * 70 a page this API actually returns (asked for 100, it sends 70), or a short page would read
+   * as the last one. Null when any page fails, so the caller records "unknown" rather than "not
+   * live" for every token.
+   */
+  async currentlyLive(
+    opts: { limit?: number; maxPages?: number } = {},
+  ): Promise<Map<string, LiveStream> | null> {
+    const { limit = 50, maxPages = 4 } = opts;
+    const live = new Map<string, LiveStream>();
+    for (let page = 0; page < maxPages; page++) {
+      const query = new URLSearchParams({
+        offset: String(page * limit),
+        limit: String(limit),
+        includeNsfw: "false",
+      });
+      let coins: PumpFunCoin[];
+      try {
+        coins = await fetchJson<PumpFunCoin[]>(`${this.baseUrl}/coins/currently-live?${query.toString()}`, {
+          timeoutMs: 8000,
+          retries: 1,
+        });
+      } catch (err) {
+        logger.warn("currently-live failed", { page, error: String(err) });
+        // A later page failing still leaves the first page's coins known live; the rest of the
+        // set is unknown, so the answer as a whole is.
+        return null;
+      }
+      if (!Array.isArray(coins)) return page === 0 ? null : live;
+      for (const coin of coins) {
+        // The feed lists coins whose stream just ended for a moment; only a coin it says is live
+        // counts.
+        if (!coin.mint || coin.is_currently_live === false) continue;
+        const viewers = coin.num_participants;
+        live.set(coin.mint, {
+          viewers: typeof viewers === "number" && Number.isFinite(viewers) && viewers >= 0 ? viewers : null,
+        });
+      }
+      if (coins.length < limit) break;
+    }
+    return live;
   }
 
   private async listCoins(params: {

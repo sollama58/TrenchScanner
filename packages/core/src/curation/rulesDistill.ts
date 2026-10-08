@@ -76,6 +76,7 @@ const YES_NO_INPUTS: ReadonlySet<string> = new Set([
   "dexBoosted",
   "devHolding",
   "ctxWeekend",
+  "livestreamLive",
 ]);
 /** Inputs stored as a 0-1 share, shown as a percentage. */
 const SHARE_INPUTS: ReadonlySet<string> = new Set([
