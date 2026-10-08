@@ -3,10 +3,12 @@ import type { JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("cleanup-job");
 const DAY_MS = 86_400_000;
+/** RugCheckCache rows older than this are swept - see the sweep. */
+export const RUGCHECK_CACHE_RETENTION_DAYS = 2;
 
 /**
  * How long an RPC cache entry (WalletActivityCache, MintAuthorityCache,
- * MayhemModeCache, RugCheckCache) is kept. Both hold
+ * MayhemModeCache) is kept; RugCheckCache has its own, shorter RUGCHECK_CACHE_RETENTION_DAYS. Both hold
  * answers that are permanently true, so this is purely about storage, not staleness - a wallet
  * or mint we haven't encountered in this long probably isn't coming back, and if it does, one
  * batched RPC call re-establishes it. Deliberately far longer than the snapshot/token horizons:
@@ -602,7 +604,14 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // RugCheckCache is a TTL cache (RUGCHECK_CACHE_TTL_MINUTES), so its rows go stale within
   // minutes - but a stale row is still *kept*, and rewritten in place, for as long as the mint
   // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
-  const deletedRugCheckCache = await sweepCache("RugCheckCache", "mintAddress");
+  // Those go after two days, not the RPC caches' 90: a report is only trusted for minutes and
+  // nothing else reads the table, so a mint gone from the watchlist (24h at most) for a day has
+  // nothing left to use its row for - and these rows carry the whole RugCheck report.
+  const deletedRugCheckCache = await sweepCache(
+    "RugCheckCache",
+    "mintAddress",
+    new Date(startedAt - RUGCHECK_CACHE_RETENTION_DAYS * DAY_MS),
+  );
   // TokenSage narratives (tokensage/prefetch.ts): kept as long as the RPC caches, past the
   // models' training window, so new inputs can be derived from them later.
   const deletedNarratives = await sweepCache("TokenNarrative", "mintAddress");

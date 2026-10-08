@@ -15,6 +15,7 @@ import {
   type TokenSageHints,
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
+import { forgetNarrativeRead } from "./heldNarrativeReads.js";
 
 const logger = createLogger("tokensage");
 
@@ -363,6 +364,7 @@ async function storeAnalysis(
     create: { mintAddress: mint, ...data },
     update: data,
   });
+  forgetNarrativeRead(mint);
   stats.stored += 1;
   failCounts.delete(mint);
   settle(mint, fields.depth, status === "partial");
@@ -385,6 +387,7 @@ async function storeFailure(mintAddress: string, depth: TokenSageDepth, reason: 
     create: { mintAddress, depth, status: "failed", failReason, checkedAt: new Date() },
     update: { depth, status: "failed", failReason, checkedAt: new Date() },
   });
+  forgetNarrativeRead(mintAddress);
   stats.failed += 1;
   settle(mintAddress, "full", false);
 }

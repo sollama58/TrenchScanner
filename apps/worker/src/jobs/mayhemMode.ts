@@ -1,3 +1,4 @@
+import { SettledAnswers } from "./settledAnswers.js";
 import { prisma, createLogger, type HeliusClient, type MayhemModeResult } from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
 
@@ -39,6 +40,9 @@ export function resetMayhemFailureBackoff(): void {
  * would be indistinguishable from a real one and would blacklist a legitimate token forever - it
  * is instead backed off briefly, so retrying stays cheap without becoming permanent.
  */
+/** MayhemModeCache's answers, held in memory too - a mint's Mayhem flag never changes. */
+export const settledMayhem = new SettledAnswers<boolean>(20_000);
+
 export async function resolveMayhemMode(
   mintAddresses: string[],
   helius: HeliusClient,
@@ -50,9 +54,17 @@ export async function resolveMayhemMode(
   const now = Date.now();
   failureBackoff.prune(now);
 
-  const cached = await prisma.mayhemModeCache.findMany({ where: { mintAddress: { in: unique } } });
+  for (const [mint, isMayhemMode] of settledMayhem.take(unique)) {
+    result.set(mint, { status: "found", isMayhemMode });
+  }
+  const fromTable = unique.filter((mint) => !result.has(mint));
+  const cached =
+    fromTable.length === 0
+      ? []
+      : await prisma.mayhemModeCache.findMany({ where: { mintAddress: { in: fromTable } } });
   for (const row of cached) {
     result.set(row.mintAddress, { status: "found", isMayhemMode: row.isMayhemMode });
+    settledMayhem.remember(row.mintAddress, row.isMayhemMode);
   }
 
   // A backed-off mint reports "failed" without a call - the same answer it would have produced,
@@ -92,6 +104,7 @@ export async function resolveMayhemMode(
     }
   }
 
+  for (const row of toCache) settledMayhem.remember(row.mintAddress, row.isMayhemMode);
   if (toCache.length > 0) {
     try {
       await prisma.mayhemModeCache.createMany({ data: toCache, skipDuplicates: true });

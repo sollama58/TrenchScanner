@@ -1,3 +1,4 @@
+import { SettledAnswers } from "./settledAnswers.js";
 import {
   prisma,
   createLogger,
@@ -45,6 +46,9 @@ export function resetMintAuthorityFailureBackoff(): void {
  * its rejection reasons honest, not to change an outcome - which is precisely why it should be
  * cheap, and why nothing here is worth spending a call on twice.
  */
+/** Mints whose mint and freeze authorities are both revoked - final, so held in memory too. */
+export const revokedMints = new SettledAnswers<true>(20_000);
+
 export async function resolveMintAuthorities(
   mintAddresses: string[],
   helius: HeliusClient,
@@ -55,9 +59,19 @@ export async function resolveMintAuthorities(
   if (unique.length === 0) return result;
 
   const activeCutoff = new Date(Date.now() - env.MINT_AUTHORITY_ACTIVE_TTL_MINUTES * 60_000);
-  const cached = await prisma.mintAuthorityCache.findMany({ where: { mintAddress: { in: unique } } });
+  // Both authorities revoked is final, so those answers are kept in memory; anything still
+  // active is read from the table each time, where its TTL is decided.
+  for (const mint of revokedMints.take(unique).keys()) {
+    result.set(mint, { status: "found", mintAuthorityActive: false, freezeAuthorityActive: false });
+  }
+  const fromTable = unique.filter((mint) => !result.has(mint));
+  const cached =
+    fromTable.length === 0
+      ? []
+      : await prisma.mintAuthorityCache.findMany({ where: { mintAddress: { in: fromTable } } });
   for (const row of cached) {
     const permanentlyRevoked = !row.mintAuthorityActive && !row.freezeAuthorityActive;
+    if (permanentlyRevoked) revokedMints.remember(row.mintAddress, true);
     // A still-active row is only good for its TTL; a revoked one never expires.
     if (!permanentlyRevoked && row.checkedAt < activeCutoff) continue;
     result.set(row.mintAddress, {
@@ -98,6 +112,7 @@ export async function resolveMintAuthorities(
     // failed lookup is never cached at all, so a transient RPC error isn't frozen in as a verdict.
     if (outcome.status === "found") {
       failureBackoff.succeed(mint);
+      if (!outcome.mintAuthorityActive && !outcome.freezeAuthorityActive) revokedMints.remember(mint, true);
       toCache.push({
         mintAddress: mint,
         mintAuthorityActive: outcome.mintAuthorityActive,

@@ -1,3 +1,4 @@
+import { SettledAnswers } from "./settledAnswers.js";
 import { prisma, createLogger, type HeliusClient } from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
 
@@ -67,6 +68,9 @@ export interface WalletFreshnessOptions {
  * didn't fit the budget, or the lookup failed), which computeFreshPct reports as unknown rather
  * than guessing.
  */
+/** WalletActivityCache's answers, held in memory too - they never change once written. */
+export const settledActivity = new SettledAnswers<Date | null>(50_000);
+
 export async function resolveEarliestActivity(
   groups: string[][],
   helius: HeliusClient,
@@ -79,8 +83,17 @@ export async function resolveEarliestActivity(
   const unique = [...new Set(groups.flat())];
   if (unique.length === 0) return result;
 
-  const cached = await prisma.walletActivityCache.findMany({ where: { address: { in: unique } } });
-  for (const row of cached) result.set(row.address, row.earliestActivityAt);
+  // Settled answers this process already read come from memory; only the rest from the table.
+  for (const [address, at] of settledActivity.take(unique)) result.set(address, at);
+  const fromTable = unique.filter((a) => !result.has(a));
+  const cached =
+    fromTable.length === 0
+      ? []
+      : await prisma.walletActivityCache.findMany({ where: { address: { in: fromTable } } });
+  for (const row of cached) {
+    result.set(row.address, row.earliestActivityAt);
+    settledActivity.remember(row.address, row.earliestActivityAt);
+  }
 
   // Whole groups only, in the order given, until the budget is spent. A group holding a wallet
   // that is currently backed off can't be completed this cycle either, so it is skipped rather
@@ -113,7 +126,12 @@ export async function resolveEarliestActivity(
   // Cheap keep-alive for rows the retention sweep would otherwise evict while they're still in
   // active use: one statement, and only for entries already past half the horizon, so a hot
   // cache doesn't turn into a write per hit.
-  await refreshStaleCacheStamps([...result.keys()], now);
+  // Only rows read from the table this cycle: memory hits were read from it earlier in this
+  // process's life, well inside the 45 days, and stamping them every cycle was a write per scan.
+  await refreshStaleCacheStamps(
+    cached.map((r) => r.address),
+    now,
+  );
 
   if (toFetch.length === 0) {
     logger.info("resolved wallet earliest-activity", {
@@ -166,6 +184,7 @@ export async function resolveEarliestActivity(
     }
   }
 
+  for (const row of toCache) settledActivity.remember(row.address, row.earliestActivityAt);
   if (toCache.length > 0) {
     try {
       // A cached earliest-activity is immutable, so an existing row is always as good as the one

@@ -6,6 +6,7 @@ import {
   Prisma,
   createLogger,
   refreshAndFilterToBand,
+  writeLiveMarketData,
   scanBand,
   inMcapBand,
   buildScoredToken,
@@ -469,7 +470,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // DexScreener calls. The most recently viewed win.
   const activelyViewed = await prisma.token.findMany({
     where: { lastViewedAt: { gt: viewCutoff } },
-    select: { mintAddress: true, firstSeenAt: true },
+    select: { id: true, mintAddress: true, firstSeenAt: true },
     orderBy: { lastViewedAt: "desc" },
     take: env.LIVE_PRICE_MAX_TRACKED,
   });
@@ -515,10 +516,18 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   });
 
   const alreadyCovered = new Set(candidates.map((c) => c.mintAddress));
+  const viewedLookedUp = await viewedLookup;
+  // Every viewed token was just priced, here or by the refresh: that IS the dashboard's live
+  // figure, so it is written now instead of the live-price job asking DexScreener again 20s later
+  // (it skips tokens read this recently - see LIVE_PRICE_FRESH_MS).
+  await writeLiveMarketData(activelyViewed, [...viewedLookedUp, ...refreshedMarketData], {
+    fetchedAt: new Date(),
+    peakWindowDays: env.SNAPSHOT_RETENTION_DAYS,
+  }).catch((err: unknown) => logger.warn("failed to write viewed tokens' live data", { error: String(err) }));
   const viewedMarketData = viewedOutOfBand(
     activelyViewed,
     refreshedMarketData,
-    await viewedLookup,
+    viewedLookedUp,
     alreadyCovered,
   );
   if (viewedMarketData.length > 0) {
@@ -853,7 +862,13 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const rpcCalls = deps.helius.takeCallStats();
   // Likewise for DexScreener: lookups every job in this process sent since the last cycle, the
   // 429 pauses among them, and how long they queued for the shared budget.
-  const dexScreenerCalls = deps.dexScreener.takeCallStats?.();
+  // Plus the mints answered from its recent-quote cache instead of a lookup (QUOTE_CACHE_MS).
+  const dexScreenerStats = deps.dexScreener.takeCallStats?.();
+  const quoteCacheHits = deps.dexScreener.takeQuoteCacheHits?.();
+  const dexScreenerCalls =
+    dexScreenerStats && quoteCacheHits !== undefined
+      ? { ...dexScreenerStats, quoteCacheHits }
+      : dexScreenerStats;
   const jupiterCalls = deps.jupiter?.takeCallStats();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,

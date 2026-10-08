@@ -22,6 +22,42 @@ const LIVE_TICK_WAIT_MS = 2_500;
 
 const LIVE_TICK_RATE_LIMIT = { max: 40, timeWindow: "1 minute" };
 
+/**
+ * How long one read of a token's live columns answers other ticks. Every open Live tab ticks
+ * every 10s for much the same tokens, and this route was ~45% of the API's requests, each reading
+ * the rows again. Two seconds is far inside the tick, so a viewer never sees a figure older than
+ * they would have; a refresh this process makes replaces the entries at once.
+ */
+const LIVE_ROW_SHARE_MS = 2_000;
+/** Tokens held; a few feed pages' worth across every viewer, so this is never reached in practice. */
+const LIVE_ROWS_MAX = 5_000;
+
+type LiveRow = {
+  id: string;
+  mintAddress: string;
+  liveMarketCapUsd: number | null;
+  livePriceUsd: number | null;
+  liveDataAt: Date | null;
+};
+const liveRows = new Map<string, { row: LiveRow; at: number }>();
+
+function holdLiveRows(rows: LiveRow[], at: number): void {
+  for (const row of rows) {
+    liveRows.delete(row.id);
+    liveRows.set(row.id, { row, at });
+  }
+  while (liveRows.size > LIVE_ROWS_MAX) {
+    const oldest = liveRows.keys().next().value;
+    if (oldest === undefined) break;
+    liveRows.delete(oldest);
+  }
+}
+
+/** Test seam: forget the shared readings. */
+export function clearLiveRows(): void {
+  liveRows.clear();
+}
+
 const tickQuerySchema = z.object({
   tokens: z
     .string()
@@ -56,19 +92,36 @@ export async function registerLiveRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const ids = parsed.data.tokens;
-    const read = () =>
-      prisma.token.findMany({
-        where: { id: { in: ids } },
+    const readRows = async (want: string[]): Promise<LiveRow[]> => {
+      if (want.length === 0) return [];
+      const rows = await prisma.token.findMany({
+        where: { id: { in: want } },
         select: { id: true, mintAddress: true, liveMarketCapUsd: true, livePriceUsd: true, liveDataAt: true },
       });
+      holdLiveRows(rows, Date.now());
+      return rows;
+    };
+    // Tokens another viewer's tick read a moment ago come from that read; only the rest are read.
+    const read = async (shared: boolean): Promise<LiveRow[]> => {
+      if (!shared) return readRows(ids);
+      const cutoff = Date.now() - LIVE_ROW_SHARE_MS;
+      const held: LiveRow[] = [];
+      const missing: string[] = [];
+      for (const id of ids) {
+        const entry = liveRows.get(id);
+        if (entry && entry.at > cutoff) held.push(entry.row);
+        else missing.push(id);
+      }
+      return [...held, ...(await readRows(missing))];
+    };
 
-    let rows = await read();
+    let rows = await read(true);
     opts.viewStamps.record(rows.map((r) => r.id));
     const refreshed = await opts.liveRefresher.refreshAndWait(rows, {
       maxAgeMs: LIVE_TICK_MAX_AGE_MS,
       timeoutMs: LIVE_TICK_WAIT_MS,
     });
-    if (refreshed) rows = await read();
+    if (refreshed) rows = await read(false);
 
     reply.header("Cache-Control", "no-store");
     const now = Date.now();
