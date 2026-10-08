@@ -3,6 +3,7 @@ import {
   ago,
   until,
   change,
+  halfHour,
   multiple,
   pct,
   shortAddress,
@@ -83,5 +84,15 @@ describe("until", () => {
     expect(until(new Date(now + 3 * 86_400_000), now)).toBe("in 3d");
     expect(until(new Date(now - 1000), now)).toBe("now");
     expect(until(null, now)).toBe("never");
+  });
+});
+
+describe("halfHour", () => {
+  // The local minutes of a UTC hour: 30 in Kolkata, 45 in Kathmandu, 0 on whole-hour zones.
+  const at = (minutes: number) => ({ getMinutes: () => minutes }) as Date;
+  it("shows a bucket's minutes only in a :30 or :45 zone", () => {
+    expect(halfHour(at(30))).toBe("2-digit");
+    expect(halfHour(at(45))).toBe("2-digit");
+    expect(halfHour(at(0))).toBeUndefined();
   });
 });

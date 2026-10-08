@@ -26,7 +26,7 @@ export interface SageView {
     imageUrl: string | null;
     firstSeenAt: string | null;
   } | null;
-  status: "ok" | "failed" | "none";
+  status: "ok" | "failed" | "expired" | "none";
   failReason: string | null;
   read: SageRead | null;
   marketCap: { t: string; usd: number }[];
@@ -237,6 +237,14 @@ export function count(n: number): string {
   return String(Math.round(n));
 }
 
+/** A SOL (or quote-token) amount: fee claims are often a fraction of one. */
+export function amount(n: number): string {
+  if (n >= 1e3) return count(n);
+  if (n >= 10) return n.toFixed(1).replace(/\.0$/, "");
+  if (n > 0 && n < 0.01) return "<0.01";
+  return n.toFixed(2).replace(/\.?0+$/, "");
+}
+
 const pct0 = (v: number) => `${Math.round(v * 100)}%`;
 
 /**
@@ -296,10 +304,9 @@ function SageLocked({ onClose, onConnect }: { onClose: () => void; onConnect: ()
       </p>
       <button
         className="button primary"
-        onClick={() => {
-          onClose();
-          onConnect();
-        }}
+        // Not closed first: closing drops ?sage from the address bar, and the view is meant to
+        // open after the sign-in. Leaving guest mode unmounts this dialog anyway.
+        onClick={onConnect}
       >
         Connect wallet
       </button>
@@ -392,7 +399,9 @@ function SageBody({ mint, onClose }: { mint: string; onClose: () => void }) {
         <p className="muted sage-empty">
           {data.status === "failed"
             ? `TokenSage couldn't read this coin${data.failReason ? ` (${data.failReason})` : ""}.`
-            : "TokenSage hasn't read this coin yet. Reads usually land within a minute or two of launch."}
+            : data.status === "expired"
+              ? "TokenSage read this coin, but its reads are kept for three weeks and this one has been cleared."
+              : "TokenSage hasn't read this coin yet. Reads usually land within a minute or two of launch."}
         </p>
       )}
 
@@ -612,8 +621,8 @@ function FeeCard({ fee }: { fee: NonNullable<SageRead["creatorFee"]> }) {
                 {r.share !== null ? ` · ${pct0(r.share)}` : ""}
                 {r.lifetimeReceived !== null
                   ? r.kind === "charity"
-                    ? ` · ${count(r.lifetimeReceived)} donated by this coin`
-                    : ` · ${count(r.lifetimeReceived)} SOL claimed across its coins`
+                    ? ` · ${amount(r.lifetimeReceived)} donated by this coin`
+                    : ` · ${amount(r.lifetimeReceived)} SOL claimed across its coins`
                   : ""}
               </span>
             </li>

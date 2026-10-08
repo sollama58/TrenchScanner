@@ -31,7 +31,7 @@ function message(
 describe("parseCommand", () => {
   it("reads /start, /start@bot and /link with their argument", () => {
     expect(parseCommand("/start abc")).toEqual({ command: "start", arg: "abc" });
-    expect(parseCommand("/start@TrenchBot abc")).toEqual({ command: "start", arg: "abc" });
+    expect(parseCommand("/start@TrenchBot abc")).toEqual({ command: "start", arg: "abc", bot: "TrenchBot" });
     expect(parseCommand("/LINK  abc ")).toEqual({ command: "link", arg: "abc" });
     expect(parseCommand("/status")).toEqual({ command: "status", arg: "" });
     expect(parseCommand("hello")).toBeNull();
@@ -108,6 +108,45 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     expect((await handleTelegramUpdate(api, message(chatId, "/stop"))).action).toBe("unlinked");
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row?.revokedAt).not.toBeNull();
+  });
+
+  it("leaves a command addressed to another bot alone", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const { code } = await issueTelegramLinkCode(userId);
+    api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`, "supergroup"));
+    const opts = { botUsername: async () => "TrenchBot" };
+    expect(
+      (await handleTelegramUpdate(api, message(chatId, "/stop@OtherBot", "supergroup"), opts)).action,
+    ).toBe("ignored");
+    let row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row?.revokedAt).toBeNull();
+    expect(
+      (await handleTelegramUpdate(api, message(chatId, "/stop@trenchbot", "supergroup"), opts)).action,
+    ).toBe("unlinked");
+    row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row?.revokedAt).not.toBeNull();
+  });
+
+  it("takes an anonymous admin, who posts as the group, for an admin", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const { code } = await issueTelegramLinkCode(userId);
+    // GroupAnonymousBot is no admin of anything; the group as the sender is what counts.
+    api.answers.set("getChatMember", { ok: true, result: { status: "member" } });
+    const update = message(chatId, `/link ${code}`, "supergroup");
+    update.message!.from = {
+      id: 1087968824,
+      is_bot: true,
+      first_name: "Group",
+      username: "GroupAnonymousBot",
+    };
+    update.message!.sender_chat = update.message!.chat;
+    expect((await handleTelegramUpdate(api, update)).action).toBe("linked");
+    const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row?.linkedByName).toBe("Anonymous admin");
+    expect(row?.linkedByTelegramId).toBeNull();
   });
 
   it("lists and flips the parts of the card with /show and /hide", async () => {

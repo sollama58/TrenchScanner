@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sageFromUrl } from "./sage";
-import { categoryText, count, span } from "./components/SageView";
+import { amount, categoryText, count, span } from "./components/SageView";
 
 describe("TokenSage view link", () => {
   it("reads the mint from the address bar, and only a mint", () => {
@@ -19,5 +19,11 @@ describe("TokenSage view link", () => {
     expect(span(15 * 31_536_000)).toBe("15y");
     expect(count(241_704_623)).toBe("241.7M");
     expect(count(1234)).toBe("1.2k");
+    expect(amount(0.42)).toBe("0.42");
+    expect(amount(2.6)).toBe("2.6");
+    expect(amount(0.004)).toBe("<0.01");
+    expect(amount(3)).toBe("3");
+    expect(amount(57.286407196)).toBe("57.3");
+    expect(amount(1234)).toBe("1.2k");
   });
 });

@@ -174,7 +174,16 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
                       checked={f.isActive}
                       disabled={busy}
                       onChange={() =>
-                        run(() => post(`/filters/${f.id}/activate`), `“${f.name}” is now active.`)
+                        void run(() => post(`/filters/${f.id}/activate`), `“${f.name}” is now active.`).then(
+                          (ok) => {
+                            // An open editor saves its whole draft, isActive included: keep it in step
+                            // so saving doesn't undo the switch just made here.
+                            if (ok)
+                              setEditing((e) =>
+                                e?.id ? { ...e, draft: { ...e.draft, isActive: e.id === f.id } } : e,
+                              );
+                          },
+                        )
                       }
                     />
                     <span>

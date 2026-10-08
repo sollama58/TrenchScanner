@@ -555,6 +555,8 @@ export async function registerMatchRoutes(
       peakPct: number | null;
       curated: {
         alertId: string;
+        /** When the call was made. */
+        at: Date;
         returnPct: number | null;
         peakPct: number | null;
         modelName: string;
@@ -598,27 +600,41 @@ export async function registerMatchRoutes(
         returnPct,
         peakPct,
         source: { modelName },
-        curated: { alertId: lead.id, returnPct, peakPct, modelName },
+        curated: { alertId: lead.id, at: lead.createdAt, returnPct, peakPct, modelName },
       };
     });
+    type FoldedReturnCard = ReturnCard & {
+      tokenId: string;
+      peakPct: number | null;
+      source: ReturnFeedCard["source"];
+      /** When the alert that made the Peak came: the Top 3 shows that, not the card's time. */
+      peakAt: Date;
+    };
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
-      (c): ReturnCard & { tokenId: string; peakPct: number | null; source: ReturnFeedCard["source"] } =>
-        // A folded card shows the call, so the model is what alerted it; its run is the better of
-        // the two alerts' (each from its own alert price).
-        c.kind === "match" && c.curated
-          ? {
-              at: c.at,
-              tokenId: c.tokenId,
-              returnPct: c.curated.returnPct,
-              peakPct: maxPct(c.peakPct, c.curated.peakPct),
-              source: { modelName: c.curated.modelName },
-            }
-          : c,
+      (c): FoldedReturnCard => {
+        if (c.kind !== "match" || !c.curated) return { ...c, peakAt: c.at };
+        // A folded card's return is the call's; its run is the better of the two alerts' (each
+        // from its own alert price), shown with the time and source of the alert that made it - a
+        // multiple put on the other alert's time or name would claim a run that alert didn't make.
+        // The card stays at its own time in the return windows, as it shows in the feed.
+        const callWins = c.curated.peakPct !== null && (c.peakPct === null || c.curated.peakPct > c.peakPct);
+        return {
+          at: c.at,
+          tokenId: c.tokenId,
+          returnPct: c.curated.returnPct,
+          peakPct: maxPct(c.peakPct, c.curated.peakPct),
+          source: callWins ? { modelName: c.curated.modelName } : c.source,
+          peakAt: callWins ? c.curated.at : c.at,
+        };
+      },
     );
     // The Top 3 three ways: the whole feed (folded as it shows), the models' calls alone, and the
     // reader's own filters' alerts alone - each from its own alerts, so a token both caught counts
     // in each list with that side's run.
-    const best = topReturns(cards, now);
+    const best = topReturns(
+      cards.map((c) => ({ ...c, at: c.peakAt })),
+      now,
+    );
     const bestModel = topReturns(callCards, now);
     const bestFilter = topReturns(matchCards, now);
     const shown = [...best, ...bestModel, ...bestFilter];
@@ -646,7 +662,9 @@ export async function registerMatchRoutes(
       const name = filterName.get(src.filterId);
       return name ? { kind: "filter" as const, name } : null;
     };
-    const named = (list: typeof best) =>
+    const named = (
+      list: readonly { tokenId: string; at: Date; peakPct: number; source: ReturnFeedCard["source"] }[],
+    ) =>
       list.flatMap((b) => {
         const t = tokenById.get(b.tokenId);
         return t

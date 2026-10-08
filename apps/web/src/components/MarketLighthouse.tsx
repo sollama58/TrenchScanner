@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { LighthouseCount, LighthouseTally, MarketLighthouse } from "../api";
 import { usePolling } from "../hooks";
-import { ago, pct, signedPct, usd } from "../format";
+import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { HBarChart, Skeleton } from "./Charts";
 import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
 
@@ -23,7 +23,19 @@ export type Days = (typeof WINDOWS)[number];
 /** Graded alerts below which a narrative's hit rate shows as early rather than as a verdict. */
 const MIN_GRADED = 5;
 
-const path = (base: string, days: number) => `${base}/lighthouse?days=${days}`;
+/** The browser's IANA zone, for the hour-of-day chart; empty when it can't say (the API reads UTC). */
+function browserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+  } catch {
+    return "";
+  }
+}
+
+const path = (base: string, days: number) => {
+  const tz = browserTimeZone();
+  return `${base}/lighthouse?days=${days}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`;
+};
 
 /** TokenSage's codes ("x_link_reused", "about_this_coin") as words. */
 export const words = (code: string) => code.replace(/[_-]+/g, " ").trim();
@@ -615,7 +627,7 @@ function screenedBucketLabel(iso: string, bucketHours: number) {
   // today's bucket with yesterday's date (the Lighthouse tab's ticks do the same).
   if (bucketHours >= 24)
     return t.toLocaleDateString([], { timeZone: "UTC", weekday: "short", day: "numeric" });
-  return t.toLocaleTimeString([], { hour: "numeric" });
+  return t.toLocaleTimeString([], { hour: "numeric", minute: halfHour(t) });
 }
 
 /**
@@ -794,17 +806,19 @@ const retTone = (v: number | null) => (v === null ? "" : v >= 0 ? "lh-up" : "lh-
 /** Hours with fewer graded tokens than this are drawn faded: too few to read a rate from. */
 const MIN_HOUR_GRADED = 30;
 
-const hourLabel = (h: number) => `${String(((h % 24) + 24) % 24).padStart(2, "0")}:00`;
+const hourLabel = (h: number, minutes = 0) =>
+  `${String(((h % 24) + 24) % 24).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 
 /**
- * The browser's clock against UTC, for turning the API's UTC hours into the reader's own: the
- * offset in whole hours (a half-hour zone rounds to the nearest hour, which the note says) and
- * a short name for the zone ("PDT", "GMT+2", or the IANA name when the short one is just "GMT").
+ * The browser's clock against UTC: the offset split into whole hours (floored) and the minutes
+ * past them, so a UTC hour falls on local hour `utc + offsetHours` starting `minutes` past it
+ * (00:00 UTC is 05:30 in Kolkata: column 5, labelled 05:30), and a short name for the zone
+ * ("PDT", "GMT+2", or "UTC+5:30" when the short one is just "GMT").
  */
 function localClock(now = new Date()) {
   const offsetMinutes = -now.getTimezoneOffset();
-  const offsetHours = Math.round(offsetMinutes / 60);
-  const rounded = offsetMinutes % 60 !== 0;
+  const offsetHours = Math.floor(offsetMinutes / 60);
+  const minutes = offsetMinutes - offsetHours * 60;
   let name: string;
   try {
     name =
@@ -815,24 +829,29 @@ function localClock(now = new Date()) {
     name = "";
   }
   if (!name || name === "GMT" || name === "UTC") {
-    name = offsetHours === 0 ? "UTC" : `UTC${offsetHours > 0 ? "+" : "−"}${Math.abs(offsetHours)}`;
+    const abs = Math.abs(offsetMinutes);
+    const mm = abs % 60 ? `:${String(abs % 60).padStart(2, "0")}` : "";
+    name = offsetMinutes === 0 ? "UTC" : `UTC${offsetMinutes > 0 ? "+" : "−"}${Math.floor(abs / 60)}${mm}`;
   }
-  return { offsetHours, rounded, name };
+  return { offsetHours, minutes, name };
 }
 
 /**
  * The screened field by hour of the day over everything the hourly rollup has kept: which
- * hours screen the most tokens, and which hours' tokens double and pay. The API sums per UTC
- * hour; the columns are shifted to the browser's own clock so "5 am" means the reader's 5 am.
+ * hours screen the most tokens, and which hours' tokens double and pay. The API sums per hour
+ * in the browser's zone (the `tz` it was sent), each row on its own date's offset, so "5 am"
+ * means the reader's 5 am on either side of a DST change. An older API, or a browser that
+ * can't name its zone, gets UTC hours, and the columns are shifted by today's offset instead.
  * Three charts on one column per hour, so a reader lines up busy against good.
  */
 function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
   const [hover, setHover] = useState<number | null>(null);
   const clock = localClock();
-  // Column i is local hour i, holding the UTC hour that falls on it.
+  const shift = !h.timeZone || h.timeZone === "UTC" ? clock.offsetHours : 0;
+  // Column i is local hour i, holding the API hour that falls on it.
   const hours = Array.from({ length: 24 }, (_, local) => {
-    const utc = (((local - clock.offsetHours) % 24) + 24) % 24;
-    return { ...(h.hours[utc] ?? h.hours[0]!), hour: local };
+    const from = (((local - shift) % 24) + 24) % 24;
+    return { ...(h.hours[from] ?? h.hours[0]!), hour: local };
   });
   const total = hours.reduce((sum, x) => sum + x.calls, 0);
   if (h.days === 0 || total === 0) return null;
@@ -854,14 +873,12 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
       </h4>
       <p className="faint small">
         Every screened token in our history by the hour it was decided on, in your local time zone (
-        {clock.name}
-        {clock.rounded ? ", rounded to the hour" : ""}): how many tokens each hour brings, how often they
-        doubled, and what they returned on the exit plan. Hours with fewer than {MIN_HOUR_GRADED} graded
-        tokens are faded.
+        {clock.name}): how many tokens each hour brings, how often they doubled, and what they returned on the
+        exit plan. Hours with fewer than {MIN_HOUR_GRADED} graded tokens are faded.
       </p>
       <div className="lh-readout" aria-live="polite">
         <strong>
-          {hourLabel(focus.hour)}–{hourLabel(focus.hour + 1)} {clock.name}
+          {hourLabel(focus.hour, clock.minutes)}–{hourLabel(focus.hour + 1, clock.minutes)} {clock.name}
         </strong>
         <span className="num">{focus.calls.toLocaleString()} screened</span>
         <span className="lh-readout-item">

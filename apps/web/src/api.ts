@@ -199,6 +199,8 @@ export interface CuratedMeta {
   outcome: Outcome;
   /** The call's Peak, which only rises: its run peak or its market-cap high since (absent from older API builds). */
   peakPct?: number | null;
+  /** That Peak as a market cap, null until it traded above the call (absent from older API builds). */
+  peakMcapUsd?: number | null;
   /** The Narrative seat's later view of the call, once the deep read decided; null until then. */
   narrative?: { verdict: "agrees" | "warns"; at: string } | null;
   aiReview?: AdminAiReview;
@@ -1091,6 +1093,8 @@ export interface TelegramState {
 
 /** POST /telegram/link/code: a one-time code inside the two t.me deep links. */
 export interface TelegramLinkCode {
+  /** For asking whether the code was used (GET /telegram/link/code/:codeId). */
+  codeId: string;
   code: string;
   expiresAt: string;
   ttlMs: number;
@@ -1181,7 +1185,8 @@ export interface LighthouseHistory {
     bucket: LighthouseHistoryBucket;
     /** The labels drawn as their own series; everything else is "other". */
     top: string[];
-    buckets: { at: string; rows: LighthouseLabelTally[] }[];
+    /** `described`: coins read in the bucket, whatever their labels. Absent from older API builds. */
+    buckets: { at: string; described?: number; rows: LighthouseLabelTally[] }[];
   };
 }
 
@@ -1249,10 +1254,15 @@ export interface MarketLighthouse {
       avgReturnPct: number | null;
     }[];
     /**
-     * The screened field by hour of the day (UTC) over all the hourly history kept, always 24
+     * The screened field by hour of the day over all the hourly history kept, always 24
      * entries. Absent from older API builds.
      */
     byHourOfDay?: {
+      /**
+       * The zone the hours are in: the `tz` asked for (canonical), UTC when none was sent.
+       * Absent from older API builds, whose hours are UTC.
+       */
+      timeZone?: string;
       /** Days of history behind the figures; 0 before the rollup has run. */
       days: number;
       hours: {

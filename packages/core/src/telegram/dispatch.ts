@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import type { Env } from "../config/env.js";
 import { adminWalletSet } from "../config/env.js";
 import { prisma } from "../db.js";
@@ -228,10 +229,34 @@ const TOKEN_SELECT = {
 } as const;
 const SNAPSHOT_SELECT = { marketCapUsd: true, holderCount: true, volume1hUsd: true } as const;
 
+/** Held for the length of a pass, so only one process is ever sending. */
+export const TELEGRAM_DISPATCH_LOCK = "telegram-dispatch";
+/** Past the pass budget plus one slow send (artwork fetch, photo, the text retry). */
+const PASS_TRANSACTION_TIMEOUT_MS = 120_000;
+
 /** One pass. Returns what it did, for the heartbeat. */
 export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Promise<DispatchSummary> {
   const summary: DispatchSummary = { chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0 };
   if (!telegramConfigured(env.TELEGRAM_BOT_TOKEN)) return summary;
+  // A deploy runs the old scanner and the new one side by side, and two passes reading the same
+  // cursors would send every alert twice. The lock is transaction-scoped, so it is held for the
+  // pass and released however the pass ends; a process that doesn't get it skips this pass.
+  return prisma.$transaction(
+    async (tx) => {
+      const [lock] = await tx.$queryRaw<{ locked: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${TELEGRAM_DISPATCH_LOCK})) AS locked`;
+      if (!lock?.locked) return summary;
+      return dispatchPass(env, deps, summary);
+    },
+    { maxWait: 10_000, timeout: PASS_TRANSACTION_TIMEOUT_MS },
+  );
+}
+
+async function dispatchPass(
+  env: Env,
+  deps: DispatchDeps,
+  summary: DispatchSummary,
+): Promise<DispatchSummary> {
   const api = deps.api ?? new TelegramApi(env.TELEGRAM_BOT_TOKEN);
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? sleepFor;
@@ -290,9 +315,10 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
         }),
   ]);
   if (matches.length === 0 && calls.length === 0) {
-    // Nothing new for anyone: move every cursor up so the next pass reads a short window.
+    // Nothing new for anyone: move every cursor up so the next pass reads a short window. Only
+    // ever up: a chat linked a moment ago starts at now, past this horizon.
     await prisma.telegramChat.updateMany({
-      where: { id: { in: chats.map((c) => c.id) }, revokedAt: null },
+      where: { id: { in: chats.map((c) => c.id) }, revokedAt: null, sentThrough: { lt: horizon } },
       data: { sentThrough: horizon },
     });
     return summary;
@@ -319,7 +345,7 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
       // so access coming back doesn't deliver a backlog.
       summary.skipped += 1;
       await prisma.telegramChat.updateMany({
-        where: { id: chat.id, revokedAt: null },
+        where: { id: chat.id, revokedAt: null, sentThrough: { lt: horizon } },
         data: { sentThrough: horizon },
       });
       continue;
@@ -345,7 +371,7 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     );
     if (pending.length === 0) {
       await prisma.telegramChat.updateMany({
-        where: { id: chat.id, revokedAt: null },
+        where: { id: chat.id, revokedAt: null, sentThrough: { lt: horizon } },
         data: { sentThrough: horizon },
       });
       continue;
@@ -367,6 +393,7 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
   await backfillImages(queues, deps.lookupImages);
 
   let lastSendAt = 0;
+  const failed: { chat: ChatRow; what: string }[] = [];
   while (queues.some((q) => q.pending.length > 0)) {
     const t = now();
     if (t - startedAt > PASS_BUDGET_MS) break;
@@ -402,10 +429,28 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     const what = `${result.code}: ${result.description}`.slice(0, 300);
     if (result.migrateToChatId !== undefined) {
       // The group became a supergroup with a new id; the same chat, so the row follows it.
-      await prisma.telegramChat.updateMany({
-        where: { id: q.chat.id },
-        data: { chatId: BigInt(result.migrateToChatId), kind: "supergroup" },
-      });
+      const followed = await prisma.telegramChat
+        .updateMany({
+          where: { id: q.chat.id },
+          data: { chatId: BigInt(result.migrateToChatId), kind: "supergroup" },
+        })
+        .then(
+          () => true,
+          (err: unknown) => {
+            if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return false;
+            throw err;
+          },
+        );
+      if (!followed) {
+        // The supergroup was linked again on its own, and that row is the chat now.
+        logger.info("telegram group upgraded and linked again, retiring the old row", { chat: q.chat.id });
+        await prisma.telegramChat.updateMany({
+          where: { id: q.chat.id },
+          data: { revokedAt: new Date(), lastError: what },
+        });
+        q.pending = [];
+        continue;
+      }
       q.chat.chatId = BigInt(result.migrateToChatId);
       q.nextAt = now() + spacing;
       continue;
@@ -443,17 +488,24 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
       });
       continue;
     }
-    // Telegram unreachable or a 5xx: leave the cursor, try again next pass.
-    const failures = q.chat.failures + 1;
-    logger.warn("telegram send failed", { chat: q.chat.id, what, failures });
+    // Telegram unreachable, a 5xx or a 401: leave the cursor, try again next pass.
+    logger.warn("telegram send failed", { chat: q.chat.id, what });
+    failed.push({ chat: q.chat, what });
+    q.pending = [];
+  }
+  // A failure counts against a chat only if Telegram took some other message in this pass: an
+  // outage or a revoked token fails every chat at once, and switching them all off for it would
+  // leave them paused once Telegram is back.
+  const reachable = summary.sent + summary.digests > 0;
+  for (const { chat, what } of failed) {
+    const failures = reachable ? chat.failures + 1 : chat.failures;
     await prisma.telegramChat.updateMany({
-      where: { id: q.chat.id, revokedAt: null },
+      where: { id: chat.id, revokedAt: null },
       data:
         failures >= MAX_FAILURES
           ? { lastError: what, failures, enabled: false }
           : { lastError: what, failures },
     });
-    q.pending = [];
   }
   return summary;
 }

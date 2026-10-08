@@ -375,24 +375,27 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // Before either sweep: anchors that retired before the run peak was copied (before 2026-10-05)
   // hand it over first, so the filter leaderboard's run size survives the delete. Found through
   // Match's tokenId index; candidateOutcomeId has none. A no-op once every alert has its copy.
-  // Ahead of the age sweep below too: with MATCH_OUTCOME_RETENTION_DAYS set past the general
-  // horizon, that sweep would otherwise take the anchors before this copy saw them.
-  const matchCopiesLanded =
-    env.MATCH_OUTCOME_RETENTION_DAYS > 0 &&
-    (await stage("matchOutcomeCopies", false, async () => {
-      await prisma.$executeRaw`
+  // Ahead of the age sweep below too, and up to whichever horizon deletes first: with
+  // MATCH_OUTCOME_RETENTION_DAYS set past the general horizon (or 0, off), that sweep would
+  // otherwise take the anchors before this copy saw them.
+  const copyCutoff =
+    env.MATCH_OUTCOME_RETENTION_DAYS > 0 && matchOutcomeCutoff > candidateOutcomeCutoff
+      ? matchOutcomeCutoff
+      : candidateOutcomeCutoff;
+  const matchCopiesLanded = await stage("matchOutcomeCopies", false, async () => {
+    await prisma.$executeRaw`
       UPDATE "Match" m
       SET "peak24hReturnPct" = o."peak24hReturnPct"
       FROM "CandidateOutcome" o
-      WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${matchOutcomeCutoff}
+      WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${copyCutoff}
         AND o."peak24hReturnPct" IS NOT NULL
         AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
         AND m."peak24hReturnPct" IS NULL`;
-      // The verdict too, for an alert whose copy never landed (a crash between the old split writes,
-      // or an anchor attached after its window closed). The watcher repairs curated alerts this
-      // way every sweep; match alerts had no such pass, and once the anchor below was gone the
-      // alert counted as pending in every hit rate forever.
-      await prisma.$executeRaw`
+    // The verdict too, for an alert whose copy never landed (a crash between the old split writes,
+    // or an anchor attached after its window closed). The watcher repairs curated alerts this
+    // way every sweep; match alerts had no such pass, and once the anchor below was gone the
+    // alert counted as pending in every hit rate forever.
+    await prisma.$executeRaw`
       UPDATE "Match" m
       SET "hit2xIn1h" = o."hit2xIn1h",
           "hit4xIn1h" = o."hit4xIn1h",
@@ -401,26 +404,25 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
           "peak1hReturnPct" = o."peak1hReturnPct",
           "maxDrawdown1hPct" = o."maxDrawdown1hPct"
       FROM "CandidateOutcome" o
-      WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${matchOutcomeCutoff}
+      WHERE o."sampleKind" = 'match' AND o."anchorAt" < ${copyCutoff}
         AND o."finalizedAt" IS NOT NULL
         AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
         AND (m."hit2xIn1h" IS NULL OR (m."hit10xIn1h" IS NULL AND o."hit10xIn1h" IS NOT NULL))`;
-      return true;
-    }));
-  // Only once the copies above landed (or were not needed): the age sweep would otherwise take
-  // match anchors whose verdict never reached their Match.
+    return true;
+  });
+  // Only once the copies above landed: the age sweep would otherwise take match anchors whose
+  // verdict never reached their Match.
   const deletedCandidateOutcomes = {
-    count:
-      env.MATCH_OUTCOME_RETENTION_DAYS > 0 && !matchCopiesLanded
-        ? 0
-        : await stage("candidateOutcomes", 0, () =>
-            deleteInBatches(
-              `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
-              "CandidateOutcome",
-              [candidateOutcomeCutoff],
-              batch,
-            ),
+    count: !matchCopiesLanded
+      ? 0
+      : await stage("candidateOutcomes", 0, () =>
+          deleteInBatches(
+            `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
+            "CandidateOutcome",
+            [candidateOutcomeCutoff],
+            batch,
           ),
+        ),
   };
 
   // Graded filter-alert anchors go much sooner (user decision 2026-10-05: 7 days after their watch
@@ -429,7 +431,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // nothing but Match references; an ungraded one stays, as it is what tells the hit-rate report
   // that its alerts will never be graded.
   let deletedMatchOutcomes = 0;
-  if (matchCopiesLanded) {
+  if (env.MATCH_OUTCOME_RETENTION_DAYS > 0 && matchCopiesLanded) {
     deletedMatchOutcomes = await stage("matchOutcomes", 0, () =>
       deleteInBatches(
         `SELECT o."id" FROM "CandidateOutcome" o

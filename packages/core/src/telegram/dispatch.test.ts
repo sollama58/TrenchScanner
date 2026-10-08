@@ -8,6 +8,7 @@ import {
   COMMIT_GRACE_MS,
   dashboardUrl,
   runTelegramDispatch,
+  TELEGRAM_DISPATCH_LOCK,
 } from "./dispatch.js";
 import { FakeTelegramApi } from "./fakeApi.js";
 
@@ -325,8 +326,25 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     let row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBeLessThan(at.getTime());
     expect(row?.lastError).toContain("timed out");
-    expect(row?.failures).toBe(1);
+    // Nothing got through in that pass, so it may be Telegram's fault, not the chat's: not counted.
+    expect(row?.failures).toBe(0);
     expect(row?.revokedAt).toBeNull();
+
+    // With another chat's message getting through, the failure is this chat's own and counts.
+    const otherChatId = BigInt(nextChat--);
+    const other = await prisma.telegramChat.create({
+      data: { chatId: otherChatId, kind: "private", userId, sentThrough: new Date(Date.now() - 60_000) },
+    });
+    const failOnlyMine = (params: Record<string, unknown>) =>
+      params.chat_id === String(chatId)
+        ? { ok: false as const, code: 0, description: "timed out" }
+        : { ok: true as const, result: {} };
+    api.answers.set("sendPhoto", failOnlyMine);
+    api.answers.set("sendMessage", failOnlyMine);
+    await run(api);
+    row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(row?.failures).toBe(1);
+    await prisma.telegramChat.delete({ where: { id: other.id } });
 
     const blocked = { ok: false as const, code: 403, description: "Forbidden: bot was blocked by the user" };
     api.answers.set("sendPhoto", blocked);
@@ -335,5 +353,55 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.revokedAt).not.toBeNull();
     expect(row?.lastError).toContain("blocked");
+  });
+
+  it("retires an upgraded group's row when the supergroup was linked again", async () => {
+    const api = new FakeTelegramApi();
+    const oldId = BigInt(nextChat--);
+    const newId = nextChat--;
+    const old = await prisma.telegramChat.create({
+      data: { chatId: oldId, kind: "group", userId, sentThrough: new Date(Date.now() - 60_000) },
+    });
+    const relinked = await prisma.telegramChat.create({
+      data: { chatId: BigInt(newId), kind: "supergroup", userId, sentThrough: new Date() },
+    });
+    await prisma.match.create({
+      data: { userId, filterId, tokenId, snapshotId, matchedAt: new Date(Date.now() - 15_000), score: 71 },
+    });
+    const migrated = (params: Record<string, unknown>) =>
+      params.chat_id === String(oldId)
+        ? {
+            ok: false as const,
+            code: 400,
+            description: "Bad Request: group chat was upgraded to a supergroup chat",
+            migrateToChatId: newId,
+          }
+        : { ok: true as const, result: {} };
+    api.answers.set("sendPhoto", migrated);
+    api.answers.set("sendMessage", migrated);
+    // The pass carries on instead of failing on the taken chat id.
+    await expect(run(api)).resolves.toMatchObject({ failed: 1 });
+    expect((await prisma.telegramChat.findUnique({ where: { id: old.id } }))?.revokedAt).not.toBeNull();
+    const row = await prisma.telegramChat.findUnique({ where: { id: relinked.id } });
+    expect(row?.revokedAt).toBeNull();
+    await prisma.telegramChat.deleteMany({ where: { id: { in: [old.id, relinked.id] } } });
+  });
+
+  it("leaves the pass to the process that holds the lock", async () => {
+    const api = new FakeTelegramApi();
+    let release = () => {};
+    let held = () => {};
+    const isHeld = new Promise<void>((resolve) => (held = resolve));
+    const holder = prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TELEGRAM_DISPATCH_LOCK}))`;
+      held();
+      await new Promise<void>((resolve) => (release = resolve));
+    });
+    await isHeld;
+    const summary = await run(api);
+    release();
+    await holder;
+    expect(summary).toEqual({ chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0 });
+    expect(api.calls).toHaveLength(0);
   });
 });

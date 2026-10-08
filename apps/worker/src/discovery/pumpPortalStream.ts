@@ -316,6 +316,9 @@ export class PumpPortalStream {
       // seconds between a reconnect and the next refusal notice.
       this.tradesConfirmed = false;
       this.retrySubscriptionsOnce = true;
+      // Trades sent while the socket was down are gone: the book must not count windows with
+      // that hole in them as fully watched once the first trade confirms the new connection.
+      this.book?.streamGap(Date.now());
       if (this.book) for (const mint of this.book.trackedMints()) this.pendingSubscribe.add(mint);
       logger.info("stream connected");
     });

@@ -20,6 +20,7 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
   let app: FastifyInstance;
   let cookie = "";
   let userId = "";
+  let bCallAt: Date;
 
   const call = (method: "GET" | "PUT", url: string, payload?: unknown) =>
     app.inject({ method, url, payload: payload as never, cookies: { [SESSION_COOKIE_NAME]: cookie } });
@@ -111,7 +112,7 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
         tokenId: b,
         model: "survivor",
         modelName: "Survivor",
-        createdAt: ago(91),
+        createdAt: (bCallAt = ago(91)),
         hit2xIn1h: true,
         hit4xIn1h: false,
         disqualified: false,
@@ -196,6 +197,7 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
     expect(on[168]!.buckets).toHaveLength(28);
     const top = (await call("GET", "/matches/returns")).json().top as {
       symbol: string;
+      at: string;
       peakPct: number;
       source: { kind: string; name: string } | null;
     }[];
@@ -206,6 +208,8 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
       ["OLD", 900, { kind: "filter", name: "mine" }],
       ["AAA", 400, { kind: "filter", name: "mine" }],
     ]);
+    // B's run is the call's, so it carries the call's time, not the filter alert's a minute later.
+    expect(top[0]!.at).toBe(bCallAt.toISOString());
     // Split by source: the models' calls alone, and the reader's own filters' alerts alone (B's
     // filter alert counts there with its own 30% run).
     const bySource = (await call("GET", "/matches/returns")).json().topBySource as Record<

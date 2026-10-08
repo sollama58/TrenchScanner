@@ -121,4 +121,31 @@ describe.skipIf(!dbAvailable)("admin panel routes", () => {
       await prisma.systemHeartbeat.delete({ where: { job } });
     }
   });
+
+  it("counts only live whitelist entries on the Subscriptions tab, as the Overview does", async () => {
+    const tag = `AdminOpsWl${Date.now()}`;
+    const whitelisted = async () =>
+      ((await call("/admin/subscriptions/stats", "admin")).json() as { whitelisted: number }).whitelisted;
+    const before = await whitelisted();
+    await prisma.whitelist.createMany({
+      data: [
+        { walletAddress: `${tag}-forever`, addedBy: ADMIN_WALLET },
+        {
+          walletAddress: `${tag}-trial`,
+          addedBy: ADMIN_WALLET,
+          expiresAt: new Date(Date.now() + 86_400_000),
+        },
+        {
+          walletAddress: `${tag}-expired`,
+          addedBy: ADMIN_WALLET,
+          expiresAt: new Date(Date.now() - 86_400_000),
+        },
+      ],
+    });
+    try {
+      expect(await whitelisted()).toBe(before + 2);
+    } finally {
+      await prisma.whitelist.deleteMany({ where: { walletAddress: { startsWith: tag } } });
+    }
+  });
 });

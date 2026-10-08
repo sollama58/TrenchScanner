@@ -110,6 +110,29 @@ describe("boosting objectives", () => {
     expect(scoreBoosted(copy, test[0]!.features)).toBe(scores[0]);
   });
 
+  it("the run-size objective counts a loss that fell through the stop as -1, not its later peak", async () => {
+    // Three segments: plain losses, clean 2.2x winners (60% of the time), and dump-then-pump
+    // losers that fell through the stop and only then ran to 6x.
+    const rand = rng(11);
+    const rows: BoostingRow[] = [];
+    for (let i = 0; i < 3000; i++) {
+      const segment = i % 3;
+      const win = segment === 1 && rand() < 0.6;
+      rows.push({
+        tokenId: `t${i}`,
+        anchorAt: new Date(T0 + i * 20_000),
+        features: { buyRatio24h: segment, ageMinutes: rand() * 300 },
+        labelValue: win ? Math.log2(2.2) : 0,
+        survived: segment !== 2,
+        runPeakMultiple: segment === 2 ? 6 : win ? 2.2 : 1.2,
+      });
+    }
+    const runner = await trainBoostedCurator(rows, { objective: "runSize" });
+    const score = (segment: number) => scoreBoosted(runner, { buyRatio24h: segment, ageMinutes: 150 });
+    expect(score(1)).toBeGreaterThan(score(2));
+    expect(score(1)).toBeGreaterThan(score(0));
+  });
+
   it("objectives ride the recipe's boosting options through trainCuratorModel", async () => {
     const rows = runRows(600, 5).map((r) => ({ ...r, anchorPriceUsd: 1e-5, anchorMcapUsd: 50_000 }));
     const params = await trainCuratorModel(rows, {
@@ -136,6 +159,53 @@ describe("plattScale", () => {
     const { slope, intercept } = plattScale(raw, labels, weights);
     expect(slope).toBeCloseTo(0.8, 1);
     expect(intercept).toBeCloseTo(-5, 0);
+  });
+
+  it("converges on clustered and non-monotone scores instead of overshooting", () => {
+    // Two clusters a few units apart: raw 0 wins 3%, raw 5 wins 8%. Plain Newton steps from
+    // (1, 0) ran off to a slope of ~2e5.
+    const raw: number[] = [];
+    const labels: number[] = [];
+    for (let i = 0; i < 5000; i++) {
+      raw.push(0);
+      labels.push(i < 150 ? 1 : 0);
+    }
+    for (let i = 0; i < 1000; i++) {
+      raw.push(5);
+      labels.push(i < 80 ? 1 : 0);
+    }
+    const two = plattScale(
+      raw,
+      labels,
+      raw.map(() => 1),
+    );
+    const p = (x: number) => 1 / (1 + Math.exp(-(two.slope * x + two.intercept)));
+    expect(p(0)).toBeCloseTo(0.03, 3);
+    expect(p(5)).toBeCloseTo(0.08, 3);
+
+    // Non-monotone: the middle cluster wins, both ends never do.
+    const raw3: number[] = [];
+    const labels3: number[] = [];
+    for (const [x, n, wins] of [
+      [2.58, 1000, 0],
+      [0.68, 200, 120],
+      [-0.3, 4000, 0],
+    ] as const) {
+      for (let i = 0; i < n; i++) {
+        raw3.push(x);
+        labels3.push(i < wins ? 1 : 0);
+      }
+    }
+    const three = plattScale(
+      raw3,
+      labels3,
+      raw3.map(() => 1),
+    );
+    expect(three.slope).toBeLessThan(5);
+    for (const x of raw3) {
+      const v = 1 / (1 + Math.exp(-(three.slope * x + three.intercept)));
+      expect(v > 1e-4 && v < 1 - 1e-4).toBe(true);
+    }
   });
 
   it("never flips an anti-correlated score's order", () => {

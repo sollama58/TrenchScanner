@@ -215,6 +215,18 @@ describe("MatchStream.sendHeartbeat", () => {
 
     expect(s.subscriberCount).toBe(0);
   });
+
+  it("ends a stream past its age, so the client's reopen re-checks its access", () => {
+    const s = new MatchStream("postgresql://unused", undefined, undefined, 0);
+    const alice = sink();
+    s.subscribeCurated("alice", alice.sink);
+
+    s.sendHeartbeat();
+
+    expect(alice.ended).toBe(true);
+    expect(alice.written).toEqual([]);
+    expect(s.subscriberCount).toBe(0);
+  });
 });
 
 describe("MatchStream.stop", () => {

@@ -286,8 +286,12 @@ export function AlertNotifier() {
     };
   }, []);
 
-  const check = useCallback(() => {
-    cachedGet<MatchPage>(FEED_PATH, 0)
+  const busy = useRef(false);
+  const again = useRef(false);
+
+  const look = useCallback((maxAgeMs: number) => {
+    busy.current = true;
+    cachedGet<MatchPage>(FEED_PATH, maxAgeMs)
       .then((page) => {
         const cards = page.matches;
         const now = Date.now();
@@ -332,8 +336,22 @@ export function AlertNotifier() {
           }
         }
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        busy.current = false;
+        if (again.current) {
+          again.current = false;
+          look(-1);
+        }
+      });
   }, []);
+
+  // A nudge means something changed after any request already in flight may have been answered:
+  // never just join that one (an alert in a burst would go unannounced), ask again once it is done.
+  const check = useCallback(() => {
+    if (busy.current) again.current = true;
+    else look(-1);
+  }, [look]);
 
   const matchesLive = useNudgeStream("/matches/stream", check, wantsMatches, true);
   const callsLive = useNudgeStream("/curated/stream", check, wantsCalls, true);
@@ -343,13 +361,13 @@ export function AlertNotifier() {
       seen.current = null;
       return;
     }
-    check();
+    if (!busy.current) look(0);
     const timer = window.setInterval(() => {
       // Streams up: they say when to look. Otherwise look on a timer.
       if (!((!wantsMatches || matchesLive) && (!wantsCalls || callsLive))) check();
     }, CHECK_EVERY_MS);
     return () => window.clearInterval(timer);
-  }, [active, wantsMatches, wantsCalls, matchesLive, callsLive, check]);
+  }, [active, wantsMatches, wantsCalls, matchesLive, callsLive, check, look]);
 
   return null;
 }

@@ -29,8 +29,9 @@ export async function refreshLiveMarketData(
   tokens: readonly { id: string; mintAddress: string }[],
   options: {
     /**
-     * Also raise the recorded peak of these tokens' matches from the last this-many days, from the
-     * readings just taken. Omit to leave peaks to the worker's match-peaks pass alone.
+     * Also raise the recorded peak of these tokens' matches and model calls from the last
+     * this-many days, from the readings just taken. Omit to leave peaks to the worker's
+     * match-peaks pass alone.
      */
     peakWindowDays?: number;
   } = {},
@@ -95,6 +96,7 @@ export async function refreshLiveMarketData(
 
   if (updated > 0 && options.peakWindowDays !== undefined) {
     await raiseMatchPeaks(rows, options.peakWindowDays);
+    await raiseCuratedPeaks(rows, options.peakWindowDays);
   }
 
   return { requested: tokens.length, updated };
@@ -131,8 +133,38 @@ async function raiseMatchPeaks(
       WHERE m."tokenId" = v.id
         AND alert.id = m."snapshotId"
         AND m."matchedAt" > now() - MAKE_INTERVAL(days => ${windowDays}::int)
+        -- A reading taken before the alert (a lookup spans seconds) is not its peak.
+        AND v.at >= m."matchedAt"
         AND v.mcap > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")`;
   } catch (err) {
     logger.warn("failed to record live match peaks", { count: rows.length, error: String(err) });
+  }
+}
+
+/**
+ * The same for model calls: raises CuratedAlert.peakMcapUsd wherever a reading just taken is above
+ * it and above the call's market cap, as the live-ping statement in curatedPeaks.ts does. Without
+ * it a call's high was only read off the Token's latest live reading on the worker's pass, so a
+ * high between two passes was lost for the call while the filter alert on the same token kept it.
+ */
+async function raiseCuratedPeaks(
+  rows: readonly { id: string; mcap: number; at: Date }[],
+  windowDays: number,
+): Promise<void> {
+  try {
+    await prisma.$executeRaw`
+      UPDATE "CuratedAlert" c
+      SET "peakMcapUsd" = v.mcap, "peakMcapAt" = v.at
+      FROM unnest(
+        ${rows.map((r) => r.id)}::text[],
+        ${floatArrayParam(rows.map((r) => r.mcap))}::text::float8[],
+        ${rows.map((r) => r.at.toISOString())}::text[]::timestamptz[]
+      ) AS v(id, mcap, at)
+      WHERE c."tokenId" = v.id
+        AND c."createdAt" > now() - MAKE_INTERVAL(days => ${windowDays}::int)
+        AND v.at >= c."createdAt"
+        AND v.mcap > GREATEST(COALESCE(c."peakMcapUsd", 0), c."anchorMcapUsd")`;
+  } catch (err) {
+    logger.warn("failed to record live call peaks", { count: rows.length, error: String(err) });
   }
 }

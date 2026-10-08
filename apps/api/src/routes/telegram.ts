@@ -112,9 +112,10 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
       if (!api) return reply.code(503).send({ error: "telegram_not_configured" });
       const bot = await lookupBot();
       if (!bot) return reply.code(503).send({ error: "telegram_unreachable" });
-      const { code, expiresAt } = await issueTelegramLinkCode(request.user!.userId);
+      const { id, code, expiresAt } = await issueTelegramLinkCode(request.user!.userId);
       request.log.info({ userId: request.user!.userId }, "issued a telegram link code");
       return {
+        codeId: id,
         code,
         expiresAt: expiresAt.toISOString(),
         ttlMs: TELEGRAM_LINK_CODE_TTL_MS,
@@ -123,6 +124,20 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
       };
     },
   );
+
+  /**
+   * Whether a code this account minted has been used. The card waiting on it needs this for a
+   * chat that was already listed (paused, or linked again): redeeming it keeps the chat's id.
+   */
+  app.get("/link/code/:id", { preHandler: app.authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const row = await prisma.telegramLinkCode.findFirst({
+      where: { id, userId: request.user!.userId },
+      select: { claimedAt: true },
+    });
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    return { claimed: row.claimedAt !== null };
+  });
 
   const patchSchema = z
     .object({
@@ -142,6 +157,13 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
     const parsed = patchSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    if (parsed.data.enabled === true) {
+      // Resuming starts from now, as linking does: what was raised while paused is not replayed.
+      await prisma.telegramChat.updateMany({
+        where: { id, userId: request.user!.userId, revokedAt: null, enabled: false },
+        data: { sentThrough: new Date() },
+      });
+    }
     const updated = await prisma.telegramChat.updateMany({
       where: { id, userId: request.user!.userId, revokedAt: null },
       data: {
@@ -226,7 +248,7 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
     const update = request.body as TelegramUpdate | null;
     if (!update || typeof update !== "object" || typeof update.update_id !== "number") return { ok: true };
     try {
-      const outcome = await handleTelegramUpdate(api!, update);
+      const outcome = await handleTelegramUpdate(api!, update, { botUsername: lookupBot });
       if (outcome.action !== "ignored")
         request.log.info({ action: outcome.action }, "telegram update handled");
     } catch (err) {
