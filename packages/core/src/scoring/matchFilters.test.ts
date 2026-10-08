@@ -203,6 +203,9 @@ describe("TokenSage narrative criteria", () => {
     xAccountMadeForCoin: null,
     xReuseRank: null,
     trendScore: null,
+    feeDestination: null,
+    feeCreatorShare: null,
+    feeMutable: null,
     ...overrides,
   });
 

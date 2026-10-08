@@ -5,7 +5,8 @@ import { topCategory } from "./routes/adminInsights.js";
  * TokenSage's read of one token, shaped for the dashboard's TokenSage view (GET
  * /tokens/:mint/sage, opened from a card or a Telegram alert's link). A curated slice of the
  * stored Analysis document rather than the document itself: the parts worth showing a reader,
- * clipped, with the creator wallet and the raw social links left out. Every string here is
+ * clipped, with the creator wallet and the raw social links left out (a creator-fee recipient
+ * other than the creator keeps its address, linked to Solscan, as TokenSage suggests). Every string here is
  * launcher-supplied or derived from it, so the page renders it as text, never as HTML.
  *
  * It carries TokenSage's interpretation only. The Narrative seat's agrees/warns note is a model
@@ -37,6 +38,7 @@ export interface SageRead {
   launchpad: string | null;
   curveProgress: number | null;
   pair: { kind: string | null; symbol: string | null } | null;
+  creatorFee: SageCreatorFee | null;
   summary: string | null;
   tickerExplanation: string | null;
   referent: {
@@ -105,6 +107,29 @@ export interface SageRead {
   caveats: string[];
 }
 
+/** Where the coin's creator fee goes (TokenSage rules 0.19.0, market.creator_fee). */
+export interface SageCreatorFee {
+  /** creator | holder_rewards | wallet | split | github | charity | cashback | ...; kept open. */
+  destination: string;
+  mechanism: string | null;
+  /** TokenSage's one-line summary, shown as is. */
+  summary: string | null;
+  /** True while the admin can still change the split. */
+  mutable: boolean | null;
+  /** Share of the fee per recipient kind, largest first. */
+  shares: { kind: string; share: number }[];
+  recipients: {
+    kind: string;
+    share: number | null;
+    /** The GitHub login, or a shortened wallet address; null for the creator's own wallet. */
+    label: string | null;
+    /** https://github.com/<login>, api.github.com/user/<id>, or the wallet on Solscan. */
+    url: string | null;
+    /** GitHub: SOL claimed across all its coins. Charity: what this coin donated, in its quote token. */
+    lifetimeReceived: number | null;
+  }[];
+}
+
 export interface SageTrackDay {
   day: string;
   alerts: number;
@@ -138,6 +163,60 @@ const MAX_FLAGS = 10;
 const MAX_TERMS = 6;
 const MAX_CAVEATS = 5;
 const MAX_COPIES = 3;
+const MAX_FEE_RECIPIENTS = 10;
+
+const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const GITHUB_URL = /^https:\/\/(github\.com\/[A-Za-z0-9-]{1,39}|api\.github\.com\/user\/\d{1,15})$/;
+
+/**
+ * market.creator_fee as the view shows it; null when the read has none (older rules, a
+ * non-pump.fun mint, a coin read before it was on-chain): missing and null mean the same.
+ */
+export function sageCreatorFee(fee: unknown): SageCreatorFee | null {
+  if (!fee || typeof fee !== "object" || Array.isArray(fee)) return null;
+  const f = fee as NonNullable<NonNullable<TokenSageAnalysis["market"]>["creator_fee"]>;
+  const destination = clip(f.destination, 30);
+  if (!destination) return null;
+  const shares =
+    f.shares && typeof f.shares === "object" && !Array.isArray(f.shares)
+      ? Object.entries(f.shares)
+          .filter((e): e is [string, number] => num(e[1]) !== null && e[1] > 0)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, MAX_FEE_RECIPIENTS)
+          .map(([kind, share]) => ({ kind: clip(kind, 20) ?? "other", share: Math.min(1, share) }))
+      : [];
+  const recipients = (Array.isArray(f.recipients) ? f.recipients : [])
+    .filter((r) => r && typeof r === "object")
+    .slice(0, MAX_FEE_RECIPIENTS)
+    .map((r) => {
+      const kind = clip(r.kind, 20) ?? "unresolved";
+      const own = r.is_creator === true || kind === "creator";
+      const address = typeof r.address === "string" && BASE58.test(r.address) ? r.address : null;
+      const github = typeof r.url === "string" && GITHUB_URL.test(r.url) ? r.url : null;
+      const login = clip(r.github_login, 39);
+      return {
+        kind,
+        share: num(r.share),
+        label: own
+          ? null
+          : login && /^[A-Za-z0-9-]+$/.test(login)
+            ? login
+            : address
+              ? `${address.slice(0, 4)}…${address.slice(-4)}`
+              : null,
+        url: own ? null : (github ?? (address ? `https://solscan.io/account/${address}` : null)),
+        lifetimeReceived: num(r.lifetime_received),
+      };
+    });
+  return {
+    destination,
+    mechanism: clip(f.mechanism, 30),
+    summary: clip(f.summary),
+    mutable: typeof f.mutable === "boolean" ? f.mutable : null,
+    shares,
+    recipients,
+  };
+}
 
 function clip(text: unknown, max = MAX_TEXT): string | null {
   if (typeof text !== "string") return null;
@@ -191,6 +270,7 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
     pair: doc.market?.pair
       ? { kind: clip(doc.market.pair.kind, 30), symbol: clip(doc.market.pair.symbol, 20) }
       : null,
+    creatorFee: sageCreatorFee(doc.market?.creator_fee),
     summary: clip(doc.summary, MAX_SUMMARY),
     tickerExplanation: clip(doc.ticker_explanation),
     referent:

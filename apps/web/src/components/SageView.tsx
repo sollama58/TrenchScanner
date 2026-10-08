@@ -40,6 +40,21 @@ export interface SageRead {
   launchpad: string | null;
   curveProgress: number | null;
   pair: { kind: string | null; symbol: string | null } | null;
+  /** Where the creator fee goes (rules 0.19.0); null on older reads. */
+  creatorFee: {
+    destination: string;
+    mechanism: string | null;
+    summary: string | null;
+    mutable: boolean | null;
+    shares: { kind: string; share: number }[];
+    recipients: {
+      kind: string;
+      share: number | null;
+      label: string | null;
+      url: string | null;
+      lifetimeReceived: number | null;
+    }[];
+  } | null;
   summary: string | null;
   tickerExplanation: string | null;
   referent: {
@@ -137,6 +152,33 @@ const LINEAGE: Record<string, { text: string; tone: "good" | "warn" | "neutral" 
   copy: { text: "Copy", tone: "warn" },
   late_copy: { text: "Late copy", tone: "warn" },
   reference: { text: "Builds on a known coin", tone: "neutral" },
+};
+
+/** TokenSage's creator-fee destinations, as the view's tag names them. Kept open. */
+const FEE_DESTINATION: Record<string, string> = {
+  creator: "Goes to the creator",
+  holder_rewards: "Goes to holders",
+  wallet: "Goes to another wallet",
+  split: "Split between wallets",
+  github: "Goes to a GitHub account",
+  charity: "Goes to charity",
+  cashback: "Goes back to traders",
+  social: "Goes to a social account",
+  other: "Redirected",
+  unknown: "Not readable",
+};
+
+/** Who a share of the fee goes to, by recipient kind. */
+const FEE_RECIPIENT: Record<string, string> = {
+  creator: "The creator",
+  wallet: "Another wallet",
+  github: "GitHub account",
+  charity: "Charity (donate.gg)",
+  x: "X account",
+  pump: "pump.fun",
+  social: "Social account",
+  program: "A program",
+  unresolved: "Unresolved",
 };
 
 const RELATION: Record<string, string> = {
@@ -458,6 +500,8 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
         </section>
       )}
 
+      {r.creatorFee && <FeeCard fee={r.creatorFee} />}
+
       {r.x && <XCard x={r.x} />}
 
       {r.trend && (r.trend.matched || r.trend.terms.length > 0) && (
@@ -499,6 +543,62 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
         </ul>
       )}
     </>
+  );
+}
+
+/** TokenSage's lower-case fragment as a sentence. */
+function sentence(text: string): string {
+  const t = text.trim().replace(/\.$/, "");
+  return `${t.charAt(0).toUpperCase()}${t.slice(1)}.`;
+}
+
+/** Where the creator fee goes: TokenSage's sentence, each recipient's share, and links. */
+function FeeCard({ fee }: { fee: NonNullable<SageRead["creatorFee"]> }) {
+  const named = fee.recipients.filter((r) => r.label !== null || r.lifetimeReceived !== null);
+  return (
+    <section className="sage-card">
+      <h4>
+        Creator fee
+        <span className="sage-tag tone-neutral">
+          {FEE_DESTINATION[fee.destination] ?? FEE_DESTINATION.other}
+        </span>
+        {fee.mutable && <span className="sage-tag tone-neutral">Split can still change</span>}
+      </h4>
+      {fee.summary && <p>{sentence(fee.summary)}</p>}
+      {fee.shares.length > 1 && (
+        <WeightBars
+          rows={fee.shares.map((s) => ({
+            key: s.kind,
+            label: FEE_RECIPIENT[s.kind] ?? words(s.kind),
+            value: s.share,
+          }))}
+        />
+      )}
+      {named.length > 0 && (
+        <ul className="sage-terms">
+          {named.map((r, i) => (
+            <li key={`${r.kind}-${i}`}>
+              {r.url ? (
+                <a href={r.url} target="_blank" rel="noopener noreferrer">
+                  {r.label ?? FEE_RECIPIENT[r.kind] ?? words(r.kind)}
+                </a>
+              ) : (
+                <strong>{r.label ?? FEE_RECIPIENT[r.kind] ?? words(r.kind)}</strong>
+              )}
+              <span className="muted small">
+                {FEE_RECIPIENT[r.kind] ?? words(r.kind)}
+                {r.share !== null ? ` · ${pct0(r.share)}` : ""}
+                {r.lifetimeReceived !== null
+                  ? r.kind === "charity"
+                    ? ` · ${count(r.lifetimeReceived)} donated by this coin`
+                    : ` · ${count(r.lifetimeReceived)} SOL claimed across its coins`
+                  : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

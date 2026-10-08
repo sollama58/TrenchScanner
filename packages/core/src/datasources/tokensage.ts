@@ -72,12 +72,55 @@ export interface TokenSageXMatch {
   basis?: string[];
 }
 
+/** One shareholder of a coin's creator fee (rules 0.19.0+). */
+export interface TokenSageFeeRecipient {
+  address?: string | null;
+  share?: number | null;
+  share_bps?: number | null;
+  /** creator | wallet | github | charity | x | pump | social | program | unresolved; kept open. */
+  kind?: string | null;
+  is_creator?: boolean | null;
+  platform?: string | null;
+  user_id?: string | number | null;
+  github_login?: string | null;
+  url?: string | null;
+  charity_config_id?: string | null;
+  /** GitHub/social: SOL claimed across all its coins. Charity: what this coin donated, in its quote token. */
+  lifetime_received?: number | null;
+}
+
+/**
+ * Where a pump.fun coin's creator fee goes (TokenSage rules 0.19.0, market.creator_fee).
+ * `destination` is the one-word answer: creator | holder_rewards | wallet | split | github |
+ * charity | cashback, rarely social | other | unknown; kept open, and anything unknown reads as
+ * "redirected, see summary". Current as of the read: a mutable split can still change.
+ */
+export interface TokenSageCreatorFee {
+  destination?: string | null;
+  /** direct | sharing_config | holder_rewards | cashback; kept open. */
+  mechanism?: string | null;
+  creator_fee_bps?: number | null;
+  admin?: string | null;
+  sharing_config?: string | null;
+  sharing_version?: number | null;
+  mutable?: boolean | null;
+  split?: boolean | null;
+  /** Share of the fee per recipient kind; sums to 1. */
+  shares?: Record<string, number> | null;
+  recipients?: TokenSageFeeRecipient[] | null;
+  /** One sentence to show as is, e.g. "creator fees go to the coin's holders (holder rewards coin)". */
+  summary?: string | null;
+}
+
 /**
  * One Analysis document (schema_version "1"). Typed from TokenSage's openapi.v1.json and checked
  * against real responses (fixtures/tokensage/). Every field is optional and may be null: a
  * partial answer (mint not yet on-chain, analysed from our hints) has no market data, a basic
  * answer has `x.status: "not_fetched"` and `x.match: null`, and new fields can appear at any
- * time. `market.creator` is here for completeness only: creator history is not a model input.
+ * time. `market.creator` is here for completeness only: creator history is not a model input
+ * (user decision 2026-10-04), so nothing here keys on it. From rules 0.19.0 it is always a wallet
+ * or null (the sharing config's admin on a fee-shared coin), and the raw curve field moved to
+ * `creator_onchain`.
  */
 export interface TokenSageAnalysis {
   schema_version?: string;
@@ -89,6 +132,15 @@ export interface TokenSageAnalysis {
     curve_progress?: number | null;
     graduated_pool?: string | null;
     creator?: string | null;
+    /** Rules 0.19.0+: the raw bonding-curve creator field (a PDA on fee-shared and holder-rewards coins). */
+    creator_onchain?: string | null;
+    /** Rules 0.19.0+: "wallet" | "sharing_config" | "holder_rewards_pda" | "unknown"; kept open. */
+    creator_kind?: string | null;
+    /**
+     * Rules 0.19.0+: where pump.fun's creator fee goes. Absent on older reads and null on a
+     * non-pump.fun mint or a read made before the coin was on-chain; both mean "not known".
+     */
+    creator_fee?: TokenSageCreatorFee | null;
     is_mayhem_mode?: boolean | null;
     quote_mint?: string | null;
     /** The token the coin trades against (rules 0.9.0+); null when the quote mint is unknown. */
@@ -499,6 +551,18 @@ export interface TokenNarrativeFields {
   xAccountMadeForCoin: boolean | null;
   xReuseRank: number | null;
   trendScore: number | null;
+  /**
+   * Rules 0.19.0+ (market.creator_fee): where the coin's creator fee goes (creator,
+   * holder_rewards, wallet, split, github, charity, cashback, ...; kept open), how it is routed,
+   * the creator's own share of it (0-1), whether the split can still change, and TokenSage's
+   * one-line summary. All null when the read has no creator_fee (older rules, a non-pump.fun
+   * mint, or a coin read before it was on-chain): missing and null mean the same.
+   */
+  feeDestination: string | null;
+  feeMechanism: string | null;
+  feeCreatorShare: number | null;
+  feeMutable: boolean | null;
+  feeSummary: string | null;
   /** Flag counts by severity, so a reader needs no catalogue of codes. 0 when there are none. */
   highFlagCount: number;
   warnFlagCount: number;
@@ -601,7 +665,9 @@ export function narrativeFieldsFromAnalysis(
     .sort((a, b) => unit(b.confidence)! - unit(a.confidence)!)[0];
   const account = xRead ? asRecord(x.account) : null;
   const bool = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null);
+  const fee = creatorFeeFields(asRecord(asRecord(doc.market)?.creator_fee));
   return {
+    ...fee,
     lineageKind: clip(lineage?.kind)?.slice(0, 40) ?? null,
     lineageRank: count(lineage?.rank),
     lineageRankOf: count(lineage?.rank_of),
@@ -650,6 +716,45 @@ export function narrativeFieldsFromAnalysis(
     rulesVersion: clip(asRecord(doc.versions)?.rules),
     lexiconVersion: clip(asRecord(doc.versions)?.lexicon)?.slice(0, 40) ?? null,
     analyzedAt: analyzedAt && !Number.isNaN(analyzedAt.getTime()) ? analyzedAt : null,
+  };
+}
+
+/** Fee destinations where the creator wallet gets none of the fee and no split is involved. */
+const FEE_TO_OTHERS_ONLY = new Set(["holder_rewards", "cashback"]);
+
+/** The creator-fee columns from market.creator_fee (rules 0.19.0+); all null without one. */
+function creatorFeeFields(
+  fee: Record<string, unknown> | null,
+): Pick<
+  TokenNarrativeFields,
+  "feeDestination" | "feeMechanism" | "feeCreatorShare" | "feeMutable" | "feeSummary"
+> {
+  const destination = clip(fee?.destination)?.slice(0, 40) ?? null;
+  if (!fee || destination === null) {
+    return {
+      feeDestination: null,
+      feeMechanism: null,
+      feeCreatorShare: null,
+      feeMutable: null,
+      feeSummary: null,
+    };
+  }
+  const shares = asRecord(fee.shares);
+  // The shares say it outright; without them, a direct fee is all the creator's and a holder-
+  // rewards or cashback fee none of it. An unreadable config ("unknown") says nothing.
+  const creatorShare = shares
+    ? (unit(shares.creator) ?? 0)
+    : destination === "creator"
+      ? 1
+      : FEE_TO_OTHERS_ONLY.has(destination)
+        ? 0
+        : null;
+  return {
+    feeDestination: destination,
+    feeMechanism: clip(fee.mechanism)?.slice(0, 40) ?? null,
+    feeCreatorShare: destination === "unknown" ? null : creatorShare,
+    feeMutable: typeof fee.mutable === "boolean" ? fee.mutable : null,
+    feeSummary: clip(fee.summary)?.slice(0, 300) ?? null,
   };
 }
 

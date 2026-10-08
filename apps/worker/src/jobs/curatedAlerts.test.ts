@@ -96,6 +96,9 @@ function deepRead(): NarrativeRead {
     xAccountMadeForCoin: null,
     xReuseRank: null,
     trendScore: null,
+    feeDestination: null,
+    feeCreatorShare: null,
+    feeMutable: null,
   };
 }
 
