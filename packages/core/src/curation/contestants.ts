@@ -33,9 +33,11 @@ import type { CuratorLearner } from "./trainer.js";
  *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
  *    stored (user decision 2026-10-07): on a decision moment that already carries it, and on a
  *    "second look" the scan takes when the deep read lands after the first decision
- *    (CandidateOutcome.sampleKind "second"). It trains on those rows alone, the ns* inputs beside
- *    the usual ones. Not a "learner": the combiners don't stack on it, it doesn't breed, and the
- *    other seats never train on its second-look rows. Lives behind TOKENSAGE_ENABLED.
+ *    (CandidateOutcome.sampleKind "second"). It trains on every row plus the second looks and is
+ *    graded only on the deep-read ones (trainingRun.ts, narrativeTrainingSet). Not a "learner":
+ *    the combiners don't stack on it, it doesn't breed, and the other seats never train on its
+ *    second-look rows. Lives behind TOKENSAGE_ENABLED. Two seats hold the role: Narrative (mostly
+ *    the narrative) and Narrative Blend (the market and the narrative in two steps).
  *
  * Ids are stable storage keys (CuratedAlert.model, CuratorModel.contestant, User.curatedModel):
  * never rename one; retire it and add a new id instead.
@@ -56,6 +58,8 @@ export interface CuratorRecipe {
   forest?: ForestOptions;
   /** Survival-first two-stage shape (see TwoStageCuratorParams in trainer.ts), either family. */
   twoStage?: boolean;
+  /** Two-step narrative shape (see NarrativeBlendCuratorParams in trainer.ts): narrative seats only. */
+  narrativeBlend?: boolean;
 }
 
 export interface ContestantSpec {
@@ -79,6 +83,8 @@ export const RULES_CONTESTANT = "rules";
 export const BLEND_CONTESTANT = "blend";
 export const AGREEMENT_CONTESTANT = "agreement";
 export const NARRATIVE_CONTESTANT = "narrative";
+/** The two-step narrative seat - see the "narrative" role above and NarrativeBlendCuratorParams. */
+export const NARRATIVE_BLEND_CONTESTANT = "narrative-blend";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
 export const RECENT_HALF_LIFE_DAYS = 3;
@@ -272,6 +278,20 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
       "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides mostly from that, with a light read of the market.",
     role: "narrative",
     recipe: { learner: "gbdt", featureNames: NARRATIVE_SEAT_FEATURES },
+  },
+  {
+    // The Narrative seat's two-step sibling (user decision 2026-10-08): the market and the
+    // narrative each get a stage, so it weighs both, where the Narrative seat is mostly the
+    // narrative. Same rows and the same deep-read gate; it files its own calls like a learner
+    // seat (the agrees/warns note on other cards stays the Narrative seat's).
+    id: NARRATIVE_BLEND_CONTESTANT,
+    name: "Narrative Blend",
+    description:
+      "Two steps: boosted trees score the coin from every market input, then shallow trees trained on deep-read coins weigh that score against TokenSage's read; decides only once the deep read is in",
+    summary:
+      "Takes the market's read of the coin and TokenSage's deep read of its story, and weighs the two together.",
+    role: "narrative",
+    recipe: { learner: "gbdt", narrativeBlend: true },
   },
 ];
 

@@ -107,7 +107,9 @@ describe("loadEnv", () => {
 
   it("seats the Narrative model on the TokenSage flag alone, so the trainer and the scanner agree", () => {
     resetEnvCacheForTests();
-    expect(loadEnv({ DATABASE_URL: "postgres://x" }).CURATOR_CONTESTANTS).not.toContain("narrative");
+    const off = loadEnv({ DATABASE_URL: "postgres://x" }).CURATOR_CONTESTANTS;
+    expect(off).not.toContain("narrative");
+    expect(off).not.toContain("narrative-blend");
     resetEnvCacheForTests();
     // The trainer has the flag but no key (render.yaml): it still trains the seat.
     expect(
@@ -121,6 +123,7 @@ describe("loadEnv", () => {
       TOKENSAGE_API_KEY: "k",
     });
     expect(on.CURATOR_CONTESTANTS).toContain("narrative");
+    expect(on.CURATOR_CONTESTANTS).toContain("narrative-blend");
     expect(on.CURATOR_CONTESTANTS).toContain("linear");
     resetEnvCacheForTests();
   });
