@@ -35,6 +35,8 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every TELEGRAM_DISPATCH_INTERVAL_SECONDS (10 by default). While it is down linked Telegram
   // chats hear nothing, and nothing else notices.
   "telegram-dispatch": 10 * 60_000,
+  // Every 5 minutes: says when a stage of the alert path stops producing (pipelineWatchJob.ts).
+  "pipeline-watch": 20 * 60_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
   // Runs every CURATOR_TRAINING_INTERVAL_HOURS (2h by default), not daily - same "expected
@@ -209,6 +211,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   if (rpcCalls) out.rpcCalls = rpcCalls;
   // The scan's TokenSage counters (requested, stored, turned away, waiting, pending...): counts
   // only, so whether reads are going out and coming back is visible without the admin wallet.
+  // pipeline-watch: what each stage of the alert path produced in its window.
+  const flows = stageTimings(meta, "flows");
+  if (flows) out.flows = flows;
   const tokensage = stageTimings(meta, "tokensage");
   if (tokensage) out.tokensage = tokensage;
   return Object.keys(out).length > 0 ? out : null;

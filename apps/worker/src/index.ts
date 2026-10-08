@@ -29,6 +29,7 @@ import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
+import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
 import {
   scheduleInterval,
   scheduleDailyAt,
@@ -173,6 +174,12 @@ async function main() {
       env.TELEGRAM_DISPATCH_INTERVAL_SECONDS / 60,
       { deadlineMinutes: 10 },
     ),
+  );
+  // Says when a stage of the alert path stops producing (new tokens, decision moments, TokenSage
+  // reads, model alerts, Telegram delivery) although every job is still running, and tells the
+  // admin wallets' Telegram chats - see runPipelineWatch.
+  schedule("pipeline-watch", () =>
+    scheduleInterval("pipeline-watch", () => runPipelineWatch(env), 5, { deadlineMinutes: 10 }),
   );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
   // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
