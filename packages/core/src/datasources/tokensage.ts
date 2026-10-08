@@ -65,6 +65,12 @@ export function tokenSageRulesAtLeast(version: string | null | undefined, min: s
   return true;
 }
 
+/**
+ * TokenSage suggests trusting the logo's top visual class (image.labels[0], rules 0.25.0+) from
+ * this score up; below it the picture is unclear.
+ */
+export const TOKENSAGE_LOGO_MIN_SCORE = 0.5;
+
 /** Rules 0.23.0 made x.credibility gentler on renamed, made-for-coin and late-reused accounts. */
 export const TOKENSAGE_GENTLE_CREDIBILITY_RULES = "0.23.0";
 
@@ -581,6 +587,18 @@ export interface TokenNarrativeFields {
   pairKind: string | null;
   pairSymbol: string | null;
   /**
+   * Rules 0.27.0+ (market.pair.pumpfun): the pair token is itself a pump.fun coin. Null for SOL,
+   * stablecoins and majors, on older reads, and when TokenSage doesn't know.
+   */
+  pairPumpfun: boolean | null;
+  /**
+   * Rules 0.25.0+, full reads (image.labels): the logo's best visual class ("dog", "text_logo",
+   * ...; kept open) and its score 0-1. What the picture looks like, not what the coin is about.
+   * Null at basic depth, when the logo couldn't be read, and on older reads.
+   */
+  logoLabel: string | null;
+  logoScore: number | null;
+  /**
    * True when the coin copies a coin launched in the last 30 days (copy_of[].recent), false
    * when it copies nothing recent, null for analyses made before TokenSage said which.
    */
@@ -749,8 +767,16 @@ export function narrativeFieldsFromAnalysis(
   const account = xRead ? asRecord(x.account) : null;
   const bool = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null);
   const fee = creatorFeeFields(asRecord(asRecord(doc.market)?.creator_fee));
+  const logo = asArray(asRecord(doc.image)?.labels)
+    .map(asRecord)
+    .map((l) => ({ label: clip(l?.label)?.slice(0, 40) ?? null, score: unit(l?.score) }))
+    .filter((l): l is { label: string; score: number } => l.label !== null && l.score !== null)
+    .sort((a, b) => b.score - a.score)[0];
   return {
     ...fee,
+    pairPumpfun: bool(pair?.pumpfun),
+    logoLabel: logo?.label ?? null,
+    logoScore: logo?.score ?? null,
     lineageKind: clip(lineage?.kind)?.slice(0, 40) ?? null,
     lineageRank: count(lineage?.rank),
     lineageRankOf: count(lineage?.rank_of),

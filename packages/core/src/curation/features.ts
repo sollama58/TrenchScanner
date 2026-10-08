@@ -14,6 +14,7 @@ import {
   NARRATIVE_FEATURES_V3,
   NARRATIVE_FEATURES_V4,
   NARRATIVE_FEATURES_V5,
+  NARRATIVE_FEATURES_V6,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -180,6 +181,11 @@ export const CANDIDATE_FEATURE_NAMES = [
   // launchSnipers.ts read and the RugCheck holder list; null until both are in, and on every row
   // banked before. Never backfilled.
   "sniperTop10WalletPct",
+  // Added 2026-10-08 (user decision), TokenSage rules 0.25.0 and 0.27.0
+  // (curation/narrativeFeatures.ts): what the logo shows, whether it agrees with the coin's
+  // theme, and whether the coin trades against another (pump.fun) coin. Null on reads that don't
+  // say, and on every row banked before. Never backfilled.
+  ...NARRATIVE_FEATURES_V6,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];

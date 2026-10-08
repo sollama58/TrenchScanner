@@ -1195,6 +1195,14 @@ model TokenNarrative {
   /// market.pair: what the coin trades against ("sol", "stablecoin", "token", "tokenized_stock", ...).
   pairKind              String?
   pairSymbol            String?
+  /// TokenSage rules 0.27.0+ (market.pair.pumpfun): the pair token is itself a pump.fun coin.
+  /// Null for SOL, stablecoins and majors, on older reads, and when not known.
+  pairPumpfun           Boolean?
+  /// TokenSage rules 0.25.0+, full reads (image.labels[0]): the logo's best visual class ("dog",
+  /// "pepe_wojak", "text_logo", ...) and its score 0-1. What the picture looks like, not the
+  /// coin's theme. Null at basic depth, when the logo couldn't be read, and on older reads.
+  logoLabel             String?
+  logoScore             Float?
   /// Copies a coin launched in the last 30 days (copy_of[].recent). Null on analyses from before
   /// TokenSage rules 0.10.0, which didn't say.
   copiesRecent          Boolean?

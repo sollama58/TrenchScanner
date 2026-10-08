@@ -1,4 +1,4 @@
-import { tokenSageFlagSeverity, type TokenSageAnalysis } from "@trenchscanner/core";
+import { TOKENSAGE_LOGO_MIN_SCORE, tokenSageFlagSeverity, type TokenSageAnalysis } from "@trenchscanner/core";
 import { topCategory } from "./routes/adminInsights.js";
 
 /**
@@ -56,7 +56,7 @@ export interface SageRead {
   } | null;
   /**
    * What the logo shows (rules 0.25.0+, full reads): image.labels[0] when its score is at least
-   * LOGO_LABEL_MIN_SCORE. A visual class ("dog", "text_logo"), not the coin's theme.
+   * TOKENSAGE_LOGO_MIN_SCORE. A visual class ("dog", "text_logo"), not the coin's theme.
    */
   logo: { label: string; score: number } | null;
   creatorFee: SageCreatorFee | null;
@@ -196,9 +196,6 @@ const MAX_CAVEATS = 5;
 const MAX_COPIES = 3;
 const MAX_FEE_RECIPIENTS = 10;
 
-/** TokenSage suggests showing the logo's top visual class from this score up. */
-export const LOGO_LABEL_MIN_SCORE = 0.5;
-
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const GITHUB_URL = /^https:\/\/(github\.com\/[A-Za-z0-9-]{1,39}|api\.github\.com\/user\/\d{1,15})$/;
 
@@ -313,7 +310,7 @@ export function sageLogo(labels: unknown): SageRead["logo"] {
         !!l && typeof l.label === "string" && l.label.trim() !== "" && num(l.score) !== null,
     )
     .sort((a, b) => b.score - a.score)[0];
-  if (!best || best.score < LOGO_LABEL_MIN_SCORE || best.label === "none") return null;
+  if (!best || best.score < TOKENSAGE_LOGO_MIN_SCORE || best.label === "none") return null;
   return { label: clip(best.label, 30)!, score: Math.min(1, best.score) };
 }
 

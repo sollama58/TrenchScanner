@@ -14,7 +14,11 @@
  * fee goes (the fourth wave) is a fact about the coin, not the wallet's history, so it is here.
  */
 
-import { TOKENSAGE_GENTLE_CREDIBILITY_RULES, tokenSageRulesAtLeast } from "../datasources/tokensage.js";
+import {
+  TOKENSAGE_GENTLE_CREDIBILITY_RULES,
+  TOKENSAGE_LOGO_MIN_SCORE,
+  tokenSageRulesAtLeast,
+} from "../datasources/tokensage.js";
 import type { CandidateFeatureName } from "./features.js";
 
 /** TokenSage's top-level taxonomy, one 0/1 input each (labels are "animal" or "animal/dog"). */
@@ -181,12 +185,79 @@ export const NARRATIVE_FEATURES_V4 = [
  */
 export const NARRATIVE_FEATURES_V5 = ["nsXCredibility23"] as const;
 
+/**
+ * The sixth wave (TokenSage rules 0.25.0 and 0.27.0, 2026-10-08; user decision): what the logo
+ * shows and whether the coin trades against another coin.
+ * - The logo: image.labels[0] from TokenSage's vision model, full reads only. One bit per
+ *   LOGO_GROUPS group when the top class scores TOKENSAGE_LOGO_MIN_SCORE or more, the top score
+ *   itself, and whether the logo agrees with the coin's theme (a dog logo on an animal coin: 1; on
+ *   a political coin: 0; null when the group has no theme, or the logo is unclear). All null
+ *   without labels (basic reads, unreadable logos, older rules).
+ * - The pair: nsPairToken is 1 when the coin trades against another coin (launched into its
+ *   community; ~1 in 4 launches on 2026-10-08), 0 against SOL, a stablecoin or a major, null when
+ *   the read doesn't say. nsPairPumpfun is 1 when that coin is itself a pump.fun coin (0.27.0+),
+ *   0 when it isn't or the coin trades against SOL and the like, null when not known.
+ * notes/tokensage-brief-2026-10-08-todays-updates.md.
+ */
+export const NARRATIVE_FEATURES_V6 = [
+  "nsLogoAnimal",
+  "nsLogoMeme",
+  "nsLogoPerson",
+  "nsLogoRobot",
+  "nsLogoFood",
+  "nsLogoText",
+  "nsLogoScore",
+  "nsLogoMatchesTheme",
+  "nsPairToken",
+  "nsPairPumpfun",
+] as const;
+
+type LogoGroupFeature = (typeof NARRATIVE_FEATURES_V6)[number] &
+  ("nsLogoAnimal" | "nsLogoMeme" | "nsLogoPerson" | "nsLogoRobot" | "nsLogoFood" | "nsLogoText");
+
+/**
+ * TokenSage's 25 logo classes, grouped into the inputs above, with the top-level themes a logo
+ * in the group agrees with. Classes not listed (cartoon_char, object, crude, screenshot, flag,
+ * none, and any TokenSage adds) set no bit. `sample` is the class a replayed vector stands for.
+ */
+const LOGO_GROUPS: Record<
+  LogoGroupFeature,
+  { classes: readonly string[]; themes: readonly string[]; sample: string }
+> = {
+  nsLogoAnimal: {
+    classes: [
+      "dog",
+      "cat",
+      "frog",
+      "monkey",
+      "hippo",
+      "squirrel",
+      "bird",
+      "bear_bull",
+      "fish",
+      "animal_other",
+    ],
+    themes: ["animal"],
+    sample: "animal_other",
+  },
+  nsLogoMeme: { classes: ["pepe_wojak", "meme_other"], themes: ["meme_template"], sample: "meme_other" },
+  nsLogoPerson: {
+    classes: ["politician", "elon", "person"],
+    themes: ["political", "celebrity"],
+    sample: "person",
+  },
+  nsLogoRobot: { classes: ["robot"], themes: ["ai_agent"], sample: "robot" },
+  nsLogoFood: { classes: ["food"], themes: ["food_object_abstract"], sample: "food" },
+  nsLogoText: { classes: ["text_logo", "coin_logo"], themes: [], sample: "text_logo" },
+};
+
 export type NarrativeFeatureName =
   | (typeof NARRATIVE_FEATURES)[number]
   | (typeof NARRATIVE_FEATURES_V2)[number]
   | (typeof NARRATIVE_FEATURES_V3)[number]
   | (typeof NARRATIVE_FEATURES_V4)[number]
-  | (typeof NARRATIVE_FEATURES_V5)[number];
+  | (typeof NARRATIVE_FEATURES_V5)[number]
+  | (typeof NARRATIVE_FEATURES_V6)[number];
 
 /** Every narrative feature, in the order the waves were added. */
 export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
@@ -195,6 +266,7 @@ export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
   ...NARRATIVE_FEATURES_V3,
   ...NARRATIVE_FEATURES_V4,
   ...NARRATIVE_FEATURES_V5,
+  ...NARRATIVE_FEATURES_V6,
 ];
 
 /** Second-wave features that are counts, ranks or ages: everything else is a 0/1 bit or a 0-1 share. */
@@ -257,6 +329,15 @@ export const NARRATIVE_BIT_FEATURES: readonly NarrativeFeatureName[] = [
   "nsFeeToGithub",
   "nsFeeToWallet",
   "nsFeeMutable",
+  "nsLogoAnimal",
+  "nsLogoMeme",
+  "nsLogoPerson",
+  "nsLogoRobot",
+  "nsLogoFood",
+  "nsLogoText",
+  "nsLogoMatchesTheme",
+  "nsPairToken",
+  "nsPairPumpfun",
 ];
 
 /** The narrative inputs that are 0-1 shares or confidences, shown as a percentage. */
@@ -269,6 +350,7 @@ export const NARRATIVE_SHARE_FEATURES: readonly NarrativeFeatureName[] = [
   "nsTrendScore",
   "nsFeeCreatorShare",
   "nsXCredibility23",
+  "nsLogoScore",
 ];
 
 export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
@@ -337,6 +419,16 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsFeeCreatorShare: "creator's share of the fee",
   nsFeeMutable: "fee split can still change",
   nsXCredibility23: "X account credibility",
+  nsLogoAnimal: "logo shows an animal",
+  nsLogoMeme: "logo shows a meme",
+  nsLogoPerson: "logo shows a person",
+  nsLogoRobot: "logo shows a robot",
+  nsLogoFood: "logo shows food",
+  nsLogoText: "logo is text or a coin",
+  nsLogoScore: "logo read confidence",
+  nsLogoMatchesTheme: "logo matches the theme",
+  nsPairToken: "paired with another coin",
+  nsPairPumpfun: "paired with a pump.fun coin",
 };
 
 /**
@@ -406,6 +498,16 @@ export interface NarrativeRead {
    * change. Null on a read replayed from stored features that predates every such split.
    */
   rulesVersion?: string | null;
+  /**
+   * market.pair: what the coin trades against ("sol", "token", ...), the pair's ticker, and
+   * (rules 0.27.0+) whether that coin is itself a pump.fun coin. Null when the read doesn't say.
+   */
+  pairKind?: string | null;
+  pairSymbol?: string | null;
+  pairPumpfun?: boolean | null;
+  /** Rules 0.25.0+, full reads: the logo's best visual class and its score; null without one. */
+  logoLabel?: string | null;
+  logoScore?: number | null;
 }
 
 /** The TokenNarrative columns a read is built from (categories is a Json column). */
@@ -457,6 +559,11 @@ export interface NarrativeRow {
   feeCreatorShare?: number | null;
   feeMutable?: boolean | null;
   rulesVersion?: string | null;
+  pairKind?: string | null;
+  pairSymbol?: string | null;
+  pairPumpfun?: boolean | null;
+  logoLabel?: string | null;
+  logoScore?: number | null;
 }
 
 /** The columns narrativeReadFromRow needs, for a Prisma `select`. */
@@ -508,6 +615,11 @@ export const NARRATIVE_ROW_SELECT = {
   feeCreatorShare: true,
   feeMutable: true,
   rulesVersion: true,
+  pairKind: true,
+  pairSymbol: true,
+  pairPumpfun: true,
+  logoLabel: true,
+  logoScore: true,
 } as const;
 
 /**
@@ -574,6 +686,11 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     feeCreatorShare: row.feeCreatorShare ?? null,
     feeMutable: row.feeMutable ?? null,
     rulesVersion: row.rulesVersion ?? null,
+    pairKind: row.pairKind ?? null,
+    pairSymbol: row.pairSymbol ?? null,
+    pairPumpfun: row.pairPumpfun ?? null,
+    logoLabel: row.logoLabel ?? null,
+    logoScore: row.logoScore ?? null,
   };
 }
 
@@ -771,6 +888,50 @@ export function narrativeFeatureValues(
     // Rules 0.19.0+: null when the read does not say where the fee goes.
     ...feeFeatureValues(read),
     nsXCredibility23: xRead && gentleCredibility ? read.xCredibility : null,
+    ...logoFeatureValues(read),
+    ...pairFeatureValues(read),
+  };
+}
+
+/** The logo's group, when its top class is clear enough to count; null otherwise. */
+function logoGroup(read: NarrativeRead): LogoGroupFeature | null {
+  if (!read.logoLabel || read.logoScore === null || read.logoScore === undefined) return null;
+  if (read.logoScore < TOKENSAGE_LOGO_MIN_SCORE) return null;
+  const label = read.logoLabel;
+  const hit = (
+    Object.entries(LOGO_GROUPS) as [LogoGroupFeature, (typeof LOGO_GROUPS)[LogoGroupFeature]][]
+  ).find(([, g]) => g.classes.includes(label));
+  return hit ? hit[0] : null;
+}
+
+function logoFeatureValues(
+  read: NarrativeRead,
+): Record<LogoGroupFeature | "nsLogoScore" | "nsLogoMatchesTheme", number | null> {
+  const known = !!read.logoLabel && read.logoScore !== null && read.logoScore !== undefined;
+  const group = known ? logoGroup(read) : null;
+  const themes = group ? LOGO_GROUPS[group].themes : [];
+  const bits = Object.fromEntries(
+    (Object.keys(LOGO_GROUPS) as LogoGroupFeature[]).map((name) => [
+      name,
+      known ? bit(group === name) : null,
+    ]),
+  ) as Record<LogoGroupFeature, number | null>;
+  return {
+    ...bits,
+    nsLogoScore: known ? read.logoScore! : null,
+    nsLogoMatchesTheme: themes.length > 0 ? bit(themes.some((top) => narrativeHasCategory(read, top))) : null,
+  };
+}
+
+function pairFeatureValues(read: NarrativeRead): Record<"nsPairToken" | "nsPairPumpfun", number | null> {
+  const kind = read.pairKind ?? null;
+  if (kind === null) return { nsPairToken: null, nsPairPumpfun: null };
+  const token = kind === "token";
+  return {
+    nsPairToken: bit(token),
+    // Against SOL, a stablecoin or a major the pair is no pump.fun coin; a token pair says so
+    // only from rules 0.27.0.
+    nsPairPumpfun: !token ? 0 : read.pairPumpfun === true ? 1 : read.pairPumpfun === false ? 0 : null,
   };
 }
 
@@ -909,6 +1070,19 @@ export function narrativeFromFeatures(
     feeMutable: num("nsFeeMutable") === null ? null : num("nsFeeMutable") === 1,
     // Only the split it feeds is recoverable: a 0.23.0+ credibility replays on its own side.
     rulesVersion: num("nsXCredibility23") !== null ? TOKENSAGE_GENTLE_CREDIBILITY_RULES : null,
+    // The pair's ticker isn't recorded; only its kind and pump.fun mark come back.
+    pairKind: num("nsPairToken") === null ? null : num("nsPairToken") === 1 ? "token" : "sol",
+    pairSymbol: null,
+    pairPumpfun:
+      num("nsPairToken") === 1 && num("nsPairPumpfun") !== null ? num("nsPairPumpfun") === 1 : null,
+    // A logo comes back as its group's sample class (an unclear or ungrouped one as "object").
+    logoLabel:
+      num("nsLogoScore") === null
+        ? null
+        : ((Object.keys(LOGO_GROUPS) as LogoGroupFeature[])
+            .filter((name) => num(name) === 1)
+            .map((name) => LOGO_GROUPS[name].sample)[0] ?? "object"),
+    logoScore: num("nsLogoScore"),
   };
 }
 

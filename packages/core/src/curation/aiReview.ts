@@ -2,6 +2,7 @@ import type { ScoredToken } from "../types.js";
 import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
 import { FIRST_BUYERS, resolveDevHolding } from "./tradeFlow.js";
 import { CREATOR_UNKNOWN_FLAG } from "../datasources/rugcheck.js";
+import { TOKENSAGE_LOGO_MIN_SCORE } from "../datasources/tokensage.js";
 import { buildCandidateFeatures } from "./features.js";
 import { LINEAGE_KIND, narrativeIsCopycat, narrativeXRead, type NarrativeRead } from "./narrativeFeatures.js";
 import {
@@ -298,6 +299,17 @@ function narrativeLines(read: NarrativeRead | undefined): string[] {
   }
   if (read.trendMatched !== null)
     lines.push(`- matches a current trend: ${read.trendMatched ? "yes" : "no"}`);
+  if (read.pairKind === "token") {
+    const pair = read.pairSymbol ? `$${clip(read.pairSymbol, 20)}` : "another coin";
+    lines.push(
+      `- trades against ${pair} instead of SOL (launched into its community)${read.pairPumpfun === true ? "; it is itself a pump.fun coin" : ""}`,
+    );
+  }
+  if (read.logoLabel && (read.logoScore ?? 0) >= TOKENSAGE_LOGO_MIN_SCORE) {
+    lines.push(
+      `- the logo looks like: ${clip(read.logoLabel, 30)} (${fmtShare(read.logoScore ?? null)}; what the picture shows, not the theme)`,
+    );
+  }
   return [`TokenSage read of the coin:`, ...lines, ``];
 }
 
