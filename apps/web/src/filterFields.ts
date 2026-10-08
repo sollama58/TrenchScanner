@@ -59,6 +59,12 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxSniperTop10WalletPct",
+        label: "Max snipers in the top 10",
+        hint: "top-10 holders that were among the first 25 buyers; 80% and over is always rejected",
+        unit: "%",
+      },
+      {
         key: "minFirstBuyersHolding",
         label: "Min first buyers holding",
         hint: "of the first 25 buyers; tokens without a count are skipped",

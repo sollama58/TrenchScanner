@@ -175,6 +175,11 @@ export const CANDIDATE_FEATURE_NAMES = [
   // credibility on the gentler 0.23.0 scale. nsXCredibility above keeps the older scale and is
   // null on 0.23.0+ reads, so neither mixes the two.
   ...NARRATIVE_FEATURES_V5,
+  // Added 2026-10-08 (user decision): % of the top-10 holders (pool and LP aside) that were among
+  // the launch's first 25 buyers - the snipers still holding a big bag. From the worker's
+  // launchSnipers.ts read and the RugCheck holder list; null until both are in, and on every row
+  // banked before. Never backfilled.
+  "sniperTop10WalletPct",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -425,6 +430,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   livestreamLive: "live on Pump.fun",
   livestreamViewers: "livestream viewers",
   pairAgeMinutes: "pair age",
+  sniperTop10WalletPct: "snipers in the top 10",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -478,6 +484,7 @@ export function scoredFromFeatures(
     riskScore: num("riskScore"),
     freshTop10WalletPct: num("freshTop10WalletPct"),
     emptyTop10WalletPct: num("emptyTop10WalletPct"),
+    sniperTop10WalletPct: num("sniperTop10WalletPct"),
     ageMinutes: num("ageMinutes"),
     graduated: bool("graduated"),
     hasTwitter: bool("hasTwitter"),
@@ -610,6 +617,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     riskScore: scored.riskScore ?? null,
     freshTop10WalletPct: scored.freshTop10WalletPct ?? null,
     emptyTop10WalletPct: scored.emptyTop10WalletPct ?? null,
+    sniperTop10WalletPct: scored.sniperTop10WalletPct ?? null,
     ageMinutes: scored.ageMinutes ?? null,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,

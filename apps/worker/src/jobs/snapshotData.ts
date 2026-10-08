@@ -63,6 +63,7 @@ export function snapshotDataFor(
     riskFlags: scored.riskFlags ?? [],
     freshTop10WalletPct: scored.freshTop10WalletPct,
     emptyTop10WalletPct: scored.emptyTop10WalletPct,
+    sniperTop10WalletPct: scored.sniperTop10WalletPct,
     top10WalletsChecked: scored.top10WalletsChecked,
     firstBuyersHolding: scored.tradeFlow?.firstBuyersHolding ?? null,
     firstBuyersSeen: scored.tradeFlow?.firstBuyersSeen ?? null,

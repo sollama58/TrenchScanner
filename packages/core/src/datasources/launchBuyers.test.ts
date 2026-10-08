@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { countStillHolding, parseLaunchBuyers, type RawLaunchTx } from "./launchBuyers.js";
+import {
+  countStillHolding,
+  parseLaunchBuyers,
+  sniperShareOfTop10,
+  type RawLaunchTx,
+} from "./launchBuyers.js";
 import { HeliusClient } from "./helius.js";
 
 const MINT = "Mint1111111111111111111111111111111111111pump";
@@ -113,6 +118,15 @@ describe("parseLaunchBuyers", () => {
     expect(parseLaunchBuyers(MINT, [create, lut], 25)?.buyers).toEqual([
       { wallet: "a", tokenAccount: "a-ata", bought: 10 },
     ]);
+  });
+});
+
+describe("sniperShareOfTop10", () => {
+  it("is the share of the holder list that were first buyers, unknown with no list", () => {
+    const snipers = new Set(["a", "b", "c"]);
+    expect(sniperShareOfTop10(["a", "b", "x", "y"], snipers)).toBe(50);
+    expect(sniperShareOfTop10(["x"], snipers)).toBe(0);
+    expect(sniperShareOfTop10([], snipers)).toBeNull();
   });
 });
 

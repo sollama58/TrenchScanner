@@ -70,6 +70,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "fresh", label: "Fresh" },
       { id: "empty", label: "Empty" },
       { id: "snipers", label: "Snipers" },
+      { id: "sniperTop10", label: "Snipers in top 10" },
       { id: "dev", label: "Dev" },
     ],
   },

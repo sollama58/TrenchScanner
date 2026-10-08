@@ -238,6 +238,7 @@ type ScreenTick = {
   reasons: string[];
   fresh_pct: number | null;
   empty_pct: number | null;
+  sniper_pct: number | null;
   top10_pct: number | null;
   risk_score: number | null;
   risk_flags: string[];
@@ -285,6 +286,7 @@ async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize =
              s."marketCapUsd" AS market_cap_usd, s."source" AS source,
              s."rugScreenPassed" AS passed, s."rugScreenReasons" AS reasons,
              s."freshTop10WalletPct" AS fresh_pct, s."emptyTop10WalletPct" AS empty_pct,
+             s."sniperTop10WalletPct" AS sniper_pct,
              s."top10HolderPct" AS top10_pct, s."riskScore" AS risk_score, s."riskFlags" AS risk_flags,
              s."isMayhemMode" AS is_mayhem, s."graduated" AS graduated, s."lpBurned" AS lp_burned,
              s."mintAuthorityActive" AS mint_authority, s."freezeAuthorityActive" AS freeze_authority,
@@ -310,6 +312,7 @@ async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize =
         const check = {
           freshTop10WalletPct: r.fresh_pct,
           emptyTop10WalletPct: r.empty_pct,
+          sniperTop10WalletPct: r.sniper_pct,
           top10HolderPct: r.top10_pct,
           riskScore: r.risk_score,
           riskFlags: r.risk_flags,

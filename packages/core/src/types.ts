@@ -142,7 +142,14 @@ export interface OnChainProfile {
    */
   emptyTop10WalletPct?: number;
   /**
-   * How many holders the two percentages above were computed over - the length of
+   * % of top10HolderAddresses that were among the launch's first 25 buyers (the dev aside) - the
+   * snipers still sitting in the top ten. Pool and LP addresses are already out of the list. From
+   * the worker's launchSnipers.ts read, so undefined until the launch's first buyers have been read
+   * or when there is no holder list.
+   */
+  sniperTop10WalletPct?: number;
+  /**
+   * How many holders the percentages above were computed over - the length of
    * top10HolderAddresses, which excludes pool and LP addresses and so is often fewer than ten.
    * Undefined whenever there was no list to check.
    */
@@ -240,6 +247,8 @@ export interface FilterCriteria {
   /** Max % of the top-10 holders whose wallet was funded <24h ago - a sniper/insider signal. */
   maxFreshTop10WalletPct?: number | null;
   maxEmptyTop10WalletPct?: number | null;
+  /** Max % of the top-10 holders that were among the launch's first 25 buyers. */
+  maxSniperTop10WalletPct?: number | null;
   /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */
   minFirstBuyersHolding?: number | null;
   maxFirstBuyersHolding?: number | null;

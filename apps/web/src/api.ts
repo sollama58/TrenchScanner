@@ -139,6 +139,8 @@ export interface Snapshot {
   freshTop10WalletPct: number | null;
   /** Share of the top 10 holders with under $25 of other tokens; null when not checked. */
   emptyTop10WalletPct?: number | null;
+  /** Share of the top 10 holders (pool and LP aside) that were among the first 25 buyers; null when not checked. */
+  sniperTop10WalletPct?: number | null;
   /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
   firstBuyersHolding?: number | null;
   firstBuyersSeen?: number | null;
@@ -639,6 +641,7 @@ export interface FilterInput {
   minScore: number | null;
   maxFreshTop10WalletPct: number | null;
   maxEmptyTop10WalletPct: number | null;
+  maxSniperTop10WalletPct: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
   /** TokenSage narrative criteria; every one fails closed until the coin has a read. */
@@ -972,6 +975,7 @@ export type CardField =
   | "fresh"
   | "empty"
   | "snipers"
+  | "sniperTop10"
   | "dev"
   | "reasons"
   | "mint"
@@ -1264,6 +1268,8 @@ export interface MarketLighthouse {
       freshWalletMaxPct: number;
       /** Rejected at this share of empty top-10 wallets or more. */
       emptyWalletRejectPct: number;
+      /** Rejected at this share of the top 10 holders being launch snipers or more. */
+      sniperWalletRejectPct?: number;
       mcapMinUsd: number;
       mcapMaxUsd: number;
       maxAgeMinutes: number;

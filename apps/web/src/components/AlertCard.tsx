@@ -74,6 +74,9 @@ export function AlertCard({
   const emptyAtAlert = s.emptyTop10WalletPct ?? null;
   const emptyPct =
     emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? card.token.lastEmptyTop10WalletPct ?? null;
+  // The share of the top 10 that were the launch's first buyers, at alert time or from a later scan.
+  const sniperAtAlert = s.sniperTop10WalletPct ?? null;
+  const sniperPct = sniperAtAlert ?? card.latestSnapshot?.sniperTop10WalletPct ?? null;
   // The same fallback for the first-buyers count, read from the launch's first transactions.
   const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
   const firstHolding = buyersFrom?.firstBuyersHolding ?? null;
@@ -90,8 +93,9 @@ export function AlertCard({
   const figCount = (["alert", "now", "peak"] as const).filter(show).length;
   // The volume field is three tiles (5m / 1h / 24h).
   const statCount =
-    (["score", "holders", "age", "top10", "fresh", "empty", "snipers", "dev"] as const).filter(show).length +
-    (show("vol") ? 3 : 0);
+    (["score", "holders", "age", "top10", "fresh", "empty", "snipers", "sniperTop10", "dev"] as const).filter(
+      show,
+    ).length + (show("vol") ? 3 : 0);
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -309,6 +313,15 @@ export function AlertCard({
               <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
             </div>
           )}
+          {show("sniperTop10") && (
+            <WalletStat
+              label="Top-10 snipers"
+              value={sniperPct}
+              failsAt={SAFETY_REJECT_SNIPER_WALLET_PCT}
+              atAlert={sniperAtAlert !== null}
+              explain="top-10 holder wallets that were among the first 25 buyers after launch"
+            />
+          )}
           {show("dev") && (
             <div
               title={
@@ -407,14 +420,16 @@ export function AlertCard({
 }
 
 /**
- * The safety screen's wallet cuts (packages/core/src/scoring/rugScreen.ts, SAFETY_MAX_FRESH_WALLET_PCT
- * and SAFETY_REJECT_EMPTY_WALLET_PCT): fresh wallets fail over 70%, empty wallets fail at 80% or
- * more. A tile turns red only when its reading would fail the screen.
+ * The safety screen's wallet cuts (packages/core/src/scoring/rugScreen.ts, SAFETY_MAX_FRESH_WALLET_PCT,
+ * SAFETY_REJECT_EMPTY_WALLET_PCT and SAFETY_REJECT_SNIPER_WALLET_PCT): fresh wallets fail over 70%,
+ * empty wallets and launch snipers each fail at 80% or more. A tile turns red only when its reading
+ * would fail the screen.
  */
 const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
+const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 
-/** One wallet-check tile (Fresh or Empty): the share, where it was read, or that it wasn't checked. */
+/** One wallet-check tile (Fresh, Empty or Top-10 snipers): the share, where it was read, or that it wasn't checked. */
 function WalletStat({
   label,
   value,

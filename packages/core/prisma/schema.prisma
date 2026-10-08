@@ -235,6 +235,9 @@ model UserFilter {
   /// maxFreshTop10WalletPct's wallet-age test: a sniper farm can age its wallets, but funding
   /// each one with a real portfolio costs real money.
   maxEmptyTop10WalletPct     Float?
+  /// Max % of the top-10 holders (pool and LP aside) that were among the launch's first 25
+  /// buyers (TokenSnapshot.sniperTop10WalletPct). Skipped while unknown, like the two above.
+  maxSniperTop10WalletPct    Float?
   /// Bounds on how many of the launch's first 25 buyers still hold it (TokenSnapshot.firstBuyersHolding).
   minFirstBuyersHolding      Int?
   maxFirstBuyersHolding      Int?
@@ -883,6 +886,10 @@ model TokenSnapshot {
   // cash nor gas. Null under exactly the same conditions as freshTop10WalletPct above, plus one
   // more: an endpoint that doesn't serve the DAS API can't answer it at all.
   emptyTop10WalletPct Float?
+  // % of the same top-10 list that were among the launch's first 25 buyers (the dev aside) - the
+  // snipers still holding. Null until the launch's first buyers have been read (the worker's
+  // launchSnipers.ts) or with no holder list.
+  sniperTop10WalletPct Float?
   // How many holders the two percentages above were computed over. The list is "top 10" by
   // intent, not by guarantee - pool and LP addresses are excluded from it - so a card that wants
   // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots

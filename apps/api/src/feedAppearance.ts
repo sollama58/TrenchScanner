@@ -29,6 +29,7 @@ export const CARD_FIELDS = [
   "fresh",
   "empty",
   "snipers",
+  "sniperTop10",
   "dev",
   "reasons",
   "mint",

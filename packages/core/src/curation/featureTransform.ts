@@ -27,6 +27,7 @@ const UNTRANSFORMED_FEATURES = new Set([
   "riskScore",
   "freshTop10WalletPct",
   "emptyTop10WalletPct",
+  "sniperTop10WalletPct",
   "graduated",
   "hasTwitter",
   "hasTelegram",
