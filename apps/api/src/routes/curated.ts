@@ -27,7 +27,11 @@ import {
   type ModelInsights,
   type ModelRunHistory,
 } from "../modelInsights.js";
-import { createLighthouseCache, lighthouseQuerySchema } from "../marketLighthouse.js";
+import {
+  createLighthouseCache,
+  lighthouseQuerySchema,
+  lighthouseSignalsQuerySchema,
+} from "../marketLighthouse.js";
 import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import {
@@ -733,6 +737,15 @@ export async function registerCuratedRoutes(
 
   /** The Lighthouse's weather gauge: how often launches are doubling now against the last week. */
   app.get("/weather", async () => opts.reports.weather.get(() => loadMarketWeather(opts.env)));
+
+  /** "Signals at a glance" alone, over a day, a week or a month (marketLighthouse.ts). */
+  app.get("/lighthouse/signals", async (request, reply) => {
+    const parsed = lighthouseSignalsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.lighthouse.signals(opts.env, parsed.data.days);
+  });
 
   /** The Lighthouse tab's trends: the kept-for-good hourly sums per hour, day or week (lighthouseHistory.ts). */
   app.get("/lighthouse/history", async (request, reply) => {
