@@ -452,3 +452,23 @@ async function aiJudgeState(isAdmin: boolean) {
 }
 
 export type ModelInsights = Awaited<ReturnType<typeof buildModelInsights>>;
+
+/** Training runs the per-model history lists (the Models tab's model detail view). */
+export const MODEL_RUN_HISTORY_LIMIT = 30;
+
+/**
+ * One model's training runs, newest first: every exam it sat, whether it took over its seat's
+ * calling, and the cutoff's record. The insights' `runs` holds the newest runs across the whole
+ * field, which is only a run or two per model; this is the longer view of one.
+ */
+export async function buildModelRunHistory(contestant: string) {
+  const rows = await prisma.curatorModel.findMany({
+    where: { contestant },
+    orderBy: { createdAt: "desc" },
+    take: MODEL_RUN_HISTORY_LIMIT,
+    select: runSelect,
+  });
+  return { contestant, runs: rows.map(summarizeRun) };
+}
+
+export type ModelRunHistory = Awaited<ReturnType<typeof buildModelRunHistory>>;

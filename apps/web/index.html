@@ -65,7 +65,7 @@
         if (h.indexOf("link=") === 0) return;
         var paths = ["/auth/me", "/subscription", "/health/worker", "/settings"].concat(
           h === "model"
-            ? ["/curated/insights?days=30", "/curated/models?days=30"]
+            ? ["/curated/insights?days=7", "/curated/models?days=7"]
             : h === "filters" || h === "top"
               ? ["/filters", "/config", "/filters/leaderboard", "/curated/models?days=30", "/telegram"]
               : h === "settings"
@@ -95,7 +95,7 @@
           // starting, and the session calls would only come back 401.
           if (localStorage.getItem("ts-guest") === "1")
             paths = ["/health/worker"].concat(
-              h === "model" ? ["/guest/insights?days=30", "/guest/models?days=30"] : ["/guest/feed?page=1"],
+              h === "model" ? ["/guest/insights?days=7", "/guest/models?days=7"] : ["/guest/feed?page=1"],
             );
         } catch (e) {}
         paths.forEach(function (p) {

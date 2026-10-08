@@ -424,6 +424,12 @@ export interface ModelRun {
   }[];
 }
 
+/** GET .../models/:id/runs: one model's training runs, newest first. */
+export interface ModelRunHistory {
+  contestant: string;
+  runs: ModelRun[];
+}
+
 export interface AiReviewRow {
   id: string;
   createdAt: string;

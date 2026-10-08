@@ -1819,9 +1819,51 @@ g:hover > .hit {
   color: var(--brand-ink);
 }
 .mbar-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   text-align: right;
   font-family: var(--mono);
   white-space: nowrap;
+}
+.mbar-value small {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+/* Rows that open a detail view carry a chevron in a fourth column. */
+.mbar.opens .mbar-row {
+  grid-template-columns: minmax(110px, 1fr) 2.4fr 104px 14px;
+}
+.mbar-open {
+  display: flex;
+  color: var(--muted);
+  transition:
+    color 0.12s,
+    transform 0.12s;
+}
+.mbar-row:hover .mbar-open,
+.mbar-row.on .mbar-open {
+  color: var(--ink);
+  transform: translateX(2px);
+}
+.mbar-row.head-row {
+  cursor: default;
+  padding-top: 0;
+  padding-bottom: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mbar-row.head-row .mbar-value {
+  font-family: inherit;
+}
+.mbar-row.head-row .mbar-value small {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
 }
 .marker-key {
   display: inline-block;
@@ -1861,6 +1903,10 @@ g:hover > .hit {
   .mbar-row {
     grid-template-columns: minmax(84px, 1fr) 1.6fr 74px;
     gap: 8px;
+  }
+  .mbar.opens .mbar-row {
+    grid-template-columns: minmax(84px, 1fr) 1.3fr 76px 12px;
+    gap: 6px;
   }
 }
 
@@ -3619,6 +3665,145 @@ button.small-btn {
 }
 .stats-note {
   margin: 12px 0 10px;
+}
+
+/* ---------- Model detail (Models tab › Models vs baseline › a model) ---------- */
+.model-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+.model-detail .about-head {
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+.model-detail-title h2 {
+  margin-top: 2px;
+}
+.model-detail-chips {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.model-detail-chips .badge {
+  font-size: 11px;
+  padding: 2px 9px;
+}
+.model-detail-score {
+  margin: 10px 0 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.model-detail-score p {
+  margin: 8px 0 0;
+}
+.model-detail h3 {
+  font-size: 14px;
+  margin: 22px 0 8px;
+}
+.model-figs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.model-fig {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.model-fig label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.model-fig > .num {
+  font-size: 22px;
+  font-weight: 700;
+}
+.model-fig small {
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.model-detail table th,
+.model-detail table td {
+  padding: 7px 8px;
+}
+.model-compare tr.selected {
+  background: color-mix(in srgb, var(--brand-a) 9%, transparent);
+}
+.model-seat {
+  margin-top: 10px;
+}
+.model-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.model-calls li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--grid);
+}
+.model-calls li:last-child {
+  border-bottom: none;
+}
+.model-call-token {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.model-call-token strong,
+.model-call-token small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-call-peak {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.model-calls .badge {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.model-detail-foot {
+  position: sticky;
+  bottom: 0;
+  margin: 18px -24px -26px;
+  padding: 12px 24px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-solid);
+}
+.model-detail-foot .error {
+  margin: 0 0 6px;
+}
+@media (max-width: 640px) {
+  .model-modal {
+    width: 100vw;
+  }
+  .model-figs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .model-fig > .num {
+    font-size: 19px;
+  }
+  .model-detail-foot {
+    margin: 16px -16px -22px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  }
 }
 /* Phones: the popup rises from the bottom as a sheet, within thumb reach. */
 @media (max-width: 640px) {

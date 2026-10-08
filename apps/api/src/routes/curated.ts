@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   prisma,
@@ -21,7 +21,12 @@ import {
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
-import { buildModelInsights, type ModelInsights } from "../modelInsights.js";
+import {
+  buildModelInsights,
+  buildModelRunHistory,
+  type ModelInsights,
+  type ModelRunHistory,
+} from "../modelInsights.js";
 import { createLighthouseCache, lighthouseQuerySchema } from "../marketLighthouse.js";
 import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
@@ -172,14 +177,50 @@ export function createReportCaches() {
     }
     return cache;
   };
+  const runHistoryCache = new Map<string, SharedCache<ModelRunHistory>>();
+  /** Callers check `contestant` against the roster first, which bounds the map. */
+  const runHistoryFor = (contestant: string) => {
+    let cache = runHistoryCache.get(contestant);
+    if (!cache) {
+      cache = new SharedCache<ModelRunHistory>(INSIGHTS_CACHE_TTL_MS, {
+        staleWhileRevalidateMs: REPORT_STALE_MS,
+      });
+      runHistoryCache.set(contestant, cache);
+    }
+    return cache;
+  };
   return {
     leaderboardFor,
     insightsFor,
+    runHistoryFor,
     lighthouse: createLighthouseCache(),
     lighthouseHistory: createLighthouseHistoryCache(),
   };
 }
 export type ReportCaches = ReturnType<typeof createReportCaches>;
+
+const modelParamsSchema = z.object({ id: z.string().min(1).max(64) });
+
+/**
+ * GET .../models/:id/runs, for subscribers and guests alike: one model's training history. Nothing
+ * in it names a token, so guests get the same answer. An id off the roster is a 404, which also
+ * keeps the per-model cache bounded.
+ */
+export async function modelRunsRoute(
+  env: Env,
+  reports: ReportCaches,
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const parsed = modelParamsSchema.safeParse(request.params);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+  }
+  const { id } = parsed.data;
+  const state = await contestState(env);
+  if (!state.roster.some((c) => c.id === id)) return reply.code(404).send({ error: "unknown model" });
+  return reports.runHistoryFor(id).get(() => buildModelRunHistory(id));
+}
 
 export async function registerCuratedRoutes(
   app: FastifyInstance,
@@ -359,6 +400,9 @@ export async function registerCuratedRoutes(
       followBest: saved.followBest,
     };
   });
+
+  /** One model's training runs (the Models tab's model detail view). */
+  app.get("/models/:id/runs", (request, reply) => modelRunsRoute(opts.env, opts.reports, request, reply));
 
   /**
    * The combined feed's settings: which models' calls it shows (checkboxes) and whether it shows

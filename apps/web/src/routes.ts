@@ -47,7 +47,7 @@ export const TAB_DATA: Record<Tab, string[]> = {
     "/curated/stats",
     "/curated/models?days=30",
   ],
-  model: ["/curated/insights?days=30", "/curated/models?days=30"],
+  model: ["/curated/insights?days=7", "/curated/models?days=7"],
   lighthouse: ["/curated/lighthouse/history?days=30&bucket=day&dimension=category"],
   filters: [
     "/filters",

@@ -5,7 +5,7 @@ import { currentMarketCap } from "./matches.js";
 import { curatedAlertInclude, serializeCuratedAlert, withLatestSnapshots } from "../curatedFeed.js";
 import { buildLeaderboard, contestState, modelLabel } from "../contest.js";
 import { buildModelInsights } from "../modelInsights.js";
-import { reportDaysSchema, type ReportCaches } from "./curated.js";
+import { modelRunsRoute, reportDaysSchema, type ReportCaches } from "./curated.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { lighthouseQuerySchema } from "../marketLighthouse.js";
@@ -138,6 +138,11 @@ export async function registerGuestRoutes(
       followBest: true,
     };
   });
+
+  /** One model's training runs: exam results only, nothing that names a token. */
+  app.get("/models/:id/runs", { config: { rateLimit: GUEST_RATE_LIMIT } }, (request, reply) =>
+    modelRunsRoute(opts.env, opts.reports, request, reply),
+  );
 
   /**
    * The Models tab's reports, as a subscriber (never an admin) sees them, minus the AI reviewer's
