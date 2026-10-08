@@ -6,6 +6,7 @@ import {
   buildPending,
   DIGEST_THRESHOLD,
   COMMIT_GRACE_MS,
+  MAX_COMMIT_WAIT_MS,
   dashboardUrl,
   runTelegramDispatch,
   TELEGRAM_DISPATCH_LOCK,
@@ -146,12 +147,13 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
 
   /** How many times a pass read the feed model state. */
   let stateLoads = 0;
-  const run = (api: FakeTelegramApi, hasAccess = true, now = Date.now()) =>
+  const run = (api: FakeTelegramApi, hasAccess = true, now = Date.now(), openSince: Date | null = null) =>
     runTelegramDispatch(env, {
       api,
       now: () => now,
       sleep: noSleep,
       hasAccess: async () => hasAccess,
+      oldestOpenTransaction: async () => openSince,
       feedModelState: async () => {
         stateLoads += 1;
         return state;
@@ -237,6 +239,29 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(api.sent()).toHaveLength(0);
     const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(Date.now() - row!.sentThrough.getTime()).toBeLessThan(COMMIT_GRACE_MS + 5_000);
+  });
+
+  it("holds the cursor behind a transaction still open, so its late commit is not skipped", async () => {
+    const api = new FakeTelegramApi();
+    await rewind();
+    const now = Date.now();
+    // A match written by a transaction that began 12 s ago and has not committed yet.
+    const openSince = new Date(now - 12_000);
+    await run(api, true, now, openSince);
+    const held = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(held!.sentThrough.getTime()).toBeLessThan(openSince.getTime());
+    // It commits; the next pass still reads it.
+    await prisma.match.create({
+      data: { userId, filterId, tokenId, snapshotId, matchedAt: openSince, score: 64 },
+    });
+    const after = new FakeTelegramApi();
+    await run(after, true, now + 1_000);
+    expect(after.sent()).toHaveLength(1);
+    // An open transaction older than the cap does not hold alerts back further.
+    const later = now + 30 * 60_000;
+    await run(new FakeTelegramApi(), true, later, new Date(later - 10 * 60_000));
+    const capped = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(capped!.sentThrough.getTime()).toBe(later - MAX_COMMIT_WAIT_MS);
   });
 
   it("sends a burst as one digest", async () => {
