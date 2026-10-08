@@ -177,7 +177,7 @@ async function main() {
   );
   // Says when a stage of the alert path stops producing (new tokens, decision moments, TokenSage
   // reads, model alerts, Telegram delivery) although every job is still running, and tells the
-  // admin wallets' Telegram chats - see runPipelineWatch.
+  // admin wallets' private Telegram chats - see runPipelineWatch.
   schedule("pipeline-watch", () =>
     scheduleInterval("pipeline-watch", () => runPipelineWatch(env), 5, { deadlineMinutes: 10 }),
   );

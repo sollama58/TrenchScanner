@@ -24,7 +24,7 @@ const logger = createLogger("pipeline-watch");
  * quiet or whose run has not returned.
  *
  * A flagged stage makes the run fail with a message naming it, so it shows as this job's error
- * on /health/worker and on the admin panel, and the admin wallets' linked Telegram chats get one
+ * on /health/worker and on the admin panel, and the admin wallets' private Telegram chats get one
  * message when it starts and one when it clears.
  */
 
@@ -182,12 +182,15 @@ async function previousKeys(): Promise<Set<string>> {
   return new Set(raw.split(",").filter(Boolean));
 }
 
-/** The enabled Telegram chats linked by an admin wallet. */
+/**
+ * The admin wallets' own private Telegram chats (kind "private"): never a group or channel an
+ * admin linked, whose other members shouldn't get operator notices (user decision 2026-10-08).
+ */
 async function adminChats(env: Env): Promise<bigint[]> {
   const admins = [...adminWalletSet(env)];
   if (admins.length === 0) return [];
   const chats = await prisma.telegramChat.findMany({
-    where: { enabled: true, revokedAt: null, user: { walletAddress: { in: admins } } },
+    where: { enabled: true, revokedAt: null, kind: "private", user: { walletAddress: { in: admins } } },
     select: { chatId: true },
   });
   return chats.map((c) => c.chatId);

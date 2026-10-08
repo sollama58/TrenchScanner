@@ -74,6 +74,7 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
   const TAG = `pw-test-${Date.now()}`;
 
   beforeEach(async () => {
+    await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
     await prisma.systemHeartbeat.deleteMany({ where: { job: "pipeline-watch" } });
   });
   afterAll(async () => {
@@ -110,5 +111,33 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
         ? String(again.meta.stalledKeys)
         : String((again as { stalledKeys?: string }).stalledKeys);
     expect(keys).not.toContain("tokensage");
+  });
+
+  it("tells only the admins' private chats, never a group an admin linked", async () => {
+    const now = Date.now();
+    const wallet = `${TAG}-admin`;
+    const user = await prisma.user.create({ data: { walletAddress: wallet } });
+    await prisma.telegramChat.createMany({
+      data: [
+        { chatId: 990_001n, kind: "private", userId: user.id },
+        { chatId: -990_002n, kind: "supergroup", userId: user.id },
+      ],
+    });
+    await prisma.tokenNarrative.create({
+      data: {
+        mintAddress: `${TAG}-c`,
+        depth: "basic",
+        status: "complete",
+        checkedAt: new Date(now - 60 * MIN),
+      },
+    });
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: `${TAG}-b` } });
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true, result: {} });
+    await runPipelineWatch(
+      { ...env, ADMIN_WALLET_ADDRESSES: wallet },
+      { now, telegram: { sendMessage } },
+    ).catch(() => undefined);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]![0]).toBe(990_001n);
   });
 });
