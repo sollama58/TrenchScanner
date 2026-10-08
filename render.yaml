@@ -318,6 +318,15 @@ services:
     name: trenchscanner-web
     buildCommand: npm install --include=dev && npm run build -w @trenchscanner/web
     staticPublishPath: apps/web/dist
+    # The TokenSage page (apps/web/tokensage/index.html, unlisted for now) at /tokensage, with or
+    # without the trailing slash.
+    routes:
+      - type: rewrite
+        source: /tokensage
+        destination: /tokensage/index.html
+      - type: rewrite
+        source: /tokensage/
+        destination: /tokensage/index.html
     # Clickjacking and sniffing guards for the dashboard. frame-ancestors still lets the HolDEX site
     # frame it, in case its /trenches/ tab ever embeds this page rather than calling the API.
     headers:

@@ -29,6 +29,7 @@ import {
 } from "../modelInsights.js";
 import { createLighthouseCache, lighthouseQuerySchema } from "../marketLighthouse.js";
 import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
+import { createTokenSageShowcaseCache } from "../tokenSageShowcase.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import {
   buildLeaderboard,
@@ -197,6 +198,7 @@ export function createReportCaches() {
     runHistoryFor,
     lighthouse: createLighthouseCache(),
     lighthouseHistory: createLighthouseHistoryCache(),
+    tokenSageShowcase: createTokenSageShowcaseCache(),
   };
 }
 export type ReportCaches = ReturnType<typeof createReportCaches>;
