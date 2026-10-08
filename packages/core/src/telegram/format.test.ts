@@ -3,6 +3,7 @@ import {
   ageText,
   alertImage,
   alertMessage,
+  alertParts,
   cardRank,
   digestMessage,
   escapeHtml,
@@ -131,7 +132,7 @@ describe("telegram alert text", () => {
     expect(alertImage({ imageUrl: "http://plain.example/x.png" })).toBeNull();
     // An IPFS file on any public gateway is read through the Pinata resizer instead.
     const cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
-    const resized = `https://pump.mypinata.cloud/ipfs/${cid}?img-width=640&img-height=640&img-fit=scale-down`;
+    const resized = `https://pump.mypinata.cloud/ipfs/${cid}?img-width=640&img-height=640&img-fit=scale-down&img-format=jpeg`;
     expect(alertImage({ imageUrl: `https://ipfs.io/ipfs/${cid}` })).toBe(resized);
     expect(alertImage({ imageUrl: `https://${cid}.ipfs.nftstorage.link/` })).toBe(resized);
     expect(alertImage({ imageUrl: `https://cf-ipfs.com/ipfs/${cid}?x=1` })).toBe(resized);
@@ -154,6 +155,42 @@ describe("telegram alert text", () => {
     // The digest wears the strongest pictured token's logo.
     expect(digestMessage([noArt, withArt], links).imageUrl).toBe("https://cdn.example/top.png");
     expect(digestMessage([noArt], links).imageUrl).toBeNull();
+  });
+
+  it("leaves out the parts a chat switched off", () => {
+    const call = {
+      modelName: "Forest",
+      confidence: 72,
+      tier: null,
+      calibratedPct: null,
+      reasons: ["r1"],
+      narrativeVerdict: null,
+    };
+    const full = card({ calls: [call], filters: [{ name: "Mine", score: 70 }] });
+    const parts = alertParts(["image", "stats", "reasons", "mint", "links", "bogus"]);
+    expect(parts).toMatchObject({
+      image: false,
+      stats: false,
+      reasons: false,
+      conviction: true,
+      filters: true,
+    });
+    const text = formatAlert(full, links, Date.now(), parts);
+    expect(text).toContain("🤖 <b>Forest</b> · 72% conviction");
+    expect(text).toContain("🎯 “Mine” · score 70");
+    expect(text).not.toContain("blockquote");
+    expect(text).not.toContain("mcap");
+    expect(text).not.toContain("<code>");
+    expect(text).not.toContain("<a href");
+    expect(alertMessage(full, links, Date.now(), parts).imageUrl).toBeNull();
+    // Reasons without the conviction line: just the quote.
+    const quoteOnly = formatAlert(full, links, Date.now(), alertParts(["conviction"]));
+    expect(quoteOnly).toContain("<blockquote>• r1</blockquote>");
+    expect(quoteOnly).not.toContain("72% conviction");
+    const digest = formatDigest([full], links, alertParts(["links", "stats"]));
+    expect(digest).not.toContain("trade</a>");
+    expect(digest).toContain(`<code>${token.mintAddress}</code>`);
+    expect(formatTestMessage(links, alertParts(["image"])).imageUrl).toBeNull();
   });
 
   it("has a test message and an age formatter", () => {

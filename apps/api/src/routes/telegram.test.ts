@@ -116,6 +116,21 @@ describe.skipIf(!dbAvailable)("telegram routes", () => {
     });
     expect(patched.statusCode).toBe(200);
     expect(patched.json().chat).toMatchObject({ id: mine.id, modelCalls: false, filterMatches: true });
+    const parts = await app.inject({
+      method: "PATCH",
+      url: `/telegram/chats/${mine.id}`,
+      ...auth(),
+      payload: { hidden: ["reasons", "links", "reasons"] },
+    });
+    expect(parts.statusCode).toBe(200);
+    expect(parts.json().chat.hidden).toEqual(["reasons", "links"]);
+    const badPart = await app.inject({
+      method: "PATCH",
+      url: `/telegram/chats/${mine.id}`,
+      ...auth(),
+      payload: { hidden: ["everything"] },
+    });
+    expect(badPart.statusCode).toBe(400);
     expect(
       (await app.inject({ method: "PATCH", url: `/telegram/chats/${mine.id}`, payload: {}, ...auth() }))
         .statusCode,

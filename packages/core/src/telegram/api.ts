@@ -269,6 +269,8 @@ export class TelegramApi {
       commands: [
         { command: "start", description: "Link this chat with a code from the Filters tab" },
         { command: "status", description: "Which account this chat is linked to" },
+        { command: "show", description: "What each alert includes; /show reasons turns a part on" },
+        { command: "hide", description: "Turn a part of the alert off, e.g. /hide links" },
         { command: "stop", description: "Stop alerts in this chat" },
       ],
     });
