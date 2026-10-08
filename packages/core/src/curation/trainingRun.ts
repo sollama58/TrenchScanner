@@ -408,6 +408,7 @@ async function sitRecipeExam(
     boosting: recipe.boosting,
     forest: recipe.forest,
     twoStage: recipe.twoStage,
+    narrativeBlend: recipe.narrativeBlend,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
     minTestWins: cfg.minTestWins,
@@ -444,6 +445,7 @@ async function shipRecipe(
     boosting: recipe.boosting,
     forest: recipe.forest,
     twoStage: recipe.twoStage,
+    narrativeBlend: recipe.narrativeBlend,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
   };
@@ -931,28 +933,23 @@ export async function runEvolvingContest(
     keep(spec.id, exam);
   }
 
-  // The Narrative seat sits its own exam, graded on the rows with the deep read: a seat on a
+  // The narrative seats sit their own exam, graded on the rows with the deep read: a seat on a
   // different population shares no fold with the learners, so it feeds no combiner and breeds
   // nothing. Skipped, with its running model kept, until it has rows enough.
-  const narrativeSpec = cfg.contestants.find((c) => c.role === "narrative");
-  const own = narrativeSpec?.recipe ? narrativeTrainingSet(rows, cfg.narrativeRows ?? []) : [];
+  const narrativeSpecs = cfg.contestants.filter((c) => c.role === "narrative" && c.recipe);
+  const own = narrativeSpecs.length > 0 ? narrativeTrainingSet(rows, cfg.narrativeRows ?? []) : [];
   const deepRead = own.filter((r) => r.sampleKind !== NARRATIVE_BACKGROUND_KIND);
-  if (narrativeSpec?.recipe && deepRead.length >= NARRATIVE_MIN_ROWS) {
+  if (deepRead.length >= NARRATIVE_MIN_ROWS) {
     // Inputs judged on the deep-read rows: across every row the TokenSage inputs are young and
-    // the onset guard would hold them, taking from the seat the very read it waits for.
+    // the onset guard would hold them, taking from the seats the very read they wait for.
     const ownFeatures = runFeatures(deepRead, cfg);
-    const exam = await examineLearner(
-      own,
-      cfg,
-      narrativeSpec.id,
-      narrativeSpec.name,
-      narrativeSpec.recipe,
-      null,
-      ownFeatures.usable,
-    );
-    exam.result.metrics.runnerReport = runnerTraitsReport(deepRead);
-    if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
-    results.push(exam.result);
+    const runnerReport = runnerTraitsReport(deepRead);
+    for (const spec of narrativeSpecs) {
+      const exam = await examineLearner(own, cfg, spec.id, spec.name, spec.recipe!, null, ownFeatures.usable);
+      exam.result.metrics.runnerReport = runnerReport;
+      if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
+      results.push(exam.result);
+    }
   }
 
   const challengerScores: (number | null)[] = [];

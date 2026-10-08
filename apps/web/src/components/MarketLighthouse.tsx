@@ -29,7 +29,7 @@ type SignalDays = (typeof SIGNAL_WINDOWS)[number];
 const windowLabel = (days: number) => (days === 1 ? "24h" : days === 7 ? "7d" : "1mo");
 
 /** Graded alerts below which a narrative's hit rate shows as early rather than as a verdict. */
-const MIN_GRADED = 5;
+export const MIN_GRADED = 5;
 
 /** TokenSage's codes ("x_link_reused", "about_this_coin") as words. */
 export const words = (code: string) => code.replace(/[_-]+/g, " ").trim();
@@ -37,7 +37,7 @@ export const words = (code: string) => code.replace(/[_-]+/g, " ").trim();
 const share = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100 : null);
 
 /** Series class for a label: the tide's order decides it, so the mix and the tide agree. */
-function seriesClassFor(order: string[]) {
+export function seriesClassFor(order: string[]) {
   return (label: string) => {
     const i = order.indexOf(label);
     return label === "other" || i < 0 ? "lh-other" : `lh-s${i + 1}`;
@@ -613,7 +613,7 @@ const RETURN_SCALE = 100;
  * carries its own gap to the average 2x rate. Thin groups stay dimmed with uncolored figures, so
  * a lucky three calls never reads as a strong narrative.
  */
-function HitRates({
+export function HitRates({
   rows,
   cls,
   baseline,

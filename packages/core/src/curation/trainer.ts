@@ -215,6 +215,29 @@ export interface TwoStageCuratorParams {
   threshold: number;
 }
 
+export const NARRATIVE_BLEND_MODEL_KIND = "narrative-blend-v1";
+
+/**
+ * The input name the blend stage of a NarrativeBlendCuratorParams reads the market stage's score
+ * under, as log-odds. Not a recorded feature: it is computed from the market stage at scoring time.
+ */
+export const MARKET_SCORE_INPUT = "marketScoreLogit";
+
+/**
+ * The two-step narrative model (the Narrative Blend seat, contestants.ts): a market stage scores
+ * the coin from every non-TokenSage input, trained on every row; a blend stage, trained only on
+ * rows that carry TokenSage's deep read, decides from that score and the TokenSage inputs. The
+ * market's view and the narrative's each get a stage of their own, so neither drowns the other.
+ */
+export interface NarrativeBlendCuratorParams {
+  kind: typeof NARRATIVE_BLEND_MODEL_KIND;
+  market: Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;
+  /** Reads MARKET_SCORE_INPUT plus the TokenSage inputs. */
+  blend: Omit<BoostedCuratorParams, "threshold">;
+  /** Emit when the blend stage's probability >= this. */
+  threshold: number;
+}
+
 /**
  * What the training job adds to any shipped model beyond its cutoff: the high-conviction line
  * and the recent-calls calibration. Absent on rows stored before either existed.
@@ -234,19 +257,23 @@ export interface ServedCuratorExtras {
  * A stored curator model of any family. Readers switch on `kind`; a kind not listed in
  * SUPPORTED_CURATOR_MODEL_KINDS must be ignored, never half-applied.
  */
-export type TrainedCuratorParams = (LogisticCuratorParams | BoostedCuratorParams | TwoStageCuratorParams) &
+export type TrainedCuratorParams = (
+  LogisticCuratorParams | BoostedCuratorParams | TwoStageCuratorParams | NarrativeBlendCuratorParams
+) &
   ServedCuratorExtras;
 
 /** A model before its emission cutoff is set (Omit over each family - Omit on a union would merge them). */
 export type UnthresholdedCuratorParams =
   | Omit<LogisticCuratorParams, "threshold">
   | Omit<BoostedCuratorParams, "threshold">
-  | Omit<TwoStageCuratorParams, "threshold">;
+  | Omit<TwoStageCuratorParams, "threshold">
+  | Omit<NarrativeBlendCuratorParams, "threshold">;
 
 export const SUPPORTED_CURATOR_MODEL_KINDS: readonly string[] = [
   CURATOR_MODEL_KIND,
   BOOSTED_MODEL_KIND,
   TWO_STAGE_MODEL_KIND,
+  NARRATIVE_BLEND_MODEL_KIND,
 ];
 
 /**
@@ -265,6 +292,8 @@ export interface ModelTrainOptions extends TrainOptions {
   forest?: ForestOptions;
   /** Train the survival-first two-stage model (TWO_STAGE_MODEL_KIND) with this family for both stages. */
   twoStage?: boolean;
+  /** Train the two-step narrative model (NARRATIVE_BLEND_MODEL_KIND), its market stage in this family. */
+  narrativeBlend?: boolean;
 }
 
 /** Trains one model of the given family (and shape). */
@@ -272,6 +301,7 @@ export async function trainCuratorModel(
   rows: TrainingRow[],
   opts: ModelTrainOptions = {},
 ): Promise<UnthresholdedCuratorParams> {
+  if (opts.narrativeBlend) return trainNarrativeBlendCurator(rows, opts);
   if (opts.twoStage) return trainTwoStageCurator(rows, opts);
   return trainSingleStage(rows, opts);
 }
@@ -330,6 +360,89 @@ export async function trainTwoStageCurator(
   const survival = await trainSingleStage(survivalRows, { ...opts, runWeightPerDoubling: 0 });
   const win = await trainSingleStage(survivors, opts);
   return { kind: TWO_STAGE_MODEL_KIND, survival, win };
+}
+
+/** The blend stage's tree depth: it adjusts one score by the narrative, so shallow trees do. */
+const BLEND_STAGE_MAX_DEPTH = 2;
+
+function logOdds(p: number): number {
+  const q = Math.min(1 - 1e-4, Math.max(1e-4, p));
+  return Math.log(q / (1 - q));
+}
+
+/**
+ * The two-step narrative trainer - see NarrativeBlendCuratorParams. The market stage trains on
+ * every row with the inputs that are not TokenSage's. The blend stage trains on the rows with the
+ * deep read (nsDepthFull = 1), each carrying the market stage's score for it as MARKET_SCORE_INPUT
+ * - cross-fitted: the deep-read tokens split in two halves, and each half is scored by a market
+ * stage that never trained on its tokens, so the blend stage learns how far to trust the market
+ * score from the scores a live coin would get, not from memorized ones. With too few deep-read
+ * rows for the blend stage, the market stage ships alone.
+ */
+export async function trainNarrativeBlendCurator(
+  rows: TrainingRow[],
+  opts: ModelTrainOptions = {},
+): Promise<UnthresholdedCuratorParams> {
+  const names = opts.featureNames ?? LEARNER_FEATURE_NAMES;
+  const marketOpts: ModelTrainOptions = {
+    ...opts,
+    narrativeBlend: false,
+    twoStage: false,
+    featureNames: names.filter((n) => !n.startsWith("ns")),
+  };
+  const market = await trainSingleStage(rows, marketOpts);
+  const deep = rows.filter((r) => r.features.nsDepthFull === 1);
+  const deepWins = deep.filter((r) => r.labelValue > 0).length;
+  if (deep.length < MIN_STAGE_ROWS || deepWins < MIN_STAGE_POSITIVES) return market;
+
+  const half = new Map<string, number>();
+  const halfOf = (r: TrainingRow, i: number): number => {
+    if (r.tokenId === undefined) return i % 2;
+    let h = half.get(r.tokenId);
+    if (h === undefined) {
+      h = half.size % 2;
+      half.set(r.tokenId, h);
+    }
+    return h;
+  };
+  const deepHalves = deep.map((r, i) => halfOf(r, i));
+  const deepTokens = [new Set<string>(), new Set<string>()];
+  deep.forEach((r, i) => {
+    if (r.tokenId !== undefined) deepTokens[deepHalves[i]!]!.add(r.tokenId);
+  });
+  const oof = new Float64Array(deep.length);
+  for (const h of [0, 1]) {
+    const train = rows.filter((r) => r.tokenId === undefined || !deepTokens[h]!.has(r.tokenId));
+    const fold =
+      train.length >= MIN_STAGE_ROWS && train.length < rows.length
+        ? await trainSingleStage(train, marketOpts)
+        : market;
+    deep.forEach((r, i) => {
+      if (deepHalves[i] === h) oof[i] = scoreCandidateWithModel(fold, r.features);
+    });
+  }
+  const blendRows = deep.map((r, i) => ({
+    ...r,
+    features: { ...r.features, [MARKET_SCORE_INPUT]: logOdds(oof[i]!) },
+  }));
+  const blend = await trainBoostedCurator(blendRows, {
+    ...opts.boosting,
+    maxDepth: BLEND_STAGE_MAX_DEPTH,
+    objective: "logistic",
+    recencyHalfLifeDays: opts.recencyHalfLifeDays,
+    legacyLabelWeight: opts.legacyLabelWeight,
+    runWeightPerDoubling: opts.runWeightPerDoubling,
+    featureNames: [MARKET_SCORE_INPUT, ...names.filter((n) => n.startsWith("ns"))],
+  });
+  return { kind: NARRATIVE_BLEND_MODEL_KIND, market, blend };
+}
+
+/** The blend stage's inputs for one candidate: its features plus the market stage's score. */
+function withMarketScore(
+  params: Omit<NarrativeBlendCuratorParams, "threshold">,
+  features: Record<string, number | null | undefined>,
+): Record<string, number | null | undefined> {
+  return { ...features, [MARKET_SCORE_INPUT]: logOdds(scoreCandidateWithModel(params.market, features)) };
 }
 
 const LEARNING_RATE = 0.5;
@@ -563,6 +676,9 @@ export function scoreCandidateWithModel(
   if (params.kind === BOOSTED_MODEL_KIND) return scoreBoosted(params, features);
   if (params.kind === TWO_STAGE_MODEL_KIND) {
     return scoreCandidateWithModel(params.survival, features) * scoreCandidateWithModel(params.win, features);
+  }
+  if (params.kind === NARRATIVE_BLEND_MODEL_KIND) {
+    return scoreBoosted(params.blend, withMarketScore(params, features));
   }
   const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
   let z = params.bias;
@@ -859,6 +975,11 @@ function featureContributions(
 ): { name: string; value: number }[] {
   // The two-stage model's reasons are its second stage's: "why it should run", given it survives.
   if (params.kind === TWO_STAGE_MODEL_KIND) return featureContributions(params.win, features);
+  // The blend stage's: the market score is one input among the TokenSage ones.
+  if (params.kind === NARRATIVE_BLEND_MODEL_KIND) {
+    const augmented = withMarketScore(params, features);
+    return [...boostedContributions(params.blend, augmented)].map(([name, value]) => ({ name, value }));
+  }
   if (params.kind === BOOSTED_MODEL_KIND) {
     return [...boostedContributions(params, features)].map(([name, value]) => ({ name, value }));
   }
@@ -870,6 +991,12 @@ function featureContributions(
   }));
 }
 
+/** An input's plain-words label; the blend stage's market score is not a recorded feature. */
+function inputLabel(name: string): string {
+  if (name === MARKET_SCORE_INPUT) return "the market's read";
+  return FRIENDLY_FEATURE_LABELS[name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? name;
+}
+
 /** Plain-words labels for the strongest contributions, merging features that share a label. */
 function strongestLabels(
   contributions: { name: string; value: number }[],
@@ -878,7 +1005,7 @@ function strongestLabels(
 ): string[] {
   const byLabel = new Map<string, number>();
   for (const c of contributions) {
-    const label = FRIENDLY_FEATURE_LABELS[c.name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? c.name;
+    const label = inputLabel(c.name);
     byLabel.set(label, (byLabel.get(label) ?? 0) + c.value);
   }
   return [...byLabel]
@@ -905,7 +1032,7 @@ export function topModelReasons(
     .sort((a, b) => b.value - a.value)
     .slice(0, limit);
   return contributions.map((c) => {
-    const label = FRIENDLY_FEATURE_LABELS[c.name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? c.name;
+    const label = inputLabel(c.name);
     return `model signal: ${label}`;
   });
 }
@@ -1100,6 +1227,8 @@ export interface WalkForwardOptions {
   forest?: ForestOptions;
   /** Train the two-stage survival-first shape - see TwoStageCuratorParams. */
   twoStage?: boolean;
+  /** Train the two-step narrative shape - see NarrativeBlendCuratorParams. */
+  narrativeBlend?: boolean;
   /** Weight multiplier for legacy-rule rows in every fold's training - see TrainOptions. */
   legacyLabelWeight?: number;
   /** Extra weight per doubling a winner ran past its 2x - see TrainOptions. */
@@ -1301,6 +1430,7 @@ export async function walkForwardEvaluate(
         boosting: opts.boosting,
         forest: opts.forest,
         twoStage: opts.twoStage,
+        narrativeBlend: opts.narrativeBlend,
         legacyLabelWeight: opts.legacyLabelWeight,
         runWeightPerDoubling: opts.runWeightPerDoubling,
       });

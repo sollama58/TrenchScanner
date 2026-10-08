@@ -1,8 +1,8 @@
 /**
  * What every branded share image has in common: a 1200x675 dark card with the TrenchScanner by
- * ASDFASDFA brand row, a title and subtitle, and a dated footer. Drawn on a canvas in the
- * browser (the TokenSage page's cards, the Models tab's learning card), so sharing costs the
- * server nothing and every card comes out the same size and look whatever screen it was made on.
+ * ASDFASDFA brand row, a title and subtitle, and a dated footer, as the TokenSage page's cards
+ * draw it (tokensage/shareCards.ts keeps its own copy). Drawn on a canvas in the browser, so
+ * sharing costs the server nothing and every card comes out the same size whatever the screen.
  */
 
 export const CARD_W = 1200;

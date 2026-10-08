@@ -1,21 +1,17 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api } from "../api";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { api, type MarketLighthouse } from "../api";
+import { HitRates, narratives, seriesClassFor } from "../components/MarketLighthouse";
+import { narrativeBaseline } from "../lighthouseMetrics";
 import { LogoMark, SageIcon, SendIcon } from "../components/Icons";
 import { ShareDialog } from "./ShareDialog";
 import type { ShareCardKind } from "./shareCards";
 import {
   compact,
-  dayLabel,
   hitRate,
-  hourLabel,
-  MIN_DAYS_FOR_DAILY,
-  MIN_GRADED,
   named,
   prettyLabel,
   share,
   type ShowcaseCount,
-  type ShowcaseLabel,
-  type ShowcasePoint,
   type TokenSageShowcase,
 } from "./showcase";
 
@@ -27,13 +23,20 @@ import {
 
 const REFRESH_MS = 5 * 60_000;
 
+/**
+ * The Lighthouse's last week, for "Which narratives pay": the same guest answer the Lighthouse
+ * tab draws that chart from (per-narrative returns are not in the rollup the rest of the page sums).
+ */
+export const LIGHTHOUSE_PATH = "/guest/lighthouse?days=7";
+
 function useShowcase() {
   const [data, setData] = useState<TokenSageShowcase | null>(null);
+  const [lighthouse, setLighthouse] = useState<MarketLighthouse | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
-    const load = () =>
-      api<TokenSageShowcase>("/guest/tokensage").then(
+    const load = () => {
+      void api<TokenSageShowcase>("/guest/tokensage").then(
         (d) => {
           if (!live) return;
           setData(d);
@@ -41,14 +44,20 @@ function useShowcase() {
         },
         (err: unknown) => live && setError(err instanceof Error ? err.message : "Couldn't load"),
       );
-    void load();
+      // Optional: without it the narratives section waits, and the rest of the page is unaffected.
+      void api<MarketLighthouse>(LIGHTHOUSE_PATH).then(
+        (l) => live && setLighthouse(l),
+        () => undefined,
+      );
+    };
+    load();
     const t = setInterval(load, REFRESH_MS);
     return () => {
       live = false;
       clearInterval(t);
     };
   }, []);
-  return { data, error };
+  return { data, lighthouse, error };
 }
 
 /** Opens a section's share image; null until the numbers have loaded. */
@@ -67,7 +76,7 @@ function ShareButton({ kind, label = "Share" }: { kind: ShareCardKind; label?: s
 }
 
 export function TokenSagePage() {
-  const { data, error } = useShowcase();
+  const { data, lighthouse, error } = useShowcase();
   const [sharing, setSharing] = useState<ShareCardKind | null>(null);
   return (
     <ShareContext.Provider value={data ? setSharing : null}>
@@ -89,11 +98,17 @@ export function TokenSagePage() {
           ) : null}
           <Tiles data={data} />
           <Anatomy data={data} />
-          {data ? <Sections data={data} /> : <LoadingSections />}
+          {data ? <Sections data={data} lighthouse={lighthouse} /> : <LoadingSections />}
         </main>
         <Footer data={data} />
         {sharing && data ? (
-          <ShareDialog key={sharing} kind={sharing} data={data} onClose={() => setSharing(null)} />
+          <ShareDialog
+            key={sharing}
+            kind={sharing}
+            data={data}
+            lighthouse={lighthouse}
+            onClose={() => setSharing(null)}
+          />
         ) : null}
       </div>
     </ShareContext.Provider>
@@ -310,32 +325,14 @@ function Anatomy({ data }: { data: TokenSageShowcase | null }) {
 
 // ---------- The data sections ----------
 
-function Sections({ data }: { data: TokenSageShowcase }) {
+function Sections({ data, lighthouse }: { data: TokenSageShowcase; lighthouse: MarketLighthouse | null }) {
   const t = data.totals;
   const themes = named(data.labels.category);
   const subThemes = named(data.labels.subcategory).slice(0, 8);
   const flags = named(data.labels.flag);
-  const overall = t.alertsGraded > 0 ? (t.alertsWon2x / t.alertsGraded) * 100 : null;
-  const themeRates = named(data.labels.category)
-    .map((l) => ({ l, rate: hitRate(l) }))
-    .filter((r): r is { l: ShowcaseLabel; rate: number } => r.rate !== null)
-    .sort((a, b) => b.rate - a.rate);
   const copyRows = data.labels.copy;
-  const perHour = data.daily.length < MIN_DAYS_FOR_DAILY;
   return (
     <>
-      <Section
-        id="volume"
-        share="volume"
-        kicker="Every day"
-        title={perHour ? "Reads, hour by hour" : "Reads, day by day"}
-        lede={`Every coin the scanner sees gets a quick read; the ones a model weighs get the deep one too. ${
-          perHour ? "Since the first read, per hour on your clock." : "The last 30 days, per UTC day."
-        }`}
-      >
-        <ReadColumns points={perHour ? data.hourly : data.daily} perHour={perHour} />
-      </Section>
-
       <Section
         id="themes"
         share="themes"
@@ -410,32 +407,6 @@ function Sections({ data }: { data: TokenSageShowcase }) {
       </Section>
 
       <Section
-        id="x"
-        share="x"
-        kicker="The X check"
-        title="Does the link match the coin?"
-        lede="On a deep read TokenSage opens the X post or profile a coin links to and checks it against the coin itself."
-      >
-        <div className="tsg-grid2">
-          <div className="tsg-card">
-            <h3>Verdict on the linked post</h3>
-            <SegmentBar rows={data.labels.xVerdict} order={["about_this_coin", "related", "unrelated"]} />
-            <Meter label="Average fit" value={t.avgXFit} note={`over ${compact(t.xRead)} links read`} />
-          </div>
-          <div className="tsg-card">
-            <h3>What the link is</h3>
-            <RankBars
-              rows={named(data.anatomy.xRelation).map((r) => ({
-                label: prettyLabel(r.label),
-                value: r.count,
-                display: compact(r.count),
-              }))}
-            />
-          </div>
-        </div>
-      </Section>
-
-      <Section
         id="flags"
         share="flags"
         kicker="What to be wary of"
@@ -462,7 +433,10 @@ function Sections({ data }: { data: TokenSageShowcase }) {
       >
         <div className="tsg-grid2">
           <div className="tsg-card">
-            <h3>What the logo shows</h3>
+            <div className="tsg-card-head">
+              <h3>What the logo shows</h3>
+              <ShareButton kind="logos" />
+            </div>
             <RankBars
               rows={named(data.anatomy.logo).map((r) => ({
                 label: prettyLabel(r.label),
@@ -472,7 +446,10 @@ function Sections({ data }: { data: TokenSageShowcase }) {
             />
           </div>
           <div className="tsg-card">
-            <h3>Where the creator fee goes</h3>
+            <div className="tsg-card-head">
+              <h3>Where the creator fee goes</h3>
+              <ShareButton kind="fees" />
+            </div>
             <RankBars
               rows={named(data.anatomy.fee).map((r) => ({
                 label: prettyLabel(r.label),
@@ -486,60 +463,71 @@ function Sections({ data }: { data: TokenSageShowcase }) {
 
       <Section
         id="models"
-        share="models"
         kicker="Into the call"
         title="How the read reaches a buy call"
         lede="The read is an input to TrenchScanner's models, the Narrative model decides on the deep read, and filters and Telegram alerts can screen on it."
       >
-        <div className="tsg-grid2">
-          <div className="tsg-card tsg-ring-card">
-            <Ring
-              value={t.alerts > 0 ? (t.alertsDescribed / t.alerts) * 100 : null}
-              label="of model calls had a read in hand"
-            />
-            <ol className="tsg-steps">
-              <li>
-                <span>
-                  <b>Scan</b> finds a new launch and screens out rugs
-                </span>
-              </li>
-              <li>
-                <span>
-                  <b>TokenSage</b> reads it: quick at once, deep when a model looks closer
-                </span>
-              </li>
-              <li>
-                <span>
-                  <b>Models</b> weigh the read with the market data and make the call
-                </span>
-              </li>
-              <li>
-                <span>
-                  <b>You</b> see the theme, lineage and flags on the alert
-                </span>
-              </li>
-            </ol>
-          </div>
-          <div className="tsg-card">
-            <h3>2x rate of model calls, by theme</h3>
-            <p className="tsg-card-sub">
-              Graded calls only; themes with fewer than {MIN_GRADED} are left out.
-              {overall !== null ? ` All calls: ${overall.toFixed(0)}%.` : ""}
-            </p>
-            <RankBars
-              max={100}
-              marker={overall}
-              rows={themeRates.map(({ l, rate }) => ({
-                label: prettyLabel(l.label),
-                value: rate,
-                display: `${rate.toFixed(0)}%`,
-                note: `${compact(l.graded)} calls`,
-              }))}
-              empty="Not enough graded calls yet"
-            />
-          </div>
+        <div className="tsg-card tsg-ring-card">
+          <Ring
+            value={t.alerts > 0 ? (t.alertsDescribed / t.alerts) * 100 : null}
+            label="of model calls had a read in hand"
+          />
+          <ol className="tsg-steps">
+            <li>
+              <span>
+                <b>Scan</b> finds a new launch and screens out rugs
+              </span>
+            </li>
+            <li>
+              <span>
+                <b>TokenSage</b> reads it: quick at once, deep when a model looks closer
+              </span>
+            </li>
+            <li>
+              <span>
+                <b>Models</b> weigh the read with the market data and make the call
+              </span>
+            </li>
+            <li>
+              <span>
+                <b>You</b> see the theme, lineage and flags on the alert
+              </span>
+            </li>
+          </ol>
         </div>
       </Section>
+
+      <Section
+        id="narratives"
+        share="models"
+        kicker="Which narratives pay"
+        title="What the calls on each theme returned"
+        lede="Model calls in the last 7 days by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Thin narratives stay faded."
+      >
+        <div className="tsg-card">
+          <NarrativesPay lighthouse={lighthouse} />
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/** The Lighthouse's "Which narratives pay" chart, from its own last-week answer. */
+function NarrativesPay({ lighthouse }: { lighthouse: MarketLighthouse | null }) {
+  if (!lighthouse) return <div className="tsg-skel tsg-skel-inline" aria-busy="true" aria-label="Loading" />;
+  const o = lighthouse.outcomes;
+  const rows = narratives(o.byCategory);
+  const base = narrativeBaseline(o.byCategory);
+  const cls = seriesClassFor(rows.slice(0, 5).map((r) => r.label));
+  return (
+    <>
+      <HitRates rows={rows} cls={cls} baseline={base} />
+      <p className="tsg-card-sub tsg-pay-foot">
+        {o.described.toLocaleString()} of {o.alerts.toLocaleString()} calls had a TokenSage read ·{" "}
+        {o.graded.toLocaleString()} graded
+        {base.rate2x !== null ? `, ${base.rate2x.toFixed(0)}% reached 2x` : ""}. TokenSage can answer after a
+        call, so this shows what wins, not what a model knew.
+      </p>
     </>
   );
 }
@@ -730,22 +718,6 @@ function SegmentBar({ rows, order = [] }: { rows: ShowcaseCount[]; order?: strin
   );
 }
 
-/** A 0-1 score as a meter, with its value in words. */
-function Meter({ label, value, note }: { label: string; value: number | null; note: string }) {
-  return (
-    <div className="tsg-meter">
-      <div className="tsg-meter-head">
-        <span>{label}</span>
-        <b className="num">{value === null ? "–" : value.toFixed(2)}</b>
-      </div>
-      <div className="tsg-meter-track">
-        <span style={{ width: `${(value ?? 0) * 100}%` }} />
-      </div>
-      <span className="tsg-tile-note">{note}</span>
-    </div>
-  );
-}
-
 function Ring({ value, label }: { value: number | null; label: string }) {
   const r = 42;
   const c = 2 * Math.PI * r;
@@ -779,113 +751,4 @@ function Ring({ value, label }: { value: number | null; label: string }) {
       <span className="tsg-ring-label">{label}</span>
     </div>
   );
-}
-
-/** Stacked columns per day or hour: deep reads at the base, quick reads on top, with a hover readout. */
-function ReadColumns({ points, perHour }: { points: ShowcasePoint[]; perHour: boolean }) {
-  const box = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(720);
-  const [hover, setHover] = useState<number | null>(null);
-  useEffect(() => {
-    const el = box.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(([e]) => e && setWidth(Math.max(280, Math.round(e.contentRect.width))));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  const rows = points.map((d) => ({ ...d, quick: Math.max(0, d.described - d.deep) }));
-  const label = (iso: string, long = false) => (perHour ? hourLabel(iso, long) : dayLabel(iso, long));
-  const peak = Math.max(1, ...rows.map((r) => r.deep + r.quick));
-  const step = niceStep(peak);
-  const top = Math.ceil(peak / step) * step;
-  const H = 220;
-  const padL = 44;
-  const padB = 24;
-  const plotW = width - padL - 4;
-  const plotH = H - padB - 8;
-  const band = plotW / Math.max(1, rows.length);
-  const barW = Math.min(18, band * 0.68);
-  const y = (v: number) => 8 + plotH - (v / top) * plotH;
-  const ticks = Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step);
-  const every = Math.ceil(rows.length / Math.max(2, Math.floor(plotW / 56)));
-  const h = hover !== null ? rows[hover] : null;
-  return (
-    <div className="tsg-card">
-      <div className="tsg-chart-head">
-        <ul className="tsg-legend inline">
-          <li>
-            <i className="lh-s1" />
-            <span>Deep reads</span>
-          </li>
-          <li>
-            <i className="lh-s2" />
-            <span>Quick reads only</span>
-          </li>
-        </ul>
-        <span className="tsg-readout" aria-live="polite">
-          {h
-            ? `${label(h.at, true)} · ${compact(h.deep)} deep · ${compact(h.quick)} quick`
-            : `Busiest ${perHour ? "hour" : "day"}: ${compact(peak)} coins described`}
-        </span>
-      </div>
-      <div ref={box} className="tsg-cols">
-        <svg
-          width={width}
-          height={H}
-          role="img"
-          aria-label={`Coins described per ${perHour ? "hour" : "day"}`}
-        >
-          {ticks.map((v) => (
-            <g key={v}>
-              <line x1={padL} x2={width} y1={y(v)} y2={y(v)} className="tsg-grid" />
-              <text x={padL - 8} y={y(v) + 4} textAnchor="end" className="tsg-axis">
-                {compact(v)}
-              </text>
-            </g>
-          ))}
-          {rows.map((r, i) => {
-            const x = padL + i * band + (band - barW) / 2;
-            const deepTop = y(r.deep);
-            const allTop = y(r.deep + r.quick);
-            const gap = r.deep > 0 && r.quick > 0 ? 2 : 0;
-            return (
-              <g
-                key={r.at}
-                onMouseEnter={() => setHover(i)}
-                onMouseLeave={() => setHover(null)}
-                className={hover !== null && hover !== i ? "is-dim" : undefined}
-              >
-                <rect x={padL + i * band} y={8} width={band} height={plotH} fill="transparent" />
-                {r.deep > 0 ? (
-                  <path d={colPath(x, y(0), deepTop, barW, r.quick === 0)} className="tsg-col s1" />
-                ) : null}
-                {r.quick > 0 ? (
-                  <path d={colPath(x, deepTop - gap, allTop, barW, true)} className="tsg-col s2" />
-                ) : null}
-                {i % every === 0 || i === rows.length - 1 ? (
-                  <text x={x + barW / 2} y={H - 6} textAnchor="middle" className="tsg-axis">
-                    {label(r.at)}
-                  </text>
-                ) : null}
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-    </div>
-  );
-}
-
-/** A column from `base` up to `top`, its data end rounded when `round`. */
-function colPath(x: number, base: number, top: number, w: number, round: boolean) {
-  const r = round ? Math.min(4, w / 2, Math.max(0, base - top)) : 0;
-  return `M${x},${base} V${top + r} Q${x},${top} ${x + r},${top} H${x + w - r} Q${x + w},${top} ${x + w},${top + r} V${base} Z`;
-}
-
-/** A round tick step: 1, 2 or 5 times a power of ten, about four ticks. */
-function niceStep(peak: number) {
-  const raw = peak / 4;
-  const mag = 10 ** Math.floor(Math.log10(raw || 1));
-  const norm = raw / mag;
-  return (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
 }

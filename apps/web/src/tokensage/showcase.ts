@@ -16,17 +16,6 @@ export interface ShowcaseCount {
   count: number;
 }
 
-export interface ShowcasePoint {
-  at: string;
-  reads: number;
-  described: number;
-  deep: number;
-  failed: number;
-}
-
-/** Days the chart needs before it is drawn per day; until then it is drawn per hour. */
-export const MIN_DAYS_FOR_DAILY = 4;
-
 export interface TokenSageShowcase {
   generatedAt: string;
   since: string | null;
@@ -48,9 +37,6 @@ export interface TokenSageShowcase {
     alertsWon2x: number;
   };
   last24h: { reads: number; described: number; deep: number };
-  /** Per UTC day over the last 30 days, and per hour over the last 72, from the first read. */
-  daily: ShowcasePoint[];
-  hourly: ShowcasePoint[];
   labels: Record<
     | "category"
     | "subcategory"
@@ -129,22 +115,4 @@ export function hitRate(l: Pick<ShowcaseLabel, "graded" | "won2x">, min = MIN_GR
 /** Labels without the catch-alls ("other", "uncategorized"), for lists that rank real themes. */
 export function named<T extends { label: string }>(rows: T[]): T[] {
   return rows.filter((r) => r.label !== "other" && r.label !== "uncategorized");
-}
-
-/** "Oct 6" for a UTC day; with `long`, "Tue, October 6". */
-export function dayLabel(iso: string, long = false): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", {
-    timeZone: "UTC",
-    month: long ? "long" : "short",
-    day: "numeric",
-    ...(long ? { weekday: "short" as const } : {}),
-  });
-}
-
-/** "14:00" for an hour on the reader's clock; with `long`, "Oct 6, 14:00". */
-export function hourLabel(iso: string, long = false): string {
-  const d = new Date(iso);
-  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-  return long ? `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${time}` : time;
 }
