@@ -648,7 +648,7 @@ export async function registerMatchRoutes(
       filterIds.length === 0
         ? []
         : await prisma.userFilter.findMany({
-            where: { id: { in: filterIds } },
+            where: { id: { in: filterIds }, userId },
             select: { id: true, name: true },
           });
     const filterName = new Map(filters.map((f) => [f.id, f.name]));

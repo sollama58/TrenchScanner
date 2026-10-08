@@ -14,7 +14,8 @@ export class FakeTelegramApi extends TelegramApi {
 
   /** By default nothing is fetchable, so artwork goes to Telegram as a URL. */
   constructor(fetchImpl: typeof fetch = () => Promise.reject(new Error("the fake never fetches"))) {
-    super("fake-token", fetchImpl);
+    // Every host resolves to a public address, so the fake fetch is what decides.
+    super("fake-token", fetchImpl, async () => ["93.184.216.34"]);
   }
 
   override async call<T>(method: string, params: Record<string, unknown> = {}): Promise<TelegramResult<T>> {
