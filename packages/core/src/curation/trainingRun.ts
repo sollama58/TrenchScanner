@@ -18,6 +18,8 @@ import {
   type WalkForwardResult,
   type ExamPopulation,
   type EvalFold,
+  type TrainingWeightByAge,
+  trainingWeightByAge,
   type ScoredOutcome,
   scoreCandidateWithModel,
 } from "./trainer.js";
@@ -157,6 +159,12 @@ export interface StoredEvalMetrics {
   examPopulation?: ExamPopulation;
   /** The Agreement seat only: out-of-sample win rate by how many learners called (curation/agreement.ts). */
   agreementCurve?: AgreementCurvePoint[];
+  /**
+   * Learner seats: how far this seat's fit leaned toward the present - the share of its training
+   * weight (under its own recency half-life) carried by the newest 1, 3 and 7 days of rows,
+   * against the share of rows (trainingWeightByAge in trainer.ts). Absent on older rows.
+   */
+  trainingWeightByAge?: TrainingWeightByAge;
 }
 
 export interface CuratorTrainingOutcome {
@@ -761,6 +769,12 @@ async function shipLearner(
       ...(exam.highConviction ? { highConviction: exam.highConviction } : {}),
       calibrationCalls: exam.extras.calibration?.calls ?? 0,
       examPopulation: evaluation.population,
+      // What the seat's half-life did on the rows the shipped model trained on (the full window).
+      trainingWeightByAge: trainingWeightByAge(rows, {
+        recencyHalfLifeDays: sat.trial.recencyHalfLifeDays,
+        legacyLabelWeight: cfg.legacyLabelWeight,
+        runWeightPerDoubling: cfg.runWeightPerDoubling,
+      }),
     },
   };
   const rankCutoff = exam.result.precisionCalibration.threshold;

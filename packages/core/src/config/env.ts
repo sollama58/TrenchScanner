@@ -379,7 +379,13 @@ const envSchema = z.object({
   // equal-weighted 60-day window means a third of the gradient comes from a regime that no
   // longer exists. The window still sets what history is SEEN (and what the walk-forward folds
   // are graded on); this only tilts training toward the part of it that still describes the
-  // present.
+  // present. Two seats (Linear Recent, Trees Recent) run a 3-day half-life regardless, and
+  // evolution breeds half-lives of 1-60 days, so the field, not this default, decides how short
+  // a memory pays. Checked 2026-10-08 on production rows (notes/recency-weighting-2026-10-08.md):
+  // with five days of current-rule history, half-lives of 1-7 days and no decay all scored within
+  // seed noise of 14 on a rolling walk-forward, for every learner family. Each run logs
+  // "training weight by age" (and every learner seat stores it) so what this does on the rows in
+  // hand is a number, not a guess.
   CURATOR_RECENCY_HALF_LIFE_DAYS: z.coerce.number().positive().default(14),
   // The per-model pace ceiling (curation/governor.ts). 0 (the default since 2026-10-05) means no
   // ceiling: every call that clears a curator's hit-rate cutoff goes out, still once per token
