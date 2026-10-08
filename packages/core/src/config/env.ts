@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createLogger } from "../logger.js";
-import { CONTESTANT_IDS, NARRATIVE_CONTESTANT, isContestantId } from "../curation/contestants.js";
+import { CONTESTANT_IDS, contestantSpec, isContestantId } from "../curation/contestants.js";
 
 /**
  * Central env schema shared by the api and worker apps. Each app calls
@@ -746,7 +746,7 @@ const validatedEnvSchema = envSchema
     message:
       "HOLDER_GROWTH_WINDOW_MINUTES must be greater than RUGCHECK_CACHE_TTL_MINUTES, or holder growth is measured between two readings of the same cached report and always reads 0%",
   })
-  // The Narrative seat (curation/contestants.ts) only exists with TokenSage: without it there
+  // The narrative seats (curation/contestants.ts) only exist with TokenSage: without it there
   // is no deep read to wait for, so the seat leaves the roster everywhere (worker, trainer, API)
   // rather than sitting untrained on the leaderboard. The flag alone decides, not the URL and
   // key as well: only the scanner calls TokenSage (tokenSageEnabled), while the trainer and the
@@ -755,7 +755,12 @@ const validatedEnvSchema = envSchema
   .transform((env) =>
     env.TOKENSAGE_ENABLED
       ? env
-      : { ...env, CURATOR_CONTESTANTS: env.CURATOR_CONTESTANTS.filter((id) => id !== NARRATIVE_CONTESTANT) },
+      : {
+          ...env,
+          CURATOR_CONTESTANTS: env.CURATOR_CONTESTANTS.filter(
+            (id) => contestantSpec(id)?.role !== "narrative",
+          ),
+        },
   );
 
 /** TokenSage is on and reachable: the flag, the URL and the key are all set. */

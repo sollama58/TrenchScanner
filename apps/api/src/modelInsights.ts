@@ -3,6 +3,7 @@ import {
   BOOSTED_MODEL_KIND,
   CURATOR_MODEL_KIND,
   TWO_STAGE_MODEL_KIND,
+  NARRATIVE_BLEND_MODEL_KIND,
   FRIENDLY_FEATURE_LABELS,
   HEURISTIC_CURATOR_SOURCE,
   contestantSpec,
@@ -11,6 +12,7 @@ import {
   type LogisticCuratorParams,
   type StoredEvalMetrics,
   type TwoStageCuratorParams,
+  type NarrativeBlendCuratorParams,
   type FeatureReport,
   type RunnerReport,
   type AiBlendMetrics,
@@ -98,7 +100,10 @@ function isKnownParams(params: unknown): params is LogisticCuratorParams | Boost
   );
 }
 
-/** The model whose weights explain a stored params blob: itself, or a two-stage model's second stage. */
+/**
+ * The model whose weights explain a stored params blob: itself, a two-stage model's second
+ * stage, or a two-step narrative model's blend stage (the market score shows as one input).
+ */
 function explainable(params: unknown): (LogisticCuratorParams | BoostedCuratorParams) | null {
   if (isKnownParams(params)) return params;
   if (
@@ -108,6 +113,14 @@ function explainable(params: unknown): (LogisticCuratorParams | BoostedCuratorPa
   ) {
     const win = (params as TwoStageCuratorParams).win;
     if (isKnownParams(win)) return win;
+  }
+  if (
+    typeof params === "object" &&
+    params !== null &&
+    (params as { kind?: unknown }).kind === NARRATIVE_BLEND_MODEL_KIND
+  ) {
+    const blend = (params as NarrativeBlendCuratorParams).blend;
+    if (isKnownParams(blend)) return blend;
   }
   return null;
 }

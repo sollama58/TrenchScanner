@@ -70,7 +70,7 @@ describe("the Narrative seat's exam", () => {
       recencyHalfLifeDays: 14,
       cooldownHours: 24,
       heuristicPrecisionGate: true,
-      contestants: enabledContestants(["linear", "narrative"]),
+      contestants: enabledContestants(["linear", "narrative", "narrative-blend"]),
     };
     const without = await runContestTraining(rows, {
       ...cfg,
@@ -81,10 +81,12 @@ describe("the Narrative seat's exam", () => {
     // The seat's rows carry the deep read; everything else about them is the usual market.
     const own = rows.map((r) => ({ ...r, features: { ...r.features, nsDepthFull: 1, nsCatAnimal: 1 } }));
     const results = await runContestTraining(rows, { ...cfg, narrativeRows: own });
-    expect(results.map((r) => r.contestant)).toEqual(["rules", "linear", "narrative"]);
-    const narrative = results.find((r) => r.contestant === "narrative")!;
-    expect(narrative.metrics.exam).toBeDefined();
-    expect(narrative.params.kind).not.toBe(STACKED_MODEL_KIND);
+    expect(results.map((r) => r.contestant)).toEqual(["rules", "linear", "narrative", "narrative-blend"]);
+    for (const id of ["narrative", "narrative-blend"]) {
+      const seat = results.find((r) => r.contestant === id)!;
+      expect(seat.metrics.exam).toBeDefined();
+      expect(seat.params.kind).not.toBe(STACKED_MODEL_KIND);
+    }
   }, 60_000);
 
   it("trains on every row, but only the deep-read rows and second looks are its decision rows", () => {
