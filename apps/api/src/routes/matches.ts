@@ -13,6 +13,7 @@ import {
   groupSameTokenCalls,
   serializeCuratedAlert,
   resolveOutcome,
+  callPeakPct,
   type CallGroup,
   type ModelCall,
 } from "../curatedFeed.js";
@@ -83,6 +84,63 @@ function runPeakPct(
   if (row.peak24hReturnPct !== null) return row.peak24hReturnPct;
   const pct = ((row.peak24hPriceUsd - row.anchorPriceUsd) / row.anchorPriceUsd) * 100;
   return Number.isFinite(pct) ? pct : null;
+}
+
+/** The larger of two percentages either of which may be missing. */
+function maxPct(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.max(a, b);
+}
+
+/**
+ * Each call's market-cap high since it was made, as a return on its alert market cap: the
+ * highest snapshot of the token since its earliest call here, and its live reading, each counted
+ * for the calls made before it. One index range scan on (tokenId, takenAt) per token, the same
+ * readings the worker folds into a filter alert's ATH (jobs/matchPeaks.ts).
+ */
+async function marketCapPeaksSince(
+  calls: readonly { id: string; tokenId: string; createdAt: Date; anchorMcapUsd: number }[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (calls.length === 0) return out;
+  const firstCall = new Map<string, Date>();
+  for (const c of calls) {
+    const held = firstCall.get(c.tokenId);
+    if (!held || c.createdAt < held) firstCall.set(c.tokenId, c.createdAt);
+  }
+  const ids = [...firstCall.keys()];
+  const froms = ids.map((id) => firstCall.get(id)!.toISOString());
+  const [highs, live] = await Promise.all([
+    prisma.$queryRaw<{ tokenId: string; mcap: number; at: Date }[]>`
+      SELECT DISTINCT ON (s."tokenId") s."tokenId", s."marketCapUsd" AS mcap, s."takenAt" AS at
+      FROM "TokenSnapshot" s
+      JOIN unnest(${ids}::text[], ${froms}::timestamptz[]) AS f(id, from_at) ON f.id = s."tokenId"
+      WHERE s."takenAt" >= f.from_at
+      ORDER BY s."tokenId", s."marketCapUsd" DESC, s."takenAt" ASC`,
+    prisma.token.findMany({
+      where: { id: { in: ids }, liveMarketCapUsd: { not: null }, liveDataAt: { not: null } },
+      select: { id: true, liveMarketCapUsd: true, liveDataAt: true },
+    }),
+  ]);
+  const readings = new Map<string, { mcap: number; at: Date }[]>();
+  for (const h of highs) readings.set(h.tokenId, [{ mcap: h.mcap, at: h.at }]);
+  for (const t of live) {
+    const list = readings.get(t.id) ?? [];
+    list.push({ mcap: t.liveMarketCapUsd!, at: t.liveDataAt! });
+    readings.set(t.id, list);
+  }
+  for (const c of calls) {
+    if (!(c.anchorMcapUsd > 0)) continue;
+    let best: number | null = null;
+    for (const r of readings.get(c.tokenId) ?? []) {
+      if (r.at < c.createdAt) continue;
+      const pct = (r.mcap / c.anchorMcapUsd - 1) * 100;
+      if (Number.isFinite(pct) && pct > 0 && (best === null || pct > best)) best = pct;
+    }
+    if (best !== null) out.set(c.id, best);
+  }
+  return out;
 }
 
 /** What GET /matches/returns answers with - cached per reader, see FEED_RETURNS_CACHE_TTL_MS. */
@@ -373,6 +431,8 @@ export async function registerMatchRoutes(
               peak24hReturnPct: true,
               runPeakMinutes: true,
               outcomeFinalizedAt: true,
+              anchorMcapUsd: true,
+              peakMcapUsd: true,
               candidateOutcome: curatedAlertInclude.candidateOutcome,
               token: { select: { symbol: true } },
             },
@@ -409,7 +469,7 @@ export async function registerMatchRoutes(
           tokenId: lead.tokenId,
           symbol: lead.token.symbol,
           outcome,
-          peakPct: outcome.peak24hReturnPct,
+          peakPct: callPeakPct(outcome.peak24hReturnPct, lead),
         };
         return { ...card, id: lead.id, matchedAt: lead.createdAt, curated: { alertId: lead.id, card } };
       },
@@ -417,7 +477,15 @@ export async function registerMatchRoutes(
     // A model call on a token the reader's filter also caught is one card showing the call.
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
       (c): FeedStatsCard =>
-        c.kind === "match" && c.curated ? { ...c.curated.card, kind: "match", tokenId: c.tokenId } : c,
+        c.kind === "match" && c.curated
+          ? {
+              ...c.curated.card,
+              kind: "match",
+              tokenId: c.tokenId,
+              // The better of the two alerts' runs, as the card shows it.
+              peakPct: maxPct(c.peakPct, c.curated.card.peakPct),
+            }
+          : c,
     );
 
     return {
@@ -476,6 +544,8 @@ export async function registerMatchRoutes(
               ...CALL_SELECT,
               simReturnPct: true,
               peak24hReturnPct: true,
+              anchorMcapUsd: true,
+              peakMcapUsd: true,
               candidateOutcome: { select: RUN_PEAK_SELECT },
             },
           }),
@@ -525,33 +595,40 @@ export async function registerMatchRoutes(
       };
     });
     // Folded exactly as /stats folds them, so the two panels count the same cards.
-    const callCards: ReturnFeedCard[] = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).map(
-      ({ lead }) => {
-        const returnPct = lead.simReturnPct ?? lead.candidateOutcome?.simReturnPct ?? null;
-        const modelName = lead.modelName ?? lead.model ?? "Model";
-        const peakPct = lead.peak24hReturnPct ?? runPeakPct(lead.candidateOutcome);
-        return {
-          id: lead.id,
-          kind: "curated",
-          tokenId: lead.tokenId,
-          matchedAt: lead.createdAt,
-          at: lead.createdAt,
-          returnPct,
-          peakPct,
-          source: { modelName },
-          curated: { alertId: lead.id, returnPct, peakPct, modelName },
-        };
-      },
-    );
+    const groups = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS);
+    const callAth = await marketCapPeaksSince(groups.map(({ lead }) => lead));
+    const callCards: ReturnFeedCard[] = groups.map(({ lead }) => {
+      const returnPct = lead.simReturnPct ?? lead.candidateOutcome?.simReturnPct ?? null;
+      const modelName = lead.modelName ?? lead.model ?? "Model";
+      // The call's own run peak stops when its watch does (30 minutes for a call that didn't
+      // double), so a token that ran later would read small. Its market-cap high since the call,
+      // from the snapshots and live readings the app keeps, is the same ATH a filter alert tracks.
+      const peakPct = maxPct(
+        callPeakPct(lead.peak24hReturnPct ?? runPeakPct(lead.candidateOutcome), lead),
+        callAth.get(lead.id) ?? null,
+      );
+      return {
+        id: lead.id,
+        kind: "curated",
+        tokenId: lead.tokenId,
+        matchedAt: lead.createdAt,
+        at: lead.createdAt,
+        returnPct,
+        peakPct,
+        source: { modelName },
+        curated: { alertId: lead.id, returnPct, peakPct, modelName },
+      };
+    });
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
       (c): ReturnCard & { tokenId: string; peakPct: number | null; source: ReturnFeedCard["source"] } =>
-        // A folded card shows the call, so the model is what alerted it.
+        // A folded card shows the call, so the model is what alerted it; its run is the better of
+        // the two alerts' (each from its own alert price).
         c.kind === "match" && c.curated
           ? {
               at: c.at,
               tokenId: c.tokenId,
               returnPct: c.curated.returnPct,
-              peakPct: c.curated.peakPct,
+              peakPct: maxPct(c.peakPct, c.curated.peakPct),
               source: { modelName: c.curated.modelName },
             }
           : c,

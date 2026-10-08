@@ -7,8 +7,6 @@ import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 
-const DAY_MS = 86_400_000;
-
 const LINKS = [
   { label: "Dex", href: (m: string) => `https://dexscreener.com/solana/${m}` },
   { label: "Pump", href: (m: string) => `https://pump.fun/coin/${m}` },
@@ -47,11 +45,11 @@ export function AlertCard({
   const badge = outcomeBadge(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");
   const calls = curated?.calledBy ?? [];
-  const recordedPeak = curated?.outcome.peak24hReturnPct ?? card.peakReturnPct;
+  // The highest of every peak the card knows - the call's (its run peak or market-cap high since),
+  // and the filter alert's own ATH when the card is both - so it never drops to a smaller one.
+  const recordedPeak = maxKnown(curated?.peakPct ?? curated?.outcome.peak24hReturnPct, card.peakReturnPct);
   // The recorded peak catches up on the worker's next pass; a "Now" above it is already a peak.
-  // A curated card's peak is its 24h peak, so a reading past that window doesn't count there.
-  const alertAt = new Date(curated?.alertedAt ?? card.matchedAt).getTime();
-  const nowCounts = move !== null && move > 0 && (!curated || now - alertAt < DAY_MS);
+  const nowCounts = move !== null && move > 0;
   const peak = nowCounts ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
   const ai = curated?.aiReview;
   const mint = card.token.mintAddress;
@@ -564,4 +562,10 @@ function calibratedRate(
     (r): r is number => typeof r === "number",
   );
   return rates.length > 0 ? Math.max(...rates) : null;
+}
+
+/** The larger of two peaks either of which may be missing. */
+function maxKnown(a: number | null | undefined, b: number | null | undefined): number | null {
+  const known = [a, b].filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  return known.length === 0 ? null : Math.max(...known);
 }

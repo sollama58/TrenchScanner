@@ -189,6 +189,25 @@ type OutcomeSources = Pick<
  * inside it, so the badge can show the win before the window is up. The 4x goal settles when the
  * 30-minute goal window closes.
  */
+/**
+ * A call's Peak: the better of its run peak (watched only while its grading row is - 30 minutes
+ * for a call that didn't double) and its market-cap high since the call, which the worker keeps
+ * from every reading (jobs/curatedPeaks.ts) and which only rises. The run peak alone made a card's
+ * Peak walk back once the live price that had overtaken it fell.
+ */
+export function callPeakPct(
+  runPeakPct: number | null,
+  alert: { peakMcapUsd: number | null; anchorMcapUsd: number },
+): number | null {
+  const athPct =
+    alert.peakMcapUsd !== null && alert.anchorMcapUsd > 0
+      ? (alert.peakMcapUsd / alert.anchorMcapUsd - 1) * 100
+      : null;
+  const fromAth = athPct !== null && Number.isFinite(athPct) && athPct > 0 ? athPct : null;
+  if (runPeakPct === null) return fromAth;
+  return fromAth === null ? runPeakPct : Math.max(runPeakPct, fromAth);
+}
+
 export function resolveOutcome(alert: OutcomeSources): OutcomeView {
   const live = alert.candidateOutcome;
   const pctFrom = (price: number, anchor: number) => ((price - anchor) / anchor) * 100;
@@ -330,6 +349,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
 
 /** The `curated` block both feeds attach to a card the curator picked. */
 export function curatedMeta(alert: CuratedAlertWithRelations, showNarrative = false) {
+  const outcome = resolveOutcome(alert);
   return {
     alertId: alert.id,
     /** "heuristic-v1", or the id of the trained model that emitted it. */
@@ -350,7 +370,9 @@ export function curatedMeta(alert: CuratedAlertWithRelations, showNarrative = fa
     // admin-only (see attachAiReviewsForAdmin), so any such line already stored is held back too.
     reasons: alert.reasons.filter((r) => !r.startsWith("AI: ")),
     alertedAt: alert.createdAt,
-    outcome: resolveOutcome(alert),
+    outcome,
+    /** The call's Peak, which only rises: its run peak or its market-cap high since, the larger. */
+    peakPct: callPeakPct(outcome.peak24hReturnPct, alert),
     /**
      * The Narrative seat's later view of this call, once TokenSage's deep read decided: "agrees"
      * or "warns". Null until then, on the Narrative seat's own calls, and while the note is
@@ -434,7 +456,7 @@ export function serializeCuratedAlert(
   // The peak the card's ATH section shows. Derived from the outcome watcher's peak rather than
   // the Match peak job (which only tracks matches): supply is fixed for these tokens, so a price
   // multiple IS a market cap multiple. Null until it has actually traded above the alert.
-  const peakPct = outcome.peak24hReturnPct;
+  const peakPct = callPeakPct(outcome.peak24hReturnPct, alert);
   const peakMcapUsd = peakPct !== null && peakPct > 0 ? alert.anchorMcapUsd * (1 + peakPct / 100) : null;
 
   return {

@@ -462,6 +462,11 @@ model CuratedAlert {
   outcomeFinalizedAt DateTime?
   /// Copy of CandidateOutcome.simReturnPct: the call's return under the fixed exit plan.
   simReturnPct       Float?
+  /// The market-cap high since the call, from the snapshots and live readings the app keeps -
+  /// the same ATH Match.peakMcapUsd is for a filter alert (worker jobs/curatedPeaks.ts). Only ever
+  /// rises; null until the token has traded above anchorMcapUsd since the call.
+  peakMcapUsd        Float?
+  peakMcapAt         DateTime?
 
   /// The Narrative seat's view of a coin another seat already called: "agrees" when its deep
   /// read would have called it too, "warns" when it would not. The seat decides when TokenSage's

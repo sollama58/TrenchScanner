@@ -119,6 +119,8 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
         simReturnPct: 60,
       },
     });
+    // Token B ran on after the call's watch: a later scan saw it at 12x the call's market cap.
+    await prisma.tokenSnapshot.create({ data: { tokenId: b, priceUsd: 0.0012, marketCapUsd: 600_000 } });
     app = await buildServer(env);
   });
 
@@ -195,12 +197,12 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
       peakPct: number;
       source: { kind: string; name: string } | null;
     }[];
-    // Ranked by each card's Peak: OLD's 9x run, AAA's 5x, then CCC's live 2.5x (its grading row's
-    // peak while it is still in its window). BBB, shown as the model's call, peaked at 2.2x.
+    // Ranked by each card's raw alert-to-ATH run: B's model call, whose own watch saw 2.2x, has
+    // since traded at 12x its alert market cap; then OLD's 9x and AAA's 5x filter alerts.
     expect(top.map((t) => [t.symbol, Math.round(t.peakPct), t.source])).toEqual([
+      ["BBB", 1100, { kind: "model", name: "Survivor" }],
       ["OLD", 900, { kind: "filter", name: "mine" }],
       ["AAA", 400, { kind: "filter", name: "mine" }],
-      ["CCC", 150, { kind: "filter", name: "mine" }],
     ]);
 
     await call("PUT", "/curated/feed", { showModelAlerts: false });
