@@ -63,6 +63,12 @@ const PARTIAL_RETRY_MS = 90_000;
 const PARTIAL_MAX_RETRIES = 3;
 /** Mints noted but not yet sent are kept at most this many (oldest dropped). */
 const MAX_WANTED = 2_000;
+/**
+ * A basic read noted and not sent within this long is dropped. The scan notes its watchlist mints
+ * every cycle, so what goes stale is a launch read or a coin that left the watchlist: after a pause
+ * or a backlog, those were the first requests sent, for coins nothing would read.
+ */
+const WANTED_BASIC_MAX_AGE_MS = 10 * 60_000;
 const MAX_SETTLED = 20_000;
 
 interface Wanted {
@@ -70,6 +76,8 @@ interface Wanted {
   hints?: TokenSageHints;
   /** A full read asked early (a young coin with an X link), on its own daily budget. */
   early?: boolean;
+  /** When the scan last noted it (see WANTED_BASIC_MAX_AGE_MS). */
+  notedAt: number;
 }
 
 interface Pending {
@@ -214,7 +222,12 @@ export function noteNarrativeWanted(
     const oldest = wanted.keys().next().value;
     if (oldest !== undefined) wanted.delete(oldest);
   }
-  wanted.set(mintAddress, { depth, hints: hints ?? have?.hints, ...(early ? { early } : {}) });
+  wanted.set(mintAddress, {
+    depth,
+    hints: hints ?? have?.hints,
+    ...(early ? { early } : {}),
+    notedAt: now,
+  });
 }
 
 /** A launch older than this when discovery lists it is left to the scan's own request. */
@@ -456,8 +469,11 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
   }
   const fullOpen = now >= fullBlockedUntil;
 
-  // Queued on TokenSage's side: re-sent first (free), until they finish or we give up on them.
-  const byDepth: Record<TokenSageDepth, { ca: string; hints?: TokenSageHints }[]> = { full: [], basic: [] };
+  // Queued on TokenSage's side: re-sent (free) until they finish or we give up on them, a chunk at
+  // a time alternating with new requests (see interleave).
+  type Entry = { ca: string; hints?: TokenSageHints };
+  const resend: Record<TokenSageDepth, Entry[]> = { full: [], basic: [] };
+  const byDepth: Record<TokenSageDepth, Entry[]> = { full: [], basic: [] };
   for (const [mint, p] of pending) {
     if (now - p.since > PENDING_GIVE_UP_MS) {
       pending.delete(mint);
@@ -466,7 +482,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
       continue;
     }
     if (p.depth === "full" && !fullOpen) continue;
-    byDepth[p.depth].push({ ca: mint, hints: p.hints });
+    resend[p.depth].push({ ca: mint, hints: p.hints });
   }
 
   // Newly noted: drop what's already stored deep enough (or queued).
@@ -483,6 +499,10 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
   let earlyBudget = Math.max(0, env.TOKENSAGE_EARLY_FULL_PER_DAY - earlySentToday);
   const earlyMints = new Set<string>();
   for (const [mint, w] of wanted) {
+    if (w.depth === "basic" && now - w.notedAt > WANTED_BASIC_MAX_AGE_MS) {
+      wanted.delete(mint);
+      continue;
+    }
     const queued = pending.get(mint);
     if (queued && narrativeDepthCovers(queued.depth, w.depth)) {
       wanted.delete(mint);
@@ -523,7 +543,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
   let batches = env.TOKENSAGE_MAX_BATCHES_PER_CYCLE;
   let jobChecks = MAX_JOB_CHECKS_PER_FLUSH;
   for (const depth of ["full", "basic"] as const) {
-    let list = byDepth[depth];
+    let list = interleave(resend[depth], byDepth[depth]);
     while (list.length > 0 && batches > 0) {
       const chunk = list.slice(0, TOKENSAGE_PREFETCH_CHUNK);
       list = list.slice(TOKENSAGE_PREFETCH_CHUNK);
@@ -579,8 +599,10 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
         const entry = typeof item?.ca === "string" ? sent.get(item.ca) : undefined;
         if (!entry) continue;
         try {
-          const wasPending = pending.has(item.ca);
-          if (!wasPending) {
+          // New unless a job at least this deep is already queued: a full read sent over a
+          // queued basic one starts a full job, which costs full quota.
+          const queued = pending.get(item.ca);
+          if (!queued || !narrativeDepthCovers(queued.depth, depth)) {
             stats.requested += 1;
             if (depth === "full") fullSentToday += 1;
             if (depth === "full" && earlyMints.has(item.ca)) earlySentToday += 1;
@@ -590,21 +612,27 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
             item.analysis !== null &&
             typeof item.analysis === "object"
           ) {
-            pending.delete(item.ca);
+            // A basic answer for a mint whose full read was queued in this flush leaves that queued.
+            if (!queued || narrativeDepthCovers(depth, queued.depth)) pending.delete(item.ca);
             await storeAnalysis(item.ca, item.analysis, item.status);
           } else if (item.status === "pending") {
             const prev = pending.get(item.ca);
             const jobId = typeof item.job_id === "number" ? item.job_id : undefined;
             if (!prev || !narrativeDepthCovers(prev.depth, depth)) {
               pending.set(item.ca, { depth, hints: entry.hints, since: prev?.since ?? Date.now(), jobId });
-            } else if (prev.jobId !== undefined && jobId !== undefined && jobId !== prev.jobId) {
-              // A re-send that comes back under a new job means the old one ended without an
-              // analysis; TokenSage's batch doesn't say why, so read the old job once.
-              const ended = prev.jobId;
-              prev.jobId = jobId;
-              if (jobChecks > 0) {
-                jobChecks -= 1;
-                await checkEndedJob(api, item.ca, prev, ended);
+            } else {
+              // To the back of the queue, so a backlog bigger than one flush is re-sent in turn.
+              pending.delete(item.ca);
+              pending.set(item.ca, prev);
+              if (prev.jobId !== undefined && jobId !== undefined && jobId !== prev.jobId) {
+                // A re-send that comes back under a new job means the old one ended without an
+                // analysis; TokenSage's batch doesn't say why, so read the old job once.
+                const ended = prev.jobId;
+                prev.jobId = jobId;
+                if (jobChecks > 0) {
+                  jobChecks -= 1;
+                  await checkEndedJob(api, item.ca, prev, ended);
+                }
               }
             }
           } else if (
@@ -619,7 +647,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
             } else {
               pausedUntil = Math.max(pausedUntil, Date.now() + Math.max(5, item.retry_after_s ?? 30) * 1000);
             }
-            if (!wanted.has(item.ca)) wanted.set(item.ca, { depth, hints: entry.hints });
+            if (!wanted.has(item.ca)) wanted.set(item.ca, { depth, hints: entry.hints, notedAt: Date.now() });
           } else if (item.status === "invalid") {
             pending.delete(item.ca);
             await storeFailure(item.ca, depth, `invalid_ca: ${item.error ?? "not a token address"}`);
@@ -640,6 +668,23 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
       }
     }
   }
+}
+
+/**
+ * Re-sends and new requests, a chunk of each in turn. Re-sends first would let a slow TokenSage's
+ * queue fill every batch of every flush (each pending mint is re-sent until it finishes or is
+ * given up), so no new mint was asked for until those aged out; new first would leave finished
+ * jobs uncollected.
+ */
+function interleave<T>(resend: T[], fresh: T[]): T[] {
+  const out: T[] = [];
+  for (let i = 0; i < Math.max(resend.length, fresh.length); i += TOKENSAGE_PREFETCH_CHUNK) {
+    out.push(
+      ...resend.slice(i, i + TOKENSAGE_PREFETCH_CHUNK),
+      ...fresh.slice(i, i + TOKENSAGE_PREFETCH_CHUNK),
+    );
+  }
+  return out;
 }
 
 /**

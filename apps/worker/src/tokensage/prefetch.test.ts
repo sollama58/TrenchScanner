@@ -2,7 +2,14 @@
 import "../bootstrap-env.js";
 import { readFileSync } from "node:fs";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma, loadEnv, HttpError, type Env, type TokenSageClient } from "@trenchscanner/core";
+import {
+  prisma,
+  loadEnv,
+  HttpError,
+  TOKENSAGE_PREFETCH_CHUNK,
+  type Env,
+  type TokenSageClient,
+} from "@trenchscanner/core";
 import {
   flushNarrativeRequests,
   noteLaunchNarratives,
@@ -513,6 +520,83 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
         },
       },
     ]);
+  });
+
+  it("asks for new mints while a backlog of queued ones fills the batches, and re-sends that backlog in turn", async () => {
+    const { client, batch } = fakeClient();
+    batch.mockImplementation(async (entries: { ca: string }[]) =>
+      ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 1 }))),
+    );
+    const two = { ...env, TOKENSAGE_MAX_BATCHES_PER_CYCLE: 2 };
+    const backlog = Array.from({ length: 3 * TOKENSAGE_PREFETCH_CHUNK }, (_, i) => `${TAG}-q${i}`);
+    for (const m of backlog) noteNarrativeWanted(m, "basic", two);
+    await flushNarrativeRequests(two, client);
+    await flushNarrativeRequests(two, client);
+    // All three chunks queued at TokenSage, more than one flush's two batches.
+    expect(takeTokenSageStats()).toMatchObject({ pending: backlog.length, waiting: 0 });
+
+    batch.mockClear();
+    const late = `${TAG}-q-late`;
+    noteNarrativeWanted(late, "basic", two);
+    await flushNarrativeRequests(two, client);
+    expect(batch.mock.calls.flatMap(cas)).toContain(late);
+
+    // Every queued mint is re-sent within a few flushes, not only the first two chunks.
+    for (let i = 0; i < 3; i += 1) await flushNarrativeRequests(two, client);
+    const resent = new Set(batch.mock.calls.flatMap(cas));
+    expect(backlog.filter((m) => !resent.has(m))).toEqual([]);
+  });
+
+  it("keeps a full read queued when the mint's basic read lands in the same flush, and counts it", async () => {
+    const { client, batch } = fakeClient();
+    const w = `${TAG}-w`;
+    batch.mockResolvedValueOnce(ok([{ ca: w, status: "pending", job_id: 1 }]));
+    noteNarrativeWanted(w, "basic", env);
+    await flushNarrativeRequests(env, client);
+
+    // The decision row asks for full; the basic job finishes before that flush.
+    batch.mockImplementation(async (entries: { ca: string }[], depth: string) =>
+      depth === "full"
+        ? ok([{ ca: w, status: "pending", job_id: 2 }])
+        : ok(entries.map((e) => ({ ca: e.ca, status: "complete", analysis: analysis(e.ca, "basic") }))),
+    );
+    noteNarrativeWanted(w, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch.mock.calls.map((c) => c[1])).toEqual(["basic", "full", "basic"]);
+    expect(takeTokenSageStats()).toMatchObject({ pending: 1, requested: 2, fullToday: 1 });
+
+    batch.mockResolvedValueOnce(ok([{ ca: w, status: "complete", analysis: analysis(w, "full") }]));
+    await flushNarrativeRequests(env, client);
+    expect(batch.mock.calls.at(-1)![1]).toBe("full");
+    const row = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: w } });
+    expect(row.depth).toBe("full");
+  });
+
+  it("drops a basic read nobody has asked for again in ten minutes, but not a deep one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { client, batch } = fakeClient();
+      batch.mockRejectedValueOnce(new HttpError(429, "https://ts.test/v1/tokens:batch"));
+      const stale = `${TAG}-stale`;
+      const deep = `${TAG}-stale-full`;
+      const kept = `${TAG}-stale-kept`;
+      noteNarrativeWanted(stale, "basic", env);
+      noteNarrativeWanted(deep, "full", env);
+      noteNarrativeWanted(kept, "basic", env);
+      await flushNarrativeRequests(env, client);
+
+      vi.setSystemTime(Date.now() + 9 * 60_000);
+      noteNarrativeWanted(kept, "basic", env);
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      batch.mockResolvedValue(ok([]));
+      await flushNarrativeRequests(env, client);
+      expect(Object.fromEntries(batch.mock.calls.slice(1).map((c) => [c[1], cas(c)]))).toEqual({
+        full: [deep],
+        basic: [kept],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("re-sends queued requests between scans when polling is on", async () => {

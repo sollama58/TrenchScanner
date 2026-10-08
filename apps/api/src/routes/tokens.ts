@@ -102,7 +102,13 @@ export async function registerTokenRoutes(app: FastifyInstance) {
             firstSeenAt: token.firstSeenAt.toISOString(),
           }
         : null,
-      status: read ? "ok" : row?.status === "failed" ? "failed" : "none",
+      status: read
+        ? "ok"
+        : row?.status === "failed"
+          ? "failed"
+          : row && row.analysis === null
+            ? "expired"
+            : "none",
       failReason: row?.status === "failed" ? (row.failReason ?? null) : null,
       read,
       marketCap: snapshots
