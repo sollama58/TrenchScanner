@@ -21,8 +21,12 @@ export interface SageView {
     imageUrl: string | null;
     firstSeenAt: string | null;
   } | null;
-  /** "ok": a read is stored; "failed": TokenSage gave a definitive no; "none": nothing yet. */
-  status: "ok" | "failed" | "none";
+  /**
+   * "ok": a read is stored; "failed": TokenSage gave a definitive no; "expired": it was read, but
+   * the document was dropped after three weeks (cleanupJob's NARRATIVE_DOC_RETENTION_DAYS);
+   * "none": nothing yet.
+   */
+  status: "ok" | "failed" | "expired" | "none";
   failReason: string | null;
   read: SageRead | null;
   /** Market cap at each stored scan, oldest first, for the chart. */

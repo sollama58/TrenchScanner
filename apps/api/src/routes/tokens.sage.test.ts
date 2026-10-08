@@ -18,6 +18,7 @@ const mint = (seed: string) =>
   );
 const READ = mint(`${TAG}-read`);
 const NONE = mint(`${TAG}-none`);
+const EXPIRED = mint(`${TAG}-expired`);
 const full = JSON.parse(
   readFileSync(
     new URL("../../../../packages/core/src/datasources/fixtures/tokensage/full.json", import.meta.url),
@@ -55,6 +56,15 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
         analysis: full.analysis,
       },
     });
+    // Read more than three weeks ago: the cleanup dropped the document and kept the row.
+    await prisma.tokenNarrative.create({
+      data: {
+        mintAddress: EXPIRED,
+        depth: "full",
+        status: "complete",
+        categories: [{ label: "animal/squirrel", confidence: 0.97 }],
+      },
+    });
     app = await buildServer(env);
     cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
       userId,
@@ -65,7 +75,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
   afterAll(async () => {
     await prisma.whitelist.deleteMany({ where: { walletAddress: `${TAG}-wallet` } });
     await app?.close();
-    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: READ } });
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { in: [READ, EXPIRED] } } });
     await prisma.token.deleteMany({ where: { mintAddress: READ } });
     await prisma.user.deleteMany({ where: { id: userId } });
   });
@@ -91,6 +101,8 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
   it("says when there is no read, and turns away bad mints and visitors", async () => {
     const none = (await get(NONE)).json() as SageView;
     expect(none).toMatchObject({ status: "none", read: null, token: null, marketCap: [] });
+    const expired = (await get(EXPIRED)).json() as SageView;
+    expect(expired).toMatchObject({ status: "expired", read: null });
     expect((await get("not-a-mint")).statusCode).toBe(400);
     expect((await get(READ, false)).statusCode).toBe(401);
   });
