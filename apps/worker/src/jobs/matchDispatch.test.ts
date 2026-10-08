@@ -7,10 +7,12 @@ import {
   createMatchesForCandidate,
   markFilterPassComplete,
   resetFilterPasses,
+  awaitsWalletFigure,
   ALERT_COOLDOWN_HOURS,
   FILTER_ARM_QUIET_MINUTES,
   type FilterWithUser,
 } from "./matchDispatch.js";
+import { resetAlertWallets } from "./walletPriority.js";
 import { snapshotDataFor } from "./snapshotData.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -38,10 +40,22 @@ function scoredFixture(mintAddress: string): ScoredToken {
   };
 }
 
-async function seedUserWithFilter(suffix: string, armedAt = ARMED_LONG_AGO): Promise<FilterWithUser> {
+async function seedUserWithFilter(
+  suffix: string,
+  armedAt = ARMED_LONG_AGO,
+  criteria: { maxEmptyTop10WalletPct?: number } = {},
+): Promise<FilterWithUser> {
   const user = await prisma.user.create({ data: { walletAddress: `${TAG}-${suffix}` } });
   return prisma.userFilter.create({
-    data: { userId: user.id, name: suffix, mcapMin: 1_000, mcapMax: 10_000_000, isActive: true, armedAt },
+    data: {
+      userId: user.id,
+      name: suffix,
+      mcapMin: 1_000,
+      mcapMax: 10_000_000,
+      isActive: true,
+      armedAt,
+      ...criteria,
+    },
   });
 }
 
@@ -56,6 +70,7 @@ async function seedToken(suffix: string): Promise<{ token: Token; snapshot: Toke
 describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
   afterEach(async () => {
     resetFilterPasses();
+    resetAlertWallets();
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
@@ -289,6 +304,42 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     expect(await createMatchesForCandidate({ ...args, scored: recovered })).toBe(1);
   });
 
+  it("holds a Max empty match until the empty-wallet share is in, then judges it on the share", async () => {
+    const env = { ...loadEnv(), MATCH_ALERT_GUARD: "off" as const };
+    const { token, snapshot } = await seedToken("empty-wait");
+    const capped = await seedUserWithFilter("k", ARMED_LONG_AGO, { maxEmptyTop10WalletPct: 60 });
+    const plain = await seedUserWithFilter("l");
+    const args = { token, snapshot, env };
+    const unknown = scoredFixture(token.mintAddress);
+
+    // First sighting, holders not priced yet: the filter without the ceiling alerts, the capped
+    // one waits rather than letting the unknown through.
+    expect(
+      await createMatchesForCandidate({ ...args, scored: unknown, activeFilters: [capped, plain] }),
+    ).toBe(1);
+    expect(await prisma.match.count({ where: { tokenId: token.id, filterId: capped.id } })).toBe(0);
+
+    // The share lands over the ceiling: never alerted.
+    const over = { ...unknown, emptyTop10WalletPct: 80 };
+    expect(await createMatchesForCandidate({ ...args, scored: over, activeFilters: [capped] })).toBe(0);
+    // Under it: alerted - the wait never started a cooldown.
+    const under = { ...unknown, emptyTop10WalletPct: 40 };
+    expect(await createMatchesForCandidate({ ...args, scored: under, activeFilters: [capped] })).toBe(1);
+  });
+
+  it("alerts with the share unknown once the wait is over", async () => {
+    const { token, snapshot } = await seedToken("empty-timeout");
+    const capped = await seedUserWithFilter("m", ARMED_LONG_AGO, { maxEmptyTop10WalletPct: 60 });
+    const args = { token, snapshot, scored: scoredFixture(token.mintAddress), activeFilters: [capped] };
+
+    const waiting = { ...loadEnv(), MATCH_ALERT_GUARD: "off" as const, FILTER_WALLET_MAX_WAIT_SECONDS: 180 };
+    expect(await createMatchesForCandidate({ ...args, env: waiting })).toBe(0);
+    // A zero wait is "don't wait": the held match goes out.
+    expect(
+      await createMatchesForCandidate({ ...args, env: { ...waiting, FILTER_WALLET_MAX_WAIT_SECONDS: 0 } }),
+    ).toBe(1);
+  });
+
   it("anchors one graded outcome for every match of the token, and reports filter records", async () => {
     const env = loadEnv();
     const { token, snapshot } = await seedToken("graded");
@@ -322,5 +373,27 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
       { graded: 1, won2x: 1, won4x: 1, won10x: 0, tenXGraded: 0 },
     );
     expect(records.get(filters[1]!.id)).toEqual({ graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0 });
+  });
+});
+
+describe("awaitsWalletFigure", () => {
+  const known = { freshTop10WalletPct: 10, emptyTop10WalletPct: 20, sniperTop10WalletPct: 30 };
+
+  it("waits only for a figure the filter caps and the token lacks", () => {
+    expect(awaitsWalletFigure({}, {})).toBe(false);
+    expect(awaitsWalletFigure({}, { maxEmptyTop10WalletPct: 60 })).toBe(true);
+    expect(awaitsWalletFigure({}, { maxFreshTop10WalletPct: 60 })).toBe(true);
+    expect(awaitsWalletFigure({}, { maxSniperTop10WalletPct: 60 })).toBe(true);
+    expect(awaitsWalletFigure({}, { maxEmptyTop10WalletPct: null })).toBe(false);
+    expect(
+      awaitsWalletFigure(known, {
+        maxFreshTop10WalletPct: 60,
+        maxEmptyTop10WalletPct: 60,
+        maxSniperTop10WalletPct: 60,
+      }),
+    ).toBe(false);
+    expect(
+      awaitsWalletFigure({ ...known, emptyTop10WalletPct: undefined }, { maxFreshTop10WalletPct: 60 }),
+    ).toBe(false);
   });
 });
