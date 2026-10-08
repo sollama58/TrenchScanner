@@ -7,10 +7,10 @@ export interface PnlCardData {
   mintAddress: string;
   /** When it alerted (ISO). */
   at: string;
-  /** Its return under the fixed exit plan, in percent. */
-  returnPct: number;
-  /** Its place in the week's top three, 1-based. */
-  rank: number;
+  /** Its Peak: the highest it went above its alert price, in percent. */
+  peakPct: number;
+  /** What alerted it: a model the reader follows, or one of their own filters. */
+  source: { kind: "filter" | "model"; name: string } | null;
 }
 
 export const PNL_CARD_WIDTH = 1200;
@@ -18,8 +18,6 @@ export const PNL_CARD_HEIGHT = 675;
 
 const FONT = '"Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif';
 const MONO = '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, Menlo, monospace';
-const BRAND_A = "#8b5cf6";
-const BRAND_B = "#3b82f6";
 const UP = "#34d399";
 const DOWN = "#f87171";
 
@@ -120,20 +118,18 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   ctx.font = `700 34px ${FONT}`;
   ctx.fillText("TrenchScanner", pad + iconSize + 18, pad + iconSize / 2);
 
-  // Rank pill, top right.
-  const pill = `#${data.rank} this week`;
-  ctx.font = `600 22px ${FONT}`;
-  const pillW = ctx.measureText(pill).width + 40;
-  const pillGrad = ctx.createLinearGradient(W - pad - pillW, 0, W - pad, 0);
-  pillGrad.addColorStop(0, BRAND_A);
-  pillGrad.addColorStop(1, BRAND_B);
-  ctx.fillStyle = pillGrad;
-  roundRect(ctx, W - pad - pillW, pad + 12, pillW, 40, 20);
-  ctx.fill();
-  ctx.fillStyle = "#ffffff";
-  ctx.textAlign = "center";
-  ctx.fillText(pill, W - pad - pillW / 2, pad + 32);
-  ctx.textAlign = "left";
+  // What alerted it, top right: the model or the reader's own filter.
+  if (data.source) {
+    const right = W - pad;
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#ffffff";
+    fitText(ctx, data.source.name, 700, 30, W * 0.42);
+    ctx.fillText(data.source.name, right, pad + 18);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+    ctx.font = `italic 500 20px ${FONT}`;
+    ctx.fillText(data.source.kind === "model" ? "AI KOL" : "Custom Filter", right, pad + 50);
+    ctx.textAlign = "left";
+  }
 
   // The token.
   const ticker = data.symbol ? `$${data.symbol}` : "Unnamed token";
@@ -148,8 +144,8 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   }
 
   // The multiple, as big as it can be.
-  const up = data.returnPct >= 0;
-  const x = multiple(data.returnPct);
+  const up = data.peakPct >= 0;
+  const x = multiple(data.peakPct);
   ctx.fillStyle = up ? UP : DOWN;
   const xSize = fitText(ctx, x, 800, 200, W * 0.62);
   ctx.shadowColor = up ? "rgba(52, 211, 153, 0.45)" : "rgba(248, 113, 113, 0.4)";
@@ -159,7 +155,7 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   const xWidth = ctx.measureText(x).width;
   ctx.fillStyle = up ? UP : DOWN;
   ctx.font = `700 44px ${FONT}`;
-  ctx.fillText(signedPct(data.returnPct, 0), pad + xWidth + 24, 300 + xSize * 0.82);
+  ctx.fillText(signedPct(data.peakPct, 0), pad + xWidth + 24, 300 + xSize * 0.82);
 
   // Footer: when, the mint, where.
   const when = new Date(data.at).toLocaleString(undefined, {
@@ -173,7 +169,7 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   ctx.textBaseline = "middle";
   ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
   ctx.font = `500 22px ${FONT}`;
-  ctx.fillText(`Alerted ${when} · return on the TrenchScanner exit plan`, pad, H - 84);
+  ctx.fillText(`Alerted ${when}`, pad, H - 84);
   ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
   ctx.font = `500 18px ${MONO}`;
   const mint = `${data.mintAddress.slice(0, 6)}…${data.mintAddress.slice(-6)}`;

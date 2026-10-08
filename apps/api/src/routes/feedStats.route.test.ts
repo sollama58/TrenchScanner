@@ -190,10 +190,17 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
     expect(on[24]).toMatchObject({ alerts: 3, settled: 1, avgReturnPct: 60 });
     expect(on[168]).toMatchObject({ alerts: 4, settled: 2, avgReturnPct: 20 });
     expect(on[168]!.buckets).toHaveLength(28);
-    const top = (await call("GET", "/matches/returns")).json().top as { symbol: string; returnPct: number }[];
-    expect(top.map((t) => [t.symbol, t.returnPct])).toEqual([
-      ["BBB", 60],
-      ["OLD", -20],
+    const top = (await call("GET", "/matches/returns")).json().top as {
+      symbol: string;
+      peakPct: number;
+      source: { kind: string; name: string } | null;
+    }[];
+    // Ranked by each card's Peak: OLD's 9x run, AAA's 5x, then CCC's live 2.5x (its grading row's
+    // peak while it is still in its window). BBB, shown as the model's call, peaked at 2.2x.
+    expect(top.map((t) => [t.symbol, Math.round(t.peakPct), t.source])).toEqual([
+      ["OLD", 900, { kind: "filter", name: "mine" }],
+      ["AAA", 400, { kind: "filter", name: "mine" }],
+      ["CCC", 150, { kind: "filter", name: "mine" }],
     ]);
 
     await call("PUT", "/curated/feed", { showModelAlerts: false });

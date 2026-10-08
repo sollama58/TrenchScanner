@@ -286,14 +286,17 @@ export interface FeedReturns {
     bucketMinutes: number;
     buckets: { at: string; settled: number; avgReturnPct: number | null }[];
   }[];
-  /** The week's three best settled returns, one per token, best first (absent from older API builds). */
+  /** The week's three biggest runs (the cards' Peak), one per token, best first (absent from older API builds). */
   top?: {
     tokenId: string;
     symbol: string | null;
     name: string | null;
     mintAddress: string;
     at: string;
-    returnPct: number;
+    /** The card's Peak: the highest the token went above its alert price, in percent. */
+    peakPct: number;
+    /** What alerted it (absent from older API builds; null when the filter has been deleted). */
+    source?: { kind: "filter" | "model"; name: string } | null;
   }[];
   showModelAlerts: boolean;
   truncated: boolean;
