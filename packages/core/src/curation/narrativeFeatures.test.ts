@@ -377,3 +377,13 @@ describe("round trip through a stored feature vector", () => {
     expect(narrativeFromFeatures({})).toBeUndefined();
   });
 });
+
+describe("narrative input scales", () => {
+  it("log-scales the post reuse count like its twin rank", async () => {
+    const { NARRATIVE_UNTRANSFORMED_FEATURES } = await import("./narrativeFeatures.js");
+    expect(NARRATIVE_UNTRANSFORMED_FEATURES).not.toContain("nsXReuseCount");
+    expect(NARRATIVE_UNTRANSFORMED_FEATURES).not.toContain("nsXReuseRank");
+    expect(NARRATIVE_UNTRANSFORMED_FEATURES).not.toContain("nsXPredatesTokenMin");
+    expect(NARRATIVE_UNTRANSFORMED_FEATURES).toContain("nsCopycat");
+  });
+});

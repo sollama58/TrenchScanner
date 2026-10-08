@@ -1,6 +1,7 @@
 import type { ScoredToken } from "../types.js";
 import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
 import { FIRST_BUYERS, resolveDevHolding } from "./tradeFlow.js";
+import { CREATOR_UNKNOWN_FLAG } from "../datasources/rugcheck.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   GOAL_MULTIPLE,
@@ -154,7 +155,7 @@ export function buildAiReviewBrief(
     `- age: ${scored.ageMinutes === undefined ? "unknown" : `${Math.round(scored.ageMinutes)} minutes`}`,
     `- graduated from bonding curve: ${fmtBool(scored.graduated)}`,
     `- Pump.fun livestream: ${livestreamText(scored.livestream)}`,
-    `- pool liquidity: ${fmtUsd(scored.liquidityUsd)}`,
+    `- pool liquidity: ${poolLiquidityText(scored)}`,
     `- price change: 5m ${fmtPct(scored.priceChange5mPct)}, 1h ${fmtPct(scored.priceChange1hPct)}, 6h ${fmtPct(scored.priceChange6hPct)}, 24h ${fmtPct(scored.priceChange24hPct)}`,
     `- volume: 5m ${fmtUsd(scored.volume5mUsd)}, 1h ${fmtUsd(scored.volume1hUsd)}, 24h ${fmtUsd(scored.volume24hUsd)}`,
     `- order flow: 1h ${buyRatio(scored.buys1h, scored.sells1h)}; 24h ${buyRatio(scored.buys24h, scored.sells24h)}`,
@@ -163,7 +164,7 @@ export function buildAiReviewBrief(
     `- holder count: ${fmtNum(scored.holderCount)}`,
     `- holder growth over the last 30 minutes: ${fmtPct(scored.holderGrowthPct)}`,
     `- top 10 wallets hold: ${fmtPct(scored.top10HolderPct)}`,
-    `- dev wallet holds: ${fmtPct(scored.devWalletPct)}; dev still holding: ${devHoldingText(resolveDevHolding(scored))}`,
+    `- dev wallet holds: ${devWalletText(scored)}; dev still holding: ${devHoldingText(resolveDevHolding(scored))}`,
     `- top-10 wallets that are brand new: ${fmtPct(scored.freshTop10WalletPct)}`,
     `- top-10 wallets holding almost nothing else: ${fmtPct(scored.emptyTop10WalletPct)}`,
     `- RugCheck risk score (higher is riskier): ${fmtNum(scored.riskScore)}`,
@@ -185,23 +186,68 @@ export function buildAiReviewBrief(
 
 /**
  * The brief's trade-by-trade section (curation/tradeFlow.ts): who is buying in the last five
- * minutes, and what the launch's snipers and the dev have done with their bags. Omitted entirely
- * when the worker wasn't tracking the token's trades, rather than a block of "unknown".
+ * minutes, and what the launch's snipers and the dev have done with their bags. Only the lines
+ * whose figures are known: the first-buyers count comes from the chain and the dev's launch buy
+ * from the create message, so either can be known while the trade stream is not, and a block of
+ * "unknown" read as bad news to the reviewer. Omitted entirely when nothing is known.
  */
 function tradeFlowLines(scored: ScoredToken): string[] {
   const f = scored.tradeFlow;
-  if (!f || Object.values(f).every((v) => v === null)) return [];
-  return [
-    `order flow, trade by trade:`,
-    `- distinct buyers in the last 5 minutes: ${fmtVal(f.uniqueBuyers5m)} (${fmtShare(f.newBuyerShare5m)} of them new to this token)`,
-    `- buys per buying wallet (5m): ${fmtVal(f.buysPerBuyer5m, 1)} - well above 1 means bots looping, not demand`,
-    `- average buy (5m): ${f.avgBuySol5m === null ? "unknown" : `${f.avgBuySol5m.toFixed(2)} SOL`}; biggest buyer's share of buy volume: ${fmtShare(f.topBuyerShare5m)}`,
-    `- net SOL flow over 5 minutes vs market cap: ${f.netFlow5mToMcap === null ? "unknown" : `${(f.netFlow5mToMcap * 100).toFixed(2)}%`}; trades per minute: ${fmtVal(f.tradesPerMin5m, 1)}`,
-    `- launch snipers (bought within 30s of launch): ${fmtVal(f.earlyBuyerCount)} wallets, still holding ${f.earlyBuyerHoldPct === null ? "unknown" : `${f.earlyBuyerHoldPct.toFixed(1)}%`} of supply, sold ${fmtShare(f.earlyBuyerSoldShare)} of what they bought`,
-    `- first ${f.firstBuyersSeen ?? FIRST_BUYERS} buyers after launch (dev aside) still holding: ${f.firstBuyersHolding === null ? "unknown" : `${f.firstBuyersHolding} of ${f.firstBuyersSeen ?? FIRST_BUYERS}`}`,
-    `- dev's launch buy: ${f.devInitialBuySol === null ? "unknown" : `${f.devInitialBuySol.toFixed(2)} SOL`}; dev has sold ${fmtShare(f.devSoldShare)} of it`,
-    ``,
-  ];
+  if (!f) return [];
+  const lines: string[] = [];
+  const tradesKnown = [
+    f.uniqueBuyers5m,
+    f.buysPerBuyer5m,
+    f.avgBuySol5m,
+    f.topBuyerShare5m,
+    f.netFlow5mToMcap,
+    f.tradesPerMin5m,
+  ].some((v) => v !== null);
+  if (tradesKnown) {
+    lines.push(
+      `- distinct buyers in the last 5 minutes: ${fmtVal(f.uniqueBuyers5m)} (${fmtShare(f.newBuyerShare5m)} of them new to this token)`,
+      `- buys per buying wallet (5m): ${fmtVal(f.buysPerBuyer5m, 1)} - well above 1 means bots looping, not demand`,
+      `- average buy (5m): ${f.avgBuySol5m === null ? "unknown" : `${f.avgBuySol5m.toFixed(2)} SOL`}; biggest buyer's share of buy volume: ${fmtShare(f.topBuyerShare5m)}`,
+      `- net SOL flow over 5 minutes vs market cap: ${f.netFlow5mToMcap === null ? "unknown" : `${(f.netFlow5mToMcap * 100).toFixed(2)}%`}; trades per minute: ${fmtVal(f.tradesPerMin5m, 1)}`,
+    );
+  }
+  if (f.earlyBuyerCount !== null) {
+    lines.push(
+      `- launch snipers (bought within 30s of launch): ${fmtVal(f.earlyBuyerCount)} wallets, still holding ${f.earlyBuyerHoldPct === null ? "unknown" : `${f.earlyBuyerHoldPct.toFixed(1)}%`} of supply, sold ${fmtShare(f.earlyBuyerSoldShare)} of what they bought`,
+    );
+  }
+  if (f.firstBuyersHolding !== null) {
+    lines.push(
+      `- first ${f.firstBuyersSeen ?? FIRST_BUYERS} buyers after launch (dev aside) still holding: ${f.firstBuyersHolding} of ${f.firstBuyersSeen ?? FIRST_BUYERS}`,
+    );
+  }
+  if (f.devInitialBuySol !== null) {
+    lines.push(
+      `- dev's launch buy: ${f.devInitialBuySol.toFixed(2)} SOL${f.devSoldShare === null ? "" : `; dev has sold ${fmtShare(f.devSoldShare)} of it`}`,
+    );
+  }
+  return lines.length > 0 ? [`order flow, trade by trade:`, ...lines, ``] : [];
+}
+
+/**
+ * A bonding-curve token has no pool, so its liquidity is not unknown: there is none to report.
+ * Spelled out because the instructions tell the reviewer that unknown values are not good news.
+ */
+function poolLiquidityText(scored: ScoredToken): string {
+  if (scored.liquidityUsd === undefined && scored.graduated === false)
+    return "none yet (still on the bonding curve)";
+  return fmtUsd(scored.liquidityUsd);
+}
+
+/**
+ * RugCheck lists the creator only while they hold enough to rank among the top holders, so with a
+ * known creator a missing figure means a small bag, not an unknown one (rugcheck.ts toProfile).
+ */
+function devWalletText(scored: ScoredToken): string {
+  if (scored.devWalletPct !== undefined) return fmtPct(scored.devWalletPct);
+  // The holder list itself must have read cleanly too (an inconsistent one blanks both figures).
+  const creatorKnown = scored.riskFlags !== undefined && !scored.riskFlags.includes(CREATOR_UNKNOWN_FLAG);
+  return creatorKnown && scored.top10HolderPct !== undefined ? "not among the top holders" : "unknown";
 }
 
 /** Clamps a model-reported probability into [0, 1]; anything non-finite becomes 0. */

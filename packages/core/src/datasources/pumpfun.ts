@@ -173,7 +173,10 @@ export class PumpFunClient {
       const query = new URLSearchParams({
         offset: String(page * limit),
         limit: String(limit),
-        includeNsfw: "false",
+        // NSFW coins too: this only sets a model input, nothing is shown, and the watchlist holds
+        // coins the PumpPortal stream and DexScreener feeds added with no NSFW filter. Left out,
+        // a streaming NSFW coin read as a known "not live".
+        includeNsfw: "true",
       });
       let coins: PumpFunCoin[];
       try {

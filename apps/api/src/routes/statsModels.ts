@@ -114,6 +114,9 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
  * reads as mostly null there for weeks; this one says whether it is arriving today. A feature
  * that is present but always zero is as dead as a null one, hence the zero share and range.
  */
+/** Inputs that legitimately read 0 on every row of a window, so all-zero is not a dead wire. */
+const ZERO_IS_NORMAL: ReadonlySet<string> = new Set(["ctxWeekend"]);
+
 export async function buildFeatureFillReport(since: Date, until: Date = new Date()) {
   // The denominator is counted on its own: jsonb_each yields nothing for a row whose features
   // are `{}`, so counting rows through the join below left those rows out and overstated every
@@ -188,9 +191,14 @@ export async function buildFeatureFillReport(since: Date, until: Date = new Date
     window: { since, until },
     rows: totalRows,
     rowsByKind: Object.fromEntries(rowsByKind),
-    // Present on under 10% of the window's rows, or present but zero on every one of them.
+    // Present on under 10% of the window's rows, or present but zero on every one of them - except
+    // an input whose 0 is the everyday value (the weekend flag reads 0 all week).
     dead: features
-      .filter((f) => (f.presentPct ?? 0) < 10 || (f.zeroPct !== null && f.zeroPct === 100))
+      .filter(
+        (f) =>
+          (f.presentPct ?? 0) < 10 ||
+          (f.zeroPct !== null && f.zeroPct === 100 && !ZERO_IS_NORMAL.has(f.feature)),
+      )
       .map((f) => f.feature),
     features,
   };

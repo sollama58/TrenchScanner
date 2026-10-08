@@ -1,6 +1,7 @@
 import { paceBudget } from "./governor.js";
 import { runDoublings } from "./labels.js";
 import { FRIENDLY_FEATURE_LABELS, type CandidateFeatureName } from "./features.js";
+import { NARRATIVE_BIT_FEATURES, NARRATIVE_SHARE_FEATURES } from "./narrativeFeatures.js";
 import { emptyRecord, type CallRecord } from "./leaderboard.js";
 import {
   applyCooldown,
@@ -77,6 +78,7 @@ const YES_NO_INPUTS: ReadonlySet<string> = new Set([
   "devHolding",
   "ctxWeekend",
   "livestreamLive",
+  ...NARRATIVE_BIT_FEATURES,
 ]);
 /** Inputs stored as a 0-1 share, shown as a percentage. */
 const SHARE_INPUTS: ReadonlySet<string> = new Set([
@@ -88,6 +90,7 @@ const SHARE_INPUTS: ReadonlySet<string> = new Set([
   "earlyBuyerSoldShare",
   "devSoldShare",
   "pathGreenShare10m",
+  ...NARRATIVE_SHARE_FEATURES,
 ]);
 
 function readFeature(features: Record<string, number | null | undefined>, name: string): number | null {

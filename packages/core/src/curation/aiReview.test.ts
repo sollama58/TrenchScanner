@@ -1,3 +1,4 @@
+import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
 import { describe, expect, it } from "vitest";
 import {
   AI_REVIEW_SYSTEM_PROMPT,
@@ -54,6 +55,41 @@ describe("AI review brief", () => {
     expect(brief).toContain("top 10 wallets hold: 22.0%");
     expect(brief).toContain("dev wallet holds: unknown");
     expect(brief).toContain("curator: heuristic-v1, conviction 68.2");
+  });
+
+  it("prints only the order-flow lines whose figures are known", () => {
+    const tradeFlow = {
+      ...EMPTY_TRADE_FLOW,
+      firstBuyersHolding: 9,
+      firstBuyersSeen: 25,
+    };
+    const brief = buildAiReviewBrief({ ...scored, tradeFlow } as ScoredToken, decision);
+    expect(brief).toContain("first 25 buyers after launch (dev aside) still holding: 9 of 25");
+    expect(brief).not.toContain("distinct buyers in the last 5 minutes");
+    expect(brief).not.toContain("launch snipers");
+    expect(brief).not.toContain("dev's launch buy");
+    expect(
+      buildAiReviewBrief({ ...scored, tradeFlow: EMPTY_TRADE_FLOW } as ScoredToken, decision),
+    ).not.toContain("order flow, trade by trade");
+  });
+
+  it("says a bonding-curve token has no pool rather than unknown liquidity", () => {
+    expect(buildAiReviewBrief(scored, decision)).toContain(
+      "pool liquidity: none yet (still on the bonding curve)",
+    );
+    expect(buildAiReviewBrief({ ...scored, graduated: undefined } as ScoredToken, decision)).toContain(
+      "pool liquidity: unknown",
+    );
+  });
+
+  it("says a known creator missing from the holder list holds too little to rank", () => {
+    const brief = buildAiReviewBrief({ ...scored, riskFlags: [] } as ScoredToken, decision);
+    expect(brief).toContain("dev wallet holds: not among the top holders");
+    const unknown = buildAiReviewBrief(
+      { ...scored, riskFlags: ["Creator identity unknown"] } as ScoredToken,
+      decision,
+    );
+    expect(unknown).toContain("dev wallet holds: unknown");
   });
 
   it("fences launcher-written text inside the token block", () => {

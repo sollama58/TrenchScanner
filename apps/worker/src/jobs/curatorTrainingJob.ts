@@ -20,6 +20,7 @@ import {
   lockCuratorModelWrites,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   walletSafetyCutsSql,
+  maskKnownBadInputs,
   Prisma,
   type ContestRunOutcome,
   type ContestantTrainingResult,
@@ -862,7 +863,8 @@ async function loadRowsOfKind(
       ORDER BY "anchorAt" DESC, "id" DESC
       LIMIT ${take}`;
     for (const r of page) {
-      const features = r.features as Record<string, number | null>;
+      // Inputs known to be wrong on old rows (fake order-flow zeros) read as missing.
+      const features = maskKnownBadInputs(r.anchorAt, r.features as Record<string, number | null>);
       out.push({
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,

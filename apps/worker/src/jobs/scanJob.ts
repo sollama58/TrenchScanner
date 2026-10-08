@@ -1125,6 +1125,13 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
   }
 }
 
+/**
+ * How far back a holder-growth baseline may reach, as a multiple of its window. Snapshots are
+ * written only while a token is a scan candidate, so after a gap the newest snapshot "at least N
+ * minutes old" could be hours old and the growth figure would describe the whole gap.
+ */
+export const HOLDER_BASELINE_MAX_SPAN = 2;
+
 export interface CandidatePrior {
   token: Token | null;
   /**
@@ -1133,9 +1140,11 @@ export interface CandidatePrior {
    * make the figure's meaning silently track SCAN_INTERVAL_MINUTES, quietly redefining every
    * user's minHolderGrowthPct whenever the cadence changed. Anchoring to wall clock keeps
    * "% holder growth over the last N minutes" a fixed thing users can reason about.
+   * No older than twice the window either (HOLDER_BASELINE_MAX_SPAN): a token that left the scan
+   * for hours and came back has no baseline, rather than reporting hours of change as N minutes'.
    */
   holderCount: number | null;
-  /** The short-window sibling: newest snapshot at least 10 minutes old (holderGrowth10mPct). */
+  /** The short-window sibling: newest snapshot 10-20 minutes old (holderGrowth10mPct). */
   holderCount10m: number | null;
   /** An hourly training sample already exists inside its spacing window. */
   recentHourlySample: boolean;
@@ -1178,7 +1187,9 @@ export async function loadCandidatePriors(
   if (tokens.length === 0) return out;
   const ids = tokens.map((t) => t.id);
   const growthCutoff = new Date(now - env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000);
+  const growthFloor = new Date(now - HOLDER_BASELINE_MAX_SPAN * env.HOLDER_GROWTH_WINDOW_MINUTES * 60_000);
   const growth10mCutoff = new Date(now - 10 * 60_000);
+  const growth10mFloor = new Date(now - HOLDER_BASELINE_MAX_SPAN * 10 * 60_000);
   const spacingCutoff = new Date(now - env.CANDIDATE_SAMPLE_SPACING_MINUTES * 60_000);
   const [baselines, recentHourly, alertedRows, narratives, lastDecisions] = await Promise.all([
     prisma.$queryRaw<{ id: string; h: number | null; h10: number | null }[]>`
@@ -1186,12 +1197,12 @@ export async function loadCandidatePriors(
       FROM unnest(${ids}::text[]) AS t(id)
       LEFT JOIN LATERAL (
         SELECT s."holderCount" FROM "TokenSnapshot" s
-        WHERE s."tokenId" = t.id AND s."takenAt" <= ${growthCutoff}
+        WHERE s."tokenId" = t.id AND s."takenAt" <= ${growthCutoff} AND s."takenAt" >= ${growthFloor}
         ORDER BY s."takenAt" DESC LIMIT 1
       ) b ON true
       LEFT JOIN LATERAL (
         SELECT s."holderCount" FROM "TokenSnapshot" s
-        WHERE s."tokenId" = t.id AND s."takenAt" <= ${growth10mCutoff}
+        WHERE s."tokenId" = t.id AND s."takenAt" <= ${growth10mCutoff} AND s."takenAt" >= ${growth10mFloor}
         ORDER BY s."takenAt" DESC LIMIT 1
       ) b10 ON true`,
     prisma.$queryRaw<{ tokenId: string }[]>`
