@@ -1,5 +1,5 @@
 import { LEARNER_FEATURE_NAMES } from "./features.js";
-import { isCurrentLabelRule, LABEL_LOG2_CAP, runWeight, TEN_X_MULTIPLE } from "./labels.js";
+import { isCurrentLabelRule, LABEL_LOG2_CAP, runDoublings, runWeight, TEN_X_MULTIPLE } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 
 /**
@@ -88,6 +88,8 @@ export interface BoostingRow {
   runPeakMultiple?: number;
   /** Same meaning as TrainingRow.hit10x: the "lambdarank" objective's top relevance tier. */
   hit10x?: boolean;
+  /** Same meaning as TrainingRow.survived: a loss that fell through the stop is "runSize"'s -1. */
+  survived?: boolean;
 }
 
 export interface BoostingOptions {
@@ -393,12 +395,18 @@ export function recencyWeights(
   return w;
 }
 
-/** A row's target under the "runSize" objective: its run in doublings, a stop-out counting -1. */
+/**
+ * A row's target under the "runSize" objective: its run in doublings, a stop-out counting -1.
+ * A winner counts as runDoublings credits it; a loss that fell through the stop counts -1 even
+ * when the window's peak (runPeakMultiple, measured past the stop) came later.
+ */
 function runSizeTarget(row: BoostingRow): number {
+  if (row.labelValue > 0) return runDoublings(row);
+  if (row.survived === false) return -1;
   if (row.runPeakMultiple !== undefined && row.runPeakMultiple > 0) {
     return Math.min(LABEL_LOG2_CAP, Math.max(-1, Math.log2(row.runPeakMultiple)));
   }
-  return row.labelValue > 0 ? Math.min(LABEL_LOG2_CAP, row.labelValue) : 0;
+  return 0;
 }
 
 const TEN_X_LABEL = Math.log2(TEN_X_MULTIPLE);
@@ -624,17 +632,31 @@ export function plattScale(
   weights: ArrayLike<number>,
 ): { slope: number; intercept: number } {
   const n = raw.length;
-  let a = 1;
-  let b = 0;
   // Centre the input so the two parameters are near-orthogonal and Newton converges in a few steps.
   let mean = 0;
   let wSum = 0;
+  let wPos = 0;
   for (let i = 0; i < n; i++) {
     mean += weights[i]! * raw[i]!;
     wSum += weights[i]!;
+    wPos += weights[i]! * labels[i]!;
   }
   mean = wSum > 0 ? mean / wSum : 0;
+  // Start from "the score says nothing": a flat slope at the base rate's log-odds. Starting at
+  // (1, 0) puts every row at 0.5 against a rate near 5%, and the first full step overshoots.
+  const rate = wSum > 0 ? Math.min(1 - 1e-6, Math.max(1e-6, wPos / wSum)) : 0.5;
+  let a = 0;
+  let b = Math.log(rate / (1 - rate));
   const L2 = 1e-3;
+  const loss = (sa: number, sb: number) => {
+    let l = 0.5 * L2 * sa * sa;
+    for (let i = 0; i < n; i++) {
+      const p = Math.min(1 - 1e-12, Math.max(1e-12, sigmoid(sa * (raw[i]! - mean) + sb)));
+      l -= weights[i]! * (labels[i]! * Math.log(p) + (1 - labels[i]!) * Math.log(1 - p));
+    }
+    return l;
+  };
+  let current = loss(a, b);
   for (let iter = 0; iter < 25; iter++) {
     let ga = L2 * a;
     let gb = 0;
@@ -656,9 +678,20 @@ export function plattScale(
     if (!(Math.abs(det) > 1e-12)) break;
     const da = (hbb * ga - hab * gb) / det;
     const db = (haa * gb - hab * ga) / det;
-    a -= da;
-    b -= db;
-    if (Math.abs(da) < 1e-9 && Math.abs(db) < 1e-9) break;
+    // Step halving: a full Newton step on clustered or non-monotone scores can overshoot into a
+    // huge (finite) slope; only a step that lowers the loss is taken.
+    let step = 1;
+    let next = loss(a - da, b - db);
+    while (!(next <= current) && step > 1e-6) {
+      step /= 2;
+      next = loss(a - step * da, b - step * db);
+    }
+    if (!(next <= current)) break;
+    a -= step * da;
+    b -= step * db;
+    const improvement = current - next;
+    current = next;
+    if ((Math.abs(step * da) < 1e-9 && Math.abs(step * db) < 1e-9) || improvement < 1e-12 * wSum) break;
   }
   if (!(a > 1e-3) || !Number.isFinite(a) || !Number.isFinite(b))
     return { slope: 1e-3, intercept: Number.isFinite(b) ? b : 0 };
