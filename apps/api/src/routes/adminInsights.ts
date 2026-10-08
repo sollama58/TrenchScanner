@@ -332,6 +332,7 @@ async function buildScreenReport(hours: number) {
         mcap: number | null;
         fresh_pct: number | null;
         empty_pct: number | null;
+        sniper_pct: number | null;
         top10_pct: number | null;
         risk_score: number | null;
       }[]
@@ -339,7 +340,8 @@ async function buildScreenReport(hours: number) {
       SELECT t."mintAddress" AS mint, t.symbol, t."firstSeenAt" AS first_seen_at,
              s."takenAt" AS taken_at, s."rugScreenPassed" AS passed, s."rugScreenReasons" AS reasons,
              s."marketCapUsd" AS mcap, s."freshTop10WalletPct" AS fresh_pct,
-             s."emptyTop10WalletPct" AS empty_pct, s."top10HolderPct" AS top10_pct,
+             s."emptyTop10WalletPct" AS empty_pct, s."sniperTop10WalletPct" AS sniper_pct,
+             s."top10HolderPct" AS top10_pct,
              s."riskScore" AS risk_score
       FROM "Token" t
       CROSS JOIN LATERAL (
@@ -379,6 +381,7 @@ async function buildScreenReport(hours: number) {
       marketCapUsd: r.mcap,
       freshTop10WalletPct: r.fresh_pct,
       emptyTop10WalletPct: r.empty_pct,
+      sniperTop10WalletPct: r.sniper_pct,
       top10HolderPct: r.top10_pct,
       riskScore: r.risk_score,
     }));

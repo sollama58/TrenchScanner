@@ -12,6 +12,7 @@ import {
   scoreToken,
   refreshScoreWeights,
   runRugScreen,
+  sniperShareOfTop10,
   passesLocalRugScreen,
   passesEventPreGate,
   walletChecksKnown,
@@ -66,6 +67,7 @@ import { resolveMayhemMode } from "./mayhemMode.js";
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
+  sniperWalletsFromCache,
   type LaunchSnipers,
   type SniperGroup,
 } from "./launchSnipers.js";
@@ -721,6 +723,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           deps.pricePath,
           marketContext,
           liveStreams,
+          sniperWalletsFromCache(candidate.mintAddress),
         ),
       );
     } catch (err) {
@@ -1420,9 +1423,16 @@ async function processCandidate(
   pricePath?: PricePathBook,
   marketContext?: MarketContextFeatures,
   liveStreams?: ReadonlyMap<string, LiveStream> | null,
+  sniperWallets?: ReadonlySet<string>,
 ): Promise<number> {
   const existingToken = prior.token;
-  const onChain = withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env);
+  const onChain = withWalletSignals(
+    onChainProfile,
+    earliestActivityByAddress,
+    holdingsByAddress,
+    env,
+    sniperWallets,
+  );
   // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
   // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
   // whose creation time is the graduation, and age read from it restarted at zero - a six-hour
@@ -1733,12 +1743,17 @@ export function buildOnChainProfile(
  * part-checked list, recorded as undefined. They answer complementary questions - freshness asks
  * how OLD the wallets are, emptiness asks whether they hold anything BESIDES this launch - so a
  * sniper farm that ages its wallets is still caught by the second, and vice versa.
+ *
+ * The third, the share of the list that were the launch's first 25 buyers, needs no lookup of its
+ * own: it compares the list against the first buyers launchSnipers.ts already read. Unknown until
+ * that read has landed. Exported for tests.
  */
-function withWalletSignals(
+export function withWalletSignals(
   onChain: OnChainProfile | null,
   earliestActivityByAddress: Map<string, Date | null>,
   holdingsByAddress: Map<string, WalletHoldings>,
-  env: Env,
+  env: Pick<Env, "WALLET_HOLDINGS_MIN_USD">,
+  sniperWallets?: ReadonlySet<string>,
 ): OnChainProfile | null {
   if (!onChain?.top10HolderAddresses?.length) return onChain;
   const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
@@ -1752,6 +1767,9 @@ function withWalletSignals(
     ...onChain,
     freshTop10WalletPct: freshTop10WalletPct ?? undefined,
     emptyTop10WalletPct: emptyTop10WalletPct ?? undefined,
+    sniperTop10WalletPct: sniperWallets
+      ? (sniperShareOfTop10(onChain.top10HolderAddresses, sniperWallets) ?? undefined)
+      : undefined,
     // Recorded even when both percentages came back unknown: it describes the list that was
     // available, which is what a card needs to say "4 of 9" rather than assuming ten.
     top10WalletsChecked: onChain.top10HolderAddresses.length,

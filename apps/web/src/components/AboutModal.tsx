@@ -150,6 +150,13 @@ export function AboutModal({
             every few minutes, so it shows &ldquo;–&rdquo; only until a new token has been checked. You can
             set a minimum or maximum on the Filters tab, and the models read it too.
           </dd>
+          <dt>Top-10 snipers</dt>
+          <dd>
+            Of the top 10 holders (pool and liquidity aside), the share that were among those first 25 buyers:
+            snipers still sitting on a big bag. At 80% or more a token is always rejected. Shows &ldquo;Not
+            checked&rdquo; until the launch&apos;s first buyers have been read. You can set a maximum on the
+            Filters tab, and the models read it too.
+          </dd>
           <dt>Dev</dt>
           <dd>
             DH (Dev Holding) means the creator&apos;s wallet still holds the token; DS (Dev Sold) means it

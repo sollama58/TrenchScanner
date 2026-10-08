@@ -84,6 +84,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  if (
+    filter.maxSniperTop10WalletPct != null &&
+    token.sniperTop10WalletPct !== undefined &&
+    token.sniperTop10WalletPct > filter.maxSniperTop10WalletPct
+  ) {
+    return false;
+  }
+
   // Unknown until the launch's first buyers have been read: the floor fails closed, the ceiling
   // skips, per the split above.
   const firstBuyersHolding = token.tradeFlow?.firstBuyersHolding ?? null;

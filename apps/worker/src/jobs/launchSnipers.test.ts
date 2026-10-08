@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_TRADE_FLOW, type HeliusClient, type LaunchBuyersResult } from "@trenchscanner/core";
-import { launchSnipersFromCache, resetLaunchSnipersCache, resolveLaunchSnipers } from "./launchSnipers.js";
-import { withLaunchSnipers } from "./scanJob.js";
+import {
+  launchSnipersFromCache,
+  resetLaunchSnipersCache,
+  resolveLaunchSnipers,
+  sniperWalletsFromCache,
+} from "./launchSnipers.js";
+import { withLaunchSnipers, withWalletSignals } from "./scanJob.js";
 
 const buyers = (mint: string, n: number) =>
   Array.from({ length: n }, (_, i) => ({
@@ -135,5 +140,36 @@ describe("withLaunchSnipers", () => {
     const streamed = { ...EMPTY_TRADE_FLOW, firstBuyersHolding: 3, firstBuyersSeen: 25 };
     expect(withLaunchSnipers(streamed, snipers)).toBe(streamed);
     expect(withLaunchSnipers(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("snipers in the top 10", () => {
+  beforeEach(() => resetLaunchSnipersCache());
+
+  it("measures the top-10 list against the first buyers once they are read, unknown before", async () => {
+    const profile = {
+      mintAddress: "A",
+      mintAuthorityActive: false,
+      freezeAuthorityActive: false,
+      lpBurned: true,
+      // Two of the first buyers, two later holders (the pool is never in the list).
+      top10HolderAddresses: ["A-w0", "A-w7", "late1", "late2"],
+    };
+    const env = { WALLET_HOLDINGS_MIN_USD: 25 };
+    expect(sniperWalletsFromCache("A")).toBeUndefined();
+    expect(
+      withWalletSignals(profile, new Map(), new Map(), env, undefined)?.sniperTop10WalletPct,
+    ).toBeUndefined();
+    await resolveLaunchSnipers(
+      [{ mintAddress: "A", contender: true }],
+      fakeHelius({ found: { A: 25 } }).helius,
+      {
+        ...opts,
+        now: 0,
+      },
+    );
+    const wallets = sniperWalletsFromCache("A");
+    expect(wallets?.size).toBe(25);
+    expect(withWalletSignals(profile, new Map(), new Map(), env, wallets)?.sniperTop10WalletPct).toBe(50);
   });
 });
