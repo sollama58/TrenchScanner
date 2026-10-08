@@ -177,10 +177,7 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
         select: { chatId: true },
       });
       if (!row) return reply.code(404).send({ error: "not_found" });
-      const result = await api.sendMessage(
-        row.chatId,
-        formatTestMessage({ dashboardUrl: dashboardUrl(env) }),
-      );
+      const result = await api.sendAlert(row.chatId, formatTestMessage({ dashboardUrl: dashboardUrl(env) }));
       if (!result.ok) {
         await prisma.telegramChat.updateMany({
           where: { id },

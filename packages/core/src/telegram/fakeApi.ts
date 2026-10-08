@@ -23,9 +23,14 @@ export class FakeTelegramApi extends TelegramApi {
     return (result ?? { ok: true, result: {} }) as TelegramResult<T>;
   }
 
-  sent(): { chatId: string; text: string }[] {
+  /** Every message that went out, text or photo, with the photo's URL when there was one. */
+  sent(): { chatId: string; text: string; photo: string | null }[] {
     return this.calls
-      .filter((c) => c.method === "sendMessage")
-      .map((c) => ({ chatId: String(c.params.chat_id), text: String(c.params.text) }));
+      .filter((c) => c.method === "sendMessage" || c.method === "sendPhoto")
+      .map((c) => ({
+        chatId: String(c.params.chat_id),
+        text: String(c.method === "sendPhoto" ? c.params.caption : c.params.text),
+        photo: c.method === "sendPhoto" ? String(c.params.photo) : null,
+      }));
   }
 }

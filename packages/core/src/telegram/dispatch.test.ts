@@ -38,7 +38,7 @@ describe("dashboardUrl", () => {
 });
 
 describe("buildPending", () => {
-  const token = { mintAddress: "m", symbol: "S", name: "N", firstSeenAt: null };
+  const token = { mintAddress: "m", symbol: "S", name: "N", firstSeenAt: null, imageUrl: null };
   const snap = { marketCapUsd: 1, holderCount: null, volume1hUsd: null };
   const t = (s: number) => new Date(100_000 + s * 1_000);
   it("folds a token's matches and calls into one card, inside the window, oldest first", () => {
@@ -110,7 +110,14 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     filterId = (await prisma.userFilter.create({ data: { userId, name: "Mine", mcapMin: 1, mcapMax: 1e9 } }))
       .id;
     tokenId = (
-      await prisma.token.create({ data: { mintAddress: `${TAG}-mint`, symbol: "TST", name: "Test" } })
+      await prisma.token.create({
+        data: {
+          mintAddress: `${TAG}-mint`,
+          symbol: "TST",
+          name: "Test",
+          imageUrl: "https://cdn.example/tst.png",
+        },
+      })
     ).id;
     snapshotId = (
       await prisma.tokenSnapshot.create({
@@ -190,6 +197,8 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(sent[0]!.text).toContain("Rules called it and your filter caught it");
     expect(sent[0]!.text).toContain("“Mine” · score 71");
     expect(sent[0]!.text).not.toContain("Trees");
+    // The token has artwork, so the alert went out as a photo with the text as its caption.
+    expect(sent[0]!.photo).toBe("https://cdn.example/tst.png");
     const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBe(at.getTime() + 1_000);
     expect(row?.lastSentAt).not.toBeNull();
@@ -232,12 +241,34 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     for (let i = 0; i <= DIGEST_THRESHOLD; i++) expect(text).toContain(`<b>$B${i}</b>`);
   });
 
+  it("falls back to plain text when Telegram refuses the photo", async () => {
+    const api = new FakeTelegramApi();
+    await rewind();
+    const at = new Date(Date.now() - 15_000);
+    await prisma.match.create({ data: { userId, filterId, tokenId, snapshotId, matchedAt: at, score: 71 } });
+    api.answers.set("sendPhoto", {
+      ok: false,
+      code: 400,
+      description: "Bad Request: wrong file identifier/HTTP URL specified",
+    });
+    // Earlier tests' alerts are inside the rewound window too, so this may go out as a digest;
+    // either way it is one message, pictured with this token (the strongest one with artwork).
+    const summary = await run(api);
+    expect(summary.failed).toBe(0);
+    expect(summary.sent + summary.digests).toBe(1);
+    const sent = api.sent();
+    expect(sent.map((m) => m.photo)).toEqual(["https://cdn.example/tst.png", null]);
+    expect(sent[1]!.text).toContain("$TST");
+    const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(at.getTime());
+  });
+
   it("unlinks a chat that blocked the bot, and keeps the cursor on a transient failure", async () => {
     const api = new FakeTelegramApi();
     await rewind();
     const at = new Date(Date.now() - 15_000);
     await prisma.match.create({ data: { userId, filterId, tokenId, snapshotId, matchedAt: at, score: 71 } });
-    api.answers.set("sendMessage", { ok: false, code: 0, description: "timed out" });
+    api.answers.set("sendPhoto", { ok: false, code: 0, description: "timed out" });
     expect((await run(api)).failed).toBe(1);
     let row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBeLessThan(at.getTime());
@@ -245,7 +276,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(row?.failures).toBe(1);
     expect(row?.revokedAt).toBeNull();
 
-    api.answers.set("sendMessage", {
+    api.answers.set("sendPhoto", {
       ok: false,
       code: 403,
       description: "Forbidden: bot was blocked by the user",
