@@ -18,11 +18,14 @@ const MINT_DOG2 = "LightDog211111111111111111111111111111111111";
 const MINT_AI = "LightAi1111111111111111111111111111111111111";
 const MINT_BAD = "LightBad111111111111111111111111111111111111";
 const MINTS = [MINT_DOG, MINT_DOG2, MINT_AI, MINT_BAD];
-// One hourly rollup row far in the past, at 13:00 UTC, for the hour-of-day chart.
+// Hourly rollup rows far in the past, both at 13:00 UTC, for the hour-of-day chart: one in
+// northern winter, one in summer (08:00 and 09:00 in New York, either side of DST).
 const ROLLUP_HOUR = new Date(Date.UTC(2021, 0, 5, 13));
+const SUMMER_HOUR = new Date(Date.UTC(2021, 6, 5, 13));
+const SUMMER_CALLS = 100_000;
 
 async function cleanup() {
-  await prisma.lighthouseHour.deleteMany({ where: { hour: ROLLUP_HOUR } });
+  await prisma.lighthouseHour.deleteMany({ where: { hour: { in: [ROLLUP_HOUR, SUMMER_HOUR] } } });
   await prisma.curatedAlert.deleteMany({ where: { source: TAG } });
   await prisma.candidateOutcome.deleteMany({ where: { token: { mintAddress: { in: MINTS } } } });
   await prisma.token.deleteMany({ where: { mintAddress: { in: MINTS } } });
@@ -126,15 +129,18 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
         { ...base, tokenId: tokens[2]!.id },
       ],
     });
-    await prisma.lighthouseHour.create({
-      data: {
-        hour: ROLLUP_HOUR,
-        screenedCalls: 10,
-        screenedGraded: 5,
-        screenedWon2x: 2,
-        screenedReturnN: 4,
-        screenedReturnSum: 40,
-      },
+    await prisma.lighthouseHour.createMany({
+      data: [
+        {
+          hour: ROLLUP_HOUR,
+          screenedCalls: 10,
+          screenedGraded: 5,
+          screenedWon2x: 2,
+          screenedReturnN: 4,
+          screenedReturnSum: 40,
+        },
+        { hour: SUMMER_HOUR, screenedCalls: SUMMER_CALLS },
+      ],
     });
   });
 
@@ -213,8 +219,24 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     expect(one.returnGraded).toBeGreaterThanOrEqual(4);
     expect(one.hit2xPct).not.toBeNull();
     expect(one.avgReturnPct).not.toBeNull();
-    // At least the day the seeded row sits in; years when other suites' rows are around.
-    expect(h.days).toBeGreaterThanOrEqual(1);
+    expect(h.timeZone).toBe("UTC");
+    // From the winter row through the summer one at least: 181 days and the summer row's hour.
+    expect(h.days).toBeGreaterThanOrEqual(182);
+  });
+
+  it("buckets each hour by its own offset in the reader's zone", async () => {
+    const url = (tz: string) => `/guest/lighthouse?days=1&tz=${encodeURIComponent(tz)}`;
+    const ny = (await app.inject({ method: "GET", url: url("america/new_york") })).json<MarketLighthouse>();
+    const h = ny.screened.byHourOfDay;
+    expect(h.timeZone).toBe("America/New_York");
+    // 13:00 UTC is 08:00 EST in January and 09:00 EDT in July.
+    expect(h.hours[8]!.calls).toBeGreaterThanOrEqual(10);
+    expect(h.hours[8]!.calls).toBeLessThan(SUMMER_CALLS);
+    expect(h.hours[9]!.calls).toBeGreaterThanOrEqual(SUMMER_CALLS);
+    // A half-hour zone: 13:00 UTC is 18:30 in Kolkata, so hour 18.
+    const ist = (await app.inject({ method: "GET", url: url("Asia/Kolkata") })).json<MarketLighthouse>();
+    expect(ist.screened.byHourOfDay.hours[18]!.calls).toBeGreaterThanOrEqual(SUMMER_CALLS + 10);
+    expect((await app.inject({ method: "GET", url: url("Not/A_Zone") })).statusCode).toBe(400);
   });
 
   it("serves the 7-day window and rejects others", async () => {

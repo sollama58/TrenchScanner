@@ -151,8 +151,13 @@ describe("lighthouse metrics", () => {
       ["tech", 2, [2, 0]],
       ["other", 0, [2, 0]],
     ]);
+    // An older API without the coins read: the label total stands in.
     const share = breakdownSeries(h, "share");
     expect(share[0]!.values).toEqual([60, null]);
+    // Of the coins read, not of the labels: 6 of 40 coins, whatever the other 30 carried.
+    h.labels.buckets[0]!.described = 40;
+    h.labels.buckets[1]!.described = 0;
+    expect(breakdownSeries(h, "share")[0]!.values).toEqual([15, null]);
     const rates = breakdownSeries(h, "rate2x");
     // tech has 2 graded calls: too few for a verdict; other has none and so no series.
     expect(rates.map((s) => [s.id, s.values])).toEqual([

@@ -5,6 +5,7 @@ import type {
   LighthouseLabelTally,
   LighthouseSums,
 } from "./api";
+import { halfHour } from "./format";
 
 /**
  * What the Lighthouse tab can draw from the history's sums: the metric catalogue, the chart
@@ -358,7 +359,9 @@ export function breakdownSeries(h: LighthouseHistory, mode: BreakdownMode): Seri
     unit,
     slot: label === "other" ? 0 : i + 1,
     values: h.labels.buckets.map((b) => {
-      const total = b.rows.reduce((s, r) => s + r.count, 0);
+      // A share is of the coins read, not of the labels: a coin can carry several labels of a
+      // dimension or none. Older API builds don't send the coins read; their label sum stands in.
+      const total = b.described ?? b.rows.reduce((s, r) => s + r.count, 0);
       return pick(
         b.rows.find((r) => r.label === label),
         total,
@@ -434,8 +437,14 @@ export function bucketLabel(iso: string, bucket: LighthouseHistoryBucket): { sho
   const t = new Date(iso);
   if (bucket === "hour") {
     return {
-      short: t.toLocaleTimeString([], { hour: "numeric" }),
-      full: t.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric" }),
+      short: t.toLocaleTimeString([], { hour: "numeric", minute: halfHour(t) }),
+      full: t.toLocaleString([], {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: halfHour(t),
+      }),
     };
   }
   // Day and week buckets start at 00:00 UTC (Mondays for weeks), so their labels are UTC dates:

@@ -139,6 +139,8 @@ describe.skipIf(!dbAvailable)("lighthouse history", () => {
     expect(other).toMatchObject({ count: 90, alerts: 4, won2x: 2 });
     expect(today.rows.find((r) => r.label === "lhhist-a")?.count).toBe(100);
     expect(today.rows.some((r) => r.count === 999)).toBe(false);
+    // A share's denominator: the coins read that day, from the hourly sums, not the label total.
+    expect(today.described).toBe(4);
   });
 
   it("serves guests, picks a bucket for the window, and rejects what it can't draw", async () => {

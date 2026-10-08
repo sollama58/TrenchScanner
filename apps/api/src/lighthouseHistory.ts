@@ -225,7 +225,7 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
   const labelBucket: HistoryBucket = bucket === "hour" ? "day" : bucket;
   const labelSince = since ? new Date(bucketStart(since.getTime(), labelBucket)) : null;
 
-  const [coverage, perBucket, whole, previous, labelRows] = await Promise.all([
+  const [coverage, perBucket, whole, previous, labelRows, describedRows] = await Promise.all([
     prisma.lighthouseHour.aggregate({ _min: { hour: true }, _max: { hour: true, computedAt: true } }),
     sumHours(since, to, bucket),
     sumHours(since, to, null),
@@ -243,6 +243,13 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
       FROM "LighthouseDayLabel" l
       WHERE l."dimension" = ${dimension} AND l."day" >= ${labelSince ?? new Date(0)} AND l."day" < ${to}
       GROUP BY 1, 2`,
+    // Coins read per label bucket, over the same days as the label rows: a share's denominator.
+    // A coin can carry several labels of a dimension or none, so the label counts don't add up to it.
+    prisma.$queryRaw<{ bucket: Date; described: bigint }[]>`
+      SELECT date_trunc(${labelBucket}, h."hour") AS bucket, sum(h."readsDescribed") AS described
+      FROM "LighthouseHour" h
+      WHERE h."hour" >= ${labelSince ?? new Date(0)} AND h."hour" < ${to}
+      GROUP BY 1`,
   ]);
 
   // Zero-filled buckets from the window's start (or the oldest hour kept) through now.
@@ -283,6 +290,7 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
     t.won10x += n(r.won10x);
     t.tenXGraded += n(r.ten_x_graded);
   }
+  const describedBy = new Map(describedRows.map((r) => [r.bucket.getTime(), n(r.described)]));
 
   return {
     window: { days, since, bucket, dimension },
@@ -303,6 +311,8 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
       top,
       buckets: [...labelBuckets.entries()].map(([b, rows]) => ({
         at: new Date(b).toISOString(),
+        /** Coins read in the bucket, whatever their labels. */
+        described: describedBy.get(b) ?? 0,
         rows: [...rows.values()],
       })),
     },
