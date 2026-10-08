@@ -14,6 +14,7 @@
  * fee goes (the fourth wave) is a fact about the coin, not the wallet's history, so it is here.
  */
 
+import { TOKENSAGE_GENTLE_CREDIBILITY_RULES, tokenSageRulesAtLeast } from "../datasources/tokensage.js";
 import type { CandidateFeatureName } from "./features.js";
 
 /** TokenSage's top-level taxonomy, one 0/1 input each (labels are "animal" or "animal/dog"). */
@@ -171,11 +172,21 @@ export const NARRATIVE_FEATURES_V4 = [
   "nsFeeMutable",
 ] as const;
 
+/**
+ * The fifth wave (TokenSage rules 0.23.0, 2026-10-08): x.credibility got gentler on renamed,
+ * made-for-coin and late-reused accounts (x0.85 where it was x0.5; reuse floors at x0.75, was
+ * x0.4), so the same account scores higher than it did. nsXCredibility keeps the old scale and
+ * is null on 0.23.0+ reads; this one carries the new scale and is null before, so a learner
+ * never mixes the two (notes/tokensage-brief-2026-10-08-x-account-weighting.md).
+ */
+export const NARRATIVE_FEATURES_V5 = ["nsXCredibility23"] as const;
+
 export type NarrativeFeatureName =
   | (typeof NARRATIVE_FEATURES)[number]
   | (typeof NARRATIVE_FEATURES_V2)[number]
   | (typeof NARRATIVE_FEATURES_V3)[number]
-  | (typeof NARRATIVE_FEATURES_V4)[number];
+  | (typeof NARRATIVE_FEATURES_V4)[number]
+  | (typeof NARRATIVE_FEATURES_V5)[number];
 
 /** Every narrative feature, in the order the waves were added. */
 export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
@@ -183,6 +194,7 @@ export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
   ...NARRATIVE_FEATURES_V2,
   ...NARRATIVE_FEATURES_V3,
   ...NARRATIVE_FEATURES_V4,
+  ...NARRATIVE_FEATURES_V5,
 ];
 
 /** Second-wave features that are counts, ranks or ages: everything else is a 0/1 bit or a 0-1 share. */
@@ -256,6 +268,7 @@ export const NARRATIVE_SHARE_FEATURES: readonly NarrativeFeatureName[] = [
   "nsXCredibility",
   "nsTrendScore",
   "nsFeeCreatorShare",
+  "nsXCredibility23",
 ];
 
 export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
@@ -309,7 +322,7 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsWaveLaunches24h: "same-referent launches, 24 hours",
   nsWaveRank24h: "place in the referent wave",
   nsTopCategoryInputs: "inputs agreeing on the theme",
-  nsXCredibility: "X account credibility",
+  nsXCredibility: "X account credibility (before rules 0.23)",
   nsXAccountAgeDays: "X account age at launch",
   nsXAccountMadeForCoin: "X account made for the coin",
   nsXReuseRank: "place among coins linking the post",
@@ -323,6 +336,7 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsFeeToWallet: "creator fee to other wallets",
   nsFeeCreatorShare: "creator's share of the fee",
   nsFeeMutable: "fee split can still change",
+  nsXCredibility23: "X account credibility",
 };
 
 /**
@@ -387,6 +401,11 @@ export interface NarrativeRead {
   feeDestination: string | null;
   feeCreatorShare: number | null;
   feeMutable: boolean | null;
+  /**
+   * versions.rules of the read ("0.23.0-full"), for inputs whose scale moved with a rules
+   * change. Null on a read replayed from stored features that predates every such split.
+   */
+  rulesVersion?: string | null;
 }
 
 /** The TokenNarrative columns a read is built from (categories is a Json column). */
@@ -437,6 +456,7 @@ export interface NarrativeRow {
   feeDestination?: string | null;
   feeCreatorShare?: number | null;
   feeMutable?: boolean | null;
+  rulesVersion?: string | null;
 }
 
 /** The columns narrativeReadFromRow needs, for a Prisma `select`. */
@@ -487,6 +507,7 @@ export const NARRATIVE_ROW_SELECT = {
   feeDestination: true,
   feeCreatorShare: true,
   feeMutable: true,
+  rulesVersion: true,
 } as const;
 
 /**
@@ -552,6 +573,7 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     feeDestination: row.feeDestination ?? null,
     feeCreatorShare: row.feeCreatorShare ?? null,
     feeMutable: row.feeMutable ?? null,
+    rulesVersion: row.rulesVersion ?? null,
   };
 }
 
@@ -681,6 +703,7 @@ export function narrativeFeatureValues(
   }
   const full = read.depth === "full";
   const xRead = narrativeXRead(read);
+  const gentleCredibility = tokenSageRulesAtLeast(read.rulesVersion, TOKENSAGE_GENTLE_CREDIBILITY_RULES);
   // An unresolved lineage ("unknown": no launch time) says nothing, like a read from older rules.
   const lineage = read.lineageKind === LINEAGE_KIND.unknown ? null : read.lineageKind;
   const relation = (name: string) => (full ? bit(xRead && read.xRelation === name) : null);
@@ -736,7 +759,8 @@ export function narrativeFeatureValues(
     nsWaveLaunches24h: read.waveLaunches24h,
     nsWaveRank24h: read.waveRank24h,
     nsTopCategoryInputs: read.topCategoryInputs,
-    nsXCredibility: xRead ? read.xCredibility : null,
+    // Split at rules 0.23.0, where the scale moved: each is null on the other side.
+    nsXCredibility: xRead && !gentleCredibility ? read.xCredibility : null,
     nsXAccountAgeDays: xRead && read.xAccountAgeS !== null ? read.xAccountAgeS / 86_400 : null,
     nsXAccountMadeForCoin: xRead && read.xAccountMadeForCoin !== null ? bit(read.xAccountMadeForCoin) : null,
     nsXReuseRank: xRead ? read.xReuseRank : null,
@@ -746,6 +770,7 @@ export function narrativeFeatureValues(
     nsReferentNamed: bit(narrativeReferentNamed(read)),
     // Rules 0.19.0+: null when the read does not say where the fee goes.
     ...feeFeatureValues(read),
+    nsXCredibility23: xRead && gentleCredibility ? read.xCredibility : null,
   };
 }
 
@@ -861,7 +886,7 @@ export function narrativeFromFeatures(
     waveLaunches24h: num("nsWaveLaunches24h"),
     waveRank24h: num("nsWaveRank24h"),
     topCategoryInputs: num("nsTopCategoryInputs"),
-    xCredibility: num("nsXCredibility"),
+    xCredibility: num("nsXCredibility23") ?? num("nsXCredibility"),
     xAccountAgeS: accountAgeDays === null ? null : Math.round(accountAgeDays * 86_400),
     xAccountMadeForCoin: num("nsXAccountMadeForCoin") === null ? null : num("nsXAccountMadeForCoin") === 1,
     xReuseRank: num("nsXReuseRank"),
@@ -882,6 +907,8 @@ export function narrativeFromFeatures(
                   : "other",
     feeCreatorShare: num("nsFeeCreatorShare"),
     feeMutable: num("nsFeeMutable") === null ? null : num("nsFeeMutable") === 1,
+    // Only the split it feeds is recoverable: a 0.23.0+ credibility replays on its own side.
+    rulesVersion: num("nsXCredibility23") !== null ? TOKENSAGE_GENTLE_CREDIBILITY_RULES : null,
   };
 }
 
