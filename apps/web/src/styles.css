@@ -4297,49 +4297,6 @@ button.small-btn {
   align-items: center;
   gap: 5px;
 }
-.lh-cols {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  height: 150px;
-  padding-bottom: 1px;
-  border-bottom: 1px solid var(--axis);
-  background: repeating-linear-gradient(
-    to top,
-    transparent 0,
-    transparent calc(25% - 1px),
-    var(--grid) calc(25% - 1px),
-    var(--grid) 25%
-  );
-}
-.lh-col {
-  flex: 1;
-  display: flex;
-  align-items: flex-end;
-  min-width: 0;
-  cursor: pointer;
-  border-radius: 4px 4px 0 0;
-}
-.lh-col.is-hover {
-  background: var(--highlight);
-}
-.lh-col-stack {
-  width: 100%;
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 1px;
-  border-radius: 4px 4px 0 0;
-  overflow: hidden;
-  min-height: 0;
-}
-.lh-col-stack > span {
-  display: block;
-  min-height: 1px;
-  background: var(--lh-c);
-}
-.lh-cols:hover .lh-col:not(.is-hover) .lh-col-stack {
-  opacity: 0.6;
-}
 .lh-axis {
   display: flex;
   gap: 2px;
@@ -4633,9 +4590,6 @@ button.small-btn {
   .lh-grid,
   .lh-splits {
     grid-template-columns: 1fr;
-  }
-  .lh-cols {
-    height: 120px;
   }
   .lh-donut svg {
     width: 120px;
