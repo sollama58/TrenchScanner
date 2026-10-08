@@ -59,11 +59,14 @@ const MAX_CACHED_PAGES = 8;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
 
 /**
- * The base-rate counts are a full pass over CandidateOutcome (no index leads with sampleKind,
- * and the table is one of the largest), and they only move when outcomes finalize on the hour.
- * Cached on their own, much longer than the rest of the panel.
+ * The base-rate counts read every event row over CandidateOutcome's retention (tens of thousands
+ * of heap rows, with jsonb wallet cuts, on one of the largest tables), and they only move when
+ * outcomes finalize on the hour. Cached on their own, an hour, much longer than the rest of the
+ * panel.
  */
-const BASE_RATE_CACHE_TTL_MS = 15 * 60_000;
+const BASE_RATE_CACHE_TTL_MS = 60 * 60_000;
+/** The Live tab's market weather chip: a week of finalized rows, so it moves faster than that. */
+const WEATHER_CACHE_TTL_MS = 15 * 60_000;
 
 /**
  * How long past its TTL a report cache (stats, insights, leaderboard) keeps answering at once
@@ -503,8 +506,7 @@ export async function registerCuratedRoutes(
     staleWhileRevalidateMs: REPORT_STALE_MS,
   });
 
-  // The Live tab's market weather chip: same TTL as the base rate, for the same reason.
-  const weatherCache = new SharedCache<MarketWeather>(BASE_RATE_CACHE_TTL_MS, {
+  const weatherCache = new SharedCache<MarketWeather>(WEATHER_CACHE_TTL_MS, {
     staleWhileRevalidateMs: REPORT_STALE_MS,
   });
 
