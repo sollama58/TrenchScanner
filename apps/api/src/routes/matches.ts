@@ -584,7 +584,7 @@ export async function registerMatchRoutes(
       };
     };
     const toCuratedCard = (alert: (typeof pageCurated)[number], group: CallGroup<CallRow>) => {
-      const card = serializeCuratedAlert(alert, currentMarketCap);
+      const card = serializeCuratedAlert(alert, currentMarketCap, opts.env.NARRATIVE_NOTES_SHOWN);
       return { ...card, curated: { ...card.curated, calledBy: group.calls } as CuratedCardMeta | null };
     };
 

@@ -329,7 +329,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
 }
 
 /** The `curated` block both feeds attach to a card the curator picked. */
-export function curatedMeta(alert: CuratedAlertWithRelations) {
+export function curatedMeta(alert: CuratedAlertWithRelations, showNarrative = false) {
   return {
     alertId: alert.id,
     /** "heuristic-v1", or the id of the trained model that emitted it. */
@@ -353,10 +353,11 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
     outcome: resolveOutcome(alert),
     /**
      * The Narrative seat's later view of this call, once TokenSage's deep read decided: "agrees"
-     * or "warns". Null until then, and on the Narrative seat's own calls.
+     * or "warns". Null until then, on the Narrative seat's own calls, and while the note is
+     * switched off (NARRATIVE_NOTES_SHOWN).
      */
     narrative:
-      alert.narrativeVerdict === "agrees" || alert.narrativeVerdict === "warns"
+      showNarrative && (alert.narrativeVerdict === "agrees" || alert.narrativeVerdict === "warns")
         ? { verdict: alert.narrativeVerdict, at: alert.narrativeNotedAt ?? alert.createdAt }
         : null,
   };
@@ -381,6 +382,8 @@ export function serializeCuratedAlert(
     token: { liveMarketCapUsd: number | null; liveDataAt: Date | null },
     latestSnapshot: { marketCapUsd: number; takenAt: Date } | null,
   ) => { marketCapUsd: number | null; at: Date | null },
+  /** Carry the Narrative seat's note (env NARRATIVE_NOTES_SHOWN); off by default. */
+  showNarrative = false,
 ) {
   const { snapshots, ...token } = alert.token;
   const latestSnapshot = snapshots[0] ?? null;
@@ -454,7 +457,7 @@ export function serializeCuratedAlert(
     currentMarketCapUsd: current.marketCapUsd,
     currentMarketCapAt: current.at,
     filter: { id: "curated", name: "Curated" },
-    curated: curatedMeta(alert),
+    curated: curatedMeta(alert, showNarrative),
   };
 }
 

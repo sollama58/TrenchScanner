@@ -337,7 +337,8 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     const pending = buildPending(
       { ...chat, modelCalls: chat.modelCalls && chat.user.showModelAlerts },
       mine,
-      theirs,
+      // The Narrative seat's note stays off the message while NARRATIVE_NOTES_SHOWN is off.
+      env.NARRATIVE_NOTES_SHOWN ? theirs : theirs.map((c) => ({ ...c, narrativeVerdict: null })),
       horizon,
     );
     if (pending.length === 0) {
