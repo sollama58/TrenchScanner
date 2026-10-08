@@ -158,6 +158,8 @@ interface FeedReturnsResponse {
     /** What alerted it: one of the reader's filters, or a model they follow. Null if the filter is gone. */
     source: { kind: "filter" | "model"; name: string } | null;
   }[];
+  /** The same, from the followed models' calls alone and from the reader's own filters' alerts alone. */
+  topBySource: { model: FeedReturnsResponse["top"]; filter: FeedReturnsResponse["top"] };
   showModelAlerts: boolean;
   truncated: boolean;
 }
@@ -633,17 +635,24 @@ export async function registerMatchRoutes(
             }
           : c,
     );
-    // Names only for the three shown, not for the week's every card.
+    // The Top 3 three ways: the whole feed (folded as it shows), the models' calls alone, and the
+    // reader's own filters' alerts alone - each from its own alerts, so a token both caught counts
+    // in each list with that side's run.
     const best = topReturns(cards, now);
+    const bestModel = topReturns(callCards, now);
+    const bestFilter = topReturns(matchCards, now);
+    const shown = [...best, ...bestModel, ...bestFilter];
+    // Names only for the cards shown, not for the week's every card.
+    const tokenIds = [...new Set(shown.map((b) => b.tokenId))];
     const tokens =
-      best.length === 0
+      tokenIds.length === 0
         ? []
         : await prisma.token.findMany({
-            where: { id: { in: best.map((b) => b.tokenId) } },
+            where: { id: { in: tokenIds } },
             select: { id: true, symbol: true, name: true, mintAddress: true },
           });
     const tokenById = new Map(tokens.map((t) => [t.id, t]));
-    const filterIds = best.flatMap((b) => ("filterId" in b.source ? [b.source.filterId] : []));
+    const filterIds = [...new Set(shown.flatMap((b) => ("filterId" in b.source ? [b.source.filterId] : [])))];
     const filters =
       filterIds.length === 0
         ? []
@@ -657,9 +666,8 @@ export async function registerMatchRoutes(
       const name = filterName.get(src.filterId);
       return name ? { kind: "filter" as const, name } : null;
     };
-    return {
-      windows: summarizeReturns(cards, now),
-      top: best.flatMap((b) => {
+    const named = (list: typeof best) =>
+      list.flatMap((b) => {
         const t = tokenById.get(b.tokenId);
         return t
           ? [
@@ -674,7 +682,11 @@ export async function registerMatchRoutes(
               },
             ]
           : [];
-      }),
+      });
+    return {
+      windows: summarizeReturns(cards, now),
+      top: named(best),
+      topBySource: { model: named(bestModel), filter: named(bestFilter) },
       showModelAlerts,
       truncated: matches.length === FEED_STATS_MAX_ROWS || calls.length === FEED_STATS_MAX_ROWS,
     };
