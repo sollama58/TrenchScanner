@@ -242,26 +242,35 @@ export function resetSniperWaits(): void {
  * serving it right now, or the launch's history has no curve launch to read buyers from - or the
  * token has already waited maxWaitMs. The bound matters: the read is metered and sometimes slow
  * or failing, and an unbounded wait held almost every decision back (2026-10-08). Past it the row
- * is banked with the share unknown, which the models already handle. Call it only for a token
- * that is otherwise ready to be decided on: the first call starts its wait. Exported for tests.
+ * is banked with the share unknown, which the models already handle. A coin younger than
+ * minAgeMinutes doesn't wait at all: its ready moment is short and its read the least likely to
+ * land in time, so a wait cost almost every young coin its decision (2026-10-08). An unknown age
+ * waits. Call it only for a token that is otherwise ready to be decided on: the first call starts
+ * its wait. Exported for tests.
  */
 export function sniperShareReady(
-  scored: Pick<ScoredToken, "mintAddress" | "sniperTop10WalletPct">,
+  scored: Pick<ScoredToken, "mintAddress" | "sniperTop10WalletPct" | "ageMinutes">,
   chainReadAvailable: boolean,
-  maxWaitMs: number,
+  wait: { maxMs: number; minAgeMinutes: number },
   now = Date.now(),
 ): boolean {
   const mint = scored.mintAddress;
-  if (scored.sniperTop10WalletPct !== undefined || !chainReadAvailable || sniperShareUnobtainable(mint)) {
+  const young = scored.ageMinutes !== undefined && scored.ageMinutes < wait.minAgeMinutes;
+  if (
+    scored.sniperTop10WalletPct !== undefined ||
+    !chainReadAvailable ||
+    young ||
+    sniperShareUnobtainable(mint)
+  ) {
     sniperWaitSince.delete(mint);
     return true;
   }
   const since = sniperWaitSince.get(mint);
   if (since === undefined) {
     sniperWaitSince.set(mint, now);
-    return maxWaitMs <= 0;
+    return wait.maxMs <= 0;
   }
-  if (now - since < maxWaitMs) return false;
+  if (now - since < wait.maxMs) return false;
   sniperWaitSince.delete(mint);
   return true;
 }
@@ -1753,14 +1762,17 @@ async function processCandidate(
     // An event waits for the sniper checks when they're required: deciding without them would
     // skip the curator's wallet caps, and an event spent now can't be reopened until the
     // spacing window passes. The contender-first wallet ordering above resolves them quickly.
-    // The top-10 snipers share too, while it can still come and for SNIPER_SHARE_MAX_WAIT_SECONDS
-    // at most (sniperShareReady): the safety cut reads it, and a decision row banked without it
+    // The top-10 snipers share too, while it can still come, for SNIPER_SHARE_MAX_WAIT_SECONDS at
+    // most and not for young coins (sniperShareReady): the safety cut reads it, and a decision row banked without it
     // would teach the models its absence. Checked after the pre-gate, so the wait starts when the
     // token is otherwise ready to be decided on.
     const walletReady = () =>
       !env.CURATED_REQUIRE_WALLET_CHECKS ||
       (walletChecksKnown(scored) &&
-        sniperShareReady(scored, sniperChainAvailable, env.SNIPER_SHARE_MAX_WAIT_SECONDS * 1000));
+        sniperShareReady(scored, sniperChainAvailable, {
+          maxMs: env.SNIPER_SHARE_MAX_WAIT_SECONDS * 1000,
+          minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
+        }));
     if (passesEventPreGate(scored, band) && walletReady()) {
       const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
       // A pick that lost an earlier governor pass re-contends while its event is spent - see

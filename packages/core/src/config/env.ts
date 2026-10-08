@@ -205,6 +205,11 @@ const envSchema = z.object({
   // or keeps failing must not hold decisions back (on 2026-10-08 an unbounded wait cut decisions
   // from about ten every ten minutes to one). 0 = don't wait at all.
   SNIPER_SHARE_MAX_WAIT_SECONDS: z.coerce.number().nonnegative().default(90),
+  // Coins younger than this don't wait for the share at all. A young coin looks ready for a minute
+  // or two at most and its launch is often too new for the read to land: with the 90 s wait, first
+  // decisions on coins under 3 minutes old fell from ~15 an hour to ~1 (2026-10-08), and young
+  // coins are where most wins are. They're decided with the share if it's in, unknown if not.
+  SNIPER_SHARE_WAIT_MIN_AGE_MINUTES: z.coerce.number().nonnegative().default(10),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
   // every few minutes for the band, every minute for a token about to be decided on.
   SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(300),
