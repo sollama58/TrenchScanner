@@ -53,8 +53,13 @@ const BATCH_SIZE = 30;
  * leaving the API's 120 a minute of live refreshes room if the two leave from one address.
  */
 export const DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE = 180;
-/** Lookups that may go out back to back before the per-minute pace applies. */
-const GATE_BURST = 15;
+/**
+ * Lookups that may go out back to back before the per-minute pace applies. A full watchlist
+ * refresh is 30 batches: at 15 the other half queued at 3 a second, which held the scan's refresh
+ * at 5.5 s a cycle (worker health, 2026-10-08) once Jupiter had taken the outcome watcher and the
+ * wallet checks off this budget and it was no longer short.
+ */
+const GATE_BURST = 30;
 
 export interface DexScreenerClientOptions {
   baseUrl?: string;
