@@ -14,6 +14,17 @@ const logger = createLogger("telegram-api");
 
 const API_BASE = "https://api.telegram.org";
 const TIMEOUT_MS = 10_000;
+/** Fetching a token's artwork: public IPFS gateways are slow, and an alert must not wait on one. */
+const IMAGE_TIMEOUT_MS = 6_000;
+/** Telegram takes photos up to 10 MB as an upload; anything bigger is not worth the bandwidth. */
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+/** A picture fetched by us, to upload to Telegram as multipart rather than handed over as a URL. */
+export interface FetchedImage {
+  bytes: Uint8Array;
+  contentType: string;
+  sourceUrl: string;
+}
 
 export interface TelegramUser {
   id: number;
@@ -94,10 +105,26 @@ export class TelegramApi {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
+      // A Blob among the params (an uploaded photo) makes the request multipart; otherwise JSON.
+      const upload = Object.values(params).some((v) => v instanceof Blob);
+      let payload: string | FormData;
+      const headers: Record<string, string> = {};
+      if (upload) {
+        const form = new FormData();
+        for (const [k, v] of Object.entries(params)) {
+          if (v === undefined) continue;
+          if (v instanceof Blob) form.append(k, v, "photo");
+          else form.append(k, typeof v === "string" ? v : JSON.stringify(v));
+        }
+        payload = form;
+      } else {
+        payload = JSON.stringify(params);
+        headers["content-type"] = "application/json";
+      }
       const res = await this.fetchImpl(`${API_BASE}/bot${this.token}/${method}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(params),
+        headers,
+        body: payload,
         signal: controller.signal,
       });
       const body = (await res.json().catch(() => null)) as
@@ -149,16 +176,19 @@ export class TelegramApi {
     });
   }
 
-  /** A photo by https URL (Telegram fetches it) with an HTML caption; same link rules as a message. */
+  /**
+   * A photo with an HTML caption: bytes we fetched (uploaded as multipart) or an https URL for
+   * Telegram to fetch itself. Same link rules as a message.
+   */
   sendPhoto(
     chatId: number | bigint,
-    photoUrl: string,
+    photo: string | FetchedImage,
     captionHtml: string,
     opts: { silent?: boolean } = {},
   ): Promise<TelegramResult<TelegramMessage>> {
     return this.call<TelegramMessage>("sendPhoto", {
       chat_id: String(chatId),
-      photo: photoUrl,
+      photo: typeof photo === "string" ? photo : new Blob([photo.bytes], { type: photo.contentType }),
       caption: captionHtml,
       parse_mode: "HTML",
       disable_notification: opts.silent === true,
@@ -166,10 +196,41 @@ export class TelegramApi {
   }
 
   /**
+   * Downloads a token's artwork so it can be uploaded to Telegram. Telegram fetching the URL
+   * itself was the first design and showed no pictures at all: the launchers' images sit on
+   * public IPFS gateways that answer Telegram's fetcher with 429s and timeouts, and Telegram
+   * turns every such miss into a 400. Null when the fetch fails, times out, is not an image, or
+   * is too big; the caller then tries the URL, then text.
+   */
+  async fetchImage(url: string): Promise<FetchedImage | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), IMAGE_TIMEOUT_MS);
+    try {
+      const res = await this.fetchImpl(url, { signal: controller.signal, redirect: "follow" });
+      const contentType = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+      if (!res.ok || !contentType.startsWith("image/")) {
+        logger.info("token artwork not fetchable", { url, status: res.status, contentType });
+        return null;
+      }
+      const declared = Number(res.headers.get("content-length") ?? 0);
+      if (declared > IMAGE_MAX_BYTES) return null;
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.byteLength === 0 || bytes.byteLength > IMAGE_MAX_BYTES) return null;
+      return { bytes, contentType, sourceUrl: url };
+    } catch (err) {
+      const description = err instanceof Error && err.name === "AbortError" ? "timed out" : String(err);
+      logger.info("token artwork fetch failed", { url, error: description });
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * An alert: the token's picture with the text as its caption when there is a picture and the
-   * text fits a caption, else the text alone. A picture Telegram can't fetch or won't take (a 400:
-   * a dead CDN link, a format it doesn't render) costs nothing but the retry as plain text, so an
-   * alert is never lost to its artwork.
+   * text fits a caption, else the text alone. The picture is fetched here and uploaded; if that
+   * fails the URL is handed to Telegram to try; a picture Telegram won't take (a 400) costs
+   * nothing but the retry as plain text, so an alert is never lost to its artwork.
    */
   async sendAlert(
     chatId: number | bigint,
@@ -177,9 +238,12 @@ export class TelegramApi {
     opts: { silent?: boolean } = {},
   ): Promise<TelegramResult<TelegramMessage>> {
     if (message.imageUrl && message.html.length <= CAPTION_MAX_CHARS) {
-      const withPhoto = await this.sendPhoto(chatId, message.imageUrl, message.html, opts);
+      const fetched = await this.fetchImage(message.imageUrl);
+      const withPhoto = await this.sendPhoto(chatId, fetched ?? message.imageUrl, message.html, opts);
       if (withPhoto.ok || withPhoto.code !== 400) return withPhoto;
-      logger.info("telegram refused the photo, sending the alert as text", {
+      logger.warn("telegram refused the photo, sending the alert as text", {
+        url: message.imageUrl,
+        uploaded: fetched !== null,
         description: withPhoto.description,
       });
     }

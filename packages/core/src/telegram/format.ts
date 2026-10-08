@@ -63,10 +63,24 @@ export interface AlertMessage {
   imageUrl: string | null;
 }
 
-/** The token's logo if it is a usable https URL, else nothing: Telegram fetches it itself. */
+/** The longest side of the picture sent with an alert, in px. Telegram shows it at about this size. */
+export const ALERT_IMAGE_PX = 640;
+
+/**
+ * The token's logo as the URL to fetch for the alert, or nothing. Launchers' images are IPFS
+ * files on whichever public gateway the launcher used (ipfs.io rate-limits with 429s, and the
+ * files are often megabytes); an IPFS image is read through Pump.fun's Pinata gateway instead,
+ * resized there, the same trick the dashboard's thumbnails use. Anything else must be https.
+ */
 export function alertImage(token: Pick<AlertToken, "imageUrl">): string | null {
   const url = token.imageUrl?.trim() ?? "";
-  return /^https:\/\/\S+$/.test(url) ? url : null;
+  if (!/^https:\/\/\S+$/.test(url)) return null;
+  const cid =
+    /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?(?:[?#].*)?$/.exec(url)?.[1] ??
+    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?(?:[?#].*)?$/.exec(url)?.[1];
+  return cid
+    ? `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${ALERT_IMAGE_PX}&img-height=${ALERT_IMAGE_PX}&img-fit=scale-down`
+    : url;
 }
 
 /**
