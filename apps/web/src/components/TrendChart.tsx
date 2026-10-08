@@ -93,7 +93,10 @@ export function TrendChart({ labels, series, kind, height = 220, partialLast = f
     const nice = niceScale(lo, hi * 1.08 || 1);
     return { ...nice, max: unit === "pct" ? Math.min(100, Math.max(nice.max, nice.step)) : nice.max };
   };
-  const scales = new Map<Unit, ReturnType<typeof scaleFor>>(units.map((u) => [u, scaleFor(u)]));
+  // The left axis always has a scale, even with no series (an empty breakdown), so the axis can draw.
+  const scales = new Map<Unit, ReturnType<typeof scaleFor>>(
+    (units.length ? units : [left]).map((u) => [u, scaleFor(u)]),
+  );
   const y = (v: number, unit: Unit) => {
     const sc = scales.get(unit)!;
     const span = sc.max - sc.min || 1;
