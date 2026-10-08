@@ -70,6 +70,8 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
   const [view, setView] = useState<View>(loadView);
   const [panels, setPanels] = useState<Panel[]>(loadPanels);
   const [nowDays, setNowDays] = useState<Days>(7);
+  // The charts start folded away; most visits only want the headline numbers and Right now.
+  const [chartsOpen, setChartsOpen] = useState(false);
   useEffect(() => {
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(view));
@@ -248,57 +250,76 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
                 </p>
               </div>
               <div className="feed-controls">
-                <label className="lht-add">
-                  <PlusIcon size={14} />
-                  <select
-                    value=""
-                    aria-label="Add a chart"
-                    onChange={(e) => {
-                      const preset = PRESETS[Number(e.target.value)];
-                      if (!preset) return;
-                      const made = preset.make();
-                      setPanels((ps) => (hasPanel(ps, made) ? ps : [...ps, made]));
-                    }}
-                  >
-                    <option value="" disabled>
-                      Add chart…
-                    </option>
-                    {PRESETS.map((p, i) => {
-                      const active = hasPanel(panels, p.make());
-                      return (
-                        <option key={p.label} value={i} disabled={active}>
-                          {p.label}
-                          {active ? " (on the page)" : ""}
+                {chartsOpen && (
+                  <>
+                    <label className="lht-add">
+                      <PlusIcon size={14} />
+                      <select
+                        value=""
+                        aria-label="Add a chart"
+                        onChange={(e) => {
+                          const preset = PRESETS[Number(e.target.value)];
+                          if (!preset) return;
+                          const made = preset.make();
+                          setPanels((ps) => (hasPanel(ps, made) ? ps : [...ps, made]));
+                        }}
+                      >
+                        <option value="" disabled>
+                          Add chart…
                         </option>
-                      );
-                    })}
-                  </select>
-                </label>
-                <button type="button" className="ghost stats-btn" onClick={() => setPanels(defaultPanels())}>
-                  Reset
+                        {PRESETS.map((p, i) => {
+                          const active = hasPanel(panels, p.make());
+                          return (
+                            <option key={p.label} value={i} disabled={active}>
+                              {p.label}
+                              {active ? " (on the page)" : ""}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="ghost stats-btn"
+                      onClick={() => setPanels(defaultPanels())}
+                    >
+                      Reset
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  className="ghost stats-btn"
+                  aria-expanded={chartsOpen}
+                  aria-controls="lht-charts-body"
+                  onClick={() => setChartsOpen((o) => !o)}
+                >
+                  {chartsOpen ? "Hide charts" : "Show charts"}
                 </button>
               </div>
             </header>
-            {panels.length === 0 && (
+            {chartsOpen && panels.length === 0 && (
               <p className="muted small">No charts. Add one above, or reset to the defaults.</p>
             )}
-            <div className="lht-grid">
-              {panels.map((p, i) => (
-                <ChartPanel
-                  key={p.id}
-                  panel={p}
-                  history={d}
-                  api={api}
-                  view={view}
-                  targets={targets}
-                  first={i === 0}
-                  last={i === panels.length - 1}
-                  onChange={(f) => update(p.id, f)}
-                  onRemove={() => remove(p.id)}
-                  onMove={(dir) => move(p.id, dir)}
-                />
-              ))}
-            </div>
+            {chartsOpen && (
+              <div className="lht-grid" id="lht-charts-body">
+                {panels.map((p, i) => (
+                  <ChartPanel
+                    key={p.id}
+                    panel={p}
+                    history={d}
+                    api={api}
+                    view={view}
+                    targets={targets}
+                    first={i === 0}
+                    last={i === panels.length - 1}
+                    onChange={(f) => update(p.id, f)}
+                    onRemove={() => remove(p.id)}
+                    onMove={(dir) => move(p.id, dir)}
+                  />
+                ))}
+              </div>
+            )}
           </section>
         </>
       )}
