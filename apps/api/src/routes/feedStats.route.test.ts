@@ -117,10 +117,11 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
         disqualified: false,
         peak24hReturnPct: 120,
         simReturnPct: 60,
+        // Token B ran on after the call's watch: a later scan saw it at 12x the call's market cap,
+        // which the worker's peak pass banked on the call.
+        peakMcapUsd: 600_000,
       },
     });
-    // Token B ran on after the call's watch: a later scan saw it at 12x the call's market cap.
-    await prisma.tokenSnapshot.create({ data: { tokenId: b, priceUsd: 0.0012, marketCapUsd: 600_000 } });
     app = await buildServer(env);
   });
 
@@ -146,7 +147,8 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
       hit2x: 2,
       hit2xPct: 100,
       hit4x: 1,
-      best: { symbol: "AAA", peakPct: 400 },
+      // Token B's model call, folded into its filter twin, carries the banked 12x high.
+      best: { symbol: "BBB", peakPct: 1100 },
     });
   });
 

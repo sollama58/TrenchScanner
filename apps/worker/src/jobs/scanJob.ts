@@ -3,6 +3,7 @@ import {
   recordRunProgress,
   floatArrayParam,
   prisma,
+  Prisma,
   createLogger,
   refreshAndFilterToBand,
   scanBand,
@@ -37,7 +38,7 @@ import {
   EMPTY_TRADE_FLOW,
   type NarrativeRead,
 } from "@trenchscanner/core";
-import type { Prisma, Token } from "@prisma/client";
+import type { Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
 import {
   flushNarrativeRequests,
@@ -388,8 +389,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // Tokens someone currently has open on a Live Feed page (see the comment on
   // Token.lastViewedAt) keep getting re-scanned regardless of mcap band, so "Now"/% change
   // stays live for a genuine breakout winner instead of freezing the moment it leaves the
-  // MCAP_FILTER_MIN/MAX band. Every viewed token is asked for, since the refresh keeps only the
-  // in-band ones; those it already covers are dropped from the answer below.
+  // MCAP_FILTER_MIN/MAX band. A viewed token on the watchlist is read out of the refresh's own
+  // answer (it was just priced there, in band or not); only the rest are asked for here. Those
+  // the refresh already scores in band are dropped below.
   //
   // Looked up alongside the watchlist refresh, on the same tight timeouts and deadline: this
   // lookup used to run after it on fetchJson's defaults (10s, two retries), and whenever
@@ -405,11 +407,13 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     orderBy: { lastViewedAt: "desc" },
     take: env.LIVE_PRICE_MAX_TRACKED,
   });
+  const trackedMints = new Set(tracked.map((t) => t.mintAddress));
+  const viewedOffWatchlist = activelyViewed.filter((t) => !trackedMints.has(t.mintAddress));
   const viewedLookup =
-    activelyViewed.length > 0
+    viewedOffWatchlist.length > 0
       ? deps.dexScreener
           .getTokensByAddresses(
-            activelyViewed.map((t) => t.mintAddress),
+            viewedOffWatchlist.map((t) => t.mintAddress),
             5,
             { timeoutMs: 5000, retries: 1, deadlineMs: 10_000 },
           )
@@ -421,6 +425,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
 
   let candidates: CandidateToken[];
   let refreshPartial: boolean;
+  let refreshedMarketData: CandidateToken[];
   try {
     const refreshed = await refreshAndFilterToBand(
       deps.dexScreener,
@@ -429,6 +434,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     );
     candidates = refreshed.inBand;
     refreshPartial = refreshed.partial;
+    refreshedMarketData = refreshed.marketData;
     // The stamp the liveness-prioritized selection above runs on.
     await stampLiveMarketCaps(refreshed.liveMarketCaps, env);
   } catch (err) {
@@ -443,7 +449,12 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   });
 
   const alreadyCovered = new Set(candidates.map((c) => c.mintAddress));
-  const viewedMarketData = (await viewedLookup).filter((c) => !alreadyCovered.has(c.mintAddress));
+  const viewedMarketData = viewedOutOfBand(
+    activelyViewed,
+    refreshedMarketData,
+    await viewedLookup,
+    alreadyCovered,
+  );
   if (viewedMarketData.length > 0) {
     candidates.push(...viewedMarketData);
     logger.info("kept scanning actively-viewed tokens outside the mcap band", {
@@ -935,6 +946,26 @@ async function discoverWithin<T>(
   return fallback;
 }
 
+/**
+ * The actively-viewed tokens' market data the cycle scans on top of the band: each one from the
+ * watchlist refresh's answer when the refresh priced it, else from the separate viewed lookup,
+ * in the order they were viewed, minus the mints already in band. Exported for tests.
+ */
+export function viewedOutOfBand(
+  activelyViewed: { mintAddress: string }[],
+  refreshed: CandidateToken[],
+  lookedUp: CandidateToken[],
+  alreadyCovered: Set<string>,
+): CandidateToken[] {
+  const byMint = new Map<string, CandidateToken>();
+  for (const c of lookedUp) byMint.set(c.mintAddress, c);
+  for (const c of refreshed) byMint.set(c.mintAddress, c);
+  return activelyViewed.flatMap((t) => {
+    const c = byMint.get(t.mintAddress);
+    return c && !alreadyCovered.has(t.mintAddress) ? [c] : [];
+  });
+}
+
 /** The coins Pump.fun gave a market cap for, as reviveMovingMints takes them. */
 function movingCoins(coins: DiscoveredCoin[]): { mintAddress: string; marketCapUsd: number }[] {
   return coins.flatMap((c) =>
@@ -961,6 +992,33 @@ function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): Wa
   };
 }
 
+/** How often a live mint's lastLiveAt/lastMcapUsd is rewritten - see liveStampDue. */
+const LIVE_STAMP_THROTTLE_SECONDS = 120;
+
+/**
+ * Whether a live mint's stamp is worth rewriting: the WHERE condition stampLiveMarketCaps and
+ * reviveMovingMints share, for an `UPDATE "Token" AS t ... FROM ... AS v(mint, mcap)`.
+ *
+ * One stamp every couple of minutes is plenty for the liveness horizon (two hours) and the
+ * near-band tier; stamping every live mint every cycle rewrote ~900 Token rows a cycle, and twice
+ * that at a 30-second cadence. A mint whose cap crossed in or out of the near-band tier is stamped
+ * at once, since tier membership is what selection uses. The throttle is held under half the
+ * probation window - the alive cutoff selectWatchlist reads lastLiveAt against - so a stamp
+ * skipped here can never be the one that lets a live mint age out of selection.
+ */
+function liveStampDue(env: Env): Prisma.Sql {
+  // The near-band tier selectWatchlist ranks on.
+  const tierMin = env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD;
+  const tierMax = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
+  const throttleSeconds = Math.min(LIVE_STAMP_THROTTLE_SECONDS, (env.WATCHLIST_PROBATION_MINUTES * 60) / 2);
+  return Prisma.sql`(
+        t."lastLiveAt" IS NULL
+        OR t."lastLiveAt" < now() - ${throttleSeconds}::float8 * interval '1 second'
+        OR (t."lastMcapUsd" BETWEEN ${tierMin}::float8 AND ${tierMax}::float8)
+          IS DISTINCT FROM (v.mcap BETWEEN ${tierMin}::float8 AND ${tierMax}::float8)
+      )`;
+}
+
 /**
  * Stamps lastLiveAt and lastMcapUsd - what the liveness-prioritized selection in selectWatchlist
  * runs on - for the mints the refresh found market data for. One statement for the whole batch;
@@ -974,24 +1032,14 @@ export async function stampLiveMarketCaps(
   if (liveMarketCaps.length === 0) return;
   const mints = liveMarketCaps.map((m) => m.mintAddress);
   const mcaps = floatArrayParam(liveMarketCaps.map((m) => m.marketCapUsd));
-  // The near-band tier selectWatchlist ranks on.
-  const tierMin = env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD;
-  const tierMax = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
   await prisma.$executeRaw`
     UPDATE "Token" AS t
     SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
     FROM unnest(${mints}::text[], ${mcaps}::text::float8[]) AS v(mint, mcap)
     WHERE t."mintAddress" = v.mint
-      -- One stamp every couple of minutes is plenty for the liveness horizon (two hours) and the
-      -- near-band tier; stamping every live mint every cycle rewrote ~900 Token rows a cycle, and
-      -- twice that at a 30-second cadence. A mint whose cap crossed in or out of the near-band
-      -- tier is stamped at once, since tier membership is what selection uses.
-      AND (
-        t."lastLiveAt" IS NULL
-        OR t."lastLiveAt" < now() - interval '2 minutes'
-        OR (t."lastMcapUsd" BETWEEN ${tierMin}::float8 AND ${tierMax}::float8)
-          IS DISTINCT FROM (v.mcap BETWEEN ${tierMin}::float8 AND ${tierMax}::float8)
-      )`.catch((err) => logger.warn("failed to stamp lastLiveAt", { error: String(err) }));
+      AND ${liveStampDue(env)}`.catch((err) =>
+    logger.warn("failed to stamp lastLiveAt", { error: String(err) }),
+  );
 }
 
 /**
@@ -999,7 +1047,8 @@ export async function stampLiveMarketCaps(
  * stamps lastLiveAt (so they count as alive) and lastMcapUsd (what the near-band tier of
  * selectWatchlist ranks on) for those already known. Only mints at or above the near-band floor
  * are worth a slot - below it they'd be stamped into the launch-level tier and change nothing.
- * Mints not yet in the table are left to addNewMintsToWatchlist. Returns how many rows changed.
+ * Mints not yet in the table are left to addNewMintsToWatchlist, and ones stamped moments ago
+ * are left alone (see liveStampDue). Returns how many rows changed.
  */
 export async function reviveMovingMints(
   moving: { mintAddress: string; marketCapUsd: number }[],
@@ -1017,7 +1066,12 @@ export async function reviveMovingMints(
     UPDATE "Token" AS t
     SET "lastLiveAt" = now(), "lastMcapUsd" = v.mcap
     FROM unnest(${mints}::text[], ${mcaps}::text::float8[]) AS v(mint, mcap)
-    WHERE t."mintAddress" = v.mint`.catch((err) => {
+    WHERE t."mintAddress" = v.mint
+      -- The same throttle as the refresh's stamp: the ~110 recently-traded coins were rewritten
+      -- every cycle whether or not anything selection reads had changed. A row stamped within the
+      -- window is already alive for selectWatchlist, and a cap that moved it into the near-band
+      -- tier is still written at once - which is the whole of what a revival is for.
+      AND ${liveStampDue(env)}`.catch((err) => {
     logger.warn("failed to revive moving mints", { error: String(err) });
     return 0;
   });

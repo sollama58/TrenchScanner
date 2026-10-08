@@ -41,6 +41,8 @@ describe("refreshAndFilterToBand", () => {
     });
     expect(result.inBand.map((t) => t.mintAddress)).toEqual(["in-band"]);
     expect(result.liveMints.sort()).toEqual(["below", "in-band"]);
+    // The whole answer too, out-of-band rows included: the scan reads its viewed tokens from it.
+    expect(result.marketData.map((t) => t.mintAddress)).toEqual(["in-band", "below"]);
     // "dead" was asked about and answered (no pair): a complete refresh, not a partial one.
     expect(result.partial).toBe(false);
   });
@@ -73,6 +75,7 @@ describe("refreshAndFilterToBand", () => {
       inBand: [],
       liveMints: [],
       liveMarketCaps: [],
+      marketData: [],
       partial: false,
     });
   });

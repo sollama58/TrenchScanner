@@ -445,16 +445,39 @@ export async function trainCurator(
   // scan, and the candidate watcher misses ticks inside the very windows whose
   // resolution the labels and the public grades depend on. Training would degrade the data it
   // trains on. Yielding costs a fraction of the runtime and keeps both on cadence.
+  //
+  // Each row is kept sparse: of a feature's value and its missing indicator only one is ever
+  // non-zero, so at least half of every dense pass multiplied by zero. The non-zero entries stay
+  // in ascending index order, so the sums add the same terms in the same order and the weights
+  // come out bit-for-bit what the dense loops gave (a term of w * 0 never moved a sum).
+  const rowIdx: Uint32Array[] = [];
+  const rowVal: Float64Array[] = [];
+  for (const x of xs) {
+    let nz = 0;
+    for (let j = 0; j < dim; j++) if (x[j] !== 0) nz++;
+    const idx = new Uint32Array(nz);
+    const val = new Float64Array(nz);
+    let k = 0;
+    for (let j = 0; j < dim; j++) {
+      if (x[j] === 0) continue;
+      idx[k] = j;
+      val[k++] = x[j]!;
+    }
+    rowIdx.push(idx);
+    rowVal.push(val);
+  }
+  const grad = new Float64Array(dim);
   for (let iter = 0; iter < ITERATIONS; iter++) {
     if (iter > 0 && iter % YIELD_EVERY_ITERATIONS === 0) await yieldToEventLoop();
-    const grad = new Array<number>(dim).fill(0);
+    grad.fill(0);
     let gradBias = 0;
     for (let i = 0; i < xs.length; i++) {
-      const x = xs[i]!;
+      const idx = rowIdx[i]!;
+      const val = rowVal[i]!;
       let z = bias;
-      for (let j = 0; j < dim; j++) z += weights[j]! * x[j]!;
+      for (let k = 0; k < idx.length; k++) z += weights[idx[k]!]! * val[k]!;
       const err = (sigmoid(z) - ys[i]!) * sampleWeights[i]!;
-      for (let j = 0; j < dim; j++) grad[j] = grad[j]! + err * x[j]!;
+      for (let k = 0; k < idx.length; k++) grad[idx[k]!] = grad[idx[k]!]! + err * val[k]!;
       gradBias += err;
     }
     // Simple decay keeps late iterations from oscillating; the bias is never regularized.
