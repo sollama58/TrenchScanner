@@ -44,6 +44,19 @@ function settleWith(inFlight: () => Promise<void> | undefined): ScheduledJob["se
   };
 }
 
+/**
+ * Thrown by a job whose run worked but found something wrong it should report: the run is
+ * recorded as failed with this message, and `meta` is kept on the heartbeat like a success's.
+ */
+export class JobFailure extends Error {
+  constructor(
+    message: string,
+    readonly meta: JobRunMeta,
+  ) {
+    super(message);
+  }
+}
+
 /** What a job may hand back about its own run - stored on its heartbeat row and served by
  *  GET /health/worker, which is the only view of production timing that needs no log access. */
 export type JobRunMeta = Record<string, string | number | boolean | null | Record<string, number>>;
@@ -150,10 +163,12 @@ export function scheduleInterval(
       });
     } catch (err) {
       logger.error("job threw an unhandled error", { job: name, error: String(err) });
+      // A job that fails on purpose (pipeline-watch flagging a stall) keeps its counts on the row.
+      const errMeta = err instanceof JobFailure ? err.meta : {};
       await recordHeartbeat(name, {
         success: false,
-        error: String(err),
-        meta: { durationMs: Date.now() - startedAt, intervalMs },
+        error: err instanceof JobFailure ? err.message : String(err),
+        meta: { ...errMeta, durationMs: Date.now() - startedAt, intervalMs },
       }).catch(() => {
         // If the DB itself is unreachable, the heartbeat write will fail too - nothing more we
         // can do here, the original error is already logged above.

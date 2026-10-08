@@ -19,7 +19,8 @@ export type HeartbeatJob =
   | "model-backup"
   | "score-weights"
   | "lighthouse-rollup"
-  | "telegram-dispatch";
+  | "telegram-dispatch"
+  | "pipeline-watch";
 
 /**
  * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
@@ -40,6 +41,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "burn-scan": "scanner",
   "match-peaks": "scanner",
   "telegram-dispatch": "scanner",
+  // Holds the Telegram bot token and the admin wallets it notifies (the trainer has neither).
+  "pipeline-watch": "scanner",
   cleanup: "trainer",
   "outcome-tracking": "trainer",
   "curator-training": "trainer",
