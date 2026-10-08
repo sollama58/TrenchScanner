@@ -31,12 +31,14 @@ function shortWallet(address: string): string {
   return address.length > 12 ? `${address.slice(0, 4)}…${address.slice(-4)}` : address;
 }
 
-/** "/start code" | "/start@Bot code" | "/link code" -> { command, arg }. */
-export function parseCommand(text: string | undefined): { command: string; arg: string } | null {
+/** "/start code" | "/start@Bot code" | "/link code" -> { command, arg, bot? }. */
+export function parseCommand(
+  text: string | undefined,
+): { command: string; arg: string; bot?: string } | null {
   if (!text) return null;
-  const m = /^\/([a-zA-Z_]+)(?:@[A-Za-z0-9_]+)?(?:\s+(.*))?$/s.exec(text.trim());
+  const m = /^\/([a-zA-Z_]+)(?:@([A-Za-z0-9_]+))?(?:\s+(.*))?$/s.exec(text.trim());
   if (!m) return null;
-  return { command: m[1]!.toLowerCase(), arg: (m[2] ?? "").trim() };
+  return { command: m[1]!.toLowerCase(), arg: (m[3] ?? "").trim(), ...(m[2] ? { bot: m[2] } : {}) };
 }
 
 const HELP_PRIVATE =
@@ -47,7 +49,15 @@ const HELP_GROUP =
   "<b>Filters → Telegram alerts</b>, presses <b>Link a group</b> and picks this group. " +
   "Or paste the code there as <code>/link &lt;code&gt;</code> in this group.";
 
-export async function handleTelegramUpdate(api: TelegramApi, update: TelegramUpdate): Promise<UpdateOutcome> {
+export async function handleTelegramUpdate(
+  api: TelegramApi,
+  update: TelegramUpdate,
+  /**
+   * The bot's @username (null when unknown), asked only for a command addressed to a bot by name:
+   * one addressed to another bot is left to that bot.
+   */
+  opts: { botUsername?: () => Promise<string | null> } = {},
+): Promise<UpdateOutcome> {
   if (update.my_chat_member) {
     const change = update.my_chat_member;
     const status = change.new_chat_member.status;
@@ -80,6 +90,11 @@ export async function handleTelegramUpdate(api: TelegramApi, update: TelegramUpd
   if (!message) return { action: "ignored" };
   const parsed = parseCommand(message.text);
   if (!parsed) return { action: "ignored" };
+  // A bot that is a group admin sees every command there, "/stop@OtherBot" included.
+  if (parsed.bot && opts.botUsername) {
+    const me = await opts.botUsername();
+    if (me && parsed.bot.toLowerCase() !== me.toLowerCase()) return { action: "ignored" };
+  }
   const chat = message.chat;
   const chatId = BigInt(chat.id);
   const isPrivate = chat.type === "private";
@@ -216,7 +231,16 @@ export function partsText(hidden: readonly string[]): string {
   return lines.join("\n");
 }
 
+/**
+ * An admin posting with "Remain anonymous" on: Telegram sends it as the group itself, from its
+ * GroupAnonymousBot stand-in, and only an admin of this chat can post as this chat.
+ */
+function isAnonymousAdmin(message: TelegramMessage): boolean {
+  return message.sender_chat?.id === message.chat.id;
+}
+
 async function isGroupAdmin(api: TelegramApi, message: TelegramMessage): Promise<boolean> {
+  if (isAnonymousAdmin(message)) return true;
   if (!message.from) return false;
   const member = await api.getChatMember(message.chat.id, message.from.id);
   return member.ok && GROUP_ADMIN_STATUSES.has(member.result.status);
@@ -232,12 +256,14 @@ async function link(api: TelegramApi, message: TelegramMessage, code: string): P
     await api.sendMessage(chatId, "Only a group admin can link this group to a TrenchScanner account.");
     return { action: "refused" };
   }
+  // An anonymous admin's `from` is Telegram's stand-in bot, not a person.
+  const from = isAnonymousAdmin(message) ? undefined : message.from;
   const result = await redeemTelegramLinkCode(code, {
     chatId,
     kind: chat.type,
     title: chatTitle(chat),
-    linkedByTelegramId: message.from ? BigInt(message.from.id) : null,
-    linkedByName: message.from ? userDisplayName(message.from) : null,
+    linkedByTelegramId: from ? BigInt(from.id) : null,
+    linkedByName: from ? userDisplayName(from) : isAnonymousAdmin(message) ? "Anonymous admin" : null,
   });
   if (!result.ok) {
     logger.warn("rejected a telegram link code", { chatId: String(chatId) });

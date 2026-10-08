@@ -51,6 +51,14 @@ describe("sendAlert", () => {
     await api.sendAlert(5, { html: "y".repeat(1025), imageUrl: "https://cdn.example/a.png" });
     expect(api.calls.map((c) => c.method)).toEqual(["sendMessage", "sendMessage"]);
   });
+
+  it("measures the caption as Telegram does, without the markup", async () => {
+    const api = new FakeTelegramApi(async () => image());
+    // Well over 1024 characters of HTML, but under 1000 of text: still a caption.
+    const html = `<a href="https://trenchscanner.app/?sage=${"m".repeat(200)}">${"y".repeat(990)}</a> &amp; &lt;b&gt;`;
+    await api.sendAlert(5, { html, imageUrl: "https://cdn.example/a.png" });
+    expect(api.calls.map((c) => c.method)).toEqual(["sendPhoto"]);
+  });
 });
 
 describe("fetchImage safety", () => {

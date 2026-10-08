@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
 import { createLogger } from "../logger.js";
-import { CAPTION_MAX_CHARS } from "./format.js";
+import { CAPTION_MAX_CHARS, captionLength } from "./format.js";
 
 /**
  * The slice of Telegram's Bot API this app uses, over plain fetch. Deliberately not fetchJson:
@@ -142,6 +142,8 @@ export interface TelegramChatInfo {
 export interface TelegramMessage {
   message_id: number;
   from?: TelegramUser;
+  /** Who posted, when it was a chat: the group itself for an admin posting anonymously. */
+  sender_chat?: TelegramChatInfo;
   chat: TelegramChatInfo;
   date: number;
   text?: string;
@@ -357,7 +359,7 @@ export class TelegramApi {
     message: { html: string; imageUrl: string | null },
     opts: { silent?: boolean } = {},
   ): Promise<TelegramResult<TelegramMessage>> {
-    if (message.imageUrl && message.html.length <= CAPTION_MAX_CHARS) {
+    if (message.imageUrl && captionLength(message.html) <= CAPTION_MAX_CHARS) {
       const fetched = await this.fetchImage(message.imageUrl);
       const withPhoto = await this.sendPhoto(chatId, fetched ?? message.imageUrl, message.html, opts);
       if (withPhoto.ok || withPhoto.code !== 400) return withPhoto;
