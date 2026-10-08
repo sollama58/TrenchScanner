@@ -73,6 +73,22 @@ function canonicalTimeZone(tz: string): string | null {
   }
 }
 
+/**
+ * Windows "Signals at a glance" can be read over. A day and a week are parts of the full answer
+ * above, so they come from its cache; the month has a cache of its own holding just the signals,
+ * since the full answer's dozen aggregates over a month of reads would cost far more than these.
+ */
+export const SIGNAL_WINDOWS = [1, 7, 30] as const;
+export const lighthouseSignalsQuerySchema = z.object({
+  days: z.coerce
+    .number()
+    .int()
+    .refine((d) => (SIGNAL_WINDOWS as readonly number[]).includes(d), {
+      message: `days must be one of ${SIGNAL_WINDOWS.join(", ")}`,
+    })
+    .default(1),
+});
+
 /** The tide chart's buckets: hourly over a day, six-hourly over a week (28 bars either way, give or take). */
 const bucketHoursFor = (days: number) => (days <= 1 ? 1 : 6);
 
@@ -264,6 +280,36 @@ function screenedByHourOfDay(rows: ScreenedHourRow[], timeZone: string) {
   };
 }
 
+/**
+ * "Signals at a glance": what TokenSage said about each coin read in the window - its X link
+ * check (deep reads only), whether its story is in the news, whether it copies a recent coin, and
+ * what it trades against. Shared by the full window and the signals-only windows below.
+ */
+function signalQueries(since: Date) {
+  return [
+    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
+      SELECT "xVerdict" AS label, count(*) AS count FROM "TokenNarrative"
+      WHERE "checkedAt" > ${since} AND depth = 'full' AND status <> 'failed' AND "xVerdict" IS NOT NULL
+      GROUP BY 1 ORDER BY 2 DESC`,
+    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
+      SELECT CASE WHEN "trendMatched" THEN 'in the news' ELSE 'not in the news' END AS label,
+             count(*) AS count
+      FROM "TokenNarrative"
+      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "trendMatched" IS NOT NULL
+      GROUP BY 1 ORDER BY 2 DESC`,
+    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
+      SELECT CASE WHEN "copiesRecent" THEN 'copies a recent coin' ELSE 'original' END AS label,
+             count(*) AS count
+      FROM "TokenNarrative"
+      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "copiesRecent" IS NOT NULL
+      GROUP BY 1 ORDER BY 2 DESC`,
+    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
+      SELECT "pairKind" AS label, count(*) AS count FROM "TokenNarrative"
+      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "pairKind" IS NOT NULL
+      GROUP BY 1 ORDER BY 2 DESC LIMIT 6`,
+  ] as const;
+}
+
 export async function buildMarketLighthouse(env: Env, days: number) {
   const now = Date.now();
   const since = new Date(now - days * DAY_MS);
@@ -279,9 +325,9 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     referentSupport,
     flags,
     xVerdicts,
-    pairKinds,
-    copies,
     news,
+    copies,
+    pairKinds,
     averages,
     alertRows,
     screened,
@@ -334,26 +380,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
       SELECT f AS label, count(*) AS count FROM "TokenNarrative", unnest(flags) f
       WHERE "checkedAt" > ${since} AND status <> 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 10`,
-    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
-      SELECT "xVerdict" AS label, count(*) AS count FROM "TokenNarrative"
-      WHERE "checkedAt" > ${since} AND depth = 'full' AND status <> 'failed' AND "xVerdict" IS NOT NULL
-      GROUP BY 1 ORDER BY 2 DESC`,
-    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
-      SELECT "pairKind" AS label, count(*) AS count FROM "TokenNarrative"
-      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "pairKind" IS NOT NULL
-      GROUP BY 1 ORDER BY 2 DESC LIMIT 6`,
-    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
-      SELECT CASE WHEN "copiesRecent" THEN 'copies a recent coin' ELSE 'original' END AS label,
-             count(*) AS count
-      FROM "TokenNarrative"
-      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "copiesRecent" IS NOT NULL
-      GROUP BY 1 ORDER BY 2 DESC`,
-    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
-      SELECT CASE WHEN "trendMatched" THEN 'in the news' ELSE 'not in the news' END AS label,
-             count(*) AS count
-      FROM "TokenNarrative"
-      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "trendMatched" IS NOT NULL
-      GROUP BY 1 ORDER BY 2 DESC`,
+    ...signalQueries(since),
     prisma.$queryRaw<{ referent_confidence: number | null; x_fit: number | null; newest: Date | null }[]>`
       SELECT avg("referentConfidence")::float8 AS referent_confidence, avg("xFit")::float8 AS x_fit,
              max("checkedAt") AS newest
@@ -468,7 +495,82 @@ export async function buildMarketLighthouse(env: Env, days: number) {
   };
 }
 
+/**
+ * "Signals at a glance" alone, for a window the full answer doesn't cover: the four signal splits,
+ * how many coins were read (deep reads decide whether the X and news checks can show at all), and
+ * how calls on originals did against calls on copies.
+ */
+export async function buildLighthouseSignals(days: number): Promise<LighthouseSignals> {
+  const since = new Date(Date.now() - days * DAY_MS);
+  const [byDepthStatus, [xVerdicts, news, copies, pairKinds], copyRows] = await Promise.all([
+    prisma.tokenNarrative.groupBy({
+      by: ["depth"],
+      where: { checkedAt: { gt: since }, status: { not: "failed" } },
+      _count: { _all: true },
+    }),
+    Promise.all(signalQueries(since)),
+    // Only the calls whose coin TokenSage placed as original or copy, and only what the tallies read.
+    prisma.$queryRaw<Pick<AlertOutcomeRow, "hit2x" | "hit4x" | "hit10x" | "sim_return" | "copies_recent">[]>`
+      SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
+             a."simReturnPct"::float8 AS sim_return, n."copiesRecent" AS copies_recent
+      FROM "CuratedAlert" a
+      JOIN "Token" t ON t.id = a."tokenId"
+      JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
+      WHERE a."createdAt" > ${since} AND n.status <> 'failed' AND n."copiesRecent" IS NOT NULL
+      ORDER BY a."createdAt" DESC
+      LIMIT 20000`,
+  ]);
+  let described = 0;
+  let deep = 0;
+  for (const g of byDepthStatus) {
+    described += g._count._all;
+    if (g.depth === "full") deep += g._count._all;
+  }
+  const byCopy = new Map<string, OutcomeTally>();
+  for (const row of copyRows) {
+    const full: AlertOutcomeRow = {
+      ...row,
+      status: null,
+      categories: null,
+      main_category: null,
+      x_verdict: null,
+      referent_kind: null,
+      flags: null,
+    };
+    tally(byCopy, row.copies_recent ? "copies a recent coin" : "original", full);
+  }
+  return {
+    window: { days, since },
+    reads: { described, deep },
+    xVerdicts: counts(xVerdicts),
+    news: counts(news),
+    copies: counts(copies),
+    pairKinds: counts(pairKinds),
+    outcomes: { byCopy: sortedTallies(byCopy).map(slimTally) },
+  };
+}
+
 type WindowLighthouse = Awaited<ReturnType<typeof buildMarketLighthouse>>;
+export interface LighthouseSignals {
+  window: { days: number; since: Date };
+  reads: { described: number; deep: number };
+  xVerdicts: WindowLighthouse["xVerdicts"];
+  news: WindowLighthouse["news"];
+  copies: WindowLighthouse["copies"];
+  pairKinds: WindowLighthouse["pairKinds"];
+  outcomes: { byCopy: LighthouseTally[] };
+}
+
+/** The signals part of a full window's answer, in the signals-only shape. */
+const signalsOf = (m: WindowLighthouse): LighthouseSignals => ({
+  window: { days: m.window.days, since: m.window.since },
+  reads: { described: m.reads.described, deep: m.reads.deep },
+  xVerdicts: m.xVerdicts,
+  news: m.news,
+  copies: m.copies,
+  pairKinds: m.pairKinds,
+  outcomes: { byCopy: m.outcomes.byCopy },
+});
 type ScreenedByHourOfDay = ReturnType<typeof screenedByHourOfDay>;
 export type MarketLighthouse = Omit<WindowLighthouse, "screened"> & {
   screened: WindowLighthouse["screened"] & { byHourOfDay: ScreenedByHourOfDay };
@@ -498,6 +600,22 @@ export function createLighthouseCache() {
     }
     return cache;
   };
+  const signalCaches = new Map<number, SharedCache<LighthouseSignals>>();
+  const signalCache = (days: number) => {
+    let cache = signalCaches.get(days);
+    if (!cache) {
+      cache = new SharedCache<LighthouseSignals>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
+      // Bounded by the schema: one per SIGNAL_WINDOWS outside LIGHTHOUSE_WINDOWS.
+      signalCaches.set(days, cache);
+    }
+    return cache;
+  };
+  const isFullWindow = (days: number) => (LIGHTHOUSE_WINDOWS as readonly number[]).includes(days);
+  /** "Signals at a glance" for a window: a day or a week from the full answer's cache, else its own. */
+  const signals = async (env: Env, days: number): Promise<LighthouseSignals> =>
+    isFullWindow(days)
+      ? signalsOf(await windowCache(days).get(() => buildMarketLighthouse(env, days)))
+      : signalCache(days).get(() => buildLighthouseSignals(days));
   const read = async (env: Env, days: number, timeZone = "UTC"): Promise<MarketLighthouse> => {
     let hourCache = hourCaches.get(timeZone);
     if (!hourCache) {
@@ -520,6 +638,8 @@ export function createLighthouseCache() {
     for (const days of LIGHTHOUSE_WINDOWS)
       await windowCache(days).warm(() => buildMarketLighthouse(env, days));
     await hoursCache.warm(screenedHours);
+    for (const days of SIGNAL_WINDOWS)
+      if (!isFullWindow(days)) await signalCache(days).warm(() => buildLighthouseSignals(days));
   };
-  return Object.assign(read, { keepWarm });
+  return Object.assign(read, { keepWarm, signals });
 }

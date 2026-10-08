@@ -18,7 +18,6 @@ export function FeedStatsModal({
   stats: fs,
   hours,
   targets: t,
-  weather,
   pollKey,
 }: {
   open: boolean;
@@ -26,7 +25,6 @@ export function FeedStatsModal({
   stats: FeedStats | null;
   hours: number;
   targets: { hitRate2xPct: number; hitRate4xPct: number };
-  weather: React.ReactNode;
   /** Changes when the feed's makeup does (the models it follows), so the returns refetch. */
   pollKey: string;
 }) {
@@ -123,7 +121,6 @@ export function FeedStatsModal({
               still being graded don&apos;t count as misses.
             </p>
             <FeedReturns pollKey={pollKey} />
-            {weather}
           </>
         )}
       </div>

@@ -766,52 +766,50 @@ input[type="checkbox"] {
 .window-row .window-note {
   margin: 0 0 0 4px;
 }
-/* Market weather: informational, so a quiet pill rather than a banner. */
-.weather-chip {
-  display: inline-flex;
+/* Market weather: the Lighthouse's needle gauge (WeatherGauge). Informational, so it sits quietly. */
+.lh-weather {
+  display: grid;
+  grid-template-columns: minmax(200px, 300px) 1fr;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface-3);
-  color: var(--ink-2);
-  cursor: help;
-  max-width: 100%;
-  white-space: normal;
-  text-align: left;
+  gap: 8px 20px;
 }
-.weather-chip .num {
-  font-weight: 500;
-  color: var(--muted);
+.lh-weather-dial .weather-gauge {
+  max-width: 300px;
+  margin: 0 auto;
+}
+/* Drawn small here, so its labels are set larger on the 560-wide canvas to read at ~13px. */
+.lh-weather-dial .weather-gauge .label {
+  font-size: 26px;
+}
+.lh-weather-text h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+.lh-weather-text p {
+  margin: 0 0 6px;
 }
 .weather-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--muted);
 }
-.weather-chip.hot {
-  color: var(--good-ink);
-  border-color: color-mix(in srgb, var(--good) 40%, transparent);
-  background: var(--good-wash);
+.lh-weather.hot .weather-dot {
+  background: var(--series-2);
 }
-.weather-chip.hot .weather-dot {
-  background: var(--good-ink);
+.lh-weather.cold .weather-dot {
+  background: var(--series-1);
 }
-.weather-chip.cold {
-  color: var(--bad-ink);
-  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
-  background: var(--bad-wash);
+.lh-weather.normal .weather-dot {
+  background: var(--axis);
 }
-.weather-chip.cold .weather-dot {
-  background: var(--bad-ink);
-}
-.weather-chip.normal .weather-dot {
-  background: var(--warn);
+@media (max-width: 640px) {
+  .lh-weather {
+    grid-template-columns: 1fr;
+  }
 }
 .kpi-ring {
   justify-content: center;
@@ -4513,6 +4511,17 @@ button.small-btn {
 .lh-section h3 {
   margin: 0 0 2px;
   font-size: 15px;
+}
+.lh-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.lh-section-head h3 {
+  margin: 0;
 }
 .lh-section > p {
   margin: 0 0 10px;

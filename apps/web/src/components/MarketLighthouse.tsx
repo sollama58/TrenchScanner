@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { LighthouseCount, LighthouseTally, MarketLighthouse } from "../api";
+import type { LighthouseCount, LighthouseSignals, LighthouseTally, MarketLighthouse } from "../api";
 import { usePolling } from "../hooks";
 import { lighthousePath } from "../routes";
 import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { HBarChart, Skeleton } from "./Charts";
 import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
+import { WeatherGauge } from "./WeatherGauge";
 
 /**
  * The Market Lighthouse, beside Stats on the Live tab: how every token that passed the pre-checks
@@ -21,6 +22,11 @@ import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
 
 export const WINDOWS = [1, 7] as const;
 export type Days = (typeof WINDOWS)[number];
+
+/** "Signals at a glance" reads further back than the rest: a day, a week or a month. */
+const SIGNAL_WINDOWS = [1, 7, 30] as const;
+type SignalDays = (typeof SIGNAL_WINDOWS)[number];
+const windowLabel = (days: number) => (days === 1 ? "24h" : days === 7 ? "7d" : "1mo");
 
 /** Graded alerts below which a narrative's hit rate shows as early rather than as a verdict. */
 const MIN_GRADED = 5;
@@ -100,8 +106,9 @@ export function MarketLighthouseModal({
             <div className="lh-head-text">
               <h2 id="lh-title">Market Lighthouse</h2>
               <p className="muted small">
-                At a glance: how the tokens that pass our pre-checks are doing, and what TokenSage sees across
-                new coins. The Lighthouse tab has the charts, breakdowns and months of history.
+                At a glance: the market weather, how the tokens that pass our pre-checks are doing, and what
+                TokenSage sees across new coins. The Lighthouse tab has the charts, breakdowns and months of
+                history.
               </p>
             </div>
             <button className="ghost icon-btn" onClick={onClose} aria-label="Close">
@@ -141,15 +148,17 @@ export function MarketLighthouseModal({
  * One window's answer. The Lighthouse tab's "right now" shows the whole of it; the Live tab's
  * modal shows the compact form - the headline numbers only, with the tab a click away.
  */
-export function LighthouseBody({
-  base,
-  days,
-  compact = false,
-}: {
-  base: string;
-  days: Days;
-  compact?: boolean;
-}) {
+export function LighthouseBody(props: { base: string; days: Days; compact?: boolean }) {
+  // The weather gauge reads its own endpoint, so it shows whether or not the window has loaded.
+  return (
+    <div className="stack">
+      <WeatherGauge base={props.base} />
+      <LighthouseWindow {...props} />
+    </div>
+  );
+}
+
+function LighthouseWindow({ base, days, compact = false }: { base: string; days: Days; compact?: boolean }) {
   const q = usePolling<MarketLighthouse>(lighthousePath(base, days), 300_000);
   if (!q.data) {
     if (q.error) return <p className="error">Couldn&apos;t load the Lighthouse: {q.error.message}</p>;
@@ -165,7 +174,6 @@ export function LighthouseBody({
   const cls = seriesClassFor(order);
   const span = days === 1 ? "24 hours" : "7 days";
 
-  const quickOnly = d.reads.deep === 0;
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
       <Screened s={d.screened} span={span} compact={compact} />
@@ -191,7 +199,7 @@ export function LighthouseBody({
       ) : compact ? (
         <TokenSageGlance d={d} cls={cls} />
       ) : (
-        <TokenSageSections d={d} span={span} cls={cls} quickOnly={quickOnly} />
+        <TokenSageSections d={d} base={base} days={days} span={span} cls={cls} />
       )}
     </div>
   );
@@ -199,14 +207,16 @@ export function LighthouseBody({
 
 function TokenSageSections({
   d,
+  base: apiBase,
+  days,
   span,
   cls,
-  quickOnly,
 }: {
   d: MarketLighthouse;
+  base: string;
+  days: Days;
   span: string;
   cls: (l: string) => string;
-  quickOnly: boolean;
 }) {
   const base = narrativeBaseline(d.outcomes.byCategory);
   return (
@@ -249,28 +259,99 @@ function TokenSageSections({
         </p>
       </Section>
 
-      <Section title="Signals at a glance" note="Each bar is 100% of the coins that had that signal read.">
-        <div className="lh-splits">
-          <Split
-            title="X link check"
-            rows={d.xVerdicts}
-            empty={quickOnly ? "Waits on deep reads" : "No linked posts read"}
-          />
-          <Split
-            title="In the news"
-            rows={d.news}
-            empty={quickOnly ? "Waits on deep reads" : "Not read yet"}
-          />
-          <Split title="Original or copy" rows={d.copies} empty="Not said yet" />
-          <Split title="Trades against" rows={d.pairKinds} empty="Not said yet" />
+      <SignalsAtAGlance d={d} base={apiBase} days={days} />
+    </>
+  );
+}
+
+/**
+ * "Signals at a glance", with its own 24h / 7d / 1mo switch. It follows the window above until
+ * someone picks one here; a pick matching that window reads from the answer already on screen,
+ * any other from the signals-only route, which the API keeps warm per window.
+ */
+function SignalsAtAGlance({ d, base, days }: { d: MarketLighthouse; base: string; days: Days }) {
+  const [picked, setPicked] = useState<SignalDays | null>(null);
+  const shown = picked ?? days;
+  return (
+    <section className="lh-section">
+      <div className="lh-section-head">
+        <h3>Signals at a glance</h3>
+        <div className="segmented small" role="tablist" aria-label="Signals window">
+          {SIGNAL_WINDOWS.map((w) => (
+            <button
+              key={w}
+              role="tab"
+              aria-selected={w === shown}
+              className={w === shown ? "on" : ""}
+              onClick={() => setPicked(w)}
+            >
+              {windowLabel(w)}
+            </button>
+          ))}
         </div>
-        {d.outcomes.byCopy.length > 0 && (
-          <div className="lh-mini">
-            <h4>Calls on originals vs copies</h4>
-            <HitRates rows={d.outcomes.byCopy} />
-          </div>
-        )}
-      </Section>
+      </div>
+      <p className="faint small">
+        Coins read in the last {shown === 1 ? "24 hours" : shown === 7 ? "7 days" : "30 days"}. Each bar is
+        100% of the coins that had that signal read.
+      </p>
+      {shown === days ? (
+        <Signals
+          s={{
+            reads: d.reads,
+            xVerdicts: d.xVerdicts,
+            news: d.news,
+            copies: d.copies,
+            pairKinds: d.pairKinds,
+            outcomes: d.outcomes,
+          }}
+        />
+      ) : (
+        <FetchedSignals base={base} days={shown} />
+      )}
+    </section>
+  );
+}
+
+function FetchedSignals({ base, days }: { base: string; days: number }) {
+  const q = usePolling<LighthouseSignals>(`${base}/lighthouse/signals?days=${days}`, 300_000);
+  if (!q.data) {
+    if (q.error) return <p className="error">Couldn&apos;t load these signals: {q.error.message}</p>;
+    return <Skeleton lines={4} />;
+  }
+  return (
+    <div className={q.stale ? "stale" : undefined} aria-busy={q.stale}>
+      <Signals s={q.data} />
+    </div>
+  );
+}
+
+function Signals({
+  s,
+}: {
+  s: Pick<LighthouseSignals, "xVerdicts" | "news" | "copies" | "pairKinds"> & {
+    reads: { described: number; deep: number };
+    outcomes: { byCopy: LighthouseTally[] };
+  };
+}) {
+  const quickOnly = s.reads.deep === 0;
+  return (
+    <>
+      <div className="lh-splits">
+        <Split
+          title="X link check"
+          rows={s.xVerdicts}
+          empty={quickOnly ? "Waits on deep reads" : "No linked posts read"}
+        />
+        <Split title="In the news" rows={s.news} empty={quickOnly ? "Waits on deep reads" : "Not read yet"} />
+        <Split title="Original or copy" rows={s.copies} empty="Not said yet" />
+        <Split title="Trades against" rows={s.pairKinds} empty="Not said yet" />
+      </div>
+      {s.outcomes.byCopy.length > 0 && (
+        <div className="lh-mini">
+          <h4>Calls on originals vs copies</h4>
+          <HitRates rows={s.outcomes.byCopy} />
+        </div>
+      )}
     </>
   );
 }

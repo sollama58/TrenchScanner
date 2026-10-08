@@ -27,7 +27,11 @@ import {
   type ModelInsights,
   type ModelRunHistory,
 } from "../modelInsights.js";
-import { createLighthouseCache, lighthouseQuerySchema } from "../marketLighthouse.js";
+import {
+  createLighthouseCache,
+  lighthouseQuerySchema,
+  lighthouseSignalsQuerySchema,
+} from "../marketLighthouse.js";
 import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 import { createTokenSageShowcaseCache } from "../tokenSageShowcase.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
@@ -71,7 +75,7 @@ const STATS_CACHE_TTL_MS = 5 * 60_000;
  * panel.
  */
 const BASE_RATE_CACHE_TTL_MS = 60 * 60_000;
-/** The Live tab's market weather chip: a week of finalized rows, so it moves faster than that. */
+/** Market weather: a week of finalized rows, so it moves faster than the base rate. */
 const WEATHER_CACHE_TTL_MS = 15 * 60_000;
 
 /**
@@ -199,6 +203,10 @@ export function createReportCaches() {
     lighthouse: createLighthouseCache(),
     lighthouseHistory: createLighthouseHistoryCache(),
     tokenSageShowcase: createTokenSageShowcaseCache(),
+    /** Market weather: the Stats panel and the Lighthouse's gauge, for subscribers and guests alike. */
+    weather: new SharedCache<MarketWeather>(WEATHER_CACHE_TTL_MS, {
+      staleWhileRevalidateMs: REPORT_STALE_MS,
+    }),
   };
 }
 export type ReportCaches = ReturnType<typeof createReportCaches>;
@@ -552,10 +560,6 @@ export async function registerCuratedRoutes(
     staleWhileRevalidateMs: REPORT_STALE_MS,
   });
 
-  const weatherCache = new SharedCache<MarketWeather>(WEATHER_CACHE_TTL_MS, {
-    staleWhileRevalidateMs: REPORT_STALE_MS,
-  });
-
   const buildStats = async () => {
     const day1 = new Date(Date.now() - 86_400_000);
     const day7 = new Date(Date.now() - 7 * 86_400_000);
@@ -591,7 +595,7 @@ export async function registerCuratedRoutes(
           })
         : prisma.curatorModel.findFirst({ orderBy: { createdAt: "desc" }, select: LATEST_MODEL_SELECT }),
       // Informational: a failed reading hides the chip rather than failing the panel.
-      weatherCache.get(() => loadMarketWeather(opts.env)).catch((): MarketWeather | null => null),
+      opts.reports.weather.get(() => loadMarketWeather(opts.env)).catch((): MarketWeather | null => null),
     ]);
     const finalizedSamples = Number(eventSamples[0]?.finalized ?? 0);
     const winners = Number(eventSamples[0]?.winners ?? 0);
@@ -731,6 +735,18 @@ export async function registerCuratedRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     return opts.reports.lighthouse(opts.env, parsed.data.days, parsed.data.tz);
+  });
+
+  /** The Lighthouse's weather gauge: how often launches are doubling now against the last week. */
+  app.get("/weather", async () => opts.reports.weather.get(() => loadMarketWeather(opts.env)));
+
+  /** "Signals at a glance" alone, over a day, a week or a month (marketLighthouse.ts). */
+  app.get("/lighthouse/signals", async (request, reply) => {
+    const parsed = lighthouseSignalsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return opts.reports.lighthouse.signals(opts.env, parsed.data.days);
   });
 
   /** The Lighthouse tab's trends: the kept-for-good hourly sums per hour, day or week (lighthouseHistory.ts). */

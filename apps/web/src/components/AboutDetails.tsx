@@ -147,11 +147,12 @@ export function AboutDetails({ targets }: { targets: { hitRate2xPct: number; hit
 
       <h3>Market weather</h3>
       <p>
-        The chip under the scores says how often launches are doubling right now. It takes every decision
-        moment the scanner graded in the last 6 hours (tokens in the market-cap band, checked on the hour and
-        when something happened) and counts the share that hit 2x within 15 minutes. It compares that with the
-        same share over the last 7 days: 25% or more above the week reads hot, 25% or more below reads cold,
-        anything between is normal. With too few graded moments it says so instead of guessing.
+        The gauge at the top of the Lighthouse (the button beside Stats, and the Lighthouse tab) says how
+        often launches are doubling right now. It takes every decision moment the scanner graded in the last 6
+        hours (tokens in the market-cap band, checked on the hour and when something happened) and counts the
+        share that hit 2x within 15 minutes. It compares that with the same share over the last 7 days: 25% or
+        more above the week reads hot, 25% or more below reads cold, anything between is normal. With too few
+        graded moments it says so instead of guessing.
       </p>
       <p>
         It is there to help you size or skip trades on a cold day. It doesn&apos;t change or hold back any
