@@ -124,6 +124,11 @@ export async function loadReplayItems(
       name: a.token.name ?? undefined,
       description: a.token.description ?? undefined,
       narrativeTags: a.token.narrativeTags,
+      // The pool's open time, back from the recorded pair age, so the brief reads it as it stood.
+      pairCreatedAt:
+        typeof features.pairAgeMinutes === "number"
+          ? new Date(co.anchorAt.getTime() - features.pairAgeMinutes * 60_000)
+          : undefined,
     };
     const decision: CurationDecision = {
       curate: true,
@@ -134,7 +139,7 @@ export async function loadReplayItems(
     return {
       candidateOutcomeId: co.id,
       anchorAt: co.anchorAt,
-      brief: buildAiReviewBrief(scored, decision, comparablesAsOf(features, pool, co.anchorAt)),
+      brief: buildAiReviewBrief(scored, decision, comparablesAsOf(features, pool, co.anchorAt), co.anchorAt),
     };
   });
 }

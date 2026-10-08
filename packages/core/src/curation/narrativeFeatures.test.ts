@@ -333,8 +333,12 @@ describe("round trip through a stored feature vector", () => {
 
   it("records every ns* input on the vector", () => {
     for (const name of ALL_NARRATIVE_FEATURES) expect(CANDIDATE_FEATURE_NAMES).toContain(name);
-    // The fee inputs (rules 0.19.0) close the vector, after the livestream inputs.
-    expect(CANDIDATE_FEATURE_NAMES.slice(-NARRATIVE_FEATURES_V4.length)).toEqual([...NARRATIVE_FEATURES_V4]);
+    // The fee inputs (rules 0.19.0) follow the livestream inputs, and pair age follows them.
+    const feeStart = CANDIDATE_FEATURE_NAMES.indexOf("livestreamViewers") + 1;
+    expect(CANDIDATE_FEATURE_NAMES.slice(feeStart, feeStart + NARRATIVE_FEATURES_V4.length)).toEqual([
+      ...NARRATIVE_FEATURES_V4,
+    ]);
+    expect(CANDIDATE_FEATURE_NAMES[feeStart + NARRATIVE_FEATURES_V4.length]).toBe("pairAgeMinutes");
     // The livestream inputs (added after) follow the earlier narrative ones.
     const lastNarrative = CANDIDATE_FEATURE_NAMES.indexOf("livestreamLive") - 1;
     expect(CANDIDATE_FEATURE_NAMES.indexOf("nsReferentNamed")).toBe(lastNarrative);

@@ -164,6 +164,12 @@ export const CANDIDATE_FEATURE_NAMES = [
   // creator fee goes (holders, charity, a GitHub account, other wallets) and the creator's share.
   // Null on reads from older rules.
   ...NARRATIVE_FEATURES_V4,
+  // Added 2026-10-08 (notes/model-inputs-review-2026-10-08.md): minutes since the DexScreener pair
+  // opened. On a graduated token that is the PumpSwap pool, and every 5m/1h/24h figure above is
+  // per pair, so it counts only trades since graduation; without this the models could not tell a
+  // fresh pool on an old token from an old pool. Null when DexScreener gave no pair time, and on
+  // every row banked before.
+  "pairAgeMinutes",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -217,8 +223,27 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The one order-flow input filled while PumpPortal refuses the trade stream (from the launch's
   // create message). Without trades the tracker drops a launch within 10-15 minutes, so on the
   // 2-4% of rows that carry it, its presence says "decided within minutes of launch", not what
-  // the dev bought. Comes back with the rest of TRADE_FLOW_FEATURES once trades flow.
+  // the dev bought.
   "devInitialBuySol",
+  // The trade-by-trade order flow (user decision 2026-10-08): dead since 2026-10-04, as PumpPortal
+  // only streams trades to a funded API key and none is set. Still recorded, so they come back by
+  // removing them here once a key is funded. firstBuyersHolding stays: the chain fills it.
+  "uniqueBuyers5m",
+  "buysPerBuyer5m",
+  "avgBuySol5m",
+  "topBuyerShare5m",
+  "newBuyerShare5m",
+  "netFlow5mToMcap",
+  "tradesPerMin5m",
+  "earlyBuyerCount",
+  "earlyBuyerHoldPct",
+  "earlyBuyerSoldShare",
+  "devSoldShare",
+  // The in-memory tape's length (user decision 2026-10-08): the tape empties on every deploy (13-14
+  // times in three days), so for up to an hour after one every token reads as minutes old and the
+  // models learned it as youth. ageMinutes and minutesSinceFirstInBand carry youth without the
+  // artefact; it stays recorded as the gauge of how far the other path inputs can be trusted.
+  "pathObservedMinutes",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -394,6 +419,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   buyRatio5m: "5m buy pressure",
   livestreamLive: "live on Pump.fun",
   livestreamViewers: "livestream viewers",
+  pairAgeMinutes: "pair age",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -629,6 +655,8 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     // Nobody watches a stream that isn't on; a live stream whose count the feed left out is unknown.
     livestreamViewers:
       scored.livestream === undefined ? null : scored.livestream.live ? scored.livestream.viewers : 0,
+    // A pair time a few seconds ahead of this clock is skew, not a pool from the future.
+    pairAgeMinutes: pairAgeMinutes === undefined ? null : Math.max(0, pairAgeMinutes),
   };
 }
 

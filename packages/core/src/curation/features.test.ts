@@ -108,6 +108,17 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     ).toBeCloseTo(2);
   });
 
+  it("records the pair's age in minutes, null without a pair time", () => {
+    const now = new Date("2026-10-08T12:00:00Z");
+    const at = (pairCreatedAt?: Date) =>
+      buildCandidateFeatures(scored({ pairCreatedAt }), now).pairAgeMinutes;
+    expect(at(new Date(now.getTime() - 90 * 60_000))).toBeCloseTo(90);
+    expect(at(undefined)).toBeNull();
+    expect(at(new Date(Number.NaN))).toBeNull();
+    // A pair time a little ahead of the clock is skew, read as just opened.
+    expect(at(new Date(now.getTime() + 5_000))).toBe(0);
+  });
+
   it("records every declared feature name, unknowns as null", () => {
     const f = buildCandidateFeatures(scored({}));
     for (const name of CANDIDATE_FEATURE_NAMES) {
