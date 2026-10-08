@@ -174,12 +174,30 @@ async function oldestChatCursor(): Promise<Date | null> {
   return row?.sentThrough ?? null;
 }
 
-/** What the last run flagged, read back from this job's own heartbeat. */
-async function previousKeys(): Promise<Set<string>> {
+/** What the last run left on this job's own heartbeat: the stall in progress and the restart state. */
+interface WatchState {
+  keys: Set<string>;
+  /** When the unbroken stall in progress began. */
+  stalledSince: number | null;
+  /** 0 none, 1 the 5-minute warning is up, 2 the 1-minute warning is up (restart due), -1 restart capped. */
+  warned: number;
+  lastRestartAt: number | null;
+}
+
+async function previousState(): Promise<WatchState> {
   const row = await prisma.systemHeartbeat.findUnique({ where: { job: "pipeline-watch" } });
   const meta = (row?.meta ?? null) as Record<string, unknown> | null;
-  const raw = meta && typeof meta.stalledKeys === "string" ? meta.stalledKeys : "";
-  return new Set(raw.split(",").filter(Boolean));
+  const str = (k: string) => (meta && typeof meta[k] === "string" ? (meta[k] as string) : "");
+  const time = (k: string) => {
+    const t = Date.parse(str(k));
+    return Number.isNaN(t) ? null : t;
+  };
+  return {
+    keys: new Set(str("stalledKeys").split(",").filter(Boolean)),
+    stalledSince: time("stalledSince"),
+    warned: meta && typeof meta.warned === "number" ? meta.warned : 0,
+    lastRestartAt: time("lastRestartAt"),
+  };
 }
 
 /**
@@ -214,9 +232,77 @@ export function notificationText(started: Problem[], cleared: string[], still: P
   return lines.join("\n");
 }
 
+/**
+ * Self-healing (user decision 2026-10-08): a stall that lasts RESTART_AFTER_MS restarts the
+ * scanner process, at most once per RESTART_MIN_GAP_MS. Today's stall was in-process state (a
+ * request that never returned) that only a restart cleared. Visitors get a banner 5 minutes and
+ * 1 minute before; the admins get a DM. A stall a restart doesn't clear (an upstream outage)
+ * only notifies until the hour is up.
+ */
+export const RESTART_AFTER_MS = 10 * 60_000;
+export const RESTART_MIN_GAP_MS = 60 * 60_000;
+const FIRST_WARNING_AT_MS = RESTART_AFTER_MS - 5 * 60_000;
+const LAST_WARNING_AT_MS = RESTART_AFTER_MS - 60_000;
+const RESTART_DELAY_MS = 60_000;
+/** Who the automatic banners are posted as, so ending them never ends an admin's own. */
+export const WATCH_ANNOUNCER = "pipeline-watch";
+
+export type RestartStep = "none" | "warn5" | "warn1" | "capped";
+
+/** Pure: what to do about a stall `stallMs` old, given the warnings already up and the last restart. */
+export function restartStep(
+  stallMs: number | null,
+  warned: number,
+  lastRestartAt: number | null,
+  now: number,
+): RestartStep {
+  if (stallMs === null || stallMs < FIRST_WARNING_AT_MS || warned === -1) return "none";
+  // The restart is on its way (or the fresh process is still starting up).
+  if (warned >= 2 && lastRestartAt !== null && now < lastRestartAt + 2 * 60_000) return "none";
+  // Restarted within the hour (or the stall outlived the restart): notify, don't restart again.
+  if (lastRestartAt !== null && now - lastRestartAt < RESTART_MIN_GAP_MS) return "capped";
+  if (stallMs >= LAST_WARNING_AT_MS) return "warn1";
+  return warned >= 1 ? "none" : "warn5";
+}
+
+const BANNER: Record<"warn5" | "warn1", string> = {
+  warn5:
+    "Alerts are delayed: part of the scanner has stalled. If it doesn't recover, it restarts automatically in about 5 minutes, and alerts pause for a minute or two.",
+  warn1: "The scanner restarts in about a minute to clear a stall. Alerts pause for a minute or two.",
+};
+
+async function postBanner(message: string, now: number): Promise<void> {
+  await prisma.announcement.create({
+    data: {
+      message,
+      severity: "warning",
+      expiresAt: new Date(now + 15 * 60_000),
+      createdBy: WATCH_ANNOUNCER,
+    },
+  });
+}
+
+async function endBanners(now: number): Promise<void> {
+  await prisma.announcement.updateMany({
+    where: { createdBy: WATCH_ANNOUNCER, endedAt: null },
+    data: { endedAt: new Date(now) },
+  });
+}
+
+function exitForRestart(): void {
+  const timer = setTimeout(() => {
+    logger.error("restarting the scanner to clear a pipeline stall");
+    process.exit(1);
+  }, RESTART_DELAY_MS);
+  // Kept referenced: the restart must happen even if nothing else is scheduled.
+  void timer;
+}
+
 export interface PipelineWatchDeps {
   telegram?: Pick<TelegramApi, "sendMessage">;
   now?: number;
+  /** Ends the process after RESTART_DELAY_MS so the platform starts a fresh one. */
+  restart?: () => void;
 }
 
 export async function runPipelineWatch(env: Env, deps: PipelineWatchDeps = {}): Promise<JobRunMeta> {
@@ -224,20 +310,43 @@ export async function runPipelineWatch(env: Env, deps: PipelineWatchDeps = {}): 
   const [flows, jobs, before, cursor] = await Promise.all([
     countFlows(now),
     readJobs(),
-    previousKeys(),
+    previousState(),
     oldestChatCursor(),
   ]);
   const problems = findProblems(flows, jobs, now, cursor);
   const keys = new Set(problems.map((p) => p.key));
-  const started = problems.filter((p) => !before.has(p.key));
-  const cleared = [...before].filter((k) => !keys.has(k));
+  const started = problems.filter((p) => !before.keys.has(p.key));
+  const cleared = [...before.keys].filter((k) => !keys.has(k));
+  const stalledSince =
+    problems.length === 0 ? null : before.keys.size > 0 ? (before.stalledSince ?? now) : now;
+  let warned = problems.length === 0 ? 0 : before.warned;
+  let lastRestartAt = before.lastRestartAt;
+
+  const notices: string[] = [];
+  if (started.length > 0 || cleared.length > 0) notices.push(notificationText(started, cleared, problems));
+  if (problems.length === 0 && before.keys.size > 0) await endBanners(now);
+
+  const step = restartStep(stalledSince === null ? null : now - stalledSince, warned, lastRestartAt, now);
+  if (step === "warn5" || step === "warn1") {
+    await postBanner(BANNER[step], now);
+    warned = step === "warn5" ? 1 : 2;
+    if (step === "warn1") {
+      lastRestartAt = now + RESTART_DELAY_MS;
+      notices.push("<b>🔄 Restarting the scanner in about a minute</b> to clear the stall.");
+      (deps.restart ?? exitForRestart)();
+    }
+  } else if (step === "capped") {
+    warned = -1;
+    notices.push(
+      "<b>Not restarting:</b> the scanner already restarted in the last hour, so this stall needs a look.",
+    );
+  }
 
   let notified = 0;
-  if ((started.length > 0 || cleared.length > 0) && (deps.telegram || env.TELEGRAM_BOT_TOKEN)) {
+  if (notices.length > 0 && (deps.telegram || env.TELEGRAM_BOT_TOKEN)) {
     const api = deps.telegram ?? new TelegramApi(env.TELEGRAM_BOT_TOKEN);
-    const text = notificationText(started, cleared, problems);
     for (const chatId of await adminChats(env)) {
-      const res = await api.sendMessage(chatId, text);
+      const res = await api.sendMessage(chatId, notices.join("\n\n"));
       if (res.ok) notified += 1;
       else logger.warn("pipeline notice not sent", { code: res.code });
     }
@@ -247,6 +356,9 @@ export async function runPipelineWatch(env: Env, deps: PipelineWatchDeps = {}): 
     stalled: problems.length,
     notified,
     stalledKeys: [...keys].join(","),
+    stalledSince: stalledSince === null ? null : new Date(stalledSince).toISOString(),
+    warned,
+    lastRestartAt: lastRestartAt === null ? null : new Date(lastRestartAt).toISOString(),
     flows: Object.fromEntries(flows.map((f) => [f.key, f.recent])),
   };
   if (problems.length > 0) {

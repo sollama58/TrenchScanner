@@ -177,9 +177,11 @@ async function main() {
   );
   // Says when a stage of the alert path stops producing (new tokens, decision moments, TokenSage
   // reads, model alerts, Telegram delivery) although every job is still running, and tells the
-  // admin wallets' private Telegram chats - see runPipelineWatch.
+  // admin wallets' private Telegram chats - see runPipelineWatch. A stall that lasts 10 minutes
+  // restarts this process (at most once an hour), with a banner for visitors first. Every minute,
+  // so those warnings land on time.
   schedule("pipeline-watch", () =>
-    scheduleInterval("pipeline-watch", () => runPipelineWatch(env), 5, { deadlineMinutes: 10 }),
+    scheduleInterval("pipeline-watch", () => runPipelineWatch(env), 1, { deadlineMinutes: 10 }),
   );
   // Prices the open curated-alerts training rows and closes their label windows - one batched
   // DexScreener sweep per tick, see runCandidateWatchJob. Its cadence IS the label resolution,
