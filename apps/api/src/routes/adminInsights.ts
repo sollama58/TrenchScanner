@@ -150,6 +150,8 @@ async function buildTokenSageReport(days: number) {
     pairKinds,
     rulesVersions,
     copies,
+    trend,
+    trendSources,
     averages,
     alertRows,
   ] = await Promise.all([
@@ -201,6 +203,21 @@ async function buildTokenSageReport(days: number) {
                   WHEN "copiesRecent" THEN 'copies a recent coin' ELSE 'no recent copy' END AS label,
              count(*) AS count
       FROM "TokenNarrative" WHERE "checkedAt" > ${since} AND status <> 'failed' GROUP BY 1 ORDER BY 2 DESC`,
+    // The trend match on deep reads, and each trend source's status (trend.sources[] in the stored
+    // document, rules 0.15.0+), so a quiet "in the news" can be told from a source that was down.
+    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
+      SELECT CASE WHEN "trendMatched" IS NULL THEN 'not read'
+                  WHEN "trendMatched" THEN 'in the news' ELSE 'not in the news' END AS label,
+             count(*) AS count
+      FROM "TokenNarrative"
+      WHERE "checkedAt" > ${since} AND depth = 'full' AND status <> 'failed' GROUP BY 1 ORDER BY 2 DESC`,
+    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
+      SELECT coalesce(s->>'source', '?') || ': ' || coalesce(s->>'status', '?') AS label, count(*) AS count
+      FROM "TokenNarrative" n,
+           jsonb_array_elements(CASE WHEN jsonb_typeof(n.analysis->'trend'->'sources') = 'array'
+                                     THEN n.analysis->'trend'->'sources' ELSE '[]'::jsonb END) s
+      WHERE n."checkedAt" > ${since} AND n.depth = 'full' AND n.status <> 'failed'
+      GROUP BY 1 ORDER BY 1 LIMIT 40`,
     prisma.$queryRaw<
       {
         referent_confidence: number | null;
@@ -277,6 +294,8 @@ async function buildTokenSageReport(days: number) {
     pairKinds: counts(pairKinds),
     rulesVersions: counts(rulesVersions),
     copies: counts(copies),
+    trend: counts(trend),
+    trendSources: counts(trendSources),
     outcomes: {
       alerts: alertRows.length,
       capped: alertRows.length >= 20000,
