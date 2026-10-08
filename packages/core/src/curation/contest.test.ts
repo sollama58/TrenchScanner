@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CONTESTANTS, CONTESTANT_IDS, ORDER_FLOW_FEATURES, enabledContestants } from "./contestants.js";
-import { NARRATIVE_MIN_ROWS } from "./trainingRun.js";
+import { NARRATIVE_BACKGROUND_KIND, NARRATIVE_MIN_ROWS, narrativeTrainingSet } from "./trainingRun.js";
+import { isDecisionRow, type TrainingRow } from "./trainer.js";
 import { STACKED_MODEL_KIND } from "./stacking.js";
 import {
   defaultContestant,
@@ -64,6 +65,31 @@ describe("the Narrative seat's exam", () => {
     expect(narrative.metrics.exam).toBeDefined();
     expect(narrative.params.kind).not.toBe(STACKED_MODEL_KIND);
   }, 60_000);
+
+  it("trains on every row, but only the deep-read rows and second looks are its decision rows", () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 9, 8, 12, m));
+    const row = (m: number, kind: string, deep: boolean): TrainingRow => ({
+      features: deep ? { nsDepthFull: 1 } : { nsDepthFull: null },
+      labelValue: 0,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 50_000,
+      anchorAt: at(m),
+      sampleKind: kind,
+    });
+    const second = row(3, "event", true);
+    const set = narrativeTrainingSet(
+      [row(1, "event", false), row(2, "event", true), row(4, "hourly", false), row(5, "hourly", true)],
+      [second],
+    );
+    expect(set.map((r) => [r.anchorAt.getUTCMinutes(), r.sampleKind])).toEqual([
+      [5, "hourly"],
+      [4, NARRATIVE_BACKGROUND_KIND],
+      [3, "event"],
+      [2, "event"],
+      [1, NARRATIVE_BACKGROUND_KIND],
+    ]);
+    expect(set.filter((r) => isDecisionRow(r)).map((r) => r.anchorAt.getUTCMinutes())).toEqual([3, 2]);
+  });
 });
 
 describe("defaultContestant", () => {
