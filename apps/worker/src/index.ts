@@ -6,6 +6,8 @@ import {
   prisma,
   DexScreenerClient,
   GeckoTerminalClient,
+  JupiterClient,
+  JupiterFirstLookup,
   PumpFunClient,
   RugCheckClient,
   HeliusClient,
@@ -91,22 +93,30 @@ async function main() {
   // startNarrativePolling. The queue lives in the scanning process.
   const stopNarrativePolling = scans ? startNarrativePolling(env) : undefined;
 
+  const dexScreener = new DexScreenerClient({
+    baseUrl: env.DEXSCREENER_BASE_URL,
+    requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
+    // Answers token lookups while DexScreener answers them blank (2026-10-07).
+    fallback: new GeckoTerminalClient(
+      env.COINGECKO_API_KEY
+        ? {
+            apiKey: env.COINGECKO_API_KEY,
+            priorityPerMinute: Math.ceil(env.COINGECKO_REQUESTS_PER_MINUTE * 0.6),
+            backgroundPerMinute: Math.floor(env.COINGECKO_REQUESTS_PER_MINUTE * 0.4),
+          }
+        : {},
+    ),
+  });
+  // With a Jupiter key, the price-only jobs (candidate-watch, the empty-wallet check) ask Jupiter
+  // first, so DexScreener's per-IP budget goes to the scan's refresh and fast-match.
+  const jupiter = env.JUPITER_API_KEY
+    ? new JupiterClient({ apiKey: env.JUPITER_API_KEY, requestsPerMinute: env.JUPITER_REQUESTS_PER_MINUTE })
+    : undefined;
   const deps = {
     pumpFun: new PumpFunClient({ baseUrl: env.PUMPFUN_BASE_URL }),
-    dexScreener: new DexScreenerClient({
-      baseUrl: env.DEXSCREENER_BASE_URL,
-      requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
-      // Answers token lookups while DexScreener answers them blank (2026-10-07).
-      fallback: new GeckoTerminalClient(
-        env.COINGECKO_API_KEY
-          ? {
-              apiKey: env.COINGECKO_API_KEY,
-              priorityPerMinute: Math.ceil(env.COINGECKO_REQUESTS_PER_MINUTE * 0.6),
-              backgroundPerMinute: Math.floor(env.COINGECKO_REQUESTS_PER_MINUTE * 0.4),
-            }
-          : {},
-      ),
-    }),
+    dexScreener,
+    jupiter,
+    priceLookup: jupiter ? new JupiterFirstLookup(jupiter, dexScreener) : dexScreener,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     stream,
@@ -195,7 +205,7 @@ async function main() {
   schedule("candidate-watch", () =>
     scheduleInterval(
       "candidate-watch",
-      () => runCandidateWatchJob(deps.dexScreener, env),
+      () => runCandidateWatchJob(deps.priceLookup, env),
       env.CANDIDATE_WATCH_INTERVAL_MINUTES,
       { deadlineMinutes: 15, firstRunDelayMs: async () => DEX_BURST_OFFSET_MS["candidate-watch"] },
     ),

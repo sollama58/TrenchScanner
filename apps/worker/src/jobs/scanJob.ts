@@ -21,6 +21,7 @@ import {
   looksLikeSolanaAddress,
   type Env,
   type DexScreenerClient,
+  type JupiterClient,
   type PumpFunClient,
   type LiveStream,
   type RugCheckClient,
@@ -100,6 +101,13 @@ const CANDIDATE_CONCURRENCY = 15;
 export interface ScanDeps {
   pumpFun: PumpFunClient;
   dexScreener: DexScreenerClient;
+  /**
+   * Where the empty-wallet check prices holders' other holdings: Jupiter first when a key is set
+   * (JupiterFirstLookup), else DexScreener itself. Optional: unset means `dexScreener`.
+   */
+  priceLookup?: Pick<DexScreenerClient, "getTokensByAddresses">;
+  /** The Jupiter client behind priceLookup, for its call counts. */
+  jupiter?: Pick<JupiterClient, "takeCallStats">;
   rugCheck: RugCheckClient;
   helius: HeliusClient;
   /** The live PumpPortal launch/graduation feed, drained once per cycle. Optional: off when unset. */
@@ -560,7 +568,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     );
   // Every candidate's own price is already in hand - the wallet valuation reuses it for free.
   seedQuotes(candidates);
-  const valuation = { dexScreener: deps.dexScreener };
+  const valuation = { dexScreener: deps.priceLookup ?? deps.dexScreener };
   // The snipers figure, read from the chain for every token that passed the screen (see
   // launchSnipers.ts) - started now so it overlaps the wallet stage, and given the same budget:
   // past it the cycle reads the cache and the reads finish behind it for the next cycle.
@@ -786,6 +794,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // Likewise for DexScreener: lookups every job in this process sent since the last cycle, the
   // 429 pauses among them, and how long they queued for the shared budget.
   const dexScreenerCalls = deps.dexScreener.takeCallStats?.();
+  const jupiterCalls = deps.jupiter?.takeCallStats();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
@@ -795,12 +804,14 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     samplesBanked: samples.banked,
     rpcCalls,
     dexScreenerCalls,
+    jupiterCalls,
     stagesMs,
   });
   return {
     stagesMs,
     rpcCalls,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
+    ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,
