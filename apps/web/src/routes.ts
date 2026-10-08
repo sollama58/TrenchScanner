@@ -49,8 +49,15 @@ export const TAB_DATA: Record<Tab, string[]> = {
   ],
   model: ["/curated/insights?days=30", "/curated/models?days=30"],
   lighthouse: ["/curated/lighthouse/history?days=30&bucket=day&dimension=category"],
-  filters: ["/filters", "/config", "/filters/leaderboard"],
-  settings: ["/settings", "/curated/models?days=30"],
+  filters: [
+    "/filters",
+    "/config",
+    "/filters/leaderboard",
+    "/settings",
+    "/curated/models?days=30",
+    "/telegram",
+  ],
+  settings: ["/settings"],
   // Nothing warmed: only admin wallets can read /admin, and everyone's session runs this warm-up.
   admin: [],
 };

@@ -530,9 +530,21 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
    * Revoked devices are the smaller kind, kept a month first - see above.
    */
   const none = { count: 0 };
-  const [deletedLinkCodes, deletedRevokedDevices, deletedNonces, deletedFilterBaselines] = await Promise.all([
+  const [
+    deletedLinkCodes,
+    deletedTelegramLinkCodes,
+    deletedRevokedDevices,
+    deletedNonces,
+    deletedFilterBaselines,
+  ] = await Promise.all([
     stage("linkCodes", none, () =>
       prisma.mobileLinkCode.deleteMany({
+        where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
+      }),
+    ),
+    // The Telegram link codes, same shape and same reasoning.
+    stage("telegramLinkCodes", none, () =>
+      prisma.telegramLinkCode.deleteMany({
         where: { expiresAt: { lt: new Date(startedAt - 3_600_000) } },
       }),
     ),
@@ -620,6 +632,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedCuratorModels: deletedCuratorModels.count,
     strippedCuratorModels,
     deletedLinkCodes: deletedLinkCodes.count,
+    deletedTelegramLinkCodes: deletedTelegramLinkCodes.count,
     deletedRevokedDevices: deletedRevokedDevices.count,
     deletedNonces: deletedNonces.count,
     deletedFilterBaselines: deletedFilterBaselines.count,

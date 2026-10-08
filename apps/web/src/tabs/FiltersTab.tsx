@@ -1,11 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import { del, patch, post, ApiError, type AppConfig, type Filter, type FilterInput } from "../api";
+import {
+  del,
+  patch,
+  post,
+  ApiError,
+  type AppConfig,
+  type Filter,
+  type FilterInput,
+  type Leaderboard,
+} from "../api";
 import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
 import { GROUPS } from "../filterFields";
+import { useSettings } from "../alerts";
 import { ScoreExplainer } from "../components/ScoreExplainer";
-import { EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
+import { BellIcon, EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
 import { TopFiltersPanel } from "../components/TopFiltersPanel";
+import { AlertsPanel, ModelPanel } from "../components/AlertDeliveryPanels";
+import { TelegramPanel } from "../components/TelegramPanel";
 
 /** Mirrors MAX_FILTERS_PER_USER in apps/api/src/routes/filters.ts. */
 const MAX_FILTERS = 10;
@@ -62,12 +74,16 @@ function toInput(f: Filter): FilterInput {
 }
 
 /**
- * The Filters tab: up to ten saved setups, one active at a time, with the shared-filter
- * leaderboard (Top filters) below them.
+ * The Filters tab: up to ten saved setups, one active at a time; then how the alerts they raise
+ * reach you (Telegram, your preferred model, sound and browser notifications); then the
+ * shared-filter leaderboard (Top filters).
  */
-export function FiltersTab() {
+export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) {
   const filters = usePolling<Filter[]>("/filters", 120_000);
   const config = usePolling<AppConfig>("/config", 600_000);
+  const settings = useSettings();
+  const [pick, setPick] = useState(0);
+  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
   // `opened` tells apart two editors for the same filter (or two new ones), so opening again starts
   // the form over instead of keeping the last one's keyword text.
   const [editing, setEditing] = useState<{ id: string | null; draft: FilterInput; opened: number } | null>(
@@ -253,6 +269,30 @@ export function FiltersTab() {
           )}
         </section>
       </div>
+      <section className="alerts-band" aria-labelledby="alerts-band-title">
+        <header className="section-head band-head">
+          <div>
+            <span className="eyebrow">
+              <BellIcon size={13} /> Alerts
+            </span>
+            <h2 id="alerts-band-title">How your alerts reach you</h2>
+            <p className="muted">
+              Your active filter and your preferred model decide what alerts you; this is where they go.
+              Everything here is saved to your wallet.
+            </p>
+          </div>
+        </header>
+        <div className="delivery-grid">
+          <TelegramPanel />
+          <ModelPanel
+            board={board.data}
+            stale={board.stale}
+            onChanged={() => setPick((n) => n + 1)}
+            goTo={goTo}
+          />
+          <AlertsPanel prefs={settings?.alerts ?? null} />
+        </div>
+      </section>
       <TopFiltersPanel onCopied={filters.reload} />
     </div>
   );

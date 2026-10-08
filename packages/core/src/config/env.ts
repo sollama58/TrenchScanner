@@ -648,6 +648,21 @@ const envSchema = z.object({
   // switches the endpoint off: it answers 404 as if it didn't exist.
   STATS_API_TOKEN: z.string().optional().default(""),
 
+  // Telegram alerts (packages/core/src/telegram). The bot token from @BotFather; empty (the
+  // default) leaves the whole feature inert: the dashboard's Telegram card says the bot isn't set
+  // up, the webhook route answers 404, and the worker's telegram-dispatch job sends nothing.
+  // Needed by the api (the bot's webhook, link codes) and the scanner worker (sending alerts).
+  TELEGRAM_BOT_TOKEN: pastedKey,
+  // Where Telegram should POST the bot's updates (the api's /telegram/webhook, on a public
+  // https host). Registered with Telegram when the api starts, whenever both this and the token
+  // are set; empty leaves whatever webhook the bot already has.
+  TELEGRAM_WEBHOOK_URL: z.string().optional().default(""),
+  // The dashboard an alert message links back to, e.g. https://trenchscanner.app. Empty derives
+  // it from the first PUBLIC_APP_DOMAIN entry.
+  TELEGRAM_DASHBOARD_URL: z.string().optional().default(""),
+  // How often the scanner worker looks for new alerts to send (seconds).
+  TELEGRAM_DISPATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(10),
+
   // Where the burn reconciler and the claim endpoint read the chain.
   //
   // Empty (the default) means Helius, built from HELIUS_API_KEY, and so does a value naming one of

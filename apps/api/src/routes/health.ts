@@ -32,6 +32,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every MATCH_PEAKS_INTERVAL_MINUTES (2 by default). Nothing time-critical waits on it -
   // peaks feed the leaderboard and outcome figures - so a generous margin.
   "match-peaks": 20 * 60_000,
+  // Every TELEGRAM_DISPATCH_INTERVAL_SECONDS (10 by default). While it is down linked Telegram
+  // chats hear nothing, and nothing else notices.
+  "telegram-dispatch": 10 * 60_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
   // Runs every CURATOR_TRAINING_INTERVAL_HOURS (2h by default), not daily - same "expected

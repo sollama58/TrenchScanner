@@ -68,12 +68,14 @@ model User {
   /// show) - see feedAppearance.ts in apps/api for the shape. Null = the default look.
   feedAppearance  Json?
 
-  filters      UserFilter[]
-  matches      Match[]
-  subscription Subscription?
-  burns        BurnEvent[]
-  linkCodes    MobileLinkCode[]
-  devices      LinkedDevice[]
+  filters           UserFilter[]
+  matches           Match[]
+  subscription      Subscription?
+  burns             BurnEvent[]
+  linkCodes         MobileLinkCode[]
+  devices           LinkedDevice[]
+  telegramLinkCodes TelegramLinkCode[]
+  telegramChats     TelegramChat[]
 }
 
 /// A single-use code, shown as a QR on a signed-in desktop, that mints a session on a phone.
@@ -99,6 +101,64 @@ model MobileLinkCode {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+/// A single-use code that links a Telegram chat to this account, carried in a t.me deep link
+/// (t.me/<bot>?start=<code>). The same discipline as MobileLinkCode: only the SHA-256 is stored,
+/// the raw value is returned to the signed-in dashboard exactly once, the code expires in minutes
+/// and is claimed with a conditional update so two chats racing it cannot both win.
+model TelegramLinkCode {
+  id       String @id @default(cuid())
+  codeHash String @unique
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  claimedAt DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// A Telegram chat (a private chat with the bot, or a group it was added to) that receives one
+/// account's Live Feed alerts: that account's filter matches and the calls of the models in its
+/// feed. Linked by redeeming a TelegramLinkCode in the chat (/start <code>); in a group only a
+/// group admin may do so. A chat belongs to at most one account at a time (chatId is unique), so
+/// re-linking it moves it rather than duplicating it.
+model TelegramChat {
+  id                 String  @id @default(cuid())
+  /// Telegram's chat id: positive for a private chat, negative for groups and supergroups.
+  chatId             BigInt  @unique
+  /// "private" | "group" | "supergroup" | "channel", as Telegram reports it.
+  kind               String
+  /// The group's title, or the person's name in a private chat. Untrusted text: rendered, never interpreted.
+  title              String?
+  userId             String
+  user               User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The Telegram user who redeemed the code, for the dashboard's "linked by" line.
+  linkedByTelegramId BigInt?
+  linkedByName       String?
+
+  /// Which alerts this chat gets.
+  filterMatches Boolean   @default(true)
+  modelCalls    Boolean   @default(true)
+  /// Paused by the user from the dashboard; the chat stays linked.
+  enabled       Boolean   @default(true)
+  /// Alerts raised at or before this were sent (or never due) - the dispatcher's cursor per chat.
+  /// Starts at link time, so linking never replays the backlog.
+  sentThrough   DateTime  @default(now())
+  lastSentAt    DateTime?
+  /// What Telegram last answered when a send failed; cleared on the next success.
+  lastError     String?
+  failures      Int       @default(0)
+
+  createdAt DateTime  @default(now())
+  /// Unlinked from the dashboard, or the bot was blocked / removed from the group. Kept for the
+  /// record; a fresh /start in the same chat revives the row.
+  revokedAt DateTime?
+
+  @@index([userId])
 }
 
 /// A phone that has been linked to an account, and the thing that makes those sessions revocable.
@@ -1091,84 +1151,84 @@ model RugCheckCache {
 /// `status` "failed" with a null `analysis` caches a definitive answer (unknown mint, not a token)
 /// so it is not re-requested every cycle. Transport failures are never written here.
 model TokenNarrative {
-  mintAddress        String    @id
-  depth              String
-  status             String
+  mintAddress           String    @id
+  depth                 String
+  status                String
   /// Top-level and sub-category labels with confidences, e.g. [{"label":"animal/dog","confidence":0.9}].
-  categories         Json?
-  referentLabel      String?
-  referentKind       String?
-  summary            String?
+  categories            Json?
+  referentLabel         String?
+  referentKind          String?
+  summary               String?
   /// Flag codes, e.g. ["copycat","x_link_reused"].
-  flags              String[]  @default([])
+  flags                 String[]  @default([])
   /// How well the linked X post/profile matches the token (TokenSage's x.match, full depth):
   /// fit 0-1 and verdict "about_this_coin" / "related" / "unrelated". Null when not read or
   /// "unknown" (nothing fetched), which is missing data, not a mismatch.
-  xFit               Float?
-  xVerdict           String?
+  xFit                  Float?
+  xVerdict              String?
   /// referent.confidence and referent.supported_by (the inputs pointing at it, e.g. ["name","x"]).
-  referentConfidence Float?
-  referentSupport    String[]  @default([])
+  referentConfidence    Float?
+  referentSupport       String[]  @default([])
   /// TokenSage rules 0.17.0+: only the referent's kind is known (referent.generic; "frog", not
   /// a named frog). False on a named referent, null without one or on older rules.
-  referentGeneric    Boolean?
+  referentGeneric       Boolean?
   /// market.pair: what the coin trades against ("sol", "stablecoin", "token", "tokenized_stock", ...).
-  pairKind           String?
-  pairSymbol         String?
+  pairKind              String?
+  pairSymbol            String?
   /// Copies a coin launched in the last 30 days (copy_of[].recent). Null on analyses from before
   /// TokenSage rules 0.10.0, which didn't say.
-  copiesRecent       Boolean?
+  copiesRecent          Boolean?
   /// The linked X post, when the full read opened it (x.status "ok"): how it relates to the coin
   /// ("launch_announcement", "official_account", "narrative_reference", "spoofed", ...), its
   /// author's followers, how many seconds it predates the token, and how many other coins link
   /// the same post. All null when the post was not read.
-  xRelation          String?
-  xAuthorFollowers   Int?
-  xPredatesTokenS    Int?
-  xReuseCount        Int?
+  xRelation             String?
+  xAuthorFollowers      Int?
+  xPredatesTokenS       Int?
+  xReuseCount           Int?
   /// The name matched a Wikipedia/news spike (trend.matched, full depth); null until read.
-  trendMatched    Boolean?
+  trendMatched          Boolean?
   /// TokenSage rules 0.15.0+: which copy of what this coin is (lineage.kind "original",
   /// "early_copy", "copy", "late_copy", "reference", "unknown"), its launch-order rank among its
   /// namesakes, the coin it copies and that coin's age and curve state at the read, how many
   /// coins shared its name, ticker or logo in the hours before it, and how many coins TokenSage
   /// resolved to the same referent (the wave). All null on reads made by older rules.
-  lineageKind     String?
-  lineageRank     Int?
-  lineageRankOf   Int?
-  lineageOfMint   String?
-  originalAgeS    Int?
+  lineageKind           String?
+  lineageRank           Int?
+  lineageRankOf         Int?
+  lineageOfMint         String?
+  originalAgeS          Int?
   originalCurveProgress Float?
-  originalComplete Boolean?
-  siblings1h      Int?
-  siblings6h      Int?
-  siblings24h     Int?
-  logoReuse24h    Int?
-  waveLaunches1h  Int?
-  waveLaunches6h  Int?
-  waveLaunches24h Int?
-  waveRank24h     Int?
+  originalComplete      Boolean?
+  siblings1h            Int?
+  siblings6h            Int?
+  siblings24h           Int?
+  logoReuse24h          Int?
+  waveLaunches1h        Int?
+  waveLaunches6h        Int?
+  waveLaunches24h       Int?
+  waveRank24h           Int?
   /// How many inputs (name, symbol, description, image, x, trend, db) agree on the top category.
-  topCategoryInputs Int?
+  topCategoryInputs     Int?
   /// The linked X account's worth apart from its fit (x.credibility 0-1), its age at the coin's
   /// launch, whether it was made for the coin, and this coin's place among the coins linking it.
-  xCredibility    Float?
-  xAccountAgeS    Int?
-  xAccountMadeForCoin Boolean?
-  xReuseRank      Int?
+  xCredibility          Float?
+  xAccountAgeS          Int?
+  xAccountMadeForCoin   Boolean?
+  xReuseRank            Int?
   /// Strength of the trend hit (trend.score 0-1); null until read or on older rules.
-  trendScore      Float?
+  trendScore            Float?
   /// Flags by severity, so the models and score need no catalogue of codes.
-  highFlagCount      Int       @default(0)
-  warnFlagCount      Int       @default(0)
+  highFlagCount         Int       @default(0)
+  warnFlagCount         Int       @default(0)
   /// Why the analysis failed, on status "failed" rows.
-  failReason         String?
-  rulesVersion       String?
+  failReason            String?
+  rulesVersion          String?
   /// versions.lexicon: TokenSage's category lexicon, which moves without a rules bump.
-  lexiconVersion     String?
-  analysis           Json?
-  analyzedAt         DateTime?
-  checkedAt          DateTime  @default(now())
+  lexiconVersion        String?
+  analysis              Json?
+  analyzedAt            DateTime?
+  checkedAt             DateTime  @default(now())
 
   @@index([checkedAt])
 }
