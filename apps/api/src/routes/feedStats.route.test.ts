@@ -76,7 +76,26 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
       },
     });
     await match(c, ago(2), { candidateOutcomeId: open.id });
+    // Two days old, with its exit-plan return settled on its grading row: in the week, not the day.
+    const settled = await prisma.candidateOutcome.create({
+      data: {
+        tokenId: old,
+        sampleKind: "event",
+        anchorAt: ago(48 * 60),
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 50_000,
+        features: {},
+        nextCheckAt: new Date(),
+        peak1hPriceUsd: 0.0001,
+        low1hPriceUsd: 0.00008,
+        lowBefore2xPriceUsd: 0.00008,
+        peak24hPriceUsd: 0.0001,
+        simReturnPct: -20,
+      },
+    });
     await match(old, ago(48 * 60), {
+      candidateOutcomeId: settled.id,
+      hit10xIn1h: false,
       hit2xIn1h: true,
       hit4xIn1h: true,
       disqualified: false,
@@ -97,6 +116,7 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
         hit4xIn1h: false,
         disqualified: false,
         peak24hReturnPct: 120,
+        simReturnPct: 60,
       },
     });
     app = await buildServer(env);
@@ -148,6 +168,32 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
       peak24hReturnPct: null,
     });
     expect(bySymbol.BBB).toMatchObject({ status: "missed" });
+  });
+
+  it("averages the feed's settled exit-plan returns over each window", async () => {
+    type Win = {
+      hours: number;
+      alerts: number;
+      settled: number;
+      avgReturnPct: number | null;
+      buckets: unknown[];
+    };
+    const windows = async () => {
+      const res = await call("GET", "/matches/returns");
+      expect(res.statusCode).toBe(200);
+      return Object.fromEntries((res.json().windows as Win[]).map((w) => [w.hours, w]));
+    };
+    await call("PUT", "/curated/feed", { models: ["survivor"], showModelAlerts: true });
+    const on = await windows();
+    // The model call folded into token B's alert carries its +60%; C is still holding.
+    expect(on[1]).toMatchObject({ alerts: 1, settled: 0, avgReturnPct: null });
+    expect(on[24]).toMatchObject({ alerts: 3, settled: 1, avgReturnPct: 60 });
+    expect(on[168]).toMatchObject({ alerts: 4, settled: 2, avgReturnPct: 20 });
+    expect(on[168]!.buckets).toHaveLength(28);
+
+    await call("PUT", "/curated/feed", { showModelAlerts: false });
+    const off = await windows();
+    expect(off[168]).toMatchObject({ alerts: 4, settled: 1, avgReturnPct: -20 });
   });
 
   it("rejects an out-of-range window", async () => {

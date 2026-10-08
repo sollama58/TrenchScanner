@@ -99,6 +99,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
         stats={fs ?? null}
         hours={hours}
         targets={t}
+        pollKey={String(pick)}
         weather={
           stats.data?.market && (
             <WeatherChip
