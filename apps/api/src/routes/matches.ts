@@ -13,6 +13,7 @@ import {
   groupSameTokenCalls,
   serializeCuratedAlert,
   resolveOutcome,
+  callPeakPct,
   type CallGroup,
   type ModelCall,
 } from "../curatedFeed.js";
@@ -430,6 +431,8 @@ export async function registerMatchRoutes(
               peak24hReturnPct: true,
               runPeakMinutes: true,
               outcomeFinalizedAt: true,
+              anchorMcapUsd: true,
+              peakMcapUsd: true,
               candidateOutcome: curatedAlertInclude.candidateOutcome,
               token: { select: { symbol: true } },
             },
@@ -466,7 +469,7 @@ export async function registerMatchRoutes(
           tokenId: lead.tokenId,
           symbol: lead.token.symbol,
           outcome,
-          peakPct: outcome.peak24hReturnPct,
+          peakPct: callPeakPct(outcome.peak24hReturnPct, lead),
         };
         return { ...card, id: lead.id, matchedAt: lead.createdAt, curated: { alertId: lead.id, card } };
       },
@@ -474,7 +477,15 @@ export async function registerMatchRoutes(
     // A model call on a token the reader's filter also caught is one card showing the call.
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
       (c): FeedStatsCard =>
-        c.kind === "match" && c.curated ? { ...c.curated.card, kind: "match", tokenId: c.tokenId } : c,
+        c.kind === "match" && c.curated
+          ? {
+              ...c.curated.card,
+              kind: "match",
+              tokenId: c.tokenId,
+              // The better of the two alerts' runs, as the card shows it.
+              peakPct: maxPct(c.peakPct, c.curated.card.peakPct),
+            }
+          : c,
     );
 
     return {
@@ -534,6 +545,7 @@ export async function registerMatchRoutes(
               simReturnPct: true,
               peak24hReturnPct: true,
               anchorMcapUsd: true,
+              peakMcapUsd: true,
               candidateOutcome: { select: RUN_PEAK_SELECT },
             },
           }),
@@ -592,7 +604,7 @@ export async function registerMatchRoutes(
       // double), so a token that ran later would read small. Its market-cap high since the call,
       // from the snapshots and live readings the app keeps, is the same ATH a filter alert tracks.
       const peakPct = maxPct(
-        lead.peak24hReturnPct ?? runPeakPct(lead.candidateOutcome),
+        callPeakPct(lead.peak24hReturnPct ?? runPeakPct(lead.candidateOutcome), lead),
         callAth.get(lead.id) ?? null,
       );
       return {

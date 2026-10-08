@@ -1,5 +1,6 @@
 import { prisma, createLogger, forEachWithConcurrency, type DexScreenerClient } from "@trenchscanner/core";
 import { recordMatchPeaksFullSweep } from "./matchPeaks.js";
+import { recordCuratedPeaksFullSweep } from "./curatedPeaks.js";
 
 const logger = createLogger("outcome-tracking-job");
 
@@ -152,6 +153,8 @@ export async function runOutcomeTrackingJob(
       )
     : undefined;
   const swept = await recordMatchPeaksFullSweep(snapshotRetentionDays, snapshotsSince);
+  // The model calls' highs, on the same bound: their cards' Peak, like a filter alert's ATH.
+  await recordCuratedPeaksFullSweep(snapshotRetentionDays, snapshotsSince);
 
   const cutoff = new Date(startedAt - OUTCOME_TRACKING_WINDOW_DAYS * 86_400_000);
   const matches = await prisma.match.findMany({

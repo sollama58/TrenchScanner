@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  callPeakPct,
   foldCuratedIntoPage,
   groupSameTokenCalls,
   resolveOutcome,
@@ -559,5 +560,16 @@ describe("resolveOutcome", () => {
     const view = resolveOutcome(alert({ candidateOutcome: null }));
     expect(view.status).toBe("unknown");
     expect(view.peak1hReturnPct).toBeNull();
+  });
+});
+
+describe("callPeakPct", () => {
+  it("takes the market-cap high since the call when the short watch saw less", () => {
+    expect(callPeakPct(20, { peakMcapUsd: 500_000, anchorMcapUsd: 50_000 })).toBe(900);
+  });
+  it("keeps the run peak when it is the larger, or the only one", () => {
+    expect(callPeakPct(300, { peakMcapUsd: 100_000, anchorMcapUsd: 50_000 })).toBe(300);
+    expect(callPeakPct(40, { peakMcapUsd: null, anchorMcapUsd: 50_000 })).toBe(40);
+    expect(callPeakPct(null, { peakMcapUsd: null, anchorMcapUsd: 50_000 })).toBeNull();
   });
 });

@@ -193,6 +193,8 @@ export interface CuratedMeta {
   reasons: string[];
   alertedAt: string;
   outcome: Outcome;
+  /** The call's Peak, which only rises: its run peak or its market-cap high since (absent from older API builds). */
+  peakPct?: number | null;
   /** The Narrative seat's later view of the call, once the deep read decided; null until then. */
   narrative?: { verdict: "agrees" | "warns"; at: string } | null;
   aiReview?: AdminAiReview;

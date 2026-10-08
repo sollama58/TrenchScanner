@@ -1,4 +1,5 @@
 import { prisma, createLogger } from "@trenchscanner/core";
+import { recordCuratedPeaks } from "./curatedPeaks.js";
 
 const logger = createLogger("match-peaks");
 
@@ -235,6 +236,8 @@ export function createMatchPeaksRunner(
         sinceMinutes: windowMinutes,
         tokenIds,
       });
+      // The model calls' highs from the same fresh readings, so a call's Peak keeps up as a match's does.
+      await recordCuratedPeaks(snapshotRetentionDays, { sinceMinutes: windowMinutes, tokenIds });
       const repaired = await repair({ sinceMinutes: windowMinutes });
       // Only advanced once the pass succeeded: a failed pass leaves the next window covering both.
       previousStartedAt = startedAt;
