@@ -181,3 +181,32 @@ export function summarizeReturns(cards: readonly ReturnCard[], now: number): Fee
     };
   });
 }
+
+/** One of the week's best settled returns in the feed, for the Stats panel's top three. */
+export interface TopReturn {
+  tokenId: string;
+  /** When it alerted. */
+  at: Date;
+  returnPct: number;
+}
+
+/**
+ * The feed's best settled exit-plan returns over the week, one per token (a token alerted twice
+ * shows its better run), best first.
+ */
+export function topReturns(
+  cards: readonly (ReturnCard & { tokenId: string })[],
+  now: number,
+  n = 3,
+): TopReturn[] {
+  const start = now - RETURN_WINDOW_MAX_HOURS * 3_600_000;
+  const best = new Map<string, TopReturn>();
+  for (const c of cards) {
+    if (c.returnPct === null || !Number.isFinite(c.returnPct)) continue;
+    if (c.at.getTime() <= start || c.at.getTime() > now) continue;
+    const held = best.get(c.tokenId);
+    if (!held || c.returnPct > held.returnPct)
+      best.set(c.tokenId, { tokenId: c.tokenId, at: c.at, returnPct: c.returnPct });
+  }
+  return [...best.values()].sort((a, b) => b.returnPct - a.returnPct).slice(0, n);
+}

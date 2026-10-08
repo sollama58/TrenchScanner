@@ -286,6 +286,15 @@ export interface FeedReturns {
     bucketMinutes: number;
     buckets: { at: string; settled: number; avgReturnPct: number | null }[];
   }[];
+  /** The week's three best settled returns, one per token, best first (absent from older API builds). */
+  top?: {
+    tokenId: string;
+    symbol: string | null;
+    name: string | null;
+    mintAddress: string;
+    at: string;
+    returnPct: number;
+  }[];
   showModelAlerts: boolean;
   truncated: boolean;
 }

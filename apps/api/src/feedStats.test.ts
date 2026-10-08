@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeFeed, summarizeReturns, type FeedStatsCard } from "./feedStats.js";
+import { summarizeFeed, summarizeReturns, topReturns, type FeedStatsCard } from "./feedStats.js";
 
 const card = (
   status: FeedStatsCard["outcome"]["status"],
@@ -116,5 +116,31 @@ describe("summarizeReturns", () => {
     expect(h1!.buckets[11]).toMatchObject({ settled: 1, avgReturnPct: 20 });
     expect(d1!.buckets[23]).toMatchObject({ settled: 2, avgReturnPct: 30 });
     expect(h1!.buckets[0]).toMatchObject({ settled: 0, avgReturnPct: null });
+  });
+});
+
+describe("topReturns", () => {
+  const now = Date.parse("2026-10-08T12:00:00Z");
+  const ago = (h: number) => new Date(now - h * 3_600_000);
+
+  it("keeps the week's three best settled returns, one per token, best first", () => {
+    const top = topReturns(
+      [
+        { tokenId: "a", at: ago(1), returnPct: 120 },
+        { tokenId: "a", at: ago(30), returnPct: 400 },
+        { tokenId: "b", at: ago(2), returnPct: 250 },
+        { tokenId: "c", at: ago(3), returnPct: null },
+        { tokenId: "d", at: ago(4), returnPct: -40 },
+        { tokenId: "e", at: ago(5), returnPct: 60 },
+        { tokenId: "f", at: ago(200), returnPct: 9000 },
+      ],
+      now,
+    );
+    expect(top.map((t) => [t.tokenId, t.returnPct])).toEqual([
+      ["a", 400],
+      ["b", 250],
+      ["e", 60],
+    ]);
+    expect(top[0]!.at).toEqual(ago(30));
   });
 });
