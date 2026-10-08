@@ -162,9 +162,9 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             it&apos;s out.
           </p>
           <ul className="tour-checks">
-            <li>Nobody can print more of it</li>
+            <li>Mint Authority revoked</li>
             <li>Nobody can freeze your coins</li>
-            <li>Its cash pool is locked in</li>
+            <li>Primary LP Locked</li>
             <li>Not a Mayhem Mode launch</li>
             <li>Top holders aren&apos;t mostly brand-new wallets</li>
             <li>Top holders aren&apos;t mostly empty wallets</li>
@@ -208,11 +208,6 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             Every few hours each model studies the latest coins, then sits a test on weeks it has never seen.
             The one closest to the goal leads and becomes your default feed. New models are bred from the
             winners, and a newcomer that beats the weakest takes its seat.
-          </p>
-          <p className="tour-note">
-            <span className="pill pill-model">Narrative: agrees</span>{" "}
-            <span className="pill pill-warn">Narrative: warns</span> One model reads each coin&apos;s story
-            and gives other models&apos; calls a thumbs up or a warning. Switch it in Customize.
           </p>
         </>
       ),

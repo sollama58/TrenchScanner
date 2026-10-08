@@ -6941,3 +6941,170 @@ button.small-btn {
     font-size: 17px;
   }
 }
+
+/* The tour's fine print (AboutDetails): a reference laid out to scan */
+.fine-print section {
+  scroll-margin-top: 72px;
+  padding-top: 4px;
+}
+.fine-print section + section {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.fp-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+.fp-jump a {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.fp-jump a:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+.fp-targets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+.fp-targets div {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  background: var(--good-wash);
+  border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.fp-targets .num {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--good-ink);
+}
+.about-body p.fp-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+.fp-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin: 4px 0 12px;
+  font-size: 13px;
+}
+.fp-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-strong);
+}
+.fp-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-2);
+  vertical-align: top;
+}
+.fp-table th:first-child {
+  width: 34%;
+}
+.fp-table td:first-child {
+  color: var(--ink);
+  font-weight: 600;
+}
+.fp-table th,
+.fp-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.fp-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.fp-pair > div {
+  padding: 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.about-body .fp-pair p {
+  margin: 8px 0 6px;
+  font-size: 13px;
+}
+.about-body ul.fp-list {
+  list-style: disc;
+  padding-left: 18px;
+  gap: 4px;
+}
+.about-body .fp-list li {
+  font-size: 13px;
+}
+.about-body ol.fp-steps {
+  margin: 4px 0 10px;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+.about-body .fp-steps li {
+  color: var(--ink-2);
+}
+.fp-steps b {
+  color: var(--ink);
+}
+.about-terms dt.fp-good {
+  color: var(--good-ink);
+}
+.about-terms dt.fp-bad {
+  color: var(--bad-ink);
+}
+.fp-weather {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+.fp-weather span {
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+.fp-weather .cold {
+  color: var(--series-1);
+  border-color: color-mix(in srgb, var(--series-1) 40%, transparent);
+}
+.fp-weather .hot {
+  color: var(--series-2);
+  border-color: color-mix(in srgb, var(--series-2) 40%, transparent);
+}
+@media (max-width: 640px) {
+  .fp-targets,
+  .fp-pair,
+  .fp-weather {
+    grid-template-columns: 1fr;
+  }
+  .fp-targets div {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 10px;
+  }
+}
