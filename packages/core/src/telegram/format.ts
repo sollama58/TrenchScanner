@@ -361,7 +361,7 @@ export function formatDigest(cards: AlertCard[], links: AlertLinks, parts: Alert
     // A blank line between entries, so a wrapped entry doesn't run into the next one.
     lines.push(...(i > 0 ? [""] : []), bits.join(" · "));
   });
-  if (ranked.length > DIGEST_MAX_ENTRIES) lines.push(`➕ and ${ranked.length - DIGEST_MAX_ENTRIES} more`);
+  if (ranked.length > DIGEST_MAX_ENTRIES) lines.push(`… and ${ranked.length - DIGEST_MAX_ENTRIES} more`);
   const dash = dashboardLink(links, "Open the Live feed");
   if (dash) lines.push("", dash);
   return lines.join("\n");
