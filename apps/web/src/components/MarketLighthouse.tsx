@@ -944,10 +944,10 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
         By hour of the day in your local time ({clock.name}), all {h.days.toLocaleString()} days kept
       </h4>
       <p className="faint small">
-        Every screened token in our history by the hour it was decided on. Times are in your local time zone,{" "}
+        Every screened token in our history by the hour it was decided on, in your local time zone (
         {clock.name}
-        {clock.rounded ? ", rounded to the hour" : ""}, not UTC: how many tokens each hour brings, how often
-        they doubled, and what they returned on the exit plan. Hours with fewer than {MIN_HOUR_GRADED} graded
+        {clock.rounded ? ", rounded to the hour" : ""}): how many tokens each hour brings, how often they
+        doubled, and what they returned on the exit plan. Hours with fewer than {MIN_HOUR_GRADED} graded
         tokens are faded.
       </p>
       <div className="lh-readout" aria-live="polite">
