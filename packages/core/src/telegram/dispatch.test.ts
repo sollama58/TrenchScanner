@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { Prisma } from "@prisma/client";
 import { loadEnv } from "../config/env.js";
 import { prisma } from "../db.js";
 import type { ContestantSpec } from "../curation/contestants.js";
@@ -226,6 +227,49 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     const summary = await run(api);
     expect(summary.sent + summary.digests).toBe(0);
     expect(stateLoads).toBe(0);
+  });
+
+  it("adds the Narrative seat's note per the user's toggle, else once the seat is ready", async () => {
+    const at = new Date(Date.now() - 30_000);
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId,
+        source: "test",
+        confidence: 80,
+        anchorPriceUsd: 0.001,
+        anchorMcapUsd: 50_000,
+        model: "rules",
+        modelName: "Rules",
+        createdAt: at,
+        narrativeVerdict: "agrees",
+      },
+    });
+    const pass = async (feedAppearance: object | null, ready: boolean) => {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { feedAppearance: feedAppearance ?? Prisma.DbNull },
+      });
+      await prisma.telegramChat.update({
+        where: { id: chatRowId },
+        data: { sentThrough: new Date(at.getTime() - 1) },
+      });
+      const api = new FakeTelegramApi();
+      await runTelegramDispatch(env, {
+        api,
+        sleep: noSleep,
+        hasAccess: async () => true,
+        oldestOpenTransaction: async () => null,
+        feedModelState: async () => state,
+        narrativeNoteReady: async () => ready,
+      });
+      expect(api.sent()).toHaveLength(1);
+      return api.sent()[0]!.text;
+    };
+    expect(await pass(null, false)).not.toContain("Narrative agrees");
+    expect(await pass(null, true)).toContain("Narrative agrees");
+    expect(await pass({ narrativeNote: false }, true)).not.toContain("Narrative agrees");
+    expect(await pass({ narrativeNote: true }, false)).toContain("Narrative agrees");
+    await prisma.user.update({ where: { id: userId }, data: { feedAppearance: Prisma.DbNull } });
   });
 
   it("skips accounts without access and still moves their cursor", async () => {

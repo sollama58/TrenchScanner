@@ -4120,6 +4120,10 @@ button.small-btn {
 .appearance-controls .check {
   margin-top: 0;
 }
+/* A line under a checkbox saying what it does on its own (the Narrative toggle's automatic rule). */
+.appearance-controls .check-hint {
+  margin: -8px 0 0;
+}
 .preset-options {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

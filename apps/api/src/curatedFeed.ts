@@ -385,7 +385,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
 }
 
 /** The `curated` block both feeds attach to a card the curator picked. */
-export function curatedMeta(alert: CuratedAlertWithRelations, showNarrative = false) {
+export function curatedMeta(alert: CuratedAlertWithRelations) {
   const outcome = resolveOutcome(alert);
   const peakPct = callPeakPct(outcome.peak24hReturnPct, alert);
   return {
@@ -418,11 +418,12 @@ export function curatedMeta(alert: CuratedAlertWithRelations, showNarrative = fa
     peakMcapUsd: peakPct !== null && peakPct > 0 ? alert.anchorMcapUsd * (1 + peakPct / 100) : null,
     /**
      * The Narrative seat's later view of this call, once TokenSage's deep read decided: "agrees"
-     * or "warns". Null until then, on the Narrative seat's own calls, and while the note is
-     * switched off (NARRATIVE_NOTES_SHOWN).
+     * or "warns". Null until then, and on the Narrative seat's own calls. Whether the card shows
+     * it is the reader's Customize toggle (FeedAppearance.narrativeNote) or, unset, GET
+     * /config/narrative-note.
      */
     narrative:
-      showNarrative && (alert.narrativeVerdict === "agrees" || alert.narrativeVerdict === "warns")
+      alert.narrativeVerdict === "agrees" || alert.narrativeVerdict === "warns"
         ? { verdict: alert.narrativeVerdict, at: alert.narrativeNotedAt ?? alert.createdAt }
         : null,
   };
@@ -447,8 +448,6 @@ export function serializeCuratedAlert(
     token: { liveMarketCapUsd: number | null; liveDataAt: Date | null },
     latestSnapshot: { marketCapUsd: number; takenAt: Date } | null,
   ) => { marketCapUsd: number | null; at: Date | null },
-  /** Carry the Narrative seat's note (env NARRATIVE_NOTES_SHOWN); off by default. */
-  showNarrative = false,
 ) {
   const { snapshots, ...token } = alert.token;
   const latestSnapshot = snapshots[0] ?? null;
@@ -523,7 +522,7 @@ export function serializeCuratedAlert(
     currentMarketCapUsd: current.marketCapUsd,
     currentMarketCapAt: current.at,
     filter: { id: "curated", name: "Curated" },
-    curated: curatedMeta(alert, showNarrative),
+    curated: curatedMeta(alert),
   };
 }
 

@@ -1020,9 +1020,25 @@ export interface FeedAppearance {
   reasons: boolean;
   /** The Top-10 snipers tile; off by default. */
   sniperTop10: boolean;
+  /**
+   * The Narrative model's "agrees" / "warns" pill on other models' cards (and the line in Telegram
+   * alerts). Null follows the automatic default (GET /config/narrative-note).
+   */
+  narrativeNote: boolean | null;
   /** Trading sites each card links to; Padre's Trading Terminal by default. */
   quickLinks: QuickLink[];
   hidden: CardField[];
+}
+
+/** Whether the Narrative note shows by default, and the record behind it (GET /config/narrative-note). */
+export interface NarrativeNoteReadiness {
+  ready: boolean;
+  /** The Narrative model's live 2x hit rate over the window, in percent; null with nothing graded. */
+  winRatePct: number | null;
+  graded: number;
+  minRatePct: number;
+  minGraded: number;
+  windowDays: number;
 }
 
 /** The composite score's current weights (GET /config/score). */

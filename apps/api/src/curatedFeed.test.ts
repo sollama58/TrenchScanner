@@ -204,10 +204,10 @@ describe("serializeCuratedAlert", () => {
     expect(card.currentMarketCapUsd).toBe(150_000);
   });
 
-  it("carries the Narrative seat's note only while NARRATIVE_NOTES_SHOWN is on", () => {
+  it("carries the Narrative seat's note; the reader's Customize toggle decides whether it shows", () => {
     const noted = alertRow({ narrativeVerdict: "warns", narrativeNotedAt: at(5) }) as any;
-    expect(serializeCuratedAlert(noted, currentMarketCap).curated.narrative).toBeNull();
-    expect(serializeCuratedAlert(noted, currentMarketCap, true).curated.narrative).toEqual({
+    expect(serializeCuratedAlert(alertRow() as any, currentMarketCap).curated.narrative).toBeNull();
+    expect(serializeCuratedAlert(noted, currentMarketCap).curated.narrative).toEqual({
       verdict: "warns",
       at: at(5),
     });

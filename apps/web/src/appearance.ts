@@ -27,6 +27,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   scoreColor: true,
   reasons: false,
   sniperTop10: false,
+  narrativeNote: null,
   quickLinks: ["terminal"],
   hidden: [],
 };
@@ -184,6 +185,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     scoreColor: typeof r.scoreColor === "boolean" ? r.scoreColor : d.scoreColor,
     reasons: typeof r.reasons === "boolean" ? r.reasons : d.reasons,
     sniperTop10: typeof r.sniperTop10 === "boolean" ? r.sniperTop10 : d.sniperTop10,
+    narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     quickLinks: Array.isArray(r.quickLinks)
       ? [
           ...new Set(
@@ -199,8 +201,18 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
 
 /** A preset applied on top of the default, keeping the user's theme and colors. */
 export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance>): FeedAppearance {
-  const { theme, accent, mine, win, loss, quickLinks } = current;
-  return normalizeAppearance({ ...DEFAULT_APPEARANCE, ...look, theme, accent, mine, win, loss, quickLinks });
+  const { theme, accent, mine, win, loss, quickLinks, narrativeNote } = current;
+  return normalizeAppearance({
+    ...DEFAULT_APPEARANCE,
+    ...look,
+    theme,
+    accent,
+    mine,
+    win,
+    loss,
+    quickLinks,
+    narrativeNote,
+  });
 }
 
 /** Whether two appearances look the same (hidden fields in any order). */

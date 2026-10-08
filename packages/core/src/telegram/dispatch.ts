@@ -5,6 +5,11 @@ import { prisma } from "../db.js";
 import { createLogger } from "../logger.js";
 import { resolveAccess } from "../subscription/access.js";
 import { loadFeedModelState, resolveFeedModels, type FeedModelState } from "../curation/feedModels.js";
+import {
+  loadNarrativeNoteReadiness,
+  narrativeNoteChoice,
+  showsNarrativeNote,
+} from "../curation/narrativeNote.js";
 import { TelegramApi, telegramConfigured } from "./api.js";
 import { alertMessage, alertParts, digestMessage, type AlertCard, type AlertLinks } from "./format.js";
 
@@ -70,6 +75,8 @@ export interface DispatchDeps {
   lookupImages?: (mints: string[]) => Promise<Map<string, string>>;
   /** Test seam: when the oldest transaction open in the database began. */
   oldestOpenTransaction?: () => Promise<Date | null>;
+  /** Test seam: whether the Narrative seat's note shows for users who haven't set the toggle. */
+  narrativeNoteReady?: () => Promise<boolean>;
 }
 
 /** When the oldest other transaction open in this database began, or null if none is (or unknown). */
@@ -151,6 +158,7 @@ function loadChats() {
           feedModels: true,
           showModelAlerts: true,
           followBestModel: true,
+          feedAppearance: true,
         },
       },
     },
@@ -358,6 +366,14 @@ async function dispatchPass(
   // The roster and default only decide which calls go to whom, so they are read only when there
   // are calls to route: most passes are empty, and this runs every few seconds.
   const state = calls.length > 0 ? await (deps.feedModelState ?? (() => loadFeedModelState(env)))() : null;
+  // The Narrative seat's note shows per the user's Customize toggle, else once the seat has proven
+  // itself (curation/narrativeNote.ts). Read only when a call carries a note; a failed read keeps
+  // the note off rather than holding the alerts.
+  const noteReady = calls.some((c) => c.narrativeVerdict !== null)
+    ? await (deps.narrativeNoteReady ?? (async () => (await loadNarrativeNoteReadiness()).ready))().catch(
+        () => false,
+      )
+    : false;
 
   const access = new Map<string, Promise<boolean>>();
   const accessOf = (wallet: string) => {
@@ -403,8 +419,9 @@ async function dispatchPass(
     const pending = buildPending(
       { ...chat, modelCalls: chat.modelCalls && chat.user.showModelAlerts },
       mine,
-      // The Narrative seat's note stays off the message while NARRATIVE_NOTES_SHOWN is off.
-      env.NARRATIVE_NOTES_SHOWN ? theirs : theirs.map((c) => ({ ...c, narrativeVerdict: null })),
+      showsNarrativeNote(narrativeNoteChoice(chat.user.feedAppearance), noteReady)
+        ? theirs
+        : theirs.map((c) => ({ ...c, narrativeVerdict: null })),
       horizon,
     );
     if (pending.length === 0) {

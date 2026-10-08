@@ -78,6 +78,11 @@ export const feedAppearanceSchema = z
     reasons: z.boolean().default(false),
     /** The Top-10 snipers tile; hidden by default, as are accounts saved before it. */
     sniperTop10: z.boolean().default(false),
+    /**
+     * The Narrative seat's "agrees"/"warns" note on other models' cards and Telegram alerts. Null
+     * (the default) follows curation/narrativeNote.ts: off until the seat proves itself live.
+     */
+    narrativeNote: z.boolean().nullable().default(null),
     /** Trading sites each card links to, in this order; Padre's Trading Terminal by default. */
     quickLinks: z
       .array(z.enum(QUICK_LINKS))
@@ -113,6 +118,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   scoreColor: true,
   reasons: false,
   sniperTop10: false,
+  narrativeNote: null,
   quickLinks: ["terminal"],
   hidden: [],
 };

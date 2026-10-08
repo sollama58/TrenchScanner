@@ -6,6 +6,7 @@ import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SageIcon, Slid
 import { openSage } from "../sage";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
+import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 
 const LINKS = [
@@ -33,6 +34,8 @@ export function AlertCard({
   const { weights, scale } = useScoreWeights();
   // Red at recent alerts' 10th percentile through to green at their 90th (Customize can turn it off).
   const { scoreColor, quickLinks } = useAppearance();
+  // Customize's Narrative toggle, else on once the Narrative model's 7-day hit rate passes 40%.
+  const showNarrative = useShowNarrativeNote();
   const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
   const [open, setOpen] = useState(false);
@@ -155,7 +158,7 @@ export function AlertCard({
                   <span className="pill-text">High conviction</span>
                 </span>
               )}
-            {curated?.narrative && show("modelPill") && (
+            {curated?.narrative && showNarrative && show("modelPill") && (
               <span
                 className={`pill ${curated.narrative.verdict === "agrees" ? "pill-model" : "pill-warn"}`}
                 title={

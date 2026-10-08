@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Card, CardField, QuickLink } from "../api";
+import type { Card, CardField, NarrativeNoteReadiness, QuickLink } from "../api";
 import {
   CARD_FIELD_GROUPS,
   DEFAULT_APPEARANCE,
@@ -17,6 +17,7 @@ import {
 import { AlertCard } from "./AlertCard";
 import { PaletteIcon } from "./Icons";
 import { useNow } from "../hooks";
+import { useNarrativeNoteReadiness } from "../narrativeNote";
 
 /**
  * Settings › Feed appearance: theme, colors, spacing, columns and which card fields show, with a
@@ -93,6 +94,8 @@ export function AppearancePanel() {
  */
 export function AppearanceControls() {
   const look = useAppearance();
+  const narrative = useNarrativeNoteReadiness();
+  const narrativeShown = look.narrativeNote ?? narrative?.ready ?? false;
   const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
   const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
   const shown = (f: CardField) =>
@@ -287,6 +290,27 @@ export function AppearanceControls() {
           />
           Color the score: red for the lowest 10% of recent alerts, green for the top 10%
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={narrativeShown}
+            onChange={() => setAppearance({ narrativeNote: !narrativeShown })}
+          />
+          Narrative model&rsquo;s &ldquo;agrees&rdquo; / &ldquo;warns&rdquo; on other models&rsquo; calls
+        </label>
+        <p className="faint small check-hint">
+          {look.narrativeNote === null ? (
+            <>Automatic: {narrativeAutoHint(narrative)}</>
+          ) : (
+            <>
+              Set by you.{" "}
+              <button type="button" className="link" onClick={() => setAppearance({ narrativeNote: null })}>
+                Go back to automatic
+              </button>{" "}
+              ({narrativeAutoHint(narrative)})
+            </>
+          )}
+        </p>
         <div className="field-group">
           <h4>Quick links</h4>
           {QUICK_LINK_SITES.map((l) => (
@@ -472,6 +496,17 @@ function TextSize({ value, onCommit }: { value: number; onCommit: (v: number) =>
 }
 
 /** Two made-up cards for the preview: a model call that ran to 4x, and a filter alert that missed. */
+/** What the automatic Narrative default is doing, and why. */
+function narrativeAutoHint(n: NarrativeNoteReadiness | null): string {
+  if (!n) return "off until the Narrative model's record loads.";
+  const rule = `turns on once the Narrative model's ${n.windowDays}-day 2x hit rate is above ${n.minRatePct}% on at least ${n.minGraded} graded calls`;
+  const record =
+    n.winRatePct === null
+      ? "no graded calls yet"
+      : `${n.winRatePct.toFixed(0)}% over ${n.graded} graded call${n.graded === 1 ? "" : "s"}`;
+  return n.ready ? `on, ${record}. It ${rule}.` : `off for now, ${record}. It ${rule}.`;
+}
+
 function sampleCards(now: number): { won: Card; missed: Card } {
   const at = (minAgo: number) => new Date(now - minAgo * 60_000).toISOString();
   const snapshot = (mcap: number, extra: Partial<Card["snapshot"]> = {}): Card["snapshot"] => ({
@@ -529,6 +564,7 @@ function sampleCards(now: number): { won: Card; missed: Card } {
       calibratedPct: 41,
       reasons: ["Strong buy pressure", "Holders growing fast", "Low top 10 share"],
       alertedAt: at(42),
+      narrative: { verdict: "agrees", at: at(30) },
       outcome: {
         status: "won",
         hit2x: true,
