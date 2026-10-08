@@ -16,7 +16,14 @@ import {
   type CallGroup,
   type ModelCall,
 } from "../curatedFeed.js";
-import { summarizeFeed, type FeedStatsCard } from "../feedStats.js";
+import {
+  RETURN_WINDOW_MAX_HOURS,
+  summarizeFeed,
+  summarizeReturns,
+  type FeedReturnWindow,
+  type FeedStatsCard,
+  type ReturnCard,
+} from "../feedStats.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { contestState, resolveFeedModels, savedFeed } from "../contest.js";
@@ -58,6 +65,13 @@ type CuratedCardMeta = ReturnType<typeof serializeCuratedAlert>["curated"] & { c
 
 /** What GET /matches/stats answers with - cached per reader, see FEED_STATS_CACHE_TTL_MS. */
 type FeedStatsResponse = ReturnType<typeof summarizeFeed> & { showModelAlerts: boolean; truncated: boolean };
+
+/** What GET /matches/returns answers with - cached per reader, see FEED_RETURNS_CACHE_TTL_MS. */
+interface FeedReturnsResponse {
+  windows: FeedReturnWindow[];
+  showModelAlerts: boolean;
+  truncated: boolean;
+}
 
 /**
  * Only the latest snapshot per token, not the whole history - lets the dashboard show "now"
@@ -120,6 +134,12 @@ const FEED_STATS_CACHE_TTL_MS = 10_000;
  * page; the count only changes when a match or call lands, and both clear it.
  */
 const MERGED_RUN_CACHE_TTL_MS = 60_000;
+/**
+ * How long one reader's /returns answer stands. A week of the feed is read for it, but only while
+ * the Stats panel is open, and an exit-plan return lands minutes to hours after its alert, so a
+ * minute old is current enough. Cleared with the stats when a new card lands.
+ */
+const FEED_RETURNS_CACHE_TTL_MS = 60_000;
 /** Readers' caches held per process: a few hundred keys, each a few kilobytes at most. */
 const MAX_CACHED_READER_KEYS = 500;
 
@@ -192,12 +212,18 @@ export async function registerMatchRoutes(
   // alert is in every follower's feed, so it clears everything.
   const statsCache = new SharedCacheMap<FeedStatsResponse>(FEED_STATS_CACHE_TTL_MS, MAX_CACHED_READER_KEYS);
   const mergedRunCache = new SharedCacheMap<number>(MERGED_RUN_CACHE_TTL_MS, MAX_CACHED_READER_KEYS);
+  const returnsCache = new SharedCacheMap<FeedReturnsResponse>(
+    FEED_RETURNS_CACHE_TTL_MS,
+    MAX_CACHED_READER_KEYS,
+  );
   const stopCuratedListener = opts.matchStream.onCuratedAlert(() => {
     statsCache.clear();
+    returnsCache.clear();
     mergedRunCache.clear();
   });
   const stopMatchListener = opts.matchStream.onMatch((userId) => {
     statsCache.clear(`${userId}:`);
+    returnsCache.clear(`${userId}:`);
     mergedRunCache.clear(`${userId}:`);
   });
   app.addHook("onClose", async () => {
@@ -367,6 +393,103 @@ export async function registerMatchRoutes(
       ...summarizeFeed(cards, hours),
       showModelAlerts,
       // The caps bound a pathological window; a real feed is far below them.
+      truncated: matches.length === FEED_STATS_MAX_ROWS || calls.length === FEED_STATS_MAX_ROWS,
+    };
+  }
+
+  /**
+   * The Stats panel's returns: the average exit-plan return of this reader's feed over the last
+   * hour, 6 hours, day and week, each with its bars. The same cards /stats grades (their filter's
+   * alerts plus, when their switch is on, their followed models' calls, folded the same way), read
+   * once for the week and cut into the four windows here. Only the columns the return needs are
+   * read, both reads ride an index ((userId, matchedAt) and (model, createdAt)), and the panel
+   * asks only while it is open.
+   */
+  app.get("/returns", async (request) => {
+    const saved = await savedFeed(request);
+    const models = saved.showModelAlerts ? resolveFeedModels(await contestState(opts.env), saved).models : [];
+    const userId = request.user!.userId;
+    const key = `${userId}:${saved.showModelAlerts ? "on" : "off"}:${models.join(",")}`;
+    return returnsCache.for(key).get(() => buildFeedReturns(userId, models, saved.showModelAlerts));
+  });
+
+  async function buildFeedReturns(
+    userId: string,
+    models: string[],
+    showModelAlerts: boolean,
+  ): Promise<FeedReturnsResponse> {
+    const now = Date.now();
+    const since = new Date(now - RETURN_WINDOW_MAX_HOURS * 3_600_000);
+    const [matches, calls] = await Promise.all([
+      prisma.match.findMany({
+        where: { userId, matchedAt: { gte: since } },
+        orderBy: { matchedAt: "desc" },
+        take: FEED_STATS_MAX_ROWS,
+        select: { id: true, tokenId: true, matchedAt: true, candidateOutcomeId: true },
+      }),
+      models.length === 0
+        ? Promise.resolve([])
+        : prisma.curatedAlert.findMany({
+            where: { model: { in: models }, createdAt: { gte: since } },
+            orderBy: { createdAt: "desc" },
+            take: FEED_STATS_MAX_ROWS,
+            select: {
+              ...CALL_SELECT,
+              simReturnPct: true,
+              candidateOutcome: { select: { simReturnPct: true } },
+            },
+          }),
+    ]);
+    // A filter alert's return is on the row grading it; the match keeps no copy.
+    const outcomeIds = [
+      ...new Set(matches.flatMap((m) => (m.candidateOutcomeId ? [m.candidateOutcomeId] : []))),
+    ];
+    const outcomes =
+      outcomeIds.length === 0
+        ? []
+        : await prisma.candidateOutcome.findMany({
+            where: { id: { in: outcomeIds }, simReturnPct: { not: null } },
+            select: { id: true, simReturnPct: true },
+          });
+    const returnById = new Map(outcomes.map((o) => [o.id, o.simReturnPct]));
+
+    type ReturnFeedCard = ReturnCard & {
+      id: string;
+      kind: "match" | "curated";
+      tokenId: string;
+      matchedAt: Date;
+      curated: { alertId: string; returnPct: number | null } | null;
+    };
+    const matchCards: ReturnFeedCard[] = matches.map((m) => ({
+      id: m.id,
+      kind: "match",
+      tokenId: m.tokenId,
+      matchedAt: m.matchedAt,
+      at: m.matchedAt,
+      returnPct: m.candidateOutcomeId ? (returnById.get(m.candidateOutcomeId) ?? null) : null,
+      curated: null,
+    }));
+    // Folded exactly as /stats folds them, so the two panels count the same cards.
+    const callCards: ReturnFeedCard[] = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).map(
+      ({ lead }) => {
+        const returnPct = lead.simReturnPct ?? lead.candidateOutcome?.simReturnPct ?? null;
+        return {
+          id: lead.id,
+          kind: "curated",
+          tokenId: lead.tokenId,
+          matchedAt: lead.createdAt,
+          at: lead.createdAt,
+          returnPct,
+          curated: { alertId: lead.id, returnPct },
+        };
+      },
+    );
+    const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
+      (c): ReturnCard => (c.kind === "match" && c.curated ? { at: c.at, returnPct: c.curated.returnPct } : c),
+    );
+    return {
+      windows: summarizeReturns(cards, now),
+      showModelAlerts,
       truncated: matches.length === FEED_STATS_MAX_ROWS || calls.length === FEED_STATS_MAX_ROWS,
     };
   }

@@ -275,6 +275,21 @@ export interface FeedStats {
   truncated: boolean;
 }
 
+/** GET /matches/returns: the average exit-plan return of the reader's feed over 1h, 6h, 24h and 7d. */
+export interface FeedReturns {
+  windows: {
+    hours: number;
+    alerts: number;
+    settled: number;
+    avgReturnPct: number | null;
+    profitable: number;
+    bucketMinutes: number;
+    buckets: { at: string; settled: number; avgReturnPct: number | null }[];
+  }[];
+  showModelAlerts: boolean;
+  truncated: boolean;
+}
+
 export interface MatchPage {
   matches: Card[];
   page: number;

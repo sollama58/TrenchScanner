@@ -95,3 +95,89 @@ export function summarizeFeed(cards: FeedStatsCard[], hours: number): FeedStats 
     medianPeakPct,
   };
 }
+
+/**
+ * The windows the Live tab's returns panel shows, each with the bucket its bar chart uses: twelve
+ * bars for the hour and six hours, one an hour for the day, one per six hours for the week.
+ */
+export const RETURN_WINDOWS = [
+  { hours: 1, bucketMinutes: 5 },
+  { hours: 6, bucketMinutes: 30 },
+  { hours: 24, bucketMinutes: 60 },
+  { hours: 168, bucketMinutes: 360 },
+] as const;
+
+/** The longest window: how far back the returns panel reads. */
+export const RETURN_WINDOW_MAX_HOURS = 168;
+
+/** One card of the reader's feed for the returns panel: when it alerted, and its exit-plan return once settled. */
+export interface ReturnCard {
+  at: Date;
+  /** The call's return under the fixed exit plan (curation/profitSim.ts), in percent; null until it settles. */
+  returnPct: number | null;
+}
+
+export interface ReturnBucket {
+  /** The bucket's start. */
+  at: string;
+  settled: number;
+  avgReturnPct: number | null;
+}
+
+export interface FeedReturnWindow {
+  hours: number;
+  /** Cards alerted in the window. */
+  alerts: number;
+  /** Of those, the ones whose exit-plan return has landed: the average is over these. */
+  settled: number;
+  avgReturnPct: number | null;
+  /** Settled cards that made money, and the share of settled cards they are. */
+  profitable: number;
+  bucketMinutes: number;
+  /** Oldest first, ending now. */
+  buckets: ReturnBucket[];
+}
+
+/**
+ * The average exit-plan return of the reader's feed over each of RETURN_WINDOWS, by when each
+ * card alerted. A card still holding (its return not yet written) counts as an alert but not in
+ * the average, the way the hit rates leave a call in its window out.
+ */
+export function summarizeReturns(cards: readonly ReturnCard[], now: number): FeedReturnWindow[] {
+  const settledCards = cards.filter(
+    (c): c is ReturnCard & { returnPct: number } => c.returnPct !== null && Number.isFinite(c.returnPct),
+  );
+  const avg = (sum: number, n: number) => (n === 0 ? null : sum / n);
+  return RETURN_WINDOWS.map(({ hours, bucketMinutes }) => {
+    const bucketMs = bucketMinutes * 60_000;
+    const count = (hours * 60) / bucketMinutes;
+    const start = now - hours * 3_600_000;
+    const inWindow = (c: ReturnCard) => c.at.getTime() > start && c.at.getTime() <= now;
+    const sums = Array.from({ length: count }, () => ({ n: 0, sum: 0 }));
+    let n = 0;
+    let sum = 0;
+    let profitable = 0;
+    for (const c of settledCards) {
+      if (!inWindow(c)) continue;
+      n += 1;
+      sum += c.returnPct;
+      if (c.returnPct > 0) profitable += 1;
+      const i = Math.min(count - 1, Math.floor((c.at.getTime() - start) / bucketMs));
+      sums[i]!.n += 1;
+      sums[i]!.sum += c.returnPct;
+    }
+    return {
+      hours,
+      alerts: cards.filter(inWindow).length,
+      settled: n,
+      avgReturnPct: avg(sum, n),
+      profitable,
+      bucketMinutes,
+      buckets: sums.map((b, i) => ({
+        at: new Date(start + i * bucketMs).toISOString(),
+        settled: b.n,
+        avgReturnPct: avg(b.sum, b.n),
+      })),
+    };
+  });
+}

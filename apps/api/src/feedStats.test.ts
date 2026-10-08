@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeFeed, type FeedStatsCard } from "./feedStats.js";
+import { summarizeFeed, summarizeReturns, type FeedStatsCard } from "./feedStats.js";
 
 const card = (
   status: FeedStatsCard["outcome"]["status"],
@@ -75,5 +75,46 @@ describe("summarizeFeed", () => {
       24,
     );
     expect(s).toMatchObject({ alerts: 1, graded: 0, pending: 0 });
+  });
+});
+
+describe("summarizeReturns", () => {
+  const now = Date.parse("2026-10-08T12:00:00Z");
+  const ago = (min: number) => new Date(now - min * 60_000);
+
+  it("averages settled returns per window and leaves unsettled alerts out of the average", () => {
+    const [h1, h6, d1, w1] = summarizeReturns(
+      [
+        { at: ago(10), returnPct: 50 },
+        { at: ago(20), returnPct: null },
+        { at: ago(120), returnPct: -30 },
+        { at: ago(600), returnPct: 100 },
+        { at: ago(3 * 24 * 60), returnPct: -50 },
+        { at: ago(8 * 24 * 60), returnPct: 1000 },
+      ],
+      now,
+    );
+    expect(h1).toMatchObject({ hours: 1, alerts: 2, settled: 1, avgReturnPct: 50, profitable: 1 });
+    expect(h6).toMatchObject({ alerts: 3, settled: 2, avgReturnPct: 10 });
+    expect(d1).toMatchObject({ alerts: 4, settled: 3, avgReturnPct: 40, profitable: 2 });
+    // The 8-day-old alert is past the week.
+    expect(w1).toMatchObject({ alerts: 5, settled: 4, avgReturnPct: 17.5 });
+  });
+
+  it("puts each alert in the bar for its time, oldest bar first", () => {
+    const [h1, , d1, w1] = summarizeReturns(
+      [
+        { at: ago(10), returnPct: 40 },
+        { at: ago(1), returnPct: 20 },
+      ],
+      now,
+    );
+    expect(h1!.buckets).toHaveLength(12);
+    expect(d1!.buckets).toHaveLength(24);
+    expect(w1!.buckets).toHaveLength(28);
+    expect(h1!.buckets[10]).toMatchObject({ settled: 1, avgReturnPct: 40 });
+    expect(h1!.buckets[11]).toMatchObject({ settled: 1, avgReturnPct: 20 });
+    expect(d1!.buckets[23]).toMatchObject({ settled: 2, avgReturnPct: 30 });
+    expect(h1!.buckets[0]).toMatchObject({ settled: 0, avgReturnPct: null });
   });
 });

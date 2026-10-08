@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { FeedStats } from "../api";
 import { RingGauge } from "./Charts";
+import { FeedReturns } from "./FeedReturns";
 import { BoltIcon, CloseIcon, RadarIcon, TrophyIcon } from "./Icons";
 import { multiple, pct } from "../format";
 
@@ -18,6 +19,7 @@ export function FeedStatsModal({
   hours,
   targets: t,
   weather,
+  pollKey,
 }: {
   open: boolean;
   onClose: () => void;
@@ -25,6 +27,8 @@ export function FeedStatsModal({
   hours: number;
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   weather: React.ReactNode;
+  /** Changes when the feed's makeup does (the models it follows), so the returns refetch. */
+  pollKey: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
 
@@ -118,6 +122,7 @@ export function FeedStatsModal({
               Coins alerted in your feed over the last {hours} hours, graded from the alert price. Alerts
               still being graded don&apos;t count as misses.
             </p>
+            <FeedReturns pollKey={pollKey} />
             {weather}
           </>
         )}
