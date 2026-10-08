@@ -16,6 +16,7 @@ import {
   isCurrentLabelRule,
   runDoublings,
   runWeight,
+  TEN_X_WINDOW_MINUTES,
 } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 import {
@@ -86,7 +87,7 @@ export interface TrainingRow {
   /**
    * The third tier: a clean win that reached 10x within an hour of the alert, before the stop
    * (CandidateOutcome.hit10xIn1h). Omitted while unknown, and on rows from before it was tracked.
-   * Read by the exam's record (the score's 10x part), never by the fit.
+   * Read by the exam's record (the score's 10x part) and the "lambdarank" fit's top tier.
    */
   hit10x?: boolean;
 }
@@ -1057,6 +1058,7 @@ export async function walkForwardEvaluate(
   const cooldownMs = opts.cooldownHours !== undefined ? opts.cooldownHours * 3_600_000 : undefined;
   const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
   const extendedWatchMs = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
+  const tenXWindowMs = TEN_X_WINDOW_MINUTES * 60_000;
   const inBand = (r: TrainingRow) =>
     (!opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand)) &&
     (!opts.decisionRowsOnly || isDecisionRow(r, opts.mcapBand)) &&
@@ -1146,6 +1148,12 @@ export async function walkForwardEvaluate(
           r.runPeakMultiple !== undefined &&
           r.anchorAt.getTime() + extendedWatchMs > testStartMs
             ? { ...r, runPeakMultiple: undefined }
+            : r,
+        )
+        // And the 10x tier (read by the "lambdarank" fit) is graded over an hour, past the purge.
+        .map((r) =>
+          r.hit10x !== undefined && r.anchorAt.getTime() + tenXWindowMs > testStartMs
+            ? { ...r, hit10x: undefined }
             : r,
         );
       if (train.length < minTrainRows || test.length < minTestRows) continue;
