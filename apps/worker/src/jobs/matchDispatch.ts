@@ -5,12 +5,14 @@ import {
   alertGuardBlocks,
   notifyMatchesCreated,
   type Env,
+  type FilterCriteria,
   type MatchAlertGuardMode,
   type ScoredToken,
   type UserFilter,
 } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
+import { clearFilterWalletWait, filterWalletWaitOver } from "./walletPriority.js";
 
 const logger = createLogger("match-dispatch");
 
@@ -35,6 +37,29 @@ export const ALERT_COOLDOWN_HOURS = 12;
 export const FILTER_ARM_QUIET_MINUTES = 10;
 
 export type FilterWithUser = UserFilter;
+
+/** Default for resolveAlertTargets' walletWaitMs - the env default of FILTER_WALLET_MAX_WAIT_SECONDS. */
+const DEFAULT_WALLET_WAIT_MS = 180_000;
+
+/**
+ * Whether this filter puts a ceiling on a wallet figure the token doesn't have yet. matchesFilter
+ * lets an unknown figure past a ceiling, which on its own let a token with 80% empty holders
+ * through a 60% "Max empty" filter on its first sighting, before its holders had been priced
+ * (reported 2026-10-08): resolveAlertTargets holds such a match until the figure lands.
+ */
+export function awaitsWalletFigure(
+  scored: Pick<ScoredToken, "freshTop10WalletPct" | "emptyTop10WalletPct" | "sniperTop10WalletPct">,
+  filter: Pick<
+    FilterCriteria,
+    "maxFreshTop10WalletPct" | "maxEmptyTop10WalletPct" | "maxSniperTop10WalletPct"
+  >,
+): boolean {
+  return (
+    (filter.maxFreshTop10WalletPct != null && scored.freshTop10WalletPct === undefined) ||
+    (filter.maxEmptyTop10WalletPct != null && scored.emptyTop10WalletPct === undefined) ||
+    (filter.maxSniperTop10WalletPct != null && scored.sniperTop10WalletPct === undefined)
+  );
+}
 
 /**
  * Per filter, the armedAt the scan has completed a full pass for. Process-local: after a restart
@@ -142,6 +167,7 @@ export async function createMatchesForCandidate(opts: {
     scored,
     activeFilters,
     guard: env?.MATCH_ALERT_GUARD,
+    walletWaitMs: env ? env.FILTER_WALLET_MAX_WAIT_SECONDS * 1000 : undefined,
   });
   if (toAlert.length === 0) return 0;
 
@@ -166,11 +192,19 @@ export async function resolveAlertTargets(opts: {
   activeFilters: FilterWithUser[];
   /** MATCH_ALERT_GUARD - see scoring/alertGuard.ts. Omitted means "off". */
   guard?: MatchAlertGuardMode;
+  /**
+   * FILTER_WALLET_MAX_WAIT_SECONDS in ms: the longest a match is held for a wallet figure its
+   * filter puts a ceiling on (see awaitsWalletFigure). Omitted means the env default.
+   */
+  walletWaitMs?: number;
 }): Promise<FilterWithUser[]> {
   const { tokenId, scored, activeFilters } = opts;
 
   const allMatching = activeFilters.filter((filter) => matchesFilter(scored, filter));
-  if (allMatching.length === 0) return [];
+  if (allMatching.length === 0) {
+    clearFilterWalletWait(scored.mintAddress);
+    return [];
+  }
 
   // A filter that was only just armed records what already matches it instead of alerting on it.
   // Before the guard on purpose: a token held back for flushing was still already matching.
@@ -181,7 +215,19 @@ export async function resolveAlertTargets(opts: {
     tokenId,
     settling.map((f) => f.id),
   );
-  const matching = allMatching.filter((f) => !settling.includes(f));
+  const settled = allMatching.filter((f) => !settling.includes(f));
+  if (settled.length === 0) return [];
+
+  // A match whose filter caps a wallet figure that isn't in yet waits for it, up to walletWaitMs:
+  // the next scan with the figure decides it for real. Held, like the guard below, without
+  // starting the cooldown. The other filters on the token alert now.
+  const waiting = settled.filter((f) => awaitsWalletFigure(scored, f));
+  let matching = settled;
+  if (waiting.length === 0) {
+    clearFilterWalletWait(scored.mintAddress);
+  } else if (!filterWalletWaitOver(scored.mintAddress, opts.walletWaitMs ?? DEFAULT_WALLET_WAIT_MS, now)) {
+    matching = settled.filter((f) => !waiting.includes(f));
+  }
   if (matching.length === 0) return [];
 
   // Before the cooldown read, and returning nothing rather than a reason: a held-back match must

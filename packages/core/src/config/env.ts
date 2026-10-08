@@ -250,6 +250,12 @@ const envSchema = z.object({
   // also requires buyers to hold the last hour's flow and the last five minutes not to be red;
   // "off" alerts on any match. A held-back match doesn't start the filter's cooldown.
   MATCH_ALERT_GUARD: z.enum(["off", "flush", "ready"]).default("flush"),
+  // The longest a user-filter match waits for a wallet figure its filter puts a ceiling on (Max
+  // fresh / empty / top-10 snipers) when that figure isn't in yet. Holding the match until the
+  // figure lands is what stops a token over the ceiling slipping through on its first sighting;
+  // past this the match alerts with the figure unknown, as it always did, so a lookup that is slow
+  // or failing can't hold a filter's alerts back for good. 0 = don't wait.
+  FILTER_WALLET_MAX_WAIT_SECONDS: z.coerce.number().nonnegative().default(180),
   LIVE_PRICE_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(1),
   // How often match peaks are rolled forward from the snapshots and live pings already banked
   // (apps/worker/src/jobs/matchPeaks.ts). Its own timer rather than part of the scan cycle, which

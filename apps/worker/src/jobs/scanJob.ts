@@ -610,8 +610,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       mintAddress: c.mintAddress,
       addresses: onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? [],
       contender: passesEventPreGate(c, curatedBand),
-      // Alerted on while its empty-wallet share was still unknown: next in line after the
-      // contenders, so the card gets its reading within a cycle or two of the alert.
+      // Alerted on while its empty-wallet share was still unknown, or a user-filter match held
+      // for a wallet figure (see resolveAlertTargets): next in line after the contenders, so the
+      // reading lands within a cycle or two.
       alerted: alertAwaitingWallets(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
@@ -633,15 +634,22 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     .map((c) => ({
       mintAddress: c.mintAddress,
       contender: passesEventPreGate(c, curatedBand),
+      // A user-filter match held for its top-10 snipers share (see resolveAlertTargets).
+      alerted: alertAwaitingWallets(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
     }))
-    .sort((a, b) => Number(b.contender) - Number(a.contender) || b.churn - a.churn);
+    .sort(
+      (a, b) =>
+        Number(b.contender) - Number(a.contender) ||
+        Number(b.alerted) - Number(a.alerted) ||
+        b.churn - a.churn,
+    );
   const sniperStageStartedAt = Date.now();
   const sniperWork = startSniperStage(sniperGroups, deps.helius, env);
 
-  // A user filter with a wallet criterion lets an unknown figure through (see matchFilters), so
-  // while any is active every candidate's lookups are waited on, as they always were - otherwise
-  // a first-sight match would skip the very check that user asked for.
+  // A user filter with a wallet criterion holds a match until the figure is in, up to
+  // FILTER_WALLET_MAX_WAIT_SECONDS (see resolveAlertTargets), so while any is active every
+  // candidate's lookups are waited on - the sooner the figure lands, the sooner the alert.
   const walletFiltersActive = activeFilters.some(
     (f) => f.maxFreshTop10WalletPct != null || f.maxEmptyTop10WalletPct != null,
   );

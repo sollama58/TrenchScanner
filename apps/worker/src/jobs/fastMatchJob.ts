@@ -316,6 +316,7 @@ async function alertForToken(
     scored,
     activeFilters,
     guard: env.MATCH_ALERT_GUARD,
+    walletWaitMs: env.FILTER_WALLET_MAX_WAIT_SECONDS * 1000,
   });
   if (toAlert.length === 0) return 0;
 
