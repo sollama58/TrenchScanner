@@ -13,7 +13,16 @@ import {
   type AiJudgeState,
 } from "../api";
 import { HBarChart, MarkerBars, Skeleton, TargetBars, TrendLines } from "../components/Charts";
-import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
+import {
+  ArrowRightIcon,
+  BrainIcon,
+  ChartIcon,
+  RadarIcon,
+  RobotIcon,
+  ShareIcon,
+  TargetIcon,
+} from "../components/Icons";
+import { ShareImageDialog } from "../components/ShareImageDialog";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
 import { prefetch } from "../cache";
@@ -31,6 +40,7 @@ import {
   rateTone,
 } from "./modelShared";
 import { ModelDetailModal } from "./ModelDetail";
+import { renderLearningCard, type LearningCardData } from "./learningCard";
 
 /**
  * The Model tab: the curator contest. Several models train on the same graded history, each calls
@@ -188,18 +198,20 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         refreshing={board.stale}
       />
 
-      <LeaderboardPanel
-        board={lb}
-        days={days}
-        onSetModels={setFeedModels}
-        guest={guest}
-        refreshing={board.stale}
-        now={now}
-      />
+      <LearningPanel learning={data.learning} board={lb} days={days} now={now} />
 
       <WinnerRunsPanel data={data} days={days} />
 
       <UnderTheHood>
+        <LeaderboardPanel
+          board={lb}
+          days={days}
+          onSetModels={setFeedModels}
+          guest={guest}
+          refreshing={board.stale}
+          now={now}
+        />
+
         <section className="panel">
           <span className="eyebrow">The contest</span>
           <h3>How a call is made</h3>
@@ -257,8 +269,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
           now={now}
           detailed
         />
-
-        <LearningPanel learning={data.learning} now={now} />
 
         <HowItWorks board={lb} />
 
@@ -670,8 +680,8 @@ function UnderTheHood({ children }: { children: ReactNode }) {
         <span>
           <strong>Under the hood</strong>
           <span className="muted small">
-            The full leaderboard, how scores and profit are worked out, whether the models are learning,
-            training exams, evolution, the signals they read, and the AI reviewer.
+            The leaderboard and every figure behind it, how scores and profit are worked out, training exams,
+            evolution, the signals the models read, and the AI reviewer.
           </span>
         </span>
         <span className="under-hood-toggle small">{open ? "Hide" : "Show"}</span>
@@ -1418,115 +1428,237 @@ function shortDay(day: string): string {
 }
 
 /**
- * Day over day: is the system getting better as data accumulates? Hit rates alone can't say - on a
+ * Day over day: is a model getting better as data accumulates? Hit rates alone can't say - on a
  * day the whole market doubles twice as often every model looks twice as good - and the score
- * can't either, since it climbs with evidence at a constant skill. The feed's LIFT over the market
+ * can't either, since it climbs with evidence at a constant skill. A model's LIFT over the market
  * (its 2x rate divided by the 2x rate of the moments the models decided on) is what carries across
- * days, so that is what this panel tracks, by day for the live feed and by run for the exam.
+ * days, so that is what this panel tracks: one model at a time, picked by the reader, by day for
+ * its live calls and by run for its exams. Its window is the page's.
  */
-function LearningPanel({ learning, now }: { learning: LearningCurve; now: number }) {
-  const days = learning.days.filter((d) => d.feed.calls > 0 || d.market.calls > 0);
-  const trend = learning.trend;
-  const runs = learning.runs;
+function LearningPanel({
+  learning,
+  board,
+  days: windowDays,
+  now,
+}: {
+  learning: LearningCurve;
+  board: Leaderboard;
+  days: number;
+  now: number;
+}) {
+  const series = new Map((learning.models ?? []).map((m) => [m.model, m]));
+  // The board's seats in its order; a seat with no calls in the window stays pickable.
+  const seats = board.entries.map((e) => ({ id: e.id, name: e.name }));
+  const firstWithCalls = seats.find((s) => (series.get(s.id)?.days.length ?? 0) > 0) ?? seats[0] ?? null;
+  const [picked, setPicked] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
   const [showRuns, setShowRuns] = useState(false);
+  const seat = seats.find((s) => s.id === picked) ?? firstWithCalls;
+  const mine = seat ? (series.get(seat.id) ?? null) : null;
+  const name = seat?.name ?? mine?.name ?? "This model";
+  const trend = mine?.trend ?? null;
+  const span = learning.trendSpanDays;
+
+  // Every day the market or the model had something, with the model's rate where it called.
+  const own = new Map((mine?.days ?? []).map((d) => [d.day, d]));
+  const points = learning.days
+    .filter((d) => d.market.graded > 0 || own.has(d.day))
+    .map((d) => {
+      const m = own.get(d.day);
+      return {
+        day: d.day,
+        label: shortDay(d.day),
+        model: m && m.rates.graded > 0 ? m.rates.rate2xPct : null,
+        market: d.market.rate2xPct,
+        graded: m?.rates.graded ?? 0,
+        moments: d.market.graded,
+        lift: m?.lift2x ?? null,
+      };
+    });
+  const graded = (mine?.days ?? []).reduce((n, d) => n + d.rates.graded, 0);
+  const runs = learning.runs;
+  const runRows = seat
+    ? runs.map((r) => ({ run: r, own: r.models.find((m) => m.contestant === seat.id) ?? null }))
+    : [];
+  const ranInRuns = runRows.some((r) => r.own);
+
+  const verdictLine = (() => {
+    if (!trend) return `${name} has no graded calls in the last ${windowDays} days yet.`;
+    const r = trend.recent;
+    const p = trend.prior;
+    if (r.lift2x === null)
+      return `${name} needs more graded calls in the last ${span} days before its edge over the market can be read.`;
+    const lately = `Over the last ${span} days ${pct(r.feed.rate2xPct, 1)} of its ${r.feed.graded} graded calls doubled, against ${pct(
+      r.market.rate2xPct,
+      1,
+    )} for the market: ${r.lift2x.toFixed(1)}x the market rate.`;
+    if (!p || p.lift2x === null) return `${lately} Too few calls in the ${span} days before to compare.`;
+    if (trend.verdict === "too-early")
+      return `${lately} The ${span} days before held ${p.lift2x.toFixed(1)}x, but on too few calls to call a trend.`;
+    return `${lately} The ${span} days before held ${p.lift2x.toFixed(1)}x, so it is ${
+      trend.verdict === "improving"
+        ? "pulling further ahead"
+        : trend.verdict === "worsening"
+          ? "losing ground"
+          : "holding its edge"
+    }.`;
+  })();
+
+  const card = (): LearningCardData => ({
+    model: name,
+    windowDays,
+    points: points.map((p) => ({ label: p.label, model: p.model, market: p.market })),
+    spanDays: span,
+    recentLift: trend?.recent.lift2x ?? null,
+    priorLift: trend?.prior?.lift2x ?? null,
+    verdict: trend ? TREND_TEXT[trend.verdict] : TREND_TEXT["too-early"],
+    tone: (trend ? TREND_STATE[trend.verdict] : "early") as LearningCardData["tone"],
+    graded,
+  });
+
   return (
-    <section className="panel">
+    <section className="panel learning-panel">
       <header className="section-head">
         <div>
-          <span className="eyebrow">Learning</span>
+          <span className="eyebrow">
+            <ChartIcon size={13} /> Learning
+          </span>
           <h3>Is it getting better?</h3>
-          <p className="muted small">{learning.note}</p>
+          <p className="muted small">
+            Pick a model to see how often its calls doubled, day by day, next to the market rate: how often a
+            random pick from the same moments doubled. A model that is learning pulls further above the market
+            over time. If both lines rise together, that&apos;s the market, not the model.
+          </p>
         </div>
-        {trend && (
-          <div className="ring-text">
-            <span className="ring-label">
-              Last {learning.trendSpanDays} days vs the {learning.trendSpanDays} before
+        <div className="learning-tools">
+          {trend && (
+            <span
+              className={`state ${TREND_STATE[trend.verdict]}`}
+              title={`Last ${span} days vs the ${span} before`}
+            >
+              {TREND_TEXT[trend.verdict]}
             </span>
-            <span className={`state ${TREND_STATE[trend.verdict]}`}>{TREND_TEXT[trend.verdict]}</span>
-          </div>
-        )}
+          )}
+          <button
+            type="button"
+            className="ghost share-btn"
+            disabled={!seat || points.length === 0}
+            onClick={() => setSharing(true)}
+          >
+            <ShareIcon size={14} /> Share
+          </button>
+        </div>
       </header>
 
-      {trend ? (
+      {seats.length > 0 ? (
+        <div className="model-pick" role="radiogroup" aria-label="Model">
+          {seats.map((s) => {
+            const has = (series.get(s.id)?.days.length ?? 0) > 0;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                role="radio"
+                aria-checked={s.id === seat?.id}
+                className={`${s.id === seat?.id ? "on" : ""}${has ? "" : " quiet"}`}
+                onClick={() => setPicked(s.id)}
+                title={has ? undefined : `No calls in the last ${windowDays} days`}
+              >
+                {s.name}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="empty">No models on the board yet.</p>
+      )}
+
+      {seat && (
         <>
           <div className="family-figs">
             <div>
-              <label>Feed 2x, last {learning.trendSpanDays}d</label>
-              <span className="num">{pct(trend.recent.feed.rate2xPct, 1)}</span>
+              <label>
+                {name} 2x, last {span}d
+              </label>
+              <span className="num">{pct(trend?.recent.feed.rate2xPct, 1)}</span>
             </div>
             <div>
-              <label>Market 2x, same days</label>
-              <span className="num">{pct(trend.recent.market.rate2xPct, 1)}</span>
+              <label>Market 2x, last {span}d</label>
+              <span className="num">{pct(trend?.recent.market.rate2xPct, 1)}</span>
             </div>
             <div>
-              <label>Lift</label>
-              <span className="num">{lift(trend.recent.lift2x)}</span>
+              <label>Vs market, last {span}d</label>
+              <span className="num">{lift(trend?.recent.lift2x)}</span>
             </div>
-            {trend.prior && (
-              <div>
-                <label>Lift, {learning.trendSpanDays}d before</label>
-                <span className="num">{lift(trend.prior.lift2x)}</span>
-              </div>
-            )}
+            <div>
+              <label>Vs market, {span}d before</label>
+              <span className="num">{lift(trend?.prior?.lift2x)}</span>
+            </div>
           </div>
-          <p className="muted small">{trend.reason}</p>
+          <p className="muted small">{verdictLine}</p>
+
+          {points.length > 1 ? (
+            <TrendLines
+              aLabel={`${name} 2x rate`}
+              bLabel="Market 2x rate"
+              data={points.map((p) => ({
+                label: p.label,
+                a: p.model,
+                b: p.market,
+                sub: `${p.graded} graded call${p.graded === 1 ? "" : "s"}; ${p.moments.toLocaleString()} moments${
+                  p.lift !== null ? `; ${lift(p.lift)} the market` : ""
+                }`,
+              }))}
+            />
+          ) : (
+            <p className="empty">Needs a couple of days of graded calls.</p>
+          )}
+          <p className="faint small">
+            Live calls over the last {windowDays} days (the window picked at the top of the page), each graded
+            on a 2x within 15 minutes. Gaps are days it made no graded calls. A day&apos;s edge over the
+            market shows once it has {learning.minGradedForLift} graded calls; the verdict compares the last{" "}
+            {span} days with the {span} before.
+          </p>
         </>
-      ) : (
-        <p className="empty">Appears once the models have made graded calls.</p>
       )}
 
-      {days.length > 1 && (
-        <>
-          <h4>Feed vs market, by day</h4>
-          <TrendLines
-            aLabel="Feed 2x rate"
-            bLabel="Market 2x rate (decision moments)"
-            data={days.map((d) => ({
-              label: shortDay(d.day),
-              a: d.feed.rate2xPct,
-              b: d.market.rate2xPct,
-              sub: `${d.feed.graded} graded calls of ${d.feed.calls}; ${d.market.graded.toLocaleString()} moments; lift ${lift(d.lift2x)}`,
-            }))}
-          />
-        </>
-      )}
-
-      {runs.length > 0 && (
+      {seat && runs.length > 0 && (
         <details className="folds" onToggle={(e) => setShowRuns((e.target as HTMLDetailsElement).open)}>
-          <summary>Training run by training run ({runs.length})</summary>
+          <summary>
+            {name} in each training run ({runs.length})
+          </summary>
           {showRuns && (
             <>
               <p className="muted small">
-                Each run's exam grades the newest half of its decision moments out of sample. "Base 2x" is
-                what picking at random from them would have earned; "Best model" is the top exam 2x rate at
-                its cutoff that run, with its lift over the base. The exam window moves with the data, so
-                compare lifts, not rates.
+                Each run&apos;s exam grades the newest half of its decision moments out of sample.
+                &quot;Market 2x&quot; is what a random pick from them would have earned; the next two columns
+                are {name}&apos;s exam 2x rate and how many times the market rate that is. The exam window
+                moves with the data, so compare the multiples, not the rates.
+                {ranInRuns ? "" : ` ${name} sat out these runs' exams.`}
               </p>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
                       <th>Run</th>
-                      <th className="r">Rows</th>
                       <th className="r">History</th>
                       <th className="r">Moments</th>
-                      <th className="r">Base 2x</th>
-                      <th>Best model</th>
-                      <th className="r">2x</th>
-                      <th className="r">Lift</th>
+                      <th className="r">Market 2x</th>
+                      <th className="r">{name} 2x</th>
+                      <th className="r">Vs market</th>
+                      <th>Best that run</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {runs.map((r) => (
+                    {runRows.map(({ run: r, own: m }) => (
                       <tr key={r.at}>
                         <td className="muted">{ago(r.at, now)}</td>
-                        <td className="r num">{r.trainingRows.toLocaleString()}</td>
                         <td className="r num">{r.historyDays.toFixed(1)}d</td>
                         <td className="r num">{r.exam.decisionRows.toLocaleString()}</td>
                         <td className="r num">{pct(r.exam.baseRate2xPct, 1)}</td>
+                        <td className="r num">{pct(m?.rate2xPct, 1)}</td>
+                        <td className="r num">{lift(m?.lift2x)}</td>
                         <td>{r.best ? (r.best.name ?? r.best.contestant) : "–"}</td>
-                        <td className="r num">{pct(r.best?.rate2xPct, 1)}</td>
-                        <td className="r num">{lift(r.best?.lift2x)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1535,6 +1667,17 @@ function LearningPanel({ learning, now }: { learning: LearningCurve; now: number
             </>
           )}
         </details>
+      )}
+
+      {sharing && seat && (
+        <ShareImageDialog
+          title={`Is ${name} getting better?`}
+          fileName={`trenchscanner-${name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-vs-market`}
+          caption={`${name} vs the market, on TrenchScanner`}
+          link="trenchscanner.app"
+          render={() => renderLearningCard(card())}
+          onClose={() => setSharing(false)}
+        />
       )}
     </section>
   );

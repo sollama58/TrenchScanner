@@ -1884,6 +1884,76 @@ g:hover > .hit {
 .baseline-controls button {
   white-space: nowrap;
 }
+/* ---------- Learning panel (ModelTab LearningPanel) ---------- */
+.learning-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.learning-tools .state {
+  white-space: nowrap;
+  font-weight: 600;
+}
+.share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.model-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+.model-pick button {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.model-pick button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.model-pick button.quiet {
+  opacity: 0.55;
+}
+.model-pick button.on {
+  opacity: 1;
+  color: var(--brand-ink);
+  background: color-mix(in srgb, var(--brand-a) 14%, transparent);
+  border-color: color-mix(in srgb, var(--brand-a) 55%, transparent);
+}
+@media (max-width: 640px) {
+  /* One swipeable row on a phone instead of a wall of chips. */
+  .model-pick {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin: 0 -16px 14px;
+    padding: 0 16px 2px;
+    scrollbar-width: none;
+  }
+  .model-pick::-webkit-scrollbar {
+    display: none;
+  }
+  .learning-tools {
+    justify-content: space-between;
+  }
+}
+.share-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+.share-modal .about-head h3 {
+  margin: 0;
+}
+
 .baseline-readout {
   margin: 10px 0 0;
   padding: 10px 12px;
@@ -7103,5 +7173,29 @@ button.small-btn {
     grid-template-columns: auto 1fr;
     align-items: center;
     gap: 10px;
+  }
+}
+
+/* Chart legend and tooltip keys. The appearance picker's round .swatch buttons share the class
+   name and are declared later, so the charts' small squares are restated here, last. */
+.chart .swatch {
+  position: static;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  box-shadow: none;
+  cursor: auto;
+  flex: none;
+}
+.learning-panel .family-figs {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .learning-panel .family-figs {
+    grid-template-columns: repeat(2, 1fr);
+    row-gap: 12px;
   }
 }

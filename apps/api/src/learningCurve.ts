@@ -120,10 +120,32 @@ export interface LearningTrend {
   reason: string;
 }
 
+/** One model's day: its own calls, graded like the feed's, and their lift over that day's market. */
+export interface LearningModelDay {
+  day: string;
+  rates: DayRates;
+  lift2x: number | null;
+}
+
+/**
+ * One model's learning curve: its calls by day (only days it called on; the market for each day is
+ * the curve's own `days`), and the same two-span trend verdict the feed gets.
+ */
+export interface LearningModel {
+  /** The contestant id (CuratedAlert.model) - the seat, stable across the names it has held. */
+  model: string;
+  /** The name it called under most recently in the window. */
+  name: string | null;
+  days: LearningModelDay[];
+  trend: LearningTrend | null;
+}
+
 export interface LearningCurve {
   window: { since: string; until: string };
   /** Oldest first. Days with neither a decision moment nor a call are left out. */
   days: LearningDay[];
+  /** Each model's own curve against the same market, most graded calls first. */
+  models: LearningModel[];
   /** Newest first. Every run of a window up to EVERY_RUN_UP_TO_DAYS days, else each day's last run. */
   runs: LearningRun[];
   trend: LearningTrend | null;
@@ -142,6 +164,8 @@ type RawDay = {
   ten_x_graded: bigint;
   doubled_after_stop: bigint;
 };
+
+type RawModelDay = RawDay & { model: string | null; model_name: string | null };
 
 type RawRun = {
   at: Date;
@@ -227,6 +251,64 @@ export function buildLearningDays(marketRows: RawDay[], feedRows: RawDay[]): Lea
       lift10x: ratio(f.won10x ?? 0, f.tenXGraded ?? 0, m.won10x ?? 0, m.tenXGraded ?? 0, MIN_GRADED_FOR_LIFT),
     };
   });
+}
+
+/** Pure: the feed's day rows - every model's calls pooled per day - from the per-model rows. */
+export function poolModelDays(rows: RawModelDay[]): RawDay[] {
+  const byDay = new Map<string, RawDay>();
+  for (const r of rows) {
+    const d = byDay.get(r.day);
+    if (!d) {
+      byDay.set(r.day, {
+        day: r.day,
+        calls: r.calls,
+        graded: r.graded,
+        won2x: r.won2x,
+        won4x: r.won4x,
+        won10x: r.won10x,
+        ten_x_graded: r.ten_x_graded,
+        doubled_after_stop: r.doubled_after_stop,
+      });
+      continue;
+    }
+    d.calls += r.calls;
+    d.graded += r.graded;
+    d.won2x += r.won2x;
+    d.won4x += r.won4x;
+    d.won10x += r.won10x;
+    d.ten_x_graded += r.ten_x_graded;
+    d.doubled_after_stop += r.doubled_after_stop;
+  }
+  return [...byDay.values()];
+}
+
+/**
+ * Pure: each model's curve from the per-model day rows, against the market rows. Rows without a
+ * model (calls from before the contest) count toward the feed only. Most graded calls first.
+ */
+export function buildLearningModels(marketRows: RawDay[], rows: RawModelDay[]): LearningModel[] {
+  const byModel = new Map<string, RawModelDay[]>();
+  for (const r of rows) {
+    if (!r.model) continue;
+    const list = byModel.get(r.model);
+    if (list) list.push(r);
+    else byModel.set(r.model, [r]);
+  }
+  const gradedOf = (m: LearningModel) => m.days.reduce((n, d) => n + d.rates.graded, 0);
+  return [...byModel.entries()]
+    .map(([model, own]) => {
+      const days = buildLearningDays(marketRows, own);
+      const newestFirst = [...own].sort((a, b) => b.day.localeCompare(a.day));
+      return {
+        model,
+        name: newestFirst.find((r) => r.model_name)?.model_name ?? null,
+        days: days
+          .filter((d) => d.feed.calls > 0)
+          .map((d) => ({ day: d.day, rates: d.feed, lift2x: d.lift2x })),
+        trend: buildLearningTrend(days),
+      };
+    })
+    .sort((a, b) => gradedOf(b) - gradedOf(a) || a.model.localeCompare(b.model));
 }
 
 /**
@@ -360,11 +442,14 @@ export async function buildLearningCurve(
       AND ${walletSafetyCutsSql()}
       AND "labelRule" >= ${CURRENT_LABEL_RULE}
     GROUP BY 1`;
-  // Every model's calls by UTC day, graded the same way (see buildHitRateReport for the label
-  // sources). A call whose training row was graded under the legacy rule is left out for the same
-  // reason as above; one whose row is gone keeps its own copied verdict.
-  const feedRows = prisma.$queryRaw<RawDay[]>`
+  // Every model's calls by UTC day and model, graded the same way (see buildHitRateReport for the
+  // label sources); the feed is their sum per day. A call whose training row was graded under the
+  // legacy rule is left out for the same reason as above; one whose row is gone keeps its own
+  // copied verdict.
+  const modelRows = prisma.$queryRaw<RawModelDay[]>`
     SELECT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day,
+           a."model" AS model,
+           max(a."modelName") AS model_name,
            count(*) AS calls,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
@@ -380,7 +465,7 @@ export async function buildLearningCurve(
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
       AND (co."labelRule" IS NULL OR co."labelRule" >= ${CURRENT_LABEL_RULE})
-    GROUP BY 1`;
+    GROUP BY 1, 2`;
   // Which runs to show: every run of a short window, the last run of each UTC day of a longer one
   // (a 90-day window at twelve runs a day would be a thousand rows nobody reads). Columns are
   // timestamp(3) without a zone, stored in UTC, so date_trunc groups by UTC day.
@@ -419,8 +504,8 @@ export async function buildLearningCurve(
     WHERE m."trainingTo" = ANY(${chosen.map((d) => d.toISOString())}::timestamp(3)[])
       AND m."contestant" IS NOT NULL
     ORDER BY m."trainingTo" DESC`;
-  const [market, feed, runs] = await Promise.all([marketRows, feedRows, runRows]);
-  const dayseries = buildLearningDays(market, feed);
+  const [market, perModel, runs] = await Promise.all([marketRows, modelRows, runRows]);
+  const dayseries = buildLearningDays(market, poolModelDays(perModel));
   const precision: PrecisionTargets = {
     winRate: targets.hitRate2xPct / 100,
     goalRate: targets.hitRate4xPct / 100,
@@ -430,6 +515,7 @@ export async function buildLearningCurve(
   return {
     window: { since: since.toISOString(), until: until.toISOString() },
     days: dayseries,
+    models: buildLearningModels(market, perModel),
     runs: buildLearningRuns(runs, precision),
     trend: buildLearningTrend(dayseries),
     minGradedForLift: MIN_GRADED_FOR_LIFT,
