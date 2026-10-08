@@ -296,9 +296,11 @@ describe("round trip through a stored feature vector", () => {
 
   it("records every ns* input on the vector", () => {
     for (const name of ALL_NARRATIVE_FEATURES) expect(CANDIDATE_FEATURE_NAMES).toContain(name);
-    expect(CANDIDATE_FEATURE_NAMES.indexOf("nsReferentNamed")).toBe(CANDIDATE_FEATURE_NAMES.length - 1);
+    // The livestream inputs (added after) follow the narrative ones.
+    const lastNarrative = CANDIDATE_FEATURE_NAMES.indexOf("livestreamLive") - 1;
+    expect(CANDIDATE_FEATURE_NAMES.indexOf("nsReferentNamed")).toBe(lastNarrative);
     expect(CANDIDATE_FEATURE_NAMES.indexOf("nsTrendScore")).toBe(
-      CANDIDATE_FEATURE_NAMES.length - 1 - NARRATIVE_FEATURES_V3.length,
+      lastNarrative - NARRATIVE_FEATURES_V3.length,
     );
     const features = buildCandidateFeatures(scoredWith(narrativeReadFromRow(fullRow())));
     expect(features.nsXFit).toBe(0.85);

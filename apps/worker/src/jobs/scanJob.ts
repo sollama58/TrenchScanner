@@ -20,6 +20,7 @@ import {
   type Env,
   type DexScreenerClient,
   type PumpFunClient,
+  type LiveStream,
   type RugCheckClient,
   type RugCheckProfile,
   type HeliusClient,
@@ -280,7 +281,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // Each source is time-boxed (see discoverWithin): one slow upstream used to hold the whole cycle
   // - ~10s on most cycles of 2026-10-04 - and with it every alert. A late source's mints still
   // join the watchlist the moment they land, in time for the next cycle.
-  const [newMints, trending, active, koth] = await Promise.all([
+  const [newMints, trending, active, koth, liveStreams] = await Promise.all([
     discoverWithin(
       "pumpfun",
       deps.pumpFun.discoverNewMints().catch((err) => {
@@ -320,6 +321,15 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
         await addNewMintsToWatchlist([toWatchlistCandidate(coin, "pumpfun-koth")]);
         await reviveMovingMints(movingCoins([coin]), env);
       },
+    ),
+    // Which coins have a Pump.fun livestream on right now: the livestream model inputs, read once
+    // for the cycle like the market context. Late or failed reads are dropped (null = unknown for
+    // every candidate), never applied to a later cycle's decisions.
+    discoverWithin(
+      "pumpfun-live",
+      deps.pumpFun.currentlyLive().catch(() => null),
+      null,
+      async () => {},
     ),
   ]);
   const streamed = deps.stream?.drain() ?? [];
@@ -362,6 +372,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     newlySeen: discovered.length,
     streamed: streamed.length,
     revived,
+    liveStreams: liveStreams?.size ?? null,
   });
 
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
@@ -698,6 +709,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           ),
           deps.pricePath,
           marketContext,
+          liveStreams,
         ),
       );
     } catch (err) {
@@ -1337,6 +1349,7 @@ async function processCandidate(
   tradeFlow?: TradeFlowFeatures,
   pricePath?: PricePathBook,
   marketContext?: MarketContextFeatures,
+  liveStreams?: ReadonlyMap<string, LiveStream> | null,
 ): Promise<number> {
   const existingToken = prior.token;
   const onChain = withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env);
@@ -1399,6 +1412,10 @@ async function processCandidate(
     scored.pricePath = pricePath.features(candidate.mintAddress);
   }
   if (marketContext) scored.marketContext = marketContext;
+  if (liveStreams) {
+    const stream = liveStreams.get(candidate.mintAddress);
+    scored.livestream = { live: stream !== undefined, viewers: stream?.viewers ?? null };
+  }
   // Claude's read of the launch's text, once the text scorer has made one (ai/textScorer.ts).
   const textScores = parseTextScores(existingToken?.aiTextScores);
   if (textScores) scored.textScores = textScores;
