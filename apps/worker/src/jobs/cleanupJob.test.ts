@@ -595,6 +595,66 @@ describe.skipIf(!dbAvailable)("runCleanupJob: graded filter-alert anchors", () =
     expect(copied.hit4xIn1h).toBe(false);
     await prisma.user.delete({ where: { id: user.id } });
   });
+
+  // The general age sweep takes match anchors too; the copy must reach them first whichever
+  // horizon is shorter, and with the match horizon off.
+  it.each([0, 120])(
+    "copies the verdict before the age sweep (MATCH_OUTCOME_RETENTION_DAYS=%i)",
+    async (days) => {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-age-${days}` } });
+      const anchor = await prisma.candidateOutcome.create({
+        data: {
+          tokenId: token.id,
+          sampleKind: "match",
+          anchorAt: new Date(Date.now() - 40 * DAY),
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 50_000,
+          features: {},
+          nextCheckAt: new Date(),
+          peak1hPriceUsd: 1,
+          low1hPriceUsd: 1,
+          lowBefore2xPriceUsd: 1,
+          peak24hPriceUsd: 1,
+          finalizedAt: new Date(Date.now() - 40 * DAY),
+          finalized24hAt: new Date(Date.now() - 40 * DAY),
+          peak24hReturnPct: 300,
+          hit2xIn1h: true,
+          hit4xIn1h: false,
+          disqualified: false,
+        },
+      });
+      const user = await prisma.user.create({ data: { walletAddress: `${TAG}-user-${Date.now()}` } });
+      const filter = await prisma.userFilter.create({ data: { userId: user.id, name: "f" } });
+      const snapshot = await prisma.tokenSnapshot.create({
+        data: { tokenId: token.id, priceUsd: 1, marketCapUsd: 50_000 },
+      });
+      const alert = await prisma.match.create({
+        data: {
+          userId: user.id,
+          filterId: filter.id,
+          tokenId: token.id,
+          snapshotId: snapshot.id,
+          score: 50,
+          candidateOutcomeId: anchor.id,
+        },
+      });
+
+      await runCleanupJob(
+        {
+          ...(env as object),
+          CANDIDATE_OUTCOME_RETENTION_DAYS: 30,
+          MATCH_OUTCOME_RETENTION_DAYS: days,
+        } as never,
+        { rowsPerBatch: 1, pauseMs: 0 },
+      );
+
+      expect(await prisma.candidateOutcome.findUnique({ where: { id: anchor.id } })).toBeNull();
+      const copied = await prisma.match.findUniqueOrThrow({ where: { id: alert.id } });
+      expect(copied.hit2xIn1h).toBe(true);
+      expect(copied.peak24hReturnPct).toBe(300);
+      await prisma.user.delete({ where: { id: user.id } });
+    },
+  );
 });
 
 describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
