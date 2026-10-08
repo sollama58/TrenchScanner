@@ -425,6 +425,8 @@ export interface MarkerBarDatum {
   display?: string;
   /** A second, smaller line under the value, e.g. the rate's lift over the baseline. */
   note?: string;
+  /** Colors the note: "up" for a gain, "down" for a loss. */
+  noteTone?: "up" | "down";
   /** Under the label, e.g. how many graded calls the rate rests on. */
   sub?: string;
   /** Drawn dimmer: a rate on too few calls to lean on. */
@@ -515,7 +517,7 @@ export function MarkerBars({
             </span>
             <span className="mbar-value num">
               {d.display ?? (d.value === null ? "–" : `${d.value.toFixed(1)}%`)}
-              {d.note && <small>{d.note}</small>}
+              {d.note && <small className={d.noteTone}>{d.note}</small>}
             </span>
             {onOpen && (
               <span className="mbar-open" aria-hidden="true">
