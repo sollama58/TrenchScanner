@@ -609,7 +609,10 @@ export function TokenSageAdmin() {
                 <Counts title="X link verdict (deep reads)" rows={r.xVerdicts} />
                 <Counts title="Trades against" rows={r.pairKinds} />
                 <Counts title="Copies" rows={r.copies} />
-                <Counts title="In the news (deep reads)" rows={r.trend ?? []} />
+                <Counts
+                  title="In the news (deep reads; TokenSage expects 4-8% of launches)"
+                  rows={r.trend ?? []}
+                />
                 <Counts
                   title="Trend sources (deep reads)"
                   rows={r.trendSources ?? []}

@@ -243,7 +243,7 @@ export interface TokenSageAnalysis {
     /** Rules 0.15.0+: strength of the hit, 0-1. */
     score?: number | null;
     /**
-     * One hit per source: "wikipedia", "google_trends", "news", and from rules 0.18.0 (pending) "x_trends"
+     * One hit per source: "wikipedia", "google_trends", "news", and from rules 0.18.0 "x_trends"
      * (X's trending topics: rank 1-50 and hours listed) and "bluesky" (posts in 24 h from at
      * least 3 accounts). Kept open: TokenSage adds sources without a schema bump.
      */
@@ -253,15 +253,27 @@ export interface TokenSageAnalysis {
       spike?: number | null;
       score?: number | null;
       seen_at?: string | null;
+      /** Which input hit: "name", "description", ... and from rules 0.18.0 "symbol" (the ticker). */
       matched_on?: string | null;
+      /** Rules 0.18.0+: true when one rare word of the name matched inside a longer trending label. */
+      partial?: boolean | null;
       searches?: number | null;
       rank?: number | null;
       hours?: number | null;
       posts?: number | null;
       headline?: string | null;
     }[];
-    /** Rules 0.15.0+, full reads: each source's status ("ok", "stale", "failed", "skipped", "unavailable"). */
-    sources?: { source?: string; status?: string; as_of?: string | null; terms?: number | null }[];
+    /**
+     * Rules 0.15.0+, full reads: each source's status ("ok", "stale", "failed", "skipped", "unavailable");
+     * five entries from 0.18.0. `detail` says why a source was skipped (an everyday-word name).
+     */
+    sources?: {
+      source?: string;
+      status?: string;
+      as_of?: string | null;
+      terms?: number | null;
+      detail?: string | null;
+    }[];
   } | null;
   flags?: TokenSageFlag[];
   summary?: string;
