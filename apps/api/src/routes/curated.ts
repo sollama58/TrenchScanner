@@ -349,9 +349,7 @@ export async function registerCuratedRoutes(
 
     // Serialized per request, not per cache fill - see the note on pageCache: the countdown and
     // the won/missed flip are computed from Date.now() and have to stay live.
-    const cards = alerts.map((alert) =>
-      serializeCuratedAlert(alert, currentMarketCap, opts.env.NARRATIVE_NOTES_SHOWN),
-    );
+    const cards = alerts.map((alert) => serializeCuratedAlert(alert, currentMarketCap));
 
     // Same side effect the Live Feed's list has, for the same reason: being on a page someone
     // fetched is what keeps a token's market cap refreshing (see Token.lastViewedAt), and

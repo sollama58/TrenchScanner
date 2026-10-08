@@ -5,6 +5,9 @@ import {
   NARRATIVE_CATEGORY_LABELS,
   NARRATIVE_SUB_LABELS,
   loadAdoptedScoreWeights,
+  loadNarrativeNoteReadiness,
+  narrativeNoteReadiness,
+  emptyRecord,
   recentScoreScale,
   SCORE_SCALE_FALLBACK,
   scanBand,
@@ -67,5 +70,18 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
     };
     cached = { at: Date.now(), body };
     return body;
+  });
+
+  // Whether the Narrative seat's "agrees"/"warns" note shows on cards for readers who haven't set
+  // the Customize toggle (curation/narrativeNote.ts), with the record behind it for the toggle's
+  // hint. Public like the rest, and cached in core for five minutes.
+  app.get("/narrative-note", async (request) => {
+    try {
+      return await loadNarrativeNoteReadiness();
+    } catch (err) {
+      request.log.warn({ err }, "narrative note readiness read failed");
+      // Off until the record can be read: the note only shows once it's proven.
+      return narrativeNoteReadiness(emptyRecord());
+    }
   });
 }
