@@ -247,6 +247,7 @@ export function withLaunchSnipers(
     ...(flow ?? EMPTY_TRADE_FLOW),
     firstBuyersHolding: snipers.holding,
     firstBuyersSeen: snipers.seen,
+    firstBuyersHolding25: snipers.holding25,
   };
 }
 

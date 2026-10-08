@@ -2,6 +2,7 @@ import {
   countStillHolding,
   createLogger,
   FIRST_BUYERS,
+  LEGACY_FIRST_BUYERS,
   type HeliusClient,
   type LaunchBuyer,
 } from "@trenchscanner/core";
@@ -15,10 +16,13 @@ const logger = createLogger("launch-snipers");
  *
  * Two reads, priced very differently, so they are cached differently:
  *  - Who the first buyers were (getTransactionsForAddress, 10 credits) never changes once there
- *    are 15 of them, so it is read once per token and kept for the life of the process. A token
+ *    are 25 of them, so it is read once per token and kept for the life of the process. A token
  *    with fewer buyers so far is re-read after INCOMPLETE_RETRY_MS.
  *  - Whether they still hold is one getMultipleAccounts over their token accounts - 1 credit per
  *    100 accounts, so four tokens per credit - refreshed on a TTL, faster for contenders.
+ * The first LEGACY_FIRST_BUYERS (25) are read and checked, as before 2026-10-08: the figure counts
+ * the first 15 of them, and the count over all 25 still feeds the models trained on it. The 25-buyer
+ * read costs the same credits (one page of transactions either way).
  * New first-buyer reads are budgeted per cycle (env SNIPER_LAUNCH_LOOKUPS_PER_CYCLE), contenders
  * first, so a burst of new tokens spreads over a few cycles instead of spiking the bill.
  */
@@ -30,6 +34,8 @@ interface Entry {
   /** Re-reads of an incomplete launch so far: each waits twice as long as the last. */
   rereads: number;
   holding: number | null;
+  /** The same over all the buyers read (up to LEGACY_FIRST_BUYERS). */
+  holding25: number | null;
   holdingAt: number;
 }
 
@@ -40,7 +46,7 @@ const entries = new Map<string, Entry>();
 const failedUntil = new Map<string, number>();
 const FAILURE_BACKOFF_MS = 5 * 60_000;
 /**
- * How soon a launch that had fewer than 15 buyers is read again for the rest, doubling on each
+ * How soon a launch that had fewer than 25 buyers is read again for the rest, doubling on each
  * re-read up to INCOMPLETE_RETRY_MAX_MS: a dud with twelve buyers stays incomplete for as long
  * as it sits in band, and every re-read pays for its whole history again (10+ credits) to learn
  * that nobody new bought.
@@ -59,6 +65,8 @@ export interface LaunchSnipers {
   holding: number;
   /** How many first buyers there were (15, or fewer while the launch has had fewer). */
   seen: number;
+  /** Of the first 25 buyers (or fewer), how many still hold: the retired model input only. */
+  holding25: number;
 }
 
 export interface SniperGroup {
@@ -100,7 +108,11 @@ export function launchSnipersFromCache(
   for (const mint of mints) {
     const e = entries.get(mint);
     if (!e || e.holding === null || now - e.holdingAt > MAX_HOLDING_AGE_MS) continue;
-    out.set(mint, { holding: e.holding, seen: e.buyers.length });
+    out.set(mint, {
+      holding: e.holding,
+      seen: Math.min(FIRST_BUYERS, e.buyers.length),
+      holding25: e.holding25 ?? e.holding,
+    });
   }
   return out;
 }
@@ -118,7 +130,7 @@ export async function resolveLaunchSnipers(
   const now = opts.now ?? Date.now();
   for (const [mint, until] of failedUntil) if (until <= now) failedUntil.delete(mint);
 
-  // 1. First buyers, for the mints that don't have them (or had fewer than 15 a while ago).
+  // 1. First buyers, for the mints that don't have them (or had fewer than 25 a while ago).
   const toRead = groups
     .filter((g) => {
       if (failedUntil.has(g.mintAddress)) return false;
@@ -129,7 +141,7 @@ export async function resolveLaunchSnipers(
     .map((g) => g.mintAddress);
   const fresh = new Set<string>();
   if (toRead.length > 0) {
-    const results = await helius.getLaunchBuyersBatch(toRead, FIRST_BUYERS);
+    const results = await helius.getLaunchBuyersBatch(toRead, LEGACY_FIRST_BUYERS);
     let failed = 0;
     for (const mint of toRead) {
       const r = results.get(mint);
@@ -147,6 +159,7 @@ export async function resolveLaunchSnipers(
           readAt: now,
           rereads: prev ? prev.rereads + 1 : 0,
           holding: sameBuyers ? prev.holding : null,
+          holding25: sameBuyers ? prev.holding25 : null,
           holdingAt: sameBuyers ? prev.holdingAt : 0,
         });
         fresh.add(mint);
@@ -177,9 +190,11 @@ export async function resolveLaunchSnipers(
     );
     for (const mint of refresh) {
       const e = entries.get(mint)!;
-      const holding = countStillHolding(e.buyers, balances);
-      if (holding !== null) {
+      const holding = countStillHolding(e.buyers.slice(0, FIRST_BUYERS), balances);
+      const holding25 = countStillHolding(e.buyers, balances);
+      if (holding !== null && holding25 !== null) {
         e.holding = holding;
+        e.holding25 = holding25;
         e.holdingAt = now;
       }
     }

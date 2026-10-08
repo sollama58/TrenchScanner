@@ -18,6 +18,11 @@ export const FLOW_WINDOW_MS = 5 * 60_000;
 
 /** How many of the launch's first buyers the still-holding count follows. */
 export const FIRST_BUYERS = 15;
+/**
+ * The count followed the first 25 until 2026-10-08. Still read and counted, for the models
+ * trained on it (features.ts firstBuyersHolding) - never shown or filtered on.
+ */
+export const LEGACY_FIRST_BUYERS = 25;
 /** A first buyer left holding under this share of what they bought counts as sold out (dust). */
 const HOLDING_DUST_SHARE = 0.01;
 
@@ -83,6 +88,8 @@ export interface TradeFlowFeatures {
    */
   firstBuyersHolding: number | null;
   firstBuyersSeen: number | null;
+  /** The same over the first LEGACY_FIRST_BUYERS: only the retired model input reads it. */
+  firstBuyersHolding25: number | null;
 }
 
 export const EMPTY_TRADE_FLOW: TradeFlowFeatures = {
@@ -100,6 +107,7 @@ export const EMPTY_TRADE_FLOW: TradeFlowFeatures = {
   devSoldShare: null,
   firstBuyersHolding: null,
   firstBuyersSeen: null,
+  firstBuyersHolding25: null,
 };
 
 interface Bag {
@@ -125,7 +133,7 @@ class MintFlow {
   devInitialBuySol: number | null = null;
   dev: Bag | null = null;
   readonly early = new Map<string, Bag>();
-  /** The first FIRST_BUYERS buying wallets after launch, the dev aside. */
+  /** The first LEGACY_FIRST_BUYERS buying wallets after launch, the dev aside, in buy order. */
   readonly firstBuyers = new Map<string, Bag>();
   /** wallet -> first trade time, insertion-ordered so the oldest go first when full. */
   readonly wallets = new Map<string, number>();
@@ -245,7 +253,7 @@ export class TradeFlowBook {
       const firstBuyer = flow.firstBuyers.get(t.wallet);
       if (firstBuyer) {
         addToBag(firstBuyer, t);
-      } else if (t.side === "buy" && flow.launchAt !== null && flow.firstBuyers.size < FIRST_BUYERS) {
+      } else if (t.side === "buy" && flow.launchAt !== null && flow.firstBuyers.size < LEGACY_FIRST_BUYERS) {
         const bag: Bag = { bought: 0, sold: 0, balance: null };
         addToBag(bag, t);
         flow.firstBuyers.set(t.wallet, bag);
@@ -332,11 +340,17 @@ export class TradeFlowBook {
       out.devInitialBuySol = flow.devInitialBuySol;
       out.devSoldShare = flow.dev ? soldShare(flow.dev) : null;
       let holding = 0;
+      let holding25 = 0;
+      let i = 0;
       for (const bag of flow.firstBuyers.values()) {
-        if (bagBalance(bag) > bag.bought * HOLDING_DUST_SHARE) holding += 1;
+        const holds = bagBalance(bag) > bag.bought * HOLDING_DUST_SHARE;
+        if (holds && i < FIRST_BUYERS) holding += 1;
+        if (holds) holding25 += 1;
+        i += 1;
       }
       out.firstBuyersHolding = holding;
-      out.firstBuyersSeen = flow.firstBuyers.size;
+      out.firstBuyersSeen = Math.min(FIRST_BUYERS, flow.firstBuyers.size);
+      out.firstBuyersHolding25 = holding25;
     }
     return out;
   }

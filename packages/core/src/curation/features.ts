@@ -100,9 +100,9 @@ export const CANDIDATE_FEATURE_NAMES = [
   "earlyBuyerSoldShare",
   "devInitialBuySol",
   "devSoldShare",
-  // Added 2026-10-04: of the launch's first 25 buyers, how many still hold it. No longer filled
-  // since 2026-10-08, when the count moved to the first 15 (first15BuyersHolding below); kept so
-  // the rows banked before still read.
+  // Added 2026-10-04: of the launch's first 25 buyers, how many still hold it. Retired from new
+  // training on 2026-10-08, when the count moved to the first 15 (first15BuyersHolding below), but
+  // still filled (tradeFlow.firstBuyersHolding25) so models trained on it keep reading it.
   "firstBuyersHolding",
   // Added 2026-10-04: Claude's read of the launch's own name and description, 0-1 each
   // (curation/textFeatures.ts). Null until the mint has been read, and on rows banked before.
@@ -246,8 +246,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "earlyBuyerHoldPct",
   "earlyBuyerSoldShare",
   "devSoldShare",
-  // The first 25 buyers' count (user decision 2026-10-08): replaced by first15BuyersHolding and no
-  // longer filled, so only rows banked before carry it.
+  // The first 25 buyers' count (user decision 2026-10-08): replaced by first15BuyersHolding. Still
+  // filled, so the models already trained on it keep working until they are retrained.
   "firstBuyersHolding",
   // The in-memory tape's length (user decision 2026-10-08): the tape empties on every deploy (13-14
   // times in three days), so for up to an hour after one every token reads as minutes old and the
@@ -284,7 +284,7 @@ export const TRADE_FLOW_FEATURES = [
 
 /**
  * Learner inputs replaced by a successor: a stored recipe (a bred seat's feature list) that names
- * the old one reads the new one instead, as the old one is no longer filled.
+ * the old one trains on the new one instead.
  */
 export const REPLACED_LEARNER_INPUTS: Readonly<Partial<Record<CandidateFeatureName, CandidateFeatureName>>> =
   {
@@ -515,6 +515,7 @@ export function scoredFromFeatures(
       // Only the 15-buyer count: the retired 25-buyer one is on another scale than today's filters.
       firstBuyersHolding: num("first15BuyersHolding") ?? null,
       firstBuyersSeen: null,
+      firstBuyersHolding25: num("firstBuyersHolding") ?? null,
     },
     pricePath: Object.fromEntries(
       PRICE_PATH_FEATURES.map((k) => [k, num(k) ?? null]),
@@ -670,7 +671,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     ...(Object.fromEntries(
       TRADE_FLOW_FEATURES.map((k) => [k, (scored.tradeFlow ?? EMPTY_TRADE_FLOW)[k]]),
     ) as Record<(typeof TRADE_FLOW_FEATURES)[number], number | null>),
-    firstBuyersHolding: null,
+    firstBuyersHolding: (scored.tradeFlow ?? EMPTY_TRADE_FLOW).firstBuyersHolding25 ?? null,
     first15BuyersHolding: (scored.tradeFlow ?? EMPTY_TRADE_FLOW).firstBuyersHolding,
     devHolding: devHoldingFeature(scored),
     textCopycatRisk: scored.textScores?.copycatRisk ?? null,

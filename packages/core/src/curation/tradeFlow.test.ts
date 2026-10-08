@@ -90,6 +90,7 @@ describe("TradeFlowBook", () => {
     let f = book.features(MINT, sec(60));
     expect(f.firstBuyersSeen).toBe(15);
     expect(f.firstBuyersHolding).toBe(15);
+    expect(f.firstBuyersHolding25).toBe(25);
     // w0 sells out, w1 leaves dust, w2 sells half, w29 (not a first buyer) sells out.
     book.trade(trade("w0", "sell", 1, sec(70), { tokenAmount: 1_000_000, newTokenBalance: 0 }));
     book.trade(trade("w1", "sell", 1, sec(71), { tokenAmount: 995_000, newTokenBalance: 5_000 }));
@@ -98,6 +99,7 @@ describe("TradeFlowBook", () => {
     f = book.features(MINT, sec(80));
     expect(f.firstBuyersHolding).toBe(13);
     expect(f.firstBuyersSeen).toBe(15);
+    expect(f.firstBuyersHolding25).toBe(23);
     const features = buildCandidateFeatures({
       mintAddress: MINT,
       priceUsd: 1,
@@ -107,9 +109,10 @@ describe("TradeFlowBook", () => {
       score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
       tradeFlow: f,
     } as ScoredToken);
-    // The 15-buyer count is its own input; the retired 25-buyer one is no longer filled.
+    // The 15-buyer count is its own input; the retired 25-buyer one stays filled for the models
+    // already trained on it.
     expect(features.first15BuyersHolding).toBe(13);
-    expect(features.firstBuyersHolding).toBeNull();
+    expect(features.firstBuyersHolding).toBe(23);
     expect("firstBuyersSeen" in features).toBe(false);
   });
 
@@ -161,8 +164,8 @@ describe("order-flow features in the vector", () => {
     const names = CANDIDATE_FEATURE_NAMES as readonly string[];
     // After every feature that predates them; only the later text, path, market, 5m-flow and
     // narrative inputs (and the narrative part of the score they feed), the livestream and the
-    // pair's age follow - and the first-buyers counts, kept out of the list as the 25-buyer one
-    // is no longer filled and the 15-buyer one replaced it (2026-10-08).
+    // pair's age follow - and the first-buyers counts, kept out of the list since the 15-buyer one
+    // replaced the 25-buyer one (2026-10-08) and each reads its own tradeFlow field.
     const start = names.indexOf(TRADE_FLOW_FEATURES[0]);
     expect(names.slice(start, start + TRADE_FLOW_FEATURES.length)).toEqual([...TRADE_FLOW_FEATURES]);
     expect(
