@@ -58,6 +58,13 @@ export interface PumpFunClientOptions {
   baseUrl?: string;
 }
 
+/**
+ * Coins asked for per page. Pump.fun's /coins sends at most 70 a page whatever `limit` asks
+ * (checked 2026-10-08), and the pages here are fetched at once at offsets of page * limit - so a
+ * limit above that cap skipped coins 70-99 of every page. Kept under the cap with room to spare.
+ */
+const PAGE_SIZE = 50;
+
 type SortField = "market_cap" | "created_timestamp" | "last_trade_timestamp";
 type SortOrder = "ASC" | "DESC";
 
@@ -86,7 +93,7 @@ export class PumpFunClient {
    * band, rather than needing this snapshot to catch it mid-band by luck.
    */
   async discoverNewMints(opts: { pages?: number; limit?: number } = {}): Promise<DiscoveredCoin[]> {
-    const { pages = 6, limit = 100 } = opts;
+    const { pages = 6, limit = PAGE_SIZE } = opts;
     const seen = new Map<string, DiscoveredCoin>();
 
     const fetches: Promise<PumpFunCoin[]>[] = [];
@@ -115,7 +122,7 @@ export class PumpFunClient {
    * just fewer results.
    */
   async discoverActiveMints(opts: { pages?: number; limit?: number } = {}): Promise<DiscoveredCoin[]> {
-    const { pages = 2, limit = 100 } = opts;
+    const { pages = 3, limit = PAGE_SIZE } = opts;
     const settled = await Promise.allSettled(
       Array.from({ length: pages }, (_, page) =>
         this.listCoins({ offset: page * limit, limit, sort: "last_trade_timestamp", order: "DESC" }),
