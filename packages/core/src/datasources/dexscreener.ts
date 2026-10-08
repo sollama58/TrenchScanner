@@ -375,6 +375,7 @@ const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;
  *  - a funded pumpswap pool (Pump.fun's graduation target) means the mint has graduated, and the
  *    deepest real pool is canonical;
  *  - otherwise a curve that is still trading is canonical, whatever side pools exist;
+ *  - otherwise any pumpswap pool, even a drained one, beats the curve (frozen since graduation);
  *  - otherwise (a non-Pump.fun token, or an older Raydium graduation) the deepest real pool,
  *    falling back to the deepest pair of any size.
  */
@@ -387,6 +388,10 @@ export function pickCanonicalPair<P extends Pick<DexScreenerPair, "dexId" | "liq
   if (pools.some((p) => p.dexId === "pumpswap")) return deepest(pools);
   const curve = pairs.find((p) => p.dexId === "pumpfun" && (p.volume?.h1 ?? 0) > 0);
   if (curve) return curve;
+  // A quiet curve beside a pumpswap pool of any size is a graduated coin whose pool has drained:
+  // DexScreener keeps listing the old curve frozen at the graduation price, so it must not win.
+  const drained = pairs.filter((p) => p.dexId === "pumpswap");
+  if (drained.length > 0) return deepest([...pools, ...drained]);
   if (pools.length > 0) return deepest(pools);
   // No real pool and a quiet curve: the curve is still where the token lives. Falling through to
   // the deepest pair of any size let a few dollars in a side pool outrank it - pricing the token

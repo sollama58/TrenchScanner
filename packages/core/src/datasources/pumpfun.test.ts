@@ -65,6 +65,16 @@ describe("PumpFunClient.currentlyLive", () => {
     expect(paths).toHaveLength(2);
   });
 
+  it("answers null (unknown) when the last allowed page is still full", async () => {
+    // Coins past the page cap would otherwise read as a definite "not live".
+    const { url, paths } = await serve([
+      [{ mint: "a" }, { mint: "b" }],
+      [{ mint: "c" }, { mint: "d" }],
+    ]);
+    expect(await new PumpFunClient({ baseUrl: url }).currentlyLive({ limit: 2, maxPages: 2 })).toBeNull();
+    expect(paths).toHaveLength(2);
+  });
+
   it("answers null (unknown), not an empty set, when the feed fails", async () => {
     const { url } = await serve(["fail"]);
     expect(await new PumpFunClient({ baseUrl: url }).currentlyLive()).toBeNull();

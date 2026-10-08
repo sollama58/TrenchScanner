@@ -161,8 +161,8 @@ export class PumpFunClient {
    * (`num_participants`). About 75 coins were live at once on 2026-10-08, so two pages on most
    * cycles; a further page is read only while one comes back full. The page size stays under the
    * 70 a page this API actually returns (asked for 100, it sends 70), or a short page would read
-   * as the last one. Null when any page fails, so the caller records "unknown" rather than "not
-   * live" for every token.
+   * as the last one. Null when any page fails, or when the last allowed page is still full, so
+   * the caller records "unknown" rather than "not live" for every token.
    */
   async currentlyLive(
     opts: { limit?: number; maxPages?: number } = {},
@@ -200,9 +200,12 @@ export class PumpFunClient {
           viewers: typeof viewers === "number" && Number.isFinite(viewers) && viewers >= 0 ? viewers : null,
         });
       }
-      if (coins.length < limit) break;
+      if (coins.length < limit) return live;
     }
-    return live;
+    // The last page allowed came back full: more coins may be live past it, and reading the
+    // missing ones as "not live" is worse than not knowing.
+    logger.warn("currently-live hit the page cap", { maxPages, limit });
+    return null;
   }
 
   private async listCoins(params: {
