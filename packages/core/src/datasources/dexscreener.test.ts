@@ -216,6 +216,34 @@ describe("getTokensByAddresses fallback while DexScreener is blank", () => {
     expect(client.usingFallback).toBe(false);
   });
 
+  it("sends no unindexed lookup to the fallback while DexScreener is blank, and fails its mints", async () => {
+    let geckoCalls = 0;
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = url.split("/").pop()!.split("?")[0]!.split(",");
+      if (url.includes("geckoterminal")) {
+        geckoCalls += 1;
+        return Promise.resolve(new Response(JSON.stringify(geckoBody(list))));
+      }
+      return Promise.resolve(new Response("[]"));
+    });
+    const client = new DexScreenerClient({
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+    const mints = Array.from({ length: 60 }, (_, i) => `mint${i}`);
+    await client.getTokensByAddresses(mints, 5, { retries: 0 });
+    expect(client.usingFallback).toBe(true);
+    geckoCalls = 0;
+
+    const failed = new Set<string>();
+    const junk = Array.from({ length: 60 }, (_, i) => `junk${i}`);
+    expect(await client.getTokensByAddresses(junk, 5, { retries: 0, mayBeUnindexed: true, failed })).toEqual(
+      [],
+    );
+    expect(geckoCalls).toBe(0);
+    expect(failed.size).toBe(60);
+    expect(client.usingFallback).toBe(true);
+  });
+
   it("leaves a small blank lookup alone: a few unindexed mints are not an outage", async () => {
     vi.stubGlobal("fetch", (url: string) => {
       if (url.includes("geckoterminal")) throw new Error("should not be called");
