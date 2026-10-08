@@ -9,6 +9,7 @@ import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { GUEST_DELAY_MINUTES } from "../session";
+import { introSeen, markIntroSeen } from "../intro";
 
 /** GET /guest/feed: the default model's calls, as feed cards, plus which model that is. */
 export interface GuestPage extends MatchPage {
@@ -32,7 +33,8 @@ const TARGETS = { hitRate2xPct: 75, hitRate4xPct: 50 };
 export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
   const now = useNow(15_000);
   const [page, setPage] = useState(1);
-  const [aboutOpen, setAboutOpen] = useState(false);
+  // The tour opens by itself the first time a guest lands here in this browser.
+  const [aboutOpen, setAboutOpen] = useState(() => !introSeen(null));
   const look = useAppearance();
   const hidden = useMemo(() => cardHideSet(look), [look]);
   const feedPath = (n: number) => `/guest/feed?page=${n}`;
@@ -45,7 +47,15 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
 
   return (
     <div className="stack">
-      <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} targets={TARGETS} />
+      <AboutModal
+        open={aboutOpen}
+        onClose={() => {
+          setAboutOpen(false);
+          markIntroSeen(null);
+        }}
+        targets={TARGETS}
+        guest
+      />
       <div className="guest-banner panel" role="note">
         <ClockIcon size={16} />
         <p>
