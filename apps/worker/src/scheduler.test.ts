@@ -73,6 +73,20 @@ describe("scheduleInterval", () => {
     expect(maxInFlight).toBe(1);
   });
 
+  it("keeps the job's failure meta on a run that throws", async () => {
+    const job = scheduleInterval(
+      "scan",
+      async () => {
+        throw new Error("db blip");
+      },
+      1,
+      { failureMeta: () => ({ lastScreenPassAt: 123 }) },
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    job.stop();
+    expect(heartbeats[0]).toMatchObject({ success: false, meta: { lastScreenPassAt: 123 } });
+  });
+
   it("stamps the run start and stores the job's own meta with the duration", async () => {
     const job = scheduleInterval(
       "scan",

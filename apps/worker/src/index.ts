@@ -18,7 +18,7 @@ import {
   runTelegramDispatch,
   type HeartbeatJob,
 } from "@trenchscanner/core";
-import { runScanCycle } from "./jobs/scanJob.js";
+import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob, repairOutcomeBookkeeping } from "./jobs/outcomeTrackingJob.js";
 import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
@@ -144,6 +144,7 @@ async function main() {
   schedule("scan", () =>
     scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
       deadlineMinutes: 20,
+      failureMeta: scanFailureMeta,
     }),
   );
   // Runs far more often than the scan cycle, but only touches tokens someone currently has open

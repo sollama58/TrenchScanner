@@ -261,7 +261,7 @@ export function App() {
             </nav>
           )}
           <div className="topbar-right">
-            <WorkerStatus />
+            <WorkerStatus showJobs={isAdmin} />
             {guest && (
               <button className="button primary connect-btn" onClick={connectWallet}>
                 Connect wallet
@@ -412,7 +412,8 @@ function since(iso: string | null | undefined, now: number): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function WorkerStatus() {
+/** `showJobs`: the per-job rows, for admin wallets only - everyone else sees the alert pipeline. */
+function WorkerStatus({ showJobs }: { showJobs: boolean }) {
   const { data } = usePolling<WorkerHealth>("/health/worker", 30_000);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -472,19 +473,23 @@ function WorkerStatus() {
             })}
           </>
         )}
-        <span className="status-tip-head">Jobs</span>
-        {data.jobs.map((j) => {
-          const late = j.stale || j.hung;
-          return (
-            <span key={j.job} className="status-tip-row">
-              <span className={`status-tip-dot ${late ? "warn" : "ok"}`} />
-              <span className="status-tip-label">{j.job}</span>
-              <span className={`status-tip-val num${late ? " warn" : ""}`}>
-                {j.hung ? "running too long" : since(j.lastSuccessAt, now)}
-              </span>
-            </span>
-          );
-        })}
+        {showJobs && (
+          <>
+            <span className="status-tip-head">Jobs</span>
+            {data.jobs.map((j) => {
+              const late = j.stale || j.hung;
+              return (
+                <span key={j.job} className="status-tip-row">
+                  <span className={`status-tip-dot ${late ? "warn" : "ok"}`} />
+                  <span className="status-tip-label">{j.job}</span>
+                  <span className={`status-tip-val num${late ? " warn" : ""}`}>
+                    {j.hung ? "running too long" : since(j.lastSuccessAt, now)}
+                  </span>
+                </span>
+              );
+            })}
+          </>
+        )}
       </span>
     </span>
   );
