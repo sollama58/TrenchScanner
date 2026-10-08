@@ -462,7 +462,7 @@ describe("narrativeDetails", () => {
   });
 });
 
-describe("narrativeFieldsFromAnalysis on a rules-0.17.0 document", () => {
+describe("narrativeFieldsFromAnalysis on a rules-0.17.0 / 0.18.0 document", () => {
   // Shaped after TokenSage's complete reply of 2026-10-07: a kind-only referent (FROGMAN), the
   // crypto_native sub-labels, an unresolved lineage, and the trend sources 0.18.0 will add.
   const doc: TokenSageAnalysis = {
@@ -495,11 +495,24 @@ describe("narrativeFieldsFromAnalysis on a rules-0.17.0 document", () => {
     trend: {
       matched: false,
       score: 0,
-      terms: [{ term: "frogman", source: "bluesky", score: 0.12, posts: 3, headline: "frogman lives" }],
+      terms: [
+        { term: "frogman", source: "bluesky", score: 0.12, posts: 3, headline: "frogman lives" },
+        // Rules 0.18.0: the ticker matched one word of a longer X topic.
+        {
+          term: "Froggo Gomez",
+          source: "x_trends",
+          score: 0.2,
+          rank: 31,
+          hours: 2,
+          matched_on: "symbol",
+          partial: true,
+        },
+      ],
       sources: [
         { source: "wikipedia", status: "ok", as_of: "2026-10-07T22:50:00Z", terms: 0 },
-        { source: "news", status: "stale", as_of: "2026-10-07T20:00:00Z", terms: 0 },
-        { source: "x_trends", status: "unavailable", as_of: null, terms: 0 },
+        { source: "google_trends", status: "ok", as_of: "2026-10-07T22:40:00Z", terms: 0 },
+        { source: "news", status: "skipped", as_of: null, terms: 0, detail: "name is everyday words" },
+        { source: "x_trends", status: "ok", as_of: "2026-10-07T22:50:00Z", terms: 1 },
         { source: "bluesky", status: "ok", as_of: "2026-10-07T22:55:00Z", terms: 1 },
       ],
     },
@@ -507,7 +520,7 @@ describe("narrativeFieldsFromAnalysis on a rules-0.17.0 document", () => {
       { code: "x_account_made_for_coin", severity: "info" },
       { code: "logo_reused", severity: "info" },
     ],
-    versions: { rules: "0.17.0-full", lexicon: "2026-10-07.3" },
+    versions: { rules: "0.18.0-full", lexicon: "2026-10-07.3" },
   };
 
   it("keeps the kind-only referent, the lexicon, the sub-labels and the info flags", () => {
@@ -529,7 +542,7 @@ describe("narrativeFieldsFromAnalysis on a rules-0.17.0 document", () => {
       trendScore: 0,
       highFlagCount: 0,
       warnFlagCount: 0,
-      rulesVersion: "0.17.0-full",
+      rulesVersion: "0.18.0-full",
       lexiconVersion: "2026-10-07.3",
     });
     expect(f.flags).toEqual(["x_account_made_for_coin", "logo_reused"]);
