@@ -5,6 +5,8 @@ import {
   tokenSageHints,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
+  tokenSageFlagSeverity,
+  tokenSageRulesAtLeast,
   normalizeSocialUrl,
   storableAnalysis,
   STORED_ANALYSIS_MAX_BYTES,
@@ -787,5 +789,37 @@ describe("narrativeFieldsFromAnalysis on a rules-0.19.0 document (creator fee)",
     expect(narrativeFieldsFromAnalysis(withFee(undefined, "0.18.0-full"), "complete")).toMatchObject(empty);
     expect(narrativeFieldsFromAnalysis({ mint: "X", market: null }, "complete")).toMatchObject(empty);
     expect(narrativeFieldsFromAnalysis(withFee("charity"), "complete")).toMatchObject(empty);
+  });
+});
+
+describe("X account signals as context (rules 0.23.0)", () => {
+  it("counts recycled_x_account as info even on a read that still says high", () => {
+    const f = narrativeFieldsFromAnalysis(
+      {
+        mint: "X",
+        flags: [
+          { code: "recycled_x_account", severity: "high" },
+          { code: "spoofed_tweet_handle", severity: "high" },
+          { code: "copycat", severity: "warn" },
+        ],
+      },
+      "complete",
+    );
+    expect(f.highFlagCount).toBe(1);
+    expect(f.warnFlagCount).toBe(1);
+    expect(f.flags).toContain("recycled_x_account");
+    expect(tokenSageFlagSeverity("recycled_x_account", "high")).toBe("info");
+    expect(tokenSageFlagSeverity("spoofed_tweet_handle", "high")).toBe("high");
+    expect(tokenSageFlagSeverity("copycat", undefined)).toBe("info");
+  });
+
+  it("compares rules versions by number, suffix and all", () => {
+    expect(tokenSageRulesAtLeast("0.23.0-full", "0.23.0")).toBe(true);
+    expect(tokenSageRulesAtLeast("0.23.1", "0.23.0")).toBe(true);
+    expect(tokenSageRulesAtLeast("1.0.0", "0.23.0")).toBe(true);
+    expect(tokenSageRulesAtLeast("0.22.9-full", "0.23.0")).toBe(false);
+    expect(tokenSageRulesAtLeast("0.3.0", "0.23.0")).toBe(false);
+    expect(tokenSageRulesAtLeast(null, "0.23.0")).toBe(false);
+    expect(tokenSageRulesAtLeast("dev", "0.23.0")).toBe(false);
   });
 });

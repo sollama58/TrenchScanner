@@ -331,6 +331,31 @@ describe("round trip through a stored feature vector", () => {
     });
   });
 
+  it("splits X account credibility at rules 0.23.0, where its scale moved", () => {
+    const older = narrativeFeatureValues(narrativeReadFromRow(lineageRow({ rulesVersion: "0.22.1-full" })));
+    expect(older.nsXCredibility).toBe(0.032);
+    expect(older.nsXCredibility23).toBeNull();
+    const gentle = narrativeFeatureValues(narrativeReadFromRow(lineageRow({ rulesVersion: "0.23.0-full" })));
+    expect(gentle.nsXCredibility).toBeNull();
+    expect(gentle.nsXCredibility23).toBe(0.032);
+    // Without the post read neither is known.
+    const basic = narrativeFeatureValues(
+      narrativeReadFromRow(
+        lineageRow({ depth: "basic", xRelation: null, xVerdict: null, rulesVersion: "0.23.0" }),
+      ),
+    );
+    expect(basic.nsXCredibility23).toBeNull();
+    // A replay lands each value back on its own side.
+    expect(narrativeFeatureValues(narrativeFromFeatures(gentle)!)).toMatchObject({
+      nsXCredibility: null,
+      nsXCredibility23: 0.032,
+    });
+    expect(narrativeFeatureValues(narrativeFromFeatures(older)!)).toMatchObject({
+      nsXCredibility: 0.032,
+      nsXCredibility23: null,
+    });
+  });
+
   it("records every ns* input on the vector", () => {
     for (const name of ALL_NARRATIVE_FEATURES) expect(CANDIDATE_FEATURE_NAMES).toContain(name);
     // The fee inputs (rules 0.19.0) follow the livestream inputs, and pair age follows them.
@@ -339,6 +364,8 @@ describe("round trip through a stored feature vector", () => {
       ...NARRATIVE_FEATURES_V4,
     ]);
     expect(CANDIDATE_FEATURE_NAMES[feeStart + NARRATIVE_FEATURES_V4.length]).toBe("pairAgeMinutes");
+    // The 0.23.0 credibility follows pair age.
+    expect(CANDIDATE_FEATURE_NAMES[feeStart + NARRATIVE_FEATURES_V4.length + 1]).toBe("nsXCredibility23");
     // The livestream inputs (added after) follow the earlier narrative ones.
     const lastNarrative = CANDIDATE_FEATURE_NAMES.indexOf("livestreamLive") - 1;
     expect(CANDIDATE_FEATURE_NAMES.indexOf("nsReferentNamed")).toBe(lastNarrative);

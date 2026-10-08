@@ -13,6 +13,7 @@ import {
   NARRATIVE_FEATURES_V2,
   NARRATIVE_FEATURES_V3,
   NARRATIVE_FEATURES_V4,
+  NARRATIVE_FEATURES_V5,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -170,6 +171,10 @@ export const CANDIDATE_FEATURE_NAMES = [
   // fresh pool on an old token from an old pool. Null when DexScreener gave no pair time, and on
   // every row banked before.
   "pairAgeMinutes",
+  // Added 2026-10-08, TokenSage rules 0.23.0 (curation/narrativeFeatures.ts): the X account's
+  // credibility on the gentler 0.23.0 scale. nsXCredibility above keeps the older scale and is
+  // null on 0.23.0+ reads, so neither mixes the two.
+  ...NARRATIVE_FEATURES_V5,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];

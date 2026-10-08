@@ -1,4 +1,4 @@
-import type { TokenSageAnalysis } from "@trenchscanner/core";
+import { tokenSageFlagSeverity, type TokenSageAnalysis } from "@trenchscanner/core";
 import { topCategory } from "./routes/adminInsights.js";
 
 /**
@@ -386,7 +386,11 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
     flags: (Array.isArray(doc.flags) ? doc.flags : [])
       .filter((f) => typeof f?.code === "string")
       .slice(0, MAX_FLAGS)
-      .map((f) => ({ code: f.code, severity: f.severity ?? "info", detail: clip(f.detail) })),
+      .map((f) => ({
+        code: f.code,
+        severity: tokenSageFlagSeverity(f.code, f.severity),
+        detail: clip(f.detail),
+      })),
     evidence,
     caveats: strings(doc.caveats, MAX_CAVEATS)
       .map((c) => clip(c))

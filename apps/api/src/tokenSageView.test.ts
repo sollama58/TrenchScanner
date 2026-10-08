@@ -65,6 +65,22 @@ describe("TokenSage view", () => {
     ).toBe("copy");
   });
 
+  it("shows a recycled X account as info, as rules 0.23.0 do, on a read stored before", () => {
+    const read = sageRead(
+      {
+        flags: [
+          { code: "recycled_x_account", severity: "high" },
+          { code: "spoofed_tweet_handle", severity: "high" },
+        ],
+      },
+      "full",
+    )!;
+    expect(read.flags.map((f) => [f.code, f.severity])).toEqual([
+      ["recycled_x_account", "info"],
+      ["spoofed_tweet_handle", "high"],
+    ]);
+  });
+
   it("copes with missing parts and clips long text", () => {
     expect(sageRead(null, "basic")).toBeNull();
     const read = sageRead({ summary: "x".repeat(5000), categories: [{ label: 5 } as never] }, "basic")!;
