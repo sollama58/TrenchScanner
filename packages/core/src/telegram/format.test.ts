@@ -129,6 +129,12 @@ describe("telegram alert text", () => {
   it("pictures a message with the token's logo only when it is an https URL", () => {
     expect(alertMessage(card(), links).imageUrl).toBe("https://cdn.example/doge.png");
     expect(alertImage({ imageUrl: "http://plain.example/x.png" })).toBeNull();
+    // An IPFS file on any public gateway is read through the Pinata resizer instead.
+    const cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+    const resized = `https://pump.mypinata.cloud/ipfs/${cid}?img-width=640&img-height=640&img-fit=scale-down`;
+    expect(alertImage({ imageUrl: `https://ipfs.io/ipfs/${cid}` })).toBe(resized);
+    expect(alertImage({ imageUrl: `https://${cid}.ipfs.nftstorage.link/` })).toBe(resized);
+    expect(alertImage({ imageUrl: `https://cf-ipfs.com/ipfs/${cid}?x=1` })).toBe(resized);
     expect(alertImage({ imageUrl: "  " })).toBeNull();
     expect(alertImage({ imageUrl: null })).toBeNull();
     const noArt = card({ token: { ...token, imageUrl: null } });

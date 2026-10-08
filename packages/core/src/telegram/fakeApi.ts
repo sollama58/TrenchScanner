@@ -12,8 +12,9 @@ export class FakeTelegramApi extends TelegramApi {
     TelegramResult<unknown> | ((params: Record<string, unknown>) => TelegramResult<unknown>)
   >();
 
-  constructor() {
-    super("fake-token", () => Promise.reject(new Error("the fake never fetches")));
+  /** By default nothing is fetchable, so artwork goes to Telegram as a URL. */
+  constructor(fetchImpl: typeof fetch = () => Promise.reject(new Error("the fake never fetches"))) {
+    super("fake-token", fetchImpl);
   }
 
   override async call<T>(method: string, params: Record<string, unknown> = {}): Promise<TelegramResult<T>> {
@@ -23,14 +24,22 @@ export class FakeTelegramApi extends TelegramApi {
     return (result ?? { ok: true, result: {} }) as TelegramResult<T>;
   }
 
-  /** Every message that went out, text or photo, with the photo's URL when there was one. */
+  /**
+   * Every message that went out, text or photo. `photo` is the URL handed to Telegram, or
+   * "upload" when the bytes were uploaded, or null for a text message.
+   */
   sent(): { chatId: string; text: string; photo: string | null }[] {
     return this.calls
       .filter((c) => c.method === "sendMessage" || c.method === "sendPhoto")
       .map((c) => ({
         chatId: String(c.params.chat_id),
         text: String(c.method === "sendPhoto" ? c.params.caption : c.params.text),
-        photo: c.method === "sendPhoto" ? String(c.params.photo) : null,
+        photo:
+          c.method !== "sendPhoto"
+            ? null
+            : c.params.photo instanceof Blob
+              ? "upload"
+              : String(c.params.photo),
       }));
   }
 }
