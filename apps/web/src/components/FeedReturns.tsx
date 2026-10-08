@@ -138,7 +138,7 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
                     {t.source ? ` · ${t.source.name}` : ""}
                   </small>
                 </span>
-                <span className={`returns-x num ${tone(t.returnPct)}`}>{multiple(t.returnPct)}</span>
+                <span className={`returns-x num ${tone(t.peakPct)}`}>{multiple(t.peakPct)}</span>
                 <button
                   type="button"
                   className="ghost small"
@@ -162,7 +162,8 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
       <p className="faint small stats-note">
         Each alert&apos;s return under the fixed exit plan (half sold at 2x, the rest on a trailing stop, stop
         at −50%), averaged by when it alerted. An alert counts once its return settles, from 30 minutes to 3
-        hours after it fires, so the last hour fills in late.
+        hours after it fires, so the last hour fills in late. The top 3 are ranked by Peak, the figure each
+        feed card shows.
       </p>
     </section>
   );

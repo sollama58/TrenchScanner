@@ -67,17 +67,36 @@ type CuratedCardMeta = ReturnType<typeof serializeCuratedAlert>["curated"] & { c
 /** What GET /matches/stats answers with - cached per reader, see FEED_STATS_CACHE_TTL_MS. */
 type FeedStatsResponse = ReturnType<typeof summarizeFeed> & { showModelAlerts: boolean; truncated: boolean };
 
+/** A grading row's columns the run peak reads, and the exit-plan return. */
+const RUN_PEAK_SELECT = {
+  simReturnPct: true,
+  peak24hReturnPct: true,
+  peak24hPriceUsd: true,
+  anchorPriceUsd: true,
+} satisfies Prisma.CandidateOutcomeSelect;
+
+/** A grading row's run peak, as a return on its anchor price: written at the close, live before it. */
+function runPeakPct(
+  row: { peak24hReturnPct: number | null; peak24hPriceUsd: number; anchorPriceUsd: number } | null,
+): number | null {
+  if (!row) return null;
+  if (row.peak24hReturnPct !== null) return row.peak24hReturnPct;
+  const pct = ((row.peak24hPriceUsd - row.anchorPriceUsd) / row.anchorPriceUsd) * 100;
+  return Number.isFinite(pct) ? pct : null;
+}
+
 /** What GET /matches/returns answers with - cached per reader, see FEED_RETURNS_CACHE_TTL_MS. */
 interface FeedReturnsResponse {
   windows: FeedReturnWindow[];
-  /** The week's three best settled returns, one per token, best first - for the share cards. */
+  /** The week's three biggest runs (the cards' Peak), one per token, best first - for the share cards. */
   top: {
     tokenId: string;
     symbol: string | null;
     name: string | null;
     mintAddress: string;
     at: string;
-    returnPct: number;
+    /** The card's Peak: the highest the token went above its alert price, in percent. */
+    peakPct: number;
     /** What alerted it: one of the reader's filters, or a model they follow. Null if the filter is gone. */
     source: { kind: "filter" | "model"; name: string } | null;
   }[];
@@ -437,7 +456,15 @@ export async function registerMatchRoutes(
         where: { userId, matchedAt: { gte: since } },
         orderBy: { matchedAt: "desc" },
         take: FEED_STATS_MAX_ROWS,
-        select: { id: true, tokenId: true, matchedAt: true, candidateOutcomeId: true, filterId: true },
+        select: {
+          id: true,
+          tokenId: true,
+          matchedAt: true,
+          candidateOutcomeId: true,
+          filterId: true,
+          peakReturnPct: true,
+          peak24hReturnPct: true,
+        },
       }),
       models.length === 0
         ? Promise.resolve([])
@@ -448,7 +475,8 @@ export async function registerMatchRoutes(
             select: {
               ...CALL_SELECT,
               simReturnPct: true,
-              candidateOutcome: { select: { simReturnPct: true } },
+              peak24hReturnPct: true,
+              candidateOutcome: { select: RUN_PEAK_SELECT },
             },
           }),
     ]);
@@ -460,10 +488,10 @@ export async function registerMatchRoutes(
       outcomeIds.length === 0
         ? []
         : await prisma.candidateOutcome.findMany({
-            where: { id: { in: outcomeIds }, simReturnPct: { not: null } },
-            select: { id: true, simReturnPct: true },
+            where: { id: { in: outcomeIds } },
+            select: { id: true, ...RUN_PEAK_SELECT },
           });
-    const returnById = new Map(outcomes.map((o) => [o.id, o.simReturnPct]));
+    const outcomeById = new Map(outcomes.map((o) => [o.id, o]));
 
     type ReturnFeedCard = ReturnCard & {
       id: string;
@@ -472,23 +500,36 @@ export async function registerMatchRoutes(
       matchedAt: Date;
       /** The filter that caught it, or the model's name for a call. */
       source: { filterId: string } | { modelName: string };
-      curated: { alertId: string; returnPct: number | null; modelName: string } | null;
+      /** The Peak the feed card shows: the highest the token went above its alert price. */
+      peakPct: number | null;
+      curated: {
+        alertId: string;
+        returnPct: number | null;
+        peakPct: number | null;
+        modelName: string;
+      } | null;
     };
-    const matchCards: ReturnFeedCard[] = matches.map((m) => ({
-      id: m.id,
-      kind: "match",
-      tokenId: m.tokenId,
-      matchedAt: m.matchedAt,
-      at: m.matchedAt,
-      returnPct: m.candidateOutcomeId ? (returnById.get(m.candidateOutcomeId) ?? null) : null,
-      source: { filterId: m.filterId },
-      curated: null,
-    }));
+    const matchCards: ReturnFeedCard[] = matches.map((m) => {
+      const row = m.candidateOutcomeId ? (outcomeById.get(m.candidateOutcomeId) ?? null) : null;
+      return {
+        id: m.id,
+        kind: "match",
+        tokenId: m.tokenId,
+        matchedAt: m.matchedAt,
+        at: m.matchedAt,
+        returnPct: row?.simReturnPct ?? null,
+        // The card's Peak for a filter alert: its tracked ATH, else its grading row's run peak.
+        peakPct: m.peakReturnPct ?? m.peak24hReturnPct ?? runPeakPct(row),
+        source: { filterId: m.filterId },
+        curated: null,
+      };
+    });
     // Folded exactly as /stats folds them, so the two panels count the same cards.
     const callCards: ReturnFeedCard[] = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).map(
       ({ lead }) => {
         const returnPct = lead.simReturnPct ?? lead.candidateOutcome?.simReturnPct ?? null;
         const modelName = lead.modelName ?? lead.model ?? "Model";
+        const peakPct = lead.peak24hReturnPct ?? runPeakPct(lead.candidateOutcome);
         return {
           id: lead.id,
           kind: "curated",
@@ -496,19 +537,21 @@ export async function registerMatchRoutes(
           matchedAt: lead.createdAt,
           at: lead.createdAt,
           returnPct,
+          peakPct,
           source: { modelName },
-          curated: { alertId: lead.id, returnPct, modelName },
+          curated: { alertId: lead.id, returnPct, peakPct, modelName },
         };
       },
     );
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
-      (c): ReturnCard & { tokenId: string; source: ReturnFeedCard["source"] } =>
+      (c): ReturnCard & { tokenId: string; peakPct: number | null; source: ReturnFeedCard["source"] } =>
         // A folded card shows the call, so the model is what alerted it.
         c.kind === "match" && c.curated
           ? {
               at: c.at,
               tokenId: c.tokenId,
               returnPct: c.curated.returnPct,
+              peakPct: c.curated.peakPct,
               source: { modelName: c.curated.modelName },
             }
           : c,
@@ -549,7 +592,7 @@ export async function registerMatchRoutes(
                 name: t.name,
                 mintAddress: t.mintAddress,
                 at: b.at.toISOString(),
-                returnPct: b.returnPct,
+                peakPct: b.peakPct,
                 source: sourceOf(b.source),
               },
             ]

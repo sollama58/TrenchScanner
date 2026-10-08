@@ -7,8 +7,8 @@ export interface PnlCardData {
   mintAddress: string;
   /** When it alerted (ISO). */
   at: string;
-  /** Its return under the fixed exit plan, in percent. */
-  returnPct: number;
+  /** Its Peak: the highest it went above its alert price, in percent. */
+  peakPct: number;
   /** What alerted it: a model the reader follows, or one of their own filters. */
   source: { kind: "filter" | "model"; name: string } | null;
 }
@@ -127,7 +127,7 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
     ctx.fillText(data.source.name, right, pad + 18);
     ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
     ctx.font = `italic 500 20px ${FONT}`;
-    ctx.fillText(data.source.kind === "model" ? "Machine Model" : "Custom Filter", right, pad + 50);
+    ctx.fillText(data.source.kind === "model" ? "AI KOL" : "Custom Filter", right, pad + 50);
     ctx.textAlign = "left";
   }
 
@@ -144,8 +144,8 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   }
 
   // The multiple, as big as it can be.
-  const up = data.returnPct >= 0;
-  const x = multiple(data.returnPct);
+  const up = data.peakPct >= 0;
+  const x = multiple(data.peakPct);
   ctx.fillStyle = up ? UP : DOWN;
   const xSize = fitText(ctx, x, 800, 200, W * 0.62);
   ctx.shadowColor = up ? "rgba(52, 211, 153, 0.45)" : "rgba(248, 113, 113, 0.4)";
@@ -155,7 +155,7 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   const xWidth = ctx.measureText(x).width;
   ctx.fillStyle = up ? UP : DOWN;
   ctx.font = `700 44px ${FONT}`;
-  ctx.fillText(signedPct(data.returnPct, 0), pad + xWidth + 24, 300 + xSize * 0.82);
+  ctx.fillText(signedPct(data.peakPct, 0), pad + xWidth + 24, 300 + xSize * 0.82);
 
   // Footer: when, the mint, where.
   const when = new Date(data.at).toLocaleString(undefined, {

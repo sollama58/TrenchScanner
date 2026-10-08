@@ -192,13 +192,15 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
     expect(on[168]!.buckets).toHaveLength(28);
     const top = (await call("GET", "/matches/returns")).json().top as {
       symbol: string;
-      returnPct: number;
+      peakPct: number;
       source: { kind: string; name: string } | null;
     }[];
-    // B's card shows the model's call; OLD was caught by the reader's own filter.
-    expect(top.map((t) => [t.symbol, t.returnPct, t.source])).toEqual([
-      ["BBB", 60, { kind: "model", name: "Survivor" }],
-      ["OLD", -20, { kind: "filter", name: "mine" }],
+    // Ranked by each card's Peak: OLD's 9x run, AAA's 5x, then CCC's live 2.5x (its grading row's
+    // peak while it is still in its window). BBB, shown as the model's call, peaked at 2.2x.
+    expect(top.map((t) => [t.symbol, Math.round(t.peakPct), t.source])).toEqual([
+      ["OLD", 900, { kind: "filter", name: "mine" }],
+      ["AAA", 400, { kind: "filter", name: "mine" }],
+      ["CCC", 150, { kind: "filter", name: "mine" }],
     ]);
 
     await call("PUT", "/curated/feed", { showModelAlerts: false });

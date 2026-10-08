@@ -123,20 +123,20 @@ describe("topReturns", () => {
   const now = Date.parse("2026-10-08T12:00:00Z");
   const ago = (h: number) => new Date(now - h * 3_600_000);
 
-  it("keeps the week's three best settled returns, one per token, best first", () => {
+  it("keeps the week's three biggest runs, one per token, best first", () => {
     const top = topReturns(
       [
-        { tokenId: "a", at: ago(1), returnPct: 120 },
-        { tokenId: "a", at: ago(30), returnPct: 400 },
-        { tokenId: "b", at: ago(2), returnPct: 250 },
-        { tokenId: "c", at: ago(3), returnPct: null },
-        { tokenId: "d", at: ago(4), returnPct: -40 },
-        { tokenId: "e", at: ago(5), returnPct: 60 },
-        { tokenId: "f", at: ago(200), returnPct: 9000 },
+        { tokenId: "a", at: ago(1), peakPct: 120 },
+        { tokenId: "a", at: ago(30), peakPct: 400 },
+        { tokenId: "b", at: ago(2), peakPct: 250 },
+        { tokenId: "c", at: ago(3), peakPct: null },
+        { tokenId: "d", at: ago(4), peakPct: -40 },
+        { tokenId: "e", at: ago(5), peakPct: 60 },
+        { tokenId: "f", at: ago(200), peakPct: 9000 },
       ],
       now,
     );
-    expect(top.map((t) => [t.tokenId, t.returnPct])).toEqual([
+    expect(top.map((t) => [t.tokenId, t.peakPct])).toEqual([
       ["a", 400],
       ["b", 250],
       ["e", 60],

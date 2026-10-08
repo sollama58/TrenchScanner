@@ -183,22 +183,23 @@ export function summarizeReturns(cards: readonly ReturnCard[], now: number): Fee
 }
 
 /**
- * The feed's best settled exit-plan returns over the week, one per token (a token alerted twice
- * shows its better run), best first. Each comes back as the card it was, so the caller keeps
+ * The feed's best runs over the week: the cards whose Peak (the figure the feed card shows, the
+ * highest the token went above its alert price) is highest, one per token (a token alerted twice
+ * shows its bigger run), best first. Each comes back as the card it was, so the caller keeps
  * whatever it carried (which model or filter alerted it).
  */
-export function topReturns<T extends ReturnCard & { tokenId: string }>(
+export function topReturns<T extends { at: Date; tokenId: string; peakPct: number | null }>(
   cards: readonly T[],
   now: number,
   n = 3,
-): (T & { returnPct: number })[] {
+): (T & { peakPct: number })[] {
   const start = now - RETURN_WINDOW_MAX_HOURS * 3_600_000;
-  const best = new Map<string, T & { returnPct: number }>();
+  const best = new Map<string, T & { peakPct: number }>();
   for (const c of cards) {
-    if (c.returnPct === null || !Number.isFinite(c.returnPct)) continue;
+    if (c.peakPct === null || !Number.isFinite(c.peakPct) || c.peakPct <= 0) continue;
     if (c.at.getTime() <= start || c.at.getTime() > now) continue;
     const held = best.get(c.tokenId);
-    if (!held || c.returnPct > held.returnPct) best.set(c.tokenId, { ...c, returnPct: c.returnPct });
+    if (!held || c.peakPct > held.peakPct) best.set(c.tokenId, { ...c, peakPct: c.peakPct });
   }
-  return [...best.values()].sort((a, b) => b.returnPct - a.returnPct).slice(0, n);
+  return [...best.values()].sort((a, b) => b.peakPct - a.peakPct).slice(0, n);
 }
