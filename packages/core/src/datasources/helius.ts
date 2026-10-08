@@ -125,6 +125,8 @@ const BATCH_CONCURRENCY = 3;
  * bill 10 credits per 100 returned, so a page of 100 is the most one 10-credit call can carry.
  */
 const LAUNCH_TX_PAGE = 100;
+/** Launch-buyer reads in flight at once, each its own request (see getLaunchBuyersBatch). */
+const LAUNCH_READ_CONCURRENCY = 5;
 /** Pages read before giving up on reaching the full buyer count - caps a launch at 30 credits. */
 const LAUNCH_MAX_PAGES = 3;
 /** Matches packages/core/src/subscription/solanaRpc.ts: v1 transactions exist on mainnet. */
@@ -518,15 +520,23 @@ export class HeliusClient {
     return byId;
   }
 
-  /** Splits into RPC_BATCH_SIZE chunks and runs them with bounded concurrency, merging the results. */
-  private async sendBatched<T>(calls: RpcCall[], timeoutMs: number): Promise<Map<string, RpcResponse<T>>> {
+  /**
+   * Splits into RPC_BATCH_SIZE chunks (or opts.batchSize) and runs them with bounded concurrency
+   * (BATCH_CONCURRENCY, or opts.concurrency), merging the results.
+   */
+  private async sendBatched<T>(
+    calls: RpcCall[],
+    timeoutMs: number,
+    opts: { batchSize?: number; concurrency?: number } = {},
+  ): Promise<Map<string, RpcResponse<T>>> {
+    const size = opts.batchSize ?? RPC_BATCH_SIZE;
     const chunks: RpcCall[][] = [];
-    for (let i = 0; i < calls.length; i += RPC_BATCH_SIZE) {
-      chunks.push(calls.slice(i, i + RPC_BATCH_SIZE));
+    for (let i = 0; i < calls.length; i += size) {
+      chunks.push(calls.slice(i, i + size));
     }
 
     const merged = new Map<string, RpcResponse<T>>();
-    await forEachWithConcurrency(chunks, BATCH_CONCURRENCY, async (chunk) => {
+    await forEachWithConcurrency(chunks, opts.concurrency ?? BATCH_CONCURRENCY, async (chunk) => {
       const result = await this.sendBatch<T>(chunk, timeoutMs);
       for (const [id, res] of result) merged.set(id, res);
     });
@@ -797,9 +807,13 @@ export class HeliusClient {
           },
         ],
       }));
+      // One mint per POST, a few at a time: a page is up to 100 full transactions, and twenty of
+      // them in one batch (#276's contender budget) is a response so large it timed out or was
+      // refused whole, failing every mint in it - after that deploy almost no launch was read.
       const responses = await this.sendBatched<{ data?: RawLaunchTx[]; paginationToken?: string | null }>(
         calls,
-        20_000,
+        15_000,
+        { batchSize: 1, concurrency: LAUNCH_READ_CONCURRENCY },
       );
 
       const next: string[] = [];

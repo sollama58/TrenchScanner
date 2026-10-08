@@ -614,3 +614,17 @@ describe("HeliusClient call accounting", () => {
     expect((requests[0]!.body as { method: string }[])[0]!.method).toBe("getTransactionsForAddress");
   });
 });
+
+describe("HeliusClient.getLaunchBuyersBatch", () => {
+  it("sends each mint's read as its own request, so one heavy answer can't fail the rest", async () => {
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: { data: [], paginationToken: null } })),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+    const out = await client.getLaunchBuyersBatch(["m1", "m2", "m3"], 25);
+    expect(requests).toHaveLength(3);
+    for (const r of requests) expect(r.body as unknown[]).toHaveLength(1);
+    // An empty history is a mint too new for the index: retried, not answered.
+    expect(out.get("m2")).toEqual({ status: "failed" });
+  });
+});
