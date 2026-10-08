@@ -1174,7 +1174,8 @@ export interface LighthouseHistory {
     bucket: LighthouseHistoryBucket;
     /** The labels drawn as their own series; everything else is "other". */
     top: string[];
-    buckets: { at: string; rows: LighthouseLabelTally[] }[];
+    /** `described`: coins read in the bucket, whatever their labels. Absent from older API builds. */
+    buckets: { at: string; described?: number; rows: LighthouseLabelTally[] }[];
   };
 }
 
@@ -1242,10 +1243,15 @@ export interface MarketLighthouse {
       avgReturnPct: number | null;
     }[];
     /**
-     * The screened field by hour of the day (UTC) over all the hourly history kept, always 24
+     * The screened field by hour of the day over all the hourly history kept, always 24
      * entries. Absent from older API builds.
      */
     byHourOfDay?: {
+      /**
+       * The zone the hours are in: the `tz` asked for (canonical), UTC when none was sent.
+       * Absent from older API builds, whose hours are UTC.
+       */
+      timeZone?: string;
       /** Days of history behind the figures; 0 before the rollup has run. */
       days: number;
       hours: {

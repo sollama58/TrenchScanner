@@ -107,3 +107,9 @@ export function tokenThumb(url: string, size = 96): string {
     ? `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${size}&img-height=${size}&img-fit=cover`
     : url;
 }
+
+/**
+ * Hour buckets start on the UTC hour, which a :30 or :45 zone (Kolkata, Adelaide, Newfoundland)
+ * reads as 5:30 rather than 5: the `minute` option for a bucket's time label, shown only then.
+ */
+export const halfHour = (t: Date) => (t.getMinutes() !== 0 ? ("2-digit" as const) : undefined);

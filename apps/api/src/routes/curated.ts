@@ -682,7 +682,7 @@ export async function registerCuratedRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    return opts.reports.lighthouse(opts.env, parsed.data.days);
+    return opts.reports.lighthouse(opts.env, parsed.data.days, parsed.data.tz);
   });
 
   /** The Lighthouse tab's trends: the kept-for-good hourly sums per hour, day or week (lighthouseHistory.ts). */

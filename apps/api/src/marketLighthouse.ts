@@ -44,7 +44,27 @@ export const lighthouseQuerySchema = z.object({
       message: `days must be one of ${LIGHTHOUSE_WINDOWS.join(", ")}`,
     })
     .default(1),
+  /**
+   * The reader's IANA zone, for the hour-of-day chart (screenedByHourOfDay). Canonicalized, so
+   * "europe/berlin" and "Europe/Berlin" share one cache. Absent means UTC, and so does a zone
+   * this server's ICU doesn't know ("Etc/Unknown", which Chrome reports when it can't tell, or
+   * a zone newer than our tzdata): the answer says UTC and the web shifts by today's offset, rather
+   * than the whole Lighthouse failing over a hint for one chart.
+   */
+  tz: z
+    .string()
+    .max(64)
+    .transform((tz) => canonicalTimeZone(tz) ?? "UTC")
+    .default("UTC"),
 });
+
+function canonicalTimeZone(tz: string): string | null {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
 
 /** The tide chart's buckets: hourly over a day, six-hourly over a week (28 bars either way, give or take). */
 const bucketHoursFor = (days: number) => (days <= 1 ? 1 : 6);
@@ -166,58 +186,73 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
   };
 }
 
-interface HourOfDayRow {
-  hour: number;
-  calls: bigint;
-  graded: bigint;
-  won2x: bigint;
-  return_n: bigint;
-  return_sum: number | null;
-  first_hour: Date | null;
-  last_hour: Date | null;
+interface ScreenedHourRow {
+  hour: Date;
+  calls: number;
+  graded: number;
+  won2x: number;
+  return_n: number;
+  return_sum: number;
 }
 
 /**
- * The screened field by hour of the day (UTC), over everything the hourly rollup has kept
- * (LighthouseHour, apps/worker/src/jobs/lighthouseRollupJob.ts): which hours launch the most
- * decision-ready tokens and which hours' tokens pay. Always all 24 hours, zero where nothing
- * was screened, so the chart's columns never shift.
+ * Every hour the hourly rollup (LighthouseHour, apps/worker/src/jobs/lighthouseRollupJob.ts)
+ * saw anything screened in, oldest first: one row per hour, read once for every reader's zone.
  */
-async function buildScreenedByHourOfDay() {
-  const rows = await prisma.$queryRaw<HourOfDayRow[]>`
-    SELECT extract(hour FROM h."hour" AT TIME ZONE 'UTC')::int AS hour,
-           sum(h."screenedCalls") AS calls,
-           sum(h."screenedGraded") AS graded,
-           sum(h."screenedWon2x") AS won2x,
-           sum(h."screenedReturnN") AS return_n,
-           sum(h."screenedReturnSum")::float8 AS return_sum,
-           min(h."hour") AS first_hour,
-           max(h."hour") AS last_hour
+function screenedHours() {
+  return prisma.$queryRaw<ScreenedHourRow[]>`
+    SELECT h."hour", h."screenedCalls" AS calls, h."screenedGraded" AS graded, h."screenedWon2x" AS won2x,
+           h."screenedReturnN" AS return_n, h."screenedReturnSum"::float8 AS return_sum
     FROM "LighthouseHour" h
-    GROUP BY 1 ORDER BY 1`;
-  const n = (v: bigint | number | null | undefined) => Number(v ?? 0);
-  const byHour = new Map(rows.map((r) => [r.hour, r]));
-  let oldest: Date | null = null;
-  let newest: Date | null = null;
+    WHERE h."screenedCalls" > 0
+    ORDER BY h."hour"`;
+}
+
+/**
+ * The screened field by hour of the day in `timeZone`, over everything the rollup has kept:
+ * which hours launch the most decision-ready tokens and which hours' tokens pay. Always all 24
+ * hours, zero where nothing was screened, so the chart's columns never shift.
+ *
+ * Each row goes on the hour its start falls on in the zone at its own date, so history from
+ * the other side of a DST change lands on the right hour. In a half-hour zone that is the hour
+ * the row starts in (00:00 UTC is 05:30 in Kolkata, hour 5). Done here with the same zone
+ * database the browser names its zone from, not Postgres's, whose aliases differ.
+ */
+function screenedByHourOfDay(rows: ScreenedHourRow[], timeZone: string) {
+  const localHour = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", hourCycle: "h23" });
+  const sums = Array.from({ length: 24 }, () => ({
+    calls: 0,
+    graded: 0,
+    won2x: 0,
+    returnN: 0,
+    returnSum: 0,
+  }));
   for (const r of rows) {
-    if (r.first_hour && (!oldest || r.first_hour < oldest)) oldest = r.first_hour;
-    if (r.last_hour && (!newest || r.last_hour > newest)) newest = r.last_hour;
+    const s = sums[Number(localHour.format(r.hour)) % 24]!;
+    s.calls += r.calls;
+    s.graded += r.graded;
+    s.won2x += r.won2x;
+    s.returnN += r.return_n;
+    s.returnSum += r.return_sum;
   }
+  const oldest = rows[0]?.hour;
+  const newest = rows[rows.length - 1]?.hour;
   return {
-    /** Days of hourly history behind the figures (0 before the rollup has run). */
-    days: oldest && newest ? Math.max(1, Math.round((newest.getTime() - oldest.getTime()) / DAY_MS + 1)) : 0,
-    hours: Array.from({ length: 24 }, (_, hour) => {
-      const r = byHour.get(hour);
-      const returnN = n(r?.return_n);
-      return {
-        hour,
-        calls: n(r?.calls),
-        graded: n(r?.graded),
-        hit2xPct: rate(n(r?.won2x), n(r?.graded)),
-        avgReturnPct: returnN > 0 ? (r?.return_sum ?? 0) / returnN : null,
-        returnGraded: returnN,
-      };
-    }),
+    /** The zone the hours are in. */
+    timeZone,
+    /**
+     * Days of hourly history behind the figures, from the first hour anything was screened
+     * through the end of the last (0 before then).
+     */
+    days: oldest && newest ? Math.ceil((newest.getTime() - oldest.getTime() + HOUR_MS) / DAY_MS) : 0,
+    hours: sums.map((s, hour) => ({
+      hour,
+      calls: s.calls,
+      graded: s.graded,
+      hit2xPct: rate(s.won2x, s.graded),
+      avgReturnPct: s.returnN > 0 ? s.returnSum / s.returnN : null,
+      returnGraded: s.returnN,
+    })),
   };
 }
 
@@ -243,7 +278,6 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     averages,
     alertRows,
     screened,
-    byHourOfDay,
   ] = await Promise.all([
     tokenSageWorkerStatus(),
     prisma.tokenNarrative.groupBy({
@@ -331,7 +365,6 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,
     buildScreenedOutcomes(env, since, days),
-    buildScreenedByHourOfDay(),
   ]);
 
   // ---- Reads ----
@@ -416,7 +449,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     pairKinds: counts(pairKinds),
     copies: counts(copies),
     news: counts(news),
-    screened: { ...screened, byHourOfDay },
+    screened,
     outcomes: {
       alerts: alertRows.length,
       described: alertsDescribed,
@@ -430,18 +463,38 @@ export async function buildMarketLighthouse(env: Env, days: number) {
   };
 }
 
-export type MarketLighthouse = Awaited<ReturnType<typeof buildMarketLighthouse>>;
+type WindowLighthouse = Awaited<ReturnType<typeof buildMarketLighthouse>>;
+type ScreenedByHourOfDay = ReturnType<typeof screenedByHourOfDay>;
+export type MarketLighthouse = Omit<WindowLighthouse, "screened"> & {
+  screened: WindowLighthouse["screened"] & { byHourOfDay: ScreenedByHourOfDay };
+};
 
-/** One cache per window, shared by the subscriber and guest routes. */
+/**
+ * One cache per window, shared by the subscriber and guest routes, plus the hourly rows for the
+ * hour-of-day chart and one cache per reader zone summing them: a new zone never refills the
+ * window's aggregates or rereads the rows.
+ */
 export function createLighthouseCache() {
-  const caches = new Map<number, SharedCache<MarketLighthouse>>();
-  return (env: Env, days: number) => {
+  const caches = new Map<number, SharedCache<WindowLighthouse>>();
+  const hoursCache = new SharedCache<ScreenedHourRow[]>(CACHE_MS);
+  const hourCaches = new Map<string, SharedCache<ScreenedByHourOfDay>>();
+  return async (env: Env, days: number, timeZone = "UTC"): Promise<MarketLighthouse> => {
     let cache = caches.get(days);
     if (!cache) {
-      cache = new SharedCache<MarketLighthouse>(CACHE_MS);
+      cache = new SharedCache<WindowLighthouse>(CACHE_MS);
       // Bounded by the schema: one per LIGHTHOUSE_WINDOWS.
       caches.set(days, cache);
     }
-    return cache.get(() => buildMarketLighthouse(env, days));
+    let hourCache = hourCaches.get(timeZone);
+    if (!hourCache) {
+      hourCache = new SharedCache<ScreenedByHourOfDay>(CACHE_MS);
+      // Bounded by the schema: canonical IANA zones only, a few hundred at most.
+      hourCaches.set(timeZone, hourCache);
+    }
+    const [m, byHourOfDay] = await Promise.all([
+      cache.get(() => buildMarketLighthouse(env, days)),
+      hourCache.get(async () => screenedByHourOfDay(await hoursCache.get(screenedHours), timeZone)),
+    ]);
+    return { ...m, screened: { ...m.screened, byHourOfDay } };
   };
 }
