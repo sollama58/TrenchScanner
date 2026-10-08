@@ -45,7 +45,7 @@ const MAX_SUBSCRIBERS = Math.max(1, Number(process.env.MAX_STREAM_SUBSCRIBERS ??
 const MAX_STREAMS_PER_USER = 8;
 
 /**
- * How long one stream is held before the server ends it. Access is checked only when a stream
+ * How long one stream is held at most before the server ends it (a random 75-100% of it). Access is checked only when a stream
  * opens, so without this a stream outlived sign-out, a revoked device or a revoked subscription
  * for as long as the tab stayed open. The client reopens it within seconds (see useNudgeStream),
  * and the reopen goes through the same session and subscriber checks as any other request.
@@ -86,8 +86,8 @@ interface Subscriber {
   /** Only meaningful for kind "match". */
   userId: string;
   sink: StreamSink;
-  /** When it was opened (ms), for MAX_STREAM_AGE_MS. */
-  openedAt: number;
+  /** When the heartbeat ends it (ms), for MAX_STREAM_AGE_MS. */
+  endsAt: number;
 }
 
 /**
@@ -330,7 +330,7 @@ export class MatchStream {
    */
   subscribe(userId: string, sink: StreamSink): (() => void) | null {
     if (!this.hasRoomFor(userId)) return null;
-    const subscriber: Subscriber = { kind: "match", userId, sink, openedAt: Date.now() };
+    const subscriber: Subscriber = { kind: "match", userId, sink, endsAt: this.streamDeadline() };
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
   }
@@ -357,7 +357,7 @@ export class MatchStream {
   /** Same contract as subscribe(), for the broadcast curated feed - shares the same capacity cap. */
   subscribeCurated(userId: string, sink: StreamSink): (() => void) | null {
     if (!this.hasRoomFor(userId)) return null;
-    const subscriber: Subscriber = { kind: "curated", userId, sink, openedAt: Date.now() };
+    const subscriber: Subscriber = { kind: "curated", userId, sink, endsAt: this.streamDeadline() };
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
   }
@@ -369,13 +369,22 @@ export class MatchStream {
     return mine < MAX_STREAMS_PER_USER;
   }
 
+  /**
+   * Somewhere in the last quarter of MAX_STREAM_AGE_MS from now. Spread out so streams opened
+   * together (every client after a deploy) are not all ended on one tick and reopened in the same
+   * few seconds, every ten minutes, for as long as the process runs.
+   */
+  private streamDeadline(): number {
+    return Date.now() + this.maxStreamAgeMs * (0.75 + Math.random() * 0.25);
+  }
+
   /** Exposed alongside dispatch so the dead-connection sweep can be exercised without waiting 25s. */
   sendHeartbeat(): void {
     // An SSE comment: ignored by EventSource, but it is real traffic on the socket, which is what
     // both the proxy and the dead-connection check need.
     const now = Date.now();
     for (const subscriber of this.subscribers) {
-      if (now - subscriber.openedAt >= this.maxStreamAgeMs) {
+      if (now >= subscriber.endsAt) {
         // Past its age: ended so the client's reopen re-checks its access (MAX_STREAM_AGE_MS).
         this.subscribers.delete(subscriber);
         try {
