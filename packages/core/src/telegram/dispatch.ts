@@ -5,7 +5,7 @@ import { createLogger } from "../logger.js";
 import { resolveAccess } from "../subscription/access.js";
 import { loadFeedModelState, resolveFeedModels, type FeedModelState } from "../curation/feedModels.js";
 import { TelegramApi, telegramConfigured } from "./api.js";
-import { formatAlert, formatDigest, type AlertCard, type AlertLinks } from "./format.js";
+import { alertMessage, digestMessage, type AlertCard, type AlertLinks } from "./format.js";
 
 /**
  * The scanner worker's telegram-dispatch job: every few seconds, send each linked chat the
@@ -176,7 +176,13 @@ export function buildPending(
   return [...byToken.values()].sort((a, b) => a.through.getTime() - b.through.getTime());
 }
 
-const TOKEN_SELECT = { mintAddress: true, symbol: true, name: true, firstSeenAt: true } as const;
+const TOKEN_SELECT = {
+  mintAddress: true,
+  symbol: true,
+  name: true,
+  firstSeenAt: true,
+  imageUrl: true,
+} as const;
 const SNAPSHOT_SELECT = { marketCapUsd: true, holderCount: true, volume1hUsd: true } as const;
 
 /** One pass. Returns what it did, for the heartbeat. */
@@ -326,11 +332,11 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     if (gap > 0) await sleep(gap);
     const q = ready[0]!;
     const item = q.pending[0]!;
-    const text = isDigest(item.card)
-      ? formatDigest(item.card.digest, links)
-      : formatAlert(item.card, links, now());
+    const message = isDigest(item.card)
+      ? digestMessage(item.card.digest, links)
+      : alertMessage(item.card, links, now());
     lastSendAt = now();
-    const result = await api.sendMessage(q.chat.chatId, text);
+    const result = await api.sendAlert(q.chat.chatId, message);
     const spacing = q.chat.kind === "private" ? PRIVATE_GAP_MS : GROUP_GAP_MS;
     if (result.ok) {
       q.pending.shift();

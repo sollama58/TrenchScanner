@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createLogger } from "../logger.js";
+import { CAPTION_MAX_CHARS } from "./format.js";
 
 /**
  * The slice of Telegram's Bot API this app uses, over plain fetch. Deliberately not fetchJson:
@@ -146,6 +147,43 @@ export class TelegramApi {
       link_preview_options: { is_disabled: true },
       disable_notification: opts.silent === true,
     });
+  }
+
+  /** A photo by https URL (Telegram fetches it) with an HTML caption; same link rules as a message. */
+  sendPhoto(
+    chatId: number | bigint,
+    photoUrl: string,
+    captionHtml: string,
+    opts: { silent?: boolean } = {},
+  ): Promise<TelegramResult<TelegramMessage>> {
+    return this.call<TelegramMessage>("sendPhoto", {
+      chat_id: String(chatId),
+      photo: photoUrl,
+      caption: captionHtml,
+      parse_mode: "HTML",
+      disable_notification: opts.silent === true,
+    });
+  }
+
+  /**
+   * An alert: the token's picture with the text as its caption when there is a picture and the
+   * text fits a caption, else the text alone. A picture Telegram can't fetch or won't take (a 400:
+   * a dead CDN link, a format it doesn't render) costs nothing but the retry as plain text, so an
+   * alert is never lost to its artwork.
+   */
+  async sendAlert(
+    chatId: number | bigint,
+    message: { html: string; imageUrl: string | null },
+    opts: { silent?: boolean } = {},
+  ): Promise<TelegramResult<TelegramMessage>> {
+    if (message.imageUrl && message.html.length <= CAPTION_MAX_CHARS) {
+      const withPhoto = await this.sendPhoto(chatId, message.imageUrl, message.html, opts);
+      if (withPhoto.ok || withPhoto.code !== 400) return withPhoto;
+      logger.info("telegram refused the photo, sending the alert as text", {
+        description: withPhoto.description,
+      });
+    }
+    return this.sendMessage(chatId, message.html, opts);
   }
 
   getChatMember(chatId: number | bigint, userId: number): Promise<TelegramResult<{ status: string }>> {

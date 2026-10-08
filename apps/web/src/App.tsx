@@ -48,9 +48,10 @@ const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ def
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
+  // Filters sits right after Live: it is where the feed is tuned and where alerts are set up.
+  { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
   { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
-  { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
