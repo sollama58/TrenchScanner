@@ -135,6 +135,7 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
                       hour: "numeric",
                       minute: "2-digit",
                     })}
+                    {t.source ? ` · ${t.source.name}` : ""}
                   </small>
                 </span>
                 <span className={`returns-x num ${tone(t.returnPct)}`}>{multiple(t.returnPct)}</span>
@@ -152,7 +153,7 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
           {sharing !== null && data.top[sharing] && (
             <PnlShare
               key={data.top[sharing]!.tokenId}
-              data={{ ...data.top[sharing]!, rank: sharing + 1 }}
+              data={{ ...data.top[sharing]!, source: data.top[sharing]!.source ?? null }}
               onClose={() => setSharing(null)}
             />
           )}

@@ -190,10 +190,15 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
     expect(on[24]).toMatchObject({ alerts: 3, settled: 1, avgReturnPct: 60 });
     expect(on[168]).toMatchObject({ alerts: 4, settled: 2, avgReturnPct: 20 });
     expect(on[168]!.buckets).toHaveLength(28);
-    const top = (await call("GET", "/matches/returns")).json().top as { symbol: string; returnPct: number }[];
-    expect(top.map((t) => [t.symbol, t.returnPct])).toEqual([
-      ["BBB", 60],
-      ["OLD", -20],
+    const top = (await call("GET", "/matches/returns")).json().top as {
+      symbol: string;
+      returnPct: number;
+      source: { kind: string; name: string } | null;
+    }[];
+    // B's card shows the model's call; OLD was caught by the reader's own filter.
+    expect(top.map((t) => [t.symbol, t.returnPct, t.source])).toEqual([
+      ["BBB", 60, { kind: "model", name: "Survivor" }],
+      ["OLD", -20, { kind: "filter", name: "mine" }],
     ]);
 
     await call("PUT", "/curated/feed", { showModelAlerts: false });

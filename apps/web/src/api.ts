@@ -294,6 +294,8 @@ export interface FeedReturns {
     mintAddress: string;
     at: string;
     returnPct: number;
+    /** What alerted it (absent from older API builds; null when the filter has been deleted). */
+    source?: { kind: "filter" | "model"; name: string } | null;
   }[];
   showModelAlerts: boolean;
   truncated: boolean;

@@ -78,6 +78,8 @@ interface FeedReturnsResponse {
     mintAddress: string;
     at: string;
     returnPct: number;
+    /** What alerted it: one of the reader's filters, or a model they follow. Null if the filter is gone. */
+    source: { kind: "filter" | "model"; name: string } | null;
   }[];
   showModelAlerts: boolean;
   truncated: boolean;
@@ -435,7 +437,7 @@ export async function registerMatchRoutes(
         where: { userId, matchedAt: { gte: since } },
         orderBy: { matchedAt: "desc" },
         take: FEED_STATS_MAX_ROWS,
-        select: { id: true, tokenId: true, matchedAt: true, candidateOutcomeId: true },
+        select: { id: true, tokenId: true, matchedAt: true, candidateOutcomeId: true, filterId: true },
       }),
       models.length === 0
         ? Promise.resolve([])
@@ -468,7 +470,9 @@ export async function registerMatchRoutes(
       kind: "match" | "curated";
       tokenId: string;
       matchedAt: Date;
-      curated: { alertId: string; returnPct: number | null } | null;
+      /** The filter that caught it, or the model's name for a call. */
+      source: { filterId: string } | { modelName: string };
+      curated: { alertId: string; returnPct: number | null; modelName: string } | null;
     };
     const matchCards: ReturnFeedCard[] = matches.map((m) => ({
       id: m.id,
@@ -477,12 +481,14 @@ export async function registerMatchRoutes(
       matchedAt: m.matchedAt,
       at: m.matchedAt,
       returnPct: m.candidateOutcomeId ? (returnById.get(m.candidateOutcomeId) ?? null) : null,
+      source: { filterId: m.filterId },
       curated: null,
     }));
     // Folded exactly as /stats folds them, so the two panels count the same cards.
     const callCards: ReturnFeedCard[] = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).map(
       ({ lead }) => {
         const returnPct = lead.simReturnPct ?? lead.candidateOutcome?.simReturnPct ?? null;
+        const modelName = lead.modelName ?? lead.model ?? "Model";
         return {
           id: lead.id,
           kind: "curated",
@@ -490,14 +496,21 @@ export async function registerMatchRoutes(
           matchedAt: lead.createdAt,
           at: lead.createdAt,
           returnPct,
-          curated: { alertId: lead.id, returnPct },
+          source: { modelName },
+          curated: { alertId: lead.id, returnPct, modelName },
         };
       },
     );
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
-      (c): ReturnCard & { tokenId: string } =>
+      (c): ReturnCard & { tokenId: string; source: ReturnFeedCard["source"] } =>
+        // A folded card shows the call, so the model is what alerted it.
         c.kind === "match" && c.curated
-          ? { at: c.at, tokenId: c.tokenId, returnPct: c.curated.returnPct }
+          ? {
+              at: c.at,
+              tokenId: c.tokenId,
+              returnPct: c.curated.returnPct,
+              source: { modelName: c.curated.modelName },
+            }
           : c,
     );
     // Names only for the three shown, not for the week's every card.
@@ -510,6 +523,20 @@ export async function registerMatchRoutes(
             select: { id: true, symbol: true, name: true, mintAddress: true },
           });
     const tokenById = new Map(tokens.map((t) => [t.id, t]));
+    const filterIds = best.flatMap((b) => ("filterId" in b.source ? [b.source.filterId] : []));
+    const filters =
+      filterIds.length === 0
+        ? []
+        : await prisma.userFilter.findMany({
+            where: { id: { in: filterIds } },
+            select: { id: true, name: true },
+          });
+    const filterName = new Map(filters.map((f) => [f.id, f.name]));
+    const sourceOf = (src: ReturnFeedCard["source"]) => {
+      if ("modelName" in src) return { kind: "model" as const, name: src.modelName };
+      const name = filterName.get(src.filterId);
+      return name ? { kind: "filter" as const, name } : null;
+    };
     return {
       windows: summarizeReturns(cards, now),
       top: best.flatMap((b) => {
@@ -523,6 +550,7 @@ export async function registerMatchRoutes(
                 mintAddress: t.mintAddress,
                 at: b.at.toISOString(),
                 returnPct: b.returnPct,
+                source: sourceOf(b.source),
               },
             ]
           : [];
