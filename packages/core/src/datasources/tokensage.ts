@@ -393,6 +393,18 @@ export interface TokenSageBatchResult {
 
 /** POST /v1/tokens:batch takes at most this many CAs. */
 export const TOKENSAGE_BATCH_MAX = 50;
+/**
+ * The mints the prefetch sends per batch call. TokenSage enqueues a batch's items one by one
+ * (a transaction and a quota lock each), so a full 50 under load took longer than the 8 s
+ * timeout: on 2026-10-08 most full batches timed out and the backlog only grew. Smaller calls
+ * finish, and the flush sends a couple of them per pass.
+ */
+export const TOKENSAGE_PREFETCH_CHUNK = 20;
+/**
+ * A batch call's timeout, at least this however short TOKENSAGE_TIMEOUT_MS is: the call does up
+ * to TOKENSAGE_PREFETCH_CHUNK enqueues on TokenSage's side and nothing waits on it.
+ */
+export const TOKENSAGE_BATCH_MIN_TIMEOUT_MS = 20_000;
 
 /** Summary/referent text is clipped to this before it is stored. */
 const MAX_TEXT = 500;
@@ -437,7 +449,7 @@ export class TokenSageClient {
       method: "POST",
       headers: this.headers({ "content-type": "application/json" }),
       body: JSON.stringify({ items, depth }),
-      timeoutMs: this.timeoutMs,
+      timeoutMs: Math.max(this.timeoutMs, TOKENSAGE_BATCH_MIN_TIMEOUT_MS),
       retries: 0,
       onHeaders: (h) => {
         const raw = h.get("x-quota-full-remaining");
@@ -455,7 +467,7 @@ export class TokenSageClient {
   async job(jobId: number): Promise<TokenSageJob> {
     return fetchJson<TokenSageJob>(`${this.baseUrl}/v1/jobs/${encodeURIComponent(String(jobId))}`, {
       headers: this.headers(),
-      timeoutMs: this.timeoutMs,
+      timeoutMs: Math.max(this.timeoutMs, TOKENSAGE_BATCH_MIN_TIMEOUT_MS),
       retries: 0,
     });
   }

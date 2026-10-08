@@ -571,8 +571,8 @@ const envSchema = z.object({
   // reads the X link and trends), and stores the answer in TokenNarrative. Nothing in the scan,
   // matching or alerting path waits on it. Off until TOKENSAGE_ENABLED=true and both the URL and
   // the API key are set. TOKENSAGE_MAX_BATCHES_PER_CYCLE bounds the calls per scan cycle (each
-  // carries up to 50 mints) and TOKENSAGE_FULL_PER_DAY keeps full-depth requests under the key's
-  // daily quota on TokenSage's side (20,000/day on the deployed service).
+  // carries up to TOKENSAGE_PREFETCH_CHUNK mints) and TOKENSAGE_FULL_PER_DAY keeps full-depth
+  // requests under the key's daily quota on TokenSage's side (20,000/day on the deployed service).
   //
   // Early deep read (user decision 2026-10-07): a coin with an X link that reaches the watchlist
   // under TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES old gets the full read at once instead of the
