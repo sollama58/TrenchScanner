@@ -131,21 +131,35 @@ export async function registerHealthRoutes(
    * light defense-in-depth measure against dumping internal detail to an unauthenticated caller.
    */
   const readHeartbeats = async () => {
-    const [heartbeats, aiBudget] = await Promise.all([
+    const [heartbeats, aiBudget, lastAlert, lastRead, lastDecision] = await Promise.all([
       prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
       readAiBudget(budgetEnv),
+      // Newest row of each, each one a backward step down its own index.
+      prisma.curatedAlert.aggregate({ _max: { createdAt: true } }),
+      prisma.tokenNarrative.aggregate({ _max: { checkedAt: true } }),
+      prisma.candidateOutcome.aggregate({ where: { sampleKind: "event" }, _max: { anchorAt: true } }),
     ]);
-    return { heartbeats, aiBudget };
+    const scanMeta = heartbeats.find((h) => h.job === "scan")?.meta as Record<string, unknown> | null;
+    const screenPass = scanMeta?.lastScreenPassAt;
+    // When each stage of the alert path last produced something (the header pill's tooltip).
+    const pipeline = {
+      lastAlertAt: lastAlert._max.createdAt,
+      lastPreCheckPassAt: typeof screenPass === "number" ? new Date(screenPass) : null,
+      lastTokenSageAt: lastRead._max.checkedAt,
+      lastDecisionAt: lastDecision._max.anchorAt,
+    };
+    return { heartbeats, aiBudget, pipeline };
   };
   const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
 
   app.get("/worker", async () => {
-    const { heartbeats, aiBudget } = await heartbeatCache.get(readHeartbeats);
+    const { heartbeats, aiBudget, pipeline } = await heartbeatCache.get(readHeartbeats);
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
 
     return {
       jobs: heartbeats.map((h) => summarizeHeartbeat(h, now)),
+      pipeline,
       // Today's AI spend against the daily cap (AI_DAILY_BUDGET_USD): totals only here - the
       // per-source split is on the admin panel.
       aiBudget: {
