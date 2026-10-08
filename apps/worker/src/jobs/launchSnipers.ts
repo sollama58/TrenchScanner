@@ -165,9 +165,12 @@ export async function resolveLaunchSnipers(
     return !e || (!e.complete && now - e.readAt > incompleteRetryMs(e.rereads, g.contender));
   });
   const contenderMints = new Set(groups.filter((g) => g.contender).map((g) => g.mintAddress));
+  // Within them, a first read goes ahead of a re-read of an incomplete list: a decision waits
+  // only while there's no list at all, and a re-read only adds late buyers to one already read.
   const toRead = [
     ...needsRead
       .filter((g) => g.contender)
+      .sort((a, b) => Number(entries.has(a.mintAddress)) - Number(entries.has(b.mintAddress)))
       .slice(0, Math.max(0, opts.maxContenderLookups ?? opts.maxNewLookups)),
     ...needsRead.filter((g) => !g.contender).slice(0, Math.max(0, opts.maxNewLookups)),
   ].map((g) => g.mintAddress);

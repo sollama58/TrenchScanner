@@ -217,19 +217,51 @@ function sniperReadsOn(env: Env): boolean {
   return env.SNIPER_LAUNCH_LOOKUPS_PER_CYCLE > 0 || env.SNIPER_CONTENDER_LOOKUPS_PER_CYCLE > 0;
 }
 
+/** When each token waiting on its top-10 snipers share started waiting - see sniperShareReady. */
+const sniperWaitSince = new Map<string, number>();
+/** A wait older than this belongs to a token that left the band or the watchlist. */
+const SNIPER_WAIT_FORGET_MS = 60 * 60_000;
+
+/** Drops waits for tokens no longer being decided on. Once a cycle. */
+function pruneSniperWaits(now: number): void {
+  for (const [mint, since] of sniperWaitSince) {
+    if (now - since > SNIPER_WAIT_FORGET_MS) sniperWaitSince.delete(mint);
+  }
+}
+
+/** Test hook. */
+export function resetSniperWaits(): void {
+  sniperWaitSince.clear();
+}
+
 /**
- * Whether a curated decision on this token should wait for its top-10 snipers share: only while
- * the share can still come - the chain read is on and the endpoint serves it right now, and the
- * launch isn't one whose history has no curve launch to read buyers from. Otherwise waiting would
- * hold every decision for a figure that won't arrive; the share then stays unknown on the row.
- * Exported for tests.
+ * Whether a curated decision on this token should go ahead rather than wait for its top-10
+ * snipers share: the share is in, or it can't come - the chain read is off or the endpoint isn't
+ * serving it right now, or the launch's history has no curve launch to read buyers from - or the
+ * token has already waited maxWaitMs. The bound matters: the read is metered and sometimes slow
+ * or failing, and an unbounded wait held almost every decision back (2026-10-08). Past it the row
+ * is banked with the share unknown, which the models already handle. Call it only for a token
+ * that is otherwise ready to be decided on: the first call starts its wait. Exported for tests.
  */
 export function sniperShareReady(
   scored: Pick<ScoredToken, "mintAddress" | "sniperTop10WalletPct">,
   chainReadAvailable: boolean,
+  maxWaitMs: number,
+  now = Date.now(),
 ): boolean {
-  if (scored.sniperTop10WalletPct !== undefined || !chainReadAvailable) return true;
-  return sniperShareUnobtainable(scored.mintAddress);
+  const mint = scored.mintAddress;
+  if (scored.sniperTop10WalletPct !== undefined || !chainReadAvailable || sniperShareUnobtainable(mint)) {
+    sniperWaitSince.delete(mint);
+    return true;
+  }
+  const since = sniperWaitSince.get(mint);
+  if (since === undefined) {
+    sniperWaitSince.set(mint, now);
+    return maxWaitMs <= 0;
+  }
+  if (now - since < maxWaitMs) return false;
+  sniperWaitSince.delete(mint);
+  return true;
 }
 
 /** The sniper reads still running, possibly past a cycle's budget - see startSniperStage. */
@@ -733,6 +765,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
 
   // Read once for the cycle: whether a curated decision should wait for the top-10 snipers share.
   const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;
+  pruneSniperWaits(Date.now());
   const perCandidateMatches: number[] = [];
   const curatedCycle = newCuratedCycle();
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
@@ -1668,12 +1701,15 @@ async function processCandidate(
     // An event waits for the sniper checks when they're required: deciding without them would
     // skip the curator's wallet caps, and an event spent now can't be reopened until the
     // spacing window passes. The contender-first wallet ordering above resolves them quickly.
-    // The top-10 snipers share too, while it can still come (sniperShareReady): the safety cut
-    // reads it, and a decision row banked without it would teach the models its absence.
-    const walletReady =
+    // The top-10 snipers share too, while it can still come and for SNIPER_SHARE_MAX_WAIT_SECONDS
+    // at most (sniperShareReady): the safety cut reads it, and a decision row banked without it
+    // would teach the models its absence. Checked after the pre-gate, so the wait starts when the
+    // token is otherwise ready to be decided on.
+    const walletReady = () =>
       !env.CURATED_REQUIRE_WALLET_CHECKS ||
-      (walletChecksKnown(scored) && sniperShareReady(scored, sniperChainAvailable));
-    if (walletReady && passesEventPreGate(scored, band)) {
+      (walletChecksKnown(scored) &&
+        sniperShareReady(scored, sniperChainAvailable, env.SNIPER_SHARE_MAX_WAIT_SECONDS * 1000));
+    if (passesEventPreGate(scored, band) && walletReady()) {
       const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
       // A pick that lost an earlier governor pass re-contends while its event is spent - see
       // takeContenderRetry. A fresh event decides from scratch and supersedes any retry.
