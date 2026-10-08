@@ -77,6 +77,7 @@ import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
 import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
+import type { JobRunMeta } from "../scheduler.js";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
   collectCuratedContender,
@@ -288,6 +289,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   logger.info("scan cycle starting");
   // The composite score's newest adopted weights (cached; never fails the cycle).
   await refreshScoreWeights();
+  await seedLastScreenPass();
   const stagesMs: Record<string, number> = {};
   let lapStartedAt = startedAt;
   const lap = (stage: string) => {
@@ -848,8 +850,35 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   };
 }
 
-/** When a token last passed the rug screen in this process (0: not yet). */
+/**
+ * When a token last passed the rug screen (0: not yet). Seeded from the scan heartbeat on the
+ * first cycle after a boot: kept only in this process, it read as "not yet" on the header pill
+ * after every deploy or stall restart until a fresh pass came through, while the admin feed was
+ * showing tokens passing.
+ */
 let lastScreenPassAt = 0;
+let lastScreenPassSeeded = false;
+
+async function seedLastScreenPass(): Promise<void> {
+  if (lastScreenPassSeeded) return;
+  lastScreenPassSeeded = true;
+  try {
+    const heartbeat = await prisma.systemHeartbeat.findUnique({ where: { job: "scan" } });
+    const meta = heartbeat?.meta as Record<string, unknown> | null | undefined;
+    const prior = meta?.lastScreenPassAt;
+    if (typeof prior === "number" && prior > lastScreenPassAt) lastScreenPassAt = prior;
+  } catch {
+    // Display only: the next pass stamps it anyway.
+  }
+}
+
+/**
+ * What a failed scan run keeps on its heartbeat. The scheduler replaces meta on every run, so
+ * without this one thrown cycle wiped the last pre-check pass off the header pill.
+ */
+export function scanFailureMeta(): JobRunMeta {
+  return lastScreenPassAt > 0 ? { lastScreenPassAt } : {};
+}
 
 /**
  * The mints this cycle will refresh, liveness-prioritized rather than newest-first: Pump.fun

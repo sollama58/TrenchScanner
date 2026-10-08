@@ -101,6 +101,8 @@ export function scheduleInterval(
     onDeadline?: (job: HeartbeatJob, runningForMs: number) => void;
     /** How long to hold the first run, in ms - by default none, it runs at once. */
     firstRunDelayMs?: () => Promise<number>;
+    /** Meta a failed run still records (a run that throws otherwise leaves only its timing). */
+    failureMeta?: () => JobRunMeta;
   } = {},
 ): ScheduledJob {
   const intervalMs = intervalMinutes * 60_000;
@@ -164,7 +166,7 @@ export function scheduleInterval(
     } catch (err) {
       logger.error("job threw an unhandled error", { job: name, error: String(err) });
       // A job that fails on purpose (pipeline-watch flagging a stall) keeps its counts on the row.
-      const errMeta = err instanceof JobFailure ? err.meta : {};
+      const errMeta = { ...opts.failureMeta?.(), ...(err instanceof JobFailure ? err.meta : {}) };
       await recordHeartbeat(name, {
         success: false,
         error: err instanceof JobFailure ? err.message : String(err),
