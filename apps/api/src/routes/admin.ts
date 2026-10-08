@@ -261,7 +261,8 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
     const [active, expired, whitelisted, burns, unattributed, totals, cursor] = await Promise.all([
       prisma.subscription.count({ where: { expiresAt: { gt: now } } }),
       prisma.subscription.count({ where: { expiresAt: { lte: now } } }),
-      prisma.whitelist.count(),
+      // Live entries only, as on the Overview: an expired trial grants no access.
+      prisma.whitelist.count({ where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] } }),
       prisma.burnEvent.count(),
       prisma.burnEvent.count({ where: { userId: null } }),
       prisma.burnEvent.aggregate({ _sum: { monthsCredited: true } }),
