@@ -72,6 +72,13 @@ export interface SageRead {
     } | null;
   } | null;
   categories: { label: string; confidence: number; inputs: string[] }[];
+  /** The coin's one theme: main_category (rules 0.20.0+), else the most confident category. */
+  mainCategory: { label: string; confidence: number } | null;
+  /**
+   * How the coin relates to another, shown apart from its theme: the lineage kind when it copies
+   * or builds on one, else "copy" from copy_of[] or a derivative category. Null on an original.
+   */
+  copyMark: string | null;
   lineage: {
     kind: string;
     ofName: string | null;
@@ -409,6 +416,8 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
   const ref = r.referent;
   const supported = new Set(ref?.supportedBy ?? []);
   const lineage = r.lineage ? LINEAGE[r.lineage.kind] : undefined;
+  // The copy mark rides beside the theme: a copy of an animal coin reads as animal, marked a copy.
+  const copy = r.copyMark ? (LINEAGE[r.copyMark] ?? LINEAGE.copy) : undefined;
   const high = r.flags.filter((f) => f.severity === "high");
   const others = r.flags.filter((f) => f.severity !== "high");
   const readAt = r.analyzedAt ? Date.parse(r.analyzedAt) : null;
@@ -422,6 +431,19 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
           </span>
           <h3 className="sage-referent">{ref ? ref.label : "No clear referent"}</h3>
           {ref?.kind && <span className="pill">{words(ref.kind)}</span>}
+          {(r.mainCategory || copy) && (
+            <div className="sage-marks">
+              {r.mainCategory && (
+                <span
+                  className="sage-tag"
+                  title={`Main category: ${categoryText(r.mainCategory.label)}, ${pct0(r.mainCategory.confidence)} confidence`}
+                >
+                  {categoryText(r.mainCategory.label)}
+                </span>
+              )}
+              {copy && <span className={`sage-tag tone-${copy.tone}`}>{copy.text}</span>}
+            </div>
+          )}
           {ref?.desc && <p className="sage-desc">{ref.desc}</p>}
           {r.tickerExplanation && <p className="sage-ticker small">{r.tickerExplanation}</p>}
         </div>

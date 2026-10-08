@@ -37,6 +37,34 @@ describe("TokenSage view", () => {
     expect(JSON.stringify(read)).not.toContain("CTfBTtxhtAyGEysdjp9owVQvjSwPjtrzEGB9ZgAKewsY");
   });
 
+  it("names the main category and marks a copy apart from it", () => {
+    const full = fixture("full").analysis;
+    // Older rules: no main_category, so the most confident category stands in.
+    const old = sageRead(full, "full")!;
+    expect(old.mainCategory).toMatchObject({ label: "animal", confidence: 0.97 });
+    const copy = sageRead(
+      {
+        ...full,
+        categories: [
+          { label: "derivative", confidence: 0.75 },
+          { label: "animal", confidence: 0.54 },
+        ],
+        main_category: { label: "animal", confidence: 0.54 },
+        lineage: { kind: "late_copy", of_name: "Zubbo" },
+      },
+      "full",
+    )!;
+    expect(copy.mainCategory).toEqual({ label: "animal", confidence: 0.54 });
+    expect(copy.copyMark).toBe("late_copy");
+    expect(sageRead({ ...full, lineage: { kind: "original" } }, "full")!.copyMark).toBeNull();
+    expect(
+      sageRead(
+        { ...full, lineage: null, copy_of: [], categories: [{ label: "derivative/meme", confidence: 0.6 }] },
+        "full",
+      )!.copyMark,
+    ).toBe("copy");
+  });
+
   it("copes with missing parts and clips long text", () => {
     expect(sageRead(null, "basic")).toBeNull();
     const read = sageRead({ summary: "x".repeat(5000), categories: [{ label: 5 } as never] }, "basic")!;
@@ -126,5 +154,7 @@ describe("TokenSage view", () => {
     ]);
     expect(sageTrack(rows, [{ label: "political", confidence: 0.9 }])).toBeNull();
     expect(sageTrack(rows, null)).toBeNull();
+    // A copy of a dog coin tracks under animal (its main category), not derivative.
+    expect(sageTrack(rows, [{ label: "derivative", confidence: 0.75 }], "animal")!.label).toBe("animal");
   });
 });

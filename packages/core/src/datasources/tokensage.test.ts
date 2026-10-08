@@ -672,6 +672,25 @@ describe("narrativeFieldsFromAnalysis on a rules-0.15.0 document", () => {
     });
   });
 
+  it("stores the main category (rules 0.20.0) and counts the inputs behind it, not behind derivative", () => {
+    const copy = {
+      ...doc,
+      categories: [
+        { label: "derivative", confidence: 0.75, inputs: ["name", "symbol"] },
+        { label: "animal", confidence: 0.54, inputs: ["name", "image", "description"] },
+      ],
+      main_category: { label: "animal", confidence: 0.54, inputs: ["name", "image", "description"] },
+      versions: { rules: "0.20.0-full" },
+    };
+    const f = narrativeFieldsFromAnalysis(copy, "complete");
+    expect(f.mainCategory).toBe("animal");
+    expect(f.topCategoryInputs).toBe(3);
+    // categories[] is kept whole, derivative first.
+    expect(f.categories[0]!.label).toBe("derivative");
+    expect(narrativeFieldsFromAnalysis({ ...copy, main_category: null }, "complete").mainCategory).toBeNull();
+    expect(narrativeFieldsFromAnalysis(doc, "complete").mainCategory).toBeNull();
+  });
+
   it("leaves every new field null on a document from older rules, or without a readable post", () => {
     const f = narrativeFieldsFromAnalysis(fixture("full").analysis, "complete");
     for (const k of [

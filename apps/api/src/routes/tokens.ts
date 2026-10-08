@@ -53,7 +53,14 @@ export async function registerTokenRoutes(app: FastifyInstance) {
     const [row, token] = await Promise.all([
       prisma.tokenNarrative.findUnique({
         where: { mintAddress },
-        select: { depth: true, status: true, failReason: true, categories: true, analysis: true },
+        select: {
+          depth: true,
+          status: true,
+          failReason: true,
+          categories: true,
+          mainCategory: true,
+          analysis: true,
+        },
       }),
       prisma.token.findUnique({
         where: { mintAddress },
@@ -102,7 +109,7 @@ export async function registerTokenRoutes(app: FastifyInstance) {
         .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
         .reverse()
         .map((s) => ({ t: s.takenAt.toISOString(), usd: s.marketCapUsd })),
-      track: read ? sageTrack(labels, row?.categories) : null,
+      track: read ? sageTrack(labels, row?.categories, row?.mainCategory) : null,
     };
   });
 }

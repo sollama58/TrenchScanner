@@ -196,6 +196,12 @@ export interface TokenSageAnalysis {
     } | null;
   } | null;
   categories?: TokenSageCategory[];
+  /**
+   * Rules 0.20.0+: the coin's strongest top-level theme (animal, celebrity, ...), its own or
+   * inherited from the coin it copies. `derivative` is the main category only when the coin has
+   * no theme at all; null when categories is empty. Absent on older reads.
+   */
+  main_category?: TokenSageCategory | null;
   ticker_explanation?: string | null;
   /**
    * Coins this one copies or builds on. `recent: true` = it copies a coin launched 5 min - 30
@@ -487,6 +493,8 @@ export interface TokenNarrativeFields {
   depth: TokenSageDepth;
   status: "complete" | "partial";
   categories: TokenSageCategory[];
+  /** main_category.label (rules 0.20.0+); null on older reads and when there are no categories. */
+  mainCategory: string | null;
   referentLabel: string | null;
   referentKind: string | null;
   referentConfidence: number | null;
@@ -527,7 +535,7 @@ export interface TokenNarrativeFields {
   /**
    * Rules 0.15.0+ (TokenNarrative's columns of the same names, all null on older reads): the
    * coin's lineage, the coin it copies, how many coins shared its name, ticker or logo before
-   * it, the referent wave, how many inputs agree on the top category, the X account's
+   * it, the referent wave, how many inputs agree on the main category (the top one before rules 0.20.0), the X account's
    * credibility and age, and the trend score.
    */
   lineageKind: string | null;
@@ -659,10 +667,15 @@ export function narrativeFieldsFromAnalysis(
     null;
   const originalMarket = asRecord(original?.original_market);
   const wave = asRecord(referent?.wave);
-  const top = asArray(doc.categories)
-    .map(asRecord)
-    .filter((c): c is Record<string, unknown> => c !== null && unit(c.confidence) !== null)
-    .sort((a, b) => unit(b.confidence)! - unit(a.confidence)!)[0];
+  // Rules 0.20.0+ name the main category; older reads fall back to the one TokenSage is surest of.
+  const main = asRecord(doc.main_category);
+  const mainCategory = clip(main?.label)?.slice(0, 80) ?? null;
+  const top =
+    (mainCategory !== null ? main : null) ??
+    asArray(doc.categories)
+      .map(asRecord)
+      .filter((c): c is Record<string, unknown> => c !== null && unit(c.confidence) !== null)
+      .sort((a, b) => unit(b.confidence)! - unit(a.confidence)!)[0];
   const account = xRead ? asRecord(x.account) : null;
   const bool = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null);
   const fee = creatorFeeFields(asRecord(asRecord(doc.market)?.creator_fee));
@@ -694,6 +707,7 @@ export function narrativeFieldsFromAnalysis(
     depth: doc.depth === "full" ? "full" : "basic",
     status,
     categories,
+    mainCategory,
     referentLabel: clip(referent?.label),
     referentKind: clip(referent?.kind),
     referentConfidence: referent ? unit(referent.confidence) : null,

@@ -58,8 +58,13 @@ export async function tokenSageWorkerStatus() {
   };
 }
 
-/** The category TokenSage is surest of, by its top-level part ("animal/dog" -> "animal"). */
-export function topCategory(categories: unknown): string | null {
+/**
+ * The coin's one category, by its top-level part ("animal/dog" -> "animal"): TokenSage's main
+ * category (rules 0.20.0+), else the category it is surest of.
+ */
+export function topCategory(categories: unknown, mainCategory?: string | null): string | null {
+  const main = mainCategory?.trim();
+  if (main) return main.split("/")[0]!.trim() || main;
   if (!Array.isArray(categories)) return null;
   let best: { label: string; confidence: number } | null = null;
   for (const c of categories) {
@@ -126,6 +131,7 @@ export interface AlertOutcomeRow {
   sim_return: number | null;
   status: string | null;
   categories: unknown;
+  main_category: string | null;
   x_verdict: string | null;
   copies_recent: boolean | null;
   referent_kind: string | null;
@@ -237,7 +243,7 @@ async function buildTokenSageReport(days: number) {
     prisma.$queryRaw<AlertOutcomeRow[]>`
       SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
              a."simReturnPct"::float8 AS sim_return,
-             n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
+             n.status, n.categories, n."mainCategory" AS main_category, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
              CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind, n.flags
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
@@ -257,7 +263,7 @@ async function buildTokenSageReport(days: number) {
       row.status === null ? "no TokenSage answer" : row.status === "failed" ? "failed" : "described";
     tally(byCoverage, coverage, row);
     if (row.status === null || row.status === "failed") continue;
-    tally(byCategory, topCategory(row.categories) ?? "(uncategorized)", row);
+    tally(byCategory, topCategory(row.categories, row.main_category) ?? "(uncategorized)", row);
     if (row.x_verdict) tally(byXVerdict, row.x_verdict, row);
     tally(
       byCopy,
