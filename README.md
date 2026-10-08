@@ -59,6 +59,51 @@ To turn it on: create a bot with [@BotFather](https://t.me/BotFather) and set `T
 
 The Live tab's **Lighthouse** button shows how every token that passed the pre-checks did (2x/4x/10x hit rates and the average return under the exit plan) and what TokenSage sees across new coins, over the last day or week. The **Lighthouse tab** keeps that history for good: the trainer worker's hourly `lighthouse-rollup` job sums the same figures into `LighthouseHour` (one row an hour) and `LighthouseDayLabel` (one row per narrative, flag, referent kind and so on per day), which the nightly cleanup never touches, so trends can be read over weeks and months after the rows they were summed from (CandidateOutcome, TokenNarrative) are swept. The first run backfills from the oldest rows still present; every run re-sums the trailing three days so late grades land. `GET /curated/lighthouse/history` and `GET /guest/lighthouse/history` (`days` 7/30/90/365/0, `bucket` hour/day/week, `dimension` for the breakdown) serve the sums per bucket; the tab computes every rate, lets a reader compose charts from any metrics or breakdowns, remembers the layout in the browser, and exports the window as CSV. Aggregates only, so guests read the same answer.
 
+## Trading bot (admin-only preview)
+
+A **Bot** tab, shown only to wallets in `ADMIN_WALLET_ADDRESSES`, runs a Solana trading bot from a
+wallet the server holds for you (`packages/core/src/trading`). It buys the signals you pick - the
+matches of any of your filters (a filter produces matches while it is your active one) and the
+calls of any model, optionally only high-conviction ones - and sells each position on an exit
+plan: by default the same plan the Lighthouse and Models tab simulate (`EXIT_PLAN`: half at 2x,
+the rest on a trailing exit 35% off its high, out at 3 hours; -50% stop before the first sale;
+closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers and hold times.
+
+- **Custody.** Each wallet's key is sealed with AES-256-GCM under its own data key, and the data
+  key is stored only wrapped by **AWS KMS** (envelope encryption, bound to the user and the
+  wallet's address with a KMS encryption context). The database alone cannot spend anything; the
+  key never reaches the browser and is never logged.
+- **Access.** You reach the wallet by signing in with your own wallet (SIWS). Withdrawals go **only
+  to that sign-in wallet**: the destination is read from your account, never from the request, so
+  even a stolen session can only send your funds back to you.
+- **Split permissions.** The api creates wallets and needs only `kms:GenerateDataKey`; the worker
+  signs trades and withdrawals and needs only `kms:Decrypt`. The internet-facing api never opens a
+  wallet - a withdrawal is a request the worker carries out.
+- **Execution.** The scanner worker's `trading-bot` job runs every `TRADING_BOT_INTERVAL_SECONDS`
+  (5): it settles earlier swaps from the chain, walks open positions through their exit plan, and
+  buys new signals within the bot's guards (buy size capped server-side by `TRADING_MAX_BUY_SOL`,
+  max open positions, 24h spend, a SOL reserve, maximum signal age, one entry per token ever).
+  Swaps are routed by Jupiter. Every transaction is **simulated before it is sent and refused if
+  it would take more SOL than the trade allows**, then recorded by its signature before sending,
+  so a crash never leaves a trade the database doesn't know about. Positions only advance on a
+  confirmed fill read back from the chain. Pausing the bot stops new buys; exits keep running.
+  **Sell all and pause** is the panic button.
+
+### Setting it up
+
+1. AWS → KMS → **Create key**: symmetric, encrypt and decrypt. Note its ARN.
+2. AWS → IAM → create two users with access keys:
+   - `trenchscanner-api`: `{"Effect":"Allow","Action":"kms:GenerateDataKey","Resource":"<key ARN>"}`
+   - `trenchscanner-worker`: `{"Effect":"Allow","Action":"kms:Decrypt","Resource":"<key ARN>"}`
+3. On Render, set `TRADING_KMS_KEY_ID` (the ARN), `TRADING_KMS_REGION`, and each service's own
+   `TRADING_AWS_ACCESS_KEY_ID` / `TRADING_AWS_SECRET_ACCESS_KEY` on `trenchscanner-api` and
+   `trenchscanner-worker`; optionally `TRADING_JUPITER_API_KEY` on the worker. Then set
+   `TRADING_BOT_ENABLED=true` on both.
+4. Open the **Bot** tab, create the wallet, send it a little SOL, pick sources, save, **Start**.
+
+For local development, `TRADING_KEY_PROVIDER=local` with `TRADING_LOCAL_MASTER_KEY`
+(`openssl rand -hex 32`) replaces KMS; it is refused when `NODE_ENV=production`.
+
 ## Admin Panel
 
 A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; empty by default) sees an extra **Admin** tab in the dashboard, backed by `GET`/`POST /admin/*` on the API (every route 403s anyone else - see `apps/api/src/routes/admin.ts`). Admin status is config, not a DB column, so promoting/demoting an admin is a one-line env change rather than a manual DB write. It covers:

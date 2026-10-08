@@ -76,6 +76,8 @@ model User {
   devices           LinkedDevice[]
   telegramLinkCodes TelegramLinkCode[]
   telegramChats     TelegramChat[]
+  tradingWallet     TradingWallet?
+  tradingBot        TradingBot?
 }
 
 /// A single-use code, shown as a QR on a signed-in desktop, that mints a session on a phone.
@@ -1637,4 +1639,146 @@ model Announcement {
   createdBy String?
 
   @@index([createdAt])
+}
+
+// ── Trading bot (packages/core/src/trading) ──────────────────────────────────────────────────
+// Admin-only for now. A user's bot trades from a wallet the server holds for them; its key is
+// sealed under AWS KMS (trading/keyVault.ts) and withdrawals only ever go to the wallet the user
+// signs in with.
+
+/// One custodial wallet per user. The seed is AES-256-GCM sealed under a per-wallet data key, and
+/// the data key is stored only wrapped by the key provider (KMS in production) - this row alone
+/// cannot spend. Restrict, not Cascade: deleting a user must never silently drop a wallet that
+/// may still hold funds.
+model TradingWallet {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  publicKey        String   @unique
+  secretCiphertext Bytes
+  secretIv         Bytes
+  secretAuthTag    Bytes
+  wrappedDataKey   Bytes
+  /// "kms" or "local" (development only).
+  keyProvider      String
+  /// The KMS key that wraps the data key (id or ARN), or "local:<fingerprint>".
+  keyRef           String
+  createdAt        DateTime @default(now())
+}
+
+/// A user's bot: on/off for new entries and its settings (trading/config.ts validates `config`).
+/// Exits of open positions are managed whether or not the bot is enabled.
+model TradingBot {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enabled     Boolean   @default(false)
+  config      Json
+  /// Signals before this are never bought: set to now each time the bot is switched on, so it
+  /// never trades a backlog. Advanced past each pass's window as it reads signals.
+  signalsFrom DateTime  @default(now())
+  lastRunAt   DateTime?
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+/// One entry into one token. A user enters a mint at most once (the unique key), which is also
+/// what makes a buy idempotent across a crash or two lanes seeing the same signal.
+/// Amounts in a token's raw units are decimal strings: a u64 can exceed Postgres' BIGINT.
+model TradingPosition {
+  id               String    @id @default(cuid())
+  userId           String
+  mint             String
+  symbol           String?
+  /// "filter" or "model", the id of the filter or model, and its name at the time.
+  sourceKind       String
+  sourceRef        String
+  sourceLabel      String
+  /// When the signal was raised (the match or the call).
+  signalAt         DateTime
+  /// "buying" -> "open" -> "closed", or "failed" when the entry never filled.
+  status           String
+  /// SOL spent on the entry, fees and token-account rent included.
+  entryLamports    BigInt?
+  /// SOL put into the swap itself - what the exit multiple is measured against.
+  swapInLamports   BigInt?
+  tokensBought     String?
+  tokensHeld       String    @default("0")
+  decimals         Int?
+  /// The exit plan the position was opened under (a snapshot: editing the bot's plan later
+  /// applies to new positions, not to ones already riding).
+  exitPlan         Json
+  rungsTaken       Int       @default(0)
+  highMultiple     Float?
+  lastMultiple     Float?
+  lastPricedAt     DateTime?
+  /// SOL received from sales so far, fees deducted.
+  proceedsLamports BigInt    @default(0)
+  /// Set by the owner ("sell now", "sell all"): the next tick sells everything held.
+  closeRequested   Boolean   @default(false)
+  openedAt         DateTime?
+  closedAt         DateTime?
+  closeReason      String?
+  error            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  orders TradingOrder[]
+
+  @@unique([userId, mint])
+  @@index([status])
+  @@index([userId, createdAt])
+}
+
+/// One swap transaction. Recorded with its signature BEFORE it is sent (the signature is known
+/// once signed), so a crash between sending and confirming leaves a row to settle, not a mystery.
+model TradingOrder {
+  id                   String          @id @default(cuid())
+  positionId           String
+  position             TradingPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  userId               String
+  /// "buy" or "sell"
+  side                 String
+  /// "entry", or the exit reason (take_profit, stop_loss, trailing_stop, max_hold, ...).
+  reason               String
+  /// For a take-profit: the rung being sold.
+  rung                 Int?
+  signature            String          @unique
+  lastValidBlockHeight BigInt
+  /// "pending" -> "confirmed" | "failed" | "expired"
+  status               String          @default("pending")
+  /// What went in: lamports on a buy, raw token units on a sell.
+  inAmount             String
+  quotedOut            String
+  lamportsDelta        BigInt?
+  tokenDelta           String?
+  error                String?
+  createdAt            DateTime        @default(now())
+  settledAt            DateTime?
+
+  @@index([status])
+  @@index([positionId])
+}
+
+/// A withdrawal of SOL to the user's sign-in wallet. The API only records the request; the worker
+/// (the one process that can open a wallet) builds, signs and sends it. `destination` is copied
+/// from User.walletAddress, never taken from a request.
+model TradingWithdrawal {
+  id                   String    @id @default(cuid())
+  userId               String
+  destination          String
+  /// The amount asked for; null = everything (less the fee).
+  requestedLamports    BigInt?
+  sentLamports         BigInt?
+  /// "requested" -> "pending" -> "confirmed" | "failed"
+  status               String    @default("requested")
+  signature            String?   @unique
+  lastValidBlockHeight BigInt?
+  error                String?
+  createdAt            DateTime  @default(now())
+  settledAt            DateTime?
+
+  @@index([status])
+  @@index([userId, createdAt])
 }

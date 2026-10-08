@@ -32,6 +32,7 @@ import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
+import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import {
   scheduleInterval,
   scheduleDailyAt,
@@ -191,6 +192,16 @@ async function main() {
       { deadlineMinutes: 10 },
     ),
   );
+  // The trading bot (admin-only): settles swaps, walks open positions through their exit plans,
+  // and buys the signals each enabled bot follows - see packages/core/src/trading/engine.ts.
+  if (env.TRADING_BOT_ENABLED) {
+    const runTradingBot = createTradingBotRunner(env);
+    schedule("trading-bot", () =>
+      scheduleInterval("trading-bot", runTradingBot, env.TRADING_BOT_INTERVAL_SECONDS / 60, {
+        deadlineMinutes: 10,
+      }),
+    );
+  }
   // Says when a stage of the alert path stops producing (new tokens, decision moments, TokenSage
   // reads, model alerts, Telegram delivery) although every job is still running, and tells the
   // admin wallets' private Telegram chats - see runPipelineWatch. A stall that lasts 10 minutes

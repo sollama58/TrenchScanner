@@ -46,6 +46,12 @@
 #   - TELEGRAM_BOT_TOKEN (api + worker)            optional: a bot token from @BotFather
 #         Turns on Telegram alerts (Filters tab -> Telegram alerts): the api runs the bot's webhook
 #         and link codes, the worker sends each linked chat its alerts. Empty, the feature is off.
+#   - TRADING_KMS_KEY_ID, TRADING_AWS_ACCESS_KEY_ID, TRADING_AWS_SECRET_ACCESS_KEY (api + worker,
+#     optional; with TRADING_BOT_ENABLED=true)
+#         Custody for the admin-only trading bot's wallets (README -> Trading bot). One KMS key,
+#         and a DIFFERENT IAM user per service: the api's may only kms:GenerateDataKey (it creates
+#         wallets), the worker's may only kms:Decrypt (it signs). TRADING_JUPITER_API_KEY (worker)
+#         is optional: its own Jupiter key for swaps, else JUPITER_API_KEY.
 #   - MODEL_BACKUP_S3_ENDPOINT, _BUCKET, _ACCESS_KEY_ID, _SECRET_ACCESS_KEY (trainer only, optional)
 #         Off-site copies of the weekly model backups to any S3-compatible bucket (Cloudflare R2,
 #         Backblaze B2, AWS S3); MODEL_BACKUP_S3_REGION defaults to "auto" (R2). Unset, backups
@@ -156,6 +162,18 @@ services:
       # Where Telegram delivers the bot's updates: this service's public webhook route.
       - key: TELEGRAM_WEBHOOK_URL
         value: https://trenchscanner-api.onrender.com/telegram/webhook
+      # The trading bot (admin-only, packages/core/src/trading). Off until the KMS key and this
+      # service's IAM user (kms:GenerateDataKey only) are in place; flip on here and on the worker.
+      - key: TRADING_BOT_ENABLED
+        value: "false"
+      - key: TRADING_KMS_KEY_ID
+        sync: false
+      - key: TRADING_KMS_REGION
+        value: us-east-1
+      - key: TRADING_AWS_ACCESS_KEY_ID
+        sync: false
+      - key: TRADING_AWS_SECRET_ACCESS_KEY
+        sync: false
 
   - type: worker
     name: trenchscanner-worker
@@ -260,7 +278,22 @@ services:
         value: https://trenchscanner.app
       # The same list as on the api: the dispatcher sends real-time alerts only to accounts with
       # access (admin, whitelist or subscription), and this is how it recognises the admin wallets.
+      # The trading bot reads it too: only these wallets' bots open new positions.
       - key: ADMIN_WALLET_ADDRESSES
+        sync: false
+      # The trading bot's engine (trading-bot job). The same KMS key as the api, but this
+      # service's own IAM user, allowed only kms:Decrypt on it.
+      - key: TRADING_BOT_ENABLED
+        value: "false"
+      - key: TRADING_KMS_KEY_ID
+        sync: false
+      - key: TRADING_KMS_REGION
+        value: us-east-1
+      - key: TRADING_AWS_ACCESS_KEY_ID
+        sync: false
+      - key: TRADING_AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: TRADING_JUPITER_API_KEY
         sync: false
 
   # The model trainer: the same worker build, running only the batch jobs (curator-training,

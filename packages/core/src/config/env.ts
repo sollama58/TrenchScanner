@@ -731,6 +731,37 @@ const envSchema = z.object({
   // mint's measured ~53 tx/day that is ~21k signatures, which the cursor walks across a few
   // passes; it is a one-time cost on a fresh install, not a recurring one.
   BURN_SCAN_COLD_START_DAYS: z.coerce.number().positive().default(400),
+
+  // The trading bot (packages/core/src/trading): custodial wallets that buy the signals of a
+  // user's filters and models and sell them on the exit plan. Admin-only while it is new. Off by
+  // default: the api's /trading routes answer 404 and the worker's trading-bot job does nothing.
+  TRADING_BOT_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  // Who wraps the wallets' keys (trading/keyVault.ts). "kms" (production): AWS KMS envelope
+  // encryption - give the api an IAM user allowed only kms:GenerateDataKey on the key (it creates
+  // wallets) and the worker one allowed only kms:Decrypt (it signs), so the internet-facing api
+  // can never open a wallet. "local": a master key from TRADING_LOCAL_MASTER_KEY, for local
+  // development only - refused when NODE_ENV=production.
+  TRADING_KEY_PROVIDER: z.enum(["kms", "local"]).default("kms"),
+  TRADING_KMS_KEY_ID: z.string().optional().default(""),
+  TRADING_KMS_REGION: z.string().optional().default("us-east-1"),
+  TRADING_AWS_ACCESS_KEY_ID: pastedKey,
+  TRADING_AWS_SECRET_ACCESS_KEY: pastedKey,
+  // Only for temporary credentials (an assumed role); empty for an IAM user's keys.
+  TRADING_AWS_SESSION_TOKEN: pastedKey,
+  // 64 hex characters (openssl rand -hex 32); only read with TRADING_KEY_PROVIDER=local.
+  TRADING_LOCAL_MASTER_KEY: pastedKey,
+  // Jupiter key for swaps and the bot's prices. Empty falls back to JUPITER_API_KEY; with neither,
+  // Jupiter's keyless lite host. Its own key keeps a stop-loss from queueing behind the scan's
+  // price sweeps on a shared 60-a-minute plan.
+  TRADING_JUPITER_API_KEY: pastedKey,
+  TRADING_JUPITER_BASE_URL: z.string().optional().default(""),
+  // How often the worker's trading-bot job runs (seconds): settles swaps, manages exits, buys.
+  TRADING_BOT_INTERVAL_SECONDS: z.coerce.number().min(2).default(5),
+  // Server-wide ceiling on one entry in SOL, whatever a bot's settings say.
+  TRADING_MAX_BUY_SOL: z.coerce.number().positive().default(1),
 });
 
 /**
