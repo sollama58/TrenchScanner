@@ -71,6 +71,7 @@ import {
   resolveLaunchSnipers,
   sniperShareUnobtainable,
   sniperWalletsFromCache,
+  takeSniperReadStats,
   type LaunchSnipers,
   type SniperGroup,
 } from "./launchSnipers.js";
@@ -910,6 +911,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     samplesBanked,
     pricePathMints: deps.pricePath?.size ?? 0,
     ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats() } : {}),
+    // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle.
+    sniperReads: takeSniperReadStats(),
     // Epoch ms of the newest rug-screen (pre-check) pass: the header pill's "last passed pre-check".
     ...(lastScreenPassAt > 0 ? { lastScreenPassAt } : {}),
   };

@@ -97,6 +97,16 @@ export interface ResolveLaunchSnipersOptions {
 export function resetLaunchSnipersCache(): void {
   entries.clear();
   failedUntil.clear();
+  readStats = { requested: 0, found: 0, failed: 0 };
+}
+
+/** First-buyer reads since the last take - on the scan heartbeat, to see whether they land. */
+let readStats = { requested: 0, found: 0, failed: 0 };
+
+export function takeSniperReadStats(): { requested: number; found: number; failed: number } {
+  const out = readStats;
+  readStats = { requested: 0, found: 0, failed: 0 };
+  return out;
 }
 
 function remember(mint: string, entry: Entry): void {
@@ -172,7 +182,10 @@ export async function resolveLaunchSnipers(
       .filter((g) => g.contender)
       .sort((a, b) => Number(entries.has(a.mintAddress)) - Number(entries.has(b.mintAddress)))
       .slice(0, Math.max(0, opts.maxContenderLookups ?? opts.maxNewLookups)),
-    ...needsRead.filter((g) => !g.contender).slice(0, Math.max(0, opts.maxNewLookups)),
+    ...needsRead
+      .filter((g) => !g.contender)
+      .sort((a, b) => Number(entries.has(a.mintAddress)) - Number(entries.has(b.mintAddress)))
+      .slice(0, Math.max(0, opts.maxNewLookups)),
   ].map((g) => g.mintAddress);
   const fresh = new Set<string>();
   if (toRead.length > 0) {
@@ -206,6 +219,9 @@ export async function resolveLaunchSnipers(
       }
     }
     logger.info("read launch buyers", { requested: toRead.length, found: fresh.size, failed });
+    readStats.requested += toRead.length;
+    readStats.found += fresh.size;
+    readStats.failed += failed;
   }
 
   // 2. Whether they still hold, for newly read mints and stale readings, within the account cap.
