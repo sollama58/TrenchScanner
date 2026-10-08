@@ -60,6 +60,20 @@ export const DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE = 180;
  * wallet checks off this budget and it was no longer short.
  */
 const GATE_BURST = 30;
+/**
+ * How long a pair DexScreener returned is reused for another lookup of the same mint.
+ *
+ * Every job in a process shares this client, and several price the same mints within a minute:
+ * the scan's watchlist refresh, fast-match 15s later, live-price 20s later, the outcome watcher,
+ * wallet valuation. They shared the rate budget but not the answers, so 10-25% of the budget
+ * went on asking again for a quote seconds old. Under fast-match's 15s cadence, so the fast lane
+ * still sees a reading newer than the scan's; a caller passing `seenAt` gets the quote's own
+ * time, never the reuse time. Only pairs are kept, never "no pair": a mint whose pool appeared a
+ * moment ago must not be hidden for the TTL.
+ */
+export const QUOTE_CACHE_MS = 10_000;
+/** Mints held at once; far above a cycle's working set, so pruning is the TTL's job. */
+const QUOTE_CACHE_MAX = 5_000;
 
 export interface DexScreenerClientOptions {
   baseUrl?: string;
@@ -114,6 +128,12 @@ export interface TokenLookupOptions {
    * fallback is on, the lookup is not sent at all and every mint counts as failed.
    */
   mayBeUnindexed?: boolean;
+  /**
+   * Skip the recent-quote cache and ask DexScreener now (the answer is still cached for others).
+   * For a caller whose logic needs a reading independent of the one other jobs just took - the
+   * outcome watcher's crash-tick guard checks a fetched price against the scan's own snapshot.
+   */
+  fresh?: boolean;
 }
 
 export class DexScreenerClient {
@@ -126,6 +146,10 @@ export class DexScreenerClient {
   private readonly fallback?: GeckoTerminalClient;
   /** Until when DexScreener is treated as blank (epoch ms); 0 while it answers. */
   private blankUntil = 0;
+  /** Recent pairs by mint, with when they were seen - see QUOTE_CACHE_MS. */
+  private readonly quotes = new Map<string, { token: CandidateToken; at: Date }>();
+  /** Lookups answered from the quote cache since the last takeQuoteCacheHits(). */
+  private quoteHits = 0;
 
   constructor(options: DexScreenerClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://api.dexscreener.com";
@@ -140,6 +164,27 @@ export class DexScreenerClient {
   /** Whether lookups are currently being answered by the fallback. */
   get usingFallback(): boolean {
     return this.fallback !== undefined && Date.now() < this.blankUntil;
+  }
+
+  /** Mints answered from the recent-quote cache since the last call, then reset. */
+  takeQuoteCacheHits(): number {
+    const hits = this.quoteHits;
+    this.quoteHits = 0;
+    return hits;
+  }
+
+  private rememberQuotes(tokens: CandidateToken[], at: Date): void {
+    for (const token of tokens) {
+      this.quotes.delete(token.mintAddress);
+      this.quotes.set(token.mintAddress, { token, at });
+    }
+    if (this.quotes.size <= QUOTE_CACHE_MAX) return;
+    const cutoff = Date.now() - QUOTE_CACHE_MS;
+    // Insertion order is age order (re-inserted above), so the oldest go first.
+    for (const [mint, q] of this.quotes) {
+      if (this.quotes.size <= QUOTE_CACHE_MAX && q.at.getTime() > cutoff) break;
+      this.quotes.delete(mint);
+    }
   }
 
   /** Token lookups sent, 429 pauses and time spent queued since the last call, then reset. */
@@ -223,11 +268,34 @@ export class DexScreenerClient {
     options: TokenLookupOptions,
     answeredOut?: Set<string>,
   ): Promise<CandidateToken[]> {
-    const { deadlineMs, seenAt, failed, priority: _priority, ...fetchOptions } = options;
+    const { deadlineMs, seenAt, failed, priority: _priority, fresh, ...fetchOptions } = options;
+
+    // Mints another job priced moments ago are answered from that reading, at its own time.
+    const results: CandidateToken[] = [];
+    // Mints whose batch came back (or the cache answered), for `failed` - see the note at the return.
+    const settled = new Set<string>();
+    let toFetch = unique;
+    if (!fresh) {
+      const cutoff = Date.now() - QUOTE_CACHE_MS;
+      toFetch = [];
+      for (const mint of unique) {
+        const q = this.quotes.get(mint);
+        if (!q || q.at.getTime() <= cutoff) {
+          toFetch.push(mint);
+          continue;
+        }
+        // A copy: callers decorate what they get back, and the next reader must not see that.
+        results.push({ ...q.token });
+        seenAt?.set(mint, q.at);
+        settled.add(mint);
+        answeredOut?.add(mint);
+        this.quoteHits += 1;
+      }
+    }
 
     const chunks: string[][] = [];
-    for (let i = 0; i < unique.length; i += BATCH_SIZE) {
-      chunks.push(unique.slice(i, i + BATCH_SIZE));
+    for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
+      chunks.push(toFetch.slice(i, i + BATCH_SIZE));
     }
 
     // Bounded-concurrency worker pool (same shared helper as RugCheckClient.getProfiles):
@@ -235,15 +303,12 @@ export class DexScreenerClient {
     // watchlist size - at the default WATCHLIST_MAX_TRACKED that's up to 30 sequential round
     // trips, adding real wall-clock time to every scan cycle. A modest concurrency cap gets most
     // of the speedup without hammering a public, unauthenticated API with 30 simultaneous requests.
-    const results: CandidateToken[] = [];
     const deadline = deadlineMs === undefined ? Infinity : Date.now() + deadlineMs;
     let skipped = 0;
     const gate = {
       acquire: () => this.gate.acquire(deadline),
       throttled: (delayMs: number) => this.gate.throttled(delayMs),
     };
-    // Mints whose batch came back, for `failed` - see the note at the return.
-    const settled = new Set<string>();
     const work = forEachWithConcurrency(chunks, concurrency, async (chunk) => {
       if (Date.now() >= deadline) {
         skipped += chunk.length;
@@ -260,7 +325,8 @@ export class DexScreenerClient {
         for (const mint of chunk) answeredOut?.add(mint);
         const tokens = this.selectCanonicalPairs(pairs ?? [], new Set(chunk));
         if (seenAt) for (const t of tokens) seenAt.set(t.mintAddress, answered);
-        results.push(...tokens);
+        this.rememberQuotes(tokens, answered);
+        results.push(...tokens.map((t) => ({ ...t })));
       } catch (err) {
         for (const mint of chunk) failed?.add(mint);
         // Queued behind the budget past the deadline: the same as reaching the deadline unsent.

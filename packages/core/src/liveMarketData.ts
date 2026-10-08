@@ -47,7 +47,26 @@ export async function refreshLiveMarketData(
     5,
     { seenAt },
   );
-  const fetchedAt = new Date();
+  return writeLiveMarketData(tokens, live, { ...options, seenAt, fetchedAt: new Date() });
+}
+
+/**
+ * The write half of refreshLiveMarketData, for market data already in hand: the scan prices every
+ * viewed token each cycle anyway, and writing what it got saves the live-price job asking
+ * DexScreener for the same tokens again moments later.
+ */
+export async function writeLiveMarketData(
+  tokens: readonly { id: string; mintAddress: string }[],
+  live: readonly { mintAddress: string; marketCapUsd: number; priceUsd: number }[],
+  options: {
+    /** Per mint, when its reading was taken; mints missing from it get `fetchedAt`. */
+    seenAt?: Map<string, Date>;
+    fetchedAt: Date;
+    peakWindowDays?: number;
+  },
+): Promise<LiveMarketDataRefresh> {
+  if (tokens.length === 0) return { requested: 0, updated: 0 };
+  const { seenAt, fetchedAt } = options;
   const byMint = new Map(live.map((c) => [c.mintAddress, c]));
   // Not in the response (delisted, liquidity pulled, DexScreener hasn't indexed it) - leave
   // whatever was last recorded rather than blanking it, exactly as outcomeTrackingJob does.
@@ -65,7 +84,7 @@ export async function refreshLiveMarketData(
               id: t.id,
               mcap: data.marketCapUsd > 0 ? data.marketCapUsd : NaN,
               price: data.priceUsd > 0 ? data.priceUsd : NaN,
-              at: seenAt.get(t.mintAddress) ?? fetchedAt,
+              at: seenAt?.get(t.mintAddress) ?? fetchedAt,
             },
           ]
         : [];

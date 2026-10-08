@@ -9,6 +9,14 @@ import {
 const logger = createLogger("live-price-job");
 
 /**
+ * A token whose live figure is newer than this is left alone: the scan writes every viewed
+ * token's figure from its own pricing each cycle, and the API's on-demand refresh writes the ones
+ * a page just opened on, so asking DexScreener again here would only repeat their answer. Under
+ * the one-minute cadence, so a token the scan missed is still refreshed every minute.
+ */
+export const LIVE_PRICE_FRESH_MS = 30_000;
+
+/**
  * Keeps the market cap fresh for tokens someone currently has open on a Live Feed page, far more
  * often than a full scan cycle does.
  *
@@ -33,28 +41,33 @@ export async function runLivePriceJob(dexScreener: DexScreenerClient, env: Env):
     where: { lastViewedAt: { gt: viewCutoff } },
     orderBy: { lastViewedAt: "desc" },
     take: env.LIVE_PRICE_MAX_TRACKED,
-    select: { id: true, mintAddress: true },
+    select: { id: true, mintAddress: true, liveDataAt: true },
   });
+  const freshCutoff = startedAt - LIVE_PRICE_FRESH_MS;
+  const stale = viewed.filter((t) => !t.liveDataAt || t.liveDataAt.getTime() <= freshCutoff);
 
   if (viewed.length === 0) {
     // Nobody has the dashboard open - the common case for most of the day, and the reason this
     // job being on a one-minute timer costs nothing when idle.
     return;
   }
+  if (stale.length === 0) return;
 
   let result;
   try {
-    result = await refreshLiveMarketData(dexScreener, viewed, {
+    result = await refreshLiveMarketData(dexScreener, stale, {
       peakWindowDays: env.SNAPSHOT_RETENTION_DAYS,
     });
   } catch (err) {
-    logger.warn("live price refresh failed", { viewed: viewed.length, error: String(err) });
+    logger.warn("live price refresh failed", { viewed: stale.length, error: String(err) });
     return;
   }
 
   logger.info("live price refresh complete", {
     durationMs: Date.now() - startedAt,
-    viewed: result.requested,
+    viewed: viewed.length,
+    alreadyFresh: viewed.length - stale.length,
+    refreshed: result.requested,
     updated: result.updated,
     missingFromDexScreener: result.requested - result.updated,
   });

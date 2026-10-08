@@ -351,3 +351,65 @@ describe("GeckoTerminalClient with a CoinGecko key", () => {
     expect(failed.size).toBe(0);
   });
 });
+
+describe("getTokensByAddresses quote cache", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function stubPairs(): string[] {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      const chunk = url.split("/").pop()!.split(",");
+      const pairs = chunk.map((mint) => ({
+        chainId: "solana",
+        dexId: "raydium",
+        baseToken: { address: mint },
+        marketCap: 50_000,
+      }));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+    return urls;
+  }
+
+  it("answers a repeat lookup within the window from memory, with the first reading's time", async () => {
+    const urls = stubPairs();
+    const client = new DexScreenerClient();
+    const firstSeen = new Map<string, Date>();
+    await client.getTokensByAddresses(["a", "b"], 1, { retries: 0, seenAt: firstSeen });
+
+    const seenAt = new Map<string, Date>();
+    const again = await client.getTokensByAddresses(["a", "b", "c"], 1, { retries: 0, seenAt });
+    expect(again.map((t) => t.mintAddress).sort()).toEqual(["a", "b", "c"]);
+    // Only the mint it hadn't seen goes upstream.
+    expect(urls).toHaveLength(2);
+    expect(urls[1]!.endsWith("/c")).toBe(true);
+    expect(seenAt.get("a")).toEqual(firstSeen.get("a"));
+    expect(client.takeQuoteCacheHits()).toBe(2);
+    expect(client.takeQuoteCacheHits()).toBe(0);
+  });
+
+  it("goes upstream when asked for a fresh reading, and once the window has passed", async () => {
+    const urls = stubPairs();
+    const client = new DexScreenerClient();
+    await client.getTokensByAddresses(["a"], 1, { retries: 0 });
+    await client.getTokensByAddresses(["a"], 1, { retries: 0, fresh: true });
+    expect(urls).toHaveLength(2);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 11_000);
+    await client.getTokensByAddresses(["a"], 1, { retries: 0 });
+    expect(urls).toHaveLength(3);
+  });
+
+  it("hands each caller its own copy, so one caller's edits don't leak into another's", async () => {
+    stubPairs();
+    const client = new DexScreenerClient();
+    const [first] = await client.getTokensByAddresses(["a"], 1, { retries: 0 });
+    first!.marketCapUsd = 1;
+    const [second] = await client.getTokensByAddresses(["a"], 1, { retries: 0 });
+    expect(second!.marketCapUsd).toBe(50_000);
+  });
+});

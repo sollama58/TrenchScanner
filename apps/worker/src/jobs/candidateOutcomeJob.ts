@@ -357,6 +357,9 @@ export async function runCandidateWatchJob(
       retries: 1,
       deadlineMs: PRICE_FETCH_DEADLINE_MS,
       seenAt,
+      // Its own reading, not the one the scan just took: the crash-tick guard below checks a
+      // fetched price against the scan's snapshot, which proves nothing if they are one quote.
+      fresh: true,
     })) {
       // A pair with no price string comes back as 0, which is "no price", not a price: it must
       // fall through to the snapshot path below (not block it), and it must never become the
