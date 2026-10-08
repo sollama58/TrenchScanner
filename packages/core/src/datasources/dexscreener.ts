@@ -367,6 +367,13 @@ export class DexScreenerClient {
 
 /** Below this, a non-curve pool is too thin to be a trustworthy price source. */
 const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;
+/**
+ * A pumpswap pool this thin beside a quiet curve is a dust pool someone opened on a coin still on
+ * its curve, not a drained graduation pool. Pump.fun's LP is burned at graduation, so a real pool
+ * keeps both sides: even with the whole remaining supply sold into it, it holds about a fifth of
+ * the SOL it was seeded with, worth well over this.
+ */
+const MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD = 250;
 
 /**
  * The pair a mint's market data is read from. A pre-bond Pump.fun curve pair reports no
@@ -375,6 +382,8 @@ const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;
  *  - a funded pumpswap pool (Pump.fun's graduation target) means the mint has graduated, and the
  *    deepest real pool is canonical;
  *  - otherwise a curve that is still trading is canonical, whatever side pools exist;
+ *  - otherwise a drained pumpswap pool (under the funded threshold but above dust) beats the
+ *    quiet curve, which DexScreener keeps listing frozen at the graduation price;
  *  - otherwise (a non-Pump.fun token, or an older Raydium graduation) the deepest real pool,
  *    falling back to the deepest pair of any size.
  */
@@ -387,6 +396,10 @@ export function pickCanonicalPair<P extends Pick<DexScreenerPair, "dexId" | "liq
   if (pools.some((p) => p.dexId === "pumpswap")) return deepest(pools);
   const curve = pairs.find((p) => p.dexId === "pumpfun" && (p.volume?.h1 ?? 0) > 0);
   if (curve) return curve;
+  // A quiet curve beside a drained pumpswap pool is a graduated coin: DexScreener keeps listing the
+  // old curve frozen at the graduation price, so it must not win. A dust pool is still no signal.
+  const drained = pairs.filter((p) => p.dexId === "pumpswap" && liq(p) >= MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD);
+  if (drained.length > 0) return deepest([...pools, ...drained]);
   if (pools.length > 0) return deepest(pools);
   // No real pool and a quiet curve: the curve is still where the token lives. Falling through to
   // the deepest pair of any size let a few dollars in a side pool outrank it - pricing the token

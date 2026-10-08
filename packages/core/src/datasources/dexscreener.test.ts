@@ -22,6 +22,20 @@ describe("pickCanonicalPair", () => {
     expect(pickCanonicalPair([curve, fake])).toBe(curve);
   });
 
+  it("prices a graduated coin off its drained pumpswap pool, not the frozen curve", () => {
+    // After graduation DexScreener still lists the curve at the graduation price; once the pool
+    // falls under the funded threshold the quiet curve used to win and read as not graduated.
+    const frozenCurve = { dexId: "pumpfun", volume: { h1: 0 } };
+    const drained = { dexId: "pumpswap", liquidity: { usd: 600 }, volume: { h1: 0 } };
+    expect(pickCanonicalPair([frozenCurve, drained])).toBe(drained);
+  });
+
+  it("keeps a quiet curve over a dust pumpswap pool opened on a coin still on its curve", () => {
+    const quietCurve = { dexId: "pumpfun", volume: { h1: 0 } };
+    const fake = { dexId: "pumpswap", liquidity: { usd: 10 }, volume: { h1: 0 } };
+    expect(pickCanonicalPair([quietCurve, fake])).toBe(quietCurve);
+  });
+
   it("uses the deepest real pool once the curve has stopped trading", () => {
     const staleCurve = { dexId: "pumpfun", volume: { h1: 0 } };
     const raydium = { dexId: "raydium", liquidity: { usd: 50_000 } };

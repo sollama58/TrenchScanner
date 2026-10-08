@@ -132,6 +132,26 @@ describe("TradeFlowBook", () => {
     expect(book.features("unknown", sec(0)).uniqueBuyers5m).toBeNull();
   });
 
+  it("leaves the window and the bags unknown after a stream gap, not short of the missed trades", () => {
+    const book = new TradeFlowBook();
+    book.launch({ mint: MINT, creator: "dev", initialBuyTokens: 100, initialBuySol: 1, at: T0 });
+    book.trade(trade("a", "buy", 1, sec(10)));
+    // The socket drops at 20s and comes back at 140s; the dev may have sold in between.
+    book.streamGap(sec(140));
+    book.trade(trade("b", "buy", 1, sec(150)));
+    const after = book.features(MINT, sec(200));
+    expect(after.uniqueBuyers5m).toBeNull();
+    expect(after.tradesPerMin5m).toBeNull();
+    expect(after.devSoldShare).toBeNull();
+    expect(after.earlyBuyerCount).toBeNull();
+    expect(after.firstBuyersHolding).toBeNull();
+    expect(after.devInitialBuySol).toBe(1);
+    // Five minutes past the reconnect the window is whole again; the bags stay unknown.
+    const later = book.features(MINT, sec(140 + 300));
+    expect(later.uniqueBuyers5m).toBe(1);
+    expect(later.devSoldShare).toBeNull();
+  });
+
   it("drops idle mints and launches that never took off, but keeps what the scan watches", () => {
     const book = new TradeFlowBook({ idleMs: 15 * 60_000, launchGraceMs: 10 * 60_000, minMcapSol: 45 });
     book.launch({ mint: "dud", marketCapSol: 30, at: T0 });

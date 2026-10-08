@@ -134,6 +134,10 @@ class MintFlow {
   droppedThrough: number | null = null;
   lastTradeAt: number;
   lastMcapSol: number | null = null;
+  /** When the stream last came back from a disconnect: trades before it may be missing. */
+  gapUntil: number | null = null;
+  /** The stream dropped while this launch was tracked, so its bags may be missing sells. */
+  bagsMissedTrades = false;
 
   constructor(now: number) {
     this.observedSince = now;
@@ -188,6 +192,18 @@ export class TradeFlowBook {
   /** Every tracked mint - what a reconnecting stream resubscribes to. */
   trackedMints(): string[] {
     return [...this.mints.keys()];
+  }
+
+  /**
+   * The stream reconnected: whatever traded while it was down was never delivered (PumpPortal
+   * doesn't replay). Each tracked mint's 5m window stays unknown until it is five minutes past
+   * this, and a launch's early-buyer, dev and first-buyer bags may be missing sells for good.
+   */
+  streamGap(now: number): void {
+    for (const flow of this.mints.values()) {
+      flow.gapUntil = now;
+      if (flow.launchAt !== null) flow.bagsMissedTrades = true;
+    }
   }
 
   /** A new launch, seen from its create transaction. Returns true when it is newly tracked. */
@@ -281,8 +297,10 @@ export class TradeFlowBook {
     const since = now - FLOW_WINDOW_MS;
     flow.window = flow.window.filter((w) => w.at >= since);
     // A full five minutes watched, or the token's whole life when we saw it launch - otherwise a
-    // half-watched window would read as a quiet one.
-    if (flow.observedSince <= since || (flow.launchAt !== null && flow.launchAt <= flow.observedSince)) {
+    // half-watched window would read as a quiet one. A stream gap inside the window is the same.
+    const watchedThrough =
+      flow.observedSince <= since || (flow.launchAt !== null && flow.launchAt <= flow.observedSince);
+    if (watchedThrough && (flow.gapUntil === null || flow.gapUntil <= since)) {
       // A full window buffer has dropped its oldest trades: the figures then cover the span from
       // the oldest one kept, not five minutes - dividing by five minutes capped a busy mint's
       // trade rate at MAX_WINDOW_TRADES / 5 a minute.
@@ -317,7 +335,8 @@ export class TradeFlowBook {
       }
     }
 
-    if (flow.launchAt !== null) {
+    if (flow.launchAt !== null) out.devInitialBuySol = flow.devInitialBuySol;
+    if (flow.launchAt !== null && !flow.bagsMissedTrades) {
       out.earlyBuyerCount = flow.early.size;
       let held = 0;
       let bought = 0;
@@ -329,7 +348,6 @@ export class TradeFlowBook {
       }
       out.earlyBuyerHoldPct = (held / PUMP_TOTAL_SUPPLY) * 100;
       out.earlyBuyerSoldShare = soldShare({ bought, sold });
-      out.devInitialBuySol = flow.devInitialBuySol;
       out.devSoldShare = flow.dev ? soldShare(flow.dev) : null;
       let holding = 0;
       for (const bag of flow.firstBuyers.values()) {
