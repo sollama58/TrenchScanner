@@ -3,7 +3,7 @@ import type { Leaderboard, LighthouseDimension, LighthouseHistory, LighthouseHis
 import { usePolling } from "../hooks";
 import { ago } from "../format";
 import { Skeleton } from "../components/Charts";
-import { TrendChart, fmt } from "../components/TrendChart";
+import { TrendChart } from "../components/TrendChart";
 import { LighthouseBody, WINDOWS as NOW_WINDOWS, type Days } from "../components/MarketLighthouse";
 import { ChevronDownIcon, CloseIcon, DownloadIcon, LighthouseIcon, PlusIcon } from "../components/Icons";
 import {
@@ -21,10 +21,8 @@ import {
   hasPanel,
   defaultBucketFor,
   defaultPanels,
-  delta,
   historyCsv,
   loadPanels,
-  metricById,
   metricSeries,
   panelTitle,
   savePanels,
@@ -36,10 +34,10 @@ import {
 
 /**
  * The Lighthouse tab: the Market Lighthouse's whole history, for building trends over weeks and
- * months. The top is the window's headline numbers against the span before it; then the charts,
- * which the reader composes - any metrics on one chart, as lines or bars, or a breakdown of the
- * coins read by narrative, flag and so on - and which this browser remembers; then the Live tab's
- * Lighthouse itself for the last day or week. Guests see the same aggregates-only answer, from the
+ * months. The Live tab's Lighthouse itself for the last day or week comes first; then the charts,
+ * folded away until opened, which the reader composes - any metrics on one chart, as lines or bars,
+ * or a breakdown of the coins read by narrative, flag and so on - over a window and bucket picked
+ * beside them, and which this browser remembers. Guests see the same aggregates-only answer, from the
  * guest routes, because nothing here names a coin.
  */
 
@@ -125,91 +123,7 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
             </p>
           </div>
         </div>
-        <div className="lht-controls">
-          <div className="lht-control">
-            <span className="lht-control-label">Window</span>
-            <div className="segmented small" role="tablist" aria-label="Window">
-              {WINDOWS.map((w) => (
-                <button
-                  key={w.days}
-                  role="tab"
-                  aria-selected={w.days === view.days}
-                  className={w.days === view.days ? "on" : ""}
-                  onClick={() => setDays(w.days)}
-                >
-                  {w.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="lht-control">
-            <span className="lht-control-label">Per</span>
-            <div className="segmented small" role="tablist" aria-label="Bucket">
-              {BUCKETS.map((b) => {
-                const ok = bucketAllowed(b.id, view.days);
-                return (
-                  <button
-                    key={b.id}
-                    role="tab"
-                    aria-selected={b.id === view.bucket}
-                    className={b.id === view.bucket ? "on" : ""}
-                    disabled={!ok}
-                    title={ok ? undefined : "Hourly points cover up to 30 days"}
-                    onClick={() => setView((v) => ({ ...v, bucket: b.id }))}
-                  >
-                    {b.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="ghost stats-btn lht-csv"
-            disabled={!d}
-            onClick={() => d && downloadCsv(d, view)}
-            title="The window's sums and rates per bucket, as a spreadsheet"
-          >
-            <DownloadIcon size={14} />
-            CSV
-          </button>
-        </div>
-        {d && (
-          <p className="faint small lht-coverage">
-            {d.coverage.oldestHour
-              ? `History kept since ${new Date(d.coverage.oldestHour).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`
-              : "No history summed yet"}
-            {d.coverage.summedAt ? ` · last summed ${ago(d.coverage.summedAt)}` : ""}
-            {" · "}
-            exit plan: {d.exitPlan}
-          </p>
-        )}
       </section>
-
-      {history.error && !d && (
-        <p className="error">Couldn&apos;t load the Lighthouse history: {history.error.message}</p>
-      )}
-      {!d && !history.error && (
-        <section className="panel">
-          <Skeleton lines={2} height={56} />
-          <Skeleton lines={6} />
-        </section>
-      )}
-
-      {d && (
-        <>
-          <section
-            className={`panel lht-kpis${history.stale ? " stale" : ""}`}
-            aria-busy={history.stale}
-            aria-label="Headline numbers"
-          >
-            <Kpi d={d} id="field2x" label="2x rate, screened field" span={win.long} />
-            <Kpi d={d} id="fieldReturn" label="Avg return, screened field" span={win.long} />
-            <Kpi d={d} id="calls2x" label="2x rate, model calls" span={win.long} />
-            <Kpi d={d} id="coinsRead" label="Coins TokenSage read" span={win.long} />
-          </section>
-        </>
-      )}
 
       <section className="panel lht-now">
         <header className="section-head">
@@ -237,116 +151,151 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
         <LighthouseBody base={api} days={nowDays} />
       </section>
 
-      {d && (
-        <>
-          <section className={`panel lht-charts${history.stale ? " stale" : ""}`} aria-busy={history.stale}>
-            <header className="section-head">
-              <div>
-                <span className="eyebrow">Trends · last {win.long}</span>
-                <h2>Your charts</h2>
-                <p className="faint small">
-                  Pick any metrics for a chart, lines or bars, or break the coins read down by what TokenSage
-                  saw. This browser remembers your layout.
-                </p>
-              </div>
-              <div className="feed-controls">
-                {chartsOpen && (
-                  <>
-                    <label className="lht-add">
-                      <PlusIcon size={14} />
-                      <select
-                        value=""
-                        aria-label="Add a chart"
-                        onChange={(e) => {
-                          const preset = PRESETS[Number(e.target.value)];
-                          if (!preset) return;
-                          const made = preset.make();
-                          setPanels((ps) => (hasPanel(ps, made) ? ps : [...ps, made]));
-                        }}
-                      >
-                        <option value="" disabled>
-                          Add chart…
-                        </option>
-                        {PRESETS.map((p, i) => {
-                          const active = hasPanel(panels, p.make());
-                          return (
-                            <option key={p.label} value={i} disabled={active}>
-                              {p.label}
-                              {active ? " (on the page)" : ""}
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </label>
-                    <button
-                      type="button"
-                      className="ghost stats-btn"
-                      onClick={() => setPanels(defaultPanels())}
-                    >
-                      Reset
-                    </button>
-                  </>
-                )}
-                <button
-                  type="button"
-                  className="ghost stats-btn"
-                  aria-expanded={chartsOpen}
-                  aria-controls="lht-charts-body"
-                  onClick={() => setChartsOpen((o) => !o)}
-                >
-                  {chartsOpen ? "Hide charts" : "Show charts"}
-                </button>
-              </div>
-            </header>
-            {chartsOpen && panels.length === 0 && (
-              <p className="muted small">No charts. Add one above, or reset to the defaults.</p>
-            )}
+      <section className={`panel lht-charts${history.stale ? " stale" : ""}`} aria-busy={history.stale}>
+        <header className="section-head">
+          <div>
+            <span className="eyebrow">Trends · last {win.long}</span>
+            <h2>Your charts</h2>
+            <p className="faint small">
+              Pick any metrics for a chart, lines or bars, or break the coins read down by what TokenSage saw.
+              This browser remembers your layout.
+            </p>
+          </div>
+          <div className="feed-controls">
             {chartsOpen && (
-              <div className="lht-grid" id="lht-charts-body">
-                {panels.map((p, i) => (
-                  <ChartPanel
-                    key={p.id}
-                    panel={p}
-                    history={d}
-                    api={api}
-                    view={view}
-                    targets={targets}
-                    first={i === 0}
-                    last={i === panels.length - 1}
-                    onChange={(f) => update(p.id, f)}
-                    onRemove={() => remove(p.id)}
-                    onMove={(dir) => move(p.id, dir)}
-                  />
-                ))}
-              </div>
+              <>
+                <label className="lht-add">
+                  <PlusIcon size={14} />
+                  <select
+                    value=""
+                    aria-label="Add a chart"
+                    onChange={(e) => {
+                      const preset = PRESETS[Number(e.target.value)];
+                      if (!preset) return;
+                      const made = preset.make();
+                      setPanels((ps) => (hasPanel(ps, made) ? ps : [...ps, made]));
+                    }}
+                  >
+                    <option value="" disabled>
+                      Add chart…
+                    </option>
+                    {PRESETS.map((p, i) => {
+                      const active = hasPanel(panels, p.make());
+                      return (
+                        <option key={p.label} value={i} disabled={active}>
+                          {p.label}
+                          {active ? " (on the page)" : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+                <button type="button" className="ghost stats-btn" onClick={() => setPanels(defaultPanels())}>
+                  Reset
+                </button>
+              </>
             )}
-          </section>
-        </>
-      )}
-    </div>
-  );
-}
-
-function Kpi({ d, id, label, span }: { d: LighthouseHistory; id: MetricId; label: string; span: string }) {
-  const m = metricById(id);
-  const value = m.value(d.totals);
-  const change = delta(m, d.totals, d.previous);
-  const tone = change === null || Math.abs(change) < 0.05 ? "" : change > 0 ? "lh-up" : "lh-down";
-  const changeText =
-    change === null
-      ? d.previous
-        ? "no comparison yet"
-        : "the whole history"
-      : `${change > 0 ? "▲" : change < 0 ? "▼" : "="} ${m.unit === "count" ? fmt(Math.abs(change), "count") : `${Math.abs(change).toFixed(1)} pts`} vs the ${span} before`;
-  return (
-    <div className="lh-kpi">
-      <span className="lh-kpi-label">{label}</span>
-      <span
-        className={`lh-kpi-value num${m.unit === "ret" ? ` ${value === null ? "" : value >= 0 ? "lh-up" : "lh-down"}` : ""}`}
-      >
-        {fmt(value, m.unit)}
-      </span>
-      <span className={`small ${tone || "muted"}`}>{changeText}</span>
+            <button
+              type="button"
+              className="ghost stats-btn"
+              aria-expanded={chartsOpen}
+              aria-controls="lht-charts-body"
+              onClick={() => setChartsOpen((o) => !o)}
+            >
+              {chartsOpen ? "Hide charts" : "Show charts"}
+            </button>
+          </div>
+        </header>
+        {chartsOpen && (
+          <>
+            <div className="lht-controls">
+              <div className="lht-control">
+                <span className="lht-control-label">Window</span>
+                <div className="segmented small" role="tablist" aria-label="Window">
+                  {WINDOWS.map((w) => (
+                    <button
+                      key={w.days}
+                      role="tab"
+                      aria-selected={w.days === view.days}
+                      className={w.days === view.days ? "on" : ""}
+                      onClick={() => setDays(w.days)}
+                    >
+                      {w.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="lht-control">
+                <span className="lht-control-label">Per</span>
+                <div className="segmented small" role="tablist" aria-label="Bucket">
+                  {BUCKETS.map((b) => {
+                    const ok = bucketAllowed(b.id, view.days);
+                    return (
+                      <button
+                        key={b.id}
+                        role="tab"
+                        aria-selected={b.id === view.bucket}
+                        className={b.id === view.bucket ? "on" : ""}
+                        disabled={!ok}
+                        title={ok ? undefined : "Hourly points cover up to 30 days"}
+                        onClick={() => setView((v) => ({ ...v, bucket: b.id }))}
+                      >
+                        {b.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="ghost stats-btn lht-csv"
+                disabled={!d}
+                onClick={() => d && downloadCsv(d, view)}
+                title="The window's sums and rates per bucket, as a spreadsheet"
+              >
+                <DownloadIcon size={14} />
+                CSV
+              </button>
+            </div>
+            {d && (
+              <p className="faint small lht-coverage">
+                {d.coverage.oldestHour
+                  ? `History kept since ${new Date(d.coverage.oldestHour).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`
+                  : "No history summed yet"}
+                {d.coverage.summedAt ? ` · last summed ${ago(d.coverage.summedAt)}` : ""}
+                {" · "}
+                exit plan: {d.exitPlan}
+              </p>
+            )}
+          </>
+        )}
+        {chartsOpen && d && panels.length === 0 && (
+          <p className="muted small">No charts. Add one above, or reset to the defaults.</p>
+        )}
+        {chartsOpen && !d && history.error && (
+          <p className="error">Couldn&apos;t load the Lighthouse history: {history.error.message}</p>
+        )}
+        {chartsOpen && !d && !history.error && <Skeleton lines={6} />}
+        {chartsOpen && d && (
+          <div className="lht-grid" id="lht-charts-body">
+            {panels.map((p, i) => (
+              <ChartPanel
+                key={p.id}
+                panel={p}
+                history={d}
+                api={api}
+                view={view}
+                targets={targets}
+                first={i === 0}
+                last={i === panels.length - 1}
+                onChange={(f) => update(p.id, f)}
+                onRemove={() => remove(p.id)}
+                onMove={(dir) => move(p.id, dir)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -5192,16 +5192,7 @@ button.small-btn {
 }
 .lht-coverage {
   position: relative;
-  margin: 10px 0 0;
-}
-.lht-kpis {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  padding: 10px;
-}
-.lht-kpis .lh-kpi {
-  background: var(--surface-2);
+  margin: 10px 0 14px;
 }
 .lht-add {
   display: inline-flex;
@@ -5336,11 +5327,6 @@ button.small-btn {
 }
 .lht-now .lh-content {
   margin-top: 4px;
-}
-@media (max-width: 760px) {
-  .lht-kpis {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 @media (max-width: 640px) {
   .lht-csv {
