@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { LighthouseCount, LighthouseTally, MarketLighthouse } from "../api";
 import { usePolling } from "../hooks";
+import { lighthousePath } from "../routes";
 import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { HBarChart, Skeleton } from "./Charts";
@@ -23,20 +24,6 @@ export type Days = (typeof WINDOWS)[number];
 
 /** Graded alerts below which a narrative's hit rate shows as early rather than as a verdict. */
 const MIN_GRADED = 5;
-
-/** The browser's IANA zone, for the hour-of-day chart; empty when it can't say (the API reads UTC). */
-function browserTimeZone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
-  } catch {
-    return "";
-  }
-}
-
-const path = (base: string, days: number) => {
-  const tz = browserTimeZone();
-  return `${base}/lighthouse?days=${days}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`;
-};
 
 /** TokenSage's codes ("x_link_reused", "about_this_coin") as words. */
 export const words = (code: string) => code.replace(/[_-]+/g, " ").trim();
@@ -163,7 +150,7 @@ export function LighthouseBody({
   days: Days;
   compact?: boolean;
 }) {
-  const q = usePolling<MarketLighthouse>(path(base, days), 300_000);
+  const q = usePolling<MarketLighthouse>(lighthousePath(base, days), 300_000);
   if (!q.data) {
     if (q.error) return <p className="error">Couldn&apos;t load the Lighthouse: {q.error.message}</p>;
     return (

@@ -35,6 +35,12 @@ const DAY_MS = 24 * HOUR_MS;
 
 /** Aggregates over a day or more of rows: one fill per window, however many tabs open the modal. */
 const CACHE_MS = 5 * 60_000;
+/**
+ * How long past CACHE_MS an answer may still be served while its refill runs. keepWarm() normally
+ * refills well inside CACHE_MS; this only covers a refill that is slow or failing, and past it a
+ * reader waits rather than read something older.
+ */
+const STALE_MS = 60 * 60_000;
 
 export const LIGHTHOUSE_WINDOWS = [1, 7] as const;
 export const lighthouseQuerySchema = z.object({
@@ -289,30 +295,39 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     // Each described coin once, under the top-level part of its main category (else the one TokenSage is surest of).
     prisma.$queryRaw<{ bucket: Date; label: string | null; count: bigint }[]>`
       SELECT to_timestamp(floor(extract(epoch FROM n."checkedAt") / ${bucketSeconds}) * ${bucketSeconds}) AS bucket,
-             split_part(COALESCE(n."mainCategory", top.label), '/', 1) AS label,
+             -- COALESCE only runs the subquery when it needs it: most reads name a main category.
+             split_part(COALESCE(n."mainCategory", (
+               SELECT c->>'label'
+               FROM jsonb_array_elements(CASE WHEN jsonb_typeof(n.categories) = 'array' THEN n.categories ELSE '[]'::jsonb END) c
+               WHERE jsonb_typeof(c->'label') = 'string'
+               ORDER BY CASE WHEN jsonb_typeof(c->'confidence') = 'number' THEN (c->>'confidence')::float8 END DESC NULLS LAST
+               LIMIT 1
+             )), '/', 1) AS label,
              count(*) AS count
       FROM "TokenNarrative" n
-      LEFT JOIN LATERAL (
-        SELECT c->>'label' AS label
-        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(n.categories) = 'array' THEN n.categories ELSE '[]'::jsonb END) c
-        WHERE jsonb_typeof(c->'label') = 'string'
-        ORDER BY CASE WHEN jsonb_typeof(c->'confidence') = 'number' THEN (c->>'confidence')::float8 END DESC NULLS LAST
-        LIMIT 1
-      ) top ON true
       WHERE n."checkedAt" > ${since} AND n.status <> 'failed'
       GROUP BY 1, 2`,
+    // Coins carrying each label: each coin's labels made distinct on its own row (the mint is the
+    // key), rather than count(DISTINCT mint), which sorted every label of the window by mint.
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
-      SELECT split_part(c->>'label', '/', 1) AS label, count(DISTINCT n."mintAddress") AS count
+      SELECT c.label, count(*) AS count
       FROM "TokenNarrative" n,
-           jsonb_array_elements(CASE WHEN jsonb_typeof(n.categories) = 'array' THEN n.categories ELSE '[]'::jsonb END) c
+           LATERAL (
+             SELECT DISTINCT split_part(e->>'label', '/', 1) AS label
+             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(n.categories) = 'array' THEN n.categories ELSE '[]'::jsonb END) e
+           ) c
       WHERE n."checkedAt" > ${since} AND n.status <> 'failed'
-      GROUP BY 1 ORDER BY 2 DESC LIMIT 10`,
+      GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10`,
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
-      SELECT c->>'label' AS label, count(DISTINCT n."mintAddress") AS count
+      SELECT c.label, count(*) AS count
       FROM "TokenNarrative" n,
-           jsonb_array_elements(CASE WHEN jsonb_typeof(n.categories) = 'array' THEN n.categories ELSE '[]'::jsonb END) c
-      WHERE n."checkedAt" > ${since} AND n.status <> 'failed' AND position('/' IN c->>'label') > 0
-      GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
+           LATERAL (
+             SELECT DISTINCT e->>'label' AS label
+             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(n.categories) = 'array' THEN n.categories ELSE '[]'::jsonb END) e
+             WHERE position('/' IN e->>'label') > 0
+           ) c
+      WHERE n."checkedAt" > ${since} AND n.status <> 'failed'
+      GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 12`,
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
       SELECT s AS label, count(*) AS count FROM "TokenNarrative", unnest("referentSupport") s
       WHERE "checkedAt" > ${since} AND status <> 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`,
@@ -463,28 +478,48 @@ export type MarketLighthouse = Omit<WindowLighthouse, "screened"> & {
  * One cache per window, shared by the subscriber and guest routes, plus the hourly rows for the
  * hour-of-day chart and one cache per reader zone summing them: a new zone never refills the
  * window's aggregates or rereads the rows.
+ *
+ * A window's fill is a dozen aggregates over a week of reads and calls, several seconds in
+ * production, so no reader should be the one waiting on it. keepWarm() refills each window as it
+ * falls due (the API runs it every minute, routes/curated.ts), and past its five minutes an
+ * answer is still served at once while a refill runs behind it (STALE_MS), so a reader only waits
+ * on the very first fill after a start, which the startup warm-up has usually done already.
  */
 export function createLighthouseCache() {
   const caches = new Map<number, SharedCache<WindowLighthouse>>();
-  const hoursCache = new SharedCache<ScreenedHourRow[]>(CACHE_MS);
+  const hoursCache = new SharedCache<ScreenedHourRow[]>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
   const hourCaches = new Map<string, SharedCache<ScreenedByHourOfDay>>();
-  return async (env: Env, days: number, timeZone = "UTC"): Promise<MarketLighthouse> => {
+  const windowCache = (days: number) => {
     let cache = caches.get(days);
     if (!cache) {
-      cache = new SharedCache<WindowLighthouse>(CACHE_MS);
+      cache = new SharedCache<WindowLighthouse>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
       // Bounded by the schema: one per LIGHTHOUSE_WINDOWS.
       caches.set(days, cache);
     }
+    return cache;
+  };
+  const read = async (env: Env, days: number, timeZone = "UTC"): Promise<MarketLighthouse> => {
     let hourCache = hourCaches.get(timeZone);
     if (!hourCache) {
-      hourCache = new SharedCache<ScreenedByHourOfDay>(CACHE_MS);
+      hourCache = new SharedCache<ScreenedByHourOfDay>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
       // Bounded by the schema: canonical IANA zones only, a few hundred at most.
       hourCaches.set(timeZone, hourCache);
     }
     const [m, byHourOfDay] = await Promise.all([
-      cache.get(() => buildMarketLighthouse(env, days)),
+      windowCache(days).get(() => buildMarketLighthouse(env, days)),
       hourCache.get(async () => screenedByHourOfDay(await hoursCache.get(screenedHours), timeZone)),
     ]);
     return { ...m, screened: { ...m.screened, byHourOfDay } };
   };
+  /**
+   * Starts a refill of every window, and of the hourly rows, whose answer is due or missing; a
+   * fresh one, or one already filling, is left alone. One window at a time, so the refills never
+   * hold more than one window's queries on the pool. Never rejects.
+   */
+  const keepWarm = async (env: Env): Promise<void> => {
+    for (const days of LIGHTHOUSE_WINDOWS)
+      await windowCache(days).warm(() => buildMarketLighthouse(env, days));
+    await hoursCache.warm(screenedHours);
+  };
+  return Object.assign(read, { keepWarm });
 }

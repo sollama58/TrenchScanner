@@ -36,6 +36,25 @@ export const loadSettingsTab = () => import("./tabs/SettingsTab").then((m) => (l
 export const loadAdminTab = () => import("./tabs/AdminTab").then((m) => (loaded.admin = m));
 export const loadSignIn = () => import("./components/SignIn");
 
+/** The browser's IANA zone, for the Lighthouse's hour-of-day chart; empty when it can't say (the API reads UTC). */
+function browserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The Lighthouse's path for a window (`base` is /curated or /guest). Built here, in the main
+ * bundle, so the warm-up below asks for exactly what the tab's Right now will (index.html builds
+ * the same path for the boot prefetch).
+ */
+export const lighthousePath = (base: string, days: number) => {
+  const tz = browserTimeZone();
+  return `${base}/lighthouse?days=${days}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`;
+};
+
 /**
  * The GETs each tab makes on mount (index.html keeps its own copy for the boot prefetch). Warming
  * these in the background lets a tab paint its data the moment it opens, then refresh.
@@ -48,7 +67,10 @@ export const TAB_DATA: Record<Tab, string[]> = {
     "/curated/models?days=30",
   ],
   model: ["/curated/insights?days=7", "/curated/models?days=7"],
-  lighthouse: ["/curated/lighthouse/history?days=30&bucket=day&dimension=category"],
+  lighthouse: [
+    "/curated/lighthouse/history?days=30&bucket=day&dimension=category",
+    lighthousePath("/curated", 7),
+  ],
   filters: [
     "/filters",
     "/config",

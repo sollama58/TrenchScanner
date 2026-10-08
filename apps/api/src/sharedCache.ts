@@ -70,12 +70,17 @@ export class SharedCache<T> {
 
   /**
    * Starts a fill now if the cache has nothing fresh and none is running - used to warm a cache at
-   * startup so the first reader after a deploy doesn't pay for it. Never rejects.
+   * startup so the first reader after a deploy doesn't pay for it, or to refill one before a
+   * reader finds it expired. Resolves when that fill settles (at once when none was needed), so a
+   * caller can run several one after another. Never rejects.
    */
-  warm(produce: () => Promise<T>): void {
-    if (this.value && this.value.expiresAt > Date.now()) return;
-    if (this.inFlight) return;
-    void this.fill(produce).catch((err: unknown) => logger.warn("warm-up failed", { err: String(err) }));
+  warm(produce: () => Promise<T>): Promise<void> {
+    if (this.value && this.value.expiresAt > Date.now()) return Promise.resolve();
+    if (this.inFlight) return Promise.resolve();
+    return this.fill(produce).then(
+      () => undefined,
+      (err: unknown) => logger.warn("warm-up failed", { err: String(err) }),
+    );
   }
 
   private fill(produce: () => Promise<T>): Promise<T> {
