@@ -5492,3 +5492,556 @@ button.small-btn {
   gap: 8px;
   margin-top: 10px;
 }
+
+/* ---------- TokenSage view (components/SageView.tsx) ---------- */
+.sage-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--brand-ink);
+  background: color-mix(in srgb, var(--brand-a) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand-a) 40%, transparent);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.sage-btn:hover {
+  background: color-mix(in srgb, var(--brand-a) 22%, transparent);
+  border-color: color-mix(in srgb, var(--brand-a) 65%, transparent);
+}
+@media (min-width: 641px) {
+  .sage-modal {
+    width: min(760px, calc(100vw - 32px));
+  }
+}
+.sage-card .legend .swatch {
+  width: 10px;
+  height: 10px;
+  flex: none;
+}
+.sage-title:focus {
+  outline: none;
+}
+.sage-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+.sage-locked {
+  text-align: center;
+}
+.sage-locked .about-head {
+  text-align: left;
+}
+.sage-locked .paywall-icon {
+  margin: 8px auto 12px;
+}
+.sage-locked p {
+  margin: 0 auto 16px;
+  max-width: 44ch;
+}
+.sage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.sage-token {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.sage-token h2 {
+  margin: 0;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+.sage-token img.avatar {
+  cursor: default;
+}
+.sage-sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 12.5px;
+}
+.sage-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.sage-empty {
+  padding: 18px 0;
+}
+.sage-hero {
+  position: relative;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--brand-a) 30%, var(--border));
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--brand-a) 16%, transparent), transparent 60%),
+    radial-gradient(
+      120% 140% at 100% 100%,
+      color-mix(in srgb, var(--brand-b) 12%, transparent),
+      transparent 60%
+    ),
+    var(--surface-2);
+  overflow: hidden;
+}
+.sage-ring {
+  width: 92px;
+  height: 92px;
+  flex: none;
+}
+.sage-ring .ring-track {
+  stroke-width: 8;
+}
+.sage-ring-arc {
+  fill: none;
+  stroke: url(#sage-ring-grad);
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+.sage-ring-value {
+  fill: var(--ink);
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font);
+}
+.sage-ring-sub {
+  fill: var(--muted);
+  font-size: 9.5px;
+  font-family: var(--font);
+}
+.sage-hero-text {
+  min-width: 0;
+}
+.sage-eyebrow {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.sage-referent {
+  margin: 2px 8px 4px 0;
+  font-size: 22px;
+  display: inline-block;
+  overflow-wrap: anywhere;
+}
+.sage-desc {
+  margin: 6px 0 0 !important;
+  color: var(--ink-2);
+}
+.sage-ticker {
+  margin: 4px 0 0 !important;
+  color: var(--muted) !important;
+}
+.sage-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.sage-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-strong);
+  color: var(--muted);
+}
+.sage-input.on {
+  border-style: solid;
+  color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 45%, transparent);
+  background: var(--good-wash);
+}
+.sage-flags {
+  list-style: none;
+  margin: 12px 0 0 !important;
+  padding: 0;
+  display: grid;
+  gap: 6px !important;
+}
+.sage-flag {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 7px 11px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+.sage-flag-code {
+  font-weight: 600;
+  color: var(--ink);
+}
+.sage-flag.sev-high {
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  background: var(--bad-wash);
+}
+.sage-flag.sev-high .sage-flag-code {
+  color: var(--bad-ink);
+}
+.sage-flag.sev-warn .sage-flag-code {
+  color: var(--warn);
+}
+.sage-flag-detail {
+  color: var(--ink-2);
+}
+.sage-summary {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--brand-a);
+  border-radius: 0 var(--radius-s) var(--radius-s) 0;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.sage-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+.sage-grid > .sage-card {
+  margin-top: 0;
+}
+.sage-card {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.sage-card h4 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13.5px;
+}
+.sage-card p {
+  margin: 0 0 10px;
+}
+.sage-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  background: var(--surface-3);
+}
+.sage-tag.tone-good {
+  color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 40%, transparent);
+  background: var(--good-wash);
+}
+.sage-tag.tone-warn {
+  color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  background: var(--bad-wash);
+}
+.sage-bars {
+  display: grid;
+  gap: 7px;
+}
+.sage-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(60px, 1fr) 36px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.sage-bar-label {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sage-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.sage-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--series-1);
+}
+.sage-bars.s2 .sage-bar-fill {
+  background: var(--series-2);
+}
+.sage-bar-value {
+  text-align: right;
+  color: var(--ink-2);
+}
+.sage-crowd-plot {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  border-bottom: 1px solid var(--axis);
+}
+.sage-crowd-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.sage-crowd-bars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+}
+.sage-crowd-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  width: min(36px, 40%);
+  height: 100%;
+}
+.sage-crowd-val {
+  font-size: 11px;
+  color: var(--ink-2);
+  margin-bottom: 2px;
+}
+.sage-crowd-fill {
+  width: 100%;
+  border-radius: 4px 4px 0 0;
+}
+.sage-crowd-fill.s1,
+.sage-track-fill.s1 {
+  background: var(--series-1);
+}
+.sage-crowd-fill.s2,
+.sage-track-fill.s2 {
+  background: var(--series-2);
+}
+.sage-crowd-x {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 4px 0 -22px;
+}
+.sage-crowd .legend {
+  margin: 28px 0 0;
+}
+.sage-x-author {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 13px;
+}
+.sage-x-text {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--ink);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sage-x-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px 14px;
+  margin: 8px 0;
+}
+.sage-x-facts dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.sage-x-facts dd {
+  margin: 0;
+  font-size: 13px;
+}
+.sage-meter {
+  display: grid;
+  grid-template-columns: auto 1fr 36px;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.sage-x-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+}
+.sage-terms {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 8px !important;
+}
+.sage-terms li {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+}
+.sage-terms strong {
+  color: var(--ink);
+}
+.sage-mcap {
+  position: relative;
+}
+.sage-mcap-readout {
+  margin-bottom: 4px;
+}
+.sage-mcap-svg {
+  display: block;
+  width: 100%;
+  height: 150px;
+  touch-action: pan-y;
+}
+.sage-axis {
+  stroke: var(--axis);
+  stroke-width: 1;
+}
+.sage-mcap-line {
+  fill: none;
+  stroke: var(--series-1);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.sage-read-mark {
+  stroke: var(--brand-a);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.sage-cross {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+.sage-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: 13px 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--series-1);
+  box-shadow: 0 0 0 2px var(--surface-2);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.sage-mcap-x {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+.sage-read-key {
+  color: var(--brand-ink);
+}
+.sage-track {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+}
+.sage-track-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 110px;
+  text-align: right;
+}
+.sage-track-plot {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 6px;
+  border-bottom: 1px solid var(--axis);
+}
+.sage-track-day {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.sage-track-bars {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+}
+.sage-track-fill {
+  width: min(16px, 45%);
+  border-radius: 4px 4px 0 0;
+}
+.sage-track-x {
+  text-align: center;
+  margin: 4px 0 -20px;
+}
+.sage-track + .legend {
+  margin: 28px 0 0;
+}
+.sage-caveats {
+  margin: 14px 0 0 !important;
+  padding-left: 16px !important;
+  list-style: disc !important;
+  gap: 2px !important;
+}
+.sage-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 640px) {
+  .sage-grid {
+    grid-template-columns: 1fr;
+  }
+  .sage-hero {
+    gap: 12px;
+    padding: 14px;
+  }
+  .sage-ring {
+    width: 72px;
+    height: 72px;
+  }
+  .sage-referent {
+    font-size: 18px;
+  }
+}
+.card-foot-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}

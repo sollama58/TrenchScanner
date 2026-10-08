@@ -1,5 +1,16 @@
 import type { FastifyInstance } from "fastify";
-import { prisma } from "@trenchscanner/core";
+import { prisma, type TokenSageAnalysis } from "@trenchscanner/core";
+import { SharedCache } from "../sharedCache.js";
+import { sageRead, sageTrack, type DayLabelRow, type SageView } from "../tokenSageView.js";
+
+const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+/** Market cap points drawn in the TokenSage view's chart (the newest scans). */
+const SAGE_CHART_POINTS = 120;
+
+/** The week of narrative records behind the TokenSage view: the same for every token, moves hourly. */
+const TRACK_DAYS = 7;
+const TRACK_CACHE_MS = 10 * 60_000;
 
 /**
  * Token detail is not user-specific (it's the same underlying market data for
@@ -28,5 +39,70 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       take: 50,
     });
     return { ...token, snapshots };
+  });
+
+  const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);
+
+  /** TokenSage's read of the token, for the card's TokenSage view (src/tokenSageView.ts). */
+  app.get("/:mintAddress/sage", async (request, reply): Promise<SageView | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) {
+      reply.code(400).send({ error: "not a valid mint" });
+      return;
+    }
+    const [row, token] = await Promise.all([
+      prisma.tokenNarrative.findUnique({
+        where: { mintAddress },
+        select: { depth: true, status: true, failReason: true, categories: true, analysis: true },
+      }),
+      prisma.token.findUnique({
+        where: { mintAddress },
+        select: { id: true, symbol: true, name: true, imageUrl: true, firstSeenAt: true },
+      }),
+    ]);
+    const [snapshots, labels] = await Promise.all([
+      token
+        ? prisma.tokenSnapshot.findMany({
+            where: { tokenId: token.id },
+            orderBy: { takenAt: "desc" },
+            take: SAGE_CHART_POINTS,
+            select: { takenAt: true, marketCapUsd: true },
+          })
+        : [],
+      row?.categories
+        ? weekLabels.get(() =>
+            prisma.lighthouseDayLabel.findMany({
+              where: {
+                dimension: "category",
+                day: { gte: new Date(Date.now() - TRACK_DAYS * 86_400_000) },
+              },
+              select: { day: true, label: true, count: true, alerts: true, graded: true, won2x: true },
+            }),
+          )
+        : [],
+    ]);
+    const read =
+      row?.status === "failed"
+        ? null
+        : sageRead(row?.analysis as TokenSageAnalysis | null, row?.depth ?? "basic");
+    return {
+      mint: mintAddress,
+      token: token
+        ? {
+            symbol: token.symbol,
+            name: token.name,
+            imageUrl: token.imageUrl,
+            firstSeenAt: token.firstSeenAt.toISOString(),
+          }
+        : null,
+      status: read ? "ok" : row?.status === "failed" ? "failed" : "none",
+      failReason: row?.status === "failed" ? (row.failReason ?? null) : null,
+      read,
+      marketCap: snapshots
+        .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
+        .reverse()
+        .map((s) => ({ t: s.takenAt.toISOString(), usd: s.marketCapUsd })),
+      track: read ? sageTrack(labels, row?.categories) : null,
+    };
   });
 }

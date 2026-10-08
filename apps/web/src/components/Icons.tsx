@@ -275,3 +275,12 @@ export const UsersIcon = (p: IconProps) => (
     <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
   </Svg>
 );
+
+/** TokenSage's read: an eye with a spark, for "what this coin is about". */
+export const SageIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
+    <circle cx="12" cy="12" r="2.6" />
+    <path d="M19 2.5v3M17.5 4h3" />
+  </Svg>
+);

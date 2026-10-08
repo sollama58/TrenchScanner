@@ -61,7 +61,16 @@ export const DIGEST_MAX_ENTRIES = 12;
  * The parts of an alert a chat can switch off, in the order the card shows them. The chat's
  * TelegramChat.hidden lists the keys it turned off; everything else is on.
  */
-export const ALERT_PARTS = ["image", "stats", "conviction", "reasons", "filters", "mint", "links"] as const;
+export const ALERT_PARTS = [
+  "image",
+  "stats",
+  "conviction",
+  "reasons",
+  "filters",
+  "mint",
+  "links",
+  "sage",
+] as const;
 export type AlertPart = (typeof ALERT_PARTS)[number];
 export const ALERT_PART_LABELS: Record<AlertPart, string> = {
   image: "the token's picture",
@@ -71,6 +80,7 @@ export const ALERT_PART_LABELS: Record<AlertPart, string> = {
   filters: "which filter caught it, with the score",
   mint: "the mint address",
   links: "the trade links",
+  sage: "the link to TokenSage's read of the coin",
 };
 export type AlertParts = Record<AlertPart, boolean>;
 
@@ -153,6 +163,20 @@ function tokenLabel(t: AlertToken): string {
   if (t.symbol) return `$${t.symbol}`;
   if (t.name) return t.name;
   return `${t.mintAddress.slice(0, 4)}…${t.mintAddress.slice(-4)}`;
+}
+
+/**
+ * The dashboard link that opens the token's TokenSage view (apps/web/src/sage.ts reads `?sage=`),
+ * or null without a dashboard URL. Telegram can't show the view itself, so the alert links to it.
+ */
+export function sageUrl(mint: string, links: AlertLinks): string | null {
+  const base = links.dashboardUrl.replace(/\/$/, "");
+  return base ? `${base}/?sage=${encodeURIComponent(mint)}` : null;
+}
+
+function sageLink(mint: string, links: AlertLinks, text: string): string | null {
+  const url = sageUrl(mint, links);
+  return url ? `<a href="${escapeHtml(url)}">${text}</a>` : null;
 }
 
 function tradeLinks(mint: string, links: AlertLinks): string {
@@ -245,6 +269,8 @@ export function formatAlert(
   const tail: string[] = [];
   if (parts.mint) tail.push(`<code>${escapeHtml(t.mintAddress)}</code>`);
   if (parts.links) tail.push(tradeLinks(t.mintAddress, links));
+  const sage = parts.sage ? sageLink(t.mintAddress, links, "🔮 TokenSage read") : null;
+  if (sage) tail.push(sage);
   if (tail.length > 0) sections.push(tail.join("\n"));
   return sections.join("\n\n");
 }

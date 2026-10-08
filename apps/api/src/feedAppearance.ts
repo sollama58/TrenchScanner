@@ -33,6 +33,7 @@ export const CARD_FIELDS = [
   "reasons",
   "mint",
   "links",
+  "sage",
 ] as const;
 
 /** Trading sites a card can link the token to (apps/web/src/appearance.ts has their URLs). */

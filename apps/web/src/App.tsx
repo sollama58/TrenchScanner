@@ -34,6 +34,7 @@ import {
 import { AlertNotifier, resetSettings } from "./alerts";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
+import { useSageMint } from "./sage";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -44,6 +45,8 @@ const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.S
 const LazyAdminTab = lazy(() => loadAdminTab().then((m) => ({ default: m.AdminTab })));
 const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 // The burn button (and its transaction builder) only matters to someone without access.
+// The TokenSage view (and its charts) loads the first time a card or a Telegram link opens one.
+const SageHost = lazy(() => import("./components/SageView").then((m) => ({ default: m.SageHost })));
 const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ default: m.BurnPanel })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
@@ -78,6 +81,7 @@ export function App() {
     return isGuest() ? { state: "guest" } : { state: "loading" };
   });
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
+  const sageMint = useSageMint();
 
   const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
@@ -353,6 +357,11 @@ export function App() {
             )}
           </div>
         )}
+        {guest && sageMint && (
+          <Suspense fallback={null}>
+            <SageHost key={sageMint} mint={sageMint} guest onConnect={connectWallet} />
+          </Suspense>
+        )}
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
@@ -366,6 +375,11 @@ export function App() {
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
             </div>
+            {sageMint && (
+              <Suspense fallback={null}>
+                <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
+              </Suspense>
+            )}
           </AccessGate>
         )}
       </main>

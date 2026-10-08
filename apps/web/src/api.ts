@@ -964,7 +964,8 @@ export type CardField =
   | "dev"
   | "reasons"
   | "mint"
-  | "links";
+  | "links"
+  | "sage";
 
 /** Trading sites a card can link the token to (the API's QUICK_LINKS). */
 export type QuickLink = "terminal" | "axiom" | "gmgn";
@@ -1060,6 +1061,7 @@ export const TELEGRAM_ALERT_PARTS = [
   { key: "filters", label: "Filter and score" },
   { key: "mint", label: "Mint address" },
   { key: "links", label: "Trade links" },
+  { key: "sage", label: "TokenSage read link" },
 ] as const;
 export type TelegramAlertPart = (typeof TELEGRAM_ALERT_PARTS)[number]["key"];
 
