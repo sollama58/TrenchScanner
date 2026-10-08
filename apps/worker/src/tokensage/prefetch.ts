@@ -539,142 +539,164 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
     }
   }
 
-  // Full first: those are the mints a model is deciding on right now.
+  // Youngest coins first: a read only helps a decision it lands before, and most first decisions
+  // come within a few minutes of launch. In a backlog, first-noted-first-sent leaves a new launch
+  // behind hundreds of older requests until it has already been decided (2026-10-08: with 200+
+  // reads waiting each cycle, under-3-minute first decisions carrying any read fell from ~95% to
+  // under 5%).
+  newestFirst(byDepth.full);
+  newestFirst(byDepth.basic);
+  // The depths take batches in turn, full first (those are the mints a model is deciding on
+  // right now). Full taking every batch until its list ran dry let a full-depth backlog starve
+  // the quick reads entirely.
+  const lists: Record<TokenSageDepth, Entry[]> = {
+    full: interleave(resend.full, byDepth.full),
+    basic: interleave(resend.basic, byDepth.basic),
+  };
   let batches = env.TOKENSAGE_MAX_BATCHES_PER_CYCLE;
   let jobChecks = MAX_JOB_CHECKS_PER_FLUSH;
-  for (const depth of ["full", "basic"] as const) {
-    let list = interleave(resend[depth], byDepth[depth]);
-    while (list.length > 0 && batches > 0) {
-      const chunk = list.slice(0, TOKENSAGE_PREFETCH_CHUNK);
-      list = list.slice(TOKENSAGE_PREFETCH_CHUNK);
-      batches -= 1;
-      let result;
-      try {
-        result = await api.batch(chunk, depth);
-      } catch (err) {
-        if (!(err instanceof HttpError) || (err.status !== 404 && err.status !== 422)) throw err;
-        // TokenSage answers the whole batch 404/422 when one re-sent mint's job failed
-        // definitively (token_not_found, not_pumpfun, ...) in the last 10 minutes. Find it by
-        // reading the queued mints' jobs, so the next batch goes through.
-        stats.errors += 1;
-        stats.lastStatus = err.status;
-        let culprits = 0;
-        for (const e of chunk) {
-          const p = pending.get(e.ca);
-          if (p?.jobId === undefined || jobChecks <= 0) continue;
-          jobChecks -= 1;
-          if (await checkEndedJob(api, e.ca, p, p.jobId)) culprits += 1;
-        }
-        if (culprits === 0) {
-          // No queued job to blame (the culprit's pending entry is gone, or there were more
-          // than this flush could look up): the chunk's never-sent mints would otherwise be
-          // re-sent, and refused, every flush for the rest of TokenSage's window, holding up
-          // every other read behind them. Left alone for one window instead; the queued ones
-          // keep their place, since re-sending those is what finds the culprit.
-          const now = Date.now();
-          const cooled: string[] = [];
-          for (const e of chunk) {
-            if (pending.has(e.ca)) continue;
-            wanted.delete(e.ca);
-            rememberNotFound(e.ca, now + NOT_FOUND_COOLDOWN_MS);
-            cooled.push(e.ca);
-          }
-          logger.warn("TokenSage refused a batch with no culprit found; cooling its unsent mints", {
-            status: err.status,
-            depth,
-            chunk: chunk.length,
-            cooled: cooled.length,
-          });
-        }
-        continue;
-      }
-      const { items, fullRemaining } = result;
-      if (fullRemaining === 0) fullBlockedUntil = nextUtcMidnight(Date.now());
-      const sent = new Map(chunk.map((e) => [e.ca, e]));
+  let turn: TokenSageDepth = "full";
+  while (batches > 0 && (lists.full.length > 0 || lists.basic.length > 0)) {
+    const depth: TokenSageDepth = lists[turn].length > 0 ? turn : turn === "full" ? "basic" : "full";
+    turn = depth === "full" ? "basic" : "full";
+    const chunk = lists[depth].slice(0, TOKENSAGE_PREFETCH_CHUNK);
+    lists[depth] = lists[depth].slice(TOKENSAGE_PREFETCH_CHUNK);
+    batches -= 1;
+    let result;
+    try {
+      result = await api.batch(chunk, depth);
+    } catch (err) {
+      if (!(err instanceof HttpError) || (err.status !== 404 && err.status !== 422)) throw err;
+      // TokenSage answers the whole batch 404/422 when one re-sent mint's job failed
+      // definitively (token_not_found, not_pumpfun, ...) in the last 10 minutes. Find it by
+      // reading the queued mints' jobs, so the next batch goes through.
+      stats.errors += 1;
+      stats.lastStatus = err.status;
+      let culprits = 0;
       for (const e of chunk) {
-        const w = wanted.get(e.ca);
-        if (w && narrativeDepthCovers(depth, w.depth)) wanted.delete(e.ca);
+        const p = pending.get(e.ca);
+        if (p?.jobId === undefined || jobChecks <= 0) continue;
+        jobChecks -= 1;
+        if (await checkEndedJob(api, e.ca, p, p.jobId)) culprits += 1;
       }
-      for (const item of items) {
-        const entry = typeof item?.ca === "string" ? sent.get(item.ca) : undefined;
-        if (!entry) continue;
-        try {
-          // New unless a job at least this deep is already queued: a full read sent over a
-          // queued basic one starts a full job, which costs full quota.
-          const queued = pending.get(item.ca);
-          if (!queued || !narrativeDepthCovers(queued.depth, depth)) {
-            stats.requested += 1;
-            if (depth === "full") fullSentToday += 1;
-            if (depth === "full" && earlyMints.has(item.ca)) earlySentToday += 1;
-          }
-          if (
-            (item.status === "complete" || item.status === "partial") &&
-            item.analysis !== null &&
-            typeof item.analysis === "object"
-          ) {
-            // A basic answer for a mint whose full read was queued in this flush leaves that queued.
-            if (!queued || narrativeDepthCovers(depth, queued.depth)) pending.delete(item.ca);
-            await storeAnalysis(item.ca, item.analysis, item.status);
-          } else if (item.status === "pending") {
-            const prev = pending.get(item.ca);
-            const jobId = typeof item.job_id === "number" ? item.job_id : undefined;
-            if (!prev || !narrativeDepthCovers(prev.depth, depth)) {
-              pending.set(item.ca, { depth, hints: entry.hints, since: prev?.since ?? Date.now(), jobId });
-            } else {
-              // To the back of the queue, so a backlog bigger than one flush is re-sent in turn.
-              pending.delete(item.ca);
-              pending.set(item.ca, prev);
-              // Only at the queued depth: a basic re-send for a mint upgraded to full in this flush
-              // answers with the basic job, which is not the queued full job ending.
-              if (
-                prev.depth === depth &&
-                prev.jobId !== undefined &&
-                jobId !== undefined &&
-                jobId !== prev.jobId
-              ) {
-                // A re-send that comes back under a new job means the old one ended without an
-                // analysis; TokenSage's batch doesn't say why, so read the old job once.
-                const ended = prev.jobId;
-                prev.jobId = jobId;
-                if (jobChecks > 0) {
-                  jobChecks -= 1;
-                  await checkEndedJob(api, item.ca, prev, ended);
-                }
+      if (culprits === 0) {
+        // No queued job to blame (the culprit's pending entry is gone, or there were more
+        // than this flush could look up): the chunk's never-sent mints would otherwise be
+        // re-sent, and refused, every flush for the rest of TokenSage's window, holding up
+        // every other read behind them. Left alone for one window instead; the queued ones
+        // keep their place, since re-sending those is what finds the culprit.
+        const now = Date.now();
+        const cooled: string[] = [];
+        for (const e of chunk) {
+          if (pending.has(e.ca)) continue;
+          wanted.delete(e.ca);
+          rememberNotFound(e.ca, now + NOT_FOUND_COOLDOWN_MS);
+          cooled.push(e.ca);
+        }
+        logger.warn("TokenSage refused a batch with no culprit found; cooling its unsent mints", {
+          status: err.status,
+          depth,
+          chunk: chunk.length,
+          cooled: cooled.length,
+        });
+      }
+      continue;
+    }
+    const { items, fullRemaining } = result;
+    if (fullRemaining === 0) fullBlockedUntil = nextUtcMidnight(Date.now());
+    const sent = new Map(chunk.map((e) => [e.ca, e]));
+    for (const e of chunk) {
+      const w = wanted.get(e.ca);
+      if (w && narrativeDepthCovers(depth, w.depth)) wanted.delete(e.ca);
+    }
+    for (const item of items) {
+      const entry = typeof item?.ca === "string" ? sent.get(item.ca) : undefined;
+      if (!entry) continue;
+      try {
+        // New unless a job at least this deep is already queued: a full read sent over a
+        // queued basic one starts a full job, which costs full quota.
+        const queued = pending.get(item.ca);
+        if (!queued || !narrativeDepthCovers(queued.depth, depth)) {
+          stats.requested += 1;
+          if (depth === "full") fullSentToday += 1;
+          if (depth === "full" && earlyMints.has(item.ca)) earlySentToday += 1;
+        }
+        if (
+          (item.status === "complete" || item.status === "partial") &&
+          item.analysis !== null &&
+          typeof item.analysis === "object"
+        ) {
+          // A basic answer for a mint whose full read was queued in this flush leaves that queued.
+          if (!queued || narrativeDepthCovers(depth, queued.depth)) pending.delete(item.ca);
+          await storeAnalysis(item.ca, item.analysis, item.status);
+        } else if (item.status === "pending") {
+          const prev = pending.get(item.ca);
+          const jobId = typeof item.job_id === "number" ? item.job_id : undefined;
+          if (!prev || !narrativeDepthCovers(prev.depth, depth)) {
+            pending.set(item.ca, { depth, hints: entry.hints, since: prev?.since ?? Date.now(), jobId });
+          } else {
+            // To the back of the queue, so a backlog bigger than one flush is re-sent in turn.
+            pending.delete(item.ca);
+            pending.set(item.ca, prev);
+            // Only at the queued depth: a basic re-send for a mint upgraded to full in this flush
+            // answers with the basic job, which is not the queued full job ending.
+            if (
+              prev.depth === depth &&
+              prev.jobId !== undefined &&
+              jobId !== undefined &&
+              jobId !== prev.jobId
+            ) {
+              // A re-send that comes back under a new job means the old one ended without an
+              // analysis; TokenSage's batch doesn't say why, so read the old job once.
+              const ended = prev.jobId;
+              prev.jobId = jobId;
+              if (jobChecks > 0) {
+                jobChecks -= 1;
+                await checkEndedJob(api, item.ca, prev, ended);
               }
             }
-          } else if (
-            item.status === "failed" &&
-            (item.error === "quota_exceeded" || item.error === "overloaded")
-          ) {
-            // Turned away, not analysed: ask again later (as basic, once full is out of quota).
-            pending.delete(item.ca);
-            stats.turnedAway += 1;
-            if (item.error === "quota_exceeded" && depth === "full") {
-              fullBlockedUntil = nextUtcMidnight(Date.now());
-            } else {
-              pausedUntil = Math.max(pausedUntil, Date.now() + Math.max(5, item.retry_after_s ?? 30) * 1000);
-            }
-            if (!wanted.has(item.ca)) wanted.set(item.ca, { depth, hints: entry.hints, notedAt: Date.now() });
-          } else if (item.status === "invalid") {
-            pending.delete(item.ca);
-            await storeFailure(item.ca, depth, `invalid_ca: ${item.error ?? "not a token address"}`);
-          } else if (item.status === "failed") {
-            // TokenSage reports a failed job for 10 minutes without starting a new one.
-            await noteFailure(item.ca, depth, item.error);
-          } else {
-            // A done status without a document, or a status this version doesn't know: ask again
-            // after a cool-off rather than every cycle.
-            pending.delete(item.ca);
-            notFoundUntil.set(item.ca, Date.now() + NOT_FOUND_COOLDOWN_MS);
           }
-        } catch (err) {
-          // One bad item (an odd document, a DB hiccup) must not lose the rest of the batch.
-          stats.errors += 1;
-          logger.warn("TokenSage item not stored", { mint: item.ca, error: (err as Error).message });
+        } else if (
+          item.status === "failed" &&
+          (item.error === "quota_exceeded" || item.error === "overloaded")
+        ) {
+          // Turned away, not analysed: ask again later (as basic, once full is out of quota).
+          pending.delete(item.ca);
+          stats.turnedAway += 1;
+          if (item.error === "quota_exceeded" && depth === "full") {
+            fullBlockedUntil = nextUtcMidnight(Date.now());
+          } else {
+            pausedUntil = Math.max(pausedUntil, Date.now() + Math.max(5, item.retry_after_s ?? 30) * 1000);
+          }
+          if (!wanted.has(item.ca)) wanted.set(item.ca, { depth, hints: entry.hints, notedAt: Date.now() });
+        } else if (item.status === "invalid") {
+          pending.delete(item.ca);
+          await storeFailure(item.ca, depth, `invalid_ca: ${item.error ?? "not a token address"}`);
+        } else if (item.status === "failed") {
+          // TokenSage reports a failed job for 10 minutes without starting a new one.
+          await noteFailure(item.ca, depth, item.error);
+        } else {
+          // A done status without a document, or a status this version doesn't know: ask again
+          // after a cool-off rather than every cycle.
+          pending.delete(item.ca);
+          notFoundUntil.set(item.ca, Date.now() + NOT_FOUND_COOLDOWN_MS);
         }
+      } catch (err) {
+        // One bad item (an odd document, a DB hiccup) must not lose the rest of the batch.
+        stats.errors += 1;
+        logger.warn("TokenSage item not stored", { mint: item.ca, error: (err as Error).message });
       }
     }
   }
+}
+
+/** Sorts in place by the coin's launch time, newest first; coins with no launch time go last. */
+function newestFirst(list: { hints?: TokenSageHints }[]): void {
+  const at = (e: { hints?: TokenSageHints }) => {
+    const t = e.hints?.created_at ? Date.parse(e.hints.created_at) : Number.NaN;
+    return Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t;
+  };
+  list.sort((a, b) => at(b) - at(a));
 }
 
 /**
