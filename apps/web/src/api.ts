@@ -722,6 +722,13 @@ export interface WorkerHealth {
     stale: boolean;
     hung: boolean;
   }[];
+  /** When each stage of the alert path last produced something (absent from older API builds). */
+  pipeline?: {
+    lastAlertAt: string | null;
+    lastPreCheckPassAt: string | null;
+    lastTokenSageAt: string | null;
+    lastDecisionAt: string | null;
+  };
 }
 
 // ---- The curator contest (/curated/models) ----

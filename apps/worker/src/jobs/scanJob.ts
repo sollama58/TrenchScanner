@@ -793,8 +793,13 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     samplesBanked,
     pricePathMints: deps.pricePath?.size ?? 0,
     ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats() } : {}),
+    // Epoch ms of the newest rug-screen (pre-check) pass: the header pill's "last passed pre-check".
+    ...(lastScreenPassAt > 0 ? { lastScreenPassAt } : {}),
   };
 }
+
+/** When a token last passed the rug screen in this process (0: not yet). */
+let lastScreenPassAt = 0;
 
 /**
  * The mints this cycle will refresh, liveness-prioritized rather than newest-first: Pump.fun
@@ -1489,6 +1494,7 @@ async function processCandidate(
   if (!scored.rugScreen.passed) {
     return 0;
   }
+  lastScreenPassAt = Date.now();
 
   // The first rug-screen pass inside the curated band asks for the text read the curators use as
   // features. Fire-and-forget: it lands on the token for its next scan.

@@ -455,6 +455,84 @@ input[type="checkbox"] {
 .status-pill.warn {
   color: var(--warn);
 }
+/* The pill's hover/focus card: when each stage of the alert path last produced, then each job. A
+   sibling of the pill, not a child, so the phone layout's font-size: 0 on the pill doesn't hide it. */
+.status-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.status-pill:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+}
+.status-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  column-gap: 10px;
+  row-gap: 6px;
+  min-width: min(300px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 14px 34px -12px rgba(0, 0, 0, 0.6);
+  font-size: 12.5px;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease,
+    visibility 0.12s;
+}
+.status-tip.open {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+.status-tip-head {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.status-tip-head:not(:first-child) {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.status-tip-row {
+  display: contents;
+}
+.status-tip-label {
+  white-space: normal;
+}
+.status-tip-dot {
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--good-ink);
+}
+.status-tip-dot.warn {
+  background: var(--warn);
+}
+.status-tip-val {
+  text-align: right;
+}
+.status-tip-val.warn {
+  color: var(--warn);
+}
 .pulse {
   width: 7px;
   height: 7px;
@@ -3340,7 +3418,7 @@ button.small-btn {
 .admin-query {
   display: inline-block;
   white-space: normal;
-  min-width: 300px;
+  min-width: min(300px, calc(100vw - 32px));
   max-width: 640px;
   font-size: 11.5px;
   color: var(--ink-2);
