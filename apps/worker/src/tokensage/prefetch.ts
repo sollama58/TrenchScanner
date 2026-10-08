@@ -624,7 +624,14 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
               // To the back of the queue, so a backlog bigger than one flush is re-sent in turn.
               pending.delete(item.ca);
               pending.set(item.ca, prev);
-              if (prev.jobId !== undefined && jobId !== undefined && jobId !== prev.jobId) {
+              // Only at the queued depth: a basic re-send for a mint upgraded to full in this flush
+              // answers with the basic job, which is not the queued full job ending.
+              if (
+                prev.depth === depth &&
+                prev.jobId !== undefined &&
+                jobId !== undefined &&
+                jobId !== prev.jobId
+              ) {
                 // A re-send that comes back under a new job means the old one ended without an
                 // analysis; TokenSage's batch doesn't say why, so read the old job once.
                 const ended = prev.jobId;

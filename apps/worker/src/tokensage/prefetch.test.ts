@@ -572,6 +572,26 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     expect(row.depth).toBe("full");
   });
 
+  it("keeps tracking the full job when the basic re-send in the same flush is still queued", async () => {
+    const { client, batch, job } = fakeClient();
+    const w = `${TAG}-w2`;
+    batch.mockResolvedValueOnce(ok([{ ca: w, status: "pending", job_id: 1 }]));
+    noteNarrativeWanted(w, "basic", env);
+    await flushNarrativeRequests(env, client);
+
+    batch.mockImplementation(async (_entries: { ca: string }[], depth: string) =>
+      ok([{ ca: w, status: "pending", job_id: depth === "full" ? 2 : 1 }]),
+    );
+    noteNarrativeWanted(w, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch.mock.calls.map((c) => c[1])).toEqual(["basic", "full", "basic"]);
+    // Neither job is taken for ended: the full one is still running, and the basic one isn't queued.
+    expect(job).not.toHaveBeenCalled();
+    await flushNarrativeRequests(env, client);
+    expect(batch.mock.calls.at(-1)![1]).toBe("full");
+    expect(job).not.toHaveBeenCalled();
+  });
+
   it("drops a basic read nobody has asked for again in ten minutes, but not a deep one", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
