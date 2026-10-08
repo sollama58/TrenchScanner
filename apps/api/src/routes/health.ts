@@ -244,6 +244,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   if (flows) out.flows = flows;
   const tokensage = stageTimings(meta, "tokensage");
   if (tokensage) out.tokensage = tokensage;
+  // The scan's launch first-buyer reads (the top-10 snipers share): requested, found, failed.
+  const sniperReads = stageTimings(meta, "sniperReads");
+  if (sniperReads) out.sniperReads = sniperReads;
   return Object.keys(out).length > 0 ? out : null;
 }
 
