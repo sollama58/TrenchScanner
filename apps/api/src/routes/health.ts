@@ -223,6 +223,12 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // The scan's paid RPC calls per method ({ method: count }) - what the Helius plan bills on.
   const rpcCalls = stageTimings(meta, "rpcCalls");
   if (rpcCalls) out.rpcCalls = rpcCalls;
+  // The scan's market-data calls since the last cycle (requests, 429 pauses, time queued, gave
+  // up): whether DexScreener is throttling the shared budget, and how much Jupiter took off it.
+  for (const key of ["dexScreenerCalls", "jupiterCalls"] as const) {
+    const calls = stageTimings(meta, key);
+    if (calls) out[key] = calls;
+  }
   // The scan's TokenSage counters (requested, stored, turned away, waiting, pending...): counts
   // only, so whether reads are going out and coming back is visible without the admin wallet.
   // pipeline-watch: what each stage of the alert path produced in its window.

@@ -301,7 +301,7 @@ const WATCH_ROW_SELECT = {
  * observed past the entry delay, retires it ungraded rather than inventing a loss.
  */
 export async function runCandidateWatchJob(
-  dexScreener: DexScreenerClient,
+  dexScreener: Pick<DexScreenerClient, "getTokensByAddresses">,
   env: Env,
 ): Promise<Record<string, number> | void> {
   const startedAt = Date.now();

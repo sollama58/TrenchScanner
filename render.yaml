@@ -35,6 +35,10 @@
 #         Market data falls back to GeckoTerminal whenever DexScreener answers lookups blank (it
 #         did on 2026-10-07). Free, that is 30 calls a minute; with this key it is CoinGecko's
 #         on-chain API on the plan's limit (COINGECKO_REQUESTS_PER_MINUTE, 200 by default).
+#   - JUPITER_API_KEY (worker)                      optional: a Jupiter API key (free plan is enough)
+#         The outcome watcher and the empty-wallet check price on Jupiter's Tokens API first (100
+#         mints a call, a per-account limit) and on DexScreener only for what it missed, so
+#         DexScreener's per-IP budget goes to the scan's refresh and fast-match.
 #   - SOLANA_RPC_URL (both api + worker)           optional: leave empty to use Helius
 #         Verifies and reconciles burns. Empty (or a public endpoint) means the Helius RPC built
 #         from HELIUS_API_KEY; set it only to use a different paid RPC.
@@ -191,6 +195,10 @@ services:
         sync: false
       # Optional: a CoinGecko paid-plan key for the market-data fallback (see .env.example).
       - key: COINGECKO_API_KEY
+        sync: false
+      # Optional: a Jupiter API key (portal.jup.ag, free plan). The outcome watcher and the
+      # empty-wallet check then price on Jupiter first, leaving DexScreener to the scan.
+      - key: JUPITER_API_KEY
         sync: false
       # The burn reconciler's endpoint - see the note on this var on the API above. Empty means
       # Helius via HELIUS_API_KEY.

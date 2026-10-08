@@ -82,6 +82,13 @@ const envSchema = z.object({
   // The worker's share of the plan's calls a minute (the API process takes a small fixed share on
   // top). Only read with COINGECKO_API_KEY. 250 is the Basic plan's limit, less the API's.
   COINGECKO_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(200),
+  // A Jupiter API key (portal.jup.ag; the free plan is enough). With one, the jobs that only need a
+  // price - the outcome watcher and the empty-wallet check - ask Jupiter first and DexScreener only
+  // for what it missed, leaving DexScreener's per-IP budget to the scan and fast-match
+  // (datasources/jupiter.ts). Empty: every lookup goes to DexScreener, as before.
+  JUPITER_API_KEY: pastedKey,
+  // Calls a minute to Jupiter. The free plan allows 60 per account.
+  JUPITER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(50),
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api-v3.pump.fun"),
   // PumpPortal's public data websocket: Pump.fun launches and graduations as they land on chain
   // (apps/worker/src/discovery/pumpPortalStream.ts). Empty disables the stream; discovery then
