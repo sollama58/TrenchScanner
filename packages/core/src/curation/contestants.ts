@@ -1,6 +1,7 @@
 import type { BoostingOptions } from "./boosting.js";
 import type { ForestOptions } from "./forest.js";
 import {
+  LEARNER_FEATURE_NAMES,
   learnerSubset,
   MARKET_CONTEXT_FEATURES,
   PRICE_PATH_FEATURES,
@@ -107,6 +108,23 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubse
   // Who is doing the buying, trade by trade (curation/tradeFlow.ts).
   ...TRADE_FLOW_FEATURES,
 ]);
+
+/**
+ * The Narrative seat's inputs: every TokenSage input the learners read, plus only the four market
+ * readings that carry most of the market's signal on deep-read moments (age, volume acceleration,
+ * 10-minute holder growth, 15-minute price path). User decision 2026-10-08: the seat should lean
+ * on the narrative. With every usual input beside them, scrambling the TokenSage inputs moved 41%
+ * of its top-10% picks; with these four it moved 80%, at the same top-10% 2x rate (20.3%) and AUC
+ * 0.660 vs 0.674 (walk-forward on 1,307 deep-read decision rows, 2026-10-07 16:00 to 10-08 21:00).
+ * New TokenSage inputs join automatically: anything named ns* on the learner list.
+ */
+export const NARRATIVE_SEAT_FEATURES: readonly CandidateFeatureName[] = [
+  "ageMinutes",
+  "volumeAccel",
+  "holderGrowth10mPct",
+  "pathRet15mPct",
+  ...LEARNER_FEATURE_NAMES.filter((name) => name.startsWith("ns")),
+];
 
 /**
  * The last half hour's price path and the market around it, plus the order flow - the "what is
@@ -249,11 +267,11 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: NARRATIVE_CONTESTANT,
     name: "Narrative",
     description:
-      "Gradient-boosted trees that decide only once TokenSage's deep read of the coin is in, reading it beside every usual input",
+      "Gradient-boosted trees that decide only once TokenSage's deep read of the coin is in, reading every TokenSage input plus four market readings (age, volume acceleration, holder growth, the 15-minute price path)",
     summary:
-      "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides from that plus the usual signals.",
+      "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides mostly from that, with a light read of the market.",
     role: "narrative",
-    recipe: { learner: "gbdt" },
+    recipe: { learner: "gbdt", featureNames: NARRATIVE_SEAT_FEATURES },
   },
 ];
 
