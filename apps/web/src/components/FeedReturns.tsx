@@ -35,9 +35,11 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
   const { data, error } = usePolling<FeedReturnsData>("/matches/returns", 60_000, pollKey);
   const [hours, setHours] = useState(24);
   const [hover, setHover] = useState<number | null>(null);
-  const [sharing, setSharing] = useState<number | null>(null);
+  // The shared row's token, not its rank: a poll can re-rank the list under an open preview.
+  const [sharing, setSharing] = useState<string | null>(null);
   const [topBy, setTopBy] = useState<TopBy>("all");
   const top = (topBy === "all" ? data?.top : data?.topBySource?.[topBy]) ?? [];
+  const shared = sharing !== null ? (top.find((t) => t.tokenId === sharing) ?? null) : null;
   const win = data?.windows.find((w) => w.hours === hours) ?? null;
   const retAbs = Math.max(5, ...(win?.buckets ?? []).map((b) => Math.abs(b.avgReturnPct ?? 0)));
   const focus = win && hover !== null ? (win.buckets[hover] ?? null) : null;
@@ -182,18 +184,18 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
                 <button
                   type="button"
                   className="ghost small"
-                  aria-expanded={sharing === i}
-                  onClick={() => setSharing(sharing === i ? null : i)}
+                  aria-expanded={sharing === t.tokenId}
+                  onClick={() => setSharing(sharing === t.tokenId ? null : t.tokenId)}
                 >
-                  {sharing === i ? "Close" : "Share"}
+                  {sharing === t.tokenId ? "Close" : "Share"}
                 </button>
               </li>
             ))}
           </ol>
-          {sharing !== null && top[sharing] && (
+          {shared && (
             <PnlShare
-              key={`${topBy}:${top[sharing]!.tokenId}`}
-              data={{ ...top[sharing]!, source: top[sharing]!.source ?? null }}
+              key={`${topBy}:${shared.tokenId}`}
+              data={{ ...shared, source: shared.source ?? null }}
               onClose={() => setSharing(null)}
             />
           )}

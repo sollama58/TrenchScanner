@@ -120,4 +120,65 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
       await prisma.user.delete({ where: { id: user.id } });
     }
   });
+
+  it("does not record a reading taken before the alert as its peak", async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet-${Date.now()}` } });
+    try {
+      const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-early` } });
+      const alert = await prisma.tokenSnapshot.create({
+        data: { tokenId: token.id, priceUsd: 0.001, marketCapUsd: 1000 },
+      });
+      const match = await prisma.match.create({
+        data: { userId: user.id, filterId: filter.id, tokenId: token.id, snapshotId: alert.id, score: 50 },
+      });
+      const call = await prisma.curatedAlert.create({
+        data: {
+          source: "test",
+          confidence: 50,
+          anchorPriceUsd: 0.001,
+          anchorMcapUsd: 1000,
+          tokenId: token.id,
+        },
+      });
+      // Read a second before both alerts landed.
+      const before = new Date(Math.min(match.matchedAt.getTime(), call.createdAt.getTime()) - 1000);
+      const dexScreener = {
+        getTokensByAddresses: async (_m: string[], _c: number, opts: { seenAt: Map<string, Date> }) => {
+          opts.seenAt.set(token.mintAddress, before);
+          return [{ mintAddress: token.mintAddress, marketCapUsd: 5000, priceUsd: 1 }];
+        },
+      } as unknown as DexScreenerClient;
+      await refreshLiveMarketData(dexScreener, [token], { peakWindowDays: 30 });
+      expect((await prisma.match.findUniqueOrThrow({ where: { id: match.id } })).peakMcapUsd).toBeNull();
+      expect(
+        (await prisma.curatedAlert.findUniqueOrThrow({ where: { id: call.id } })).peakMcapUsd,
+      ).toBeNull();
+    } finally {
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
+  it("raises a model call's high from a live reading above it, and only above its market cap", async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-call` } });
+    const call = await prisma.curatedAlert.create({
+      data: { source: "test", confidence: 50, anchorPriceUsd: 0.001, anchorMcapUsd: 1000, tokenId: token.id },
+    });
+    let mcap = 900;
+    const dexScreener = {
+      getTokensByAddresses: async () => [{ mintAddress: token.mintAddress, marketCapUsd: mcap, priceUsd: 1 }],
+    } as unknown as DexScreenerClient;
+    const highAfter = async (value: number) => {
+      mcap = value;
+      await refreshLiveMarketData(dexScreener, [token], { peakWindowDays: 30 });
+      return (await prisma.curatedAlert.findUniqueOrThrow({ where: { id: call.id } })).peakMcapUsd;
+    };
+
+    expect(await highAfter(900)).toBeNull();
+    expect(await highAfter(3000)).toBe(3000);
+    // The high between two worker passes stays once the price falls back.
+    expect(await highAfter(2000)).toBe(3000);
+  });
 });
