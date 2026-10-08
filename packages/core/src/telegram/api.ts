@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { BlockList, isIP } from "node:net";
 import { createLogger } from "../logger.js";
 import { CAPTION_MAX_CHARS } from "./format.js";
 
@@ -18,6 +20,100 @@ const TIMEOUT_MS = 10_000;
 const IMAGE_TIMEOUT_MS = 6_000;
 /** Telegram takes photos up to 10 MB as an upload; anything bigger is not worth the bandwidth. */
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/** Hops followed when fetching artwork; each one is checked like the first URL. */
+const IMAGE_MAX_REDIRECTS = 3;
+
+/** A host name's addresses, as the fetch would connect to them. Injectable for tests. */
+export type HostResolver = (hostname: string) => Promise<string[]>;
+
+const dnsResolve: HostResolver = async (hostname) =>
+  (await lookup(hostname, { all: true, verbatim: true })).map((a) => a.address);
+
+/**
+ * Addresses the worker must never fetch on a stranger's say-so: loopback, private and link-local
+ * ranges (cloud metadata lives at 169.254.169.254), carrier NAT, multicast and reserved space.
+ */
+const NON_PUBLIC_V4 = new BlockList();
+const NON_PUBLIC_V6 = new BlockList();
+for (const [net, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["224.0.0.0", 3],
+] as const)
+  NON_PUBLIC_V4.addSubnet(net, prefix, "ipv4");
+for (const [net, prefix] of [
+  ["::", 127],
+  ["::ffff:0:0", 96],
+  ["64:ff9b::", 96],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["ff00::", 8],
+] as const)
+  NON_PUBLIC_V6.addSubnet(net, prefix, "ipv6");
+
+/**
+ * True for an address on the public internet. Two lists, because a BlockList also matches IPv4
+ * addresses against IPv4-mapped IPv6 rules; mapped addresses (::ffff:a.b.c.d) are refused whole.
+ */
+export function isPublicAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) return !NON_PUBLIC_V4.check(address, "ipv4");
+  if (family === 6) return !NON_PUBLIC_V6.check(address, "ipv6");
+  return false;
+}
+
+/**
+ * Whether a URL is safe for the worker to fetch: https on the default port, no credentials, and
+ * a host whose every address is public. Token artwork URLs are chosen by whoever launched the
+ * coin, so without this an alert could make the worker read its own network (a DNS answer that
+ * changes between this check and the connect could still slip through; the image-only, capped
+ * answer and the upload to the linked chat bound what that would reveal).
+ */
+export async function isFetchableUrl(url: URL, resolve: HostResolver = dnsResolve): Promise<boolean> {
+  if (url.protocol !== "https:" || (url.port !== "" && url.port !== "443")) return false;
+  if (url.username || url.password) return false;
+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (isIP(host)) return isPublicAddress(host);
+  if (!host.includes(".") || /\.(localhost|local|internal)\.?$/.test(host)) return false;
+  try {
+    const addresses = await resolve(host);
+    return addresses.length > 0 && addresses.every(isPublicAddress);
+  } catch {
+    return false;
+  }
+}
+
+/** Reads a body up to `max` bytes; null (and the rest abandoned) once it runs past. */
+async function readCapped(res: Response, max: number): Promise<Uint8Array | null> {
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.byteLength;
+  }
+  return out;
+}
 
 /** A picture fetched by us, to upload to Telegram as multipart rather than handed over as a URL. */
 export interface FetchedImage {
@@ -98,6 +194,7 @@ export class TelegramApi {
   constructor(
     private readonly token: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly resolveHost: HostResolver = dnsResolve,
   ) {}
 
   /** One Bot API call. Never throws: a network failure is `{ ok: false, code: 0 }`. */
@@ -149,7 +246,10 @@ export class TelegramApi {
       }
       return failure;
     } catch (err) {
-      const description = err instanceof Error && err.name === "AbortError" ? "timed out" : String(err);
+      // A malformed token makes fetch throw "Failed to parse URL from <url>", token and all; this
+      // text is logged and shown in the dashboard as the chat's last error.
+      let description = err instanceof Error && err.name === "AbortError" ? "timed out" : String(err);
+      if (this.token) description = description.split(this.token).join("<token>");
       logger.warn("telegram call failed", { method, error: description });
       return { ok: false, code: 0, description };
     } finally {
@@ -206,17 +306,37 @@ export class TelegramApi {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), IMAGE_TIMEOUT_MS);
     try {
-      const res = await this.fetchImpl(url, { signal: controller.signal, redirect: "follow" });
-      const contentType = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-      if (!res.ok || !contentType.startsWith("image/")) {
-        logger.info("token artwork not fetchable", { url, status: res.status, contentType });
-        return null;
+      // Redirects are followed by hand so every hop passes the same check as the first URL.
+      let target = new URL(url);
+      for (let hop = 0; ; hop++) {
+        if (!(await isFetchableUrl(target, this.resolveHost))) {
+          logger.warn("token artwork URL refused", { url: target.href });
+          return null;
+        }
+        const res = await this.fetchImpl(target, { signal: controller.signal, redirect: "manual" });
+        if (res.status >= 300 && res.status < 400) {
+          const location = res.headers.get("location");
+          await res.body?.cancel().catch(() => undefined);
+          if (!location || hop >= IMAGE_MAX_REDIRECTS) return null;
+          target = new URL(location, target);
+          continue;
+        }
+        const contentType = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+        if (!res.ok || !contentType.startsWith("image/")) {
+          await res.body?.cancel().catch(() => undefined);
+          logger.info("token artwork not fetchable", { url, status: res.status, contentType });
+          return null;
+        }
+        const declared = Number(res.headers.get("content-length") ?? 0);
+        if (declared > IMAGE_MAX_BYTES) {
+          await res.body?.cancel().catch(() => undefined);
+          return null;
+        }
+        // Capped while reading, not after: a body with no length header could be any size.
+        const bytes = await readCapped(res, IMAGE_MAX_BYTES);
+        if (!bytes || bytes.byteLength === 0) return null;
+        return { bytes, contentType, sourceUrl: url };
       }
-      const declared = Number(res.headers.get("content-length") ?? 0);
-      if (declared > IMAGE_MAX_BYTES) return null;
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.byteLength === 0 || bytes.byteLength > IMAGE_MAX_BYTES) return null;
-      return { bytes, contentType, sourceUrl: url };
     } catch (err) {
       const description = err instanceof Error && err.name === "AbortError" ? "timed out" : String(err);
       logger.info("token artwork fetch failed", { url, error: description });
