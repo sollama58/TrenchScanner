@@ -127,8 +127,20 @@ interface Stats {
   failed: number;
   turnedAway: number;
   errors: number;
+  /** Queued mints dropped after PENDING_GIVE_UP_MS without an answer (TokenSage never finished them). */
+  givenUp: number;
+  /** HTTP status of the last request TokenSage refused or failed this cycle (0: none). */
+  lastStatus: number;
 }
-const NO_STATS: Stats = { requested: 0, stored: 0, failed: 0, turnedAway: 0, errors: 0 };
+const NO_STATS: Stats = {
+  requested: 0,
+  stored: 0,
+  failed: 0,
+  turnedAway: 0,
+  errors: 0,
+  givenUp: 0,
+  lastStatus: 0,
+};
 let stats: Stats = { ...NO_STATS };
 
 /** Test hook. */
@@ -255,6 +267,9 @@ export function takeTokenSageStats(): Record<string, number> {
     pending: pending.size,
     fullToday: fullSentToday,
     earlyFullToday: earlySentToday,
+    // Seconds left on a pause after a refusal (429/503, an overloaded item, a rejected key).
+    pausedForS: Math.max(0, Math.ceil((pausedUntil - Date.now()) / 1000)),
+    fullBlocked: Date.now() < fullBlockedUntil ? 1 : 0,
   };
   stats = { ...NO_STATS };
   return out;
@@ -383,6 +398,7 @@ export async function flushNarrativeRequests(env: Env, client?: TokenSageClient)
     await send(api, env, now);
   } catch (err) {
     stats.errors += 1;
+    if (err instanceof HttpError) stats.lastStatus = err.status;
     if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
       pausedUntil = Date.now() + PAUSE_AFTER_AUTH_FAILURE_MS;
       logger.warn("TokenSage rejected TOKENSAGE_API_KEY; pausing 5 minutes", { status: err.status });
@@ -413,6 +429,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
     if (now - p.since > PENDING_GIVE_UP_MS) {
       pending.delete(mint);
       stats.errors += 1;
+      stats.givenUp += 1;
       continue;
     }
     if (p.depth === "full" && !fullOpen) continue;
@@ -487,6 +504,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
         // definitively (token_not_found, not_pumpfun, ...) in the last 10 minutes. Find it by
         // reading the queued mints' jobs, so the next batch goes through.
         stats.errors += 1;
+        stats.lastStatus = err.status;
         let culprits = 0;
         for (const e of chunk) {
           const p = pending.get(e.ca);

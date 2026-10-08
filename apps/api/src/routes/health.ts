@@ -207,6 +207,10 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // The scan's paid RPC calls per method ({ method: count }) - what the Helius plan bills on.
   const rpcCalls = stageTimings(meta, "rpcCalls");
   if (rpcCalls) out.rpcCalls = rpcCalls;
+  // The scan's TokenSage counters (requested, stored, turned away, waiting, pending...): counts
+  // only, so whether reads are going out and coming back is visible without the admin wallet.
+  const tokensage = stageTimings(meta, "tokensage");
+  if (tokensage) out.tokensage = tokensage;
   return Object.keys(out).length > 0 ? out : null;
 }
 

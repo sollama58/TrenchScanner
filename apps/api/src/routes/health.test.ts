@@ -78,3 +78,22 @@ describe("public worker health: stale threshold", () => {
     expect(summary.lastRun).toEqual({ durationMs: 1_000 });
   });
 });
+
+/** The scan's TokenSage counters reach the public summary, numbers only. */
+describe("public worker health: TokenSage counters", () => {
+  it("carries the scan's tokensage counts and drops anything that isn't a number", () => {
+    const row = {
+      job: "scan",
+      lastRunAt: new Date(1_000),
+      lastSuccessAt: null,
+      lastError: null,
+      meta: { durationMs: 900, tokensage: { requested: 12, stored: 3, pending: 40, mint: "abc" } },
+    };
+    const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
+    expect(s.lastRun).toMatchObject({
+      durationMs: 900,
+      tokensage: { requested: 12, stored: 3, pending: 40 },
+    });
+    expect((s.lastRun as { tokensage: Record<string, unknown> }).tokensage).not.toHaveProperty("mint");
+  });
+});
