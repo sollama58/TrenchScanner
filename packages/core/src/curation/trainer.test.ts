@@ -10,6 +10,7 @@ import {
   confidenceRanks,
   thresholdAtRank,
   transformFeature,
+  rowWeight,
   type TrainingRow,
   type EvalFold,
 } from "./trainer.js";
@@ -725,5 +726,84 @@ describe("precisionCurve", () => {
     const top20 = curve.find((p) => p.alerts === 40)!;
     expect(top20.winRatePct).toBe(100);
     expect(top20.goalRatePct).toBe(25);
+  });
+});
+
+describe("trainCurator sparse passes", () => {
+  /** The dense loops trainCurator ran before it kept rows sparse, kept here as the reference. */
+  function denseReference(
+    rows: TrainingRow[],
+    params: Awaited<ReturnType<typeof trainCurator>>,
+    opts: { recencyHalfLifeDays?: number },
+  ): { weights: number[]; bias: number } {
+    const names = params.featureNames;
+    const n = names.length;
+    const dim = 2 * n;
+    const xs = rows.map((r) => {
+      const x = new Array<number>(dim).fill(0);
+      for (let j = 0; j < n; j++) {
+        const raw = r.features[names[j]!];
+        if (raw === null || raw === undefined || !Number.isFinite(raw)) x[n + j] = 1;
+        else
+          x[j] = (transformFeature(names[j]!, raw, params.transform) - params.means[j]!) / params.stdevs[j]!;
+      }
+      return x;
+    });
+    const frozen = names.map((name) => rows.every((r) => !Number.isFinite(r.features[name] ?? NaN)));
+    const ys = rows.map((r) => (r.labelValue > 0 ? 1 : 0));
+    const newest = Math.max(...rows.map((r) => r.anchorAt.getTime()));
+    const sw = rows.map((r) => rowWeight(r, newest, opts));
+    const total = sw.reduce((s, w) => s + w, 0);
+    const weights = new Array<number>(dim).fill(0);
+    let bias = 0;
+    for (let iter = 0; iter < 400; iter++) {
+      const grad = new Array<number>(dim).fill(0);
+      let gradBias = 0;
+      for (let i = 0; i < xs.length; i++) {
+        const x = xs[i]!;
+        let z = bias;
+        for (let j = 0; j < dim; j++) z += weights[j]! * x[j]!;
+        const err = (1 / (1 + Math.exp(-z)) - ys[i]!) * sw[i]!;
+        for (let j = 0; j < dim; j++) grad[j] = grad[j]! + err * x[j]!;
+        gradBias += err;
+      }
+      const lr = 0.5 / (1 + iter / 100);
+      for (let j = 0; j < dim; j++) {
+        if (frozen[j % n]) continue;
+        weights[j] = weights[j]! - lr * (grad[j]! / total + 0.01 * weights[j]!);
+      }
+      bias -= lr * (gradBias / total);
+    }
+    return { weights, bias };
+  }
+
+  const bits = (xs: number[]) => Array.from(new BigUint64Array(Float64Array.from(xs).buffer), String);
+
+  it("gives bit-identical weights to the dense loops", async () => {
+    for (const seed of [1, 7, 99]) {
+      const rand = rng(seed);
+      // Missing values, exact zeros (and -0) among present ones, and a never-present feature.
+      const rows: TrainingRow[] = Array.from({ length: 300 }, (_, i) => ({
+        anchorAt: new Date(T0 + i * HOUR),
+        features: {
+          volumeToMcapRatio: rand() < 0.2 ? null : rand() * 3,
+          buyRatio24h: rand() < 0.3 ? 0 : 0.5 + rand() * 0.2,
+          holderGrowthPct: rand() < 0.1 ? -0 : rand() < 0.2 ? undefined : rand() * 20 - 5,
+          ageMinutes: 30 + rand() * 200,
+          liquidityUsd: null,
+        },
+        labelValue: rand() < 0.2 ? 1 + rand() * 2 : 0,
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 100_000,
+      }));
+      const opts = {
+        featureNames: ["volumeToMcapRatio", "buyRatio24h", "holderGrowthPct", "ageMinutes", "liquidityUsd"],
+        recencyHalfLifeDays: 5,
+      };
+      const params = await trainCurator(rows, opts);
+      const ref = denseReference(rows, params, opts);
+      expect(bits(params.weights)).toEqual(bits(ref.weights));
+      expect(bits([params.bias])).toEqual(bits([ref.bias]));
+    }
   });
 });

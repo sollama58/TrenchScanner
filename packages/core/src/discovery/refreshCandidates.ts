@@ -41,6 +41,11 @@ export interface BandRefreshResult {
   /** The same mints with the market cap each one was just seen at - see Token.lastMcapUsd. */
   liveMarketCaps: { mintAddress: string; marketCapUsd: number }[];
   /**
+   * Everything the lookup returned, in band or not. The scan cycle reads its actively-viewed
+   * tokens out of this rather than asking DexScreener a second time for mints it just priced.
+   */
+  marketData: CandidateToken[];
+  /**
    * True when at least one requested mint got no answer - its batch failed or was still in
    * flight at the deadline. `inBand` is then a subset of what the band holds, and a caller that
    * treats one refresh as "every in-band token was looked at" (the settling-in pass of a newly
@@ -62,7 +67,9 @@ export async function refreshAndFilterToBand(
   mintAddresses: string[],
   options: BandFilterOptions,
 ): Promise<BandRefreshResult> {
-  if (mintAddresses.length === 0) return { inBand: [], liveMints: [], liveMarketCaps: [], partial: false };
+  if (mintAddresses.length === 0) {
+    return { inBand: [], liveMints: [], liveMarketCaps: [], marketData: [], partial: false };
+  }
 
   const { mcapMin, mcapMax, bandPaddingRatio } = options;
   const { min: lowerBound, max: upperBound } = scanBand(mcapMin, mcapMax, bandPaddingRatio);
@@ -91,5 +98,6 @@ export async function refreshAndFilterToBand(
     liveMarketCaps: marketData
       .filter((t) => t.marketCapUsd > 0)
       .map((t) => ({ mintAddress: t.mintAddress, marketCapUsd: t.marketCapUsd })),
+    marketData,
   };
 }

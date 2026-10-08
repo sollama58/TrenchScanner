@@ -32,6 +32,42 @@ export interface TokenSageFlag {
   detail?: string;
 }
 
+/**
+ * Flags whose severity TokenSage has lowered, mapped to today's severity, so a stored read made
+ * by older rules counts and shows the same as a fresh one. Rules 0.23.0 made recycled_x_account
+ * info (it was high): an account's age, renames and link reuse are context, not a verdict
+ * (notes/tokensage-brief-2026-10-08-x-account-weighting.md).
+ */
+const FLAG_SEVERITY_NOW: Readonly<Record<string, "info" | "warn" | "high">> = {
+  recycled_x_account: "info",
+};
+
+/** A flag's severity under today's rules: TokenSage's own, unless it has since lowered it. */
+export function tokenSageFlagSeverity(code: unknown, severity: unknown): string {
+  if (typeof code === "string" && FLAG_SEVERITY_NOW[code] !== undefined) return FLAG_SEVERITY_NOW[code];
+  return typeof severity === "string" ? severity : "info";
+}
+
+/**
+ * True when a versions.rules string ("0.23.0-full", "0.19.0") is at least `min` ("0.23.0").
+ * False on null or anything unparseable, which reads as older rules.
+ */
+export function tokenSageRulesAtLeast(version: string | null | undefined, min: string): boolean {
+  const parts = (v: string) =>
+    v
+      .match(/^(\d+)\.(\d+)\.(\d+)/)
+      ?.slice(1)
+      .map(Number) ?? null;
+  const have = version ? parts(version) : null;
+  const want = parts(min);
+  if (!have || !want) return false;
+  for (let i = 0; i < 3; i++) if (have[i] !== want[i]) return have[i]! > want[i]!;
+  return true;
+}
+
+/** Rules 0.23.0 made x.credibility gentler on renamed, made-for-coin and late-reused accounts. */
+export const TOKENSAGE_GENTLE_CREDIBILITY_RULES = "0.23.0";
+
 /** One X account the analysis names (post author, quoted or replied-to author). */
 export interface TokenSageXAccount {
   role?: string;
@@ -290,7 +326,12 @@ export interface TokenSageAnalysis {
       verified_type?: string | null;
       made_for_coin?: boolean | null;
     } | null;
-    /** Rules 0.15.0+: 0-1 from account age, followers, posting history and verification. */
+    /**
+     * Rules 0.15.0+: 0-1 from account age, followers, posting history and verification. Context
+     * about the account, not about what the post says. Rules 0.23.0 made it gentler: a renamed or
+     * made-for-coin account costs x0.85 (was x0.5) and late link reuse floors at x0.75 (was x0.4),
+     * so values from before and after that change don't compare.
+     */
     credibility?: number | null;
     /** Rules 0.15.0+: this coin's place among the coins that linked the same post or profile (1 = first). */
     reuse_rank?: number | null;
@@ -583,7 +624,10 @@ export interface TokenNarrativeFields {
   feeCreatorShare: number | null;
   feeMutable: boolean | null;
   feeSummary: string | null;
-  /** Flag counts by severity, so a reader needs no catalogue of codes. 0 when there are none. */
+  /**
+   * Flag counts by severity, so a reader needs no catalogue of codes. 0 when there are none.
+   * Severity as of today's rules (tokenSageFlagSeverity): recycled_x_account counts as info.
+   */
   highFlagCount: number;
   warnFlagCount: number;
   rulesVersion: string | null;
@@ -652,7 +696,7 @@ export function narrativeFieldsFromAnalysis(
     30,
   );
   const severityCount = (severity: string) =>
-    flagRecords.filter((f) => f !== null && f.severity === severity).length;
+    flagRecords.filter((f) => f !== null && tokenSageFlagSeverity(f.code, f.severity) === severity).length;
   const analyzedAt = typeof doc.analyzed_at === "string" ? new Date(doc.analyzed_at) : null;
   const referent = asRecord(doc.referent);
   const x = asRecord(doc.x);

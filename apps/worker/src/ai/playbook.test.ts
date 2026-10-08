@@ -2,7 +2,7 @@
 import "../bootstrap-env.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv, summarizeJudgeRecord, type JudgedCall } from "@trenchscanner/core";
-import { settleEvolutionRun, maybeEvolvePlaybook } from "./playbook.js";
+import { settleEvolutionRun, maybeEvolvePlaybook, resetEvolutionBackoff } from "./playbook.js";
 import { activePlaybook, resetActivePlaybookCache } from "./playbookStore.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -32,6 +32,7 @@ describe.skipIf(!dbAvailable)("playbook evolution", () => {
     await prisma.aiReplayRun.deleteMany({});
     await prisma.aiPlaybook.deleteMany({});
     resetActivePlaybookCache();
+    resetEvolutionBackoff();
   }
   beforeEach(clean);
   afterEach(clean);
@@ -104,5 +105,15 @@ describe.skipIf(!dbAvailable)("playbook evolution", () => {
     expect(await maybeEvolvePlaybook(on)).toBe("replay-pending");
     await prisma.aiReplayRun.update({ where: { id: run.id }, data: { status: "scored" } });
     expect(await maybeEvolvePlaybook(on)).toBe("not-due");
+  });
+
+  it("backs off for an hour after a due round that could not start", async () => {
+    // Nothing was graded in 2000, so the round finds no holdout and ends without recording a run.
+    const on = { ...env, AI_PLAYBOOK_EVOLUTION: true };
+    const t0 = Date.UTC(2000, 0, 1, 12);
+    expect(await maybeEvolvePlaybook(on, t0)).toBe("too-few-holdout-alerts");
+    expect(await maybeEvolvePlaybook(on, t0 + 10 * 60_000)).toBe("not-due");
+    expect(await maybeEvolvePlaybook(on, t0 + 59 * 60_000)).toBe("not-due");
+    expect(await maybeEvolvePlaybook(on, t0 + 60 * 60_000)).toBe("too-few-holdout-alerts");
   });
 });

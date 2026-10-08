@@ -862,9 +862,9 @@ function XCard({ x }: { x: NonNullable<SageRead["x"]> }) {
       {x.credibility !== null && (
         <div
           className="sage-meter"
-          title="TokenSage's 0-100% for the account: its age, followers, posting history and verification"
+          title="Context about the account, not a verdict on the post: TokenSage's 0-100% from its age, followers, posting history and verification. Reads before rules 0.23 scored renamed and made-for-coin accounts much lower."
         >
-          <span className="small muted">Account credibility</span>
+          <span className="small muted">Account credibility (context)</span>
           <span className="sage-bar-track">
             <span className="sage-bar-fill" style={{ width: `${Math.max(2, x.credibility * 100)}%` }} />
           </span>
