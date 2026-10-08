@@ -682,7 +682,9 @@ export async function registerMatchRoutes(
       const name = filterName.get(src.filterId);
       return name ? { kind: "filter" as const, name } : null;
     };
-    const named = (list: typeof best) =>
+    const named = (
+      list: readonly { tokenId: string; at: Date; peakPct: number; source: ReturnFeedCard["source"] }[],
+    ) =>
       list.flatMap((b) => {
         const t = tokenById.get(b.tokenId);
         return t
