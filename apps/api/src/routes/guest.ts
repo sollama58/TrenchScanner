@@ -96,7 +96,9 @@ export async function registerGuestRoutes(
       return { rows: all.slice(0, PAGE_SIZE), hasMore: all.length > PAGE_SIZE && page < GUEST_MAX_PAGES };
     });
 
-    const matches = rows.map((alert) => serializeCuratedAlert(alert, currentMarketCap));
+    const matches = rows.map((alert) =>
+      serializeCuratedAlert(alert, currentMarketCap, opts.env.NARRATIVE_NOTES_SHOWN),
+    );
     // Keeps the cards' "Now" market cap refreshing, as the paid feeds do. Buffered and shared with
     // every subscriber following the same model, so guests add next to nothing. The on-demand
     // live refresher (which spends RPC credits) is left to signed-in readers.

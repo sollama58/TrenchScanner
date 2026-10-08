@@ -586,6 +586,15 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   TOKENSAGE_API_URL: z.string().default(""),
+  // The Narrative seat's "agrees"/"warns" note on other seats' cards (dashboard pill and Telegram
+  // line). Off until the seat is trained well enough to be worth showing (user decision
+  // 2026-10-08). The worker still records the note on each card and the seat still trains, sits
+  // its exam and files its own calls; this only decides whether the note is shown, so turning it
+  // on later shows the notes recorded meanwhile too.
+  NARRATIVE_NOTES_SHOWN: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // Trimmed, with surrounding quotes or a pasted "Bearer " dropped: a stray space or quote from
   // the Render dashboard otherwise makes every call a 401.
   TOKENSAGE_API_KEY: pastedKey,
