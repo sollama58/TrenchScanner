@@ -24,7 +24,7 @@ describe("intro tour, seen once", () => {
     expect(introSeen(null)).toBe(false);
     markIntroSeen(null);
     expect(introSeen(null)).toBe(true);
-    expect(introKey(null)).toBe("ts-intro-seen:guest");
+    expect(introKey(null)).toBe("ts-intro-seen:v2:guest");
   });
 
   it("doesn't pop up on every visit when storage is blocked", () => {

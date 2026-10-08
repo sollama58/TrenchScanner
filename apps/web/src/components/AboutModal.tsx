@@ -6,9 +6,6 @@ import { GUEST_DELAY_MINUTES } from "../session";
 
 type Targets = { hitRate2xPct: number; hitRate4xPct: number };
 
-/** The tour's slide on market weather, for the weather chip to open at. */
-export const WEATHER_STEP = 6;
-
 /**
  * The Live tab's "how this works": a short picture tour in plain words, with the full fine print
  * one tap away (AboutDetails). A native modal dialog, so Escape, focus and the backdrop come with
@@ -20,16 +17,14 @@ export function AboutModal({
   onClose,
   targets,
   guest = false,
-  startStep = 0,
 }: {
   open: boolean;
   onClose: () => void;
   targets: Targets;
   guest?: boolean;
-  startStep?: number;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  const [step, setStep] = useState(startStep);
+  const [step, setStep] = useState(0);
   const [details, setDetails] = useState(false);
   const slides = tourSlides(targets, guest);
   const last = slides.length - 1;
@@ -40,12 +35,12 @@ export function AboutModal({
     const dialog = ref.current;
     if (!dialog) return;
     if (open && !dialog.open) {
-      setStep(startStep);
+      setStep(0);
       setDetails(false);
       dialog.showModal();
     }
     if (!open && dialog.open) dialog.close();
-  }, [open, startStep]);
+  }, [open]);
 
   // Each page starts at its top.
   useEffect(() => {
@@ -261,34 +256,41 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
         </ol>
       ),
     },
-    guest
-      ? {
-          title: "You're looking around as a guest",
-          art: <GuestArt delay={GUEST_DELAY_MINUTES} />,
-          body: (
-            <>
-              <p className="tour-lead">
-                You see the leading model&apos;s calls {GUEST_DELAY_MINUTES} minutes after it makes them.
-                Connect a wallet to get them live, plus your own filters, model picks, alerts and stats.
-              </p>
-              <p className="tour-note">Tap the ⓘ by the feed title to see this tour again.</p>
-            </>
-          ),
-        }
-      : {
-          title: "Check the weather",
-          art: <WeatherArt />,
-          body: (
-            <>
-              <p className="tour-lead">
-                The weather chip in Stats says whether coins are doubling more or less often right now than
-                over the past week. Use it to size up on a hot day or sit out a cold one. It never hides an
-                alert.
-              </p>
-              <p className="tour-note">Tap the ⓘ by the feed title to see this tour again.</p>
-            </>
-          ),
-        },
+    {
+      title: "Check the weather in the Lighthouse",
+      art: <WeatherArt />,
+      body: (
+        <>
+          <p className="tour-lead">
+            The Lighthouse button sits beside Stats on your feed. It&apos;s a quick look at the whole market,
+            not just your alerts: how every coin that got past the bouncer did, and which stories (narratives)
+            new coins are riding.
+          </p>
+          <p className="tour-lead">
+            Its weather gauge, up top, says whether coins are doubling more or less often right now than over
+            the past week. Size up on a hot day, sit out a cold one. It never hides an alert.
+          </p>
+          {!guest && <p className="tour-note">Tap the ⓘ by the feed title to see this tour again.</p>}
+        </>
+      ),
+    },
+    ...(guest
+      ? [
+          {
+            title: "You're looking around as a guest",
+            art: <GuestArt delay={GUEST_DELAY_MINUTES} />,
+            body: (
+              <>
+                <p className="tour-lead">
+                  You see the leading model&apos;s calls {GUEST_DELAY_MINUTES} minutes after it makes them.
+                  Connect a wallet to get them live, plus your own filters, model picks, alerts and stats.
+                </p>
+                <p className="tour-note">Tap the ⓘ by the feed title to see this tour again.</p>
+              </>
+            ),
+          },
+        ]
+      : []),
   ];
 }
 

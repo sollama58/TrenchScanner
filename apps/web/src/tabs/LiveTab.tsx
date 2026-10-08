@@ -1,15 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
-import {
-  type CuratedStats,
-  type FeedStats,
-  type Leaderboard,
-  type MarketWeather,
-  type MatchPage,
-} from "../api";
+import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
-import { AboutModal, WEATHER_STEP } from "../components/AboutModal";
+import { AboutModal } from "../components/AboutModal";
 import { introSeen, markIntroSeen } from "../intro";
 import { FeedStatsModal } from "../components/FeedStatsModal";
 import { LighthouseButton } from "../components/MarketLighthouse";
@@ -40,10 +34,10 @@ export function LiveTab({
   const [pick, setPick] = useState(0);
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  // The tour opens by itself the first time this wallet lands here; null when it's closed.
-  const [aboutAt, setAboutAt] = useState<number | null>(() => (introSeen(walletAddress) ? null : 0));
+  // The tour opens by itself the first time this wallet lands here.
+  const [aboutOpen, setAboutOpen] = useState(() => !introSeen(walletAddress));
   const closeAbout = () => {
-    setAboutAt(null);
+    setAboutOpen(false);
     markIntroSeen(walletAddress);
   };
   const [statsOpen, setStatsOpen] = useState(false);
@@ -112,20 +106,9 @@ export function LiveTab({
         hours={hours}
         targets={t}
         pollKey={String(pick)}
-        weather={
-          stats.data?.market && (
-            <WeatherChip
-              weather={stats.data.market}
-              onAbout={() => {
-                setStatsOpen(false);
-                setAboutAt(WEATHER_STEP);
-              }}
-            />
-          )
-        }
       />
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
-      <AboutModal open={aboutAt !== null} onClose={closeAbout} targets={t} startStep={aboutAt ?? 0} />
+      <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
       <section className="panel feed">
         <header className="section-head">
           <div>
@@ -135,7 +118,7 @@ export function LiveTab({
               <button
                 type="button"
                 className="ghost icon-btn"
-                onClick={() => setAboutAt(0)}
+                onClick={() => setAboutOpen(true)}
                 aria-label="How this works"
                 title="How this works"
               >
@@ -246,47 +229,5 @@ export function LiveTab({
         )}
       </section>
     </div>
-  );
-}
-
-const WEATHER_LABEL: Record<MarketWeather["condition"], string> = {
-  hot: "Hot market",
-  normal: "Normal market",
-  cold: "Cold market",
-  unknown: "Market: too early to read",
-};
-
-/**
- * How often launches are doubling right now against the last week. Informational only: it holds
- * nothing back. The hover says what it measured; a click opens the full explanation.
- */
-function WeatherChip({ weather: w, onAbout }: { weather: MarketWeather; onAbout: () => void }) {
-  const detail =
-    w.recentRatePct === null
-      ? `Only ${w.recentGraded} graded moments in the last ${w.recentHours}h, too few to read.`
-      : `${pct(w.recentRatePct, 1)} of ${w.recentGraded.toLocaleString()} launch moments doubled within 15 minutes ` +
-        `over the last ${w.recentHours}h` +
-        (w.trailingRatePct === null
-          ? `. Not enough history yet for the ${w.trailingDays}-day average.`
-          : `, against ${pct(w.trailingRatePct, 1)} over the last ${w.trailingDays} days.`);
-  const title = `${detail} Informational only: it doesn't change or hold back any alert. Click for how it works.`;
-  return (
-    <button
-      type="button"
-      className={`weather-chip ${w.condition}`}
-      onClick={onAbout}
-      title={title}
-      aria-label={`${WEATHER_LABEL[w.condition]}. ${title}`}
-    >
-      <span className="weather-dot" aria-hidden="true" />
-      {WEATHER_LABEL[w.condition]}
-      {w.recentRatePct !== null && (
-        <span className="num">
-          {" "}
-          · {pct(w.recentRatePct, 0)} doubling ({w.recentHours}h)
-          {w.trailingRatePct !== null && ` vs ${pct(w.trailingRatePct, 0)} (${w.trailingDays}d)`}
-        </span>
-      )}
-    </button>
   );
 }

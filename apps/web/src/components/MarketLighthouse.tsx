@@ -6,6 +6,7 @@ import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { HBarChart, Skeleton } from "./Charts";
 import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
+import { WeatherGauge } from "./WeatherGauge";
 
 /**
  * The Market Lighthouse, beside Stats on the Live tab: how every token that passed the pre-checks
@@ -100,8 +101,9 @@ export function MarketLighthouseModal({
             <div className="lh-head-text">
               <h2 id="lh-title">Market Lighthouse</h2>
               <p className="muted small">
-                At a glance: how the tokens that pass our pre-checks are doing, and what TokenSage sees across
-                new coins. The Lighthouse tab has the charts, breakdowns and months of history.
+                At a glance: the market weather, how the tokens that pass our pre-checks are doing, and what
+                TokenSage sees across new coins. The Lighthouse tab has the charts, breakdowns and months of
+                history.
               </p>
             </div>
             <button className="ghost icon-btn" onClick={onClose} aria-label="Close">
@@ -141,15 +143,17 @@ export function MarketLighthouseModal({
  * One window's answer. The Lighthouse tab's "right now" shows the whole of it; the Live tab's
  * modal shows the compact form - the headline numbers only, with the tab a click away.
  */
-export function LighthouseBody({
-  base,
-  days,
-  compact = false,
-}: {
-  base: string;
-  days: Days;
-  compact?: boolean;
-}) {
+export function LighthouseBody(props: { base: string; days: Days; compact?: boolean }) {
+  // The weather gauge reads its own endpoint, so it shows whether or not the window has loaded.
+  return (
+    <div className="stack">
+      <WeatherGauge base={props.base} />
+      <LighthouseWindow {...props} />
+    </div>
+  );
+}
+
+function LighthouseWindow({ base, days, compact = false }: { base: string; days: Days; compact?: boolean }) {
   const q = usePolling<MarketLighthouse>(lighthousePath(base, days), 300_000);
   if (!q.data) {
     if (q.error) return <p className="error">Couldn&apos;t load the Lighthouse: {q.error.message}</p>;

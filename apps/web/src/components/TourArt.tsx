@@ -1,3 +1,5 @@
+import { GaugeDial } from "./WeatherGauge";
+
 /**
  * The pictures in the Live tab's tour (AboutModal). Plain inline SVG on a 560x220 canvas, colored
  * through the .tour-art classes in styles.css so they follow the light and dark themes.
@@ -265,42 +267,14 @@ function Badge({ cx, cy, text }: { cx: number; cy: number; text: string }) {
   );
 }
 
-/** A gauge from cold to hot. */
+/** The Lighthouse's weather gauge, with a made-up hot reading. */
 export function WeatherArt() {
-  const cx = 280;
-  const cy = 150;
-  const r = 110;
-  const arc = (from: number, to: number) => {
-    const p = (a: number) => [cx + r * Math.cos(Math.PI - a), cy - r * Math.sin(Math.PI - a)];
-    const [x1, y1] = p(from);
-    const [x2, y2] = p(to);
-    return `M${x1!.toFixed(1)} ${y1!.toFixed(1)} A${r} ${r} 0 0 1 ${x2!.toFixed(1)} ${y2!.toFixed(1)}`;
-  };
-  const third = Math.PI / 3;
-  const needle = Math.PI * 0.72;
   return (
-    <Art label="A gauge from cold to hot: how often coins are doubling compared with the past week">
-      <path className="gauge cold" d={arc(0.04, third - 0.04)} />
-      <path className="gauge normal" d={arc(third + 0.04, 2 * third - 0.04)} />
-      <path className="gauge hot" d={arc(2 * third + 0.04, Math.PI - 0.04)} />
-      <path
-        className="needle"
-        d={`M${cx} ${cy} L${(cx + (r - 26) * Math.cos(Math.PI - needle)).toFixed(1)} ${(cy - (r - 26) * Math.sin(Math.PI - needle)).toFixed(1)}`}
-      />
-      <circle className="hub" cx={cx} cy={cy} r="9" />
-      <text x={cx - r} y={cy + 32} className="label cold" textAnchor="middle">
-        Cold
-      </text>
-      <text x={cx} y={cy - r - 14} className="label" textAnchor="middle">
-        Normal
-      </text>
-      <text x={cx + r} y={cy + 32} className="label hot" textAnchor="middle">
-        Hot
-      </text>
-      <text x={cx} y={212} className="cap" textAnchor="middle">
-        Coins doubling now vs. the past week
-      </text>
-    </Art>
+    <GaugeDial
+      ratio={1.35}
+      label="A gauge from cold to hot: how often coins are doubling compared with the past week"
+      caption="Coins doubling now vs. the past week"
+    />
   );
 }
 

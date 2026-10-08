@@ -63,6 +63,15 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
 
+  it("reads the market weather without a session", async () => {
+    const res = await app.inject({ method: "GET", url: "/guest/weather" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { condition: string; recentHours: number; trailingDays: number };
+    expect(["hot", "normal", "cold", "unknown"]).toContain(body.condition);
+    expect(body.recentHours).toBeGreaterThan(0);
+    expect(body.trailingDays).toBeGreaterThan(0);
+  });
+
   it("answers without a session, with only the default model's calls past the delay", async () => {
     const res = await app.inject({ method: "GET", url: "/guest/feed?page=1" });
     expect(res.statusCode).toBe(200);
