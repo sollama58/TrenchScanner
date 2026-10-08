@@ -10,6 +10,7 @@ import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { lighthouseQuerySchema } from "../marketLighthouse.js";
 import { lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
+import { loadMarketWeather } from "../marketWeather.js";
 
 /**
  * The guest feed: what a visitor who hasn't connected a wallet sees - the default model's calls
@@ -169,6 +170,11 @@ export async function registerGuestRoutes(
     }
     return opts.reports.lighthouse(opts.env, parsed.data.days, parsed.data.tz);
   });
+
+  /** The Lighthouse's weather gauge, the same market-wide reading subscribers get. */
+  app.get("/weather", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () =>
+    opts.reports.weather.get(() => loadMarketWeather(opts.env)),
+  );
 
   /** The Lighthouse tab's trends, the same aggregates-only answer subscribers get. */
   app.get("/lighthouse/history", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
