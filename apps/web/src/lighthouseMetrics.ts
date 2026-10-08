@@ -194,7 +194,6 @@ export const DIMENSIONS: { id: LighthouseDimension; label: string }[] = [
   { id: "category", label: "Narrative" },
   { id: "subcategory", label: "Sub-narrative" },
   { id: "flag", label: "Flag raised" },
-  { id: "referentKind", label: "What the coin is about" },
   { id: "referentSupport", label: "Where the story comes from" },
   { id: "xVerdict", label: "X link verdict" },
   { id: "pairKind", label: "Trades against" },

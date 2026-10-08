@@ -163,10 +163,6 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     expect(d.reads.failed).toBeGreaterThanOrEqual(1);
     expect(d.reads.deep).toBeGreaterThanOrEqual(1);
     expect(d.reads.described).toBe(d.reads.total - d.reads.failed);
-    // A read with no referent is counted, never shown as a "(none)" kind.
-    expect(d.reads.noReferent).toBeGreaterThanOrEqual(1);
-    expect(d.referentKinds.map((k) => k.label)).not.toContain("(none)");
-    expect(d.referentKinds.find((k) => k.label === "animal")?.count).toBeGreaterThanOrEqual(1);
     expect(d.window.bucketHours).toBe(1);
     expect(d.tide.buckets.length).toBeGreaterThanOrEqual(24);
     const sum = (label: string) =>

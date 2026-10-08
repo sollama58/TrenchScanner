@@ -270,7 +270,6 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     tideRows,
     topLevel,
     subCategories,
-    referentKinds,
     referentSupport,
     flags,
     xVerdicts,
@@ -315,11 +314,6 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       WHERE n."checkedAt" > ${since} AND n.status <> 'failed' AND position('/' IN c->>'label') > 0
       GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
-      SELECT CASE WHEN "referentGeneric" THEN "referentKind" || ' (kind only)' ELSE "referentKind" END AS label, count(*) AS count
-      FROM "TokenNarrative"
-      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "referentKind" IS NOT NULL
-      GROUP BY 1 ORDER BY 2 DESC LIMIT 8`,
-    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
       SELECT s AS label, count(*) AS count FROM "TokenNarrative", unnest("referentSupport") s
       WHERE "checkedAt" > ${since} AND status <> 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`,
     prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
@@ -345,13 +339,9 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       FROM "TokenNarrative"
       WHERE "checkedAt" > ${since} AND status <> 'failed' AND "trendMatched" IS NOT NULL
       GROUP BY 1 ORDER BY 2 DESC`,
-    // Reads where TokenSage resolved no referent at all (null kind) are counted, not labelled:
-    // "(none)" is not a kind of thing a coin can be about.
-    prisma.$queryRaw<
-      { referent_confidence: number | null; x_fit: number | null; newest: Date | null; no_referent: bigint }[]
-    >`
+    prisma.$queryRaw<{ referent_confidence: number | null; x_fit: number | null; newest: Date | null }[]>`
       SELECT avg("referentConfidence")::float8 AS referent_confidence, avg("xFit")::float8 AS x_fit,
-             max("checkedAt") AS newest, count(*) FILTER (WHERE "referentKind" IS NULL) AS no_referent
+             max("checkedAt") AS newest
       FROM "TokenNarrative" WHERE "checkedAt" > ${since} AND status <> 'failed'`,
     // Model alerts in the window with what TokenSage says about their coin now. Same bound and
     // cap as the Admin report; only the columns the tallies need, never the mint.
@@ -431,7 +421,6 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       deep,
       quick: described - deep,
       failed,
-      noReferent: Number(avg?.no_referent ?? 0),
       newestAt: avg?.newest ?? null,
     },
     avgReferentConfidence: avg?.referent_confidence ?? null,
@@ -444,7 +433,6 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     },
     topLevelCategories: counts(topLevel),
     categories: counts(subCategories),
-    referentKinds: counts(referentKinds),
     referentSupport: counts(referentSupport),
     flags: counts(flags),
     xVerdicts: counts(xVerdicts),

@@ -1225,8 +1225,6 @@ export interface MarketLighthouse {
     deep: number;
     quick: number;
     failed: number;
-    /** Described coins TokenSage could not say what they are about (no referent). */
-    noReferent: number;
     newestAt: string | null;
   };
   avgReferentConfidence: number | null;
@@ -1234,7 +1232,6 @@ export interface MarketLighthouse {
   tide: { buckets: string[]; series: { label: string; values: number[] }[] };
   topLevelCategories: LighthouseCount[];
   categories: LighthouseCount[];
-  referentKinds: LighthouseCount[];
   referentSupport: LighthouseCount[];
   flags: LighthouseCount[];
   xVerdicts: LighthouseCount[];

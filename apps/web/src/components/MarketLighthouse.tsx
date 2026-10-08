@@ -262,17 +262,6 @@ function TokenSageSections({
         </p>
       </Section>
 
-      <Section
-        title="What the coins are about"
-        note={
-          d.reads.noReferent > 0
-            ? `The kind of thing each coin refers to, where TokenSage could tell. It couldn't for ${d.reads.noReferent.toLocaleString()} of ${d.reads.described.toLocaleString()} coins (${pct(share(d.reads.noReferent, d.reads.described))}).`
-            : "The kind of thing each coin refers to."
-        }
-      >
-        <CountBars rows={d.referentKinds} empty="TokenSage couldn't tell for any coin in this window." />
-      </Section>
-
       <Section title="Signals at a glance" note="Each bar is 100% of the coins that had that signal read.">
         <div className="lh-splits">
           <Split
@@ -469,21 +458,6 @@ function Donut({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) 
           </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-function CountBars({ rows, empty, tone }: { rows: LighthouseCount[]; empty: string; tone?: "warn" }) {
-  if (!rows.length) return <p className="muted small">{empty}</p>;
-  return (
-    <div className={tone === "warn" ? "lh-warnbars" : undefined}>
-      <HBarChart
-        data={rows.slice(0, 8).map((r) => ({
-          label: words(r.label),
-          value: r.count,
-          display: r.count.toLocaleString(),
-        }))}
-      />
     </div>
   );
 }
