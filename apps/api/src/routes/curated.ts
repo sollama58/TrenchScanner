@@ -33,6 +33,7 @@ import {
   lighthouseSignalsQuerySchema,
 } from "../marketLighthouse.js";
 import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
+import { createTokenSageShowcaseCache } from "../tokenSageShowcase.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import {
   buildLeaderboard,
@@ -201,6 +202,7 @@ export function createReportCaches() {
     runHistoryFor,
     lighthouse: createLighthouseCache(),
     lighthouseHistory: createLighthouseHistoryCache(),
+    tokenSageShowcase: createTokenSageShowcaseCache(),
     /** Market weather: the Stats panel and the Lighthouse's gauge, for subscribers and guests alike. */
     weather: new SharedCache<MarketWeather>(WEATHER_CACHE_TTL_MS, {
       staleWhileRevalidateMs: REPORT_STALE_MS,

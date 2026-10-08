@@ -193,4 +193,12 @@ export async function registerGuestRoutes(
     }
     return opts.reports.lighthouseHistory(parsed.data);
   });
+
+  /**
+   * The /tokensage page: what TokenSage has read so far, as counts per label (tokenSageShowcase.ts).
+   * No coin is named, so it is open to anyone like the Lighthouse.
+   */
+  app.get("/tokensage", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () =>
+    opts.reports.tokenSageShowcase(),
+  );
 }

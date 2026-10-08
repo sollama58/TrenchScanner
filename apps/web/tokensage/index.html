@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <title>TokenSage · TrenchScanner</title>
+    <meta
+      name="description"
+      content="TokenSage reads every new Solana coin and says what it is about: its theme, what it copies, its X link and its creator fee."
+    />
+    <!-- Not linked from the dashboard yet: kept out of search until it is. -->
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#07080c" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <script>
+      // The dashboard's theme (src/appearance.ts keeps it under this key), set before the first paint.
+      try {
+        var look = JSON.parse(localStorage.getItem("ts.feedAppearance") || "null");
+        if (look && (look.theme === "dark" || look.theme === "light"))
+          document.documentElement.setAttribute("data-theme", look.theme);
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/tokensage/main.tsx"></script>
+  </body>
+</html>

@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -23,4 +24,14 @@ function fontPreload(): Plugin {
 export default defineConfig({
   plugins: [react(), fontPreload()],
   server: { port: 5173 },
+  build: {
+    rollupOptions: {
+      // The dashboard, and the /tokensage page (unlisted for now), which shares its styles but
+      // not its code.
+      input: {
+        main: resolve(import.meta.dirname, "index.html"),
+        tokensage: resolve(import.meta.dirname, "tokensage/index.html"),
+      },
+    },
+  },
 });
