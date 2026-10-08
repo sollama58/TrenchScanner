@@ -428,14 +428,15 @@ function BaselinePanel({
             <MarkerBars
               data={rows.map((e) => {
                 const rate = rateOf(e);
-                const l = liftOf(rate);
+                const profit = e.composite.live.avgSimReturnPct ?? null;
                 return {
                   id: e.id,
                   label: e.name,
                   value: rate,
                   sub: `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
                   display: rate === null ? "–" : `${rate.toFixed(1)}%`,
-                  note: l === null ? undefined : `${l.toFixed(1)}x random`,
+                  note: `${signedPct(profit)} profit`,
+                  noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
                   thin: thin(e),
                 };
               })}
@@ -446,7 +447,7 @@ function BaselinePanel({
               selected={selected?.id ?? null}
               onSelect={setPicked}
               onOpen={setOpened}
-              columns={{ label: "Model", value: `${metric} hit rate`, note: "vs a random pick" }}
+              columns={{ label: "Model", value: `${metric} hit rate`, note: "avg profit per call" }}
             />
             {selected && (
               <p className="baseline-readout">
@@ -460,14 +461,17 @@ function BaselinePanel({
                           ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
                           : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
                     }`}
+                {selected.composite.live.avgSimReturnPct != null
+                  ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
+                  : ""}
                 {selected.composite.warmingUp ? " Still too few calls to lean on." : ""}
               </p>
             )}
             <p className="faint small">
               Live calls over the last {days} days (the window picked at the top of the page). Under each rate
-              is its lift: how many times as often its calls hit as a random pick does, so 1.0x is no better
-              than random. Faded bars rest on too few calls. <strong>Tap or click a model</strong> for its
-              full record, past versions and exam results.
+              is its average profit per call, following every call with one fixed exit plan. Faded bars rest
+              on too few calls. <strong>Tap or click a model</strong> for its full record, past versions and
+              exam results.
             </p>
             <ModelDetailModal
               entry={board.entries.find((e) => e.id === opened) ?? null}

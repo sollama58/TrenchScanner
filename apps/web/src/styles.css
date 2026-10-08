@@ -1830,6 +1830,12 @@ g:hover > .hit {
   font-size: 10.5px;
   color: var(--muted);
 }
+.mbar-value small.up {
+  color: var(--good-ink);
+}
+.mbar-value small.down {
+  color: var(--bad-ink);
+}
 /* Rows that open a detail view carry a chevron in a fourth column. */
 .mbar.opens .mbar-row {
   grid-template-columns: minmax(110px, 1fr) 2.4fr 104px 14px;
@@ -1905,7 +1911,7 @@ g:hover > .hit {
     gap: 8px;
   }
   .mbar.opens .mbar-row {
-    grid-template-columns: minmax(84px, 1fr) 1.3fr 76px 12px;
+    grid-template-columns: minmax(84px, 1fr) 1.3fr 80px 12px;
     gap: 6px;
   }
 }
