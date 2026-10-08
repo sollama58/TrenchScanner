@@ -196,6 +196,10 @@ const envSchema = z.object({
   // token, read once and cached; this many new tokens are read per scan cycle, contenders first.
   // 0 turns the chain read off (the figure then only comes from the trade stream, when it runs).
   SNIPER_LAUNCH_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
+  // The same for contenders (tokens about to be decided on), on top of the above: with
+  // CURATED_REQUIRE_WALLET_CHECKS on, a curated decision waits for the top-10 snipers share, which
+  // needs the first buyers. Contenders are a handful a cycle; this caps a burst.
+  SNIPER_CONTENDER_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(15),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
   // every few minutes for the band, every minute for a token about to be decided on.
   SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(300),

@@ -39,6 +39,8 @@ const entries = new Map<string, Entry>();
 /** Mints whose read failed, and when they may be tried again. */
 const failedUntil = new Map<string, number>();
 const FAILURE_BACKOFF_MS = 5 * 60_000;
+/** A contender is about to be decided on, and its decision waits for the figure: retried sooner. */
+const CONTENDER_FAILURE_BACKOFF_MS = 60_000;
 /**
  * How soon a launch that had fewer than 25 buyers is read again for the rest, doubling on each
  * re-read up to INCOMPLETE_RETRY_MAX_MS: a dud with twelve buyers stays incomplete for as long
@@ -48,8 +50,15 @@ const FAILURE_BACKOFF_MS = 5 * 60_000;
 const INCOMPLETE_RETRY_MS = 5 * 60_000;
 const INCOMPLETE_RETRY_MAX_MS = 60 * 60_000;
 
-function incompleteRetryMs(rereads: number): number {
-  return Math.min(INCOMPLETE_RETRY_MAX_MS, INCOMPLETE_RETRY_MS * 2 ** rereads);
+/**
+ * A contender's incomplete list is re-read at least this often: buyers who arrive after the read
+ * are first buyers too, and the top-10 snipers share would miss them while the decision waits.
+ */
+const CONTENDER_INCOMPLETE_RETRY_MS = 2 * 60_000;
+
+function incompleteRetryMs(rereads: number, contender: boolean): number {
+  const ms = Math.min(INCOMPLETE_RETRY_MAX_MS, INCOMPLETE_RETRY_MS * 2 ** rereads);
+  return contender ? Math.min(ms, CONTENDER_INCOMPLETE_RETRY_MS) : ms;
 }
 /** A holdings reading older than this is too stale to use. */
 const MAX_HOLDING_AGE_MS = 30 * 60_000;
@@ -68,8 +77,13 @@ export interface SniperGroup {
 }
 
 export interface ResolveLaunchSnipersOptions {
-  /** New first-buyer reads allowed this call. 0 = answer from the cache only. */
+  /** New first-buyer reads allowed this call for non-contenders. 0 = none. */
   maxNewLookups: number;
+  /**
+   * New first-buyer reads allowed this call for contenders, on top of maxNewLookups: their
+   * decision waits for the top-10 snipers share. Omitted = maxNewLookups.
+   */
+  maxContenderLookups?: number;
   /** How old a holdings reading may get before it is refreshed. */
   refreshMs: number;
   /** The same, for contenders. */
@@ -114,7 +128,20 @@ export function launchSnipersFromCache(
 export function sniperWalletsFromCache(mint: string): ReadonlySet<string> | undefined {
   const e = entries.get(mint);
   if (!e || e.buyers.length === 0) return undefined;
-  return new Set(e.buyers.map((b) => b.wallet));
+  // The token accounts too: a holder list entry falls back to the token account when RugCheck
+  // gives no owner for it (rugcheck.ts), and a sniper must not read as a later holder then.
+  return new Set(e.buyers.flatMap((b) => [b.wallet, b.tokenAccount]));
+}
+
+/**
+ * Whether the top-10 snipers share can never be measured for this mint, so nothing should wait
+ * for it: its history doesn't start at a curve launch (read, with no buyers). A read still to
+ * come, or one that failed, is not this; an endpoint that can't read launch buyers right now is
+ * the caller's to check (HeliusClient.gtfaUsable).
+ */
+export function sniperShareUnobtainable(mint: string): boolean {
+  const e = entries.get(mint);
+  return e !== undefined && e.complete && e.buyers.length === 0;
 }
 
 /**
@@ -131,14 +158,19 @@ export async function resolveLaunchSnipers(
   for (const [mint, until] of failedUntil) if (until <= now) failedUntil.delete(mint);
 
   // 1. First buyers, for the mints that don't have them (or had fewer than 25 a while ago).
-  const toRead = groups
-    .filter((g) => {
-      if (failedUntil.has(g.mintAddress)) return false;
-      const e = entries.get(g.mintAddress);
-      return !e || (!e.complete && now - e.readAt > incompleteRetryMs(e.rereads));
-    })
-    .slice(0, Math.max(0, opts.maxNewLookups))
-    .map((g) => g.mintAddress);
+  // Contenders first, on their own budget: their decisions wait for the figure.
+  const needsRead = groups.filter((g) => {
+    if (failedUntil.has(g.mintAddress)) return false;
+    const e = entries.get(g.mintAddress);
+    return !e || (!e.complete && now - e.readAt > incompleteRetryMs(e.rereads, g.contender));
+  });
+  const contenderMints = new Set(groups.filter((g) => g.contender).map((g) => g.mintAddress));
+  const toRead = [
+    ...needsRead
+      .filter((g) => g.contender)
+      .slice(0, Math.max(0, opts.maxContenderLookups ?? opts.maxNewLookups)),
+    ...needsRead.filter((g) => !g.contender).slice(0, Math.max(0, opts.maxNewLookups)),
+  ].map((g) => g.mintAddress);
   const fresh = new Set<string>();
   if (toRead.length > 0) {
     const results = await helius.getLaunchBuyersBatch(toRead, FIRST_BUYERS);
@@ -163,7 +195,10 @@ export async function resolveLaunchSnipers(
         });
         fresh.add(mint);
       } else if (r?.status !== "unsupported") {
-        failedUntil.set(mint, now + FAILURE_BACKOFF_MS);
+        failedUntil.set(
+          mint,
+          now + (contenderMints.has(mint) ? CONTENDER_FAILURE_BACKOFF_MS : FAILURE_BACKOFF_MS),
+        );
         failed += 1;
       }
     }

@@ -4,9 +4,10 @@ import {
   launchSnipersFromCache,
   resetLaunchSnipersCache,
   resolveLaunchSnipers,
+  sniperShareUnobtainable,
   sniperWalletsFromCache,
 } from "./launchSnipers.js";
-import { withLaunchSnipers, withWalletSignals } from "./scanJob.js";
+import { sniperShareReady, withLaunchSnipers, withWalletSignals } from "./scanJob.js";
 
 const buyers = (mint: string, n: number) =>
   Array.from({ length: n }, (_, i) => ({
@@ -17,6 +18,8 @@ const buyers = (mint: string, n: number) =>
 
 function fakeHelius(opts: {
   found?: Record<string, number>;
+  /** Mints whose read comes back complete whatever the count (a history with no curve launch). */
+  complete?: Record<string, boolean>;
   balance?: (account: string) => number | undefined;
 }) {
   const getLaunchBuyersBatch = vi.fn(async (mints: string[]) => {
@@ -27,7 +30,12 @@ function fakeHelius(opts: {
         m,
         n === undefined
           ? { status: "failed" }
-          : { status: "found", complete: n >= 25, buyers: buyers(m, n), launchAt: null },
+          : {
+              status: "found",
+              complete: opts.complete?.[m] ?? n >= 25,
+              buyers: buyers(m, n),
+              launchAt: null,
+            },
       );
     }
     return out;
@@ -78,10 +86,20 @@ describe("resolveLaunchSnipers", () => {
       { mintAddress: "A", contender: false },
       { mintAddress: "B", contender: false },
     ];
-    const first = await resolveLaunchSnipers(groups, f.helius, { ...opts, maxNewLookups: 2, now: 0 });
+    const first = await resolveLaunchSnipers(groups, f.helius, {
+      ...opts,
+      maxNewLookups: 1,
+      maxContenderLookups: 1,
+      now: 0,
+    });
     expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["C", "A"], 25);
     expect([...first.keys()].sort()).toEqual(["A", "C"]);
-    await resolveLaunchSnipers(groups, f.helius, { ...opts, maxNewLookups: 2, now: 61_000 });
+    await resolveLaunchSnipers(groups, f.helius, {
+      ...opts,
+      maxNewLookups: 1,
+      maxContenderLookups: 1,
+      now: 61_000,
+    });
     expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["B"], 25);
     // C (contender, 61s old) and B (new) refreshed; A (61s, not a contender) not.
     expect(f.getTokenAccountBalances.mock.lastCall![0]).toHaveLength(50);
@@ -169,7 +187,74 @@ describe("snipers in the top 10", () => {
       },
     );
     const wallets = sniperWalletsFromCache("A");
-    expect(wallets?.size).toBe(25);
+    // Each buyer's wallet and token account.
+    expect(wallets?.size).toBe(50);
     expect(withWalletSignals(profile, new Map(), new Map(), env, wallets)?.sniperTop10WalletPct).toBe(50);
+    // A holder listed by token account (no owner from RugCheck) is still recognized.
+    const byAccount = { ...profile, top10HolderAddresses: ["A-a0", "late1"] };
+    expect(withWalletSignals(byAccount, new Map(), new Map(), env, wallets)?.sniperTop10WalletPct).toBe(50);
+  });
+
+  it("gives contenders their own read budget, ahead of the rest", async () => {
+    const f = fakeHelius({ found: { A: 25, B: 25, C: 25, D: 25 } });
+    const groups = [
+      { mintAddress: "A", contender: true },
+      { mintAddress: "B", contender: true },
+      { mintAddress: "C", contender: false },
+      { mintAddress: "D", contender: false },
+    ];
+    await resolveLaunchSnipers(groups, f.helius, {
+      ...opts,
+      maxNewLookups: 1,
+      maxContenderLookups: 2,
+      now: 0,
+    });
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["A", "B", "C"], 25);
+  });
+
+  it("retries a contender's failed read after a minute, the rest after five", async () => {
+    const f = fakeHelius({});
+    const groups = [
+      { mintAddress: "A", contender: true },
+      { mintAddress: "B", contender: false },
+    ];
+    await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 });
+    await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 61_000 });
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["A"], 25);
+  });
+
+  it("re-reads a contender's incomplete list within two minutes", async () => {
+    const f = fakeHelius({ found: { A: 10 } });
+    await resolveLaunchSnipers([{ mintAddress: "A", contender: true }], f.helius, { ...opts, now: 0 });
+    await resolveLaunchSnipers([{ mintAddress: "A", contender: true }], f.helius, { ...opts, now: 121_000 });
+    expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("calls the share unobtainable only for a launch read with no buyers", async () => {
+    const f = fakeHelius({ found: { A: 0, B: 3 }, complete: { A: true } });
+    expect(sniperShareUnobtainable("A")).toBe(false);
+    await resolveLaunchSnipers(
+      [
+        { mintAddress: "A", contender: true },
+        { mintAddress: "B", contender: true },
+      ],
+      f.helius,
+      { ...opts, now: 0 },
+    );
+    expect(sniperShareUnobtainable("A")).toBe(true);
+    // Fewer buyers than asked so far is a read to repeat, not a launch without snipers.
+    expect(sniperShareUnobtainable("B")).toBe(false);
+  });
+});
+
+describe("sniperShareReady", () => {
+  beforeEach(() => resetLaunchSnipersCache());
+
+  it("holds a decision until the share is in, unless it can't come", () => {
+    const unknown = { mintAddress: "A", sniperTop10WalletPct: undefined };
+    expect(sniperShareReady(unknown, true)).toBe(false);
+    expect(sniperShareReady({ ...unknown, sniperTop10WalletPct: 0 }, true)).toBe(true);
+    // The chain read is off or the endpoint is standing down: nothing to wait for.
+    expect(sniperShareReady(unknown, false)).toBe(true);
   });
 });

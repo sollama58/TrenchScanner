@@ -48,6 +48,10 @@ describe("parseFeedAppearance", () => {
     });
     expect(saved.reasons).toBe(false);
     expect(saved.quickLinks).toEqual(["terminal"]);
+    // The Top-10 snipers tile is opt-in, for new and older accounts alike.
+    expect(saved.sniperTop10).toBe(false);
+    expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(false);
+    expect(parseFeedAppearance({ sniperTop10: true }).sniperTop10).toBe(true);
     expect(
       parseFeedAppearance({ reasons: true, quickLinks: ["gmgn", "padre", "gmgn", "axiom"] }),
     ).toMatchObject({

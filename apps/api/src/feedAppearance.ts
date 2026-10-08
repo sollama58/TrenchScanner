@@ -76,6 +76,8 @@ export const feedAppearanceSchema = z
     scoreColor: z.boolean().default(true),
     /** The model's reasons under a model call; hidden by default, as are accounts saved before it. */
     reasons: z.boolean().default(false),
+    /** The Top-10 snipers tile; hidden by default, as are accounts saved before it. */
+    sniperTop10: z.boolean().default(false),
     /** Trading sites each card links to, in this order; Padre's Trading Terminal by default. */
     quickLinks: z
       .array(z.enum(QUICK_LINKS))
@@ -110,6 +112,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   volume: false,
   scoreColor: true,
   reasons: false,
+  sniperTop10: false,
   quickLinks: ["terminal"],
   hidden: [],
 };

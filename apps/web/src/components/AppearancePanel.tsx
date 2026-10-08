@@ -95,11 +95,12 @@ export function AppearanceControls() {
   const look = useAppearance();
   const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
   const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
-  const shown = (f: CardField) => !hidden.has(f) && (f !== "reasons" || look.reasons);
+  const shown = (f: CardField) =>
+    !hidden.has(f) && (f !== "reasons" || look.reasons) && (f !== "sniperTop10" || look.sniperTop10);
   const toggleField = (f: CardField) =>
-    f === "reasons"
+    f === "reasons" || f === "sniperTop10"
       ? // Opt-in: switching it on also unhides it, in case an older preset hid it.
-        setAppearance({ reasons: !shown(f), hidden: look.hidden.filter((x) => x !== f) })
+        setAppearance({ [f]: !shown(f), hidden: look.hidden.filter((x) => x !== f) })
       : setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });
   const toggleQuickLink = (id: QuickLink) =>
     setAppearance({

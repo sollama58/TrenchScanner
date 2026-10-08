@@ -68,6 +68,7 @@ import { resolveMayhemMode } from "./mayhemMode.js";
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
+  sniperShareUnobtainable,
   sniperWalletsFromCache,
   type LaunchSnipers,
   type SniperGroup,
@@ -211,6 +212,26 @@ async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> 
   }
 }
 
+/** Whether the chain read of launch buyers is configured at all (both budgets 0 turn it off). */
+function sniperReadsOn(env: Env): boolean {
+  return env.SNIPER_LAUNCH_LOOKUPS_PER_CYCLE > 0 || env.SNIPER_CONTENDER_LOOKUPS_PER_CYCLE > 0;
+}
+
+/**
+ * Whether a curated decision on this token should wait for its top-10 snipers share: only while
+ * the share can still come - the chain read is on and the endpoint serves it right now, and the
+ * launch isn't one whose history has no curve launch to read buyers from. Otherwise waiting would
+ * hold every decision for a figure that won't arrive; the share then stays unknown on the row.
+ * Exported for tests.
+ */
+export function sniperShareReady(
+  scored: Pick<ScoredToken, "mintAddress" | "sniperTop10WalletPct">,
+  chainReadAvailable: boolean,
+): boolean {
+  if (scored.sniperTop10WalletPct !== undefined || !chainReadAvailable) return true;
+  return sniperShareUnobtainable(scored.mintAddress);
+}
+
 /** The sniper reads still running, possibly past a cycle's budget - see startSniperStage. */
 let sniperStageInFlight: Promise<unknown> | null = null;
 
@@ -224,11 +245,12 @@ function startSniperStage(
   env: Env,
 ): Promise<Map<string, LaunchSnipers>> {
   const mints = groups.map((g) => g.mintAddress);
-  if (sniperStageInFlight || env.SNIPER_LAUNCH_LOOKUPS_PER_CYCLE === 0) {
+  if (sniperStageInFlight || !sniperReadsOn(env)) {
     return Promise.resolve(launchSnipersFromCache(mints));
   }
   const work = resolveLaunchSnipers(groups, helius, {
     maxNewLookups: env.SNIPER_LAUNCH_LOOKUPS_PER_CYCLE,
+    maxContenderLookups: env.SNIPER_CONTENDER_LOOKUPS_PER_CYCLE,
     refreshMs: env.SNIPER_HOLDING_REFRESH_SECONDS * 1000,
     contenderRefreshMs: env.SNIPER_CONTENDER_REFRESH_SECONDS * 1000,
     maxRefreshAccounts: env.SNIPER_MAX_REFRESH_ACCOUNTS_PER_CYCLE,
@@ -709,6 +731,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const marketContext = await loadMarketContext(env, candidates.length);
   deps.pricePath?.prune(new Date(Date.now() - 2 * 3_600_000));
 
+  // Read once for the cycle: whether a curated decision should wait for the top-10 snipers share.
+  const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;
   const perCandidateMatches: number[] = [];
   const curatedCycle = newCuratedCycle();
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
@@ -732,6 +756,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           marketContext,
           liveStreams,
           sniperWalletsFromCache(candidate.mintAddress),
+          sniperChainAvailable,
         ),
       );
     } catch (err) {
@@ -1435,6 +1460,7 @@ async function processCandidate(
   marketContext?: MarketContextFeatures,
   liveStreams?: ReadonlyMap<string, LiveStream> | null,
   sniperWallets?: ReadonlySet<string>,
+  sniperChainAvailable = false,
 ): Promise<number> {
   const existingToken = prior.token;
   const onChain = withWalletSignals(
@@ -1642,7 +1668,11 @@ async function processCandidate(
     // An event waits for the sniper checks when they're required: deciding without them would
     // skip the curator's wallet caps, and an event spent now can't be reopened until the
     // spacing window passes. The contender-first wallet ordering above resolves them quickly.
-    const walletReady = !env.CURATED_REQUIRE_WALLET_CHECKS || walletChecksKnown(scored);
+    // The top-10 snipers share too, while it can still come (sniperShareReady): the safety cut
+    // reads it, and a decision row banked without it would teach the models its absence.
+    const walletReady =
+      !env.CURATED_REQUIRE_WALLET_CHECKS ||
+      (walletChecksKnown(scored) && sniperShareReady(scored, sniperChainAvailable));
     if (walletReady && passesEventPreGate(scored, band)) {
       const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
       // A pick that lost an earlier governor pass re-contends while its event is spent - see
