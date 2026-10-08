@@ -54,6 +54,13 @@ export interface SageRead {
     } | null;
   } | null;
   categories: { label: string; confidence: number; inputs: string[] }[];
+  /** The coin's one theme: main_category (rules 0.20.0+), else the most confident category. */
+  mainCategory: { label: string; confidence: number } | null;
+  /**
+   * How the coin relates to another, shown apart from its theme: the lineage kind when it copies
+   * or builds on one, else "copy" from copy_of[] or a derivative category. Null on an original.
+   */
+  copyMark: string | null;
   lineage: {
     kind: string;
     ofName: string | null;
@@ -175,6 +182,23 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, MAX_CATEGORIES)
     .map((c) => ({ label: c.label, confidence: c.confidence, inputs: strings(c.inputs) }));
+  const main = doc.main_category;
+  const mainCategory =
+    main && typeof main.label === "string" && main.label.trim() && typeof main.confidence === "number"
+      ? { label: clip(main.label, 80)!, confidence: main.confidence }
+      : categories[0]
+        ? { label: categories[0].label, confidence: categories[0].confidence }
+        : null;
+  const linKind = typeof lin?.kind === "string" && lin.kind !== "unknown" ? lin.kind : null;
+  const copyMark = linKind
+    ? linKind === "original"
+      ? null
+      : linKind
+    : Array.isArray(doc.copy_of) && doc.copy_of.length > 0
+      ? "copy"
+      : categories.some((c) => c.label === "derivative" || c.label.startsWith("derivative/"))
+        ? "copy"
+        : null;
   const evidence = (Array.isArray(doc.evidence) ? doc.evidence : [])
     .filter((e) => typeof e?.label === "string" && typeof e.weight === "number" && e.weight > 0)
     .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
@@ -213,6 +237,8 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
           }
         : null,
     categories,
+    mainCategory,
+    copyMark,
     lineage:
       lin && typeof lin.kind === "string"
         ? {
@@ -292,8 +318,12 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
  * The week's record for the coin's top narrative, next to every narrative's. Days with nothing
  * read under the label still appear (zeros), so the two series line up.
  */
-export function sageTrack(rows: DayLabelRow[], categories: unknown): SageTrack | null {
-  const label = topCategory(categories);
+export function sageTrack(
+  rows: DayLabelRow[],
+  categories: unknown,
+  mainCategory?: string | null,
+): SageTrack | null {
+  const label = topCategory(categories, mainCategory);
   if (!label) return null;
   const all = new Map<string, SageTrackDay>();
   const mine = new Map<string, SageTrackDay & { count: number }>();

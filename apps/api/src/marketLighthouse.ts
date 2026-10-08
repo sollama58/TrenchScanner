@@ -251,10 +251,10 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       where: { checkedAt: { gt: since } },
       _count: { _all: true },
     }),
-    // Each described coin once, under the top-level part of the category TokenSage is surest of.
+    // Each described coin once, under the top-level part of its main category (else the one TokenSage is surest of).
     prisma.$queryRaw<{ bucket: Date; label: string | null; count: bigint }[]>`
       SELECT to_timestamp(floor(extract(epoch FROM n."checkedAt") / ${bucketSeconds}) * ${bucketSeconds}) AS bucket,
-             split_part(top.label, '/', 1) AS label,
+             split_part(COALESCE(n."mainCategory", top.label), '/', 1) AS label,
              count(*) AS count
       FROM "TokenNarrative" n
       LEFT JOIN LATERAL (
@@ -322,7 +322,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     prisma.$queryRaw<AlertOutcomeRow[]>`
       SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
              a."simReturnPct"::float8 AS sim_return,
-             n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
+             n.status, n.categories, n."mainCategory" AS main_category, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
              CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind, n.flags
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
@@ -379,7 +379,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     tally(all, "all", row);
     if (row.status === null || row.status === "failed") continue;
     alertsDescribed += 1;
-    tally(byCategory, topCategory(row.categories) ?? "uncategorized", row);
+    tally(byCategory, topCategory(row.categories, row.main_category) ?? "uncategorized", row);
     if (row.x_verdict) tally(byXVerdict, row.x_verdict, row);
     if (row.copies_recent !== null)
       tally(byCopy, row.copies_recent ? "copies a recent coin" : "original", row);

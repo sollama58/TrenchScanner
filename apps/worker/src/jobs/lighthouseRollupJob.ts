@@ -287,6 +287,7 @@ interface AlertRow {
   hit10x: boolean | null;
   status: string | null;
   categories: unknown;
+  main_category: string | null;
   x_verdict: string | null;
   copies_recent: boolean | null;
   trend_matched: boolean | null;
@@ -307,8 +308,13 @@ interface LabelTally {
   tenXGraded: number;
 }
 
-/** The top-level part of the category TokenSage is surest of - adminInsights.topCategory's rule. */
-function surestCategory(categories: unknown): string | null {
+/**
+ * The top-level part of the coin's one category - adminInsights.topCategory's rule: TokenSage's
+ * main category (rules 0.20.0+), else the category it is surest of.
+ */
+function surestCategory(categories: unknown, mainCategory: string | null): string | null {
+  const main = mainCategory?.trim();
+  if (main) return main.split("/")[0]!.trim() || main;
   if (!Array.isArray(categories)) return null;
   let best: { label: string; confidence: number } | null = null;
   for (const c of categories) {
@@ -352,9 +358,9 @@ async function readCounts(from: Date, to: Date): Promise<Record<LabelDimension, 
   // and could time the whole run out. Each is cheap on its own.
   const [category, subcategory, flag, referentKind, referentSupport, xVerdict, pairKind, copy, news] =
     await inTurn([
-      // Each coin once, under the top-level part of the category it is surest of (the tide's rule).
+      // Each coin once, under the top-level part of its main category, else the one it is surest of (the tide's rule).
       () => described`
-        SELECT split_part(top.label, '/', 1) AS label, count(*) AS count
+        SELECT split_part(COALESCE(n."mainCategory", top.label), '/', 1) AS label, count(*) AS count
         FROM "TokenNarrative" n
         LEFT JOIN LATERAL (
           SELECT c->>'label' AS label
@@ -411,7 +417,7 @@ async function readCounts(from: Date, to: Date): Promise<Record<LabelDimension, 
 function alertRows(from: Date, to: Date) {
   return prisma.$queryRaw<AlertRow[]>`
     SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
-           n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
+           n.status, n.categories, n."mainCategory" AS main_category, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
            n."trendMatched" AS trend_matched,
            CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind,
            n."referentSupport" AS referent_support, n.flags, n."pairKind" AS pair_kind
@@ -458,7 +464,7 @@ async function labelRowsForDay(day: Date): Promise<Prisma.LighthouseDayLabelCrea
   };
   for (const row of alerts) {
     if (row.status === null || row.status === "failed") continue;
-    tallyAlert("category", surestCategory(row.categories) ?? "uncategorized", row);
+    tallyAlert("category", surestCategory(row.categories, row.main_category) ?? "uncategorized", row);
     for (const label of subLabels(row.categories)) tallyAlert("subcategory", label, row);
     for (const label of new Set(row.flags ?? [])) tallyAlert("flag", label, row);
     if (row.referent_kind) tallyAlert("referentKind", row.referent_kind, row);

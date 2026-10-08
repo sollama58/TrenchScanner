@@ -1165,6 +1165,10 @@ model TokenNarrative {
   status                String
   /// Top-level and sub-category labels with confidences, e.g. [{"label":"animal/dog","confidence":0.9}].
   categories            Json?
+  /// TokenSage rules 0.20.0+: main_category.label, the coin's strongest theme (its own or the one
+  /// it copies; "derivative" only when it has none). Null on older reads: fall back to the most
+  /// confident entry in categories.
+  mainCategory          String?
   referentLabel         String?
   referentKind          String?
   summary               String?
