@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { LighthouseCount, LighthouseTally, MarketLighthouse } from "../api";
 import { usePolling } from "../hooks";
 import { ago, halfHour, pct, signedPct, usd } from "../format";
+import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { HBarChart, Skeleton } from "./Charts";
 import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
 
@@ -220,6 +221,7 @@ function TokenSageSections({
   cls: (l: string) => string;
   quickOnly: boolean;
 }) {
+  const base = narrativeBaseline(d.outcomes.byCategory);
   return (
     <>
       <TokenSageKpis d={d} span={span} />
@@ -248,14 +250,15 @@ function TokenSageSections({
 
       <Section
         title="Which narratives pay"
-        note={`Model calls in the last ${span} by their coin's narrative: the average return under the exit plan, and how many reached 2x and 10x. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
+        note={`Model calls in the last ${span} by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Narratives under ${MIN_GRADED} graded calls stay faded. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
       >
-        <HitRates rows={narratives(d.outcomes.byCategory)} cls={cls} />
+        <HitRates rows={narratives(d.outcomes.byCategory)} cls={cls} baseline={base} />
         <p className="faint small lh-foot">
           {d.outcomes.described.toLocaleString()} of {d.outcomes.alerts.toLocaleString()} calls had a
           TokenSage read · {d.outcomes.graded.toLocaleString()} graded overall
           {d.outcomes.graded > 0 ? <>, {pct(share(d.outcomes.won2x, d.outcomes.graded))} reached 2x</> : null}
-          .
+          . The average each narrative is read against is every call with a read: {signedPct(base.avgReturn)}{" "}
+          return, {pct(base.rate2x)} reached 2x, over {base.graded.toLocaleString()} graded.
         </p>
       </Section>
 
@@ -324,9 +327,9 @@ function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => 
         </Section>
         <Section
           title="Best-performing narratives"
-          note="By the average return of model calls under the exit plan, with how many reached 2x and 10x."
+          note="Points of average return under the exit plan above or below the average of every model call, with each narrative's own return and 2x rate."
         >
-          <HitRates rows={best} cls={cls} />
+          <HitRates rows={best} cls={cls} baseline={narrativeBaseline(d.outcomes.byCategory)} />
         </Section>
       </div>
     </>
@@ -562,44 +565,93 @@ const RETURN_SCALE = 100;
  * One row per group: the average return under the exit plan as a bar from zero, green to the
  * right for a gain and red to the left for a loss on a -100% to +100% scale, then the share of
  * graded calls that reached 2x and 10x, and how many calls that rests on.
+ *
+ * With a baseline it reads relative strength instead: the bar grows from the all-narrative
+ * average, by how many points the group's average return sits above or below it, and the 2x rate
+ * carries its own gap to the average 2x rate. Thin groups stay dimmed with uncolored figures, so
+ * a lucky three calls never reads as a strong narrative.
  */
-function HitRates({ rows, cls }: { rows: LighthouseTally[]; cls?: (l: string) => string }) {
+function HitRates({
+  rows,
+  cls,
+  baseline,
+}: {
+  rows: LighthouseTally[];
+  cls?: (l: string) => string;
+  baseline?: NarrativeBaseline;
+}) {
   if (!rows.length)
     return <p className="muted small">No model calls on described coins in this window yet.</p>;
+  const base = baseline?.avgReturn ?? null;
+  const relative = baseline !== undefined && base !== null;
+  const gapOf = (r: LighthouseTally) => {
+    const ret = avgReturn(r);
+    return ret === null ? null : relative ? ret - base : ret;
+  };
+  const scale = relative
+    ? relativeScale(rows.filter((r) => r.graded >= MIN_GRADED).map(gapOf))
+    : RETURN_SCALE;
+  const unit = relative ? " pts" : "%";
   return (
     <div className="lh-hits">
       <div className="lh-hit lh-hit-axis" aria-hidden>
         <span />
         <span className="lh-hit-scale">
-          <i>-{RETURN_SCALE}%</i>
-          <i>0</i>
-          <i>+{RETURN_SCALE}%</i>
+          <i>
+            -{scale}
+            {unit}
+          </i>
+          <i>{relative ? `avg ${signedPct(base)}` : "0"}</i>
+          <i>
+            +{scale}
+            {unit}
+          </i>
         </span>
       </div>
       {rows.map((r) => {
         const ret = avgReturn(r);
+        const gap = gapOf(r);
         const early = r.graded < MIN_GRADED;
         const tier = (won: number, over: number = r.graded) => (over > 0 ? pct(share(won, over)) : "–");
         const tenXOver = r.tenXGraded ?? r.graded;
-        // Half the track is one side of zero; a hair of bar stays visible for a flat return.
-        const reach =
-          ret === null ? 0 : Math.max(0.5, (Math.min(Math.abs(ret), RETURN_SCALE) / RETURN_SCALE) * 50);
-        const tone = ret === null ? "" : ret < 0 ? "loss" : "gain";
+        const r2x = share(r.won2x, r.graded);
+        const gap2x = relative && r2x !== null && baseline.rate2x !== null ? r2x - baseline.rate2x : null;
+        // Half the track is one side of the line; a hair of bar stays visible for a flat gap.
+        const reach = gap === null ? 0 : Math.max(0.5, (Math.min(Math.abs(gap), scale) / scale) * 50);
+        const tone = gap === null ? "" : gap < 0 ? "loss" : "gain";
+        const valueTone = gap === null ? "" : relative && early ? "muted" : gap < 0 ? "lh-down" : "lh-up";
+        const title = relative
+          ? `${words(r.label)}: average return ${signedPct(ret)} against ${signedPct(base)} for all narratives (${signedPts(gap)}); 2x rate ${pct(r2x)} against ${pct(baseline.rate2x)}; 10x rate ${tier(r.won10x, tenXOver)}.${early ? " Too few graded calls to call it yet." : ""}`
+          : undefined;
         return (
-          <div key={r.label} className={`lh-hit${early ? " early" : ""}`}>
+          <div key={r.label} className={`lh-hit${early ? " early" : ""}`} title={title}>
             <span className="lh-hit-label">
               {cls && <span className={`lh-swatch ${cls(r.label)}`} />}
               {words(r.label)}
             </span>
             <span className="lh-hit-track diverging">
               <span className="lh-hit-zero" />
-              {ret !== null && <span className={`lh-hit-fill ${tone}`} style={{ width: `${reach}%` }} />}
+              {gap !== null && <span className={`lh-hit-fill ${tone}`} style={{ width: `${reach}%` }} />}
             </span>
-            <span className={`lh-hit-value num ${ret === null ? "" : ret < 0 ? "lh-down" : "lh-up"}`}>
-              {ret === null ? "–" : signedPct(ret)}
+            <span className={`lh-hit-value num ${valueTone}`}>
+              {relative ? signedPts(gap).replace(" pts", "") : signedPct(ret)}
             </span>
             <span className="lh-hit-tiers muted">
-              2x {tier(r.won2x)} · 10x {tier(r.won10x, tenXOver)}
+              {relative ? (
+                <>
+                  return {signedPct(ret)} · 2x {tier(r.won2x)}
+                  {gap2x !== null && (
+                    <span className={early ? "" : gap2x < 0 ? "lh-down" : gap2x > 0 ? "lh-up" : ""}>
+                      {" "}
+                      ({signedPts(gap2x).replace(" pts", "")})
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  2x {tier(r.won2x)} · 10x {tier(r.won10x, tenXOver)}
+                </>
+              )}
             </span>
             <span className="lh-hit-state muted">
               {early ? `${r.graded}/${MIN_GRADED} graded` : `${r.graded} graded`}

@@ -10,7 +10,10 @@ import {
   isPanel,
   metricById,
   metricSeries,
+  narrativeBaseline,
   panelTitle,
+  relativeScale,
+  signedPts,
   unitsOf,
 } from "./lighthouseMetrics";
 
@@ -187,5 +190,37 @@ describe("lighthouse metrics", () => {
     const h = history();
     expect(delta(metricById("field2x"), h.totals, h.previous)).toBe(25);
     expect(delta(metricById("field2x"), h.totals, null)).toBeNull();
+  });
+});
+
+describe("narrative relative strength", () => {
+  const t = (graded: number, won2x: number, returnN: number, returnSum: number) => ({
+    graded,
+    won2x,
+    returnN,
+    returnSum,
+  });
+
+  it("pools every narrative, uncategorized included, into one average", () => {
+    const b = narrativeBaseline([t(10, 2, 10, 100), t(10, 4, 10, -100), t(0, 0, 0, 0)]);
+    expect(b).toEqual({ avgReturn: 0, rate2x: 30, graded: 20 });
+  });
+
+  it("says nothing without graded calls or returns", () => {
+    expect(narrativeBaseline([])).toEqual({ avgReturn: null, rate2x: null, graded: 0 });
+  });
+
+  it("picks the smallest scale that fits the widest gap", () => {
+    expect(relativeScale([3, -8, null])).toBe(10);
+    expect(relativeScale([12, -30])).toBe(50);
+    expect(relativeScale([])).toBe(10);
+    expect(relativeScale([900])).toBe(200);
+  });
+
+  it("writes gaps in signed points", () => {
+    expect(signedPts(12.4)).toBe("+12 pts");
+    expect(signedPts(-7.6)).toBe("-8 pts");
+    expect(signedPts(0.3)).toBe("0 pts");
+    expect(signedPts(null)).toBe("–");
   });
 });
