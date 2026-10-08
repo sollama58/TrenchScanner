@@ -41,6 +41,11 @@ export interface RugCheckClientOptions {
 }
 
 const TOP_N_FOR_CONCENTRATION = 10;
+/** A top-10 share past this (100%, plus rounding) means the report's shares don't share one supply. */
+const MAX_TOP10_SHARE_PCT = 100.5;
+
+/** The risk flag toProfile adds when RugCheck names no creator (rugScreen.ts treats it as critical). */
+export const CREATOR_UNKNOWN_FLAG = "Creator identity unknown";
 
 /** RugCheck's marketType for a Pump.fun bonding curve and for the PumpSwap pool a token graduates into. */
 const PUMP_MARKET_TYPES = new Set(["pump_fun", "pump_fun_amm"]);
@@ -163,7 +168,7 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     : undefined;
   const riskFlags = (report.risks ?? []).map((r) => r.name);
   if (!report.creator) {
-    riskFlags.push("Creator identity unknown");
+    riskFlags.push(CREATOR_UNKNOWN_FLAG);
   }
 
   // lpLockedPct lives per-market on the full /report endpoint (unlike /report/summary, which
@@ -195,11 +200,19 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
 
   const top10Holders = realHolders.slice(0, TOP_N_FOR_CONCENTRATION);
 
+  // Shares of one supply cannot sum past 100. A report whose top ten do (seen at 120% in
+  // production) mixes denominators, so neither the sum nor any one holder's share from it can be
+  // trusted: both read as unknown rather than as an impossible concentration.
+  const sharesConsistent = top10HolderPct <= MAX_TOP10_SHARE_PCT;
+
   return {
     mintAddress,
-    holderCount: report.totalHolders,
-    top10HolderPct: realHolders.length > 0 ? top10HolderPct : undefined,
-    devWalletPct: devHolder?.pct,
+    // 0 holders is an unindexed list, not a token nobody holds: as a count it made both holder
+    // growth windows read exactly -100%.
+    holderCount:
+      typeof report.totalHolders === "number" && report.totalHolders > 0 ? report.totalHolders : undefined,
+    top10HolderPct: realHolders.length > 0 && sharesConsistent ? top10HolderPct : undefined,
+    devWalletPct: sharesConsistent ? devHolder?.pct : undefined,
     creatorHolding:
       report.creator && typeof report.creatorBalance === "number" ? report.creatorBalance > 0 : undefined,
     // A report without its token block hasn't said either way: active until shown otherwise, as

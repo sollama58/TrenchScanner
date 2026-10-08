@@ -1,6 +1,9 @@
 import type { ScoredToken } from "../types.js";
 import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
 import { FIRST_BUYERS, resolveDevHolding } from "./tradeFlow.js";
+import { CREATOR_UNKNOWN_FLAG } from "../datasources/rugcheck.js";
+import { buildCandidateFeatures } from "./features.js";
+import { LINEAGE_KIND, narrativeIsCopycat, narrativeXRead, type NarrativeRead } from "./narrativeFeatures.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   GOAL_MULTIPLE,
@@ -128,16 +131,25 @@ function livestreamText(stream: ScoredToken["livestream"]): string {
   return stream.viewers === null ? "live now" : `live now, ${stream.viewers} watching`;
 }
 
-/** The per-alert brief - plain labeled lines, every unknown spelled out as "unknown". */
+/**
+ * The per-alert brief - plain labeled lines, every unknown spelled out as "unknown". It carries
+ * what the scanner's own models read (notes/model-inputs-review-2026-10-08.md): the 5-minute flow,
+ * volume acceleration, the price path, the market's base rate, the pool's age and TokenSage's
+ * read, and leaves out the inputs the models retired as noise (6h and 24h price change, the
+ * 30-minute holder growth). `now` is the moment the brief describes; a replay passes the anchor.
+ */
 export function buildAiReviewBrief(
   scored: ScoredToken,
   decision: CurationDecision,
   comparables?: ComparableOutcome[],
+  now: Date = new Date(),
 ): string {
   const buyRatio = (buys?: number, sells?: number) =>
     buys !== undefined && sells !== undefined && buys + sells > 0
       ? `${Math.round((buys / (buys + sells)) * 100)}% buys (${buys} buys / ${sells} sells)`
       : "unknown";
+  // The same derivations the models get, so the brief and the model never disagree on a figure.
+  const features = buildCandidateFeatures(scored, now);
 
   const modelProbability = curatorProbabilityOf(decision);
   return [
@@ -153,23 +165,29 @@ export function buildAiReviewBrief(
     `- market cap: ${fmtUsd(scored.marketCapUsd)}`,
     `- age: ${scored.ageMinutes === undefined ? "unknown" : `${Math.round(scored.ageMinutes)} minutes`}`,
     `- graduated from bonding curve: ${fmtBool(scored.graduated)}`,
+    `- trading pool opened: ${pairAgeText(features.pairAgeMinutes, scored.graduated)}`,
+    `- minutes since it first entered the alert band: ${fmtVal(features.minutesSinceFirstInBand)}`,
     `- Pump.fun livestream: ${livestreamText(scored.livestream)}`,
-    `- pool liquidity: ${fmtUsd(scored.liquidityUsd)}`,
-    `- price change: 5m ${fmtPct(scored.priceChange5mPct)}, 1h ${fmtPct(scored.priceChange1hPct)}, 6h ${fmtPct(scored.priceChange6hPct)}, 24h ${fmtPct(scored.priceChange24hPct)}`,
+    `- pool liquidity: ${poolLiquidityText(scored)}`,
+    `- price change: 5m ${fmtPct(scored.priceChange5mPct)}, 1h ${fmtPct(scored.priceChange1hPct)}`,
     `- volume: 5m ${fmtUsd(scored.volume5mUsd)}, 1h ${fmtUsd(scored.volume1hUsd)}, 24h ${fmtUsd(scored.volume24hUsd)}`,
-    `- order flow: 1h ${buyRatio(scored.buys1h, scored.sells1h)}; 24h ${buyRatio(scored.buys24h, scored.sells24h)}`,
+    `- volume acceleration (the last 5 minutes at an hourly pace, over the last hour; above 1 is speeding up): ${fmtVal(features.volumeAccel, 2)}`,
+    `- order flow: 5m ${buyRatio(scored.buys5m, scored.sells5m)}; 1h ${buyRatio(scored.buys1h, scored.sells1h)}; 24h ${buyRatio(scored.buys24h, scored.sells24h)}`,
     ``,
+    ...pricePathLines(scored),
     `holders:`,
     `- holder count: ${fmtNum(scored.holderCount)}`,
-    `- holder growth over the last 30 minutes: ${fmtPct(scored.holderGrowthPct)}`,
+    `- holder growth over the last 10 minutes: ${fmtPct(scored.holderGrowth10mPct)}`,
     `- top 10 wallets hold: ${fmtPct(scored.top10HolderPct)}`,
-    `- dev wallet holds: ${fmtPct(scored.devWalletPct)}; dev still holding: ${devHoldingText(resolveDevHolding(scored))}`,
+    `- dev wallet holds: ${devWalletText(scored)}; dev still holding: ${devHoldingText(resolveDevHolding(scored))}`,
     `- top-10 wallets that are brand new: ${fmtPct(scored.freshTop10WalletPct)}`,
     `- top-10 wallets holding almost nothing else: ${fmtPct(scored.emptyTop10WalletPct)}`,
     `- RugCheck risk score (higher is riskier): ${fmtNum(scored.riskScore)}`,
     `- RugCheck flags: ${scored.riskFlags && scored.riskFlags.length > 0 ? scored.riskFlags.join("; ") : "none"}`,
     ``,
     ...tradeFlowLines(scored),
+    ...narrativeLines(scored.narrative),
+    ...marketContextLines(scored),
     `scanner:`,
     `- composite score: ${Math.round(scored.score.total)}/100`,
     ...(modelProbability !== undefined
@@ -184,24 +202,168 @@ export function buildAiReviewBrief(
 }
 
 /**
+ * How long ago the DexScreener pair opened. On a graduated token that pair is the PumpSwap pool,
+ * and every 5m/1h/24h figure above counts only trades since then - said outright, since an
+ * hours-old token can carry a minutes-old pool.
+ */
+function pairAgeText(minutes: number | null, graduated: boolean | undefined): string {
+  if (minutes === null) return "unknown";
+  const ago = `${Math.round(minutes)} minutes ago`;
+  return graduated ? `${ago} (the volume and order flow figures cover only this pool)` : ago;
+}
+
+/** A signed percentage, "+12.0%" or "-4.5%". */
+const fmtSignedPct = (v: number | null) =>
+  v === null || !Number.isFinite(v) ? "unknown" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+
+/**
+ * The scan's own tape of the token's price (curation/pricePath.ts): returns over the last
+ * 5/15/30 minutes, how far it sits off the hour's high and since when, and how many of the last
+ * ten minutes closed up. Omitted when the tape holds nothing for the token yet.
+ */
+function pricePathLines(scored: ScoredToken): string[] {
+  const p = scored.pricePath;
+  if (!p) return [];
+  const known = [
+    p.pathRet5mPct,
+    p.pathRet15mPct,
+    p.pathRet30mPct,
+    p.pathDrawdown60mPct,
+    p.pathMinutesSinceHigh60m,
+    p.pathGreenShare10m,
+  ].some((v) => v !== null);
+  if (!known) return [];
+  return [
+    `price path (the scanner's own tape):`,
+    `- return: last 5m ${fmtSignedPct(p.pathRet5mPct)}, 15m ${fmtSignedPct(p.pathRet15mPct)}, 30m ${fmtSignedPct(p.pathRet30mPct)}`,
+    `- off the last hour's high: ${fmtSignedPct(p.pathDrawdown60mPct)}, high set ${p.pathMinutesSinceHigh60m === null ? "unknown" : `${Math.round(p.pathMinutesSinceHigh60m)} minutes ago`}`,
+    `- share of the last 10 minutes' moves that were up: ${fmtShare(p.pathGreenShare10m)}`,
+    ``,
+  ];
+}
+
+/** How the whole market is doing: the share of this scanner's recent decision moments that doubled. */
+function marketContextLines(scored: ScoredToken): string[] {
+  const m = scored.marketContext;
+  if (!m || (m.mktBaseRate1hPct === null && m.mktBaseRate6hPct === null)) return [];
+  const rate = (v: number | null) => (v === null || !Number.isFinite(v) ? "unknown" : `${v.toFixed(1)}%`);
+  return [
+    `market conditions:`,
+    `- share of this scanner's decision moments that doubled: last hour ${rate(m.mktBaseRate1hPct)}, last 6 hours ${rate(m.mktBaseRate6hPct)}`,
+    ``,
+  ];
+}
+
+/** TokenSage's lineage kinds in words. */
+const LINEAGE_TEXT: Record<string, string> = {
+  [LINEAGE_KIND.original]: "the original",
+  [LINEAGE_KIND.earlyCopy]: "an early copy",
+  [LINEAGE_KIND.copy]: "a copy",
+  [LINEAGE_KIND.lateCopy]: "a late copy",
+  [LINEAGE_KIND.reference]: "a reference to an existing coin",
+};
+
+/**
+ * TokenSage's read of what the coin is about (curation/narrativeFeatures.ts): theme, referent,
+ * whether it copies another coin, the linked X post and the trend match. Its labels come from a
+ * service reading launcher-written text, so they are clipped like the token's own text. Omitted
+ * when TokenSage has not read the coin.
+ */
+function narrativeLines(read: NarrativeRead | undefined): string[] {
+  if (!read) return [];
+  const themes = [...read.categories]
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 3)
+    .map((c) => `${clip(c.label, 40)} (${Math.round(c.confidence * 100)}%)`);
+  const referent =
+    read.referentLabel !== null && (read.referentConfidence ?? 0) > 0
+      ? `${clip(read.referentLabel, 60)}${read.referentKind ? ` (${clip(read.referentKind, 30)})` : ""}, confidence ${fmtShare(read.referentConfidence)}`
+      : "none identified";
+  const lineage =
+    read.lineageKind !== null && LINEAGE_TEXT[read.lineageKind] !== undefined
+      ? `${LINEAGE_TEXT[read.lineageKind]}${read.lineageRank !== null && read.lineageRankOf !== null ? ` (number ${read.lineageRank} of ${read.lineageRankOf} with this name)` : ""}`
+      : "unknown";
+  const lines = [
+    `- themes: ${themes.length > 0 ? themes.join(", ") : "none"}`,
+    `- what it refers to: ${referent}`,
+    `- lineage: ${lineage}; copying a recent coin: ${narrativeIsCopycat(read) ? "yes" : "no"}`,
+    `- same-name launches in the last hour: ${fmtVal(read.siblings1h)}; launches on the same referent in the last hour: ${fmtVal(read.waveLaunches1h)}`,
+    `- TokenSage flags: ${read.flags.length > 0 ? read.flags.map((f) => clip(f, 40)).join("; ") : "none"}`,
+  ];
+  if (narrativeXRead(read)) {
+    lines.push(
+      `- linked X post: ${clip(read.xVerdict ?? "no verdict", 40)}, ${clip(read.xRelation ?? "relation unknown", 40)}, fit ${fmtShare(read.xFit)}`,
+    );
+  }
+  if (read.trendMatched !== null)
+    lines.push(`- matches a current trend: ${read.trendMatched ? "yes" : "no"}`);
+  return [`TokenSage read of the coin:`, ...lines, ``];
+}
+
+/**
  * The brief's trade-by-trade section (curation/tradeFlow.ts): who is buying in the last five
- * minutes, and what the launch's snipers and the dev have done with their bags. Omitted entirely
- * when the worker wasn't tracking the token's trades, rather than a block of "unknown".
+ * minutes, and what the launch's snipers and the dev have done with their bags. Only the lines
+ * whose figures are known: the first-buyers count comes from the chain and the dev's launch buy
+ * from the create message, so either can be known while the trade stream is not, and a block of
+ * "unknown" read as bad news to the reviewer. Omitted entirely when nothing is known.
  */
 function tradeFlowLines(scored: ScoredToken): string[] {
   const f = scored.tradeFlow;
-  if (!f || Object.values(f).every((v) => v === null)) return [];
-  return [
-    `order flow, trade by trade:`,
-    `- distinct buyers in the last 5 minutes: ${fmtVal(f.uniqueBuyers5m)} (${fmtShare(f.newBuyerShare5m)} of them new to this token)`,
-    `- buys per buying wallet (5m): ${fmtVal(f.buysPerBuyer5m, 1)} - well above 1 means bots looping, not demand`,
-    `- average buy (5m): ${f.avgBuySol5m === null ? "unknown" : `${f.avgBuySol5m.toFixed(2)} SOL`}; biggest buyer's share of buy volume: ${fmtShare(f.topBuyerShare5m)}`,
-    `- net SOL flow over 5 minutes vs market cap: ${f.netFlow5mToMcap === null ? "unknown" : `${(f.netFlow5mToMcap * 100).toFixed(2)}%`}; trades per minute: ${fmtVal(f.tradesPerMin5m, 1)}`,
-    `- launch snipers (bought within 30s of launch): ${fmtVal(f.earlyBuyerCount)} wallets, still holding ${f.earlyBuyerHoldPct === null ? "unknown" : `${f.earlyBuyerHoldPct.toFixed(1)}%`} of supply, sold ${fmtShare(f.earlyBuyerSoldShare)} of what they bought`,
-    `- first ${f.firstBuyersSeen ?? FIRST_BUYERS} buyers after launch (dev aside) still holding: ${f.firstBuyersHolding === null ? "unknown" : `${f.firstBuyersHolding} of ${f.firstBuyersSeen ?? FIRST_BUYERS}`}`,
-    `- dev's launch buy: ${f.devInitialBuySol === null ? "unknown" : `${f.devInitialBuySol.toFixed(2)} SOL`}; dev has sold ${fmtShare(f.devSoldShare)} of it`,
-    ``,
-  ];
+  if (!f) return [];
+  const lines: string[] = [];
+  const tradesKnown = [
+    f.uniqueBuyers5m,
+    f.buysPerBuyer5m,
+    f.avgBuySol5m,
+    f.topBuyerShare5m,
+    f.netFlow5mToMcap,
+    f.tradesPerMin5m,
+  ].some((v) => v !== null);
+  if (tradesKnown) {
+    lines.push(
+      `- distinct buyers in the last 5 minutes: ${fmtVal(f.uniqueBuyers5m)} (${fmtShare(f.newBuyerShare5m)} of them new to this token)`,
+      `- buys per buying wallet (5m): ${fmtVal(f.buysPerBuyer5m, 1)} - well above 1 means bots looping, not demand`,
+      `- average buy (5m): ${f.avgBuySol5m === null ? "unknown" : `${f.avgBuySol5m.toFixed(2)} SOL`}; biggest buyer's share of buy volume: ${fmtShare(f.topBuyerShare5m)}`,
+      `- net SOL flow over 5 minutes vs market cap: ${f.netFlow5mToMcap === null ? "unknown" : `${(f.netFlow5mToMcap * 100).toFixed(2)}%`}; trades per minute: ${fmtVal(f.tradesPerMin5m, 1)}`,
+    );
+  }
+  if (f.earlyBuyerCount !== null) {
+    lines.push(
+      `- launch snipers (bought within 30s of launch): ${fmtVal(f.earlyBuyerCount)} wallets, still holding ${f.earlyBuyerHoldPct === null ? "unknown" : `${f.earlyBuyerHoldPct.toFixed(1)}%`} of supply, sold ${fmtShare(f.earlyBuyerSoldShare)} of what they bought`,
+    );
+  }
+  if (f.firstBuyersHolding !== null) {
+    lines.push(
+      `- first ${f.firstBuyersSeen ?? FIRST_BUYERS} buyers after launch (dev aside) still holding: ${f.firstBuyersHolding} of ${f.firstBuyersSeen ?? FIRST_BUYERS}`,
+    );
+  }
+  if (f.devInitialBuySol !== null) {
+    lines.push(
+      `- dev's launch buy: ${f.devInitialBuySol.toFixed(2)} SOL${f.devSoldShare === null ? "" : `; dev has sold ${fmtShare(f.devSoldShare)} of it`}`,
+    );
+  }
+  return lines.length > 0 ? [`order flow, trade by trade:`, ...lines, ``] : [];
+}
+
+/**
+ * A bonding-curve token has no pool, so its liquidity is not unknown: there is none to report.
+ * Spelled out because the instructions tell the reviewer that unknown values are not good news.
+ */
+function poolLiquidityText(scored: ScoredToken): string {
+  if (scored.liquidityUsd === undefined && scored.graduated === false)
+    return "none yet (still on the bonding curve)";
+  return fmtUsd(scored.liquidityUsd);
+}
+
+/**
+ * RugCheck lists the creator only while they hold enough to rank among the top holders, so with a
+ * known creator a missing figure means a small bag, not an unknown one (rugcheck.ts toProfile).
+ */
+function devWalletText(scored: ScoredToken): string {
+  if (scored.devWalletPct !== undefined) return fmtPct(scored.devWalletPct);
+  // The holder list itself must have read cleanly too (an inconsistent one blanks both figures).
+  const creatorKnown = scored.riskFlags !== undefined && !scored.riskFlags.includes(CREATOR_UNKNOWN_FLAG);
+  return creatorKnown && scored.top10HolderPct !== undefined ? "not among the top holders" : "unknown";
 }
 
 /** Clamps a model-reported probability into [0, 1]; anything non-finite becomes 0. */
@@ -221,7 +383,8 @@ export interface ComparableOutcome {
   ageMinutes: number | null;
   priceChange5mPct: number | null;
   priceChange1hPct: number | null;
-  buyRatio1h: number | null;
+  /** The 5-minute buy share, 0-1 - what the models read; the 1h share is retired. */
+  buyRatio5m: number | null;
   top10HolderPct: number | null;
   /** The graded label (CandidateOutcome.labelValue): 0 = loss, log2(peak) for a clean win. */
   labelValue: number;
@@ -239,20 +402,16 @@ const COMPARISON_FEATURES = [
   "ageMinutes",
   "priceChange5mPct",
   "priceChange1hPct",
-  "buyRatio1h",
+  "buyRatio5m",
   "volume1hToMcapRatio",
   "volumeAccel",
   "top10HolderPct",
   "holderCount",
   "graduated",
-  // Trade-by-trade flow (curation/tradeFlow.ts). Older rows lack these; a pair is compared on
-  // the features both sides have, so they sharpen matches without excluding older history.
-  "uniqueBuyers5m",
-  "buysPerBuyer5m",
-  "topBuyerShare5m",
-  "netFlow5mToMcap",
-  "earlyBuyerSoldShare",
-  "devSoldShare",
+  // From the chain (worker launchSnipers.ts). Older rows lack it; a pair is compared on the
+  // features both sides have, so it sharpens matches without excluding older history. The
+  // trade-stream inputs that sat here have been dead since 2026-10-04 and are retired from the
+  // models (notes/model-inputs-review-2026-10-08.md).
   "firstBuyersHolding",
 ] as const;
 const LOG_SCALED = new Set([
@@ -263,8 +422,6 @@ const LOG_SCALED = new Set([
   "volume1hToMcapRatio",
   "volumeAccel",
   "holderCount",
-  "uniqueBuyers5m",
-  "buysPerBuyer5m",
 ]);
 
 const scale = (name: string, v: number) =>
@@ -329,7 +486,7 @@ export function nearestOutcomes(
       ageMinutes: raw(row.features, "ageMinutes"),
       priceChange5mPct: raw(row.features, "priceChange5mPct"),
       priceChange1hPct: raw(row.features, "priceChange1hPct"),
-      buyRatio1h: raw(row.features, "buyRatio1h"),
+      buyRatio5m: raw(row.features, "buyRatio5m"),
       top10HolderPct: raw(row.features, "top10HolderPct"),
       labelValue: row.labelValue,
       disqualified: row.disqualified,
@@ -356,7 +513,7 @@ export function formatComparables(comparables: ComparableOutcome[]): string {
         : c.disqualified
           ? "STOPPED OUT before doubling"
           : `missed (peak ${fmt(c.peak1hReturnPct, (x) => `${x >= 0 ? "+" : ""}${Math.round(x)}%`)})`;
-    return `- mcap ${fmt(c.mcapUsd, (x) => `$${Math.round(x).toLocaleString("en-US")}`)}, age ${fmt(c.ageMinutes, (x) => `${Math.round(x)}m`)}, 5m ${fmt(c.priceChange5mPct, (x) => `${x.toFixed(0)}%`)}, 1h ${fmt(c.priceChange1hPct, (x) => `${x.toFixed(0)}%`)}, 1h buys ${fmt(c.buyRatio1h, (x) => `${Math.round(x * 100)}%`)}, top-10 ${fmt(c.top10HolderPct, (x) => `${x.toFixed(0)}%`)}: ${outcome}`;
+    return `- mcap ${fmt(c.mcapUsd, (x) => `$${Math.round(x).toLocaleString("en-US")}`)}, age ${fmt(c.ageMinutes, (x) => `${Math.round(x)}m`)}, 5m ${fmt(c.priceChange5mPct, (x) => `${x.toFixed(0)}%`)}, 1h ${fmt(c.priceChange1hPct, (x) => `${x.toFixed(0)}%`)}, 5m buys ${fmt(c.buyRatio5m, (x) => `${Math.round(x * 100)}%`)}, top-10 ${fmt(c.top10HolderPct, (x) => `${x.toFixed(0)}%`)}: ${outcome}`;
   });
   return [
     `similar past calls (the ${n} most alike graded moments from this scanner, measured from the alert price):`,

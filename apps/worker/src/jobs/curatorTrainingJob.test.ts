@@ -14,7 +14,12 @@ import {
   type TrainedCuratorParams,
   type ScoredToken,
 } from "@trenchscanner/core";
-import { applyContestResults, describeRowBudget, loadTrainingRows } from "./curatorTrainingJob.js";
+import {
+  applyContestResults,
+  describeRowBudget,
+  loadTrainingRows,
+  withoutEventTwins,
+} from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
   emitCuratedCycle,
@@ -353,5 +358,54 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     expect(budget).toMatchObject({ rows: 5, eventRows: 3, hourlyRows: 2, capped: true });
     expect(budget.historyDays).toBeGreaterThanOrEqual(budget.hourlyDays);
     expect(describeRowBudget(all, windowStart, 100).capped).toBe(false);
+  });
+
+  it("keeps only rows inside the alert band, and decision rows no older than the age cap", async () => {
+    const windowStart = new Date("2099-02-01T00:00:00Z");
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-band` } });
+    const at = (m: number) => new Date(windowStart.getTime() + m * 60_000);
+    const row = (m: number, sampleKind: string, anchorMcapUsd: number, features: object = {}) => ({
+      tokenId: token.id,
+      anchorAt: at(m),
+      finalizedAt: at(m),
+      sampleKind,
+      anchorPriceUsd: 1,
+      anchorMcapUsd,
+      features,
+      score: 50,
+      nextCheckAt: windowStart,
+      labelValue: 0,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+    });
+    await prisma.candidateOutcome.createMany({
+      data: [
+        row(1, "hourly", 50_000),
+        row(2, "hourly", 4_000), // under the band
+        row(3, "event", 50_000, { ageMinutes: 30 }),
+        row(4, "event", 50_000, { ageMinutes: 600 }), // older than the event age cap
+        // The hourly twin of the minute-3 event row, banked in the same scan.
+        { ...row(3, "hourly", 50_000), anchorAt: new Date(at(3).getTime() + 1_000) },
+      ],
+    });
+    const rows = await loadTrainingRows(windowStart, 100, 50, { min: 10_000, max: 1_000_000 });
+    expect(
+      rows.map((r) => `${r.sampleKind}@${(r.anchorAt.getTime() - windowStart.getTime()) / 60_000}`),
+    ).toEqual(["event@3", "hourly@1"]);
+  });
+});
+
+describe("withoutEventTwins", () => {
+  const at = (s: number) => new Date(Date.UTC(2026, 9, 8, 12, 0, s));
+  it("drops an hourly row banked in the same scan as its token's event row, and nothing else", () => {
+    const events = [{ tokenId: "a", anchorAt: at(10) }];
+    const hourly = [
+      { tokenId: "a", anchorAt: at(12), id: "twin" },
+      { tokenId: "a", anchorAt: at(40), id: "later scan" },
+      { tokenId: "b", anchorAt: at(10), id: "other token" },
+    ];
+    expect(withoutEventTwins(hourly, events).map((h) => h.id)).toEqual(["later scan", "other token"]);
   });
 });

@@ -19,6 +19,7 @@ describe.skipIf(!dbAvailable)("loadCandidatePriors", () => {
     const ago = (min: number) => new Date(now - min * 60_000);
     const old = await prisma.token.create({ data: { mintAddress: `${TAG}-old` } });
     const young = await prisma.token.create({ data: { mintAddress: `${TAG}-young` } });
+    const returned = await prisma.token.create({ data: { mintAddress: `${TAG}-returned` } });
     const snap = (tokenId: string, takenAt: Date, holderCount: number | null) => ({
       tokenId,
       takenAt,
@@ -34,6 +35,8 @@ describe.skipIf(!dbAvailable)("loadCandidatePriors", () => {
         snap(old.id, ago(12), 30), // newest at least 10 minutes old
         snap(old.id, ago(1), 40),
         snap(young.id, ago(3), 5), // nothing old enough for either baseline
+        snap(returned.id, ago(180), 50), // left the scan for hours: too old for either baseline
+        snap(returned.id, ago(1), 60),
       ],
     });
     await prisma.candidateOutcome.create({
@@ -52,7 +55,11 @@ describe.skipIf(!dbAvailable)("loadCandidatePriors", () => {
       },
     });
 
-    const priors = await loadCandidatePriors([`${TAG}-old`, `${TAG}-young`, `${TAG}-unknown`], env, now);
+    const priors = await loadCandidatePriors(
+      [`${TAG}-old`, `${TAG}-young`, `${TAG}-returned`, `${TAG}-unknown`],
+      env,
+      now,
+    );
     expect(priors.get(`${TAG}-old`)).toMatchObject({
       holderCount: 20,
       holderCount10m: 30,
@@ -64,6 +71,7 @@ describe.skipIf(!dbAvailable)("loadCandidatePriors", () => {
       holderCount10m: null,
       recentHourlySample: false,
     });
+    expect(priors.get(`${TAG}-returned`)).toMatchObject({ holderCount: null, holderCount10m: null });
     expect(priors.has(`${TAG}-unknown`)).toBe(false);
   });
 });

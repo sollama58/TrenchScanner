@@ -41,9 +41,10 @@ export const CANDIDATE_FEATURE_NAMES = [
   // only features that can see what the price and flow were doing over the minutes just before;
   // on a quarter-hour question a 24h aggregate is weak evidence. All from the same DexScreener
   // response the 24h figures come from; null on rows banked before they were captured (the
-  // trainer's missing-indicators absorb that cleanly). For a token younger than a window,
-  // DexScreener reports the change since launch, so on a launch under an hour old the 1h, 6h and
-  // 24h moves are one and the same figure.
+  // trainer's missing-indicators absorb that cleanly). The windows are per DexScreener pair: for a
+  // pair younger than a window DexScreener reports the change since the pair opened - since launch
+  // on the bonding curve, since graduation once the PumpSwap pool is the canonical pair - so on a
+  // pair under an hour old the 1h, 6h and 24h figures are one and the same.
   "priceChange5mPct",
   "priceChange1hPct",
   "priceChange6hPct",
@@ -163,6 +164,12 @@ export const CANDIDATE_FEATURE_NAMES = [
   // creator fee goes (holders, charity, a GitHub account, other wallets) and the creator's share.
   // Null on reads from older rules.
   ...NARRATIVE_FEATURES_V4,
+  // Added 2026-10-08 (notes/model-inputs-review-2026-10-08.md): minutes since the DexScreener pair
+  // opened. On a graduated token that is the PumpSwap pool, and every 5m/1h/24h figure above is
+  // per pair, so it counts only trades since graduation; without this the models could not tell a
+  // fresh pool on an old token from an old pool. Null when DexScreener gave no pair time, and on
+  // every row banked before.
+  "pairAgeMinutes",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -207,6 +214,36 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "nsEarlierSameName",
   "nsCopyRank",
   "nsWaveRank24h",
+  // Model input review, 2026-10-08 (notes/model-inputs-review-2026-10-08.md). An exact function of
+  // two inputs the learners keep: named = 1[nsReferentConf > 0] - nsReferentGeneric on every read
+  // (1,321 of 1,321 rows).
+  "nsReferentNamed",
+  // Equal to nsXVerdictUnrelated on every row that carries either (1,671 of 1,671).
+  "nsXContentMismatch",
+  // The one order-flow input filled while PumpPortal refuses the trade stream (from the launch's
+  // create message). Without trades the tracker drops a launch within 10-15 minutes, so on the
+  // 2-4% of rows that carry it, its presence says "decided within minutes of launch", not what
+  // the dev bought.
+  "devInitialBuySol",
+  // The trade-by-trade order flow (user decision 2026-10-08): dead since 2026-10-04, as PumpPortal
+  // only streams trades to a funded API key and none is set. Still recorded, so they come back by
+  // removing them here once a key is funded. firstBuyersHolding stays: the chain fills it.
+  "uniqueBuyers5m",
+  "buysPerBuyer5m",
+  "avgBuySol5m",
+  "topBuyerShare5m",
+  "newBuyerShare5m",
+  "netFlow5mToMcap",
+  "tradesPerMin5m",
+  "earlyBuyerCount",
+  "earlyBuyerHoldPct",
+  "earlyBuyerSoldShare",
+  "devSoldShare",
+  // The in-memory tape's length (user decision 2026-10-08): the tape empties on every deploy (13-14
+  // times in three days), so for up to an hour after one every token reads as minutes old and the
+  // models learned it as youth. ageMinutes and minutesSinceFirstInBand carry youth without the
+  // artefact; it stays recorded as the gauge of how far the other path inputs can be trusted.
+  "pathObservedMinutes",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -235,6 +272,32 @@ export const TRADE_FLOW_FEATURES = [
   "devSoldShare",
   "firstBuyersHolding",
 ] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
+
+/**
+ * Rows banked before this carry fake zeros for the order-flow inputs: until PR #127 the PumpPortal
+ * tracker reported 0 buyers and 0 trades for launches whose trades it was never sent (no funded
+ * key). Every such row reads uniqueBuyers5m = 0 and tradesPerMin5m = 0 (1,744 rows from
+ * 2026-10-04 00:39 to 2026-10-05 00:12 UTC). The rows stay in the training window for three
+ * weeks, so the day trades flow they would teach "no buyers" as a real observation.
+ */
+export const TRADE_FLOW_FAKE_ZEROS_UNTIL = new Date("2026-10-05T00:13:00Z");
+
+/**
+ * A stored vector with the inputs known to be wrong on it read as missing: today, the order-flow
+ * inputs on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came
+ * from the create message and is real). Returns the same object when nothing applies.
+ */
+export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
+  anchorAt: Date,
+  features: T,
+): T {
+  if (anchorAt.getTime() >= TRADE_FLOW_FAKE_ZEROS_UNTIL.getTime()) return features;
+  const masked: Record<string, number | null | undefined> = { ...features };
+  for (const name of TRADE_FLOW_FEATURES) {
+    if (name !== "devInitialBuySol" && masked[name] !== undefined) masked[name] = null;
+  }
+  return masked as T;
+}
 
 /** The price-path features, in vector order - each a PricePathFeatures field of the same name. */
 export const PRICE_PATH_FEATURES = [
@@ -356,6 +419,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   buyRatio5m: "5m buy pressure",
   livestreamLive: "live on Pump.fun",
   livestreamViewers: "livestream viewers",
+  pairAgeMinutes: "pair age",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -591,6 +655,8 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     // Nobody watches a stream that isn't on; a live stream whose count the feed left out is unknown.
     livestreamViewers:
       scored.livestream === undefined ? null : scored.livestream.live ? scored.livestream.viewers : 0,
+    // A pair time a few seconds ahead of this clock is skew, not a pool from the future.
+    pairAgeMinutes: pairAgeMinutes === undefined ? null : Math.max(0, pairAgeMinutes),
   };
 }
 

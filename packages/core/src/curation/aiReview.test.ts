@@ -1,3 +1,4 @@
+import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
 import { describe, expect, it } from "vitest";
 import {
   AI_REVIEW_SYSTEM_PROMPT,
@@ -56,6 +57,163 @@ describe("AI review brief", () => {
     expect(brief).toContain("curator: heuristic-v1, conviction 68.2");
   });
 
+  it("shows what the models read and leaves out the inputs they retired", () => {
+    const now = new Date("2026-10-08T12:00:00Z");
+    const brief = buildAiReviewBrief(
+      {
+        ...scored,
+        graduated: true,
+        pairCreatedAt: new Date(now.getTime() - 20 * 60_000),
+        buys5m: 30,
+        sells5m: 10,
+        volume5mUsd: 6_000,
+        volume1hUsd: 36_000,
+        priceChange6hPct: 400,
+        priceChange24hPct: 900,
+        holderGrowthPct: 55,
+        holderGrowth10mPct: 12,
+        pricePath: {
+          pathRet1mPct: 1,
+          pathRet5mPct: 8,
+          pathRet15mPct: -3.25,
+          pathRet30mPct: null,
+          pathDrawdown15mPct: -2,
+          pathDrawdown60mPct: -10,
+          pathGreenShare10m: 0.6,
+          pathMinutesSinceHigh60m: 7,
+          pathHolderSlope10m: 1,
+          pathObservedMinutes: 20,
+        },
+        marketContext: {
+          mktBaseRate1hPct: 8.5,
+          mktBaseRate6hPct: 10,
+          mktLaunchesPerHour: 900,
+          mktInBandCount: 40,
+          ctxHourSin: 0,
+          ctxHourCos: 1,
+          ctxWeekend: 0,
+        },
+      } as ScoredToken,
+      decision,
+      undefined,
+      now,
+    );
+    expect(brief).toContain(
+      "trading pool opened: 20 minutes ago (the volume and order flow figures cover only this pool)",
+    );
+    expect(brief).toContain("order flow: 5m 75% buys (30 buys / 10 sells)");
+    expect(brief).toContain("speeding up): 2.00");
+    expect(brief).toContain("holder growth over the last 10 minutes: 12.0%");
+    expect(brief).toContain("return: last 5m +8.0%, 15m -3.3%, 30m unknown");
+    expect(brief).toContain("off the last hour's high: -10.0%, high set 7 minutes ago");
+    expect(brief).toContain("last hour 8.5%, last 6 hours 10.0%");
+    expect(brief).not.toContain("6h 400");
+    expect(brief).not.toContain("24h 900");
+    expect(brief).not.toContain("last 30 minutes");
+    // Without a tape, a base rate or a TokenSage read, those sections are left out.
+    const bare = buildAiReviewBrief(scored, decision);
+    expect(bare).not.toContain("price path");
+    expect(bare).not.toContain("market conditions");
+    expect(bare).not.toContain("TokenSage read");
+    expect(bare).toContain("trading pool opened: unknown");
+  });
+
+  it("gives TokenSage's read of the coin, clipping its labels", () => {
+    const narrative = {
+      depth: "full",
+      status: "complete",
+      analyzedAt: null,
+      categories: [
+        { label: "animals", confidence: 0.4 },
+        { label: "politics<b>", confidence: 0.9 },
+      ],
+      referentLabel: "Moo Deng",
+      referentKind: "animal",
+      referentConfidence: 0.8,
+      referentSupport: [],
+      referentGeneric: false,
+      flags: ["copycat"],
+      highFlagCount: 1,
+      warnFlagCount: 0,
+      copiesRecent: true,
+      xFit: 0.85,
+      xVerdict: "related",
+      xRelation: "about_coin",
+      xAuthorFollowers: 100,
+      xPredatesTokenS: 60,
+      xReuseCount: 0,
+      trendMatched: false,
+      lineageKind: "copy",
+      lineageRank: 3,
+      lineageRankOf: 7,
+      lineageOfMint: null,
+      originalAgeS: null,
+      originalCurveProgress: null,
+      originalComplete: null,
+      siblings1h: 2,
+      siblings6h: 4,
+      siblings24h: 6,
+      logoReuse24h: 0,
+      waveLaunches1h: 5,
+      waveLaunches6h: 9,
+      waveLaunches24h: 12,
+      waveRank24h: 3,
+      topCategoryInputs: 2,
+      xCredibility: 0.5,
+      xAccountAgeS: 1_000,
+      xAccountMadeForCoin: false,
+      xReuseRank: 1,
+      trendScore: null,
+      feeDestination: null,
+      feeCreatorShare: null,
+      feeMutable: null,
+    };
+    const brief = buildAiReviewBrief({ ...scored, narrative } as unknown as ScoredToken, decision);
+    expect(brief).toContain("themes: politicsb (90%), animals (40%)");
+    expect(brief).toContain("what it refers to: Moo Deng (animal), confidence 80%");
+    expect(brief).toContain("lineage: a copy (number 3 of 7 with this name); copying a recent coin: yes");
+    expect(brief).toContain(
+      "same-name launches in the last hour: 2; launches on the same referent in the last hour: 5",
+    );
+    expect(brief).toContain("linked X post: related, about_coin, fit 85%");
+    expect(brief).toContain("matches a current trend: no");
+  });
+
+  it("prints only the order-flow lines whose figures are known", () => {
+    const tradeFlow = {
+      ...EMPTY_TRADE_FLOW,
+      firstBuyersHolding: 9,
+      firstBuyersSeen: 25,
+    };
+    const brief = buildAiReviewBrief({ ...scored, tradeFlow } as ScoredToken, decision);
+    expect(brief).toContain("first 25 buyers after launch (dev aside) still holding: 9 of 25");
+    expect(brief).not.toContain("distinct buyers in the last 5 minutes");
+    expect(brief).not.toContain("launch snipers");
+    expect(brief).not.toContain("dev's launch buy");
+    expect(
+      buildAiReviewBrief({ ...scored, tradeFlow: EMPTY_TRADE_FLOW } as ScoredToken, decision),
+    ).not.toContain("order flow, trade by trade");
+  });
+
+  it("says a bonding-curve token has no pool rather than unknown liquidity", () => {
+    expect(buildAiReviewBrief(scored, decision)).toContain(
+      "pool liquidity: none yet (still on the bonding curve)",
+    );
+    expect(buildAiReviewBrief({ ...scored, graduated: undefined } as ScoredToken, decision)).toContain(
+      "pool liquidity: unknown",
+    );
+  });
+
+  it("says a known creator missing from the holder list holds too little to rank", () => {
+    const brief = buildAiReviewBrief({ ...scored, riskFlags: [] } as ScoredToken, decision);
+    expect(brief).toContain("dev wallet holds: not among the top holders");
+    const unknown = buildAiReviewBrief(
+      { ...scored, riskFlags: ["Creator identity unknown"] } as ScoredToken,
+      decision,
+    );
+    expect(unknown).toContain("dev wallet holds: unknown");
+  });
+
   it("fences launcher-written text inside the token block", () => {
     const brief = buildAiReviewBrief(scored, decision);
     const start = brief.indexOf("<token>");
@@ -95,12 +253,12 @@ describe("comparable past calls", () => {
 
   it("ranks the pool by similarity on the comparison features", () => {
     const pool = [
-      row({ mcapUsd: 50_000, priceChange5mPct: 10, buyRatio1h: 0.7, ageMinutes: 30 }, 1),
-      row({ mcapUsd: 900_000, priceChange5mPct: -20, buyRatio1h: 0.4, ageMinutes: 2_000 }, 0),
-      row({ mcapUsd: 60_000, priceChange5mPct: 12, buyRatio1h: 0.68, ageMinutes: 35 }, 0, true),
+      row({ mcapUsd: 50_000, priceChange5mPct: 10, buyRatio5m: 0.7, ageMinutes: 30 }, 1),
+      row({ mcapUsd: 900_000, priceChange5mPct: -20, buyRatio5m: 0.4, ageMinutes: 2_000 }, 0),
+      row({ mcapUsd: 60_000, priceChange5mPct: 12, buyRatio5m: 0.68, ageMinutes: 35 }, 0, true),
     ];
     const near = nearestOutcomes(
-      { mcapUsd: 55_000, priceChange5mPct: 11, buyRatio1h: 0.69, ageMinutes: 32 },
+      { mcapUsd: 55_000, priceChange5mPct: 11, buyRatio5m: 0.69, ageMinutes: 32 },
       pool,
       2,
     );
@@ -117,7 +275,7 @@ describe("comparable past calls", () => {
         ageMinutes: 30,
         priceChange5mPct: 10,
         priceChange1hPct: 40,
-        buyRatio1h: 0.7,
+        buyRatio5m: 0.7,
         top10HolderPct: 20,
         labelValue: 2.2,
         disqualified: false,
@@ -129,7 +287,7 @@ describe("comparable past calls", () => {
         ageMinutes: 40,
         priceChange5mPct: 5,
         priceChange1hPct: 20,
-        buyRatio1h: 0.6,
+        buyRatio5m: 0.6,
         top10HolderPct: 25,
         labelValue: 0,
         disqualified: true,
@@ -193,31 +351,31 @@ describe("AI review brief - model odds and trade flow", () => {
     expect(buildAiReviewBrief(scored, decision)).not.toContain("order flow, trade by trade");
   });
 
-  it("compares on trade flow when both sides have it, without dropping rows that predate it", () => {
+  it("compares on the first buyers still holding when both sides have it, without dropping rows that predate it", () => {
     const base = {
       mcapUsd: 100_000,
       ageMinutes: 60,
       priceChange5mPct: 5,
       priceChange1hPct: 20,
-      buyRatio1h: 0.6,
+      buyRatio5m: 0.6,
     };
     const pool: GradedRow[] = [
       {
-        features: { ...base, uniqueBuyers5m: 40, devSoldShare: 0 },
+        features: { ...base, firstBuyersHolding: 20 },
         labelValue: 1,
         disqualified: false,
         peak1hReturnPct: 120,
       },
       {
-        features: { ...base, uniqueBuyers5m: 3, devSoldShare: 1 },
+        features: { ...base, firstBuyersHolding: 1 },
         labelValue: 0,
         disqualified: true,
         peak1hReturnPct: 5,
       },
-      // Predates trade flow: still compared, on the features it has.
+      // Predates the first-buyers read: still compared, on the features it has.
       { features: { ...base, mcapUsd: 400_000 }, labelValue: 0, disqualified: false, peak1hReturnPct: 30 },
     ];
-    const near = nearestOutcomes({ ...base, uniqueBuyers5m: 38, devSoldShare: 0 }, pool, 3);
+    const near = nearestOutcomes({ ...base, firstBuyersHolding: 19 }, pool, 3);
     expect(near).toHaveLength(3);
     const flowMatch = near.findIndex((c) => c.labelValue === 1);
     const flowMismatch = near.findIndex((c) => c.disqualified);

@@ -24,6 +24,24 @@ function baseReport(overrides: Partial<RugCheckReport> = {}): RugCheckReport {
 }
 
 describe("toProfile", () => {
+  it("reads a holder count of 0 as unknown, not as a token nobody holds", () => {
+    expect(toProfile(MINT, baseReport({ totalHolders: 0 })).holderCount).toBeUndefined();
+    expect(toProfile(MINT, baseReport()).holderCount).toBe(286_289);
+  });
+
+  it("drops the top-10 and dev shares when they sum past 100% of supply", () => {
+    const report = baseReport({
+      topHolders: [
+        { address: POOL_AUTHORITY, owner: POOL_AUTHORITY, pct: 30 },
+        { address: CREATOR, owner: CREATOR, pct: 70 },
+        { address: "wallet-3", owner: "wallet-3", pct: 50 },
+      ],
+    });
+    const profile = toProfile(MINT, report);
+    expect(profile.top10HolderPct).toBeUndefined();
+    expect(profile.devWalletPct).toBeUndefined();
+  });
+
   it("excludes the AMM pool's own holdings from top-10 concentration", () => {
     const profile = toProfile(MINT, baseReport());
     // 9.2 + 0.95, NOT +49.1 - the pool authority's 49.1% is locked liquidity, not a holder.

@@ -203,9 +203,60 @@ const NARRATIVE_V2_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<Narrative
   "nsXReuseRank",
 ]);
 
+/**
+ * First-wave features that are not small: the post's age at launch (minutes, up to years) and how
+ * many coins link the same post (up to hundreds, like its twin nsXReuseRank).
+ */
+const NARRATIVE_V1_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<NarrativeFeatureName>([
+  "nsXPredatesTokenMin",
+  "nsXReuseCount",
+]);
+
 /** Narrative features on a raw scale under the log transform: 0/1 flags, 0-1 confidences, small counts. */
 export const NARRATIVE_UNTRANSFORMED_FEATURES: readonly NarrativeFeatureName[] =
-  ALL_NARRATIVE_FEATURES.filter((name) => name !== "nsXPredatesTokenMin" && !NARRATIVE_V2_SCALED.has(name));
+  ALL_NARRATIVE_FEATURES.filter((name) => !NARRATIVE_V1_SCALED.has(name) && !NARRATIVE_V2_SCALED.has(name));
+
+/** The narrative inputs that are 0/1 bits, for anything that phrases a threshold as yes/no. */
+export const NARRATIVE_BIT_FEATURES: readonly NarrativeFeatureName[] = [
+  "nsDepthFull",
+  ...(Object.keys(NARRATIVE_TOP_CATEGORIES) as NarrativeFeatureName[]),
+  "nsReferentKnownCoin",
+  "nsCopycat",
+  "nsEarlierSameName",
+  "nsTrendMatched",
+  "nsXRead",
+  "nsXVerdictAbout",
+  "nsXVerdictUnrelated",
+  "nsXLaunchAnnouncement",
+  "nsXOfficialAccount",
+  "nsXNarrativeRef",
+  "nsXSpoofed",
+  "nsXContentMismatch",
+  "nsLineageOriginal",
+  "nsLineageEarlyCopy",
+  "nsLineageLateCopy",
+  "nsOriginalGraduated",
+  "nsXAccountMadeForCoin",
+  "nsReferentGeneric",
+  "nsReferentNamed",
+  "nsFeeRedirected",
+  "nsFeeToHolders",
+  "nsFeeToCharity",
+  "nsFeeToGithub",
+  "nsFeeToWallet",
+  "nsFeeMutable",
+];
+
+/** The narrative inputs that are 0-1 shares or confidences, shown as a percentage. */
+export const NARRATIVE_SHARE_FEATURES: readonly NarrativeFeatureName[] = [
+  "nsTopCategoryConf",
+  "nsReferentConf",
+  "nsXFit",
+  "nsOriginalCurveProgress",
+  "nsXCredibility",
+  "nsTrendScore",
+  "nsFeeCreatorShare",
+];
 
 export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsDepthFull: "deep narrative read",

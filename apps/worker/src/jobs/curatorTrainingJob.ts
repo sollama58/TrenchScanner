@@ -20,6 +20,8 @@ import {
   lockCuratorModelWrites,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   walletSafetyCutsSql,
+  maskKnownBadInputs,
+  MAX_EVENT_AGE_MINUTES,
   Prisma,
   type ContestRunOutcome,
   type ContestantTrainingResult,
@@ -74,7 +76,10 @@ export async function runCuratorTrainingJob(
   // The Rules seat's exam replays the composite score with today's weights (scoreWeights.ts).
   await refreshScoreWeights();
 
-  const trainingRows = await loadTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS);
+  const trainingRows = await loadTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS, LOAD_PAGE_ROWS, {
+    min: env.MCAP_FILTER_MIN,
+    max: env.MCAP_FILTER_MAX,
+  });
   if (trainingRows.length < MIN_ROWS_TO_TRAIN) {
     logger.info("not enough finalized samples to train yet", {
       rows: trainingRows.length,
@@ -717,11 +722,42 @@ export async function loadTrainingRows(
   windowStart: Date,
   maxRows: number,
   pageRows = LOAD_PAGE_ROWS,
+  band?: { min: number; max: number },
 ): Promise<TrainingRow[]> {
   const events = await loadRowsOfKind("event", windowStart, maxRows, pageRows);
-  const hourly = await loadRowsOfKind("hourly", windowStart, maxRows - events.length, pageRows);
+  const hourly = withoutEventTwins(
+    await loadRowsOfKind("hourly", windowStart, maxRows - events.length, pageRows, band),
+    events,
+  );
   // Newest first, as a single newest-first query would have returned them; ties keep events first.
   return [...events, ...hourly].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
+}
+
+/** An hourly row this close to one of its token's event rows was banked from the same scan. */
+const TWIN_WINDOW_MS = 5_000;
+
+/**
+ * The scan banks a token's hourly row and its event row from the same scored token when both are
+ * due in one cycle, so the moment would sit in the training set twice (a fifth of event rows had
+ * such a twin, 2026-10-08). The event row is the one the exam reads; its hourly twin goes.
+ */
+export function withoutEventTwins<T extends { tokenId?: string; anchorAt: Date }>(
+  hourly: readonly T[],
+  events: readonly { tokenId?: string; anchorAt: Date }[],
+): T[] {
+  const eventTimes = new Map<string, number[]>();
+  for (const e of events) {
+    // A row with no token can't be matched to anything, so it is never anyone's twin.
+    if (e.tokenId === undefined) continue;
+    const list = eventTimes.get(e.tokenId) ?? [];
+    list.push(e.anchorAt.getTime());
+    eventTimes.set(e.tokenId, list);
+  }
+  return hourly.filter((h) => {
+    const times = h.tokenId === undefined ? undefined : eventTimes.get(h.tokenId);
+    const t = h.anchorAt.getTime();
+    return !times?.some((e) => Math.abs(e - t) < TWIN_WINDOW_MS);
+  });
 }
 
 /**
@@ -836,7 +872,18 @@ async function loadRowsOfKind(
   windowStart: Date,
   maxRows: number,
   pageRows: number,
+  band?: { min: number; max: number },
 ): Promise<TrainingRow[]> {
+  // Background rows are banked across the padded scan band, but no call is ever made outside the
+  // curated band: half of them sat under its floor (2026-10-08), teaching a market nobody trades.
+  const bandSql =
+    band !== undefined ? Prisma.sql`AND "anchorMcapUsd" BETWEEN ${band.min} AND ${band.max}` : Prisma.empty;
+  // Decision moments older than the event pre-gate's age cap were banked before the cap existed
+  // (2026-10-05): a live decision can no longer be one, so they neither train nor grade.
+  const ageSql =
+    sampleKind === "event"
+      ? Prisma.sql`AND COALESCE(("features"::jsonb ->> 'ageMinutes')::float8, 0) <= ${MAX_EVENT_AGE_MINUTES}`
+      : Prisma.empty;
   const out: TrainingRow[] = [];
   let cursor: { anchorAt: Date; id: string } | undefined;
   let pages = 0;
@@ -858,11 +905,14 @@ async function loadRowsOfKind(
         AND "anchorAt" >= ${windowStart}
         AND "sampleKind" = ${sampleKind}
         AND ${walletSafetyCutsSql()}
+        ${bandSql}
+        ${ageSql}
         ${cursor !== undefined ? Prisma.sql`AND ("anchorAt", "id") < (${cursor.anchorAt}, ${cursor.id})` : Prisma.empty}
       ORDER BY "anchorAt" DESC, "id" DESC
       LIMIT ${take}`;
     for (const r of page) {
-      const features = r.features as Record<string, number | null>;
+      // Inputs known to be wrong on old rows (fake order-flow zeros) read as missing.
+      const features = maskKnownBadInputs(r.anchorAt, r.features as Record<string, number | null>);
       out.push({
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,

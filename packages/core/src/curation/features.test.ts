@@ -6,6 +6,8 @@ import {
   LEARNER_FEATURE_NAMES,
   RETIRED_LEARNER_INPUTS,
   learnerSubset,
+  maskKnownBadInputs,
+  TRADE_FLOW_FAKE_ZEROS_UNTIL,
 } from "./features.js";
 import type { ScoredToken } from "../types.js";
 
@@ -104,6 +106,17 @@ describe("buildCandidateFeatures - short-window derivations", () => {
         now,
       ).volumeAccel,
     ).toBeCloseTo(2);
+  });
+
+  it("records the pair's age in minutes, null without a pair time", () => {
+    const now = new Date("2026-10-08T12:00:00Z");
+    const at = (pairCreatedAt?: Date) =>
+      buildCandidateFeatures(scored({ pairCreatedAt }), now).pairAgeMinutes;
+    expect(at(new Date(now.getTime() - 90 * 60_000))).toBeCloseTo(90);
+    expect(at(undefined)).toBeNull();
+    expect(at(new Date(Number.NaN))).toBeNull();
+    // A pair time a little ahead of the clock is skew, read as just opened.
+    expect(at(new Date(now.getTime() + 5_000))).toBe(0);
   });
 
   it("records every declared feature name, unknowns as null", () => {
@@ -211,5 +224,34 @@ describe("buildCandidateFeatures - livestream", () => {
     expect(LEARNER_FEATURE_NAMES).toContain("livestreamLive");
     expect(scoredFromFeatures(live, 1, 100_000).livestream).toEqual({ live: true, viewers: 42 });
     expect(scoredFromFeatures(unknown, 1, 100_000).livestream).toBeUndefined();
+  });
+});
+
+describe("maskKnownBadInputs", () => {
+  it("reads the fake order-flow zeros on old rows as missing, and leaves newer rows alone", () => {
+    const row = {
+      uniqueBuyers5m: 0,
+      tradesPerMin5m: 0,
+      devInitialBuySol: 1.5,
+      firstBuyersHolding: 0,
+      mcapUsd: 50_000,
+    };
+    const masked = maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), row);
+    expect(masked).toMatchObject({
+      uniqueBuyers5m: null,
+      tradesPerMin5m: null,
+      firstBuyersHolding: null,
+      devInitialBuySol: 1.5,
+      mcapUsd: 50_000,
+    });
+    expect(row.uniqueBuyers5m).toBe(0);
+    const fresh = maskKnownBadInputs(TRADE_FLOW_FAKE_ZEROS_UNTIL, row);
+    expect(fresh).toBe(row);
+  });
+
+  it("keeps the retired duplicates off the learner list", () => {
+    for (const name of ["nsReferentNamed", "nsXContentMismatch", "devInitialBuySol"] as const) {
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
   });
 });
