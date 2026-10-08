@@ -3,6 +3,7 @@ import {
   ALL_NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
   NARRATIVE_FEATURES_V3,
+  NARRATIVE_FEATURES_V4,
   narrativeFeatureValues,
   narrativeIsLateCopy,
   narrativeReferentNamed,
@@ -61,6 +62,9 @@ function row(overrides: Partial<NarrativeRow> = {}): NarrativeRow {
     xAccountMadeForCoin: null,
     xReuseRank: null,
     trendScore: null,
+    feeDestination: null,
+    feeCreatorShare: null,
+    feeMutable: null,
     ...overrides,
   };
 }
@@ -294,9 +298,44 @@ describe("round trip through a stored feature vector", () => {
     expect(unresolved.nsCopyRank).toBe(15);
   });
 
+  it("records where the creator fee goes (rules 0.19.0), and nothing when the read doesn't say", () => {
+    // Older reads and reads without creator_fee: unknown, not "goes to the creator".
+    const older = narrativeFeatureValues(narrativeReadFromRow(row()));
+    for (const name of NARRATIVE_FEATURES_V4) expect(older[name]).toBeNull();
+    const unknown = narrativeFeatureValues(narrativeReadFromRow(row({ feeDestination: "unknown" })));
+    for (const name of NARRATIVE_FEATURES_V4) expect(unknown[name]).toBeNull();
+    expect(
+      narrativeFeatureValues(narrativeReadFromRow(row({ feeDestination: "creator", feeCreatorShare: 1 }))),
+    ).toMatchObject({ nsFeeRedirected: 0, nsFeeToHolders: 0, nsFeeCreatorShare: 1, nsFeeMutable: 0 });
+    expect(
+      narrativeFeatureValues(
+        narrativeReadFromRow(row({ feeDestination: "holder_rewards", feeCreatorShare: 0 })),
+      ),
+    ).toMatchObject({ nsFeeRedirected: 1, nsFeeToHolders: 1, nsFeeToCharity: 0, nsFeeCreatorShare: 0 });
+    // KindnessCoin: 99% charity, 1% creator, split fixed.
+    expect(
+      narrativeFeatureValues(
+        narrativeReadFromRow(row({ feeDestination: "charity", feeCreatorShare: 0.01, feeMutable: false })),
+      ),
+    ).toMatchObject({ nsFeeRedirected: 1, nsFeeToCharity: 1, nsFeeCreatorShare: 0.01, nsFeeMutable: 0 });
+    expect(
+      narrativeFeatureValues(
+        narrativeReadFromRow(row({ feeDestination: "split", feeCreatorShare: 0.5, feeMutable: true })),
+      ),
+    ).toMatchObject({ nsFeeRedirected: 1, nsFeeToWallet: 1, nsFeeToGithub: 0, nsFeeMutable: 1 });
+    // A destination TokenSage adds later reads as redirected, with no bit of its own.
+    expect(narrativeFeatureValues(narrativeReadFromRow(row({ feeDestination: "x_account" })))).toMatchObject({
+      nsFeeRedirected: 1,
+      nsFeeToWallet: 0,
+      nsFeeCreatorShare: null,
+    });
+  });
+
   it("records every ns* input on the vector", () => {
     for (const name of ALL_NARRATIVE_FEATURES) expect(CANDIDATE_FEATURE_NAMES).toContain(name);
-    // The livestream inputs (added after) follow the narrative ones.
+    // The fee inputs (rules 0.19.0) close the vector, after the livestream inputs.
+    expect(CANDIDATE_FEATURE_NAMES.slice(-NARRATIVE_FEATURES_V4.length)).toEqual([...NARRATIVE_FEATURES_V4]);
+    // The livestream inputs (added after) follow the earlier narrative ones.
     const lastNarrative = CANDIDATE_FEATURE_NAMES.indexOf("livestreamLive") - 1;
     expect(CANDIDATE_FEATURE_NAMES.indexOf("nsReferentNamed")).toBe(lastNarrative);
     expect(CANDIDATE_FEATURE_NAMES.indexOf("nsTrendScore")).toBe(
@@ -315,7 +354,17 @@ describe("round trip through a stored feature vector", () => {
       referentSupport: ["name"],
       referentGeneric: true,
     });
-    for (const r of [row(), fullRow(), row({ depth: "full", trendMatched: false }), lineageRow(), frog]) {
+    const github = row({ feeDestination: "github", feeCreatorShare: 0, feeMutable: false });
+    const creator = row({ feeDestination: "creator", feeCreatorShare: 1, feeMutable: false });
+    for (const r of [
+      row(),
+      fullRow(),
+      row({ depth: "full", trendMatched: false }),
+      lineageRow(),
+      frog,
+      github,
+      creator,
+    ]) {
       const features = buildCandidateFeatures(scoredWith(narrativeReadFromRow(r)));
       const replayed = scoredFromFeatures(features, 0.001, 20_000);
       expect(narrativeFeatureValues(replayed.narrative)).toEqual(

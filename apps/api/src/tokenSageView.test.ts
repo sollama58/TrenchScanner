@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { TokenSageAnalysis } from "@trenchscanner/core";
-import { sageRead, sageTrack, xUrl } from "./tokenSageView.js";
+import { sageCreatorFee, sageRead, sageTrack, xUrl } from "./tokenSageView.js";
 
 const fixture = (name: string) =>
   JSON.parse(
@@ -44,6 +44,59 @@ describe("TokenSage view", () => {
     expect(read.categories).toEqual([]);
     expect(read.referent).toBeNull();
     expect(read.x).toBeNull();
+  });
+
+  it("shows where the creator fee goes (rules 0.19.0), and nothing when the read doesn't say", () => {
+    // KindnessCoin, from the brief: 99% to a donate.gg charity, 1% to the creator.
+    const fee = sageCreatorFee({
+      destination: "charity",
+      mechanism: "sharing_config",
+      mutable: false,
+      shares: { creator: 0.01, charity: 0.99 },
+      recipients: [
+        {
+          address: "8PQxd6VmfGPMyg8WPnfkT9jUTmtE7UsnDmvBKXeAVP9z",
+          share: 0.01,
+          kind: "creator",
+          is_creator: true,
+        },
+        {
+          address: "CYoJ1Hs3Ldk7aa1wpZQ4KfqVQy9AzB9mT3x4Q8qWgyxC",
+          share: 0.99,
+          kind: "charity",
+          is_creator: false,
+          lifetime_received: 57.286407196,
+        },
+      ],
+      summary: "creator fees go to charity: 99% to a charity via donate.gg, 1% to the creator wallet",
+    })!;
+    expect(fee.destination).toBe("charity");
+    expect(fee.shares).toEqual([
+      { kind: "charity", share: 0.99 },
+      { kind: "creator", share: 0.01 },
+    ]);
+    // The creator's own wallet stays out; another recipient links to Solscan.
+    expect(fee.recipients[0]).toMatchObject({ kind: "creator", label: null, url: null });
+    expect(fee.recipients[1]).toMatchObject({
+      kind: "charity",
+      label: "CYoJ…gyxC",
+      url: "https://solscan.io/account/CYoJ1Hs3Ldk7aa1wpZQ4KfqVQy9AzB9mT3x4Q8qWgyxC",
+      lifetimeReceived: 57.286407196,
+    });
+    // A GitHub recipient links to its account; anything else in `url` is dropped.
+    const github = sageCreatorFee({
+      destination: "github",
+      recipients: [
+        { kind: "github", share: 1, github_login: "shelldon", url: "https://github.com/shelldon" },
+        { kind: "github", share: 0, url: "javascript:alert(1)" },
+      ],
+    })!;
+    expect(github.recipients[0]).toMatchObject({ label: "shelldon", url: "https://github.com/shelldon" });
+    expect(github.recipients[1]).toMatchObject({ label: null, url: null });
+    expect(sageCreatorFee(null)).toBeNull();
+    expect(sageCreatorFee(undefined)).toBeNull();
+    expect(sageCreatorFee({ summary: "no destination" })).toBeNull();
+    expect(sageRead(fixture("full").analysis, "full")!.creatorFee).toBeNull();
   });
 
   it("only links to X over https", () => {

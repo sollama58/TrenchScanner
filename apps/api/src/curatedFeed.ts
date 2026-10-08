@@ -32,18 +32,55 @@ import {
  * take-1 per parent in memory - so every feed page pulled every snapshot of every token on it
  * (up to ~1,400 a day per token, 30 days kept) out of the largest table in the database, on
  * every poll. This asks for one row per token through the (tokenId, takenAt) index instead.
+ *
+ * Also attaches `token.creatorFee`: where the coin's creator fee goes, from its TokenSage read
+ * (rules 0.19.0), for the card's Dev tile. Null when the read doesn't say.
  */
-export async function withLatestSnapshots<T extends { token: { id: string } }>(
+export async function withLatestSnapshots<T extends { token: { id: string; mintAddress?: string } }>(
   rows: T[],
   // A caller that already knows the page's tokens can start this lookup alongside its own row
   // load and pass the result in, instead of waiting for the rows first.
   latest?: Promise<Map<string, TokenSnapshot>>,
-): Promise<(T & { token: T["token"] & { snapshots: TokenSnapshot[] } })[]> {
-  const byToken = await (latest ?? latestSnapshotsByToken(rows.map((r) => r.token.id)));
+): Promise<
+  (T & { token: T["token"] & { snapshots: TokenSnapshot[]; creatorFee: CardCreatorFee | null } })[]
+> {
+  const [byToken, fees] = await Promise.all([
+    latest ?? latestSnapshotsByToken(rows.map((r) => r.token.id)),
+    creatorFeesByMint(rows.map((r) => r.token.mintAddress)),
+  ]);
   return rows.map((r) => {
     const snapshot = byToken.get(r.token.id);
-    return { ...r, token: { ...r.token, snapshots: snapshot ? [snapshot] : [] } };
+    const creatorFee = (r.token.mintAddress && fees.get(r.token.mintAddress)) || null;
+    return { ...r, token: { ...r.token, snapshots: snapshot ? [snapshot] : [], creatorFee } };
   });
+}
+
+/** Where a card's coin sends its creator fee (TokenNarrative.feeDestination and feeSummary). */
+export interface CardCreatorFee {
+  destination: string;
+  summary: string | null;
+}
+
+/**
+ * The creator-fee read for each mint that has one, in one primary-key lookup. A failed lookup
+ * leaves the cards without it rather than failing the feed: it is a tooltip line.
+ */
+export async function creatorFeesByMint(
+  mints: readonly (string | undefined)[],
+): Promise<Map<string, CardCreatorFee>> {
+  const unique = [...new Set(mints.filter((m): m is string => typeof m === "string" && m !== ""))];
+  if (unique.length === 0) return new Map();
+  try {
+    const rows = await prisma.tokenNarrative.findMany({
+      where: { mintAddress: { in: unique }, feeDestination: { not: null } },
+      select: { mintAddress: true, feeDestination: true, feeSummary: true },
+    });
+    return new Map(
+      rows.map((r) => [r.mintAddress, { destination: r.feeDestination!, summary: r.feeSummary }]),
+    );
+  } catch {
+    return new Map();
+  }
 }
 
 /**

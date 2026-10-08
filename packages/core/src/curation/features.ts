@@ -12,6 +12,7 @@ import {
   NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
   NARRATIVE_FEATURES_V3,
+  NARRATIVE_FEATURES_V4,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -158,6 +159,10 @@ export const CANDIDATE_FEATURE_NAMES = [
   // scan cycle; null when that read failed and on every row banked before. Never backfilled.
   "livestreamLive",
   "livestreamViewers",
+  // Added 2026-10-08, TokenSage rules 0.19.0 (curation/narrativeFeatures.ts): where the coin's
+  // creator fee goes (holders, charity, a GitHub account, other wallets) and the creator's share.
+  // Null on reads from older rules.
+  ...NARRATIVE_FEATURES_V4,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];

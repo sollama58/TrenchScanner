@@ -10,7 +10,8 @@
  * row carried, so a learner can tell "no X link read yet" from "no X link".
  *
  * Deliberately not here: anything about the creator wallet (user decision 2026-10-04) and the
- * category sub-labels (sparse; the top-level label carries the theme).
+ * category sub-labels (sparse; the top-level label carries the theme). Where the coin's creator
+ * fee goes (the fourth wave) is a fact about the coin, not the wallet's history, so it is here.
  */
 
 import type { CandidateFeatureName } from "./features.js";
@@ -152,16 +153,36 @@ export const NARRATIVE_FEATURES_V2 = [
  */
 export const NARRATIVE_FEATURES_V3 = ["nsReferentGeneric", "nsReferentNamed"] as const;
 
+/**
+ * The fourth wave (TokenSage rules 0.19.0, 2026-10-08): where pump.fun's creator fee goes
+ * (market.creator_fee). About 14% of coins send it somewhere other than the launch wallet: to
+ * holders, a charity, a GitHub account or other wallets. One bit per common destination, the
+ * creator's own share (0-1) and whether the split can still change. Null when the read has no
+ * creator_fee (older rules, or a coin read before it was on-chain) or TokenSage could not read
+ * the config ("unknown"), which is "unknown", not "goes to the creator".
+ */
+export const NARRATIVE_FEATURES_V4 = [
+  "nsFeeRedirected",
+  "nsFeeToHolders",
+  "nsFeeToCharity",
+  "nsFeeToGithub",
+  "nsFeeToWallet",
+  "nsFeeCreatorShare",
+  "nsFeeMutable",
+] as const;
+
 export type NarrativeFeatureName =
   | (typeof NARRATIVE_FEATURES)[number]
   | (typeof NARRATIVE_FEATURES_V2)[number]
-  | (typeof NARRATIVE_FEATURES_V3)[number];
+  | (typeof NARRATIVE_FEATURES_V3)[number]
+  | (typeof NARRATIVE_FEATURES_V4)[number];
 
-/** Every narrative feature, first wave, then second, then third. */
+/** Every narrative feature, in the order the waves were added. */
 export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
   ...NARRATIVE_FEATURES,
   ...NARRATIVE_FEATURES_V2,
   ...NARRATIVE_FEATURES_V3,
+  ...NARRATIVE_FEATURES_V4,
 ];
 
 /** Second-wave features that are counts, ranks or ages: everything else is a 0/1 bit or a 0-1 share. */
@@ -244,6 +265,13 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsTrendScore: "trend strength",
   nsReferentGeneric: "referent is a kind only",
   nsReferentNamed: "named referent",
+  nsFeeRedirected: "creator fee redirected",
+  nsFeeToHolders: "creator fee to holders",
+  nsFeeToCharity: "creator fee to charity",
+  nsFeeToGithub: "creator fee to a GitHub account",
+  nsFeeToWallet: "creator fee to other wallets",
+  nsFeeCreatorShare: "creator's share of the fee",
+  nsFeeMutable: "fee split can still change",
 };
 
 /**
@@ -301,6 +329,13 @@ export interface NarrativeRead {
   xAccountMadeForCoin: boolean | null;
   xReuseRank: number | null;
   trendScore: number | null;
+  /**
+   * Rules 0.19.0+: where the creator fee goes (market.creator_fee.destination), the creator's own
+   * share of it, and whether the split can still change. Null on older reads.
+   */
+  feeDestination: string | null;
+  feeCreatorShare: number | null;
+  feeMutable: boolean | null;
 }
 
 /** The TokenNarrative columns a read is built from (categories is a Json column). */
@@ -348,6 +383,9 @@ export interface NarrativeRow {
   xAccountMadeForCoin: boolean | null;
   xReuseRank: number | null;
   trendScore: number | null;
+  feeDestination?: string | null;
+  feeCreatorShare?: number | null;
+  feeMutable?: boolean | null;
 }
 
 /** The columns narrativeReadFromRow needs, for a Prisma `select`. */
@@ -395,6 +433,9 @@ export const NARRATIVE_ROW_SELECT = {
   xAccountMadeForCoin: true,
   xReuseRank: true,
   trendScore: true,
+  feeDestination: true,
+  feeCreatorShare: true,
+  feeMutable: true,
 } as const;
 
 /**
@@ -457,6 +498,9 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     xAccountMadeForCoin: row.xAccountMadeForCoin ?? null,
     xReuseRank: row.xReuseRank ?? null,
     trendScore: row.trendScore ?? null,
+    feeDestination: row.feeDestination ?? null,
+    feeCreatorShare: row.feeCreatorShare ?? null,
+    feeMutable: row.feeMutable ?? null,
   };
 }
 
@@ -513,6 +557,27 @@ export const REFERENT_KIND_LABELS: Readonly<Record<string, string>> = {
   object: "food, object or idea",
   organization: "company or exchange",
 };
+
+/** TokenSage's creator-fee destinations (rules 0.19.0+); kept open, as TokenSage may add more. */
+export const FEE_DESTINATION = {
+  creator: "creator",
+  holderRewards: "holder_rewards",
+  wallet: "wallet",
+  split: "split",
+  github: "github",
+  charity: "charity",
+  cashback: "cashback",
+  unknown: "unknown",
+} as const;
+
+/**
+ * Where the creator fee goes, when the read says: null without creator_fee (older rules, a coin
+ * read before it was on-chain) and when TokenSage could not read the config ("unknown").
+ */
+export function narrativeFeeDestination(read: NarrativeRead): string | null {
+  const d = read.feeDestination;
+  return d === null || d === undefined || d === FEE_DESTINATION.unknown ? null : d;
+}
 
 /** A named referent: TokenSage identified what the coin is about, not only what kind of thing. */
 export function narrativeReferentNamed(read: NarrativeRead): boolean {
@@ -628,6 +693,29 @@ export function narrativeFeatureValues(
     // Rules 0.17.0+: 0 on older reads, whose referents were all named.
     nsReferentGeneric: bit(read.referentGeneric === true),
     nsReferentNamed: bit(narrativeReferentNamed(read)),
+    // Rules 0.19.0+: null when the read does not say where the fee goes.
+    ...feeFeatureValues(read),
+  };
+}
+
+function feeFeatureValues(
+  read: NarrativeRead,
+): Record<(typeof NARRATIVE_FEATURES_V4)[number], number | null> {
+  const d = narrativeFeeDestination(read);
+  if (d === null) {
+    return Object.fromEntries(NARRATIVE_FEATURES_V4.map((k) => [k, null])) as Record<
+      (typeof NARRATIVE_FEATURES_V4)[number],
+      number | null
+    >;
+  }
+  return {
+    nsFeeRedirected: bit(d !== FEE_DESTINATION.creator),
+    nsFeeToHolders: bit(d === FEE_DESTINATION.holderRewards),
+    nsFeeToCharity: bit(d === FEE_DESTINATION.charity),
+    nsFeeToGithub: bit(d === FEE_DESTINATION.github),
+    nsFeeToWallet: bit(d === FEE_DESTINATION.wallet || d === FEE_DESTINATION.split),
+    nsFeeCreatorShare: read.feeCreatorShare,
+    nsFeeMutable: bit(read.feeMutable === true),
   };
 }
 
@@ -727,6 +815,22 @@ export function narrativeFromFeatures(
     xAccountMadeForCoin: num("nsXAccountMadeForCoin") === null ? null : num("nsXAccountMadeForCoin") === 1,
     xReuseRank: num("nsXReuseRank"),
     trendScore: num("nsTrendScore"),
+    feeDestination:
+      num("nsFeeRedirected") === null
+        ? null
+        : num("nsFeeRedirected") === 0
+          ? FEE_DESTINATION.creator
+          : num("nsFeeToHolders") === 1
+            ? FEE_DESTINATION.holderRewards
+            : num("nsFeeToCharity") === 1
+              ? FEE_DESTINATION.charity
+              : num("nsFeeToGithub") === 1
+                ? FEE_DESTINATION.github
+                : num("nsFeeToWallet") === 1
+                  ? FEE_DESTINATION.wallet
+                  : "other",
+    feeCreatorShare: num("nsFeeCreatorShare"),
+    feeMutable: num("nsFeeMutable") === null ? null : num("nsFeeMutable") === 1,
   };
 }
 

@@ -80,6 +80,12 @@ export function AlertCard({
   const firstSeen = buyersFrom?.firstBuyersSeen ?? null;
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
   const devHolding = card.latestSnapshot?.devHolding ?? s.devHolding ?? null;
+  // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
+  // send it to holders, a charity, a GitHub account or other wallets instead of the dev.
+  const fee = card.token.creatorFee;
+  const feeLine = fee?.summary
+    ? `${fee.summary.charAt(0).toUpperCase()}${fee.summary.slice(1).replace(/\.$/, "")}.`
+    : null;
 
   const figCount = (["alert", "now", "peak"] as const).filter(show).length;
   // The volume field is three tiles (5m / 1h / 24h).
@@ -306,11 +312,12 @@ export function AlertCard({
           {show("dev") && (
             <div
               title={
-                devHolding === null
+                (devHolding === null
                   ? "Dev Holding / Dev Sold: not known for this token yet"
                   : devHolding
                     ? "DH = Dev Holding: the creator's wallet still holds this token (as of the latest scan)"
-                    : "DS = Dev Sold: the creator's wallet holds none of this token (as of the latest scan)"
+                    : "DS = Dev Sold: the creator's wallet holds none of this token (as of the latest scan)") +
+                (feeLine ? `\n${feeLine}` : "")
               }
             >
               <dt>Dev</dt>

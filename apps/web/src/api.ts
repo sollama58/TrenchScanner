@@ -118,6 +118,8 @@ export interface Token {
   /** The last measured top-10 wallet shares, from any scan - for when the snapshots lack one. */
   lastEmptyTop10WalletPct?: number | null;
   lastFreshTop10WalletPct?: number | null;
+  /** Where the coin's creator fee goes, from its TokenSage read; null when the read doesn't say. */
+  creatorFee?: { destination: string; summary: string | null } | null;
 }
 
 export interface Snapshot {

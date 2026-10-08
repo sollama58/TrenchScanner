@@ -694,3 +694,79 @@ describe("narrativeFieldsFromAnalysis on a rules-0.15.0 document", () => {
     expect(unread.lineageKind).toBe("late_copy");
   });
 });
+
+describe("narrativeFieldsFromAnalysis on a rules-0.19.0 document (creator fee)", () => {
+  // The brief's golden cases (TokenSage tests/golden/fee_cases.yaml), cut to the market block.
+  const withFee = (creatorFee: unknown, rules = "0.19.0-full"): TokenSageAnalysis =>
+    ({
+      mint: "FeeMint",
+      depth: "basic",
+      market: { creator: "8PQxd6VmfGPMyg8WPnfkT9jUTmtE7UsnDmvBKXeAVP9z", creator_fee: creatorFee },
+      versions: { rules },
+    }) as TokenSageAnalysis;
+
+  it("keeps a charity split with its shares, mutability and summary", () => {
+    const f = narrativeFieldsFromAnalysis(
+      withFee({
+        destination: "charity",
+        mechanism: "sharing_config",
+        mutable: false,
+        split: true,
+        shares: { creator: 0.01, charity: 0.99 },
+        summary: "creator fees go to charity: 99% to a charity via donate.gg, 1% to the creator wallet",
+      }),
+      "complete",
+    );
+    expect(f).toMatchObject({
+      feeDestination: "charity",
+      feeMechanism: "sharing_config",
+      feeCreatorShare: 0.01,
+      feeMutable: false,
+      feeSummary: "creator fees go to charity: 99% to a charity via donate.gg, 1% to the creator wallet",
+    });
+  });
+
+  it("reads the creator's share as none when the shares leave the creator out", () => {
+    const github = narrativeFieldsFromAnalysis(
+      withFee({ destination: "github", mechanism: "sharing_config", shares: { github: 1 } }),
+      "complete",
+    );
+    expect(github.feeCreatorShare).toBe(0);
+  });
+
+  it("fills the creator's share from the destination when there are no shares", () => {
+    const direct = narrativeFieldsFromAnalysis(
+      withFee({ destination: "creator", mechanism: "direct" }),
+      "complete",
+    );
+    expect(direct).toMatchObject({ feeDestination: "creator", feeCreatorShare: 1, feeMutable: null });
+    const holders = narrativeFieldsFromAnalysis(
+      withFee({
+        destination: "holder_rewards",
+        mechanism: "holder_rewards",
+        summary: "creator fees go to the coin's holders (holder rewards coin)",
+      }),
+      "complete",
+    );
+    expect(holders).toMatchObject({ feeDestination: "holder_rewards", feeCreatorShare: 0 });
+    const unknown = narrativeFieldsFromAnalysis(
+      withFee({ destination: "unknown", shares: null }),
+      "complete",
+    );
+    expect(unknown).toMatchObject({ feeDestination: "unknown", feeCreatorShare: null });
+  });
+
+  it("treats a missing and a null creator_fee alike", () => {
+    const empty = {
+      feeDestination: null,
+      feeMechanism: null,
+      feeCreatorShare: null,
+      feeMutable: null,
+      feeSummary: null,
+    };
+    expect(narrativeFieldsFromAnalysis(withFee(null), "partial")).toMatchObject(empty);
+    expect(narrativeFieldsFromAnalysis(withFee(undefined, "0.18.0-full"), "complete")).toMatchObject(empty);
+    expect(narrativeFieldsFromAnalysis({ mint: "X", market: null }, "complete")).toMatchObject(empty);
+    expect(narrativeFieldsFromAnalysis(withFee("charity"), "complete")).toMatchObject(empty);
+  });
+});
