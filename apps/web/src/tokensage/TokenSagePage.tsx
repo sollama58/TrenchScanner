@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { LogoMark, SageIcon } from "../components/Icons";
+import { LogoMark, SageIcon, SendIcon } from "../components/Icons";
+import { ShareDialog } from "./ShareDialog";
+import type { ShareCardKind } from "./shareCards";
 import {
   compact,
   dayLabel,
@@ -49,31 +51,52 @@ function useShowcase() {
   return { data, error };
 }
 
+/** Opens a section's share image; null until the numbers have loaded. */
+const ShareContext = createContext<((kind: ShareCardKind) => void) | null>(null);
+
+/** The button that opens a section's branded share image. */
+function ShareButton({ kind, label = "Share" }: { kind: ShareCardKind; label?: string }) {
+  const open = useContext(ShareContext);
+  if (!open) return null;
+  return (
+    <button type="button" className="tsg-share" onClick={() => open(kind)}>
+      <SendIcon size={14} />
+      {label}
+    </button>
+  );
+}
+
 export function TokenSagePage() {
   const { data, error } = useShowcase();
+  const [sharing, setSharing] = useState<ShareCardKind | null>(null);
   return (
-    <div className="tsg">
-      <div className="tsg-glow" aria-hidden />
-      <header className="tsg-top">
-        <a href="/" className="tsg-brand">
-          <LogoMark size={26} />
-          <span>TrenchScanner</span>
-        </a>
-        <span className="tsg-pill">Preview</span>
-      </header>
-      <main className="tsg-main">
-        <Hero data={data} />
-        {error && !data ? (
-          <p className="tsg-error" role="alert">
-            The numbers didn't load ({error}). They will try again in a few minutes.
-          </p>
+    <ShareContext.Provider value={data ? setSharing : null}>
+      <div className="tsg">
+        <div className="tsg-glow" aria-hidden />
+        <header className="tsg-top">
+          <a href="/" className="tsg-brand">
+            <LogoMark size={26} />
+            <span>TrenchScanner</span>
+          </a>
+          <span className="tsg-pill">Preview</span>
+        </header>
+        <main className="tsg-main">
+          <Hero data={data} />
+          {error && !data ? (
+            <p className="tsg-error" role="alert">
+              The numbers didn't load ({error}). They will try again in a few minutes.
+            </p>
+          ) : null}
+          <Tiles data={data} />
+          <Anatomy data={data} />
+          {data ? <Sections data={data} /> : <LoadingSections />}
+        </main>
+        <Footer data={data} />
+        {sharing && data ? (
+          <ShareDialog key={sharing} kind={sharing} data={data} onClose={() => setSharing(null)} />
         ) : null}
-        <Tiles data={data} />
-        <Anatomy data={data} />
-        {data ? <Sections data={data} /> : <LoadingSections />}
-      </main>
-      <Footer data={data} />
-    </div>
+      </div>
+    </ShareContext.Provider>
   );
 }
 
@@ -101,6 +124,7 @@ function Hero({ data }: { data: TokenSageShowcase | null }) {
         <div className="tsg-hero-figure">
           <span className="tsg-hero-num">{data ? compact(data.totals.reads) : "…"}</span>
           <span className="tsg-hero-cap">coins read{since ? ` since ${since}` : ""}</span>
+          <ShareButton kind="headline" label="Share the numbers" />
         </div>
       </div>
       <SageArt />
@@ -302,6 +326,7 @@ function Sections({ data }: { data: TokenSageShowcase }) {
     <>
       <Section
         id="volume"
+        share="volume"
         kicker="Every day"
         title={perHour ? "Reads, hour by hour" : "Reads, day by day"}
         lede={`Every coin the scanner sees gets a quick read; the ones a model weighs get the deep one too. ${
@@ -313,6 +338,7 @@ function Sections({ data }: { data: TokenSageShowcase }) {
 
       <Section
         id="themes"
+        share="themes"
         kicker="What the trenches are about"
         title="Themes"
         lede="The theme TokenSage is surest of, one per coin, across every coin it has described."
@@ -347,6 +373,7 @@ function Sections({ data }: { data: TokenSageShowcase }) {
 
       <Section
         id="lineage"
+        share="lineage"
         kicker="Originals and copies"
         title="Most new coins are a copy of something"
         lede="TokenSage lines each coin up against every launch that shared its name, ticker or logo, and says where it falls in the wave."
@@ -384,6 +411,7 @@ function Sections({ data }: { data: TokenSageShowcase }) {
 
       <Section
         id="x"
+        share="x"
         kicker="The X check"
         title="Does the link match the coin?"
         lede="On a deep read TokenSage opens the X post or profile a coin links to and checks it against the coin itself."
@@ -409,6 +437,7 @@ function Sections({ data }: { data: TokenSageShowcase }) {
 
       <Section
         id="flags"
+        share="flags"
         kicker="What to be wary of"
         title="Flags raised"
         lede="Warnings TokenSage attaches to a coin. One coin can carry several."
@@ -457,6 +486,7 @@ function Sections({ data }: { data: TokenSageShowcase }) {
 
       <Section
         id="models"
+        share="models"
         kicker="Into the call"
         title="How the read reaches a buy call"
         lede="The read is an input to TrenchScanner's models, the Narrative model decides on the deep read, and filters and Telegram alerts can screen on it."
@@ -552,17 +582,23 @@ function Section({
   kicker,
   title,
   lede,
+  share,
   children,
 }: {
   id: string;
   kicker: string;
   title: string;
   lede: string;
+  /** The share image this section offers, if any. */
+  share?: ShareCardKind;
   children: ReactNode;
 }) {
   return (
     <section className="tsg-section" id={id} aria-labelledby={`${id}-h`}>
-      <span className="tsg-kicker">{kicker}</span>
+      <div className="tsg-section-head">
+        <span className="tsg-kicker">{kicker}</span>
+        {share ? <ShareButton kind={share} /> : null}
+      </div>
       <h2 id={`${id}-h`}>{title}</h2>
       <p className="tsg-section-lede">{lede}</p>
       {children}
