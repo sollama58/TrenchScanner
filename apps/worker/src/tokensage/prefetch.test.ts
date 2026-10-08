@@ -592,6 +592,31 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     expect(job).not.toHaveBeenCalled();
   });
 
+  it("sends the youngest coins first, and keeps a batch for quick reads behind a deep backlog", async () => {
+    const { client, batch } = fakeClient();
+    batch.mockImplementation(async (entries: { ca: string }[]) =>
+      ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 1 }))),
+    );
+    const two = { ...env, TOKENSAGE_MAX_BATCHES_PER_CYCLE: 2 };
+    const now = Date.now();
+    const launched = (minutesAgo: number) => ({
+      created_at: new Date(now - minutesAgo * 60_000).toISOString(),
+    });
+    const deep = Array.from({ length: 2 * TOKENSAGE_PREFETCH_CHUNK }, (_, i) => `${TAG}-deep${i}`);
+    for (const m of deep) noteNarrativeWanted(m, "full", two, launched(5));
+    const old = Array.from({ length: TOKENSAGE_PREFETCH_CHUNK }, (_, i) => `${TAG}-old${i}`);
+    for (const m of old) noteNarrativeWanted(m, "basic", two, launched(8));
+    const undated = `${TAG}-undated`;
+    noteNarrativeWanted(undated, "basic", two);
+    const fresh = `${TAG}-fresh`;
+    noteNarrativeWanted(fresh, "basic", two, launched(0.2));
+    await flushNarrativeRequests(two, client);
+    expect(batch.mock.calls.map((c) => c[1])).toEqual(["full", "basic"]);
+    const basic = cas(batch.mock.calls[1]!);
+    expect(basic[0]).toBe(fresh);
+    expect(basic).not.toContain(undated);
+  });
+
   it("drops a basic read nobody has asked for again in ten minutes, but not a deep one", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
