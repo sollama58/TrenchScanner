@@ -26,6 +26,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   volume: false,
   scoreColor: true,
   reasons: false,
+  sniperTop10: false,
   quickLinks: ["terminal"],
   hidden: [],
 };
@@ -86,16 +87,18 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
-// "reasons" is listed in the groups but is opt-in too (FeedAppearance.reasons).
+// "reasons" and "sniperTop10" are listed in the groups but are opt-in too (FeedAppearance.reasons,
+// FeedAppearance.sniperTop10).
 const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
 
 /** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
 export function cardHideSet(
-  look: Pick<FeedAppearance, "hidden" | "volume" | "reasons">,
+  look: Pick<FeedAppearance, "hidden" | "volume" | "reasons" | "sniperTop10">,
 ): ReadonlySet<CardField> {
   const out = new Set<CardField>(look.hidden);
   if (!look.volume) out.add("vol");
   if (!look.reasons) out.add("reasons");
+  if (!look.sniperTop10) out.add("sniperTop10");
   return out;
 }
 
@@ -180,6 +183,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     volume: typeof r.volume === "boolean" ? r.volume : d.volume,
     scoreColor: typeof r.scoreColor === "boolean" ? r.scoreColor : d.scoreColor,
     reasons: typeof r.reasons === "boolean" ? r.reasons : d.reasons,
+    sniperTop10: typeof r.sniperTop10 === "boolean" ? r.sniperTop10 : d.sniperTop10,
     quickLinks: Array.isArray(r.quickLinks)
       ? [
           ...new Set(

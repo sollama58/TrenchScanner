@@ -1010,6 +1010,8 @@ export interface FeedAppearance {
   scoreColor: boolean;
   /** The model's reasons under a model call; off by default. */
   reasons: boolean;
+  /** The Top-10 snipers tile; off by default. */
+  sniperTop10: boolean;
   /** Trading sites each card links to; Padre's Trading Terminal by default. */
   quickLinks: QuickLink[];
   hidden: CardField[];
