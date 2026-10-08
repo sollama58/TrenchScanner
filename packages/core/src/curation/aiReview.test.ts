@@ -177,6 +177,26 @@ describe("AI review brief", () => {
     );
     expect(brief).toContain("linked X post: related, about_coin, fit 85%");
     expect(brief).toContain("matches a current trend: no");
+    expect(brief).not.toContain("trades against");
+    expect(brief).not.toContain("the logo looks like");
+    const paired = buildAiReviewBrief(
+      {
+        ...scored,
+        narrative: {
+          ...narrative,
+          pairKind: "token",
+          pairSymbol: "BULL",
+          pairPumpfun: true,
+          logoLabel: "dog",
+          logoScore: 0.91,
+        },
+      } as unknown as ScoredToken,
+      decision,
+    );
+    expect(paired).toContain(
+      "trades against $BULL instead of SOL (launched into its community); it is itself a pump.fun coin",
+    );
+    expect(paired).toContain("the logo looks like: dog (91%");
   });
 
   it("prints only the order-flow lines whose figures are known", () => {

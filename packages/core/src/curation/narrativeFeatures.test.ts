@@ -4,6 +4,7 @@ import {
   NARRATIVE_FEATURES_V2,
   NARRATIVE_FEATURES_V3,
   NARRATIVE_FEATURES_V4,
+  NARRATIVE_FEATURES_V6,
   narrativeFeatureValues,
   narrativeIsLateCopy,
   narrativeReferentNamed,
@@ -356,6 +357,52 @@ describe("round trip through a stored feature vector", () => {
     });
   });
 
+  it("reads the logo (rules 0.25.0) and the pair (rules 0.27.0), and nothing when the read doesn't say", () => {
+    const none = narrativeFeatureValues(narrativeReadFromRow(row()));
+    for (const name of NARRATIVE_FEATURES_V6) expect(none[name]).toBeNull();
+    // A dog logo on an animal coin agrees with its theme; on a political coin it doesn't.
+    expect(
+      narrativeFeatureValues(narrativeReadFromRow(row({ depth: "full", logoLabel: "dog", logoScore: 0.91 }))),
+    ).toMatchObject({
+      nsLogoAnimal: 1,
+      nsLogoMeme: 0,
+      nsLogoText: 0,
+      nsLogoScore: 0.91,
+      nsLogoMatchesTheme: 1,
+    });
+    const trumpDog = row({
+      depth: "full",
+      categories: [{ label: "political", confidence: 0.8 }],
+      logoLabel: "dog",
+      logoScore: 0.7,
+    });
+    expect(narrativeFeatureValues(narrativeReadFromRow(trumpDog))).toMatchObject({
+      nsLogoAnimal: 1,
+      nsLogoMatchesTheme: 0,
+    });
+    // An unclear logo sets no group and says nothing about the theme; its score still counts.
+    expect(
+      narrativeFeatureValues(narrativeReadFromRow(row({ depth: "full", logoLabel: "dog", logoScore: 0.3 }))),
+    ).toMatchObject({ nsLogoAnimal: 0, nsLogoScore: 0.3, nsLogoMatchesTheme: null });
+    // A text logo has a group but no theme to agree with.
+    expect(
+      narrativeFeatureValues(
+        narrativeReadFromRow(row({ depth: "full", logoLabel: "text_logo", logoScore: 0.8 })),
+      ),
+    ).toMatchObject({ nsLogoText: 1, nsLogoAnimal: 0, nsLogoMatchesTheme: null });
+    // The pair: another coin, a pump.fun one, or SOL.
+    expect(
+      narrativeFeatureValues(narrativeReadFromRow(row({ pairKind: "token", pairPumpfun: true }))),
+    ).toMatchObject({ nsPairToken: 1, nsPairPumpfun: 1 });
+    expect(
+      narrativeFeatureValues(narrativeReadFromRow(row({ pairKind: "token", pairPumpfun: null }))),
+    ).toMatchObject({ nsPairToken: 1, nsPairPumpfun: null });
+    expect(narrativeFeatureValues(narrativeReadFromRow(row({ pairKind: "major" })))).toMatchObject({
+      nsPairToken: 0,
+      nsPairPumpfun: 0,
+    });
+  });
+
   it("records every ns* input on the vector", () => {
     for (const name of ALL_NARRATIVE_FEATURES) expect(CANDIDATE_FEATURE_NAMES).toContain(name);
     // The fee inputs (rules 0.19.0) follow the livestream inputs, and pair age follows them.
@@ -387,7 +434,14 @@ describe("round trip through a stored feature vector", () => {
     });
     const github = row({ feeDestination: "github", feeCreatorShare: 0, feeMutable: false });
     const creator = row({ feeDestination: "creator", feeCreatorShare: 1, feeMutable: false });
+    const logos = [
+      row({ depth: "full", logoLabel: "pepe_wojak", logoScore: 0.8, pairKind: "token", pairPumpfun: true }),
+      row({ depth: "full", logoLabel: "cartoon_char", logoScore: 0.9, pairKind: "sol" }),
+      row({ depth: "full", logoLabel: "politician", logoScore: 0.6, pairKind: "token", pairPumpfun: false }),
+      row({ depth: "full", logoLabel: "frog", logoScore: 0.2, pairKind: "token" }),
+    ];
     for (const r of [
+      ...logos,
       row(),
       fullRow(),
       row({ depth: "full", trendMatched: false }),

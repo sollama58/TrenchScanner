@@ -53,7 +53,17 @@ export interface SageRead {
   rulesVersion: string | null;
   launchpad: string | null;
   curveProgress: number | null;
-  pair: { kind: string | null; symbol: string | null } | null;
+  /** What the coin trades against; kind "token" is another coin (rules 0.27.0: any pump.fun coin). */
+  pair: {
+    kind: string | null;
+    symbol: string | null;
+    name: string | null;
+    pumpfun: boolean | null;
+    buildsOn: boolean;
+    about: string | null;
+  } | null;
+  /** The logo's best visual class (rules 0.25.0+, full reads), when its score is 0.5 or more. */
+  logo: { label: string; score: number } | null;
   /** Where the creator fee goes (rules 0.19.0); null on older reads. */
   creatorFee: {
     destination: string;
@@ -173,6 +183,24 @@ const LINEAGE: Record<string, { text: string; tone: "good" | "warn" | "neutral" 
   copy: { text: "Copy", tone: "warn" },
   late_copy: { text: "Late copy", tone: "warn" },
   reference: { text: "Builds on a known coin", tone: "neutral" },
+};
+
+/** TokenSage's logo classes (image.labels) as the tag reads them; others fall back to words(). */
+const LOGO_CLASS: Record<string, string> = {
+  bear_bull: "bear or bull",
+  animal_other: "an animal",
+  pepe_wojak: "Pepe / Wojak",
+  meme_other: "a meme",
+  elon: "Elon",
+  person: "a person",
+  cartoon_char: "a cartoon character",
+  coin_logo: "a coin logo",
+  text_logo: "text",
+  screenshot: "a screenshot",
+  flag: "a flag",
+  crude: "crude art",
+  object: "an object",
+  politician: "a politician",
 };
 
 /** TokenSage's creator-fee destinations, as the view's tag names them. Kept open. */
@@ -507,6 +535,8 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
   const lineage = r.lineage ? LINEAGE[r.lineage.kind] : undefined;
   // The copy mark rides beside the theme: a copy of an animal coin reads as animal, marked a copy.
   const copy = r.copyMark ? (LINEAGE[r.copyMark] ?? LINEAGE.copy) : undefined;
+  // Paired with another coin: launched into its community. SOL, stablecoins and majors: no badge.
+  const pairToken = r.pair?.kind === "token" ? r.pair : null;
   const high = r.flags.filter((f) => f.severity === "high");
   const others = r.flags.filter((f) => f.severity !== "high");
   const readAt = r.analyzedAt ? Date.parse(r.analyzedAt) : null;
@@ -521,7 +551,7 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
           </span>
           <h3 className="sage-referent">{ref ? ref.label : "No clear referent"}</h3>
           {ref?.kind && <span className="pill">{words(ref.kind)}</span>}
-          {(r.mainCategory || copy) && (
+          {(r.mainCategory || copy || pairToken || r.logo) && (
             <div className="sage-marks">
               {r.mainCategory && (
                 <span
@@ -532,6 +562,28 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
                 </span>
               )}
               {copy && <span className={`sage-tag tone-${copy.tone}`}>{copy.text}</span>}
+              {pairToken && (
+                <span
+                  className="sage-tag tone-neutral"
+                  title={
+                    `Trades against ${pairToken.symbol ? `$${pairToken.symbol}` : "another coin"}` +
+                    `${pairToken.name ? ` (${pairToken.name})` : ""} instead of SOL` +
+                    `${pairToken.about ? `; it is about ${pairToken.about}` : ""}` +
+                    `${pairToken.buildsOn ? "; this coin's name builds on it" : ""}`
+                  }
+                >
+                  Paired with {pairToken.symbol ? `$${pairToken.symbol}` : "another coin"}
+                  {pairToken.pumpfun ? " (pump.fun coin)" : ""}
+                </span>
+              )}
+              {r.logo && (
+                <span
+                  className="sage-tag tone-neutral"
+                  title={`What the logo looks like, ${pct0(r.logo.score)} sure. Not what the coin is about.`}
+                >
+                  Logo: {LOGO_CLASS[r.logo.label] ?? words(r.logo.label)}
+                </span>
+              )}
             </div>
           )}
           {ref?.desc && <p className="sage-desc">{ref.desc}</p>}

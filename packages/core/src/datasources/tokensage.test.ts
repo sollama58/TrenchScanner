@@ -387,7 +387,11 @@ describe("narrativeDetails", () => {
       name: "Bonk",
       underlying: null,
       buildsOn: true,
+      pumpfun: null,
     });
+    const pumpPair = fixture("paired_token").analysis as { market: { pair: Record<string, unknown> } };
+    pumpPair.market.pair.pumpfun = true;
+    expect(narrativeDetails(pumpPair).pair).toMatchObject({ kind: "token", pumpfun: true });
     expect(narrativeDetails(fixture("full").analysis).pair).toBeNull();
     expect(narrativeDetails(fixture("partial").analysis).pair).toBeNull();
     const stock = {
@@ -821,5 +825,41 @@ describe("X account signals as context (rules 0.23.0)", () => {
     expect(tokenSageRulesAtLeast("0.3.0", "0.23.0")).toBe(false);
     expect(tokenSageRulesAtLeast(null, "0.23.0")).toBe(false);
     expect(tokenSageRulesAtLeast("dev", "0.23.0")).toBe(false);
+  });
+});
+
+describe("logo labels and pump.fun pairs (rules 0.25.0, 0.27.0)", () => {
+  it("stores the logo's best class and score, and whether the pair is a pump.fun coin", () => {
+    const doc = fixture("paired_token").analysis as TokenSageAnalysis;
+    doc.market!.pair!.pumpfun = true;
+    doc.image = {
+      labels: [
+        { label: "cartoon_char", score: 0.04, model: "siglip-b16-q8/1" },
+        { label: "dog", score: 0.91, model: "siglip-b16-q8/1" },
+      ],
+    };
+    expect(narrativeFieldsFromAnalysis(doc, "complete")).toMatchObject({
+      pairKind: "token",
+      pairPumpfun: true,
+      logoLabel: "dog",
+      logoScore: 0.91,
+    });
+  });
+
+  it("leaves them null on older or basic reads, and on junk", () => {
+    expect(narrativeFieldsFromAnalysis(fixture("paired_token").analysis, "complete")).toMatchObject({
+      pairPumpfun: null,
+      logoLabel: null,
+      logoScore: null,
+    });
+    const junk = {
+      market: { pair: { kind: "token", pumpfun: "yes" } },
+      image: { labels: [null, { label: 3, score: 0.9 }, { label: "dog" }, "cat"] },
+    } as unknown as TokenSageAnalysis;
+    expect(narrativeFieldsFromAnalysis(junk, "complete")).toMatchObject({
+      pairPumpfun: null,
+      logoLabel: null,
+      logoScore: null,
+    });
   });
 });
