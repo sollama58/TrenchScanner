@@ -184,7 +184,7 @@ const envSchema = z.object({
   // is the DAS route's). About 2 credits a wallet plus a little for mint decimals: 40 a cycle is
   // ~80 credits, under the ~100 the 10-wallet DAS budget spent, for four times the wallets.
   WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(40),
-  // The snipers figure (first 25 buyers still holding), read from the chain - see the worker's
+  // The snipers figure (first 15 buyers still holding), read from the chain - see the worker's
   // launchSnipers.ts. Who the first buyers were costs one 10-credit getTransactionsForAddress per
   // token, read once and cached; this many new tokens are read per scan cycle, contenders first.
   // 0 turns the chain read off (the figure then only comes from the trade stream, when it runs).

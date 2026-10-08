@@ -17,7 +17,7 @@ export const EARLY_WINDOW_MS = 30_000;
 export const FLOW_WINDOW_MS = 5 * 60_000;
 
 /** How many of the launch's first buyers the still-holding count follows. */
-export const FIRST_BUYERS = 25;
+export const FIRST_BUYERS = 15;
 /** A first buyer left holding under this share of what they bought counts as sold out (dust). */
 const HOLDING_DUST_SHARE = 0.01;
 

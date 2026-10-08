@@ -183,10 +183,10 @@ describe("AI review brief", () => {
     const tradeFlow = {
       ...EMPTY_TRADE_FLOW,
       firstBuyersHolding: 9,
-      firstBuyersSeen: 25,
+      firstBuyersSeen: 15,
     };
     const brief = buildAiReviewBrief({ ...scored, tradeFlow } as ScoredToken, decision);
-    expect(brief).toContain("first 25 buyers after launch (dev aside) still holding: 9 of 25");
+    expect(brief).toContain("first 15 buyers after launch (dev aside) still holding: 9 of 15");
     expect(brief).not.toContain("distinct buyers in the last 5 minutes");
     expect(brief).not.toContain("launch snipers");
     expect(brief).not.toContain("dev's launch buy");
@@ -361,13 +361,13 @@ describe("AI review brief - model odds and trade flow", () => {
     };
     const pool: GradedRow[] = [
       {
-        features: { ...base, firstBuyersHolding: 20 },
+        features: { ...base, first15BuyersHolding: 14 },
         labelValue: 1,
         disqualified: false,
         peak1hReturnPct: 120,
       },
       {
-        features: { ...base, firstBuyersHolding: 1 },
+        features: { ...base, first15BuyersHolding: 1 },
         labelValue: 0,
         disqualified: true,
         peak1hReturnPct: 5,
@@ -375,7 +375,7 @@ describe("AI review brief - model odds and trade flow", () => {
       // Predates the first-buyers read: still compared, on the features it has.
       { features: { ...base, mcapUsd: 400_000 }, labelValue: 0, disqualified: false, peak1hReturnPct: 30 },
     ];
-    const near = nearestOutcomes({ ...base, firstBuyersHolding: 19 }, pool, 3);
+    const near = nearestOutcomes({ ...base, first15BuyersHolding: 13 }, pool, 3);
     expect(near).toHaveLength(3);
     const flowMatch = near.findIndex((c) => c.labelValue === 1);
     const flowMismatch = near.findIndex((c) => c.disqualified);

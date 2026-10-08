@@ -21,7 +21,7 @@ import {
   type ScoredOutcome,
   scoreCandidateWithModel,
 } from "./trainer.js";
-import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES } from "./features.js";
+import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES, withReplacedInputs } from "./features.js";
 import {
   CONSENSUS_CONTESTANT,
   RULES_CONTESTANT,
@@ -302,8 +302,15 @@ function runFeatures(
   return { usable: new Set(usable), held };
 }
 
-/** A recipe narrowed to the run's usable inputs; one left with none keeps its own list. */
-function narrowRecipe(recipe: CuratorRecipe, usable: ReadonlySet<string> | null): CuratorRecipe {
+/**
+ * A recipe narrowed to the run's usable inputs; one left with none keeps its own list. A stored
+ * list naming a replaced input reads its successor first (REPLACED_LEARNER_INPUTS).
+ */
+function narrowRecipe(wholeRecipe: CuratorRecipe, usable: ReadonlySet<string> | null): CuratorRecipe {
+  const recipe =
+    wholeRecipe.featureNames === undefined
+      ? wholeRecipe
+      : { ...wholeRecipe, featureNames: withReplacedInputs(wholeRecipe.featureNames) };
   if (usable === null) return recipe;
   const wanted = recipe.featureNames ?? LEARNER_FEATURE_NAMES;
   const kept = wanted.filter((f) => usable.has(f));

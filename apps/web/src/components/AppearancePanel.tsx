@@ -492,7 +492,7 @@ function sampleCards(now: number): { won: Card; missed: Card } {
     freshTop10WalletPct: 30,
     emptyTop10WalletPct: 20,
     firstBuyersHolding: 9,
-    firstBuyersSeen: 25,
+    firstBuyersSeen: 15,
     devHolding: false,
     ageMinutes: 14,
     graduated: false,

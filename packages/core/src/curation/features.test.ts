@@ -8,6 +8,7 @@ import {
   learnerSubset,
   maskKnownBadInputs,
   TRADE_FLOW_FAKE_ZEROS_UNTIL,
+  withReplacedInputs,
 } from "./features.js";
 import type { ScoredToken } from "../types.js";
 
@@ -233,20 +234,30 @@ describe("maskKnownBadInputs", () => {
       uniqueBuyers5m: 0,
       tradesPerMin5m: 0,
       devInitialBuySol: 1.5,
-      firstBuyersHolding: 0,
       mcapUsd: 50_000,
     };
     const masked = maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), row);
     expect(masked).toMatchObject({
       uniqueBuyers5m: null,
       tradesPerMin5m: null,
-      firstBuyersHolding: null,
       devInitialBuySol: 1.5,
       mcapUsd: 50_000,
     });
     expect(row.uniqueBuyers5m).toBe(0);
     const fresh = maskKnownBadInputs(TRADE_FLOW_FAKE_ZEROS_UNTIL, row);
     expect(fresh).toBe(row);
+  });
+
+  it("reads a stored recipe's 25-buyer count as the 15-buyer one that replaced it", () => {
+    expect(LEARNER_FEATURE_NAMES).not.toContain("firstBuyersHolding");
+    expect(LEARNER_FEATURE_NAMES).toContain("first15BuyersHolding");
+    expect(withReplacedInputs(["mcapUsd", "firstBuyersHolding"])).toEqual([
+      "mcapUsd",
+      "first15BuyersHolding",
+    ]);
+    expect(withReplacedInputs(["firstBuyersHolding", "first15BuyersHolding"])).toEqual([
+      "first15BuyersHolding",
+    ]);
   });
 
   it("keeps the retired duplicates off the learner list", () => {

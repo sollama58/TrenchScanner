@@ -106,6 +106,7 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubse
   "minutesSinceFirstInBand",
   // Who is doing the buying, trade by trade (curation/tradeFlow.ts).
   ...TRADE_FLOW_FEATURES,
+  "first15BuyersHolding",
 ]);
 
 /**

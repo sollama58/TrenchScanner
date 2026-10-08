@@ -235,7 +235,7 @@ model UserFilter {
   /// maxFreshTop10WalletPct's wallet-age test: a sniper farm can age its wallets, but funding
   /// each one with a real portfolio costs real money.
   maxEmptyTop10WalletPct     Float?
-  /// Bounds on how many of the launch's first 25 buyers still hold it (TokenSnapshot.firstBuyersHolding).
+  /// Bounds on how many of the launch's first 15 buyers still hold it (TokenSnapshot.firstBuyersHolding).
   minFirstBuyersHolding      Int?
   maxFirstBuyersHolding      Int?
   /// TokenSage narrative criteria (packages/core/src/scoring/matchFilters.ts): only / never these
@@ -888,9 +888,10 @@ model TokenSnapshot {
   // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots
   // written before this column existed, and on any snapshot with no holder list at all.
   top10WalletsChecked Int?
-  // Of the first 25 wallets to buy after launch (the dev aside), how many still hold it, out of
-  // firstBuyersSeen (under 25 only while the launch has had fewer buyers). From the worker's
-  // PumpPortal trade stream (curation/tradeFlow.ts), so null for a launch it didn't see.
+  // Of the first 15 wallets to buy after launch (the dev aside), how many still hold it, out of
+  // firstBuyersSeen (under 15 only while the launch has had fewer buyers). From the chain (the
+  // worker's launchSnipers.ts); null until the launch has been read. Rows written before
+  // 2026-10-08 counted the first 25, and say so with a firstBuyersSeen above 15.
   firstBuyersHolding  Int?
   firstBuyersSeen     Int?
   // Whether the dev still holds the token (resolveDevHolding: the trade stream's view of the dev's

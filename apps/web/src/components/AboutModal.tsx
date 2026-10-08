@@ -144,8 +144,8 @@ export function AboutModal({
           </dd>
           <dt>Snipers</dt>
           <dd>
-            Of the first 25 wallets to buy after launch (the dev aside), how many still hold it, shown as
-            12/25. Snipers who have sold out can&apos;t dump on you; ones still holding can. The first buyers
+            Of the first 15 wallets to buy after launch (the dev aside), how many still hold it, shown as
+            9/15. Snipers who have sold out can&apos;t dump on you; ones still holding can. The first buyers
             are read once from the token&apos;s launch transactions on chain and their wallets are rechecked
             every few minutes, so it shows &ldquo;–&rdquo; only until a new token has been checked. You can
             set a minimum or maximum on the Filters tab, and the models read it too.

@@ -140,19 +140,19 @@ describe("maxEmptyTop10WalletPct", () => {
 describe("first buyers still holding", () => {
   const withHolding = (n: number | null) =>
     baseToken({
-      tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersHolding: n, firstBuyersSeen: n === null ? null : 25 },
+      tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersHolding: n, firstBuyersSeen: n === null ? null : 15 },
     });
 
   it("applies the floor and the ceiling", () => {
-    expect(matchesFilter(withHolding(8), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);
-    expect(matchesFilter(withHolding(12), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(true);
-    expect(matchesFilter(withHolding(20), { ...baseFilter, maxFirstBuyersHolding: 15 })).toBe(false);
-    expect(matchesFilter(withHolding(15), { ...baseFilter, maxFirstBuyersHolding: 15 })).toBe(true);
+    expect(matchesFilter(withHolding(4), { ...baseFilter, minFirstBuyersHolding: 6 })).toBe(false);
+    expect(matchesFilter(withHolding(8), { ...baseFilter, minFirstBuyersHolding: 6 })).toBe(true);
+    expect(matchesFilter(withHolding(12), { ...baseFilter, maxFirstBuyersHolding: 9 })).toBe(false);
+    expect(matchesFilter(withHolding(9), { ...baseFilter, maxFirstBuyersHolding: 9 })).toBe(true);
   });
 
   it("fails the floor but skips the ceiling when the launch wasn't seen", () => {
-    expect(matchesFilter(withHolding(null), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);
-    expect(matchesFilter(withHolding(null), { ...baseFilter, maxFirstBuyersHolding: 15 })).toBe(true);
+    expect(matchesFilter(withHolding(null), { ...baseFilter, minFirstBuyersHolding: 6 })).toBe(false);
+    expect(matchesFilter(withHolding(null), { ...baseFilter, maxFirstBuyersHolding: 9 })).toBe(true);
   });
 });
 

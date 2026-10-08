@@ -172,7 +172,7 @@ export async function buildFeatureFillReport(since: Date, until: Date = new Date
   const totalRows = [...rowsByKind.values()].reduce((a, b) => a + b, 0);
   const round = (v: number) => Math.round(v * 1000) / 1000;
   const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 1000) / 10 : null);
-  const tradeFlow = new Set<string>(TRADE_FLOW_FEATURES);
+  const tradeFlow = new Set<string>([...TRADE_FLOW_FEATURES, "firstBuyersHolding", "first15BuyersHolding"]);
   const features = CANDIDATE_FEATURE_NAMES.map((name) => {
     const p = pooled.get(name);
     // A feature missing from a row's JSON (banked before it existed) counts as absent too.

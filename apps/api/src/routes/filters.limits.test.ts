@@ -51,8 +51,10 @@ describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
     const badAge = await call("POST", "/filters", { minTokenAgeMinutes: 30, maxTokenAgeMinutes: 10 });
     expect(badAge.statusCode).toBe(400);
     expect(badAge.json().error).toMatch(/token age/);
-    const badBuyers = await call("POST", "/filters", { minFirstBuyersHolding: 20, maxFirstBuyersHolding: 5 });
+    const badBuyers = await call("POST", "/filters", { minFirstBuyersHolding: 12, maxFirstBuyersHolding: 5 });
     expect(badBuyers.statusCode).toBe(400);
+    // The count is out of the first 15 buyers: a bound past that could never be met.
+    expect((await call("POST", "/filters", { maxFirstBuyersHolding: 16 })).statusCode).toBe(400);
     expect((await call("POST", "/filters", { narrativeKeywords: ["ai", "  "] })).statusCode).toBe(400);
     // Narrative labels are TokenSage slugs: a top-level one or one level under it.
     expect((await call("POST", "/filters", { narrativeCategories: ["Animal Coins"] })).statusCode).toBe(400);

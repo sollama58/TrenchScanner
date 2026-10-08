@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Card, CardField } from "../api";
+import { FIRST_BUYERS, type Card, type CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SageIcon, SlidersIcon } from "./Icons";
 import { openSage } from "../sage";
@@ -299,14 +299,16 @@ export function AlertCard({
             <div
               title={
                 firstHolding === null
-                  ? "First 25 buyers still holding: not checked yet for this token"
-                  : `${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
+                  ? `First ${FIRST_BUYERS} buyers still holding: not checked yet for this token`
+                  : `${firstHolding} of the first ${firstSeen ?? FIRST_BUYERS} buyers after launch still hold it${
                       buyersFrom === s ? ", at alert time" : ", from a scan after the alert"
                     }`
               }
             >
               <dt>Snipers</dt>
-              <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
+              <dd className="num">
+                {firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? FIRST_BUYERS}`}
+              </dd>
             </div>
           )}
           {show("dev") && (

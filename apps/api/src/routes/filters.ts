@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { type Env, prisma, scanBand, loadFilterTrackRecords } from "@trenchscanner/core";
+import { type Env, FIRST_BUYERS, prisma, scanBand, loadFilterTrackRecords } from "@trenchscanner/core";
 import {
   boardFor,
   buildFilterLeaderboard,
@@ -47,8 +47,8 @@ function buildFilterInputSchema(env: Env) {
     minScore: z.number().min(0).max(100).nullable().optional(),
     maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
-    minFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
-    maxFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
+    minFirstBuyersHolding: z.number().int().min(0).max(FIRST_BUYERS).nullable().optional(),
+    maxFirstBuyersHolding: z.number().int().min(0).max(FIRST_BUYERS).nullable().optional(),
     // TokenSage narrative criteria (core matchFilters.ts). Labels are TokenSage's own slugs, a
     // top-level one ("animal") or a full one ("animal/dog"); the taxonomy can grow on their side,
     // so the shape is checked rather than the list.

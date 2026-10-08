@@ -341,7 +341,7 @@ export class PumpPortalStream {
 
   /**
    * A new launch's trades are subscribed to at once rather than on the next flush: its first
-   * seconds are the snipers and bundles the early-buyer and first-25 features exist to see, and
+   * seconds are the snipers and bundles the early-buyer and first-15 features exist to see, and
    * waiting up to FLUSH_INTERVAL_MS for the batch missed them. Queued when the socket isn't open.
    */
   private subscribeNow(mint: string): void {

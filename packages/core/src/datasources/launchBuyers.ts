@@ -1,7 +1,7 @@
 /**
  * Who bought a launch first, read from the chain rather than from a live trade stream.
  *
- * The first-25-buyers count (TradeFlowFeatures.firstBuyersHolding) used to come only from the
+ * The first-15-buyers count (TradeFlowFeatures.firstBuyersHolding) used to come only from the
  * PumpPortal trade stream, which had to be connected at the moment of launch - and the stream
  * stopped sending trades altogether without a funded API key, so every token read "launch not
  * seen". The launch is on chain for good, though: the mint's earliest transactions ARE the

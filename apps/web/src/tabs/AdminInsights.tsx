@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { narrativeCriteriaLines } from "../filterFields";
-import type { FilterCriteria } from "../api";
+import { FIRST_BUYERS, type FilterCriteria } from "../api";
 import { usePolling } from "../hooks";
 import { pct, shortAddress, usd } from "../format";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
@@ -930,8 +930,8 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["maxRiskScore", "risk ≤", (v) => String(v)],
   ["minVolumeMcapRatio", "vol/mcap ≥", (v) => String(v)],
   ["minHolderGrowthPct", "holders ≥", (v) => `+${v}%`],
-  ["minFirstBuyersHolding", "snipers ≥", (v) => `${v}/25`],
-  ["maxFirstBuyersHolding", "snipers ≤", (v) => `${v}/25`],
+  ["minFirstBuyersHolding", "snipers ≥", (v) => `${v}/${FIRST_BUYERS}`],
+  ["maxFirstBuyersHolding", "snipers ≤", (v) => `${v}/${FIRST_BUYERS}`],
 ];
 
 function criteria(f: AdminFilter): string {

@@ -1,4 +1,5 @@
 import type { EnrichedToken, ScoreBreakdown } from "../types.js";
+import { FIRST_BUYERS } from "../curation/tradeFlow.js";
 import { narrativeIsLateCopy, narrativeReferentNamed } from "../curation/narrativeFeatures.js";
 
 /**
@@ -217,8 +218,8 @@ function scoreFreshness(token: EnrichedToken): number {
 }
 
 /**
- * Few empty wallets in the top 10 (0% = 100, 70% or more = 0) and the launch's first 25 buyers
- * still holding (25 = 100), each 50 when unknown. A pre-bond launch whose top 10 hold 15% or less
+ * Few empty wallets in the top 10 (0% = 100, 70% or more = 0) and the launch's first 15 buyers
+ * still holding (all 15 = 100), each 50 when unknown. A pre-bond launch whose top 10 hold 15% or less
  * scores 0: those doubled 2% of the time against 12-20% for every other bracket - supply spread
  * over throwaway wallets, not a healthy book.
  */
@@ -227,7 +228,7 @@ function scoreHolderQuality(token: EnrichedToken): number {
   const empty =
     token.emptyTop10WalletPct === undefined ? 50 : clamp(100 - (token.emptyTop10WalletPct / 70) * 100);
   const held = token.tradeFlow?.firstBuyersHolding;
-  const firstBuyers = held === null || held === undefined ? 50 : clamp((held / 25) * 100);
+  const firstBuyers = held === null || held === undefined ? 50 : clamp((held / FIRST_BUYERS) * 100);
   return clamp(empty * 0.5 + firstBuyers * 0.5);
 }
 

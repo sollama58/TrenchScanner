@@ -240,7 +240,7 @@ export interface FilterCriteria {
   /** Max % of the top-10 holders whose wallet was funded <24h ago - a sniper/insider signal. */
   maxFreshTop10WalletPct?: number | null;
   maxEmptyTop10WalletPct?: number | null;
-  /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */
+  /** Bounds on how many of the launch's first 15 buyers still hold it (tradeFlow.firstBuyersHolding). */
   minFirstBuyersHolding?: number | null;
   maxFirstBuyersHolding?: number | null;
   /**

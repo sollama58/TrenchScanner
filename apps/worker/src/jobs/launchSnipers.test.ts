@@ -22,7 +22,7 @@ function fakeHelius(opts: {
         m,
         n === undefined
           ? { status: "failed" }
-          : { status: "found", complete: n >= 25, buyers: buyers(m, n), launchAt: null },
+          : { status: "found", complete: n >= 15, buyers: buyers(m, n), launchAt: null },
       );
     }
     return out;
@@ -50,13 +50,13 @@ describe("resolveLaunchSnipers", () => {
   it("reads first buyers once, then only refreshes holdings on the TTL", async () => {
     // Even-numbered buyers sold out.
     const f = fakeHelius({
-      found: { A: 25 },
+      found: { A: 15 },
       balance: (a) => (Number(a.split("-a")[1]) % 2 === 0 ? 0 : 900),
     });
     const groups = [{ mintAddress: "A", contender: false }];
     expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 })).get("A")).toEqual({
-      holding: 12,
-      seen: 25,
+      holding: 7,
+      seen: 15,
     });
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 60_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
@@ -67,33 +67,33 @@ describe("resolveLaunchSnipers", () => {
   });
 
   it("keeps contenders fresher and reads them first within the budget", async () => {
-    const f = fakeHelius({ found: { A: 25, B: 25, C: 25 } });
+    const f = fakeHelius({ found: { A: 15, B: 15, C: 15 } });
     const groups = [
       { mintAddress: "C", contender: true },
       { mintAddress: "A", contender: false },
       { mintAddress: "B", contender: false },
     ];
     const first = await resolveLaunchSnipers(groups, f.helius, { ...opts, maxNewLookups: 2, now: 0 });
-    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["C", "A"], 25);
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["C", "A"], 15);
     expect([...first.keys()].sort()).toEqual(["A", "C"]);
     await resolveLaunchSnipers(groups, f.helius, { ...opts, maxNewLookups: 2, now: 61_000 });
-    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["B"], 25);
+    expect(f.getLaunchBuyersBatch).toHaveBeenLastCalledWith(["B"], 15);
     // C (contender, 61s old) and B (new) refreshed; A (61s, not a contender) not.
-    expect(f.getTokenAccountBalances.mock.lastCall![0]).toHaveLength(50);
+    expect(f.getTokenAccountBalances.mock.lastCall![0]).toHaveLength(30);
   });
 
   it("caps refreshed accounts per call", async () => {
-    const f = fakeHelius({ found: { A: 25, B: 25 } });
+    const f = fakeHelius({ found: { A: 15, B: 15 } });
     const groups = [
       { mintAddress: "A", contender: false },
       { mintAddress: "B", contender: false },
     ];
-    const out = await resolveLaunchSnipers(groups, f.helius, { ...opts, maxRefreshAccounts: 30, now: 0 });
+    const out = await resolveLaunchSnipers(groups, f.helius, { ...opts, maxRefreshAccounts: 20, now: 0 });
     expect([...out.keys()]).toEqual(["A"]);
   });
 
   it("leaves a failed read or an unknown balance as unknown, and backs off the failure", async () => {
-    const f = fakeHelius({ found: { A: 25 }, balance: (a) => (a === "A-a3" ? undefined : 0) });
+    const f = fakeHelius({ found: { A: 15 }, balance: (a) => (a === "A-a3" ? undefined : 0) });
     const groups = [
       { mintAddress: "A", contender: false },
       { mintAddress: "X", contender: false },
@@ -103,7 +103,7 @@ describe("resolveLaunchSnipers", () => {
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
   });
 
-  it("re-reads a launch that had fewer than 25 buyers after a while", async () => {
+  it("re-reads a launch that had fewer than 15 buyers after a while", async () => {
     const f = fakeHelius({ found: { A: 10 } });
     const groups = [{ mintAddress: "A", contender: false }];
     expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 })).get("A")).toEqual({
@@ -117,7 +117,7 @@ describe("resolveLaunchSnipers", () => {
   });
 
   it("drops a reading once it is too old to trust", async () => {
-    const f = fakeHelius({ found: { A: 25 } });
+    const f = fakeHelius({ found: { A: 15 } });
     await resolveLaunchSnipers([{ mintAddress: "A", contender: false }], f.helius, { ...opts, now: 0 });
     expect(launchSnipersFromCache(["A"], 1_000).size).toBe(1);
     expect(launchSnipersFromCache(["A"], 31 * 60_000).size).toBe(0);
@@ -126,13 +126,13 @@ describe("resolveLaunchSnipers", () => {
 
 describe("withLaunchSnipers", () => {
   it("fills the figure in when the stream has none, and keeps the stream's when it has one", () => {
-    const snipers = { holding: 7, seen: 25 };
+    const snipers = { holding: 7, seen: 15 };
     expect(withLaunchSnipers(undefined, snipers)).toEqual({
       ...EMPTY_TRADE_FLOW,
       firstBuyersHolding: 7,
-      firstBuyersSeen: 25,
+      firstBuyersSeen: 15,
     });
-    const streamed = { ...EMPTY_TRADE_FLOW, firstBuyersHolding: 3, firstBuyersSeen: 25 };
+    const streamed = { ...EMPTY_TRADE_FLOW, firstBuyersHolding: 3, firstBuyersSeen: 15 };
     expect(withLaunchSnipers(streamed, snipers)).toBe(streamed);
     expect(withLaunchSnipers(undefined, undefined)).toBeUndefined();
   });

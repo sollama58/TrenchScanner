@@ -1,5 +1,8 @@
 import { authHeaders } from "./session";
 
+/** How many of a launch's first buyers the snipers figure follows (core FIRST_BUYERS). */
+export const FIRST_BUYERS = 15;
+
 /**
  * The API client. Every call carries the session cookie (credentials: "include"): the API sets it
  * on sign-in and reads it on every request, and this page lives on a different origin from it.
@@ -139,7 +142,10 @@ export interface Snapshot {
   freshTop10WalletPct: number | null;
   /** Share of the top 10 holders with under $25 of other tokens; null when not checked. */
   emptyTop10WalletPct?: number | null;
-  /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
+  /**
+   * Of the launch's first FIRST_BUYERS buyers (firstBuyersSeen while fewer), how many still hold
+   * it. Snapshots from before 2026-10-08 counted the first 25 and carry firstBuyersSeen up to 25.
+   */
   firstBuyersHolding?: number | null;
   firstBuyersSeen?: number | null;
   /** Whether the dev still holds the token; null when unknown. */

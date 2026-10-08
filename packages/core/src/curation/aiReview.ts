@@ -412,7 +412,7 @@ const COMPARISON_FEATURES = [
   // features both sides have, so it sharpens matches without excluding older history. The
   // trade-stream inputs that sat here have been dead since 2026-10-04 and are retired from the
   // models (notes/model-inputs-review-2026-10-08.md).
-  "firstBuyersHolding",
+  "first15BuyersHolding",
 ] as const;
 const LOG_SCALED = new Set([
   "mcapUsd",

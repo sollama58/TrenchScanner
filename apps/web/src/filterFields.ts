@@ -1,4 +1,4 @@
-import type { FilterCriteria, FilterInput } from "./api";
+import { FIRST_BUYERS, type FilterCriteria, type FilterInput } from "./api";
 import { usd } from "./format";
 
 /** The filter fields shown as numbers, grouped the way the editor and the leaderboard show them. */
@@ -61,15 +61,15 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "minFirstBuyersHolding",
         label: "Min first buyers holding",
-        hint: "of the first 25 buyers; tokens without a count are skipped",
-        unit: "of 25",
+        hint: `of the first ${FIRST_BUYERS} buyers; tokens without a count are skipped`,
+        unit: `of ${FIRST_BUYERS}`,
         step: 1,
       },
       {
         key: "maxFirstBuyersHolding",
         label: "Max first buyers holding",
-        hint: "of the first 25 buyers, e.g. 10 = snipers mostly gone",
-        unit: "of 25",
+        hint: `of the first ${FIRST_BUYERS} buyers, e.g. 6 = snipers mostly gone`,
+        unit: `of ${FIRST_BUYERS}`,
         step: 1,
       },
     ],

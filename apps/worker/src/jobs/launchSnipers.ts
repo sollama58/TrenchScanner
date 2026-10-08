@@ -9,13 +9,13 @@ import {
 const logger = createLogger("launch-snipers");
 
 /**
- * The snipers figure - of the launch's first 25 buyers, how many still hold - read from the chain,
+ * The snipers figure - of the launch's first 15 buyers, how many still hold - read from the chain,
  * so it no longer depends on the trade stream having watched the launch (see
  * packages/core/src/datasources/launchBuyers.ts for why that stream view went dark).
  *
  * Two reads, priced very differently, so they are cached differently:
  *  - Who the first buyers were (getTransactionsForAddress, 10 credits) never changes once there
- *    are 25 of them, so it is read once per token and kept for the life of the process. A token
+ *    are 15 of them, so it is read once per token and kept for the life of the process. A token
  *    with fewer buyers so far is re-read after INCOMPLETE_RETRY_MS.
  *  - Whether they still hold is one getMultipleAccounts over their token accounts - 1 credit per
  *    100 accounts, so four tokens per credit - refreshed on a TTL, faster for contenders.
@@ -40,7 +40,7 @@ const entries = new Map<string, Entry>();
 const failedUntil = new Map<string, number>();
 const FAILURE_BACKOFF_MS = 5 * 60_000;
 /**
- * How soon a launch that had fewer than 25 buyers is read again for the rest, doubling on each
+ * How soon a launch that had fewer than 15 buyers is read again for the rest, doubling on each
  * re-read up to INCOMPLETE_RETRY_MAX_MS: a dud with twelve buyers stays incomplete for as long
  * as it sits in band, and every re-read pays for its whole history again (10+ credits) to learn
  * that nobody new bought.
@@ -57,7 +57,7 @@ const MAX_HOLDING_AGE_MS = 30 * 60_000;
 export interface LaunchSnipers {
   /** Of the first buyers, how many still hold. */
   holding: number;
-  /** How many first buyers there were (25, or fewer while the launch has had fewer). */
+  /** How many first buyers there were (15, or fewer while the launch has had fewer). */
   seen: number;
 }
 
@@ -118,7 +118,7 @@ export async function resolveLaunchSnipers(
   const now = opts.now ?? Date.now();
   for (const [mint, until] of failedUntil) if (until <= now) failedUntil.delete(mint);
 
-  // 1. First buyers, for the mints that don't have them (or had fewer than 25 a while ago).
+  // 1. First buyers, for the mints that don't have them (or had fewer than 15 a while ago).
   const toRead = groups
     .filter((g) => {
       if (failedUntil.has(g.mintAddress)) return false;
