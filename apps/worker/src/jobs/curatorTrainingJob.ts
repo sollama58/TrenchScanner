@@ -121,10 +121,10 @@ export async function runCuratorTrainingJob(
     return [l.generation === 0 && spec.recipe ? { ...l, recipe: spec.recipe } : l];
   });
   const contestants = withLanes(roster, lanes);
-  // The Narrative seat's own rows: every moment that carried the deep read (see
-  // narrativeTrainingRows). Only loaded while the seat is on the roster.
+  // The Narrative seat's second looks (see narrativeTrainingRows). Only loaded while the seat is
+  // on the roster.
   const narrativeRows = contestants.some((c) => c.role === "narrative")
-    ? await narrativeTrainingRows(trainingRows, windowStart, env.CURATOR_TRAINING_MAX_ROWS)
+    ? await narrativeTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS)
     : [];
 
   // A takeover on probation is settled first: confirmed (its challenger takes the seat this
@@ -763,25 +763,19 @@ export function withoutEventTwins<T extends { tokenId?: string; anchorAt: Date }
 }
 
 /**
- * The Narrative seat's training set (curation/contestants.ts): the run's decision moments and
- * hourly background that carried the deep read (nsDepthFull = 1), plus the second looks the scan
- * took when a deep read landed after a token's last decision - those count as decision moments
- * for this seat alone, so they are relabeled "event" here and nowhere else. Newest first, capped
- * like the main set.
+ * The Narrative seat's second looks (curation/contestants.ts): the rows the scan took when a deep
+ * read landed after a token's last decision. They count as decision moments for this seat alone,
+ * so they are relabeled "event" here and nowhere else. The seat's full training set (these plus
+ * every row of the run) is put together in the training thread (narrativeTrainingSet).
  */
 export async function narrativeTrainingRows(
-  trainingRows: readonly TrainingRow[],
   windowStart: Date,
   maxRows: number,
   pageRows = LOAD_PAGE_ROWS,
 ): Promise<TrainingRow[]> {
-  const withRead = trainingRows.filter((r) => r.features.nsDepthFull === 1);
-  const seconds = (
-    await loadRowsOfKind("second", windowStart, Math.max(0, maxRows - withRead.length), pageRows)
-  )
+  return (await loadRowsOfKind("second", windowStart, maxRows, pageRows))
     .filter((r) => r.features.nsDepthFull === 1)
     .map((r) => ({ ...r, sampleKind: "event" }));
-  return [...seconds, ...withRead].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
 }
 
 /** What loadTrainingRows kept, for the run's log: how deep each kind reaches and whether the cap bound. */

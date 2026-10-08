@@ -638,15 +638,42 @@ export interface ContestTrainingConfig extends Omit<CuratorTrainingConfig, "lear
   /** The learned rules the seat runs now, if any - re-examined so it keeps them only on merit. */
   currentRules?: DerivedRuleSet | null;
   /**
-   * The Narrative seat's own training set (contestants.ts): the decision moments and second
-   * looks that carried the deep read, plus the hourly background that did. Absent or shorter
-   * than NARRATIVE_MIN_ROWS, the seat is not examined this run and keeps its running model.
+   * The Narrative seat's second looks (contestants.ts): the rows the scan took when TokenSage's
+   * deep read landed after a token's last decision, relabeled "event" - decision moments for this
+   * seat alone. The seat's training set is these plus every row of the run (see
+   * narrativeTrainingSet), built here rather than passed in, so the run's rows cross into the
+   * training thread once. With fewer than NARRATIVE_MIN_ROWS deep-read rows in that set, the seat
+   * is not examined this run and keeps its running model.
    */
   narrativeRows?: TrainingRow[];
 }
 
-/** Fewest rows the Narrative seat's exam runs on: under this its cutoff would be a coin flip. */
+/** Fewest deep-read rows the Narrative seat's exam runs on: under this its cutoff would be a coin flip. */
 export const NARRATIVE_MIN_ROWS = 300;
+
+/**
+ * The sample kind a Narrative-seat training row without the deep read carries: it trains the
+ * seat but is never one of its decision rows (isDecisionRow knows only "event" and "hourly"), so
+ * the seat is graded and calibrated only on the moments it can decide on.
+ */
+export const NARRATIVE_BACKGROUND_KIND = "narrative-background";
+
+/**
+ * The Narrative seat's training set: every row of the run plus its second looks, newest first.
+ * Trained on the deep-read rows alone it ranked those same moments clearly worse (walk-forward
+ * AUC 0.65 vs 0.68 on 2026-10-08 production rows; user decision 2026-10-08 to train on every
+ * row). It still decides only with the deep read in hand, so it is graded and calibrated only on
+ * rows that carry it: every row without it (nsDepthFull != 1) becomes NARRATIVE_BACKGROUND_KIND.
+ */
+export function narrativeTrainingSet(
+  rows: readonly TrainingRow[],
+  seconds: readonly TrainingRow[],
+): TrainingRow[] {
+  const rest = rows.map((r) =>
+    r.features.nsDepthFull === 1 ? r : { ...r, sampleKind: NARRATIVE_BACKGROUND_KIND },
+  );
+  return [...seconds, ...rest].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
+}
 
 /** A learner's exam, packaged: its stored result plus the rank arrays the consensus stacks on. */
 interface LearnerExam {
@@ -890,13 +917,16 @@ export async function runEvolvingContest(
     keep(spec.id, exam);
   }
 
-  // The Narrative seat sits its own exam on its own rows (the ones with the deep read): a seat
-  // on a different population shares no fold with the learners, so it feeds no combiner and
-  // breeds nothing. Skipped, with its running model kept, until it has rows enough.
+  // The Narrative seat sits its own exam, graded on the rows with the deep read: a seat on a
+  // different population shares no fold with the learners, so it feeds no combiner and breeds
+  // nothing. Skipped, with its running model kept, until it has rows enough.
   const narrativeSpec = cfg.contestants.find((c) => c.role === "narrative");
-  if (narrativeSpec?.recipe && (cfg.narrativeRows?.length ?? 0) >= NARRATIVE_MIN_ROWS) {
-    const own = cfg.narrativeRows!;
-    const ownFeatures = runFeatures(own, cfg);
+  const own = narrativeSpec?.recipe ? narrativeTrainingSet(rows, cfg.narrativeRows ?? []) : [];
+  const deepRead = own.filter((r) => r.sampleKind !== NARRATIVE_BACKGROUND_KIND);
+  if (narrativeSpec?.recipe && deepRead.length >= NARRATIVE_MIN_ROWS) {
+    // Inputs judged on the deep-read rows: across every row the TokenSage inputs are young and
+    // the onset guard would hold them, taking from the seat the very read it waits for.
+    const ownFeatures = runFeatures(deepRead, cfg);
     const exam = await examineLearner(
       own,
       cfg,
@@ -906,7 +936,7 @@ export async function runEvolvingContest(
       null,
       ownFeatures.usable,
     );
-    exam.result.metrics.runnerReport = runnerTraitsReport(own);
+    exam.result.metrics.runnerReport = runnerTraitsReport(deepRead);
     if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
     results.push(exam.result);
   }
