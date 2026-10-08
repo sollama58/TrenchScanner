@@ -18,8 +18,11 @@ const MINT_DOG2 = "LightDog211111111111111111111111111111111111";
 const MINT_AI = "LightAi1111111111111111111111111111111111111";
 const MINT_BAD = "LightBad111111111111111111111111111111111111";
 const MINTS = [MINT_DOG, MINT_DOG2, MINT_AI, MINT_BAD];
+// One hourly rollup row far in the past, at 13:00 UTC, for the hour-of-day chart.
+const ROLLUP_HOUR = new Date(Date.UTC(2021, 0, 5, 13));
 
 async function cleanup() {
+  await prisma.lighthouseHour.deleteMany({ where: { hour: ROLLUP_HOUR } });
   await prisma.curatedAlert.deleteMany({ where: { source: TAG } });
   await prisma.candidateOutcome.deleteMany({ where: { token: { mintAddress: { in: MINTS } } } });
   await prisma.token.deleteMany({ where: { mintAddress: { in: MINTS } } });
@@ -123,6 +126,16 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
         { ...base, tokenId: tokens[2]!.id },
       ],
     });
+    await prisma.lighthouseHour.create({
+      data: {
+        hour: ROLLUP_HOUR,
+        screenedCalls: 10,
+        screenedGraded: 5,
+        screenedWon2x: 2,
+        screenedReturnN: 4,
+        screenedReturnSum: 40,
+      },
+    });
   });
 
   afterAll(async () => {
@@ -186,6 +199,22 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     const bucket = s.byBucket.find((b) => b.graded >= 3);
     expect(bucket).toBeDefined();
     expect(s.hit2xPct).not.toBeNull();
+  });
+
+  it("sums the screened field by hour of the day over the whole hourly history", async () => {
+    const d = (await app.inject({ method: "GET", url: "/guest/lighthouse?days=1" })).json<MarketLighthouse>();
+    const h = d.screened.byHourOfDay;
+    expect(h.hours).toHaveLength(24);
+    expect(h.hours.map((x) => x.hour)).toEqual(Array.from({ length: 24 }, (_, i) => i));
+    // Other suites keep hourly rows too, so the 13:00 column holds at least this test's row.
+    const one = h.hours[13]!;
+    expect(one.calls).toBeGreaterThanOrEqual(10);
+    expect(one.graded).toBeGreaterThanOrEqual(5);
+    expect(one.returnGraded).toBeGreaterThanOrEqual(4);
+    expect(one.hit2xPct).not.toBeNull();
+    expect(one.avgReturnPct).not.toBeNull();
+    // At least the day the seeded row sits in; years when other suites' rows are around.
+    expect(h.days).toBeGreaterThanOrEqual(1);
   });
 
   it("serves the 7-day window and rejects others", async () => {
