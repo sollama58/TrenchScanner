@@ -411,6 +411,8 @@ interface TokenSageReport {
   pairKinds: Count[];
   rulesVersions: Count[];
   copies: Count[];
+  trend?: Count[];
+  trendSources?: Count[];
   outcomes: {
     alerts: number;
     capped: boolean;
@@ -607,6 +609,12 @@ export function TokenSageAdmin() {
                 <Counts title="X link verdict (deep reads)" rows={r.xVerdicts} />
                 <Counts title="Trades against" rows={r.pairKinds} />
                 <Counts title="Copies" rows={r.copies} />
+                <Counts title="In the news (deep reads)" rows={r.trend ?? []} />
+                <Counts
+                  title="Trend sources (deep reads)"
+                  rows={r.trendSources ?? []}
+                  empty="No read has reported its sources yet (rules 0.15.0+)."
+                />
                 <Counts title="Rules version" rows={r.rulesVersions} />
                 <Counts title="Why it failed" rows={r.failReasons} empty="No failures in this window." />
               </div>
