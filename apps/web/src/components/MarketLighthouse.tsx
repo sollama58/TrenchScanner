@@ -212,13 +212,6 @@ function TokenSageSections({
     <>
       <TokenSageKpis d={d} span={span} />
 
-      <Section
-        title="Narrative tide"
-        note={`Coins read per ${d.window.bucketHours === 1 ? "hour" : "6 hours"}, by the narrative TokenSage is surest of.`}
-      >
-        <Tide d={d} cls={cls} />
-      </Section>
-
       <div className="lh-grid">
         <Section
           title="Narrative mix"
@@ -403,91 +396,7 @@ function Section({ title, note, children }: { title: string; note?: string; chil
   );
 }
 
-function bucketLabel(iso: string, bucketHours: number) {
-  const t = new Date(iso);
-  if (bucketHours === 1) return t.toLocaleTimeString([], { hour: "numeric" });
-  return `${t.toLocaleDateString([], { weekday: "short" })} ${t.toLocaleTimeString([], { hour: "numeric" })}`;
-}
-
-/** Stacked columns: coins read per bucket, split by narrative. Hover or tap a column to read it. */
-function Tide({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) {
-  const [hover, setHover] = useState<number | null>(null);
-  const { buckets, series } = d.tide;
-  const totals = buckets.map((_, i) => series.reduce((s, x) => s + (x.values[i] ?? 0), 0));
-  const max = Math.max(1, ...totals);
-  if (totals.every((t) => t === 0)) return <p className="muted small">No coins described in this window.</p>;
-  // At rest the readout shows the newest bucket with reads in it (the current one may be empty yet).
-  const latest = totals.reduce((last, t, i) => (t > 0 ? i : last), totals.length - 1);
-  // A hover from before the window switched (7 days has more buckets than 24 hours) is stale.
-  const shown = hover !== null && hover < buckets.length ? hover : latest;
-  // Bottom-up: the biggest narrative sits on the baseline.
-  const stack = series;
-  const tickEvery = Math.ceil(buckets.length / 6);
-  return (
-    <div className="lh-tide">
-      <Legend labels={series.map((s) => s.label)} cls={cls} />
-      <div className="lh-readout" aria-live="polite">
-        <strong>{bucketLabel(buckets[shown]!, d.window.bucketHours)}</strong>
-        <span className="num">{totals[shown]!.toLocaleString()} coins</span>
-        {stack
-          .filter((s) => (s.values[shown] ?? 0) > 0)
-          .map((s) => (
-            <span key={s.label} className="lh-readout-item">
-              <span className={`lh-swatch ${cls(s.label)}`} />
-              {words(s.label)} <span className="num">{s.values[shown]}</span>
-            </span>
-          ))}
-      </div>
-      <div
-        className="lh-cols"
-        role="img"
-        aria-label={`Coins read per bucket, peaking at ${max.toLocaleString()}`}
-        onMouseLeave={() => setHover(null)}
-      >
-        {buckets.map((b, i) => (
-          <div
-            key={b}
-            className={`lh-col${hover === i ? " is-hover" : ""}`}
-            onMouseEnter={() => setHover(i)}
-            onClick={() => setHover(i)}
-          >
-            <div className="lh-col-stack" style={{ height: `${(totals[i]! / max) * 100}%` }}>
-              {stack.map((s) =>
-                (s.values[i] ?? 0) > 0 ? (
-                  <span
-                    key={s.label}
-                    className={cls(s.label)}
-                    style={{ flexGrow: s.values[i], flexBasis: 0 }}
-                  />
-                ) : null,
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="lh-axis" aria-hidden>
-        {buckets.map((b, i) => (
-          <span key={b}>{i % tickEvery === 0 ? bucketLabel(b, d.window.bucketHours) : ""}</span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function Legend({ labels, cls }: { labels: string[]; cls: (l: string) => string }) {
-  return (
-    <ul className="lh-legend">
-      {labels.map((l) => (
-        <li key={l}>
-          <span className={`lh-swatch ${cls(l)}`} />
-          {words(l)}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** The tide's totals as a ring, the same colors, labeled beside it. */
+/** The window's narrative totals as a ring, labeled beside it. */
 function Donut({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) {
   const [hover, setHover] = useState<string | null>(null);
   const parts = d.tide.series
