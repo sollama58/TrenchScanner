@@ -563,6 +563,11 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(alerts.map((a) => a.model)).toEqual([RULES_CONTESTANT]);
     expect(alerts[0]).toMatchObject({ narrativeVerdict: "agrees" });
     expect(alerts[0]!.narrativeNotedAt).not.toBeNull();
+    // What the verdict rests on goes with it, for the TokenSage view.
+    expect(alerts[0]!.narrativeRationale).toMatchObject({
+      for: expect.any(Array),
+      against: expect.any(Array),
+    });
 
     // A later deep read does not overwrite the note; a coin nobody called gets no note and
     // the seat's own call.

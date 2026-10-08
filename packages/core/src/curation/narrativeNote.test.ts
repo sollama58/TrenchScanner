@@ -4,6 +4,7 @@ import {
   NARRATIVE_NOTE_MIN_GRADED,
   narrativeNoteChoice,
   narrativeNoteReadiness,
+  parseNarrativeRationale,
   showsNarrativeNote,
 } from "./narrativeNote.js";
 
@@ -40,5 +41,19 @@ describe("the Narrative note's automatic default", () => {
     expect(narrativeNoteChoice({ narrativeNote: "yes" })).toBeNull();
     expect(narrativeNoteChoice({ narrativeNote: false })).toBe(false);
     expect(narrativeNoteChoice({ narrativeNote: true })).toBe(true);
+  });
+});
+
+describe("parseNarrativeRationale", () => {
+  it("reads a stored rationale and turns away anything else", () => {
+    const stored = { probabilityPct: 41.2, calibratedPct: 38, for: ["X post fit"], against: ["late copy"] };
+    expect(parseNarrativeRationale(stored)).toEqual(stored);
+    expect(parseNarrativeRationale({ ...stored, calibratedPct: undefined })).toMatchObject({
+      calibratedPct: null,
+    });
+    expect(parseNarrativeRationale({ ...stored, for: [1, "a"] })!.for).toEqual(["a"]);
+    expect(parseNarrativeRationale(null)).toBeNull();
+    expect(parseNarrativeRationale([])).toBeNull();
+    expect(parseNarrativeRationale({ for: [], against: [] })).toBeNull();
   });
 });

@@ -1,7 +1,14 @@
 import type { FastifyInstance } from "fastify";
-import { prisma, type TokenSageAnalysis } from "@trenchscanner/core";
+import { NARRATIVE_CONTESTANT, Prisma, prisma, type TokenSageAnalysis } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
-import { sageRead, sageTrack, type DayLabelRow, type SageView } from "../tokenSageView.js";
+import {
+  sageNarrative,
+  sageRead,
+  sageTrack,
+  type DayLabelRow,
+  type NarrativeAlertRow,
+  type SageView,
+} from "../tokenSageView.js";
 
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -67,7 +74,7 @@ export async function registerTokenRoutes(app: FastifyInstance) {
         select: { id: true, symbol: true, name: true, imageUrl: true, firstSeenAt: true },
       }),
     ]);
-    const [snapshots, labels] = await Promise.all([
+    const [snapshots, labels, judged] = await Promise.all([
       token
         ? prisma.tokenSnapshot.findMany({
             where: { tokenId: token.id },
@@ -87,6 +94,26 @@ export async function registerTokenRoutes(app: FastifyInstance) {
             }),
           )
         : [],
+      // The Narrative seat's judgments of this coin: its own calls and the notes it left on
+      // other seats' cards. A coin carries a handful of cards at most.
+      token
+        ? prisma.curatedAlert.findMany({
+            where: {
+              tokenId: token.id,
+              narrativeRationale: { not: Prisma.DbNull },
+              OR: [{ model: NARRATIVE_CONTESTANT }, { narrativeVerdict: { not: null } }],
+            },
+            orderBy: { createdAt: "desc" },
+            take: 10,
+            select: {
+              model: true,
+              createdAt: true,
+              narrativeVerdict: true,
+              narrativeNotedAt: true,
+              narrativeRationale: true,
+            },
+          })
+        : ([] as NarrativeAlertRow[]),
     ]);
     const read =
       row?.status === "failed"
@@ -116,6 +143,7 @@ export async function registerTokenRoutes(app: FastifyInstance) {
         .reverse()
         .map((s) => ({ t: s.takenAt.toISOString(), usd: s.marketCapUsd })),
       track: read ? sageTrack(labels, row?.categories, row?.mainCategory) : null,
+      narrative: sageNarrative(judged),
     };
   });
 }

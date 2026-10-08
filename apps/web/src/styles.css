@@ -6051,6 +6051,40 @@ button.small-btn {
   border-color: color-mix(in srgb, var(--bad) 40%, transparent);
   background: var(--bad-wash);
 }
+.sage-why {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.sage-why ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.sage-why li {
+  margin: 0;
+  padding: 0;
+  list-style: disc;
+}
+.sage-why li + li {
+  margin-top: 2px;
+}
+.sage-why-head {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.sage-why-head.tone-good {
+  color: var(--good-ink);
+}
+.sage-why-head.tone-warn {
+  color: var(--bad-ink);
+}
+@media (max-width: 420px) {
+  .sage-why {
+    grid-template-columns: 1fr;
+  }
+}
 .sage-bars {
   display: grid;
   gap: 7px;
@@ -6328,4 +6362,584 @@ button.small-btn {
   align-items: center;
   gap: 6px;
   flex: none;
+}
+
+/* The Live tab's picture tour (AboutModal, TourArt) */
+.tour-modal {
+  width: min(600px, calc(100vw - 32px));
+}
+.tour-modal .about-body {
+  padding-bottom: 0;
+}
+.tour-slide {
+  animation: tour-in 0.22s ease-out;
+}
+@keyframes tour-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-slide {
+    animation: none;
+  }
+}
+.tour-art-wrap {
+  margin: 4px -4px 10px;
+  padding: 10px 8px 4px;
+  border-radius: var(--radius-s);
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--brand-a) 12%, transparent), transparent 70%),
+    var(--surface-2);
+  border: 1px solid var(--border);
+}
+.tour-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.tour-step {
+  display: block;
+  margin-top: 4px;
+}
+.about-body h3.tour-title {
+  margin: 2px 0 8px;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+.about-body p.tour-lead {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.55;
+}
+.about-body p.tour-note {
+  font-size: 13px;
+  color: var(--muted);
+}
+.tour-note .pill {
+  vertical-align: 1px;
+}
+.tour-lead .good,
+.tour-card .good {
+  color: var(--good-ink);
+}
+.tour-lead .bad {
+  color: var(--bad-ink);
+}
+.about-body ul.tour-checks {
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  margin: 4px 0 10px;
+}
+.about-body .tour-checks li {
+  position: relative;
+  padding-left: 24px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.tour-checks li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 50%;
+  color: var(--good-ink);
+  background: var(--good-wash);
+  border: 1px solid color-mix(in srgb, var(--good) 40%, transparent);
+}
+.tour-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.tour-pair > div {
+  padding: 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.about-body .tour-pair p {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.tour-goal {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-s);
+  background: var(--good-wash);
+  border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+}
+.tour-goal .num {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--good-ink);
+}
+.about-body ol.tour-legend {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  counter-reset: legend;
+  display: grid;
+  gap: 6px;
+}
+.tour-legend li {
+  counter-increment: legend;
+  position: relative;
+  padding-left: 28px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.tour-legend li::before {
+  content: counter(legend);
+}
+.tour-legend li::before,
+.tour-spot {
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  flex: none;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--brand-a);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-a) 25%, transparent);
+}
+.tour-legend li::before {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+/* The pretend card on "Reading a card" */
+.tour-card {
+  display: grid;
+  gap: 10px;
+  max-width: 420px;
+  margin: 6px auto 8px;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.tour-card-head,
+.tour-card-pills,
+.tour-card-name,
+.tour-card-chips,
+.tour-card-grade {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tour-card-head {
+  justify-content: space-between;
+}
+.tour-card-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--series-3), var(--series-1));
+}
+.tour-card-stats {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.tour-card-stats div {
+  display: grid;
+}
+.tour-card-stats .faint {
+  font-size: 11px;
+}
+.tour-card-grade {
+  margin-left: auto;
+}
+.tour-win {
+  color: var(--good-ink);
+  background: var(--good-wash);
+  border-color: color-mix(in srgb, var(--good) 40%, transparent);
+}
+
+/* Footer: dots, fine print, back / next */
+.tour-foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px -24px 0;
+  padding: 12px 24px 16px;
+  background: var(--surface-solid);
+  border-top: 1px solid var(--border);
+}
+.tour-dots {
+  display: flex;
+  gap: 6px;
+}
+.tour-dots button {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-3);
+  cursor: pointer;
+  transition: width 0.2s;
+}
+.tour-dots button.on {
+  width: 22px;
+  background: var(--brand-a);
+}
+.tour-fine {
+  font-size: 13px;
+  color: var(--muted);
+}
+.tour-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.tour-back-link {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+/* Picture colors, so the art follows the theme */
+.tour-art text {
+  font-family: var(--font);
+}
+.tour-art .cap {
+  font-size: 13px;
+  fill: var(--ink-2);
+}
+.tour-art .cap.small {
+  font-size: 11px;
+  fill: var(--muted);
+}
+.tour-art .label {
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.tour-art .cap.good,
+.tour-art .label.good {
+  fill: var(--good-ink);
+  font-weight: 600;
+}
+.tour-art .cap.bad {
+  fill: var(--bad-ink);
+  font-weight: 600;
+}
+.tour-art .label.mine {
+  fill: var(--series-1);
+}
+.tour-art .label.model {
+  fill: var(--brand-ink);
+}
+.tour-art .label.cold {
+  fill: var(--series-1);
+}
+.tour-art .label.hot {
+  fill: var(--series-2);
+}
+.tour-art .coin circle {
+  fill: var(--surface-3);
+  stroke: var(--axis);
+  stroke-width: 1.5;
+}
+.tour-art .coin .coin-ring {
+  fill: none;
+  stroke: var(--axis);
+}
+.tour-art .coin.dim {
+  opacity: 0.5;
+}
+.tour-art .coin.good circle {
+  fill: color-mix(in srgb, var(--good) 22%, var(--surface-solid));
+  stroke: var(--good-ink);
+}
+.tour-art .coin.good .coin-ring {
+  fill: none;
+}
+.tour-art .coin.bad circle {
+  fill: color-mix(in srgb, var(--bad) 22%, var(--surface-solid));
+  stroke: var(--bad-ink);
+}
+.tour-art .coin.bad .coin-ring {
+  fill: none;
+}
+.tour-art .flow {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-dasharray: 5 5;
+}
+.tour-art .flow.bad {
+  stroke: var(--bad-ink);
+}
+.tour-art .arrow-head {
+  fill: var(--muted);
+}
+.tour-art .arrow-head.bad {
+  fill: var(--bad-ink);
+}
+.tour-art .funnel {
+  fill: color-mix(in srgb, var(--brand-a) 18%, var(--surface-solid));
+  stroke: var(--brand-a);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.tour-art .lens,
+.tour-art .lens-handle {
+  fill: none;
+  stroke: var(--brand-ink);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.tour-art .bell path {
+  fill: color-mix(in srgb, var(--warn) 30%, var(--surface-solid));
+  stroke: var(--warn);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.tour-art .ping {
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.tour-art .belt {
+  stroke: var(--axis);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.tour-art .shield {
+  fill: color-mix(in srgb, var(--brand-a) 22%, var(--surface-solid));
+  stroke: var(--brand-a);
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+.tour-art .shield-tick {
+  fill: none;
+  stroke: var(--brand-ink);
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tour-art .bin path {
+  fill: var(--bad-wash);
+  stroke: var(--bad-ink);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.tour-art .box {
+  stroke-width: 1.5;
+}
+.tour-art .box.mine {
+  fill: color-mix(in srgb, var(--series-1) 12%, var(--surface-solid));
+  stroke: color-mix(in srgb, var(--series-1) 50%, transparent);
+}
+.tour-art .box.model {
+  fill: color-mix(in srgb, var(--brand-a) 12%, var(--surface-solid));
+  stroke: color-mix(in srgb, var(--brand-a) 50%, transparent);
+}
+.tour-art .sliders path {
+  stroke: var(--series-1);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.tour-art .sliders circle {
+  fill: var(--surface-solid);
+  stroke: var(--series-1);
+  stroke-width: 3;
+}
+.tour-art .robot rect,
+.tour-art .robot path,
+.tour-art .robot circle {
+  fill: none;
+  stroke: var(--brand-ink);
+  stroke-width: 3;
+}
+.tour-art .robot .eye {
+  fill: var(--brand-ink);
+  stroke: none;
+}
+.tour-art .card {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+.tour-art .card.back {
+  fill: var(--surface-3);
+}
+.tour-art .card.mid {
+  fill: var(--surface-2);
+}
+.tour-art .card.front {
+  fill: var(--surface-solid);
+}
+.tour-art .line {
+  fill: var(--surface-3);
+}
+.tour-art .line.strong {
+  fill: var(--axis);
+}
+.tour-art .chip.good {
+  fill: var(--good-wash);
+  stroke: var(--good-ink);
+}
+.tour-art .orbit {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+.tour-art .podium rect {
+  fill: var(--surface-3);
+  stroke: var(--axis);
+}
+.tour-art .podium .first {
+  fill: color-mix(in srgb, var(--warn) 35%, var(--surface-solid));
+  stroke: var(--warn);
+}
+.tour-art .crown {
+  fill: var(--warn);
+}
+.tour-art .grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+.tour-art .grid.base {
+  stroke: var(--axis);
+  stroke-width: 1.5;
+}
+.tour-art .grid.deadline {
+  stroke: var(--axis);
+  stroke-dasharray: 3 4;
+}
+.tour-art .zone.bad {
+  fill: var(--bad-wash);
+}
+.tour-art .path {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tour-art .path.win {
+  stroke: var(--good-ink);
+}
+.tour-art .path.loss {
+  stroke: var(--bad-ink);
+}
+.tour-art .badge rect,
+.tour-art .badge circle {
+  stroke-width: 1.5;
+}
+.tour-art .badge.good rect {
+  fill: color-mix(in srgb, var(--good) 22%, var(--surface-solid));
+  stroke: var(--good-ink);
+}
+.tour-art .badge.bad circle {
+  fill: color-mix(in srgb, var(--bad) 22%, var(--surface-solid));
+  stroke: var(--bad-ink);
+}
+.tour-art .badge text {
+  font-size: 12px;
+  font-weight: 700;
+}
+.tour-art .badge.good text {
+  fill: var(--good-ink);
+}
+.tour-art .badge.bad text {
+  fill: var(--bad-ink);
+}
+.tour-art .gauge {
+  fill: none;
+  stroke-width: 22;
+  stroke-linecap: round;
+}
+.tour-art .gauge.cold {
+  stroke: var(--series-1);
+}
+.tour-art .gauge.normal {
+  stroke: var(--axis);
+}
+.tour-art .gauge.hot {
+  stroke: var(--series-2);
+}
+.tour-art .needle {
+  stroke: var(--ink);
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+.tour-art .hub {
+  fill: var(--ink);
+}
+.tour-art .clock {
+  fill: var(--surface-solid);
+  stroke: var(--axis);
+  stroke-width: 4;
+}
+.tour-art .clock-hand {
+  stroke: var(--ink);
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+.tour-art .wallet-flap {
+  fill: color-mix(in srgb, var(--brand-a) 30%, var(--surface-solid));
+  stroke: var(--brand-a);
+  stroke-width: 1.5;
+}
+.tour-art .wallet-dot {
+  fill: var(--good-ink);
+}
+
+@media (max-width: 640px) {
+  .tour-modal {
+    width: calc(100vw - 16px);
+  }
+  .about-body ul.tour-checks,
+  .tour-pair {
+    grid-template-columns: 1fr;
+  }
+  .tour-pair {
+    gap: 8px;
+  }
+  .about-body p.tour-lead {
+    font-size: 14px;
+  }
+  .tour-foot {
+    margin: 8px -16px 0;
+    padding: 10px 16px 14px;
+    flex-wrap: wrap;
+  }
+  .tour-dots {
+    flex-basis: 100%;
+    justify-content: center;
+  }
+  .tour-art .cap {
+    font-size: 15px;
+  }
+  .tour-art .cap.small {
+    font-size: 13px;
+  }
+  .tour-art .label {
+    font-size: 17px;
+  }
 }

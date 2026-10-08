@@ -8,6 +8,9 @@ import {
   buildCandidateFeatures,
   scoreCandidateWithModel,
   topModelReasons,
+  modelRationale,
+  Prisma,
+  type NarrativeRationale,
   governorCapacity,
   paceLimited,
   selectEmissions,
@@ -325,6 +328,7 @@ function decideCurations(
         curate,
         confidence: probability * 100,
         reasons: curate ? topModelReasons(params, features) : [],
+        rationale: modelRationale(params, features),
         source: id,
         ...servedFields(params, probability),
       });
@@ -638,7 +642,11 @@ async function noteNarrativeVerdict(
     const verdict = decision.curate ? "agrees" : "warns";
     await prisma.curatedAlert.updateMany({
       where: { id: { in: unnoted }, narrativeVerdict: null },
-      data: { narrativeVerdict: verdict, narrativeNotedAt: new Date() },
+      data: {
+        narrativeVerdict: verdict,
+        narrativeNotedAt: new Date(),
+        narrativeRationale: rationaleColumn(narrativeRationaleJson(decision)),
+      },
     });
     logger.info("narrative seat noted another seat's card", {
       tokenId,
@@ -648,6 +656,25 @@ async function noteNarrativeVerdict(
     });
   }
   return true;
+}
+
+/**
+ * What the Narrative seat's verdict rests on, as stored on a card (CuratedAlert.narrativeRationale)
+ * for the TokenSage view: its conviction, the calibrated 2x rate when it has one, and the inputs
+ * that moved it most each way. Null when the decision carries no rationale.
+ */
+export function narrativeRationaleJson(decision: CurationDecision): NarrativeRationale | null {
+  if (!decision.rationale) return null;
+  return {
+    probabilityPct: Math.round(decision.confidence * 10) / 10,
+    calibratedPct: decision.calibratedPct ?? null,
+    for: decision.rationale.for,
+    against: decision.rationale.against,
+  };
+}
+
+function rationaleColumn(r: NarrativeRationale | null): Prisma.InputJsonObject | typeof Prisma.DbNull {
+  return r === null ? Prisma.DbNull : (r as unknown as Prisma.InputJsonObject);
 }
 
 /**
@@ -938,6 +965,9 @@ async function emitCuratedAlert(
           tier: decision.tier ?? null,
           calibratedPct: decision.calibratedPct ?? null,
           reasons: decision.reasons,
+          narrativeRationale: rationaleColumn(
+            model === NARRATIVE_CONTESTANT ? narrativeRationaleJson(decision) : null,
+          ),
           anchorPriceUsd: scored.priceUsd,
           anchorMcapUsd: scored.marketCapUsd,
         },

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { TokenSageAnalysis } from "@trenchscanner/core";
-import { sageCreatorFee, sageLogo, sageRead, sageTrack, xUrl } from "./tokenSageView.js";
+import { sageCreatorFee, sageLogo, sageNarrative, sageRead, sageTrack, xUrl } from "./tokenSageView.js";
 
 const fixture = (name: string) =>
   JSON.parse(
@@ -241,5 +241,34 @@ describe("pair and logo marks (rules 0.25.0, 0.27.0)", () => {
       label: "frog",
       score: 0.8,
     });
+  });
+});
+
+describe("sageNarrative", () => {
+  const rationale = { probabilityPct: 22, calibratedPct: null, for: ["X post fit"], against: ["late copy"] };
+  const row = (over: Partial<Parameters<typeof sageNarrative>[0][number]>) => ({
+    model: "runner",
+    createdAt: new Date("2026-10-08T10:00:00Z"),
+    narrativeVerdict: null,
+    narrativeNotedAt: null,
+    narrativeRationale: rationale,
+    ...over,
+  });
+
+  it("is null until the Narrative model has judged the coin with a stored rationale", () => {
+    expect(sageNarrative([])).toBeNull();
+    expect(sageNarrative([row({})])).toBeNull();
+    expect(sageNarrative([row({ narrativeVerdict: "warns", narrativeRationale: null })])).toBeNull();
+  });
+
+  it("takes the newest judgment: its own call or a note on another card", () => {
+    const noted = row({ narrativeVerdict: "warns", narrativeNotedAt: new Date("2026-10-08T10:05:00Z") });
+    const own = row({ model: "narrative", createdAt: new Date("2026-10-08T10:02:00Z") });
+    expect(sageNarrative([own, noted])).toEqual({
+      verdict: "warns",
+      at: "2026-10-08T10:05:00.000Z",
+      ...rationale,
+    });
+    expect(sageNarrative([own])).toMatchObject({ verdict: "calls", at: "2026-10-08T10:02:00.000Z" });
   });
 });

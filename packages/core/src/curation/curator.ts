@@ -133,6 +133,11 @@ export interface CurationDecision {
    * when the model carries no calibration table.
    */
   calibratedPct?: number;
+  /**
+   * The inputs that moved the score most each way. Set by the Narrative seat only, on a call and a
+   * pass alike: its verdict is shown with its reasons in the TokenSage view.
+   */
+  rationale?: { for: string[]; against: string[] };
 }
 
 /**

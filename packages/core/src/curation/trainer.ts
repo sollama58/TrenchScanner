@@ -795,6 +795,47 @@ export function precisionCurve(calls: ScoredOutcome[]): PrecisionCurvePoint[] {
 }
 
 /**
+ * Each base feature's push on THIS candidate's score, in the model's own units (log-odds for the
+ * trees, weight x standardized value for the logistic) - its value input plus its
+ * missing-indicator input. Positive pushes toward a call, negative away from one.
+ */
+function featureContributions(
+  params: UnthresholdedCuratorParams,
+  features: Record<string, number | null | undefined>,
+): { name: string; value: number }[] {
+  // The two-stage model's reasons are its second stage's: "why it should run", given it survives.
+  if (params.kind === TWO_STAGE_MODEL_KIND) return featureContributions(params.win, features);
+  if (params.kind === BOOSTED_MODEL_KIND) {
+    return [...boostedContributions(params, features)].map(([name, value]) => ({ name, value }));
+  }
+  const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
+  const n = params.featureNames.length;
+  return params.featureNames.map((name, j) => ({
+    name,
+    value: params.weights[j]! * x[j]! + params.weights[n + j]! * x[n + j]!,
+  }));
+}
+
+/** Plain-words labels for the strongest contributions, merging features that share a label. */
+function strongestLabels(
+  contributions: { name: string; value: number }[],
+  sign: 1 | -1,
+  limit: number,
+): string[] {
+  const byLabel = new Map<string, number>();
+  for (const c of contributions) {
+    const label = FRIENDLY_FEATURE_LABELS[c.name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? c.name;
+    byLabel.set(label, (byLabel.get(label) ?? 0) + c.value);
+  }
+  return [...byLabel]
+    .map(([label, value]) => ({ label, value: value * sign }))
+    .filter((c) => c.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, limit)
+    .map((c) => c.label);
+}
+
+/**
  * The signals that pushed THIS candidate over the model's line, strongest first - the model-side
  * equivalent of the heuristic's reasons, from the same inspectable weights that made the
  * decision. Contributions are per base feature (its value input plus its missing-indicator
@@ -805,27 +846,39 @@ export function topModelReasons(
   features: Record<string, number | null | undefined>,
   limit = 4,
 ): string[] {
-  // The two-stage model's reasons are its second stage's: "why it should run", given it survives.
-  if (params.kind === TWO_STAGE_MODEL_KIND) return topModelReasons(params.win, features, limit);
-  let contributions: { name: string; value: number }[];
-  if (params.kind === BOOSTED_MODEL_KIND) {
-    contributions = [...boostedContributions(params, features)].map(([name, value]) => ({ name, value }));
-  } else {
-    const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
-    const n = params.featureNames.length;
-    contributions = params.featureNames.map((name, j) => ({
-      name,
-      value: params.weights[j]! * x[j]! + params.weights[n + j]! * x[n + j]!,
-    }));
-  }
-  return contributions
+  const contributions = featureContributions(params, features)
     .filter((c) => c.value > 0)
     .sort((a, b) => b.value - a.value)
-    .slice(0, limit)
-    .map((c) => {
-      const label = FRIENDLY_FEATURE_LABELS[c.name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? c.name;
-      return `model signal: ${label}`;
-    });
+    .slice(0, limit);
+  return contributions.map((c) => {
+    const label = FRIENDLY_FEATURE_LABELS[c.name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? c.name;
+    return `model signal: ${label}`;
+  });
+}
+
+/** Why a model scored a candidate as it did, both ways, in plain-words input names. */
+export interface ModelRationale {
+  /** The inputs that pushed hardest toward a call, strongest first. */
+  for: string[];
+  /** The inputs that pushed hardest against one, strongest first. */
+  against: string[];
+}
+
+/**
+ * The inputs that moved THIS candidate's score most, each way - what the Narrative seat's
+ * verdict rests on, shown beside TokenSage's read. Unlike topModelReasons it is computed on a
+ * pass too, since "why not" is the useful half of a warning.
+ */
+export function modelRationale(
+  params: UnthresholdedCuratorParams,
+  features: Record<string, number | null | undefined>,
+  limit = 3,
+): ModelRationale {
+  const contributions = featureContributions(params, features);
+  return {
+    for: strongestLabels(contributions, 1, limit),
+    against: strongestLabels(contributions, -1, limit),
+  };
 }
 
 export interface FoldSide {
