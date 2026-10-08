@@ -387,7 +387,11 @@ describe("narrativeDetails", () => {
       name: "Bonk",
       underlying: null,
       buildsOn: true,
+      pumpfun: null,
     });
+    const pumpPair = fixture("paired_token").analysis as { market: { pair: Record<string, unknown> } };
+    pumpPair.market.pair.pumpfun = true;
+    expect(narrativeDetails(pumpPair).pair).toMatchObject({ kind: "token", pumpfun: true });
     expect(narrativeDetails(fixture("full").analysis).pair).toBeNull();
     expect(narrativeDetails(fixture("partial").analysis).pair).toBeNull();
     const stock = {

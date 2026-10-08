@@ -41,7 +41,24 @@ export interface SageRead {
   rulesVersion: string | null;
   launchpad: string | null;
   curveProgress: number | null;
-  pair: { kind: string | null; symbol: string | null } | null;
+  /**
+   * What the coin trades against. kind "token" is another coin (rules 0.27.0: any pump.fun coin),
+   * launched into that coin's community; `pumpfun` says the pair token is itself a pump.fun coin
+   * and `about` is its own referent ("Ansem"). SOL, stablecoins and majors carry no badge.
+   */
+  pair: {
+    kind: string | null;
+    symbol: string | null;
+    name: string | null;
+    pumpfun: boolean | null;
+    buildsOn: boolean;
+    about: string | null;
+  } | null;
+  /**
+   * What the logo shows (rules 0.25.0+, full reads): image.labels[0] when its score is at least
+   * LOGO_LABEL_MIN_SCORE. A visual class ("dog", "text_logo"), not the coin's theme.
+   */
+  logo: { label: string; score: number } | null;
   creatorFee: SageCreatorFee | null;
   summary: string | null;
   tickerExplanation: string | null;
@@ -132,7 +149,10 @@ export interface SageCreatorFee {
   recipients: {
     kind: string;
     share: number | null;
-    /** The GitHub login, or a shortened wallet address; null for the creator's own wallet. */
+    /**
+     * The GitHub login (reads before rules 0.22.0), else "GitHub #<id>" by user_id, else a
+     * shortened wallet address; null for the creator's own wallet.
+     */
     label: string | null;
     /** https://github.com/<login>, api.github.com/user/<id>, or the wallet on Solscan. */
     url: string | null;
@@ -176,6 +196,9 @@ const MAX_CAVEATS = 5;
 const MAX_COPIES = 3;
 const MAX_FEE_RECIPIENTS = 10;
 
+/** TokenSage suggests showing the logo's top visual class from this score up. */
+export const LOGO_LABEL_MIN_SCORE = 0.5;
+
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const GITHUB_URL = /^https:\/\/(github\.com\/[A-Za-z0-9-]{1,39}|api\.github\.com\/user\/\d{1,15})$/;
 
@@ -205,6 +228,12 @@ export function sageCreatorFee(fee: unknown): SageCreatorFee | null {
       const address = typeof r.address === "string" && BASE58.test(r.address) ? r.address : null;
       const github = typeof r.url === "string" && GITHUB_URL.test(r.url) ? r.url : null;
       const login = clip(r.github_login, 39);
+      // Rules 0.22.0+ send no login: a GitHub recipient is named and linked by its numeric id.
+      const userId =
+        kind === "github" && (typeof r.user_id === "string" || typeof r.user_id === "number")
+          ? String(r.user_id)
+          : null;
+      const githubId = userId !== null && /^\d{1,15}$/.test(userId) ? userId : null;
       return {
         kind,
         share: num(r.share),
@@ -212,10 +241,19 @@ export function sageCreatorFee(fee: unknown): SageCreatorFee | null {
           ? null
           : login && /^[A-Za-z0-9-]+$/.test(login)
             ? login
-            : address
-              ? `${address.slice(0, 4)}…${address.slice(-4)}`
-              : null,
-        url: own ? null : (github ?? (address ? `https://solscan.io/account/${address}` : null)),
+            : githubId
+              ? `GitHub #${githubId}`
+              : address
+                ? `${address.slice(0, 4)}…${address.slice(-4)}`
+                : null,
+        url: own
+          ? null
+          : (github ??
+            (githubId
+              ? `https://api.github.com/user/${githubId}`
+              : address
+                ? `https://solscan.io/account/${address}`
+                : null)),
         lifetimeReceived: num(r.lifetime_received),
       };
     });
@@ -250,6 +288,33 @@ export function xUrl(doc: TokenSageAnalysis): string | null {
   if (typeof id === "string" && /^\d{1,25}$/.test(id)) return `https://x.com/i/status/${id}`;
   const raw = doc.raw?.twitter?.trim() ?? "";
   return /^https:\/\/(www\.)?(x|twitter)\.com\/[^\s"'<>]+$/i.test(raw) ? raw : null;
+}
+
+type TokenSagePair = NonNullable<NonNullable<TokenSageAnalysis["market"]>["pair"]>;
+
+function sagePair(p: TokenSagePair): SageRead["pair"] {
+  const about = p.referent && typeof p.referent.label === "string" ? clip(p.referent.label, 80) : null;
+  return {
+    kind: clip(p.kind, 30),
+    symbol: clip(p.symbol, 20),
+    name: clip(p.name, 80),
+    pumpfun: typeof p.pumpfun === "boolean" ? p.pumpfun : null,
+    buildsOn: p.builds_on === true,
+    about,
+  };
+}
+
+/** The logo's best visual class, when TokenSage is sure enough of it to show. */
+export function sageLogo(labels: unknown): SageRead["logo"] {
+  if (!Array.isArray(labels)) return null;
+  const best = labels
+    .filter(
+      (l): l is { label: string; score: number } =>
+        !!l && typeof l.label === "string" && l.label.trim() !== "" && num(l.score) !== null,
+    )
+    .sort((a, b) => b.score - a.score)[0];
+  if (!best || best.score < LOGO_LABEL_MIN_SCORE || best.label === "none") return null;
+  return { label: clip(best.label, 30)!, score: Math.min(1, best.score) };
 }
 
 /** The read itself, from the stored Analysis document; null when there is none to show. */
@@ -295,9 +360,8 @@ export function sageRead(doc: TokenSageAnalysis | null | undefined, depth: strin
     rulesVersion: clip(doc.versions?.rules, 20),
     launchpad: clip(doc.launchpad, 40),
     curveProgress: num(doc.market?.curve_progress),
-    pair: doc.market?.pair
-      ? { kind: clip(doc.market.pair.kind, 30), symbol: clip(doc.market.pair.symbol, 20) }
-      : null,
+    pair: doc.market?.pair ? sagePair(doc.market.pair) : null,
+    logo: sageLogo(doc.image?.labels),
     creatorFee: sageCreatorFee(doc.market?.creator_fee),
     summary: clip(doc.summary, MAX_SUMMARY),
     tickerExplanation: clip(doc.ticker_explanation),

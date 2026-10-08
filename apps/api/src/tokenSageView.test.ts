@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { TokenSageAnalysis } from "@trenchscanner/core";
-import { sageCreatorFee, sageRead, sageTrack, xUrl } from "./tokenSageView.js";
+import { sageCreatorFee, sageLogo, sageRead, sageTrack, xUrl } from "./tokenSageView.js";
 
 const fixture = (name: string) =>
   JSON.parse(
@@ -137,6 +137,37 @@ describe("TokenSage view", () => {
     })!;
     expect(github.recipients[0]).toMatchObject({ label: "shelldon", url: "https://github.com/shelldon" });
     expect(github.recipients[1]).toMatchObject({ label: null, url: null });
+    // Rules 0.22.0+: no login, so the recipient is named and linked by its numeric user_id.
+    const byId = sageCreatorFee({
+      destination: "github",
+      recipients: [
+        {
+          kind: "github",
+          share: 1,
+          user_id: "9919",
+          github_login: null,
+          url: "https://api.github.com/user/9919",
+        },
+        { kind: "github", share: 0, user_id: 4242 },
+        { kind: "github", share: 0, user_id: "../evil" },
+      ],
+    })!;
+    expect(byId.recipients[0]).toMatchObject({
+      label: "GitHub #9919",
+      url: "https://api.github.com/user/9919",
+    });
+    expect(byId.recipients[1]).toMatchObject({
+      label: "GitHub #4242",
+      url: "https://api.github.com/user/4242",
+    });
+    expect(byId.recipients[2]).toMatchObject({ label: null, url: null });
+    // An unreadable split (rules 0.21.0) keeps its destination and summary.
+    expect(
+      sageCreatorFee({ destination: "unknown", summary: "fee split; recipients unreadable" }),
+    ).toMatchObject({
+      destination: "unknown",
+      summary: "fee split; recipients unreadable",
+    });
     expect(sageCreatorFee(null)).toBeNull();
     expect(sageCreatorFee(undefined)).toBeNull();
     expect(sageCreatorFee({ summary: "no destination" })).toBeNull();
@@ -172,5 +203,43 @@ describe("TokenSage view", () => {
     expect(sageTrack(rows, null)).toBeNull();
     // A copy of a dog coin tracks under animal (its main category), not derivative.
     expect(sageTrack(rows, [{ label: "derivative", confidence: 0.75 }], "animal")!.label).toBe("animal");
+  });
+});
+
+describe("pair and logo marks (rules 0.25.0, 0.27.0)", () => {
+  it("carries the pair token, its pump.fun mark and what it is about", () => {
+    const doc = fixture("paired_token").analysis;
+    doc.market!.pair!.pumpfun = true;
+    expect(sageRead(doc, "full")!.pair).toEqual({
+      kind: "token",
+      symbol: "BONK",
+      name: "Bonk",
+      pumpfun: true,
+      buildsOn: true,
+      about: "Bonk",
+    });
+    // Older reads have no pumpfun field: not known.
+    expect(sageRead(fixture("paired_token").analysis, "full")!.pair!.pumpfun).toBeNull();
+  });
+
+  it("shows the logo's best class only from a 0.5 score", () => {
+    const m = "siglip-b16-q8/1";
+    expect(
+      sageLogo([
+        { label: "cartoon_char", score: 0.04, model: m },
+        { label: "dog", score: 0.91, model: m },
+      ]),
+    ).toEqual({ label: "dog", score: 0.91 });
+    expect(sageLogo([{ label: "dog", score: 0.49, model: m }])).toBeNull();
+    expect(sageLogo([{ label: "none", score: 0.9, model: m }])).toBeNull();
+    expect(sageLogo([])).toBeNull();
+    expect(sageLogo(undefined)).toBeNull();
+    expect(sageLogo([null, { label: 3 }, "dog"])).toBeNull();
+    // Basic reads and older rules carry no labels.
+    expect(sageRead(fixture("paired_token").analysis, "basic")!.logo).toBeNull();
+    expect(sageRead({ image: { labels: [{ label: "frog", score: 0.8, model: m }] } }, "full")!.logo).toEqual({
+      label: "frog",
+      score: 0.8,
+    });
   });
 });
