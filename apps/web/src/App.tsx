@@ -367,7 +367,7 @@ export function App() {
             <AlertNotifier />
             <div className="tab-view" key={tab}>
               <Suspense fallback={<Boot />}>
-                {tab === "live" && <LiveTab goTo={goTo} />}
+                {tab === "live" && <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} />}
                 {tab === "model" && <ModelTab />}
                 {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab goTo={goTo} />}

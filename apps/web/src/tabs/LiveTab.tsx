@@ -9,7 +9,8 @@ import {
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
-import { AboutModal } from "../components/AboutModal";
+import { AboutModal, WEATHER_STEP } from "../components/AboutModal";
+import { introSeen, markIntroSeen } from "../intro";
 import { FeedStatsModal } from "../components/FeedStatsModal";
 import { LighthouseButton } from "../components/MarketLighthouse";
 import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
@@ -26,14 +27,25 @@ const MIN_TEASER = 10;
 const STATS_HOURS = 24;
 
 /** The main tab: your own filter's catches and the model calls you follow, in one stream. */
-export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings") => void }) {
+export function LiveTab({
+  goTo,
+  walletAddress,
+}: {
+  goTo: (tab: "model" | "filters" | "settings") => void;
+  walletAddress: string;
+}) {
   const now = useNow(15_000);
   const [page, setPage] = useState(1);
   // Bumped when the user changes their feed settings, so every view keyed on them refetches at once.
   const [pick, setPick] = useState(0);
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const [aboutOpen, setAboutOpen] = useState(false);
+  // The tour opens by itself the first time this wallet lands here; null when it's closed.
+  const [aboutAt, setAboutAt] = useState<number | null>(() => (introSeen(walletAddress) ? null : 0));
+  const closeAbout = () => {
+    setAboutAt(null);
+    markIntroSeen(walletAddress);
+  };
   const [statsOpen, setStatsOpen] = useState(false);
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
@@ -106,14 +118,14 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
               weather={stats.data.market}
               onAbout={() => {
                 setStatsOpen(false);
-                setAboutOpen(true);
+                setAboutAt(WEATHER_STEP);
               }}
             />
           )
         }
       />
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
-      <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} targets={t} />
+      <AboutModal open={aboutAt !== null} onClose={closeAbout} targets={t} startStep={aboutAt ?? 0} />
       <section className="panel feed">
         <header className="section-head">
           <div>
@@ -123,7 +135,7 @@ export function LiveTab({ goTo }: { goTo: (tab: "model" | "filters" | "settings"
               <button
                 type="button"
                 className="ghost icon-btn"
-                onClick={() => setAboutOpen(true)}
+                onClick={() => setAboutAt(0)}
                 aria-label="How this works"
                 title="How this works"
               >
