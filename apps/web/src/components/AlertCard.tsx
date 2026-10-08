@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Card, CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
-import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SlidersIcon } from "./Icons";
+import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SageIcon, SlidersIcon } from "./Icons";
+import { openSage } from "../sage";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
@@ -355,13 +356,27 @@ export function AlertCard({
         </div>
       )}
 
-      {(show("mint") || show("links") || trade.length > 0) && (
+      {(show("mint") || show("sage") || show("links") || trade.length > 0) && (
         <footer className="card-foot">
-          {show("mint") && (
-            <button className="mint" onClick={copy} title="Copy mint address">
-              {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-              {copied ? "Copied" : shortAddress(mint)}
-            </button>
+          {(show("mint") || show("sage")) && (
+            <div className="card-foot-left">
+              {show("mint") && (
+                <button className="mint" onClick={copy} title="Copy mint address">
+                  {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+                  {copied ? "Copied" : shortAddress(mint)}
+                </button>
+              )}
+              {show("sage") && (
+                <button
+                  className="sage-btn"
+                  onClick={() => openSage(mint)}
+                  title="Open TokenSage's read of this coin: what it's about, its lineage, X link and flags"
+                >
+                  <SageIcon size={13} />
+                  Sage
+                </button>
+              )}
+            </div>
           )}
           {(show("links") || trade.length > 0) && (
             <nav className="card-links">

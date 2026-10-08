@@ -11,6 +11,7 @@ import {
   formatDigest,
   formatTestMessage,
   headline,
+  sageUrl,
   sortCards,
   type AlertCard,
 } from "./format.js";
@@ -167,7 +168,7 @@ describe("telegram alert text", () => {
       narrativeVerdict: null,
     };
     const full = card({ calls: [call], filters: [{ name: "Mine", score: 70 }] });
-    const parts = alertParts(["image", "stats", "reasons", "mint", "links", "bogus"]);
+    const parts = alertParts(["image", "stats", "reasons", "mint", "links", "sage", "bogus"]);
     expect(parts).toMatchObject({
       image: false,
       stats: false,
@@ -187,10 +188,21 @@ describe("telegram alert text", () => {
     const quoteOnly = formatAlert(full, links, Date.now(), alertParts(["conviction"]));
     expect(quoteOnly).toContain("<blockquote>• r1</blockquote>");
     expect(quoteOnly).not.toContain("72% conviction");
-    const digest = formatDigest([full], links, alertParts(["links", "stats"]));
+    const digest = formatDigest([full], links, alertParts(["links", "stats", "sage"]));
     expect(digest).not.toContain("trade</a>");
     expect(digest).toContain(`<code>${token.mintAddress}</code>`);
     expect(formatTestMessage(links, alertParts(["image"])).imageUrl).toBeNull();
+  });
+
+  it("links to the token's TokenSage view on the dashboard", () => {
+    const url = `https://trenchscanner.app/?sage=${token.mintAddress}`;
+    expect(sageUrl(token.mintAddress, links)).toBe(url);
+    expect(sageUrl(token.mintAddress, { dashboardUrl: "" })).toBeNull();
+    expect(formatAlert(card(), links)).toContain(`<a href="${url}">🔮 TokenSage read</a>`);
+    expect(formatAlert(card(), links, Date.now(), alertParts(["sage"]))).not.toContain("?sage=");
+    expect(formatAlert(card(), { dashboardUrl: "" })).not.toContain("TokenSage");
+    // A digest stays short enough to keep its picture: its lines carry no per-token read link.
+    expect(formatDigest([card()], links)).not.toContain("?sage=");
   });
 
   it("has a test message and an age formatter", () => {
