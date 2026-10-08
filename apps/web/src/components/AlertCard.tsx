@@ -46,9 +46,7 @@ export function AlertCard({
   const badge = outcomeBadge(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");
   const calls = curated?.calledBy ?? [];
-  // The highest of every peak the card knows - the call's (its run peak or market-cap high since),
-  // and the filter alert's own ATH when the card is both - so it never drops to a smaller one.
-  const recordedPeak = maxKnown(curated?.peakPct ?? curated?.outcome.peak24hReturnPct, card.peakReturnPct);
+  const { pct: recordedPeak, isRunPeak } = recordedPeakOf(card);
   // The recorded peak catches up on the worker's next pass; a "Now" above it is already a peak.
   const nowCounts = move !== null && move > 0;
   const peak = nowCounts ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
@@ -62,9 +60,12 @@ export function AlertCard({
   // Marks only: ✓ 2x, ✓✓ 4x, ✓✓✓ 10x, ✕ missed or stopped out (the words stay in the tooltip).
   // An ungraded result has no mark, so nothing shows.
   const resultMark = showVerdict && badge.tone !== "neutral" ? badge.text.split(" ")[0] : null;
-  // When the recorded run peak came - only while "Now" hasn't overtaken it.
+  // When the recorded run peak came - only while it is the Peak shown and "Now" hasn't overtaken it
+  // (a later market-cap high or the filter alert's ATH came at another time).
   const runPeakAfter =
-    !nowCounts || (recordedPeak ?? 0) >= (move ?? 0) ? (curated?.outcome.runPeakMinutes ?? null) : null;
+    isRunPeak && (!nowCounts || (recordedPeak ?? 0) >= (move ?? 0))
+      ? (curated?.outcome.runPeakMinutes ?? null)
+      : null;
   // Measured at alert time when the wallet lookups made it in time; otherwise from a later scan.
   const freshAtAlert = s.freshTop10WalletPct ?? null;
   const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
@@ -584,6 +585,31 @@ function calibratedRate(
     (r): r is number => typeof r === "number",
   );
   return rates.length > 0 ? Math.max(...rates) : null;
+}
+
+/**
+ * The highest of every peak the card knows, as a return on the alert market cap it shows - the
+ * call's (its run peak or market-cap high since), and the filter alert's own ATH when the card is
+ * both - so it never drops to a smaller one. And whether that is the call's run peak, the one its
+ * runPeakMinutes times.
+ *
+ * A card a call folded into keeps the filter alert's market cap, while the call's Peak is from its
+ * own alert price (up to hours apart, so possibly far lower): the call's high is re-based onto the
+ * card's market cap first. Older API builds send no peakMcapUsd and keep the call's percentage.
+ */
+export function recordedPeakOf(card: Card): { pct: number | null; isRunPeak: boolean } {
+  const curated = card.curated;
+  const runPeak = curated?.outcome.peak24hReturnPct ?? null;
+  const callPeak = curated?.peakPct ?? runPeak;
+  const alertMcap = card.snapshot.marketCapUsd;
+  const callHere =
+    card.kind === "match" && curated && curated.peakMcapUsd !== undefined
+      ? curated.peakMcapUsd !== null && alertMcap > 0
+        ? (curated.peakMcapUsd / alertMcap - 1) * 100
+        : null
+      : callPeak;
+  const pct = maxKnown(callHere, card.peakReturnPct);
+  return { pct, isRunPeak: pct !== null && pct === callHere && runPeak !== null && callPeak === runPeak };
 }
 
 /** The larger of two peaks either of which may be missing. */

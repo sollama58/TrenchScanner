@@ -387,6 +387,7 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
 /** The `curated` block both feeds attach to a card the curator picked. */
 export function curatedMeta(alert: CuratedAlertWithRelations, showNarrative = false) {
   const outcome = resolveOutcome(alert);
+  const peakPct = callPeakPct(outcome.peak24hReturnPct, alert);
   return {
     alertId: alert.id,
     /** "heuristic-v1", or the id of the trained model that emitted it. */
@@ -409,7 +410,12 @@ export function curatedMeta(alert: CuratedAlertWithRelations, showNarrative = fa
     alertedAt: alert.createdAt,
     outcome,
     /** The call's Peak, which only rises: its run peak or its market-cap high since, the larger. */
-    peakPct: callPeakPct(outcome.peak24hReturnPct, alert),
+    peakPct,
+    /**
+     * That Peak as a market cap. A card this call folds into keeps the filter alert's market cap,
+     * so it re-bases the call's Peak from this rather than from the call's own alert price.
+     */
+    peakMcapUsd: peakPct !== null && peakPct > 0 ? alert.anchorMcapUsd * (1 + peakPct / 100) : null,
     /**
      * The Narrative seat's later view of this call, once TokenSage's deep read decided: "agrees"
      * or "warns". Null until then, on the Narrative seat's own calls, and while the note is

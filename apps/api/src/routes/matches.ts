@@ -576,6 +576,8 @@ export async function registerMatchRoutes(
       peakPct: number | null;
       curated: {
         alertId: string;
+        /** When the call was made. */
+        at: Date;
         returnPct: number | null;
         peakPct: number | null;
         modelName: string;
@@ -618,20 +620,22 @@ export async function registerMatchRoutes(
         returnPct,
         peakPct,
         source: { modelName },
-        curated: { alertId: lead.id, returnPct, peakPct, modelName },
+        curated: { alertId: lead.id, at: lead.createdAt, returnPct, peakPct, modelName },
       };
     });
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
       (c): ReturnCard & { tokenId: string; peakPct: number | null; source: ReturnFeedCard["source"] } =>
-        // A folded card shows the call, so the model is what alerted it; its run is the better of
-        // the two alerts' (each from its own alert price).
+        // A folded card's return is the call's; its run is the better of the two alerts' (each
+        // from its own alert price), shown with the time and source of the alert that made it - a
+        // multiple put on the other alert's time or name would claim a run that alert didn't make.
         c.kind === "match" && c.curated
           ? {
-              at: c.at,
               tokenId: c.tokenId,
               returnPct: c.curated.returnPct,
               peakPct: maxPct(c.peakPct, c.curated.peakPct),
-              source: { modelName: c.curated.modelName },
+              ...(c.curated.peakPct !== null && (c.peakPct === null || c.curated.peakPct > c.peakPct)
+                ? { at: c.curated.at, source: { modelName: c.curated.modelName } }
+                : { at: c.at, source: c.source }),
             }
           : c,
     );
