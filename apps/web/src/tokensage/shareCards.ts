@@ -1,4 +1,7 @@
-import { compact, hitRate, hourLabel, dayLabel, MIN_DAYS_FOR_DAILY, named, prettyLabel } from "./showcase";
+import type { LighthouseTally, MarketLighthouse } from "../api";
+import { MIN_GRADED as LIGHTHOUSE_MIN_GRADED, narratives } from "../components/MarketLighthouse";
+import { narrativeBaseline, relativeScale } from "../lighthouseMetrics";
+import { compact, hitRate, named, prettyLabel } from "./showcase";
 import type { ShowcaseCount, TokenSageShowcase } from "./showcase";
 
 /**
@@ -8,16 +11,16 @@ import type { ShowcaseCount, TokenSageShowcase } from "./showcase";
  * Counts only, as on the page.
  */
 
-export type ShareCardKind = "headline" | "volume" | "themes" | "lineage" | "x" | "flags" | "models";
+export type ShareCardKind = "headline" | "themes" | "lineage" | "flags" | "logos" | "fees" | "models";
 
 export const SHARE_CARDS: Record<ShareCardKind, { title: string; file: string }> = {
   headline: { title: "TokenSage at a glance", file: "tokensage" },
-  volume: { title: "Reads over time", file: "tokensage-reads" },
   themes: { title: "Top themes", file: "tokensage-themes" },
   lineage: { title: "Originals and copies", file: "tokensage-copies" },
-  x: { title: "The X check", file: "tokensage-x-check" },
   flags: { title: "Flags raised", file: "tokensage-flags" },
-  models: { title: "2x rate by theme", file: "tokensage-hit-rates" },
+  logos: { title: "What the logo shows", file: "tokensage-logos" },
+  fees: { title: "Where the creator fee goes", file: "tokensage-creator-fees" },
+  models: { title: "Which narratives pay", file: "tokensage-narratives-pay" },
 };
 
 export const CARD_W = 1200;
@@ -95,7 +98,13 @@ function clip(ctx: CanvasRenderingContext2D, text: string, max: number) {
 }
 
 /** Background, brand row, title and footer: everything every card shares. */
-function frame(ctx: CanvasRenderingContext2D, icon: HTMLImageElement | null, title: string, sub: string) {
+function frame(
+  ctx: CanvasRenderingContext2D,
+  icon: HTMLImageElement | null,
+  title: string,
+  sub: string,
+  source: string,
+) {
   const W = CARD_W;
   const H = CARD_H;
   ctx.fillStyle = "#0b0b1a";
@@ -151,7 +160,7 @@ function frame(ctx: CanvasRenderingContext2D, icon: HTMLImageElement | null, tit
   ctx.fillStyle = MUTED;
   ctx.font = `500 18px ${FONT}`;
   const date = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-  ctx.fillText(`Counts across every coin TokenSage has read · ${date}`, PAD, H - 44);
+  ctx.fillText(`${source} · ${date}`, PAD, H - 44);
   ctx.textAlign = "right";
   ctx.fillStyle = INK;
   ctx.font = `700 22px ${FONT}`;
@@ -374,66 +383,6 @@ function drawHeadline(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
   );
 }
 
-function drawVolume(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
-  const perHour = d.daily.length < MIN_DAYS_FOR_DAILY;
-  const pts = perHour ? d.hourly : d.daily;
-  if (pts.length === 0) return empty(ctx);
-  const top = Math.max(1, ...pts.map((p) => p.described));
-  const x0 = PAD;
-  const width = CARD_W - PAD * 2;
-  const base = BODY_BOTTOM - 30;
-  const h = base - (BODY_TOP + 10);
-  const band = width / pts.length;
-  const bw = Math.min(26, band * 0.7);
-  pts.forEach((p, i) => {
-    const x = x0 + i * band + (band - bw) / 2;
-    const deepH = (Math.min(p.deep, p.described) / top) * h;
-    const quickH = (Math.max(0, p.described - p.deep) / top) * h;
-    // Deep at the base, quick on top with a 3px gap; only the column's top end is rounded.
-    const gap = deepH > 0 && quickH > 0 ? 3 : 0;
-    if (deepH > 0) {
-      ctx.fillStyle = SERIES[0]!;
-      corners(ctx, x, base - deepH, bw, deepH, quickH > 0 ? [0, 0, 0, 0] : [4, 4, 0, 0]);
-      ctx.fill();
-    }
-    if (quickH > 0) {
-      ctx.fillStyle = SERIES[1]!;
-      corners(ctx, x, base - deepH - gap - quickH, bw, quickH, [4, 4, 0, 0]);
-      ctx.fill();
-    }
-  });
-  ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
-  ctx.fillRect(x0, base, width, 1);
-  ctx.fillStyle = MUTED;
-  ctx.font = `500 16px ${FONT}`;
-  ctx.textBaseline = "top";
-  const every = Math.ceil(pts.length / 8);
-  pts.forEach((p, i) => {
-    if (i % every !== 0) return;
-    ctx.textAlign = "center";
-    ctx.fillText(perHour ? hourLabel(p.at) : dayLabel(p.at), x0 + i * band + band / 2, base + 8);
-  });
-  ctx.textAlign = "left";
-  // Legend, top right of the body.
-  ctx.textBaseline = "middle";
-  ctx.font = `500 19px ${FONT}`;
-  const legend: [string, string][] = [
-    ["Deep reads", SERIES[0]!],
-    ["Quick reads", SERIES[1]!],
-  ];
-  let lx = CARD_W - PAD;
-  for (const [name, color] of [...legend].reverse()) {
-    const w = ctx.measureText(name).width;
-    lx -= w;
-    ctx.fillStyle = INK2;
-    ctx.fillText(name, lx, BODY_TOP - 14);
-    ctx.fillStyle = color;
-    roundRect(ctx, lx - 24, BODY_TOP - 22, 16, 16, 4);
-    ctx.fill();
-    lx -= 52;
-  }
-}
-
 function drawThemes(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
   bars(
     ctx,
@@ -470,26 +419,6 @@ function drawLineage(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
   if (items.length) stats(ctx, items.slice(0, 2), BODY_BOTTOM - 28);
 }
 
-function drawX(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
-  segments(
-    ctx,
-    d.labels.xVerdict.map(({ label, count }) => ({ label, count })),
-    ["about_this_coin", "related", "unrelated"],
-    BODY_TOP + 8,
-  );
-  stats(
-    ctx,
-    [
-      { value: compact(d.totals.xRead), label: "X links opened and read" },
-      {
-        value: d.totals.avgXFit === null ? "–" : d.totals.avgXFit.toFixed(2),
-        label: "average fit, 0 to 1",
-      },
-    ],
-    BODY_BOTTOM - 28,
-  );
-}
-
 function drawFlags(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
   bars(
     ctx,
@@ -502,65 +431,177 @@ function drawFlags(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
   );
 }
 
-function drawModels(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
-  const t = d.totals;
-  const overall = t.alertsGraded > 0 ? (t.alertsWon2x / t.alertsGraded) * 100 : null;
-  const rows = named(d.labels.category)
-    .map((l) => ({ l, rate: hitRate(l) }))
-    .filter((r): r is { l: (typeof r)["l"]; rate: number } => r.rate !== null)
-    .sort((a, b) => b.rate - a.rate)
-    .map(({ l, rate }) => ({
-      label: prettyLabel(l.label),
-      value: rate,
-      display: `${rate.toFixed(0)}%`,
-      note: `${compact(l.graded)} calls`,
-    }));
-  bars(ctx, rows, { top: Math.max(50, ...rows.map((r) => r.value)), marker: overall });
+function drawCounts(ctx: CanvasRenderingContext2D, rows: ShowcaseCount[]) {
+  const shown = named(rows);
+  const total = rows.reduce((sum, r) => sum + r.count, 0);
+  bars(
+    ctx,
+    shown.map((r) => ({
+      label: prettyLabel(r.label),
+      value: r.count,
+      display: compact(r.count),
+      note: `${pctOf(r.count, total)} of coins read`,
+    })),
+  );
 }
 
-const DRAW: Record<ShareCardKind, (ctx: CanvasRenderingContext2D, d: TokenSageShowcase) => void> = {
+const avgReturn = (t: LighthouseTally) => (t.returnN > 0 ? t.returnSum / t.returnN : null);
+const signed = (v: number | null, suffix = "") =>
+  v === null
+    ? "–"
+    : `${Math.round(v) > 0 ? "+" : Math.round(v) < 0 ? "-" : ""}${Math.abs(Math.round(v))}${suffix}`;
+const GAIN = "#16a34a";
+const LOSS = "#dc2626";
+const UP = "#4ade80";
+const DOWN = "#ff8080";
+
+/**
+ * The Lighthouse's "Which narratives pay" (HitRates in MarketLighthouse.tsx, relative mode): per
+ * narrative, a bar from the all-narrative average by how many points its average return sits
+ * above or below it, its own return and 2x rate with that rate's gap, and how many calls it rests
+ * on. Thin narratives are faded, as on the page.
+ */
+function drawModels(ctx: CanvasRenderingContext2D, lh: MarketLighthouse | null) {
+  if (!lh) return empty(ctx);
+  const all = narratives(lh.outcomes.byCategory);
+  const rows = all.slice(0, 6);
+  if (rows.length === 0) return empty(ctx);
+  const base = narrativeBaseline(lh.outcomes.byCategory);
+  const avg = base.avgReturn ?? 0;
+  const gapOf = (r: LighthouseTally) => {
+    const ret = avgReturn(r);
+    return ret === null ? null : ret - avg;
+  };
+  const scale = relativeScale(all.filter((r) => r.graded >= LIGHTHOUSE_MIN_GRADED).map(gapOf));
+  const labelW = 210;
+  const trackW = 360;
+  const valueW = 76;
+  const x0 = PAD + labelW;
+  const mid = x0 + trackW / 2;
+  const top = BODY_TOP + 34;
+  const rowH = (BODY_BOTTOM - top) / Math.max(5, rows.length);
+
+  // Axis: -scale, the average, +scale.
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = MUTED;
+  ctx.font = `500 16px ${FONT}`;
+  ctx.textAlign = "left";
+  ctx.fillText(`-${scale} pts`, x0, BODY_TOP + 14);
+  ctx.textAlign = "center";
+  ctx.fillText(`avg ${signed(base.avgReturn, "%")}`, mid, BODY_TOP + 14);
+  ctx.textAlign = "right";
+  ctx.fillText(`+${scale} pts`, x0 + trackW, BODY_TOP + 14);
+
+  rows.forEach((r, i) => {
+    const cy = top + rowH * i + rowH / 2;
+    const early = r.graded < LIGHTHOUSE_MIN_GRADED;
+    const gap = gapOf(r);
+    const ret = avgReturn(r);
+    const r2x = r.graded > 0 ? (r.won2x / r.graded) * 100 : null;
+    // Rounded before it picks a color, so a "(0)" is never drawn red or green.
+    const gap2x = r2x !== null && base.rate2x !== null ? Math.round(r2x - base.rate2x) : null;
+    ctx.globalAlpha = early ? 0.45 : 1;
+
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.fillStyle = SERIES[i] ?? OTHER;
+    roundRect(ctx, PAD, cy - 7, 14, 14, 4);
+    ctx.fill();
+    ctx.fillStyle = INK;
+    ctx.font = `500 22px ${FONT}`;
+    ctx.fillText(clip(ctx, prettyLabel(r.label), labelW - 40), PAD + 24, cy);
+
+    ctx.fillStyle = TRACK;
+    roundRect(ctx, x0, cy - 9, trackW, 18, 9);
+    ctx.fill();
+    if (gap !== null) {
+      const reach = Math.max(3, (Math.min(Math.abs(gap), scale) / scale) * (trackW / 2));
+      ctx.fillStyle = gap < 0 ? LOSS : GAIN;
+      if (gap < 0) corners(ctx, mid - reach, cy - 9, reach, 18, [9, 0, 0, 9]);
+      else corners(ctx, mid, cy - 9, reach, 18, [0, 9, 9, 0]);
+      ctx.fill();
+    }
+    ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+    ctx.fillRect(mid - 1, cy - 15, 2, 30);
+
+    const vx = x0 + trackW + 24 + valueW;
+    ctx.textAlign = "right";
+    ctx.font = `700 24px ${FONT}`;
+    ctx.fillStyle = gap === null || early ? INK2 : gap < 0 ? DOWN : UP;
+    ctx.fillText(signed(gap), vx, cy);
+
+    ctx.textAlign = "left";
+    ctx.font = `500 19px ${FONT}`;
+    let tx = vx + 18;
+    const part = (text: string, color: string) => {
+      ctx.fillStyle = color;
+      ctx.fillText(text, tx, cy);
+      tx += ctx.measureText(text).width;
+    };
+    part(`return ${signed(ret, "%")} · 2x ${r2x === null ? "–" : `${Math.round(r2x)}%`}`, INK2);
+    if (gap2x !== null) part(` (${signed(gap2x)})`, early ? INK2 : gap2x < 0 ? DOWN : gap2x > 0 ? UP : INK2);
+
+    ctx.textAlign = "right";
+    ctx.fillStyle = MUTED;
+    ctx.font = `500 17px ${FONT}`;
+    ctx.fillText(
+      early ? `${r.graded}/${LIGHTHOUSE_MIN_GRADED} graded` : `${r.graded} graded`,
+      CARD_W - PAD,
+      cy,
+    );
+    ctx.globalAlpha = 1;
+  });
+  ctx.textAlign = "left";
+}
+
+const DRAW: Record<
+  ShareCardKind,
+  (ctx: CanvasRenderingContext2D, d: TokenSageShowcase, lh: MarketLighthouse | null) => void
+> = {
   headline: drawHeadline,
-  volume: drawVolume,
   themes: drawThemes,
   lineage: drawLineage,
-  x: drawX,
   flags: drawFlags,
-  models: drawModels,
+  logos: (ctx, d) => drawCounts(ctx, d.anatomy.logo),
+  fees: (ctx, d) => drawCounts(ctx, d.anatomy.fee),
+  models: (ctx, _d, lh) => drawModels(ctx, lh),
 };
 
 /** The subtitle under each card's title. */
-function subtitle(kind: ShareCardKind, d: TokenSageShowcase): string {
-  const t = d.totals;
-  const overall = t.alertsGraded > 0 ? `${Math.round((t.alertsWon2x / t.alertsGraded) * 100)}%` : null;
+function subtitle(kind: ShareCardKind): string {
   switch (kind) {
     case "headline":
       return "Every new Solana coin, read and understood in seconds.";
-    case "volume":
-      return `Coins described per ${d.daily.length < MIN_DAYS_FOR_DAILY ? "hour" : "day"}, quick and deep.`;
     case "themes":
       return "What new Solana coins are about, by the theme TokenSage is surest of.";
     case "lineage":
       return "Where each coin falls in its wave of namesakes.";
-    case "x":
-      return "Does the X post a coin links to actually match the coin?";
     case "flags":
       return "Warnings TokenSage raised on new coins.";
+    case "logos":
+      return "What the logos of new Solana coins show, read from the picture itself.";
+    case "fees":
+      return "Where pump.fun's creator fee is set to go on new coins.";
     case "models":
-      return `Graded model calls that hit 2x, by the coin's theme${overall ? ` (dashed line: all calls, ${overall})` : ""}.`;
+      return "Model calls in the last 7 days by narrative: return and 2x rate against the average.";
   }
 }
 
 const TITLES: Record<ShareCardKind, string> = {
   headline: "TokenSage reads the trenches",
-  volume: "Reads, around the clock",
   themes: "What the trenches are about",
   lineage: "Most new coins are a copy",
-  x: "The X link check",
   flags: "What to be wary of",
-  models: "Which themes double",
+  logos: "What the logos show",
+  fees: "Where the creator fee goes",
+  models: "Which narratives pay",
 };
 
-export async function renderShareCard(kind: ShareCardKind, d: TokenSageShowcase): Promise<HTMLCanvasElement> {
+export async function renderShareCard(
+  kind: ShareCardKind,
+  d: TokenSageShowcase,
+  lh: MarketLighthouse | null,
+): Promise<HTMLCanvasElement> {
   const [icon] = await Promise.all([
     loadIcon(),
     // The canvas only draws with a font already loaded; wait for the page's own.
@@ -572,7 +613,11 @@ export async function renderShareCard(kind: ShareCardKind, d: TokenSageShowcase)
   canvas.height = CARD_H;
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
-  frame(ctx, icon, TITLES[kind], subtitle(kind, d));
-  DRAW[kind](ctx, d);
+  const source =
+    kind === "models"
+      ? "TrenchScanner model calls, last 7 days"
+      : "Counts across every coin TokenSage has read";
+  frame(ctx, icon, TITLES[kind], subtitle(kind), source);
+  DRAW[kind](ctx, d, lh);
   return canvas;
 }

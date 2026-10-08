@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
-import { buildTokenSageShowcase, SHOWCASE_DAYS, SHOWCASE_HOURS, topLabels } from "../tokenSageShowcase.js";
+import { buildTokenSageShowcase, topLabels } from "../tokenSageShowcase.js";
 
 /**
  * GET /guest/tokensage: the /tokensage page's aggregates - the rollup's sums kept for good and
@@ -68,7 +68,7 @@ describe.skipIf(!dbAvailable)("tokensage showcase", () => {
           alertsWon2x: 1,
         },
         { hour: new Date(NOW.getTime() - 5 * DAY_MS), readsTotal: 6, readsDescribed: 6, readsDeep: 1 },
-        // Before the window: in the totals, not in the daily chart.
+        // Outside the last 24 hours: in the totals only.
         { hour: new Date(NOW.getTime() - 60 * DAY_MS), readsTotal: 100, readsDescribed: 90 },
       ],
     });
@@ -103,7 +103,7 @@ describe.skipIf(!dbAvailable)("tokensage showcase", () => {
     await cleanup();
   });
 
-  it("sums every read kept, with a zero-filled daily chart", async () => {
+  it("sums every read kept", async () => {
     const d = await buildTokenSageShowcase(NOW);
     expect(d.totals).toMatchObject({
       reads: 116,
@@ -117,26 +117,6 @@ describe.skipIf(!dbAvailable)("tokensage showcase", () => {
     expect(d.totals.avgXFit).toBeCloseTo(0.75);
     expect(d.since).toEqual(new Date(NOW.getTime() - 60 * DAY_MS));
     expect(d.last24h).toEqual({ reads: 10, described: 8, deep: 3 });
-    expect(d.daily).toHaveLength(SHOWCASE_DAYS);
-    expect(d.daily[d.daily.length - 1]).toMatchObject({ at: TODAY.toISOString(), reads: 10, deep: 3 });
-    expect(d.daily[d.daily.length - 6]!.reads).toBe(6);
-    expect(d.daily[0]!.reads).toBe(0);
-    expect(d.hourly).toHaveLength(SHOWCASE_HOURS);
-    expect(d.hourly[d.hourly.length - 3]).toMatchObject({
-      at: new Date(Date.UTC(2019, 2, 14, 13)).toISOString(),
-      reads: 10,
-      deep: 3,
-    });
-  });
-
-  it("starts the charts at the first read", async () => {
-    // Two days after the newest row: the 30-day chart has no reads before the oldest one.
-    const later = new Date(NOW.getTime() - 58 * DAY_MS);
-    const d = await buildTokenSageShowcase(later);
-    expect(d.daily[0]!.at).toBe(new Date(Date.UTC(2019, 0, 13)).toISOString());
-    expect(d.daily[0]!.reads).toBe(100);
-    expect(d.daily).toHaveLength(3);
-    expect(d.hourly[0]!.reads).toBe(100);
   });
 
   it("totals each label over every day, biggest first", async () => {
