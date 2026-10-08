@@ -1014,11 +1014,25 @@ export interface TelegramChat {
   filterMatches: boolean;
   modelCalls: boolean;
   enabled: boolean;
+  /** The parts of the card this chat switched off (TELEGRAM_ALERT_PARTS keys); [] is the whole card. */
+  hidden: TelegramAlertPart[];
   lastSentAt: string | null;
   /** What Telegram last answered when a send failed; null while all is well. */
   lastError: string | null;
   createdAt: string;
 }
+
+/** The parts of a Telegram alert a chat can switch off, in the order the card shows them. */
+export const TELEGRAM_ALERT_PARTS = [
+  { key: "image", label: "Token picture" },
+  { key: "stats", label: "Mcap, holders, volume, age" },
+  { key: "conviction", label: "Model conviction" },
+  { key: "reasons", label: "Reasons" },
+  { key: "filters", label: "Filter and score" },
+  { key: "mint", label: "Mint address" },
+  { key: "links", label: "Trade links" },
+] as const;
+export type TelegramAlertPart = (typeof TELEGRAM_ALERT_PARTS)[number]["key"];
 
 export interface TelegramState {
   /** The server has a bot token; false means the feature is off for everyone. */

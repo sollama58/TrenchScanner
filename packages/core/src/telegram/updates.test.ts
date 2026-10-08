@@ -110,6 +110,44 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     expect(row?.revokedAt).not.toBeNull();
   });
 
+  it("lists and flips the parts of the card with /show and /hide", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const { code } = await issueTelegramLinkCode(userId);
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    expect((await handleTelegramUpdate(api, message(chatId, "/show"))).action).toBe("parts");
+    expect(api.sent().at(-1)!.text).toContain("✅ <b>reasons</b>");
+    await handleTelegramUpdate(api, message(chatId, "/hide reasons links"));
+    let row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row?.hidden.sort()).toEqual(["links", "reasons"]);
+    expect(api.sent().at(-1)!.text).toContain("▫️ <b>reasons</b>");
+    await handleTelegramUpdate(api, message(chatId, "/show picture off"));
+    await handleTelegramUpdate(api, message(chatId, "/show reasons"));
+    row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row?.hidden.sort()).toEqual(["image", "links"]);
+    await handleTelegramUpdate(api, message(chatId, "/hide nonsense"));
+    expect(api.sent().at(-1)!.text).toContain("I don't know “nonsense”");
+    await handleTelegramUpdate(api, message(chatId, "/show all"));
+    row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row?.hidden).toEqual([]);
+  });
+
+  it("lets only a group admin change the parts in a group", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const { code } = await issueTelegramLinkCode(userId);
+    api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`, "supergroup"));
+    api.answers.set("getChatMember", { ok: true, result: { status: "member" } });
+    // Anyone may ask; only an admin may change.
+    expect((await handleTelegramUpdate(api, message(chatId, "/show", "supergroup"))).action).toBe("parts");
+    expect((await handleTelegramUpdate(api, message(chatId, "/hide mint", "supergroup"))).action).toBe(
+      "refused",
+    );
+    const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row?.hidden).toEqual([]);
+  });
+
   it("notices being blocked or removed, and greets a group it joins", async () => {
     const api = new FakeTelegramApi();
     const chatId = nextChat--;

@@ -2,7 +2,9 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  ALERT_PARTS,
   TELEGRAM_LINK_CODE_TTL_MS,
+  alertParts,
   TelegramApi,
   dashboardUrl,
   formatTestMessage,
@@ -39,6 +41,7 @@ const CHAT_SELECT = {
   filterMatches: true,
   modelCalls: true,
   enabled: true,
+  hidden: true,
   lastSentAt: true,
   lastError: true,
   createdAt: true,
@@ -122,12 +125,18 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
   );
 
   const patchSchema = z
-    .object({ filterMatches: z.boolean(), modelCalls: z.boolean(), enabled: z.boolean() })
+    .object({
+      filterMatches: z.boolean(),
+      modelCalls: z.boolean(),
+      enabled: z.boolean(),
+      /** The parts of the card switched off (ALERT_PARTS); [] shows everything. */
+      hidden: z.array(z.enum(ALERT_PARTS)).max(ALERT_PARTS.length),
+    })
     .partial()
     .strict()
     .refine((v) => Object.keys(v).length > 0, "nothing to change");
 
-  /** Which alerts a chat gets, or pause it. Scoped to the caller's chats by the where clause. */
+  /** Which alerts a chat gets, what they include, or pause it. Scoped to the caller's chats by the where clause. */
   app.patch("/chats/:id", { preHandler: app.authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const parsed = patchSchema.safeParse(request.body);
@@ -135,7 +144,11 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     const updated = await prisma.telegramChat.updateMany({
       where: { id, userId: request.user!.userId, revokedAt: null },
-      data: { ...parsed.data, ...(parsed.data.enabled === true ? { failures: 0, lastError: null } : {}) },
+      data: {
+        ...parsed.data,
+        ...(parsed.data.hidden ? { hidden: [...new Set(parsed.data.hidden)] } : {}),
+        ...(parsed.data.enabled === true ? { failures: 0, lastError: null } : {}),
+      },
     });
     if (updated.count === 0) return reply.code(404).send({ error: "not_found" });
     const chat = await prisma.telegramChat.findUnique({ where: { id }, select: CHAT_SELECT });
@@ -174,10 +187,13 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
       const { id } = request.params as { id: string };
       const row = await prisma.telegramChat.findFirst({
         where: { id, userId: request.user!.userId, revokedAt: null },
-        select: { chatId: true },
+        select: { chatId: true, hidden: true },
       });
       if (!row) return reply.code(404).send({ error: "not_found" });
-      const result = await api.sendAlert(row.chatId, formatTestMessage({ dashboardUrl: dashboardUrl(env) }));
+      const result = await api.sendAlert(
+        row.chatId,
+        formatTestMessage({ dashboardUrl: dashboardUrl(env) }, alertParts(row.hidden)),
+      );
       if (!result.ok) {
         await prisma.telegramChat.updateMany({
           where: { id },

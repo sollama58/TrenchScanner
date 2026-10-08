@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, del, patch, post, type TelegramChat, type TelegramLinkCode, type TelegramState } from "../api";
+import {
+  api,
+  del,
+  patch,
+  post,
+  TELEGRAM_ALERT_PARTS,
+  type TelegramAlertPart,
+  type TelegramChat,
+  type TelegramLinkCode,
+  type TelegramState,
+} from "../api";
 import { ago } from "../format";
 import { CheckIcon, CopyIcon, ExternalIcon, SendIcon, TrashIcon, UsersIcon } from "./Icons";
 
@@ -125,8 +135,15 @@ export function TelegramPanel() {
 
   const change = (
     chat: TelegramChat,
-    body: Partial<Pick<TelegramChat, "filterMatches" | "modelCalls" | "enabled">>,
+    body: Partial<Pick<TelegramChat, "filterMatches" | "modelCalls" | "enabled" | "hidden">>,
   ) => run(chat.id, () => patch(`/telegram/chats/${encodeURIComponent(chat.id)}`, body));
+
+  const togglePart = (chat: TelegramChat, part: TelegramAlertPart) => {
+    const hidden = chat.hidden.includes(part)
+      ? chat.hidden.filter((p) => p !== part)
+      : [...chat.hidden, part];
+    return change(chat, { hidden });
+  };
 
   const unlink = (chat: TelegramChat) => {
     if (!window.confirm(`Unlink “${chatName(chat)}”? It gets no more alerts until it's linked again.`))
@@ -183,6 +200,10 @@ export function TelegramPanel() {
                 <li>Press a button: it makes a one-time link{noBot ? "" : ` to @${tg.botUsername}`}.</li>
                 <li>Open the link. Telegram opens the chat, or asks which group to add the bot to.</li>
                 <li>Press Start (in a group, you need to be an admin). The chat shows up below.</li>
+                <li>
+                  Pick what each alert includes with the chips, or in the chat with <code>/show</code> and{" "}
+                  <code>/hide</code>.
+                </li>
               </ol>
             )}
             {showing && (
@@ -289,6 +310,24 @@ export function TelegramPanel() {
                         />
                         Calls from the models in my feed
                       </label>
+                    </div>
+                    <div className="tg-chat-parts">
+                      <span className="faint small">Each alert includes</span>
+                      {TELEGRAM_ALERT_PARTS.map((p) => {
+                        const on = !c.hidden.includes(p.key);
+                        return (
+                          <button
+                            key={p.key}
+                            type="button"
+                            className={`chip${on ? " on" : ""}`}
+                            aria-pressed={on}
+                            disabled={busy !== null}
+                            onClick={() => void togglePart(c, p.key)}
+                          >
+                            {p.label}
+                          </button>
+                        );
+                      })}
                       <span className="tg-chat-buttons">
                         <button
                           className="button ghost small-btn"

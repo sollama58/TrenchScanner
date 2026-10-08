@@ -158,7 +158,18 @@ async function main() {
   schedule("telegram-dispatch", () =>
     scheduleInterval(
       "telegram-dispatch",
-      async () => ({ ...(await runTelegramDispatch(env)) }),
+      async () => ({
+        ...(await runTelegramDispatch(env, {
+          // Artwork for a token that didn't come through Pump.fun: DexScreener's, when it has one.
+          lookupImages: async (mints) => {
+            const found = await deps.dexScreener.getTokensByAddresses(mints, 1, {
+              retries: 0,
+              deadlineMs: 5_000,
+            });
+            return new Map(found.flatMap((t) => (t.imageUrl ? [[t.mintAddress, t.imageUrl] as const] : [])));
+          },
+        })),
+      }),
       env.TELEGRAM_DISPATCH_INTERVAL_SECONDS / 60,
       { deadlineMinutes: 10 },
     ),

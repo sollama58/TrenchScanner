@@ -5374,6 +5374,38 @@ button.small-btn {
 .tg-chat-controls .check {
   margin: 0;
 }
+.tg-chat-parts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+}
+.tg-chat-parts .faint {
+  margin-right: 2px;
+}
+.tg-chat-parts .chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-3);
+  text-decoration: line-through;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
+}
+.tg-chat-parts .chip.on {
+  color: var(--brand-ink);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--brand-a) 12%, var(--surface-3));
+  border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
+}
+.tg-chat-parts .chip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
 .tg-chat-buttons {
   display: inline-flex;
   gap: 8px;

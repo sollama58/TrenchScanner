@@ -5,7 +5,7 @@ import { createLogger } from "../logger.js";
 import { resolveAccess } from "../subscription/access.js";
 import { loadFeedModelState, resolveFeedModels, type FeedModelState } from "../curation/feedModels.js";
 import { TelegramApi, telegramConfigured } from "./api.js";
-import { alertMessage, digestMessage, type AlertCard, type AlertLinks } from "./format.js";
+import { alertMessage, alertParts, digestMessage, type AlertCard, type AlertLinks } from "./format.js";
 
 /**
  * The scanner worker's telegram-dispatch job: every few seconds, send each linked chat the
@@ -50,6 +50,48 @@ export interface DispatchDeps {
   /** Test seam: who may receive alerts. Defaults to resolveAccess (the paywall). */
   hasAccess?: (walletAddress: string) => Promise<boolean>;
   feedModelState?: () => Promise<FeedModelState>;
+  /**
+   * Finds artwork for tokens that have none on file (DexScreener's, for a coin that didn't come
+   * through Pump.fun), mint -> https URL. The worker passes its DexScreener client; without one,
+   * such alerts go out as text.
+   */
+  lookupImages?: (mints: string[]) => Promise<Map<string, string>>;
+}
+
+/** The most imageless tokens looked up in one pass: one DexScreener batch. */
+const IMAGE_LOOKUP_MAX = 30;
+
+/**
+ * Fills in the picture for pending cards whose token has none, and remembers what it found on
+ * the Token row so the dashboard and the next alert have it too. Best effort and bounded.
+ */
+async function backfillImages(queues: { pending: Pending[] }[], lookup: DispatchDeps["lookupImages"]) {
+  if (!lookup) return;
+  const missing = new Map<string, AlertCard["token"][]>();
+  for (const q of queues) {
+    for (const p of q.pending) {
+      const cards = isDigest(p.card) ? p.card.digest : [p.card];
+      for (const card of cards) {
+        if (card.token.imageUrl) continue;
+        const list = missing.get(card.token.mintAddress) ?? [];
+        list.push(card.token);
+        missing.set(card.token.mintAddress, list);
+      }
+    }
+  }
+  if (missing.size === 0) return;
+  let found: Map<string, string>;
+  try {
+    found = await lookup([...missing.keys()].slice(0, IMAGE_LOOKUP_MAX));
+  } catch (err) {
+    logger.warn("token artwork lookup failed", { error: String(err) });
+    return;
+  }
+  for (const [mint, url] of found) {
+    if (!/^https:\/\/\S+$/.test(url)) continue;
+    for (const token of missing.get(mint) ?? []) token.imageUrl = url;
+    await prisma.token.updateMany({ where: { mintAddress: mint, imageUrl: null }, data: { imageUrl: url } });
+  }
 }
 
 export interface DispatchSummary {
@@ -71,6 +113,7 @@ function loadChats() {
       kind: true,
       filterMatches: true,
       modelCalls: true,
+      hidden: true,
       sentThrough: true,
       failures: true,
       user: {
@@ -318,6 +361,8 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     }
   }
 
+  await backfillImages(queues, deps.lookupImages);
+
   let lastSendAt = 0;
   while (queues.some((q) => q.pending.length > 0)) {
     const t = now();
@@ -332,9 +377,10 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     if (gap > 0) await sleep(gap);
     const q = ready[0]!;
     const item = q.pending[0]!;
+    const parts = alertParts(q.chat.hidden);
     const message = isDigest(item.card)
-      ? digestMessage(item.card.digest, links)
-      : alertMessage(item.card, links, now());
+      ? digestMessage(item.card.digest, links, parts)
+      : alertMessage(item.card, links, now(), parts);
     lastSendAt = now();
     const result = await api.sendAlert(q.chat.chatId, message);
     const spacing = q.chat.kind === "private" ? PRIVATE_GAP_MS : GROUP_GAP_MS;

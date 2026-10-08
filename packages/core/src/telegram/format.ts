@@ -57,6 +57,35 @@ export const CAPTION_MAX_CHARS = 1024;
 /** A digest lists this many tokens in full and counts the rest. */
 export const DIGEST_MAX_ENTRIES = 12;
 
+/**
+ * The parts of an alert a chat can switch off, in the order the card shows them. The chat's
+ * TelegramChat.hidden lists the keys it turned off; everything else is on.
+ */
+export const ALERT_PARTS = ["image", "stats", "conviction", "reasons", "filters", "mint", "links"] as const;
+export type AlertPart = (typeof ALERT_PARTS)[number];
+export const ALERT_PART_LABELS: Record<AlertPart, string> = {
+  image: "the token's picture",
+  stats: "market cap, holders, volume and age",
+  conviction: "each model's conviction line",
+  reasons: "the strongest call's reasons",
+  filters: "which filter caught it, with the score",
+  mint: "the mint address",
+  links: "the trade links",
+};
+export type AlertParts = Record<AlertPart, boolean>;
+
+export function isAlertPart(key: string): key is AlertPart {
+  return (ALERT_PARTS as readonly string[]).includes(key);
+}
+
+/** Which parts are on, from a chat's hidden list. Unknown keys are ignored. */
+export function alertParts(hidden: readonly string[] = []): AlertParts {
+  const off = new Set(hidden);
+  return Object.fromEntries(ALERT_PARTS.map((p) => [p, !off.has(p)])) as AlertParts;
+}
+
+export const ALL_PARTS: AlertParts = alertParts();
+
 /** One message, ready to send: the HTML and the photo to put above it, if any. */
 export interface AlertMessage {
   html: string;
@@ -78,8 +107,10 @@ export function alertImage(token: Pick<AlertToken, "imageUrl">): string | null {
   const cid =
     /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?(?:[?#].*)?$/.exec(url)?.[1] ??
     /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?(?:[?#].*)?$/.exec(url)?.[1];
+  // Also re-encoded as JPEG there: Telegram takes JPEG and PNG as a photo but balks at the GIFs,
+  // WebPs and SVGs launchers upload, and a JPEG is the smallest of the lot.
   return cid
-    ? `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${ALERT_IMAGE_PX}&img-height=${ALERT_IMAGE_PX}&img-fit=scale-down`
+    ? `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${ALERT_IMAGE_PX}&img-height=${ALERT_IMAGE_PX}&img-fit=scale-down&img-format=jpeg`
     : url;
 }
 
@@ -183,7 +214,12 @@ function callLines(call: AlertCall, withReasons: boolean): string[] {
  * call (strongest first) with its reasons, each filter that caught it (highest score first), then
  * the mint to copy and the places to trade. Short enough to ride as a photo caption.
  */
-export function formatAlert(card: AlertCard, links: AlertLinks, now = Date.now()): string {
+export function formatAlert(
+  card: AlertCard,
+  links: AlertLinks,
+  now = Date.now(),
+  parts: AlertParts = ALL_PARTS,
+): string {
   const c = strongestFirst(card);
   const t = c.token;
   const icon = c.calls.length > 0 ? "🟢" : "🎯";
@@ -193,23 +229,37 @@ export function formatAlert(card: AlertCard, links: AlertLinks, now = Date.now()
       : `${icon} <b>${escapeHtml(tokenLabel(t))}</b>`;
   const sections: string[] = [`${title}\n<i>${escapeHtml(headline(c))}</i>`];
 
-  const facts = factsLine(c, now);
+  const facts = parts.stats ? factsLine(c, now) : null;
   if (facts) sections.push(facts);
 
   const raised: string[] = [];
   // The strongest call carries the reasons; the others are one line each, which keeps the whole
   // message inside a photo caption.
-  c.calls.forEach((call, i) => raised.push(...callLines(call, i === 0)));
-  for (const f of c.filters) raised.push(`🎯 “${escapeHtml(f.name)}” · score ${Math.round(f.score)}`);
+  if (parts.conviction)
+    c.calls.forEach((call, i) => raised.push(...callLines(call, i === 0 && parts.reasons)));
+  else if (parts.reasons && c.calls[0]) raised.push(...callLines(c.calls[0], true).slice(1));
+  if (parts.filters)
+    for (const f of c.filters) raised.push(`🎯 “${escapeHtml(f.name)}” · score ${Math.round(f.score)}`);
   if (raised.length > 0) sections.push(raised.join("\n"));
 
-  sections.push(`<code>${escapeHtml(t.mintAddress)}</code>\n${tradeLinks(t.mintAddress, links)}`);
+  const tail: string[] = [];
+  if (parts.mint) tail.push(`<code>${escapeHtml(t.mintAddress)}</code>`);
+  if (parts.links) tail.push(tradeLinks(t.mintAddress, links));
+  if (tail.length > 0) sections.push(tail.join("\n"));
   return sections.join("\n\n");
 }
 
 /** One alert, with the token's picture above it when there is one. */
-export function alertMessage(card: AlertCard, links: AlertLinks, now = Date.now()): AlertMessage {
-  return { html: formatAlert(card, links, now), imageUrl: alertImage(card.token) };
+export function alertMessage(
+  card: AlertCard,
+  links: AlertLinks,
+  now = Date.now(),
+  parts: AlertParts = ALL_PARTS,
+): AlertMessage {
+  return {
+    html: formatAlert(card, links, now, parts),
+    imageUrl: parts.image ? alertImage(card.token) : null,
+  };
 }
 
 function digestWho(card: AlertCard): string {
@@ -228,7 +278,7 @@ function digestWho(card: AlertCard): string {
  * Many alerts at once become one message, so a burst never floods a chat. Best first, so the
  * strongest call is the first line a person reads, and each line links straight to the terminal.
  */
-export function formatDigest(cards: AlertCard[], links: AlertLinks): string {
+export function formatDigest(cards: AlertCard[], links: AlertLinks, parts: AlertParts = ALL_PARTS): string {
   const ranked = sortCards(cards);
   const lines = [`⚡ <b>${cards.length} new alerts</b> · strongest first`, ""];
   ranked.slice(0, DIGEST_MAX_ENTRIES).forEach((card, i) => {
@@ -237,9 +287,10 @@ export function formatDigest(cards: AlertCard[], links: AlertLinks): string {
       `${i + 1}. ${icon} <b>${escapeHtml(tokenLabel(card.token))}</b>`,
       escapeHtml(digestWho(card)),
     ];
-    if (card.snapshot) bits.push(usd(card.snapshot.marketCapUsd));
+    if (parts.stats && card.snapshot) bits.push(usd(card.snapshot.marketCapUsd));
     const m = encodeURIComponent(card.token.mintAddress);
-    bits.push(`<a href="https://trade.padre.gg/trade/solana/${m}">trade</a>`);
+    if (parts.links) bits.push(`<a href="https://trade.padre.gg/trade/solana/${m}">trade</a>`);
+    else if (parts.mint) bits.push(`<code>${escapeHtml(card.token.mintAddress)}</code>`);
     lines.push(bits.join(" · "));
   });
   if (ranked.length > DIGEST_MAX_ENTRIES) lines.push(`… and ${ranked.length - DIGEST_MAX_ENTRIES} more`);
@@ -253,13 +304,17 @@ export function formatDigest(cards: AlertCard[], links: AlertLinks): string {
 }
 
 /** A digest, pictured with the strongest token's logo when it has one. */
-export function digestMessage(cards: AlertCard[], links: AlertLinks): AlertMessage {
-  const top = sortCards(cards).find((c) => alertImage(c.token) !== null);
-  return { html: formatDigest(cards, links), imageUrl: top ? alertImage(top.token) : null };
+export function digestMessage(
+  cards: AlertCard[],
+  links: AlertLinks,
+  parts: AlertParts = ALL_PARTS,
+): AlertMessage {
+  const top = parts.image ? sortCards(cards).find((c) => alertImage(c.token) !== null) : undefined;
+  return { html: formatDigest(cards, links, parts), imageUrl: top ? alertImage(top.token) : null };
 }
 
 /** The sample alert the Filters tab sends, pictured with the app's own icon. */
-export function formatTestMessage(links: AlertLinks): AlertMessage {
+export function formatTestMessage(links: AlertLinks, parts: AlertParts = ALL_PARTS): AlertMessage {
   const base = links.dashboardUrl.replace(/\/$/, "");
   const html = formatAlert(
     {
@@ -276,6 +331,8 @@ export function formatTestMessage(links: AlertLinks): AlertMessage {
       raisedAt: new Date(),
     },
     links,
+    Date.now(),
+    parts,
   ).replace("🎯 <b>", "🔔 <b>");
-  return { html, imageUrl: base.startsWith("https://") ? `${base}/icon-512.png` : null };
+  return { html, imageUrl: parts.image && base.startsWith("https://") ? `${base}/icon-512.png` : null };
 }

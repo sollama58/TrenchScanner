@@ -263,12 +263,48 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(at.getTime());
   });
 
+  it("looks up artwork for a token that has none and keeps it", async () => {
+    const api = new FakeTelegramApi();
+    await rewind();
+    const bare = await prisma.token.create({ data: { mintAddress: `${TAG}-bare`, symbol: "BARE" } });
+    await prisma.match.create({
+      data: {
+        userId,
+        filterId,
+        tokenId: bare.id,
+        snapshotId,
+        matchedAt: new Date(Date.now() - 15_000),
+        score: 90,
+      },
+    });
+    const asked: string[][] = [];
+    const summary = await runTelegramDispatch(env, {
+      api,
+      hasAccess: async () => true,
+      lookupImages: async (mints) => {
+        asked.push(mints);
+        return new Map([[`${TAG}-bare`, "https://cdn.example/bare.png"]]);
+      },
+    });
+    expect(summary.failed).toBe(0);
+    // Only the tokens without artwork are asked about (earlier tests' imageless tokens are in the
+    // rewound window too), never the one that has a picture.
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain(`${TAG}-bare`);
+    expect(asked[0]).not.toContain(`${TAG}-mint`);
+    expect(api.sent()).toHaveLength(1);
+    const row = await prisma.token.findUnique({ where: { id: bare.id } });
+    expect(row?.imageUrl).toBe("https://cdn.example/bare.png");
+  });
+
   it("unlinks a chat that blocked the bot, and keeps the cursor on a transient failure", async () => {
     const api = new FakeTelegramApi();
     await rewind();
     const at = new Date(Date.now() - 15_000);
     await prisma.match.create({ data: { userId, filterId, tokenId, snapshotId, matchedAt: at, score: 71 } });
+    // Whichever way the message goes out (photo, or text when the digest outgrows a caption).
     api.answers.set("sendPhoto", { ok: false, code: 0, description: "timed out" });
+    api.answers.set("sendMessage", { ok: false, code: 0, description: "timed out" });
     expect((await run(api)).failed).toBe(1);
     let row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBeLessThan(at.getTime());
@@ -276,11 +312,9 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(row?.failures).toBe(1);
     expect(row?.revokedAt).toBeNull();
 
-    api.answers.set("sendPhoto", {
-      ok: false,
-      code: 403,
-      description: "Forbidden: bot was blocked by the user",
-    });
+    const blocked = { ok: false as const, code: 403, description: "Forbidden: bot was blocked by the user" };
+    api.answers.set("sendPhoto", blocked);
+    api.answers.set("sendMessage", blocked);
     expect((await run(api)).failed).toBe(1);
     row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.revokedAt).not.toBeNull();

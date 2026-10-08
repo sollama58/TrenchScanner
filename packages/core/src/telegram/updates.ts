@@ -7,7 +7,7 @@ import {
   type TelegramMessage,
   type TelegramUpdate,
 } from "./api.js";
-import { escapeHtml } from "./format.js";
+import { ALERT_PARTS, ALERT_PART_LABELS, alertParts, escapeHtml, isAlertPart } from "./format.js";
 import { looksLikeTelegramCode, redeemTelegramLinkCode } from "./link.js";
 
 /**
@@ -23,7 +23,8 @@ const logger = createLogger("telegram-updates");
 const GROUP_ADMIN_STATUSES = new Set(["creator", "administrator"]);
 
 export interface UpdateOutcome {
-  action: "ignored" | "linked" | "refused" | "help" | "status" | "unlinked" | "removed" | "welcomed";
+  action:
+    "ignored" | "linked" | "refused" | "help" | "status" | "unlinked" | "removed" | "welcomed" | "parts";
 }
 
 function shortWallet(address: string): string {
@@ -124,6 +125,62 @@ export async function handleTelegramUpdate(api: TelegramApi, update: TelegramUpd
       );
       return { action: "status" };
     }
+    case "show":
+    case "hide": {
+      const row = await prisma.telegramChat.findFirst({
+        where: { chatId, revokedAt: null },
+        select: { id: true, hidden: true },
+      });
+      if (!row) {
+        await api.sendMessage(
+          chatId,
+          `Not linked to any account yet.\n\n${isPrivate ? HELP_PRIVATE : HELP_GROUP}`,
+        );
+        return { action: "parts" };
+      }
+      const words = parsed.arg.toLowerCase().split(/\s+/).filter(Boolean);
+      if (words.length === 0) {
+        await api.sendMessage(chatId, partsText(row.hidden));
+        return { action: "parts" };
+      }
+      if (isGroup && !(await isGroupAdmin(api, message))) {
+        await api.sendMessage(chatId, "Only a group admin can change what the alerts here include.");
+        return { action: "refused" };
+      }
+      let hidden = new Set(row.hidden);
+      const unknown: string[] = [];
+      if (parsed.command === "show" && (words[0] === "all" || words[0] === "everything")) {
+        hidden = new Set();
+      } else if (parsed.command === "hide" && words[0] === "all") {
+        hidden = new Set(ALERT_PARTS.filter((p) => p !== "mint"));
+      } else {
+        // "/show reasons off" reads as hide; "/hide reasons on" reads as show.
+        const flip = words[words.length - 1] === "off";
+        const on = words[words.length - 1] === "on";
+        const turnOff = parsed.command === "hide" ? !on : flip;
+        for (const w of words) {
+          if (w === "on" || w === "off") continue;
+          const key = w === "picture" || w === "photo" ? "image" : w === "numbers" ? "stats" : w;
+          if (!isAlertPart(key)) {
+            unknown.push(w);
+            continue;
+          }
+          if (turnOff) hidden.add(key);
+          else hidden.delete(key);
+        }
+      }
+      if (unknown.length > 0) {
+        await api.sendMessage(
+          chatId,
+          `I don't know “${escapeHtml(unknown.join(", "))}”. The parts are: ${ALERT_PARTS.join(", ")}.\n\n` +
+            partsText([...hidden]),
+        );
+        return { action: "parts" };
+      }
+      await prisma.telegramChat.updateMany({ where: { id: row.id }, data: { hidden: [...hidden] } });
+      await api.sendMessage(chatId, partsText([...hidden]));
+      return { action: "parts" };
+    }
     case "stop":
     case "unlink": {
       if (isGroup && !(await isGroupAdmin(api, message))) {
@@ -145,6 +202,18 @@ export async function handleTelegramUpdate(api: TelegramApi, update: TelegramUpd
     default:
       return { action: "ignored" };
   }
+}
+
+/** The /show answer: each part of the card with its switch, and how to flip one. */
+export function partsText(hidden: readonly string[]): string {
+  const parts = alertParts(hidden);
+  const lines = ["<b>What each alert here includes</b>"];
+  for (const p of ALERT_PARTS) lines.push(`${parts[p] ? "✅" : "▫️"} <b>${p}</b> · ${ALERT_PART_LABELS[p]}`);
+  lines.push(
+    "",
+    "Flip one with <code>/hide reasons</code> or <code>/show reasons</code>; <code>/show all</code> brings the whole card back. The same switches are on the Filters tab.",
+  );
+  return lines.join("\n");
 }
 
 async function isGroupAdmin(api: TelegramApi, message: TelegramMessage): Promise<boolean> {

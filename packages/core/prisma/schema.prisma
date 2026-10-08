@@ -145,6 +145,10 @@ model TelegramChat {
   modelCalls    Boolean   @default(true)
   /// Paused by the user from the dashboard; the chat stays linked.
   enabled       Boolean   @default(true)
+  /// The parts of an alert this chat has switched off (ALERT_PARTS in telegram/format.ts:
+  /// "image", "stats", "conviction", "reasons", "filters", "mint", "links"). Empty means the
+  /// whole card. Set from the dashboard or with /show and /hide in the chat.
+  hidden        String[]  @default([])
   /// Alerts raised at or before this were sent (or never due) - the dispatcher's cursor per chat.
   /// Starts at link time, so linking never replays the backlog.
   sentThrough   DateTime  @default(now())
