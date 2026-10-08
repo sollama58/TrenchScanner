@@ -4453,7 +4453,7 @@ button.small-btn {
 .lh-hit {
   display: grid;
   /* Fixed widths, so every row's track (and the scale above them) lines up. */
-  grid-template-columns: minmax(90px, 160px) 1fr 56px 118px 80px;
+  grid-template-columns: minmax(90px, 160px) 1fr 56px 172px 80px;
   align-items: center;
   gap: 10px;
   font-size: 13px;

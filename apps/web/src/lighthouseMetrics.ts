@@ -513,3 +513,46 @@ export function delta(m: Metric, now: LighthouseSums, before: LighthouseSums | n
   const b = m.value(before);
   return a === null || b === null ? null : a - b;
 }
+
+/** The yardstick a narrative is read against: every graded model call in the window, pooled. */
+export interface NarrativeBaseline {
+  /** Average return under the exit plan across every call with one, or null with none. */
+  avgReturn: number | null;
+  /** Share of graded calls that reached 2x, or null with none graded. */
+  rate2x: number | null;
+  graded: number;
+}
+
+/**
+ * The all-narrative average from the per-narrative tallies, uncategorized included, so a
+ * narrative's relative strength is its figure minus this one: what it adds over picking calls
+ * at random from the same window.
+ */
+export function narrativeBaseline(
+  rows: { graded: number; won2x: number; returnN: number; returnSum: number }[],
+): NarrativeBaseline {
+  let graded = 0;
+  let won2x = 0;
+  let returnN = 0;
+  let returnSum = 0;
+  for (const r of rows) {
+    graded += r.graded;
+    won2x += r.won2x;
+    returnN += r.returnN;
+    returnSum += r.returnSum;
+  }
+  return { avgReturn: mean(returnSum, returnN), rate2x: rate(won2x, graded), graded };
+}
+
+/** The relative bar's reach either side of the average: the smallest step that fits the widest gap. */
+export function relativeScale(gaps: (number | null)[]): number {
+  const widest = Math.max(0, ...gaps.map((g) => (g === null ? 0 : Math.abs(g))));
+  return [10, 25, 50, 100, 200].find((s) => widest <= s) ?? 200;
+}
+
+/** A gap in percentage points with its sign: +12 pts, -8 pts, 0 pts. */
+export function signedPts(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "–";
+  const r = Math.round(value);
+  return `${r > 0 ? "+" : r < 0 ? "-" : ""}${Math.abs(r)} pts`;
+}
