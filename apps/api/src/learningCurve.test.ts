@@ -5,10 +5,12 @@ import { prisma } from "@trenchscanner/core";
 import {
   buildLearningCurve,
   buildLearningDays,
+  buildLearningModels,
   buildLearningRuns,
   buildLearningTrend,
   chooseRuns,
   MIN_GRADED_FOR_LIFT,
+  poolModelDays,
   TREND_SPAN_DAYS,
 } from "./learningCurve.js";
 
@@ -66,6 +68,49 @@ describe("buildLearningDays", () => {
     expect(day!.feed.rate10xPct).toBe(12.5);
     expect(day!.market.rate10xPct).toBe(1);
     expect(day!.lift10x).toBe(12.5);
+  });
+});
+
+describe("per-model curves", () => {
+  const modelRaw = (model: string | null, name: string | null, ...args: Parameters<typeof raw>) => ({
+    ...raw(...args),
+    model,
+    model_name: name,
+  });
+  const market = [raw("2026-10-01", 1000, 1000, 100), raw("2026-10-02", 1000, 1000, 80)];
+  const rows = [
+    modelRaw("seat-a", "Alpha", "2026-10-01", 10, 10, 3),
+    modelRaw("seat-a", "Alpha II", "2026-10-02", 20, 20, 4),
+    modelRaw("seat-b", "Beta", "2026-10-02", 12, 12, 6),
+    // A call from before the contest: the feed's only.
+    modelRaw(null, null, "2026-10-02", 2, 2, 2),
+  ];
+
+  it("pools every model's rows into the feed's day rows", () => {
+    const feed = buildLearningDays(market, poolModelDays(rows));
+    expect(feed.map((d) => [d.day, d.feed.calls, d.feed.won2x])).toEqual([
+      ["2026-10-01", 10, 3],
+      ["2026-10-02", 34, 12],
+    ]);
+  });
+
+  it("gives each model its own days and lift against the same market, most graded first", () => {
+    const models = buildLearningModels(market, rows);
+    expect(models.map((m) => m.model)).toEqual(["seat-a", "seat-b"]);
+    const [a, b] = models;
+    // Its newest name, and only the days it called on.
+    expect(a!.name).toBe("Alpha II");
+    expect(a!.days.map((d) => d.day)).toEqual(["2026-10-01", "2026-10-02"]);
+    // 30% over a 10% market; 20% over 8%.
+    expect(a!.days.map((d) => d.lift2x)).toEqual([3, 2.5]);
+    expect(b!.days).toEqual([
+      expect.objectContaining({
+        day: "2026-10-02",
+        lift2x: 6.25,
+        rates: expect.objectContaining({ rate2xPct: 50 }),
+      }),
+    ]);
+    expect(a!.trend?.verdict).toBe("too-early");
   });
 });
 
@@ -191,5 +236,6 @@ describe.skipIf(!dbAvailable)("buildLearningCurve", () => {
     expect(curve.minGradedForLift).toBe(MIN_GRADED_FOR_LIFT);
     expect(Array.isArray(curve.days)).toBe(true);
     expect(Array.isArray(curve.runs)).toBe(true);
+    expect(Array.isArray(curve.models)).toBe(true);
   });
 });

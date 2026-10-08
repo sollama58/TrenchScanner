@@ -564,10 +564,29 @@ export interface LearningTrend {
   reason: string;
 }
 
+/** One model's day: its own calls and their lift over that day's market (LearningDay.market). */
+export interface LearningModelDay {
+  day: string;
+  rates: LearningRates;
+  lift2x: number | null;
+}
+
+/** One model's learning curve against the same market, and its own trend verdict. */
+export interface LearningModel {
+  /** The contestant id: the seat, as on the leaderboard. */
+  model: string;
+  name: string | null;
+  /** Only the days it called on, oldest first. */
+  days: LearningModelDay[];
+  trend: LearningTrend | null;
+}
+
 /** Day-over-day: the feed's edge over the market, and each training run's exam against its base rate. */
 export interface LearningCurve {
   window: { since: string; until: string };
   days: LearningDay[];
+  /** Each model's own curve; absent from an API older than the per-model view. */
+  models?: LearningModel[];
   runs: LearningRun[];
   trend: LearningTrend | null;
   minGradedForLift: number;

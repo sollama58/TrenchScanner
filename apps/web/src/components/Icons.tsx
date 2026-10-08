@@ -254,6 +254,13 @@ export const ChevronDownIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** An arrow leaving a tray: share. */
+export const ShareIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 15V3M7 8l5-5 5 5M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6" />
+  </Svg>
+);
+
 export const DownloadIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
