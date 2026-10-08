@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { CONTESTANTS, CONTESTANT_IDS, ORDER_FLOW_FEATURES, enabledContestants } from "./contestants.js";
+import {
+  CONTESTANTS,
+  CONTESTANT_IDS,
+  NARRATIVE_SEAT_FEATURES,
+  ORDER_FLOW_FEATURES,
+  enabledContestants,
+} from "./contestants.js";
+import { LEARNER_FEATURE_NAMES } from "./features.js";
 import { NARRATIVE_BACKGROUND_KIND, NARRATIVE_MIN_ROWS, narrativeTrainingSet } from "./trainingRun.js";
 import { isDecisionRow, type TrainingRow } from "./trainer.js";
 import { STACKED_MODEL_KIND } from "./stacking.js";
@@ -35,6 +42,20 @@ describe("contestant roster", () => {
       "narrative",
     ]);
     expect(CONTESTANTS.find((c) => c.id === "narrative")?.role).toBe("narrative");
+  });
+
+  it("points the Narrative model at every TokenSage input and only four market readings", () => {
+    const recipe = CONTESTANTS.find((c) => c.id === "narrative")?.recipe;
+    expect(recipe?.featureNames).toBe(NARRATIVE_SEAT_FEATURES);
+    const tokenSage = LEARNER_FEATURE_NAMES.filter((f) => f.startsWith("ns"));
+    expect(tokenSage.length).toBeGreaterThan(30);
+    expect(NARRATIVE_SEAT_FEATURES.filter((f) => f.startsWith("ns"))).toEqual(tokenSage);
+    expect(NARRATIVE_SEAT_FEATURES.filter((f) => !f.startsWith("ns"))).toEqual([
+      "ageMinutes",
+      "volumeAccel",
+      "holderGrowth10mPct",
+      "pathRet15mPct",
+    ]);
   });
 });
 
