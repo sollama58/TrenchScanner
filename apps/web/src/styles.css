@@ -6051,6 +6051,40 @@ button.small-btn {
   border-color: color-mix(in srgb, var(--bad) 40%, transparent);
   background: var(--bad-wash);
 }
+.sage-why {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.sage-why ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.sage-why li {
+  margin: 0;
+  padding: 0;
+  list-style: disc;
+}
+.sage-why li + li {
+  margin-top: 2px;
+}
+.sage-why-head {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.sage-why-head.tone-good {
+  color: var(--good-ink);
+}
+.sage-why-head.tone-warn {
+  color: var(--bad-ink);
+}
+@media (max-width: 420px) {
+  .sage-why {
+    grid-template-columns: 1fr;
+  }
+}
 .sage-bars {
   display: grid;
   gap: 7px;

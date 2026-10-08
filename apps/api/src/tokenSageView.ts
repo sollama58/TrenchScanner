@@ -1,4 +1,9 @@
-import { tokenSageFlagSeverity, type TokenSageAnalysis } from "@trenchscanner/core";
+import {
+  NARRATIVE_CONTESTANT,
+  parseNarrativeRationale,
+  tokenSageFlagSeverity,
+  type TokenSageAnalysis,
+} from "@trenchscanner/core";
 import { topCategory } from "./routes/adminInsights.js";
 
 /**
@@ -9,8 +14,10 @@ import { topCategory } from "./routes/adminInsights.js";
  * other than the creator keeps its address, linked to Solscan, as TokenSage suggests). Every string here is
  * launcher-supplied or derived from it, so the page renders it as text, never as HTML.
  *
- * It carries TokenSage's interpretation only. The Narrative seat's agrees/warns note is a model
- * call (switched off on the cards until it is better trained) and is deliberately not part of it.
+ * Beside TokenSage's interpretation it carries the Narrative seat's latest verdict on the coin
+ * with what that verdict rests on (`narrative`), once the seat has judged it. The page shows that
+ * part only to readers who see the seat's agrees/warns note on cards (the Customize toggle, or its
+ * automatic default - curation/narrativeNote.ts).
  */
 
 export interface SageView {
@@ -33,6 +40,53 @@ export interface SageView {
   marketCap: { t: string; usd: number }[];
   /** How the models' calls on coins in this coin's top narrative graded over the last week. */
   track: SageTrack | null;
+  /** The Narrative seat's latest verdict on this coin and why; null until it has judged it. */
+  narrative: SageNarrative | null;
+}
+
+/**
+ * The Narrative seat's verdict: "calls" on its own call, "agrees"/"warns" as the note it left on
+ * another seat's card. The rest is curation/narrativeNote.ts's NarrativeRationale.
+ */
+export interface SageNarrative {
+  verdict: "calls" | "agrees" | "warns";
+  at: string;
+  probabilityPct: number;
+  calibratedPct: number | null;
+  for: string[];
+  against: string[];
+}
+
+/** One CuratedAlert row, as sageNarrative needs it. */
+export interface NarrativeAlertRow {
+  model: string | null;
+  createdAt: Date;
+  narrativeVerdict: string | null;
+  narrativeNotedAt: Date | null;
+  narrativeRationale: unknown;
+}
+
+/**
+ * The newest judgment among a coin's cards that carries a stored rationale: the seat's own call,
+ * or the note it left on another seat's card. Rows from before rationales were stored are skipped.
+ */
+export function sageNarrative(rows: NarrativeAlertRow[]): SageNarrative | null {
+  let best: SageNarrative | null = null;
+  for (const row of rows) {
+    const rationale = parseNarrativeRationale(row.narrativeRationale);
+    if (!rationale) continue;
+    const verdict =
+      row.model === NARRATIVE_CONTESTANT
+        ? "calls"
+        : row.narrativeVerdict === "agrees" || row.narrativeVerdict === "warns"
+          ? row.narrativeVerdict
+          : null;
+    if (!verdict) continue;
+    const at = (verdict === "calls" ? row.createdAt : (row.narrativeNotedAt ?? row.createdAt)).toISOString();
+    if (best && best.at >= at) continue;
+    best = { verdict, at, ...rationale };
+  }
+  return best;
 }
 
 export interface SageRead {

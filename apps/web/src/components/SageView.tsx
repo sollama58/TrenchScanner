@@ -5,6 +5,7 @@ import { ago, shortAddress, tokenThumb, usd } from "../format";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LockIcon, SageIcon } from "./Icons";
 import { Skeleton } from "./Charts";
 import { closeSage, SAGE_PARAM } from "../sage";
+import { useShowNarrativeNote } from "../narrativeNote";
 
 /**
  * The TokenSage view: TokenSage's interpretation of one token (what it is about, why, which copy
@@ -13,8 +14,9 @@ import { closeSage, SAGE_PARAM } from "../sage";
  * GET /tokens/:mint/sage (apps/api/src/tokenSageView.ts). Every string is launcher-derived and is
  * rendered as text.
  *
- * This is TokenSage's read only, not a call: the Narrative seat's agrees/warns note stays off
- * until that seat is better trained.
+ * Beside TokenSage's read it shows the Narrative model's latest verdict on the coin and the
+ * inputs it rests on, once that model has judged it - only for readers who see its agrees/warns
+ * note on cards (the Customize toggle, else its automatic default; src/narrativeNote.ts).
  */
 
 /** Mirrors apps/api/src/tokenSageView.ts. */
@@ -31,6 +33,18 @@ export interface SageView {
   read: SageRead | null;
   marketCap: { t: string; usd: number }[];
   track: SageTrack | null;
+  /** Absent from a server older than this page. */
+  narrative?: SageNarrative | null;
+}
+
+/** The Narrative model's latest verdict on the coin and what it rests on. */
+export interface SageNarrative {
+  verdict: "calls" | "agrees" | "warns";
+  at: string;
+  probabilityPct: number;
+  calibratedPct: number | null;
+  for: string[];
+  against: string[];
 }
 
 export interface SageRead {
@@ -421,6 +435,72 @@ function SageBody({ mint, onClose }: { mint: string; onClose: () => void }) {
   );
 }
 
+const NARRATIVE_VERDICT: Record<
+  SageNarrative["verdict"],
+  { text: string; tone: "good" | "warn"; line: string }
+> = {
+  calls: { text: "Calls it", tone: "good", line: "The Narrative model called this coin." },
+  agrees: {
+    text: "Agrees",
+    tone: "good",
+    line: "Another model called this coin, and the Narrative model would have called it too.",
+  },
+  warns: {
+    text: "Warns",
+    tone: "warn",
+    line: "Another model called this coin; the Narrative model would not have.",
+  },
+};
+
+/**
+ * The Narrative model's verdict and its rationale: the inputs that moved its score most each way,
+ * from its own trees on this coin (packages/core curation/trainer.ts modelRationale).
+ */
+export function NarrativeCard({ narrative: n }: { narrative: SageNarrative }) {
+  const v = NARRATIVE_VERDICT[n.verdict];
+  return (
+    <section className="sage-card sage-narrative">
+      <h4>
+        Narrative model
+        <span className={`sage-tag tone-${v.tone}`}>{v.text}</span>
+        <span className="when">{ago(n.at)}</span>
+      </h4>
+      <p className="small">
+        {v.line}{" "}
+        {n.calibratedPct !== null
+          ? `Its past calls ranked like this one doubled ${Math.round(n.calibratedPct)}% of the time.`
+          : `It gave it a ${Math.round(n.probabilityPct)}% chance to double.`}
+      </p>
+      <div className="sage-why">
+        <div>
+          <span className="sage-why-head tone-good">Pushed toward a call</span>
+          {n.for.length > 0 ? (
+            <ul>
+              {n.for.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Nothing stood out</p>
+          )}
+        </div>
+        <div>
+          <span className="sage-why-head tone-warn">Held it back</span>
+          {n.against.length > 0 ? (
+            <ul>
+              {n.against.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Nothing stood out</p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
   const ref = r.referent;
   const supported = new Set(ref?.supportedBy ?? []);
@@ -430,6 +510,7 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
   const high = r.flags.filter((f) => f.severity === "high");
   const others = r.flags.filter((f) => f.severity !== "high");
   const readAt = r.analyzedAt ? Date.parse(r.analyzedAt) : null;
+  const showNarrative = useShowNarrativeNote();
   return (
     <>
       <section className="sage-hero">
@@ -486,6 +567,8 @@ function SageReadView({ read: r, view }: { read: SageRead; view: SageView }) {
       )}
 
       {r.summary && <blockquote className="sage-summary">{r.summary}</blockquote>}
+
+      {view.narrative && showNarrative && <NarrativeCard narrative={view.narrative} />}
 
       <div className="sage-grid">
         {r.categories.length > 0 && (
