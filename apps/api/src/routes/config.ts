@@ -3,6 +3,7 @@ import {
   type Env,
   NARRATIVE_CATEGORY_IDS,
   NARRATIVE_CATEGORY_LABELS,
+  NARRATIVE_SUB_LABELS,
   loadAdoptedScoreWeights,
   recentScoreScale,
   SCORE_SCALE_FALLBACK,
@@ -26,12 +27,16 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
       // comment. A user's own filter.mcapMin/mcapMax is clamped to this on both ends.
       scanBandMin,
       scanBandMax,
-      // TokenSage's top-level themes, for the filter editor's narrative criteria. Whether the
-      // criteria can match anything depends on TokenSage being on, which the scanner decides.
-      narrativeCategories: NARRATIVE_CATEGORY_IDS.map((id) => ({
-        id,
-        label: NARRATIVE_CATEGORY_LABELS[id as keyof typeof NARRATIVE_CATEGORY_LABELS] ?? id,
-      })),
+      // TokenSage's top-level themes, then the sub-labels offered on their own, for the filter
+      // editor's narrative criteria. Whether the criteria can match anything depends on TokenSage
+      // being on, which the scanner decides.
+      narrativeCategories: [
+        ...NARRATIVE_CATEGORY_IDS.map((id) => ({
+          id,
+          label: NARRATIVE_CATEGORY_LABELS[id as keyof typeof NARRATIVE_CATEGORY_LABELS] ?? id,
+        })),
+        ...NARRATIVE_SUB_LABELS,
+      ],
     };
   });
 

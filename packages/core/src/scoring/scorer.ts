@@ -1,5 +1,5 @@
 import type { EnrichedToken, ScoreBreakdown } from "../types.js";
-import { narrativeIsLateCopy } from "../curation/narrativeFeatures.js";
+import { narrativeIsLateCopy, narrativeReferentNamed } from "../curation/narrativeFeatures.js";
 
 /**
  * Composite score (0-100): how much a token looks like the launches that double fast. It ranks
@@ -77,12 +77,30 @@ const X_RELATIONS_CREDITED = new Set(["launch_announcement", "narrative_referenc
 /** A linked post counts as predating the coin when it went out at least this long before it. */
 export const X_POST_PREDATES_MIN_S = 60;
 
+/** TokenSage's confidence bands (rules 0.17.0): a named referent from one input starts here... */
+export const NAMED_REFERENT_MIN_CONFIDENCE = 0.5;
+/** ...and two or more independent inputs agreeing here. */
+export const AGREED_REFERENT_MIN_CONFIDENCE = 0.7;
+/** A kind-only referent (generic) starts here, whatever its exact confidence. */
+export const GENERIC_REFERENT_MIN_CONFIDENCE = 0.3;
+
+/**
+ * Points a late copy loses. 0 until the lineage inputs have shown their direction on 1,000+
+ * graded decision rows (notes/tokensage-models-eval-2026-10-07.md, section 2): the first 50 rows
+ * had late copies doubling more often than originals, not less.
+ */
+export const LATE_COPY_PENALTY = 0;
+
 /**
  * TokenSage's read as a 0-100 part (notes/tokensage-models-filters-scoring-review-2026-10-06.md,
  * section 5, revised on the first live day's data in notes/tokensage-data-eval-2026-10-07.md).
  * Starts at the midpoint and moves on what the read established:
- *  - a confident referent (what the coin is about is clear) lifts it, more when several inputs
- *    agree on it;
+ *  - a named referent (TokenSage identified what the coin is about) lifts it, more when two or
+ *    more independent inputs agree on it. TokenSage's confidence bands since rules 0.17.0 say
+ *    which is which: 0.5-0.69 is a named referent from one input, 0.7+ two or more agreeing, and
+ *    0.3-0.49 a kind only ("frog", `generic: true`) or a weak guess. A kind alone earns half
+ *    the single-input credit (user decision 2026-10-07): it says what sort of coin it is, not
+ *    that the story is clear;
  *  - a linked X post that announced the coin or is the thing it references lifts it, when the
  *    post went out before the coin (X_POST_PREDATES_MIN_S). How well the post fits earns nothing:
  *    on the first live day the perfect fits were the launcher's own profiles, named after the
@@ -92,7 +110,9 @@ export const X_POST_PREDATES_MIN_S = 60;
  *  - a copycat as such is neutral: copycats doubled more often than other coins in every
  *    population on the first live day, because a copy of a coin that is running rides its
  *    narrative. A late copy (TokenSage's lineage: the 11th or later coin with the name, or a copy
- *    of a coin more than a day old) takes the penalty instead;
+ *    of a coin more than a day old) is neutral too for now (LATE_COPY_PENALTY, user decision
+ *    2026-10-07): on the first rows with lineage, late copies doubled more often than originals,
+ *    so the penalty waits until about 1,000 graded decision rows carry lineage;
  *  - a matched trend (the name is spiking on Wikipedia or in the news) lifts it;
  *  - a high-severity flag caps the part at NARRATIVE_RED_FLAG_CAP whatever else it earned.
  * The parts' breakpoints are hand-set like the other three; the weight between the parts is what
@@ -103,7 +123,11 @@ export function scoreNarrative(token: EnrichedToken): number {
   if (!read) return NARRATIVE_NEUTRAL;
   let part = NARRATIVE_NEUTRAL;
   const referent = read.referentConfidence ?? 0;
-  if (referent >= 0.6) part += read.referentSupport.length >= 2 ? 15 : 10;
+  if (read.referentGeneric === true) {
+    if (referent >= GENERIC_REFERENT_MIN_CONFIDENCE) part += 5;
+  } else if (narrativeReferentNamed(read) && referent >= NAMED_REFERENT_MIN_CONFIDENCE) {
+    part += referent >= AGREED_REFERENT_MIN_CONFIDENCE || read.referentSupport.length >= 2 ? 15 : 10;
+  }
   const xRead = read.depth === "full" && (read.xRelation !== null || read.xVerdict !== null);
   if (xRead) {
     const spoofed = read.xRelation === "spoofed";
@@ -120,7 +144,7 @@ export function scoreNarrative(token: EnrichedToken): number {
       part += 15;
     }
   }
-  if (narrativeIsLateCopy(read) === true) part -= 25;
+  if (narrativeIsLateCopy(read) === true) part -= LATE_COPY_PENALTY;
   if (read.trendMatched === true) part += 10;
   part = clamp(part);
   return read.highFlagCount > 0 ? Math.min(part, NARRATIVE_RED_FLAG_CAP) : part;

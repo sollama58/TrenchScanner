@@ -375,8 +375,11 @@ async function readCounts(from: Date, to: Date): Promise<Record<LabelDimension, 
       () => described`
         SELECT f AS label, count(*) AS count FROM "TokenNarrative", unnest(flags) f
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' GROUP BY 1`,
+      // A kind-only referent (rules 0.17.0: "frog", not a named frog) counts under its own label.
       () => described`
-        SELECT "referentKind" AS label, count(*) AS count FROM "TokenNarrative"
+        SELECT CASE WHEN "referentGeneric" THEN "referentKind" || ' (kind only)' ELSE "referentKind" END AS label,
+               count(*) AS count
+        FROM "TokenNarrative"
         WHERE "checkedAt" >= ${from} AND "checkedAt" < ${to} AND status <> 'failed' AND "referentKind" IS NOT NULL
         GROUP BY 1`,
       () => described`
@@ -409,7 +412,8 @@ function alertRows(from: Date, to: Date) {
   return prisma.$queryRaw<AlertRow[]>`
     SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
            n.status, n.categories, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
-           n."trendMatched" AS trend_matched, n."referentKind" AS referent_kind,
+           n."trendMatched" AS trend_matched,
+           CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind,
            n."referentSupport" AS referent_support, n.flags, n."pairKind" AS pair_kind
     FROM "CuratedAlert" a
     JOIN "Token" t ON t.id = a."tokenId"

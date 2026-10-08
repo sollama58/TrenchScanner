@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
+  NARRATIVE_FEATURES_V3,
   narrativeFeatureValues,
   narrativeIsLateCopy,
+  narrativeReferentNamed,
   narrativeFromFeatures,
   narrativeReadFromRow,
   type NarrativeRead,
@@ -26,6 +28,7 @@ function row(overrides: Partial<NarrativeRow> = {}): NarrativeRow {
     referentKind: "famous_animal",
     referentConfidence: 0.97,
     referentSupport: ["name", "description"],
+    referentGeneric: false,
     flags: ["references_known_coin"],
     highFlagCount: 0,
     warnFlagCount: 0,
@@ -244,9 +247,59 @@ describe("round trip through a stored feature vector", () => {
     expect(narrativeIsLateCopy(narrativeReadFromRow(row({ flags: ["late_copy"] }))!)).toBe(true);
   });
 
+  it("tells a kind-only referent (rules 0.17.0) from a named one, and both from none", () => {
+    // A named referent, as every read before 0.17.0 carried: generic unset or false.
+    const named = narrativeFeatureValues(narrativeReadFromRow(row()));
+    expect(named).toMatchObject({ nsReferentGeneric: 0, nsReferentNamed: 1, nsReferentConf: 0.97 });
+    const older = narrativeFeatureValues(narrativeReadFromRow(row({ referentGeneric: null })));
+    expect(older).toMatchObject({ nsReferentGeneric: 0, nsReferentNamed: 1 });
+    // FROGMAN: {kind: "animal", label: "frog", generic: true, confidence: 0.38}.
+    const frog = narrativeReadFromRow(
+      row({
+        referentLabel: "frog",
+        referentKind: "animal",
+        referentConfidence: 0.38,
+        referentSupport: ["name"],
+        referentGeneric: true,
+      }),
+    )!;
+    expect(narrativeReferentNamed(frog)).toBe(false);
+    expect(narrativeFeatureValues(frog)).toMatchObject({
+      nsReferentGeneric: 1,
+      nsReferentNamed: 0,
+      nsReferentConf: 0.38,
+      nsReferentSupportCount: 1,
+    });
+    const none = narrativeReadFromRow(
+      row({
+        referentLabel: null,
+        referentKind: null,
+        referentConfidence: null,
+        referentSupport: [],
+        referentGeneric: null,
+      }),
+    )!;
+    expect(narrativeReferentNamed(none)).toBe(false);
+    expect(narrativeFeatureValues(none)).toMatchObject({
+      nsReferentGeneric: 0,
+      nsReferentNamed: 0,
+      nsReferentConf: 0,
+    });
+    // An unresolved lineage says nothing about which copy the coin is.
+    const unresolved = narrativeFeatureValues(
+      narrativeReadFromRow(lineageRow({ lineageKind: "unknown", flags: [] })),
+    );
+    expect(unresolved.nsLineageOriginal).toBeNull();
+    expect(unresolved.nsLineageLateCopy).toBeNull();
+    expect(unresolved.nsCopyRank).toBe(15);
+  });
+
   it("records every ns* input on the vector", () => {
     for (const name of ALL_NARRATIVE_FEATURES) expect(CANDIDATE_FEATURE_NAMES).toContain(name);
-    expect(CANDIDATE_FEATURE_NAMES.indexOf("nsTrendScore")).toBe(CANDIDATE_FEATURE_NAMES.length - 1);
+    expect(CANDIDATE_FEATURE_NAMES.indexOf("nsReferentNamed")).toBe(CANDIDATE_FEATURE_NAMES.length - 1);
+    expect(CANDIDATE_FEATURE_NAMES.indexOf("nsTrendScore")).toBe(
+      CANDIDATE_FEATURE_NAMES.length - 1 - NARRATIVE_FEATURES_V3.length,
+    );
     const features = buildCandidateFeatures(scoredWith(narrativeReadFromRow(fullRow())));
     expect(features.nsXFit).toBe(0.85);
     expect(features.nsCatAnimal).toBe(1);
@@ -254,7 +307,13 @@ describe("round trip through a stored feature vector", () => {
   });
 
   it("replays the same inputs from the vector", () => {
-    for (const r of [row(), fullRow(), row({ depth: "full", trendMatched: false }), lineageRow()]) {
+    const frog = row({
+      referentKind: "animal",
+      referentConfidence: 0.38,
+      referentSupport: ["name"],
+      referentGeneric: true,
+    });
+    for (const r of [row(), fullRow(), row({ depth: "full", trendMatched: false }), lineageRow(), frog]) {
       const features = buildCandidateFeatures(scoredWith(narrativeReadFromRow(r)));
       const replayed = scoredFromFeatures(features, 0.001, 20_000);
       expect(narrativeFeatureValues(replayed.narrative)).toEqual(

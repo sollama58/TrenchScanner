@@ -4858,9 +4858,43 @@ button.small-btn {
   padding-left: 46px;
   gap: 6px;
 }
+/* By hour of the day: three short charts on one column per hour, UTC. */
+.lh-hod {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.lh-hod h5.lh-subchart {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.lh-hod .lh-groups,
+.lh-hod .lh-ret {
+  height: 72px;
+  gap: 3px;
+}
+.lh-hod .lh-group {
+  cursor: pointer;
+}
+.lh-hod .lh-gbar {
+  max-width: 18px;
+}
+.lh-hod .lh-group.is-thin .lh-gbar,
+.lh-hod .lh-ret-col.is-thin .lh-ret-bar {
+  opacity: 0.3;
+}
+.lh-hod .lh-axis-inset {
+  gap: 3px;
+}
 @media (max-width: 640px) {
   .lh-checks {
     grid-template-columns: 1fr;
+  }
+  .lh-hod .lh-groups,
+  .lh-hod .lh-ret,
+  .lh-hod .lh-axis-inset {
+    gap: 1px;
   }
   .lh-groups,
   .lh-ret {
