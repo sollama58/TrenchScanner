@@ -45,7 +45,13 @@ const PERSIST = new Set([
   "/curated/insights?days=7",
   "/filters",
   "/config",
+  "/curated/lighthouse/history?days=30&bucket=day&dimension=category",
+  "/guest/lighthouse/history?days=30&bucket=day&dimension=category",
 ]);
+/** The Lighthouse's Right now, whose path ends with the reader's zone (routes.ts lighthousePath). */
+const PERSIST_PREFIXES = ["/curated/lighthouse?days=7&", "/guest/lighthouse?days=7&"];
+const persisted = (path: string) =>
+  PERSIST.has(path) || PERSIST_PREFIXES.some((prefix) => path.startsWith(prefix));
 const STORE_KEY = "ts-cache-v1";
 /** Older stored answers are dropped rather than shown. */
 const STORE_MAX_AGE_MS = 12 * 3600_000;
@@ -56,7 +62,7 @@ function restore(): void {
     if (!raw) return;
     const saved = JSON.parse(raw) as Record<string, { data: unknown; at: number }>;
     for (const [path, { data, at }] of Object.entries(saved))
-      if (PERSIST.has(path) && Date.now() - at < STORE_MAX_AGE_MS)
+      if (persisted(path) && Date.now() - at < STORE_MAX_AGE_MS)
         entries.set(path, { data, at, restored: true });
   } catch {
     // Storage blocked or corrupt: start empty.
@@ -71,7 +77,7 @@ function persistSoon(): void {
     saveTimer = undefined;
     const out: Record<string, { data: unknown; at: number }> = {};
     for (const [path, e] of entries)
-      if (PERSIST.has(path) && e.data !== undefined) out[path] = { data: e.data, at: e.at };
+      if (persisted(path) && e.data !== undefined) out[path] = { data: e.data, at: e.at };
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(out));
     } catch {
@@ -133,7 +139,7 @@ export function cachedGet<T>(path: string, maxAgeMs = 0): Promise<T> {
       e.at = Date.now();
       e.n = n;
       e.restored = false;
-      if (PERSIST.has(path)) persistSoon();
+      if (persisted(path)) persistSoon();
     }
     return data;
   });

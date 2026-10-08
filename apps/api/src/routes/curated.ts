@@ -81,6 +81,8 @@ const WEATHER_CACHE_TTL_MS = 15 * 60_000;
  * waiting most of a second for a fill on every expiry.
  */
 const REPORT_STALE_MS = 6 * 3_600_000;
+/** How often the Lighthouse caches are checked for a due refill (createLighthouseCache's keepWarm). */
+const LIGHTHOUSE_KEEP_WARM_MS = 60_000;
 
 /** What the cache holds: the database rows, not the rendered cards. */
 type CuratedPage = {
@@ -756,5 +758,31 @@ export async function registerCuratedRoutes(
         );
       }
     })();
+  });
+
+  // The Lighthouse (the tab's Right now, the Live tab's modal) and the tab's opening trends: their
+  // fills take seconds, so they are refilled as they fall due rather than by whichever reader
+  // arrives after an expiry. A check each minute is free when nothing is due; a refill is one
+  // window's queries at a time. Started once listening, like the warm-ups above.
+  let lighthouseTimer: ReturnType<typeof setInterval> | undefined;
+  let lighthouseRunning = false;
+  const keepLighthouseWarm = () => {
+    if (lighthouseRunning) return;
+    lighthouseRunning = true;
+    void opts.reports.lighthouse
+      .keepWarm(opts.env)
+      .then(() => opts.reports.lighthouseHistory.keepWarm())
+      .finally(() => {
+        lighthouseRunning = false;
+      });
+  };
+  opts.warmers?.push(() => {
+    keepLighthouseWarm();
+    lighthouseTimer ??= setInterval(keepLighthouseWarm, LIGHTHOUSE_KEEP_WARM_MS);
+    lighthouseTimer.unref();
+  });
+  app.addHook("onClose", async () => {
+    clearInterval(lighthouseTimer);
+    lighthouseTimer = undefined;
   });
 }

@@ -16,6 +16,8 @@ const WEEK_MS = 7 * DAY_MS;
 
 /** Sums over at most a few thousand compact rows: one fill per window, however many tabs open. */
 const CACHE_MS = 5 * 60_000;
+/** How long past CACHE_MS an answer may still be served while its refill runs. */
+const STALE_MS = 60 * 60_000;
 
 /** Windows in days; 0 is everything kept. */
 export const HISTORY_WINDOWS = [7, 30, 90, 365, 0] as const;
@@ -321,16 +323,27 @@ export async function buildLighthouseHistory(q: LighthouseHistoryQuery, now = ne
 
 export type LighthouseHistory = Awaited<ReturnType<typeof buildLighthouseHistory>>;
 
-/** One cache per window, bucket and dimension (bounded by the schema), shared by both routes. */
+/** The tab's opening view (loadView in apps/web/src/tabs/LighthouseTab.tsx), kept filled by keepWarm(). */
+const DEFAULT_QUERY: LighthouseHistoryQuery = { days: 30, bucket: "day", dimension: "category" };
+
+/**
+ * One cache per window, bucket and dimension (bounded by the schema), shared by both routes. The
+ * sums only move when the hourly rollup runs, so past its five minutes an answer is served at
+ * once while the refill runs behind it (STALE_MS), and keepWarm() keeps the opening view filled.
+ */
 export function createLighthouseHistoryCache() {
   const caches = new Map<string, SharedCache<LighthouseHistory>>();
-  return (q: LighthouseHistoryQuery) => {
+  const cacheFor = (q: LighthouseHistoryQuery) => {
     const key = `${q.days}:${q.bucket}:${q.dimension}`;
     let cache = caches.get(key);
     if (!cache) {
-      cache = new SharedCache<LighthouseHistory>(CACHE_MS);
+      cache = new SharedCache<LighthouseHistory>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
       caches.set(key, cache);
     }
-    return cache.get(() => buildLighthouseHistory(q));
+    return cache;
   };
+  const read = (q: LighthouseHistoryQuery) => cacheFor(q).get(() => buildLighthouseHistory(q));
+  /** Refills the opening view when it is due or missing. Never rejects. */
+  const keepWarm = () => cacheFor(DEFAULT_QUERY).warm(() => buildLighthouseHistory(DEFAULT_QUERY));
+  return Object.assign(read, { keepWarm });
 }

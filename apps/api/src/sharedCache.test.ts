@@ -178,6 +178,25 @@ describe("SharedCache", () => {
     await tick();
     await expect(failing.get(async () => "after")).resolves.toBe("after");
   });
+
+  it("warm() resolves once its fill has settled, and does nothing while the value is fresh", async () => {
+    const cache = new SharedCache<string>(60_000);
+    let runs = 0;
+    await cache.warm(async () => {
+      runs += 1;
+      return "warmed";
+    });
+    expect(runs).toBe(1);
+    await cache.warm(async () => {
+      runs += 1;
+      return "again";
+    });
+    expect(runs).toBe(1);
+    expect(await cache.get(async () => "unused")).toBe("warmed");
+    await expect(
+      new SharedCache<string>(60_000).warm(async () => Promise.reject(new Error("boom"))),
+    ).resolves.toBe(undefined);
+  });
 });
 
 describe("SharedCacheMap", () => {
