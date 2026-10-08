@@ -131,6 +131,8 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
 /** First wait before reopening a dropped nudge stream; doubles per failure up to the cap. */
 const STREAM_RETRY_MS = 5_000;
 const STREAM_RETRY_MAX_MS = 300_000;
+/** The most a broadcast curated nudge is held back on this page - see SharedStream.open. */
+const CURATED_NUDGE_SPREAD_MS = 3_000;
 
 interface StreamSubscriber {
   onEvent: () => void;
@@ -185,8 +187,22 @@ class SharedStream {
 
   private open() {
     this.close();
-    const fire = () => {
+    const deliver = () => {
       for (const s of [...this.subs]) s.onEvent();
+    };
+    // A curated call reaches every open dashboard in the same instant, and each one refetching
+    // at once landed the whole readership on the API together. Spread over a couple of seconds
+    // (one delay per event, so this page's listeners still share their fetches). A match is one
+    // reader's own and goes straight through.
+    let pending: number | undefined;
+    const spread = this.path === "/curated/stream" ? CURATED_NUDGE_SPREAD_MS : 0;
+    const fire = () => {
+      if (spread === 0) return deliver();
+      if (pending !== undefined) return;
+      pending = window.setTimeout(() => {
+        pending = undefined;
+        deliver();
+      }, Math.random() * spread);
     };
     const ready = () => {
       this.failures = 0;

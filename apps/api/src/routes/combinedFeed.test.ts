@@ -29,6 +29,9 @@ describe.skipIf(!dbAvailable)("combined feed", () => {
   const call = (method: "GET" | "PUT", url: string, payload?: unknown) =>
     app.inject({ method, url, payload: payload as never, cookies: { [SESSION_COOKIE_NAME]: cookie } });
 
+  /** What the worker's NOTIFY does on arrival, for calls this file writes straight to the table. */
+  const announceCalls = () => app.matchStream.dispatchCurated(JSON.stringify({ alertId: TAG }));
+
   /** This test's cards on the first page (other test files share the database). */
   const myCards = async () => {
     const res = await call("GET", "/matches?page=1&includeCurated=saved");
@@ -137,6 +140,8 @@ describe.skipIf(!dbAvailable)("combined feed", () => {
         { ...base, tokenId: late, model: "trees", modelName: "Trees", createdAt: later(60) },
       ],
     });
+    // The worker announces every call it writes; the feed's shared call reads are cleared by it.
+    announceCalls();
 
     const res = await call("GET", "/matches?page=1&includeCurated=saved");
     const body = res.json() as {
@@ -190,6 +195,8 @@ describe.skipIf(!dbAvailable)("combined feed", () => {
         createdAt: at(i * 7 + 0.5),
       })),
     });
+    // The worker announces every call it writes; the feed's shared call reads are cleared by it.
+    announceCalls();
 
     const seen: string[] = [];
     let page = 1;

@@ -46,6 +46,10 @@ const PASS_BUDGET_MS = 25_000;
 const PRIVATE_GAP_MS = 1_100;
 const GROUP_GAP_MS = 3_100;
 const GLOBAL_GAP_MS = 50;
+/** Sends out at once; with GLOBAL_GAP_MS that is what keeps the pass near Telegram's own limit. */
+const MAX_IN_FLIGHT = 8;
+/** Access lookups run this many at a time, so a pass doesn't take the whole worker pool. */
+const ACCESS_CHECK_BATCH = 8;
 /** The most a 429 is honoured in one pass; a longer wait is left for the next pass. */
 const MAX_RETRY_AFTER_MS = 20_000;
 /** Consecutive failed passes before a chat is switched off rather than retried forever. */
@@ -137,6 +141,7 @@ function loadChats() {
       modelCalls: true,
       hidden: true,
       sentThrough: true,
+      lastSentAt: true,
       failures: true,
       user: {
         select: {
@@ -364,6 +369,15 @@ async function dispatchPass(
     return p;
   };
 
+  // Every account's access up front, a few at a time, rather than one round trip per chat in
+  // turn - with hundreds of linked chats that serial walk alone took seconds of every pass.
+  const wallets = [...new Set(chats.map((c) => c.user.walletAddress))];
+  for (let i = 0; i < wallets.length; i += ACCESS_CHECK_BATCH) {
+    await Promise.all(wallets.slice(i, i + ACCESS_CHECK_BATCH).map(accessOf));
+  }
+
+  // Chats with nothing to send this pass only need their cursor moved; one write for all of them.
+  const caughtUp: string[] = [];
   // Each chat's queue, then the sends interleaved across chats under the spacing rules.
   const queues: { chat: ChatRow; pending: Pending[]; nextAt: number }[] = [];
   for (const chat of chats) {
@@ -371,10 +385,7 @@ async function dispatchPass(
       // No access, no real-time alerts (guests and lapsed subscriptions). The cursor still moves,
       // so access coming back doesn't deliver a backlog.
       summary.skipped += 1;
-      await prisma.telegramChat.updateMany({
-        where: { id: chat.id, revokedAt: null, sentThrough: { lt: horizon } },
-        data: { sentThrough: horizon },
-      });
+      caughtUp.push(chat.id);
       continue;
     }
     const mine = matches.filter((m) => m.userId === chat.user.id);
@@ -397,10 +408,7 @@ async function dispatchPass(
       horizon,
     );
     if (pending.length === 0) {
-      await prisma.telegramChat.updateMany({
-        where: { id: chat.id, revokedAt: null, sentThrough: { lt: horizon } },
-        data: { sentThrough: horizon },
-      });
+      caughtUp.push(chat.id);
       continue;
     }
     if (pending.length > DIGEST_THRESHOLD) {
@@ -417,28 +425,34 @@ async function dispatchPass(
     }
   }
 
+  if (caughtUp.length > 0) {
+    await prisma.telegramChat.updateMany({
+      where: { id: { in: caughtUp }, revokedAt: null, sentThrough: { lt: horizon } },
+      data: { sentThrough: horizon },
+    });
+  }
+  // Whoever was served longest ago goes first. In load order the same chats were always the last
+  // of a big fan-out, and the ones a pass's budget left for the next pass.
+  queues.sort((a, b) => (a.chat.lastSentAt?.getTime() ?? 0) - (b.chat.lastSentAt?.getTime() ?? 0));
+
   await backfillImages(queues, deps.lookupImages);
 
-  let lastSendAt = 0;
+  // Up to MAX_IN_FLIGHT sends are out at once, one per chat at most (so each chat still gets its
+  // messages in order), launched no closer together than GLOBAL_GAP_MS. One at a time, each send
+  // cost the gap plus Telegram's round trip plus a cursor write - a few messages a second - so a
+  // call followed by a few hundred chats ran over several passes and the last chats heard about
+  // it minutes late. Overlapping the round trips is what lets the global gap be the limit.
+  type Queue = (typeof queues)[number];
   const failed: { chat: ChatRow; what: string }[] = [];
-  while (queues.some((q) => q.pending.length > 0)) {
-    const t = now();
-    if (t - startedAt > PASS_BUDGET_MS) break;
-    const ready = queues.filter((q) => q.pending.length > 0 && q.nextAt <= t);
-    if (ready.length === 0) {
-      const next = Math.min(...queues.filter((q) => q.pending.length > 0).map((q) => q.nextAt));
-      await sleep(Math.max(1, next - t));
-      continue;
-    }
-    const gap = GLOBAL_GAP_MS - (t - lastSendAt);
-    if (gap > 0) await sleep(gap);
-    const q = ready[0]!;
+  const inFlight = new Set<Promise<void>>();
+  const busy = new Set<Queue>();
+  let lastSendAt = 0;
+  const send = async (q: Queue) => {
     const item = q.pending[0]!;
     const parts = alertParts(q.chat.hidden);
     const message = isDigest(item.card)
       ? digestMessage(item.card.digest, links, parts)
       : alertMessage(item.card, links, now(), parts);
-    lastSendAt = now();
     const result = await api.sendAlert(q.chat.chatId, message);
     const spacing = q.chat.kind === "private" ? PRIVATE_GAP_MS : GROUP_GAP_MS;
     if (result.ok) {
@@ -450,7 +464,7 @@ async function dispatchPass(
         where: { id: q.chat.id, revokedAt: null },
         data: { sentThrough: item.through, lastSentAt: new Date(), lastError: null, failures: 0 },
       });
-      continue;
+      return;
     }
     summary.failed += 1;
     const what = `${result.code}: ${result.description}`.slice(0, 300);
@@ -476,11 +490,11 @@ async function dispatchPass(
           data: { revokedAt: new Date(), lastError: what },
         });
         q.pending = [];
-        continue;
+        return;
       }
       q.chat.chatId = BigInt(result.migrateToChatId);
       q.nextAt = now() + spacing;
-      continue;
+      return;
     }
     if (
       result.code === 403 ||
@@ -493,7 +507,7 @@ async function dispatchPass(
         data: { revokedAt: new Date(), lastError: what },
       });
       q.pending = [];
-      continue;
+      return;
     }
     if (result.code === 429) {
       const wait = Math.min(MAX_RETRY_AFTER_MS, (result.retryAfter ?? 5) * 1_000);
@@ -501,7 +515,7 @@ async function dispatchPass(
       q.nextAt = now() + wait;
       // Every chat waits: a 429 is usually the global limit.
       for (const other of queues) other.nextAt = Math.max(other.nextAt, q.nextAt);
-      continue;
+      return;
     }
     if (result.code === 400) {
       // The message itself was refused (a parse problem, a message too long): skipping it is
@@ -513,12 +527,52 @@ async function dispatchPass(
         where: { id: q.chat.id, revokedAt: null },
         data: { sentThrough: item.through, lastError: what },
       });
-      continue;
+      return;
     }
     // Telegram unreachable, a 5xx or a 401: leave the cursor, try again next pass.
     logger.warn("telegram send failed", { chat: q.chat.id, what });
     failed.push({ chat: q.chat, what });
     q.pending = [];
+  };
+  const launch = (q: Queue) => {
+    busy.add(q);
+    const p: Promise<void> = send(q)
+      .catch((err: unknown) => {
+        // A failed bookkeeping write: the cursor stays where it was, so the next pass retries.
+        logger.warn("telegram send bookkeeping failed", { chat: q.chat.id, error: String(err) });
+        q.pending = [];
+      })
+      .finally(() => {
+        busy.delete(q);
+        inFlight.delete(p);
+      });
+    inFlight.add(p);
+  };
+
+  while (queues.some((q) => q.pending.length > 0) || inFlight.size > 0) {
+    const t = now();
+    const overBudget = t - startedAt > PASS_BUDGET_MS;
+    const ready =
+      overBudget || inFlight.size >= MAX_IN_FLIGHT
+        ? []
+        : queues.filter((q) => q.pending.length > 0 && q.nextAt <= t && !busy.has(q));
+    if (ready.length === 0) {
+      if (inFlight.size > 0) {
+        // Whichever comes first: a send finishing, or the next chat coming off its spacing.
+        const waiting = overBudget ? [] : queues.filter((q) => q.pending.length > 0 && !busy.has(q));
+        const next = waiting.length === 0 ? null : Math.min(...waiting.map((q) => q.nextAt));
+        await Promise.race([...inFlight, ...(next === null ? [] : [sleep(Math.max(1, next - t))])]);
+        continue;
+      }
+      if (overBudget) break;
+      const next = Math.min(...queues.filter((q) => q.pending.length > 0).map((q) => q.nextAt));
+      await sleep(Math.max(1, next - t));
+      continue;
+    }
+    const gap = GLOBAL_GAP_MS - (t - lastSendAt);
+    if (gap > 0) await sleep(gap);
+    lastSendAt = now();
+    launch(ready[0]!);
   }
   // A failure counts against a chat only if Telegram took some other message in this pass: an
   // outage or a revoked token fails every chat at once, and switching them all off for it would

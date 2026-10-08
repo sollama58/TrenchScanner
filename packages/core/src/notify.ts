@@ -69,3 +69,19 @@ export async function notifyMatchCreated(notification: MatchNotification): Promi
     logger.warn("failed to publish match notification", { error: String(err) });
   }
 }
+
+/**
+ * notifyMatchCreated for many matches in one statement. A token that catches the filters of a
+ * few hundred users would otherwise send a few hundred separate round trips at once, each
+ * wanting its own pool connection while the scan's fan-out already holds most of them. Postgres
+ * still delivers one notification per row, so listeners see exactly what single calls produced.
+ */
+export async function notifyMatchesCreated(notifications: readonly MatchNotification[]): Promise<void> {
+  if (notifications.length === 0) return;
+  try {
+    const payloads = notifications.map((n) => JSON.stringify(n));
+    await prisma.$executeRaw`SELECT pg_notify(${MATCH_CHANNEL}, p) FROM unnest(${payloads}::text[]) AS p`;
+  } catch (err) {
+    logger.warn("failed to publish match notifications", { error: String(err), count: notifications.length });
+  }
+}

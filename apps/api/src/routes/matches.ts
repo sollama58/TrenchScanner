@@ -212,6 +212,21 @@ const MERGED_RUN_CACHE_TTL_MS = 60_000;
 const FEED_RETURNS_CACHE_TTL_MS = 60_000;
 /** Readers' caches held per process: a few hundred keys, each a few kilobytes at most. */
 const MAX_CACHED_READER_KEYS = 500;
+/**
+ * How long one read of the followed models' calls is shared across readers.
+ *
+ * The feed, the stats tiles and the returns each read the calls of the reader's models, and those
+ * rows are identical for everyone following the same models - yet each reader read them alone,
+ * up to 5,000 rows at a time for the stats. A new call clears every one of them at once and every
+ * open tab asks again in the same moment, so that per-reader read was most of what a busy
+ * instance spent its database on: at 1,000 simulated readers the refresh after a call took ~10s.
+ * Shared per model set, a few reads serve them all. Cleared the moment a call lands; between
+ * calls, what moves is a call's outcome, which the stats and returns caches already let stand
+ * this long.
+ */
+const SHARED_CALL_READ_TTL_MS = 10_000;
+/** Keys are a window and a model set: a handful in practice, far below this. */
+const MAX_SHARED_CALL_READ_KEYS = 200;
 
 /** The match columns resolveOutcome reads, plus the link to the row grading it. */
 const MATCH_OUTCOME_SELECT = {
@@ -286,7 +301,13 @@ export async function registerMatchRoutes(
     FEED_RETURNS_CACHE_TTL_MS,
     MAX_CACHED_READER_KEYS,
   );
+  // The model-call half of those answers is the same for everyone following the same models, so
+  // it is read once per model set and shared, not once per reader. See SHARED_CALL_READ_TTL_MS.
+  const sharedCallReads = new SharedCacheMap<unknown>(SHARED_CALL_READ_TTL_MS, MAX_SHARED_CALL_READ_KEYS);
+  const sharedCallRead = <T>(key: string, read: () => Promise<T>): Promise<T> =>
+    sharedCallReads.for(key).get(read) as Promise<T>;
   const stopCuratedListener = opts.matchStream.onCuratedAlert(() => {
+    sharedCallReads.clear();
     statsCache.clear();
     returnsCache.clear();
     mergedRunCache.clear();
@@ -396,28 +417,30 @@ export async function registerMatchRoutes(
       }),
       models.length === 0
         ? Promise.resolve([])
-        : prisma.curatedAlert.findMany({
-            where: { model: { in: models }, createdAt: { gte: since } },
-            orderBy: { createdAt: "desc" },
-            take: FEED_STATS_MAX_ROWS,
-            select: {
-              ...CALL_SELECT,
-              peak1hReturnPct: true,
-              maxDrawdown1hPct: true,
-              hit2xIn15m: true,
-              hit2xIn1h: true,
-              hit4xIn1h: true,
-              hit10xIn1h: true,
-              disqualified: true,
-              peak24hReturnPct: true,
-              runPeakMinutes: true,
-              outcomeFinalizedAt: true,
-              anchorMcapUsd: true,
-              peakMcapUsd: true,
-              candidateOutcome: curatedAlertInclude.candidateOutcome,
-              token: { select: { symbol: true } },
-            },
-          }),
+        : sharedCallRead(`stats:${hours}:${models.join(",")}`, () =>
+            prisma.curatedAlert.findMany({
+              where: { model: { in: models }, createdAt: { gte: since } },
+              orderBy: { createdAt: "desc" },
+              take: FEED_STATS_MAX_ROWS,
+              select: {
+                ...CALL_SELECT,
+                peak1hReturnPct: true,
+                maxDrawdown1hPct: true,
+                hit2xIn15m: true,
+                hit2xIn1h: true,
+                hit4xIn1h: true,
+                hit10xIn1h: true,
+                disqualified: true,
+                peak24hReturnPct: true,
+                runPeakMinutes: true,
+                outcomeFinalizedAt: true,
+                anchorMcapUsd: true,
+                peakMcapUsd: true,
+                candidateOutcome: curatedAlertInclude.candidateOutcome,
+                token: { select: { symbol: true } },
+              },
+            }),
+          ),
     ]);
 
     const rowById = await openOutcomeRows(matches);
@@ -517,19 +540,21 @@ export async function registerMatchRoutes(
       }),
       models.length === 0
         ? Promise.resolve([])
-        : prisma.curatedAlert.findMany({
-            where: { model: { in: models }, createdAt: { gte: since } },
-            orderBy: { createdAt: "desc" },
-            take: FEED_STATS_MAX_ROWS,
-            select: {
-              ...CALL_SELECT,
-              simReturnPct: true,
-              peak24hReturnPct: true,
-              anchorMcapUsd: true,
-              peakMcapUsd: true,
-              candidateOutcome: { select: RUN_PEAK_SELECT },
-            },
-          }),
+        : sharedCallRead(`returns:${models.join(",")}`, () =>
+            prisma.curatedAlert.findMany({
+              where: { model: { in: models }, createdAt: { gte: since } },
+              orderBy: { createdAt: "desc" },
+              take: FEED_STATS_MAX_ROWS,
+              select: {
+                ...CALL_SELECT,
+                simReturnPct: true,
+                peak24hReturnPct: true,
+                anchorMcapUsd: true,
+                peakMcapUsd: true,
+                candidateOutcome: { select: RUN_PEAK_SELECT },
+              },
+            }),
+          ),
     ]);
     // A filter alert's return is on the row grading it; the match keeps no copy.
     const outcomeIds = [
@@ -742,14 +767,20 @@ export async function registerMatchRoutes(
       // full below.
       const take = depth * models.length;
       const [rows, total] = await Promise.all([
-        prisma.curatedAlert.findMany({
-          where: { model: { in: models } },
-          orderBy: { createdAt: "desc" },
-          take,
-          select: CALL_SELECT,
-        }),
+        sharedCallRead(`feed:${take}:${models.join(",")}`, () =>
+          prisma.curatedAlert.findMany({
+            where: { model: { in: models } },
+            orderBy: { createdAt: "desc" },
+            take,
+            select: CALL_SELECT,
+          }),
+        ),
         // Only the legacy flag reports a count; the dashboard pages on hasMore instead.
-        includeCurated === "on" ? prisma.curatedAlert.count({ where: { model: { in: models } } }) : 0,
+        includeCurated === "on"
+          ? sharedCallRead(`count:${models.join(",")}`, () =>
+              prisma.curatedAlert.count({ where: { model: { in: models } } }),
+            )
+          : 0,
       ]);
       return { models, rows, total, hitLimit: rows.length === take };
     };

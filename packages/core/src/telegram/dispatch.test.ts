@@ -430,3 +430,72 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(api.calls).toHaveLength(0);
   });
 });
+
+describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
+  const FAN_TAG = `${TAG}-fan`;
+  const CHATS = 24;
+  let chatIds: bigint[] = [];
+
+  beforeAll(async () => {
+    const user = await prisma.user.create({ data: { walletAddress: `${FAN_TAG}-wallet` } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id, name: "Fan" } });
+    const token = await prisma.token.create({ data: { mintAddress: `${FAN_TAG}-mint`, symbol: "FAN" } });
+    const snapshot = await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 0.001, marketCapUsd: 50_000 },
+    });
+    chatIds = Array.from({ length: CHATS }, () => BigInt(nextChat--));
+    // The last chat in load order was served longest ago, so it should go first.
+    await prisma.telegramChat.createMany({
+      data: chatIds.map((chatId, i) => ({
+        chatId,
+        kind: "private",
+        userId: user.id,
+        sentThrough: new Date(Date.now() - 60_000),
+        lastSentAt: new Date(Date.now() - (i + 1) * 60_000),
+      })),
+    });
+    await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        matchedAt: new Date(Date.now() - 20_000),
+        score: 60,
+      },
+    });
+  });
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.user.deleteMany({ where: { walletAddress: { startsWith: FAN_TAG } } });
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: FAN_TAG } } });
+  });
+
+  it("overlaps sends across chats, a few at a time, least recently served first", async () => {
+    let open = 0;
+    let peak = 0;
+    const order: string[] = [];
+    const api = new (class extends FakeTelegramApi {
+      override async call<T>(method: string, params: Record<string, unknown> = {}) {
+        if (method === "sendMessage" || method === "sendPhoto") {
+          order.push(String(params.chat_id));
+          open += 1;
+          peak = Math.max(peak, open);
+          // A slow Telegram: one at a time this pass would need 24 x 200ms on round trips alone.
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          open -= 1;
+        }
+        return super.call<T>(method, params);
+      }
+    })();
+    const ours = new Set(chatIds.map(String));
+    const started = Date.now();
+    await runTelegramDispatch(env, { api, hasAccess: async () => true, feedModelState: async () => state });
+    const mine = order.filter((id) => ours.has(id));
+    expect(mine).toHaveLength(CHATS);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(Date.now() - started).toBeLessThan(CHATS * 200);
+    expect(mine[0]).toBe(String(chatIds[CHATS - 1]));
+  });
+});
