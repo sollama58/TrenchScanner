@@ -97,3 +97,18 @@ describe("public worker health: TokenSage counters", () => {
     expect((s.lastRun as { tokensage: Record<string, unknown> }).tokensage).not.toHaveProperty("mint");
   });
 });
+
+/** The scan's launch-buyer read counts reach the public summary too. */
+describe("public worker health: snipers share reads", () => {
+  it("carries the scan's sniperReads counts", () => {
+    const row = {
+      job: "scan",
+      lastRunAt: new Date(1_000),
+      lastSuccessAt: null,
+      lastError: null,
+      meta: { durationMs: 900, sniperReads: { requested: 6, found: 5, failed: 1 } },
+    };
+    const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
+    expect(s.lastRun).toMatchObject({ sniperReads: { requested: 6, found: 5, failed: 1 } });
+  });
+});
