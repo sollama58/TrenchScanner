@@ -18,6 +18,7 @@ import {
   applyContestResults,
   describeRowBudget,
   loadTrainingRows,
+  withFixedShape,
   withoutEventTwins,
 } from "./curatorTrainingJob.js";
 import {
@@ -407,5 +408,31 @@ describe("withoutEventTwins", () => {
       { tokenId: "b", anchorAt: at(10), id: "other token" },
     ];
     expect(withoutEventTwins(hourly, events).map((h) => h.id)).toEqual(["later scan", "other token"]);
+  });
+});
+
+describe("withFixedShape", () => {
+  it("reads every name as the stored vector did, keeps extra keys, and gives rows one shape", () => {
+    const names = [...CANDIDATE_FEATURE_NAMES];
+    // Shaped like a parsed jsonb row: some names stored, some null, some never stored, and a key
+    // no list knows (a retired input on an old row).
+    const stored = (seed: number): Record<string, number | null> => {
+      const v: Record<string, number | null> = { retiredInput: seed };
+      names.forEach((name, i) => {
+        if ((i + seed) % 5 === 0) return;
+        v[name] = (i + seed) % 3 === 0 ? null : i * seed;
+      });
+      return JSON.parse(JSON.stringify(v)) as Record<string, number | null>;
+    };
+    const a = stored(1);
+    const shaped = withFixedShape(a);
+    expect(Object.getPrototypeOf(shaped)).toBe(Object.prototype);
+    for (const name of [...names, "retiredInput", "neverAName"]) expect(shaped[name]).toBe(a[name]);
+    expect(JSON.parse(JSON.stringify(shaped))).toEqual(a);
+    expect(structuredClone(shaped)).toEqual(a);
+    // Same keys in the same order whichever names a row stored.
+    const keys = (o: object) => Object.keys(o).filter((k) => k !== "retiredInput");
+    expect(keys(withFixedShape(stored(2)))).toEqual(keys(shaped));
+    expect(withFixedShape(null)).toBeNull();
   });
 });

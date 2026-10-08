@@ -5,6 +5,7 @@ import {
   prisma,
   loadEnv,
   runRugScreen,
+  type CandidateToken,
   type RugCheckProfile,
   type MintAuthorityResult,
 } from "@trenchscanner/core";
@@ -15,12 +16,13 @@ import {
   persistSnapshot,
   reviveMovingMints,
   stampLiveMarketCaps,
+  viewedOutOfBand,
   type CandidatePrior,
 } from "./scanJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
-/** Valid-looking base58 mints (looksLikeSolanaAddress), unique per run. */
+/** Valid-looking base58 mints (looksLikeSolanaAddress), unique per run. The pad collides 1 and 11, 2 and 12. */
 const RUN = Date.now()
   .toString(36)
   .replace(/[0lIO]/g, "x");
@@ -99,6 +101,32 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
     expect(untouched.lastMcapUsd).toBe(4_000);
   });
 
+  it("revives a mint stamped moments ago only when its cap moves it into the near-band tier", async () => {
+    // The ~110 recently-traded coins were rewritten every cycle, stamped or not.
+    const recent = new Date(Date.now() - 30_000);
+    await prisma.token.createMany({
+      data: [
+        { mintAddress: mint(21), lastLiveAt: recent, lastMcapUsd: 20_000 },
+        { mintAddress: mint(22), lastLiveAt: recent, lastMcapUsd: 3_000 },
+        { mintAddress: mint(23) },
+      ],
+    });
+    const changed = await reviveMovingMints(
+      [
+        { mintAddress: mint(21), marketCapUsd: 21_000 }, // same tier, stamped recently: left alone
+        { mintAddress: mint(22), marketCapUsd: 30_000 }, // climbed into the tier: revived
+        { mintAddress: mint(23), marketCapUsd: 40_000 }, // never stamped: revived
+      ],
+      env,
+    );
+    expect(changed).toBe(2);
+    const rows = await prisma.token.findMany({
+      where: { mintAddress: { in: [mint(21), mint(22), mint(23)] } },
+    });
+    const mcap = (n: number) => rows.find((r) => r.mintAddress === mint(n))?.lastMcapUsd;
+    expect([mcap(21), mcap(22), mcap(23)]).toEqual([20_000, 30_000, 40_000]);
+  });
+
   it("stamps a live mint at most every couple of minutes, unless its cap crossed the near-band tier", async () => {
     // Stamping all ~900 live mints every cycle rewrote that many Token rows a cycle.
     const recent = new Date(Date.now() - 30_000);
@@ -125,6 +153,34 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
     });
     const mcap = (n: number) => rows.find((r) => r.mintAddress === mint(n))?.lastMcapUsd;
     expect([mcap(5), mcap(6), mcap(7), mcap(8)]).toEqual([20_000, 30_000, 22_000, 5_000]);
+  });
+});
+
+describe("viewedOutOfBand", () => {
+  const token = (mintAddress: string, marketCapUsd: number): CandidateToken => ({
+    mintAddress,
+    priceUsd: 0.001,
+    marketCapUsd,
+  });
+
+  it("reads a watchlisted viewed token from the refresh, the rest from the lookup", () => {
+    // What a lookup of every viewed token, minus the in-band ones, used to return.
+    const refreshed = [token("in-band", 100_000), token("viewed-above", 5_000_000), token("unviewed", 1)];
+    const lookedUp = [token("viewed-off-list", 2_000)];
+    const viewed = [
+      { mintAddress: "viewed-off-list" },
+      { mintAddress: "in-band" },
+      { mintAddress: "viewed-above" },
+    ];
+    const out = viewedOutOfBand(viewed, refreshed, lookedUp, new Set(["in-band"]));
+    expect(out.map((t) => [t.mintAddress, t.marketCapUsd])).toEqual([
+      ["viewed-off-list", 2_000],
+      ["viewed-above", 5_000_000],
+    ]);
+  });
+
+  it("drops a viewed token nothing returned market data for", () => {
+    expect(viewedOutOfBand([{ mintAddress: "dead" }], [], [], new Set())).toEqual([]);
   });
 });
 

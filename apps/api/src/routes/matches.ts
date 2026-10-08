@@ -94,51 +94,30 @@ function maxPct(a: number | null, b: number | null): number | null {
 }
 
 /**
- * Each call's market-cap high since it was made, as a return on its alert market cap: the
- * highest snapshot of the token since its earliest call here, and its live reading, each counted
- * for the calls made before it. One index range scan on (tokenId, takenAt) per token, the same
- * readings the worker folds into a filter alert's ATH (jobs/matchPeaks.ts).
+ * Each call's live market cap, as a return on its alert market cap, for the calls made before
+ * that reading. The snapshot highs are already folded into the call's peakMcapUsd by the worker
+ * (jobs/curatedPeaks.ts, every match-peaks pass), which callPeakPct reads - only the live ping
+ * is read here, so a token someone has open shows its newest high before the next pass banks it.
  */
-async function marketCapPeaksSince(
+async function liveMarketCapPeaks(
   calls: readonly { id: string; tokenId: string; createdAt: Date; anchorMcapUsd: number }[],
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (calls.length === 0) return out;
-  const firstCall = new Map<string, Date>();
+  const live = await prisma.token.findMany({
+    where: {
+      id: { in: [...new Set(calls.map((c) => c.tokenId))] },
+      liveMarketCapUsd: { not: null },
+      liveDataAt: { not: null },
+    },
+    select: { id: true, liveMarketCapUsd: true, liveDataAt: true },
+  });
+  const byToken = new Map(live.map((t) => [t.id, { mcap: t.liveMarketCapUsd!, at: t.liveDataAt! }]));
   for (const c of calls) {
-    const held = firstCall.get(c.tokenId);
-    if (!held || c.createdAt < held) firstCall.set(c.tokenId, c.createdAt);
-  }
-  const ids = [...firstCall.keys()];
-  const froms = ids.map((id) => firstCall.get(id)!.toISOString());
-  const [highs, live] = await Promise.all([
-    prisma.$queryRaw<{ tokenId: string; mcap: number; at: Date }[]>`
-      SELECT DISTINCT ON (s."tokenId") s."tokenId", s."marketCapUsd" AS mcap, s."takenAt" AS at
-      FROM "TokenSnapshot" s
-      JOIN unnest(${ids}::text[], ${froms}::timestamptz[]) AS f(id, from_at) ON f.id = s."tokenId"
-      WHERE s."takenAt" >= f.from_at
-      ORDER BY s."tokenId", s."marketCapUsd" DESC, s."takenAt" ASC`,
-    prisma.token.findMany({
-      where: { id: { in: ids }, liveMarketCapUsd: { not: null }, liveDataAt: { not: null } },
-      select: { id: true, liveMarketCapUsd: true, liveDataAt: true },
-    }),
-  ]);
-  const readings = new Map<string, { mcap: number; at: Date }[]>();
-  for (const h of highs) readings.set(h.tokenId, [{ mcap: h.mcap, at: h.at }]);
-  for (const t of live) {
-    const list = readings.get(t.id) ?? [];
-    list.push({ mcap: t.liveMarketCapUsd!, at: t.liveDataAt! });
-    readings.set(t.id, list);
-  }
-  for (const c of calls) {
-    if (!(c.anchorMcapUsd > 0)) continue;
-    let best: number | null = null;
-    for (const r of readings.get(c.tokenId) ?? []) {
-      if (r.at < c.createdAt) continue;
-      const pct = (r.mcap / c.anchorMcapUsd - 1) * 100;
-      if (Number.isFinite(pct) && pct > 0 && (best === null || pct > best)) best = pct;
-    }
-    if (best !== null) out.set(c.id, best);
+    const r = byToken.get(c.tokenId);
+    if (!r || !(c.anchorMcapUsd > 0) || r.at < c.createdAt) continue;
+    const pct = (r.mcap / c.anchorMcapUsd - 1) * 100;
+    if (Number.isFinite(pct) && pct > 0) out.set(c.id, pct);
   }
   return out;
 }
@@ -598,16 +577,17 @@ export async function registerMatchRoutes(
     });
     // Folded exactly as /stats folds them, so the two panels count the same cards.
     const groups = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS);
-    const callAth = await marketCapPeaksSince(groups.map(({ lead }) => lead));
+    const callLive = await liveMarketCapPeaks(groups.map(({ lead }) => lead));
     const callCards: ReturnFeedCard[] = groups.map(({ lead }) => {
       const returnPct = lead.simReturnPct ?? lead.candidateOutcome?.simReturnPct ?? null;
       const modelName = lead.modelName ?? lead.model ?? "Model";
       // The call's own run peak stops when its watch does (30 minutes for a call that didn't
-      // double), so a token that ran later would read small. Its market-cap high since the call,
-      // from the snapshots and live readings the app keeps, is the same ATH a filter alert tracks.
+      // double), so a token that ran later would read small. Its market-cap high since the call
+      // (peakMcapUsd, from the snapshots, via callPeakPct) and its live reading are the same ATH a
+      // filter alert tracks.
       const peakPct = maxPct(
         callPeakPct(lead.peak24hReturnPct ?? runPeakPct(lead.candidateOutcome), lead),
-        callAth.get(lead.id) ?? null,
+        callLive.get(lead.id) ?? null,
       );
       return {
         id: lead.id,

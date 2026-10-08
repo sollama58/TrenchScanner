@@ -126,6 +126,11 @@ async function main() {
   // have none: a slow retrain, or a slow RPC provider under the reconciler's sequential pages,
   // would otherwise restart the whole worker in a loop, and either one stuck holds up nothing
   // but itself.
+  // The other DexScreener sweeps start a few seconds apart from the scan rather than in phase
+  // with it: started together, every one of their bursts landed on the scan's band refresh - the
+  // call that decides what gets screened - and on each other. Each reschedules from its own run's
+  // end, so this only sets where they begin.
+  const DEX_BURST_OFFSET_MS = { "fast-match": 7_000, "candidate-watch": 12_000, "live-price": 20_000 };
   schedule("scan", () =>
     scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
       deadlineMinutes: 20,
@@ -138,7 +143,7 @@ async function main() {
       "live-price",
       () => runLivePriceJob(deps.dexScreener, env),
       env.LIVE_PRICE_INTERVAL_MINUTES,
-      { deadlineMinutes: 10 },
+      { deadlineMinutes: 10, firstRunDelayMs: async () => DEX_BURST_OFFSET_MS["live-price"] },
     ),
   );
   // The path a subscriber actually feels. Re-prices tokens the scan cycle has recently vetted and
@@ -151,7 +156,7 @@ async function main() {
       "fast-match",
       () => runFastMatchCycle(deps.dexScreener, env),
       env.FAST_MATCH_INTERVAL_SECONDS / 60,
-      { deadlineMinutes: 10 },
+      { deadlineMinutes: 10, firstRunDelayMs: async () => DEX_BURST_OFFSET_MS["fast-match"] },
     ),
   );
   // Sends each linked Telegram chat the alerts its account got since the chat's cursor - see
@@ -192,7 +197,7 @@ async function main() {
       "candidate-watch",
       () => runCandidateWatchJob(deps.dexScreener, env),
       env.CANDIDATE_WATCH_INTERVAL_MINUTES,
-      { deadlineMinutes: 15 },
+      { deadlineMinutes: 15, firstRunDelayMs: async () => DEX_BURST_OFFSET_MS["candidate-watch"] },
     ),
   );
   // The backstop that makes the paywall's promise true: it finds burns whose owners never told us

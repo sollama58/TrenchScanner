@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { boostedContributions, scoreBoosted, trainBoostedCurator, type BoostingRow } from "./boosting.js";
+import {
+  binColumn,
+  boostedContributions,
+  scoreBoosted,
+  trainBoostedCurator,
+  type BoostingRow,
+} from "./boosting.js";
 import { scoreCandidateWithModel, topModelReasons, trainCurator, trainCuratorModel } from "./trainer.js";
 
 const T0 = new Date("2026-08-01T00:00:00Z").getTime();
@@ -131,5 +137,60 @@ describe("trainBoostedCurator", () => {
   it("is reachable through trainCuratorModel", async () => {
     const params = await trainCuratorModel(asTraining(interactionRows(600, 8)), { learner: "gbdt" });
     expect(params.kind).toBe("gbdt-v1");
+  });
+});
+
+describe("binColumn", () => {
+  /** The comparator-sort binning binColumn used before the typed-array sort, as the reference. */
+  function binColumnReference(col: Float64Array, maxBins: number): { edges: number[]; bins: Uint8Array } {
+    const present: number[] = [];
+    for (const v of col) if (!Number.isNaN(v)) present.push(v);
+    present.sort((a, b) => a - b);
+    const edges: number[] = [];
+    if (present.length > 0) {
+      for (let q = 1; q < maxBins; q++) {
+        const v = present[Math.min(present.length - 1, Math.floor((q * present.length) / maxBins))]!;
+        if (edges.length === 0 || v > edges[edges.length - 1]!) edges.push(v);
+      }
+      if (edges.length > 0 && edges[edges.length - 1]! >= present[present.length - 1]!) edges.pop();
+    }
+    const bins = new Uint8Array(col.length);
+    for (let i = 0; i < col.length; i++) {
+      const v = col[i]!;
+      if (Number.isNaN(v)) continue;
+      let lo = 0;
+      let hi = edges.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (edges[mid]! < v) lo = mid + 1;
+        else hi = mid;
+      }
+      bins[i] = lo + 1;
+    }
+    return { edges, bins };
+  }
+
+  const bits = (xs: number[]) => Array.from(new BigUint64Array(Float64Array.from(xs).buffer), String);
+
+  it("matches the comparator-sort binning bit for bit", () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const rand = rng(seed);
+      const length = Math.floor(rand() * 400);
+      // Missing values, heavy ties, and both signed zeros in row order, around few or many values.
+      const levels = 1 + Math.floor(rand() * 50);
+      const col = Float64Array.from({ length }, () => {
+        const r = rand();
+        if (r < 0.15) return NaN;
+        if (r < 0.25) return -0;
+        if (r < 0.35) return 0;
+        return Math.round((rand() - 0.5) * levels) / 3;
+      });
+      for (const maxBins of [2, 16, 64]) {
+        const got = binColumn(col, maxBins);
+        const want = binColumnReference(col, maxBins);
+        expect(bits(got.edges)).toEqual(bits(want.edges));
+        expect(Array.from(got.bins)).toEqual(Array.from(want.bins));
+      }
+    }
   });
 });

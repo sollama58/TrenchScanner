@@ -234,6 +234,60 @@ export function resetSampleStats(): void {
 }
 
 /**
+ * What the watcher reads of each due row: every column but `features`. The feature vector is
+ * ~2KB of jsonb per row that the sweep never looks at, and it was being pulled for up to 2000
+ * rows a minute. Every other scalar stays, so the row still passes as the OutcomeAggregates and
+ * exit-plan inputs it is handed to (tsc checks that) - a column added later must be listed here
+ * before the sweep can read it.
+ */
+const WATCH_ROW_SELECT = {
+  id: true,
+  tokenId: true,
+  anchorAt: true,
+  anchorPriceUsd: true,
+  anchorMcapUsd: true,
+  entryAt: true,
+  signalPriceUsd: true,
+  sampleKind: true,
+  labelRule: true,
+  score: true,
+  nextCheckAt: true,
+  lastCheckedAt: true,
+  lastPriceUsd: true,
+  extended24h: true,
+  peak1hPriceUsd: true,
+  peak1hAt: true,
+  low1hPriceUsd: true,
+  lowBefore2xPriceUsd: true,
+  hit2xAt: true,
+  peak24hPriceUsd: true,
+  peak24hAt: true,
+  peakBeforeStopPriceUsd: true,
+  stoppedAt: true,
+  peakBeforeStop60mPriceUsd: true,
+  stopped60mAt: true,
+  trailHighPriceUsd: true,
+  trailExitAt: true,
+  trailExitPriceUsd: true,
+  finalizedAt: true,
+  peak1hReturnPct: true,
+  maxDrawdown1hPct: true,
+  hit2xIn15m: true,
+  hit2xIn1h: true,
+  hit4xIn1h: true,
+  hit10xIn1h: true,
+  disqualified: true,
+  labelValue: true,
+  finalized24hAt: true,
+  peak24hReturnPct: true,
+  runPeakMinutes: true,
+  simReturnPct: true,
+  token: { select: { mintAddress: true } },
+  // So closing a window can push outcome copies onto the feed row - see runCandidateWatchJob.
+  curatedAlerts: { select: { id: true } },
+} satisfies Prisma.CandidateOutcomeSelect;
+
+/**
  * The watcher: price-checks every open CandidateOutcome row that's due, folds the tick into the
  * row's running aggregates (see curation/labels.ts for the math), closes the 30-minute goal window
  * (the moment labels are written - the 2x-within-15-minutes verdict included), and retires
@@ -271,8 +325,7 @@ export async function runCandidateWatchJob(
       { nextCheckAt: "asc" },
     ],
     take: env.CANDIDATE_WATCH_MAX_BATCH,
-    // curatedAlerts: so closing a window can push outcome copies onto the feed row - see below.
-    include: { token: { select: { mintAddress: true } }, curatedAlerts: { select: { id: true } } },
+    select: WATCH_ROW_SELECT,
   });
   if (due.length === 0) return;
   // At the cap, the rows the sweep left behind are the 24h-extended ones (sorted last), and a cap

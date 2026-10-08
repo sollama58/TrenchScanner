@@ -10,6 +10,7 @@ import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   passesWalletSafetyCuts,
   REFLECTION_SYSTEM_PROMPT,
+  aiBudgetResetsAt,
   type Env,
   type JudgeRecordSummary,
   type ReflectionCall,
@@ -50,6 +51,20 @@ const MIN_HOLDOUT_ROWS = 30;
 const BASELINE_DAYS = 14;
 /** Most graded calls loaded for one review (the brief lists the costliest first). */
 const MAX_REFLECTION_LOAD = 600;
+/** How long a due round that could not start waits before it is tried again. */
+const RETRY_BACKOFF_MS = 3_600_000;
+
+/**
+ * When a due round that ended without recording a run may next be tried. Those outcomes leave
+ * nothing for the interval gate to count, and getting to them means loading the whole holdout -
+ * every 10-minute pass would do that again for an answer that won't change for a while.
+ */
+let nextAttemptAt = 0;
+
+/** Forgets the retry backoff - for tests, which share this module's state. */
+export function resetEvolutionBackoff(): void {
+  nextAttemptAt = 0;
+}
 
 const ReflectionSchema = z.object({
   candidates: z.array(z.object({ playbook: z.string(), rationale: z.string() })),
@@ -83,7 +98,28 @@ export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<E
   ) {
     return "not-due";
   }
+  if (now < nextAttemptAt) return "not-due";
 
+  const step = await evolutionRound(env, now);
+  switch (step) {
+    case "too-few-holdout-alerts":
+    case "waiting-for-graded-calls":
+    case "not-due":
+      nextAttemptAt = now + RETRY_BACKOFF_MS;
+      break;
+    case "over-budget":
+      // Room only comes back when the day's budget resets.
+      nextAttemptAt = aiBudgetResetsAt(new Date(now)).getTime();
+      break;
+    default:
+      // A run was recorded (or a replay is out), so the gates above take over again.
+      nextAttemptAt = 0;
+  }
+  return step;
+}
+
+/** The round itself, once nothing above says to wait. */
+async function evolutionRound(env: Env, now: number): Promise<EvolutionStep> {
   const active = await ensureActivePlaybook();
   const holdoutStart = new Date(now - env.AI_REPLAY_HOLDOUT_DAYS * 86_400_000);
   const holdoutEnd = new Date(now);

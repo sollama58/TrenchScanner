@@ -360,12 +360,24 @@ async function crossFittedProbabilities(
 /** Fewer training rows than this and a cross-fit half keeps the shipped model's own scores. */
 const MIN_CROSS_FIT_ROWS = 300;
 
-async function examineRecipe(
+/**
+ * A recipe's walk-forward exam, before anything ships: the folds, the out-of-sample record and
+ * its rank cutoff. Everything a challenger is judged on lives here (see shipRecipe).
+ */
+interface RecipeTrial {
+  /** The recipe as examined - narrowed to the run's usable inputs. */
+  recipe: CuratorRecipe;
+  recencyHalfLifeDays: number | undefined;
+  evaluation: WalkForwardResult;
+  precisionCalibration: PrecisionCalibration;
+}
+
+async function sitRecipeExam(
   rows: TrainingRow[],
   cfg: Omit<CuratorTrainingConfig, "learners">,
   wholeRecipe: CuratorRecipe,
-  usable: ReadonlySet<string> | null = null,
-): Promise<RecipeExam> {
+  usable: ReadonlySet<string> | null,
+): Promise<RecipeTrial> {
   const recipe = narrowRecipe(wholeRecipe, usable);
   const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
   const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? cfg.recencyHalfLifeDays;
@@ -400,6 +412,21 @@ async function examineRecipe(
     cfg.targets,
     cooldown,
   );
+  return { recipe, recencyHalfLifeDays, evaluation, precisionCalibration };
+}
+
+/**
+ * The model a trial ships: the full-window fit, its cross-fitted scale and what serves beside
+ * it. Three fits, none of which the exam score reads - so a challenger only pays for them once
+ * it has won (runEvolvingContest). Every fit seeds its own RNG, so shipping later, or not at
+ * all, changes nothing else the run trains.
+ */
+async function shipRecipe(
+  rows: TrainingRow[],
+  cfg: Omit<CuratorTrainingConfig, "learners">,
+  trial: RecipeTrial,
+): Promise<RecipeExam> {
+  const { recipe, recencyHalfLifeDays, evaluation, precisionCalibration } = trial;
   // The deployable model trains on the FULL window - the folds were the exam, this is the model
   // that ships, with strictly more (and newer) data than any fold saw.
   const trainOpts = {
@@ -443,6 +470,15 @@ async function examineRecipe(
     highConviction,
     shippedProbabilities,
   };
+}
+
+async function examineRecipe(
+  rows: TrainingRow[],
+  cfg: Omit<CuratorTrainingConfig, "learners">,
+  wholeRecipe: CuratorRecipe,
+  usable: ReadonlySet<string> | null = null,
+): Promise<RecipeExam> {
+  return shipRecipe(rows, cfg, await sitRecipeExam(rows, cfg, wholeRecipe, usable));
 }
 
 /** A verdict that promotes needs a cutoff to promote at. */
@@ -630,19 +666,53 @@ interface LearnerExam {
   callRank: number | null;
 }
 
-async function examineLearner(
+/** A learner's exam before it ships: what a challenger is scored and compared on. */
+interface LearnerTrial {
+  trial: RecipeTrial;
+  record: CallRecord;
+  examScore: number | null;
+  /** Whether its reference rows line up one to one with the run's (see sitLearnerExam). */
+  aligned: boolean;
+  calls: Uint8Array | null;
+}
+
+async function sitLearnerExam(
+  rows: TrainingRow[],
+  cfg: ContestTrainingConfig,
+  recipe: CuratorRecipe,
+  reference: TrainingRow[] | null,
+  usable: ReadonlySet<string> | null,
+): Promise<LearnerTrial> {
+  const trial = await sitRecipeExam(rows, cfg, recipe, usable);
+  const { evaluation } = trial;
+  const record = foldsRecord(evaluation.folds, "model");
+  // Every learner's exam cuts the same rows into the same folds, so their reference rows (and
+  // so their rank arrays) line up one to one; checked rather than assumed.
+  const ref = reference ?? evaluation.decisionReference;
+  const aligned =
+    ref.length > 0 &&
+    evaluation.decisionReference.length === ref.length &&
+    evaluation.decisionReference.every((r, i) => r === ref[i]);
+  return {
+    trial,
+    record,
+    examScore: recordScore(record, cfg.targets),
+    aligned,
+    calls: aligned && evaluation.examCalls.some((c) => c === 1) ? evaluation.examCalls : null,
+  };
+}
+
+async function shipLearner(
   rows: TrainingRow[],
   cfg: ContestTrainingConfig,
   slot: string,
   name: string,
-  recipe: CuratorRecipe,
-  reference: TrainingRow[] | null,
-  usable: ReadonlySet<string> | null,
+  sat: LearnerTrial,
 ): Promise<LearnerExam> {
-  const exam = await examineRecipe(rows, cfg, recipe, usable);
+  const exam = await shipRecipe(rows, cfg, sat.trial);
   const { evaluation, trained, deployedThreshold } = exam;
   const verdict = verdictWithCutoff(exam);
-  const record = foldsRecord(evaluation.folds, "model");
+  const { record, aligned } = sat;
   const result: ContestantTrainingResult = {
     contestant: slot,
     params: {
@@ -656,7 +726,7 @@ async function examineLearner(
       folds: evaluation.folds,
       verdict: { ...verdict, reason: `${name}: ${verdict.reason}` },
       targets: cfg.targets,
-      learner: recipe.learner,
+      learner: sat.trial.recipe.learner,
       precisionCalibration: exam.result.precisionCalibration,
       precisionCurve: precisionCurve(evaluation.outOfSampleRanks),
       heuristicPrecisionCurve: [],
@@ -666,23 +736,28 @@ async function examineLearner(
       examPopulation: evaluation.population,
     },
   };
-  // Every learner's exam cuts the same rows into the same folds, so their reference rows (and
-  // so their rank arrays) line up one to one; checked rather than assumed.
-  const ref = reference ?? evaluation.decisionReference;
-  const aligned =
-    ref.length > 0 &&
-    evaluation.decisionReference.length === ref.length &&
-    evaluation.decisionReference.every((r, i) => r === ref[i]);
   const rankCutoff = exam.result.precisionCalibration.threshold;
   return {
     result,
-    examScore: recordScore(record, cfg.targets),
+    examScore: sat.examScore,
     evaluation,
     foldRanks: aligned ? Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability) : null,
     shipped: aligned ? exam.shippedProbabilities : null,
-    calls: aligned && evaluation.examCalls.some((c) => c === 1) ? evaluation.examCalls : null,
+    calls: sat.calls,
     callRank: rankCutoff,
   };
+}
+
+async function examineLearner(
+  rows: TrainingRow[],
+  cfg: ContestTrainingConfig,
+  slot: string,
+  name: string,
+  recipe: CuratorRecipe,
+  reference: TrainingRow[] | null,
+  usable: ReadonlySet<string> | null,
+): Promise<LearnerExam> {
+  return shipLearner(rows, cfg, slot, name, await sitLearnerExam(rows, cfg, recipe, reference, usable));
 }
 
 /**
@@ -839,19 +914,23 @@ export async function runEvolvingContest(
   const challengerScores: (number | null)[] = [];
   const challengerCalls: (Uint8Array | null)[] = [];
   const challengerExamWins: number[] = [];
-  let bestChallenger: { index: number; exam: LearnerExam } | null = null;
+  // Challengers only sit the exam: the model the winner ships is fitted below, once a takeover
+  // (or probation) actually needs it, rather than three discarded fits per loser.
+  let bestChallenger: { index: number; trial: LearnerTrial } | null = null;
   for (const [i, bred] of (plan?.challengers ?? []).entries()) {
-    const exam = await examineLearner(rows, cfg, "", bred.name, bred.recipe, reference, features.usable);
-    challengerScores.push(exam.examScore);
-    challengerCalls.push(exam.calls);
-    challengerExamWins.push(exam.result.metrics.exam?.wins ?? 0);
+    const trial = await sitLearnerExam(rows, cfg, bred.recipe, reference, features.usable);
+    challengerScores.push(trial.examScore);
+    challengerCalls.push(trial.calls);
+    challengerExamWins.push(trial.record.wins);
     if (
-      exam.examScore !== null &&
-      (bestChallenger === null || exam.examScore > bestChallenger.exam.examScore!)
+      trial.examScore !== null &&
+      (bestChallenger === null || trial.examScore > bestChallenger.trial.examScore!)
     ) {
-      bestChallenger = { index: i, exam };
+      bestChallenger = { index: i, trial };
     }
   }
+  const shipBest = (best: { index: number; trial: LearnerTrial }) =>
+    shipLearner(rows, cfg, "", plan!.challengers[best.index]!.name, best.trial);
   let replacement: ContestRunOutcome["replacement"] = null;
   let probation: ContestRunOutcome["probation"] = null;
   let dropped: string | null = null;
@@ -878,21 +957,22 @@ export async function runEvolvingContest(
   } else if (decided && bestChallenger && plan?.probation) {
     const seat = results.find((r) => r.contestant === decided.slot);
     if (seat) {
+      const exam = await shipBest(bestChallenger);
       probation = {
         ...decided,
         bred: plan.challengers[decided.challenger]!,
-        examScore: bestChallenger.exam.examScore,
-        challengerParams: bestChallenger.exam.result.params,
+        examScore: exam.examScore,
+        challengerParams: exam.result.params,
         laneParams: seat.params,
         laneName: seat.metrics.contestantName ?? decided.slot,
       };
     } else dropped = `takeover of ${decided.slot} decided, but that seat didn't train this run`;
   } else if (decided && bestChallenger) {
-    const { exam } = bestChallenger;
     const slot = decided.slot;
     const seat = results.findIndex((r) => r.contestant === slot);
     if (seat === -1) dropped = `takeover of ${slot} decided, but that seat didn't train this run`;
     else {
+      const exam = await shipBest(bestChallenger);
       results[seat] = {
         contestant: slot,
         params: exam.result.params,
