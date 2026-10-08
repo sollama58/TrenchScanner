@@ -3,7 +3,7 @@ import {
   createLogger,
   matchesFilter,
   alertGuardBlocks,
-  notifyMatchCreated,
+  notifyMatchesCreated,
   type Env,
   type MatchAlertGuardMode,
   type ScoredToken,
@@ -246,22 +246,20 @@ export async function createMatchesForTargets(opts: {
         (f) => stillActive.has(f.id) && !onCooldown.has(`${f.userId}:${f.id}`),
       );
 
-      const rows = [];
-      for (const filter of confirmed) {
-        rows.push(
-          await tx.match.create({
-            data: {
-              userId: filter.userId,
-              filterId: filter.id,
-              tokenId: token.id,
-              snapshotId: snapshot.id,
-              score: scored.score.total,
-              deliveredDashboard: true,
-            },
-          }),
-        );
-      }
-      return rows;
+      // One multi-row insert: a hot token can catch hundreds of users' filters at once, and
+      // inserting them one by one held this token's lock (and a pooled connection) for as many
+      // round trips, against the 15s body timeout below.
+      if (confirmed.length === 0) return [];
+      return tx.match.createManyAndReturn({
+        data: confirmed.map((filter) => ({
+          userId: filter.userId,
+          filterId: filter.id,
+          tokenId: token.id,
+          snapshotId: snapshot.id,
+          score: scored.score.total,
+          deliveredDashboard: true,
+        })),
+      });
     },
     // Prisma's default is to give up after 2s waiting for a connection. This runs while the scan's
     // candidate fan-out holds most of the worker's pool, and a timeout here drops the alert until
@@ -280,10 +278,10 @@ export async function createMatchesForTargets(opts: {
   });
 
   // After the creates, never before: the row has to exist by the time a client acts on the
-  // notification. Each swallows its own errors - the match is already committed, and the
+  // notification. It swallows its own errors - the match is already committed, and the
   // client's fallback poll covers a missed nudge.
-  await Promise.all(
-    alerted.map(({ match, filter }) => notifyMatchCreated({ userId: filter.userId, matchId: match.id })),
+  await notifyMatchesCreated(
+    alerted.map(({ match, filter }) => ({ userId: filter.userId, matchId: match.id })),
   );
 
   if (env) {
