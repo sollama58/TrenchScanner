@@ -30,9 +30,10 @@ const LINKED_POLL_MS = 3_000;
 type Code =
   | { state: "idle" }
   | { state: "minting"; target: "private" | "group" }
-  | { state: "showing"; target: "private" | "group"; url: string; deadline: number }
+  | { state: "showing"; target: "private" | "group"; url: string; codeId: string; deadline: number }
   | { state: "expired" }
-  | { state: "linked"; chat: TelegramChat };
+  /** `chat` is null for a chat that was already listed: it was linked again under the same id. */
+  | { state: "linked"; chat: TelegramChat | null };
 
 export function TelegramPanel() {
   const [tg, setTg] = useState<TelegramState | null>(null);
@@ -76,6 +77,7 @@ export function TelegramPanel() {
         state: "showing",
         target,
         url: target === "group" ? issued.groupUrl : issued.privateUrl,
+        codeId: issued.codeId,
         deadline: Date.now() + ttl,
       });
     } catch (e) {
@@ -96,9 +98,16 @@ export function TelegramPanel() {
     }, 1_000);
     const watch = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
-      void load().then((next) => {
+      void load().then(async (next) => {
         const fresh = next?.chats.find((c) => !before.current?.has(c.id));
-        if (fresh) setCode({ state: "linked", chat: fresh });
+        if (fresh) return setCode({ state: "linked", chat: fresh });
+        // A chat already listed (paused, or a group linked again) keeps its id: ask about the code.
+        const status = await api<{ claimed: boolean }>(
+          `/telegram/link/code/${encodeURIComponent(showing.codeId)}`,
+        ).catch(() => null);
+        if (!status?.claimed) return;
+        const after = await load();
+        setCode({ state: "linked", chat: after?.chats.find((c) => !before.current?.has(c.id)) ?? null });
       });
     }, LINKED_POLL_MS);
     setNow(Date.now());
@@ -192,8 +201,9 @@ export function TelegramPanel() {
           <div className="tg-link">
             {code.state === "linked" ? (
               <p className="cp-status good" role="status">
-                <CheckIcon size={15} /> Linked {chatName(code.chat)}
-                {code.chat.kind === "private" ? "" : " (group)"}. Alerts start with the next one raised.
+                <CheckIcon size={15} /> Linked
+                {code.chat ? ` ${chatName(code.chat)}${code.chat.kind === "private" ? "" : " (group)"}` : ""}.
+                Alerts start with the next one raised.
               </p>
             ) : (
               <ol className="muted small">

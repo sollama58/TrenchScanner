@@ -1080,6 +1080,8 @@ export interface TelegramState {
 
 /** POST /telegram/link/code: a one-time code inside the two t.me deep links. */
 export interface TelegramLinkCode {
+  /** For asking whether the code was used (GET /telegram/link/code/:codeId). */
+  codeId: string;
   code: string;
   expiresAt: string;
   ttlMs: number;

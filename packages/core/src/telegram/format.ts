@@ -54,6 +54,14 @@ export interface AlertLinks {
 export const MAX_REASONS = 3;
 /** Telegram caps a photo caption at 1024 characters; a longer alert goes as plain text. */
 export const CAPTION_MAX_CHARS = 1024;
+
+/**
+ * What a caption counts against that cap: Telegram measures the text left once the HTML is
+ * parsed, so the tags and the links' hrefs are free and an escape is one character.
+ */
+export function captionLength(html: string): number {
+  return html.replace(/<[^>]*>/g, "").replace(/&(?:[a-z]+|#\d+|#x[0-9a-f]+);/gi, "_").length;
+}
 /** A digest lists this many tokens in full and counts the rest. */
 export const DIGEST_MAX_ENTRIES = 12;
 

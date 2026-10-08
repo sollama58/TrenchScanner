@@ -36,6 +36,8 @@ export function looksLikeTelegramCode(code: string): boolean {
 }
 
 export interface IssuedTelegramCode {
+  /** The row's id, for asking whether the code was used without handing the code around again. */
+  id: string;
   code: string;
   expiresAt: Date;
 }
@@ -43,8 +45,11 @@ export interface IssuedTelegramCode {
 export async function issueTelegramLinkCode(userId: string): Promise<IssuedTelegramCode> {
   const code = generateCode();
   const expiresAt = new Date(Date.now() + TELEGRAM_LINK_CODE_TTL_MS);
-  await prisma.telegramLinkCode.create({ data: { codeHash: hashTelegramCode(code), userId, expiresAt } });
-  return { code, expiresAt };
+  const { id } = await prisma.telegramLinkCode.create({
+    data: { codeHash: hashTelegramCode(code), userId, expiresAt },
+    select: { id: true },
+  });
+  return { id, code, expiresAt };
 }
 
 export interface TelegramChatBinding {

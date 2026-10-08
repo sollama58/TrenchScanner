@@ -124,6 +124,21 @@ describe.skipIf(!dbAvailable)("telegram routes", () => {
     });
     expect(parts.statusCode).toBe(200);
     expect(parts.json().chat.hidden).toEqual(["reasons", "links"]);
+    // Resuming a paused chat moves its cursor to now, so the pause is not replayed.
+    const stale = new Date(Date.now() - 10 * 60_000);
+    await prisma.telegramChat.update({
+      where: { id: mine.id },
+      data: { enabled: false, sentThrough: stale },
+    });
+    const resumed = await app.inject({
+      method: "PATCH",
+      url: `/telegram/chats/${mine.id}`,
+      ...auth(),
+      payload: { enabled: true },
+    });
+    expect(resumed.json().chat.enabled).toBe(true);
+    const cursor = (await prisma.telegramChat.findUnique({ where: { id: mine.id } }))!.sentThrough;
+    expect(cursor.getTime()).toBeGreaterThan(Date.now() - 60_000);
     const badPart = await app.inject({
       method: "PATCH",
       url: `/telegram/chats/${mine.id}`,
@@ -172,5 +187,18 @@ describe.skipIf(!dbAvailable)("telegram routes", () => {
     const { code } = await issueTelegramLinkCode(userId);
     const row = await prisma.telegramLinkCode.findUnique({ where: { codeHash: hashTelegramCode(code) } });
     expect(row?.userId).toBe(userId);
+  });
+
+  it("says whether the caller's own code was used", async () => {
+    const { id } = await issueTelegramLinkCode(userId);
+    const ask = () => app.inject({ method: "GET", url: `/telegram/link/code/${id}`, ...auth() });
+    expect((await ask()).json()).toEqual({ claimed: false });
+    await prisma.telegramLinkCode.update({ where: { id }, data: { claimedAt: new Date() } });
+    expect((await ask()).json()).toEqual({ claimed: true });
+    const other = (await prisma.user.create({ data: { walletAddress: `${TAG}-coder` } })).id;
+    const theirs = await issueTelegramLinkCode(other);
+    expect(
+      (await app.inject({ method: "GET", url: `/telegram/link/code/${theirs.id}`, ...auth() })).statusCode,
+    ).toBe(404);
   });
 });
