@@ -114,6 +114,15 @@ const MAX_TRANSIENT_FAILURES = 3;
 const MAX_JOB_CHECKS_PER_FLUSH = 5;
 const DEFINITIVE_FAILURES = ["not_a_token_mint", "not_pumpfun", "invalid_ca"];
 let flushing = false;
+/**
+ * The longest one flush may hold the flushing flag. Every request in it has its own timeout, but
+ * on 2026-10-08 a flush never returned (a request or query that never settled) and, with the
+ * flag held, every later flush was a no-op: nothing reached TokenSage for an hour, with no error
+ * logged, until a restart. Past this the flag is released and the next flush goes ahead; the
+ * stuck one is abandoned (whatever it still finishes is harmless: a stored read, a map entry).
+ */
+export const FLUSH_DEADLINE_MS = 2 * 60_000;
+let flushDeadlineMs = FLUSH_DEADLINE_MS;
 let pausedUntil = 0;
 let fullDay = "";
 let fullSentToday = 0;
@@ -129,6 +138,8 @@ interface Stats {
   errors: number;
   /** Queued mints dropped after PENDING_GIVE_UP_MS without an answer (TokenSage never finished them). */
   givenUp: number;
+  /** Flushes abandoned at FLUSH_DEADLINE_MS. */
+  hung: number;
   /** HTTP status of the last request TokenSage refused or failed this cycle (0: none). */
   lastStatus: number;
 }
@@ -139,6 +150,7 @@ const NO_STATS: Stats = {
   turnedAway: 0,
   errors: 0,
   givenUp: 0,
+  hung: 0,
   lastStatus: 0,
 };
 let stats: Stats = { ...NO_STATS };
@@ -156,7 +168,13 @@ export function resetTokenSage(): void {
   fullSentToday = 0;
   earlySentToday = 0;
   fullBlockedUntil = 0;
+  flushDeadlineMs = FLUSH_DEADLINE_MS;
   stats = { ...NO_STATS };
+}
+
+/** Test hook: a shorter flush deadline. */
+export function setFlushDeadlineForTest(ms: number): void {
+  flushDeadlineMs = ms;
 }
 
 export { tokenSageEnabled };
@@ -394,14 +412,26 @@ export async function flushNarrativeRequests(env: Env, client?: TokenSageClient)
       apiKey: env.TOKENSAGE_API_KEY,
       timeoutMs: env.TOKENSAGE_TIMEOUT_MS,
     });
+  let deadline: NodeJS.Timeout | undefined;
   try {
-    await send(api, env, now);
+    await Promise.race([
+      send(api, env, now),
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new FlushHung()), flushDeadlineMs);
+        deadline.unref();
+      }),
+    ]);
   } catch (err) {
     stats.errors += 1;
     if (err instanceof HttpError) stats.lastStatus = err.status;
     if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
       pausedUntil = Date.now() + PAUSE_AFTER_AUTH_FAILURE_MS;
       logger.warn("TokenSage rejected TOKENSAGE_API_KEY; pausing 5 minutes", { status: err.status });
+    } else if (err instanceof FlushHung) {
+      stats.hung += 1;
+      logger.error("TokenSage flush did not finish; abandoning it so the next one can run", {
+        deadlineMs: flushDeadlineMs,
+      });
     } else if (isRefusal(err)) {
       pausedUntil = Date.now() + PAUSE_AFTER_REFUSAL_MS;
       logger.warn("TokenSage refused requests; pausing", { status: (err as HttpError).status });
@@ -409,9 +439,12 @@ export async function flushNarrativeRequests(env: Env, client?: TokenSageClient)
       logger.warn("TokenSage flush failed", { error: String(err) });
     }
   } finally {
+    clearTimeout(deadline);
     flushing = false;
   }
 }
+
+class FlushHung extends Error {}
 
 async function send(api: TokenSageClient, env: Env, now: number): Promise<void> {
   if (env.TOKENSAGE_MAX_BATCHES_PER_CYCLE === 0) return;

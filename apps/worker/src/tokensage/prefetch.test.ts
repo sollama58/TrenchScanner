@@ -8,6 +8,7 @@ import {
   noteLaunchNarratives,
   noteNarrativeWanted,
   resetTokenSage,
+  setFlushDeadlineForTest,
   startNarrativePolling,
   takeTokenSageStats,
 } from "./prefetch.js";
@@ -54,6 +55,25 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     noteNarrativeWanted(`${TAG}-off`, "basic", off);
     await flushNarrativeRequests(off, client);
     expect(batch).not.toHaveBeenCalled();
+  });
+
+  it("abandons a flush that never finishes, so the next one still sends", async () => {
+    // 2026-10-08: one flush never returned and every later one was a no-op for an hour.
+    const { client, batch } = fakeClient();
+    const a = `${TAG}-hung-a`;
+    const b = `${TAG}-hung-b`;
+    setFlushDeadlineForTest(50);
+    batch.mockReturnValueOnce(new Promise(() => {}));
+    noteNarrativeWanted(a, "basic", env);
+    await flushNarrativeRequests(env, client);
+    expect(takeTokenSageStats()).toMatchObject({ hung: 1, errors: 1 });
+
+    batch.mockResolvedValueOnce(ok([{ ca: b, status: "complete", analysis: analysis(b, "basic") }]));
+    noteNarrativeWanted(b, "basic", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch).toHaveBeenCalledTimes(2);
+    expect(cas(batch.mock.calls[1]!)).toContain(b);
+    expect(await prisma.tokenNarrative.count({ where: { mintAddress: b } })).toBe(1);
   });
 
   it("sends hints, stores cached answers, and re-sends queued ones instead of polling", async () => {
