@@ -11,6 +11,7 @@ import {
   thresholdAtRank,
   transformFeature,
   rowWeight,
+  trainingWeightByAge,
   type TrainingRow,
   type EvalFold,
 } from "./trainer.js";
@@ -805,5 +806,66 @@ describe("trainCurator sparse passes", () => {
       expect(bits(params.weights)).toEqual(bits(ref.weights));
       expect(bits([params.bias])).toEqual(bits([ref.bias]));
     }
+  });
+});
+
+describe("trainingWeightByAge", () => {
+  const DAY = 86_400_000;
+  /** One loss row a day for `days` days, newest last. */
+  const daily = (days: number): TrainingRow[] =>
+    Array.from({ length: days }, (_, i) => ({
+      anchorAt: new Date(T0 + i * DAY),
+      features: {},
+      labelValue: 0,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 50_000,
+    }));
+
+  it("reads equal shares in weight and rows without a half-life", () => {
+    const out = trainingWeightByAge(daily(21), {});
+    expect(out.halfLifeDays).toBeNull();
+    // Rows within 1 / 3 / 7 days of the newest: the newest row plus that many older ones.
+    expect(out.rowsPct).toEqual({ d1: 9.5, d3: 19, d7: 38.1 });
+    expect(out.weightPct).toEqual(out.rowsPct);
+  });
+
+  it("leans toward the newest rows as the half-life shortens", () => {
+    const rows = daily(21);
+    const hl14 = trainingWeightByAge(rows, { recencyHalfLifeDays: 14 });
+    const hl3 = trainingWeightByAge(rows, { recencyHalfLifeDays: 3 });
+    expect(hl14.halfLifeDays).toBe(14);
+    expect(hl14.weightPct.d7).toBeGreaterThan(hl14.rowsPct.d7);
+    expect(hl3.weightPct.d7).toBeGreaterThan(hl14.weightPct.d7);
+    expect(hl3.weightPct.d1).toBeGreaterThan(hl14.weightPct.d1);
+    // A 3-day half-life over three weeks: the newest week carries most of the weight.
+    expect(hl3.weightPct.d7).toBeGreaterThan(80);
+    // Shares add up: the row shares are untouched by the decay.
+    expect(hl3.rowsPct).toEqual(hl14.rowsPct);
+  });
+
+  it("counts the legacy discount and the run weight the way the fit does", () => {
+    const rows = daily(5); // ages 4, 3, 2, 1, 0 days
+    rows[0]!.labelRule = 1; // the oldest row is legacy
+    rows[4]!.labelValue = 1;
+    rows[4]!.runPeakMultiple = 8; // the newest is a winner that kept running: weighs more than 1
+    const opts = { legacyLabelWeight: 0.25, runWeightPerDoubling: 0.5 };
+    const newest = rows[4]!.anchorAt.getTime();
+    const w = rows.map((r) => rowWeight(r, newest, opts));
+    expect(w[0]).toBe(0.25);
+    expect(w[4]).toBeGreaterThan(1);
+    const total = w.reduce((a, b) => a + b, 0);
+    const out = trainingWeightByAge(rows, opts);
+    // "Within a day" includes the row exactly a day old.
+    expect(out.weightPct.d1).toBeCloseTo(((w[3]! + w[4]!) / total) * 100, 0);
+    expect(out.weightPct.d3).toBeCloseTo(((w[1]! + w[2]! + w[3]! + w[4]!) / total) * 100, 0);
+    expect(out.rowsPct).toEqual({ d1: 40, d3: 80, d7: 100 });
+  });
+
+  it("gives zeros for no rows", () => {
+    expect(trainingWeightByAge([], { recencyHalfLifeDays: 14 })).toEqual({
+      halfLifeDays: 14,
+      weightPct: { d1: 0, d3: 0, d7: 0 },
+      rowsPct: { d1: 0, d3: 0, d7: 0 },
+    });
   });
 });

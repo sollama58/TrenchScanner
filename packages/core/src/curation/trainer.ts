@@ -116,6 +116,60 @@ export function rowWeight(
   return w;
 }
 
+/**
+ * How much of a training set's weight the newest days carry: the share of the summed row weight
+ * (rowWeight: recency decay x legacy discount x run weight) and of the rows themselves that sit
+ * within 1, 3 and 7 days of the newest row. What the recency half-life actually does on the rows
+ * in hand - a 14-day half-life over five days of history tilts almost nothing, over three weeks
+ * it puts 40% of the weight on the newest week - so every run can say in a number how far it
+ * leaned toward the present. Empty rows give an all-zero answer.
+ */
+export interface TrainingWeightByAge {
+  /** The recency half-life these shares were computed under (days), or null for no decay. */
+  halfLifeDays: number | null;
+  /** Percent of the summed training weight from rows within 1 / 3 / 7 days of the newest row. */
+  weightPct: { d1: number; d3: number; d7: number };
+  /** The same shares counted in rows, for comparison: equal weights would give these. */
+  rowsPct: { d1: number; d3: number; d7: number };
+}
+
+export function trainingWeightByAge(
+  rows: readonly { anchorAt: Date; labelRule?: number; labelValue?: number; runPeakMultiple?: number }[],
+  opts: { recencyHalfLifeDays?: number; legacyLabelWeight?: number; runWeightPerDoubling?: number },
+): TrainingWeightByAge {
+  const halfLifeDays =
+    opts.recencyHalfLifeDays !== undefined && opts.recencyHalfLifeDays > 0 ? opts.recencyHalfLifeDays : null;
+  const zero = { d1: 0, d3: 0, d7: 0 };
+  if (rows.length === 0) return { halfLifeDays, weightPct: { ...zero }, rowsPct: { ...zero } };
+  let newest = -Infinity;
+  for (const r of rows) newest = Math.max(newest, r.anchorAt.getTime());
+  const spans = [1, 3, 7].map((d) => d * 86_400_000);
+  const weight = [0, 0, 0];
+  const count = [0, 0, 0];
+  let total = 0;
+  for (const r of rows) {
+    const w = rowWeight(r, newest, opts);
+    const age = newest - r.anchorAt.getTime();
+    total += w;
+    for (let i = 0; i < spans.length; i++) {
+      if (age <= spans[i]!) {
+        weight[i] = weight[i]! + w;
+        count[i] = count[i]! + 1;
+      }
+    }
+  }
+  const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : 0);
+  return {
+    halfLifeDays,
+    weightPct: { d1: pct(weight[0]!, total), d3: pct(weight[1]!, total), d7: pct(weight[2]!, total) },
+    rowsPct: {
+      d1: pct(count[0]!, rows.length),
+      d3: pct(count[1]!, rows.length),
+      d7: pct(count[2]!, rows.length),
+    },
+  };
+}
+
 export const CURATOR_MODEL_KIND = "weighted-logistic-v1";
 
 /**

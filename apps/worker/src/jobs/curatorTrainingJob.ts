@@ -21,6 +21,7 @@ import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   walletSafetyCutsSql,
   maskKnownBadInputs,
+  trainingWeightByAge,
   MAX_EVENT_AGE_MINUTES,
   CANDIDATE_FEATURE_NAMES,
   ALL_NARRATIVE_FEATURES,
@@ -98,6 +99,16 @@ export async function runCuratorTrainingJob(
   // The history the models actually saw, not the window they were allowed: when the cap binds
   // the oldest row is days newer than windowStart, and the stored span should say so.
   const trainingFrom = trainingRows[trainingRows.length - 1]!.anchorAt;
+  // How far the default half-life tilts this run toward the present, on the rows in hand: the
+  // same figure every learner seat stores under its own half-life (evalMetrics.trainingWeightByAge).
+  logger.info("training weight by age", {
+    ...budget,
+    ...trainingWeightByAge(trainingRows, {
+      recencyHalfLifeDays: env.CURATOR_RECENCY_HALF_LIFE_DAYS,
+      legacyLabelWeight: env.CURATOR_LEGACY_LABEL_WEIGHT,
+      runWeightPerDoubling: env.CURATOR_RUN_WEIGHT_PER_DOUBLING,
+    }),
+  });
 
   const targets: PrecisionTargets = {
     winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
