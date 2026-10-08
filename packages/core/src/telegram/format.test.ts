@@ -66,7 +66,7 @@ describe("telegram alert text", () => {
     );
     expect(text).toContain(
       "🤖 <b>Forest</b>  ▰▰▰▰▰▰▰▱▱▱  <b>72%</b> conviction  🔥 high\n" +
-        "     📈 41% of calls like it 2x'd\n" +
+        "     41% of calls like it 2x'd\n" +
         "     ⚠️ Narrative warns\n" +
         "<blockquote>▸ r1\n▸ r2\n▸ r3</blockquote>",
     );
@@ -74,8 +74,8 @@ describe("telegram alert text", () => {
     expect(text).toContain(
       "💰 MC <b>$45.2k</b>   ·   👥 <b>130</b> holders\n📊 Vol 1h <b>$22.0k</b>   ·   ⏱ 4m old",
     );
-    expect(text).toContain(`📋 <code>${token.mintAddress}</code>`);
-    expect(text).toContain('🔭 <a href="https://trenchscanner.app/#live">TrenchScanner</a>');
+    expect(text).toContain(`<code>${token.mintAddress}</code>`);
+    expect(text).toContain('<a href="https://trenchscanner.app/#live">TrenchScanner</a>');
     expect(text).toContain("https://axiom.trade/t/");
   });
 
@@ -100,8 +100,8 @@ describe("telegram alert text", () => {
     );
     expect(text.startsWith("⚡ <b>2 new alerts</b>  ·  strongest first\n━━━━━━━━━━━━━━")).toBe(true);
     // The model call outranks the filter-only match, so it is line 1.
-    expect(text).toContain("🥇 🟢 <b>$DOGE</b> · Rules 50% · $45.2k");
-    expect(text).toContain("🥈 🎯 <b>$DOGE</b> · “A” score 1 · $45.2k");
+    expect(text).toContain("<b>1.</b> 🟢 <b>$DOGE</b> · Rules 50% · $45.2k");
+    expect(text).toContain("<b>2.</b> 🎯 <b>$DOGE</b> · “A” score 1 · $45.2k");
     expect(text).toContain('<a href="https://trade.padre.gg/trade/solana/');
   });
 

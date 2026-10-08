@@ -251,7 +251,7 @@ function callLines(call: AlertCall, withReasons: boolean): string[] {
   if (call.tier === "high") head += "  🔥 high";
   const lines = [head];
   if (call.calibratedPct !== null)
-    lines.push(`     📈 ${Math.round(call.calibratedPct)}% of calls like it 2x'd`);
+    lines.push(`     ${Math.round(call.calibratedPct)}% of calls like it 2x'd`);
   if (call.narrativeVerdict === "agrees") lines.push("     📝 Narrative agrees");
   if (call.narrativeVerdict === "warns") lines.push("     ⚠️ Narrative warns");
   const reasons = withReasons ? call.reasons.slice(0, MAX_REASONS).map((r) => `▸ ${escapeHtml(r)}`) : [];
@@ -300,11 +300,11 @@ export function formatAlert(
     );
 
   const tail: string[] = [];
-  if (parts.mint) tail.push(`📋 <code>${escapeHtml(t.mintAddress)}</code>`);
-  if (parts.links) tail.push(`🛒 ${tradeLinks(t.mintAddress)}`);
+  if (parts.mint) tail.push(`<code>${escapeHtml(t.mintAddress)}</code>`);
+  if (parts.links) tail.push(tradeLinks(t.mintAddress));
   const reads: string[] = [];
   const dash = parts.links ? dashboardLink(links, "TrenchScanner") : null;
-  if (dash) reads.push(`🔭 ${dash}`);
+  if (dash) reads.push(dash);
   const sage = parts.sage ? sageLink(t.mintAddress, links, "TokenSage read") : null;
   if (sage) reads.push(`🔮 ${sage}`);
   if (reads.length > 0) tail.push(reads.join("   "));
@@ -339,11 +339,9 @@ function digestWho(card: AlertCard): string {
   return top ? `“${top.name}” score ${Math.round(top.score)}` : "caught by your filters";
 }
 
-const MEDALS = ["🥇", "🥈", "🥉"];
-
 /**
  * Many alerts at once become one message, so a burst never floods a chat. Best first, so the
- * strongest call is the first line a person reads (the top three wear medals), and each entry
+ * strongest call is the first line a person reads, and each entry
  * links straight to the terminal.
  */
 export function formatDigest(cards: AlertCard[], links: AlertLinks, parts: AlertParts = ALL_PARTS): string {
@@ -351,7 +349,7 @@ export function formatDigest(cards: AlertCard[], links: AlertLinks, parts: Alert
   const lines = [`⚡ <b>${cards.length} new alerts</b>  ·  strongest first`, DIVIDER];
   ranked.slice(0, DIGEST_MAX_ENTRIES).forEach((card, i) => {
     const icon = card.calls.length > 0 ? "🟢" : "🎯";
-    const rank = MEDALS[i] ?? `<b>${i + 1}.</b>`;
+    const rank = `<b>${i + 1}.</b>`;
     const bits = [
       `${rank} ${icon} <b>${escapeHtml(tokenLabel(card.token))}</b>`,
       escapeHtml(digestWho(card)),
@@ -365,7 +363,7 @@ export function formatDigest(cards: AlertCard[], links: AlertLinks, parts: Alert
   });
   if (ranked.length > DIGEST_MAX_ENTRIES) lines.push(`➕ and ${ranked.length - DIGEST_MAX_ENTRIES} more`);
   const dash = dashboardLink(links, "Open the Live feed");
-  if (dash) lines.push("", `🔭 ${dash}`);
+  if (dash) lines.push("", dash);
   return lines.join("\n");
 }
 
