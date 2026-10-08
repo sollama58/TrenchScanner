@@ -885,16 +885,46 @@ const retTone = (v: number | null) => (v === null ? "" : v >= 0 ? "lh-up" : "lh-
 /** Hours with fewer graded tokens than this are drawn faded: too few to read a rate from. */
 const MIN_HOUR_GRADED = 30;
 
-const hourLabel = (h: number) => `${String(h % 24).padStart(2, "0")}:00`;
+const hourLabel = (h: number) => `${String(((h % 24) + 24) % 24).padStart(2, "0")}:00`;
+
+/**
+ * The browser's clock against UTC, for turning the API's UTC hours into the reader's own: the
+ * offset in whole hours (a half-hour zone rounds to the nearest hour, which the note says) and
+ * a short name for the zone ("PDT", "GMT+2", or the IANA name when the short one is just "GMT").
+ */
+function localClock(now = new Date()) {
+  const offsetMinutes = -now.getTimezoneOffset();
+  const offsetHours = Math.round(offsetMinutes / 60);
+  const rounded = offsetMinutes % 60 !== 0;
+  let name: string;
+  try {
+    name =
+      new Intl.DateTimeFormat([], { timeZoneName: "short" })
+        .formatToParts(now)
+        .find((p) => p.type === "timeZoneName")?.value ?? "";
+  } catch {
+    name = "";
+  }
+  if (!name || name === "GMT" || name === "UTC") {
+    name = offsetHours === 0 ? "UTC" : `UTC${offsetHours > 0 ? "+" : "−"}${Math.abs(offsetHours)}`;
+  }
+  return { offsetHours, rounded, name };
+}
 
 /**
  * The screened field by hour of the day over everything the hourly rollup has kept: which
- * hours (UTC) screen the most tokens, and which hours' tokens double and pay. Three charts on
- * one column per hour, so a reader lines up busy against good.
+ * hours screen the most tokens, and which hours' tokens double and pay. The API sums per UTC
+ * hour; the columns are shifted to the browser's own clock so "5 am" means the reader's 5 am.
+ * Three charts on one column per hour, so a reader lines up busy against good.
  */
 function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
   const [hover, setHover] = useState<number | null>(null);
-  const hours = h.hours;
+  const clock = localClock();
+  // Column i is local hour i, holding the UTC hour that falls on it.
+  const hours = Array.from({ length: 24 }, (_, local) => {
+    const utc = (((local - clock.offsetHours) % 24) + 24) % 24;
+    return { ...(h.hours[utc] ?? h.hours[0]!), hour: local };
+  });
   const total = hours.reduce((sum, x) => sum + x.calls, 0);
   if (h.days === 0 || total === 0) return null;
   const callsMax = Math.max(1, ...hours.map((x) => x.calls));
@@ -912,13 +942,14 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
     <div className="lh-hod" onMouseLeave={() => setHover(null)}>
       <h4 className="lh-subchart">By hour of the day, all {h.days.toLocaleString()} days kept</h4>
       <p className="faint small">
-        Every screened token in our history by the UTC hour it was decided on: how many each hour brings, how
-        often they doubled, and what they returned on the exit plan. Hours with fewer than {MIN_HOUR_GRADED}{" "}
-        graded tokens are faded.
+        Every screened token in our history by the hour it was decided on, in your time zone ({clock.name}
+        {clock.rounded ? ", rounded to the hour" : ""}): how many each hour brings, how often they doubled,
+        and what they returned on the exit plan. Hours with fewer than {MIN_HOUR_GRADED} graded tokens are
+        faded.
       </p>
       <div className="lh-readout" aria-live="polite">
         <strong>
-          {hourLabel(focus.hour)}–{hourLabel(focus.hour + 1)} UTC
+          {hourLabel(focus.hour)}–{hourLabel(focus.hour + 1)} {clock.name}
         </strong>
         <span className="num">{focus.calls.toLocaleString()} screened</span>
         <span className="lh-readout-item">
@@ -939,7 +970,11 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
           <span>{top / 2}%</span>
           <span>0%</span>
         </span>
-        <div className="lh-groups" role="img" aria-label="2x rate of screened tokens by hour of the day, UTC">
+        <div
+          className="lh-groups"
+          role="img"
+          aria-label="2x rate of screened tokens by hour of the day, local time"
+        >
           {hours.map((x, i) => (
             <div key={x.hour} className={`lh-group${col(x, i)}`} {...hoverProps(i)}>
               {x.hit2xPct !== null && (
@@ -962,7 +997,7 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
         <div
           className="lh-ret"
           role="img"
-          aria-label="Average exit-plan return of screened tokens by hour of the day, UTC"
+          aria-label="Average exit-plan return of screened tokens by hour of the day, local time"
         >
           {hours.map((x, i) => {
             const v = x.avgReturnPct ?? 0;
@@ -986,7 +1021,7 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
           <span>{Math.round(callsMax / 2).toLocaleString()}</span>
           <span>0</span>
         </span>
-        <div className="lh-groups" role="img" aria-label="Tokens screened by hour of the day, UTC">
+        <div className="lh-groups" role="img" aria-label="Tokens screened by hour of the day, local time">
           {hours.map((x, i) => (
             <div key={x.hour} className={`lh-group${hover === i ? " is-hover" : ""}`} {...hoverProps(i)}>
               <span
