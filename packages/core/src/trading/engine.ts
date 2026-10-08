@@ -19,7 +19,7 @@ import { buildSolTransfer, signTransaction } from "./transaction.js";
 import { withWalletKey, type TradingWalletRow } from "./wallets.js";
 
 /**
- * The trading bot's engine: one pass, run every few seconds by the scanner worker
+ * The trading bot's engine: one pass, run every few seconds by the trader worker
  * (TRADING_BOT_INTERVAL_SECONDS). Each pass, in order:
  *
  *   1. settles every swap and withdrawal sent earlier (confirmed, failed, or expired unlanded);
@@ -98,9 +98,33 @@ function errText(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).slice(0, 500);
 }
 
-export async function runTradingEngine(deps: TradingEngineDeps): Promise<TradingRunSummary> {
-  const now = deps.now ?? (() => new Date());
-  const summary: TradingRunSummary = {
+/** The advisory lock one pass holds; see runTradingEngine. */
+export const TRADING_ENGINE_LOCK = "trading-engine";
+/** Past the slowest pass we expect: a handful of quotes, signs, simulations and sends. */
+const PASS_TRANSACTION_TIMEOUT_MS = 240_000;
+
+/**
+ * One pass, under a Postgres advisory lock. A deploy runs the old trader and the new one side by
+ * side for a moment, and two passes at once would read the same signals and the same exit
+ * decisions: two buys of one token, two sales of one rung. The lock is transaction-scoped, so it
+ * is released however the pass ends (a crash included); a process that doesn't get it skips.
+ */
+export async function runTradingEngine(
+  deps: TradingEngineDeps,
+): Promise<TradingRunSummary & { locked: boolean }> {
+  return prisma.$transaction(
+    async (tx) => {
+      const [lock] = await tx.$queryRaw<{ locked: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${TRADING_ENGINE_LOCK})) AS locked`;
+      if (!lock?.locked) return { ...emptySummary(), locked: false };
+      return { ...(await tradingPass(deps)), locked: true };
+    },
+    { maxWait: 10_000, timeout: PASS_TRANSACTION_TIMEOUT_MS },
+  );
+}
+
+function emptySummary(): TradingRunSummary {
+  return {
     settled: 0,
     withdrawals: 0,
     exitsChecked: 0,
@@ -111,6 +135,11 @@ export async function runTradingEngine(deps: TradingEngineDeps): Promise<Trading
     skipped: 0,
     errors: 0,
   };
+}
+
+async function tradingPass(deps: TradingEngineDeps): Promise<TradingRunSummary> {
+  const now = deps.now ?? (() => new Date());
+  const summary = emptySummary();
   const wallets = new Map<string, Wallet>();
   const walletFor = async (userId: string) => {
     if (!wallets.has(userId)) {

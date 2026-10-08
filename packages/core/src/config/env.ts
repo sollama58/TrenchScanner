@@ -353,9 +353,10 @@ const envSchema = z.object({
   // MIN_TRAINING_ROWS is the promotion floor - below it the job still trains and records the
   // evaluation (the learning panel shows progress) but never lets the model take over.
   // Which jobs this worker process runs - see HEARTBEAT_JOB_ROLE in heartbeat.ts. Production
-  // runs two processes (render.yaml): one "scanner" on the alert path and one "trainer" for the
-  // model and nightly batch work. "all" runs everything in one process.
-  WORKER_ROLE: z.enum(["all", "scanner", "trainer"]).default("all"),
+  // runs three processes (render.yaml): one "scanner" on the alert path, one "trainer" for the
+  // model and nightly batch work, and one "trader" for the trading bot alone (the only process
+  // that holds kms:Decrypt for the bot's wallets). "all" runs everything in one process.
+  WORKER_ROLE: z.enum(["all", "scanner", "trainer", "trader"]).default("all"),
   // Every 2 hours since 2026-10-05, when training moved to its own process: a run no longer
   // costs the scan anything, and a model that just earned (or lost) a seat, a fresh calibration
   // table and new cutoffs take effect within two hours of the evidence.

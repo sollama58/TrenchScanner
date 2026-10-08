@@ -297,6 +297,13 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect(p.error).toMatch(/never sent/);
   });
 
+  it("lets only one pass run at a time", async () => {
+    await freshSignal();
+    const [a, b] = await Promise.all([tick(), tick()]);
+    expect([a.locked, b.locked].sort()).toEqual([false, true]);
+    expect(a.buys + b.buys).toBe(1);
+  });
+
   it("sells everything on request", async () => {
     await freshSignal();
     await tick();

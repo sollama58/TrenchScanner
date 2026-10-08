@@ -194,7 +194,10 @@ async function main() {
   );
   // The trading bot (admin-only): settles swaps, walks open positions through their exit plans,
   // and buys the signals each enabled bot follows - see packages/core/src/trading/engine.ts.
-  if (env.TRADING_BOT_ENABLED) {
+  if (role === "trader" && !env.TRADING_BOT_ENABLED) {
+    logger.warn("WORKER_ROLE=trader but TRADING_BOT_ENABLED is off: this process runs nothing");
+  }
+  if (env.TRADING_BOT_ENABLED && runsJob(role, "trading-bot")) {
     const runTradingBot = createTradingBotRunner(env);
     schedule("trading-bot", () =>
       scheduleInterval("trading-bot", runTradingBot, env.TRADING_BOT_INTERVAL_SECONDS / 60, {

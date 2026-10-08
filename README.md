@@ -76,10 +76,11 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
 - **Access.** You reach the wallet by signing in with your own wallet (SIWS). Withdrawals go **only
   to that sign-in wallet**: the destination is read from your account, never from the request, so
   even a stolen session can only send your funds back to you.
-- **Split permissions.** The api creates wallets and needs only `kms:GenerateDataKey`; the worker
-  signs trades and withdrawals and needs only `kms:Decrypt`. The internet-facing api never opens a
-  wallet - a withdrawal is a request the worker carries out.
-- **Execution.** The scanner worker's `trading-bot` job runs every `TRADING_BOT_INTERVAL_SECONDS`
+- **Split permissions.** The api creates wallets and needs only `kms:GenerateDataKey`; the
+  dedicated **`trenchscanner-trader`** worker (`WORKER_ROLE=trader`, its own Render service) signs
+  trades and withdrawals and is the only service holding `kms:Decrypt`. The internet-facing api
+  and the scanner can never open a wallet - a withdrawal is a request the trader carries out.
+- **Execution.** The trader's `trading-bot` job runs every `TRADING_BOT_INTERVAL_SECONDS`
   (5): it settles earlier swaps from the chain, walks open positions through their exit plan, and
   buys new signals within the bot's guards (buy size capped server-side by `TRADING_MAX_BUY_SOL`,
   max open positions, 24h spend, a SOL reserve, maximum signal age, one entry per token ever).
@@ -94,10 +95,12 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
 1. AWS → KMS → **Create key**: symmetric, encrypt and decrypt. Note its ARN.
 2. AWS → IAM → create two users with access keys:
    - `trenchscanner-api`: `{"Effect":"Allow","Action":"kms:GenerateDataKey","Resource":"<key ARN>"}`
-   - `trenchscanner-worker`: `{"Effect":"Allow","Action":"kms:Decrypt","Resource":"<key ARN>"}`
-3. On Render, set `TRADING_KMS_KEY_ID` (the ARN), `TRADING_KMS_REGION`, and each service's own
+   - `trenchscanner-trader`: `{"Effect":"Allow","Action":"kms:Decrypt","Resource":"<key ARN>"}`
+3. On Render, sync the Blueprint (it adds the `trenchscanner-trader` worker), then set
+   `TRADING_KMS_KEY_ID` (the ARN), `TRADING_KMS_REGION`, and each service's own
    `TRADING_AWS_ACCESS_KEY_ID` / `TRADING_AWS_SECRET_ACCESS_KEY` on `trenchscanner-api` and
-   `trenchscanner-worker`; optionally `TRADING_JUPITER_API_KEY` on the worker. Then set
+   `trenchscanner-trader`. The trader also needs `HELIUS_API_KEY` (or a paid `SOLANA_RPC_URL`),
+   `ADMIN_WALLET_ADDRESSES` and, recommended, its own `TRADING_JUPITER_API_KEY`. Then set
    `TRADING_BOT_ENABLED=true` on both.
 4. Open the **Bot** tab, create the wallet, send it a little SOL, pick sources, save, **Start**.
 

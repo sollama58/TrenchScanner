@@ -62,7 +62,8 @@ describe("worker roles", () => {
     expect(jobs.length).toBeGreaterThan(0);
     for (const job of jobs) {
       expect(runsJob("all", job)).toBe(true);
-      expect(runsJob("scanner", job) !== runsJob("trainer", job)).toBe(true);
+      const owners = (["scanner", "trainer", "trader"] as const).filter((role) => runsJob(role, job));
+      expect(owners).toHaveLength(1);
     }
     // The alert path stays with the scanner; the batch work goes to the trainer.
     expect(runsJob("scanner", "scan")).toBe(true);
@@ -70,5 +71,9 @@ describe("worker roles", () => {
     expect(runsJob("trainer", "curator-training")).toBe(true);
     expect(runsJob("trainer", "champion-refresh")).toBe(true);
     expect(runsJob("scanner", "curator-training")).toBe(false);
+    // The trading bot has a process to itself.
+    expect(runsJob("trader", "trading-bot")).toBe(true);
+    expect(runsJob("trader", "scan")).toBe(false);
+    expect(runsJob("scanner", "trading-bot")).toBe(false);
   });
 });
