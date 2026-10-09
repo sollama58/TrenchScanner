@@ -84,16 +84,27 @@ export interface GuardRpc {
   getWalletTokenAccounts(owner: string): Promise<WalletTokenAccount[] | null>;
 }
 
+/** Shared by both sides of a trade. */
+interface TradeLimits {
+  /**
+   * The most SOL that may leave by System transfers to anyone but the wallet itself (its own
+   * wrapped-SOL account included): a route's fee or a validator tip. Anything above is theft.
+   */
+  maxExternalLamports: bigint;
+  /** The most the compute-budget instructions may set as priority fee. */
+  maxPriorityFeeLamports: bigint;
+}
+
 export type TradeExpectation =
-  | {
+  | (TradeLimits & {
       kind: "buy";
       /** The token bought; at least `minOut` raw units must arrive. */
       mint: string;
       minOut: bigint;
       /** The most SOL the wallet may lose: the buy, fees, rent. */
       maxSolDrop: bigint;
-    }
-  | {
+    })
+  | (TradeLimits & {
       kind: "sell";
       mint: string;
       /** At most this many raw units may leave. */
@@ -101,7 +112,7 @@ export type TradeExpectation =
       /** SOL the wallet must gain, at least: the quote's minimum less `feeAllowance`. */
       minSolOut: bigint;
       feeAllowance: bigint;
-    };
+    });
 
 export class GuardRefusal extends Error {
   constructor(message: string) {
@@ -111,20 +122,44 @@ export class GuardRefusal extends Error {
 
 const u32 = (d: Uint8Array, at: number) =>
   (d[at]! | (d[at + 1]! << 8) | (d[at + 2]! << 16) | (d[at + 3]! << 24)) >>> 0;
+const u64 = (d: Uint8Array, at: number) => {
+  let v = 0n;
+  for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(d[at + i]!);
+  return v;
+};
 
 /** The wallet's associated token account for `mint` under `tokenProgram`. */
 export function associatedTokenAddress(owner: string, mint: string, tokenProgram: string): string {
   return findProgramAddress([bs58.decode(owner), bs58.decode(tokenProgram), bs58.decode(mint)], PROGRAM.ata);
 }
 
+/** What the instructions add up to: SOL sent to others, and the priority fee they set. */
+export interface InstructionTotals {
+  externalLamports: bigint;
+  priorityFeeLamports: bigint;
+}
+
+/** The compute-unit limit when none is set: the transaction maximum, so the fee bound is conservative. */
+const DEFAULT_COMPUTE_UNIT_LIMIT = 1_400_000n;
+
 /**
  * Layer 1: every top-level instruction is one the swap needs. Throws GuardRefusal naming the
- * first that isn't. `keys` is the message's full key list (lookup tables resolved).
+ * first that isn't. `keys` is the message's full key list (lookup tables resolved). Returns the
+ * SOL the System transfers send to anyone but the wallet, and the priority fee set, for the
+ * caller to bound.
  */
-export function checkInstructions(decoded: DecodedMessage, keys: string[], wallet: string): void {
+export function checkInstructions(
+  decoded: DecodedMessage,
+  keys: string[],
+  wallet: string,
+): InstructionTotals {
   if (decoded.staticKeys[0] !== wallet) throw new GuardRefusal("the wallet is not the fee payer");
   if (decoded.requiredSignatures !== 1)
     throw new GuardRefusal(`${decoded.requiredSignatures} signers required`);
+  const own = new Set([wallet, ...[...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, WSOL, p))]);
+  let externalLamports = 0n;
+  let unitLimit: bigint | null = null;
+  let microLamportsPerUnit = 0n;
   decoded.instructions.forEach((ix, n) => {
     if (ix.programIdIndex >= decoded.staticKeys.length)
       throw new GuardRefusal(`instruction ${n}: bad program index`);
@@ -136,11 +171,21 @@ export function checkInstructions(decoded: DecodedMessage, keys: string[], walle
       return keys[index]!;
     };
     const d = ix.data;
-    if (program === PROGRAM.computeBudget || SWAP_PROGRAMS.has(program)) return;
+    if (program === PROGRAM.computeBudget) {
+      if (d[0] === 2 && d.length >= 5)
+        unitLimit = BigInt(u32(d, 1)); // SetComputeUnitLimit
+      else if (d[0] === 3 && d.length >= 9) microLamportsPerUnit = u64(d, 1); // SetComputeUnitPrice
+      return;
+    }
+    if (SWAP_PROGRAMS.has(program)) return;
     if (program === PROGRAM.system) {
       const tag = d.length >= 4 ? u32(d, 0) : -1;
-      // Transfer (2): only SOL leaves, which the simulated SOL allowance bounds.
-      if (tag === 2 && acct(0) === wallet) return;
+      // Transfer (2): to the wallet's own wrapped-SOL account (wrapping), or a fee/tip, which is
+      // counted and bounded by the caller.
+      if (tag === 2 && acct(0) === wallet && d.length >= 12) {
+        if (!own.has(acct(1))) externalLamports += u64(d, 4);
+        return;
+      }
       // CreateAccount (0), funded by the wallet, for a new token account (wSOL wrapping).
       if (tag === 0 && acct(0) === wallet && d.length >= 52) {
         const owner = bs58.encode(d.slice(20, 52));
@@ -164,6 +209,8 @@ export function checkInstructions(decoded: DecodedMessage, keys: string[], walle
     }
     throw new GuardRefusal(`instruction ${n}: program ${program} is not allowed`);
   });
+  const limit: bigint = unitLimit ?? DEFAULT_COMPUTE_UNIT_LIMIT;
+  return { externalLamports, priorityFeeLamports: (microLamportsPerUnit * limit) / 1_000_000n };
 }
 
 function sum(list: (ParsedAccountState | null)[], indexes: number[]): bigint {
@@ -172,7 +219,8 @@ function sum(list: (ParsedAccountState | null)[], indexes: number[]): bigint {
 
 /**
  * Both layers, for an UNSIGNED transaction a swap API built. Resolves with nothing when it may be
- * signed; throws GuardRefusal (or an Error when the chain couldn't be read - never "allow").
+ * signed; throws GuardRefusal when it may not, or a plain Error when the chain couldn't be read
+ * (try again later - never "allow").
  */
 export async function guardSwapTransaction(
   rpc: GuardRpc,
@@ -193,20 +241,38 @@ export async function guardSwapTransaction(
       tables.set(t, parseLookupTableAddresses(bytes));
     });
   }
-  checkInstructions(decoded, resolveAccountKeys(decoded, tables), wallet);
+  const keys = resolveAccountKeys(decoded, tables);
+  const totals = checkInstructions(decoded, keys, wallet);
+  if (totals.externalLamports > expect.maxExternalLamports)
+    throw new GuardRefusal(
+      `it would send ${totals.externalLamports} lamports to others, more than the ${expect.maxExternalLamports} allowed`,
+    );
+  // A tenth over the cap and 10,000 lamports of slack: routes round their own fee estimates.
+  if (totals.priorityFeeLamports > (expect.maxPriorityFeeLamports * 11n) / 10n + 10_000n)
+    throw new GuardRefusal(`it would pay a ${totals.priorityFeeLamports}-lamport priority fee, over the cap`);
 
-  // Layer 2: watch the wallet and every token account it has, plus where the traded token lands.
+  // Layer 2: watch the wallet and the token accounts of the wallet's that the transaction can
+  // reach at all - the runtime can't touch an account a transaction doesn't list, and the RPC
+  // refuses to watch more accounts than the transaction has.
   const owned = await rpc.getWalletTokenAccounts(wallet);
   if (!owned) throw new Error("could not list the wallet's token accounts");
+  const inTx = new Set(keys);
   const candidates = [...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, expect.mint, p));
-  const watch = [...new Set([wallet, ...owned.map((a) => a.address), ...candidates])];
-  if (watch.length > 120) throw new GuardRefusal("too many token accounts to verify; close empty ones first");
+  const watch = [
+    ...new Set(
+      [wallet, ...owned.map((a) => a.address), ...candidates].filter((a) => a === wallet || inTx.has(a)),
+    ),
+  ];
   const [pre, sim] = await Promise.all([
     rpc.getParsedAccounts(watch),
     rpc.simulateParsed(Buffer.from(unsigned).toString("base64"), watch),
   ]);
   if (!pre || !sim) throw new Error("simulation unavailable; not signing blind");
-  if (sim.error) throw new GuardRefusal(`simulation failed: ${sim.error}`);
+  if (sim.error) {
+    // Our node behind the route's: not the transaction's fault.
+    if (/BlockhashNotFound/i.test(sim.error)) throw new Error(`simulation: ${sim.error}`);
+    throw new GuardRefusal(`simulation failed: ${sim.error}`);
+  }
   const post = sim.accounts;
   if (post.length !== watch.length) throw new Error("simulation returned the wrong number of accounts");
 
@@ -215,8 +281,11 @@ export async function guardSwapTransaction(
   if (!walletPre || !walletPost) throw new GuardRefusal("the wallet account is missing");
   if (walletPost.owner !== SYSTEM_PROGRAM_ID) throw new GuardRefusal("the wallet would be reassigned");
 
-  // Which watched accounts hold the traded mint (they may change; nothing else may).
+  // Which watched accounts hold the traded mint (they may change; nothing else may), and the
+  // wallet's wrapped-SOL accounts (their lamports count as the wallet's SOL).
   const traded: number[] = [];
+  let wrappedPre = 0n;
+  let wrappedPost = 0n;
   for (let i = 1; i < watch.length; i++) {
     const before = pre[i];
     const after = post[i];
@@ -230,9 +299,15 @@ export async function guardSwapTransaction(
       traded.push(i);
       continue;
     }
-    // Wrapped SOL accounts are created and closed by the swap itself; their value is SOL, which
-    // the SOL checks below account for when closed back to the wallet.
-    if (mint === WSOL) continue;
+    if (mint === WSOL) {
+      // Created, filled and closed by the swap itself: counted with the wallet's SOL below, so
+      // wrapped SOL moved anywhere but back to the wallet reads as SOL lost.
+      if (after?.token && after.token.owner !== wallet)
+        throw new GuardRefusal("a wrapped-SOL account changes owner");
+      if (before?.token?.owner === wallet || before === null) wrappedPre += before?.lamports ?? 0n;
+      if (after?.token?.owner === wallet) wrappedPost += after.lamports;
+      continue;
+    }
     if (!before) continue; // not an account of the wallet's before the swap
     if (!after) throw new GuardRefusal(`token account ${watch[i]} would be closed`);
     const b = before.token;
@@ -247,7 +322,7 @@ export async function guardSwapTransaction(
       throw new GuardRefusal(`another token account's authority would change (${b.mint})`);
   }
 
-  const solDelta = walletPost.lamports - walletPre.lamports;
+  const solDelta = walletPost.lamports + wrappedPost - (walletPre.lamports + wrappedPre);
   const tokenDelta = sum(post, traded) - sum(pre, traded);
   if (expect.kind === "buy") {
     if (-solDelta > expect.maxSolDrop)
@@ -262,8 +337,6 @@ export async function guardSwapTransaction(
     if (-tokenDelta > expect.amount)
       throw new GuardRefusal(`it would sell ${-tokenDelta} tokens, more than ${expect.amount}`);
     if (solDelta < expect.minSolOut - expect.feeAllowance)
-      throw new GuardRefusal(
-        `it would return ${solDelta} lamports, under the quoted minimum ${expect.minSolOut}`,
-      );
+      throw new GuardRefusal(`it would return ${solDelta} lamports, under the minimum ${expect.minSolOut}`);
   }
 }

@@ -53,7 +53,10 @@ class FakeChain {
   /** lamports per raw token unit */
   price = new Map<string, number>();
   solUsd = 200;
-  hostile: "none" | "drain-sol" | "steal-other" | "reassign" = "none";
+  hostile: "none" | "drain-sol" | "steal-other" | "reassign" | "skim" = "none";
+  /** Token balance reads lag: they return the balance from before the last transaction, once. */
+  lagOnce = false;
+  private lastBalance = new Map<string, bigint>();
   jupiterNoRoute = false;
   height = 100;
   /** Mints the PumpPortal stand-in will build for. */
@@ -144,6 +147,7 @@ class FakeChain {
       this.sol.set(effect.wallet, (this.sol.get(effect.wallet) ?? 0n) + effect.solDelta);
       if (effect.mint) {
         const k = this.key(effect.wallet, effect.mint);
+        this.lastBalance.set(k, this.tokens.get(k) ?? 0n);
         this.tokens.set(k, (this.tokens.get(k) ?? 0n) + effect.tokenDelta);
       }
       this.landed.set(signature, {
@@ -160,7 +164,11 @@ class FakeChain {
       this.landed.has(sig) ? { seen: true, confirmed: true, error: null } : { seen: false },
     getTransactionFill: async (sig) => this.landed.get(sig) ?? null,
     getTokenBalance: async (owner, mint) => {
-      const raw = this.tokens.get(this.key(owner, mint));
+      let raw = this.tokens.get(this.key(owner, mint));
+      if (this.lagOnce && this.lastBalance.has(this.key(owner, mint))) {
+        this.lagOnce = false;
+        raw = this.lastBalance.get(this.key(owner, mint));
+      }
       return {
         raw: raw ?? 0n,
         decimals: 6,
@@ -178,12 +186,28 @@ class FakeChain {
     inAmount: bigint,
     outAmount: bigint,
   ) {
-    const tx = buildSolTransfer({
-      from: userPublicKey,
-      to: generateWalletKeypair().publicKey,
-      lamports: this.nonce++,
-      recentBlockhash: BLOCKHASH,
-    });
+    // Shaped like a real swap: one call to the aggregator listing the token accounts it moves.
+    // A hostile "skim" instead sends the trade's worth to a stranger with a System transfer.
+    const other = [...this.tokens.keys()].find(
+      (k) => k.startsWith(`${userPublicKey}:`) && !k.endsWith(`:${mint}`),
+    );
+    const tx =
+      this.hostile === "skim"
+        ? buildSolTransfer({
+            from: userPublicKey,
+            to: generateWalletKeypair().publicKey,
+            lamports: 50_000_000n + this.nonce++,
+            recentBlockhash: BLOCKHASH,
+          })
+        : buildLegacyTransaction(userPublicKey, BLOCKHASH, {
+            programId: PROGRAM.jupiterV6,
+            accounts: [
+              { pubkey: this.ata(userPublicKey, mint), writable: true },
+              ...(other ? [{ pubkey: this.ata(userPublicKey, other.split(":")[1]!), writable: true }] : []),
+              { pubkey: generateWalletKeypair().publicKey, writable: true },
+            ],
+            data: [Number(this.nonce++ % 256n)],
+          });
     const fee = 10_000n;
     const effect: Effect = {
       wallet: userPublicKey,
@@ -406,6 +430,67 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
       expect(await prisma.tradingOrder.count({ where: { positionId: p.id } })).toBe(0);
     }
     expect(chain.sol.get(walletKey)).toBe(LAMPORTS);
+  });
+
+  it("refuses a fallback build that skims the trade with an extra SOL transfer", async () => {
+    await freshSignal();
+    chain.jupiterNoRoute = true;
+    chain.fallbackMints.add(mint);
+    chain.hostile = "skim";
+    expect((await tick()).buys).toBe(0);
+    const p = await position();
+    expect(p.status).toBe("failed");
+    expect(p.error).toMatch(/to others/);
+    expect(chain.sent).toHaveLength(0);
+  });
+
+  it("does not count a missing price toward stuck, and still closes at the hold cap", async () => {
+    await opened();
+    chain.swap.pricesUsd = async () => new Map([[WSOL_MINT, 200]]);
+    chain.jupiterNoRoute = true; // no quote either: no price at all
+    chain.fallbackMints.add(mint); // ...but the fallback can still sell
+    await tick(1);
+    let p = await position();
+    expect(p.status).toBe("open");
+    expect(p.failCount).toBe(0);
+    expect(p.error).toMatch(/no price/);
+    // Past the 30-minute cap for a position that never sold: out by the clock.
+    expect((await tick(31)).sells).toBe(1);
+    await tick();
+    p = await position();
+    expect(p.status).toBe("closed");
+    expect(p.closeReason).toBe("max_hold");
+  });
+
+  it("does not let a lagging balance read undo a confirmed sale", async () => {
+    await opened();
+    chain.price.set(mint, 0.105);
+    expect((await tick(1)).sells).toBe(1);
+    chain.lagOnce = true; // the settle's read sees the balance from before the sale
+    await tick();
+    const p = await position();
+    expect(p.rungsTaken).toBe(1);
+    expect(p.tokensHeld).toBe("500000000");
+    // ...so the same rung is not sold again.
+    expect((await tick(1)).sells).toBe(0);
+  });
+
+  it("reopens a closed position whose tokens turn up in the wallet", async () => {
+    await opened();
+    await prisma.tradingPosition.update({
+      where: { userId_mint: { userId, mint } },
+      data: {
+        status: "closed",
+        closedAt: new Date(clock.getTime() - 5 * 60_000),
+        closeReason: "manual",
+        tokensHeld: "0",
+      },
+    });
+    const run = await tick();
+    expect(run.recovered).toBe(1);
+    const p = await position();
+    expect(p.status).toBe("open");
+    expect(p.tokensHeld).toBe("1000000000");
   });
 
   it("falls back to PumpPortal when Jupiter has no route for a Pump.fun token", async () => {

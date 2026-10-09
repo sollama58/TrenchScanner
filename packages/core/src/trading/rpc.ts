@@ -189,8 +189,9 @@ export class TradingRpc implements GuardRpc {
         logs: (out.value.logs ?? []).slice(-20),
         accounts: (out.value.accounts ?? []).map(parseAccountState),
       };
-    } catch (err) {
-      return { error: String(err), logs: [], accounts: [] };
+    } catch {
+      // The node refused the request itself (not the transaction): unavailable, not a verdict.
+      return null;
     }
   }
 

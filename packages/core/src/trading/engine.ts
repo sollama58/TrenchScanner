@@ -12,7 +12,13 @@ import {
   type TradingBotConfig,
 } from "./config.js";
 import { decideExit, sellAmount, type ExitReason } from "./exitEngine.js";
-import { NoRouteError, WSOL_MINT, type FallbackSwapClient, type SwapClient } from "./jupiterSwap.js";
+import {
+  NoRouteError,
+  RateLimitedError,
+  WSOL_MINT,
+  type FallbackSwapClient,
+  type SwapClient,
+} from "./jupiterSwap.js";
 import type { KeyProvider } from "./keyVault.js";
 import type { TradingRpc, TransactionFill } from "./rpc.js";
 import { buildCloseTokenAccount, buildSolTransfer, signTransaction } from "./transaction.js";
@@ -67,6 +73,14 @@ const BLOCKHASH_LIFETIME_BLOCKS = 150;
 const EXPIRY_MARGIN_BLOCKS = 32n;
 /** A confirmed transaction whose details the RPC still can't serve after this is settled from balances. */
 const FILL_READ_GRACE_MS = 120_000;
+/** How long a confirmed buy whose tokens don't show yet is re-read before it's written off. */
+const CONFIRMED_BALANCE_WAIT_MS = 10 * 60_000;
+/** Failed buys and closed positions are re-checked for tokens this long after they ended... */
+const RECOVERY_LOOKBACK_MS = 2 * 3_600_000;
+/** ...once they have been over this long (no node still shows the balance from before)... */
+const RECOVERY_SETTLE_MS = 2 * 60_000;
+/** ...at most this often each. */
+const RECOVERY_RECHECK_MS = 5 * 60_000;
 /** An entry still "buying" with no order this long after creation was never sent. */
 const ORPHAN_ENTRY_MS = 2 * 60_000;
 /** A withdrawal claimed this long ago with no signature recorded was never sent. */
@@ -83,6 +97,7 @@ const QUOTE_CACHE_MS = 15_000;
 /** Emptied accounts are closed this long after the position closes (the sale has settled). */
 const RENT_RECLAIM_DELAY_MS = 30_000;
 const RENT_RECLAIM_GIVE_UP_MS = 24 * 3_600_000;
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 /** Signals read per bot per pass. */
 const MAX_SIGNALS_PER_PASS = 200;
 /** Each pass starts no new transaction after this long, well inside the lock's timeout. */
@@ -220,6 +235,7 @@ async function tradingPass(deps: TradingEngineDeps): Promise<TradingRunSummary> 
   };
 
   await stage(ctx, "settle-orders", () => settleOrders(ctx));
+  await stage(ctx, "recover", () => recoverPositions(ctx));
   await stage(ctx, "settle-withdrawals", () => settleWithdrawals(ctx));
   await stage(ctx, "send-withdrawals", () => sendWithdrawals(ctx));
   await stage(ctx, "exits", () => manageExits(ctx));
@@ -263,6 +279,11 @@ interface SwapRequest {
   decimals: number | null;
   slippageBps: number;
   maxPriorityFeeLamports: bigint;
+  /**
+   * Sell only: what `amount` is worth in lamports by the latest price, or by its cost when there
+   * is none - the base for how much SOL the route may send elsewhere (its fee, a tip).
+   */
+  valueHintLamports?: bigint;
 }
 
 interface BuiltSwap {
@@ -273,11 +294,48 @@ interface BuiltSwap {
   expect: TradeExpectation;
 }
 
+/** SOL a route may send to anyone but the wallet: 2% of the trade (fees, tips) plus 0.001 SOL. */
+function externalAllowance(tradeLamports: bigint): bigint {
+  return tradeLamports / 50n + 1_000_000n;
+}
+
+/**
+ * A floor for a trade the fallback route built without a quote: what the Price API says it's
+ * worth, less the slippage and another tenth (the pool's price is not the index's). Buy: raw
+ * tokens; sell: lamports. The lowest acceptable (1 token, 0 lamports) when there is no price -
+ * the external-transfer cap still bounds what a hostile build could take.
+ */
+async function fallbackFloor(ctx: PassContext, req: SwapRequest): Promise<bigint> {
+  const none = req.side === "buy" ? 1n : 0n;
+  let prices: Map<string, number>;
+  try {
+    prices = await ctx.deps.swap.pricesUsd([req.mint, WSOL_MINT]);
+  } catch {
+    return none;
+  }
+  const tokenUsd = prices.get(req.mint);
+  const solUsd = prices.get(WSOL_MINT);
+  if (!tokenUsd || !solUsd) return none;
+  // Pump.fun tokens (the only ones the fallback trades) have 6 decimals.
+  const lamportsPerRaw = ((tokenUsd / solUsd) * 1e9) / 10 ** (req.decimals ?? 6);
+  if (!(lamportsPerRaw > 0)) return none;
+  const keep = Math.max(0, 1 - req.slippageBps / 10_000) * 0.9;
+  const fair = req.side === "buy" ? Number(req.amount) / lamportsPerRaw : Number(req.amount) * lamportsPerRaw;
+  const floor = BigInt(Math.floor(fair * keep));
+  return floor > none ? floor : none;
+}
+
 /** Builds the swap on Jupiter, else (a Pump.fun token) PumpPortal, with what the guard must see. */
 async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Promise<BuiltSwap> {
   const buy = req.side === "buy";
-  const maxSolDrop = req.amount + req.maxPriorityFeeLamports + BUY_MARGIN_LAMPORTS + req.amount / 100n;
-  const feeAllowance = req.maxPriorityFeeLamports + SELL_FEE_ALLOWANCE_LAMPORTS;
+  const tradeLamports = buy ? req.amount : (req.valueHintLamports ?? 0n);
+  const limits = {
+    maxExternalLamports: externalAllowance(tradeLamports),
+    maxPriorityFeeLamports: req.maxPriorityFeeLamports,
+  };
+  const maxSolDrop =
+    req.amount + req.maxPriorityFeeLamports + BUY_MARGIN_LAMPORTS + limits.maxExternalLamports;
+  const feeAllowance = req.maxPriorityFeeLamports + SELL_FEE_ALLOWANCE_LAMPORTS + limits.maxExternalLamports;
   try {
     const quote = await ctx.deps.swap.quote({
       inputMint: buy ? WSOL_MINT : req.mint,
@@ -296,8 +354,8 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
       route: "jupiter",
       quotedOut: quote.outAmount,
       expect: buy
-        ? { kind: "buy", mint: req.mint, minOut, maxSolDrop }
-        : { kind: "sell", mint: req.mint, amount: req.amount, minSolOut: minOut, feeAllowance },
+        ? { kind: "buy", mint: req.mint, minOut, maxSolDrop, ...limits }
+        : { kind: "sell", mint: req.mint, amount: req.amount, minSolOut: minOut, feeAllowance, ...limits },
     };
   } catch (err) {
     const fallback = ctx.deps.fallback;
@@ -307,23 +365,25 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
       side: req.side,
       error: errText(err),
     });
-    const built = await fallback.build({
-      side: req.side,
-      mint: req.mint,
-      wallet: wallet.publicKey,
-      amount: req.amount,
-      decimals: req.decimals,
-      slippageBps: req.slippageBps,
-      maxPriorityFeeLamports: Number(req.maxPriorityFeeLamports),
-    });
-    // No quote to hold it to: any tokens for a buy, and for a sale no worse than the fees.
+    const [built, floor] = await Promise.all([
+      fallback.build({
+        side: req.side,
+        mint: req.mint,
+        wallet: wallet.publicKey,
+        amount: req.amount,
+        decimals: req.decimals,
+        slippageBps: req.slippageBps,
+        maxPriorityFeeLamports: Number(req.maxPriorityFeeLamports),
+      }),
+      fallbackFloor(ctx, req),
+    ]);
     return {
       ...built,
       route: "pumpportal",
-      quotedOut: "0",
+      quotedOut: floor.toString(),
       expect: buy
-        ? { kind: "buy", mint: req.mint, minOut: 1n, maxSolDrop }
-        : { kind: "sell", mint: req.mint, amount: req.amount, minSolOut: 0n, feeAllowance },
+        ? { kind: "buy", mint: req.mint, minOut: floor, maxSolDrop, ...limits }
+        : { kind: "sell", mint: req.mint, amount: req.amount, minSolOut: floor, feeAllowance, ...limits },
     };
   }
 }
@@ -412,11 +472,25 @@ async function settleOrphanEntries(ctx: PassContext) {
  * that landed although its status said otherwise), in which case the position opens from the
  * real balance rather than leaving tokens no exit will ever manage.
  */
-async function endEntry(ctx: PassContext, position: PositionRow, orderId: string | null, why: string) {
+async function endEntry(
+  ctx: PassContext,
+  position: PositionRow,
+  order: { id: string; createdAt: Date; confirmedOnChain: boolean } | null,
+  why: string,
+) {
+  const orderId = order?.id ?? null;
   const wallet = await ctx.walletFor(position.userId);
   const held = wallet ? await ctx.deps.rpc.getTokenBalance(wallet.publicKey, position.mint) : null;
   if (held === null && wallet) return; // can't tell yet; next pass
   const at = ctx.now();
+  // A buy the chain CONFIRMED is never written off on one zero balance: a lagging node can read
+  // the wallet from before it. Read again on later passes, for a while, before giving up.
+  if (
+    order?.confirmedOnChain &&
+    (!held || held.raw === 0n) &&
+    at.getTime() - order.createdAt.getTime() < CONFIRMED_BALANCE_WAIT_MS
+  )
+    return;
   if (held && held.raw > 0n) {
     await prisma.$transaction(async (tx) => {
       if (orderId) {
@@ -467,7 +541,12 @@ async function settleOrder(ctx: PassContext, order: OrderWithPosition, height: n
     if (height === null) return;
     if (BigInt(height) > order.lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS) {
       if (order.side === "buy") {
-        await endEntry(ctx, order.position, order.id, "the buy expired without landing");
+        await endEntry(
+          ctx,
+          order.position,
+          { id: order.id, createdAt: order.createdAt, confirmedOnChain: false },
+          "the buy expired without landing",
+        );
       } else {
         await prisma.tradingOrder.updateMany({
           where: { id: order.id, status: "pending" },
@@ -580,7 +659,10 @@ async function settleSale(ctx: PassContext, wallet: Wallet, order: OrderWithPosi
   // Holdings after a sale come from the chain; the fill's token change is only the fallback.
   const chain = await ctx.deps.rpc.getTokenBalance(wallet.publicKey, position.mint);
   const sold = fill.tokenDelta < 0n ? -fill.tokenDelta : 0n;
-  let held = chain ? chain.raw : BigInt(position.tokensHeld) - sold;
+  // The chain can only lower what the fill says is left: a lagging node reading the balance from
+  // before the sale must not undo it (and get the same rung sold twice).
+  let held = BigInt(position.tokensHeld) - sold;
+  if (chain && chain.raw < held) held = chain.raw;
   if (held < 0n) held = 0n;
   const at = ctx.now();
   await prisma.$transaction(async (tx) => {
@@ -604,7 +686,12 @@ async function settleSale(ctx: PassContext, wallet: Wallet, order: OrderWithPosi
 /** Confirmed, details unreadable: the sale's effect from balances, the buy recovered from holdings. */
 async function settleFromBalances(ctx: PassContext, wallet: Wallet, order: OrderWithPosition) {
   if (order.side === "buy") {
-    await endEntry(ctx, order.position, order.id, "confirmed, but its details could not be read");
+    await endEntry(
+      ctx,
+      order.position,
+      { id: order.id, createdAt: order.createdAt, confirmedOnChain: true },
+      "confirmed, but its details could not be read",
+    );
     return;
   }
   const chain = await ctx.deps.rpc.getTokenBalance(wallet.publicKey, order.position.mint);
@@ -653,6 +740,60 @@ function saleOutcome(
     nextAttemptAt: null,
     error: null,
   };
+}
+
+const recoveryCheckedAt = new Map<string, number>();
+
+/**
+ * The backstop for every place a balance read can lag: failed buys (that had a transaction) and
+ * closed positions from the last two hours are re-checked every few minutes, and one whose token
+ * is in the wallet after all (more than dust) is reopened, so no tokens sit unmanaged.
+ */
+async function recoverPositions(ctx: PassContext): Promise<void> {
+  const now = ctx.now().getTime();
+  const since = new Date(now - RECOVERY_LOOKBACK_MS);
+  const rows = await prisma.tradingPosition.findMany({
+    where: {
+      // Past the window a lagging node could still show the balance from before the sale.
+      closedAt: { gt: since, lt: new Date(now - RECOVERY_SETTLE_MS) },
+      OR: [{ status: "failed", orders: { some: {} } }, { status: "closed" }],
+    },
+    orderBy: { closedAt: "desc" },
+    take: 50,
+  });
+  for (const row of rows) {
+    if (!ctx.inBudget()) return;
+    if ((recoveryCheckedAt.get(row.id) ?? 0) > now - RECOVERY_RECHECK_MS) continue;
+    recoveryCheckedAt.set(row.id, now);
+    const wallet = await ctx.walletFor(row.userId);
+    if (!wallet) continue;
+    const held = await ctx.deps.rpc.getTokenBalance(wallet.publicKey, row.mint);
+    if (!held || held.raw === 0n) continue;
+    const bought = BigInt(row.tokensBought ?? "0");
+    if (bought > 0n && held.raw * 1000n < bought) continue; // dust left by a sale
+    const reopened = await prisma.tradingPosition.updateMany({
+      where: { id: row.id, status: row.status },
+      data: {
+        status: "open",
+        tokensHeld: held.raw.toString(),
+        tokensBought: row.tokensBought ?? held.raw.toString(),
+        decimals: row.decimals ?? held.decimals,
+        entryLamports: row.entryLamports ?? row.swapInLamports,
+        openedAt: row.openedAt ?? ctx.now(),
+        closedAt: null,
+        closeReason: null,
+        accountClosedAt: null,
+        failCount: 0,
+        nextAttemptAt: null,
+        error: `reopened: ${held.raw} tokens found in the wallet after it was ${row.status}`,
+      },
+    });
+    if (reopened.count === 1) {
+      ctx.summary.recovered++;
+      logger.warn("position reopened: tokens found in the wallet", { positionId: row.id, was: row.status });
+    }
+  }
+  if (recoveryCheckedAt.size > 5_000) recoveryCheckedAt.clear();
 }
 
 /** The next attempt's time after one more failure. */
@@ -878,7 +1019,22 @@ async function manageExits(ctx: PassContext): Promise<void> {
   } catch (err) {
     logger.warn("price lookup failed; falling back to quotes", { error: errText(err) });
   }
-  const solUsd = prices.get(WSOL_MINT);
+  let solUsd = prices.get(WSOL_MINT);
+  if (!solUsd) {
+    // One SOL->USDC quote stands in for the Price API's SOL price, rather than a quote per position.
+    try {
+      const q = await ctx.deps.swap.quote({
+        inputMint: WSOL_MINT,
+        outputMint: USDC_MINT,
+        amount: 1_000_000_000n,
+        slippageBps: 100,
+      });
+      const usd = Number(q.outAmount) / 1e6;
+      if (usd > 0) solUsd = usd;
+    } catch {
+      /* priced per position below, by quote */
+    }
+  }
   for (const position of due) {
     if (!ctx.inBudget()) return;
     ctx.summary.exitsChecked++;
@@ -891,13 +1047,35 @@ async function manageExits(ctx: PassContext): Promise<void> {
   }
 }
 
+/** The position couldn't be priced this pass (no index price, no quote): not a failed sale. */
+class PricingError extends Error {}
+
+/** The hold cap that applies to a position now: the trail's once something has sold. */
+function holdCapMinutes(position: Pick<PositionRow, "rungsTaken">, plan: ExitPlan): number {
+  return position.rungsTaken > 0 && plan.trail.length > 0 ? plan.trailMaxHoldMinutes : plan.maxHoldMinutes;
+}
+
 /**
- * An exit that couldn't be priced or sold: back off, and once it plainly can't be sold (no route,
- * or failing well past its hold time) call it stuck so it stops holding an open slot. Stuck
- * positions keep being retried, at most every 10 minutes.
+ * An exit that couldn't be priced or sold. Not being able to PRICE it (or being rate limited)
+ * just retries shortly - it says nothing about whether it can be sold, and the hold caps still
+ * close it on time. A failed SALE backs off, and once the position plainly can't be sold (no
+ * route, or failing well past its hold time) it is called stuck so it stops holding an open
+ * slot. Stuck positions keep following their plan, retried at most every 10 minutes.
  */
 async function recordExitFailure(ctx: PassContext, position: PositionRow, err: unknown) {
   const at = ctx.now();
+  if (err instanceof PricingError || err instanceof RateLimitedError) {
+    await prisma.tradingPosition
+      .update({
+        where: { id: position.id },
+        data: {
+          error: errText(err),
+          nextAttemptAt: new Date(at.getTime() + (err instanceof RateLimitedError ? 30_000 : 15_000)),
+        },
+      })
+      .catch(() => undefined);
+    return;
+  }
   const backoff = failureBackoff(position, at);
   const plan = readExitPlan(position.exitPlan);
   const ageMinutes = position.openedAt ? (at.getTime() - position.openedAt.getTime()) / 60_000 : 0;
@@ -905,7 +1083,7 @@ async function recordExitFailure(ctx: PassContext, position: PositionRow, err: u
   const stuck =
     position.status === "open" &&
     ((noRoute && backoff.failCount >= 3) ||
-      (backoff.failCount >= STUCK_AFTER_FAILURES && ageMinutes > plan.maxHoldMinutes));
+      (backoff.failCount >= STUCK_AFTER_FAILURES && ageMinutes > holdCapMinutes(position, plan)));
   await prisma.tradingPosition
     .update({
       where: { id: position.id },
@@ -966,27 +1144,41 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
   const plan = readExitPlan(position.exitPlan);
 
   let decision: { all: boolean; fraction: number; reason: ExitReason; rung?: number };
-  if (position.closeRequested || position.status === "stuck") {
-    // The owner asked, or it's stuck: sell everything, no price needed (a failing price lookup
-    // must never block a manual sale).
-    decision = { all: true, fraction: 1, reason: position.closeRequested ? "manual" : "max_hold" };
+  let multiple: number | null = null;
+  if (position.closeRequested) {
+    // The owner asked: sell everything, no price needed (a failing price lookup must never block it).
+    decision = { all: true, fraction: 1, reason: "manual" };
   } else {
-    let multiple = positionMultiple(position, tokenUsd, solUsd);
-    if (multiple === null) multiple = await quotedMultiple(ctx, position, held, bought);
-    if (multiple === null) throw new Error("no price for the token");
-    const d = decideExit(
-      { openedAt: position.openedAt, rungsTaken: position.rungsTaken, highMultiple: position.highMultiple },
-      multiple,
-      now,
-      plan,
-    );
-    await prisma.tradingPosition.update({
-      where: { id: position.id },
-      data: { lastMultiple: multiple, lastPricedAt: now, highMultiple: d.highMultiple },
-    });
-    if (d.action === "hold") return;
-    decision = { all: d.all, fraction: d.fraction, reason: d.reason, rung: d.rung };
-    position.lastMultiple = multiple;
+    multiple = positionMultiple(position, tokenUsd, solUsd);
+    if (multiple === null) {
+      try {
+        multiple = await quotedMultiple(ctx, position, held, bought);
+      } catch (err) {
+        if (err instanceof RateLimitedError) throw err;
+        multiple = null;
+      }
+    }
+    if (multiple === null) {
+      // No price at all: the plan's price rules can't run, but its clock still can.
+      const ageMinutes = (now.getTime() - position.openedAt.getTime()) / 60_000;
+      if (ageMinutes < holdCapMinutes(position, plan))
+        throw new PricingError("no price for the token right now");
+      decision = { all: true, fraction: 1, reason: position.rungsTaken > 0 ? "trail_max_hold" : "max_hold" };
+    } else {
+      const d = decideExit(
+        { openedAt: position.openedAt, rungsTaken: position.rungsTaken, highMultiple: position.highMultiple },
+        multiple,
+        now,
+        plan,
+      );
+      await prisma.tradingPosition.update({
+        where: { id: position.id },
+        data: { lastMultiple: multiple, lastPricedAt: now, highMultiple: d.highMultiple },
+      });
+      if (d.action === "hold") return;
+      decision = { all: d.all, fraction: d.fraction, reason: d.reason, rung: d.rung };
+      position.lastMultiple = multiple;
+    }
   }
 
   // A full exit sells what the chain says is held, not what the books say.
@@ -995,6 +1187,12 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
     const chain = await ctx.deps.rpc.getTokenBalance(wallet.publicKey, position.mint);
     if (!chain) throw new Error("could not read the token balance");
     amount = chain.raw;
+    if (amount === 0n) {
+      // The books say tokens are held: read again before believing a zero (a lagging node).
+      const again = await ctx.deps.rpc.getTokenBalance(wallet.publicKey, position.mint);
+      if (!again) throw new Error("could not read the token balance");
+      amount = again.raw;
+    }
     if (amount === 0n) {
       await prisma.tradingPosition.update({
         where: { id: position.id },
@@ -1013,6 +1211,11 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
     decision.reason === "take_profit" && position.failCount < TAKE_PROFIT_TIGHT_ATTEMPTS
       ? configured
       : exitSlippage;
+  // What the tokens being sold are worth: by the price when there is one, else by their cost.
+  const costOfAmount =
+    position.swapInLamports && bought > 0n ? (position.swapInLamports * amount) / bought : 0n;
+  const valueHintLamports =
+    multiple !== null ? BigInt(Math.floor(Number(costOfAmount) * multiple)) : costOfAmount;
   await executeSwap(
     ctx,
     wallet,
@@ -1025,6 +1228,7 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
       decimals: position.decimals,
       slippageBps,
       maxPriorityFeeLamports: solToLamports(config.maxPriorityFeeSol),
+      valueHintLamports,
     },
   );
   ctx.summary.sells++;
@@ -1032,7 +1236,7 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
     positionId: position.id,
     mint: position.mint,
     reason: decision.reason,
-    multiple: position.lastMultiple !== null ? Number(position.lastMultiple.toFixed(3)) : null,
+    multiple: multiple !== null ? Number(multiple.toFixed(3)) : null,
   });
 }
 
@@ -1058,7 +1262,7 @@ export async function loadSignals(
   from: Date,
   to: Date,
   configSavedAt: Date = new Date(8.64e15),
-): Promise<TradeSignal[]> {
+): Promise<{ signals: TradeSignal[]; through: Date }> {
   const { filterIds, models, highConvictionOnly } = config.sources;
   const [matches, calls] = await Promise.all([
     filterIds.length === 0
@@ -1115,9 +1319,19 @@ export async function loadSignals(
       label: `Model: ${c.modelName ?? contestantSpec(c.model ?? "")?.name ?? c.model ?? "?"}`,
     })),
   ];
-  signals.sort((a, b) => a.at.getTime() - b.at.getTime());
+  // A source that filled its page may have more: read only up to its last row this time, and the
+  // rest next pass, instead of skipping past it.
+  let through = to;
+  for (const page of [matches.map((m) => m.matchedAt), calls.map((c) => c.createdAt)]) {
+    if (page.length === MAX_SIGNALS_PER_PASS && page[page.length - 1]! < through)
+      through = page[page.length - 1]!;
+  }
+  const inWindow = signals.filter((s) => s.at <= through).sort((a, b) => a.at.getTime() - b.at.getTime());
   const seen = new Set<string>();
-  return signals.filter((s) => (seen.has(s.mint) ? false : (seen.add(s.mint), true)));
+  return {
+    signals: inWindow.filter((s) => (seen.has(s.mint) ? false : (seen.add(s.mint), true))),
+    through,
+  };
 }
 
 /**
@@ -1177,9 +1391,15 @@ async function runBotEntries(
   const now = ctx.now();
   const horizon = await signalHorizon(now);
   if (horizon <= bot.signalsFrom) return;
-  const signals = await loadSignals(bot.userId, config, bot.signalsFrom, horizon, bot.configSavedAt);
+  const { signals, through } = await loadSignals(
+    bot.userId,
+    config,
+    bot.signalsFrom,
+    horizon,
+    bot.configSavedAt,
+  );
   // The window is consumed whatever happens to its signals: a skipped signal is never bought later.
-  await prisma.tradingBot.update({ where: { id: bot.id }, data: { signalsFrom: horizon } });
+  await prisma.tradingBot.update({ where: { id: bot.id }, data: { signalsFrom: through } });
   if (signals.length === 0) return;
   ctx.summary.signals += signals.length;
 
@@ -1309,6 +1529,7 @@ async function reclaimRent(ctx: PassContext): Promise<void> {
       accountClosedAt: null,
       closedAt: { lt: new Date(now.getTime() - RENT_RECLAIM_DELAY_MS) },
     },
+    orderBy: { closedAt: "asc" },
     take: 5,
   });
   for (const position of closed) {
@@ -1338,7 +1559,16 @@ async function reclaimRent(ctx: PassContext): Promise<void> {
         const sim = await ctx.deps.rpc.simulateParsed(Buffer.from(unsigned).toString("base64"), [
           wallet.publicKey,
         ]);
-        if (!sim || sim.error) continue;
+        if (!sim) continue;
+        if (sim.error) {
+          // This account can't be closed (Token-2022 withheld fees, say): stop trying, so it
+          // doesn't hold up the others.
+          await prisma.tradingPosition.update({
+            where: { id: position.id },
+            data: { accountClosedAt: now, error: `token account not closed: ${sim.error}`.slice(0, 500) },
+          });
+          break;
+        }
         const { rawTx } = await sign(ctx, wallet, unsigned);
         // Not tracked as an order: if it doesn't land, the account is still there next pass.
         await ctx.deps.rpc.send(rawTx);

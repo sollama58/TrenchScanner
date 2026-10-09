@@ -24,7 +24,7 @@ import {
   sealWalletSecret,
 } from "./keyVault.js";
 import { decideExit, ladderSoldFraction, sellAmount } from "./exitEngine.js";
-import { checkInstructions, PROGRAM } from "./txGuard.js";
+import { associatedTokenAddress, checkInstructions, PROGRAM } from "./txGuard.js";
 import {
   DEFAULT_TRADING_BOT_CONFIG,
   effectiveExitPlan,
@@ -388,6 +388,26 @@ describe("instruction guard", () => {
     expect(check(ix(PROGRAM.token, [stranger, stranger, wallet], [9]))).toThrow(/token instruction 9/); // close elsewhere
     expect(check(ix(PROGRAM.ata, [wallet, stranger, stranger], [1]))).toThrow(/associated-token/); // someone else's ATA
     expect(check(ix(stranger, [wallet], [0]))).toThrow(/is not allowed/); // unknown program
+  });
+
+  it("counts SOL sent to others and the priority fee, for the caller to bound", () => {
+    const wsolAta = associatedTokenAddress(
+      wallet,
+      "So11111111111111111111111111111111111111112",
+      PROGRAM.token,
+    );
+    const decode = (tx: Uint8Array) => decodeMessage(parseWireTransaction(tx).message);
+    const toStranger = decode(
+      buildSolTransfer({ from: wallet, to: stranger, lamports: 7_000n, recentBlockhash: BLOCKHASH }),
+    );
+    expect(checkInstructions(toStranger, toStranger.staticKeys, wallet).externalLamports).toBe(7_000n);
+    const wrapping = decode(
+      buildSolTransfer({ from: wallet, to: wsolAta, lamports: 9_000n, recentBlockhash: BLOCKHASH }),
+    );
+    expect(checkInstructions(wrapping, wrapping.staticKeys, wallet).externalLamports).toBe(0n);
+    // 1,000,000 micro-lamports a unit, no limit set: the 1.4M-unit maximum is assumed.
+    const fee = decode(ix(PROGRAM.computeBudget, [], [3, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0]));
+    expect(checkInstructions(fee, fee.staticKeys, wallet).priorityFeeLamports).toBe(1_400_000n);
   });
 
   it("decodes v0 messages and resolves lookup-table accounts in runtime order", () => {

@@ -1,5 +1,6 @@
 import {
   adminWalletSet,
+  createLogger,
   createKeyProvider,
   JupiterSwapClient,
   PumpPortalSwapClient,
@@ -31,6 +32,13 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
     baseUrl: env.TRADING_JUPITER_BASE_URL || undefined,
   });
   const fallback = env.TRADING_PUMPPORTAL_FALLBACK ? new PumpPortalSwapClient() : null;
+  if (!env.TRADING_JUPITER_API_KEY && !env.JUPITER_API_KEY) {
+    // Jupiter has been moving keyless traffic off lite-api.jup.ag; a key (free at portal.jup.ag)
+    // puts swaps on api.jup.ag with their own limit.
+    createLogger("trading").warn(
+      "no Jupiter API key: swaps and prices use the keyless lite host; set TRADING_JUPITER_API_KEY",
+    );
+  }
   return async () => {
     if (!keys.provider) throw new Error(`trading bot has no key provider: ${keys.reason}`);
     if (!hasRpc) throw new Error("trading bot has no RPC: set HELIUS_API_KEY or SOLANA_RPC_URL");
