@@ -19,22 +19,11 @@ jobs:
     runs-on: ubuntu-latest
 
     # A real Postgres, not a mock - prisma:deploy actually applies every migration against it,
-    # which catches migration-file drift/corruption that a schema-only check would miss.
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: trenchscanner
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
+    # which catches migration-file drift/corruption that a schema-only check would miss. It is the
+    # runner image's own PostgreSQL 16 (installed, service off by default), started below: a
+    # postgres:16 service container pulls from Docker Hub, whose anonymous pull quota the shared
+    # runner IPs exhaust from time to time, and then CI fails before its first step
+    # (2026-10-09, PRs #309 and #330).
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/trenchscanner
       # Not a real secret - CI never talks to production anything. apps/api's own startup check
@@ -43,6 +32,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER USER postgres PASSWORD 'postgres';" -c "CREATE DATABASE trenchscanner;"
+          pg_isready -h localhost -p 5432 -U postgres
 
       - uses: actions/setup-node@v4
         with:
