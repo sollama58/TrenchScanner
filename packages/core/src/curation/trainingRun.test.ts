@@ -4,9 +4,17 @@ import {
   runCuratorTraining,
   runEvolvingContest,
   NEVER_EMIT_THRESHOLD,
+  servedTranslate,
   type FamilyResult,
 } from "./trainingRun.js";
-import { calibrateThresholdForPrecision, wilsonLowerBound, type ScoredOutcome } from "./trainer.js";
+import {
+  calibrateThresholdForPrecision,
+  probabilityAtRank,
+  scoreCandidateWithModel,
+  trainCuratorModel,
+  wilsonLowerBound,
+  type ScoredOutcome,
+} from "./trainer.js";
 import { syntheticMarket } from "./syntheticMarket.js";
 import { enabledContestants } from "./contestants.js";
 
@@ -128,4 +136,27 @@ describe("runEvolvingContest's challengers", () => {
     expect(taken.results.find((r) => r.contestant === "linear")).toEqual(seat);
     expect(held.probation!.challengerParams).toEqual(seat.params);
   }, 60_000);
+});
+
+describe("servedTranslate", () => {
+  it("raises a cross-fitted cutoff that sits below where the shipped model puts the same rank", async () => {
+    const rows = syntheticMarket({ tokens: 600, days: 10, truth: "interactions", seed: 5 });
+    const shipped = await trainCuratorModel(rows, { learner: "logistic" });
+    const reference = rows.slice(-400);
+    const own = reference.map((r) => scoreCandidateWithModel(shipped, r.features));
+    const rank = 0.97;
+    // A cross-fit that scores everything lower: its cutoff would pass far more than 3% live.
+    const lower = servedTranslate(
+      shipped,
+      reference,
+      own.map((p) => p * 0.5),
+    );
+    expect(lower(rank)).toBe(probabilityAtRank(own, rank));
+    // A cross-fit that scores higher keeps its own, stricter cutoff.
+    const higher = own.map((p) => Math.min(1, p * 1.5));
+    expect(servedTranslate(shipped, reference, higher)(rank)).toBe(probabilityAtRank(higher, rank));
+    // Live share at the served cutoff stays near the rank's share.
+    const cut = lower(rank)!;
+    expect(own.filter((p) => p >= cut).length / own.length).toBeLessThanOrEqual(0.04);
+  });
 });
