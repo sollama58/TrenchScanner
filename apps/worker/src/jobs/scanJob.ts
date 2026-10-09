@@ -324,6 +324,9 @@ export function withLaunchSnipers(
     ...(flow ?? EMPTY_TRADE_FLOW),
     firstBuyersHolding: snipers.holding,
     firstBuyersSeen: snipers.seen,
+    firstBuyersSupplyPct: snipers.firstBuyersSupplyPct,
+    launchBundledBuyers: snipers.launchBundledBuyers,
+    devBuySupplyPct: snipers.devBuySupplyPct,
   };
 }
 
@@ -460,7 +463,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
 
   if (tracked.length === 0) {
     logger.info("scan cycle complete (empty watchlist)", { durationMs: Date.now() - startedAt });
-    return { stagesMs };
+    return { stagesMs, ...earlyExitMeta(env) };
   }
 
   // Tokens someone currently has open on a Live Feed page (see the comment on
@@ -516,7 +519,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     await stampLiveMarketCaps(refreshed.liveMarketCaps, env);
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
-    return { stagesMs };
+    return { stagesMs, ...earlyExitMeta(env) };
   }
   lap("marketRefresh");
   logger.info("refreshed watchlist", {
@@ -552,7 +555,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
       durationMs: Date.now() - startedAt,
     });
-    return { stagesMs };
+    return { stagesMs, ...earlyExitMeta(env) };
   }
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
@@ -938,6 +941,20 @@ async function seedLastScreenPass(): Promise<void> {
   } catch {
     // Display only: the next pass stamps it anyway.
   }
+}
+
+/**
+ * What a cycle that stops early (empty watchlist, market refresh failed, nothing in band) still
+ * reports. The scheduler replaces meta on every run, so a bare { stagesMs } dropped the TokenSage
+ * counters - the Lighthouse tab and admin page then read TokenSage as off - and the last
+ * pre-check pass, until the next full cycle.
+ */
+function earlyExitMeta(env: Env): JobRunMeta {
+  return {
+    ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats() } : {}),
+    sniperReads: takeSniperReadStats(),
+    ...scanFailureMeta(),
+  };
 }
 
 /**

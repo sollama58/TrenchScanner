@@ -103,6 +103,16 @@ export function scheduleInterval(
     firstRunDelayMs?: () => Promise<number>;
     /** Meta a failed run still records (a run that throws otherwise leaves only its timing). */
     failureMeta?: () => JobRunMeta;
+    /**
+     * Checked every `everyMs` while the job waits for its next slot: true starts the run now and
+     * the cadence restarts from it (an admin's "retrain now"). Never while a run is in flight.
+     */
+    runEarly?: {
+      everyMs: number;
+      due: () => Promise<boolean>;
+      /** Don't log each early run: for a job woken by routine events rather than a person. */
+      quiet?: boolean;
+    };
   } = {},
 ): ScheduledJob {
   const intervalMs = intervalMinutes * 60_000;
@@ -111,8 +121,11 @@ export function scheduleInterval(
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
+  let started = false;
 
   const run = () => {
+    if (inFlight) return inFlight;
+    started = true;
     inFlight = runOnce().finally(() => {
       inFlight = undefined;
     });
@@ -190,6 +203,30 @@ export function scheduleInterval(
     }
   };
 
+  // Whether any run has started: an early run (runEarly) can beat the first run's delay, and its
+  // own successor is then the cadence - the delayed first run must not start a second one.
+  let checkingEarly = false;
+  const early =
+    opts.runEarly === undefined
+      ? undefined
+      : setInterval(() => {
+          if (stopped || inFlight || checkingEarly) return;
+          checkingEarly = true;
+          void opts
+            .runEarly!.due()
+            .catch(() => false)
+            .then((due) => {
+              if (!due || stopped || inFlight) return;
+              if (next) clearTimeout(next);
+              if (!opts.runEarly!.quiet) logger.info("running early on request", { job: name });
+              void run();
+            })
+            .finally(() => {
+              checkingEarly = false;
+            });
+        }, opts.runEarly.everyMs);
+  early?.unref?.();
+
   if (opts.firstRunDelayMs) {
     void opts
       .firstRunDelayMs()
@@ -197,7 +234,7 @@ export function scheduleInterval(
       // than run it at once - "at once" is exactly what the caller asked not to happen.
       .catch(() => intervalMs)
       .then((delay) => {
-        if (!stopped) next = setTimeout(() => void run(), Math.max(0, delay));
+        if (!stopped && !started) next = setTimeout(() => void run(), Math.max(0, delay));
       });
   } else {
     void run();
@@ -206,6 +243,7 @@ export function scheduleInterval(
     stop: () => {
       stopped = true;
       if (next) clearTimeout(next);
+      if (early) clearInterval(early);
     },
     settle: settleWith(() => inFlight),
   };

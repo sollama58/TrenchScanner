@@ -125,6 +125,7 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
           source: "cm_test",
           model: "consensus",
           confidence: 42,
+          calibratedPct: 27,
           reasons: ["backed by Trees"],
           anchorPriceUsd: 0.0001,
           anchorMcapUsd: 150_000,
@@ -151,7 +152,8 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
     const item = items.find((i) => i.candidateOutcomeId === alertId);
     expect(item).toBeDefined();
     expect(item!.brief).toContain("symbol: ALERT");
-    expect(item!.brief).toContain("doubles within 15 minutes: 42%");
+    // The calibrated rate, not the conviction score.
+    expect(item!.brief).toContain("doubles within 15 minutes: 27%");
     expect(item!.brief).toContain("backed by Trees");
     // The earlier row won (+150%); the later one, which would read "missed (peak +10%)", is unseen.
     expect(item!.brief).toContain("WON (peak +150%)");

@@ -399,6 +399,20 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     }
   });
 
+  it("caches a job whose TokenSage worker died at once, since asking again would crash it again", async () => {
+    const { client, batch } = fakeClient();
+    const w1 = `${TAG}-w1`;
+    batch.mockResolvedValue(
+      ok([{ ca: w1, status: "failed", analysis: null, job_id: 9, error: "worker died" }]),
+    );
+    noteNarrativeWanted(w1, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: w1 } })).toMatchObject({
+      status: "failed",
+      failReason: "worker died",
+    });
+  });
+
   it("finds the mint behind a batch TokenSage refused with 404, so the next batch goes through", async () => {
     const { client, batch, job } = fakeClient();
     const t1 = `${TAG}-t1`;

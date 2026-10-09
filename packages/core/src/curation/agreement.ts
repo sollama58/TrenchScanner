@@ -8,7 +8,14 @@ import {
   type ServedCuratorExtras,
   type TrainingRow,
 } from "./trainer.js";
-import { agreementCount, memberCalls, memberRanks, quantileTable, type StackedMember } from "./stacking.js";
+import {
+  agreementCount,
+  memberCallRanksFrom,
+  memberCalls,
+  memberRanks,
+  quantileTable,
+  type StackedMember,
+} from "./stacking.js";
 import { blendRanks, examUnfittedScores } from "./blend.js";
 import { GOAL_LABEL, type CallRecord } from "./leaderboard.js";
 
@@ -46,7 +53,8 @@ export function agreementScore(calls: number, ranks: readonly number[], members:
 
 /** The score's integer part: how many members the score says are calling. */
 export function agreeingFromScore(score: number, members: number): number {
-  return Math.min(members, Math.floor(score * (members + 1)));
+  // The epsilon absorbs float error: (15 + r) / 22 * 22 can land just under 15.
+  return Math.min(members, Math.floor(score * (members + 1) + 1e-9));
 }
 
 /** The agreement score for one candidate at serve time (see scoreStacked for the member map). */
@@ -82,11 +90,23 @@ export interface AgreementResult {
   params: AgreementCuratorParams;
   precisionCalibration: PrecisionCalibration;
   precisionCurve: PrecisionCurvePoint[];
-  /** The out-of-sample agreement scores, one per reference row - the calibration's evidence. */
+  /**
+   * The agreement scores at the members' stored cutoffs, one per reference row: the scale that
+   * serves, and the cutoff's evidence. Those cutoffs were chosen on these rows' labels.
+   */
   outOfSample: ScoredOutcome[];
+  /**
+   * The same rows scored with member cutoffs set off each row's exam chunk: the evidence for the
+   * calibration (the card's 2x %), the high-conviction tier and the curve, which would otherwise
+   * read the line the cutoffs were drawn from. Equal to outOfSample when no chunks could be cut.
+   */
+  heldOut: ScoredOutcome[];
   exam: CallRecord;
   examChunks: number;
-  /** Win rate by how many members called, over every reference row: is agreement a signal here? */
+  /**
+   * Win rate by how many members called, over every reference row, counted at the held-out
+   * member cutoffs: is agreement a signal here?
+   */
   curve: AgreementCurvePoint[];
 }
 
@@ -104,24 +124,16 @@ export function trainAgreementCurator(
     }
   }
   const callRank = (c: string) => input.memberCallRanks.get(c) ?? null;
-  const curve: AgreementCurvePoint[] = Array.from({ length: members.length + 1 }, (_, agreeing) => ({
-    agreeing,
-    rows: 0,
-    wins: 0,
-    goals: 0,
-  }));
-  const scores = input.reference.map((row, i) => {
-    const ranks = members.map((c) => input.memberFoldRanks.get(c)![i]!);
-    let calls = 0;
-    members.forEach((c, j) => {
-      if (memberCalls(callRank(c), ranks[j]!)) calls += 1;
+  const scoresAt = (cutoffOf: (c: string) => number | null): number[] =>
+    input.reference.map((_, i) => {
+      const ranks = members.map((c) => input.memberFoldRanks.get(c)![i]!);
+      let calls = 0;
+      members.forEach((c, j) => {
+        if (memberCalls(cutoffOf(c), ranks[j]!)) calls += 1;
+      });
+      return agreementScore(calls, ranks, members.length);
     });
-    const point = curve[calls]!;
-    point.rows += 1;
-    if (row.labelValue > 0) point.wins += 1;
-    if (row.labelValue >= GOAL_LABEL) point.goals += 1;
-    return agreementScore(calls, ranks, members.length);
-  });
+  const scores = scoresAt(callRank);
   const outOfSample: ScoredOutcome[] = input.reference.map((row, i) => ({
     probability: scores[i]!,
     labelValue: row.labelValue,
@@ -130,7 +142,38 @@ export function trainAgreementCurator(
   }));
   const cooldownMs = input.cooldownHours * 3_600_000;
   const precisionCalibration = calibrateThresholdForPrecision(outOfSample, input.targets, { cooldownMs });
-  const { exam, examChunks } = examUnfittedScores(input.reference, scores, input);
+  // Graded per chunk with the members' cutoffs set without that chunk: the stored ones were
+  // chosen on every reference row's label, this chunk's included. A member whose exam set no
+  // cutoff never calls live, so it doesn't in the exam either.
+  const memberRanksOnly = new Map(
+    members.filter((c) => callRank(c) !== null).map((c) => [c, input.memberFoldRanks.get(c)!]),
+  );
+  // Each chunk's own rows keep the scores they were graded with: held-out evidence for the
+  // card's calibration, the tier and the curve.
+  const heldOutScores = [...scores];
+  const { exam, examChunks } = examUnfittedScores(
+    input.reference,
+    (chunk) => {
+      const ranksAt = memberCallRanksFrom(input.reference, memberRanksOnly, chunk.others, input);
+      const s = scoresAt((c) => ranksAt.get(c) ?? null);
+      for (const i of chunk.indexes) heldOutScores[i] = s[i]!;
+      return s;
+    },
+    input,
+  );
+  const heldOut: ScoredOutcome[] = outOfSample.map((c, i) => ({ ...c, probability: heldOutScores[i]! }));
+  const curve: AgreementCurvePoint[] = Array.from({ length: members.length + 1 }, (_, agreeing) => ({
+    agreeing,
+    rows: 0,
+    wins: 0,
+    goals: 0,
+  }));
+  input.reference.forEach((row, i) => {
+    const point = curve[agreeingFromScore(heldOutScores[i]!, members.length)]!;
+    point.rows += 1;
+    if (row.labelValue > 0) point.wins += 1;
+    if (row.labelValue >= GOAL_LABEL) point.goals += 1;
+  });
 
   return {
     params: {
@@ -146,6 +189,7 @@ export function trainAgreementCurator(
     precisionCalibration,
     precisionCurve: precisionCurve(outOfSample),
     outOfSample,
+    heldOut,
     exam,
     examChunks,
     curve,
@@ -154,10 +198,12 @@ export function trainAgreementCurator(
 
 import { STACKED_MODEL_KIND } from "./stacking.js";
 import { BLEND_MODEL_KIND } from "./blend.js";
+import { TOP_SLICE_MODEL_KIND } from "./topSlice.js";
 
 /** The model kinds that reference members: stored and restored after the learners they point at. */
 export const COMBINER_MODEL_KINDS: readonly string[] = [
   STACKED_MODEL_KIND,
   BLEND_MODEL_KIND,
   AGREEMENT_MODEL_KIND,
+  TOP_SLICE_MODEL_KIND,
 ];

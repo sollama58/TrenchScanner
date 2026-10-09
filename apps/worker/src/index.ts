@@ -16,6 +16,8 @@ import {
   recordHeartbeat,
   runsJob,
   runTelegramDispatch,
+  onAlertWritten,
+  COMMIT_GRACE_MS,
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
@@ -29,6 +31,7 @@ import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrain
 import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
+import { aiReviewEnabled } from "./ai/reviewer.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
@@ -180,25 +183,48 @@ async function main() {
   );
   // Sends each linked Telegram chat the alerts its account got since the chat's cursor - see
   // packages/core/src/telegram/dispatch.ts. Nothing to do until TELEGRAM_BOT_TOKEN is set.
-  schedule("telegram-dispatch", () =>
-    scheduleInterval(
+  //
+  // The interval is only the fallback: an alert this process writes wakes a pass as soon as the
+  // pass can see it (COMMIT_GRACE_MS after the commit), so it goes out within a second or two
+  // rather than after up to a whole interval of waiting.
+  schedule("telegram-dispatch", () => {
+    /** When each alert not yet covered by a pass was written, oldest first. */
+    const written: number[] = [];
+    onAlertWritten(() => {
+      if (written.length < 1_000) written.push(Date.now());
+    });
+    return scheduleInterval(
       "telegram-dispatch",
-      async () => ({
-        ...(await runTelegramDispatch(env, {
-          // Artwork for a token that didn't come through Pump.fun: DexScreener's, when it has one.
-          lookupImages: async (mints) => {
-            const found = await deps.dexScreener.getTokensByAddresses(mints, 1, {
-              retries: 0,
-              deadlineMs: 5_000,
-            });
-            return new Map(found.flatMap((t) => (t.imageUrl ? [[t.mintAddress, t.imageUrl] as const] : [])));
-          },
-        })),
-      }),
+      async () => {
+        // A pass starting now sends everything written up to the grace before now.
+        const covered = Date.now() - COMMIT_GRACE_MS;
+        while (written.length > 0 && written[0]! <= covered) written.shift();
+        return {
+          ...(await runTelegramDispatch(env, {
+            // Artwork for a token that didn't come through Pump.fun: DexScreener's, when it has one.
+            lookupImages: async (mints) => {
+              const found = await deps.dexScreener.getTokensByAddresses(mints, 1, {
+                retries: 0,
+                deadlineMs: 5_000,
+              });
+              return new Map(
+                found.flatMap((t) => (t.imageUrl ? [[t.mintAddress, t.imageUrl] as const] : [])),
+              );
+            },
+          })),
+        };
+      },
       env.TELEGRAM_DISPATCH_INTERVAL_SECONDS / 60,
-      { deadlineMinutes: 10 },
-    ),
-  );
+      {
+        deadlineMinutes: 10,
+        runEarly: {
+          everyMs: 100,
+          quiet: true,
+          due: async () => written.length > 0 && Date.now() >= written[0]! + COMMIT_GRACE_MS,
+        },
+      },
+    );
+  });
   // The trading bot (admin-only): settles swaps, walks open positions through their exit plans,
   // and buys the signals each enabled bot follows - see packages/core/src/trading/engine.ts.
   if (role === "trader" && !env.TRADING_BOT_ENABLED) {
@@ -301,9 +327,24 @@ async function main() {
   schedule("curator-training", () =>
     scheduleInterval(
       "curator-training",
-      () => runCuratorTrainingJob(env),
+      async () => {
+        // Every run, early or on the cadence, answers the admin's pending "retrain now".
+        await prisma.curatorRetrainRequest.updateMany({
+          where: { startedAt: null },
+          data: { startedAt: new Date() },
+        });
+        return runCuratorTrainingJob(env);
+      },
       env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
       {
+        // A run takes about ten minutes. One that hangs (a dead connection, a training thread that
+        // never answers) would otherwise stop training for good and block "Retrain now".
+        deadlineMinutes: 90,
+        // The admin panel's "Retrain now" (POST /admin/curator/retrain) leaves a request row.
+        runEarly: {
+          everyMs: 60_000,
+          due: async () => (await prisma.curatorRetrainRequest.count({ where: { startedAt: null } })) > 0,
+        },
         // Not straight away on every boot: a retrain on each restart (several on 2026-10-04)
         // is a retrain nobody asked for, and while the scanner and trainer were one process it
         // landed on the cold first scan cycles too. The first run waits for the slot the last
@@ -364,6 +405,9 @@ async function main() {
     // getEarliestActivityBatch. It can change at runtime; this is only the starting state.
     earliestActivityMethod: deps.helius.earliestActivityMethod,
     burnScanIntervalMinutes: env.BURN_SCAN_INTERVAL_MINUTES,
+    // The AI buy/no-buy reviewer is silently off without a key or with the mode off; say which.
+    aiReviewEnabled: aiReviewEnabled(env),
+    aiReviewMode: env.AI_REVIEW_MODE,
   });
 
   // Render sends SIGTERM and gives the process a short grace period before killing it. The runs

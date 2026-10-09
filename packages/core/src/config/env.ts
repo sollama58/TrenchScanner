@@ -554,7 +554,7 @@ const envSchema = z.object({
   // ANTHROPIC_API_KEY it is off whatever the mode says. A pick it passes on is not re-asked for
   // AI_REVIEW_VETO_COOLDOWN_MINUTES, so one token can't buy a review every scan cycle.
   AI_REVIEW_MODE: z.enum(["off", "shadow", "gate"]).default("shadow"),
-  ANTHROPIC_API_KEY: z.string().optional().default(""),
+  ANTHROPIC_API_KEY: pastedKey,
   AI_REVIEW_MODEL: z.string().default("claude-opus-5-5"),
   AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),

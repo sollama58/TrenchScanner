@@ -7,7 +7,12 @@ import {
   RETIRED_LEARNER_INPUTS,
   learnerSubset,
   maskKnownBadInputs,
+  NARRATIVE_READ_AT_DECISION_SINCE,
+  SOCIAL_BITS_FROM_DISCOVERY_SINCE,
+  withCurrentNarrativeTiming,
   TRADE_FLOW_FAKE_ZEROS_UNTIL,
+  VOLUME_ACCEL_YOUNG_NULL_SINCE,
+  WEEKEND_FLAG_FROM,
 } from "./features.js";
 import type { ScoredToken } from "../types.js";
 
@@ -227,6 +232,26 @@ describe("buildCandidateFeatures - livestream", () => {
   });
 });
 
+describe("withCurrentNarrativeTiming", () => {
+  it("reads TokenSage inputs as missing on rows from before the read arrived at decision time", () => {
+    const old = {
+      anchorAt: new Date("2026-10-08T18:09:59Z"),
+      features: { nsCopycat: 1, nsDepthFull: 0, nsLogoScore: null, mcapUsd: 50_000, hasTwitter: 1 },
+      labelValue: 1,
+    };
+    const fresh = { ...old, anchorAt: NARRATIVE_READ_AT_DECISION_SINCE };
+    const noRead = { ...old, features: { mcapUsd: 40_000 } };
+    const [maskedOld, keptFresh, keptNoRead] = withCurrentNarrativeTiming([old, fresh, noRead]);
+    expect(maskedOld).toEqual({
+      ...old,
+      features: { nsCopycat: null, nsDepthFull: null, nsLogoScore: null, mcapUsd: 50_000, hasTwitter: 1 },
+    });
+    expect(old.features.nsCopycat).toBe(1);
+    expect(keptFresh).toBe(fresh);
+    expect(keptNoRead).toBe(noRead);
+  });
+});
+
 describe("maskKnownBadInputs", () => {
   it("reads the fake order-flow zeros on old rows as missing, and leaves newer rows alone", () => {
     const row = {
@@ -234,6 +259,7 @@ describe("maskKnownBadInputs", () => {
       tradesPerMin5m: 0,
       devInitialBuySol: 1.5,
       firstBuyersHolding: 0,
+      hasTwitter: 1,
       mcapUsd: 50_000,
     };
     const masked = maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), row);
@@ -241,12 +267,50 @@ describe("maskKnownBadInputs", () => {
       uniqueBuyers5m: null,
       tradesPerMin5m: null,
       firstBuyersHolding: null,
+      hasTwitter: null,
       devInitialBuySol: 1.5,
       mcapUsd: 50_000,
     });
     expect(row.uniqueBuyers5m).toBe(0);
-    const fresh = maskKnownBadInputs(TRADE_FLOW_FAKE_ZEROS_UNTIL, row);
+    const fresh = maskKnownBadInputs(SOCIAL_BITS_FROM_DISCOVERY_SINCE, row);
     expect(fresh).toBe(row);
+  });
+
+  it("reads the social bits as missing on rows from before they came from discovery, keeping the flow", () => {
+    const row = { hasTwitter: 1, hasTelegram: 0, hasWebsite: 1, uniqueBuyers5m: 3, mcapUsd: 50_000 };
+    const masked = maskKnownBadInputs(TRADE_FLOW_FAKE_ZEROS_UNTIL, row);
+    expect(masked).toEqual({
+      hasTwitter: null,
+      hasTelegram: null,
+      hasWebsite: null,
+      uniqueBuyers5m: 3,
+      mcapUsd: 50_000,
+    });
+    expect(maskKnownBadInputs(new Date("2026-10-07T19:38:59Z"), row).hasTwitter).toBeNull();
+    expect(maskKnownBadInputs(new Date("2026-10-07T19:39:00Z"), row)).toBe(row);
+  });
+
+  it("reads volumeAccel's by-construction 12 on young tokens and the 30-second pathRet1mPct as missing before #138", () => {
+    const young = { ageMinutes: 2, volumeAccel: 12, pathRet1mPct: 8, mcapUsd: 50_000 };
+    const older = { ageMinutes: 30, volumeAccel: 3.5, pathRet1mPct: -4, mcapUsd: 50_000 };
+    const before = new Date("2026-10-05T15:29:00Z");
+    expect(maskKnownBadInputs(before, young)).toMatchObject({
+      volumeAccel: null,
+      pathRet1mPct: null,
+      ageMinutes: 2,
+    });
+    expect(maskKnownBadInputs(before, older)).toMatchObject({ volumeAccel: 3.5, pathRet1mPct: null });
+    const after = maskKnownBadInputs(VOLUME_ACCEL_YOUNG_NULL_SINCE, young);
+    expect(after).toMatchObject({ volumeAccel: 12, pathRet1mPct: 8 });
+  });
+
+  it("reads ctxWeekend as missing on the first evening of data, its only weekend rows", () => {
+    const row = { ctxWeekend: 1, ctxHourSin: 0.5, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(new Date("2026-10-04T21:00:00Z"), row)).toMatchObject({
+      ctxWeekend: null,
+      ctxHourSin: 0.5,
+    });
+    expect(maskKnownBadInputs(WEEKEND_FLAG_FROM, row).ctxWeekend).toBe(1);
   });
 
   it("keeps the retired duplicates off the learner list", () => {

@@ -8,6 +8,7 @@ import type {
   ModelRunHistory,
   RecordSummary,
 } from "../api";
+import { runExamRates } from "../api";
 import { CloseIcon } from "../components/Icons";
 import { toggledModels } from "../components/ModelPicker";
 import { ScoreBar } from "../components/ScoreBar";
@@ -355,9 +356,9 @@ function ModelDetail({
                     <td>
                       <span className={`chip ${r.status === "active" ? "chip-model" : ""}`}>{r.status}</span>
                     </td>
-                    <td className="r num">{r.precisionCalibration?.support ?? "–"}</td>
-                    <td className="r num">{pct(r.precisionCalibration?.winRatePct)}</td>
-                    <td className="r num">{pct(r.precisionCalibration?.goalRatePct)}</td>
+                    <td className="r num">{runExamRates(r).calls ?? "–"}</td>
+                    <td className="r num">{pct(runExamRates(r).winRatePct)}</td>
+                    <td className="r num">{pct(runExamRates(r).goalRatePct)}</td>
                   </tr>
                 ))}
               </tbody>

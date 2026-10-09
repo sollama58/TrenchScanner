@@ -29,9 +29,13 @@ import {
   agreeingFromScore,
   memberCalls,
   AGREEMENT_MODEL_KIND,
+  scoreTopSlice,
+  topSliceCallers,
+  TOP_SLICE_MODEL_KIND,
   calibratedWinRate,
   RULES_CONTESTANT,
   NARRATIVE_CONTESTANT,
+  CONTESTANTS,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
   BLEND_MODEL_KIND,
@@ -39,6 +43,7 @@ import {
   GOVERNOR_BURST_WINDOW_MINUTES,
   type BlendCuratorParams,
   type AgreementCuratorParams,
+  type TopSliceCuratorParams,
   type ContestantSpec,
   type CurationDecision,
   type Env,
@@ -97,7 +102,8 @@ type RosterEntry =
   | { role: "narrative"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
   | { role: "stacked"; spec: ContestantSpec; model: ModelRef<StackedCuratorParams> }
   | { role: "blend"; spec: ContestantSpec; model: ModelRef<BlendCuratorParams> }
-  | { role: "agreement"; spec: ContestantSpec; model: ModelRef<AgreementCuratorParams> };
+  | { role: "agreement"; spec: ContestantSpec; model: ModelRef<AgreementCuratorParams> }
+  | { role: "topslice"; spec: ContestantSpec; model: ModelRef<TopSliceCuratorParams> };
 
 interface CuratorRoster {
   /** Enabled contestants that have what they need to decide, in roster order. */
@@ -186,6 +192,12 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
         spec,
         model: { id: row.id, params: row.params as unknown as AgreementCuratorParams },
       });
+    } else if (spec.role === "topslice" && row?.kind === TOP_SLICE_MODEL_KIND) {
+      entries.push({
+        role: "topslice",
+        spec,
+        model: { id: row.id, params: row.params as unknown as TopSliceCuratorParams },
+      });
     }
   }
 
@@ -197,7 +209,9 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
     entries.flatMap((e) => (e.role === "learner" ? [[e.spec.id, e.model.id] as const] : [])),
   );
   const usable = entries.filter((e) => {
-    if (e.role !== "stacked" && e.role !== "blend" && e.role !== "agreement") return true;
+    if (e.role !== "stacked" && e.role !== "blend" && e.role !== "agreement" && e.role !== "topslice") {
+      return true;
+    }
     const stale = e.model.params.members.filter((m) => learnerIds.get(m.contestant) !== m.modelId);
     if (stale.length === 0) return true;
     logger.warn("combiner sitting out: its members' active models are not the ones it was trained beside", {
@@ -360,6 +374,26 @@ function decideCurations(
 
   for (const entry of roster.entries) {
     if (population === "second") break;
+    if (entry.role === "topslice") {
+      const { params, id } = entry.model;
+      const probability = scoreTopSlice(params, probabilities);
+      const curate = probability >= params.threshold;
+      let reasons: string[] = [];
+      if (curate) {
+        const callers = topSliceCallers(params, probabilities);
+        const named = callers.map((c) => names.get(c)).filter((b): b is string => b !== undefined);
+        if (named.length > 0) reasons.push(`top of its calls for ${named.join(", ")}`);
+        const strongest = callers[0] ? learners.get(callers[0]) : undefined;
+        if (strongest) reasons = [...reasons, ...topModelReasons(strongest.params, features, 3)];
+      }
+      decisions.set(entry.spec.id, {
+        curate,
+        confidence: probability * 100,
+        reasons,
+        source: id,
+      });
+      continue;
+    }
     if (entry.role === "agreement") {
       const { params, id } = entry.model;
       const probability = scoreAgreement(params, probabilities);
@@ -585,7 +619,15 @@ export async function collectCuratedContender(
   const decisions = decideCurations(scored, roster, env, population);
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
   const narrative = decisions.get(NARRATIVE_CONTESTANT);
-  if (narrative && retry === undefined && (await noteNarrativeVerdict(token.id, narrative, cooldownCutoff))) {
+  // A failed note costs only the Narrative seat's card on this coin, never every seat's decision.
+  const noted =
+    narrative !== undefined &&
+    retry === undefined &&
+    (await noteNarrativeVerdict(token.id, narrative, cooldownCutoff).catch((err) => {
+      logger.warn("failed to note narrative verdict", { tokenId: token.id, error: String(err) });
+      return true;
+    }));
+  if (noted) {
     // Another seat's card is already showing this coin: the Narrative seat's view went onto it
     // as a note, so it files no call of its own (a second card on one coin was decided against).
     decisions.delete(NARRATIVE_CONTESTANT);
@@ -619,6 +661,9 @@ export async function collectCuratedContender(
   }
 }
 
+/** Cards the Narrative seat never notes: its own, and the control seats' (compared against, not followed). */
+const NOT_NOTED_MODELS = [NARRATIVE_CONTESTANT, ...CONTESTANTS.filter((c) => c.control).map((c) => c.id)];
+
 /**
  * The Narrative seat decides when TokenSage's deep read lands, usually after another seat has
  * already called the coin. Rather than a second card inside the cooldown, its verdict goes onto
@@ -633,7 +678,7 @@ async function noteNarrativeVerdict(
   cooldownCutoff: Date,
 ): Promise<boolean> {
   const others = await prisma.curatedAlert.findMany({
-    where: { tokenId, createdAt: { gt: cooldownCutoff }, NOT: { model: NARRATIVE_CONTESTANT } },
+    where: { tokenId, createdAt: { gt: cooldownCutoff }, model: { notIn: NOT_NOTED_MODELS } },
     select: { id: true, narrativeVerdict: true },
   });
   if (others.length === 0) return false;

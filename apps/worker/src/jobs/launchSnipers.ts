@@ -2,8 +2,10 @@ import {
   countStillHolding,
   createLogger,
   FIRST_BUYERS,
+  launchFigures,
   type HeliusClient,
   type LaunchBuyer,
+  type LaunchFigures,
 } from "@trenchscanner/core";
 
 const logger = createLogger("launch-snipers");
@@ -25,6 +27,8 @@ const logger = createLogger("launch-snipers");
 
 interface Entry {
   buyers: LaunchBuyer[];
+  /** The launch's shape, from the same read (launchFigures). */
+  figures: LaunchFigures;
   complete: boolean;
   readAt: number;
   /** Re-reads of an incomplete launch so far: each waits twice as long as the last. */
@@ -63,7 +67,7 @@ function incompleteRetryMs(rereads: number, contender: boolean): number {
 /** A holdings reading older than this is too stale to use. */
 const MAX_HOLDING_AGE_MS = 30 * 60_000;
 
-export interface LaunchSnipers {
+export interface LaunchSnipers extends LaunchFigures {
   /** Of the first buyers, how many still hold. */
   holding: number;
   /** How many first buyers there were (25, or fewer while the launch has had fewer). */
@@ -124,7 +128,7 @@ export function launchSnipersFromCache(
   for (const mint of mints) {
     const e = entries.get(mint);
     if (!e || e.holding === null || now - e.holdingAt > MAX_HOLDING_AGE_MS) continue;
-    out.set(mint, { holding: e.holding, seen: e.buyers.length });
+    out.set(mint, { holding: e.holding, seen: e.buyers.length, ...e.figures });
   }
   return out;
 }
@@ -203,6 +207,7 @@ export async function resolveLaunchSnipers(
           prev.buyers.every((b, i) => b.tokenAccount === r.buyers[i]?.tokenAccount);
         remember(mint, {
           buyers: r.buyers,
+          figures: launchFigures(r),
           complete: r.complete,
           readAt: now,
           rereads: prev ? prev.rereads + 1 : 0,

@@ -112,3 +112,18 @@ describe("public worker health: snipers share reads", () => {
     expect(s.lastRun).toMatchObject({ sniperReads: { requested: 6, found: 5, failed: 1 } });
   });
 });
+
+/** A run that did nothing says why, so a reviewer with no key doesn't read as a healthy success. */
+describe("public worker health: skipped runs", () => {
+  it("carries the job's skipped reason", () => {
+    const row = {
+      job: "ai-judge",
+      lastRunAt: new Date(1_000),
+      lastSuccessAt: new Date(1_000),
+      lastError: null,
+      meta: { durationMs: 6, skipped: "reviewer off" },
+    };
+    const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
+    expect(s.lastRun).toEqual({ durationMs: 6, skipped: "reviewer off" });
+  });
+});

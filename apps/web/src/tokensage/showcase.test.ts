@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compact, hitRate, named, prettyLabel, share } from "./showcase";
+import { compact, hitRate, logoKinds, named, prettyLabel, share } from "./showcase";
 
 describe("tokensage showcase helpers", () => {
   it("names codes in words", () => {
@@ -29,6 +29,12 @@ describe("tokensage showcase helpers", () => {
   it("drops the catch-all labels", () => {
     expect(named([{ label: "other" }, { label: "animal" }, { label: "uncategorized" }])).toEqual([
       { label: "animal" },
+    ]);
+  });
+
+  it("drops 'none' from the logo kinds, along with the catch-alls", () => {
+    expect(logoKinds([{ label: "none" }, { label: "mascot" }, { label: "other" }])).toEqual([
+      { label: "mascot" },
     ]);
   });
 });

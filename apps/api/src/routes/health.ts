@@ -229,6 +229,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   for (const [key, value] of Object.entries(m)) {
     if (typeof value === "number" && !SCHEDULE_META_KEYS.has(key)) out[key] = value;
   }
+  // Why a run did nothing (the AI judge's "reviewer off"): without it a skipped run reads as a
+  // healthy few-millisecond success.
+  if (typeof m.skipped === "string") out.skipped = m.skipped;
   const stages = stageTimings(meta, "stagesMs");
   if (stages) out.stagesMs = stages;
   // The scan's paid RPC calls per method ({ method: count }) - what the Helius plan bills on.

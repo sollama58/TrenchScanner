@@ -71,6 +71,7 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
           band: e.composite.band,
           warmingUp: e.composite.warmingUp,
           live: e.composite.live,
+          vsMarket: e.vsMarket,
           exam: e.composite.exam,
           highConviction: e.highConviction,
         })),

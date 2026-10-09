@@ -83,6 +83,15 @@ export interface TradeFlowFeatures {
    */
   firstBuyersHolding: number | null;
   firstBuyersSeen: number | null;
+  /**
+   * The launch's shape, from the chain read (datasources/launchBuyers.ts launchFigures): % of the
+   * supply the first FIRST_BUYERS buyers bought, how many of them bought in the create
+   * transaction's own slot (the bundle), and % of the supply the dev bought in the create. Null
+   * until the launch has been read, and on a history that doesn't start at a curve launch.
+   */
+  firstBuyersSupplyPct: number | null;
+  launchBundledBuyers: number | null;
+  devBuySupplyPct: number | null;
 }
 
 export const EMPTY_TRADE_FLOW: TradeFlowFeatures = {
@@ -100,6 +109,9 @@ export const EMPTY_TRADE_FLOW: TradeFlowFeatures = {
   devSoldShare: null,
   firstBuyersHolding: null,
   firstBuyersSeen: null,
+  firstBuyersSupplyPct: null,
+  launchBundledBuyers: null,
+  devBuySupplyPct: null,
 };
 
 interface Bag {

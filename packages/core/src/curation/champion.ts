@@ -176,9 +176,11 @@ export async function rechooseChampion(input: {
     return {
       id: spec.id,
       name: spec.name,
+      // A control seat is there to be compared against, never to become the default.
       calling:
-        spec.role === "rules" ||
-        (model !== undefined && model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD),
+        spec.control !== true &&
+        (spec.role === "rules" ||
+          (model !== undefined && model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD)),
       composite: compositeScore(
         live.get(spec.id) ?? emptyRecord(),
         model?.metrics.exam ?? emptyRecord(),

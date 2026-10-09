@@ -769,7 +769,7 @@ export function wilsonLowerBound(hits: number, n: number, z: number): number {
 }
 
 /** Whether a cutoff's record (wins and goals of n alerts) meets the targets - see confidenceZ. */
-function meetsTargets(wins: number, goals: number, n: number, targets: PrecisionTargets): boolean {
+export function meetsTargets(wins: number, goals: number, n: number, targets: PrecisionTargets): boolean {
   const z = targets.confidenceZ ?? 0;
   return wilsonLowerBound(wins, n, z) >= targets.winRate && wilsonLowerBound(goals, n, z) >= targets.goalRate;
 }
@@ -969,7 +969,12 @@ export function precisionCurve(calls: ScoredOutcome[]): PrecisionCurvePoint[] {
  * trees, weight x standardized value for the logistic) - its value input plus its
  * missing-indicator input. Positive pushes toward a call, negative away from one.
  */
-function featureContributions(
+/**
+ * Each input's push on this candidate's score, in log-odds: the logistic weights times the
+ * standardized input, or the trees' path attribution (boostedContributions). Exported for the
+ * Admin model explainer, which shows both directions for one call.
+ */
+export function featureContributions(
   params: UnthresholdedCuratorParams,
   features: Record<string, number | null | undefined>,
 ): { name: string; value: number }[] {
@@ -992,7 +997,7 @@ function featureContributions(
 }
 
 /** An input's plain-words label; the blend stage's market score is not a recorded feature. */
-function inputLabel(name: string): string {
+export function inputLabel(name: string): string {
   if (name === MARKET_SCORE_INPUT) return "the market's read";
   return FRIENDLY_FEATURE_LABELS[name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? name;
 }
@@ -1566,6 +1571,14 @@ export function confidenceRanks(probabilities: number[]): number[] {
   if (n === 0) return [];
   const ascending = [...probabilities].sort((a, b) => a - b);
   return probabilities.map((p) => lowerBound(ascending, p) / n);
+}
+
+/** Each value's rank on another set's scale: the share of `reference` strictly below it. */
+export function ranksAgainst(values: readonly number[], reference: readonly number[]): number[] {
+  const n = reference.length;
+  if (n === 0) return values.map(() => 0);
+  const ascending = [...reference].sort((a, b) => a - b);
+  return values.map((p) => lowerBound(ascending, p) / n);
 }
 
 /** Index of the first element >= value in an ascending array. */

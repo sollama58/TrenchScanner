@@ -20,6 +20,7 @@ import {
   loadTrainingRows,
   withFixedShape,
   withoutEventTwins,
+  runPeakOf,
 } from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
@@ -319,6 +320,8 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
       data: [
         ...anchors.map((anchorAt, i) => ({
           ...base,
+          // Each scan read its own price, so no hourly row reads as a moved event's twin.
+          anchorPriceUsd: 1 + i / 100,
           anchorAt,
           finalizedAt: anchorAt,
           sampleKind: i % 2 === 0 ? "hourly" : "event",
@@ -383,7 +386,7 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     });
     await prisma.candidateOutcome.createMany({
       data: [
-        row(1, "hourly", 50_000),
+        { ...row(1, "hourly", 50_000), anchorPriceUsd: 0.9 }, // a scan with its own price
         row(2, "hourly", 4_000), // under the band
         row(3, "event", 50_000, { ageMinutes: 30 }),
         row(4, "event", 50_000, { ageMinutes: 600 }), // older than the event age cap
@@ -408,6 +411,30 @@ describe("withoutEventTwins", () => {
       { tokenId: "b", anchorAt: at(10), id: "other token" },
     ];
     expect(withoutEventTwins(hourly, events).map((h) => h.id)).toEqual(["later scan", "other token"]);
+  });
+
+  it("drops the twin of an alerted event whose anchor moved to send time, keeping the scan price", () => {
+    const events = [{ tokenId: "a", anchorAt: at(50), anchorPriceUsd: 0.001 }];
+    const hourly = [
+      { tokenId: "a", anchorAt: at(10), anchorPriceUsd: 0.001, id: "twin" },
+      { tokenId: "a", anchorAt: at(20), anchorPriceUsd: 0.0012, id: "other price" },
+      { tokenId: "a", anchorAt: at(55), anchorPriceUsd: 0.001, id: "after the event" },
+    ];
+    expect(withoutEventTwins(hourly, events).map((h) => h.id)).toEqual(["other price", "after the event"]);
+  });
+});
+
+describe("runPeakOf", () => {
+  it("reads the peak before the stop, so a run after a stop-out earns no run credit", () => {
+    // 2x, fell through 0.5x, then ran to 11x: a 2x to anyone holding the alert.
+    expect(runPeakOf({ peak1hReturnPct: 1000, peakBeforeStopPriceUsd: 2, anchorPriceUsd: 1 })).toEqual({
+      runPeakMultiple: 2,
+    });
+    // Rows from before the stop peak was tracked keep the window peak.
+    expect(runPeakOf({ peak1hReturnPct: 150, peakBeforeStopPriceUsd: null, anchorPriceUsd: 1 })).toEqual({
+      runPeakMultiple: 2.5,
+    });
+    expect(runPeakOf({ peak1hReturnPct: null, peakBeforeStopPriceUsd: null, anchorPriceUsd: 1 })).toEqual({});
   });
 });
 

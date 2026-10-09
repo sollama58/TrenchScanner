@@ -114,5 +114,41 @@ describe("trainAgreementCurator", () => {
     expect(result!.exam.sumRun).toBeGreaterThanOrEqual(result!.exam.sumLabel - 1e-9);
     expect(result!.outOfSample).toHaveLength(reference.length);
     for (const c of result!.outOfSample) expect(c.probability).toBeLessThan(1);
+    // The calibration's evidence: the same rows, scored at member cutoffs set off their chunk.
+    expect(result!.heldOut).toHaveLength(reference.length);
+    expect(result!.heldOut.map((c) => c.labelValue)).toEqual(result!.outOfSample.map((c) => c.labelValue));
+    expect(result!.heldOut.some((c, i) => c.probability !== result!.outOfSample[i]!.probability)).toBe(true);
+  });
+
+  it("grades its exam with member cutoffs set on the other chunks, not the stored in-sample ones", () => {
+    const reference = syntheticMarket({ tokens: 300, days: 3, truth: "linear", seed: 5 })
+      .slice(0, 900)
+      .sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
+    const a = Float64Array.from(reference, (_, i) => ((i * 7919) % reference.length) / reference.length);
+    const b = Float64Array.from(reference, (_, i) => ((i * 104729) % reference.length) / reference.length);
+    const exam = (stored: number) =>
+      trainAgreementCurator(
+        {
+          reference,
+          memberFoldRanks: new Map([
+            ["a", a],
+            ["b", b],
+          ]),
+          memberShippedProbabilities: new Map([
+            ["a", a],
+            ["b", b],
+          ]),
+          memberCallRanks: new Map([
+            ["a", stored],
+            ["b", stored],
+          ]),
+          targets,
+          cooldownHours: 0,
+          targetPerHour: 0,
+        },
+        1.01,
+      )!.exam;
+    expect(exam(0.6).graded).toBeGreaterThan(0);
+    expect(exam(0.99)).toEqual(exam(0.6));
   });
 });

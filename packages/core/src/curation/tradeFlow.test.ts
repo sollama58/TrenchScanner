@@ -179,14 +179,14 @@ describe("order-flow features in the vector", () => {
     const names = CANDIDATE_FEATURE_NAMES as readonly string[];
     // After every feature that predates them; only the later text, path, market, 5m-flow and
     // narrative inputs (and the narrative part of the score they feed), the livestream and the
-    // pair's age, and the top-10 snipers share, follow.
+    // pair's age, the top-10 snipers share and the launch's shape, follow.
     const start = names.indexOf(TRADE_FLOW_FEATURES[0]);
     expect(names.slice(start, start + TRADE_FLOW_FEATURES.length)).toEqual([...TRADE_FLOW_FEATURES]);
     expect(
       names
         .slice(start + TRADE_FLOW_FEATURES.length)
         .every((n) =>
-          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$)/.test(
+          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$)/.test(
             n,
           ),
         ),

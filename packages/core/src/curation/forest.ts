@@ -69,7 +69,9 @@ export const DEFAULT_FOREST_OPTIONS: Required<
   minLeafRows: 25,
   rowSample: 0.63,
   featureSample: 0.3,
-  smoothing: 5,
+  // 20 since the split search reads it on the right scale (2026-10-09 replay: same AUC, slightly
+  // better log loss than 5; 5 on the corrected scale ranked worst).
+  smoothing: 20,
   maxBins: 32,
   seed: 1,
 };
@@ -131,7 +133,9 @@ export async function trainForestCurator(
     minLeafRows: opts.minLeafRows,
     // A row's hessian is ~baseRate x (1 - baseRate), so this is minLeafRows' worth of hessian.
     minLeafHessian: opts.minLeafRows * baseRate * (1 - baseRate) * 0.5,
-    l2: opts.smoothing,
+    // smoothing is pseudo-rows; a row's hessian is ~baseRate x (1 - baseRate), so in hessian units
+    // (what the split gain reads) that many rows weigh this much. Plain smoothing acted like ~70.
+    l2: opts.smoothing * baseRate * (1 - baseRate),
     learningRate: 1,
     rowSample: opts.rowSample,
     featureSample: opts.featureSample,

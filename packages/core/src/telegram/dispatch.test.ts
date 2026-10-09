@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { Prisma } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { loadEnv } from "../config/env.js";
-import { prisma } from "../db.js";
+import { appendPoolParams, prisma, TRAINER_APPLICATION_NAME } from "../db.js";
 import type { ContestantSpec } from "../curation/contestants.js";
 import {
   buildPending,
@@ -9,6 +9,7 @@ import {
   COMMIT_GRACE_MS,
   MAX_COMMIT_WAIT_MS,
   dashboardUrl,
+  oldestOpenTransaction,
   runTelegramDispatch,
   TELEGRAM_DISPATCH_LOCK,
 } from "./dispatch.js";
@@ -306,6 +307,48 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     await run(new FakeTelegramApi(), true, later, new Date(later - 10 * 60_000));
     const capped = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(capped!.sentThrough.getTime()).toBe(later - MAX_COMMIT_WAIT_MS);
+  });
+
+  it("waits on other connections' open transactions, but not the trainer's or its own", async () => {
+    const connect = (applicationName?: string) =>
+      new PrismaClient({ datasourceUrl: appendPoolParams(process.env.DATABASE_URL!, { applicationName }) });
+    const holdOpen = async (client: PrismaClient) => {
+      let release = () => {};
+      let began = (_at: Date) => {};
+      const start = new Promise<Date>((resolve) => (began = resolve));
+      const done = client.$transaction(
+        async (tx) => {
+          const [row] = await tx.$queryRaw<{ at: Date }[]>`SELECT now() AS at`;
+          began(row!.at);
+          await new Promise<void>((resolve) => (release = resolve));
+        },
+        { timeout: 30_000 },
+      );
+      return { start: await start, release: () => (release(), done) };
+    };
+    const oldest = () =>
+      prisma.$transaction(async (tx) => {
+        const [self] = await tx.$queryRaw<{ at: Date }[]>`SELECT now() AS at`;
+        return { self: self!.at.getTime(), oldest: (await oldestOpenTransaction(tx))?.getTime() ?? null };
+      });
+    const trainer = connect(TRAINER_APPLICATION_NAME);
+    const scanner = connect();
+    try {
+      const training = await holdOpen(trainer);
+      const seen = await oldest();
+      // Other test files may have their own short transactions open; never this one, nor the pass's.
+      expect(seen.oldest).not.toBe(training.start.getTime());
+      expect(seen.oldest).not.toBe(seen.self);
+      const writing = await holdOpen(scanner);
+      const held = await oldest();
+      expect(held.oldest).not.toBeNull();
+      expect(held.oldest!).toBeLessThanOrEqual(writing.start.getTime());
+      await writing.release();
+      await training.release();
+    } finally {
+      await trainer.$disconnect();
+      await scanner.$disconnect();
+    }
   });
 
   it("sends a burst as one digest", async () => {

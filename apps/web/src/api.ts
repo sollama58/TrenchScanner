@@ -392,6 +392,32 @@ export interface Calibration {
   goalRatePct: number | null;
 }
 
+/**
+ * A run's exam figures as the tables show them: the held-out exam record (each part graded at a
+ * cutoff set on the others) when the run stored one, else the cutoff search's own best slice,
+ * which reads high because it was picked on those same calls.
+ */
+export function runExamRates(run: Pick<ModelRun, "exam" | "precisionCalibration">): {
+  calls: number | null;
+  winRatePct: number | null;
+  goalRatePct: number | null;
+} {
+  const exam = run.exam;
+  if (exam && exam.graded > 0) {
+    return {
+      calls: exam.graded,
+      winRatePct: (exam.wins / exam.graded) * 100,
+      goalRatePct: (exam.goals / exam.graded) * 100,
+    };
+  }
+  const c = run.precisionCalibration;
+  return {
+    calls: c?.support ?? null,
+    winRatePct: c?.winRatePct ?? null,
+    goalRatePct: c?.goalRatePct ?? null,
+  };
+}
+
 export interface ModelRun {
   id: string;
   contestant: string | null;
@@ -411,6 +437,8 @@ export interface ModelRun {
     precisionCalibration: Calibration;
   }[];
   precisionCalibration: Calibration | null;
+  /** The exam graded at cutoffs set on other parts of it (absent on older runs). */
+  exam?: { graded: number; wins: number; goals: number } | null;
   precisionCurve: CurvePoint[];
   heuristicCalibration: Calibration | null;
   heuristicPrecisionCurve: CurvePoint[];
@@ -511,6 +539,10 @@ export interface LearningRates {
   won10x?: number;
   tenXGraded?: number;
   rate10xPct?: number | null;
+  /** Calls with a simulated return, their sum in percent, and the average (absent from older API builds). */
+  simCalls?: number;
+  sumSimReturnPct?: number;
+  avgReturnPct?: number | null;
 }
 
 export interface LearningDay {
@@ -814,7 +846,8 @@ export interface ScoreBasis {
   liveCalls: number;
 }
 
-export type ContestantRole = "rules" | "learner" | "stacked" | "blend" | "agreement" | "narrative";
+export type ContestantRole =
+  "rules" | "learner" | "stacked" | "blend" | "agreement" | "topslice" | "narrative";
 
 export interface WinnerRuns {
   population: "curated" | "samples" | string;
@@ -877,6 +910,11 @@ export interface LeaderboardEntry {
     live: RecordSummary;
     exam: RecordSummary;
   };
+  /**
+   * Its live 2x rate against the market's in the same hours: the board's order among seasoned
+   * models. Null with no graded calls; absent from older API builds.
+   */
+  vsMarket?: { lift: number | null; marketRatePct: number | null; graded: number } | null;
   /** The score in a sentence. Absent from older API builds. */
   scoreExplained?: string;
   /** Its live record on high-conviction calls alone; null with none graded. */
@@ -1235,7 +1273,7 @@ export interface LighthouseHistory {
 
 /**
  * GET /curated/lighthouse/signals and /guest/lighthouse/signals: the Lighthouse's "Signals at a
- * glance" alone, over 1, 7 or 30 days.
+ * glance", and how calls did by narrative, over 1, 7 or 30 days.
  */
 export interface LighthouseSignals {
   window: { days: number; since: string };
@@ -1244,7 +1282,10 @@ export interface LighthouseSignals {
   news: LighthouseCount[];
   copies: LighthouseCount[];
   pairKinds: LighthouseCount[];
-  outcomes: { byCopy: LighthouseTally[] };
+  outcomes: Pick<
+    MarketLighthouse["outcomes"],
+    "alerts" | "described" | "graded" | "won2x" | "byCategory" | "byCopy"
+  >;
 }
 
 /** GET /curated/lighthouse and /guest/lighthouse: what TokenSage sees across new coins, aggregates only. */

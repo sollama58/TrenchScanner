@@ -17,25 +17,39 @@ import {
 } from "../shareCard";
 
 /**
- * The Models tab's learning share image: one model's 2x rate day by day against the market rate,
- * with its edge over the market lately and before, in the shared branded frame (shareCard.ts).
+ * The Models tab's model share image: one model's chosen measure (2x, 4x or 10x rate, or average
+ * return) day by day against the market's, and all four over the window beside it, in the shared
+ * branded frame (shareCard.ts). It shows the record; the tab carries the caveats.
  */
+export type CardMetric = "2x" | "4x" | "10x" | "ret";
+
 export interface LearningCardData {
   model: string;
   windowDays: number;
+  /** The measure the chart draws. */
+  metric: CardMetric;
   /** Oldest first; null where the side had no graded calls that day. */
   points: { label: string; model: number | null; market: number | null }[];
-  spanDays: number;
-  recentLift: number | null;
-  priorLift: number | null;
-  verdict: string;
-  /** "met" / "early" / "below": the verdict's tone. */
-  tone: "met" | "early" | "below";
+  /** Its figures over the window, in percent: hit rates, and the average return per call. */
+  rates: Record<CardMetric, number | null>;
+  /** The market's figure for `metric` on the days it called. */
+  market: number | null;
   graded: number;
 }
 
 const MARKET = "rgba(255, 255, 255, 0.55)";
-const TONE: Record<LearningCardData["tone"], string> = { met: "#34d399", early: "#fbbf24", below: "#f87171" };
+const UP = "#34d399";
+const DOWN = "#f87171";
+const rate = (v: number | null) => (v === null ? "–" : `${v.toFixed(v >= 10 ? 0 : 1)}%`);
+const signed = (v: number | null) =>
+  v === null ? "–" : `${v > 0 ? "+" : v < 0 ? "-" : ""}${Math.abs(v).toFixed(Math.abs(v) >= 10 ? 0 : 1)}%`;
+const show = (k: CardMetric, v: number | null) => (k === "ret" ? signed(v) : rate(v));
+const SERIES: Record<CardMetric, string> = {
+  "2x": "2x rate",
+  "4x": "4x rate",
+  "10x": "10x rate",
+  ret: "avg return",
+};
 
 function chart(ctx: CanvasRenderingContext2D, d: LearningCardData, x0: number, x1: number) {
   const top = BODY_TOP + 62;
@@ -43,12 +57,16 @@ function chart(ctx: CanvasRenderingContext2D, d: LearningCardData, x0: number, x
   const h = base - top;
   const pts = d.points;
   const values = pts.flatMap((p) => [p.model, p.market]).filter((v): v is number => v !== null);
-  const max = Math.max(10, Math.ceil((Math.max(0, ...values) * 1.15) / 10) * 10);
-  const step = max <= 30 ? 10 : max <= 60 ? 20 : 25;
-  const left = x0 + 52;
+  const hi = Math.max(0, ...values) * 1.15;
+  const low = d.metric === "ret" ? Math.min(0, ...values) * 1.15 : 0;
+  const span = Math.max(10, hi - low);
+  const step = span <= 30 ? 10 : span <= 60 ? 20 : span <= 125 ? 25 : span <= 250 ? 50 : 100;
+  const max = Math.max(10, Math.ceil(hi / step) * step);
+  const min = Math.floor(low / step) * step;
+  const left = x0 + 62;
   const w = x1 - left;
   const x = (i: number) => left + (pts.length <= 1 ? w / 2 : (i / (pts.length - 1)) * w);
-  const y = (v: number) => base - (Math.min(max, Math.max(0, v)) / max) * h;
+  const y = (v: number) => base - ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * h;
 
   // Legend, above the plot.
   ctx.textBaseline = "middle";
@@ -56,22 +74,22 @@ function chart(ctx: CanvasRenderingContext2D, d: LearningCardData, x0: number, x
   ctx.font = `600 20px ${FONT}`;
   let lx = x0;
   const legend: [string, string][] = [
-    [d.model, BRAND_A],
-    ["Market rate", MARKET],
+    [`${d.model} ${SERIES[d.metric]}`, BRAND_A],
+    [`Market ${SERIES[d.metric]}`, MARKET],
   ];
   for (const [name, color] of legend) {
     ctx.fillStyle = color;
     roundRect(ctx, lx, BODY_TOP + 17, 28, 6, 3);
     ctx.fill();
     ctx.fillStyle = INK2;
-    const label = clip(ctx, name, 300);
+    const label = clip(ctx, name, 330);
     ctx.fillText(label, lx + 38, BODY_TOP + 20);
     lx += 38 + ctx.measureText(label).width + 36;
   }
 
   // Grid and ticks.
   ctx.font = `500 16px ${FONT}`;
-  for (let t = 0; t <= max; t += step) {
+  for (let t = min; t <= max; t += step) {
     ctx.strokeStyle = t === 0 ? "rgba(255, 255, 255, 0.2)" : "rgba(255, 255, 255, 0.07)";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -80,7 +98,7 @@ function chart(ctx: CanvasRenderingContext2D, d: LearningCardData, x0: number, x
     ctx.stroke();
     ctx.fillStyle = MUTED;
     ctx.textAlign = "right";
-    ctx.fillText(`${t}%`, left - 10, y(t));
+    ctx.fillText(d.metric === "ret" && t > 0 ? `+${t}%` : `${t}%`, left - 10, y(t));
   }
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
@@ -135,49 +153,71 @@ function chart(ctx: CanvasRenderingContext2D, d: LearningCardData, x0: number, x
 
 function side(ctx: CanvasRenderingContext2D, d: LearningCardData, x0: number) {
   const w = CARD_W - PAD - x0;
+  const top = BODY_TOP + 6;
   ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
-  roundRect(ctx, x0, BODY_TOP + 6, w, BODY_BOTTOM - BODY_TOP - 6, 18);
+  roundRect(ctx, x0, top, w, BODY_BOTTOM - top, 18);
   ctx.fill();
   const ix = x0 + 26;
   const iw = w - 52;
+  const half = iw / 2;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-  const big = ctx.createLinearGradient(ix, 0, ix + 200, 0);
-  big.addColorStop(0, "#b9a6ff");
-  big.addColorStop(1, "#7fb2ff");
-  ctx.fillStyle = big;
-  ctx.font = `800 76px ${FONT}`;
-  ctx.fillText(d.recentLift === null ? "–" : `${d.recentLift.toFixed(1)}x`, ix - 2, BODY_TOP + 84);
-  ctx.fillStyle = INK2;
-  ctx.font = `500 19px ${FONT}`;
-  ctx.fillText(clip(ctx, "the market rate,", iw), ix, BODY_TOP + 116);
-  ctx.fillText(clip(ctx, `last ${d.spanDays} days`, iw), ix, BODY_TOP + 140);
 
+  // All four figures, two by two; the one the chart draws in the brand gradient.
+  const cells: [CardMetric, string][] = [
+    ["2x", "hit 2x"],
+    ["4x", "hit 4x"],
+    ["10x", "hit 10x"],
+    ["ret", "avg return"],
+  ];
+  cells.forEach(([k, label], i) => {
+    const x = ix + half * (i % 2);
+    const y = top + 66 + Math.floor(i / 2) * 102;
+    const v = d.rates[k];
+    if (k === d.metric) {
+      const g = ctx.createLinearGradient(x, 0, x + 120, 0);
+      g.addColorStop(0, "#b9a6ff");
+      g.addColorStop(1, "#7fb2ff");
+      ctx.fillStyle = g;
+    } else ctx.fillStyle = k === "ret" && v !== null && v !== 0 ? (v > 0 ? UP : DOWN) : INK;
+    ctx.font = `800 40px ${FONT}`;
+    ctx.fillText(clip(ctx, show(k, v), half - 8), x, y);
+    ctx.fillStyle = INK2;
+    ctx.font = `500 18px ${FONT}`;
+    ctx.fillText(clip(ctx, label, half - 8), x, y + 28);
+  });
+
+  // The chart's measure against the market, on the days it called.
+  ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+  ctx.fillRect(ix, BODY_BOTTOM - 64, iw, 1);
+  const mine = d.rates[d.metric];
+  const line =
+    d.metric === "ret"
+      ? `Market: ${signed(d.market)} a call`
+      : mine !== null && d.market
+        ? `${(mine / d.market).toFixed(1)}x the market's ${d.metric} rate`
+        : `${d.graded.toLocaleString("en-US")} graded calls`;
   ctx.fillStyle = INK;
-  ctx.font = `700 30px ${FONT}`;
-  ctx.fillText(d.priorLift === null ? "–" : `${d.priorLift.toFixed(1)}x`, ix, BODY_TOP + 198);
-  ctx.fillStyle = INK2;
-  ctx.font = `500 19px ${FONT}`;
-  ctx.fillText(clip(ctx, `the ${d.spanDays} days before`, iw), ix, BODY_TOP + 226);
-
-  ctx.fillStyle = TONE[d.tone];
-  ctx.font = `700 26px ${FONT}`;
-  ctx.fillText(clip(ctx, d.verdict, iw), ix, BODY_BOTTOM - 26);
+  ctx.font = `700 20px ${FONT}`;
+  ctx.fillText(clip(ctx, line, iw), ix, BODY_BOTTOM - 26);
 }
+
+const SUB: Record<CardMetric, string> = {
+  "2x": "How often its calls doubled, day by day, next to the market.",
+  "4x": "How often its calls reached 4x, day by day, next to the market.",
+  "10x": "How often its calls reached 10x, day by day, next to the market.",
+  ret: "Its average return per call, day by day, next to the market.",
+};
 
 export async function renderLearningCard(d: LearningCardData): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
   if (!ctx) return canvas;
-  const sub =
-    d.recentLift === null
-      ? `How often its calls doubled, day by day, vs a random pick from the same moments.`
-      : `Its calls doubled ${d.recentLift.toFixed(1)}x as often as a random pick from the same moments.`;
-  frame(ctx, icon, `Is ${d.model} getting better?`, sub, {
+  frame(ctx, icon, `${d.model}'s calls, day by day`, SUB[d.metric], {
     badge: (c, right, cy) => pill(c, right, cy, `Last ${d.windowDays} days`),
-    footer: `${d.graded.toLocaleString("en-US")} live calls, each graded on a 2x within 15 minutes`,
+    footer: `${d.graded.toLocaleString("en-US")} live calls · market = a random pick from the same moments`,
     link: "trenchscanner.app",
   });
-  const split = CARD_W - PAD - 300;
+  const split = CARD_W - PAD - 372;
   if (d.points.length < 2) {
     ctx.fillStyle = MUTED;
     ctx.font = `500 24px ${FONT}`;

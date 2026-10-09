@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import { createLogger, runEvolvingContest } from "@trenchscanner/core";
+import { createLogger, getScoreWeights, runEvolvingContest } from "@trenchscanner/core";
 import { toEvolutionPlan, type ContestPlan } from "./contestPlan.js";
 
 const logger = createLogger("curator-training");
@@ -34,7 +34,9 @@ export async function runContestOffThread(
 
   return new Promise<Outcome>((resolve, reject) => {
     const worker = new Worker(threadUrl, {
-      workerData: { rows, cfg, plan },
+      // The thread's scorer starts on the default weights; the replayed heuristic must read the
+      // adopted set live scoring uses (refreshScoreWeights ran on this thread only).
+      workerData: { rows, cfg, plan, scoreWeights: getScoreWeights() },
       resourceLimits: { maxOldGenerationSizeMb: THREAD_MAX_HEAP_MB },
     });
     let settled = false;

@@ -804,3 +804,7 @@
 .tsg-pay-foot {
   margin: 12px 0 0;
 }
+/* "Which narratives pay": its 24h / 7d / 1mo switch, above the chart. */
+.tsg-pay-head {
+  margin-bottom: 12px;
+}

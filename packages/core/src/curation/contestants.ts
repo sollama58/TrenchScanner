@@ -8,6 +8,7 @@ import {
   TRADE_FLOW_FEATURES,
   type CandidateFeatureName,
 } from "./features.js";
+import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
 import type { CuratorLearner } from "./trainer.js";
 
 /**
@@ -30,6 +31,8 @@ import type { CuratorLearner } from "./trainer.js";
  *    consensus's unlearned rival.
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
  *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
+ *  - "topslice": only the most confident calls of the tree seats - a token one of them ranks in
+ *    the top quarter of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
  *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
  *    stored (user decision 2026-10-07): on a decision moment that already carries it, and on a
  *    "second look" the scan takes when the deep read lands after the first decision
@@ -43,7 +46,8 @@ import type { CuratorLearner } from "./trainer.js";
  * never rename one; retire it and add a new id instead.
  */
 
-export type ContestantRole = "rules" | "learner" | "stacked" | "blend" | "agreement" | "narrative";
+export type ContestantRole =
+  "rules" | "learner" | "stacked" | "blend" | "agreement" | "topslice" | "narrative";
 
 /** What a learner contestant trains - the knobs that make it a different model. */
 export interface CuratorRecipe {
@@ -75,6 +79,12 @@ export interface ContestantSpec {
   summary?: string;
   role: ContestantRole;
   recipe?: CuratorRecipe;
+  /**
+   * A fixed comparison seat (learners only): it trains, sits the exam and calls on its own ledger
+   * like any learner, but no combiner stacks it, evolution neither breeds from nor replaces it,
+   * and it never becomes the default model. It exists to be compared against, not followed.
+   */
+  control?: boolean;
 }
 
 /** The consensus - what every subscriber sees until they pick another model. */
@@ -82,6 +92,7 @@ export const CONSENSUS_CONTESTANT = "consensus";
 export const RULES_CONTESTANT = "rules";
 export const BLEND_CONTESTANT = "blend";
 export const AGREEMENT_CONTESTANT = "agreement";
+export const TOP_SLICE_CONTESTANT = "top-slice";
 export const NARRATIVE_CONTESTANT = "narrative";
 /** The two-step narrative seat - see the "narrative" role above and NarrativeBlendCuratorParams. */
 export const NARRATIVE_BLEND_CONTESTANT = "narrative-blend";
@@ -142,6 +153,24 @@ export const MOMENTUM_FEATURES: readonly CandidateFeatureName[] = learnerSubset(
   ...ORDER_FLOW_FEATURES,
 ]);
 
+/** Trees' twin that never reads TokenSage (see TREES_NO_TOKENSAGE_FEATURES). */
+export const TREES_NO_TOKENSAGE_CONTESTANT = "trees-no-tokensage";
+
+/**
+ * Every learner input except TokenSage's. User decision 2026-10-09: keep one tree seat that never
+ * reads TokenSage, so whether the read helps the market seats can be measured head to head. Since
+ * #316 the onset guard holds the TokenSage inputs out of every market seat until enough rows carry
+ * the read's new timing (about 10-12/13); after that Trees reads them again and this seat doesn't.
+ */
+export const TREES_NO_TOKENSAGE_FEATURES: readonly CandidateFeatureName[] = LEARNER_FEATURE_NAMES.filter(
+  (name) => !name.startsWith("ns") && !(ALL_NARRATIVE_FEATURES as readonly string[]).includes(name),
+);
+
+/** A learner the combiners stack and evolution works on: every learner but the control seats. */
+export function isMemberLearner(spec: ContestantSpec): boolean {
+  return spec.role === "learner" && spec.control !== true;
+}
+
 export const CONTESTANTS: readonly ContestantSpec[] = [
   {
     id: CONSENSUS_CONTESTANT,
@@ -166,6 +195,14 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary:
       "Counts how many of the other models would call a token, and calls the ones most of them agree on.",
     role: "agreement",
+  },
+  {
+    id: TOP_SLICE_CONTESTANT,
+    name: "Top Slice",
+    description:
+      "Calls only what a tree model ranks in the top quarter of its own calls - fixed cutoff, nothing fitted",
+    summary: "Waits for one of the tree models to be at its most sure, and sends only those calls.",
+    role: "topslice",
   },
   {
     id: RULES_CONTESTANT,
@@ -207,6 +244,17 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary: 'Learns if-then rules from every signal, like "lots of buyers and few fresh wallets".',
     role: "learner",
     recipe: { learner: "gbdt" },
+  },
+  {
+    id: TREES_NO_TOKENSAGE_CONTESTANT,
+    name: "Trees (no TokenSage)",
+    description:
+      "Trees' twin on every input except TokenSage's, kept to measure what the read adds - in no combiner, never the default",
+    summary:
+      "The same if-then rules as Trees, but it never sees TokenSage, so we can tell whether TokenSage helps.",
+    role: "learner",
+    recipe: { learner: "gbdt", featureNames: TREES_NO_TOKENSAGE_FEATURES },
+    control: true,
   },
   {
     id: "deep-trees",
@@ -306,7 +354,7 @@ export function isContestantId(id: string): boolean {
 }
 
 /** Roles that combine the learners' calls rather than read tokens themselves. */
-export const COMBINER_ROLES: readonly ContestantRole[] = ["stacked", "blend", "agreement"];
+export const COMBINER_ROLES: readonly ContestantRole[] = ["stacked", "blend", "agreement", "topslice"];
 
 /**
  * The enabled roster in canonical order, from CURATOR_CONTESTANTS. The combiners need members,
@@ -316,7 +364,7 @@ export const COMBINER_ROLES: readonly ContestantRole[] = ["stacked", "blend", "a
 export function enabledContestants(ids: readonly string[]): ContestantSpec[] {
   const wanted = new Set(ids);
   wanted.add(RULES_CONTESTANT);
-  const learners = CONTESTANTS.filter((c) => c.role === "learner" && wanted.has(c.id));
+  const learners = CONTESTANTS.filter((c) => isMemberLearner(c) && wanted.has(c.id));
   return CONTESTANTS.filter(
     (c) => wanted.has(c.id) && (!COMBINER_ROLES.includes(c.role) || learners.length >= 2),
   );

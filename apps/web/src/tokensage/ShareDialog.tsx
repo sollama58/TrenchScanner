@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { canvasToPng } from "../pnlCard";
 import { CloseIcon } from "../components/Icons";
 import { renderShareCard, SHARE_CARDS, type ShareCardKind } from "./shareCards";
-import type { MarketLighthouse } from "../api";
+import type { LighthouseSignals } from "../api";
 import type { TokenSageShowcase } from "./showcase";
 
 /**
@@ -12,13 +12,13 @@ import type { TokenSageShowcase } from "./showcase";
 export function ShareDialog({
   kind,
   data,
-  lighthouse,
+  pay,
   onClose,
 }: {
   kind: ShareCardKind;
   data: TokenSageShowcase;
-  /** The Lighthouse's last week, which the "Which narratives pay" image draws from. */
-  lighthouse: MarketLighthouse | null;
+  /** How calls did by narrative over the picked window, which the "Which narratives pay" image draws from. */
+  pay: LighthouseSignals | null;
   onClose: () => void;
 }) {
   const [png, setPng] = useState<{ blob: Blob; url: string } | null>(null);
@@ -29,7 +29,7 @@ export function ShareDialog({
   useEffect(() => {
     let url: string | null = null;
     let live = true;
-    void renderShareCard(kind, data, lighthouse)
+    void renderShareCard(kind, data, pay)
       .then(canvasToPng)
       .then((blob) => {
         if (!live || !blob) return;

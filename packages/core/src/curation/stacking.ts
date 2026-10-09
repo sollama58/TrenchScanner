@@ -188,6 +188,37 @@ export function scoreStacked(
   return scoreCandidateWithModel(params.meta, features);
 }
 
+/**
+ * Each member's rank cutoff as its exam sets it (calibrateThresholdForPrecision on its fold ranks,
+ * cooldown replayed), but from `rows` only. A combiner that reads its members' cutoffs is graded
+ * on a chunk with cutoffs set without that chunk: the members' own cutoffs are chosen on every
+ * reference row's label, so a combiner graded with them grades the line it was drawn from.
+ * The call floor (minSupport) shrinks with the share of rows used: the stored cutoffs met it on
+ * every reference row, and the tree seats sit on it, so an unscaled floor on a third of the rows
+ * reaches several times deeper into the ranking than the cutoff that serves.
+ */
+export function memberCallRanksFrom(
+  reference: readonly TrainingRow[],
+  memberFoldRanks: ReadonlyMap<string, ArrayLike<number>>,
+  rows: readonly number[],
+  input: { targets: PrecisionTargets; cooldownHours: number },
+): Map<string, number | null> {
+  const cooldownMs = input.cooldownHours * 3_600_000;
+  const share = reference.length > 0 ? rows.length / reference.length : 1;
+  const targets = { ...input.targets, minSupport: Math.max(1, Math.round(input.targets.minSupport * share)) };
+  const out = new Map<string, number | null>();
+  for (const [member, ranks] of memberFoldRanks) {
+    const calls: ScoredOutcome[] = rows.map((i) => ({
+      probability: ranks[i]!,
+      labelValue: reference[i]!.labelValue,
+      tokenId: reference[i]!.tokenId,
+      anchorAt: reference[i]!.anchorAt,
+    }));
+    out.set(member, calibrateThresholdForPrecision(calls, targets, { cooldownMs }).threshold);
+  }
+  return out;
+}
+
 export interface StackingInput {
   /** The walk-forward exam's decision reference rows, in time order (identical for every member). */
   reference: TrainingRow[];
@@ -205,6 +236,8 @@ export interface StackingInput {
   cooldownHours: number;
   targetPerHour: number;
   recencyHalfLifeDays?: number;
+  /** Same meaning as TrainOptions.runWeightPerDoubling; the learner seats read it from the env. */
+  runWeightPerDoubling?: number;
 }
 
 export interface StackingResult {
@@ -246,22 +279,37 @@ export async function trainStackedCurator(
 
   // The meta model's training rows: the reference rows with their features swapped for member
   // signals. Fold ranks, not shipped-model ranks - the shipped models trained on these very rows.
+  // The agreement signal counts members at a cutoff, so it depends on which cutoffs it reads.
   const callRank = (c: string) => input.memberCallRanks?.get(c) ?? null;
-  const metaRows: TrainingRow[] = input.reference.map((row, i) => {
-    const features: Record<string, number> = {};
-    let agreeing = 0;
-    for (const c of members) {
-      const rank = input.memberFoldRanks.get(c)![i]!;
-      features[memberSignalName(c)] = rankSignal(rank);
-      if (memberCalls(callRank(c), rank)) agreeing += 1;
-    }
-    features[RULES_RANK_SIGNAL] = rankSignal(rankFromQuantiles(rulesQuantiles, rulesSignals[i]!.rankScore));
-    features[RULES_GATE_SIGNAL] = rulesSignals[i]!.gate ? 1 : 0;
-    features[AGREEMENT_SIGNAL] = agreeing / members.length;
-    return { ...row, features };
-  });
+  const metaRowsWith = (callRankOf: (c: string) => number | null): TrainingRow[] =>
+    input.reference.map((row, i) => {
+      const features: Record<string, number> = {};
+      let agreeing = 0;
+      for (const c of members) {
+        const rank = input.memberFoldRanks.get(c)![i]!;
+        features[memberSignalName(c)] = rankSignal(rank);
+        if (memberCalls(callRankOf(c), rank)) agreeing += 1;
+      }
+      features[RULES_RANK_SIGNAL] = rankSignal(rankFromQuantiles(rulesQuantiles, rulesSignals[i]!.rankScore));
+      features[RULES_GATE_SIGNAL] = rulesSignals[i]!.gate ? 1 : 0;
+      features[AGREEMENT_SIGNAL] = agreeing / members.length;
+      return { ...row, features };
+    });
+  // What ships reads the members' stored cutoffs, as serving does.
+  const metaRows = metaRowsWith(callRank);
+  // The exam's chunks read cutoffs set on their own training rows only: the stored ones were
+  // chosen on every reference row's label, the tested chunk's included. A member whose exam set
+  // no cutoff never counts as calling, here as live.
+  const callingMembers = new Map(
+    members.filter((c) => callRank(c) !== null).map((c) => [c, input.memberFoldRanks.get(c)!]),
+  );
   const train = (rows: TrainingRow[]) =>
-    trainCurator(rows, { featureNames, transform: null, recencyHalfLifeDays: input.recencyHalfLifeDays });
+    trainCurator(rows, {
+      featureNames,
+      transform: null,
+      recencyHalfLifeDays: input.recencyHalfLifeDays,
+      runWeightPerDoubling: input.runWeightPerDoubling,
+    });
 
   // The meta exam: walk forward over the reference rows in time order. Chunk 0 is training floor.
   const cooldownMs = input.cooldownHours * 3_600_000;
@@ -274,17 +322,20 @@ export async function trainStackedCurator(
     if (test.length === 0) continue;
     const testStartMs = test[0]!.anchorAt.getTime();
     const testTokens = new Set(test.flatMap((r) => (r.tokenId === undefined ? [] : [r.tokenId])));
-    const trainRows = metaRows
-      .slice(0, start)
-      .filter(
-        (r) =>
-          r.anchorAt.getTime() + labelWindowMs <= testStartMs &&
-          (r.tokenId === undefined || !testTokens.has(r.tokenId)),
-      );
-    if (trainRows.length < MIN_META_TRAIN_ROWS) continue;
-    if (trainRows.filter((r) => r.labelValue > 0).length < MIN_META_TRAIN_WINS) continue;
-    const meta = await train(trainRows);
-    const ranks = confidenceRanks(test.map((r) => scoreCandidateWithModel(meta, r.features)));
+    const trainIndexes: number[] = [];
+    for (let i = 0; i < start; i++) {
+      const r = metaRows[i]!;
+      if (r.anchorAt.getTime() + labelWindowMs > testStartMs) continue;
+      if (r.tokenId !== undefined && testTokens.has(r.tokenId)) continue;
+      trainIndexes.push(i);
+    }
+    if (trainIndexes.length < MIN_META_TRAIN_ROWS) continue;
+    if (trainIndexes.filter((i) => metaRows[i]!.labelValue > 0).length < MIN_META_TRAIN_WINS) continue;
+    const cutoffs = memberCallRanksFrom(input.reference, callingMembers, trainIndexes, input);
+    const chunkRows = metaRowsWith((c) => cutoffs.get(c) ?? null);
+    const meta = await train(trainIndexes.map((i) => chunkRows[i]!));
+    const chunkTest = chunkRows.slice(start, start + test.length);
+    const ranks = confidenceRanks(chunkTest.map((r) => scoreCandidateWithModel(meta, r.features)));
     const spanMs = test[test.length - 1]!.anchorAt.getTime() - testStartMs;
     judged.push({ rows: test, ranks, spanHours: Math.max(1, spanMs / 3_600_000) });
   }

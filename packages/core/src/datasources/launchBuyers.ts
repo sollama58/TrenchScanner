@@ -19,6 +19,8 @@ export interface LaunchBuyer {
   tokenAccount: string;
   /** Tokens bought across the transactions read, in base units. */
   bought: number;
+  /** Slot of this wallet's first buy, when the provider gave one. */
+  slot: number | null;
 }
 
 export interface LaunchBuyersReading {
@@ -26,11 +28,55 @@ export interface LaunchBuyersReading {
   buyers: LaunchBuyer[];
   /** Block time of the create transaction. */
   launchAt: Date | null;
+  /**
+   * The supply the create transaction minted, in base units (every balance it credited, the
+   * curve's and the dev's). What the shares below are measured against.
+   */
+  supply: number;
+  /**
+   * What the create transaction credited to wallets other than the curve, in base units - the
+   * dev's initial buy, which rides in the create on Pump.fun. 0 when the dev bought nothing.
+   */
+  devBought: number;
+  /** Slot of the create transaction, when the provider gave one. */
+  createSlot: number | null;
+}
+
+/** The launch's shape as the models read it (features firstBuyersSupplyPct and friends). */
+export interface LaunchFigures {
+  /** % of the supply the first buyers bought, across the transactions read. */
+  firstBuyersSupplyPct: number | null;
+  /** First buyers whose first buy landed in the create transaction's own slot: the bundle. */
+  launchBundledBuyers: number | null;
+  /** % of the supply the dev bought in the create transaction. */
+  devBuySupplyPct: number | null;
+}
+
+/**
+ * The figures from a reading. Null across the board for a reading with no supply (not a curve
+ * launch); the bundle count is null when the provider gave no slots.
+ */
+export function launchFigures(
+  reading: Pick<LaunchBuyersReading, "buyers" | "supply" | "devBought" | "createSlot">,
+): LaunchFigures {
+  if (!(reading.supply > 0)) {
+    return { firstBuyersSupplyPct: null, launchBundledBuyers: null, devBuySupplyPct: null };
+  }
+  const bought = reading.buyers.reduce((sum, b) => sum + b.bought, 0);
+  return {
+    firstBuyersSupplyPct: (bought / reading.supply) * 100,
+    launchBundledBuyers:
+      reading.createSlot === null
+        ? null
+        : reading.buyers.filter((b) => b.slot !== null && b.slot === reading.createSlot).length,
+    devBuySupplyPct: (reading.devBought / reading.supply) * 100,
+  };
 }
 
 /** The parts of a getTransaction-shaped result this reads. Loose: providers vary the key shape. */
 export interface RawLaunchTx {
   blockTime?: number | null;
+  slot?: number | null;
   meta?: {
     err?: unknown;
     preTokenBalances?: RawTokenBalance[] | null;
@@ -110,6 +156,16 @@ export function parseLaunchBuyers(
   if (launch.hadPre || launch.owners.size === 0) return null;
 
   const excluded = new Set(launch.owners.keys());
+  // The curve takes the supply, so it is the create's largest credit; whatever else the create
+  // credited is the dev's initial buy (the dev's wallet, or several).
+  let supply = 0;
+  let curveDelta = 0;
+  for (const { delta } of launch.owners.values()) {
+    supply += delta;
+    curveDelta = Math.max(curveDelta, delta);
+  }
+  const slotOf = (tx: RawLaunchTx): number | null =>
+    typeof tx.slot === "number" && Number.isFinite(tx.slot) ? tx.slot : null;
   const buyers = new Map<string, LaunchBuyer>();
   for (const tx of ok.slice(1)) {
     for (const [owner, change] of balanceChanges(tx, mint).owners) {
@@ -118,13 +174,21 @@ export function parseLaunchBuyers(
       if (known) {
         known.bought += change.delta;
       } else if (buyers.size < maxBuyers && change.account) {
-        buyers.set(owner, { wallet: owner, tokenAccount: change.account, bought: change.delta });
+        buyers.set(owner, {
+          wallet: owner,
+          tokenAccount: change.account,
+          bought: change.delta,
+          slot: slotOf(tx),
+        });
       }
     }
   }
   return {
     buyers: [...buyers.values()],
     launchAt: create.blockTime ? new Date(create.blockTime * 1000) : null,
+    supply,
+    devBought: Math.max(0, supply - curveDelta),
+    createSlot: slotOf(create),
   };
 }
 

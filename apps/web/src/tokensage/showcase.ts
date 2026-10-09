@@ -116,3 +116,8 @@ export function hitRate(l: Pick<ShowcaseLabel, "graded" | "won2x">, min = MIN_GR
 export function named<T extends { label: string }>(rows: T[]): T[] {
   return rows.filter((r) => r.label !== "other" && r.label !== "uncategorized");
 }
+
+/** Logo kinds worth ranking: named(), less "none" (no picture, or nothing TokenSage could read in it). */
+export function logoKinds<T extends { label: string }>(rows: T[]): T[] {
+  return named(rows).filter((r) => r.label !== "none");
+}

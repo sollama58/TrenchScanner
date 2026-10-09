@@ -2,6 +2,7 @@ import type { McapBand } from "./curator.js";
 import {
   calibrateThresholdForPrecision,
   confidenceRanks,
+  ranksAgainst,
   precisionCurve,
   probabilityAtRank,
   trainCuratorModel,
@@ -23,7 +24,7 @@ import {
   type ScoredOutcome,
   scoreCandidateWithModel,
 } from "./trainer.js";
-import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES } from "./features.js";
+import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES, withCurrentNarrativeTiming } from "./features.js";
 import {
   CONSENSUS_CONTESTANT,
   RULES_CONTESTANT,
@@ -35,6 +36,7 @@ import type { Challenger, Replacement } from "./evolution.js";
 import { quantileTable, trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
 import { trainBlendCurator, type BlendCuratorParams } from "./blend.js";
 import { trainAgreementCurator, type AgreementCuratorParams, type AgreementCurvePoint } from "./agreement.js";
+import { trainTopSliceCurator, type TopSliceCuratorParams } from "./topSlice.js";
 import { buildCalibration } from "./calibration.js";
 import { runDoublings } from "./labels.js";
 import {
@@ -365,6 +367,36 @@ async function crossFittedProbabilities(
   return out;
 }
 
+/**
+ * Rank cutoffs (the served cutoff, the high-conviction line) as probabilities on the shipped
+ * model's scale: the rank translated on its cross-fitted scores, raised to where the shipped
+ * model itself puts that rank on the reference rows when that is higher. The cross-fit halves
+ * are meant to share the shipped model's scale, and for plain trees they do (in-sample, the
+ * shipped model passes fewer reference rows than the exam's share, so the cross-fitted cutoff
+ * stands). For some shapes they don't: a two-stage or ranking model refitted on a half can score
+ * a whole group of rows (brand-new coins with no price path) well below where the shipped model
+ * does. The cutoff then sits under that group and the model calls all of it live. Seen
+ * 2026-10-09: Survivor's 10:16 run passed 28% of its own reference rows at a cutoff meant for
+ * 2.6%, and called 51 coins in two hours against about 4 expected; Ranker's 16:06 run passed 15%
+ * against 3.5% and called 13 coins on one tied score. Replayed on production rows (five runs
+ * 10-08 20:11 to 10-09 10:16; Trees, Deep Trees, Survivor, Ranker, Runner), the raised cutoff took
+ * the next two hours' calls from 193 (38 doubled, 19.7%) to 92 (26 doubled, 28.3%), with Trees
+ * and Deep Trees unchanged (notes/runner-target-2026-10-09.md).
+ */
+export function servedTranslate(
+  shipped: UnthresholdedCuratorParams,
+  reference: readonly TrainingRow[],
+  crossFitted: ArrayLike<number>,
+): (rank: number) => number | null {
+  const inSample = reference.map((r) => scoreCandidateWithModel(shipped, r.features));
+  return (rank) => {
+    const fitted = probabilityAtRank(crossFitted, rank);
+    const own = probabilityAtRank(inSample, rank);
+    if (fitted === null) return own;
+    return own === null ? fitted : Math.max(fitted, own);
+  };
+}
+
 /** Fewer training rows than this and a cross-fit half keeps the shipped model's own scores. */
 const MIN_CROSS_FIT_ROWS = 300;
 
@@ -458,7 +490,7 @@ async function shipRecipe(
     trained,
     (train) => trainCuratorModel(train, trainOpts),
   );
-  const translate = (rank: number) => probabilityAtRank(shippedProbabilities, rank);
+  const translate = servedTranslate(trained, evaluation.decisionReference, shippedProbabilities);
   // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
   // at its best-effort cutoff (see chooseCutoff) and still competes on its exam. Only an exam
   // with no judgeable cutoff at all leaves it without one.
@@ -623,6 +655,7 @@ export type ContestantParams =
   | StackedCuratorParams
   | BlendCuratorParams
   | AgreementCuratorParams
+  | TopSliceCuratorParams
   | RulesCuratorParams;
 
 export interface ContestantTrainingResult {
@@ -880,10 +913,13 @@ export interface ProbationStart extends Replacement {
  * contestants and challengers run; time grows linearly.
  */
 export async function runEvolvingContest(
-  rows: TrainingRow[],
+  storedRows: TrainingRow[],
   cfg: ContestTrainingConfig,
   plan?: EvolutionPlan,
 ): Promise<ContestRunOutcome> {
+  // Every seat but the narrative ones learns TokenSage's read only from rows where it arrived
+  // as it does live (see withCurrentNarrativeTiming); the narrative seats read storedRows.
+  const rows = withCurrentNarrativeTiming(storedRows);
   const results: ContestantTrainingResult[] = [];
   const foldRanks = new Map<string, Float64Array>();
   const shippedProbabilities = new Map<string, Float64Array>();
@@ -929,6 +965,9 @@ export async function runEvolvingContest(
     exam.result.metrics.runnerReport = runnerReport;
     Object.assign(exam.result.metrics, heldFeatures);
     results.push(exam.result);
+    // A control seat ships and calls on its own ledger, but feeds no combiner, the rules seat or
+    // evolution (contestants.ts, ContestantSpec.control).
+    if (spec.control) continue;
     laneExamScores.set(spec.id, exam.examScore);
     keep(spec.id, exam);
   }
@@ -937,7 +976,7 @@ export async function runEvolvingContest(
   // different population shares no fold with the learners, so it feeds no combiner and breeds
   // nothing. Skipped, with its running model kept, until it has rows enough.
   const narrativeSpecs = cfg.contestants.filter((c) => c.role === "narrative" && c.recipe);
-  const own = narrativeSpecs.length > 0 ? narrativeTrainingSet(rows, cfg.narrativeRows ?? []) : [];
+  const own = narrativeSpecs.length > 0 ? narrativeTrainingSet(storedRows, cfg.narrativeRows ?? []) : [];
   const deepRead = own.filter((r) => r.sampleKind !== NARRATIVE_BACKGROUND_KIND);
   if (deepRead.length >= NARRATIVE_MIN_ROWS) {
     // Inputs judged on the deep-read rows: across every row the TokenSage inputs are young and
@@ -1057,6 +1096,7 @@ export async function runEvolvingContest(
         cooldownHours: cfg.cooldownHours,
         targetPerHour: cfg.targetPerHour,
         recencyHalfLifeDays: cfg.recencyHalfLifeDays,
+        runWeightPerDoubling: cfg.runWeightPerDoubling,
       },
       NEVER_EMIT_THRESHOLD,
     );
@@ -1159,13 +1199,18 @@ export async function runEvolvingContest(
     );
     if (agreement) {
       // Agreement scores bunch at each member count, so like the blend's they become their own
-      // percentiles for the tier line and the calibration (see the blend above).
+      // percentiles for the tier line and the calibration (see the blend above). The scale is the
+      // stored-cutoff scores (what serves); the evidence placed on it is the held-out scores, so
+      // the card's 2x % and the tier don't read the rows the member cutoffs were chosen on.
       const scores = agreement.outOfSample.map((c) => c.probability);
-      const percentiles = confidenceRanks(scores);
+      const heldOutRanks = ranksAgainst(
+        agreement.heldOut.map((c) => c.probability),
+        scores,
+      );
       const cutoff = agreement.precisionCalibration.threshold;
       const served = servedExtras(
         cfg,
-        agreement.outOfSample.map((c, i) => ({ ...c, probability: percentiles[i]! })),
+        agreement.heldOut.map((c, i) => ({ ...c, probability: heldOutRanks[i]! })),
         scores,
         (rank) => probabilityAtRank(scores, rank),
         cutoff === null ? null : scores.filter((p) => p < cutoff).length / scores.length,
@@ -1191,6 +1236,42 @@ export async function runEvolvingContest(
           agreementCurve: agreement.curve,
           ...(served.highConviction ? { highConviction: served.highConviction } : {}),
           calibrationCalls: served.extras.calibration?.calls ?? 0,
+        },
+      });
+    }
+  }
+
+  const topSliceSpec = cfg.contestants.find((c) => c.role === "topslice");
+  if (topSliceSpec && reference !== null) {
+    const topSlice = trainTopSliceCurator({
+      reference,
+      memberFoldRanks: foldRanks,
+      memberShippedProbabilities: shippedProbabilities,
+      memberCallRanks: callRanks,
+      targets: cfg.targets,
+      cooldownHours: cfg.cooldownHours,
+      targetPerHour: cfg.targetPerHour,
+    });
+    if (topSlice) {
+      const names = topSlice.params.members.map(
+        (m) => cfg.contestants.find((c) => c.id === m.contestant)?.name ?? m.contestant,
+      );
+      results.push({
+        contestant: topSliceSpec.id,
+        params: topSlice.params,
+        metrics: {
+          contestant: topSliceSpec.id,
+          contestantName: topSliceSpec.name,
+          folds: [],
+          verdict: {
+            promote: false,
+            reason: `${topSliceSpec.name}: the top quarter of ${names.join(", ")}'s own calls, judged on their out-of-sample calls - ${topSlice.exam.wins}/${topSlice.exam.graded} doubled`,
+          },
+          targets: cfg.targets,
+          precisionCalibration: topSlice.precisionCalibration,
+          precisionCurve: [],
+          heuristicPrecisionCurve: [],
+          exam: topSlice.exam,
         },
       });
     }

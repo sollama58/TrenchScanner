@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, type MarketLighthouse } from "../api";
+import { api, type LighthouseSignals } from "../api";
 import { HitRates, narratives, seriesClassFor } from "../components/MarketLighthouse";
 import { narrativeBaseline } from "../lighthouseMetrics";
 import { LogoMark, SageIcon, SendIcon } from "../components/Icons";
@@ -8,6 +8,7 @@ import type { ShareCardKind } from "./shareCards";
 import {
   compact,
   hitRate,
+  logoKinds,
   named,
   prettyLabel,
   share,
@@ -23,19 +24,24 @@ import {
 
 const REFRESH_MS = 5 * 60_000;
 
+/** "Which narratives pay" reads over a day, a week or a month, as Signals at a glance does. */
+export const PAY_WINDOWS = [1, 7, 30] as const;
+export type PayDays = (typeof PAY_WINDOWS)[number];
+const PAY_LABEL: Record<PayDays, string> = { 1: "24h", 7: "7d", 30: "1mo" };
+export const PAY_SPAN: Record<PayDays, string> = { 1: "24 hours", 7: "7 days", 30: "30 days" };
+
 /**
- * The Lighthouse's last week, for "Which narratives pay": the same guest answer the Lighthouse
- * tab draws that chart from (per-narrative returns are not in the rollup the rest of the page sums).
+ * How calls did by narrative over a window, for "Which narratives pay": the Lighthouse's signals
+ * answer, which carries the per-narrative returns the rollup the rest of the page sums does not.
  */
-export const LIGHTHOUSE_PATH = "/guest/lighthouse?days=7";
+export const payPath = (days: PayDays) => `/guest/lighthouse/signals?days=${days}`;
 
 function useShowcase() {
   const [data, setData] = useState<TokenSageShowcase | null>(null);
-  const [lighthouse, setLighthouse] = useState<MarketLighthouse | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
-    const load = () => {
+    const load = () =>
       void api<TokenSageShowcase>("/guest/tokensage").then(
         (d) => {
           if (!live) return;
@@ -44,12 +50,6 @@ function useShowcase() {
         },
         (err: unknown) => live && setError(err instanceof Error ? err.message : "Couldn't load"),
       );
-      // Optional: without it the narratives section waits, and the rest of the page is unaffected.
-      void api<MarketLighthouse>(LIGHTHOUSE_PATH).then(
-        (l) => live && setLighthouse(l),
-        () => undefined,
-      );
-    };
     load();
     const t = setInterval(load, REFRESH_MS);
     return () => {
@@ -57,7 +57,30 @@ function useShowcase() {
       clearInterval(t);
     };
   }, []);
-  return { data, lighthouse, error };
+  return { data, error };
+}
+
+/**
+ * "Which narratives pay" for the picked window. Optional: without it that section waits, and the
+ * rest of the page is unaffected. The last answer stays on screen while another window loads.
+ */
+function usePay(days: PayDays) {
+  const [pay, setPay] = useState<LighthouseSignals | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      void api<LighthouseSignals>(payPath(days)).then(
+        (l) => live && setPay(l),
+        () => undefined,
+      );
+    load();
+    const t = setInterval(load, REFRESH_MS);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [days]);
+  return pay;
 }
 
 /** Opens a section's share image; null until the numbers have loaded. */
@@ -76,7 +99,9 @@ function ShareButton({ kind, label = "Share" }: { kind: ShareCardKind; label?: s
 }
 
 export function TokenSagePage() {
-  const { data, lighthouse, error } = useShowcase();
+  const { data, error } = useShowcase();
+  const [payDays, setPayDays] = useState<PayDays>(7);
+  const pay = usePay(payDays);
   const [sharing, setSharing] = useState<ShareCardKind | null>(null);
   return (
     <ShareContext.Provider value={data ? setSharing : null}>
@@ -98,17 +123,15 @@ export function TokenSagePage() {
           ) : null}
           <Tiles data={data} />
           <Anatomy data={data} />
-          {data ? <Sections data={data} lighthouse={lighthouse} /> : <LoadingSections />}
+          {data ? (
+            <Sections data={data} pay={pay} payDays={payDays} onPayDays={setPayDays} />
+          ) : (
+            <LoadingSections />
+          )}
         </main>
         <Footer data={data} />
         {sharing && data ? (
-          <ShareDialog
-            key={sharing}
-            kind={sharing}
-            data={data}
-            lighthouse={lighthouse}
-            onClose={() => setSharing(null)}
-          />
+          <ShareDialog key={sharing} kind={sharing} data={data} pay={pay} onClose={() => setSharing(null)} />
         ) : null}
       </div>
     </ShareContext.Provider>
@@ -325,7 +348,17 @@ function Anatomy({ data }: { data: TokenSageShowcase | null }) {
 
 // ---------- The data sections ----------
 
-function Sections({ data, lighthouse }: { data: TokenSageShowcase; lighthouse: MarketLighthouse | null }) {
+function Sections({
+  data,
+  pay,
+  payDays,
+  onPayDays,
+}: {
+  data: TokenSageShowcase;
+  pay: LighthouseSignals | null;
+  payDays: PayDays;
+  onPayDays: (d: PayDays) => void;
+}) {
   const t = data.totals;
   const themes = named(data.labels.category);
   const subThemes = named(data.labels.subcategory).slice(0, 8);
@@ -438,7 +471,7 @@ function Sections({ data, lighthouse }: { data: TokenSageShowcase; lighthouse: M
               <ShareButton kind="logos" />
             </div>
             <RankBars
-              rows={named(data.anatomy.logo).map((r) => ({
+              rows={logoKinds(data.anatomy.logo).map((r) => ({
                 label: prettyLabel(r.label),
                 value: r.count,
                 display: compact(r.count),
@@ -502,25 +535,43 @@ function Sections({ data, lighthouse }: { data: TokenSageShowcase; lighthouse: M
         share="models"
         kicker="Which narratives pay"
         title="What the calls on each theme returned"
-        lede="Model calls in the last 7 days by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Thin narratives stay faded."
+        lede={`Model calls in the last ${PAY_SPAN[payDays]} by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Thin narratives stay faded.`}
       >
         <div className="tsg-card">
-          <NarrativesPay lighthouse={lighthouse} />
+          <div className="tsg-card-head tsg-pay-head">
+            <span className="tsg-card-sub">Window</span>
+            <div className="segmented small" role="tablist" aria-label="Narratives window">
+              {PAY_WINDOWS.map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  role="tab"
+                  aria-selected={w === payDays}
+                  className={w === payDays ? "on" : ""}
+                  onClick={() => onPayDays(w)}
+                >
+                  {PAY_LABEL[w]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <NarrativesPay pay={pay} days={payDays} />
         </div>
       </Section>
     </>
   );
 }
 
-/** The Lighthouse's "Which narratives pay" chart, from its own last-week answer. */
-function NarrativesPay({ lighthouse }: { lighthouse: MarketLighthouse | null }) {
-  if (!lighthouse) return <div className="tsg-skel tsg-skel-inline" aria-busy="true" aria-label="Loading" />;
-  const o = lighthouse.outcomes;
+/** The Lighthouse's "Which narratives pay" chart, over the picked window. */
+function NarrativesPay({ pay, days }: { pay: LighthouseSignals | null; days: PayDays }) {
+  if (!pay) return <div className="tsg-skel tsg-skel-inline" aria-busy="true" aria-label="Loading" />;
+  const stale = pay.window.days !== days;
+  const o = pay.outcomes;
   const rows = narratives(o.byCategory);
   const base = narrativeBaseline(o.byCategory);
   const cls = seriesClassFor(rows.slice(0, 5).map((r) => r.label));
   return (
-    <>
+    <div className={stale ? "stale" : undefined} aria-busy={stale}>
       <HitRates rows={rows} cls={cls} baseline={base} />
       <p className="tsg-card-sub tsg-pay-foot">
         {o.described.toLocaleString()} of {o.alerts.toLocaleString()} calls had a TokenSage read ·{" "}
@@ -528,7 +579,7 @@ function NarrativesPay({ lighthouse }: { lighthouse: MarketLighthouse | null }) 
         {base.rate2x !== null ? `, ${base.rate2x.toFixed(0)}% reached 2x` : ""}. TokenSage can answer after a
         call, so this shows what wins, not what a model knew.
       </p>
-    </>
+    </div>
   );
 }
 

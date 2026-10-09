@@ -1,5 +1,5 @@
 import { LEARNER_FEATURE_NAMES } from "./features.js";
-import { isCurrentLabelRule, LABEL_LOG2_CAP, runDoublings, runWeight, TEN_X_MULTIPLE } from "./labels.js";
+import { isCurrentLabelRule, runDoublings, runWeight, TEN_X_MULTIPLE } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 
 /**
@@ -68,9 +68,9 @@ export interface BoostedCuratorParams {
  *    each pair weighted by how much swapping them would move the hour's NDCG, truncated to pairs
  *    that touch the top of the hour's current ranking - so the fit spends itself on getting the
  *    top of each hour right, which is the only part of the ranking the feed ever acts on.
- *  - "runSize": how far the token runs - its peak over the label window in doublings (losses
- *    count their peak too, a stop-out as -1) - by squared error. A model of the run, not of the
- *    win: it ranks a likely 5x above a sure 2x.
+ *  - "runSize": how far a winner runs - its peak over the label window in doublings, any other
+ *    loss 0 and a stop-out -1 - by squared error. A model of the run, not just of the win: it
+ *    ranks a likely 5x above a sure 2x.
  * Either non-default objective leaves the tree sum on its own scale; trainBoostedCurator then
  * fits a one-dimensional logistic map from that sum to the clean-2x label (Platt scaling) and
  * folds it into the trees, so every stored model still scores as a probability of a clean 2x.
@@ -324,7 +324,9 @@ function bestSplit(rows: Uint32Array, gSum: number, hSum: number, ctx: GrowConte
         if (cL < minLeafRows || cR < minLeafRows || hL < minLeafHessian || hR < minLeafHessian) continue;
         const gain = (gL * gL) / (hL + l2) + (gR * gR) / (hR + l2) - parentScore;
         if (gain > 1e-9 && (best === null || gain > best.gain)) {
-          best = { gain, feature: f, binCut: k, missingLeft: missLeft };
+          // No training row was missing here, so the gain can't say; a value missing live then
+          // follows the heavier child rather than always reading as above the cut.
+          best = { gain, feature: f, binCut: k, missingLeft: cMiss === 0 ? hL >= hR : missLeft };
         }
         if (cMiss === 0) break; // both directions are the same split
       }
@@ -421,15 +423,18 @@ export function recencyWeights(
 /**
  * A row's target under the "runSize" objective: its run in doublings, a stop-out counting -1.
  * A winner counts as runDoublings credits it; a loss that fell through the stop counts -1 even
- * when the window's peak (runPeakMultiple, measured past the stop) came later.
+ * when the window's peak (runPeakMultiple, measured past the stop) came later; any other loss
+ * counts 0, however high it peaked. Until 2026-10-09 such a loss counted its peak (a 1.9x, or a
+ * 5x that came after the 15-minute win window, scored like a 2x or better), so Runner learned to
+ * rank coins that run late or almost double above the ones that double in time: on 2x-in-15
+ * minutes its ranking fell below chance (AUC 0.47) after 2026-10-08 18:00 and its top 3% doubled
+ * 11%. Counting those losses as 0: AUC 0.55, top 3% 30% (walk-forward on production rows,
+ * 6-hour blocks 10-06 12:00 to 10-09 18:00, better or equal on 12 of 13 blocks;
+ * notes/runner-target-2026-10-09.md).
  */
 function runSizeTarget(row: BoostingRow): number {
   if (row.labelValue > 0) return runDoublings(row);
-  if (row.survived === false) return -1;
-  if (row.runPeakMultiple !== undefined && row.runPeakMultiple > 0) {
-    return Math.min(LABEL_LOG2_CAP, Math.max(-1, Math.log2(row.runPeakMultiple)));
-  }
-  return 0;
+  return row.survived === false ? -1 : 0;
 }
 
 const TEN_X_LABEL = Math.log2(TEN_X_MULTIPLE);

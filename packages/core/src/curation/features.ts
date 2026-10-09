@@ -12,6 +12,7 @@ import {
   NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
   NARRATIVE_FEATURES_V3,
+  ALL_NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V4,
   NARRATIVE_FEATURES_V5,
   NARRATIVE_FEATURES_V6,
@@ -186,6 +187,17 @@ export const CANDIDATE_FEATURE_NAMES = [
   // theme, and whether the coin trades against another (pump.fun) coin. Null on reads that don't
   // say, and on every row banked before. Never backfilled.
   ...NARRATIVE_FEATURES_V6,
+  // Added 2026-10-09 (user decision, notes/model-inputs-review-2026-10-09.md): the launch's shape
+  // from the Helius launch read the worker's launchSnipers.ts already makes (no new call): % of
+  // the supply the first 25 buyers bought, how many of them bought in the create transaction's
+  // own slot (a bundle), and % of the supply the dev bought in the create. Two thirds of the
+  // wins are coins under five minutes old, where every momentum input reads "since launch" and
+  // only the holder list tells two launches apart; these are the facts that differ at launch.
+  // Null until the launch has been read, on a history that doesn't start at a curve launch, and
+  // on every row banked before. Never backfilled.
+  "firstBuyersSupplyPct",
+  "launchBundledBuyers",
+  "devBuySupplyPct",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -199,15 +211,16 @@ export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
  * token, not this list, so retiring an input never loosens a gate.
  */
 export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set<CandidateFeatureName>([
-  // No signal on their own.
+  // No signal on their own. (pathRet1mPct and pathHolderSlope10m were retired here too, on a
+  // day-old tape and while pathRet1mPct was still a 30-second return; by 2026-10-09 they read AUC
+  // 0.64 and 0.74 on the rows that carry them, so they are back - user decision,
+  // notes/model-inputs-review-2026-10-09.md.)
   "hasTelegram",
   "hasDescription",
   "narrativeTagCount",
   "dexBoosted",
   "buyRatio1h",
   "holderGrowthPct",
-  "pathRet1mPct",
-  "pathHolderSlope10m",
   "devHolding",
   "devWalletPct",
   "liquidityToMcapRatio",
@@ -290,6 +303,16 @@ export const TRADE_FLOW_FEATURES = [
 ] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
 
 /**
+ * The launch's shape from the chain read (TradeFlowFeatures too, but never from the trade stream
+ * and never subject to the fake-zeros mask below), in vector order.
+ */
+export const LAUNCH_SHAPE_FEATURES = [
+  "firstBuyersSupplyPct",
+  "launchBundledBuyers",
+  "devBuySupplyPct",
+] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
+
+/**
  * Rows banked before this carry fake zeros for the order-flow inputs: until PR #127 the PumpPortal
  * tracker reported 0 buyers and 0 trades for launches whose trades it was never sent (no funded
  * key). Every such row reads uniqueBuyers5m = 0 and tradesPerMin5m = 0 (1,744 rows from
@@ -299,20 +322,109 @@ export const TRADE_FLOW_FEATURES = [
 export const TRADE_FLOW_FAKE_ZEROS_UNTIL = new Date("2026-10-05T00:13:00Z");
 
 /**
- * A stored vector with the inputs known to be wrong on it read as missing: today, the order-flow
- * inputs on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came
- * from the create message and is real). Returns the same object when nothing applies.
+ * Rows banked before this carry the social bits with another meaning. Until #221 (deployed
+ * 2026-10-07 about 19:39 UTC) hasTwitter / hasTelegram / hasWebsite came from the scan's own
+ * DexScreener info block, which a young coin almost never has yet, so hasTwitter = 1 meant
+ * "older coin" (2x 4.9% against 13.6% for 0 on 3,342 decision rows). Since then they read the
+ * socials saved at discovery: 88% of decisions show a Twitter link and the split is flat (13.5%
+ * against 11.3%). Trained across the change, the models learn the old meaning from most of the
+ * window and apply it to live rows that carry the new one, so the older rows read as missing
+ * (notes/model-checkin-2026-10-09.md, notes/model-inputs-review-2026-10-09.md).
+ */
+export const SOCIAL_BITS_FROM_DISCOVERY_SINCE = new Date("2026-10-07T19:39:00Z");
+const SOCIAL_BIT_FEATURES = [
+  "hasTwitter",
+  "hasTelegram",
+  "hasWebsite",
+] as const satisfies readonly CandidateFeatureName[];
+
+/**
+ * Rows banked before this carry two inputs #138 (live from about 2026-10-05 15:28 UTC) changed:
+ * - volumeAccel read exactly 12 by construction on every token under five minutes old (both
+ *   windows hold its whole life; 2,384 young rows, none after); live scoring now leaves it null
+ *   under VOLUME_ACCEL_MIN_AGE_MINUTES, so a tree learned "12" as a youth marker live rows never show.
+ * - pathRet1mPct took the previous 30-second scan tick as "a minute ago", so it was a 30-second
+ *   move, and was filled on tapes too short to hold a minute. Back on the learner list since #315.
+ */
+export const VOLUME_ACCEL_YOUNG_NULL_SINCE = new Date("2026-10-05T15:30:00Z");
+
+/**
+ * Rows banked before this are the only ones in the window that read ctxWeekend = 1: the clock
+ * inputs started at about 20:31 UTC on Sunday 2026-10-04 (#99), so every weekend row is one of 881
+ * rows from that evening, which also carry the old label rule's era and volumeAccel's 12. A tree
+ * that splits on it learns "first evening of data", and live rows start reading 1 on Saturdays.
+ * Read as missing there, the input is constant until real weekends build up.
+ */
+export const WEEKEND_FLAG_FROM = new Date("2026-10-05T00:00:00Z");
+
+/**
+ * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
+ * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
+ * the create message and is real), the social bits on rows banked before
+ * SOCIAL_BITS_FROM_DISCOVERY_SINCE, and before VOLUME_ACCEL_YOUNG_NULL_SINCE volumeAccel on young
+ * tokens (as live scoring reads it today) and the 30-second pathRet1mPct, and ctxWeekend before
+ * WEEKEND_FLAG_FROM. Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
   features: T,
 ): T {
-  if (anchorAt.getTime() >= TRADE_FLOW_FAKE_ZEROS_UNTIL.getTime()) return features;
+  const at = anchorAt.getTime();
+  if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return features;
   const masked: Record<string, number | null | undefined> = { ...features };
-  for (const name of TRADE_FLOW_FEATURES) {
-    if (name !== "devInitialBuySol" && masked[name] !== undefined) masked[name] = null;
+  for (const name of SOCIAL_BIT_FEATURES) {
+    if (masked[name] !== undefined) masked[name] = null;
+  }
+  if (at < VOLUME_ACCEL_YOUNG_NULL_SINCE.getTime()) {
+    const age = masked.ageMinutes;
+    if (typeof age === "number" && age < VOLUME_ACCEL_MIN_AGE_MINUTES && masked.volumeAccel !== undefined) {
+      masked.volumeAccel = null;
+    }
+    if (masked.pathRet1mPct !== undefined) masked.pathRet1mPct = null;
+  }
+  if (at < WEEKEND_FLAG_FROM.getTime() && masked.ctxWeekend !== undefined) masked.ctxWeekend = null;
+  if (at < TRADE_FLOW_FAKE_ZEROS_UNTIL.getTime()) {
+    for (const name of TRADE_FLOW_FEATURES) {
+      if (name !== "devInitialBuySol" && masked[name] !== undefined) masked[name] = null;
+    }
   }
   return masked as T;
+}
+
+/**
+ * Rows banked before this saw TokenSage's read arrive with other timing. Until the youngest-first
+ * queue (#281, live from about 2026-10-08 18:10 UTC) the read was rarely in at a new coin's first
+ * decision (on 0-45% of first-sight rows), so "no read yet" stood in for "very young": the tree
+ * seats put 52% of their 10-08 calls on coins without a read, against 24% of decisions. Since
+ * then the read is in on about 90% of first-sight decisions, that region is empty, and the tree
+ * seats called 0-6% of the hot new coins they used to call 17-24% of
+ * (notes/model-checkin-2026-10-09.md).
+ */
+export const NARRATIVE_READ_AT_DECISION_SINCE = new Date("2026-10-08T18:10:00Z");
+
+/**
+ * Training rows for the seats that decide on every coin (the learners and what stacks on them),
+ * with the TokenSage inputs on rows banked before NARRATIVE_READ_AT_DECISION_SINCE read as
+ * missing: those rows teach the read's old timing, not what it says. The onset guard then holds
+ * the inputs until enough rows carry the new timing, and lets them back in by itself. The
+ * narrative seats train on the rows as stored - they decide only once the deep read is in, so
+ * its timing never stood in for anything there. Rows needing no change are returned as they are.
+ */
+export function withCurrentNarrativeTiming<
+  T extends { anchorAt: Date; features: Record<string, number | null | undefined> },
+>(rows: T[]): T[] {
+  const since = NARRATIVE_READ_AT_DECISION_SINCE.getTime();
+  return rows.map((row) => {
+    if (row.anchorAt.getTime() >= since) return row;
+    let features: Record<string, number | null | undefined> | null = null;
+    for (const name of ALL_NARRATIVE_FEATURES) {
+      const value = row.features[name];
+      if (value === null || value === undefined) continue;
+      features ??= { ...row.features };
+      features[name] = null;
+    }
+    return features === null ? row : { ...row, features };
+  });
 }
 
 /** The price-path features, in vector order - each a PricePathFeatures field of the same name. */
@@ -408,6 +520,9 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   devInitialBuySol: "dev's launch buy",
   devSoldShare: "dev selling",
   firstBuyersHolding: "first 25 buyers still holding",
+  firstBuyersSupplyPct: "first 25 buyers' share of supply",
+  launchBundledBuyers: "buyers bundled with the launch",
+  devBuySupplyPct: "dev's launch buy, % of supply",
   devHolding: "dev still holding",
   textCopycatRisk: "copycat name",
   textNarrativeStrength: "narrative strength",
@@ -498,7 +613,7 @@ export function scoredFromFeatures(
     hasWebsite: bool("hasWebsite"),
     narrativeTags: (num("narrativeTagCount") ?? 0) > 0 ? ["(replayed)"] : [],
     tradeFlow: Object.fromEntries(
-      TRADE_FLOW_FEATURES.map((k) => [k, num(k) ?? null]),
+      [...TRADE_FLOW_FEATURES, ...LAUNCH_SHAPE_FEATURES].map((k) => [k, num(k) ?? null]),
     ) as unknown as TradeFlowFeatures,
     pricePath: Object.fromEntries(
       PRICE_PATH_FEATURES.map((k) => [k, num(k) ?? null]),
@@ -655,6 +770,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     ...(Object.fromEntries(
       TRADE_FLOW_FEATURES.map((k) => [k, (scored.tradeFlow ?? EMPTY_TRADE_FLOW)[k]]),
     ) as Record<(typeof TRADE_FLOW_FEATURES)[number], number | null>),
+    ...(Object.fromEntries(
+      LAUNCH_SHAPE_FEATURES.map((k) => [k, (scored.tradeFlow ?? EMPTY_TRADE_FLOW)[k] ?? null]),
+    ) as Record<(typeof LAUNCH_SHAPE_FEATURES)[number], number | null>),
     devHolding: devHoldingFeature(scored),
     textCopycatRisk: scored.textScores?.copycatRisk ?? null,
     textNarrativeStrength: scored.textScores?.narrativeStrength ?? null,

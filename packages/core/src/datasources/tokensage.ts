@@ -98,6 +98,10 @@ export interface TokenSageXPost {
 /** How well the linked post or profile matches the token (rules 0.6.0+, full depth only). */
 export interface TokenSageXMatch {
   name?: { score?: number; how?: string; detail?: string } | null;
+  /**
+   * `how` is kept open; rules 0.28.0 added "contract": the post carries the coin's mint
+   * (matched case-sensitively), read as fit 1.0 and verdict "about_this_coin".
+   */
   ticker?: { score?: number; how?: string; detail?: string } | null;
   image?: { score?: number; best_distance?: number | null; media_checked?: number; detail?: string } | null;
   referent?: {
@@ -442,7 +446,11 @@ export interface TokenSageHints {
 export interface TokenSageJob {
   job_id: number;
   status: "pending" | "running" | "done" | "failed";
-  /** On a failed job: "<code>: <detail>", e.g. "token_not_found: no account found on-chain". */
+  /**
+   * On a failed job: "<code>: <detail>", e.g. "token_not_found: no account found on-chain".
+   * From rules 0.28.0 a job whose worker crashed job_max_attempts times ends failed with
+   * "worker died" (before, it stayed pending for good).
+   */
   error?: string | null;
 }
 
