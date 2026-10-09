@@ -511,6 +511,10 @@ export interface LearningRates {
   won10x?: number;
   tenXGraded?: number;
   rate10xPct?: number | null;
+  /** Calls with a simulated return, their sum in percent, and the average (absent from older API builds). */
+  simCalls?: number;
+  sumSimReturnPct?: number;
+  avgReturnPct?: number | null;
 }
 
 export interface LearningDay {

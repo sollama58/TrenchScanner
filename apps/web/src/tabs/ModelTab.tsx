@@ -188,7 +188,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
       <BaselinePanel
         board={lb}
         base={base ?? null}
-        learning={data.learning}
         runs={data.runs}
         days={days}
         api={api}
@@ -322,7 +321,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
 function BaselinePanel({
   board,
   base,
-  learning,
   runs,
   days,
   api,
@@ -333,7 +331,6 @@ function BaselinePanel({
 }: {
   board: Leaderboard;
   base: (GradedRates & { kind: string }) | null;
-  learning: LearningCurve;
   runs: ModelRun[];
   days: number;
   api: string;
@@ -343,7 +340,6 @@ function BaselinePanel({
   refreshing: boolean;
 }) {
   const [metric, setMetric] = useState<"2x" | "4x" | "10x">("2x");
-  const [view, setView] = useState<"models" | "days">("models");
   const [picked, setPicked] = useState<string | null>(null);
   // The model whose detail dialog is open (it follows the board, so a window switch refreshes it).
   const [opened, setOpened] = useState<string | null>(null);
@@ -379,7 +375,6 @@ function BaselinePanel({
       : metric === "4x"
         ? "reached 4x within 30 minutes"
         : "reached 10x within an hour";
-  const days2 = learning.days.filter((d) => d.feed.calls > 0 || d.market.calls > 0);
 
   return (
     <section className="panel">
@@ -395,14 +390,6 @@ function BaselinePanel({
           </p>
         </div>
         <div className="row baseline-controls">
-          <div className="segmented small" role="tablist" aria-label="View">
-            <button className={view === "models" ? "on" : ""} onClick={() => setView("models")}>
-              By model
-            </button>
-            <button className={view === "days" ? "on" : ""} onClick={() => setView("days")}>
-              By day
-            </button>
-          </div>
           <div className="segmented small" role="tablist" aria-label="Hit">
             <button className={metric === "2x" ? "on" : ""} onClick={() => setMetric("2x")}>
               2x
@@ -432,92 +419,72 @@ function BaselinePanel({
         </div>
       </div>
 
-      {view === "models" ? (
-        rows.length > 0 ? (
-          <>
-            <MarkerBars
-              data={rows.map((e) => {
-                const rate = rateOf(e);
-                const profit = e.composite.live.avgSimReturnPct ?? null;
-                return {
-                  id: e.id,
-                  label: e.name,
-                  value: rate,
-                  sub: `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
-                  display: rate === null ? "–" : `${rate.toFixed(1)}%`,
-                  note: `${signedPct(profit)} profit`,
-                  noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
-                  thin: thin(e),
-                };
-              })}
-              markers={[
-                ...(baseRate !== null ? [{ label: "Baseline", value: baseRate, kind: "base" as const }] : []),
-                { label: "Goal", value: goal, kind: "goal" as const },
-              ]}
-              selected={selected?.id ?? null}
-              onSelect={setPicked}
-              onOpen={setOpened}
-              columns={{ label: "Model", value: `${metric} hit rate`, note: "avg profit per call" }}
-            />
-            {selected && (
-              <p className="baseline-readout">
-                <strong>{selected.name}</strong>:{" "}
-                {selRate === null
-                  ? `no graded calls in the last ${days} days yet.`
-                  : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
-                      selLift === null
-                        ? "."
-                        : selLift >= 1
-                          ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
-                          : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
-                    }`}
-                {selected.composite.live.avgSimReturnPct != null
-                  ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
-                  : ""}
-                {selected.composite.warmingUp ? " Still too few calls to lean on." : ""}
-              </p>
-            )}
-            <p className="faint small">
-              Live calls over the last {days} days (the window picked at the top of the page). Under each rate
-              is its average profit per call, following every call with one fixed exit plan. Faded bars rest
-              on too few calls. <strong>Tap or click a model</strong> for its full record, past versions and
-              exam results.
+      {rows.length > 0 ? (
+        <>
+          <MarkerBars
+            data={rows.map((e) => {
+              const rate = rateOf(e);
+              const profit = e.composite.live.avgSimReturnPct ?? null;
+              return {
+                id: e.id,
+                label: e.name,
+                value: rate,
+                sub: `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
+                display: rate === null ? "–" : `${rate.toFixed(1)}%`,
+                note: `${signedPct(profit)} profit`,
+                noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
+                thin: thin(e),
+              };
+            })}
+            markers={[
+              ...(baseRate !== null ? [{ label: "Baseline", value: baseRate, kind: "base" as const }] : []),
+              { label: "Goal", value: goal, kind: "goal" as const },
+            ]}
+            selected={selected?.id ?? null}
+            onSelect={setPicked}
+            onOpen={setOpened}
+            columns={{ label: "Model", value: `${metric} hit rate`, note: "avg profit per call" }}
+          />
+          {selected && (
+            <p className="baseline-readout">
+              <strong>{selected.name}</strong>:{" "}
+              {selRate === null
+                ? `no graded calls in the last ${days} days yet.`
+                : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
+                    selLift === null
+                      ? "."
+                      : selLift >= 1
+                        ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
+                        : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
+                  }`}
+              {selected.composite.live.avgSimReturnPct != null
+                ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
+                : ""}
+              {selected.composite.warmingUp ? " Still too few calls to lean on." : ""}
             </p>
-            <ModelDetailModal
-              entry={board.entries.find((e) => e.id === opened) ?? null}
-              board={board}
-              base={base}
-              runs={runs}
-              days={days}
-              api={api}
-              guest={guest}
-              now={now}
-              onClose={() => setOpened(null)}
-              onSetModels={onSetModels}
-              refreshing={refreshing}
-            />
-          </>
-        ) : (
-          <p className="empty">No models on the board yet.</p>
-        )
-      ) : days2.length > 1 ? (
-        <TrendLines
-          aLabel={`All model calls, ${metric} rate`}
-          bLabel={`Baseline ${metric} rate`}
-          data={days2.map((d) => {
-            const l = metric === "2x" ? d.lift2x : metric === "4x" ? d.lift4x : (d.lift10x ?? null);
-            const rateFor = (r: LearningRates) =>
-              metric === "2x" ? r.rate2xPct : metric === "4x" ? r.rate4xPct : (r.rate10xPct ?? null);
-            return {
-              label: shortDay(d.day),
-              a: rateFor(d.feed),
-              b: rateFor(d.market),
-              sub: `${d.feed.graded} graded calls; ${d.market.graded.toLocaleString()} moments; lift ${lift(l)}`,
-            };
-          })}
-        />
+          )}
+          <p className="faint small">
+            Live calls over the last {days} days (the window picked at the top of the page). Under each rate
+            is its average profit per call, following every call with one fixed exit plan. Faded bars rest on
+            too few calls. <strong>Tap or click a model</strong> for its full record, past versions and exam
+            results.
+          </p>
+          <ModelDetailModal
+            entry={board.entries.find((e) => e.id === opened) ?? null}
+            board={board}
+            base={base}
+            runs={runs}
+            days={days}
+            api={api}
+            guest={guest}
+            now={now}
+            onClose={() => setOpened(null)}
+            onSetModels={onSetModels}
+            refreshing={refreshing}
+          />
+        </>
       ) : (
-        <p className="empty">Needs a couple of days of graded calls.</p>
+        <p className="empty">No models on the board yet.</p>
       )}
 
       <details className="folds">
@@ -1427,6 +1394,44 @@ function shortDay(day: string): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
+/** What the learning panel can chart, each for the model and the market alike. */
+const LEARNING_METRICS = {
+  "2x": {
+    tab: "2x",
+    fig: "2x rate",
+    series: "2x rate",
+    hit: "doubled",
+    of: (r: LearningRates) => r.rate2xPct,
+    note: "A 2x is a double within 15 minutes, before the 50% stop.",
+  },
+  "4x": {
+    tab: "4x",
+    fig: "4x rate",
+    series: "4x rate",
+    hit: "reached 4x",
+    of: (r: LearningRates) => r.rate4xPct,
+    note: "A 4x is reached within 30 minutes, before the 50% stop.",
+  },
+  "10x": {
+    tab: "10x",
+    fig: "10x rate",
+    series: "10x rate",
+    hit: "reached 10x",
+    of: (r: LearningRates) => r.rate10xPct ?? null,
+    note: "A 10x is reached within an hour, before the 50% stop; calls still inside their hour wait.",
+  },
+  ret: {
+    tab: "Avg return",
+    fig: "Avg return",
+    series: "avg return",
+    hit: "",
+    of: (r: LearningRates) => r.avgReturnPct ?? null,
+    note: "Average return per call, following every call with one fixed exit plan; the market line is a random pick under the same plan.",
+  },
+} as const;
+type LearningMetric = keyof typeof LEARNING_METRICS;
+const LEARNING_METRIC_KEYS = Object.keys(LEARNING_METRICS) as LearningMetric[];
+
 /**
  * Day over day: is a model getting better as data accumulates? Hit rates alone can't say - on a
  * day the whole market doubles twice as often every model looks twice as good - and the score
@@ -1453,68 +1458,98 @@ function LearningPanel({
   const [picked, setPicked] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const [showRuns, setShowRuns] = useState(false);
+  const [metric, setMetric] = useState<LearningMetric>("2x");
   const seat = seats.find((s) => s.id === picked) ?? firstWithCalls;
   const mine = seat ? (series.get(seat.id) ?? null) : null;
   const name = seat?.name ?? mine?.name ?? "This model";
   const trend = mine?.trend ?? null;
   const span = learning.trendSpanDays;
 
-  // Every day the market or the model had something, with the model's rate where it called.
+  const m = LEARNING_METRICS[metric];
+  // Every day the market or the model had something, with the model's figure where it called.
   const own = new Map((mine?.days ?? []).map((d) => [d.day, d]));
   const points = learning.days
     .filter((d) => d.market.graded > 0 || own.has(d.day))
     .map((d) => {
-      const m = own.get(d.day);
+      const day = own.get(d.day);
       return {
         day: d.day,
         label: shortDay(d.day),
-        model: m && m.rates.graded > 0 ? m.rates.rate2xPct : null,
-        market: d.market.rate2xPct,
-        graded: m?.rates.graded ?? 0,
+        model: day && day.rates.graded > 0 ? m.of(day.rates) : null,
+        market: m.of(d.market),
+        graded: day?.rates.graded ?? 0,
         moments: d.market.graded,
-        lift: m?.lift2x ?? null,
       };
     });
   const graded = (mine?.days ?? []).reduce((n, d) => n + d.rates.graded, 0);
   const runs = learning.runs;
   const runRows = seat
-    ? runs.map((r) => ({ run: r, own: r.models.find((m) => m.contestant === seat.id) ?? null }))
+    ? runs.map((r) => ({ run: r, own: r.models.find((x) => x.contestant === seat.id) ?? null }))
     : [];
   const ranInRuns = runRows.some((r) => r.own);
 
-  const verdictLine = (() => {
-    if (!trend) return `${name} has no graded calls in the last ${windowDays} days yet.`;
-    const r = trend.recent;
-    const p = trend.prior;
-    if (r.lift2x === null)
-      return `${name} needs more graded calls in the last ${span} days before its edge over the market can be read.`;
-    const lately = `Over the last ${span} days ${pct(r.feed.rate2xPct, 1)} of its ${r.feed.graded} graded calls doubled, against ${pct(
-      r.market.rate2xPct,
+  const recent = trend?.recent ?? null;
+  const compareLine = (() => {
+    if (!recent || recent.feed.graded === 0)
+      return `${name} has no graded calls in the last ${span} days yet.`;
+    const mine_ = m.of(recent.feed);
+    const market = m.of(recent.market);
+    if (metric === "ret")
+      return `Over the last ${span} days its ${recent.feed.graded} graded calls averaged ${signedPct(mine_, 1)} each under one fixed exit plan, against ${signedPct(
+        market,
+        1,
+      )} for a random pick from the same moments.`;
+    const times = mine_ !== null && market ? ` That is ${(mine_ / market).toFixed(1)}x the market rate.` : "";
+    const lately = `Over the last ${span} days ${pct(mine_, 1)} of its ${recent.feed.graded} graded calls ${m.hit}, against ${pct(
+      market,
       1,
-    )} for the market: ${r.lift2x.toFixed(1)}x the market rate.`;
-    if (!p || p.lift2x === null) return `${lately} Too few calls in the ${span} days before to compare.`;
-    if (trend.verdict === "too-early")
-      return `${lately} The ${span} days before held ${p.lift2x.toFixed(1)}x, but on too few calls to call a trend.`;
-    return `${lately} The ${span} days before held ${p.lift2x.toFixed(1)}x, so it is ${
-      trend.verdict === "improving"
-        ? "pulling further ahead"
-        : trend.verdict === "worsening"
-          ? "losing ground"
-          : "holding its edge"
-    }.`;
+    )} for the market.${times}`;
+    const before = trend?.prior?.lift2x;
+    return metric === "2x" && before != null
+      ? `${lately} The ${span} days before, it doubled ${before.toFixed(1)}x as often as the market.`
+      : lately;
   })();
 
-  const card = (): LearningCardData => ({
-    model: name,
-    windowDays,
-    points: points.map((p) => ({ label: p.label, model: p.model, market: p.market })),
-    spanDays: span,
-    recentLift: trend?.recent.lift2x ?? null,
-    priorLift: trend?.prior?.lift2x ?? null,
-    verdict: trend ? TREND_TEXT[trend.verdict] : TREND_TEXT["too-early"],
-    tone: (trend ? TREND_STATE[trend.verdict] : "early") as LearningCardData["tone"],
-    graded,
-  });
+  // Its record over the whole window, for the share image.
+  const card = (): LearningCardData => {
+    const days = mine?.days ?? [];
+    const sum = (rows: LearningRates[], f: (r: LearningRates) => number | undefined) =>
+      rows.reduce((n, r) => n + (f(r) ?? 0), 0);
+    const pooled = (rows: LearningRates[]) => {
+      const share = (won: number, of: number) => (of > 0 ? (won / of) * 100 : null);
+      const g = sum(rows, (r) => r.graded);
+      return {
+        "2x": share(
+          sum(rows, (r) => r.won2x),
+          g,
+        ),
+        "4x": share(
+          sum(rows, (r) => r.won4x),
+          g,
+        ),
+        "10x": share(
+          sum(rows, (r) => r.won10x),
+          sum(rows, (r) => r.tenXGraded),
+        ),
+        ret:
+          sum(rows, (r) => r.simCalls) > 0
+            ? sum(rows, (r) => r.sumSimReturnPct) / sum(rows, (r) => r.simCalls)
+            : null,
+      };
+    };
+    const model = pooled(days.map((d) => d.rates));
+    // The market on the same days it called, so the comparison is like for like.
+    const market = pooled(learning.days.filter((d) => own.has(d.day)).map((d) => d.market));
+    return {
+      model: name,
+      windowDays,
+      metric,
+      points: points.map((p) => ({ label: p.label, model: p.model, market: p.market })),
+      rates: model,
+      market: market[metric],
+      graded,
+    };
+  };
 
   return (
     <section className="panel learning-panel">
@@ -1525,16 +1560,16 @@ function LearningPanel({
           </span>
           <h3>Is it getting better?</h3>
           <p className="muted small">
-            Pick a model to see how often its calls doubled, day by day, next to the market rate: how often a
-            random pick from the same moments doubled. A model that is learning pulls further above the market
-            over time. If both lines rise together, that&apos;s the market, not the model.
+            Pick a model and a measure to see it day by day next to the market: the same measure for a random
+            pick from the moments the models choose from. A model that is learning pulls further above the
+            market over time. If both lines rise together, that&apos;s the market, not the model.
           </p>
         </div>
         <div className="learning-tools">
           {trend && (
             <span
               className={`state ${TREND_STATE[trend.verdict]}`}
-              title={`Last ${span} days vs the ${span} before`}
+              title={`2x rate against the market, last ${span} days vs the ${span} before`}
             >
               {TREND_TEXT[trend.verdict]}
             </span>
@@ -1576,48 +1611,48 @@ function LearningPanel({
       {seat && (
         <>
           <div className="family-figs">
-            <div>
-              <label>
-                {name} 2x, last {span}d
-              </label>
-              <span className="num">{pct(trend?.recent.feed.rate2xPct, 1)}</span>
-            </div>
-            <div>
-              <label>Market 2x, last {span}d</label>
-              <span className="num">{pct(trend?.recent.market.rate2xPct, 1)}</span>
-            </div>
-            <div>
-              <label>Vs market, last {span}d</label>
-              <span className="num">{lift(trend?.recent.lift2x)}</span>
-            </div>
-            <div>
-              <label>Vs market, {span}d before</label>
-              <span className="num">{lift(trend?.prior?.lift2x)}</span>
-            </div>
+            {LEARNING_METRIC_KEYS.map((k) => {
+              const v = recent ? LEARNING_METRICS[k].of(recent.feed) : null;
+              return (
+                <div key={k}>
+                  <label>
+                    {LEARNING_METRICS[k].fig}, last {span}d
+                  </label>
+                  <span className={`num${k === "ret" ? ` ${profitTone(v)}` : ""}`}>
+                    {k === "ret" ? signedPct(v, 1) : pct(v, 1)}
+                  </span>
+                </div>
+              );
+            })}
           </div>
-          <p className="muted small">{verdictLine}</p>
+          <p className="muted small">{compareLine}</p>
 
+          <div className="segmented small learning-metric" role="tablist" aria-label="Measure">
+            {LEARNING_METRIC_KEYS.map((k) => (
+              <button key={k} className={k === metric ? "on" : ""} onClick={() => setMetric(k)}>
+                {LEARNING_METRICS[k].tab}
+              </button>
+            ))}
+          </div>
           {points.length > 1 ? (
             <TrendLines
-              aLabel={`${name} 2x rate`}
-              bLabel="Market 2x rate"
+              aLabel={`${name} ${m.series}`}
+              bLabel={`Market ${m.series}`}
+              signed={metric === "ret"}
               data={points.map((p) => ({
                 label: p.label,
                 a: p.model,
                 b: p.market,
-                sub: `${p.graded} graded call${p.graded === 1 ? "" : "s"}; ${p.moments.toLocaleString()} moments${
-                  p.lift !== null ? `; ${lift(p.lift)} the market` : ""
-                }`,
+                sub: `${p.graded} graded call${p.graded === 1 ? "" : "s"}; ${p.moments.toLocaleString()} moments`,
               }))}
             />
           ) : (
             <p className="empty">Needs a couple of days of graded calls.</p>
           )}
           <p className="faint small">
-            Live calls over the last {windowDays} days (the window picked at the top of the page), each graded
-            on a 2x within 15 minutes. Gaps are days it made no graded calls. A day&apos;s edge over the
-            market shows once it has {learning.minGradedForLift} graded calls; the verdict compares the last{" "}
-            {span} days with the {span} before.
+            Live calls over the last {windowDays} days (the window picked at the top of the page). {m.note}{" "}
+            Gaps are days it made no graded calls. The verdict compares its 2x rate against the market over
+            the last {span} days and the {span} before.
           </p>
         </>
       )}
@@ -1671,7 +1706,7 @@ function LearningPanel({
 
       {sharing && seat && (
         <ShareImageDialog
-          title={`Is ${name} getting better?`}
+          title={`${name}'s calls, ${LEARNING_METRICS[metric].tab}`}
           fileName={`trenchscanner-${name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-vs-market`}
           caption={`${name} vs the market, on TrenchScanner`}
           link="trenchscanner.app"
