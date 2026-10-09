@@ -5245,6 +5245,40 @@ button.small-btn {
   margin: 0;
   max-width: 70ch;
 }
+/* The hero's link to the TokenSage page: a pill on the right of the header row. */
+.lht-sage-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--brand-a) 35%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 12%, transparent);
+  color: var(--brand-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.lht-sage-pill:hover {
+  background: color-mix(in srgb, var(--brand-a) 20%, transparent);
+  border-color: color-mix(in srgb, var(--brand-a) 55%, transparent);
+  text-decoration: none;
+}
+.lht-sage-pill:focus-visible {
+  outline: 2px solid var(--brand-a);
+  outline-offset: 2px;
+}
+.lht-sage-pill svg:last-child {
+  transition: transform 0.15s;
+}
+.lht-sage-pill:hover svg:last-child {
+  transform: translateX(2px);
+}
 .lht-controls {
   position: relative;
   display: flex;
