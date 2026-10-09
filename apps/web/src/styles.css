@@ -1891,7 +1891,9 @@ g:hover > .hit {
   gap: 10px;
   flex-shrink: 0;
 }
-.learning-metric {
+.learning-controls {
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 4px 0 10px;
 }
 .learning-tools .state {

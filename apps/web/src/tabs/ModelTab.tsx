@@ -1394,6 +1394,9 @@ function shortDay(day: string): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
+/** Fewest graded calls a model needs on a day before the learning chart plots that day. */
+const MIN_CALLS_PER_POINT = 5;
+
 /** What the learning panel can chart, each for the model and the market alike. */
 const LEARNING_METRICS = {
   "2x": {
@@ -1459,6 +1462,9 @@ function LearningPanel({
   const [sharing, setSharing] = useState(false);
   const [showRuns, setShowRuns] = useState(false);
   const [metric, setMetric] = useState<LearningMetric>("2x");
+  // Today is still filling in, so it is left off the chart unless asked for.
+  const [withToday, setWithToday] = useState(false);
+  const today = new Date(now).toISOString().slice(0, 10);
   const seat = seats.find((s) => s.id === picked) ?? firstWithCalls;
   const mine = seat ? (series.get(seat.id) ?? null) : null;
   const name = seat?.name ?? mine?.name ?? "This model";
@@ -1469,13 +1475,14 @@ function LearningPanel({
   // Every day the market or the model had something, with the model's figure where it called.
   const own = new Map((mine?.days ?? []).map((d) => [d.day, d]));
   const points = learning.days
-    .filter((d) => d.market.graded > 0 || own.has(d.day))
+    .filter((d) => (d.market.graded > 0 || own.has(d.day)) && (withToday || d.day !== today))
     .map((d) => {
       const day = own.get(d.day);
       return {
         day: d.day,
-        label: shortDay(d.day),
-        model: day && day.rates.graded > 0 ? m.of(day.rates) : null,
+        label: d.day === today ? "Today" : shortDay(d.day),
+        // A day's point needs a few graded calls behind it; one or two calls swing it 0 to 100%.
+        model: day && day.rates.graded >= MIN_CALLS_PER_POINT ? m.of(day.rates) : null,
         market: m.of(d.market),
         graded: day?.rates.graded ?? 0,
         moments: d.market.graded,
@@ -1627,12 +1634,22 @@ function LearningPanel({
           </div>
           <p className="muted small">{compareLine}</p>
 
-          <div className="segmented small learning-metric" role="tablist" aria-label="Measure">
-            {LEARNING_METRIC_KEYS.map((k) => (
-              <button key={k} className={k === metric ? "on" : ""} onClick={() => setMetric(k)}>
-                {LEARNING_METRICS[k].tab}
+          <div className="row learning-controls">
+            <div className="segmented small" role="tablist" aria-label="Measure">
+              {LEARNING_METRIC_KEYS.map((k) => (
+                <button key={k} className={k === metric ? "on" : ""} onClick={() => setMetric(k)}>
+                  {LEARNING_METRICS[k].tab}
+                </button>
+              ))}
+            </div>
+            <div className="segmented small" role="tablist" aria-label="Today">
+              <button className={withToday ? "" : "on"} onClick={() => setWithToday(false)}>
+                Without today
               </button>
-            ))}
+              <button className={withToday ? "on" : ""} onClick={() => setWithToday(true)}>
+                With today
+              </button>
+            </div>
           </div>
           {points.length > 1 ? (
             <TrendLines
@@ -1650,9 +1667,10 @@ function LearningPanel({
             <p className="empty">Needs a couple of days of graded calls.</p>
           )}
           <p className="faint small">
-            Live calls over the last {windowDays} days (the window picked at the top of the page). {m.note}{" "}
-            Gaps are days it made no graded calls. The verdict compares its 2x rate against the market over
-            the last {span} days and the {span} before.
+            Live calls over the last {windowDays} days (the window picked at the top of the page). {m.note} A
+            day shows once {name} has {MIN_CALLS_PER_POINT} graded calls in it; fewer leave a gap. Today is
+            still filling in, so it is off unless you add it. The verdict compares its 2x rate against the
+            market over the last {span} days and the {span} before.
           </p>
         </>
       )}
