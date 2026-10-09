@@ -95,6 +95,7 @@ describe("trainTopSliceCurator", () => {
         ]),
         targets,
         cooldownHours: 24,
+        targetPerHour: 0,
       }),
     ).toBeNull();
   });
@@ -107,14 +108,38 @@ describe("trainTopSliceCurator", () => {
       memberCallRanks: new Map([["trees", 0.8]]),
       targets,
       cooldownHours: 0,
+      targetPerHour: 0,
     })!;
     expect(result.params.members.map((m) => m.contestant)).toEqual(["trees"]);
     expect(result.params.members[0]!.sliceRank).toBeCloseTo(0.95, 10);
     expect(result.params.threshold).toBe(0.5);
-    // Ranks i/n: the rows at or above rank 0.95 are the top 5% of 400.
-    expect(result.exam.calls).toBe(20);
-    expect(result.precisionCalibration.support).toBe(20);
+    expect(result.exam.calls).toBeGreaterThan(0);
+    expect(result.precisionCalibration.support).toBe(result.exam.graded);
     // At serve time the shipped probability that marks the slice is the one at rank 0.95.
     expect(result.params.members[0]!.sliceProbability).toBeCloseTo(0.95, 2);
+  });
+
+  it("grades each chunk with cutoffs set on the other chunks, not the stored in-sample one", () => {
+    // The stored cutoff was chosen on every reference row's label; the exam must not lean on it.
+    const rows = syntheticMarket({ tokens: 300, days: 3, truth: "linear", seed: 5 })
+      .slice(0, 900)
+      .sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
+    const fold = Float64Array.from(rows, (r, i) => ((i * 7919) % rows.length) / rows.length);
+    const exam = (stored: number) =>
+      trainTopSliceCurator({
+        reference: rows,
+        memberFoldRanks: new Map([["trees", fold]]),
+        memberShippedProbabilities: new Map([["trees", fold]]),
+        memberCallRanks: new Map([["trees", stored]]),
+        targets,
+        cooldownHours: 0,
+        targetPerHour: 0,
+      })!;
+    const a = exam(0.6);
+    const b = exam(0.99);
+    expect(a.exam.graded).toBeGreaterThan(0);
+    expect(b.exam).toEqual(a.exam);
+    // What serves still follows the stored cutoff.
+    expect(b.params.members[0]!.sliceRank).toBeGreaterThan(a.params.members[0]!.sliceRank);
   });
 });

@@ -1210,6 +1210,7 @@ export async function runEvolvingContest(
       memberCallRanks: callRanks,
       targets: cfg.targets,
       cooldownHours: cfg.cooldownHours,
+      targetPerHour: cfg.targetPerHour,
     });
     if (topSlice) {
       const names = topSlice.params.members.map(

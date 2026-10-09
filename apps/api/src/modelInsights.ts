@@ -164,6 +164,9 @@ function summarizeRun(row: {
     targets: m.targets ?? null,
     familyComparison: m.familyComparison ?? [],
     precisionCalibration: m.precisionCalibration ?? null,
+    // The governed exam record: each part graded at a cutoff set on the other parts. The
+    // calibration's own rate is the best slice of the search, read on the rows that picked it.
+    exam: m.exam ? { graded: m.exam.graded, wins: m.exam.wins, goals: m.exam.goals } : null,
     precisionCurve: m.precisionCurve ?? [],
     heuristicCalibration: m.heuristicCalibration ?? null,
     heuristicPrecisionCurve: m.heuristicPrecisionCurve ?? [],

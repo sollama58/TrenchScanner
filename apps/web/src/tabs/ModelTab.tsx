@@ -11,6 +11,7 @@ import {
   type LearningRates,
   type LearningTrend,
   type AiJudgeState,
+  runExamRates,
 } from "../api";
 import { HBarChart, MarkerBars, Skeleton, TargetBars, TrendLines } from "../components/Charts";
 import {
@@ -1776,6 +1777,7 @@ function TrainingPanel({
   const [chosen, setChosen] = useState<string | null>(null);
   const shownId = chosen && latestByModel.has(chosen) ? chosen : (options[0]?.id ?? null);
   const run = shownId ? latestByModel.get(shownId)! : (runs[0] ?? null);
+  const examRates = run ? runExamRates(run) : null;
 
   return (
     <section className="panel">
@@ -1816,10 +1818,10 @@ function TrainingPanel({
           <p className="muted small">
             Calling only the top slice by confidence trades volume for hit rate. This is the out-of-sample
             record of each slice
-            {run.precisionCalibration?.support
-              ? `; the live cutoff made ${run.precisionCalibration.support} exam calls at ${pct(
-                  run.precisionCalibration.winRatePct,
-                )} / ${pct(run.precisionCalibration.goalRatePct)}`
+            {examRates?.calls
+              ? `; graded at cutoffs set on other parts of the exam, the model made ${examRates.calls} exam calls at ${pct(
+                  examRates.winRatePct,
+                )} / ${pct(examRates.goalRatePct)}`
               : ""}
             .
           </p>
@@ -1910,9 +1912,9 @@ function TrainingPanel({
                           {r.status}
                         </span>
                       </td>
-                      <td className="r num">{pct(r.precisionCalibration?.winRatePct)}</td>
-                      <td className="r num">{pct(r.precisionCalibration?.goalRatePct)}</td>
-                      <td className="r num">{r.precisionCalibration?.support ?? "–"}</td>
+                      <td className="r num">{pct(runExamRates(r).winRatePct)}</td>
+                      <td className="r num">{pct(runExamRates(r).goalRatePct)}</td>
+                      <td className="r num">{runExamRates(r).calls ?? "–"}</td>
                     </tr>
                   ))}
                 </tbody>

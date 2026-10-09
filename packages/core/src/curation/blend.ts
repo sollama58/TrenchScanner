@@ -129,58 +129,102 @@ export function trainBlendCurator(input: BlendInput, neverEmitThreshold: number)
   };
 }
 
+/** One time-ordered chunk of the reference rows, and the rows of the others it may learn from. */
+export interface ExamChunk {
+  /** Reference row indexes in this chunk. */
+  indexes: number[];
+  /**
+   * Reference row indexes in the other chunks, less any row whose watch window overlaps this
+   * chunk (it was graded on this chunk's prices).
+   */
+  others: number[];
+  spanHours: number;
+}
+
+/** The reference rows in time order cut into EXAM_CHUNKS chunks (see examUnfittedScores). */
+export function examChunks(reference: readonly TrainingRow[]): ExamChunk[] {
+  const n = reference.length;
+  const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+  const chunkSize = Math.floor(n / EXAM_CHUNKS);
+  const spans: { start: number; end: number }[] = [];
+  for (let k = 0; k < EXAM_CHUNKS && chunkSize > 0; k++) {
+    const start = k * chunkSize;
+    const end = k === EXAM_CHUNKS - 1 ? n : start + chunkSize;
+    if (end > start) spans.push({ start, end });
+  }
+  return spans.map(({ start, end }, k) => {
+    const chunkStart = reference[start]!.anchorAt.getTime();
+    const chunkEnd = reference[end - 1]!.anchorAt.getTime();
+    const others: number[] = [];
+    for (const [j, o] of spans.entries()) {
+      if (j === k) continue;
+      for (let i = o.start; i < o.end; i++) {
+        const t = reference[i]!.anchorAt.getTime();
+        if (t + labelWindowMs <= chunkStart || t > chunkEnd) others.push(i);
+      }
+    }
+    const indexes: number[] = [];
+    for (let i = start; i < end; i++) indexes.push(i);
+    return { indexes, others, spanHours: Math.max(1, (chunkEnd - chunkStart) / 3_600_000) };
+  });
+}
+
+/**
+ * Each member's rank cutoff as its exam sets it (calibrateThresholdForPrecision on its fold ranks,
+ * cooldown replayed), but from `rows` only. A combiner that reads its members' cutoffs is graded
+ * on a chunk with cutoffs set without that chunk: the members' own cutoffs are chosen on every
+ * reference row's label, so a combiner graded with them grades the line it was drawn from.
+ */
+export function memberCallRanksFrom(
+  reference: readonly TrainingRow[],
+  memberFoldRanks: ReadonlyMap<string, ArrayLike<number>>,
+  rows: readonly number[],
+  input: Pick<BlendInput, "targets" | "cooldownHours">,
+): Map<string, number | null> {
+  const cooldownMs = input.cooldownHours * 3_600_000;
+  const out = new Map<string, number | null>();
+  for (const [member, ranks] of memberFoldRanks) {
+    const calls: ScoredOutcome[] = rows.map((i) => ({
+      probability: ranks[i]!,
+      labelValue: reference[i]!.labelValue,
+      tokenId: reference[i]!.tokenId,
+      anchorAt: reference[i]!.anchorAt,
+    }));
+    out.set(member, calibrateThresholdForPrecision(calls, input.targets, { cooldownMs }).threshold);
+  }
+  return out;
+}
+
 /**
  * The exam of a score nothing was fitted to: the reference rows in time order cut into chunks,
  * each chunk graded at the cutoff the OTHER chunks earned and governed like production. Every
  * chunk is out of sample already; the cross-chunk cutoff is what keeps the grade from choosing
- * its own line. `scores` is one score per reference row, higher = more confident.
+ * its own line. `scores` is one score per reference row, higher = more confident - or, for a score
+ * built on something set from labels (Agreement reads its members' cutoffs), a function giving
+ * chunk k's scores built without chunk k's labels.
  */
 export function examUnfittedScores(
   reference: readonly TrainingRow[],
-  scores: readonly number[],
+  scores: readonly number[] | ((chunk: ExamChunk) => readonly number[]),
   input: Pick<BlendInput, "targets" | "cooldownHours" | "targetPerHour">,
 ): { exam: CallRecord; examChunks: number } {
-  const n = reference.length;
   const cooldownMs = input.cooldownHours * 3_600_000;
-  const call = (i: number): ScoredOutcome => ({
-    probability: scores[i]!,
-    labelValue: reference[i]!.labelValue,
-    tokenId: reference[i]!.tokenId,
-    anchorAt: reference[i]!.anchorAt,
-  });
-  const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
-  const chunkSize = Math.floor(n / EXAM_CHUNKS);
-  const chunks: { indexes: number[]; spanHours: number }[] = [];
-  for (let k = 0; k < EXAM_CHUNKS && chunkSize > 0; k++) {
-    const start = k * chunkSize;
-    const end = k === EXAM_CHUNKS - 1 ? n : start + chunkSize;
-    const indexes: number[] = [];
-    for (let i = start; i < end; i++) indexes.push(i);
-    if (indexes.length === 0) continue;
-    const spanMs = reference[end - 1]!.anchorAt.getTime() - reference[start]!.anchorAt.getTime();
-    chunks.push({ indexes, spanHours: Math.max(1, spanMs / 3_600_000) });
-  }
+  const chunks = examChunks(reference);
   const exam = examRecord();
-  for (const [k, chunk] of chunks.entries()) {
-    const chunkStart = reference[chunk.indexes[0]!]!.anchorAt.getTime();
-    const chunkEnd = reference[chunk.indexes[chunk.indexes.length - 1]!]!.anchorAt.getTime();
-    const others = chunks
-      .filter((_, j) => j !== k)
-      .flatMap((o) => o.indexes)
-      // A row whose watch window overlaps this chunk was graded on this chunk's prices.
-      .filter((i) => {
-        const t = reference[i]!.anchorAt.getTime();
-        return t + labelWindowMs <= chunkStart || t > chunkEnd;
-      })
-      .map(call);
+  for (const chunk of chunks) {
+    const s = typeof scores === "function" ? scores(chunk) : scores;
+    const others = chunk.others.map((i): ScoredOutcome => ({
+      probability: s[i]!,
+      labelValue: reference[i]!.labelValue,
+      tokenId: reference[i]!.tokenId,
+      anchorAt: reference[i]!.anchorAt,
+    }));
     if (others.length === 0) continue;
     const cutoff = calibrateThresholdForPrecision(others, input.targets, { cooldownMs }).threshold;
     if (cutoff === null) continue;
     const budget = paceBudget(input.targetPerHour, chunk.spanHours);
     const sent = applyCooldown(
-      chunk.indexes.flatMap((i) =>
-        scores[i]! >= cutoff ? [{ row: reference[i]!, confidence: scores[i]! }] : [],
-      ),
+      chunk.indexes.flatMap((i) => (s[i]! >= cutoff ? [{ row: reference[i]!, confidence: s[i]! }] : [])),
       cooldownMs,
     )
       .sort((a, b) => b.confidence - a.confidence)
