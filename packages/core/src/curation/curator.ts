@@ -113,7 +113,8 @@ export interface CurationDecision {
   curate: boolean;
   /**
    * 0-100 conviction, in the deciding curator's own units: curationRankScore for the heuristic,
-   * calibrated probability x 100 for a trained model. The emission governor ranks contenders and
+   * raw model output x 100 for a learner, an agreement or slice score for a combiner. It is not a
+   * calibrated probability; that is calibratedPct. The emission governor ranks contenders and
    * calibrates its hit-rate cutoff in these units, so what they MEAN can differ per curator as
    * long as each curator is consistent with itself.
    */

@@ -193,6 +193,9 @@ export function scoreStacked(
  * cooldown replayed), but from `rows` only. A combiner that reads its members' cutoffs is graded
  * on a chunk with cutoffs set without that chunk: the members' own cutoffs are chosen on every
  * reference row's label, so a combiner graded with them grades the line it was drawn from.
+ * The call floor (minSupport) shrinks with the share of rows used: the stored cutoffs met it on
+ * every reference row, and the tree seats sit on it, so an unscaled floor on a third of the rows
+ * reaches several times deeper into the ranking than the cutoff that serves.
  */
 export function memberCallRanksFrom(
   reference: readonly TrainingRow[],
@@ -201,6 +204,8 @@ export function memberCallRanksFrom(
   input: { targets: PrecisionTargets; cooldownHours: number },
 ): Map<string, number | null> {
   const cooldownMs = input.cooldownHours * 3_600_000;
+  const share = reference.length > 0 ? rows.length / reference.length : 1;
+  const targets = { ...input.targets, minSupport: Math.max(1, Math.round(input.targets.minSupport * share)) };
   const out = new Map<string, number | null>();
   for (const [member, ranks] of memberFoldRanks) {
     const calls: ScoredOutcome[] = rows.map((i) => ({
@@ -209,7 +214,7 @@ export function memberCallRanksFrom(
       tokenId: reference[i]!.tokenId,
       anchorAt: reference[i]!.anchorAt,
     }));
-    out.set(member, calibrateThresholdForPrecision(calls, input.targets, { cooldownMs }).threshold);
+    out.set(member, calibrateThresholdForPrecision(calls, targets, { cooldownMs }).threshold);
   }
   return out;
 }
@@ -231,6 +236,8 @@ export interface StackingInput {
   cooldownHours: number;
   targetPerHour: number;
   recencyHalfLifeDays?: number;
+  /** Same meaning as TrainOptions.runWeightPerDoubling; the learner seats read it from the env. */
+  runWeightPerDoubling?: number;
 }
 
 export interface StackingResult {
@@ -297,7 +304,12 @@ export async function trainStackedCurator(
     members.filter((c) => callRank(c) !== null).map((c) => [c, input.memberFoldRanks.get(c)!]),
   );
   const train = (rows: TrainingRow[]) =>
-    trainCurator(rows, { featureNames, transform: null, recencyHalfLifeDays: input.recencyHalfLifeDays });
+    trainCurator(rows, {
+      featureNames,
+      transform: null,
+      recencyHalfLifeDays: input.recencyHalfLifeDays,
+      runWeightPerDoubling: input.runWeightPerDoubling,
+    });
 
   // The meta exam: walk forward over the reference rows in time order. Chunk 0 is training floor.
   const cooldownMs = input.cooldownHours * 3_600_000;

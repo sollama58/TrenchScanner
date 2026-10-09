@@ -618,7 +618,15 @@ export async function collectCuratedContender(
   const decisions = decideCurations(scored, roster, env, population);
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
   const narrative = decisions.get(NARRATIVE_CONTESTANT);
-  if (narrative && retry === undefined && (await noteNarrativeVerdict(token.id, narrative, cooldownCutoff))) {
+  // A failed note costs only the Narrative seat's card on this coin, never every seat's decision.
+  const noted =
+    narrative !== undefined &&
+    retry === undefined &&
+    (await noteNarrativeVerdict(token.id, narrative, cooldownCutoff).catch((err) => {
+      logger.warn("failed to note narrative verdict", { tokenId: token.id, error: String(err) });
+      return true;
+    }));
+  if (noted) {
     // Another seat's card is already showing this coin: the Narrative seat's view went onto it
     // as a note, so it files no call of its own (a second card on one coin was decided against).
     decisions.delete(NARRATIVE_CONTESTANT);

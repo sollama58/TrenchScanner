@@ -105,13 +105,15 @@ const fmtVal = (v: number | null | undefined, digits = 0) =>
   v === null || v === undefined || !Number.isFinite(v) ? "unknown" : v.toFixed(digits);
 
 /**
- * The deciding model's own calibrated 2x probability, 0-1, when it is a trained model: its
- * conviction IS that probability x 100 (see CurationDecision.confidence). The heuristic's
- * conviction is a rank score, not a probability, so it has none.
+ * The deciding model's calibrated 2x probability, 0-1: its calibratedPct, the graded 2x rate of
+ * calls scored like this one. Its conviction is NOT that probability - a learner's is its raw
+ * score, a combiner's an agreement or slice score - so the heuristic, and any pick without a
+ * calibration table, has none.
  */
 export function curatorProbabilityOf(decision: CurationDecision): number | undefined {
   if (decision.source === HEURISTIC_CURATOR_SOURCE) return undefined;
-  const p = decision.confidence / 100;
+  if (decision.calibratedPct === undefined) return undefined;
+  const p = decision.calibratedPct / 100;
   return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : undefined;
 }
 

@@ -53,7 +53,8 @@ export function agreementScore(calls: number, ranks: readonly number[], members:
 
 /** The score's integer part: how many members the score says are calling. */
 export function agreeingFromScore(score: number, members: number): number {
-  return Math.min(members, Math.floor(score * (members + 1)));
+  // The epsilon absorbs float error: (15 + r) / 22 * 22 can land just under 15.
+  return Math.min(members, Math.floor(score * (members + 1) + 1e-9));
 }
 
 /** The agreement score for one candidate at serve time (see scoreStacked for the member map). */

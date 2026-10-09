@@ -76,6 +76,7 @@ export async function loadReplayItems(
     select: {
       source: true,
       confidence: true,
+      calibratedPct: true,
       reasons: true,
       candidateOutcome: {
         select: { id: true, anchorAt: true, anchorPriceUsd: true, anchorMcapUsd: true, features: true },
@@ -133,6 +134,7 @@ export async function loadReplayItems(
     const decision: CurationDecision = {
       curate: true,
       confidence: a.confidence,
+      calibratedPct: a.calibratedPct ?? undefined,
       reasons: a.reasons,
       source: a.source,
     };

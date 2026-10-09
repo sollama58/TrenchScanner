@@ -1062,6 +1062,7 @@ export async function runEvolvingContest(
         cooldownHours: cfg.cooldownHours,
         targetPerHour: cfg.targetPerHour,
         recencyHalfLifeDays: cfg.recencyHalfLifeDays,
+        runWeightPerDoubling: cfg.runWeightPerDoubling,
       },
       NEVER_EMIT_THRESHOLD,
     );
