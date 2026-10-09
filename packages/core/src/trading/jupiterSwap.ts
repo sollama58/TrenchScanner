@@ -11,6 +11,8 @@
  * (txGuard.ts) before it is signed, whichever route built it.
  */
 
+import { TransientError } from "./errors.js";
+
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 export interface SwapQuote {
@@ -45,7 +47,10 @@ export interface SwapClient {
   swapTransaction(input: {
     quote: SwapQuote;
     userPublicKey: string;
+    /** The most the priority fee may be (lamports); the route estimates it from recent fees. */
     maxPriorityFeeLamports: number;
+    /** Instead of the estimate, exactly this fee (a retry raising its fee); never over the max. */
+    priorityFeeLamports?: number;
   }): Promise<{ transaction: Uint8Array; lastValidBlockHeight: number | null }>;
   /** USD prices for mints (SOL included when asked); a mint Jupiter has no reliable price for is absent. */
   pricesUsd(mints: string[]): Promise<Map<string, number>>;
@@ -65,6 +70,8 @@ export interface FallbackSwapClient {
     decimals: number | null;
     slippageBps: number;
     maxPriorityFeeLamports: number;
+    /** Exactly this fee instead of the max (a retry raising its fee). */
+    priorityFeeLamports?: number;
   }): Promise<{ transaction: Uint8Array; lastValidBlockHeight: number | null }>;
 }
 
@@ -75,34 +82,58 @@ const NO_ROUTE_CODES = new Set([
   "ROUTE_PLAN_DOES_NOT_CONSUME_ALL_THE_AMOUNT",
 ]);
 
+/** A failed request is tried once more after this long when it might succeed on a second go. */
+const REQUEST_RETRY_DELAY_MS = 300;
+
+/**
+ * One call to a swap API. A network failure, a timeout or a 5xx is tried once more (every call
+ * here only reads or builds - nothing is sent - so a repeat is harmless), then thrown as a
+ * TransientError. 429 is a RateLimitedError (not retried: the caller backs off); "no route" is
+ * a NoRouteError; anything else a plain Error.
+ */
 async function request(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
   what: string,
 ): Promise<Response> {
-  let res: Response;
-  try {
-    res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(12_000) });
-  } catch (err) {
-    throw new Error(`${what}: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(12_000) });
+    } catch (err) {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, REQUEST_RETRY_DELAY_MS));
+        continue;
+      }
+      throw new TransientError(`${what}: ${err instanceof Error ? err.message : String(err)}`, {
+        cause: err,
+      });
+    }
+    if (res.ok) return res;
+    const text = await res.text().catch(() => "");
+    if (res.status === 429) throw new RateLimitedError(`${what}: rate limited`);
+    let code = "";
+    let message = text.slice(0, 200);
+    try {
+      const body = JSON.parse(text) as { errorCode?: string; error?: string; message?: string };
+      code = body.errorCode ?? "";
+      message = body.error ?? body.message ?? message;
+    } catch {
+      /* not JSON */
+    }
+    if (NO_ROUTE_CODES.has(code) || /no route|not tradable|could not find any route/i.test(message)) {
+      throw new NoRouteError(`${what}: no route (${code || message})`);
+    }
+    if (res.status >= 500) {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, REQUEST_RETRY_DELAY_MS));
+        continue;
+      }
+      throw new TransientError(`${what}: HTTP ${res.status} ${code} ${message}`.trim());
+    }
+    throw new Error(`${what}: HTTP ${res.status} ${code} ${message}`.trim());
   }
-  if (res.ok) return res;
-  const text = await res.text().catch(() => "");
-  if (res.status === 429) throw new RateLimitedError(`${what}: rate limited`);
-  let code = "";
-  let message = text.slice(0, 200);
-  try {
-    const body = JSON.parse(text) as { errorCode?: string; error?: string; message?: string };
-    code = body.errorCode ?? "";
-    message = body.error ?? body.message ?? message;
-  } catch {
-    /* not JSON */
-  }
-  if (NO_ROUTE_CODES.has(code) || /no route|not tradable|could not find any route/i.test(message)) {
-    throw new NoRouteError(`${what}: no route (${code || message})`);
-  }
-  throw new Error(`${what}: HTTP ${res.status} ${code} ${message}`.trim());
 }
 
 export class JupiterSwapClient implements SwapClient {
@@ -141,7 +172,11 @@ export class JupiterSwapClient implements SwapClient {
     return quote;
   }
 
-  async swapTransaction(input: { quote: SwapQuote; userPublicKey: string; maxPriorityFeeLamports: number }) {
+  async swapTransaction(input: Parameters<SwapClient["swapTransaction"]>[0]) {
+    const exact =
+      input.priorityFeeLamports !== undefined && input.priorityFeeLamports > 0
+        ? Math.min(input.priorityFeeLamports, input.maxPriorityFeeLamports)
+        : null;
     const res = await request(
       this.fetchImpl,
       `${this.baseUrl}/swap/v1/swap`,
@@ -154,15 +189,19 @@ export class JupiterSwapClient implements SwapClient {
           wrapAndUnwrapSol: true,
           dynamicComputeUnitLimit: true,
           dynamicSlippage: false,
+          // Jupiter's estimate from recent fees ("veryHigh": the 75th percentile) under our cap, or,
+          // for a retry after a send that never landed, exactly the raised fee.
           prioritizationFeeLamports:
-            input.maxPriorityFeeLamports > 0
-              ? {
-                  priorityLevelWithMaxLamports: {
-                    maxLamports: input.maxPriorityFeeLamports,
-                    priorityLevel: "veryHigh",
-                  },
-                }
-              : undefined,
+            exact !== null
+              ? exact
+              : input.maxPriorityFeeLamports > 0
+                ? {
+                    priorityLevelWithMaxLamports: {
+                      maxLamports: input.maxPriorityFeeLamports,
+                      priorityLevel: "veryHigh",
+                    },
+                  }
+                : undefined,
         }),
       },
       "Jupiter swap",
@@ -243,7 +282,8 @@ export class PumpPortalSwapClient implements FallbackSwapClient {
           amount,
           denominatedInSol: input.side === "buy" ? "true" : "false",
           slippage: Math.max(1, Math.round(input.slippageBps / 100)),
-          priorityFee: input.maxPriorityFeeLamports / 1e9,
+          // PumpPortal pays the fee it is given: the raised one on a retry, else the cap.
+          priorityFee: (input.priorityFeeLamports ?? input.maxPriorityFeeLamports) / 1e9,
           pool: "auto",
         }),
       },

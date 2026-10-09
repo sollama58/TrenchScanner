@@ -19,9 +19,17 @@ import {
   type FallbackSwapClient,
   type SwapClient,
 } from "./jupiterSwap.js";
+import { TransientError } from "./errors.js";
 import type { KeyProvider } from "./keyVault.js";
 import type { MintInfo, TradingRpc, TransactionFill } from "./rpc.js";
-import { buildCloseTokenAccount, buildSolTransfer, signTransaction } from "./transaction.js";
+import {
+  buildCloseTokenAccount,
+  buildSolTransfer,
+  CLOSE_COMPUTE_UNITS,
+  priorityFeeOf,
+  signTransaction,
+  TRANSFER_COMPUTE_UNITS,
+} from "./transaction.js";
 import {
   GuardRefusal,
   guardSwapTransaction,
@@ -52,6 +60,15 @@ import { withWalletKey, type TradingWalletRow } from "./wallets.js";
  * only, and a simulation showing nothing but the trade itself changes), sign, record the order
  * with its signature and the signed bytes, then send. Nothing is signed before it has passed the
  * guard, and nothing is sent that the database doesn't know about.
+ *
+ * Retrying: nothing is ever sent twice while it can still land. A transaction is rebroadcast by
+ * its own signature until it lands or its blockhash is safely past expiry; only then is a new one
+ * built - from a fresh quote, and with double the priority fee of the one that never landed
+ * (feeForRetry). An entry is tried again (a send that expired, a buy that failed on chain, a
+ * build that hit a transient error) up to MAX_ENTRY_TRIES times while its signal is fresh, never
+ * at a price that ran past its slippage since the first try; a sale until it goes through (more
+ * slippage each time a protective exit fails on chain). A dependency that merely didn't answer
+ * (TransientError, a rate limit, no price) is retried shortly without counting against anything.
  *
  * Settling never trusts one reading: a row moves only from the state it was read in (a claim),
  * a transaction is written off only once its blockhash is safely past expiry, a buy written off
@@ -89,6 +106,22 @@ const RECOVERY_SETTLE_MS = 2 * 60_000;
 const RECOVERY_RECHECK_MS = 5 * 60_000;
 /** An entry still "buying" with no order this long after creation was never sent. */
 const ORPHAN_ENTRY_MS = 2 * 60_000;
+/** Tries at an entry - sends that never landed or failed on chain, builds that failed - before it is given up. */
+const MAX_ENTRY_TRIES = 4;
+/** An entry is retried this long past its signal's age limit at most (its first try was in time). */
+const ENTRY_RETRY_GRACE_MS = 2 * 60_000;
+/** A try at an entry that failed before sending (a transient error) is repeated this soon. */
+const ENTRY_RETRY_MS = 3_000;
+/** A retry after a send that never landed pays at least this priority fee (0.0001 SOL)... */
+const MIN_RAISED_FEE_LAMPORTS = 100_000n;
+/** The bot's own small transactions (withdrawals, closes) price compute at least this (micro-lamports)... */
+const UTILITY_MIN_PRICE = 200_000n;
+/** ...and pay at most this in priority fee, whatever recent fees say. */
+const UTILITY_MAX_FEE_LAMPORTS = 200_000n;
+/** Sends of a withdrawal (each after the last expired unlanded, with a higher fee) before it fails. */
+const MAX_WITHDRAWAL_SENDS = 3;
+/** An exit failing only on transient errors this long past its hold cap is called stuck. */
+const TRANSIENT_STUCK_AFTER_MINUTES = 30;
 /** A withdrawal claimed this long ago with no signature recorded was never sent. */
 const ORPHAN_WITHDRAWAL_MS = 5 * 60_000;
 /** Exits allow at least this slippage (30%): a stop must get out, not wait for a better fill. */
@@ -124,6 +157,7 @@ type EngineRpc = Pick<
   | "getTransactionFill"
   | "getTokenBalance"
   | "getMintInfo"
+  | "getPriorityFeeEstimate"
 > &
   GuardRpc;
 
@@ -281,6 +315,7 @@ async function tradingPass(deps: TradingEngineDeps): Promise<TradingRunSummary> 
   await stage(ctx, "settle-withdrawals", () => settleWithdrawals(ctx));
   await stage(ctx, "send-withdrawals", () => sendWithdrawals(ctx));
   await stage(ctx, "exits", () => manageExits(ctx));
+  await stage(ctx, "retry-entries", () => retryEntries(ctx));
   await stage(ctx, "entries", () => openEntries(ctx));
   await stage(ctx, "reclaim-rent", () => reclaimRent(ctx));
   return summary;
@@ -301,7 +336,7 @@ async function stage(ctx: PassContext, name: string, fn: () => Promise<void>) {
 /** Our own expiry bound: never below the route's, never below the height we signed at + 150. */
 async function expiryBound(ctx: PassContext, routeBound: number | null): Promise<bigint> {
   const height = await ctx.deps.rpc.getBlockHeight();
-  if (height === null) throw new Error("block height unavailable; not sending");
+  if (height === null) throw new TransientError("block height unavailable; not sending");
   return BigInt(Math.max(routeBound ?? 0, height + BLOCKHASH_LIFETIME_BLOCKS));
 }
 
@@ -331,6 +366,10 @@ interface SwapRequest {
   decimals: number | null;
   slippageBps: number;
   maxPriorityFeeLamports: bigint;
+  /** Exactly this priority fee, not the route's estimate: a retry after a send that never landed. */
+  priorityFeeLamports?: bigint;
+  /** Buy only: refuse a route that would deliver less (a retry must not chase the price). */
+  minQuotedOut?: bigint;
   /**
    * Sell only: what `amount` is worth in lamports by the latest price, or by its cost when there
    * is none - the base for how much SOL the route may send elsewhere (its fee, a tip).
@@ -365,6 +404,46 @@ function priorityFee(ctx: PassContext, config: TradingBotConfig): bigint {
   const cap = ctx.deps.maxPriorityFeeLamports;
   return cap !== undefined && cap < own ? cap : own;
 }
+
+/**
+ * The priority fee for the next try at a swap, given the last try on the same side: undefined -
+ * the route's own estimate from recent fees, under the cap - unless the last try expired without
+ * landing. Then the estimate plainly wasn't enough: double what that try paid (at least
+ * MIN_RAISED_FEE_LAMPORTS), never over the cap. A try that landed and failed on chain paid
+ * enough to land, so its retry isn't raised.
+ */
+export function feeForRetry(
+  cap: bigint,
+  last: { status: string; priorityFeeLamports: bigint | null } | null,
+): bigint | undefined {
+  if (!last || last.status !== "expired" || cap <= 0n) return undefined;
+  let fee = last.priorityFeeLamports !== null ? last.priorityFeeLamports * 2n : cap / 2n;
+  if (fee < MIN_RAISED_FEE_LAMPORTS) fee = MIN_RAISED_FEE_LAMPORTS;
+  return fee > cap ? cap : fee;
+}
+
+/**
+ * The compute-unit price (micro-lamports) for the bot's own small transactions - withdrawals and
+ * token-account closes: recent fees for the accounts they write (75th percentile), at least
+ * UTILITY_MIN_PRICE (an uncontended wallet's recent minimum is usually zero, which lands slowly),
+ * doubled for each earlier send that never landed, and never more than UTILITY_MAX_FEE_LAMPORTS
+ * in total for `units` compute units.
+ */
+async function utilityPrice(
+  ctx: PassContext,
+  accounts: string[],
+  units: number,
+  tries: number,
+): Promise<bigint> {
+  const estimate = (await ctx.deps.rpc.getPriorityFeeEstimate(accounts)) ?? 0n;
+  let price = estimate > UTILITY_MIN_PRICE ? estimate : UTILITY_MIN_PRICE;
+  price *= 2n ** BigInt(Math.min(Math.max(tries, 0), 8));
+  const cap = (UTILITY_MAX_FEE_LAMPORTS * 1_000_000n) / BigInt(units);
+  return price > cap ? cap : price;
+}
+
+/** A retry's route would deliver less than the first try's quote, less the slippage: the price ran. */
+class PriceMovedError extends Error {}
 
 /**
  * A floor for a trade the fallback route built without a quote: what the Price API says it's
@@ -410,10 +489,17 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
       amount: req.amount,
       slippageBps: req.slippageBps,
     });
+    if (req.minQuotedOut !== undefined && BigInt(quote.outAmount) < req.minQuotedOut) {
+      throw new PriceMovedError(
+        `the price ran: ${quote.outAmount} tokens quoted now, under ${req.minQuotedOut} (the first try's quote less the slippage)`,
+      );
+    }
     const built = await ctx.deps.swap.swapTransaction({
       quote,
       userPublicKey: wallet.publicKey,
       maxPriorityFeeLamports: Number(req.maxPriorityFeeLamports),
+      priorityFeeLamports:
+        req.priorityFeeLamports !== undefined ? Number(req.priorityFeeLamports) : undefined,
     });
     const minOut = BigInt(quote.otherAmountThreshold);
     return {
@@ -426,13 +512,13 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
     };
   } catch (err) {
     const fallback = ctx.deps.fallback;
-    if (!fallback || !fallback.handles(req.mint)) throw err;
+    if (!fallback || !fallback.handles(req.mint) || err instanceof PriceMovedError) throw err;
     logger.info("jupiter could not build the swap; trying the fallback route", {
       mint: req.mint,
       side: req.side,
       error: errText(err),
     });
-    const [built, floor] = await Promise.all([
+    const [built, quotedFloor] = await Promise.all([
       fallback.build({
         side: req.side,
         mint: req.mint,
@@ -441,9 +527,14 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
         decimals: req.decimals,
         slippageBps: req.slippageBps,
         maxPriorityFeeLamports: Number(req.maxPriorityFeeLamports),
+        priorityFeeLamports:
+          req.priorityFeeLamports !== undefined ? Number(req.priorityFeeLamports) : undefined,
       }),
       fallbackFloor(ctx, req),
     ]);
+    // A retry's floor is never under the first try's quote less the slippage (no chasing).
+    const floor =
+      req.minQuotedOut !== undefined && quotedFloor < req.minQuotedOut ? req.minQuotedOut : quotedFloor;
     return {
       ...built,
       route: "pumpportal",
@@ -463,9 +554,9 @@ async function executeSwap(
   meta: { reason: string; rung: number | null },
   req: SwapRequest,
 ): Promise<void> {
-  if (!ctx.inBudget()) throw new Error("pass time budget spent; next pass");
+  if (!ctx.inBudget()) throw new TransientError("pass time budget spent; next pass");
   const built = await buildSwap(ctx, wallet, req);
-  await guardSwapTransaction(ctx.deps.rpc, built.transaction, wallet.publicKey, built.expect);
+  const totals = await guardSwapTransaction(ctx.deps.rpc, built.transaction, wallet.publicKey, built.expect);
   const lastValidBlockHeight = await expiryBound(ctx, built.lastValidBlockHeight);
   const { rawTx, signature } = await sign(ctx, wallet, built.transaction);
   await prisma.tradingOrder.create({
@@ -481,6 +572,8 @@ async function executeSwap(
       route: built.route,
       inAmount: req.amount.toString(),
       quotedOut: built.quotedOut,
+      // What this try pays to land: a retry after it never landed doubles it (feeForRetry).
+      priorityFeeLamports: totals.priorityFeeLamports,
     },
   });
   const sendError = await ctx.deps.rpc.send(rawTx);
@@ -499,7 +592,6 @@ type OrderWithPosition = Prisma.TradingOrderGetPayload<{ include: { position: tr
 type PositionRow = Prisma.TradingPositionGetPayload<object>;
 
 async function settleOrders(ctx: PassContext): Promise<void> {
-  await settleOrphanEntries(ctx);
   const pending = await prisma.tradingOrder.findMany({
     where: { status: "pending" },
     include: { position: true },
@@ -518,32 +610,19 @@ async function settleOrders(ctx: PassContext): Promise<void> {
   }
 }
 
-/** "buying" positions with no order were never sent; recovered if tokens are somehow there. */
-async function settleOrphanEntries(ctx: PassContext) {
-  const orphans = await prisma.tradingPosition.findMany({
-    where: {
-      status: "buying",
-      orders: { none: {} },
-      createdAt: { lt: new Date(ctx.now().getTime() - ORPHAN_ENTRY_MS) },
-    },
-    take: 50,
-  });
-  for (const p of orphans) {
-    await endEntry(ctx, p, null, "the entry was never sent");
-    ctx.summary.settled++;
-  }
-}
-
 /**
  * Ends an entry that didn't fill as recorded - unless the wallet holds the token anyway (a buy
  * that landed although its status said otherwise), in which case the position opens from the
- * real balance rather than leaving tokens no exit will ever manage.
+ * real balance rather than leaving tokens no exit will ever manage. With `retry`, an entry
+ * whose send expired unlanded stays "buying" for the retry stage (retryEntries) to try again or
+ * give up on, instead of failing here.
  */
 async function endEntry(
   ctx: PassContext,
   position: PositionRow,
   order: { id: string; createdAt: Date; confirmedOnChain: boolean } | null,
   why: string,
+  retry = false,
 ) {
   const orderId = order?.id ?? null;
   const wallet = await ctx.walletFor(position.userId);
@@ -576,6 +655,8 @@ async function endEntry(
           decimals: held.decimals,
           entryLamports: position.swapInLamports,
           openedAt: at,
+          failCount: 0,
+          nextAttemptAt: null,
           error: `recovered from the wallet balance (${why}); entry cost estimated`,
         },
       });
@@ -594,7 +675,9 @@ async function endEntry(
     }
     await tx.tradingPosition.updateMany({
       where: { id: position.id, status: "buying" },
-      data: { status: "failed", error: why, closedAt: at },
+      data: retry
+        ? { failCount: { increment: 1 }, nextAttemptAt: at, error: why }
+        : { status: "failed", error: why, closedAt: at },
     });
   });
 }
@@ -613,6 +696,7 @@ async function settleOrder(ctx: PassContext, order: OrderWithPosition, height: n
           order.position,
           { id: order.id, createdAt: order.createdAt, confirmedOnChain: false },
           "the buy expired without landing",
+          true,
         );
       } else {
         await prisma.tradingOrder.updateMany({
@@ -664,10 +748,16 @@ async function settleFailed(
     });
     if (claimed.count !== 1) return;
     if (order.side === "buy") {
-      // Failed on chain: nothing was bought. One try per token.
+      // Failed on chain: nothing was bought. The retry stage tries again while the signal is
+      // fresh and the price hasn't run (retryEntries), or gives up.
       await tx.tradingPosition.updateMany({
         where: { id: order.positionId, status: "buying" },
-        data: { status: "failed", error, closedAt: at, proceedsLamports: { increment: fee ?? 0n } },
+        data: {
+          error,
+          failCount: { increment: 1 },
+          nextAttemptAt: new Date(at.getTime() + ENTRY_RETRY_MS),
+          proceedsLamports: { increment: fee ?? 0n },
+        },
       });
     } else {
       await tx.tradingPosition.update({
@@ -722,6 +812,8 @@ async function settleBuy(ctx: PassContext, wallet: Wallet, order: OrderWithPosit
               decimals,
               // Hold caps count from the fill itself, not from when this pass noticed it.
               openedAt: fill.blockTime ?? at,
+              failCount: 0,
+              nextAttemptAt: null,
               error: note,
             }
           : { status: "failed", error: "the buy confirmed but no tokens arrived", closedAt: at },
@@ -911,7 +1003,22 @@ async function settleWithdrawals(ctx: PassContext): Promise<void> {
         w.lastValidBlockHeight !== null &&
         BigInt(height) > w.lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS
       ) {
-        data = { status: "failed", error: "the transaction expired without landing", settledAt: ctx.now() };
+        // It can no longer land: send it again with a higher fee (sendWithdrawals), a few times.
+        data =
+          w.attempts + 1 < MAX_WITHDRAWAL_SENDS
+            ? {
+                status: "requested",
+                attempts: { increment: 1 },
+                signature: null,
+                rawTx: null,
+                lastValidBlockHeight: null,
+                error: `send ${w.attempts + 1} expired without landing (${w.signature}); sending again with a higher fee`,
+              }
+            : {
+                status: "failed",
+                error: `the transaction expired without landing, ${w.attempts + 1} times`,
+                settledAt: ctx.now(),
+              };
       } else if (w.rawTx && ctx.inBudget()) {
         await ctx.deps.rpc.send(w.rawTx);
         ctx.summary.rebroadcast++;
@@ -938,8 +1045,11 @@ export function withdrawalAmount(
   balance: bigint,
   requested: bigint | null,
   keep = 0n,
+  /** The transaction's priority fee, on top of the base fee. */
+  priorityFeeLamports = 0n,
 ): { lamports: bigint } | { error: string } {
-  const spendable = balance - TX_FEE_LAMPORTS - keep;
+  const fees = TX_FEE_LAMPORTS + priorityFeeLamports;
+  const spendable = balance - fees - keep;
   if (spendable <= 0n) {
     return {
       error:
@@ -958,7 +1068,7 @@ export function withdrawalAmount(
           : "the amount is more than the wallet holds (less the fee)",
     };
   }
-  const left = balance - TX_FEE_LAMPORTS - requested;
+  const left = balance - fees - requested;
   if (left > 0n && left < RENT_EXEMPT_MIN_LAMPORTS) {
     return {
       error: "that would leave the wallet below the rent-exempt minimum; withdraw everything or less",
@@ -1019,7 +1129,13 @@ async function sendWithdrawals(ctx: PassContext): Promise<void> {
         continue;
       }
       const keep = open > 0 ? solToLamports(readTradingBotConfig(bot?.config).reserveSol) : 0n;
-      const amount = withdrawalAmount(balance, w.requestedLamports, keep);
+      const price = await utilityPrice(ctx, [wallet.publicKey], TRANSFER_COMPUTE_UNITS, w.attempts);
+      const amount = withdrawalAmount(
+        balance,
+        w.requestedLamports,
+        keep,
+        priorityFeeOf(TRANSFER_COMPUTE_UNITS, price),
+      );
       if ("error" in amount) {
         await fail(amount.error);
         continue;
@@ -1029,6 +1145,7 @@ async function sendWithdrawals(ctx: PassContext): Promise<void> {
         to: destination,
         lamports: amount.lamports,
         recentBlockhash: blockhash.blockhash,
+        microLamportsPerUnit: price,
       });
       const sim = await ctx.deps.rpc.simulateParsed(Buffer.from(unsigned).toString("base64"), [
         wallet.publicKey,
@@ -1153,29 +1270,37 @@ function holdCapMinutes(position: Pick<PositionRow, "rungsTaken">, plan: ExitPla
 }
 
 /**
- * An exit that couldn't be priced or sold. Not being able to PRICE it (or being rate limited)
- * just retries shortly - it says nothing about whether it can be sold, and the hold caps still
- * close it on time. A failed SALE backs off, and once the position plainly can't be sold (no
+ * An exit that couldn't be priced or sold. Not being able to PRICE it, being rate limited, or a
+ * dependency not answering (TransientError) just retries shortly - it says nothing about whether
+ * it can be sold, and the hold caps still close it on time; only a position that has failed
+ * that way for half an hour past its hold cap is called stuck (so it frees its slot). A failed
+ * SALE backs off, and once the position plainly can't be sold (no
  * route, or failing well past its hold time) it is called stuck so it stops holding an open
  * slot. Stuck positions keep following their plan, retried at most every 10 minutes.
  */
 async function recordExitFailure(ctx: PassContext, position: PositionRow, err: unknown) {
   const at = ctx.now();
-  if (err instanceof PricingError || err instanceof RateLimitedError) {
+  const plan = readExitPlan(position.exitPlan);
+  const ageMinutes = position.openedAt ? (at.getTime() - position.openedAt.getTime()) / 60_000 : 0;
+  if (err instanceof PricingError || err instanceof RateLimitedError || err instanceof TransientError) {
+    const wait = err instanceof RateLimitedError ? 30_000 : err instanceof PricingError ? 15_000 : 5_000;
+    const stuck =
+      position.status === "open" &&
+      ageMinutes > holdCapMinutes(position, plan) + TRANSIENT_STUCK_AFTER_MINUTES;
     await prisma.tradingPosition
       .update({
         where: { id: position.id },
         data: {
           error: errText(err),
-          nextAttemptAt: new Date(at.getTime() + (err instanceof RateLimitedError ? 30_000 : 15_000)),
+          nextAttemptAt: new Date(at.getTime() + wait),
+          ...(stuck ? { status: "stuck" } : {}),
         },
       })
       .catch(() => undefined);
+    if (stuck) ctx.summary.stuck++;
     return;
   }
   const backoff = failureBackoff(position, at);
-  const plan = readExitPlan(position.exitPlan);
-  const ageMinutes = position.openedAt ? (at.getTime() - position.openedAt.getTime()) / 60_000 : 0;
   const noRoute = err instanceof NoRouteError;
   const stuck =
     position.status === "open" &&
@@ -1282,12 +1407,12 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
   let amount = sellAmount(decision, bought, held);
   if (decision.all) {
     const chain = await ctx.deps.rpc.getTokenBalance(wallet.publicKey, position.mint);
-    if (!chain) throw new Error("could not read the token balance");
+    if (!chain) throw new TransientError("could not read the token balance");
     amount = chain.raw;
     if (amount === 0n) {
       // The books say tokens are held: read again before believing a zero (a lagging node).
       const again = await ctx.deps.rpc.getTokenBalance(wallet.publicKey, position.mint);
-      if (!again) throw new Error("could not read the token balance");
+      if (!again) throw new TransientError("could not read the token balance");
       amount = again.raw;
     }
     if (amount === 0n) {
@@ -1314,6 +1439,13 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
     position.swapInLamports && bought > 0n ? (position.swapInLamports * amount) / bought : 0n;
   const valueHintLamports =
     multiple !== null ? BigInt(Math.floor(Number(costOfAmount) * multiple)) : costOfAmount;
+  // The last sale sent for this position: if it never landed, this one pays more to.
+  const lastSale = await prisma.tradingOrder.findFirst({
+    where: { positionId: position.id, side: "sell" },
+    orderBy: { createdAt: "desc" },
+    select: { status: true, priorityFeeLamports: true },
+  });
+  const maxFee = priorityFee(ctx, config);
   await executeSwap(
     ctx,
     wallet,
@@ -1325,7 +1457,8 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
       amount,
       decimals: position.decimals,
       slippageBps,
-      maxPriorityFeeLamports: priorityFee(ctx, config),
+      maxPriorityFeeLamports: maxFee,
+      priorityFeeLamports: feeForRetry(maxFee, lastSale),
       valueHintLamports,
     },
   );
@@ -1545,6 +1678,9 @@ async function runBotEntries(
           status: "buying",
           swapInLamports: buyLamports,
           exitPlan: exitPlanJson(plan) as unknown as Prisma.InputJsonValue,
+          // Not the retry stage's until this try has had time to record its order (a pass that
+          // outlived its lock may still be sending it).
+          nextAttemptAt: new Date(now.getTime() + ORPHAN_ENTRY_MS),
         },
       });
     } catch (err) {
@@ -1555,41 +1691,165 @@ async function runBotEntries(
       }
       throw err;
     }
-    try {
-      await executeSwap(
-        ctx,
-        wallet,
-        position,
-        { reason: "entry", rung: null },
-        {
-          side: "buy",
-          mint: signal.mint,
-          amount: buyLamports,
-          decimals: null,
-          slippageBps,
-          maxPriorityFeeLamports: priorityFee(ctx, config),
-        },
-      );
-      ctx.summary.buys++;
+    if (await attemptEntry(ctx, wallet, position, { slippageBps, maxFee: priorityFee(ctx, config) })) {
       logger.info("entry sent", { userId: bot.userId, mint: signal.mint, source: signal.label });
-    } catch (err) {
-      // Nothing was signed or sent (executeSwap only throws before recording). A refusal or no
-      // route ends the entry (one try per token); anything transient (a rate limit, an RPC
-      // hiccup) removes the attempt instead, so a later signal on the token can still buy it.
-      const final = err instanceof GuardRefusal || err instanceof NoRouteError;
-      if (final) {
-        await prisma.tradingPosition.updateMany({
-          where: { id: position.id, status: "buying", orders: { none: {} } },
-          data: { status: "failed", error: errText(err), closedAt: ctx.now() },
-        });
-      } else {
-        await prisma.tradingPosition.deleteMany({
-          where: { id: position.id, status: "buying", orders: { none: {} } },
-        });
-      }
-      if (!(err instanceof GuardRefusal) && !(err instanceof NoRouteError)) ctx.summary.errors++;
-      logger.warn("entry not sent", { mint: signal.mint, error: errText(err) });
     }
+  }
+}
+
+/**
+ * One try at an entry: build, guard, sign, record, send (executeSwap). True when it was sent;
+ * whether it lands is for settling. Otherwise the position says why: failed, when the token
+ * can't be bought (a guard refusal, no route, the price ran); or still "buying" with a short
+ * wait, when something merely didn't answer - for the retry stage to try again.
+ */
+async function attemptEntry(
+  ctx: PassContext,
+  wallet: Wallet,
+  position: PositionRow,
+  opts: { slippageBps: number; maxFee: bigint; exactFee?: bigint; minQuotedOut?: bigint },
+): Promise<boolean> {
+  try {
+    await executeSwap(
+      ctx,
+      wallet,
+      position,
+      { reason: "entry", rung: null },
+      {
+        side: "buy",
+        mint: position.mint,
+        amount: position.swapInLamports ?? 0n,
+        decimals: null,
+        slippageBps: opts.slippageBps,
+        maxPriorityFeeLamports: opts.maxFee,
+        priorityFeeLamports: opts.exactFee,
+        minQuotedOut: opts.minQuotedOut,
+      },
+    );
+    ctx.summary.buys++;
+    return true;
+  } catch (err) {
+    const at = ctx.now();
+    const final =
+      err instanceof GuardRefusal || err instanceof NoRouteError || err instanceof PriceMovedError;
+    if (final) {
+      await prisma.tradingPosition.updateMany({
+        where: { id: position.id, status: "buying", orders: { none: { status: "pending" } } },
+        data: { status: "failed", error: errText(err), closedAt: at },
+      });
+    } else {
+      ctx.summary.errors++;
+      const wait = err instanceof RateLimitedError ? 15_000 : ENTRY_RETRY_MS;
+      await prisma.tradingPosition.updateMany({
+        where: { id: position.id, status: "buying" },
+        data: {
+          error: errText(err),
+          failCount: { increment: 1 },
+          nextAttemptAt: new Date(at.getTime() + wait),
+        },
+      });
+    }
+    logger.warn("entry not sent", { mint: position.mint, final, error: errText(err) });
+    return false;
+  }
+}
+
+/**
+ * Entries whose last try didn't fill - it failed before sending, expired without landing, or
+ * failed on chain - and that aren't waiting on a send: tried again, or given up. A retry needs
+ * the bot still on and its owner still allowed to trade, fewer than MAX_ENTRY_TRIES failed tries,
+ * and the signal no older than its age limit plus ENTRY_RETRY_GRACE_MS; it re-reads the wallet
+ * first (an earlier try that landed after all is recovered, never bought twice), pays double the
+ * fee of a try that never landed, and refuses a price more than the slippage past the first
+ * try's quote. Given up: deleted when nothing was ever sent (a later signal may buy the token),
+ * else failed - unless its tokens are in the wallet (recovered).
+ */
+async function retryEntries(ctx: PassContext): Promise<void> {
+  const now = ctx.now();
+  const due = await prisma.tradingPosition.findMany({
+    where: {
+      status: "buying",
+      orders: { none: { status: "pending" } },
+      OR: [
+        { nextAttemptAt: { lte: now } },
+        // Created before entries were scheduled: due once surely past its first try.
+        { nextAttemptAt: null, createdAt: { lt: new Date(now.getTime() - ORPHAN_ENTRY_MS) } },
+      ],
+    },
+    orderBy: { createdAt: "asc" },
+    take: 50,
+  });
+  for (const position of due) {
+    if (!ctx.inBudget()) return;
+    try {
+      await retryEntry(ctx, position, now);
+    } catch (err) {
+      ctx.summary.errors++;
+      logger.warn("could not retry an entry", { positionId: position.id, error: errText(err) });
+    }
+  }
+}
+
+async function retryEntry(ctx: PassContext, position: PositionRow, now: Date) {
+  const [wallet, orders, bot] = await Promise.all([
+    ctx.walletFor(position.userId),
+    prisma.tradingOrder.findMany({
+      where: { positionId: position.id, side: "buy" },
+      orderBy: { createdAt: "asc" },
+      select: { status: true, route: true, quotedOut: true, priorityFeeLamports: true },
+    }),
+    prisma.tradingBot.findUnique({
+      where: { userId: position.userId },
+      include: { user: { select: { walletAddress: true } } },
+    }),
+  ]);
+  const config = readTradingBotConfig(bot?.config);
+  const isServer = position.userId === ctx.deps.serverWallet?.userId;
+  const signalAge = now.getTime() - position.signalAt.getTime();
+  let why: string | null = null;
+  if (!wallet) why = "no key available to buy with";
+  else if (!bot?.enabled) why = "the bot was switched off before the entry filled";
+  else if (!isServer && !ctx.deps.canTrade(bot.user.walletAddress)) why = "the owner may no longer trade";
+  else if (position.failCount >= MAX_ENTRY_TRIES) why = `the entry failed ${position.failCount} times`;
+  else if (signalAge > config.maxSignalAgeSeconds * 1000 + ENTRY_RETRY_GRACE_MS)
+    why = "the signal went stale before an entry filled";
+  if (why) {
+    if (orders.length === 0) {
+      // Never sent: nothing can have been bought. Gone, so a later signal can still buy it.
+      await prisma.tradingPosition.deleteMany({
+        where: { id: position.id, status: "buying", orders: { none: {} } },
+      });
+      logger.info("entry given up", { positionId: position.id, mint: position.mint, why });
+    } else {
+      await endEntry(ctx, position, null, `${why}: ${position.error ?? "no fill"}`.slice(0, 500));
+    }
+    ctx.summary.settled++;
+    return;
+  }
+  if (orders.length > 0) {
+    // An earlier try was sent: make sure it didn't land after all before buying again.
+    const held = await ctx.deps.rpc.getTokenBalance(wallet!.publicKey, position.mint);
+    if (!held) return; // can't tell; next pass
+    if (held.raw > 0n) {
+      await endEntry(ctx, position, null, "an earlier try landed after all");
+      return;
+    }
+  }
+  const slippageBps = Math.min(config.slippageBps, ctx.deps.maxSlippageBps ?? config.slippageBps);
+  const first = orders.find((o) => o.route === "jupiter");
+  const maxFee = priorityFee(ctx, config);
+  const sent = await attemptEntry(ctx, wallet!, position, {
+    slippageBps,
+    maxFee,
+    exactFee: feeForRetry(maxFee, orders[orders.length - 1] ?? null),
+    minQuotedOut: first ? (BigInt(first.quotedOut) * BigInt(10_000 - slippageBps)) / 10_000n : undefined,
+  });
+  if (sent) {
+    logger.info("entry retried", {
+      positionId: position.id,
+      mint: position.mint,
+      tries: position.failCount + 1,
+    });
   }
 }
 
@@ -1703,6 +1963,12 @@ async function reclaimRent(ctx: PassContext): Promise<void> {
     }
     const blockhash = await ctx.deps.rpc.getLatestBlockhash();
     if (!blockhash) continue;
+    const price = await utilityPrice(
+      ctx,
+      [wallet.publicKey, ...empty.map((a) => a.address)],
+      CLOSE_COMPUTE_UNITS,
+      0,
+    );
     for (const account of empty) {
       // Only ever a close by a real token program of an empty account the wallet owns: the
       // program comes from the RPC's listing, and this transaction is not checked by the guard.
@@ -1719,15 +1985,23 @@ async function reclaimRent(ctx: PassContext): Promise<void> {
       )
         continue;
       try {
-        const unsigned = buildCloseTokenAccount({
-          owner: wallet.publicKey,
-          account: account.address,
-          tokenProgram: account.programId,
-          recentBlockhash: blockhash.blockhash,
-        });
-        const sim = await ctx.deps.rpc.simulateParsed(Buffer.from(unsigned).toString("base64"), [
-          wallet.publicKey,
-        ]);
+        const build = (microLamportsPerUnit: bigint) =>
+          buildCloseTokenAccount({
+            owner: wallet.publicKey,
+            account: account.address,
+            tokenProgram: account.programId,
+            recentBlockhash: blockhash.blockhash,
+            microLamportsPerUnit,
+          });
+        const simulate = (tx: Uint8Array) =>
+          ctx.deps.rpc.simulateParsed(Buffer.from(tx).toString("base64"), [wallet.publicKey]);
+        let unsigned = build(price);
+        let sim = await simulate(unsigned);
+        if (sim?.error) {
+          // Not with a priority fee (its unit limit too tight for this account, say): plain.
+          unsigned = build(0n);
+          sim = await simulate(unsigned);
+        }
         if (!sim) continue;
         if (sim.error) {
           // This account can't be closed (Token-2022 withheld fees, say): stop trying, so it

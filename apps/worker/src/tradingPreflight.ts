@@ -1,11 +1,17 @@
 import "./bootstrap-env.js"; // must run before any @trenchscanner/core import - see file comment
 import {
+  buildSolTransfer,
   createKeyProvider,
+  decodeMessage,
   guardSwapTransaction,
   JupiterSwapClient,
   loadEnv,
+  generateWalletKeypair,
   loadServerWalletKey,
+  parseWireTransaction,
   prisma,
+  RENT_EXEMPT_MIN_LAMPORTS,
+  checkInstructions,
   solToLamports,
   TradingRpc,
   withWalletKey,
@@ -66,6 +72,9 @@ async function main() {
   const height = await rpc.getBlockHeight();
   if (height) ok("block height", String(height));
   else fail("RPC", "no answer to getBlockHeight");
+  const estimate = await rpc.getPriorityFeeEstimate([DEFAULT_PROBE_WALLET]);
+  if (estimate !== null) ok("priority fee estimate", `${estimate} micro-lamports/unit (withdrawals, closes)`);
+  else fail("priority fee estimate", "no answer to getRecentPrioritizationFees");
 
   console.log("\nKeys");
   const keys = createKeyProvider({ ...env, NODE_ENV: process.env.NODE_ENV });
@@ -112,9 +121,25 @@ async function main() {
   console.log(`\nGuard on real routes (simulated for ${probe.slice(0, 6)}…)`);
   const prio = solToLamports(0.002);
   const external = (n: bigint) => n / 50n + 1_000_000n;
-  const cases: { label: string; input: string; output: string; amount: bigint; side: "buy" | "sell" }[] = [
+  const cases: {
+    label: string;
+    input: string;
+    output: string;
+    amount: bigint;
+    side: "buy" | "sell";
+    /** A retry's exact (raised) fee, instead of Jupiter's estimate. */
+    exactFee?: bigint;
+  }[] = [
     { label: "buy SOL->USDC", input: WSOL_MINT, output: USDC, amount: solToLamports(0.01), side: "buy" },
     { label: "sell USDC->SOL", input: USDC, output: WSOL_MINT, amount: 500_000n, side: "sell" },
+    {
+      label: "sell USDC->SOL at a raised fee",
+      input: USDC,
+      output: WSOL_MINT,
+      amount: 500_000n,
+      side: "sell",
+      exactFee: 300_000n,
+    },
   ];
   const pumpMint = process.env.PREFLIGHT_PUMP_MINT;
   if (pumpMint) {
@@ -138,6 +163,7 @@ async function main() {
         quote,
         userPublicKey: probe,
         maxPriorityFeeLamports: Number(prio),
+        priorityFeeLamports: c.exactFee !== undefined ? Number(c.exactFee) : undefined,
       });
       const out = BigInt(quote.outAmount);
       const expect: TradeExpectation =
@@ -159,11 +185,48 @@ async function main() {
               maxExternalLamports: external(out),
               maxPriorityFeeLamports: prio,
             };
-      await guardSwapTransaction(rpc, built.transaction, probe, expect);
-      ok(c.label, "built by Jupiter, passed the allowlist and the simulation");
+      const totals = await guardSwapTransaction(rpc, built.transaction, probe, expect);
+      // A raised fee must be what the transaction pays (Jupiter spreads it over its unit limit).
+      if (
+        c.exactFee !== undefined &&
+        (totals.priorityFeeLamports > c.exactFee || totals.priorityFeeLamports < (c.exactFee * 9n) / 10n)
+      ) {
+        fail(
+          c.label,
+          `asked for a ${c.exactFee}-lamport fee, the transaction pays ${totals.priorityFeeLamports}`,
+        );
+        continue;
+      }
+      ok(
+        c.label,
+        `built by Jupiter, passed the allowlist and the simulation (priority fee ${totals.priorityFeeLamports} lamports)`,
+      );
     } catch (err) {
       fail(c.label, errText(err));
     }
+  }
+
+  // The bot's own priced transactions: a withdrawal-shaped transfer at the price it would pay.
+  console.log(`\nWithdrawal transfer (simulated for ${probe.slice(0, 6)}…)`);
+  try {
+    const blockhash = await rpc.getLatestBlockhash();
+    if (!blockhash) throw new Error("no blockhash");
+    const price = (estimate ?? 0n) > 200_000n ? estimate! : 200_000n;
+    const unsigned = buildSolTransfer({
+      from: probe,
+      to: generateWalletKeypair().publicKey,
+      lamports: RENT_EXEMPT_MIN_LAMPORTS,
+      recentBlockhash: blockhash.blockhash,
+      microLamportsPerUnit: price,
+    });
+    const decoded = decodeMessage(parseWireTransaction(unsigned).message);
+    const fee = checkInstructions(decoded, decoded.staticKeys, probe).priorityFeeLamports;
+    const sim = await rpc.simulateParsed(Buffer.from(unsigned).toString("base64"), [probe]);
+    if (!sim) fail("priced transfer", "simulation unavailable");
+    else if (sim.error) fail("priced transfer", `simulation failed: ${sim.error}`);
+    else ok("priced transfer", `fits its compute budget; priority fee ${fee} lamports`);
+  } catch (err) {
+    fail("priced transfer", errText(err));
   }
 
   console.log(failures === 0 ? "\nPreflight passed." : `\nPreflight FAILED: ${failures} check(s).`);

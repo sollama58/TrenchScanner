@@ -1,5 +1,6 @@
 export * from "./config.js";
 export * from "./engine.js";
+export * from "./errors.js";
 export * from "./exitEngine.js";
 export * from "./jupiterSwap.js";
 export * from "./keyVault.js";

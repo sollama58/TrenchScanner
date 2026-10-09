@@ -138,25 +138,28 @@ export interface InstructionSpec {
 }
 
 /**
- * An unsigned legacy transaction with one instruction, paid and signed by `payer` alone (the
+ * An unsigned legacy transaction running `ixs` in order, paid and signed by `payer` alone (the
  * only signer). Accounts are laid out as the runtime wants them: the payer, then writable
- * non-signers, then read-only non-signers (the program among them).
+ * non-signers, then read-only non-signers (the programs among them).
  */
 export function buildLegacyTransaction(
   payer: string,
   recentBlockhash: string,
-  ix: InstructionSpec,
+  ixs: InstructionSpec | InstructionSpec[],
 ): Uint8Array {
+  const list = Array.isArray(ixs) ? ixs : [ixs];
+  if (list.length === 0) throw new Error("no instructions");
   const writable = new Set<string>();
   const readonly = new Set<string>();
-  for (const a of ix.accounts) {
-    if (a.pubkey === payer) continue;
-    if (a.writable) writable.add(a.pubkey);
+  for (const ix of list) {
+    for (const a of ix.accounts) if (a.pubkey !== payer && a.writable) writable.add(a.pubkey);
   }
-  for (const a of ix.accounts) {
-    if (a.pubkey !== payer && !writable.has(a.pubkey)) readonly.add(a.pubkey);
+  for (const ix of list) {
+    for (const a of ix.accounts) {
+      if (a.pubkey !== payer && !writable.has(a.pubkey)) readonly.add(a.pubkey);
+    }
+    if (ix.programId !== payer && !writable.has(ix.programId)) readonly.add(ix.programId);
   }
-  if (ix.programId !== payer && !writable.has(ix.programId)) readonly.add(ix.programId);
   const order = [payer, ...writable, ...readonly];
   const keys = order.map((k) => {
     const bytes = bs58.decode(k);
@@ -173,59 +176,105 @@ export function buildLegacyTransaction(
     ...encodeShortVec(keys.length),
     ...keys.flatMap((k) => [...k]),
     ...blockhash,
-    ...encodeShortVec(1),
-    index(ix.programId),
-    ...encodeShortVec(ix.accounts.length),
-    ...ix.accounts.map((a) => index(a.pubkey)),
-    ...encodeShortVec(ix.data.length),
-    ...ix.data,
+    ...encodeShortVec(list.length),
+    ...list.flatMap((ix) => [
+      index(ix.programId),
+      ...encodeShortVec(ix.accounts.length),
+      ...ix.accounts.map((a) => index(a.pubkey)),
+      ...encodeShortVec(ix.data.length),
+      ...ix.data,
+    ]),
   ];
   return Uint8Array.from([...encodeShortVec(1), ...new Array<number>(SIGNATURE_LENGTH).fill(0), ...message]);
 }
 
+export const COMPUTE_BUDGET_PROGRAM_ID = "ComputeBudget111111111111111111111111111111";
+
+/**
+ * The two compute-budget instructions that set a priority fee: a unit limit (what the fee is
+ * charged on - the runtime's default would be 200,000 units per instruction) and a price in
+ * micro-lamports per unit. The fee is limit x price / 1,000,000 lamports. None when price is 0.
+ */
+export function computeBudgetInstructions(
+  unitLimit: number,
+  microLamportsPerUnit: bigint,
+): InstructionSpec[] {
+  if (microLamportsPerUnit <= 0n) return [];
+  const limit = [
+    unitLimit & 0xff,
+    (unitLimit >> 8) & 0xff,
+    (unitLimit >> 16) & 0xff,
+    (unitLimit >>> 24) & 0xff,
+  ];
+  return [
+    { programId: COMPUTE_BUDGET_PROGRAM_ID, accounts: [], data: [2, ...limit] }, // SetComputeUnitLimit
+    { programId: COMPUTE_BUDGET_PROGRAM_ID, accounts: [], data: [3, ...u64le(microLamportsPerUnit)] }, // SetComputeUnitPrice
+  ];
+}
+
+/** Compute units a SOL transfer is given when it pays a priority fee (measured: 450, budget included). */
+export const TRANSFER_COMPUTE_UNITS = 2_000;
+/** ...and a token-account close (measured on mainnet: ~420 on the Token program, ~2,000 on Token-2022). */
+export const CLOSE_COMPUTE_UNITS = 6_000;
+
 /**
  * An unsigned legacy transaction moving `lamports` from `from` to `to` with the System Program,
- * from `from` as fee payer - the withdrawal. Sign it with signTransaction.
+ * from `from` as fee payer - the withdrawal - with a priority fee when `microLamportsPerUnit` is
+ * set. Sign it with signTransaction.
  */
 export function buildSolTransfer(input: {
   from: string;
   to: string;
   lamports: bigint;
   recentBlockhash: string;
+  microLamportsPerUnit?: bigint;
 }): Uint8Array {
   if (input.from === input.to) throw new Error("transfer to the same account");
   if (input.lamports <= 0n) throw new Error("transfer amount must be positive");
   // SystemInstruction::Transfer is index 2, little-endian u32, then the u64 amount.
-  return buildLegacyTransaction(input.from, input.recentBlockhash, {
-    programId: SYSTEM_PROGRAM_ID,
-    accounts: [
-      { pubkey: input.from, writable: true },
-      { pubkey: input.to, writable: true },
-    ],
-    data: [2, 0, 0, 0, ...u64le(input.lamports)],
-  });
+  return buildLegacyTransaction(input.from, input.recentBlockhash, [
+    ...computeBudgetInstructions(TRANSFER_COMPUTE_UNITS, input.microLamportsPerUnit ?? 0n),
+    {
+      programId: SYSTEM_PROGRAM_ID,
+      accounts: [
+        { pubkey: input.from, writable: true },
+        { pubkey: input.to, writable: true },
+      ],
+      data: [2, 0, 0, 0, ...u64le(input.lamports)],
+    },
+  ]);
 }
 
 /**
  * An unsigned transaction closing an empty token account of `owner`'s, its rent going back to
- * `owner` - the ~0.002 SOL each traded token's account holds once the position is sold out.
+ * `owner` - the ~0.002 SOL each traded token's account holds once the position is sold out -
+ * with a priority fee when `microLamportsPerUnit` is set.
  */
 export function buildCloseTokenAccount(input: {
   owner: string;
   account: string;
   tokenProgram: string;
   recentBlockhash: string;
+  microLamportsPerUnit?: bigint;
 }): Uint8Array {
   // TokenInstruction::CloseAccount (9): account, destination, owner.
-  return buildLegacyTransaction(input.owner, input.recentBlockhash, {
-    programId: input.tokenProgram,
-    accounts: [
-      { pubkey: input.account, writable: true },
-      { pubkey: input.owner, writable: true },
-      { pubkey: input.owner, writable: false },
-    ],
-    data: [9],
-  });
+  return buildLegacyTransaction(input.owner, input.recentBlockhash, [
+    ...computeBudgetInstructions(CLOSE_COMPUTE_UNITS, input.microLamportsPerUnit ?? 0n),
+    {
+      programId: input.tokenProgram,
+      accounts: [
+        { pubkey: input.account, writable: true },
+        { pubkey: input.owner, writable: true },
+        { pubkey: input.owner, writable: false },
+      ],
+      data: [9],
+    },
+  ]);
+}
+
+/** The priority fee, in lamports, a compute-budget-priced transaction pays (rounded up). */
+export function priorityFeeOf(unitLimit: number, microLamportsPerUnit: bigint): bigint {
+  return (BigInt(unitLimit) * microLamportsPerUnit + 999_999n) / 1_000_000n;
 }
 
 export interface DecodedInstruction {

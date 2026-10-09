@@ -1,5 +1,6 @@
 import bs58 from "bs58";
 import { findProgramAddress } from "../solana.js";
+import { TransientError } from "./errors.js";
 import {
   decodeMessage,
   parseLookupTableAddresses,
@@ -224,23 +225,23 @@ function sum(list: (ParsedAccountState | null)[], indexes: number[]): bigint {
 }
 
 /**
- * Both layers, for an UNSIGNED transaction a swap API built. Resolves with nothing when it may be
- * signed; throws GuardRefusal when it may not, or a plain Error when the chain couldn't be read
- * (try again later - never "allow").
+ * Both layers, for an UNSIGNED transaction a swap API built. Resolves, with what the transaction
+ * pays in priority fee and sends to others, when it may be signed; throws GuardRefusal when it
+ * may not, or a TransientError when the chain couldn't be read (try again later - never "allow").
  */
 export async function guardSwapTransaction(
   rpc: GuardRpc,
   unsigned: Uint8Array,
   wallet: string,
   expect: TradeExpectation,
-): Promise<void> {
+): Promise<InstructionTotals> {
   const wire = parseWireTransaction(unsigned);
   const decoded = decodeMessage(wire.message);
   const tableNames = decoded.lookups.map((l) => l.table);
   const tables = new Map<string, string[]>();
   if (tableNames.length > 0) {
     const data = await rpc.getAccountsData(tableNames);
-    if (!data) throw new Error("could not read the transaction's lookup tables");
+    if (!data) throw new TransientError("could not read the transaction's lookup tables");
     tableNames.forEach((t, i) => {
       const bytes = data[i];
       if (!bytes) throw new GuardRefusal(`lookup table ${t} does not exist`);
@@ -265,7 +266,7 @@ export async function guardSwapTransaction(
   // behind an account opened seconds ago (and is unbounded for a busy wallet).
   const inTx = [...new Set(keys)].filter((k) => k !== wallet);
   const listed = await rpc.getParsedAccounts(inTx);
-  if (!listed) throw new Error("could not read the transaction's accounts");
+  if (!listed) throw new TransientError("could not read the transaction's accounts");
   const owned = inTx.filter((_, i) => listed[i]?.token?.owner === wallet);
   const tradedCandidates = [...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, expect.mint, p));
   const wsolCandidates = [...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, WSOL, p));
@@ -275,14 +276,15 @@ export async function guardSwapTransaction(
     rpc.getParsedAccounts(watch),
     rpc.simulateParsed(Buffer.from(unsigned).toString("base64"), watch),
   ]);
-  if (!pre || !sim) throw new Error("simulation unavailable; not signing blind");
+  if (!pre || !sim) throw new TransientError("simulation unavailable; not signing blind");
   if (sim.error) {
     // Our node behind the route's: not the transaction's fault.
-    if (/BlockhashNotFound/i.test(sim.error)) throw new Error(`simulation: ${sim.error}`);
+    if (/BlockhashNotFound/i.test(sim.error)) throw new TransientError(`simulation: ${sim.error}`);
     throw new GuardRefusal(`simulation failed: ${sim.error}`);
   }
   const post = sim.accounts;
-  if (post.length !== watch.length) throw new Error("simulation returned the wrong number of accounts");
+  if (post.length !== watch.length)
+    throw new TransientError("simulation returned the wrong number of accounts");
 
   const walletPre = pre[0];
   const walletPost = post[0];
@@ -358,4 +360,5 @@ export async function guardSwapTransaction(
     if (solDelta < expect.minSolOut - expect.feeAllowance)
       throw new GuardRefusal(`it would return ${solDelta} lamports, under the minimum ${expect.minSolOut}`);
   }
+  return totals;
 }

@@ -205,6 +205,24 @@ export class TradingRpc implements GuardRpc {
     }
   }
 
+  /**
+   * What recent transactions writing `accounts` paid per compute unit (micro-lamports): the 75th
+   * percentile of the last ~150 slots' minimum landing price. Null when the RPC didn't answer.
+   */
+  async getPriorityFeeEstimate(accounts: string[]): Promise<bigint | null> {
+    const out = await this.read<{ slot?: number; prioritizationFee?: number }[]>(
+      "getRecentPrioritizationFees",
+      [accounts.slice(0, 128)],
+    );
+    if (!Array.isArray(out)) return null;
+    const fees = out
+      .map((e) => e.prioritizationFee)
+      .filter((f): f is number => typeof f === "number" && Number.isFinite(f) && f >= 0)
+      .sort((a, b) => a - b);
+    if (fees.length === 0) return 0n;
+    return BigInt(Math.floor(fees[Math.min(fees.length - 1, Math.floor(fees.length * 0.75))]!));
+  }
+
   /** A mint's authorities and extensions; null when it can't be read or isn't a mint. */
   async getMintInfo(mint: string): Promise<MintInfo | null> {
     const out = await this.read<{

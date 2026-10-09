@@ -25,6 +25,8 @@ import {
 } from "./keyVault.js";
 import { decideExit, ladderSoldFraction, sellAmount } from "./exitEngine.js";
 import { associatedTokenAddress, checkInstructions, PROGRAM } from "./txGuard.js";
+import { JupiterSwapClient, NoRouteError, RateLimitedError, type SwapQuote } from "./jupiterSwap.js";
+import { TransientError } from "./errors.js";
 import {
   DEFAULT_TRADING_BOT_CONFIG,
   effectiveExitPlan,
@@ -483,5 +485,111 @@ describe("mint risk", () => {
     expect(mintRisk({ ...pumpLike, program: "11111111111111111111111111111111" })).toMatch(
       /not a token mint/,
     );
+  });
+});
+
+describe("Jupiter swap client", () => {
+  const quote = {
+    inputMint: OWNER,
+    outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    inAmount: "1000",
+    outAmount: "10",
+    otherAmountThreshold: "9",
+    priceImpactPct: "0",
+  } satisfies SwapQuote;
+  /** A fetch answering with each response in turn, recording the request bodies. */
+  const scripted = (responses: (() => Response)[]) => {
+    const bodies: unknown[] = [];
+    let i = 0;
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      if (init?.body) bodies.push(JSON.parse(String(init.body)));
+      const next = responses[Math.min(i++, responses.length - 1)]!;
+      return next();
+    }) as typeof fetch;
+    return { fetchImpl, bodies, calls: () => i };
+  };
+  const json =
+    (body: unknown, status = 200) =>
+    () =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const built = json({
+    swapTransaction: Buffer.from(new Uint8Array(200)).toString("base64"),
+    lastValidBlockHeight: 5,
+  });
+
+  it("tries a server error once more, then calls it transient", async () => {
+    let s = scripted([json({ error: "busy" }, 502), json(quote)]);
+    await expect(
+      new JupiterSwapClient({ fetchImpl: s.fetchImpl }).quote({
+        inputMint: OWNER,
+        outputMint: quote.outputMint,
+        amount: 1000n,
+        slippageBps: 100,
+      }),
+    ).resolves.toMatchObject({ outAmount: "10" });
+    expect(s.calls()).toBe(2);
+    s = scripted([json({ error: "busy" }, 503)]);
+    await expect(
+      new JupiterSwapClient({ fetchImpl: s.fetchImpl }).quote({
+        inputMint: OWNER,
+        outputMint: quote.outputMint,
+        amount: 1000n,
+        slippageBps: 100,
+      }),
+    ).rejects.toBeInstanceOf(TransientError);
+    expect(s.calls()).toBe(2);
+    // A network failure likewise.
+    let thrown = 0;
+    const down = (async () => {
+      thrown++;
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    await expect(new JupiterSwapClient({ fetchImpl: down }).pricesUsd([OWNER])).rejects.toBeInstanceOf(
+      TransientError,
+    );
+    expect(thrown).toBe(2);
+  });
+
+  it("does not repeat a rate limit or a missing route", async () => {
+    let s = scripted([json({ error: "slow down" }, 429)]);
+    await expect(new JupiterSwapClient({ fetchImpl: s.fetchImpl }).pricesUsd([OWNER])).rejects.toBeInstanceOf(
+      RateLimitedError,
+    );
+    expect(s.calls()).toBe(1);
+    s = scripted([json({ errorCode: "COULD_NOT_FIND_ANY_ROUTE", error: "no route" }, 400)]);
+    await expect(
+      new JupiterSwapClient({ fetchImpl: s.fetchImpl }).quote({
+        inputMint: OWNER,
+        outputMint: quote.outputMint,
+        amount: 1000n,
+        slippageBps: 100,
+      }),
+    ).rejects.toBeInstanceOf(NoRouteError);
+    expect(s.calls()).toBe(1);
+  });
+
+  it("asks for the estimate under the cap, or exactly a raised fee (never over the cap)", async () => {
+    const s = scripted([built]);
+    const client = new JupiterSwapClient({ fetchImpl: s.fetchImpl });
+    await client.swapTransaction({ quote, userPublicKey: OWNER, maxPriorityFeeLamports: 2_000_000 });
+    await client.swapTransaction({
+      quote,
+      userPublicKey: OWNER,
+      maxPriorityFeeLamports: 2_000_000,
+      priorityFeeLamports: 400_000,
+    });
+    await client.swapTransaction({
+      quote,
+      userPublicKey: OWNER,
+      maxPriorityFeeLamports: 2_000_000,
+      priorityFeeLamports: 9_000_000,
+    });
+    expect(
+      s.bodies.map((b) => (b as { prioritizationFeeLamports: unknown }).prioritizationFeeLamports),
+    ).toEqual([
+      { priorityLevelWithMaxLamports: { maxLamports: 2_000_000, priorityLevel: "veryHigh" } },
+      400_000,
+      2_000_000,
+    ]);
   });
 });

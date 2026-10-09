@@ -1725,7 +1725,8 @@ model TradingPosition {
   proceedsLamports BigInt    @default(0)
   /// Set by the owner ("sell now", "sell all"): the next tick sells everything held.
   closeRequested   Boolean   @default(false)
-  /// Consecutive failed exit attempts, and when the next may run (exponential backoff).
+  /// Consecutive failed attempts - at the exit, or while "buying" at the entry - and when the
+  /// next may run.
   failCount        Int       @default(0)
   nextAttemptAt    DateTime?
   /// When the emptied token account was closed and its rent returned (null while open).
@@ -1770,6 +1771,9 @@ model TradingOrder {
   /// What went in: lamports on a buy, raw token units on a sell.
   inAmount             String
   quotedOut            String
+  /// The priority fee this try pays (from its compute-budget instructions): a retry after a try
+  /// that never landed pays double.
+  priorityFeeLamports  BigInt?
   lamportsDelta        BigInt?
   tokenDelta           String?
   error                String?
@@ -1795,6 +1799,8 @@ model TradingWithdrawal {
   signature            String?   @unique
   rawTx                String?
   lastValidBlockHeight BigInt?
+  /// Sends that expired without landing; each resend raises the fee (MAX_WITHDRAWAL_SENDS).
+  attempts             Int       @default(0)
   error                String?
   createdAt            DateTime  @default(now())
   settledAt            DateTime?

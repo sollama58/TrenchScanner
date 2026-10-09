@@ -107,7 +107,20 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
   read back from the chain, and holdings after a sale are re-read from the chain. An exit that
   keeps failing backs off (5s, 15s, 45s, ... up to 10 minutes) and, once it plainly can't be sold,
   is marked **stuck** (retried slowly, no longer holding an open slot). Emptied token accounts are
-  closed afterwards to recover their rent. One pass runs at a time across processes (an advisory
+  closed afterwards to recover their rent.
+- **Retries and fees.** Swap priority fees are **dynamic**: Jupiter's estimate from recent fees
+  ("veryHigh") under the bot's `maxPriorityFeeSol`, itself capped by `TRADING_MAX_PRIORITY_FEE_SOL`.
+  A transaction is never replaced while it can still land; once one has expired unlanded, the next
+  try is built from a fresh quote at **double the fee that one paid** (at least 0.0001 SOL, never
+  over the cap). Entries are retried - a send that expired, a buy that failed on chain, a build
+  that hit an outage - up to 4 tries while the signal is within its age limit plus 2 minutes,
+  never at a price more than the slippage past the first try's quote, and never once the wallet
+  shows the token (an earlier try landed after all). Sales retry until they go through, protective
+  exits with 5 more points of slippage per on-chain failure. Jupiter outages, RPC hiccups, rate
+  limits and missing prices retry within seconds without counting as failures. Withdrawals and
+  rent closes pay a priority fee too (recent fees, with a floor; a withdrawal that expires unlanded
+  is resent up to twice, each time at double the price). `npm run trading:preflight` checks the
+  raised-fee build and the priced transfer against mainnet. One pass runs at a time across processes (an advisory
   lock, plus per-row claims). Pausing the bot stops new buys; exits keep running. **Sell all and
   pause** is the panic button.
 
