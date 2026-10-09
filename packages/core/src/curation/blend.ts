@@ -170,32 +170,6 @@ export function examChunks(reference: readonly TrainingRow[]): ExamChunk[] {
 }
 
 /**
- * Each member's rank cutoff as its exam sets it (calibrateThresholdForPrecision on its fold ranks,
- * cooldown replayed), but from `rows` only. A combiner that reads its members' cutoffs is graded
- * on a chunk with cutoffs set without that chunk: the members' own cutoffs are chosen on every
- * reference row's label, so a combiner graded with them grades the line it was drawn from.
- */
-export function memberCallRanksFrom(
-  reference: readonly TrainingRow[],
-  memberFoldRanks: ReadonlyMap<string, ArrayLike<number>>,
-  rows: readonly number[],
-  input: Pick<BlendInput, "targets" | "cooldownHours">,
-): Map<string, number | null> {
-  const cooldownMs = input.cooldownHours * 3_600_000;
-  const out = new Map<string, number | null>();
-  for (const [member, ranks] of memberFoldRanks) {
-    const calls: ScoredOutcome[] = rows.map((i) => ({
-      probability: ranks[i]!,
-      labelValue: reference[i]!.labelValue,
-      tokenId: reference[i]!.tokenId,
-      anchorAt: reference[i]!.anchorAt,
-    }));
-    out.set(member, calibrateThresholdForPrecision(calls, input.targets, { cooldownMs }).threshold);
-  }
-  return out;
-}
-
-/**
  * The exam of a score nothing was fitted to: the reference rows in time order cut into chunks,
  * each chunk graded at the cutoff the OTHER chunks earned and governed like production. Every
  * chunk is out of sample already; the cross-chunk cutoff is what keeps the grade from choosing
