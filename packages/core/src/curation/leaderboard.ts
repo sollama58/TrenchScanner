@@ -404,3 +404,83 @@ export function rankByComposite<T extends { composite: CompositeScore }>(entries
     })
     .map((x) => x.entry);
 }
+
+/** Fewest graded decision moments in an hour for its market 2x rate to count. */
+export const MIN_MARKET_GRADED_PER_HOUR = 20;
+/** Fewest graded calls in counted hours for a lift to be shown. */
+export const MIN_CALLS_FOR_LIFT = 20;
+
+/** A model's live 2x rate against the market's in the same hours (see marketLift). */
+export interface MarketLift {
+  /** Its 2x rate over the market's 2x rate in the hours it called; null on too little evidence. */
+  lift: number | null;
+  /** The market's 2x rate, weighted by its calls per hour: what calling at random would have hit. */
+  marketRatePct: number | null;
+  /** Its graded calls in hours with enough market rows to count. */
+  graded: number;
+}
+
+/**
+ * Each model's lift over the market, hour for hour: its wins over the wins the market's own 2x
+ * rate in each UTC hour it called would have given the same calls. A model that started on a hot
+ * day and one that sat through a cold one compare fairly; a raw hit rate over the window doesn't
+ * (2026-10-09: the 7-day board read 22-23% for the seats that called through 10-04/05, when the
+ * market doubled 7%, against 29-31% for seats that started on 10-06 or later, with equal lift).
+ * Hours with under MIN_MARKET_GRADED_PER_HOUR graded market rows are left out on both sides.
+ */
+export function marketLift(
+  calls: readonly { model: string; hour: string; graded: number; wins: number }[],
+  market: readonly { hour: string; graded: number; wins: number }[],
+): Map<string, MarketLift> {
+  const rate = new Map<string, number>();
+  for (const m of market) if (m.graded >= MIN_MARKET_GRADED_PER_HOUR) rate.set(m.hour, m.wins / m.graded);
+  const sums = new Map<string, { graded: number; wins: number; expected: number }>();
+  for (const c of calls) {
+    const r = rate.get(c.hour);
+    if (r === undefined || c.graded === 0) continue;
+    const s = sums.get(c.model) ?? { graded: 0, wins: 0, expected: 0 };
+    s.graded += c.graded;
+    s.wins += c.wins;
+    s.expected += c.graded * r;
+    sums.set(c.model, s);
+  }
+  const out = new Map<string, MarketLift>();
+  for (const [model, s] of sums) {
+    const enough = s.graded >= MIN_CALLS_FOR_LIFT && s.expected > 0;
+    out.set(model, {
+      lift: enough ? round2(s.wins / s.expected) : null,
+      marketRatePct: s.graded > 0 ? round1((s.expected / s.graded) * 100) : null,
+      graded: s.graded,
+    });
+  }
+  return out;
+}
+
+/**
+ * The board's order: seasoned contestants before warming-up ones (as rankByComposite); within
+ * the seasoned, highest lift over the market first (user decision 2026-10-09), those without one
+ * after; the rest keep the composite order they come in. The default feed is still picked on the
+ * composite score (champion.ts) - this orders the board, not the feed.
+ */
+export function rankByMarketLift<T extends { composite: CompositeScore; vsMarket: MarketLift | null }>(
+  entries: T[],
+): T[] {
+  const ranked = rankByComposite(entries);
+  const key = (e: T) => (e.composite.warmingUp ? null : (e.vsMarket?.lift ?? null));
+  return ranked
+    .map((entry, i) => ({ entry, i }))
+    .sort((a, b) => {
+      const wa = a.entry.composite.warmingUp ? 1 : 0;
+      const wb = b.entry.composite.warmingUp ? 1 : 0;
+      if (wa !== wb) return wa - wb;
+      const la = key(a.entry);
+      const lb = key(b.entry);
+      if (la !== lb) {
+        if (la === null) return 1;
+        if (lb === null) return -1;
+        return lb - la;
+      }
+      return a.i - b.i;
+    })
+    .map((x) => x.entry);
+}

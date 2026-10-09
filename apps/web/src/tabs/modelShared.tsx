@@ -37,6 +37,12 @@ export function rateTone(value: number | null, target: number): string {
   return value >= target ? "up" : "";
 }
 
+/** A lift over the market: above 1 beats a random pick in the same hours, below 1 trails it. */
+export function liftTone(value: number | null): string {
+  if (value === null) return "";
+  return value >= 1 ? "up" : "down";
+}
+
 export function doublings(value: number | null): string {
   if (value === null) return "–";
   return value.toFixed(2);

@@ -36,6 +36,7 @@ import {
   STATUS_TEXT,
   WINDOWS,
   doublings,
+  liftTone,
   profitTone,
   rateTone,
 } from "./modelShared";
@@ -802,8 +803,10 @@ function LeaderboardPanel({
             </p>
           ) : (
             <p className="muted small">
-              The score runs from 0 to 100: 100 means a model&apos;s calls have reliably hit the goal. Profit
-              is what following every call with one fixed exit plan would have returned.{" "}
+              Ranked by <strong>vs market</strong>: how much more often a model&apos;s calls doubled than the
+              average coin in the same hours, so models that started on different days compare fairly. The
+              score runs from 0 to 100: 100 means a model&apos;s calls have reliably hit the goal. Profit is
+              what following every call with one fixed exit plan would have returned.{" "}
               {guest ? (
                 <>
                   Connect a wallet to pick which models&apos; alerts you get with <strong>In feed</strong>.
@@ -836,6 +839,12 @@ function LeaderboardPanel({
               <th title="How far the model has proven itself toward the goal, 0-100">Score</th>
               <th className="r">{detailed ? "Live calls" : "Calls"}</th>
               <th className="r">{detailed ? "2x" : "Doubled"}</th>
+              <th
+                className="r"
+                title="Its 2x rate over the market's 2x rate in the same hours: 2.0x means its calls doubled twice as often as a random pick then. The board ranks by this."
+              >
+                vs market
+              </th>
               <th className="r">{detailed ? "4x" : "Hit 4x"}</th>
               <th
                 className="r"
@@ -934,6 +943,17 @@ function LeaderboardPanel({
                     data-label={detailed ? "2x" : "Doubled"}
                   >
                     {pct(live.winRatePct)}
+                  </td>
+                  <td
+                    className={`r num ${liftTone(e.vsMarket?.lift ?? null)}`}
+                    data-label="vs market"
+                    title={
+                      e.vsMarket?.marketRatePct != null
+                        ? `The market doubled ${pct(e.vsMarket.marketRatePct, 1)} in the hours it called`
+                        : undefined
+                    }
+                  >
+                    {e.vsMarket?.lift != null ? `${e.vsMarket.lift.toFixed(1)}x` : "–"}
                   </td>
                   <td
                     className={`r num ${rateTone(live.goalRatePct, t.hitRate4xPct)}`}

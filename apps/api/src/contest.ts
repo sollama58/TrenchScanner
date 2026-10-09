@@ -8,8 +8,9 @@ import {
   emptyRecord,
   enabledContestants,
   liveCallRecords,
+  liveMarketLift,
   loadCurrentLanes,
-  rankByComposite,
+  rankByMarketLift,
   withLanes,
   CONSENSUS_CONTESTANT,
   BACKTEST_EVIDENCE_CAP,
@@ -25,6 +26,7 @@ import {
   summarizeRecord,
   type ChampionRecord,
   type CompositeScore,
+  type MarketLift,
   type RecordSummary,
   type ContestantSpec,
   type Env,
@@ -255,6 +257,8 @@ export interface LeaderboardEntry {
    */
   status: "calling" | "silent" | "untrained";
   composite: CompositeScore;
+  /** Its live 2x rate against the market's in the hours it called; null with no graded calls. */
+  vsMarket: MarketLift | null;
   /** The score in a sentence: what it proves, from how much evidence, and the points. */
   scoreExplained: string;
   /** Its live record on high-conviction calls alone (CuratedAlert.tier = "high"); null with none graded. */
@@ -357,7 +361,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
   const state = await contestState(env);
-  const [live, liveHigh, history, probation] = await Promise.all([
+  const [live, liveHigh, history, probation, lifts] = await Promise.all([
     liveCallRecords(
       state.roster.map((c) => c.id),
       since,
@@ -389,6 +393,11 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       orderBy: { startedAt: "desc" },
       select: { slot: true, name: true, laneName: true, startedAt: true },
     }),
+    liveMarketLift(
+      state.roster.map((c) => c.id),
+      since,
+      state.lanes,
+    ),
   ]);
   const laneBySlot = new Map(state.lanes.map((l) => [l.slot, l]));
 
@@ -413,6 +422,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       isDefault: spec.id === state.defaultModel,
       status,
       composite,
+      vsMarket: lifts.get(spec.id) ?? null,
       scoreExplained: explainScore(composite, targets),
       highConviction: (() => {
         const record = liveHigh.get(spec.id);
@@ -487,7 +497,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
             margin: env.CURATOR_CHAMPION_MARGIN,
           }
         : null,
-    entries: rankByComposite(unranked).map((entry, i) => ({ rank: i + 1, ...entry })),
+    entries: rankByMarketLift(unranked).map((entry, i) => ({ rank: i + 1, ...entry })),
     evolution: {
       challengersPerRun: env.CURATOR_EVOLUTION_CHALLENGERS,
       minAgeHours: env.CURATOR_EVOLUTION_MIN_AGE_HOURS,

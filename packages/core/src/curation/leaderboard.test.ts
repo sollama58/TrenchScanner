@@ -4,13 +4,16 @@ import {
   compositeScore,
   emptyRecord,
   explainScore,
+  marketLift,
   pooledRecord,
   rankByComposite,
+  rankByMarketLift,
   recordScore,
   scoreBand,
   scoreParts,
   tenXGradedOf,
   type CallRecord,
+  type CompositeScore,
 } from "./leaderboard.js";
 
 const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 };
@@ -218,5 +221,52 @@ describe("rankByComposite", () => {
       entry("steady", record(80, 30, 10, 0.5)),
     ]);
     expect(ranked.map((e) => e.id)).toEqual(["steady", "hot"]);
+  });
+});
+
+describe("marketLift", () => {
+  const market = [
+    { hour: "2026-10-05T10", graded: 100, wins: 7 },
+    { hour: "2026-10-08T10", graded: 100, wins: 14 },
+    { hour: "2026-10-08T11", graded: 5, wins: 5 },
+  ];
+
+  it("scores each model against the market in its own hours, so a cold start and a hot one compare fairly", () => {
+    const lifts = marketLift(
+      [
+        // Called on the cold day: 15% when the market did 7%.
+        { model: "old", hour: "2026-10-05T10", graded: 40, wins: 6 },
+        // Called on the hot day: 30% when the market did 14%.
+        { model: "new", hour: "2026-10-08T10", graded: 40, wins: 12 },
+        // An hour with too few market rows to count is left out.
+        { model: "new", hour: "2026-10-08T11", graded: 10, wins: 10 },
+      ],
+      market,
+    );
+    expect(lifts.get("old")).toEqual({ lift: 2.14, marketRatePct: 7, graded: 40 });
+    expect(lifts.get("new")).toEqual({ lift: 2.14, marketRatePct: 14, graded: 40 });
+  });
+
+  it("shows no lift on too few graded calls", () => {
+    const lifts = marketLift([{ model: "m", hour: "2026-10-08T10", graded: 5, wins: 2 }], market);
+    expect(lifts.get("m")).toEqual({ lift: null, marketRatePct: 14, graded: 5 });
+  });
+});
+
+describe("rankByMarketLift", () => {
+  const entry = (id: string, score: number, warmingUp: boolean, lift: number | null) => ({
+    id,
+    composite: { score, warmingUp, live: { graded: 100 } } as unknown as CompositeScore,
+    vsMarket: lift === null ? null : { lift, marketRatePct: 10, graded: 100 },
+  });
+
+  it("puts the seasoned by lift, then those without one, then the warming-up by score", () => {
+    const order = rankByMarketLift([
+      entry("high-score", 30, false, 1.5),
+      entry("high-lift", 25, false, 2.2),
+      entry("no-lift", 40, false, null),
+      entry("warming", 50, true, 3),
+    ]).map((e) => e.id);
+    expect(order).toEqual(["high-lift", "high-score", "no-lift", "warming"]);
   });
 });
