@@ -30,6 +30,13 @@ const DEFAULT_SOCKET_TIMEOUT_SECONDS = 180;
 const DEFAULT_STATEMENT_TIMEOUT_SECONDS = 150;
 
 /**
+ * What the trainer's connections call themselves in pg_stat_activity. The Telegram dispatch waits
+ * for open transactions that could still commit an alert, and leaves these out: the trainer writes
+ * no alerts, and its long training reads would otherwise hold every alert back.
+ */
+export const TRAINER_APPLICATION_NAME = "trenchscanner-trainer";
+
+/**
  * Appends `connection_limit`/`pool_timeout` (and the socket/statement timeouts above) to a
  * datasource URL, without disturbing anything the URL already specifies.
  *
@@ -48,6 +55,8 @@ export function appendPoolParams(
     poolTimeoutSeconds?: number;
     socketTimeoutSeconds?: number;
     statementTimeoutSeconds?: number;
+    /** Sent as application_name alongside the statement timeout (only when `options` is ours). */
+    applicationName?: string;
   },
 ): string {
   const url = new URL(rawUrl);
@@ -65,7 +74,11 @@ export function appendPoolParams(
   }
   if (!url.searchParams.has("options")) {
     const ms = Math.round((opts.statementTimeoutSeconds ?? DEFAULT_STATEMENT_TIMEOUT_SECONDS) * 1000);
-    url.searchParams.set("options", `-c statement_timeout=${ms}`);
+    const name = opts.applicationName && /^[\w-]+$/.test(opts.applicationName) ? opts.applicationName : null;
+    url.searchParams.set(
+      "options",
+      `-c statement_timeout=${ms}${name ? ` -c application_name=${name}` : ""}`,
+    );
   }
   return url.toString();
 }
@@ -103,6 +116,7 @@ function tunedDatasourceUrl(): string | null {
         poolTimeoutSeconds !== undefined && poolTimeoutSeconds > 0 ? poolTimeoutSeconds : undefined,
       socketTimeoutSeconds: positive(process.env.DATABASE_SOCKET_TIMEOUT_SECONDS),
       statementTimeoutSeconds: positive(process.env.DATABASE_STATEMENT_TIMEOUT_SECONDS),
+      applicationName: process.env.WORKER_ROLE === "trainer" ? TRAINER_APPLICATION_NAME : undefined,
     });
   } catch {
     return null;
