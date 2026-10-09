@@ -777,11 +777,14 @@ const envSchema = z.object({
   TRADING_SERVER_WALLET_SECRET_KEY: pastedKey,
   TRADING_SERVER_WALLET_ADDRESS: z.string().optional().default(""),
   TRADING_SERVER_WALLET_WITHDRAW_TO: z.string().optional().default(""),
-  // Build Pump.fun trades with PumpPortal when Jupiter has no route for the token (a mint seconds
-  // old, or one migrating to PumpSwap). The guard checks its transactions like Jupiter's.
+  // Build Pump.fun trades with PumpPortal when Jupiter has no route for the token. OFF by default:
+  // tested against mainnet (2026-10-09), Jupiter routes bonding-curve tokens itself; PumpPortal
+  // routes them through its own proxy program, which the guard refuses (not on its allowlist),
+  // and for graduated tokens its own price estimate ran ~30% low, failing on chain at sane
+  // slippage. Kept for when that changes; the guard checks its transactions like Jupiter's.
   TRADING_PUMPPORTAL_FALLBACK: z
     .enum(["true", "false"])
-    .default("true")
+    .default("false")
     .transform((v) => v === "true"),
 });
 
