@@ -1638,3 +1638,16 @@ model Announcement {
 
   @@index([createdAt])
 }
+
+/// An admin's "retrain now" (Admin tab): the trainer polls for an unstarted row, stamps startedAt
+/// and runs curator training at once instead of waiting for its next interval slot.
+model CuratorRetrainRequest {
+  id          String    @id @default(cuid())
+  requestedAt DateTime  @default(now())
+  /// The admin wallet that asked.
+  requestedBy String?
+  /// When the trainer picked it up; null while it waits.
+  startedAt   DateTime?
+
+  @@index([startedAt])
+}

@@ -55,6 +55,46 @@ describe("scheduleInterval", () => {
     runs.slice(1).forEach((at, i) => expect(at - runs[i]!).toBeLessThan(70_010));
   });
 
+  it("runs early on request, then keeps the cadence from that run", async () => {
+    const runs: number[] = [];
+    let requested = false;
+    const job = scheduleInterval("curator-training", jobTaking(10_000, runs), 10, {
+      runEarly: {
+        everyMs: 30_000,
+        due: async () => {
+          const due = requested;
+          requested = false;
+          return due;
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(100_000);
+    requested = true;
+    await vi.advanceTimersByTimeAsync(800_000);
+    job.stop();
+    // The first run at 0, the requested one at the next check after 100s, then 10 minutes on.
+    expect(runs).toEqual([0, 120_000, 720_000]);
+  });
+
+  it("an early run before a delayed first run doesn't start a second cadence", async () => {
+    const runs: number[] = [];
+    let requested = true;
+    const job = scheduleInterval("curator-training", jobTaking(1_000, runs), 10, {
+      firstRunDelayMs: () => new Promise((resolve) => setTimeout(() => resolve(300_000), 60_000)),
+      runEarly: {
+        everyMs: 30_000,
+        due: async () => {
+          const due = requested;
+          requested = false;
+          return due;
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1_300_000);
+    job.stop();
+    expect(runs).toEqual([30_000, 630_000, 1_230_000]);
+  });
+
   it("never overlaps runs", async () => {
     let inFlight = 0;
     let maxInFlight = 0;

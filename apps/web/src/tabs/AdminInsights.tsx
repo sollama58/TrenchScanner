@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { narrativeCriteriaLines } from "../filterFields";
-import type { FilterCriteria } from "../api";
+import { post, type FilterCriteria } from "../api";
 import { usePolling } from "../hooks";
-import { pct, shortAddress, usd } from "../format";
+import { ago, pct, shortAddress, usd } from "../format";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
 
 /**
@@ -172,12 +172,76 @@ const longText = (s: string | null | undefined) =>
   s ? <span className="admin-note">{s}</span> : <span className="faint">–</span>;
 const weight = (v: number) => pct(v * 100, 0);
 
+interface RetrainState {
+  pending: { requestedAt: string; requestedBy: string | null } | null;
+  last: { requestedAt: string; requestedBy: string | null; startedAt: string | null } | null;
+  job: {
+    lastRunAt: string;
+    lastSuccessAt: string | null;
+    lastError: string | null;
+    runningForMs: number | null;
+    durationMs: number | null;
+  } | null;
+}
+
+/**
+ * "Retrain now": queues a training run the trainer worker starts within a minute, instead of
+ * waiting for its next slot. One at a time; the cadence restarts from the forced run.
+ */
+function RetrainNow() {
+  const q = usePolling<RetrainState>("/admin/curator/retrain", 15_000);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const s = q.data;
+  const running = s?.job?.runningForMs != null;
+  const queue = async () => {
+    if (!window.confirm("Retrain every model now? It runs on the trainer and takes a while.")) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await post<RetrainState & { queued: boolean; reason?: string }>("/admin/curator/retrain", {});
+      setResult(r.queued ? "Queued. The trainer starts it within a minute." : `Not queued: ${r.reason}.`);
+      q.reload();
+    } catch (e) {
+      setResult(`Failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const state = running
+    ? `Training now, started ${Math.round((s!.job!.runningForMs ?? 0) / 60_000)}m ago.`
+    : s?.pending
+      ? `Queued ${ago(s.pending.requestedAt)}, waiting for the trainer to pick it up.`
+      : s?.job
+        ? `Last run ${ago(s.job.lastRunAt)}${s.job.durationMs ? `, took ${Math.round(s.job.durationMs / 60_000)}m` : ""}${s.job.lastError ? ", failed" : ""}.`
+        : "No training run recorded yet.";
+  return (
+    <Panel
+      title="Retrain models"
+      note="Training runs on a fixed schedule. Retrain now starts a run on the trainer within a minute and the schedule restarts from it."
+      actions={
+        <button
+          className="button primary"
+          disabled={busy || running || !!s?.pending}
+          onClick={() => void queue()}
+        >
+          {running ? "Training…" : s?.pending ? "Queued" : "Retrain now"}
+        </button>
+      }
+    >
+      <p className="small">{state}</p>
+      {result && <p className="small faint">{result}</p>}
+    </Panel>
+  );
+}
+
 export function Training() {
   const q = usePolling<TrainingReport>("/admin/training", 60_000);
   return (
     <Load q={q}>
       {(t) => (
         <div className="stack">
+          <RetrainNow />
           <Panel title="Trainer jobs" note="The trainer worker's scheduled jobs, from their heartbeats.">
             <Table
               head={["Job", "State", "Last run", "Last success", "Error"]}
