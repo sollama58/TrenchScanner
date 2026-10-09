@@ -30,6 +30,8 @@ import type { CuratorLearner } from "./trainer.js";
  *    consensus's unlearned rival.
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
  *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
+ *  - "topslice": only the most confident calls of the tree seats - a token one of them ranks in
+ *    the top quarter of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
  *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
  *    stored (user decision 2026-10-07): on a decision moment that already carries it, and on a
  *    "second look" the scan takes when the deep read lands after the first decision
@@ -43,7 +45,8 @@ import type { CuratorLearner } from "./trainer.js";
  * never rename one; retire it and add a new id instead.
  */
 
-export type ContestantRole = "rules" | "learner" | "stacked" | "blend" | "agreement" | "narrative";
+export type ContestantRole =
+  "rules" | "learner" | "stacked" | "blend" | "agreement" | "topslice" | "narrative";
 
 /** What a learner contestant trains - the knobs that make it a different model. */
 export interface CuratorRecipe {
@@ -82,6 +85,7 @@ export const CONSENSUS_CONTESTANT = "consensus";
 export const RULES_CONTESTANT = "rules";
 export const BLEND_CONTESTANT = "blend";
 export const AGREEMENT_CONTESTANT = "agreement";
+export const TOP_SLICE_CONTESTANT = "top-slice";
 export const NARRATIVE_CONTESTANT = "narrative";
 /** The two-step narrative seat - see the "narrative" role above and NarrativeBlendCuratorParams. */
 export const NARRATIVE_BLEND_CONTESTANT = "narrative-blend";
@@ -166,6 +170,14 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary:
       "Counts how many of the other models would call a token, and calls the ones most of them agree on.",
     role: "agreement",
+  },
+  {
+    id: TOP_SLICE_CONTESTANT,
+    name: "Top Slice",
+    description:
+      "Calls only what a tree model ranks in the top quarter of its own calls - fixed cutoff, nothing fitted",
+    summary: "Waits for one of the tree models to be at its most sure, and sends only those calls.",
+    role: "topslice",
   },
   {
     id: RULES_CONTESTANT,
@@ -306,7 +318,7 @@ export function isContestantId(id: string): boolean {
 }
 
 /** Roles that combine the learners' calls rather than read tokens themselves. */
-export const COMBINER_ROLES: readonly ContestantRole[] = ["stacked", "blend", "agreement"];
+export const COMBINER_ROLES: readonly ContestantRole[] = ["stacked", "blend", "agreement", "topslice"];
 
 /**
  * The enabled roster in canonical order, from CURATOR_CONTESTANTS. The combiners need members,

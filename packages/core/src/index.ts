@@ -64,6 +64,7 @@ export * from "./curation/pricePath.js";
 export * from "./curation/calibration.js";
 export * from "./curation/blend.js";
 export * from "./curation/agreement.js";
+export * from "./curation/topSlice.js";
 export * from "./curation/narrativeNote.js";
 export * from "./curation/featureReport.js";
 export * from "./curation/featureOnset.js";
