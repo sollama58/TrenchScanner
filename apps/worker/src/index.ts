@@ -76,6 +76,13 @@ const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
 async function main() {
   const env = loadEnv();
   const role = env.WORKER_ROLE;
+  // The server wallet's secret belongs on the trader only: a scanner or trainer holding it would
+  // put a spendable key on a process that has no need for one.
+  if (env.TRADING_SERVER_WALLET_SECRET_KEY && role !== "trader" && role !== "all") {
+    throw new Error(
+      `TRADING_SERVER_WALLET_SECRET_KEY is set on the ${role} worker. Remove it: it belongs on trenchscanner-trader only.`,
+    );
+  }
   const jobs: { name: HeartbeatJob; job: ScheduledJob }[] = [];
   /** Starts a schedule only when this process's role owns the job. */
   const schedule = (job: HeartbeatJob, start: () => ScheduledJob) => {

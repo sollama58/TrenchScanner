@@ -80,8 +80,6 @@ export interface GuardRpc {
     base64Tx: string,
     addresses: string[],
   ): Promise<{ error: string | null; logs: string[]; accounts: (ParsedAccountState | null)[] } | null>;
-  /** Every token account the wallet owns, under both token programs; null when the RPC failed. */
-  getWalletTokenAccounts(owner: string): Promise<WalletTokenAccount[] | null>;
 }
 
 /** Shared by both sides of a trade. */
@@ -139,6 +137,9 @@ export interface InstructionTotals {
   priorityFeeLamports: bigint;
 }
 
+/** The most SOL a sale may take from the wallet beyond its priority fee: base fees and rent. */
+const MAX_SALE_SOL_COST_LAMPORTS = 10_000_000n;
+
 /** The compute-unit limit when none is set: the transaction maximum, so the fee bound is conservative. */
 const DEFAULT_COMPUTE_UNIT_LIMIT = 1_400_000n;
 
@@ -164,10 +165,15 @@ export function checkInstructions(
     if (ix.programIdIndex >= decoded.staticKeys.length)
       throw new GuardRefusal(`instruction ${n}: bad program index`);
     const program = decoded.staticKeys[ix.programIdIndex]!;
+    // The System, Token and ATA instructions this checks must name their accounts in the message
+    // itself, not through a lookup table: the tables are read from the RPC, and a hostile RPC could
+    // otherwise make a transfer to a stranger read as one to the wallet's own account.
     const acct = (i: number) => {
       const index = ix.accountIndexes[i];
       if (index === undefined || keys[index] === undefined)
         throw new GuardRefusal(`instruction ${n}: missing account`);
+      if (index >= decoded.staticKeys.length)
+        throw new GuardRefusal(`instruction ${n}: an account it moves funds with comes from a lookup table`);
       return keys[index]!;
     };
     const d = ix.data;
@@ -254,15 +260,17 @@ export async function guardSwapTransaction(
   // Layer 2: watch the wallet and the token accounts of the wallet's that the transaction can
   // reach at all - the runtime can't touch an account a transaction doesn't list, and the RPC
   // refuses to watch more accounts than the transaction has.
-  const owned = await rpc.getWalletTokenAccounts(wallet);
-  if (!owned) throw new Error("could not list the wallet's token accounts");
-  const inTx = new Set(keys);
-  const candidates = [...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, expect.mint, p));
-  const watch = [
-    ...new Set(
-      [wallet, ...owned.map((a) => a.address), ...candidates].filter((a) => a === wallet || inTx.has(a)),
-    ),
-  ];
+  // Which of the transaction's accounts are the wallet's token accounts: read from the chain for
+  // every key the transaction lists - not from a listing of the wallet's accounts, which can lag
+  // behind an account opened seconds ago (and is unbounded for a busy wallet).
+  const inTx = [...new Set(keys)].filter((k) => k !== wallet);
+  const listed = await rpc.getParsedAccounts(inTx);
+  if (!listed) throw new Error("could not read the transaction's accounts");
+  const owned = inTx.filter((_, i) => listed[i]?.token?.owner === wallet);
+  const tradedCandidates = [...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, expect.mint, p));
+  const wsolCandidates = [...TOKEN_PROGRAMS].map((p) => associatedTokenAddress(wallet, WSOL, p));
+  const candidates = [...tradedCandidates, ...wsolCandidates].filter((a) => inTx.includes(a));
+  const watch = [wallet, ...new Set([...owned, ...candidates])];
   const [pre, sim] = await Promise.all([
     rpc.getParsedAccounts(watch),
     rpc.simulateParsed(Buffer.from(unsigned).toString("base64"), watch),
@@ -290,12 +298,14 @@ export async function guardSwapTransaction(
     const before = pre[i];
     const after = post[i];
     const mint = after?.token?.mint ?? before?.token?.mint ?? null;
-    const isCandidate = candidates.includes(watch[i]!);
-    if (mint === expect.mint || (isCandidate && mint === null)) {
+    const isTradedCandidate = tradedCandidates.includes(watch[i]!);
+    if (mint === expect.mint || (isTradedCandidate && mint === null)) {
       if (after?.token && after.token.owner !== wallet)
         throw new GuardRefusal("the traded token account changes owner");
       if (after?.token && (after.token.delegate ?? null) !== (before?.token?.delegate ?? null))
         throw new GuardRefusal("a delegate is set on the traded token account");
+      if (after?.token && (after.token.closeAuthority ?? null) !== (before?.token?.closeAuthority ?? null))
+        throw new GuardRefusal("the traded token account's close authority would change");
       traded.push(i);
       continue;
     }
@@ -304,6 +314,12 @@ export async function guardSwapTransaction(
       // wrapped SOL moved anywhere but back to the wallet reads as SOL lost.
       if (after?.token && after.token.owner !== wallet)
         throw new GuardRefusal("a wrapped-SOL account changes owner");
+      if (
+        after?.token &&
+        ((after.token.delegate ?? null) !== (before?.token?.delegate ?? null) ||
+          (after.token.closeAuthority ?? null) !== (before?.token?.closeAuthority ?? null))
+      )
+        throw new GuardRefusal("a wrapped-SOL account's authority would change");
       if (before?.token?.owner === wallet || before === null) wrappedPre += before?.lamports ?? 0n;
       if (after?.token?.owner === wallet) wrappedPost += after.lamports;
       continue;
@@ -336,6 +352,9 @@ export async function guardSwapTransaction(
   } else {
     if (-tokenDelta > expect.amount)
       throw new GuardRefusal(`it would sell ${-tokenDelta} tokens, more than ${expect.amount}`);
+    // Whatever the quote says, a sale never costs the wallet SOL beyond fees and temporary rent.
+    if (solDelta < -(expect.maxPriorityFeeLamports + MAX_SALE_SOL_COST_LAMPORTS))
+      throw new GuardRefusal(`a sale would cost the wallet ${-solDelta} lamports`);
     if (solDelta < expect.minSolOut - expect.feeAllowance)
       throw new GuardRefusal(`it would return ${solDelta} lamports, under the minimum ${expect.minSolOut}`);
   }

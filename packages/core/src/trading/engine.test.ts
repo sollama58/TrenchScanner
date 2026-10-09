@@ -10,7 +10,7 @@ import {
   type SwapClient,
   type SwapQuote,
 } from "./jupiterSwap.js";
-import type { TransactionFill } from "./rpc.js";
+import type { MintInfo, TransactionFill } from "./rpc.js";
 import {
   buildLegacyTransaction,
   buildSolTransfer,
@@ -60,6 +60,15 @@ class FakeChain {
   private lastBalance = new Map<string, bigint>();
   jupiterNoRoute = false;
   height = 100;
+  /** What a mint read returns: a Pump.fun-style Token-2022 mint unless overridden. */
+  mintInfo: (mint: string) => MintInfo | null = () => ({
+    program: PROGRAM.token2022,
+    mintAuthority: null,
+    freezeAuthority: null,
+    extensions: ["metadataPointer", "tokenMetadata"],
+  });
+  /** The program the RPC claims owns the wallet's token accounts (a hostile RPC lies here). */
+  reportedTokenProgram: string = PROGRAM.token;
   /** Mints the PumpPortal stand-in will build for. */
   fallbackMints = new Set<string>();
   /** Signatures the "network" drops (sent, but never land). */
@@ -130,13 +139,6 @@ class FakeChain {
       logs: [],
       accounts: this.state(addresses, this.effectOf(b64)),
     }),
-    getWalletTokenAccounts: async (owner) =>
-      [...this.tokens.keys()]
-        .filter((k) => k.startsWith(`${owner}:`))
-        .map((k) => {
-          const mint = k.split(":")[1]!;
-          return { address: this.ata(owner, mint), programId: PROGRAM.token, mint };
-        }),
     send: async (b64) => {
       const bytes = Buffer.from(b64, "base64");
       expect(verifyTransactionSignatures(bytes)).toBe(true);
@@ -164,6 +166,7 @@ class FakeChain {
     getSignatureStatus: async (sig) =>
       this.landed.has(sig) ? { seen: true, confirmed: true, error: null } : { seen: false },
     getTransactionFill: async (sig) => this.landed.get(sig) ?? null,
+    getMintInfo: async (mint) => this.mintInfo(mint),
     getTokenBalance: async (owner, mint) => {
       let raw = this.tokens.get(this.key(owner, mint));
       if (this.lagOnce && this.lastBalance.has(this.key(owner, mint))) {
@@ -174,7 +177,9 @@ class FakeChain {
         raw: raw ?? 0n,
         decimals: 6,
         accounts:
-          raw === undefined ? [] : [{ address: this.ata(owner, mint), programId: PROGRAM.token, raw }],
+          raw === undefined
+            ? []
+            : [{ address: this.ata(owner, mint), programId: this.reportedTokenProgram, raw }],
       };
     },
   };
@@ -492,6 +497,70 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     const p = await position();
     expect(p.status).toBe("open");
     expect(p.tokensHeld).toBe("1000000000");
+  });
+
+  it("refuses to buy a token whose mint is risky", async () => {
+    const risky: MintInfo[] = [
+      { program: PROGRAM.token, mintAuthority: admin, freezeAuthority: null, extensions: [] },
+      { program: PROGRAM.token, mintAuthority: null, freezeAuthority: admin, extensions: [] },
+      {
+        program: PROGRAM.token2022,
+        mintAuthority: null,
+        freezeAuthority: null,
+        extensions: ["tokenMetadata", "permanentDelegate"],
+      },
+    ];
+    for (const info of risky) {
+      await freshSignal();
+      chain.mintInfo = () => info;
+      const run = await tick();
+      expect(run.buys).toBe(0);
+      expect(run.skipped).toBe(1);
+      expect(await prisma.tradingPosition.count({ where: { userId } })).toBe(0);
+    }
+  });
+
+  it("does not use up a token's one entry on a transient failure", async () => {
+    await freshSignal();
+    const height = chain.rpc.getBlockHeight;
+    chain.rpc.getBlockHeight = async () => null; // the RPC hiccups mid-entry
+    expect((await tick()).buys).toBe(0);
+    expect(await prisma.tradingPosition.count({ where: { userId } })).toBe(0);
+    chain.rpc.getBlockHeight = height;
+  });
+
+  it("refuses a sale that would take SOL from the wallet, and retries it", async () => {
+    await opened();
+    chain.price.set(mint, 0.02); // under the stop
+    chain.hostile = "drain-sol";
+    await tick(1);
+    const p = await position();
+    expect(p.status).toBe("open");
+    expect(p.error).toMatch(/refused/);
+    expect(p.failCount).toBe(1);
+    expect(chain.sol.get(walletKey)).toBe(LAMPORTS - 50_010_000n);
+  });
+
+  it("closes token accounts only under a real token program", async () => {
+    await opened();
+    await prisma.tradingPosition.update({
+      where: { userId_mint: { userId, mint } },
+      data: { closeRequested: true },
+    });
+    await tick();
+    await tick();
+    expect((await position()).status).toBe("closed");
+    chain.reportedTokenProgram = generateWalletKeypair().publicKey; // a hostile RPC's answer
+    const sentBefore = chain.sent.length;
+    expect((await tick(1)).reclaimed).toBe(0);
+    expect(chain.sent.length).toBe(sentBefore);
+  });
+
+  it("reports open positions it has no key to manage", async () => {
+    await opened();
+    const run = await runTradingEngine({ ...deps(), keys: null });
+    expect(run.failedStages).toContain("exits");
+    expect((await position()).error).toMatch(/no key/);
   });
 
   it("falls back to PumpPortal when Jupiter has no route for a Pump.fun token", async () => {

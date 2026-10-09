@@ -20,9 +20,15 @@ import {
   type SwapClient,
 } from "./jupiterSwap.js";
 import type { KeyProvider } from "./keyVault.js";
-import type { TradingRpc, TransactionFill } from "./rpc.js";
+import type { MintInfo, TradingRpc, TransactionFill } from "./rpc.js";
 import { buildCloseTokenAccount, buildSolTransfer, signTransaction } from "./transaction.js";
-import { GuardRefusal, guardSwapTransaction, type GuardRpc, type TradeExpectation } from "./txGuard.js";
+import {
+  GuardRefusal,
+  guardSwapTransaction,
+  PROGRAM,
+  type GuardRpc,
+  type TradeExpectation,
+} from "./txGuard.js";
 import { withWalletKey, type TradingWalletRow } from "./wallets.js";
 
 /**
@@ -92,6 +98,11 @@ const TAKE_PROFIT_TIGHT_ATTEMPTS = 3;
 /** Failed exits before a position past its hold time is called stuck (frees its slot). */
 const STUCK_AFTER_FAILURES = 5;
 const MAX_BACKOFF_MS = 10 * 60_000;
+/** A protective exit that failed on chain is retried this soon (with more slippage). */
+const PROTECTIVE_RETRY_MS = 15_000;
+/** After this many consecutive failures a position is retried only every GIVEN_UP_RETRY_MS. */
+const GIVE_UP_AFTER_FAILURES = 20;
+const GIVEN_UP_RETRY_MS = 6 * 3_600_000;
 /** A fallback sell quote is reused this long (prices for tokens the Price API lacks). */
 const QUOTE_CACHE_MS = 15_000;
 /** Emptied accounts are closed this long after the position closes (the sale has settled). */
@@ -112,6 +123,7 @@ type EngineRpc = Pick<
   | "getSignatureStatus"
   | "getTransactionFill"
   | "getTokenBalance"
+  | "getMintInfo"
 > &
   GuardRpc;
 
@@ -120,7 +132,10 @@ export interface TradingEngineDeps {
   swap: SwapClient;
   /** Second route for Pump.fun tokens Jupiter can't trade (PumpPortal); null for none. */
   fallback?: FallbackSwapClient | null;
-  keys: KeyProvider;
+  /** Opens the custodial wallets (KMS); null when this process has none (the server wallet still trades). */
+  keys: KeyProvider | null;
+  /** Server-wide ceiling on any swap's priority fee (TRADING_MAX_PRIORITY_FEE_SOL). */
+  maxPriorityFeeLamports?: bigint;
   /** Who may open new positions (the admin wallets). */
   canTrade: (walletAddress: string) => boolean;
   /**
@@ -244,7 +259,8 @@ async function tradingPass(deps: TradingEngineDeps): Promise<TradingRunSummary> 
           withdrawTo: server.withdrawTo,
           row: null,
         });
-      } else {
+      } else if (deps.keys) {
+        // A custodial wallet is only usable with the key service to open it.
         const w = await prisma.tradingWallet.findUnique({ where: { userId } });
         if (w) wallets.set(userId, { userId, publicKey: w.publicKey, withdrawTo: w.withdrawTo, row: w });
       }
@@ -294,6 +310,7 @@ async function sign(ctx: PassContext, wallet: Wallet, unsigned: Uint8Array) {
   const server = ctx.deps.serverWallet;
   let out: { signed: Uint8Array; signature: string };
   if (wallet.row) {
+    if (!ctx.deps.keys) throw new Error("the key service is not configured; custodial wallets can't sign");
     out = await withWalletKey(wallet.row, ctx.deps.keys, (seed) =>
       signTransaction(unsigned, seed, wallet.publicKey),
     );
@@ -329,9 +346,24 @@ interface BuiltSwap {
   expect: TradeExpectation;
 }
 
-/** SOL a route may send to anyone but the wallet: 2% of the trade (fees, tips) plus 0.001 SOL. */
+/** The most any one trade may send to anyone but the wallet, whatever the trade's size or price. */
+const MAX_EXTERNAL_LAMPORTS = 50_000_000n;
+
+/**
+ * SOL a route may send to anyone but the wallet: 2% of the trade (fees, tips) plus 0.001 SOL,
+ * never more than 0.05 SOL - a sale's size comes from a price the route itself reports, so the
+ * allowance must not grow with it.
+ */
 function externalAllowance(tradeLamports: bigint): bigint {
-  return tradeLamports / 50n + 1_000_000n;
+  const share = tradeLamports / 50n;
+  return (share > MAX_EXTERNAL_LAMPORTS ? MAX_EXTERNAL_LAMPORTS : share) + 1_000_000n;
+}
+
+/** The priority fee a bot may pay: its own setting, under the server's ceiling. */
+function priorityFee(ctx: PassContext, config: TradingBotConfig): bigint {
+  const own = solToLamports(config.maxPriorityFeeSol);
+  const cap = ctx.deps.maxPriorityFeeLamports;
+  return cap !== undefined && cap < own ? cap : own;
 }
 
 /**
@@ -640,7 +672,15 @@ async function settleFailed(
     } else {
       await tx.tradingPosition.update({
         where: { id: order.positionId },
-        data: { error, proceedsLamports: { increment: fee ?? 0n }, ...failureBackoff(order.position, at) },
+        data: {
+          error,
+          proceedsLamports: { increment: fee ?? 0n },
+          ...failureBackoff(order.position, at, order.reason !== "take_profit"),
+          // Failing on chain again and again: it no longer holds an open slot.
+          ...(order.position.status === "open" && order.position.failCount + 1 >= STUCK_AFTER_FAILURES
+            ? { status: "stuck" }
+            : {}),
+        },
       });
     }
   });
@@ -831,10 +871,17 @@ async function recoverPositions(ctx: PassContext): Promise<void> {
   if (recoveryCheckedAt.size > 5_000) recoveryCheckedAt.clear();
 }
 
-/** The next attempt's time after one more failure. */
-function failureBackoff(position: Pick<PositionRow, "failCount">, at: Date) {
+/**
+ * The next attempt's time after one more failure: exponential up to 10 minutes - or, for a
+ * protective exit (stop, trail, time, manual) that failed on chain, a quick retry (each with
+ * more slippage, see manageExit) while there are tries left. Past GIVE_UP_AFTER_FAILURES the
+ * position is retried only every few hours, so a sale that can never succeed stops paying fees.
+ */
+function failureBackoff(position: Pick<PositionRow, "failCount">, at: Date, protective = false) {
   const failCount = position.failCount + 1;
-  const wait = Math.min(MAX_BACKOFF_MS, 5_000 * 3 ** (failCount - 1));
+  let wait = Math.min(MAX_BACKOFF_MS, 5_000 * 3 ** (failCount - 1));
+  if (protective && failCount < STUCK_AFTER_FAILURES) wait = Math.min(wait, PROTECTIVE_RETRY_MS);
+  if (failCount >= GIVE_UP_AFTER_FAILURES) wait = GIVEN_UP_RETRY_MS;
   return { failCount, nextAttemptAt: new Date(at.getTime() + wait) };
 }
 
@@ -1072,9 +1119,21 @@ async function manageExits(ctx: PassContext): Promise<void> {
       /* priced per position below, by quote */
     }
   }
+  let unmanaged = 0;
   for (const position of due) {
     if (!ctx.inBudget()) return;
     ctx.summary.exitsChecked++;
+    if (!(await ctx.walletFor(position.userId))) {
+      // No key to sign with (KMS not configured, or the server key missing): nothing can sell it.
+      unmanaged++;
+      await prisma.tradingPosition
+        .update({
+          where: { id: position.id },
+          data: { error: "no key available to manage this position (check the trader's key settings)" },
+        })
+        .catch(() => undefined);
+      continue;
+    }
     try {
       await manageExit(ctx, position, prices.get(position.mint), solUsd);
     } catch (err) {
@@ -1082,6 +1141,7 @@ async function manageExits(ctx: PassContext): Promise<void> {
       await recordExitFailure(ctx, position, err);
     }
   }
+  if (unmanaged > 0) throw new Error(`${unmanaged} open position(s) have no key to sell with`);
 }
 
 /** The position couldn't be priced this pass (no index price, no quote): not a failed sale. */
@@ -1244,10 +1304,11 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
   const exitSlippage = Math.max(configured, EXIT_SLIPPAGE_FLOOR_BPS);
   // A take-profit sells at the configured slippage; one that keeps failing (the price moved
   // before it landed) and every protective exit sells with room to get out.
+  // Each failed attempt at a protective exit widens it by 5 points, up to 50%.
   const slippageBps =
     decision.reason === "take_profit" && position.failCount < TAKE_PROFIT_TIGHT_ATTEMPTS
       ? configured
-      : exitSlippage;
+      : Math.min(5_000, exitSlippage + 500 * Math.min(position.failCount, 4));
   // What the tokens being sold are worth: by the price when there is one, else by their cost.
   const costOfAmount =
     position.swapInLamports && bought > 0n ? (position.swapInLamports * amount) / bought : 0n;
@@ -1264,7 +1325,7 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
       amount,
       decimals: position.decimals,
       slippageBps,
-      maxPriorityFeeLamports: solToLamports(config.maxPriorityFeeSol),
+      maxPriorityFeeLamports: priorityFee(ctx, config),
       valueHintLamports,
     },
   );
@@ -1383,6 +1444,7 @@ async function signalHorizon(now: Date): Promise<Date> {
     const [row] = await prisma.$queryRaw<{ oldest: Date | null }[]>`
       SELECT min(xact_start) AS oldest FROM pg_stat_activity
       WHERE datname = current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL
+        AND backend_type = 'client backend' AND state <> 'idle'
         AND query NOT ILIKE '%pg_try_advisory_xact_lock%'`;
     const oldest = row?.oldest ?? null;
     if (!oldest) return grace;
@@ -1505,21 +1567,55 @@ async function runBotEntries(
           amount: buyLamports,
           decimals: null,
           slippageBps,
-          maxPriorityFeeLamports: solToLamports(config.maxPriorityFeeSol),
+          maxPriorityFeeLamports: priorityFee(ctx, config),
         },
       );
       ctx.summary.buys++;
       logger.info("entry sent", { userId: bot.userId, mint: signal.mint, source: signal.label });
     } catch (err) {
-      // Nothing was signed or sent (executeSwap only throws before recording): the entry is over.
-      await prisma.tradingPosition.updateMany({
-        where: { id: position.id, status: "buying", orders: { none: {} } },
-        data: { status: "failed", error: errText(err), closedAt: ctx.now() },
-      });
+      // Nothing was signed or sent (executeSwap only throws before recording). A refusal or no
+      // route ends the entry (one try per token); anything transient (a rate limit, an RPC
+      // hiccup) removes the attempt instead, so a later signal on the token can still buy it.
+      const final = err instanceof GuardRefusal || err instanceof NoRouteError;
+      if (final) {
+        await prisma.tradingPosition.updateMany({
+          where: { id: position.id, status: "buying", orders: { none: {} } },
+          data: { status: "failed", error: errText(err), closedAt: ctx.now() },
+        });
+      } else {
+        await prisma.tradingPosition.deleteMany({
+          where: { id: position.id, status: "buying", orders: { none: {} } },
+        });
+      }
       if (!(err instanceof GuardRefusal) && !(err instanceof NoRouteError)) ctx.summary.errors++;
       logger.warn("entry not sent", { mint: signal.mint, error: errText(err) });
     }
   }
+}
+
+/** Token-2022 extensions a Pump.fun-style token carries and that can't hurt a holder. */
+const HARMLESS_MINT_EXTENSIONS = new Set([
+  "metadataPointer",
+  "tokenMetadata",
+  "groupPointer",
+  "groupMemberPointer",
+  "tokenGroup",
+  "tokenGroupMember",
+]);
+
+/**
+ * Why a mint is not safe to hold, or null. Refused: a live mint authority (supply can be printed
+ * out from under the position) or freeze authority (the position can be frozen unsellable), and
+ * any Token-2022 extension beyond metadata - a permanent delegate can take the tokens, a transfer
+ * hook or pausable config can block the sale, a transfer fee takes a cut of it.
+ */
+export function mintRisk(mint: MintInfo): string | null {
+  if (!TOKEN_PROGRAM_IDS.has(mint.program)) return "not a token mint";
+  if (mint.mintAuthority) return "mint authority not revoked";
+  if (mint.freezeAuthority) return "freeze authority not revoked";
+  const risky = mint.extensions.filter((e) => !HARMLESS_MINT_EXTENSIONS.has(e));
+  if (risky.length > 0) return `risky token extensions: ${risky.join(", ")}`;
+  return null;
 }
 
 /** Why a signal can't be bought right now, or null when it can. */
@@ -1551,6 +1647,10 @@ async function entryBlocker(
     }),
   ]);
   if (existing) return "already traded this token";
+  const mint = await ctx.deps.rpc.getMintInfo(signal.mint);
+  if (!mint) return "mint unreadable";
+  const risk = mintRisk(mint);
+  if (risk) return risk;
   if (open >= config.maxOpenPositions) return "at the open-position limit";
   let dailyCap = solToLamports(config.maxDailySpendSol);
   if (ctx.deps.maxDailySpendLamports !== undefined && ctx.deps.maxDailySpendLamports < dailyCap)
@@ -1569,6 +1669,11 @@ async function entryBlocker(
 }
 
 // ── Rent ─────────────────────────────────────────────────────────────────────────────────────
+
+const TOKEN_PROGRAM_IDS = new Set<string>([PROGRAM.token, PROGRAM.token2022]);
+const closeSentAt = new Map<string, number>();
+/** A close that was sent is not sent again for this long (it lands or its blockhash expires). */
+const CLOSE_RESEND_MS = 3 * 60_000;
 
 /** Closes the emptied token accounts of sold-out positions: ~0.002 SOL back per trade. */
 async function reclaimRent(ctx: PassContext): Promise<void> {
@@ -1599,6 +1704,20 @@ async function reclaimRent(ctx: PassContext): Promise<void> {
     const blockhash = await ctx.deps.rpc.getLatestBlockhash();
     if (!blockhash) continue;
     for (const account of empty) {
+      // Only ever a close by a real token program of an empty account the wallet owns: the
+      // program comes from the RPC's listing, and this transaction is not checked by the guard.
+      if (!TOKEN_PROGRAM_IDS.has(account.programId)) continue;
+      const lastSent = closeSentAt.get(account.address) ?? 0;
+      if (Date.now() - lastSent < CLOSE_RESEND_MS) continue;
+      const [state] = (await ctx.deps.rpc.getParsedAccounts([account.address])) ?? [];
+      if (
+        !state ||
+        !TOKEN_PROGRAM_IDS.has(state.owner) ||
+        state.owner !== account.programId ||
+        state.token?.owner !== wallet.publicKey ||
+        state.token.amount !== 0n
+      )
+        continue;
       try {
         const unsigned = buildCloseTokenAccount({
           owner: wallet.publicKey,
@@ -1620,7 +1739,10 @@ async function reclaimRent(ctx: PassContext): Promise<void> {
           break;
         }
         const { rawTx } = await sign(ctx, wallet, unsigned);
-        // Not tracked as an order: if it doesn't land, the account is still there next pass.
+        // Not tracked as an order: if it doesn't land, the account is still there later - and it is
+        // not sent again for a while, so a lagging read can't make it pay a fee per pass.
+        closeSentAt.set(account.address, Date.now());
+        if (closeSentAt.size > 5_000) closeSentAt.clear();
         await ctx.deps.rpc.send(rawTx);
         ctx.summary.reclaimed++;
       } catch (err) {

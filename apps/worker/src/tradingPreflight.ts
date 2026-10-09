@@ -49,7 +49,7 @@ async function main() {
   else warn("TRADING_BOT_ENABLED", "off: the bot will not run until it is true");
   if (env.WORKER_ROLE === "trader" || env.WORKER_ROLE === "all") ok("WORKER_ROLE", env.WORKER_ROLE);
   else fail("WORKER_ROLE", `${env.WORKER_ROLE}: run this on the trader service`);
-  if (env.TRADING_JUPITER_API_KEY || env.JUPITER_API_KEY) ok("Jupiter API key");
+  if (env.TRADING_JUPITER_API_KEY) ok("Jupiter API key", "the bot's own");
   else warn("Jupiter API key", "none: using the keyless lite host; set TRADING_JUPITER_API_KEY");
   if (env.TRADING_PUMPPORTAL_FALLBACK)
     warn(
@@ -95,7 +95,7 @@ async function main() {
 
   console.log("\nJupiter");
   const swap = new JupiterSwapClient({
-    apiKey: env.TRADING_JUPITER_API_KEY || env.JUPITER_API_KEY || undefined,
+    apiKey: env.TRADING_JUPITER_API_KEY || undefined,
     baseUrl: env.TRADING_JUPITER_BASE_URL || undefined,
   });
   try {

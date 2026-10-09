@@ -85,6 +85,16 @@ export function parseAccountState(raw: RawAccount | null | undefined): ParsedAcc
   return { lamports: BigInt(raw.lamports), owner: raw.owner, token };
 }
 
+/** A mint account's authorities and Token-2022 extensions. */
+export interface MintInfo {
+  /** The token program that owns it. */
+  program: string;
+  mintAuthority: string | null;
+  freezeAuthority: string | null;
+  /** Token-2022 extension names, as the RPC's jsonParsed encoding names them. */
+  extensions: string[];
+}
+
 export class TradingRpc implements GuardRpc {
   readonly url: string;
 
@@ -193,6 +203,34 @@ export class TradingRpc implements GuardRpc {
       // The node refused the request itself (not the transaction): unavailable, not a verdict.
       return null;
     }
+  }
+
+  /** A mint's authorities and extensions; null when it can't be read or isn't a mint. */
+  async getMintInfo(mint: string): Promise<MintInfo | null> {
+    const out = await this.read<{
+      value?: {
+        owner?: string;
+        data?: {
+          parsed?: {
+            type?: string;
+            info?: {
+              mintAuthority?: string | null;
+              freezeAuthority?: string | null;
+              extensions?: { extension?: string }[];
+            };
+          };
+        };
+      } | null;
+    }>("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }]);
+    const v = out?.value;
+    const info = v?.data?.parsed?.info;
+    if (!v || typeof v.owner !== "string" || v.data?.parsed?.type !== "mint" || !info) return null;
+    return {
+      program: v.owner,
+      mintAuthority: info.mintAuthority ?? null,
+      freezeAuthority: info.freezeAuthority ?? null,
+      extensions: (info.extensions ?? []).map((e) => e.extension ?? "unknown"),
+    };
   }
 
   async getWalletTokenAccounts(owner: string): Promise<WalletTokenAccount[] | null> {

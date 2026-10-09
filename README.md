@@ -125,6 +125,29 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
    `TRADING_BOT_ENABLED=true` on both.
 4. Open the **Bot** tab, create the wallet, send it a little SOL, pick sources, save, **Start**.
 
+### Before real funds (launch checklist)
+
+1. Run the preflight on the trader (Render → `trenchscanner-trader` → Shell):
+   `npm run trading:preflight -w @trenchscanner/worker`. It builds real Jupiter swaps for a funded
+   probe wallet and runs them through the production guard against mainnet, and checks the RPC,
+   the Price API, KMS (it test-opens a custodial wallet) and the server wallet key - read-only,
+   nothing signed. Every check must pass; run it again after any change.
+2. Give the trader its own `TRADING_JUPITER_API_KEY` (never shared with the scan) and a paid RPC
+   (`HELIUS_API_KEY`).
+3. Start small: `buySol` ≤ 0.05, `maxOpenPositions` ≤ 3, and fund each wallet with about a day's
+   spend cap plus the reserve - keep the rest at the withdrawal address. Watch the first fills,
+   exits and rent reclaims on Solscan, and `/health/worker`'s `trading-bot` row.
+4. Keep the Render team small: the trader's environment can spend the server wallet and open
+   every custodial wallet.
+
+What the bot refuses to do, whatever its settings: sign a transaction the guard hasn't checked;
+buy a token with a live mint or freeze authority or a Token-2022 extension beyond metadata
+(permanent delegate, transfer hook, transfer fee, pausable, ...); send more than 0.05 SOL to
+anyone but itself in one trade; let a sale cost the wallet SOL beyond fees; exceed the
+`TRADING_MAX_*` ceilings (buy size, 24h spend, slippage, priority fee). The PumpPortal fallback
+is off by default (`TRADING_PUMPPORTAL_FALLBACK`): Jupiter routes Pump.fun tokens itself, and
+PumpPortal's proxy program is not on the guard's allowlist.
+
 ### Server wallet
 
 Besides each admin's own wallet, there can be one **server wallet** whose private key you supply:

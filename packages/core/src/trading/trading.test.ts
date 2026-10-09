@@ -31,7 +31,13 @@ import {
   readTradingBotConfig,
   tradingBotConfigSchema,
 } from "./config.js";
-import { positionMultiple, withdrawalAmount, RENT_EXEMPT_MIN_LAMPORTS, TX_FEE_LAMPORTS } from "./engine.js";
+import {
+  mintRisk,
+  positionMultiple,
+  withdrawalAmount,
+  RENT_EXEMPT_MIN_LAMPORTS,
+  TX_FEE_LAMPORTS,
+} from "./engine.js";
 
 const MASTER = "11".repeat(32);
 const OWNER = "So11111111111111111111111111111111111111112";
@@ -442,10 +448,40 @@ describe("instruction guard", () => {
     const keys = resolveAccountKeys(decoded, new Map([[table, loaded]]));
     expect(keys).toEqual([wallet, PROGRAM.token, loaded[0], loaded[1]]);
     // The close goes to a loaded account, not the wallet: refused even though it hid in a table.
-    expect(() => checkInstructions(decoded, keys, wallet)).toThrow(/token instruction 9/);
+    // A close whose accounts come from a lookup table is refused outright: the RPC serves the tables.
+    expect(() => checkInstructions(decoded, keys, wallet)).toThrow(/lookup table/);
     const header = new Uint8Array(56);
     expect(parseLookupTableAddresses(Uint8Array.from([...header, ...bs58.decode(loaded[0]!)]))).toEqual([
       loaded[0],
     ]);
+  });
+});
+
+describe("mint risk", () => {
+  const pumpLike = {
+    program: PROGRAM.token2022,
+    mintAuthority: null,
+    freezeAuthority: null,
+    extensions: ["metadataPointer", "tokenMetadata"],
+  };
+  it("accepts a Pump.fun-style mint and plain SPL mints with authorities revoked", () => {
+    expect(mintRisk(pumpLike)).toBeNull();
+    expect(mintRisk({ ...pumpLike, program: PROGRAM.token, extensions: [] })).toBeNull();
+  });
+  it("refuses live authorities, harmful extensions, and non-token accounts", () => {
+    expect(mintRisk({ ...pumpLike, mintAuthority: "x" })).toMatch(/mint authority/);
+    expect(mintRisk({ ...pumpLike, freezeAuthority: "x" })).toMatch(/freeze authority/);
+    for (const ext of [
+      "permanentDelegate",
+      "transferHook",
+      "transferFeeConfig",
+      "pausableConfig",
+      "defaultAccountState",
+      "nonTransferable",
+    ])
+      expect(mintRisk({ ...pumpLike, extensions: [...pumpLike.extensions, ext] })).toContain(ext);
+    expect(mintRisk({ ...pumpLike, program: "11111111111111111111111111111111" })).toMatch(
+      /not a token mint/,
+    );
   });
 });

@@ -12,6 +12,13 @@ const INSECURE_DEFAULT_JWT_SECRET = "dev-insecure-default-jwt-secret-change-me";
 async function main() {
   const env = loadEnv();
 
+  // The server wallet's secret belongs on the trader only: the api must never be able to spend.
+  if (env.TRADING_SERVER_WALLET_SECRET_KEY) {
+    throw new Error(
+      "TRADING_SERVER_WALLET_SECRET_KEY is set on the api. Remove it: it belongs on trenchscanner-trader only.",
+    );
+  }
+
   if (env.JWT_SECRET === INSECURE_DEFAULT_JWT_SECRET) {
     if (process.env.NODE_ENV === "production") {
       // A guessable JWT_SECRET lets anyone forge session cookies for any user - unlike most

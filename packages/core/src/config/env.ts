@@ -754,8 +754,8 @@ const envSchema = z.object({
   TRADING_AWS_SESSION_TOKEN: pastedKey,
   // 64 hex characters (openssl rand -hex 32); only read with TRADING_KEY_PROVIDER=local.
   TRADING_LOCAL_MASTER_KEY: pastedKey,
-  // Jupiter key for swaps and the bot's prices. Empty falls back to JUPITER_API_KEY; with neither,
-  // Jupiter's keyless lite host. Its own key keeps a stop-loss from queueing behind the scan's
+  // Jupiter key for swaps and the bot's prices, the bot's own (never the scan's JUPITER_API_KEY:
+  // a sale must not queue behind a price sweep on a shared plan). Empty: Jupiter's keyless host. Its own key keeps a stop-loss from queueing behind the scan's
   // price sweeps on a shared 60-a-minute plan.
   TRADING_JUPITER_API_KEY: pastedKey,
   TRADING_JUPITER_BASE_URL: z.string().optional().default(""),
@@ -767,6 +767,9 @@ const envSchema = z.object({
   TRADING_MAX_BUY_SOL: z.coerce.number().positive().default(1),
   // Entries per rolling 24 hours, in SOL.
   TRADING_MAX_DAILY_SPEND_SOL: z.coerce.number().positive().default(5),
+  // Priority fee on any one swap, in SOL. Fees go to validators, not to a thief, but a stolen
+  // session could otherwise set 0.1 SOL a transaction.
+  TRADING_MAX_PRIORITY_FEE_SOL: z.coerce.number().min(0).max(0.1).default(0.005),
   // Slippage on any swap, in basis points (2500 = 25%).
   TRADING_MAX_SLIPPAGE_BPS: z.coerce.number().int().min(50).max(5000).default(2500),
   // The server wallet (trading/serverWallet.ts): one wallet whose private key you supply here,

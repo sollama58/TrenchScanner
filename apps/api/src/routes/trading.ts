@@ -194,6 +194,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
         maxBuySol: env.TRADING_MAX_BUY_SOL,
         maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL,
         maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
+        maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL,
       },
       // A followed filter edited since the settings were saved is paused until they are saved again.
       sources: {
@@ -279,6 +280,10 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
         return reply
           .code(400)
           .send({ error: `maxDailySpendSol: at most ${env.TRADING_MAX_DAILY_SPEND_SOL} SOL on this server` });
+      if (limits.maxPriorityFeeSol > env.TRADING_MAX_PRIORITY_FEE_SOL)
+        return reply.code(400).send({
+          error: `maxPriorityFeeSol: at most ${env.TRADING_MAX_PRIORITY_FEE_SOL} SOL on this server`,
+        });
       if (limits.slippageBps > env.TRADING_MAX_SLIPPAGE_BPS)
         return reply
           .code(400)

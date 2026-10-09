@@ -93,6 +93,7 @@ interface TradingState {
     maxBuySol: number;
     maxDailySpendSol: number;
     maxSlippageBps: number;
+    maxPriorityFeeSol: number;
   };
   sources: {
     filters: { id: string; name: string; isActive: boolean; changedSinceSaved: boolean }[];
@@ -574,7 +575,7 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 type="number"
                 step="any"
                 min={0}
-                max={0.1}
+                max={state.defaults.maxPriorityFeeSol}
                 value={draft.maxPriorityFeeSol}
                 onChange={(e) => edit({ ...draft, maxPriorityFeeSol: num(e.target.value) })}
               />
