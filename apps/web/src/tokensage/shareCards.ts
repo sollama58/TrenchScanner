@@ -1,4 +1,4 @@
-import type { LighthouseTally, MarketLighthouse } from "../api";
+import type { LighthouseSignals, LighthouseTally } from "../api";
 import { MIN_GRADED as LIGHTHOUSE_MIN_GRADED, narratives } from "../components/MarketLighthouse";
 import { narrativeBaseline, relativeScale } from "../lighthouseMetrics";
 import { compact, hitRate, logoKinds, named, prettyLabel } from "./showcase";
@@ -461,7 +461,7 @@ const DOWN = "#ff8080";
  * above or below it, its own return and 2x rate with that rate's gap, and how many calls it rests
  * on. Thin narratives are faded, as on the page.
  */
-function drawModels(ctx: CanvasRenderingContext2D, lh: MarketLighthouse | null) {
+function drawModels(ctx: CanvasRenderingContext2D, lh: LighthouseSignals | null) {
   if (!lh) return empty(ctx);
   const all = narratives(lh.outcomes.byCategory);
   const rows = all.slice(0, 6);
@@ -556,7 +556,7 @@ function drawModels(ctx: CanvasRenderingContext2D, lh: MarketLighthouse | null) 
 
 const DRAW: Record<
   ShareCardKind,
-  (ctx: CanvasRenderingContext2D, d: TokenSageShowcase, lh: MarketLighthouse | null) => void
+  (ctx: CanvasRenderingContext2D, d: TokenSageShowcase, lh: LighthouseSignals | null) => void
 > = {
   headline: drawHeadline,
   themes: drawThemes,
@@ -568,7 +568,7 @@ const DRAW: Record<
 };
 
 /** The subtitle under each card's title. */
-function subtitle(kind: ShareCardKind): string {
+function subtitle(kind: ShareCardKind, span: string): string {
   switch (kind) {
     case "headline":
       return "Every new Solana coin, read and understood in seconds.";
@@ -583,7 +583,7 @@ function subtitle(kind: ShareCardKind): string {
     case "fees":
       return "Where pump.fun's creator fee is set to go on new coins.";
     case "models":
-      return "Model calls in the last 7 days by narrative: return and 2x rate against the average.";
+      return `Model calls in the last ${span} by narrative: return and 2x rate against the average.`;
   }
 }
 
@@ -600,7 +600,7 @@ const TITLES: Record<ShareCardKind, string> = {
 export async function renderShareCard(
   kind: ShareCardKind,
   d: TokenSageShowcase,
-  lh: MarketLighthouse | null,
+  lh: LighthouseSignals | null,
 ): Promise<HTMLCanvasElement> {
   const [icon] = await Promise.all([
     loadIcon(),
@@ -613,11 +613,13 @@ export async function renderShareCard(
   canvas.height = CARD_H;
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
+  const days = lh?.window.days ?? 7;
+  const span = days === 1 ? "24 hours" : `${days} days`;
   const source =
     kind === "models"
-      ? "TrenchScanner model calls, last 7 days"
+      ? `TrenchScanner model calls, last ${span}`
       : "Counts across every coin TokenSage has read";
-  frame(ctx, icon, TITLES[kind], subtitle(kind), source);
+  frame(ctx, icon, TITLES[kind], subtitle(kind, span), source);
   DRAW[kind](ctx, d, lh);
   return canvas;
 }

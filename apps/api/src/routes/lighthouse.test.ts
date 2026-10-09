@@ -264,6 +264,9 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     const copyCalls = month.outcomes.byCopy.find((t) => t.label === "copies a recent coin");
     expect(copyCalls?.won2x).toBeGreaterThanOrEqual(1);
     expect(month.outcomes.byCopy.find((t) => t.label === "original")?.graded).toBeGreaterThanOrEqual(1);
+    // "Which narratives pay" over the month: every call counted, those with a read by narrative.
+    expect(month.outcomes.alerts).toBeGreaterThanOrEqual(month.outcomes.described);
+    expect(month.outcomes.byCategory.reduce((n, t) => n + t.alerts, 0)).toBe(month.outcomes.described);
 
     const day = (
       await app.inject({ method: "GET", url: "/guest/lighthouse/signals?days=1" })
@@ -274,6 +277,8 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     expect(day.window.days).toBe(1);
     expect(day.copies).toEqual(full.copies);
     expect(day.outcomes.byCopy).toEqual(full.outcomes.byCopy);
+    expect(day.outcomes.byCategory).toEqual(full.outcomes.byCategory);
+    expect(day.outcomes.graded).toBe(full.outcomes.graded);
     expect((await app.inject({ method: "GET", url: "/guest/lighthouse/signals?days=2" })).statusCode).toBe(
       400,
     );
