@@ -20,6 +20,7 @@ import {
 } from "./transaction.js";
 import { associatedTokenAddress, PROGRAM, type ParsedAccountState } from "./txGuard.js";
 import { ensureTradingWallet } from "./wallets.js";
+import { ensureServerWalletAccount } from "./serverWallet.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const BLOCKHASH = bs58.encode(new Uint8Array(32).fill(3));
@@ -678,5 +679,114 @@ describe("a legacy transaction", () => {
       data: [9],
     });
     expect(parseWireTransaction(tx).accountKeys).toEqual([payer, other, PROGRAM.token]);
+  });
+});
+
+describe.skipIf(!dbAvailable)("the server wallet", () => {
+  const server = generateWalletKeypair();
+  const destination = generateWalletKeypair().publicKey;
+  let serverId = "";
+  let tokenId = "";
+  const mint = generateWalletKeypair().publicKey;
+  let chain: FakeChain;
+  const deps = (withdrawTo: string | null = destination): TradingEngineDeps => ({
+    rpc: chain.rpc,
+    swap: chain.swap,
+    fallback: chain.fallback,
+    keys,
+    // No admin wallets at all: the server bot trades regardless, its settings being admins' only.
+    canTrade: () => false,
+    maxBuyLamports: LAMPORTS,
+    serverWallet: { userId: serverId, publicKey: server.publicKey, seed: server.seed, withdrawTo },
+  });
+
+  beforeAll(async () => {
+    serverId = await ensureServerWalletAccount();
+    expect(await ensureServerWalletAccount()).toBe(serverId);
+    tokenId = (await prisma.token.create({ data: { mintAddress: mint, symbol: "SRV" } })).id;
+  });
+  beforeEach(() => {
+    chain = new FakeChain();
+    chain.sol.set(server.publicKey, LAMPORTS);
+    chain.price.set(mint, 0.05);
+  });
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.tradingPosition.deleteMany({ where: { userId: serverId } });
+    await prisma.tradingWithdrawal.deleteMany({ where: { userId: serverId } });
+    await prisma.tradingBot.deleteMany({ where: { userId: serverId } });
+    await prisma.curatedAlert.deleteMany({ where: { tokenId } });
+    await prisma.token.deleteMany({ where: { id: tokenId } });
+  });
+
+  it("trades from the key in the environment", async () => {
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId,
+        source: "heuristic-v1",
+        model: "rules",
+        confidence: 80,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 1,
+        createdAt: new Date(Date.now() - 20_000),
+      },
+    });
+    const data = {
+      enabled: true,
+      signalsFrom: new Date(Date.now() - 60_000),
+      config: { sources: { models: ["rules"] }, buySol: 0.05 },
+    };
+    await prisma.tradingBot.upsert({
+      where: { userId: serverId },
+      create: { userId: serverId, ...data },
+      update: data,
+    });
+    expect((await runTradingEngine(deps())).buys).toBe(1);
+    await runTradingEngine(deps());
+    const p = await prisma.tradingPosition.findUniqueOrThrow({
+      where: { userId_mint: { userId: serverId, mint } },
+    });
+    expect(p.status).toBe("open");
+    // Signed by the server key: the fake chain verified the signature on send.
+    expect(chain.sent.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("withdraws only to the configured address, and not at all without one", async () => {
+    await prisma.tradingBot.update({ where: { userId: serverId }, data: { enabled: false } });
+    await prisma.tradingPosition.deleteMany({ where: { userId: serverId } });
+    await prisma.tradingWithdrawal.create({
+      data: { userId: serverId, destination, requestedLamports: 100_000_000n },
+    });
+    await runTradingEngine(deps(null));
+    let rows = await prisma.tradingWithdrawal.findMany({ where: { userId: serverId } });
+    expect(rows[0]!.status).toBe("failed");
+    expect(rows[0]!.error).toMatch(/withdrawals are off/);
+
+    await prisma.tradingWithdrawal.deleteMany({ where: { userId: serverId } });
+    // A row aimed elsewhere (as if the database were tampered with) is refused.
+    await prisma.tradingWithdrawal.create({
+      data: {
+        userId: serverId,
+        destination: generateWalletKeypair().publicKey,
+        requestedLamports: 100_000_000n,
+      },
+    });
+    await prisma.tradingWithdrawal.create({
+      data: { userId: serverId, destination, requestedLamports: 100_000_000n },
+    });
+    const sentTo: string[] = [];
+    chain.rpc.send = async (b64) => {
+      const parsed = parseWireTransaction(Buffer.from(b64, "base64"));
+      expect(verifyTransactionSignatures(Buffer.from(b64, "base64"))).toBe(true);
+      sentTo.push(parsed.accountKeys[1]!);
+      return null;
+    };
+    await runTradingEngine(deps());
+    rows = await prisma.tradingWithdrawal.findMany({
+      where: { userId: serverId },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(rows.map((r) => r.status)).toEqual(["failed", "pending"]);
+    expect(sentTo).toEqual([destination]);
   });
 });

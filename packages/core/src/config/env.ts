@@ -769,6 +769,14 @@ const envSchema = z.object({
   TRADING_MAX_DAILY_SPEND_SOL: z.coerce.number().positive().default(5),
   // Slippage on any swap, in basis points (2500 = 25%).
   TRADING_MAX_SLIPPAGE_BPS: z.coerce.number().int().min(50).max(5000).default(2500),
+  // The server wallet (trading/serverWallet.ts): one wallet whose private key you supply here,
+  // traded by a bot every admin controls from the Bot tab. The secret goes on the TRADER ONLY -
+  // base58 as Phantom/Solflare export it, or a solana-keygen JSON byte array. The address is
+  // public and goes on the api and the trader; the trader refuses a key that doesn't match it.
+  // Withdrawals go only to TRADING_SERVER_WALLET_WITHDRAW_TO (api + trader); empty turns them off.
+  TRADING_SERVER_WALLET_SECRET_KEY: pastedKey,
+  TRADING_SERVER_WALLET_ADDRESS: z.string().optional().default(""),
+  TRADING_SERVER_WALLET_WITHDRAW_TO: z.string().optional().default(""),
   // Build Pump.fun trades with PumpPortal when Jupiter has no route for the token (a mint seconds
   // old, or one migrating to PumpSwap). The guard checks its transactions like Jupiter's.
   TRADING_PUMPPORTAL_FALLBACK: z

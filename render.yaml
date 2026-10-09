@@ -53,6 +53,10 @@
 #         wallets), the trader's may only kms:Decrypt (it signs). The trader also needs
 #         HELIUS_API_KEY (or SOLANA_RPC_URL) and ADMIN_WALLET_ADDRESSES; TRADING_JUPITER_API_KEY
 #         is recommended (its own Jupiter key for swaps).
+#   - TRADING_SERVER_WALLET_SECRET_KEY (trader only), TRADING_SERVER_WALLET_ADDRESS and
+#     TRADING_SERVER_WALLET_WITHDRAW_TO (api + trader), optional
+#         A server wallet whose key you supply, traded by a bot every admin controls (Bot tab ->
+#         Server wallet). Withdrawals go only to TRADING_SERVER_WALLET_WITHDRAW_TO.
 #   - MODEL_BACKUP_S3_ENDPOINT, _BUCKET, _ACCESS_KEY_ID, _SECRET_ACCESS_KEY (trainer only, optional)
 #         Off-site copies of the weekly model backups to any S3-compatible bucket (Cloudflare R2,
 #         Backblaze B2, AWS S3); MODEL_BACKUP_S3_REGION defaults to "auto" (R2). Unset, backups
@@ -174,6 +178,12 @@ services:
       - key: TRADING_AWS_ACCESS_KEY_ID
         sync: false
       - key: TRADING_AWS_SECRET_ACCESS_KEY
+        sync: false
+      # The server wallet's PUBLIC address and where its withdrawals go (both public). Its secret
+      # key is set on the trader only - never here.
+      - key: TRADING_SERVER_WALLET_ADDRESS
+        sync: false
+      - key: TRADING_SERVER_WALLET_WITHDRAW_TO
         sync: false
 
   - type: worker
@@ -331,6 +341,15 @@ services:
         sync: false
       # Only these wallets' bots open new positions (exits and withdrawals run for everyone).
       - key: ADMIN_WALLET_ADDRESSES
+        sync: false
+      # The server wallet (README -> Trading bot -> Server wallet): its private key, as Phantom
+      # exports it (base58) or a solana-keygen JSON array. THIS SERVICE ONLY. The address and
+      # withdrawal destination below must match the api's.
+      - key: TRADING_SERVER_WALLET_SECRET_KEY
+        sync: false
+      - key: TRADING_SERVER_WALLET_ADDRESS
+        sync: false
+      - key: TRADING_SERVER_WALLET_WITHDRAW_TO
         sync: false
 
   # The model trainer: the same worker build, running only the batch jobs (curator-training,

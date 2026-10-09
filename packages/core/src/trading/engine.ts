@@ -123,6 +123,12 @@ export interface TradingEngineDeps {
   keys: KeyProvider;
   /** Who may open new positions (the admin wallets). */
   canTrade: (walletAddress: string) => boolean;
+  /**
+   * The server wallet (serverWallet.ts), when the trader holds its key: the reserved account it
+   * trades for, its key, and where its withdrawals may go (null: nowhere). Its bot is controlled
+   * by the admins, so it may open positions whatever canTrade says.
+   */
+  serverWallet?: { userId: string; publicKey: string; seed: Uint8Array; withdrawTo: string | null } | null;
   /** Server-wide ceilings, whatever a bot's config says (TRADING_MAX_*). */
   maxBuyLamports: bigint;
   maxDailySpendLamports?: bigint;
@@ -148,7 +154,17 @@ export interface TradingRunSummary {
   failedStages: string[];
 }
 
-type Wallet = TradingWalletRow;
+/**
+ * A wallet the engine trades from: a user's custodial wallet (key sealed under KMS, `row`), or
+ * the server wallet (key from the environment, `row` null). `withdrawTo` is the only address its
+ * withdrawals may go to - sealed into the key for custodial wallets, configured for the server's.
+ */
+interface Wallet {
+  userId: string;
+  publicKey: string;
+  withdrawTo: string | null;
+  row: TradingWalletRow | null;
+}
 
 function errText(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).slice(0, 500);
@@ -218,10 +234,20 @@ async function tradingPass(deps: TradingEngineDeps): Promise<TradingRunSummary> 
   const startedAt = Date.now();
   const summary = emptySummary();
   const wallets = new Map<string, Wallet>();
+  const server = deps.serverWallet ?? null;
   const walletFor = async (userId: string) => {
     if (!wallets.has(userId)) {
-      const w = await prisma.tradingWallet.findUnique({ where: { userId } });
-      if (w) wallets.set(userId, w);
+      if (server && userId === server.userId) {
+        wallets.set(userId, {
+          userId,
+          publicKey: server.publicKey,
+          withdrawTo: server.withdrawTo,
+          row: null,
+        });
+      } else {
+        const w = await prisma.tradingWallet.findUnique({ where: { userId } });
+        if (w) wallets.set(userId, { userId, publicKey: w.publicKey, withdrawTo: w.withdrawTo, row: w });
+      }
     }
     return wallets.get(userId) ?? null;
   };
@@ -265,9 +291,18 @@ async function expiryBound(ctx: PassContext, routeBound: number | null): Promise
 
 /** Signs already-checked bytes with the wallet's key (opened for this one signature). */
 async function sign(ctx: PassContext, wallet: Wallet, unsigned: Uint8Array) {
-  const { signed, signature } = await withWalletKey(wallet, ctx.deps.keys, (seed) =>
-    signTransaction(unsigned, seed, wallet.publicKey),
-  );
+  const server = ctx.deps.serverWallet;
+  let out: { signed: Uint8Array; signature: string };
+  if (wallet.row) {
+    out = await withWalletKey(wallet.row, ctx.deps.keys, (seed) =>
+      signTransaction(unsigned, seed, wallet.publicKey),
+    );
+  } else if (server && server.publicKey === wallet.publicKey) {
+    out = signTransaction(unsigned, server.seed, wallet.publicKey);
+  } else {
+    throw new Error("no key for this wallet");
+  }
+  const { signed, signature } = out;
   return { rawTx: Buffer.from(signed).toString("base64"), signature };
 }
 
@@ -907,15 +942,17 @@ async function sendWithdrawals(ctx: PassContext): Promise<void> {
     try {
       const wallet = await ctx.walletFor(w.userId);
       const user = await prisma.user.findUnique({ where: { id: w.userId }, select: { walletAddress: true } });
-      // The destination is the address sealed into the wallet's key (opening it below proves the
-      // row wasn't altered), and it must still be the owner's sign-in wallet.
-      if (
-        !wallet ||
-        !user ||
-        wallet.withdrawTo !== user.walletAddress ||
-        w.destination !== wallet.withdrawTo
-      ) {
-        await fail("destination is not the account's sign-in wallet");
+      // A custodial wallet's destination is the address sealed into its key (opening it below
+      // proves the row wasn't altered), and it must still be the owner's sign-in wallet. The
+      // server wallet's is the configured one, from this process's environment.
+      const destination = wallet?.withdrawTo ?? null;
+      const ownerMatches = wallet?.row ? destination === user?.walletAddress : true;
+      if (!wallet || !user || !destination || !ownerMatches || w.destination !== destination) {
+        await fail(
+          wallet && !wallet.row && !destination
+            ? "server wallet withdrawals are off (TRADING_SERVER_WALLET_WITHDRAW_TO is not set on the trader)"
+            : "destination is not this wallet's withdrawal address",
+        );
         continue;
       }
       const [balance, blockhash, open, bot] = await Promise.all([
@@ -942,7 +979,7 @@ async function sendWithdrawals(ctx: PassContext): Promise<void> {
       }
       const unsigned = buildSolTransfer({
         from: wallet.publicKey,
-        to: wallet.withdrawTo,
+        to: destination,
         lamports: amount.lamports,
         recentBlockhash: blockhash.blockhash,
       });
@@ -1257,7 +1294,8 @@ export interface TradeSignal {
  * left out: what it matches changed, so the owner confirms by saving the settings again.
  */
 export async function loadSignals(
-  userId: string,
+  /** Whose matches: the bot's owner, or null for the server bot (its filters are admins'). */
+  userId: string | null,
   config: TradingBotConfig,
   from: Date,
   to: Date,
@@ -1269,7 +1307,7 @@ export async function loadSignals(
       ? []
       : prisma.match.findMany({
           where: {
-            userId,
+            ...(userId !== null ? { userId } : {}),
             filterId: { in: filterIds },
             matchedAt: { gt: from, lte: to },
             filter: { armedAt: { lte: configSavedAt } },
@@ -1362,7 +1400,8 @@ async function openEntries(ctx: PassContext): Promise<void> {
     include: { user: { select: { walletAddress: true } } },
   });
   for (const bot of bots) {
-    if (!ctx.deps.canTrade(bot.user.walletAddress)) continue;
+    const isServer = bot.userId === ctx.deps.serverWallet?.userId;
+    if (!isServer && !ctx.deps.canTrade(bot.user.walletAddress)) continue;
     const wallet = await ctx.walletFor(bot.userId);
     if (!wallet) continue;
     ctx.summary.bots++;
@@ -1391,9 +1430,20 @@ async function runBotEntries(
   const now = ctx.now();
   const horizon = await signalHorizon(now);
   if (horizon <= bot.signalsFrom) return;
+  // The server bot follows admins' filters: only those whose owner is still an admin count.
+  let sourceConfig = config;
+  const isServer = bot.userId === ctx.deps.serverWallet?.userId;
+  if (isServer && config.sources.filterIds.length > 0) {
+    const owners = await prisma.userFilter.findMany({
+      where: { id: { in: config.sources.filterIds } },
+      select: { id: true, user: { select: { walletAddress: true } } },
+    });
+    const allowed = owners.filter((f) => ctx.deps.canTrade(f.user.walletAddress)).map((f) => f.id);
+    sourceConfig = { ...config, sources: { ...config.sources, filterIds: allowed } };
+  }
   const { signals, through } = await loadSignals(
-    bot.userId,
-    config,
+    isServer ? null : bot.userId,
+    sourceConfig,
     bot.signalsFrom,
     horizon,
     bot.configSavedAt,

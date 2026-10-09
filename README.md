@@ -125,6 +125,28 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
    `TRADING_BOT_ENABLED=true` on both.
 4. Open the **Bot** tab, create the wallet, send it a little SOL, pick sources, save, **Start**.
 
+### Server wallet
+
+Besides each admin's own wallet, there can be one **server wallet** whose private key you supply:
+a wallet you already have (or a fresh one made for it), traded by its own bot that every admin
+controls from **Bot tab → Server wallet** - the same settings, exit plan, positions, sell buttons
+and guard as the per-user bots.
+
+| Variable                            | Where                           | What                                                                                   |
+| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------- |
+| `TRADING_SERVER_WALLET_SECRET_KEY`  | `trenchscanner-trader` **only** | The private key: base58 as Phantom/Solflare export it, or a `solana-keygen` JSON array |
+| `TRADING_SERVER_WALLET_ADDRESS`     | api + trader                    | Its public address. The trader refuses a key that doesn't match it                     |
+| `TRADING_SERVER_WALLET_WITHDRAW_TO` | api + trader                    | The only address withdrawals go to. Empty turns withdrawals off                        |
+
+The key never reaches the api, the database or the browser: the api shows the wallet from its
+public address and records requests, and the trader signs. Withdrawals go only to the configured
+address, so neither a stolen admin session nor a database write can send funds anywhere else.
+
+Unlike the per-user wallets (sealed under KMS), this key sits in Render's environment in plain
+form: anyone who can read the trader's environment variables - every member of the Render team
+with access to the service - can take the funds. Use a wallet made for this, fund it with what
+the bot should trade, and keep the rest elsewhere.
+
 For local development, `TRADING_KEY_PROVIDER=local` with `TRADING_LOCAL_MASTER_KEY`
 (`openssl rand -hex 32`) replaces KMS; it is refused when `NODE_ENV=production`.
 

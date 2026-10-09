@@ -14,6 +14,8 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
   // Real-looking keys: a withdrawal's destination is the sign-in wallet.
   const adminWallet = generateWalletKeypair().publicKey;
   const userWallet = generateWalletKeypair().publicKey;
+  const serverWallet = generateWalletKeypair().publicKey;
+  const serverDestination = generateWalletKeypair().publicKey;
   const env = {
     ...base,
     TRADING_BOT_ENABLED: true,
@@ -22,6 +24,9 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     ADMIN_WALLET_ADDRESSES: adminWallet,
     // Refused at once: the balance read fails fast instead of reaching for a real RPC.
     SOLANA_RPC_URL: "http://127.0.0.1:9",
+    // The server wallet: only its public half and the withdrawal address reach the api.
+    TRADING_SERVER_WALLET_ADDRESS: serverWallet,
+    TRADING_SERVER_WALLET_WITHDRAW_TO: serverDestination,
   };
   let app: FastifyInstance;
   let off: FastifyInstance;
@@ -214,5 +219,79 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(
       (await app.inject({ method: "PUT", url: "/trading/bot", payload: {}, ...as("user") })).statusCode,
     ).toBe(403);
+  });
+
+  describe("the server wallet", () => {
+    let noWithdraw: FastifyInstance;
+    let serverAccount = "";
+    beforeAll(async () => {
+      noWithdraw = await buildServer({ ...env, TRADING_SERVER_WALLET_WITHDRAW_TO: "" });
+    });
+    afterAll(async () => {
+      await noWithdraw?.close();
+      if (!serverAccount) return;
+      await prisma.tradingWithdrawal.deleteMany({ where: { userId: serverAccount } });
+      await prisma.tradingBot.deleteMany({ where: { userId: serverAccount } });
+    });
+
+    it("is for admins only, and shows its address but never a key", async () => {
+      expect((await app.inject({ method: "GET", url: "/trading/server", ...as("user") })).statusCode).toBe(
+        403,
+      );
+      expect(
+        (await app.inject({ method: "PUT", url: "/trading/server/bot", payload: {}, ...as("user") }))
+          .statusCode,
+      ).toBe(403);
+      const own = await app.inject({ method: "GET", url: "/trading", ...as("admin") });
+      expect(own.json().serverWallet).toEqual({ configured: true });
+      const res = await app.inject({ method: "GET", url: "/trading/server", ...as("admin") });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.scope).toBe("server");
+      expect(body.wallet.publicKey).toBe(serverWallet);
+      expect(body.withdrawTo).toBe(serverDestination);
+      expect(JSON.stringify(body)).not.toMatch(/secret/i);
+      serverAccount = (await prisma.user.findUniqueOrThrow({ where: { walletAddress: "server-wallet" } })).id;
+    });
+
+    it("follows admins' filters and models, set by any admin", async () => {
+      const adminFilter = await prisma.userFilter.create({ data: { userId: ids.admin, name: "admin's" } });
+      const userFilter = await prisma.userFilter.create({ data: { userId: ids.user, name: "user's" } });
+      const res = await app.inject({
+        method: "PUT",
+        url: "/trading/server/bot",
+        ...as("admin"),
+        payload: {
+          enabled: true,
+          config: { sources: { filterIds: [adminFilter.id, userFilter.id], models: ["rules"] }, buySol: 0.1 },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().config.sources).toMatchObject({ filterIds: [adminFilter.id], models: ["rules"] });
+      const bot = await prisma.tradingBot.findUniqueOrThrow({ where: { userId: serverAccount } });
+      expect(bot.enabled).toBe(true);
+      // The admin's own bot is untouched by it.
+      const own = await prisma.tradingBot.findUnique({ where: { userId: ids.admin } });
+      expect(own?.config).not.toEqual(bot.config);
+    });
+
+    it("withdraws only to the configured address, and not without one", async () => {
+      const off = await noWithdraw.inject({
+        method: "POST",
+        url: "/trading/server/withdraw",
+        ...as("admin"),
+        payload: { amount: "max" },
+      });
+      expect(off.statusCode).toBe(409);
+      expect(off.json().error).toMatch(/TRADING_SERVER_WALLET_WITHDRAW_TO/);
+      const ok = await app.inject({
+        method: "POST",
+        url: "/trading/server/withdraw",
+        ...as("admin"),
+        payload: { amount: "max", destination: adminWallet },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().destination).toBe(serverDestination);
+    });
   });
 });

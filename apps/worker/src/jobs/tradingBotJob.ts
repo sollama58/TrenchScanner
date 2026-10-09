@@ -1,6 +1,8 @@
 import {
   adminWalletSet,
   createLogger,
+  ensureServerWalletAccount,
+  loadServerWalletKey,
   createKeyProvider,
   JupiterSwapClient,
   PumpPortalSwapClient,
@@ -32,6 +34,11 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
     baseUrl: env.TRADING_JUPITER_BASE_URL || undefined,
   });
   const fallback = env.TRADING_PUMPPORTAL_FALLBACK ? new PumpPortalSwapClient() : null;
+  // The server wallet's key, from this process's environment only (never logged). A key that is
+  // set but wrong fails every run with the reason; the custodial wallets keep trading regardless.
+  const server = loadServerWalletKey(env);
+  if (server.problem) createLogger("trading").error(`server wallet disabled: ${server.problem}`);
+  let serverAccountId: string | null = null;
   if (!env.TRADING_JUPITER_API_KEY && !env.JUPITER_API_KEY) {
     // Jupiter has been moving keyless traffic off lite-api.jup.ag; a key (free at portal.jup.ag)
     // puts swaps on api.jup.ag with their own limit.
@@ -42,7 +49,17 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
   return async () => {
     if (!keys.provider) throw new Error(`trading bot has no key provider: ${keys.reason}`);
     if (!hasRpc) throw new Error("trading bot has no RPC: set HELIUS_API_KEY or SOLANA_RPC_URL");
+    if (server.key && !serverAccountId) serverAccountId = await ensureServerWalletAccount();
     const { failedStages, ...counts } = await runTradingEngine({
+      serverWallet:
+        server.key && serverAccountId
+          ? {
+              userId: serverAccountId,
+              publicKey: server.key.publicKey,
+              seed: server.key.seed,
+              withdrawTo: server.key.withdrawTo,
+            }
+          : null,
       rpc,
       swap,
       fallback,
@@ -52,7 +69,11 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
       maxDailySpendLamports: solToLamports(env.TRADING_MAX_DAILY_SPEND_SOL),
       maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
     });
-    const meta: JobRunMeta = { ...counts };
+    const meta: JobRunMeta = {
+      ...counts,
+      serverWallet: server.key ? "on" : server.problem ? "misconfigured" : "off",
+    };
+    if (server.problem) throw new JobFailure(`server wallet disabled: ${server.problem}`, meta);
     if (failedStages.length > 0)
       throw new JobFailure(`trading pass stages failed: ${failedStages.join(", ")}`, meta);
     return meta;

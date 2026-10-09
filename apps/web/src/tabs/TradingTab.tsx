@@ -69,12 +69,17 @@ interface Withdrawal {
   error: string | null;
   createdAt: string;
 }
+type Scope = "own" | "server";
+
 interface TradingState {
+  scope: Scope;
   canTrade: boolean;
+  /** For admins: whether the server wallet is set up (its tab shows then). */
+  serverWallet: { configured: boolean } | null;
   keyProviderReady: boolean;
   keyProviderProblem: string | null;
-  withdrawTo: string;
-  wallet: { publicKey: string; createdAt: string; balanceLamports: string | null } | null;
+  withdrawTo: string | null;
+  wallet: { publicKey: string; createdAt: string | null; balanceLamports: string | null } | null;
   bot: {
     enabled: boolean;
     config: BotConfig;
@@ -101,27 +106,49 @@ const LAMPORTS = 1_000_000_000;
 const sol = (lamports: string | null | undefined, digits = 4) =>
   lamports === null || lamports === undefined ? "–" : `${(Number(lamports) / LAMPORTS).toFixed(digits)} SOL`;
 const solscan = (kind: "account" | "tx" | "token", id: string) => `https://solscan.io/${kind}/${id}`;
+/** The API routes for a scope: your own wallet, or the server wallet. */
+const base = (scope: Scope) => (scope === "server" ? "/trading/server" : "/trading");
+const SCOPE_KEY = "trading-scope";
+function storedScope(): Scope {
+  try {
+    return localStorage.getItem(SCOPE_KEY) === "server" ? "server" : "own";
+  } catch {
+    return "own";
+  }
+}
 const errorText = (err: unknown) =>
   err instanceof ApiError && typeof (err.body as { error?: unknown })?.error === "string"
     ? (err.body as { error: string }).error
     : String(err instanceof Error ? err.message : err);
 
 export function TradingTab() {
+  const [scope, setScopeState] = useState<Scope>(storedScope);
   const [state, setState] = useState<TradingState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const setScope = (next: Scope) => {
+    setScopeState(next);
+    setState(null);
+    try {
+      localStorage.setItem(SCOPE_KEY, next);
+    } catch {
+      /* a convenience only */
+    }
+  };
 
   const reload = useCallback(async () => {
     try {
-      setState(await api<TradingState>("/trading"));
+      setState(await api<TradingState>(base(scope)));
       setLoadError(null);
     } catch (err) {
+      // The server wallet is for admins: anyone else lands back on their own.
+      if (scope === "server" && err instanceof ApiError && err.status === 403) return setScope("own");
       setLoadError(
         err instanceof ApiError && err.status === 404
           ? "The trading bot is not switched on for this deployment."
           : errorText(err),
       );
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     void reload();
@@ -145,8 +172,31 @@ export function TradingTab() {
   }
   return (
     <div className="stack trading">
+      {(state.serverWallet || scope === "server") && (
+        <div className="row" role="tablist" style={{ gap: 8 }}>
+          <button
+            role="tab"
+            aria-selected={scope === "own"}
+            className={scope === "own" ? "primary" : "ghost"}
+            onClick={() => setScope("own")}
+          >
+            My wallet
+          </button>
+          <button
+            role="tab"
+            aria-selected={scope === "server"}
+            className={scope === "server" ? "primary" : "ghost"}
+            onClick={() => setScope("server")}
+          >
+            Server wallet
+          </button>
+        </div>
+      )}
       <p className="notice small">
-        <LockIcon size={13} /> Admin preview. The bot trades real SOL from a wallet this server holds for you.
+        <LockIcon size={13} />{" "}
+        {scope === "server"
+          ? "The server wallet, run by every admin together. The bot trades real SOL from it."
+          : "Admin preview. The bot trades real SOL from a wallet this server holds for you."}{" "}
         Fund it with what you can afford to lose.
       </p>
       <WalletPanel state={state} reload={reload} />
@@ -168,7 +218,7 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
     setBusy(true);
     setMsg(null);
     try {
-      await api("/trading/wallet", { method: "POST" });
+      await api(`${base(state.scope)}/wallet`, { method: "POST" });
       await reload();
     } catch (err) {
       setMsg(errorText(err));
@@ -180,12 +230,16 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
   const withdraw = async (max: boolean) => {
     const lamports = max ? "max" : String(Math.round(Number(amount) * LAMPORTS));
     if (!max && !(Number(amount) > 0)) return setMsg("Enter an amount in SOL.");
+    if (!state.withdrawTo) return setMsg("Withdrawals are not set up for this wallet.");
     if (!confirm(`Withdraw ${max ? "everything" : `${amount} SOL`} to ${shortAddress(state.withdrawTo)}?`))
       return;
     setBusy(true);
     setMsg(null);
     try {
-      await api("/trading/withdraw", { method: "POST", body: JSON.stringify({ amount: lamports }) });
+      await api(`${base(state.scope)}/withdraw`, {
+        method: "POST",
+        body: JSON.stringify({ amount: lamports }),
+      });
       setAmount("");
       setMsg("Withdrawal requested. It is sent within a few seconds.");
       await reload();
@@ -201,12 +255,25 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
       <header className="section-head">
         <div>
           <span className="eyebrow">
-            <LockIcon size={13} /> Trading wallet
+            <LockIcon size={13} /> {state.scope === "server" ? "Server wallet" : "Trading wallet"}
           </span>
           <h2>{wallet ? sol(wallet.balanceLamports) : "No wallet yet"}</h2>
           <p className="muted small">
-            Held on the server: its key is sealed under AWS KMS and never leaves it. Withdrawals go only to
-            the wallet you signed in with ({shortAddress(state.withdrawTo)}).
+            {state.scope === "server" ? (
+              <>
+                Its key is in the trader service&apos;s environment (TRADING_SERVER_WALLET_SECRET_KEY) and
+                never reaches this page.{" "}
+                {state.withdrawTo
+                  ? `Withdrawals go only to ${shortAddress(state.withdrawTo)} (TRADING_SERVER_WALLET_WITHDRAW_TO).`
+                  : "Withdrawals are off: set TRADING_SERVER_WALLET_WITHDRAW_TO on the api and the trader."}
+              </>
+            ) : (
+              <>
+                Held on the server: its key is sealed under AWS KMS and never leaves it. Withdrawals go only
+                to the wallet you signed in with
+                {state.withdrawTo ? ` (${shortAddress(state.withdrawTo)})` : ""}.
+              </>
+            )}
           </p>
         </div>
       </header>
@@ -214,7 +281,8 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
         <p className="error small">Wallet custody is not configured: {state.keyProviderProblem}</p>
       )}
       {!wallet ? (
-        state.canTrade && (
+        state.canTrade &&
+        state.scope === "own" && (
           <button className="primary" disabled={busy || !state.keyProviderReady} onClick={create}>
             Create trading wallet
           </button>
@@ -247,10 +315,12 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
                 </button>
               </dd>
             </div>
-            <div>
-              <dt>Created</dt>
-              <dd>{ago(wallet.createdAt, now)}</dd>
-            </div>
+            {wallet.createdAt && (
+              <div>
+                <dt>Created</dt>
+                <dd>{ago(wallet.createdAt, now)}</dd>
+              </div>
+            )}
           </dl>
           <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 12 }}>
             <input
@@ -263,10 +333,10 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
               onChange={(e) => setAmount(e.target.value)}
               style={{ width: 120 }}
             />
-            <button disabled={busy} onClick={() => void withdraw(false)}>
+            <button disabled={busy || !state.withdrawTo} onClick={() => void withdraw(false)}>
               Withdraw
             </button>
-            <button disabled={busy} onClick={() => void withdraw(true)}>
+            <button disabled={busy || !state.withdrawTo} onClick={() => void withdraw(true)}>
               Withdraw all
             </button>
           </div>
@@ -333,7 +403,7 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
     setBusy(true);
     setMsg(null);
     try {
-      await api("/trading/bot", { method: "PUT", body: JSON.stringify(patch) });
+      await api(`${base(state.scope)}/bot`, { method: "PUT", body: JSON.stringify(patch) });
       if (patch.config) setDirty(false);
       await reload();
       setMsg(patch.config ? "Saved." : null);
@@ -757,7 +827,9 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
           <button
             className="danger"
             disabled={busy}
-            onClick={() => void act("/trading/sell-all", "Pause the bot and sell every open position?")}
+            onClick={() =>
+              void act(`${base(state.scope)}/sell-all`, "Pause the bot and sell every open position?")
+            }
           >
             Sell all and pause
           </button>
@@ -832,7 +904,7 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
                           disabled={busy}
                           onClick={() =>
                             void act(
-                              `/trading/positions/${p.id}/sell`,
+                              `${base(state.scope)}/positions/${p.id}/sell`,
                               `Sell all of ${p.symbol ?? "this token"} now?`,
                             )
                           }
