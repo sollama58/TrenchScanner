@@ -20,6 +20,10 @@ import { amzDate, signV4 } from "../storage/s3.js";
  *
  * Every wrap is bound to the wallet it belongs to with an encryption context (KMS) or the GCM
  * associated data (both layers): a sealed seed copied onto another user's row fails to open.
+ * The binding includes `withdrawTo`, the only address withdrawals may go to (the owner's sign-in
+ * wallet at creation). The worker sends withdrawals there and nowhere else, and it can only know
+ * the address is genuine by opening the wallet with it: someone able to write the database (but
+ * not KMS) who swaps the address on the row gets a wallet that no longer opens, not a payout.
  *
  * The local provider wraps data keys with a master key from the environment instead. It exists
  * for local development and tests only; createKeyProvider refuses it in production.
@@ -28,6 +32,8 @@ import { amzDate, signV4 } from "../storage/s3.js";
 export interface WalletContext {
   userId: string;
   publicKey: string;
+  /** The only withdrawal destination: the owner's sign-in wallet. */
+  withdrawTo: string;
 }
 
 export interface KeyProvider {
@@ -51,12 +57,12 @@ export interface SealedSecret {
 const PURPOSE = "trenchscanner-trading-wallet";
 
 function encryptionContext(ctx: WalletContext): Record<string, string> {
-  return { purpose: PURPOSE, userId: ctx.userId, publicKey: ctx.publicKey };
+  return { purpose: PURPOSE, userId: ctx.userId, publicKey: ctx.publicKey, withdrawTo: ctx.withdrawTo };
 }
 
 /** The GCM associated data: the same binding, as bytes. */
 function aad(ctx: WalletContext): Buffer {
-  return Buffer.from(`${PURPOSE}|${ctx.userId}|${ctx.publicKey}`, "utf8");
+  return Buffer.from(`${PURPOSE}|${ctx.userId}|${ctx.publicKey}|${ctx.withdrawTo}`, "utf8");
 }
 
 function gcmSeal(key: Buffer, plaintext: Buffer, associated: Buffer) {

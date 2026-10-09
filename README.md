@@ -74,8 +74,23 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
   wallet's address with a KMS encryption context). The database alone cannot spend anything; the
   key never reaches the browser and is never logged.
 - **Access.** You reach the wallet by signing in with your own wallet (SIWS). Withdrawals go **only
-  to that sign-in wallet**: the destination is read from your account, never from the request, so
-  even a stolen session can only send your funds back to you.
+  to that sign-in wallet**: the address is sealed into the wallet's KMS encryption context when it
+  is created, and the trader sends only there - changing it in the database makes the wallet fail
+  to open, so even someone who can write the database (but not use KMS) can't redirect a
+  withdrawal, and a stolen session can only send your funds back to you. A withdrawal while
+  positions are open leaves the bot's reserve behind, so they can still be sold.
+- **What gets signed.** The bot signs transactions Jupiter (or PumpPortal) builds, so each one
+  passes a guard first (`trading/txGuard.ts`), **before** it is signed: every top-level
+  instruction must be one a swap needs (lookup tables resolved; no account reassignment, durable
+  nonces, token transfers, approvals, authority changes or closes to anyone but the wallet), and a
+  simulation watching the wallet and **every** token account it owns must show nothing changing
+  but the trade itself - other positions untouched, at least the quoted minimum received, no more
+  SOL spent than the trade allows.
+- **Limits a stolen admin session can't exceed.** `TRADING_MAX_BUY_SOL`,
+  `TRADING_MAX_DAILY_SPEND_SOL` and `TRADING_MAX_SLIPPAGE_BPS` cap every bot. Creating the wallet
+  and changing the bot refuse paired-phone sessions. A followed filter edited after the bot's
+  settings were saved is paused until they are saved again, so editing a filter can't silently
+  change what the bot buys.
 - **Split permissions.** The api creates wallets and needs only `kms:GenerateDataKey`; the
   dedicated **`trenchscanner-trader`** worker (`WORKER_ROLE=trader`, its own Render service) signs
   trades and withdrawals and is the only service holding `kms:Decrypt`. The internet-facing api
@@ -84,11 +99,17 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
   (5): it settles earlier swaps from the chain, walks open positions through their exit plan, and
   buys new signals within the bot's guards (buy size capped server-side by `TRADING_MAX_BUY_SOL`,
   max open positions, 24h spend, a SOL reserve, maximum signal age, one entry per token ever).
-  Swaps are routed by Jupiter. Every transaction is **simulated before it is sent and refused if
-  it would take more SOL than the trade allows**, then recorded by its signature before sending,
-  so a crash never leaves a trade the database doesn't know about. Positions only advance on a
-  confirmed fill read back from the chain. Pausing the bot stops new buys; exits keep running.
-  **Sell all and pause** is the panic button.
+  Swaps are routed by Jupiter, with **PumpPortal as the fallback** for Pump.fun tokens Jupiter
+  can't route (a mint seconds old, or one migrating to PumpSwap). Each transaction is recorded by
+  its signature (and signed bytes) before it is sent and **rebroadcast** until it lands or its
+  blockhash is safely expired; a buy written off is checked against the wallet's real balance
+  first and recovered if its tokens arrived anyway. Positions only advance on a confirmed fill
+  read back from the chain, and holdings after a sale are re-read from the chain. An exit that
+  keeps failing backs off (5s, 15s, 45s, ... up to 10 minutes) and, once it plainly can't be sold,
+  is marked **stuck** (retried slowly, no longer holding an open slot). Emptied token accounts are
+  closed afterwards to recover their rent. One pass runs at a time across processes (an advisory
+  lock, plus per-row claims). Pausing the bot stops new buys; exits keep running. **Sell all and
+  pause** is the panic button.
 
 ### Setting it up
 

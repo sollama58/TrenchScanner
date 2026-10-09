@@ -3,7 +3,11 @@ import bs58 from "bs58";
 import { ed25519 } from "@noble/curves/ed25519";
 import { EXIT_PLAN, type ExitPlan } from "../curation/profitSim.js";
 import {
+  buildLegacyTransaction,
   buildSolTransfer,
+  decodeMessage,
+  parseLookupTableAddresses,
+  resolveAccountKeys,
   decodeShortVec,
   encodeShortVec,
   parseWireTransaction,
@@ -20,6 +24,7 @@ import {
   sealWalletSecret,
 } from "./keyVault.js";
 import { decideExit, ladderSoldFraction, sellAmount } from "./exitEngine.js";
+import { checkInstructions, PROGRAM } from "./txGuard.js";
 import {
   DEFAULT_TRADING_BOT_CONFIG,
   effectiveExitPlan,
@@ -29,6 +34,7 @@ import {
 import { positionMultiple, withdrawalAmount, RENT_EXEMPT_MIN_LAMPORTS, TX_FEE_LAMPORTS } from "./engine.js";
 
 const MASTER = "11".repeat(32);
+const OWNER = "So11111111111111111111111111111111111111112";
 const BLOCKHASH = bs58.encode(new Uint8Array(32).fill(7));
 
 describe("compact-u16", () => {
@@ -99,23 +105,35 @@ describe("key vault", () => {
 
   it("seals and reopens a seed bound to its wallet", async () => {
     const { seed, publicKey } = generateWalletKeypair();
-    const sealed = await sealWalletSecret(provider, seed, { userId: "u1", publicKey });
+    const sealed = await sealWalletSecret(provider, seed, { userId: "u1", publicKey, withdrawTo: OWNER });
     expect(Buffer.from(sealed.secretCiphertext).equals(Buffer.from(seed))).toBe(false);
-    const opened = await openWalletSecret(provider, sealed, { userId: "u1", publicKey });
+    const opened = await openWalletSecret(provider, sealed, { userId: "u1", publicKey, withdrawTo: OWNER });
     expect(bs58.encode(ed25519.getPublicKey(opened))).toBe(publicKey);
+  });
+
+  it("refuses a sealed seed whose withdrawal address was changed", async () => {
+    const { seed, publicKey } = generateWalletKeypair();
+    const sealed = await sealWalletSecret(provider, seed, { userId: "u1", publicKey, withdrawTo: OWNER });
+    await expect(
+      openWalletSecret(provider, sealed, { userId: "u1", publicKey, withdrawTo: "Attacker" }),
+    ).rejects.toThrow();
   });
 
   it("refuses a sealed seed moved onto another user", async () => {
     const { seed, publicKey } = generateWalletKeypair();
-    const sealed = await sealWalletSecret(provider, seed, { userId: "u1", publicKey });
-    await expect(openWalletSecret(provider, sealed, { userId: "u2", publicKey })).rejects.toThrow();
+    const sealed = await sealWalletSecret(provider, seed, { userId: "u1", publicKey, withdrawTo: OWNER });
+    await expect(
+      openWalletSecret(provider, sealed, { userId: "u2", publicKey, withdrawTo: OWNER }),
+    ).rejects.toThrow();
   });
 
   it("refuses under a different master key", async () => {
     const { seed, publicKey } = generateWalletKeypair();
-    const sealed = await sealWalletSecret(provider, seed, { userId: "u1", publicKey });
+    const sealed = await sealWalletSecret(provider, seed, { userId: "u1", publicKey, withdrawTo: OWNER });
     const other = createLocalKeyProvider("22".repeat(32));
-    await expect(openWalletSecret(other, sealed, { userId: "u1", publicKey })).rejects.toThrow();
+    await expect(
+      openWalletSecret(other, sealed, { userId: "u1", publicKey, withdrawTo: OWNER }),
+    ).rejects.toThrow();
   });
 
   it("keeps the local provider out of production and wants every KMS setting", () => {
@@ -161,8 +179,8 @@ describe("key vault", () => {
       fakeFetch,
     );
     const { seed, publicKey } = generateWalletKeypair();
-    const sealed = await sealWalletSecret(kms, seed, { userId: "u1", publicKey });
-    const opened = await openWalletSecret(kms, sealed, { userId: "u1", publicKey });
+    const sealed = await sealWalletSecret(kms, seed, { userId: "u1", publicKey, withdrawTo: OWNER });
+    const opened = await openWalletSecret(kms, sealed, { userId: "u1", publicKey, withdrawTo: OWNER });
     expect(bs58.encode(ed25519.getPublicKey(opened))).toBe(publicKey);
     expect(calls.map((c) => c.target)).toEqual(["TrentService.GenerateDataKey", "TrentService.Decrypt"]);
     expect(calls[0]!.auth).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIA\/\d{8}\/us-east-1\/kms\/aws4_request/);
@@ -170,6 +188,7 @@ describe("key vault", () => {
       purpose: "trenchscanner-trading-wallet",
       userId: "u1",
       publicKey,
+      withdrawTo: OWNER,
     });
     expect(calls[1]!.body.KeyId).toBe("arn:aws:kms:us-east-1:1:key/abc");
   });
@@ -183,7 +202,7 @@ describe("key vault", () => {
       { keyId: "k", region: "us-east-1", accessKeyId: "a", secretAccessKey: "s" },
       fakeFetch,
     );
-    await expect(kms.generateDataKey({ userId: "u", publicKey: "p" })).rejects.toThrow(
+    await expect(kms.generateDataKey({ userId: "u", publicKey: "p", withdrawTo: "w" })).rejects.toThrow(
       /AccessDeniedException/,
     );
   });
@@ -322,5 +341,91 @@ describe("position multiple", () => {
     const position = { swapInLamports: 1_000_000_000n, tokensBought: "1000000000", decimals: 6 };
     expect(positionMultiple(position, 0.4, 200)).toBeCloseTo(2);
     expect(positionMultiple(position, undefined, 200)).toBeNull();
+  });
+});
+
+describe("instruction guard", () => {
+  const wallet = generateWalletKeypair().publicKey;
+  const stranger = generateWalletKeypair().publicKey;
+  const check = (tx: Uint8Array) => {
+    const decoded = decodeMessage(parseWireTransaction(tx).message);
+    return () => checkInstructions(decoded, decoded.staticKeys, wallet);
+  };
+  const ix = (programId: string, accounts: string[], data: number[]) =>
+    buildLegacyTransaction(wallet, BLOCKHASH, {
+      programId,
+      accounts: accounts.map((pubkey) => ({ pubkey, writable: true })),
+      data,
+    });
+
+  it("allows what a swap needs", () => {
+    expect(
+      check(buildSolTransfer({ from: wallet, to: stranger, lamports: 5n, recentBlockhash: BLOCKHASH })),
+    ).not.toThrow();
+    expect(check(ix(PROGRAM.token, [stranger], [17]))).not.toThrow(); // SyncNative
+    expect(check(ix(PROGRAM.token, [stranger, wallet, wallet], [9]))).not.toThrow(); // close to the wallet
+    expect(check(ix(PROGRAM.ata, [wallet, stranger, wallet], [1]))).not.toThrow(); // create own ATA
+    expect(check(ix(PROGRAM.jupiterV6, [wallet, stranger], [1, 2, 3]))).not.toThrow();
+    expect(check(ix(PROGRAM.computeBudget, [], [3, 1, 0, 0, 0, 0, 0, 0, 0]))).not.toThrow();
+  });
+
+  it("refuses what could take the wallet's money later or elsewhere", () => {
+    expect(check(ix(SYSTEM_PROGRAM_ID, [wallet], [1, 0, 0, 0, ...new Array(32).fill(1)]))).toThrow(
+      /System instruction 1/,
+    ); // Assign
+    expect(check(ix(SYSTEM_PROGRAM_ID, [stranger, stranger, wallet], [4, 0, 0, 0]))).toThrow(
+      /System instruction 4/,
+    ); // AdvanceNonce
+    expect(check(ix(PROGRAM.token, [stranger, stranger, wallet], [3, 1, 0, 0, 0, 0, 0, 0, 0]))).toThrow(
+      /token instruction 3/,
+    ); // Transfer
+    expect(check(ix(PROGRAM.token, [stranger, wallet], [4, 1, 0, 0, 0, 0, 0, 0, 0]))).toThrow(
+      /token instruction 4/,
+    ); // Approve
+    expect(check(ix(PROGRAM.token, [stranger, wallet], [6, 2, 1, ...new Array(32).fill(1)]))).toThrow(
+      /token instruction 6/,
+    ); // SetAuthority
+    expect(check(ix(PROGRAM.token, [stranger, stranger, wallet], [9]))).toThrow(/token instruction 9/); // close elsewhere
+    expect(check(ix(PROGRAM.ata, [wallet, stranger, stranger], [1]))).toThrow(/associated-token/); // someone else's ATA
+    expect(check(ix(stranger, [wallet], [0]))).toThrow(/is not allowed/); // unknown program
+  });
+
+  it("decodes v0 messages and resolves lookup-table accounts in runtime order", () => {
+    const table = generateWalletKeypair().publicKey;
+    const loaded = [generateWalletKeypair().publicKey, generateWalletKeypair().publicKey];
+    const keyBytes = [wallet, PROGRAM.token].map((k) => [...bs58.decode(k)]);
+    const message = Uint8Array.from([
+      0x80, // v0
+      1,
+      0,
+      1,
+      2,
+      ...keyBytes.flat(),
+      ...bs58.decode(BLOCKHASH),
+      1, // one instruction: CloseAccount(loaded[1] -> loaded[0], owner wallet)
+      1,
+      3,
+      3,
+      2,
+      0,
+      1,
+      9,
+      1,
+      ...bs58.decode(table),
+      1,
+      0,
+      1,
+      1, // table: writable [0], readonly [1]
+    ]);
+    const decoded = decodeMessage(message);
+    expect(decoded.version).toBe(0);
+    const keys = resolveAccountKeys(decoded, new Map([[table, loaded]]));
+    expect(keys).toEqual([wallet, PROGRAM.token, loaded[0], loaded[1]]);
+    // The close goes to a loaded account, not the wallet: refused even though it hid in a table.
+    expect(() => checkInstructions(decoded, keys, wallet)).toThrow(/token instruction 9/);
+    const header = new Uint8Array(56);
+    expect(parseLookupTableAddresses(Uint8Array.from([...header, ...bs58.decode(loaded[0]!)]))).toEqual([
+      loaded[0],
+    ]);
   });
 });

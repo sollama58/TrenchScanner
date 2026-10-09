@@ -761,8 +761,20 @@ const envSchema = z.object({
   TRADING_JUPITER_BASE_URL: z.string().optional().default(""),
   // How often the worker's trading-bot job runs (seconds): settles swaps, manages exits, buys.
   TRADING_BOT_INTERVAL_SECONDS: z.coerce.number().min(2).default(5),
-  // Server-wide ceiling on one entry in SOL, whatever a bot's settings say.
+  // Server-wide ceilings, whatever a bot's settings say: they bound what a stolen admin session
+  // could make a bot do (buy into a pool the thief controls, at a slippage that pays them).
+  // One entry, in SOL.
   TRADING_MAX_BUY_SOL: z.coerce.number().positive().default(1),
+  // Entries per rolling 24 hours, in SOL.
+  TRADING_MAX_DAILY_SPEND_SOL: z.coerce.number().positive().default(5),
+  // Slippage on any swap, in basis points (2500 = 25%).
+  TRADING_MAX_SLIPPAGE_BPS: z.coerce.number().int().min(50).max(5000).default(2500),
+  // Build Pump.fun trades with PumpPortal when Jupiter has no route for the token (a mint seconds
+  // old, or one migrating to PumpSwap). The guard checks its transactions like Jupiter's.
+  TRADING_PUMPPORTAL_FALLBACK: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 });
 
 /**

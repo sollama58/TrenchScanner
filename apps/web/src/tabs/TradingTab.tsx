@@ -43,7 +43,7 @@ interface Position {
   mint: string;
   symbol: string | null;
   source: string;
-  status: "buying" | "open" | "closed" | "failed";
+  status: "buying" | "open" | "stuck" | "closed" | "failed";
   entryLamports: string | null;
   proceedsLamports: string | null;
   tokensHeld: string;
@@ -82,9 +82,15 @@ interface TradingState {
     lastError: string | null;
     exitPlanSummary: string;
   };
-  defaults: { exitPlan: ExitPlan; exitPlanSummary: string; maxBuySol: number };
+  defaults: {
+    exitPlan: ExitPlan;
+    exitPlanSummary: string;
+    maxBuySol: number;
+    maxDailySpendSol: number;
+    maxSlippageBps: number;
+  };
   sources: {
-    filters: { id: string; name: string; isActive: boolean }[];
+    filters: { id: string; name: string; isActive: boolean; changedSinceSaved: boolean }[];
     models: { id: string; name: string }[];
   };
   positions: Position[];
@@ -394,6 +400,11 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
               ) : (
                 <span className="faint">(inactive)</span>
               )}
+              {f.changedSinceSaved && draft.sources.filterIds.includes(f.id) && (
+                <span className="badge bad" title="Edited since you saved these settings">
+                  changed: save to resume
+                </span>
+              )}
             </label>
           ))}
           {state.sources.models.map((m) => (
@@ -455,9 +466,11 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 type="number"
                 step="any"
                 min={0}
+                max={state.defaults.maxDailySpendSol}
                 value={draft.maxDailySpendSol}
                 onChange={(e) => edit({ ...draft, maxDailySpendSol: num(e.target.value) })}
               />
+              <small className="faint">Capped at {state.defaults.maxDailySpendSol} SOL by the server.</small>
             </label>
             <label className="field">
               <span>Skip signals older than (s)</span>
@@ -476,11 +489,14 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 type="number"
                 step="any"
                 min={0.1}
-                max={50}
+                max={state.defaults.maxSlippageBps / 100}
                 value={draft.slippageBps / 100}
                 onChange={(e) => edit({ ...draft, slippageBps: Math.round(num(e.target.value) * 100) })}
               />
-              <small className="faint">Stops and trailing exits allow at least 30% so they get out.</small>
+              <small className="faint">
+                At most {state.defaults.maxSlippageBps / 100}% on this server. Stops and trailing exits allow
+                at least 30% so they get out.
+              </small>
             </label>
             <label className="field">
               <span>Max priority fee (SOL)</span>
@@ -710,7 +726,9 @@ const REASON: Record<string, string> = {
 function PositionsPanel({ state, reload }: { state: TradingState; reload: () => Promise<void> }) {
   const now = useNow(15_000);
   const [busy, setBusy] = useState(false);
-  const open = state.positions.filter((p) => p.status === "open" || p.status === "buying");
+  const open = state.positions.filter(
+    (p) => p.status === "open" || p.status === "buying" || p.status === "stuck",
+  );
   const act = async (path: string, ask: string) => {
     if (!confirm(ask)) return;
     setBusy(true);
@@ -777,14 +795,16 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
                     </td>
                     <td>
                       <span
-                        className={`badge ${p.status === "open" ? "info" : p.status === "failed" ? "bad" : p.status === "closed" ? "" : "info"}`}
+                        className={`badge ${p.status === "open" ? "info" : p.status === "failed" || p.status === "stuck" ? "bad" : p.status === "closed" ? "" : "info"}`}
                       >
                         {p.status}
                       </span>
                       {p.closeReason && (
                         <div className="faint small">{REASON[p.closeReason] ?? p.closeReason}</div>
                       )}
-                      {p.closeRequested && p.status === "open" && <div className="faint small">selling…</div>}
+                      {p.closeRequested && (p.status === "open" || p.status === "stuck") && (
+                        <div className="faint small">selling…</div>
+                      )}
                       {p.error && (
                         <div className="error small" title={p.error}>
                           {p.error.slice(0, 60)}
@@ -806,7 +826,7 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
                         : `${pnl >= 0 ? "+" : ""}${sol(String(pnl))}`}
                     </td>
                     <td>
-                      {p.status === "open" && !p.closeRequested && (
+                      {(p.status === "open" || p.status === "stuck") && !p.closeRequested && (
                         <button
                           className="ghost"
                           disabled={busy}

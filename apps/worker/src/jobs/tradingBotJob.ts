@@ -2,23 +2,26 @@ import {
   adminWalletSet,
   createKeyProvider,
   JupiterSwapClient,
+  PumpPortalSwapClient,
   runTradingEngine,
   solToLamports,
   TradingRpc,
   type Env,
 } from "@trenchscanner/core";
-import type { JobRunMeta } from "../scheduler.js";
+import { JobFailure, type JobRunMeta } from "../scheduler.js";
 
 /**
  * The trading-bot job: one engine pass (packages/core/src/trading/engine.ts) every
- * TRADING_BOT_INTERVAL_SECONDS. Only scheduled with TRADING_BOT_ENABLED. A worker without a key
- * provider it can use (KMS settings missing, or the local provider in production) fails every run
- * with the reason, so /health/worker shows a misconfigured bot rather than a silent one - open
- * positions are not being watched while it does.
+ * TRADING_BOT_INTERVAL_SECONDS, in the trader process (WORKER_ROLE=trader). A process without
+ * what it needs to trade safely - a key provider it can use, or a real RPC (a bot on the public
+ * mainnet RPC is a stop-loss waiting on a 429) - fails every run with the reason, so
+ * /health/worker shows a misconfigured bot rather than a silent one. A pass in which a stage
+ * failed (settling, exits, ...) is reported as failed too, with its counts kept.
  */
 export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
   const keys = createKeyProvider({ ...env, NODE_ENV: process.env.NODE_ENV });
   const admins = adminWalletSet(env);
+  const hasRpc = Boolean(env.HELIUS_API_KEY || env.SOLANA_RPC_URL);
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
@@ -27,15 +30,23 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
     apiKey: env.TRADING_JUPITER_API_KEY || env.JUPITER_API_KEY || undefined,
     baseUrl: env.TRADING_JUPITER_BASE_URL || undefined,
   });
+  const fallback = env.TRADING_PUMPPORTAL_FALLBACK ? new PumpPortalSwapClient() : null;
   return async () => {
     if (!keys.provider) throw new Error(`trading bot has no key provider: ${keys.reason}`);
-    const summary = await runTradingEngine({
+    if (!hasRpc) throw new Error("trading bot has no RPC: set HELIUS_API_KEY or SOLANA_RPC_URL");
+    const { failedStages, ...counts } = await runTradingEngine({
       rpc,
       swap,
+      fallback,
       keys: keys.provider,
       canTrade: (wallet) => admins.has(wallet),
       maxBuyLamports: solToLamports(env.TRADING_MAX_BUY_SOL),
+      maxDailySpendLamports: solToLamports(env.TRADING_MAX_DAILY_SPEND_SOL),
+      maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
     });
-    return { ...summary };
+    const meta: JobRunMeta = { ...counts };
+    if (failedStages.length > 0)
+      throw new JobFailure(`trading pass stages failed: ${failedStages.join(", ")}`, meta);
+    return meta;
   };
 }

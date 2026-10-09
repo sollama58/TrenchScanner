@@ -6,3 +6,4 @@ export * from "./keyVault.js";
 export * from "./rpc.js";
 export * from "./transaction.js";
 export * from "./wallets.js";
+export * from "./txGuard.js";

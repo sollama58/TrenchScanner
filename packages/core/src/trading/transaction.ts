@@ -131,6 +131,58 @@ function u64le(value: bigint): number[] {
   return out;
 }
 
+export interface InstructionSpec {
+  programId: string;
+  accounts: { pubkey: string; writable: boolean }[];
+  data: number[];
+}
+
+/**
+ * An unsigned legacy transaction with one instruction, paid and signed by `payer` alone (the
+ * only signer). Accounts are laid out as the runtime wants them: the payer, then writable
+ * non-signers, then read-only non-signers (the program among them).
+ */
+export function buildLegacyTransaction(
+  payer: string,
+  recentBlockhash: string,
+  ix: InstructionSpec,
+): Uint8Array {
+  const writable = new Set<string>();
+  const readonly = new Set<string>();
+  for (const a of ix.accounts) {
+    if (a.pubkey === payer) continue;
+    if (a.writable) writable.add(a.pubkey);
+  }
+  for (const a of ix.accounts) {
+    if (a.pubkey !== payer && !writable.has(a.pubkey)) readonly.add(a.pubkey);
+  }
+  if (ix.programId !== payer && !writable.has(ix.programId)) readonly.add(ix.programId);
+  const order = [payer, ...writable, ...readonly];
+  const keys = order.map((k) => {
+    const bytes = bs58.decode(k);
+    if (bytes.length !== PUBKEY_LENGTH) throw new Error(`not a public key: ${k}`);
+    return bytes;
+  });
+  const blockhash = bs58.decode(recentBlockhash);
+  if (blockhash.length !== 32) throw new Error("bad blockhash");
+  const index = (k: string) => order.indexOf(k);
+  const message = [
+    1, // one signature: the payer
+    0, // no read-only signed accounts
+    readonly.size,
+    ...encodeShortVec(keys.length),
+    ...keys.flatMap((k) => [...k]),
+    ...blockhash,
+    ...encodeShortVec(1),
+    index(ix.programId),
+    ...encodeShortVec(ix.accounts.length),
+    ...ix.accounts.map((a) => index(a.pubkey)),
+    ...encodeShortVec(ix.data.length),
+    ...ix.data,
+  ];
+  return Uint8Array.from([...encodeShortVec(1), ...new Array<number>(SIGNATURE_LENGTH).fill(0), ...message]);
+}
+
 /**
  * An unsigned legacy transaction moving `lamports` from `from` to `to` with the System Program,
  * from `from` as fee payer - the withdrawal. Sign it with signTransaction.
@@ -143,31 +195,165 @@ export function buildSolTransfer(input: {
 }): Uint8Array {
   if (input.from === input.to) throw new Error("transfer to the same account");
   if (input.lamports <= 0n) throw new Error("transfer amount must be positive");
-  const keys = [input.from, input.to, SYSTEM_PROGRAM_ID].map((k) => {
-    const bytes = bs58.decode(k);
-    if (bytes.length !== PUBKEY_LENGTH) throw new Error(`not a public key: ${k}`);
-    return bytes;
-  });
-  const blockhash = bs58.decode(input.recentBlockhash);
-  if (blockhash.length !== 32) throw new Error("bad blockhash");
   // SystemInstruction::Transfer is index 2, little-endian u32, then the u64 amount.
-  const data = [2, 0, 0, 0, ...u64le(input.lamports)];
-  const message = [
-    1, // one signature: the sender
-    0, // no read-only signed accounts
-    1, // one read-only unsigned account: the System Program
-    ...encodeShortVec(keys.length),
-    ...keys.flatMap((k) => [...k]),
-    ...blockhash,
-    ...encodeShortVec(1),
-    2, // program id index: the System Program
-    ...encodeShortVec(2),
-    0, // from (writable, signer)
-    1, // to (writable)
-    ...encodeShortVec(data.length),
-    ...data,
+  return buildLegacyTransaction(input.from, input.recentBlockhash, {
+    programId: SYSTEM_PROGRAM_ID,
+    accounts: [
+      { pubkey: input.from, writable: true },
+      { pubkey: input.to, writable: true },
+    ],
+    data: [2, 0, 0, 0, ...u64le(input.lamports)],
+  });
+}
+
+/**
+ * An unsigned transaction closing an empty token account of `owner`'s, its rent going back to
+ * `owner` - the ~0.002 SOL each traded token's account holds once the position is sold out.
+ */
+export function buildCloseTokenAccount(input: {
+  owner: string;
+  account: string;
+  tokenProgram: string;
+  recentBlockhash: string;
+}): Uint8Array {
+  // TokenInstruction::CloseAccount (9): account, destination, owner.
+  return buildLegacyTransaction(input.owner, input.recentBlockhash, {
+    programId: input.tokenProgram,
+    accounts: [
+      { pubkey: input.account, writable: true },
+      { pubkey: input.owner, writable: true },
+      { pubkey: input.owner, writable: false },
+    ],
+    data: [9],
+  });
+}
+
+export interface DecodedInstruction {
+  programIdIndex: number;
+  accountIndexes: number[];
+  data: Uint8Array;
+}
+
+export interface DecodedMessage {
+  version: "legacy" | number;
+  requiredSignatures: number;
+  readonlySigned: number;
+  readonlyUnsigned: number;
+  staticKeys: string[];
+  recentBlockhash: string;
+  instructions: DecodedInstruction[];
+  /** v0 address lookup tables: the table, and which of its entries load writable / read-only. */
+  lookups: { table: string; writable: number[]; readonly: number[] }[];
+}
+
+/** Decodes a whole message - header, keys, blockhash, instructions and lookup tables. */
+export function decodeMessage(message: Uint8Array): DecodedMessage {
+  let cursor = 0;
+  const need = (n: number) => {
+    if (cursor + n > message.length) throw new Error("truncated message");
+  };
+  let version: "legacy" | number = "legacy";
+  if ((message[0] ?? 0) & 0x80) {
+    version = message[0]! & 0x7f;
+    if (version !== 0) throw new Error(`unsupported message version ${version}`);
+    cursor = 1;
+  }
+  need(3);
+  const [requiredSignatures, readonlySigned, readonlyUnsigned] = [
+    message[cursor]!,
+    message[cursor + 1]!,
+    message[cursor + 2]!,
   ];
-  return Uint8Array.from([...encodeShortVec(1), ...new Array<number>(SIGNATURE_LENGTH).fill(0), ...message]);
+  cursor += 3;
+  const readKey = () => {
+    need(PUBKEY_LENGTH);
+    const k = bs58.encode(message.slice(cursor, cursor + PUBKEY_LENGTH));
+    cursor += PUBKEY_LENGTH;
+    return k;
+  };
+  const readLen = () => {
+    const [n, next] = decodeShortVec(message, cursor);
+    cursor = next;
+    return n;
+  };
+  const readBytes = (n: number) => {
+    need(n);
+    const out = message.slice(cursor, cursor + n);
+    cursor += n;
+    return out;
+  };
+  const staticKeys = Array.from({ length: readLen() }, readKey);
+  const recentBlockhash = readKey();
+  const instructions: DecodedInstruction[] = [];
+  const ixCount = readLen();
+  for (let i = 0; i < ixCount; i++) {
+    need(1);
+    const programIdIndex = message[cursor++]!;
+    const accountIndexes = [...readBytes(readLen())];
+    const data = readBytes(readLen());
+    instructions.push({ programIdIndex, accountIndexes, data });
+  }
+  const lookups: DecodedMessage["lookups"] = [];
+  if (version === 0) {
+    const tables = readLen();
+    for (let i = 0; i < tables; i++) {
+      const table = readKey();
+      const writable = [...readBytes(readLen())];
+      const readonly = [...readBytes(readLen())];
+      lookups.push({ table, writable, readonly });
+    }
+  }
+  if (cursor !== message.length) throw new Error("trailing bytes after the message");
+  return {
+    version,
+    requiredSignatures,
+    readonlySigned,
+    readonlyUnsigned,
+    staticKeys,
+    recentBlockhash,
+    instructions,
+    lookups,
+  };
+}
+
+/** The tables a message loads addresses from; resolve them before resolveAccountKeys. */
+export function lookupTablesOf(decoded: DecodedMessage): string[] {
+  return decoded.lookups.map((l) => l.table);
+}
+
+/**
+ * Every account key the message refers to, in index order: the static keys, then each table's
+ * writable entries, then each table's read-only entries (the runtime's order). `tables` maps a
+ * lookup table to its address list.
+ */
+export function resolveAccountKeys(decoded: DecodedMessage, tables: Map<string, string[]>): string[] {
+  const writable: string[] = [];
+  const readonly: string[] = [];
+  for (const l of decoded.lookups) {
+    const entries = tables.get(l.table);
+    if (!entries) throw new Error(`lookup table ${l.table} not resolved`);
+    for (const i of l.writable) {
+      if (entries[i] === undefined) throw new Error("lookup index out of range");
+      writable.push(entries[i]!);
+    }
+    for (const i of l.readonly) {
+      if (entries[i] === undefined) throw new Error("lookup index out of range");
+      readonly.push(entries[i]!);
+    }
+  }
+  return [...decoded.staticKeys, ...writable, ...readonly];
+}
+
+/** An address lookup table account's addresses (its data after the 56-byte header). */
+export function parseLookupTableAddresses(data: Uint8Array): string[] {
+  const HEADER = 56;
+  if (data.length < HEADER || (data.length - HEADER) % PUBKEY_LENGTH !== 0) {
+    throw new Error("malformed lookup table");
+  }
+  const out: string[] = [];
+  for (let at = HEADER; at < data.length; at += PUBKEY_LENGTH)
+    out.push(bs58.encode(data.slice(at, at + PUBKEY_LENGTH)));
+  return out;
 }
 
 /** Verifies every signature on a serialized transaction against its signer keys (tests, sanity). */

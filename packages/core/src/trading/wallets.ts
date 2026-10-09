@@ -11,14 +11,21 @@ import { generateWalletKeypair, openWalletSecret, sealWalletSecret, type KeyProv
 
 export type TradingWalletRow = Prisma.TradingWalletGetPayload<object>;
 
-/** The user's wallet, created (and sealed) on first call. Idempotent under a race: one row wins. */
-export async function ensureTradingWallet(userId: string, provider: KeyProvider): Promise<TradingWalletRow> {
+/**
+ * The user's wallet, created (and sealed) on first call. Idempotent under a race: one row wins.
+ * `withdrawTo` (the user's sign-in wallet) is sealed into it as the only withdrawal destination.
+ */
+export async function ensureTradingWallet(
+  userId: string,
+  withdrawTo: string,
+  provider: KeyProvider,
+): Promise<TradingWalletRow> {
   const existing = await prisma.tradingWallet.findUnique({ where: { userId } });
   if (existing) return existing;
   const { seed, publicKey } = generateWalletKeypair();
   try {
-    const sealed = await sealWalletSecret(provider, seed, { userId, publicKey });
-    return await prisma.tradingWallet.create({ data: { userId, publicKey, ...sealed } });
+    const sealed = await sealWalletSecret(provider, seed, { userId, publicKey, withdrawTo });
+    return await prisma.tradingWallet.create({ data: { userId, publicKey, withdrawTo, ...sealed } });
   } catch (err) {
     // Two requests at once: the other one's wallet stands, this key is discarded unused.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -37,6 +44,7 @@ export async function withWalletKey<T>(
     TradingWalletRow,
     | "userId"
     | "publicKey"
+    | "withdrawTo"
     | "secretCiphertext"
     | "secretIv"
     | "secretAuthTag"
@@ -49,6 +57,7 @@ export async function withWalletKey<T>(
   const seed = await openWalletSecret(provider, wallet, {
     userId: wallet.userId,
     publicKey: wallet.publicKey,
+    withdrawTo: wallet.withdrawTo,
   });
   try {
     return await use(seed);

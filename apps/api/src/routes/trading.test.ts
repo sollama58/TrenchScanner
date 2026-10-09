@@ -81,6 +81,8 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(body.canTrade).toBe(true);
     expect(body.wallet.publicKey).toBe(first.json().publicKey);
     expect(body.withdrawTo).toBe(adminWallet);
+    // The withdrawal address is sealed into the new wallet's key.
+    expect(row.withdrawTo).toBe(adminWallet);
     expect(body.bot.config.exitPlan).toBeNull();
     expect(body.defaults.exitPlanSummary).toMatch(/sell half at 2x/);
     // Never anything that could open the wallet.
@@ -127,6 +129,35 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(bad.statusCode).toBe(400);
   });
 
+  it("enforces the server's ceilings and refuses paired-phone sessions for bot changes", async () => {
+    const over = await app.inject({
+      method: "PUT",
+      url: "/trading/bot",
+      ...as("admin"),
+      payload: { config: { slippageBps: 4000 } },
+    });
+    expect(over.statusCode).toBe(400);
+    expect(over.json().error).toMatch(/slippageBps/);
+    const device = await prisma.linkedDevice.create({ data: { userId: ids.admin } });
+    const phone = await signer.sign({ userId: ids.admin, walletAddress: adminWallet, deviceId: device.id });
+    const res = await app.inject({
+      method: "PUT",
+      url: "/trading/bot",
+      cookies: { [SESSION_COOKIE_NAME]: phone },
+      payload: { enabled: false },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toMatch(/sign in with your wallet/);
+    // Viewing still works from the phone.
+    const view = await app.inject({
+      method: "GET",
+      url: "/trading",
+      cookies: { [SESSION_COOKIE_NAME]: phone },
+    });
+    expect(view.statusCode).toBe(200);
+    await prisma.linkedDevice.delete({ where: { id: device.id } });
+  });
+
   it("withdraws only to the sign-in wallet, one at a time", async () => {
     const tooSmall = await app.inject({
       method: "POST",
@@ -164,6 +195,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
         wrappedDataKey: Buffer.alloc(60),
         keyProvider: "local",
         keyRef: "local:test",
+        withdrawTo: userWallet,
       },
     });
     const state = await app.inject({ method: "GET", url: "/trading", ...as("user") });

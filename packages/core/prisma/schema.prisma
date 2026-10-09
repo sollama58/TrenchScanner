@@ -1655,6 +1655,9 @@ model TradingWallet {
   userId           String   @unique
   user             User     @relation(fields: [userId], references: [id], onDelete: Restrict)
   publicKey        String   @unique
+  /// The only address withdrawals go to: the owner's sign-in wallet at creation. Sealed into the
+  /// key's encryption context too, so changing it here makes the wallet fail to open.
+  withdrawTo       String
   secretCiphertext Bytes
   secretIv         Bytes
   secretAuthTag    Bytes
@@ -1677,6 +1680,10 @@ model TradingBot {
   /// Signals before this are never bought: set to now each time the bot is switched on, so it
   /// never trades a backlog. Advanced past each pass's window as it reads signals.
   signalsFrom DateTime  @default(now())
+  /// When the owner last saved the settings. A followed filter edited (re-armed) after this is
+  /// not traded until the settings are saved again, so changing what a filter matches never
+  /// silently changes what the bot buys.
+  configSavedAt DateTime @default(now())
   lastRunAt   DateTime?
   lastError   String?
   createdAt   DateTime  @default(now())
@@ -1697,7 +1704,8 @@ model TradingPosition {
   sourceLabel      String
   /// When the signal was raised (the match or the call).
   signalAt         DateTime
-  /// "buying" -> "open" -> "closed", or "failed" when the entry never filled.
+  /// "buying" -> "open" -> "closed", or "failed" when the entry never filled. "stuck": the exit
+  /// keeps failing (no route, say); still retried, slowly, but no longer holds an open slot.
   status           String
   /// SOL spent on the entry, fees and token-account rent included.
   entryLamports    BigInt?
@@ -1717,6 +1725,11 @@ model TradingPosition {
   proceedsLamports BigInt    @default(0)
   /// Set by the owner ("sell now", "sell all"): the next tick sells everything held.
   closeRequested   Boolean   @default(false)
+  /// Consecutive failed exit attempts, and when the next may run (exponential backoff).
+  failCount        Int       @default(0)
+  nextAttemptAt    DateTime?
+  /// When the emptied token account was closed and its rent returned (null while open).
+  accountClosedAt  DateTime?
   openedAt         DateTime?
   closedAt         DateTime?
   closeReason      String?
@@ -1745,7 +1758,13 @@ model TradingOrder {
   /// For a take-profit: the rung being sold.
   rung                 Int?
   signature            String          @unique
+  /// Our own bound on the blockhash's expiry (never below the route's), so a transaction is never
+  /// written off while it can still land.
   lastValidBlockHeight BigInt
+  /// The signed transaction, base64: rebroadcast (same signature) until it lands or expires.
+  rawTx                String?
+  /// "jupiter" or "pumpportal"
+  route                String          @default("jupiter")
   /// "pending" -> "confirmed" | "failed" | "expired"
   status               String          @default("pending")
   /// What went in: lamports on a buy, raw token units on a sell.
@@ -1771,9 +1790,10 @@ model TradingWithdrawal {
   /// The amount asked for; null = everything (less the fee).
   requestedLamports    BigInt?
   sentLamports         BigInt?
-  /// "requested" -> "pending" -> "confirmed" | "failed"
+  /// "requested" -> "sending" (claimed by a pass) -> "pending" -> "confirmed" | "failed"
   status               String    @default("requested")
   signature            String?   @unique
+  rawTx                String?
   lastValidBlockHeight BigInt?
   error                String?
   createdAt            DateTime  @default(now())

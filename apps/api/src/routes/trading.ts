@@ -33,6 +33,10 @@ import {
  * owner's funds back to the owner. The api never opens a wallet's key - it only records the
  * request; the worker, the one process allowed to decrypt (kms:Decrypt), sends it.
  *
+ * Creating the wallet and changing the bot also refuse sessions from a paired phone (QR device
+ * link): those tokens live a year on a device, and these are the two routes that decide where
+ * money goes. The server's ceilings (TRADING_MAX_*) bound whatever the settings say.
+ *
  * With TRADING_BOT_ENABLED off nothing here is registered and every route answers 404.
  */
 
@@ -40,7 +44,7 @@ const MAX_POSITIONS_SHOWN = 100;
 
 const withdrawSchema = z.object({
   /** Lamports as a decimal string, or "max" for everything less the fee. */
-  amount: z.union([z.literal("max"), z.string().regex(/^\d{1,19}$/)]),
+  amount: z.union([z.literal("max"), z.string().regex(/^\d{1,18}$/)]),
 });
 
 const botPatchSchema = z.object({
@@ -66,9 +70,17 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
 
   const isAdmin = (request: FastifyRequest) => admins.has(request.user!.walletAddress);
   const requireAdmin = (request: FastifyRequest, reply: FastifyReply) => {
-    if (isAdmin(request)) return true;
-    void reply.code(403).send({ error: "forbidden" });
-    return false;
+    if (!isAdmin(request)) {
+      void reply.code(403).send({ error: "forbidden" });
+      return false;
+    }
+    if (request.user!.deviceId) {
+      void reply
+        .code(403)
+        .send({ error: "sign in with your wallet on this device to change the trading bot" });
+      return false;
+    }
+    return true;
   };
 
   app.get("/", async (request, reply) => {
@@ -77,7 +89,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     const [wallet, bot, positions, withdrawals, filters] = await Promise.all([
       prisma.tradingWallet.findUnique({
         where: { userId },
-        select: { publicKey: true, createdAt: true, keyProvider: true },
+        select: { publicKey: true, createdAt: true, keyProvider: true, withdrawTo: true },
       }),
       prisma.tradingBot.findUnique({ where: { userId } }),
       prisma.tradingPosition.findMany({
@@ -87,7 +99,10 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
         include: { orders: { orderBy: { createdAt: "asc" } } },
       }),
       prisma.tradingWithdrawal.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, take: 20 }),
-      prisma.userFilter.findMany({ where: { userId }, select: { id: true, name: true, isActive: true } }),
+      prisma.userFilter.findMany({
+        where: { userId },
+        select: { id: true, name: true, isActive: true, armedAt: true },
+      }),
     ]);
     if (!admin && !wallet) return reply.code(403).send({ error: "forbidden" });
     const balance = wallet ? await rpc.getBalance(wallet.publicKey) : null;
@@ -98,7 +113,12 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
       keyProviderProblem: keys.provider ? null : keys.reason,
       withdrawTo: walletAddress,
       wallet: wallet
-        ? { publicKey: wallet.publicKey, createdAt: wallet.createdAt, balanceLamports: lamportsJson(balance) }
+        ? {
+            publicKey: wallet.publicKey,
+            createdAt: wallet.createdAt,
+            withdrawTo: wallet.withdrawTo,
+            balanceLamports: lamportsJson(balance),
+          }
         : null,
       bot: {
         enabled: bot?.enabled ?? false,
@@ -111,8 +131,19 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
         exitPlan: EXIT_PLAN,
         exitPlanSummary: describeExitPlan(EXIT_PLAN),
         maxBuySol: env.TRADING_MAX_BUY_SOL,
+        maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL,
+        maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
       },
-      sources: { filters, models },
+      // A followed filter edited since the settings were saved is paused until they are saved again.
+      sources: {
+        filters: filters.map((f) => ({
+          id: f.id,
+          name: f.name,
+          isActive: f.isActive,
+          changedSinceSaved: bot ? f.armedAt > bot.configSavedAt : false,
+        })),
+        models,
+      },
       positions: positions.map((p) => ({
         id: p.id,
         mint: p.mint,
@@ -167,7 +198,13 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     if (!keys.provider)
       return reply.code(503).send({ error: `wallet custody is not configured: ${keys.reason}` });
     try {
-      const wallet = await ensureTradingWallet(request.user!.userId, keys.provider);
+      // Withdrawals will only ever go to the account's sign-in wallet, sealed into the key here.
+      const user = await prisma.user.findUnique({
+        where: { id: request.user!.userId },
+        select: { walletAddress: true },
+      });
+      if (!user) return reply.code(401).send({ error: "unauthenticated" });
+      const wallet = await ensureTradingWallet(request.user!.userId, user.walletAddress, keys.provider);
       return { publicKey: wallet.publicKey };
     } catch (err) {
       request.log.error({ err: String(err) }, "trading wallet creation failed");
@@ -188,6 +225,21 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     const { userId } = request.user!;
     const wallet = await prisma.tradingWallet.findUnique({ where: { userId }, select: { id: true } });
     if (!wallet) return reply.code(409).send({ error: "create the trading wallet first" });
+    const limits = parsed.data.config;
+    if (limits) {
+      if (limits.buySol > env.TRADING_MAX_BUY_SOL)
+        return reply
+          .code(400)
+          .send({ error: `buySol: at most ${env.TRADING_MAX_BUY_SOL} SOL on this server` });
+      if (limits.maxDailySpendSol > env.TRADING_MAX_DAILY_SPEND_SOL)
+        return reply
+          .code(400)
+          .send({ error: `maxDailySpendSol: at most ${env.TRADING_MAX_DAILY_SPEND_SOL} SOL on this server` });
+      if (limits.slippageBps > env.TRADING_MAX_SLIPPAGE_BPS)
+        return reply
+          .code(400)
+          .send({ error: `slippageBps: at most ${env.TRADING_MAX_SLIPPAGE_BPS} on this server` });
+    }
     const existing = await prisma.tradingBot.findUnique({ where: { userId } });
     let config = parsed.data.config ?? readTradingBotConfig(existing?.config);
     if (parsed.data.config) {
@@ -217,6 +269,8 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
       enabled,
       config: config as unknown as Prisma.InputJsonValue,
       ...(turningOn ? { signalsFrom: new Date() } : {}),
+      // Saving the settings confirms the followed filters as they are now (see loadSignals).
+      ...(parsed.data.config ? { configSavedAt: new Date() } : {}),
     };
     const bot = await prisma.tradingBot.upsert({
       where: { userId },
@@ -229,7 +283,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   /** Sells one position in full on the next pass. */
   app.post<{ Params: { id: string } }>("/positions/:id/sell", async (request, reply) => {
     const updated = await prisma.tradingPosition.updateMany({
-      where: { id: request.params.id, userId: request.user!.userId, status: "open" },
+      where: { id: request.params.id, userId: request.user!.userId, status: { in: ["open", "stuck"] } },
       data: { closeRequested: true },
     });
     if (updated.count === 0) return reply.code(404).send({ error: "no open position with that id" });
@@ -241,7 +295,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     const { userId } = request.user!;
     await prisma.tradingBot.updateMany({ where: { userId }, data: { enabled: false } });
     const updated = await prisma.tradingPosition.updateMany({
-      where: { userId, status: "open" },
+      where: { userId, status: { in: ["open", "stuck"] } },
       data: { closeRequested: true },
     });
     return { ok: true, positions: updated.count };
@@ -253,10 +307,13 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     if (!parsed.success) return reply.code(400).send({ error: 'amount must be lamports or "max"' });
     const { userId } = request.user!;
     const [wallet, user] = await Promise.all([
-      prisma.tradingWallet.findUnique({ where: { userId }, select: { publicKey: true } }),
+      prisma.tradingWallet.findUnique({ where: { userId }, select: { publicKey: true, withdrawTo: true } }),
       prisma.user.findUnique({ where: { id: userId }, select: { walletAddress: true } }),
     ]);
     if (!wallet || !user) return reply.code(404).send({ error: "no trading wallet" });
+    if (wallet.withdrawTo !== user.walletAddress) {
+      return reply.code(409).send({ error: "this wallet's withdrawal address is not your sign-in wallet" });
+    }
     const requested = parsed.data.amount === "max" ? null : BigInt(parsed.data.amount);
     if (requested !== null && requested < RENT_EXEMPT_MIN_LAMPORTS) {
       return reply
@@ -267,11 +324,11 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     const created = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT 1 FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
       const inFlight = await tx.tradingWithdrawal.count({
-        where: { userId, status: { in: ["requested", "pending"] } },
+        where: { userId, status: { in: ["requested", "sending", "pending"] } },
       });
       if (inFlight > 0) return null;
       return tx.tradingWithdrawal.create({
-        data: { userId, destination: user.walletAddress, requestedLamports: requested },
+        data: { userId, destination: wallet.withdrawTo, requestedLamports: requested },
       });
     });
     if (!created) return reply.code(409).send({ error: "a withdrawal is already in progress" });
