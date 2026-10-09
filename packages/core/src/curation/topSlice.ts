@@ -7,8 +7,15 @@ import {
   type ServedCuratorExtras,
   type TrainingRow,
 } from "./trainer.js";
-import { addCall, examRecord, quantileTable, rankFromQuantiles, type StackedMember } from "./stacking.js";
-import { examChunks, memberCallRanksFrom } from "./blend.js";
+import {
+  addCall,
+  examRecord,
+  memberCallRanksFrom,
+  quantileTable,
+  rankFromQuantiles,
+  type StackedMember,
+} from "./stacking.js";
+import { examChunks } from "./blend.js";
 import { paceBudget } from "./governor.js";
 import type { CallRecord } from "./leaderboard.js";
 

@@ -157,4 +157,47 @@ describe("trainStackedCurator", () => {
     expect(agreementCount(params.members, [0.5, 0.95])).toBe(0);
     expect(stackedFeatureNames(params.members)).toContain(AGREEMENT_SIGNAL);
   });
+
+  it("grades its meta exam with member cutoffs set on each chunk's training rows, not the stored ones", async () => {
+    const rows = syntheticMarket({ tokens: 2000, days: 20, truth: "linear", seed: 9 }).sort(
+      (a, b) => a.anchorAt.getTime() - b.anchorAt.getTime(),
+    );
+    const half = Math.floor(rows.length / 2);
+    const model = await trainCurator(rows.slice(0, half));
+    const reference: TrainingRow[] = rows.slice(half);
+    const good = Float64Array.from(
+      confidenceRanks(reference.map((r) => scoreCandidateWithModel(model, r.features))),
+    );
+    const other = Float64Array.from(reference, (_, i) => ((i * 7919) % reference.length) / reference.length);
+    const run = (stored: number) =>
+      trainStackedCurator(
+        {
+          reference,
+          memberFoldRanks: new Map([
+            ["a", good],
+            ["b", other],
+          ]),
+          memberShippedProbabilities: new Map([
+            ["a", good],
+            ["b", other],
+          ]),
+          memberCallRanks: new Map([
+            ["a", stored],
+            ["b", stored],
+          ]),
+          heuristicMinScore: 55,
+          targets,
+          cooldownHours: 24,
+          targetPerHour: 6,
+        },
+        1.01,
+      );
+    const loose = (await run(0.6))!;
+    const strict = (await run(0.99))!;
+    expect(loose.examChunks).toBeGreaterThan(0);
+    expect(strict.exam).toEqual(loose.exam);
+    expect(strict.outOfSample).toEqual(loose.outOfSample);
+    // What ships still reads the stored cutoffs.
+    expect(strict.params.members.map((m) => m.callRank)).toEqual([0.99, 0.99]);
+  });
 });

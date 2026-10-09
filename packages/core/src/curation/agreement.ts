@@ -8,8 +8,15 @@ import {
   type ServedCuratorExtras,
   type TrainingRow,
 } from "./trainer.js";
-import { agreementCount, memberCalls, memberRanks, quantileTable, type StackedMember } from "./stacking.js";
-import { blendRanks, examUnfittedScores, memberCallRanksFrom } from "./blend.js";
+import {
+  agreementCount,
+  memberCallRanksFrom,
+  memberCalls,
+  memberRanks,
+  quantileTable,
+  type StackedMember,
+} from "./stacking.js";
+import { blendRanks, examUnfittedScores } from "./blend.js";
 import { GOAL_LABEL, type CallRecord } from "./leaderboard.js";
 
 /**
