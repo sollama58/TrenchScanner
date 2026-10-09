@@ -107,7 +107,12 @@ export function scheduleInterval(
      * Checked every `everyMs` while the job waits for its next slot: true starts the run now and
      * the cadence restarts from it (an admin's "retrain now"). Never while a run is in flight.
      */
-    runEarly?: { everyMs: number; due: () => Promise<boolean> };
+    runEarly?: {
+      everyMs: number;
+      due: () => Promise<boolean>;
+      /** Don't log each early run: for a job woken by routine events rather than a person. */
+      quiet?: boolean;
+    };
   } = {},
 ): ScheduledJob {
   const intervalMs = intervalMinutes * 60_000;
@@ -213,7 +218,7 @@ export function scheduleInterval(
             .then((due) => {
               if (!due || stopped || inFlight) return;
               if (next) clearTimeout(next);
-              logger.info("running early on request", { job: name });
+              if (!opts.runEarly!.quiet) logger.info("running early on request", { job: name });
               void run();
             })
             .finally(() => {

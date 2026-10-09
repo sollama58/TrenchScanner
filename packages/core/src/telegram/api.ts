@@ -122,6 +122,22 @@ export interface FetchedImage {
   sourceUrl: string;
 }
 
+/**
+ * What one dispatch pass learns about pictures, shared by every chat it sends to. A token that
+ * goes to fifty chats is fetched once, uploaded once, and then sent by the file_id Telegram gave
+ * back for it, instead of fifty downloads from a slow IPFS gateway and fifty uploads.
+ */
+export interface PhotoCache {
+  /** A fetch per artwork URL, started once and awaited by every send that wants it. */
+  fetched: Map<string, Promise<FetchedImage | null>>;
+  /** Artwork URL -> the file_id of the photo Telegram stored for it. */
+  fileIds: Map<string, string>;
+}
+
+export function newPhotoCache(fileIds: Map<string, string> = new Map()): PhotoCache {
+  return { fetched: new Map(), fileIds };
+}
+
 export interface TelegramUser {
   id: number;
   is_bot: boolean;
@@ -147,6 +163,8 @@ export interface TelegramMessage {
   chat: TelegramChatInfo;
   date: number;
   text?: string;
+  /** A photo message's sizes, smallest first; every size shares the picture's file_ids. */
+  photo?: { file_id: string; width: number; height: number }[];
   entities?: { type: string; offset: number; length: number }[];
 }
 
@@ -348,28 +366,54 @@ export class TelegramApi {
     }
   }
 
+  /** fetchImage, once per URL per cache: concurrent and later callers share the first fetch. */
+  fetchImageOnce(url: string, photos?: PhotoCache): Promise<FetchedImage | null> {
+    if (!photos) return this.fetchImage(url);
+    let p = photos.fetched.get(url);
+    if (!p) {
+      p = this.fetchImage(url);
+      photos.fetched.set(url, p);
+    }
+    return p;
+  }
+
   /**
    * An alert: the token's picture with the text as its caption when there is a picture and the
-   * text fits a caption, else the text alone. The picture is fetched here and uploaded; if that
-   * fails the URL is handed to Telegram to try; a picture Telegram won't take (a 400) costs
-   * nothing but the retry as plain text, so an alert is never lost to its artwork.
+   * text fits a caption, else the text alone. A picture Telegram already holds (`photos`) goes by
+   * its file_id; otherwise it is fetched here and uploaded; if that fails the URL is handed to
+   * Telegram to try; a picture Telegram won't take (a 400) costs nothing but the retry as plain
+   * text, so an alert is never lost to its artwork.
    */
   async sendAlert(
     chatId: number | bigint,
     message: { html: string; imageUrl: string | null },
-    opts: { silent?: boolean } = {},
+    opts: { silent?: boolean; photos?: PhotoCache } = {},
   ): Promise<TelegramResult<TelegramMessage>> {
-    if (message.imageUrl && captionLength(message.html) <= CAPTION_MAX_CHARS) {
-      const fetched = await this.fetchImage(message.imageUrl);
-      const withPhoto = await this.sendPhoto(chatId, fetched ?? message.imageUrl, message.html, opts);
-      if (withPhoto.ok || withPhoto.code !== 400) return withPhoto;
+    const { photos, ...sendOpts } = opts;
+    const url = message.imageUrl;
+    if (url && captionLength(message.html) <= CAPTION_MAX_CHARS) {
+      const known = photos?.fileIds.get(url);
+      if (known) {
+        const reused = await this.sendPhoto(chatId, known, message.html, sendOpts);
+        if (reused.ok || reused.code !== 400) return reused;
+        // A file_id Telegram no longer takes: forget it and go the long way.
+        photos!.fileIds.delete(url);
+      }
+      const fetched = await this.fetchImageOnce(url, photos);
+      const withPhoto = await this.sendPhoto(chatId, fetched ?? url, message.html, sendOpts);
+      if (withPhoto.ok) {
+        const fileId = withPhoto.result.photo?.at(-1)?.file_id;
+        if (photos && fileId) photos.fileIds.set(url, fileId);
+        return withPhoto;
+      }
+      if (withPhoto.code !== 400) return withPhoto;
       logger.warn("telegram refused the photo, sending the alert as text", {
-        url: message.imageUrl,
+        url,
         uploaded: fetched !== null,
         description: withPhoto.description,
       });
     }
-    return this.sendMessage(chatId, message.html, opts);
+    return this.sendMessage(chatId, message.html, sendOpts);
   }
 
   getChatMember(chatId: number | bigint, userId: number): Promise<TelegramResult<{ status: string }>> {

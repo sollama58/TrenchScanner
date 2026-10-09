@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { Env } from "../config/env.js";
 import { adminWalletSet } from "../config/env.js";
-import { prisma } from "../db.js";
+import { prisma, TRAINER_APPLICATION_NAME } from "../db.js";
 import { createLogger } from "../logger.js";
 import { resolveAccess } from "../subscription/access.js";
 import { loadFeedModelState, resolveFeedModels, type FeedModelState } from "../curation/feedModels.js";
@@ -10,8 +10,15 @@ import {
   narrativeNoteChoice,
   showsNarrativeNote,
 } from "../curation/narrativeNote.js";
-import { TelegramApi, telegramConfigured } from "./api.js";
-import { alertMessage, alertParts, digestMessage, type AlertCard, type AlertLinks } from "./format.js";
+import { newPhotoCache, TelegramApi, telegramConfigured } from "./api.js";
+import {
+  alertImage,
+  alertMessage,
+  alertParts,
+  digestMessage,
+  type AlertCard,
+  type AlertLinks,
+} from "./format.js";
 
 /**
  * The scanner worker's telegram-dispatch job: every few seconds, send each linked chat the
@@ -21,7 +28,9 @@ import { alertMessage, alertParts, digestMessage, type AlertCard, type AlertLink
  * groups, each with its own switches and its own cursor.
  *
  * Reads rather than listens: Postgres NOTIFY (notify.ts) is not durable, and a cursor per chat
- * means a restart or a failed send picks up where it left off instead of losing the alert.
+ * means a restart or a failed send picks up where it left off instead of losing the alert. The
+ * worker still wakes a pass as soon as an alert commits (onAlertWritten), so the poll interval is
+ * the fallback, not the wait.
  */
 
 const logger = createLogger("telegram-dispatch");
@@ -29,8 +38,11 @@ const logger = createLogger("telegram-dispatch");
 /**
  * Rows are read only up to this far behind now: a Match's matchedAt is stamped at insert and
  * the row commits a moment later, and a cursor that moved past the stamp in between would skip it.
+ * The open-transaction bound below is what covers that wait (every alert is written inside a
+ * transaction that began before its stamp); this only has to cover the clocks of the scanner and
+ * the database disagreeing. It was 5 s, which every alert waited out before it could be sent.
  */
-export const COMMIT_GRACE_MS = 5_000;
+export const COMMIT_GRACE_MS = 1_000;
 /**
  * A transaction still open in the database may yet commit a row stamped as early as its start
  * (matchedAt defaults to the transaction's own now()), so the horizon also stays behind the oldest
@@ -79,17 +91,30 @@ export interface DispatchDeps {
   narrativeNoteReady?: () => Promise<boolean>;
 }
 
-/** When the oldest other transaction open in this database began, or null if none is (or unknown). */
-async function oldestOpenTransaction(): Promise<Date | null> {
+/**
+ * When the oldest other transaction open in this database began, or null if none is (or unknown).
+ * Run on the pass's own connection, so its own transaction doesn't count. The trainer's
+ * connections don't either: it never writes an alert, and its training reads run for minutes,
+ * which held every alert back by the full MAX_COMMIT_WAIT_MS while they did.
+ */
+export async function oldestOpenTransaction(tx: Prisma.TransactionClient): Promise<Date | null> {
   try {
-    const [row] = await prisma.$queryRaw<{ oldest: Date | null }[]>`
+    const [row] = await tx.$queryRaw<{ oldest: Date | null }[]>`
       SELECT min(xact_start) AS oldest FROM pg_stat_activity
-      WHERE datname = current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL`;
+      WHERE datname = current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL
+        AND application_name IS DISTINCT FROM ${TRAINER_APPLICATION_NAME}`;
     return row?.oldest ?? null;
   } catch {
     return null;
   }
 }
+
+/**
+ * Artwork URL -> Telegram file_id, carried from pass to pass so a picture is uploaded once, not
+ * once per chat and pass. Oldest dropped first past the cap.
+ */
+const knownPhotoIds = new Map<string, string>();
+const KNOWN_PHOTO_IDS_MAX = 500;
 
 /** The most imageless tokens looked up in one pass: one DexScreener batch. */
 const IMAGE_LOOKUP_MAX = 30;
@@ -280,7 +305,7 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
       const [lock] = await tx.$queryRaw<{ locked: boolean }[]>`
         SELECT pg_try_advisory_xact_lock(hashtext(${TELEGRAM_DISPATCH_LOCK})) AS locked`;
       if (!lock?.locked) return summary;
-      return dispatchPass(env, deps, summary);
+      return dispatchPass(env, deps, summary, tx);
     },
     { maxWait: 10_000, timeout: PASS_TRANSACTION_TIMEOUT_MS },
   );
@@ -290,6 +315,7 @@ async function dispatchPass(
   env: Env,
   deps: DispatchDeps,
   summary: DispatchSummary,
+  tx: Prisma.TransactionClient,
 ): Promise<DispatchSummary> {
   const api = deps.api ?? new TelegramApi(env.TELEGRAM_BOT_TOKEN);
   const now = deps.now ?? Date.now;
@@ -304,7 +330,7 @@ async function dispatchPass(
   if (chats.length === 0) return summary;
 
   const startedAt = now();
-  const openSince = await (deps.oldestOpenTransaction ?? oldestOpenTransaction)();
+  const openSince = await (deps.oldestOpenTransaction ?? (() => oldestOpenTransaction(tx)))();
   const horizon = new Date(
     Math.max(
       startedAt - MAX_COMMIT_WAIT_MS,
@@ -452,7 +478,21 @@ async function dispatchPass(
   // of a big fan-out, and the ones a pass's budget left for the next pass.
   queues.sort((a, b) => (a.chat.lastSentAt?.getTime() ?? 0) - (b.chat.lastSentAt?.getTime() ?? 0));
 
+  // Every picture this pass will send starts downloading now, alongside the artwork lookup below
+  // and the first sends, rather than when its first chat's turn comes.
+  const photos = newPhotoCache(knownPhotoIds);
+  const warmAll = () => {
+    for (const q of queues) {
+      if (!alertParts(q.chat.hidden).image) continue;
+      for (const p of q.pending) {
+        const url = isDigest(p.card) ? null : alertImage(p.card.token);
+        if (url && !photos.fileIds.has(url)) void api.fetchImageOnce(url, photos);
+      }
+    }
+  };
+  warmAll();
   await backfillImages(queues, deps.lookupImages);
+  warmAll();
 
   // Up to MAX_IN_FLIGHT sends are out at once, one per chat at most (so each chat still gets its
   // messages in order), launched no closer together than GLOBAL_GAP_MS. One at a time, each send
@@ -470,7 +510,7 @@ async function dispatchPass(
     const message = isDigest(item.card)
       ? digestMessage(item.card.digest, links, parts)
       : alertMessage(item.card, links, now(), parts);
-    const result = await api.sendAlert(q.chat.chatId, message);
+    const result = await api.sendAlert(q.chat.chatId, message, { photos });
     const spacing = q.chat.kind === "private" ? PRIVATE_GAP_MS : GROUP_GAP_MS;
     if (result.ok) {
       q.pending.shift();
@@ -590,6 +630,13 @@ async function dispatchPass(
     if (gap > 0) await sleep(gap);
     lastSendAt = now();
     launch(ready[0]!);
+  }
+  // Keep the newest file_ids for the next passes (a token often comes back with another call).
+  for (const url of [...knownPhotoIds.keys()].slice(
+    0,
+    Math.max(0, knownPhotoIds.size - KNOWN_PHOTO_IDS_MAX),
+  )) {
+    knownPhotoIds.delete(url);
   }
   // A failure counts against a chat only if Telegram took some other message in this pass: an
   // outage or a revoked token fails every chat at once, and switching them all off for it would

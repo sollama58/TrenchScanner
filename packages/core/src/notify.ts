@@ -4,6 +4,30 @@ import { createLogger } from "./logger.js";
 const logger = createLogger("notify");
 
 /**
+ * In-process listeners told that an alert row (a Match or a CuratedAlert) has just committed. The
+ * scanner writes the alerts and runs the Telegram dispatch in the same process, so this is how a
+ * new alert wakes the dispatch at once instead of waiting out its poll interval. Called after the
+ * commit, like the NOTIFYs below; a listener that throws is ignored.
+ */
+const alertListeners = new Set<() => void>();
+
+/** Registers a listener for alerts written by this process. Returns the unsubscribe. */
+export function onAlertWritten(listener: () => void): () => void {
+  alertListeners.add(listener);
+  return () => alertListeners.delete(listener);
+}
+
+function announceAlertWritten(): void {
+  for (const listener of alertListeners) {
+    try {
+      listener();
+    } catch (err) {
+      logger.warn("alert listener failed", { error: String(err) });
+    }
+  }
+}
+
+/**
  * Postgres NOTIFY channel the worker announces new matches on and the API listens to.
  *
  * The two run as separate processes with nothing between them but the database, so this is the
@@ -45,6 +69,7 @@ export interface CuratedAlertNotification {
 
 /** Same contract and caveats as notifyMatchCreated, for the broadcast curated feed. */
 export async function notifyCuratedAlert(notification: CuratedAlertNotification): Promise<void> {
+  announceAlertWritten();
   try {
     const payload = JSON.stringify(notification);
     await prisma.$executeRaw`SELECT pg_notify(${CURATED_CHANNEL}, ${payload})`;
@@ -54,6 +79,7 @@ export async function notifyCuratedAlert(notification: CuratedAlertNotification)
 }
 
 export async function notifyMatchCreated(notification: MatchNotification): Promise<void> {
+  announceAlertWritten();
   try {
     const payload = JSON.stringify(notification);
     // Parameterised via Prisma's tagged template, so the payload can never be read as SQL. This is
@@ -78,6 +104,7 @@ export async function notifyMatchCreated(notification: MatchNotification): Promi
  */
 export async function notifyMatchesCreated(notifications: readonly MatchNotification[]): Promise<void> {
   if (notifications.length === 0) return;
+  announceAlertWritten();
   try {
     const payloads = notifications.map((n) => JSON.stringify(n));
     await prisma.$executeRaw`SELECT pg_notify(${MATCH_CHANNEL}, p) FROM unnest(${payloads}::text[]) AS p`;

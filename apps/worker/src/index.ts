@@ -16,6 +16,8 @@ import {
   recordHeartbeat,
   runsJob,
   runTelegramDispatch,
+  onAlertWritten,
+  COMMIT_GRACE_MS,
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
@@ -173,25 +175,48 @@ async function main() {
   );
   // Sends each linked Telegram chat the alerts its account got since the chat's cursor - see
   // packages/core/src/telegram/dispatch.ts. Nothing to do until TELEGRAM_BOT_TOKEN is set.
-  schedule("telegram-dispatch", () =>
-    scheduleInterval(
+  //
+  // The interval is only the fallback: an alert this process writes wakes a pass as soon as the
+  // pass can see it (COMMIT_GRACE_MS after the commit), so it goes out within a second or two
+  // rather than after up to a whole interval of waiting.
+  schedule("telegram-dispatch", () => {
+    /** When each alert not yet covered by a pass was written, oldest first. */
+    const written: number[] = [];
+    onAlertWritten(() => {
+      if (written.length < 1_000) written.push(Date.now());
+    });
+    return scheduleInterval(
       "telegram-dispatch",
-      async () => ({
-        ...(await runTelegramDispatch(env, {
-          // Artwork for a token that didn't come through Pump.fun: DexScreener's, when it has one.
-          lookupImages: async (mints) => {
-            const found = await deps.dexScreener.getTokensByAddresses(mints, 1, {
-              retries: 0,
-              deadlineMs: 5_000,
-            });
-            return new Map(found.flatMap((t) => (t.imageUrl ? [[t.mintAddress, t.imageUrl] as const] : [])));
-          },
-        })),
-      }),
+      async () => {
+        // A pass starting now sends everything written up to the grace before now.
+        const covered = Date.now() - COMMIT_GRACE_MS;
+        while (written.length > 0 && written[0]! <= covered) written.shift();
+        return {
+          ...(await runTelegramDispatch(env, {
+            // Artwork for a token that didn't come through Pump.fun: DexScreener's, when it has one.
+            lookupImages: async (mints) => {
+              const found = await deps.dexScreener.getTokensByAddresses(mints, 1, {
+                retries: 0,
+                deadlineMs: 5_000,
+              });
+              return new Map(
+                found.flatMap((t) => (t.imageUrl ? [[t.mintAddress, t.imageUrl] as const] : [])),
+              );
+            },
+          })),
+        };
+      },
       env.TELEGRAM_DISPATCH_INTERVAL_SECONDS / 60,
-      { deadlineMinutes: 10 },
-    ),
-  );
+      {
+        deadlineMinutes: 10,
+        runEarly: {
+          everyMs: 100,
+          quiet: true,
+          due: async () => written.length > 0 && Date.now() >= written[0]! + COMMIT_GRACE_MS,
+        },
+      },
+    );
+  });
   // Says when a stage of the alert path stops producing (new tokens, decision moments, TokenSage
   // reads, model alerts, Telegram delivery) although every job is still running, and tells the
   // admin wallets' private Telegram chats - see runPipelineWatch. A stall that lasts 10 minutes

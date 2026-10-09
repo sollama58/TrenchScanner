@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeTelegramApi } from "./fakeApi.js";
-import { TelegramApi, isPublicAddress } from "./api.js";
+import { TelegramApi, isPublicAddress, newPhotoCache } from "./api.js";
 
 const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
 const image = (status = 200, type = "image/png", body: Uint8Array = png) =>
@@ -22,6 +22,46 @@ describe("sendAlert", () => {
     expect(await (call.params.photo as Blob).bytes()).toEqual(png);
     expect(call.params.caption).toBe("<b>hi</b>");
     expect(api.sent()).toEqual([{ chatId: "5", text: "<b>hi</b>", photo: "upload" }]);
+  });
+
+  it("fetches a picture once per cache and sends it to later chats by Telegram's file_id", async () => {
+    let fetches = 0;
+    const api = new FakeTelegramApi(async () => {
+      fetches += 1;
+      return image();
+    });
+    api.answers.set("sendPhoto", {
+      ok: true,
+      result: {
+        photo: [
+          { file_id: "small", width: 90, height: 90 },
+          { file_id: "big", width: 512, height: 512 },
+        ],
+      },
+    });
+    const photos = newPhotoCache();
+    const msg = { html: "x", imageUrl: "https://cdn.example/a.png" };
+    // Two chats at once share the one download.
+    await Promise.all([api.sendAlert(1, msg, { photos }), api.sendAlert(2, msg, { photos })]);
+    await api.sendAlert(3, msg, { photos });
+    expect(fetches).toBe(1);
+    expect(api.sent().map((m) => m.photo)).toEqual(["upload", "upload", "big"]);
+    expect(photos.fileIds.get("https://cdn.example/a.png")).toBe("big");
+
+    // A file_id Telegram refuses is dropped and the picture uploaded again.
+    api.answers.set("sendPhoto", (params) =>
+      params.photo === "big"
+        ? { ok: false, code: 400, description: "Bad Request: wrong file identifier" }
+        : { ok: true, result: { photo: [{ file_id: "fresh", width: 512, height: 512 }] } },
+    );
+    await api.sendAlert(4, msg, { photos });
+    expect(
+      api
+        .sent()
+        .slice(3)
+        .map((m) => m.photo),
+    ).toEqual(["big", "upload"]);
+    expect(photos.fileIds.get("https://cdn.example/a.png")).toBe("fresh");
   });
 
   it("hands Telegram the URL when the fetch fails, then falls back to text on a 400", async () => {

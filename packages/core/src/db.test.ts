@@ -40,6 +40,16 @@ describe("appendPoolParams", () => {
     expect(tuned.searchParams.get("options")).toBe("-c statement_timeout=20000");
   });
 
+  it("names the connection alongside the statement timeout when asked", () => {
+    const url = new URL(appendPoolParams(BASE, { applicationName: "trenchscanner-trainer" }));
+    expect(url.searchParams.get("options")).toBe(
+      "-c statement_timeout=150000 -c application_name=trenchscanner-trainer",
+    );
+    // Only a plain name: anything else could smuggle another setting into the options.
+    const odd = new URL(appendPoolParams(BASE, { applicationName: "x -c work_mem=1GB" }));
+    expect(odd.searchParams.get("options")).toBe("-c statement_timeout=150000");
+  });
+
   it("never overrides a value the URL already specifies", () => {
     const url = new URL(
       appendPoolParams(`${BASE}?connection_limit=3&pool_timeout=5&socket_timeout=7&options=-c%20x%3D1`, {
