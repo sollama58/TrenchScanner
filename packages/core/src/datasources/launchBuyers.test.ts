@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   countStillHolding,
+  launchFigures,
   parseLaunchBuyers,
   sniperShareOfTop10,
   type RawLaunchTx,
@@ -14,11 +15,12 @@ const DEV = "Dev111111111111111111111111111111111111111";
 /** A transaction moving `mint` balances: [owner, account, pre, post] per holder it touches. */
 function tx(
   moves: [string, string, number | null, number][],
-  opts: { err?: unknown; at?: number } = {},
+  opts: { err?: unknown; at?: number; slot?: number } = {},
 ): RawLaunchTx {
   const keys = moves.map(([, account]) => account);
   return {
     blockTime: opts.at ?? 1_791_128_433,
+    ...(opts.slot !== undefined ? { slot: opts.slot } : {}),
     meta: {
       err: opts.err ?? null,
       preTokenBalances: moves
@@ -67,8 +69,57 @@ describe("parseLaunchBuyers", () => {
       25,
     );
     expect(reading?.buyers.map((b) => b.wallet)).toEqual(["a", "b", "c"]);
-    expect(reading?.buyers[1]).toEqual({ wallet: "b", tokenAccount: "b-ata", bought: 20 });
+    expect(reading?.buyers[1]).toEqual({ wallet: "b", tokenAccount: "b-ata", bought: 20, slot: null });
     expect(reading?.launchAt).toEqual(new Date(1_791_128_433_000));
+  });
+
+  it("reads the supply, the dev's create buy and the slots, and turns them into figures", () => {
+    const createAt = tx(
+      [
+        [CURVE, "curveAta", null, 800],
+        [DEV, "devAta", null, 200],
+      ],
+      { slot: 100 },
+    );
+    const bundled = tx(
+      [
+        [CURVE, "curveAta", 800, 790],
+        ["a", "a-ata", null, 10],
+      ],
+      { slot: 100 },
+    );
+    const later = tx(
+      [
+        [CURVE, "curveAta", 790, 750],
+        ["b", "b-ata", null, 40],
+      ],
+      { slot: 103 },
+    );
+    const reading = parseLaunchBuyers(MINT, [createAt, bundled, later], 25)!;
+    expect(reading.supply).toBe(1000);
+    expect(reading.devBought).toBe(200);
+    expect(reading.createSlot).toBe(100);
+    expect(reading.buyers.map((b) => b.slot)).toEqual([100, 103]);
+    expect(launchFigures(reading)).toEqual({
+      firstBuyersSupplyPct: 5,
+      launchBundledBuyers: 1,
+      devBuySupplyPct: 20,
+    });
+  });
+
+  it("figures: no dev buy reads 0, no slots leave the bundle unknown, no supply leaves all unknown", () => {
+    const devless = parseLaunchBuyers(MINT, [tx([[CURVE, "curveAta", null, 1000]]), buy("a", 10, 1000)], 25)!;
+    expect(devless.devBought).toBe(0);
+    expect(launchFigures(devless)).toEqual({
+      firstBuyersSupplyPct: 1,
+      launchBundledBuyers: null,
+      devBuySupplyPct: 0,
+    });
+    expect(launchFigures({ buyers: [], supply: 0, devBought: 0, createSlot: null })).toEqual({
+      firstBuyersSupplyPct: null,
+      launchBundledBuyers: null,
+      devBuySupplyPct: null,
+    });
   });
 
   it("stops at the count asked for and skips failed transactions", () => {
@@ -93,7 +144,7 @@ describe("parseLaunchBuyers", () => {
       ],
       25,
     );
-    expect(reading?.buyers).toEqual([{ wallet: "a", tokenAccount: "a-ata", bought: 15 }]);
+    expect(reading?.buyers).toEqual([{ wallet: "a", tokenAccount: "a-ata", bought: 15, slot: null }]);
   });
 
   it("refuses a history that doesn't start at the launch", () => {
@@ -116,7 +167,7 @@ describe("parseLaunchBuyers", () => {
       transaction: { message: { accountKeys: ["a"] } },
     };
     expect(parseLaunchBuyers(MINT, [create, lut], 25)?.buyers).toEqual([
-      { wallet: "a", tokenAccount: "a-ata", bought: 10 },
+      { wallet: "a", tokenAccount: "a-ata", bought: 10, slot: null },
     ]);
   });
 });
@@ -132,9 +183,9 @@ describe("sniperShareOfTop10", () => {
 
 describe("countStillHolding", () => {
   const buyers = [
-    { wallet: "a", tokenAccount: "a-ata", bought: 1000 },
-    { wallet: "b", tokenAccount: "b-ata", bought: 1000 },
-    { wallet: "c", tokenAccount: "c-ata", bought: 1000 },
+    { wallet: "a", tokenAccount: "a-ata", bought: 1000, slot: null },
+    { wallet: "b", tokenAccount: "b-ata", bought: 1000, slot: null },
+    { wallet: "c", tokenAccount: "c-ata", bought: 1000, slot: null },
   ];
   it("counts buyers above dust, a closed account as sold", () => {
     expect(
@@ -214,6 +265,9 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
       complete: true,
       buyers: [],
       launchAt: null,
+      supply: 0,
+      devBought: 0,
+      createSlot: null,
     });
   });
 

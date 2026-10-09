@@ -203,10 +203,17 @@ describe("AI review brief", () => {
     const tradeFlow = {
       ...EMPTY_TRADE_FLOW,
       firstBuyersHolding: 9,
+      firstBuyersSupplyPct: 18.25,
+      launchBundledBuyers: 4,
+      devBuySupplyPct: 2.5,
       firstBuyersSeen: 25,
     };
     const brief = buildAiReviewBrief({ ...scored, tradeFlow } as ScoredToken, decision);
     expect(brief).toContain("first 25 buyers after launch (dev aside) still holding: 9 of 25");
+    expect(brief).toContain(
+      "bought 18.3% of the supply; 4 of them bought in the launch's own slot (bundled)",
+    );
+    expect(brief).toContain("dev bought 2.5% of the supply in the create transaction");
     expect(brief).not.toContain("distinct buyers in the last 5 minutes");
     expect(brief).not.toContain("launch snipers");
     expect(brief).not.toContain("dev's launch buy");

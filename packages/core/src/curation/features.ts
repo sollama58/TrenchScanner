@@ -186,6 +186,17 @@ export const CANDIDATE_FEATURE_NAMES = [
   // theme, and whether the coin trades against another (pump.fun) coin. Null on reads that don't
   // say, and on every row banked before. Never backfilled.
   ...NARRATIVE_FEATURES_V6,
+  // Added 2026-10-09 (user decision, notes/model-inputs-review-2026-10-09.md): the launch's shape
+  // from the Helius launch read the worker's launchSnipers.ts already makes (no new call): % of
+  // the supply the first 25 buyers bought, how many of them bought in the create transaction's
+  // own slot (a bundle), and % of the supply the dev bought in the create. Two thirds of the
+  // wins are coins under five minutes old, where every momentum input reads "since launch" and
+  // only the holder list tells two launches apart; these are the facts that differ at launch.
+  // Null until the launch has been read, on a history that doesn't start at a curve launch, and
+  // on every row banked before. Never backfilled.
+  "firstBuyersSupplyPct",
+  "launchBundledBuyers",
+  "devBuySupplyPct",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -199,15 +210,16 @@ export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
  * token, not this list, so retiring an input never loosens a gate.
  */
 export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set<CandidateFeatureName>([
-  // No signal on their own.
+  // No signal on their own. (pathRet1mPct and pathHolderSlope10m were retired here too, on a
+  // day-old tape and while pathRet1mPct was still a 30-second return; by 2026-10-09 they read AUC
+  // 0.64 and 0.74 on the rows that carry them, so they are back - user decision,
+  // notes/model-inputs-review-2026-10-09.md.)
   "hasTelegram",
   "hasDescription",
   "narrativeTagCount",
   "dexBoosted",
   "buyRatio1h",
   "holderGrowthPct",
-  "pathRet1mPct",
-  "pathHolderSlope10m",
   "devHolding",
   "devWalletPct",
   "liquidityToMcapRatio",
@@ -287,6 +299,16 @@ export const TRADE_FLOW_FEATURES = [
   "devInitialBuySol",
   "devSoldShare",
   "firstBuyersHolding",
+] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
+
+/**
+ * The launch's shape from the chain read (TradeFlowFeatures too, but never from the trade stream
+ * and never subject to the fake-zeros mask below), in vector order.
+ */
+export const LAUNCH_SHAPE_FEATURES = [
+  "firstBuyersSupplyPct",
+  "launchBundledBuyers",
+  "devBuySupplyPct",
 ] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
 
 /**
@@ -408,6 +430,9 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   devInitialBuySol: "dev's launch buy",
   devSoldShare: "dev selling",
   firstBuyersHolding: "first 25 buyers still holding",
+  firstBuyersSupplyPct: "first 25 buyers' share of supply",
+  launchBundledBuyers: "buyers bundled with the launch",
+  devBuySupplyPct: "dev's launch buy, % of supply",
   devHolding: "dev still holding",
   textCopycatRisk: "copycat name",
   textNarrativeStrength: "narrative strength",
@@ -498,7 +523,7 @@ export function scoredFromFeatures(
     hasWebsite: bool("hasWebsite"),
     narrativeTags: (num("narrativeTagCount") ?? 0) > 0 ? ["(replayed)"] : [],
     tradeFlow: Object.fromEntries(
-      TRADE_FLOW_FEATURES.map((k) => [k, num(k) ?? null]),
+      [...TRADE_FLOW_FEATURES, ...LAUNCH_SHAPE_FEATURES].map((k) => [k, num(k) ?? null]),
     ) as unknown as TradeFlowFeatures,
     pricePath: Object.fromEntries(
       PRICE_PATH_FEATURES.map((k) => [k, num(k) ?? null]),
@@ -655,6 +680,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     ...(Object.fromEntries(
       TRADE_FLOW_FEATURES.map((k) => [k, (scored.tradeFlow ?? EMPTY_TRADE_FLOW)[k]]),
     ) as Record<(typeof TRADE_FLOW_FEATURES)[number], number | null>),
+    ...(Object.fromEntries(
+      LAUNCH_SHAPE_FEATURES.map((k) => [k, (scored.tradeFlow ?? EMPTY_TRADE_FLOW)[k] ?? null]),
+    ) as Record<(typeof LAUNCH_SHAPE_FEATURES)[number], number | null>),
     devHolding: devHoldingFeature(scored),
     textCopycatRisk: scored.textScores?.copycatRisk ?? null,
     textNarrativeStrength: scored.textScores?.narrativeStrength ?? null,

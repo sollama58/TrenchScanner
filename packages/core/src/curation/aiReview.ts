@@ -350,6 +350,18 @@ function tradeFlowLines(scored: ScoredToken): string[] {
       `- first ${f.firstBuyersSeen ?? FIRST_BUYERS} buyers after launch (dev aside) still holding: ${f.firstBuyersHolding} of ${f.firstBuyersSeen ?? FIRST_BUYERS}`,
     );
   }
+  // Typed as number | null, but a flow built before these existed (an older snapshot replayed,
+  // a test fixture) may lack the keys altogether.
+  if (typeof f.firstBuyersSupplyPct === "number") {
+    const bundled =
+      typeof f.launchBundledBuyers === "number"
+        ? `; ${f.launchBundledBuyers} of them bought in the launch's own slot (bundled)`
+        : "";
+    lines.push(`- those first buyers bought ${f.firstBuyersSupplyPct.toFixed(1)}% of the supply${bundled}`);
+  }
+  if (typeof f.devBuySupplyPct === "number") {
+    lines.push(`- dev bought ${f.devBuySupplyPct.toFixed(1)}% of the supply in the create transaction`);
+  }
   if (f.devInitialBuySol !== null) {
     lines.push(
       `- dev's launch buy: ${f.devInitialBuySol.toFixed(2)} SOL${f.devSoldShare === null ? "" : `; dev has sold ${fmtShare(f.devSoldShare)} of it`}`,

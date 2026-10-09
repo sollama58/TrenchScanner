@@ -849,7 +849,15 @@ export class HeliusClient {
             // transaction is fixed. Reported as a complete reading with no buyers - which stays
             // "unknown" downstream - so the caller caches it instead of re-paying 10-30 credits
             // for the same answer every five minutes the token spends in band.
-            out.set(mint, { status: "found", complete: true, buyers: [], launchAt: null });
+            out.set(mint, {
+              status: "found",
+              complete: true,
+              buyers: [],
+              launchAt: null,
+              supply: 0,
+              devBought: 0,
+              createSlot: null,
+            });
           }
           continue;
         }
