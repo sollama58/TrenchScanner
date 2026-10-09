@@ -367,6 +367,36 @@ async function crossFittedProbabilities(
   return out;
 }
 
+/**
+ * Rank cutoffs (the served cutoff, the high-conviction line) as probabilities on the shipped
+ * model's scale: the rank translated on its cross-fitted scores, raised to where the shipped
+ * model itself puts that rank on the reference rows when that is higher. The cross-fit halves
+ * are meant to share the shipped model's scale, and for plain trees they do (in-sample, the
+ * shipped model passes fewer reference rows than the exam's share, so the cross-fitted cutoff
+ * stands). For some shapes they don't: a two-stage or ranking model refitted on a half can score
+ * a whole group of rows (brand-new coins with no price path) well below where the shipped model
+ * does. The cutoff then sits under that group and the model calls all of it live. Seen
+ * 2026-10-09: Survivor's 10:16 run passed 28% of its own reference rows at a cutoff meant for
+ * 2.6%, and called 51 coins in two hours against about 4 expected; Ranker's 16:06 run passed 15%
+ * against 3.5% and called 13 coins on one tied score. Replayed on production rows (five runs
+ * 10-08 20:11 to 10-09 10:16; Trees, Deep Trees, Survivor, Ranker, Runner), the raised cutoff took
+ * the next two hours' calls from 193 (38 doubled, 19.7%) to 92 (26 doubled, 28.3%), with Trees
+ * and Deep Trees unchanged (notes/runner-target-2026-10-09.md).
+ */
+export function servedTranslate(
+  shipped: UnthresholdedCuratorParams,
+  reference: readonly TrainingRow[],
+  crossFitted: ArrayLike<number>,
+): (rank: number) => number | null {
+  const inSample = reference.map((r) => scoreCandidateWithModel(shipped, r.features));
+  return (rank) => {
+    const fitted = probabilityAtRank(crossFitted, rank);
+    const own = probabilityAtRank(inSample, rank);
+    if (fitted === null) return own;
+    return own === null ? fitted : Math.max(fitted, own);
+  };
+}
+
 /** Fewer training rows than this and a cross-fit half keeps the shipped model's own scores. */
 const MIN_CROSS_FIT_ROWS = 300;
 
@@ -460,7 +490,7 @@ async function shipRecipe(
     trained,
     (train) => trainCuratorModel(train, trainOpts),
   );
-  const translate = (rank: number) => probabilityAtRank(shippedProbabilities, rank);
+  const translate = servedTranslate(trained, evaluation.decisionReference, shippedProbabilities);
   // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
   // at its best-effort cutoff (see chooseCutoff) and still competes on its exam. Only an exam
   // with no judgeable cutoff at all leaves it without one.
