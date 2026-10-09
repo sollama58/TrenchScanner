@@ -35,6 +35,7 @@ import {
   calibratedWinRate,
   RULES_CONTESTANT,
   NARRATIVE_CONTESTANT,
+  CONTESTANTS,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
   BLEND_MODEL_KIND,
@@ -660,6 +661,9 @@ export async function collectCuratedContender(
   }
 }
 
+/** Cards the Narrative seat never notes: its own, and the control seats' (compared against, not followed). */
+const NOT_NOTED_MODELS = [NARRATIVE_CONTESTANT, ...CONTESTANTS.filter((c) => c.control).map((c) => c.id)];
+
 /**
  * The Narrative seat decides when TokenSage's deep read lands, usually after another seat has
  * already called the coin. Rather than a second card inside the cooldown, its verdict goes onto
@@ -674,7 +678,7 @@ async function noteNarrativeVerdict(
   cooldownCutoff: Date,
 ): Promise<boolean> {
   const others = await prisma.curatedAlert.findMany({
-    where: { tokenId, createdAt: { gt: cooldownCutoff }, NOT: { model: NARRATIVE_CONTESTANT } },
+    where: { tokenId, createdAt: { gt: cooldownCutoff }, model: { notIn: NOT_NOTED_MODELS } },
     select: { id: true, narrativeVerdict: true },
   });
   if (others.length === 0) return false;
