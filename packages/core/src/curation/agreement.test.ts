@@ -114,6 +114,10 @@ describe("trainAgreementCurator", () => {
     expect(result!.exam.sumRun).toBeGreaterThanOrEqual(result!.exam.sumLabel - 1e-9);
     expect(result!.outOfSample).toHaveLength(reference.length);
     for (const c of result!.outOfSample) expect(c.probability).toBeLessThan(1);
+    // The calibration's evidence: the same rows, scored at member cutoffs set off their chunk.
+    expect(result!.heldOut).toHaveLength(reference.length);
+    expect(result!.heldOut.map((c) => c.labelValue)).toEqual(result!.outOfSample.map((c) => c.labelValue));
+    expect(result!.heldOut.some((c, i) => c.probability !== result!.outOfSample[i]!.probability)).toBe(true);
   });
 
   it("grades its exam with member cutoffs set on the other chunks, not the stored in-sample ones", () => {

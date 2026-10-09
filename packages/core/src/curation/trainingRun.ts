@@ -2,6 +2,7 @@ import type { McapBand } from "./curator.js";
 import {
   calibrateThresholdForPrecision,
   confidenceRanks,
+  ranksAgainst,
   precisionCurve,
   probabilityAtRank,
   trainCuratorModel,
@@ -1165,13 +1166,18 @@ export async function runEvolvingContest(
     );
     if (agreement) {
       // Agreement scores bunch at each member count, so like the blend's they become their own
-      // percentiles for the tier line and the calibration (see the blend above).
+      // percentiles for the tier line and the calibration (see the blend above). The scale is the
+      // stored-cutoff scores (what serves); the evidence placed on it is the held-out scores, so
+      // the card's 2x % and the tier don't read the rows the member cutoffs were chosen on.
       const scores = agreement.outOfSample.map((c) => c.probability);
-      const percentiles = confidenceRanks(scores);
+      const heldOutRanks = ranksAgainst(
+        agreement.heldOut.map((c) => c.probability),
+        scores,
+      );
       const cutoff = agreement.precisionCalibration.threshold;
       const served = servedExtras(
         cfg,
-        agreement.outOfSample.map((c, i) => ({ ...c, probability: percentiles[i]! })),
+        agreement.heldOut.map((c, i) => ({ ...c, probability: heldOutRanks[i]! })),
         scores,
         (rank) => probabilityAtRank(scores, rank),
         cutoff === null ? null : scores.filter((p) => p < cutoff).length / scores.length,
