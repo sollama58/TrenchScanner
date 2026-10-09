@@ -112,6 +112,25 @@ describe("per-model curves", () => {
     ]);
     expect(a!.trend?.verdict).toBe("too-early");
   });
+
+  it("averages the simulated return per call, for the model and the market alike", () => {
+    const withSim = <T extends object>(r: T, calls: number, sum: number) => ({
+      ...r,
+      sim_calls: BigInt(calls),
+      sim_sum: sum,
+    });
+    const [day] = buildLearningDays(
+      [withSim(raw("2026-10-01", 100, 100, 10), 100, -800)],
+      poolModelDays([
+        withSim(modelRaw("seat-a", "Alpha", "2026-10-01", 10, 10, 3), 10, 150),
+        withSim(modelRaw("seat-b", "Beta", "2026-10-01", 10, 10, 2), 10, 50),
+      ]),
+    );
+    expect(day!.market.avgReturnPct).toBe(-8);
+    expect(day!.feed.avgReturnPct).toBe(10);
+    // Rows read before the return was counted carry none.
+    expect(buildLearningDays([raw("2026-10-01", 1, 1, 0)], [])[0]!.market.avgReturnPct).toBeNull();
+  });
 });
 
 describe("buildLearningTrend", () => {

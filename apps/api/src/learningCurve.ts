@@ -60,6 +60,8 @@ export interface DayRates extends GradedCounts {
   rate4xPct: number | null;
   /** won10x over the calls whose 10x tier has settled (tenXGraded). */
   rate10xPct: number | null;
+  /** Average simulated return per call under the fixed exit plan (sumSimReturnPct / simCalls), in percent. */
+  avgReturnPct: number | null;
 }
 
 export interface LearningDay {
@@ -163,6 +165,9 @@ type RawDay = {
   won10x: bigint;
   ten_x_graded: bigint;
   doubled_after_stop: bigint;
+  /** Calls with a simulated return, and its sum in percent; absent from older fixtures. */
+  sim_calls?: bigint;
+  sim_sum?: number | null;
 };
 
 type RawModelDay = RawDay & { model: string | null; model_name: string | null };
@@ -201,6 +206,8 @@ function dayRates(r: RawDay | undefined): DayRates {
     won10x: Number(r?.won10x ?? 0),
     tenXGraded: Number(r?.ten_x_graded ?? 0),
     doubledAfterStop: Number(r?.doubled_after_stop ?? 0),
+    simCalls: Number(r?.sim_calls ?? 0),
+    sumSimReturnPct: Number(r?.sim_sum ?? 0),
   };
   return withDayRates(c);
 }
@@ -211,6 +218,7 @@ function withDayRates(c: GradedCounts): DayRates {
     rate2xPct: pct(c.won2x, c.graded),
     rate4xPct: pct(c.won4x, c.graded),
     rate10xPct: pct(c.won10x ?? 0, c.tenXGraded ?? 0),
+    avgReturnPct: c.simCalls ? Math.round(((c.sumSimReturnPct ?? 0) / c.simCalls) * 10) / 10 : null,
   };
 }
 
@@ -224,8 +232,20 @@ function sumDays(rows: DayRates[]): DayRates {
       won10x: (acc.won10x ?? 0) + (r.won10x ?? 0),
       tenXGraded: (acc.tenXGraded ?? 0) + (r.tenXGraded ?? 0),
       doubledAfterStop: acc.doubledAfterStop + r.doubledAfterStop,
+      simCalls: (acc.simCalls ?? 0) + (r.simCalls ?? 0),
+      sumSimReturnPct: (acc.sumSimReturnPct ?? 0) + (r.sumSimReturnPct ?? 0),
     }),
-    { calls: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0, doubledAfterStop: 0 },
+    {
+      calls: 0,
+      graded: 0,
+      won2x: 0,
+      won4x: 0,
+      won10x: 0,
+      tenXGraded: 0,
+      doubledAfterStop: 0,
+      simCalls: 0,
+      sumSimReturnPct: 0,
+    },
   );
   return withDayRates(c);
 }
@@ -268,6 +288,8 @@ export function poolModelDays(rows: RawModelDay[]): RawDay[] {
         won10x: r.won10x,
         ten_x_graded: r.ten_x_graded,
         doubled_after_stop: r.doubled_after_stop,
+        sim_calls: r.sim_calls ?? 0n,
+        sim_sum: r.sim_sum ?? 0,
       });
       continue;
     }
@@ -278,6 +300,8 @@ export function poolModelDays(rows: RawModelDay[]): RawDay[] {
     d.won10x += r.won10x;
     d.ten_x_graded += r.ten_x_graded;
     d.doubled_after_stop += r.doubled_after_stop;
+    d.sim_calls = (d.sim_calls ?? 0n) + (r.sim_calls ?? 0n);
+    d.sim_sum = (d.sim_sum ?? 0) + (r.sim_sum ?? 0);
   }
   return [...byDay.values()];
 }
@@ -435,7 +459,9 @@ export async function buildLearningCurve(
            count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL
                               AND ("hit10xIn1h" IS NOT NULL
                                    OR NOT ("hit2xIn1h" AND NOT COALESCE("disqualified", false)))) AS ten_x_graded,
-           count(*) FILTER (WHERE "disqualified") AS doubled_after_stop
+           count(*) FILTER (WHERE "disqualified") AS doubled_after_stop,
+           count("simReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS sim_calls,
+           sum("simReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event'
       AND "anchorAt" >= ${since} AND "anchorAt" < ${until}
@@ -460,7 +486,11 @@ export async function buildLearningCurve(
                               AND (COALESCE(a."hit10xIn1h", co."hit10xIn1h") IS NOT NULL
                                    OR NOT (COALESCE(a."hit2xIn1h", co."hit2xIn1h")
                                            AND NOT COALESCE(a."disqualified", co."disqualified", false)))) AS ten_x_graded,
-           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop
+           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
+           count(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
+           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}

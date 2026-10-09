@@ -1891,6 +1891,9 @@ g:hover > .hit {
   gap: 10px;
   flex-shrink: 0;
 }
+.learning-metric {
+  margin: 4px 0 10px;
+}
 .learning-tools .state {
   white-space: nowrap;
   font-weight: 600;
@@ -7191,6 +7194,7 @@ button.small-btn {
 }
 .learning-panel .family-figs {
   grid-template-columns: repeat(4, 1fr);
+  row-gap: 14px;
   gap: 10px;
 }
 @media (max-width: 640px) {

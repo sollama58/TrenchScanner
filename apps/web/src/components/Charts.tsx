@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { signedPct } from "../format";
 
 /**
  * Small hand-drawn charts. Colors come from CSS tokens (styles.css): --series-1 (blue) and
@@ -198,11 +199,14 @@ export function TrendLines({
   aLabel,
   bLabel,
   height = 180,
+  signed = false,
 }: {
   data: TrendPoint[];
   aLabel: string;
   bLabel: string;
   height?: number;
+  /** Values can go below zero (returns): the axis reaches down to them and values carry a sign. */
+  signed?: boolean;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -223,12 +227,18 @@ export function TrendLines({
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
   const values = data.flatMap((d) => [d.a, d.b]).filter((v): v is number => v !== null);
-  // Headroom above the tallest point, on a 10% step so the ticks are round numbers.
-  const top = Math.max(10, Math.ceil(((Math.max(0, ...values) || 0) * 1.15) / 10) * 10);
-  const step = top <= 30 ? 10 : top <= 60 ? 20 : 25;
-  const ticks = Array.from({ length: Math.floor(top / step) + 1 }, (_, i) => i * step);
+  // Headroom above the tallest point (and below the lowest, when signed), on a round step.
+  const hi = Math.max(0, ...values) * 1.15;
+  const low = signed ? Math.min(0, ...values) * 1.15 : 0;
+  const span = Math.max(10, hi - low);
+  const step = span <= 30 ? 10 : span <= 60 ? 20 : span <= 125 ? 25 : span <= 250 ? 50 : 100;
+  const top = Math.max(10, Math.ceil(hi / step) * step);
+  const bottom = Math.floor(low / step) * step;
+  const ticks = Array.from({ length: Math.round((top - bottom) / step) + 1 }, (_, i) => bottom + i * step);
   const x = (i: number) => padL + (data.length <= 1 ? plotW / 2 : (i / (data.length - 1)) * plotW);
-  const y = (v: number) => padT + plotH - (Math.min(top, Math.max(0, v)) / top) * plotH;
+  const y = (v: number) =>
+    padT + plotH - ((Math.min(top, Math.max(bottom, v)) - bottom) / (top - bottom)) * plotH;
+  const fmt = (v: number | null) => (v === null ? "–" : signed ? signedPct(v, 1) : `${v.toFixed(1)}%`);
   const path = (pick: (d: TrendPoint) => number | null) => {
     let d = "";
     let pen = false;
@@ -270,6 +280,7 @@ export function TrendLines({
             <g key={t}>
               <line className="grid" x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} />
               <text className="tick" x={padL - 6} y={y(t) + 3} textAnchor="end">
+                {signed && t > 0 ? "+" : ""}
                 {t}%
               </text>
             </g>
@@ -293,16 +304,16 @@ export function TrendLines({
               )}
             </g>
           ))}
-          <line className="axis" x1={padL} x2={width - padR} y1={padT + plotH} y2={padT + plotH} />
+          <line className="axis" x1={padL} x2={width - padR} y1={y(0)} y2={y(0)} />
         </svg>
         {hovered && (
           <div className="tooltip" style={{ left: `${(tipX / width) * 100}%` }}>
             <strong>{hovered.label}</strong>
             <span>
-              <i className="swatch s1" /> {aLabel}: {hovered.a === null ? "–" : `${hovered.a.toFixed(1)}%`}
+              <i className="swatch s1" /> {aLabel}: {fmt(hovered.a)}
             </span>
             <span>
-              <i className="swatch s2" /> {bLabel}: {hovered.b === null ? "–" : `${hovered.b.toFixed(1)}%`}
+              <i className="swatch s2" /> {bLabel}: {fmt(hovered.b)}
             </span>
             {hovered.sub && <span className="muted">{hovered.sub}</span>}
           </div>
