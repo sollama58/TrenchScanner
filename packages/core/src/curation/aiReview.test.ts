@@ -358,9 +358,10 @@ describe("AI review brief - model odds and trade flow", () => {
     devSoldShare: 1,
   };
 
-  it("gives a trained model's conviction as its 2x probability, and none for the heuristic", () => {
-    const model: CurationDecision = { ...decision, source: "cm_123", confidence: 41 };
+  it("gives a trained model's calibrated rate as its 2x probability, and none for the heuristic", () => {
+    const model: CurationDecision = { ...decision, source: "cm_123", confidence: 72, calibratedPct: 41 };
     expect(curatorProbabilityOf(model)).toBeCloseTo(0.41);
+    expect(curatorProbabilityOf({ ...model, calibratedPct: undefined })).toBeUndefined();
     expect(curatorProbabilityOf(decision)).toBeUndefined();
     expect(buildAiReviewBrief(scored, model)).toContain("doubles within 15 minutes: 41%");
     expect(buildAiReviewBrief(scored, decision)).not.toContain("doubles within 15 minutes");

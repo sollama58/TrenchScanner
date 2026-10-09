@@ -324,7 +324,9 @@ function bestSplit(rows: Uint32Array, gSum: number, hSum: number, ctx: GrowConte
         if (cL < minLeafRows || cR < minLeafRows || hL < minLeafHessian || hR < minLeafHessian) continue;
         const gain = (gL * gL) / (hL + l2) + (gR * gR) / (hR + l2) - parentScore;
         if (gain > 1e-9 && (best === null || gain > best.gain)) {
-          best = { gain, feature: f, binCut: k, missingLeft: missLeft };
+          // No training row was missing here, so the gain can't say; a value missing live then
+          // follows the heavier child rather than always reading as above the cut.
+          best = { gain, feature: f, binCut: k, missingLeft: cMiss === 0 ? hL >= hR : missLeft };
         }
         if (cMiss === 0) break; // both directions are the same split
       }

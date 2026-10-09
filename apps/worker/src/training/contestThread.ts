@@ -3,14 +3,16 @@
  * Started only by that function, with the run's rows, config and plan as workerData.
  */
 import { parentPort, workerData } from "node:worker_threads";
-import { runEvolvingContest } from "@trenchscanner/core";
+import { runEvolvingContest, setScoreWeights, type ScoreWeights } from "@trenchscanner/core";
 import { toEvolutionPlan, type ContestPlan } from "./contestPlan.js";
 
-const { rows, cfg, plan } = workerData as {
+const { rows, cfg, plan, scoreWeights } = workerData as {
   rows: Parameters<typeof runEvolvingContest>[0];
   cfg: Parameters<typeof runEvolvingContest>[1];
   plan: ContestPlan | undefined;
+  scoreWeights: ScoreWeights;
 };
+setScoreWeights(scoreWeights);
 
 runEvolvingContest(rows, cfg, plan && toEvolutionPlan(plan)).then(
   (outcome) => parentPort?.postMessage({ ok: true, outcome }),

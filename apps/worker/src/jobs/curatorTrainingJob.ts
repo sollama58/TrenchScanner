@@ -750,28 +750,42 @@ export async function loadTrainingRows(
 
 /** An hourly row this close to one of its token's event rows was banked from the same scan. */
 const TWIN_WINDOW_MS = 5_000;
+/**
+ * How far an alerted event row's anchor can have moved past its scan: emitCuratedAlert restamps
+ * it at send time (after the cycle, the governor and any AI review) but keeps the scan price.
+ */
+const MOVED_TWIN_WINDOW_MS = 180_000;
 
 /**
  * The scan banks a token's hourly row and its event row from the same scored token when both are
  * due in one cycle, so the moment would sit in the training set twice (a fifth of event rows had
- * such a twin, 2026-10-08). The event row is the one the exam reads; its hourly twin goes.
+ * such a twin, 2026-10-08). The event row is the one the exam reads; its hourly twin goes. An
+ * alerted event's anchor moves to send time, so a twin is also an hourly row up to a few minutes
+ * before its token's event with the same scan price - else the models' own picks train twice.
  */
-export function withoutEventTwins<T extends { tokenId?: string; anchorAt: Date }>(
+export function withoutEventTwins<T extends { tokenId?: string; anchorAt: Date; anchorPriceUsd?: number }>(
   hourly: readonly T[],
-  events: readonly { tokenId?: string; anchorAt: Date }[],
+  events: readonly { tokenId?: string; anchorAt: Date; anchorPriceUsd?: number }[],
 ): T[] {
-  const eventTimes = new Map<string, number[]>();
+  const eventsByToken = new Map<string, { t: number; price?: number }[]>();
   for (const e of events) {
     // A row with no token can't be matched to anything, so it is never anyone's twin.
     if (e.tokenId === undefined) continue;
-    const list = eventTimes.get(e.tokenId) ?? [];
-    list.push(e.anchorAt.getTime());
-    eventTimes.set(e.tokenId, list);
+    const list = eventsByToken.get(e.tokenId) ?? [];
+    list.push({ t: e.anchorAt.getTime(), price: e.anchorPriceUsd });
+    eventsByToken.set(e.tokenId, list);
   }
   return hourly.filter((h) => {
-    const times = h.tokenId === undefined ? undefined : eventTimes.get(h.tokenId);
+    const list = h.tokenId === undefined ? undefined : eventsByToken.get(h.tokenId);
     const t = h.anchorAt.getTime();
-    return !times?.some((e) => Math.abs(e - t) < TWIN_WINDOW_MS);
+    return !list?.some(
+      (e) =>
+        Math.abs(e.t - t) < TWIN_WINDOW_MS ||
+        (h.anchorPriceUsd !== undefined &&
+          e.price === h.anchorPriceUsd &&
+          e.t >= t &&
+          e.t - t <= MOVED_TWIN_WINDOW_MS),
+    );
   });
 }
 

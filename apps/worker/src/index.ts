@@ -29,6 +29,7 @@ import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrain
 import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
+import { aiReviewEnabled } from "./ai/reviewer.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
@@ -290,6 +291,9 @@ async function main() {
       },
       env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
       {
+        // A run takes about ten minutes. One that hangs (a dead connection, a training thread that
+        // never answers) would otherwise stop training for good and block "Retrain now".
+        deadlineMinutes: 90,
         // The admin panel's "Retrain now" (POST /admin/curator/retrain) leaves a request row.
         runEarly: {
           everyMs: 60_000,
@@ -355,6 +359,9 @@ async function main() {
     // getEarliestActivityBatch. It can change at runtime; this is only the starting state.
     earliestActivityMethod: deps.helius.earliestActivityMethod,
     burnScanIntervalMinutes: env.BURN_SCAN_INTERVAL_MINUTES,
+    // The AI buy/no-buy reviewer is silently off without a key or with the mode off; say which.
+    aiReviewEnabled: aiReviewEnabled(env),
+    aiReviewMode: env.AI_REVIEW_MODE,
   });
 
   // Render sends SIGTERM and gives the process a short grace period before killing it. The runs
