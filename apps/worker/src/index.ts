@@ -280,9 +280,21 @@ async function main() {
   schedule("curator-training", () =>
     scheduleInterval(
       "curator-training",
-      () => runCuratorTrainingJob(env),
+      async () => {
+        // Every run, early or on the cadence, answers the admin's pending "retrain now".
+        await prisma.curatorRetrainRequest.updateMany({
+          where: { startedAt: null },
+          data: { startedAt: new Date() },
+        });
+        return runCuratorTrainingJob(env);
+      },
       env.CURATOR_TRAINING_INTERVAL_HOURS * 60,
       {
+        // The admin panel's "Retrain now" (POST /admin/curator/retrain) leaves a request row.
+        runEarly: {
+          everyMs: 60_000,
+          due: async () => (await prisma.curatorRetrainRequest.count({ where: { startedAt: null } })) > 0,
+        },
         // Not straight away on every boot: a retrain on each restart (several on 2026-10-04)
         // is a retrain nobody asked for, and while the scanner and trainer were one process it
         // landed on the cold first scan cycles too. The first run waits for the slot the last
