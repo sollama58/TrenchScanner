@@ -23,7 +23,7 @@ import {
   type ScoredOutcome,
   scoreCandidateWithModel,
 } from "./trainer.js";
-import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES } from "./features.js";
+import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES, withCurrentNarrativeTiming } from "./features.js";
 import {
   CONSENSUS_CONTESTANT,
   RULES_CONTESTANT,
@@ -882,10 +882,13 @@ export interface ProbationStart extends Replacement {
  * contestants and challengers run; time grows linearly.
  */
 export async function runEvolvingContest(
-  rows: TrainingRow[],
+  storedRows: TrainingRow[],
   cfg: ContestTrainingConfig,
   plan?: EvolutionPlan,
 ): Promise<ContestRunOutcome> {
+  // Every seat but the narrative ones learns TokenSage's read only from rows where it arrived
+  // as it does live (see withCurrentNarrativeTiming); the narrative seats read storedRows.
+  const rows = withCurrentNarrativeTiming(storedRows);
   const results: ContestantTrainingResult[] = [];
   const foldRanks = new Map<string, Float64Array>();
   const shippedProbabilities = new Map<string, Float64Array>();
@@ -939,7 +942,7 @@ export async function runEvolvingContest(
   // different population shares no fold with the learners, so it feeds no combiner and breeds
   // nothing. Skipped, with its running model kept, until it has rows enough.
   const narrativeSpecs = cfg.contestants.filter((c) => c.role === "narrative" && c.recipe);
-  const own = narrativeSpecs.length > 0 ? narrativeTrainingSet(rows, cfg.narrativeRows ?? []) : [];
+  const own = narrativeSpecs.length > 0 ? narrativeTrainingSet(storedRows, cfg.narrativeRows ?? []) : [];
   const deepRead = own.filter((r) => r.sampleKind !== NARRATIVE_BACKGROUND_KIND);
   if (deepRead.length >= NARRATIVE_MIN_ROWS) {
     // Inputs judged on the deep-read rows: across every row the TokenSage inputs are young and
