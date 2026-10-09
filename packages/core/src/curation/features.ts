@@ -12,6 +12,7 @@ import {
   NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V2,
   NARRATIVE_FEATURES_V3,
+  ALL_NARRATIVE_FEATURES,
   NARRATIVE_FEATURES_V4,
   NARRATIVE_FEATURES_V5,
   NARRATIVE_FEATURES_V6,
@@ -359,6 +360,42 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
     }
   }
   return masked as T;
+}
+
+/**
+ * Rows banked before this saw TokenSage's read arrive with other timing. Until the youngest-first
+ * queue (#281, live from about 2026-10-08 18:10 UTC) the read was rarely in at a new coin's first
+ * decision (on 0-45% of first-sight rows), so "no read yet" stood in for "very young": the tree
+ * seats put 52% of their 10-08 calls on coins without a read, against 24% of decisions. Since
+ * then the read is in on about 90% of first-sight decisions, that region is empty, and the tree
+ * seats called 0-6% of the hot new coins they used to call 17-24% of
+ * (notes/model-checkin-2026-10-09.md).
+ */
+export const NARRATIVE_READ_AT_DECISION_SINCE = new Date("2026-10-08T18:10:00Z");
+
+/**
+ * Training rows for the seats that decide on every coin (the learners and what stacks on them),
+ * with the TokenSage inputs on rows banked before NARRATIVE_READ_AT_DECISION_SINCE read as
+ * missing: those rows teach the read's old timing, not what it says. The onset guard then holds
+ * the inputs until enough rows carry the new timing, and lets them back in by itself. The
+ * narrative seats train on the rows as stored - they decide only once the deep read is in, so
+ * its timing never stood in for anything there. Rows needing no change are returned as they are.
+ */
+export function withCurrentNarrativeTiming<
+  T extends { anchorAt: Date; features: Record<string, number | null | undefined> },
+>(rows: T[]): T[] {
+  const since = NARRATIVE_READ_AT_DECISION_SINCE.getTime();
+  return rows.map((row) => {
+    if (row.anchorAt.getTime() >= since) return row;
+    let features: Record<string, number | null | undefined> | null = null;
+    for (const name of ALL_NARRATIVE_FEATURES) {
+      const value = row.features[name];
+      if (value === null || value === undefined) continue;
+      features ??= { ...row.features };
+      features[name] = null;
+    }
+    return features === null ? row : { ...row, features };
+  });
 }
 
 /** The price-path features, in vector order - each a PricePathFeatures field of the same name. */

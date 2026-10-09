@@ -7,7 +7,9 @@ import {
   RETIRED_LEARNER_INPUTS,
   learnerSubset,
   maskKnownBadInputs,
+  NARRATIVE_READ_AT_DECISION_SINCE,
   SOCIAL_BITS_FROM_DISCOVERY_SINCE,
+  withCurrentNarrativeTiming,
   TRADE_FLOW_FAKE_ZEROS_UNTIL,
 } from "./features.js";
 import type { ScoredToken } from "../types.js";
@@ -225,6 +227,26 @@ describe("buildCandidateFeatures - livestream", () => {
     expect(LEARNER_FEATURE_NAMES).toContain("livestreamLive");
     expect(scoredFromFeatures(live, 1, 100_000).livestream).toEqual({ live: true, viewers: 42 });
     expect(scoredFromFeatures(unknown, 1, 100_000).livestream).toBeUndefined();
+  });
+});
+
+describe("withCurrentNarrativeTiming", () => {
+  it("reads TokenSage inputs as missing on rows from before the read arrived at decision time", () => {
+    const old = {
+      anchorAt: new Date("2026-10-08T18:09:59Z"),
+      features: { nsCopycat: 1, nsDepthFull: 0, nsLogoScore: null, mcapUsd: 50_000, hasTwitter: 1 },
+      labelValue: 1,
+    };
+    const fresh = { ...old, anchorAt: NARRATIVE_READ_AT_DECISION_SINCE };
+    const noRead = { ...old, features: { mcapUsd: 40_000 } };
+    const [maskedOld, keptFresh, keptNoRead] = withCurrentNarrativeTiming([old, fresh, noRead]);
+    expect(maskedOld).toEqual({
+      ...old,
+      features: { nsCopycat: null, nsDepthFull: null, nsLogoScore: null, mcapUsd: 50_000, hasTwitter: 1 },
+    });
+    expect(old.features.nsCopycat).toBe(1);
+    expect(keptFresh).toBe(fresh);
+    expect(keptNoRead).toBe(noRead);
   });
 });
 
