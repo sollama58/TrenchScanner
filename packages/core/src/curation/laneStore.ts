@@ -1,8 +1,9 @@
 import { Prisma, prisma } from "../db.js";
 import type { CuratorRecipe } from "./contestants.js";
 import type { Lane } from "./evolution.js";
-import { LABEL_LOG2_CAP } from "./labels.js";
-import type { CallRecord } from "./leaderboard.js";
+import { CURRENT_LABEL_RULE, LABEL_LOG2_CAP } from "./labels.js";
+import { marketLift, type CallRecord, type MarketLift } from "./leaderboard.js";
+import { walletSafetyCutsSql } from "../scoring/rugScreen.js";
 
 /**
  * The contest's shared reads: the worker (emission, training) and the API (leaderboard, feeds)
@@ -194,4 +195,60 @@ export async function liveCallRecords(
     });
   }
   return out;
+}
+
+/**
+ * Each model's live lift over the market in the same UTC hours (see marketLift), over the same
+ * calls liveCallRecords counts. The market is every graded decision moment past the safety
+ * screen, graded under the current label rule, as on the learning chart.
+ */
+export async function liveMarketLift(
+  models: readonly string[],
+  since: Date,
+  lanes: readonly Lane[],
+): Promise<Map<string, MarketLift>> {
+  if (models.length === 0) return new Map();
+  const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
+  const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
+  const froms = models.map((model) => {
+    const born = bornAt.get(model);
+    return born && born > since ? born : since;
+  });
+  const earliest = new Date(Math.min(...froms.map((d) => d.getTime())));
+  const [calls, market] = await Promise.all([
+    prisma.$queryRaw<{ model: string; hour: string; graded: bigint; wins: bigint }[]>`
+      WITH seats AS (
+        SELECT * FROM unnest(
+          ${[...models]}::text[],
+          ${froms.map((d) => d.toISOString())}::timestamp(3)[],
+          ${models.map((m) => laneName.get(m) ?? "-")}::text[]
+        ) AS s(model, since, lane)
+      )
+      SELECT a."model" AS model,
+             to_char(date_trunc('hour', a."createdAt"), 'YYYY-MM-DD"T"HH24') AS hour,
+             count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
+             count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
+                                AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS wins
+      FROM "CuratedAlert" a
+      JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
+        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" = seats.lane)
+      LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+      WHERE a."createdAt" >= ${earliest}
+      GROUP BY 1, 2`,
+    prisma.$queryRaw<{ hour: string; graded: bigint; wins: bigint }[]>`
+      SELECT to_char(date_trunc('hour', "anchorAt"), 'YYYY-MM-DD"T"HH24') AS hour,
+             count(*) AS graded,
+             count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS wins
+      FROM "CandidateOutcome"
+      WHERE "sampleKind" = 'event'
+        AND "anchorAt" >= ${earliest}
+        AND "hit2xIn1h" IS NOT NULL
+        AND "labelRule" >= ${CURRENT_LABEL_RULE}
+        AND ${walletSafetyCutsSql()}
+      GROUP BY 1`,
+  ]);
+  return marketLift(
+    calls.map((c) => ({ model: c.model, hour: c.hour, graded: Number(c.graded), wins: Number(c.wins) })),
+    market.map((m) => ({ hour: m.hour, graded: Number(m.graded), wins: Number(m.wins) })),
+  );
 }

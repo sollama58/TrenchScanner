@@ -882,6 +882,11 @@ export interface LeaderboardEntry {
     live: RecordSummary;
     exam: RecordSummary;
   };
+  /**
+   * Its live 2x rate against the market's in the same hours: the board's order among seasoned
+   * models. Null with no graded calls; absent from older API builds.
+   */
+  vsMarket?: { lift: number | null; marketRatePct: number | null; graded: number } | null;
   /** The score in a sentence. Absent from older API builds. */
   scoreExplained?: string;
   /** Its live record on high-conviction calls alone; null with none graded. */
