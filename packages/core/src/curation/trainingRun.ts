@@ -935,6 +935,9 @@ export async function runEvolvingContest(
     exam.result.metrics.runnerReport = runnerReport;
     Object.assign(exam.result.metrics, heldFeatures);
     results.push(exam.result);
+    // A control seat ships and calls on its own ledger, but feeds no combiner, the rules seat or
+    // evolution (contestants.ts, ContestantSpec.control).
+    if (spec.control) continue;
     laneExamScores.set(spec.id, exam.examScore);
     keep(spec.id, exam);
   }

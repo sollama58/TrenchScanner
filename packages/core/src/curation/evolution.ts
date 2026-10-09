@@ -1,6 +1,7 @@
 import { DEFAULT_BOOSTING_OPTIONS, type BoostingObjective, type BoostingOptions } from "./boosting.js";
 import { DEFAULT_FOREST_OPTIONS, type ForestOptions } from "./forest.js";
 import {
+  isMemberLearner,
   MOMENTUM_FEATURES,
   ORDER_FLOW_FEATURES,
   type ContestantSpec,
@@ -380,7 +381,7 @@ export function plainSummary(recipe: CuratorRecipe, parentName?: string | null):
 /** The founding lanes: each learner seat's hand-written recipe, under its roster name. */
 export function foundingLanes(specs: readonly ContestantSpec[], bornAt: Date): Lane[] {
   return specs
-    .filter((s) => s.role === "learner" && s.recipe)
+    .filter((s) => isMemberLearner(s) && s.recipe)
     .map((s) => ({
       slot: s.id,
       name: s.name,

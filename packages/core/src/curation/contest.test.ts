@@ -4,8 +4,12 @@ import {
   CONTESTANT_IDS,
   NARRATIVE_SEAT_FEATURES,
   ORDER_FLOW_FEATURES,
+  TREES_NO_TOKENSAGE_CONTESTANT,
+  TREES_NO_TOKENSAGE_FEATURES,
   enabledContestants,
 } from "./contestants.js";
+import { foundingLanes } from "./evolution.js";
+import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
 import { LEARNER_FEATURE_NAMES } from "./features.js";
 import { NARRATIVE_BACKGROUND_KIND, NARRATIVE_MIN_ROWS, narrativeTrainingSet } from "./trainingRun.js";
 import { isDecisionRow, type TrainingRow } from "./trainer.js";
@@ -56,6 +60,28 @@ describe("contestant roster", () => {
       "holderGrowth10mPct",
       "pathRet15mPct",
     ]);
+  });
+
+  it("keeps a Trees twin that reads every learner input but TokenSage's", () => {
+    const spec = CONTESTANTS.find((c) => c.id === TREES_NO_TOKENSAGE_CONTESTANT)!;
+    expect(spec.role).toBe("learner");
+    expect(spec.control).toBe(true);
+    expect(spec.recipe).toEqual({ learner: "gbdt", featureNames: TREES_NO_TOKENSAGE_FEATURES });
+    const narrative = new Set<string>(ALL_NARRATIVE_FEATURES);
+    expect(TREES_NO_TOKENSAGE_FEATURES.some((f) => f.startsWith("ns") || narrative.has(f))).toBe(false);
+    expect(TREES_NO_TOKENSAGE_FEATURES).toEqual(
+      LEARNER_FEATURE_NAMES.filter((f) => !f.startsWith("ns") && !narrative.has(f)),
+    );
+    expect(TREES_NO_TOKENSAGE_FEATURES.length).toBeGreaterThan(20);
+  });
+
+  it("doesn't count a control seat as a learner the combiners need, nor give it an evolution lane", () => {
+    expect(
+      enabledContestants(["consensus", "linear", TREES_NO_TOKENSAGE_CONTESTANT]).map((c) => c.id),
+    ).toEqual(["rules", "linear", TREES_NO_TOKENSAGE_CONTESTANT]);
+    expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(
+      TREES_NO_TOKENSAGE_CONTESTANT,
+    );
   });
 });
 
@@ -148,6 +174,32 @@ describe("runContestTraining", () => {
     const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
     expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "order-flow", "trees"]);
     expect(consensus.members.every((m) => m.quantiles.length > 0)).toBe(true);
+  }, 60_000);
+
+  it("ships a control seat on its own ledger without stacking it into the combiners", async () => {
+    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
+    const results = await runContestTraining(rows, {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1500,
+      recencyHalfLifeDays: 14,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      contestants: enabledContestants([
+        "consensus",
+        "blend",
+        "linear",
+        "trees",
+        TREES_NO_TOKENSAGE_CONTESTANT,
+      ]),
+    });
+    const control = results.find((r) => r.contestant === TREES_NO_TOKENSAGE_CONTESTANT)!;
+    expect(control.metrics.exam).toBeDefined();
+    for (const id of ["consensus", "blend"]) {
+      const combiner = results.find((r) => r.contestant === id)!.params as StackedCuratorParams;
+      expect(combiner.members.map((m) => m.contestant)).toEqual(["linear", "trees"]);
+    }
   }, 60_000);
 });
 
