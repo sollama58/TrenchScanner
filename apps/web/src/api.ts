@@ -392,6 +392,32 @@ export interface Calibration {
   goalRatePct: number | null;
 }
 
+/**
+ * A run's exam figures as the tables show them: the held-out exam record (each part graded at a
+ * cutoff set on the others) when the run stored one, else the cutoff search's own best slice,
+ * which reads high because it was picked on those same calls.
+ */
+export function runExamRates(run: Pick<ModelRun, "exam" | "precisionCalibration">): {
+  calls: number | null;
+  winRatePct: number | null;
+  goalRatePct: number | null;
+} {
+  const exam = run.exam;
+  if (exam && exam.graded > 0) {
+    return {
+      calls: exam.graded,
+      winRatePct: (exam.wins / exam.graded) * 100,
+      goalRatePct: (exam.goals / exam.graded) * 100,
+    };
+  }
+  const c = run.precisionCalibration;
+  return {
+    calls: c?.support ?? null,
+    winRatePct: c?.winRatePct ?? null,
+    goalRatePct: c?.goalRatePct ?? null,
+  };
+}
+
 export interface ModelRun {
   id: string;
   contestant: string | null;
@@ -411,6 +437,8 @@ export interface ModelRun {
     precisionCalibration: Calibration;
   }[];
   precisionCalibration: Calibration | null;
+  /** The exam graded at cutoffs set on other parts of it (absent on older runs). */
+  exam?: { graded: number; wins: number; goals: number } | null;
   precisionCurve: CurvePoint[];
   heuristicCalibration: Calibration | null;
   heuristicPrecisionCurve: CurvePoint[];

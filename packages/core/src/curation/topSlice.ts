@@ -8,6 +8,8 @@ import {
   type TrainingRow,
 } from "./trainer.js";
 import { addCall, examRecord, quantileTable, rankFromQuantiles, type StackedMember } from "./stacking.js";
+import { examChunks, memberCallRanksFrom } from "./blend.js";
+import { paceBudget } from "./governor.js";
 import type { CallRecord } from "./leaderboard.js";
 
 /**
@@ -21,7 +23,10 @@ import type { CallRecord } from "./leaderboard.js";
  *
  * Nothing is fitted and the cutoff is fixed: calibrating it would pull it back toward the
  * members' own cutoffs, the volume this seat exists to leave behind. The exam grades the fixed
- * rule on the members' fold ranks over the reference rows, with the cooldown replayed.
+ * rule on the members' fold ranks over the reference rows chunk by chunk, each chunk with the
+ * members' cutoffs set on the other chunks (their stored cutoffs were chosen on every reference
+ * row's label, so grading with them graded the slice on the rows that drew it), with the cooldown
+ * and the pace budget replayed like the other combiners.
  *
  * Scores live in [0, 1): (members in their slice + the deepest member's depth into its slice) /
  * (members + 1), so any score at or above 1 / (members + 1) is a call and more members in their
@@ -113,6 +118,8 @@ export interface TopSliceInput {
   memberCallRanks: ReadonlyMap<string, number | null>;
   targets: PrecisionTargets;
   cooldownHours: number;
+  /** The governor's pace, as the other combiners' exams take it (paceBudget). */
+  targetPerHour: number;
 }
 
 export interface TopSliceResult {
@@ -141,20 +148,33 @@ export function trainTopSliceCurator(input: TopSliceInput): TopSliceResult | nul
   if (members.length === 0 || n === 0) return null;
 
   const threshold = 1 / (members.length + 1);
-  const called = input.reference.flatMap((row, i) => {
-    let inSlice = 0;
-    let deepest = 0;
-    for (const m of members) {
-      const rank = m.ranks[i]!;
-      if (rank < m.sliceRank) continue;
-      inSlice += 1;
-      deepest = Math.max(deepest, sliceDepth(rank, m.sliceRank));
-    }
-    const score = sliceScore(inSlice, deepest, members.length);
-    return score >= threshold ? [{ row, confidence: score }] : [];
-  });
+  const cooldownMs = input.cooldownHours * 3_600_000;
+  const memberRanks = new Map(members.map((m) => [m.contestant, m.ranks]));
   const exam = examRecord();
-  for (const { row } of applyCooldown(called, input.cooldownHours * 3_600_000)) addCall(exam, row);
+  for (const chunk of examChunks(input.reference)) {
+    const callRanks = memberCallRanksFrom(input.reference, memberRanks, chunk.others, input);
+    const slices = members.flatMap((m) => {
+      const callRank = callRanks.get(m.contestant) ?? null;
+      return callRank === null ? [] : [{ ranks: m.ranks, sliceRank: topSliceRank(callRank) }];
+    });
+    if (slices.length === 0) continue;
+    const called = chunk.indexes.flatMap((i) => {
+      let inSlice = 0;
+      let deepest = 0;
+      for (const m of slices) {
+        const rank = m.ranks[i]!;
+        if (rank < m.sliceRank) continue;
+        inSlice += 1;
+        deepest = Math.max(deepest, sliceDepth(rank, m.sliceRank));
+      }
+      const score = sliceScore(inSlice, deepest, members.length);
+      return score >= threshold ? [{ row: input.reference[i]!, confidence: score }] : [];
+    });
+    const sent = applyCooldown(called, cooldownMs)
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, paceBudget(input.targetPerHour, chunk.spanHours));
+    for (const { row } of sent) addCall(exam, row);
+  }
   const winRate = exam.graded > 0 ? exam.wins / exam.graded : null;
   const goalRate = exam.graded > 0 ? exam.goals / exam.graded : null;
 

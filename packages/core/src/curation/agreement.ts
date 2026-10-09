@@ -9,7 +9,7 @@ import {
   type TrainingRow,
 } from "./trainer.js";
 import { agreementCount, memberCalls, memberRanks, quantileTable, type StackedMember } from "./stacking.js";
-import { blendRanks, examUnfittedScores } from "./blend.js";
+import { blendRanks, examUnfittedScores, memberCallRanksFrom } from "./blend.js";
 import { GOAL_LABEL, type CallRecord } from "./leaderboard.js";
 
 /**
@@ -130,7 +130,27 @@ export function trainAgreementCurator(
   }));
   const cooldownMs = input.cooldownHours * 3_600_000;
   const precisionCalibration = calibrateThresholdForPrecision(outOfSample, input.targets, { cooldownMs });
-  const { exam, examChunks } = examUnfittedScores(input.reference, scores, input);
+  // Graded per chunk with the members' cutoffs set without that chunk: the stored ones were
+  // chosen on every reference row's label, this chunk's included. A member whose exam set no
+  // cutoff never calls live, so it doesn't in the exam either.
+  const memberRanksOnly = new Map(
+    members.filter((c) => callRank(c) !== null).map((c) => [c, input.memberFoldRanks.get(c)!]),
+  );
+  const { exam, examChunks } = examUnfittedScores(
+    input.reference,
+    (chunk) => {
+      const ranksAt = memberCallRanksFrom(input.reference, memberRanksOnly, chunk.others, input);
+      return input.reference.map((_, i) => {
+        const ranks = members.map((c) => input.memberFoldRanks.get(c)![i]!);
+        let calls = 0;
+        members.forEach((c, j) => {
+          if (memberCalls(ranksAt.get(c) ?? null, ranks[j]!)) calls += 1;
+        });
+        return agreementScore(calls, ranks, members.length);
+      });
+    },
+    input,
+  );
 
   return {
     params: {
