@@ -659,6 +659,8 @@ function Worker() {
                   <Tag tone="warn">stale</Tag>
                 ) : j.lastError ? (
                   <Tag tone="warn">failed</Tag>
+                ) : typeof j.lastRun?.skipped === "string" ? (
+                  <Tag tone="warn">{j.lastRun.skipped}</Tag>
                 ) : (
                   <Tag tone="ok">ok</Tag>
                 ),
@@ -676,7 +678,9 @@ function Worker() {
           {d.jobs
             .filter(
               (j) =>
-                j.lastRun && (j.lastRun.stagesMs || j.lastRun.rpcCalls || Object.keys(j.lastRun).length > 1),
+                j.lastRun &&
+                j.lastRun.skipped === undefined &&
+                (j.lastRun.stagesMs || j.lastRun.rpcCalls || Object.keys(j.lastRun).length > 1),
             )
             .map((j) => {
               const counts = Object.entries(j.lastRun!).filter(
