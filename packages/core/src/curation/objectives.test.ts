@@ -133,6 +133,29 @@ describe("boosting objectives", () => {
     expect(score(1)).toBeGreaterThan(score(0));
   });
 
+  it("the run-size objective counts a loss as 0, however high it peaked outside the win", async () => {
+    // Three segments: plain losses, clean 2.2x winners (40% of the time), and late runners that
+    // never doubled inside the win window but peaked at 5x afterwards without a stop-out.
+    const rand = rng(12);
+    const rows: BoostingRow[] = [];
+    for (let i = 0; i < 3000; i++) {
+      const segment = i % 3;
+      const win = segment === 1 && rand() < 0.4;
+      rows.push({
+        tokenId: `t${i}`,
+        anchorAt: new Date(T0 + i * 20_000),
+        features: { buyRatio24h: segment, ageMinutes: rand() * 300 },
+        labelValue: win ? Math.log2(2.2) : 0,
+        survived: true,
+        runPeakMultiple: segment === 2 ? 5 : win ? 2.2 : 1.2,
+      });
+    }
+    const runner = await trainBoostedCurator(rows, { objective: "runSize" });
+    const score = (segment: number) => scoreBoosted(runner, { buyRatio24h: segment, ageMinutes: 150 });
+    expect(score(1)).toBeGreaterThan(score(2));
+    expect(score(1)).toBeGreaterThan(score(0));
+  });
+
   it("objectives ride the recipe's boosting options through trainCuratorModel", async () => {
     const rows = runRows(600, 5).map((r) => ({ ...r, anchorPriceUsd: 1e-5, anchorMcapUsd: 50_000 }));
     const params = await trainCuratorModel(rows, {
