@@ -4,6 +4,7 @@ import { ShieldIcon } from "../components/Icons";
 import { usePolling } from "../hooks";
 import { Kpi, Load, Panel, Table, Tag, Wallet, dollars, ms, n, when } from "./adminShared";
 import { AnnouncementsAdmin } from "./AdminAnnouncements";
+import { ModelsAdmin } from "./AdminModels";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
@@ -18,6 +19,7 @@ const SECTIONS = [
   { id: "overview", label: "Overview" },
   { id: "worker", label: "Worker" },
   { id: "alerts", label: "Alerts" },
+  { id: "models", label: "Models" },
   { id: "training", label: "Training" },
   { id: "tokensage", label: "TokenSage" },
   { id: "screen", label: "Safety screen" },
@@ -70,6 +72,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
       {section === "overview" && <Overview />}
       {section === "worker" && <Worker />}
       {section === "alerts" && <Alerts />}
+      {section === "models" && <ModelsAdmin />}
       {section === "training" && <Training />}
       {section === "tokensage" && <TokenSageAdmin />}
       {section === "screen" && <SafetyScreen />}

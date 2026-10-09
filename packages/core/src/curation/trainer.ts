@@ -969,7 +969,12 @@ export function precisionCurve(calls: ScoredOutcome[]): PrecisionCurvePoint[] {
  * trees, weight x standardized value for the logistic) - its value input plus its
  * missing-indicator input. Positive pushes toward a call, negative away from one.
  */
-function featureContributions(
+/**
+ * Each input's push on this candidate's score, in log-odds: the logistic weights times the
+ * standardized input, or the trees' path attribution (boostedContributions). Exported for the
+ * Admin model explainer, which shows both directions for one call.
+ */
+export function featureContributions(
   params: UnthresholdedCuratorParams,
   features: Record<string, number | null | undefined>,
 ): { name: string; value: number }[] {
@@ -992,7 +997,7 @@ function featureContributions(
 }
 
 /** An input's plain-words label; the blend stage's market score is not a recorded feature. */
-function inputLabel(name: string): string {
+export function inputLabel(name: string): string {
   if (name === MARKET_SCORE_INPUT) return "the market's read";
   return FRIENDLY_FEATURE_LABELS[name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? name;
 }
