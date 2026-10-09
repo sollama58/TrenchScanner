@@ -863,8 +863,20 @@ export function describeRowBudget(
  * every call was watched for it. The 10x tier (hit10x below) was never affected: its hour is on
  * the extended watch every clean winner gets, alerted or not. The fit's run weight (runWeight)
  * and the runner-traits report read this field too, so they see the window peak now as well.
+ *
+ * The peak before the stop where it was tracked (peakBeforeStopPriceUsd, what labelValue is
+ * graded on), not the whole window's: a coin that 2x'd, fell through 0.5x and ran 10x afterwards
+ * was a 2x to anyone holding the alert, and crediting the later run trained it as a big winner
+ * (user decision 2026-10-09). The two are the same on every row that never hit the stop.
  */
-function runPeakOf(r: { peak1hReturnPct: number | null }): { runPeakMultiple?: number } {
+export function runPeakOf(r: {
+  peak1hReturnPct: number | null;
+  peakBeforeStopPriceUsd: number | null;
+  anchorPriceUsd: number;
+}): { runPeakMultiple?: number } {
+  if (r.peakBeforeStopPriceUsd !== null && r.anchorPriceUsd > 0) {
+    return { runPeakMultiple: r.peakBeforeStopPriceUsd / r.anchorPriceUsd };
+  }
   return r.peak1hReturnPct !== null ? { runPeakMultiple: 1 + r.peak1hReturnPct / 100 } : {};
 }
 
@@ -887,6 +899,7 @@ interface LoadedRow {
   labelRule: number;
   maxDrawdown1hPct: number | null;
   peak1hReturnPct: number | null;
+  peakBeforeStopPriceUsd: number | null;
   hit10xIn1h: boolean | null;
 }
 
@@ -950,7 +963,7 @@ async function loadRowsOfKind(
     const page = await prisma.$queryRaw<LoadedRow[]>`
       SELECT "id", "tokenId", "anchorAt", "features", "labelValue", "anchorPriceUsd",
              "signalPriceUsd", "anchorMcapUsd", "sampleKind", "labelRule", "maxDrawdown1hPct",
-             "peak1hReturnPct", "hit10xIn1h"
+             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h"
       FROM "CandidateOutcome"
       WHERE "finalizedAt" IS NOT NULL
         AND "anchorAt" >= ${windowStart}

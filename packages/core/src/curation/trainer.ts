@@ -1568,6 +1568,14 @@ export function confidenceRanks(probabilities: number[]): number[] {
   return probabilities.map((p) => lowerBound(ascending, p) / n);
 }
 
+/** Each value's rank on another set's scale: the share of `reference` strictly below it. */
+export function ranksAgainst(values: readonly number[], reference: readonly number[]): number[] {
+  const n = reference.length;
+  if (n === 0) return values.map(() => 0);
+  const ascending = [...reference].sort((a, b) => a - b);
+  return values.map((p) => lowerBound(ascending, p) / n);
+}
+
 /** Index of the first element >= value in an ascending array. */
 function lowerBound(ascending: number[], value: number): number {
   let lo = 0;

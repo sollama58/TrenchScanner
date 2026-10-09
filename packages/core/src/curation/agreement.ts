@@ -90,11 +90,23 @@ export interface AgreementResult {
   params: AgreementCuratorParams;
   precisionCalibration: PrecisionCalibration;
   precisionCurve: PrecisionCurvePoint[];
-  /** The out-of-sample agreement scores, one per reference row - the calibration's evidence. */
+  /**
+   * The agreement scores at the members' stored cutoffs, one per reference row: the scale that
+   * serves, and the cutoff's evidence. Those cutoffs were chosen on these rows' labels.
+   */
   outOfSample: ScoredOutcome[];
+  /**
+   * The same rows scored with member cutoffs set off each row's exam chunk: the evidence for the
+   * calibration (the card's 2x %), the high-conviction tier and the curve, which would otherwise
+   * read the line the cutoffs were drawn from. Equal to outOfSample when no chunks could be cut.
+   */
+  heldOut: ScoredOutcome[];
   exam: CallRecord;
   examChunks: number;
-  /** Win rate by how many members called, over every reference row: is agreement a signal here? */
+  /**
+   * Win rate by how many members called, over every reference row, counted at the held-out
+   * member cutoffs: is agreement a signal here?
+   */
   curve: AgreementCurvePoint[];
 }
 
@@ -112,24 +124,16 @@ export function trainAgreementCurator(
     }
   }
   const callRank = (c: string) => input.memberCallRanks.get(c) ?? null;
-  const curve: AgreementCurvePoint[] = Array.from({ length: members.length + 1 }, (_, agreeing) => ({
-    agreeing,
-    rows: 0,
-    wins: 0,
-    goals: 0,
-  }));
-  const scores = input.reference.map((row, i) => {
-    const ranks = members.map((c) => input.memberFoldRanks.get(c)![i]!);
-    let calls = 0;
-    members.forEach((c, j) => {
-      if (memberCalls(callRank(c), ranks[j]!)) calls += 1;
+  const scoresAt = (cutoffOf: (c: string) => number | null): number[] =>
+    input.reference.map((_, i) => {
+      const ranks = members.map((c) => input.memberFoldRanks.get(c)![i]!);
+      let calls = 0;
+      members.forEach((c, j) => {
+        if (memberCalls(cutoffOf(c), ranks[j]!)) calls += 1;
+      });
+      return agreementScore(calls, ranks, members.length);
     });
-    const point = curve[calls]!;
-    point.rows += 1;
-    if (row.labelValue > 0) point.wins += 1;
-    if (row.labelValue >= GOAL_LABEL) point.goals += 1;
-    return agreementScore(calls, ranks, members.length);
-  });
+  const scores = scoresAt(callRank);
   const outOfSample: ScoredOutcome[] = input.reference.map((row, i) => ({
     probability: scores[i]!,
     labelValue: row.labelValue,
@@ -144,21 +148,32 @@ export function trainAgreementCurator(
   const memberRanksOnly = new Map(
     members.filter((c) => callRank(c) !== null).map((c) => [c, input.memberFoldRanks.get(c)!]),
   );
+  // Each chunk's own rows keep the scores they were graded with: held-out evidence for the
+  // card's calibration, the tier and the curve.
+  const heldOutScores = [...scores];
   const { exam, examChunks } = examUnfittedScores(
     input.reference,
     (chunk) => {
       const ranksAt = memberCallRanksFrom(input.reference, memberRanksOnly, chunk.others, input);
-      return input.reference.map((_, i) => {
-        const ranks = members.map((c) => input.memberFoldRanks.get(c)![i]!);
-        let calls = 0;
-        members.forEach((c, j) => {
-          if (memberCalls(ranksAt.get(c) ?? null, ranks[j]!)) calls += 1;
-        });
-        return agreementScore(calls, ranks, members.length);
-      });
+      const s = scoresAt((c) => ranksAt.get(c) ?? null);
+      for (const i of chunk.indexes) heldOutScores[i] = s[i]!;
+      return s;
     },
     input,
   );
+  const heldOut: ScoredOutcome[] = outOfSample.map((c, i) => ({ ...c, probability: heldOutScores[i]! }));
+  const curve: AgreementCurvePoint[] = Array.from({ length: members.length + 1 }, (_, agreeing) => ({
+    agreeing,
+    rows: 0,
+    wins: 0,
+    goals: 0,
+  }));
+  input.reference.forEach((row, i) => {
+    const point = curve[agreeingFromScore(heldOutScores[i]!, members.length)]!;
+    point.rows += 1;
+    if (row.labelValue > 0) point.wins += 1;
+    if (row.labelValue >= GOAL_LABEL) point.goals += 1;
+  });
 
   return {
     params: {
@@ -174,6 +189,7 @@ export function trainAgreementCurator(
     precisionCalibration,
     precisionCurve: precisionCurve(outOfSample),
     outOfSample,
+    heldOut,
     exam,
     examChunks,
     curve,

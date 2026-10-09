@@ -20,6 +20,7 @@ import {
   loadTrainingRows,
   withFixedShape,
   withoutEventTwins,
+  runPeakOf,
 } from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
@@ -420,6 +421,20 @@ describe("withoutEventTwins", () => {
       { tokenId: "a", anchorAt: at(55), anchorPriceUsd: 0.001, id: "after the event" },
     ];
     expect(withoutEventTwins(hourly, events).map((h) => h.id)).toEqual(["other price", "after the event"]);
+  });
+});
+
+describe("runPeakOf", () => {
+  it("reads the peak before the stop, so a run after a stop-out earns no run credit", () => {
+    // 2x, fell through 0.5x, then ran to 11x: a 2x to anyone holding the alert.
+    expect(runPeakOf({ peak1hReturnPct: 1000, peakBeforeStopPriceUsd: 2, anchorPriceUsd: 1 })).toEqual({
+      runPeakMultiple: 2,
+    });
+    // Rows from before the stop peak was tracked keep the window peak.
+    expect(runPeakOf({ peak1hReturnPct: 150, peakBeforeStopPriceUsd: null, anchorPriceUsd: 1 })).toEqual({
+      runPeakMultiple: 2.5,
+    });
+    expect(runPeakOf({ peak1hReturnPct: null, peakBeforeStopPriceUsd: null, anchorPriceUsd: 1 })).toEqual({});
   });
 });
 
