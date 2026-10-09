@@ -15,7 +15,7 @@ import {
   type Lane,
   type LaneFitness,
 } from "./evolution.js";
-import { CANDIDATE_FEATURE_NAMES } from "./features.js";
+import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES, RETIRED_LEARNER_INPUTS } from "./features.js";
 
 const BASE_HL = 14;
 const t0 = new Date("2026-10-01T00:00:00Z");
@@ -46,6 +46,19 @@ describe("mutateRecipe", () => {
         expect(child.featureNames.length).toBeLessThan(CANDIDATE_FEATURE_NAMES.length);
         for (const f of child.featureNames) expect(CANDIDATE_FEATURE_NAMES).toContain(f);
       }
+    }
+  });
+
+  it("drops retired inputs a lineage still lists, from the parent and from a mate", () => {
+    const retired = [...RETIRED_LEARNER_INPUTS].slice(0, 3);
+    const live = LEARNER_FEATURE_NAMES.slice(0, 12);
+    const parent: CuratorRecipe = { learner: "logistic", featureNames: [...live, ...retired] };
+    const mate: CuratorRecipe = { learner: "logistic", featureNames: [...live.slice(0, 10), ...retired] };
+    const rng = seededRng(11);
+    for (let i = 0; i < 200; i++) {
+      const child = mutateRecipe(parent, rng, { baseHalfLifeDays: BASE_HL, mate });
+      if (!child.featureNames) continue;
+      for (const f of child.featureNames) expect(RETIRED_LEARNER_INPUTS.has(f)).toBe(false);
     }
   });
 

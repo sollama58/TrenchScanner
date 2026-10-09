@@ -7,7 +7,7 @@ import {
   type ContestantSpec,
   type CuratorRecipe,
 } from "./contestants.js";
-import { LEARNER_FEATURE_NAMES, type CandidateFeatureName } from "./features.js";
+import { LEARNER_FEATURE_NAMES, learnerSubset, type CandidateFeatureName } from "./features.js";
 import { MIN_LIVE_CALLS_TO_RANK, recordScore, type CallRecord } from "./leaderboard.js";
 import { GOAL_MULTIPLE } from "./labels.js";
 import type { PrecisionTargets } from "./trainer.js";
@@ -117,10 +117,14 @@ export function normalizeRecipe(recipe: CuratorRecipe, baseHalfLifeDays: number)
     for (const k of FOREST_KNOBS) forest[k] = recipe.forest?.[k] ?? DEFAULT_FOREST_OPTIONS[k];
     return { learner: "forest", recencyHalfLifeDays, forest, ...shape };
   }
+  // A lineage bred before an input was retired still lists it, and a recipe's list is read as
+  // is at training time; the retired names leave here, so no child, mate or stored challenger
+  // carries them on. A list that was only retired names means every learner input.
+  const featureNames = recipe.featureNames ? learnerSubset(recipe.featureNames) : undefined;
   return {
     learner: "logistic",
     recencyHalfLifeDays,
-    ...(recipe.featureNames ? { featureNames: [...recipe.featureNames] } : {}),
+    ...(featureNames && featureNames.length > 0 ? { featureNames } : {}),
     ...shape,
   };
 }
