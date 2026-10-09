@@ -1273,7 +1273,7 @@ export interface LighthouseHistory {
 
 /**
  * GET /curated/lighthouse/signals and /guest/lighthouse/signals: the Lighthouse's "Signals at a
- * glance" alone, over 1, 7 or 30 days.
+ * glance", and how calls did by narrative, over 1, 7 or 30 days.
  */
 export interface LighthouseSignals {
   window: { days: number; since: string };
@@ -1282,7 +1282,10 @@ export interface LighthouseSignals {
   news: LighthouseCount[];
   copies: LighthouseCount[];
   pairKinds: LighthouseCount[];
-  outcomes: { byCopy: LighthouseTally[] };
+  outcomes: Pick<
+    MarketLighthouse["outcomes"],
+    "alerts" | "described" | "graded" | "won2x" | "byCategory" | "byCopy"
+  >;
 }
 
 /** GET /curated/lighthouse and /guest/lighthouse: what TokenSage sees across new coins, aggregates only. */

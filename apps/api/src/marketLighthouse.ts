@@ -498,25 +498,40 @@ export async function buildMarketLighthouse(env: Env, days: number) {
 /**
  * "Signals at a glance" alone, for a window the full answer doesn't cover: the four signal splits,
  * how many coins were read (deep reads decide whether the X and news checks can show at all), and
- * how calls on originals did against calls on copies.
+ * how calls did by narrative ("Which narratives pay" on the TokenSage page) and on originals
+ * against copies.
  */
 export async function buildLighthouseSignals(days: number): Promise<LighthouseSignals> {
   const since = new Date(Date.now() - days * DAY_MS);
-  const [byDepthStatus, [xVerdicts, news, copies, pairKinds], copyRows] = await Promise.all([
+  const [byDepthStatus, [xVerdicts, news, copies, pairKinds], alertRows] = await Promise.all([
     prisma.tokenNarrative.groupBy({
       by: ["depth"],
       where: { checkedAt: { gt: since }, status: { not: "failed" } },
       _count: { _all: true },
     }),
     Promise.all(signalQueries(since)),
-    // Only the calls whose coin TokenSage placed as original or copy, and only what the tallies read.
-    prisma.$queryRaw<Pick<AlertOutcomeRow, "hit2x" | "hit4x" | "hit10x" | "sim_return" | "copies_recent">[]>`
+    // Model alerts in the window with what TokenSage says about their coin now: only what the
+    // narrative and copy tallies read. Same bound and cap as the full answer.
+    prisma.$queryRaw<
+      Pick<
+        AlertOutcomeRow,
+        | "hit2x"
+        | "hit4x"
+        | "hit10x"
+        | "sim_return"
+        | "status"
+        | "categories"
+        | "main_category"
+        | "copies_recent"
+      >[]
+    >`
       SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
-             a."simReturnPct"::float8 AS sim_return, n."copiesRecent" AS copies_recent
+             a."simReturnPct"::float8 AS sim_return,
+             n.status, n.categories, n."mainCategory" AS main_category, n."copiesRecent" AS copies_recent
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
-      JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
-      WHERE a."createdAt" > ${since} AND n.status <> 'failed' AND n."copiesRecent" IS NOT NULL
+      LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
+      WHERE a."createdAt" > ${since}
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,
   ]);
@@ -526,19 +541,20 @@ export async function buildLighthouseSignals(days: number): Promise<LighthouseSi
     described += g._count._all;
     if (g.depth === "full") deep += g._count._all;
   }
+  const byCategory = new Map<string, OutcomeTally>();
   const byCopy = new Map<string, OutcomeTally>();
-  for (const row of copyRows) {
-    const full: AlertOutcomeRow = {
-      ...row,
-      status: null,
-      categories: null,
-      main_category: null,
-      x_verdict: null,
-      referent_kind: null,
-      flags: null,
-    };
-    tally(byCopy, row.copies_recent ? "copies a recent coin" : "original", full);
+  const all = new Map<string, OutcomeTally>();
+  let alertsDescribed = 0;
+  for (const row of alertRows) {
+    const full: AlertOutcomeRow = { ...row, x_verdict: null, referent_kind: null, flags: null };
+    tally(all, "all", full);
+    if (row.status === null || row.status === "failed") continue;
+    alertsDescribed += 1;
+    tally(byCategory, topCategory(row.categories, row.main_category) ?? "uncategorized", full);
+    if (row.copies_recent !== null)
+      tally(byCopy, row.copies_recent ? "copies a recent coin" : "original", full);
   }
+  const overall = all.get("all");
   return {
     window: { days, since },
     reads: { described, deep },
@@ -546,7 +562,14 @@ export async function buildLighthouseSignals(days: number): Promise<LighthouseSi
     news: counts(news),
     copies: counts(copies),
     pairKinds: counts(pairKinds),
-    outcomes: { byCopy: sortedTallies(byCopy).map(slimTally) },
+    outcomes: {
+      alerts: alertRows.length,
+      described: alertsDescribed,
+      graded: overall?.graded ?? 0,
+      won2x: overall?.won2x ?? 0,
+      byCategory: sortedTallies(byCategory).map(slimTally),
+      byCopy: sortedTallies(byCopy).map(slimTally),
+    },
   };
 }
 
@@ -558,7 +581,10 @@ export interface LighthouseSignals {
   news: WindowLighthouse["news"];
   copies: WindowLighthouse["copies"];
   pairKinds: WindowLighthouse["pairKinds"];
-  outcomes: { byCopy: LighthouseTally[] };
+  outcomes: Pick<
+    WindowLighthouse["outcomes"],
+    "alerts" | "described" | "graded" | "won2x" | "byCategory" | "byCopy"
+  >;
 }
 
 /** The signals part of a full window's answer, in the signals-only shape. */
@@ -569,7 +595,14 @@ const signalsOf = (m: WindowLighthouse): LighthouseSignals => ({
   news: m.news,
   copies: m.copies,
   pairKinds: m.pairKinds,
-  outcomes: { byCopy: m.outcomes.byCopy },
+  outcomes: {
+    alerts: m.outcomes.alerts,
+    described: m.outcomes.described,
+    graded: m.outcomes.graded,
+    won2x: m.outcomes.won2x,
+    byCategory: m.outcomes.byCategory,
+    byCopy: m.outcomes.byCopy,
+  },
 });
 type ScreenedByHourOfDay = ReturnType<typeof screenedByHourOfDay>;
 export type MarketLighthouse = Omit<WindowLighthouse, "screened"> & {

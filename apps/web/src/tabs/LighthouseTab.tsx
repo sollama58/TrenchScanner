@@ -5,7 +5,15 @@ import { ago } from "../format";
 import { Skeleton } from "../components/Charts";
 import { TrendChart } from "../components/TrendChart";
 import { LighthouseBody, WINDOWS as NOW_WINDOWS, type Days } from "../components/MarketLighthouse";
-import { ChevronDownIcon, CloseIcon, DownloadIcon, LighthouseIcon, PlusIcon } from "../components/Icons";
+import {
+  ArrowRightIcon,
+  ChevronDownIcon,
+  CloseIcon,
+  DownloadIcon,
+  LighthouseIcon,
+  PlusIcon,
+  SageIcon,
+} from "../components/Icons";
 import {
   BREAKDOWN_MODES,
   BUCKETS,
@@ -122,6 +130,12 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
               sees across new coins: kept hour by hour for good, so trends can be read over weeks and months.
             </p>
           </div>
+          {/* The TokenSage page (apps/web/tokensage), served at /tokensage. */}
+          <a className="lht-sage-pill" href="/tokensage" title="Open the TokenSage page">
+            <SageIcon size={14} />
+            TokenSage
+            <ArrowRightIcon size={13} />
+          </a>
         </div>
       </section>
 
