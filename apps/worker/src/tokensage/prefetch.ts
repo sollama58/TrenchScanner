@@ -43,7 +43,8 @@ const logger = createLogger("tokensage");
  *   back to basic until midnight UTC;
  * - a mint TokenSage can't analyse is cached as "failed" so it isn't asked again;
  * - a partial answer (an upstream source failed, or the mint isn't on-chain yet) is stored and
- *   asked again a little later, a few times;
+ *   asked again a little later, a few times (from rules 0.28.0 metadata that never resolves ends
+ *   as complete with the metadata_unresolved flag, not partial for good);
  * - a mint still pending after PENDING_GIVE_UP_MS is dropped.
  * Everything here is in-process, so a restart forgets the queue and the day's count; mints still
  * on the watchlist are noted again on the next scan.
@@ -121,7 +122,11 @@ const failCounts = new Map<string, number>();
 const MAX_TRANSIENT_FAILURES = 3;
 /** Old-job lookups per flush (see checkEndedJob). */
 const MAX_JOB_CHECKS_PER_FLUSH = 5;
-const DEFINITIVE_FAILURES = ["not_a_token_mint", "not_pumpfun", "invalid_ca"];
+/**
+ * "worker died" (rules 0.28.0): TokenSage's worker crashed on this mint job_max_attempts times
+ * already, so asking again would only crash it again, at a unit of full quota each time.
+ */
+const DEFINITIVE_FAILURES = ["not_a_token_mint", "not_pumpfun", "invalid_ca", "worker died", "worker_died"];
 let flushing = false;
 /**
  * The longest one flush may hold the flushing flag. Every request in it has its own timeout, but
@@ -401,7 +406,7 @@ async function storeFailure(mintAddress: string, depth: TokenSageDepth, reason: 
 async function noteFailure(mint: string, depth: TokenSageDepth, error: unknown): Promise<void> {
   pending.delete(mint);
   const reason = typeof error === "string" && error.trim() !== "" ? error : "analysis failed";
-  const code = reason.split(":")[0]!.trim();
+  const code = reason.split(":")[0]!.trim().toLowerCase();
   const tries = (failCounts.get(mint) ?? 0) + 1;
   if (DEFINITIVE_FAILURES.includes(code) || tries >= MAX_TRANSIENT_FAILURES) {
     await storeFailure(mint, depth, reason);
