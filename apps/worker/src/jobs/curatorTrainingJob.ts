@@ -33,6 +33,7 @@ import {
   type StackedCuratorParams,
   type BlendCuratorParams,
   type AgreementCuratorParams,
+  type TopSliceCuratorParams,
   type Env,
   type TrainingRow,
   type PrecisionTargets,
@@ -462,7 +463,8 @@ export async function applyContestResults(
     for (const result of ordered) {
       let params = result.params;
       if (COMBINER_MODEL_KINDS.includes(params.kind)) {
-        const withMembers = params as StackedCuratorParams | BlendCuratorParams | AgreementCuratorParams;
+        const withMembers = params as
+          StackedCuratorParams | BlendCuratorParams | AgreementCuratorParams | TopSliceCuratorParams;
         params = {
           ...withMembers,
           members: withMembers.members.map((m) => ({ ...m, modelId: ids.get(m.contestant) ?? "" })),

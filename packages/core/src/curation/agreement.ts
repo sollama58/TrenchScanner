@@ -154,10 +154,12 @@ export function trainAgreementCurator(
 
 import { STACKED_MODEL_KIND } from "./stacking.js";
 import { BLEND_MODEL_KIND } from "./blend.js";
+import { TOP_SLICE_MODEL_KIND } from "./topSlice.js";
 
 /** The model kinds that reference members: stored and restored after the learners they point at. */
 export const COMBINER_MODEL_KINDS: readonly string[] = [
   STACKED_MODEL_KIND,
   BLEND_MODEL_KIND,
   AGREEMENT_MODEL_KIND,
+  TOP_SLICE_MODEL_KIND,
 ];

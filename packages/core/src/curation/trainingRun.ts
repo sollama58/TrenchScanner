@@ -35,6 +35,7 @@ import type { Challenger, Replacement } from "./evolution.js";
 import { quantileTable, trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
 import { trainBlendCurator, type BlendCuratorParams } from "./blend.js";
 import { trainAgreementCurator, type AgreementCuratorParams, type AgreementCurvePoint } from "./agreement.js";
+import { trainTopSliceCurator, type TopSliceCuratorParams } from "./topSlice.js";
 import { buildCalibration } from "./calibration.js";
 import { runDoublings } from "./labels.js";
 import {
@@ -623,6 +624,7 @@ export type ContestantParams =
   | StackedCuratorParams
   | BlendCuratorParams
   | AgreementCuratorParams
+  | TopSliceCuratorParams
   | RulesCuratorParams;
 
 export interface ContestantTrainingResult {
@@ -1191,6 +1193,41 @@ export async function runEvolvingContest(
           agreementCurve: agreement.curve,
           ...(served.highConviction ? { highConviction: served.highConviction } : {}),
           calibrationCalls: served.extras.calibration?.calls ?? 0,
+        },
+      });
+    }
+  }
+
+  const topSliceSpec = cfg.contestants.find((c) => c.role === "topslice");
+  if (topSliceSpec && reference !== null) {
+    const topSlice = trainTopSliceCurator({
+      reference,
+      memberFoldRanks: foldRanks,
+      memberShippedProbabilities: shippedProbabilities,
+      memberCallRanks: callRanks,
+      targets: cfg.targets,
+      cooldownHours: cfg.cooldownHours,
+    });
+    if (topSlice) {
+      const names = topSlice.params.members.map(
+        (m) => cfg.contestants.find((c) => c.id === m.contestant)?.name ?? m.contestant,
+      );
+      results.push({
+        contestant: topSliceSpec.id,
+        params: topSlice.params,
+        metrics: {
+          contestant: topSliceSpec.id,
+          contestantName: topSliceSpec.name,
+          folds: [],
+          verdict: {
+            promote: false,
+            reason: `${topSliceSpec.name}: the top quarter of ${names.join(", ")}'s own calls, judged on their out-of-sample calls - ${topSlice.exam.wins}/${topSlice.exam.graded} doubled`,
+          },
+          targets: cfg.targets,
+          precisionCalibration: topSlice.precisionCalibration,
+          precisionCurve: [],
+          heuristicPrecisionCurve: [],
+          exam: topSlice.exam,
         },
       });
     }

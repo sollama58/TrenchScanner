@@ -769,7 +769,7 @@ export function wilsonLowerBound(hits: number, n: number, z: number): number {
 }
 
 /** Whether a cutoff's record (wins and goals of n alerts) meets the targets - see confidenceZ. */
-function meetsTargets(wins: number, goals: number, n: number, targets: PrecisionTargets): boolean {
+export function meetsTargets(wins: number, goals: number, n: number, targets: PrecisionTargets): boolean {
   const z = targets.confidenceZ ?? 0;
   return wilsonLowerBound(wins, n, z) >= targets.winRate && wilsonLowerBound(goals, n, z) >= targets.goalRate;
 }
