@@ -339,10 +339,31 @@ const SOCIAL_BIT_FEATURES = [
 ] as const satisfies readonly CandidateFeatureName[];
 
 /**
+ * Rows banked before this carry two inputs #138 (live from about 2026-10-05 15:28 UTC) changed:
+ * - volumeAccel read exactly 12 by construction on every token under five minutes old (both
+ *   windows hold its whole life; 2,384 young rows, none after); live scoring now leaves it null
+ *   under VOLUME_ACCEL_MIN_AGE_MINUTES, so a tree learned "12" as a youth marker live rows never show.
+ * - pathRet1mPct took the previous 30-second scan tick as "a minute ago", so it was a 30-second
+ *   move, and was filled on tapes too short to hold a minute. Back on the learner list since #315.
+ */
+export const VOLUME_ACCEL_YOUNG_NULL_SINCE = new Date("2026-10-05T15:30:00Z");
+
+/**
+ * Rows banked before this are the only ones in the window that read ctxWeekend = 1: the clock
+ * inputs started at about 20:31 UTC on Sunday 2026-10-04 (#99), so every weekend row is one of 881
+ * rows from that evening, which also carry the old label rule's era and volumeAccel's 12. A tree
+ * that splits on it learns "first evening of data", and live rows start reading 1 on Saturdays.
+ * Read as missing there, the input is constant until real weekends build up.
+ */
+export const WEEKEND_FLAG_FROM = new Date("2026-10-05T00:00:00Z");
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
- * the create message and is real), and the social bits on rows banked before
- * SOCIAL_BITS_FROM_DISCOVERY_SINCE. Returns the same object when nothing applies.
+ * the create message and is real), the social bits on rows banked before
+ * SOCIAL_BITS_FROM_DISCOVERY_SINCE, and before VOLUME_ACCEL_YOUNG_NULL_SINCE volumeAccel on young
+ * tokens (as live scoring reads it today) and the 30-second pathRet1mPct, and ctxWeekend before
+ * WEEKEND_FLAG_FROM. Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
@@ -354,6 +375,14 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   for (const name of SOCIAL_BIT_FEATURES) {
     if (masked[name] !== undefined) masked[name] = null;
   }
+  if (at < VOLUME_ACCEL_YOUNG_NULL_SINCE.getTime()) {
+    const age = masked.ageMinutes;
+    if (typeof age === "number" && age < VOLUME_ACCEL_MIN_AGE_MINUTES && masked.volumeAccel !== undefined) {
+      masked.volumeAccel = null;
+    }
+    if (masked.pathRet1mPct !== undefined) masked.pathRet1mPct = null;
+  }
+  if (at < WEEKEND_FLAG_FROM.getTime() && masked.ctxWeekend !== undefined) masked.ctxWeekend = null;
   if (at < TRADE_FLOW_FAKE_ZEROS_UNTIL.getTime()) {
     for (const name of TRADE_FLOW_FEATURES) {
       if (name !== "devInitialBuySol" && masked[name] !== undefined) masked[name] = null;

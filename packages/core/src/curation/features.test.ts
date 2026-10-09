@@ -11,6 +11,8 @@ import {
   SOCIAL_BITS_FROM_DISCOVERY_SINCE,
   withCurrentNarrativeTiming,
   TRADE_FLOW_FAKE_ZEROS_UNTIL,
+  VOLUME_ACCEL_YOUNG_NULL_SINCE,
+  WEEKEND_FLAG_FROM,
 } from "./features.js";
 import type { ScoredToken } from "../types.js";
 
@@ -286,6 +288,29 @@ describe("maskKnownBadInputs", () => {
     });
     expect(maskKnownBadInputs(new Date("2026-10-07T19:38:59Z"), row).hasTwitter).toBeNull();
     expect(maskKnownBadInputs(new Date("2026-10-07T19:39:00Z"), row)).toBe(row);
+  });
+
+  it("reads volumeAccel's by-construction 12 on young tokens and the 30-second pathRet1mPct as missing before #138", () => {
+    const young = { ageMinutes: 2, volumeAccel: 12, pathRet1mPct: 8, mcapUsd: 50_000 };
+    const older = { ageMinutes: 30, volumeAccel: 3.5, pathRet1mPct: -4, mcapUsd: 50_000 };
+    const before = new Date("2026-10-05T15:29:00Z");
+    expect(maskKnownBadInputs(before, young)).toMatchObject({
+      volumeAccel: null,
+      pathRet1mPct: null,
+      ageMinutes: 2,
+    });
+    expect(maskKnownBadInputs(before, older)).toMatchObject({ volumeAccel: 3.5, pathRet1mPct: null });
+    const after = maskKnownBadInputs(VOLUME_ACCEL_YOUNG_NULL_SINCE, young);
+    expect(after).toMatchObject({ volumeAccel: 12, pathRet1mPct: 8 });
+  });
+
+  it("reads ctxWeekend as missing on the first evening of data, its only weekend rows", () => {
+    const row = { ctxWeekend: 1, ctxHourSin: 0.5, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(new Date("2026-10-04T21:00:00Z"), row)).toMatchObject({
+      ctxWeekend: null,
+      ctxHourSin: 0.5,
+    });
+    expect(maskKnownBadInputs(WEEKEND_FLAG_FROM, row).ctxWeekend).toBe(1);
   });
 
   it("keeps the retired duplicates off the learner list", () => {
