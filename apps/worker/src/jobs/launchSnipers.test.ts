@@ -14,7 +14,10 @@ const buyers = (mint: string, n: number) =>
     wallet: `${mint}-w${i}`,
     tokenAccount: `${mint}-a${i}`,
     bought: 1000,
+    slot: i === 0 ? 100 : null,
   }));
+/** Every fixture launch mints 100,000, the dev takes 2,000 in the create, slot 100. */
+const LAUNCH = { supply: 100_000, devBought: 2_000, createSlot: 100 };
 
 function fakeHelius(opts: {
   found?: Record<string, number>;
@@ -35,6 +38,7 @@ function fakeHelius(opts: {
               complete: opts.complete?.[m] ?? n >= 25,
               buyers: buyers(m, n),
               launchAt: null,
+              ...LAUNCH,
             },
       );
     }
@@ -70,6 +74,9 @@ describe("resolveLaunchSnipers", () => {
     expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 })).get("A")).toEqual({
       holding: 12,
       seen: 25,
+      firstBuyersSupplyPct: 25,
+      launchBundledBuyers: 1,
+      devBuySupplyPct: 2,
     });
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 60_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
@@ -132,6 +139,9 @@ describe("resolveLaunchSnipers", () => {
     expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 })).get("A")).toEqual({
       holding: 10,
       seen: 10,
+      firstBuyersSupplyPct: 10,
+      launchBundledBuyers: 1,
+      devBuySupplyPct: 2,
     });
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 60_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
@@ -149,11 +159,20 @@ describe("resolveLaunchSnipers", () => {
 
 describe("withLaunchSnipers", () => {
   it("fills the figure in when the stream has none, and keeps the stream's when it has one", () => {
-    const snipers = { holding: 7, seen: 25 };
+    const snipers = {
+      holding: 7,
+      seen: 25,
+      firstBuyersSupplyPct: 25,
+      launchBundledBuyers: 3,
+      devBuySupplyPct: 2,
+    };
     expect(withLaunchSnipers(undefined, snipers)).toEqual({
       ...EMPTY_TRADE_FLOW,
       firstBuyersHolding: 7,
       firstBuyersSeen: 25,
+      firstBuyersSupplyPct: 25,
+      launchBundledBuyers: 3,
+      devBuySupplyPct: 2,
     });
     const streamed = { ...EMPTY_TRADE_FLOW, firstBuyersHolding: 3, firstBuyersSeen: 25 };
     expect(withLaunchSnipers(streamed, snipers)).toBe(streamed);

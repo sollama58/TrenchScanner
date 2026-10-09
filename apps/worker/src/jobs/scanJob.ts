@@ -324,6 +324,9 @@ export function withLaunchSnipers(
     ...(flow ?? EMPTY_TRADE_FLOW),
     firstBuyersHolding: snipers.holding,
     firstBuyersSeen: snipers.seen,
+    firstBuyersSupplyPct: snipers.firstBuyersSupplyPct,
+    launchBundledBuyers: snipers.launchBundledBuyers,
+    devBuySupplyPct: snipers.devBuySupplyPct,
   };
 }
 
