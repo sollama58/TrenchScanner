@@ -321,18 +321,42 @@ export const LAUNCH_SHAPE_FEATURES = [
 export const TRADE_FLOW_FAKE_ZEROS_UNTIL = new Date("2026-10-05T00:13:00Z");
 
 /**
- * A stored vector with the inputs known to be wrong on it read as missing: today, the order-flow
- * inputs on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came
- * from the create message and is real). Returns the same object when nothing applies.
+ * Rows banked before this carry the social bits with another meaning. Until #221 (deployed
+ * 2026-10-07 about 19:39 UTC) hasTwitter / hasTelegram / hasWebsite came from the scan's own
+ * DexScreener info block, which a young coin almost never has yet, so hasTwitter = 1 meant
+ * "older coin" (2x 4.9% against 13.6% for 0 on 3,342 decision rows). Since then they read the
+ * socials saved at discovery: 88% of decisions show a Twitter link and the split is flat (13.5%
+ * against 11.3%). Trained across the change, the models learn the old meaning from most of the
+ * window and apply it to live rows that carry the new one, so the older rows read as missing
+ * (notes/model-checkin-2026-10-09.md, notes/model-inputs-review-2026-10-09.md).
+ */
+export const SOCIAL_BITS_FROM_DISCOVERY_SINCE = new Date("2026-10-07T19:39:00Z");
+const SOCIAL_BIT_FEATURES = [
+  "hasTwitter",
+  "hasTelegram",
+  "hasWebsite",
+] as const satisfies readonly CandidateFeatureName[];
+
+/**
+ * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
+ * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
+ * the create message and is real), and the social bits on rows banked before
+ * SOCIAL_BITS_FROM_DISCOVERY_SINCE. Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
   features: T,
 ): T {
-  if (anchorAt.getTime() >= TRADE_FLOW_FAKE_ZEROS_UNTIL.getTime()) return features;
+  const at = anchorAt.getTime();
+  if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return features;
   const masked: Record<string, number | null | undefined> = { ...features };
-  for (const name of TRADE_FLOW_FEATURES) {
-    if (name !== "devInitialBuySol" && masked[name] !== undefined) masked[name] = null;
+  for (const name of SOCIAL_BIT_FEATURES) {
+    if (masked[name] !== undefined) masked[name] = null;
+  }
+  if (at < TRADE_FLOW_FAKE_ZEROS_UNTIL.getTime()) {
+    for (const name of TRADE_FLOW_FEATURES) {
+      if (name !== "devInitialBuySol" && masked[name] !== undefined) masked[name] = null;
+    }
   }
   return masked as T;
 }

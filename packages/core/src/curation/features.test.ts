@@ -7,6 +7,7 @@ import {
   RETIRED_LEARNER_INPUTS,
   learnerSubset,
   maskKnownBadInputs,
+  SOCIAL_BITS_FROM_DISCOVERY_SINCE,
   TRADE_FLOW_FAKE_ZEROS_UNTIL,
 } from "./features.js";
 import type { ScoredToken } from "../types.js";
@@ -234,6 +235,7 @@ describe("maskKnownBadInputs", () => {
       tradesPerMin5m: 0,
       devInitialBuySol: 1.5,
       firstBuyersHolding: 0,
+      hasTwitter: 1,
       mcapUsd: 50_000,
     };
     const masked = maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), row);
@@ -241,12 +243,27 @@ describe("maskKnownBadInputs", () => {
       uniqueBuyers5m: null,
       tradesPerMin5m: null,
       firstBuyersHolding: null,
+      hasTwitter: null,
       devInitialBuySol: 1.5,
       mcapUsd: 50_000,
     });
     expect(row.uniqueBuyers5m).toBe(0);
-    const fresh = maskKnownBadInputs(TRADE_FLOW_FAKE_ZEROS_UNTIL, row);
+    const fresh = maskKnownBadInputs(SOCIAL_BITS_FROM_DISCOVERY_SINCE, row);
     expect(fresh).toBe(row);
+  });
+
+  it("reads the social bits as missing on rows from before they came from discovery, keeping the flow", () => {
+    const row = { hasTwitter: 1, hasTelegram: 0, hasWebsite: 1, uniqueBuyers5m: 3, mcapUsd: 50_000 };
+    const masked = maskKnownBadInputs(TRADE_FLOW_FAKE_ZEROS_UNTIL, row);
+    expect(masked).toEqual({
+      hasTwitter: null,
+      hasTelegram: null,
+      hasWebsite: null,
+      uniqueBuyers5m: 3,
+      mcapUsd: 50_000,
+    });
+    expect(maskKnownBadInputs(new Date("2026-10-07T19:38:59Z"), row).hasTwitter).toBeNull();
+    expect(maskKnownBadInputs(new Date("2026-10-07T19:39:00Z"), row)).toBe(row);
   });
 
   it("keeps the retired duplicates off the learner list", () => {
