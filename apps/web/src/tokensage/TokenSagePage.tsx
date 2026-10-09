@@ -8,6 +8,7 @@ import type { ShareCardKind } from "./shareCards";
 import {
   compact,
   hitRate,
+  logoKinds,
   named,
   prettyLabel,
   share,
@@ -438,7 +439,7 @@ function Sections({ data, lighthouse }: { data: TokenSageShowcase; lighthouse: M
               <ShareButton kind="logos" />
             </div>
             <RankBars
-              rows={named(data.anatomy.logo).map((r) => ({
+              rows={logoKinds(data.anatomy.logo).map((r) => ({
                 label: prettyLabel(r.label),
                 value: r.count,
                 display: compact(r.count),

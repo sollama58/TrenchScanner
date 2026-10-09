@@ -1,7 +1,7 @@
 import type { LighthouseTally, MarketLighthouse } from "../api";
 import { MIN_GRADED as LIGHTHOUSE_MIN_GRADED, narratives } from "../components/MarketLighthouse";
 import { narrativeBaseline, relativeScale } from "../lighthouseMetrics";
-import { compact, hitRate, named, prettyLabel } from "./showcase";
+import { compact, hitRate, logoKinds, named, prettyLabel } from "./showcase";
 import type { ShowcaseCount, TokenSageShowcase } from "./showcase";
 
 /**
@@ -431,8 +431,8 @@ function drawFlags(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
   );
 }
 
-function drawCounts(ctx: CanvasRenderingContext2D, rows: ShowcaseCount[]) {
-  const shown = named(rows);
+function drawCounts(ctx: CanvasRenderingContext2D, rows: ShowcaseCount[], pick = named<ShowcaseCount>) {
+  const shown = pick(rows);
   const total = rows.reduce((sum, r) => sum + r.count, 0);
   bars(
     ctx,
@@ -562,7 +562,7 @@ const DRAW: Record<
   themes: drawThemes,
   lineage: drawLineage,
   flags: drawFlags,
-  logos: (ctx, d) => drawCounts(ctx, d.anatomy.logo),
+  logos: (ctx, d) => drawCounts(ctx, d.anatomy.logo, logoKinds),
   fees: (ctx, d) => drawCounts(ctx, d.anatomy.fee),
   models: (ctx, _d, lh) => drawModels(ctx, lh),
 };
