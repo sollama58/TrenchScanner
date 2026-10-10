@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { loadEnv } from "../config/env.js";
 import { appendPoolParams, prisma, TRAINER_APPLICATION_NAME } from "../db.js";
@@ -140,6 +140,11 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
 
+  // The tests share one token, so each starts as if the chat had never been alerted about it.
+  beforeEach(async () => {
+    if (chatRowId) await prisma.telegramAlertSent.deleteMany({ where: { chatId: chatRowId } });
+  });
+
   /** Each test starts with the chat's cursor a minute back, whatever the previous test sent. */
   const rewind = () =>
     prisma.telegramChat.update({
@@ -221,6 +226,37 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(api.sent()).toHaveLength(1);
   });
 
+  it("alerts a chat once per token: a later call or match on it is not sent again", async () => {
+    await rewind();
+    const api = new FakeTelegramApi();
+    const first = new Date(Date.now() - 40_000);
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId,
+        source: "test",
+        confidence: 80,
+        anchorPriceUsd: 0.001,
+        anchorMcapUsd: 50_000,
+        model: "rules",
+        modelName: "Rules",
+        createdAt: first,
+      },
+    });
+    expect((await run(api, true, first.getTime() + 5_000)).sent).toBe(1);
+
+    // The filter catches the same coin a little later, in a pass of its own.
+    const later = new Date(first.getTime() + 10_000);
+    await prisma.match.create({
+      data: { userId, filterId, tokenId, snapshotId, matchedAt: later, score: 75 },
+    });
+    const again = await run(api, true, later.getTime() + 5_000);
+    expect(again.sent + again.digests).toBe(0);
+    expect(api.sent()).toHaveLength(1);
+    // Nothing waits on it: the cursor steps past the suppressed alert.
+    const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(later.getTime());
+  });
+
   it("never reads the model state on a pass with nothing new", async () => {
     const api = new FakeTelegramApi();
     await prisma.telegramChat.update({ where: { id: chatRowId }, data: { sentThrough: new Date() } });
@@ -254,6 +290,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
         where: { id: chatRowId },
         data: { sentThrough: new Date(at.getTime() - 1) },
       });
+      await prisma.telegramAlertSent.deleteMany({ where: { chatId: chatRowId } });
       const api = new FakeTelegramApi();
       await runTelegramDispatch(env, {
         api,
@@ -295,7 +332,8 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     await run(api, true, now, openSince);
     const held = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(held!.sentThrough.getTime()).toBeLessThan(openSince.getTime());
-    // It commits; the next pass still reads it.
+    // It commits; the next pass still reads it (and the chat hadn't heard about the token yet).
+    await prisma.telegramAlertSent.deleteMany({ where: { chatId: chatRowId } });
     await prisma.match.create({
       data: { userId, filterId, tokenId, snapshotId, matchedAt: openSince, score: 64 },
     });

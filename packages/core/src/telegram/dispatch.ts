@@ -193,6 +193,8 @@ function loadChats() {
 /** Something to tell a chat about: one token, everything raised on it since the cursor. */
 interface Pending {
   card: AlertCard;
+  /** The tokens it is about: one, or a digest's several. */
+  tokenIds: string[];
   /** The cursor moves here once this is sent. */
   through: Date;
 }
@@ -239,7 +241,11 @@ export function buildPending(
   const take = (tokenId: string, at: Date, token: AlertCard["token"], snapshot: AlertCard["snapshot"]) => {
     let p = byToken.get(tokenId);
     if (!p) {
-      p = { card: { token, snapshot, filters: [], calls: [], raisedAt: at }, through: at };
+      p = {
+        card: { token, snapshot, filters: [], calls: [], raisedAt: at },
+        tokenIds: [tokenId],
+        through: at,
+      };
       byToken.set(tokenId, p);
     }
     if (at > p.through) {
@@ -401,6 +407,22 @@ async function dispatchPass(
       )
     : false;
 
+  // One alert per token per chat: a token a chat already heard about (a model called it, or its
+  // filter caught it, in an earlier pass) is not sent again when another model calls it later.
+  // Each pass groups what it reads by token, but models call a coin minutes apart, so without this
+  // the second model's call went out as a second alert for the same coin.
+  const alreadySent = new Set(
+    (
+      await prisma.telegramAlertSent.findMany({
+        where: {
+          chatId: { in: chats.map((c) => c.id) },
+          tokenId: { in: [...new Set([...matches, ...calls].map((a) => a.tokenId))] },
+        },
+        select: { chatId: true, tokenId: true },
+      })
+    ).map((r) => `${r.chatId}:${r.tokenId}`),
+  );
+
   const access = new Map<string, Promise<boolean>>();
   const accessOf = (wallet: string) => {
     let p = access.get(wallet);
@@ -449,7 +471,7 @@ async function dispatchPass(
         ? theirs
         : theirs.map((c) => ({ ...c, narrativeVerdict: null })),
       horizon,
-    );
+    ).filter((p) => !alreadySent.has(`${chat.id}:${p.tokenIds[0]}`));
     if (pending.length === 0) {
       caughtUp.push(chat.id);
       continue;
@@ -459,7 +481,11 @@ async function dispatchPass(
       queues.push({
         chat,
         pending: [
-          { card: { ...pending[0]!.card, digest: pending.map((p) => p.card) } as DigestCard, through },
+          {
+            card: { ...pending[0]!.card, digest: pending.map((p) => p.card) } as DigestCard,
+            tokenIds: pending.flatMap((p) => p.tokenIds),
+            through,
+          },
         ],
         nextAt: 0,
       });
@@ -517,6 +543,11 @@ async function dispatchPass(
       q.nextAt = now() + spacing;
       if (isDigest(item.card)) summary.digests += 1;
       else summary.sent += 1;
+      // Before the cursor: if the cursor write fails, the next pass re-reads these and skips them.
+      await prisma.telegramAlertSent.createMany({
+        data: item.tokenIds.map((tokenId) => ({ chatId: q.chat.id, tokenId })),
+        skipDuplicates: true,
+      });
       await prisma.telegramChat.updateMany({
         where: { id: q.chat.id, revokedAt: null },
         data: { sentThrough: item.through, lastSentAt: new Date(), lastError: null, failures: 0 },

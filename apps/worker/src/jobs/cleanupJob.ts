@@ -38,6 +38,9 @@ const NARRATIVE_DOC_RETENTION_DAYS = 21;
  */
 const REVOKED_DEVICE_RETENTION_DAYS = 30;
 
+/** How long a chat's "already alerted about this token" row is kept. */
+const TELEGRAM_ALERT_SENT_RETENTION_DAYS = 7;
+
 /**
  * How far before the snapshot horizon a token's last sign of life may be and still be walked
  * nightly - slack for nights the sweep missed. See deleteExpiredSnapshots.
@@ -540,6 +543,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedRevokedDevices,
     deletedNonces,
     deletedFilterBaselines,
+    deletedTelegramAlertsSent,
   ] = await Promise.all([
     stage("linkCodes", none, () =>
       prisma.mobileLinkCode.deleteMany({
@@ -574,6 +578,13 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     stage("filterBaselines", none, () =>
       prisma.filterBaseline.deleteMany({
         where: { createdAt: { lt: new Date(startedAt - DAY_MS) } },
+      }),
+    ),
+    // Which tokens each Telegram chat was alerted about, kept so a later model's call on the same
+    // coin isn't sent again (telegram/dispatch.ts). A week outlasts any coin's run of calls.
+    stage("telegramAlertsSent", none, () =>
+      prisma.telegramAlertSent.deleteMany({
+        where: { sentAt: { lt: new Date(startedAt - TELEGRAM_ALERT_SENT_RETENTION_DAYS * DAY_MS) } },
       }),
     ),
   ]);
@@ -647,6 +658,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedRevokedDevices: deletedRevokedDevices.count,
     deletedNonces: deletedNonces.count,
     deletedFilterBaselines: deletedFilterBaselines.count,
+    deletedTelegramAlertsSent: deletedTelegramAlertsSent.count,
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,
