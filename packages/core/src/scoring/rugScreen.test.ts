@@ -62,15 +62,18 @@ describe("runRugScreen", () => {
     expect(result.reasons.some((r) => r.includes("liquidity"))).toBe(true);
   });
 
-  // Top-10 concentration, dev wallet %, RugCheck's risk score, and its named risk flags used to
-  // be hard-gated here too - they're now opt-in UserFilter criteria instead (see
-  // matchFilters.test.ts), so a profile that would have failed on any of those alone now passes
-  // the automatic screen. This is the intended behavior change, not a gap: different users
-  // legitimately want different thresholds for these, unlike mint/freeze/LP.
-  it("passes despite extreme top-10 concentration - that's now opt-in, not automatic", () => {
-    const result = runRugScreen({ ...safeProfile, top10HolderPct: 95 });
-    expect(result.passed).toBe(true);
+  it("rejects a token whose top-10 holders own 40% or more of supply, and only once measured", () => {
+    const concentrated = runRugScreen({ ...safeProfile, top10HolderPct: 40 });
+    expect(concentrated.passed).toBe(false);
+    expect(concentrated.reasons).toEqual(["top-10 holders own 40% of supply (40% or more)"]);
+    expect(runRugScreen({ ...safeProfile, top10HolderPct: 95 }).passed).toBe(false);
+    expect(runRugScreen({ ...safeProfile, top10HolderPct: 39.9 }).passed).toBe(true);
   });
+
+  // Dev wallet %, RugCheck's risk score, and its named risk flags used to be hard-gated here
+  // too - they're now opt-in UserFilter criteria instead (see matchFilters.test.ts), so a profile
+  // that would have failed on any of those alone now passes the automatic screen. Top-10
+  // concentration is the same below SAFETY_REJECT_TOP10_HOLDER_PCT.
 
   it("passes despite an unknown top-10 concentration - that's now opt-in, not automatic", () => {
     const result = runRugScreen({ ...safeProfile, top10HolderPct: undefined });
@@ -165,6 +168,8 @@ describe("passesWalletSafetyCuts", () => {
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 70 })).toBe(true);
+    expect(passesWalletSafetyCuts({ top10HolderPct: 40 })).toBe(false);
+    expect(passesWalletSafetyCuts({ top10HolderPct: 35 })).toBe(true);
   });
 
   it("rejects a live token when 80% or more of its top 10 are the launch's first buyers", () => {
@@ -178,5 +183,6 @@ describe("passesWalletSafetyCuts", () => {
   it("keeps a row whose wallet checks were never measured", () => {
     expect(passesWalletSafetyCuts({})).toBe(true);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: null, freshTop10WalletPct: null })).toBe(true);
+    expect(passesWalletSafetyCuts({ top10HolderPct: null })).toBe(true);
   });
 });
