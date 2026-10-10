@@ -12,7 +12,8 @@ import { narrativeIsLateCopy, narrativeReferentNamed } from "../curation/narrati
  * read 24-hour windows for a 15-minute question and rewarded a low top-10 share, which on a
  * pre-bond launch is a red flag. This one reads the 5-minute window, favors fresh launches and
  * flags thin pre-bond holder books. Each part's breakpoints are fixed; only the weights between
- * the parts adapt, a step at a time (below), so a saved minimum drifts slowly rather than jumping.
+ * the parts adapt, a step at a time (below), and each change is rescaled (ScoreAnchor) so a saved
+ * minimum keeps letting through about the same share of tokens.
  *
  * The parts keep their old field names (ScoreBreakdown is stored on snapshots): `age` is the
  * freshness part, `holderHealth` the holder-quality part.
@@ -57,6 +58,48 @@ export function setScoreWeights(w: ScoreWeights): void {
     holderQuality: w.holderQuality / sum,
     narrative: w.narrative / sum,
   };
+}
+
+/**
+ * A fixed rescale applied to the weighted sum: total = scale x sum + offset (user decision
+ * 2026-10-10, notes/scoring-audit-2026-10-10.md). Each weight change shifts the whole score up or
+ * down; before this, a saved min 80 passed anywhere from 1% to 22% of filter matches as the
+ * weights moved. When a new weight set is adopted, the fit (scoreWeights.ts) sets the rescale so
+ * the new score keeps the old score's 10th and 90th percentiles on recent matches, and stores it
+ * with the run. The rescale is monotone, so it never changes which token ranks above which.
+ */
+export interface ScoreAnchor {
+  scale: number;
+  offset: number;
+}
+
+/** No rescale: the weighted sum as is (every run before re-anchoring, and the defaults). */
+export const IDENTITY_SCORE_ANCHOR: Readonly<ScoreAnchor> = Object.freeze({ scale: 1, offset: 0 });
+
+let activeAnchor: ScoreAnchor = { ...IDENTITY_SCORE_ANCHOR };
+
+/** The rescale scoreToken applies when none is passed: the one stored with the adopted weights. */
+export function getScoreAnchor(): ScoreAnchor {
+  return { ...activeAnchor };
+}
+
+/** Installs a rescale; an unusable one (not finite, scale not positive) leaves the current one. */
+export function setScoreAnchor(a: ScoreAnchor): void {
+  if (!Number.isFinite(a.scale) || !Number.isFinite(a.offset) || !(a.scale > 0)) return;
+  activeAnchor = { scale: a.scale, offset: a.offset };
+}
+
+/** The weighted sum of the parts, before the rescale. */
+export function weightedScoreSum(
+  parts: { momentum: number; age: number; holderHealth: number; narrative: number },
+  weights: ScoreWeights,
+): number {
+  return (
+    parts.momentum * weights.momentum +
+    parts.age * weights.freshness +
+    parts.holderHealth * weights.holderQuality +
+    parts.narrative * weights.narrative
+  );
 }
 
 /**
@@ -150,19 +193,19 @@ export function scoreNarrative(token: EnrichedToken): number {
   return read.highFlagCount > 0 ? Math.min(part, NARRATIVE_RED_FLAG_CAP) : part;
 }
 
-export function scoreToken(token: EnrichedToken, weights: ScoreWeights = activeWeights): ScoreBreakdown {
-  const momentum = scoreMomentum(token);
-  const age = scoreFreshness(token);
-  const holderHealth = scoreHolderQuality(token);
-  const narrative = scoreNarrative(token);
-
-  const total =
-    momentum * weights.momentum +
-    age * weights.freshness +
-    holderHealth * weights.holderQuality +
-    narrative * weights.narrative;
-
-  return { momentum, holderHealth, age, narrative, total: clamp(total) };
+export function scoreToken(
+  token: EnrichedToken,
+  weights: ScoreWeights = activeWeights,
+  anchor: ScoreAnchor = activeAnchor,
+): ScoreBreakdown {
+  const parts = {
+    momentum: scoreMomentum(token),
+    age: scoreFreshness(token),
+    holderHealth: scoreHolderQuality(token),
+    narrative: scoreNarrative(token),
+  };
+  const total = anchor.scale * weightedScoreSum(parts, weights) + anchor.offset;
+  return { ...parts, total: clamp(total) };
 }
 
 /**

@@ -32,6 +32,9 @@ model ScoreWeightRun {
   freshness     Float
   holderQuality Float
   narrative     Float
+  /// The rescale stored with the weights: total = anchorScale x weighted sum + anchorOffset.
+  anchorScale   Float    @default(1)
+  anchorOffset  Float    @default(0)
   adopted       Boolean
   reason        String
   metrics       Json

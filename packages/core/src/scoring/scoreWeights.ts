@@ -1,4 +1,4 @@
-import type { ScoreWeights } from "./scorer.js";
+import { IDENTITY_SCORE_ANCHOR, type ScoreAnchor, type ScoreWeights } from "./scorer.js";
 
 /**
  * The composite score's adaptive weights (user ask 2026-10-06: "the scoring weighting changing to
@@ -17,7 +17,10 @@ import type { ScoreWeights } from "./scorer.js";
  * - every part keeps at least MIN_PART_WEIGHT, and the narrative part's weight stays where it is
  *   until TokenSage's read (scorer.ts scoreNarrative, live since 2026-10-07) has shown on graded
  *   rows that it ranks winners; until then most rows carry the midpoint and a fit over it would
- *   only measure how many rows had a read.
+ *   only measure how many rows had a read;
+ * - an adopted set comes with a rescale (ScoreAnchor) that keeps the score's 10th and 90th
+ *   percentiles on the window's filter matches where they were, so a saved min score keeps letting
+ *   through about the same share of tokens (user decision 2026-10-10).
  *
  * Pure: the trainer job loads the rows and stores the result (apps/worker/src/jobs/scoreWeightsJob.ts).
  */
@@ -30,6 +33,8 @@ export interface ScoreFitRow {
   momentum: number;
   freshness: number;
   holderQuality: number;
+  /** The narrative part; the midpoint when the row carries no read. Only the rescale reads it. */
+  narrative?: number;
   /** 2x inside the win window. */
   win: boolean;
   /** 4x inside the goal window. */
@@ -41,6 +46,8 @@ export interface ScoreFitRow {
 export interface ScoreFitResult {
   /** The weights to use from now on: the stepped fit when adopted, today's otherwise. */
   weights: ScoreWeights;
+  /** The rescale to use with them: set to keep the score's spread when adopted, today's otherwise. */
+  anchor: ScoreAnchor;
   adopted: boolean;
   /** Why, in a sentence (stored and shown on the Admin/explainer). */
   reason: string;
@@ -66,6 +73,10 @@ const MIN_POPULATION_WINS = 20;
 const MIN_TIER_HITS = 5;
 /** The step must beat today's weights by at least this much rank quality on the unseen rows. */
 const MIN_GAIN = 0.002;
+/** The rescale is set on filter matches when the window holds this many, on every row otherwise. */
+const MIN_ANCHOR_ROWS = 200;
+/** A rescale outside this range means the spread can't be matched sensibly; the change is held. */
+const ANCHOR_SCALE_RANGE: readonly [number, number] = [0.25, 4];
 
 type Part = "momentum" | "freshness" | "holderQuality";
 
@@ -130,7 +141,51 @@ function grid(total: number): Array<Pick<ScoreWeights, Part>> {
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
-export function fitScoreWeights(rows: readonly ScoreFitRow[], current: ScoreWeights): ScoreFitResult {
+/** The p-th quantile (0-1) of sorted values, linearly interpolated. */
+function quantile(sorted: readonly number[], p: number): number {
+  const at = (sorted.length - 1) * p;
+  const lo = Math.floor(at);
+  const hi = Math.ceil(at);
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (at - lo);
+}
+
+const rawSum = (r: ScoreFitRow, w: ScoreWeights) =>
+  w.momentum * r.momentum +
+  w.freshness * r.freshness +
+  w.holderQuality * r.holderQuality +
+  w.narrative * (r.narrative ?? 50);
+
+/**
+ * The rescale that puts the new weights' 10th and 90th percentiles where today's score (today's
+ * weights and rescale) has them, on the window's filter matches (every row when there are too few
+ * matches). Null when the spread can't be matched sensibly.
+ */
+export function anchorForWeights(
+  rows: readonly ScoreFitRow[],
+  current: ScoreWeights,
+  currentAnchor: ScoreAnchor,
+  next: ScoreWeights,
+): ScoreAnchor | null {
+  const matches = rows.filter((r) => r.population === "match");
+  const basis = matches.length >= MIN_ANCHOR_ROWS ? matches : rows;
+  if (basis.length < MIN_ANCHOR_ROWS) return null;
+  const today = basis
+    .map((r) => currentAnchor.scale * rawSum(r, current) + currentAnchor.offset)
+    .sort((a, b) => a - b);
+  const proposed = basis.map((r) => rawSum(r, next)).sort((a, b) => a - b);
+  const span = quantile(proposed, 0.9) - quantile(proposed, 0.1);
+  if (!(span > 0)) return null;
+  const scale = (quantile(today, 0.9) - quantile(today, 0.1)) / span;
+  if (!(scale >= ANCHOR_SCALE_RANGE[0] && scale <= ANCHOR_SCALE_RANGE[1])) return null;
+  const offset = quantile(today, 0.1) - scale * quantile(proposed, 0.1);
+  return { scale: Math.round(scale * 10_000) / 10_000, offset: Math.round(offset * 100) / 100 };
+}
+
+export function fitScoreWeights(
+  rows: readonly ScoreFitRow[],
+  current: ScoreWeights,
+  currentAnchor: ScoreAnchor = IDENTITY_SCORE_ANCHOR,
+): ScoreFitResult {
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
   const counts = {
     event: sorted.filter((r) => r.population === "event").length,
@@ -140,6 +195,7 @@ export function fitScoreWeights(rows: readonly ScoreFitRow[], current: ScoreWeig
   };
   const keep = (reason: string, extra: Partial<ScoreFitResult> = {}): ScoreFitResult => ({
     weights: { ...current },
+    anchor: { ...currentAnchor },
     adopted: false,
     reason,
     fitted: null,
@@ -210,8 +266,16 @@ export function fitScoreWeights(rows: readonly ScoreFitRow[], current: ScoreWeig
       extra,
     );
   }
+  const anchor = anchorForWeights(sorted, current, currentAnchor, proposed);
+  if (anchor === null) {
+    return keep(
+      "The new weights' spread couldn't be matched to today's score, so the change is held.",
+      extra,
+    );
+  }
   return {
     weights: proposed,
+    anchor,
     adopted: true,
     reason: `Ranks the newest tokens better: ${holdoutProposed.toFixed(3)} vs ${holdoutCurrent.toFixed(3)}.`,
     ...extra,
