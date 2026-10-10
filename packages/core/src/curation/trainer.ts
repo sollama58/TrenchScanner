@@ -1,5 +1,10 @@
 import { paceBudget } from "./governor.js";
-import { FRIENDLY_FEATURE_LABELS, LEARNER_FEATURE_NAMES, scoredFromFeatures } from "./features.js";
+import {
+  FRIENDLY_FEATURE_LABELS,
+  LEARNER_FEATURE_NAMES,
+  SAFETY_FEATURES,
+  scoredFromFeatures,
+} from "./features.js";
 import {
   curationRankScore,
   evaluateCandidateHeuristic,
@@ -218,21 +223,27 @@ export interface TwoStageCuratorParams {
 export const NARRATIVE_BLEND_MODEL_KIND = "narrative-blend-v1";
 
 /**
- * The input name the blend stage of a NarrativeBlendCuratorParams reads the market stage's score
- * under, as log-odds. Not a recorded feature: it is computed from the market stage at scoring time.
+ * The input name a blend stage trained before 2026-10-10 reads the first stage's score under, as
+ * log-odds, when that stage read every market input. Not a recorded feature: it is computed from
+ * the first stage at scoring time.
  */
 export const MARKET_SCORE_INPUT = "marketScoreLogit";
 
+/** The same, for a first stage that reads only the safety readings (SAFETY_FEATURES). */
+export const SAFETY_SCORE_INPUT = "safetyScoreLogit";
+
 /**
- * The two-step narrative model (the Narrative Blend seat, contestants.ts): a market stage scores
- * the coin from every non-TokenSage input, trained on every row; a blend stage, trained only on
- * rows that carry TokenSage's deep read, decides from that score and the TokenSage inputs. The
- * market's view and the narrative's each get a stage of their own, so neither drowns the other.
+ * The two-step narrative model (the Narrative Blend seat, contestants.ts): a first stage scores
+ * the coin from its safety readings (SAFETY_FEATURES), trained on every row; a blend stage,
+ * trained only on rows that carry TokenSage's deep read, decides from that score and the TokenSage
+ * inputs. No price, volume or age reaches either stage (user decision 2026-10-10; until then the
+ * first stage read every market input, and most of the seat's picks rested on it).
  */
 export interface NarrativeBlendCuratorParams {
   kind: typeof NARRATIVE_BLEND_MODEL_KIND;
+  /** The first stage. Stored under this key since the stage read every market input. */
   market: Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;
-  /** Reads MARKET_SCORE_INPUT plus the TokenSage inputs. */
+  /** Reads SAFETY_SCORE_INPUT (MARKET_SCORE_INPUT on older models) plus the TokenSage inputs. */
   blend: Omit<BoostedCuratorParams, "threshold">;
   /** Emit when the blend stage's probability >= this. */
   threshold: number;
@@ -371,13 +382,13 @@ function logOdds(p: number): number {
 }
 
 /**
- * The two-step narrative trainer - see NarrativeBlendCuratorParams. The market stage trains on
- * every row with the inputs that are not TokenSage's. The blend stage trains on the rows with the
- * deep read (nsDepthFull = 1), each carrying the market stage's score for it as MARKET_SCORE_INPUT
- * - cross-fitted: the deep-read tokens split in two halves, and each half is scored by a market
- * stage that never trained on its tokens, so the blend stage learns how far to trust the market
- * score from the scores a live coin would get, not from memorized ones. With too few deep-read
- * rows for the blend stage, the market stage ships alone.
+ * The two-step narrative trainer - see NarrativeBlendCuratorParams. The safety stage trains on
+ * every row with the safety readings. The blend stage trains on the rows with the deep read
+ * (nsDepthFull = 1), each carrying the safety stage's score for it as SAFETY_SCORE_INPUT -
+ * cross-fitted: the deep-read tokens split in two halves, and each half is scored by a safety
+ * stage that never trained on its tokens, so the blend stage learns how far to trust that score
+ * from the scores a live coin would get, not from memorized ones. With too few deep-read rows for
+ * the blend stage, the safety stage ships alone.
  */
 export async function trainNarrativeBlendCurator(
   rows: TrainingRow[],
@@ -388,7 +399,7 @@ export async function trainNarrativeBlendCurator(
     ...opts,
     narrativeBlend: false,
     twoStage: false,
-    featureNames: names.filter((n) => !n.startsWith("ns")),
+    featureNames: names.filter((n) => SAFETY_FEATURES.includes(n as (typeof SAFETY_FEATURES)[number])),
   };
   const market = await trainSingleStage(rows, marketOpts);
   const deep = rows.filter((r) => r.features.nsDepthFull === 1);
@@ -423,7 +434,7 @@ export async function trainNarrativeBlendCurator(
   }
   const blendRows = deep.map((r, i) => ({
     ...r,
-    features: { ...r.features, [MARKET_SCORE_INPUT]: logOdds(oof[i]!) },
+    features: { ...r.features, [SAFETY_SCORE_INPUT]: logOdds(oof[i]!) },
   }));
   const blend = await trainBoostedCurator(blendRows, {
     ...opts.boosting,
@@ -432,17 +443,21 @@ export async function trainNarrativeBlendCurator(
     recencyHalfLifeDays: opts.recencyHalfLifeDays,
     legacyLabelWeight: opts.legacyLabelWeight,
     runWeightPerDoubling: opts.runWeightPerDoubling,
-    featureNames: [MARKET_SCORE_INPUT, ...names.filter((n) => n.startsWith("ns"))],
+    featureNames: [SAFETY_SCORE_INPUT, ...names.filter((n) => n.startsWith("ns"))],
   });
   return { kind: NARRATIVE_BLEND_MODEL_KIND, market, blend };
 }
 
-/** The blend stage's inputs for one candidate: its features plus the market stage's score. */
+/**
+ * The blend stage's inputs for one candidate: its features plus the first stage's score, under
+ * both names, so a blend stage trained on either first stage finds it.
+ */
 function withMarketScore(
   params: Omit<NarrativeBlendCuratorParams, "threshold">,
   features: Record<string, number | null | undefined>,
 ): Record<string, number | null | undefined> {
-  return { ...features, [MARKET_SCORE_INPUT]: logOdds(scoreCandidateWithModel(params.market, features)) };
+  const score = logOdds(scoreCandidateWithModel(params.market, features));
+  return { ...features, [MARKET_SCORE_INPUT]: score, [SAFETY_SCORE_INPUT]: score };
 }
 
 const LEARNING_RATE = 0.5;
@@ -999,6 +1014,7 @@ export function featureContributions(
 /** An input's plain-words label; the blend stage's market score is not a recorded feature. */
 export function inputLabel(name: string): string {
   if (name === MARKET_SCORE_INPUT) return "the market's read";
+  if (name === SAFETY_SCORE_INPUT) return "the safety read";
   return FRIENDLY_FEATURE_LABELS[name as keyof typeof FRIENDLY_FEATURE_LABELS] ?? name;
 }
 

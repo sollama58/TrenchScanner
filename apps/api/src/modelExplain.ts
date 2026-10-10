@@ -5,6 +5,7 @@ import {
   BOOSTED_MODEL_KIND,
   CURATOR_MODEL_KIND,
   NARRATIVE_BLEND_MODEL_KIND,
+  SAFETY_SCORE_INPUT,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
   TOP_SLICE_MODEL_KIND,
@@ -148,13 +149,21 @@ export function recipeFacts(params: ContestantParams, metrics: Partial<StoredEva
         ...familyFacts("Win stage: ", params.win),
       );
       break;
-    case NARRATIVE_BLEND_MODEL_KIND:
+    case NARRATIVE_BLEND_MODEL_KIND: {
+      // Models trained before 2026-10-10 read every market input in their first step.
+      const safety = params.blend.featureNames.includes(SAFETY_SCORE_INPUT);
       facts.push(
-        { label: "Shape", value: "Two steps: the market's read, then TokenSage's on top" },
-        ...familyFacts("Market step: ", params.market),
+        {
+          label: "Shape",
+          value: safety
+            ? "Two steps: the safety read, then TokenSage's on top"
+            : "Two steps: the market's read, then TokenSage's on top",
+        },
+        ...familyFacts(safety ? "Safety step: " : "Market step: ", params.market),
         ...familyFacts("Narrative step: ", params.blend),
       );
       break;
+    }
     case STACKED_MODEL_KIND:
       facts.push(
         { label: "Shape", value: "Logistic model over the members' ranks (stacked)" },
