@@ -5,7 +5,7 @@ import { currentMarketCap } from "./matches.js";
 import { curatedAlertInclude, serializeCuratedAlert, withLatestSnapshots } from "../curatedFeed.js";
 import { buildLeaderboard, contestState, modelLabel } from "../contest.js";
 import { buildModelInsights } from "../modelInsights.js";
-import { modelRunsRoute, reportDaysSchema, type ReportCaches } from "./curated.js";
+import { leaderboardDaysSchema, modelRunsRoute, reportDaysSchema, type ReportCaches } from "./curated.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { lighthouseQuerySchema, lighthouseSignalsQuerySchema } from "../marketLighthouse.js";
@@ -48,6 +48,7 @@ const FEED_CACHE_TTL_MS = 5_000;
 const GUEST_RATE_LIMIT = { max: 90, timeWindow: "1 minute" };
 
 const reportQuerySchema = z.object({ days: reportDaysSchema });
+const leaderboardQuerySchema = z.object({ days: leaderboardDaysSchema });
 
 const querySchema = z.object({
   page: z.coerce.number().int().min(1).max(GUEST_MAX_PAGES).default(1),
@@ -119,7 +120,7 @@ export async function registerGuestRoutes(
    * no picks of their own, so the "in your feed" marks all point at the default model.
    */
   app.get("/models", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
-    const parsed = reportQuerySchema.safeParse(request.query);
+    const parsed = leaderboardQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }

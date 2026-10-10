@@ -106,6 +106,15 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
     expect((await app.inject({ method: "GET", url: "/guest/models?days=2" })).statusCode).toBe(400);
   });
 
+  it("serves a 24h leaderboard with its own baseline, but no 24h insights fill", async () => {
+    const res = await app.inject({ method: "GET", url: "/guest/models?days=1" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { window: { days: number }; baseline: { graded: number } };
+    expect(body.window.days).toBe(1);
+    expect(typeof body.baseline.graded).toBe("number");
+    expect((await app.inject({ method: "GET", url: "/guest/insights?days=1" })).statusCode).toBe(400);
+  });
+
   it("serves the Models tab's reports without the AI reviewer's live calls", async () => {
     const res = await app.inject({ method: "GET", url: "/guest/insights?days=30" });
     expect(res.statusCode).toBe(200);

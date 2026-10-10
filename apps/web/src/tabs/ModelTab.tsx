@@ -35,7 +35,11 @@ import {
   ROLE_LABEL,
   RulesInUse,
   STATUS_TEXT,
+  PAGE_DAYS,
   WINDOWS,
+  windowLong,
+  windowShort,
+  type WindowDays,
   doublings,
   liftTone,
   profitTone,
@@ -52,7 +56,7 @@ import { renderLearningCard, type LearningCardData } from "./learningCard";
  */
 export function ModelTab({ guest = false }: { guest?: boolean }) {
   const now = useNow(60_000);
-  const [days, setDays] = useState<(typeof WINDOWS)[number]>(7);
+  const days = PAGE_DAYS;
   const [pick, setPick] = useState(0);
   // A guest reads the same reports from the read-only guest routes; the /curated ones need access.
   const api = guest ? "/guest" : "/curated";
@@ -96,8 +100,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
   const leadLive = leader?.composite.live ?? null;
 
   return (
-    // Dimmed while a new window's numbers load (the old window's stay up meanwhile).
-    <div className={`stack${insights.stale ? " stale" : ""}`} aria-busy={insights.stale}>
+    <div className="stack">
       <section className="panel hero">
         <div className="hero-top">
           <div>
@@ -126,21 +129,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
                 : ""}
               {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
             </p>
-          </div>
-          <div className="segmented" role="tablist" aria-label="Window">
-            {WINDOWS.map((w) => (
-              <button
-                key={w}
-                className={w === days ? "on" : ""}
-                onPointerEnter={() => {
-                  prefetch(`${api}/insights?days=${w}`);
-                  prefetch(`${api}/models?days=${w}`);
-                }}
-                onClick={() => setDays(w)}
-              >
-                {w}d
-              </button>
-            ))}
           </div>
         </div>
 
@@ -191,12 +179,12 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         board={lb}
         base={base ?? null}
         runs={data.runs}
-        days={days}
         api={api}
         guest={guest}
         now={now}
         onSetModels={setFeedModels}
         refreshing={board.stale}
+        refreshKey={String(pick)}
       />
 
       <LearningPanel learning={data.learning} board={lb} days={days} now={now} />
@@ -320,31 +308,77 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
  * (scanJob.ts returns before sampling on a fail) and the event pre-check (passesEventPreGate in
  * packages/core curator.ts) - and the curators decide only at those same moments.
  */
-function BaselinePanel({
-  board,
-  base,
-  runs,
-  days,
-  api,
-  guest,
-  now,
-  onSetModels,
-  refreshing,
-}: {
+type BaselineProps = {
   board: Leaderboard;
-  base: (GradedRates & { kind: string }) | null;
+  base: GradedRates | null;
   runs: ModelRun[];
-  days: number;
   api: string;
   guest: boolean;
   now: number;
   onSetModels: (models: string[] | null) => Promise<void>;
   refreshing: boolean;
-}) {
+  /** Bumped when the feed's picks change, so the 24h board refetches like the page's does. */
+  refreshKey: string;
+};
+
+type BaselineView = {
+  days: WindowDays;
+  setDays: (d: WindowDays) => void;
+  metric: "2x" | "4x" | "10x";
+  setMetric: (m: "2x" | "4x" | "10x") => void;
+  picked: string | null;
+  setPicked: (id: string | null) => void;
+  opened: string | null;
+  setOpened: (id: string | null) => void;
+};
+
+function BaselinePanel(props: BaselineProps) {
+  const [days, setDays] = useState<WindowDays>(PAGE_DAYS);
   const [metric, setMetric] = useState<"2x" | "4x" | "10x">("2x");
   const [picked, setPicked] = useState<string | null>(null);
   // The model whose detail dialog is open (it follows the board, so a window switch refreshes it).
   const [opened, setOpened] = useState<string | null>(null);
+  const view = { days, setDays, metric, setMetric, picked, setPicked, opened, setOpened };
+  // The page's own board is the 7-day one; the 24h board is polled only while it is picked.
+  return days === PAGE_DAYS ? (
+    <BaselineChart {...props} {...view} loading={false} />
+  ) : (
+    <DayBaselineChart {...props} {...view} />
+  );
+}
+
+/** The chart over a window the page doesn't load itself; the page's bars stay up, dimmed, until it lands. */
+function DayBaselineChart(props: BaselineProps & BaselineView) {
+  const own = usePolling<Leaderboard>(`${props.api}/models?days=${props.days}`, 120_000, props.refreshKey);
+  return (
+    <BaselineChart
+      {...props}
+      board={own.data ?? props.board}
+      base={own.data ? (own.data.baseline ?? null) : props.base}
+      loading={own.data === null || own.stale}
+    />
+  );
+}
+
+function BaselineChart({
+  board,
+  base,
+  runs,
+  api,
+  guest,
+  now,
+  onSetModels,
+  refreshing,
+  days,
+  setDays,
+  metric,
+  setMetric,
+  picked,
+  setPicked,
+  opened,
+  setOpened,
+  loading,
+}: BaselineProps & BaselineView & { loading: boolean }) {
   const t = board.targets;
   const baseRate = base
     ? metric === "2x"
@@ -379,7 +413,7 @@ function BaselinePanel({
         : "reached 10x within an hour";
 
   return (
-    <section className="panel">
+    <section className={`panel${loading ? " stale" : ""}`} aria-busy={loading}>
       <header className="section-head">
         <div>
           <span className="eyebrow">
@@ -392,6 +426,22 @@ function BaselinePanel({
           </p>
         </div>
         <div className="row baseline-controls">
+          <div className="segmented small" role="tablist" aria-label="Window">
+            {WINDOWS.map((w) => (
+              <button
+                key={w}
+                role="tab"
+                aria-selected={w === days}
+                className={w === days ? "on" : ""}
+                onPointerEnter={() => {
+                  if (w !== PAGE_DAYS) prefetch(`${api}/models?days=${w}`);
+                }}
+                onClick={() => setDays(w)}
+              >
+                {windowShort(w)}
+              </button>
+            ))}
+          </div>
           <div className="segmented small" role="tablist" aria-label="Hit">
             <button className={metric === "2x" ? "on" : ""} onClick={() => setMetric("2x")}>
               2x
@@ -451,7 +501,7 @@ function BaselinePanel({
             <p className="baseline-readout">
               <strong>{selected.name}</strong>:{" "}
               {selRate === null
-                ? `no graded calls in the last ${days} days yet.`
+                ? `no graded calls in the last ${windowLong(days)} yet.`
                 : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
                     selLift === null
                       ? "."
@@ -466,10 +516,10 @@ function BaselinePanel({
             </p>
           )}
           <p className="faint small">
-            Live calls over the last {days} days (the window picked at the top of the page). Under each rate
-            is its average profit per call, following every call with one fixed exit plan. Faded bars rest on
-            too few calls. <strong>Tap or click a model</strong> for its full record, past versions and exam
-            results.
+            Live calls over the last {windowLong(days)}, against the baseline over the same window. Under each
+            rate is its average profit per call, following every call with one fixed exit plan. Faded bars
+            rest on too few calls. <strong>Tap or click a model</strong> for its full record, past versions
+            and exam results.
           </p>
           <ModelDetailModal
             entry={board.entries.find((e) => e.id === opened) ?? null}
@@ -1463,7 +1513,7 @@ const LEARNING_METRIC_KEYS = Object.keys(LEARNING_METRICS) as LearningMetric[];
  * can't either, since it climbs with evidence at a constant skill. A model's LIFT over the market
  * (its 2x rate divided by the 2x rate of the moments the models decided on) is what carries across
  * days, so that is what this panel tracks: one model at a time, picked by the reader, by day for
- * its live calls and by run for its exams. Its window is the page's.
+ * its live calls and by run for its exams. Its window is the page's (PAGE_DAYS).
  */
 function LearningPanel({
   learning,
@@ -1689,10 +1739,10 @@ function LearningPanel({
             <p className="empty">Needs a couple of days of graded calls.</p>
           )}
           <p className="faint small">
-            Live calls over the last {windowDays} days (the window picked at the top of the page). {m.note} A
-            day shows once {name} has {MIN_CALLS_PER_POINT} graded calls in it; fewer leave a gap. Today is
-            still filling in, so it is off unless you add it. The verdict compares its 2x rate against the
-            market over the last {span} days and the {span} before.
+            Live calls over the last {windowDays} days. {m.note} A day shows once {name} has{" "}
+            {MIN_CALLS_PER_POINT} graded calls in it; fewer leave a gap. Today is still filling in, so it is
+            off unless you add it. The verdict compares its 2x rate against the market over the last {span}{" "}
+            days and the {span} before.
           </p>
         </>
       )}

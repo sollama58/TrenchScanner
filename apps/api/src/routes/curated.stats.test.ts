@@ -137,9 +137,18 @@ describe.skipIf(!dbAvailable)("GET /curated/stats", () => {
   it("serves the Model tab's windows only, so ?days= can't be walked to force cache misses", async () => {
     const get = (url: string) =>
       app.inject({ method: "GET", url, cookies: { [SESSION_COOKIE_NAME]: cookie } });
-    for (const url of ["/curated/insights?days=13", "/curated/models?days=45", "/curated/models?days=1"]) {
+    for (const url of [
+      "/curated/insights?days=13",
+      "/curated/insights?days=1",
+      "/curated/models?days=45",
+      "/curated/models?days=2",
+    ]) {
       expect((await get(url)).statusCode).toBe(400);
     }
+    // The Models vs baseline chart's 24h window is served by the leaderboard alone.
+    const day = await get("/curated/models?days=1");
+    expect(day.statusCode).toBe(200);
+    expect(day.json().window.days).toBe(1);
     const board = await get("/curated/models?days=7");
     expect(board.statusCode).toBe(200);
     expect(board.json().window.days).toBe(7);
