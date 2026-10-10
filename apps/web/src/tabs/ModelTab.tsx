@@ -503,7 +503,7 @@ function BaselinePanel({
           <li>
             <strong>Passes the safety screen</strong>: mint and freeze authority renounced, liquidity burned
             or locked, not a Mayhem Mode token, no more than 70% of the top 10 holders on fresh wallets, under
-            80% on empty wallets or launch snipers, and the top 10 owning under 50% of supply. A token that
+            80% on empty wallets or launch snipers, and the top 10 owning under 40% of supply. A token that
             fails is never sampled at all.
           </li>
           <li>

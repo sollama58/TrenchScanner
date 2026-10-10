@@ -434,12 +434,12 @@ export function AlertCard({
  * The safety screen's wallet cuts (packages/core/src/scoring/rugScreen.ts, SAFETY_MAX_FRESH_WALLET_PCT,
  * SAFETY_REJECT_EMPTY_WALLET_PCT and SAFETY_REJECT_SNIPER_WALLET_PCT): fresh wallets fail over 70%,
  * empty wallets and launch snipers each fail at 80% or more. A tile turns red only when its reading
- * would fail the screen. SAFETY_REJECT_TOP10_HOLDER_PCT: a top ten owning 50% or more fails too.
+ * would fail the screen. SAFETY_REJECT_TOP10_HOLDER_PCT: a top ten owning 40% or more fails too.
  */
 const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
-const SAFETY_REJECT_TOP10_HOLDER_PCT = 50;
+const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 
 /** One wallet-check tile (Fresh, Empty or Top-10 snipers): the share, where it was read, or that it wasn't checked. */
 function WalletStat({

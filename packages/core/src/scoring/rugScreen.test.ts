@@ -62,12 +62,12 @@ describe("runRugScreen", () => {
     expect(result.reasons.some((r) => r.includes("liquidity"))).toBe(true);
   });
 
-  it("rejects a token whose top-10 holders own 50% or more of supply, and only once measured", () => {
-    const concentrated = runRugScreen({ ...safeProfile, top10HolderPct: 50 });
+  it("rejects a token whose top-10 holders own 40% or more of supply, and only once measured", () => {
+    const concentrated = runRugScreen({ ...safeProfile, top10HolderPct: 40 });
     expect(concentrated.passed).toBe(false);
-    expect(concentrated.reasons).toEqual(["top-10 holders own 50% of supply (50% or more)"]);
+    expect(concentrated.reasons).toEqual(["top-10 holders own 40% of supply (40% or more)"]);
     expect(runRugScreen({ ...safeProfile, top10HolderPct: 95 }).passed).toBe(false);
-    expect(runRugScreen({ ...safeProfile, top10HolderPct: 49.9 }).passed).toBe(true);
+    expect(runRugScreen({ ...safeProfile, top10HolderPct: 39.9 }).passed).toBe(true);
   });
 
   // Dev wallet %, RugCheck's risk score, and its named risk flags used to be hard-gated here
@@ -168,8 +168,8 @@ describe("passesWalletSafetyCuts", () => {
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 70 })).toBe(true);
-    expect(passesWalletSafetyCuts({ top10HolderPct: 50 })).toBe(false);
-    expect(passesWalletSafetyCuts({ top10HolderPct: 45 })).toBe(true);
+    expect(passesWalletSafetyCuts({ top10HolderPct: 40 })).toBe(false);
+    expect(passesWalletSafetyCuts({ top10HolderPct: 35 })).toBe(true);
   });
 
   it("rejects a live token when 80% or more of its top 10 are the launch's first buyers", () => {

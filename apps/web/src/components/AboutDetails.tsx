@@ -108,7 +108,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             </tr>
             <tr>
               <td>Top-10 holders&apos; share of supply</td>
-              <td>50% or more (pool aside)</td>
+              <td>40% or more (pool aside)</td>
             </tr>
           </tbody>
         </table>

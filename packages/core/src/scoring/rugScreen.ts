@@ -27,12 +27,12 @@ export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 
 /**
  * At or above this share of the supply held by the top-10 holders (pool and LP aside), a token is
- * never alerted (user decision 2026-10-10). On alerts since 10-05 the cut takes about 3% of calls,
+ * never alerted (user decision 2026-10-10). On alerts since 10-05 the cut takes about 3.5% of calls,
  * which doubled 15% of the time against 21% for the rest and fell 80% inside the hour half the
  * time against 12% (notes/top10-cut-eval-2026-10-09.md). Most readings this high are taken in the
  * first minutes after graduation, possibly before RugCheck lists the new pool.
  */
-export const SAFETY_REJECT_TOP10_HOLDER_PCT = 50;
+export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 
 /**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
