@@ -4,6 +4,7 @@ import { FakeTelegramApi } from "./fakeApi.js";
 import { issueTelegramLinkCode } from "./link.js";
 import { handleTelegramUpdate, parseCommand } from "./updates.js";
 import type { TelegramUpdate } from "./api.js";
+import type { TelegramBoards } from "./boards.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `tgupd-test-${Date.now()}`;
@@ -232,6 +233,90 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
       },
     };
     expect((await handleTelegramUpdate(api, channel)).action).toBe("ignored");
+    expect(api.sent()).toHaveLength(0);
+  });
+
+  it("answers /alerts and /trenchboard, and the window buttons edit the board in place", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const asked: { chat: string; hours?: number }[] = [];
+    const boards: TelegramBoards = {
+      activeAlerts: async (chat) => {
+        asked.push({ chat });
+        return [];
+      },
+      board: async (chat, hours) => {
+        asked.push({ chat, hours });
+        return {
+          hours,
+          alerts: 3,
+          graded: 2,
+          won: 1,
+          lost: 1,
+          pending: 1,
+          settled: 2,
+          avgReturnPct: 25,
+          best: null,
+          recordedSince: null,
+        };
+      },
+    };
+    const opts = { boards, links: { dashboardUrl: "https://trenchscanner.app" } };
+    // Not linked: no numbers, just how to link.
+    expect((await handleTelegramUpdate(api, message(chatId, "/alerts"), opts)).action).toBe("alerts");
+    expect(api.sent()[0]!.text).toContain("Not linked");
+    expect(asked).toHaveLength(0);
+
+    const { code } = await issueTelegramLinkCode(userId);
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+
+    await handleTelegramUpdate(api, message(chatId, "/alerts"), opts);
+    expect(api.sent().at(-1)!.text).toContain("Active alerts");
+    await handleTelegramUpdate(api, message(chatId, "/trenchboard"), opts);
+    const board = api.calls.at(-1)!;
+    expect(String(board.params.text)).toContain("last 24h");
+    expect(JSON.stringify(board.params.reply_markup)).toContain("• 24h •");
+    await handleTelegramUpdate(api, message(chatId, "/trenchboard 7d"), opts);
+    expect(asked.at(-1)).toEqual({ chat: row!.id, hours: 168 });
+
+    // A press on "6h" rewrites that message and stops the spinner.
+    const press: TelegramUpdate = {
+      update_id: 9,
+      callback_query: {
+        id: "cb1",
+        from: me,
+        data: "tb:6h",
+        message: { message_id: 55, chat: { id: chatId, type: "private", first_name: "Ada" }, date: 0 },
+      },
+    };
+    expect((await handleTelegramUpdate(api, press, opts)).action).toBe("board");
+    const edit = api.calls.find((c) => c.method === "editMessageText")!;
+    expect(edit.params.message_id).toBe(55);
+    expect(String(edit.params.text)).toContain("last 6h");
+    expect(JSON.stringify(edit.params.reply_markup)).toContain("• 6h •");
+    expect(api.calls.at(-1)!.method).toBe("answerCallbackQuery");
+
+    // Nothing changed since: Telegram says so, and the press still gets its answer.
+    api.answers.set("editMessageText", {
+      ok: false,
+      code: 400,
+      description: "Bad Request: message is not modified",
+    });
+    await handleTelegramUpdate(api, press, opts);
+    expect(api.calls.at(-1)).toMatchObject({
+      method: "answerCallbackQuery",
+      params: { callback_query_id: "cb1", text: "Up to date" },
+    });
+
+    // An unknown button is answered and otherwise ignored.
+    const odd = { ...press, callback_query: { ...press.callback_query!, data: "zz" } };
+    expect((await handleTelegramUpdate(api, odd, opts)).action).toBe("ignored");
+  });
+
+  it("leaves /alerts and /trenchboard alone when the boards aren't wired in", async () => {
+    const api = new FakeTelegramApi();
+    expect((await handleTelegramUpdate(api, message(nextChat--, "/alerts"))).action).toBe("ignored");
     expect(api.sent()).toHaveLength(0);
   });
 });

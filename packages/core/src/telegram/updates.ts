@@ -7,12 +7,32 @@ import {
   type TelegramMessage,
   type TelegramUpdate,
 } from "./api.js";
-import { ALERT_PARTS, ALERT_PART_LABELS, alertParts, escapeHtml, isAlertPart } from "./format.js";
+import {
+  ALERTS_KEYBOARD,
+  ALERTS_REFRESH_CALLBACK,
+  BOARD_CALLBACK_PREFIX,
+  BOARD_WINDOWS,
+  DEFAULT_BOARD_WINDOW,
+  boardWindow,
+  formatActiveAlerts,
+  formatTrenchboard,
+  trenchboardKeyboard,
+  type BoardWindowKey,
+  type TelegramBoards,
+} from "./boards.js";
+import {
+  ALERT_PARTS,
+  ALERT_PART_LABELS,
+  alertParts,
+  escapeHtml,
+  isAlertPart,
+  type AlertLinks,
+} from "./format.js";
 import { looksLikeTelegramCode, redeemTelegramLinkCode } from "./link.js";
 
 /**
  * What the bot does with each update Telegram delivers: links a chat on `/start <code>` (or
- * `/link <code>`), answers /status and /stop, and notices when it is blocked or removed. Every
+ * `/link <code>`), answers /status, /alerts, /trenchboard and /stop, and notices when it is blocked or removed. Every
  * reply is best effort - the webhook always answers 200, so Telegram never re-delivers an update
  * the bot already acted on.
  */
@@ -24,7 +44,17 @@ const GROUP_ADMIN_STATUSES = new Set(["creator", "administrator"]);
 
 export interface UpdateOutcome {
   action:
-    "ignored" | "linked" | "refused" | "help" | "status" | "unlinked" | "removed" | "welcomed" | "parts";
+    | "ignored"
+    | "linked"
+    | "refused"
+    | "help"
+    | "status"
+    | "unlinked"
+    | "removed"
+    | "welcomed"
+    | "parts"
+    | "alerts"
+    | "board";
 }
 
 function shortWallet(address: string): string {
@@ -56,8 +86,15 @@ export async function handleTelegramUpdate(
    * The bot's @username (null when unknown), asked only for a command addressed to a bot by name:
    * one addressed to another bot is left to that bot.
    */
-  opts: { botUsername?: () => Promise<string | null> } = {},
+  opts: {
+    botUsername?: () => Promise<string | null>;
+    /** The reads behind /alerts and /trenchboard; without them those commands are not offered. */
+    boards?: TelegramBoards;
+    links?: AlertLinks;
+  } = {},
 ): Promise<UpdateOutcome> {
+  if (update.callback_query) return handleButton(api, update.callback_query, opts);
+
   if (update.my_chat_member) {
     const change = update.my_chat_member;
     const status = change.new_chat_member.status;
@@ -196,6 +233,32 @@ export async function handleTelegramUpdate(
       await api.sendMessage(chatId, partsText([...hidden]));
       return { action: "parts" };
     }
+    case "alerts":
+    case "trenchboard":
+    case "board": {
+      if (!opts.boards) return { action: "ignored" };
+      const row = await prisma.telegramChat.findFirst({
+        where: { chatId, revokedAt: null },
+        select: { id: true },
+      });
+      if (!row) {
+        await api.sendMessage(
+          chatId,
+          `Not linked to any account yet.\n\n${isPrivate ? HELP_PRIVATE : HELP_GROUP}`,
+        );
+        return { action: parsed.command === "alerts" ? "alerts" : "board" };
+      }
+      const links = opts.links ?? { dashboardUrl: "" };
+      if (parsed.command === "alerts") {
+        const alerts = await opts.boards.activeAlerts(row.id);
+        await api.sendMessage(chatId, formatActiveAlerts(alerts, links), { keyboard: ALERTS_KEYBOARD });
+        return { action: "alerts" };
+      }
+      const window = boardWindow(parsed.arg) ?? BOARD_WINDOWS.find((w) => w.key === DEFAULT_BOARD_WINDOW)!;
+      const stats = await opts.boards.board(row.id, window.hours);
+      await api.sendMessage(chatId, formatTrenchboard(stats), { keyboard: trenchboardKeyboard(window.key) });
+      return { action: "board" };
+    }
     case "stop":
     case "unlink": {
       if (isGroup && !(await isGroupAdmin(api, message))) {
@@ -217,6 +280,61 @@ export async function handleTelegramUpdate(
     default:
       return { action: "ignored" };
   }
+}
+
+/**
+ * A press on a button under /alerts or /trenchboard: the same message is rewritten with the
+ * window picked (or the list refreshed). Anyone in the chat may press; both are read-only.
+ */
+async function handleButton(
+  api: TelegramApi,
+  query: NonNullable<TelegramUpdate["callback_query"]>,
+  opts: { boards?: TelegramBoards; links?: AlertLinks },
+): Promise<UpdateOutcome> {
+  const data = query.data ?? "";
+  const message = query.message;
+  const isBoard = data.startsWith(BOARD_CALLBACK_PREFIX);
+  if (!opts.boards || !message || (!isBoard && data !== ALERTS_REFRESH_CALLBACK)) {
+    await api.answerCallbackQuery(query.id);
+    return { action: "ignored" };
+  }
+  const chatId = BigInt(message.chat.id);
+  const row = await prisma.telegramChat.findFirst({
+    where: { chatId, revokedAt: null },
+    select: { id: true },
+  });
+  if (!row) {
+    await api.answerCallbackQuery(query.id, "This chat isn't linked any more.");
+    return { action: "refused" };
+  }
+  let edited;
+  if (isBoard) {
+    const key = data.slice(BOARD_CALLBACK_PREFIX.length) as BoardWindowKey;
+    const window = BOARD_WINDOWS.find((w) => w.key === key);
+    if (!window) {
+      await api.answerCallbackQuery(query.id);
+      return { action: "ignored" };
+    }
+    const stats = await opts.boards.board(row.id, window.hours);
+    edited = await api.editMessageText(chatId, message.message_id, formatTrenchboard(stats), {
+      keyboard: trenchboardKeyboard(window.key),
+    });
+  } else {
+    const alerts = await opts.boards.activeAlerts(row.id);
+    edited = await api.editMessageText(
+      chatId,
+      message.message_id,
+      formatActiveAlerts(alerts, opts.links ?? { dashboardUrl: "" }),
+      { keyboard: ALERTS_KEYBOARD },
+    );
+  }
+  // Pressing the window already shown, with nothing moved since, is "message is not modified".
+  const unchanged = !edited.ok && /not modified/i.test(edited.description);
+  if (!edited.ok && !unchanged) {
+    logger.warn("telegram button edit failed", { chatId: String(chatId), description: edited.description });
+  }
+  await api.answerCallbackQuery(query.id, unchanged ? "Up to date" : undefined);
+  return { action: isBoard ? "board" : "alerts" };
 }
 
 /** The /show answer: each part of the card with its switch, and how to flip one. */
