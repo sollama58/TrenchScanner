@@ -60,7 +60,8 @@ export function AlertCard({
   const athMcap = hasPeak && alertMcap > 0 ? alertMcap * (1 + peak / 100) : null;
   // The result badge (top right) shows once a target hit or the window closed; nothing while grading.
   const showVerdict = outcome !== null && !(outcome.status === "watching" && !outcome.hit2x);
-  // Marks only: ✓ 2x, ✓✓ 4x, ✓✓✓ 10x, ✕ missed or stopped out (the words stay in the tooltip).
+  // Marks only: ✓ 2x, ✓✓ 4x, ✓✓✓ 10x, ↗ ran later or stopped out then ran, ✕ missed (the words stay
+  // in the tooltip).
   // An ungraded result has no mark, so nothing shows.
   const resultMark = showVerdict && badge.tone !== "neutral" ? badge.text.split(" ")[0] : null;
   // When the recorded run peak came - only while it is the Peak shown and "Now" hasn't overtaken it
