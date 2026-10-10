@@ -257,6 +257,31 @@ const RAN_LATER = Prisma.sql`
                                   (co."peak24hPriceUsd" / NULLIF(co."anchorPriceUsd", 0) - 1) * 100, 0) >= 100)`;
 
 /**
+ * The baseline a model's pick has to beat: every "event" moment anchored since `since`, graded
+ * the same way as the "event" row of the hit-rate report's samples.byKind. The leaderboard carries
+ * it so the Models vs baseline chart can switch windows without the full insights report.
+ */
+export async function baselineRates(since: Date, targets: Targets): Promise<GradedRates> {
+  const [row] = await prisma.$queryRaw<RawCounts[]>`
+    SELECT count(*) AS calls,
+           count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
+           count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
+           count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
+                              AND (co."hit10xIn1h" IS NOT NULL OR NOT (co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)))) AS ten_x_graded,
+           count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
+    FROM "CandidateOutcome" co
+    WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${since}`;
+  return withRates(
+    row
+      ? toCounts(row)
+      : { calls: 0, graded: 0, won2x: 0, won4x: 0, doubledAfterStop: 0, won10x: 0, tenXGraded: 0 },
+    targets,
+  );
+}
+
+/**
  * The read-only hit-rate report: how production alerts grade under the current rules - a win is
  * 2x within 15 minutes (goal 4x within 30) of the alert price, and a 50% drop before the double is a loss
  * (see curation/labels.ts). Every figure comes from the same CandidateOutcome labels the feed's

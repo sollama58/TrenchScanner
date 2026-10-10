@@ -35,6 +35,7 @@ import {
   type StoredEvalMetrics,
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
+import { baselineRates, type GradedRates } from "./routes/stats.js";
 import type { FastifyRequest } from "fastify";
 
 /**
@@ -291,6 +292,8 @@ export interface LeaderboardEntry {
 export interface Leaderboard {
   window: { days: number; since: Date };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
+  /** The random-pick baseline over the same window: every "event" moment the models choose from. */
+  baseline: GradedRates;
   scoring: {
     weights: typeof COMPOSITE_WEIGHTS;
     /** Run-size target, in doublings per call (2 = a 4x average). */
@@ -361,7 +364,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
   const state = await contestState(env);
-  const [live, liveHigh, history, probation, lifts] = await Promise.all([
+  const [live, liveHigh, history, probation, lifts, baseline] = await Promise.all([
     liveCallRecords(
       state.roster.map((c) => c.id),
       since,
@@ -398,6 +401,10 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       since,
       state.lanes,
     ),
+    baselineRates(since, {
+      hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
+      hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
+    }),
   ]);
   const laneBySlot = new Map(state.lanes.map((l) => [l.slot, l]));
 
@@ -465,6 +472,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
       hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
     },
+    baseline,
     scoring: {
       weights: COMPOSITE_WEIGHTS,
       runTargetDoublings: RUN_SIZE_TARGET_DOUBLINGS,

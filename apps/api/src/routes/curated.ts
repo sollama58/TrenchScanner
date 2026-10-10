@@ -119,6 +119,21 @@ export const reportDaysSchema = z.coerce
 
 const insightsQuerySchema = z.object({ days: reportDaysSchema });
 
+/**
+ * The leaderboard also serves a 24h window: the Models vs baseline chart switches between 24h and
+ * 7 days. It is a few grouped reads, far lighter than an insights fill, and still one cache entry
+ * per window.
+ */
+const LEADERBOARD_WINDOWS_DAYS = [1, ...REPORT_WINDOWS_DAYS] as const;
+
+export const leaderboardDaysSchema = z.coerce
+  .number()
+  .int()
+  .refine((d) => (LEADERBOARD_WINDOWS_DAYS as readonly number[]).includes(d), {
+    message: `days must be one of ${LEADERBOARD_WINDOWS_DAYS.join(", ")}`,
+  })
+  .default(30);
+
 const listQuerySchema = z.object({
   // Pages past MAX_CACHED_PAGES run an uncached OFFSET plus a count; 500 pages is 6,000 alerts
   // of history, the same bound as /matches.
@@ -127,7 +142,7 @@ const listQuerySchema = z.object({
   model: z.string().max(64).optional(),
 });
 
-const leaderboardQuerySchema = z.object({ days: reportDaysSchema });
+const leaderboardQuerySchema = z.object({ days: leaderboardDaysSchema });
 
 /** Live records move as outcomes finalize (hourly); the Model tab polls every two minutes. */
 const LEADERBOARD_CACHE_TTL_MS = 3 * 60_000;
@@ -165,7 +180,7 @@ export function createReportCaches() {
       cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS, {
         staleWhileRevalidateMs: REPORT_STALE_MS,
       });
-      // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
+      // Bounded by the schema: one per LEADERBOARD_WINDOWS_DAYS.
       leaderboardCache.set(days, cache);
     }
     return cache;

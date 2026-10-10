@@ -954,6 +954,8 @@ export interface EvolutionEvent {
 export interface Leaderboard {
   window: { days: number; since: string };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
+  /** The random-pick baseline over the same window ("event" moments; absent from older API builds). */
+  baseline?: GradedRates;
   scoring: {
     weights: { winRate: number; goalRate: number; tenXRate?: number; runSize?: number; avgReturn?: number };
     /** The 10x-within-an-hour rate target, in percent (absent from older API builds). */

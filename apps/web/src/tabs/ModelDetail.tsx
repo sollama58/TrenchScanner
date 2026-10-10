@@ -21,6 +21,8 @@ import {
   RulesInUse,
   STATUS_TEXT,
   WINDOWS,
+  windowLong,
+  windowShort,
   doublings,
   profitTone,
   rateTone,
@@ -187,7 +189,7 @@ function ModelDetail({
         {e.scoreExplained && <p className="faint small">{e.scoreExplained}</p>}
       </div>
 
-      <h3>Last {days} days, live</h3>
+      <h3>Last {windowLong(days)}, live</h3>
       <div className="model-figs">
         <RateFig
           label="Doubled (2x)"
@@ -248,7 +250,7 @@ function ModelDetail({
             </tr>
           </thead>
           <tbody>
-            <RecordRow name={`Live, ${days}d`} r={live} t={t} />
+            <RecordRow name={`Live, ${windowShort(days)}`} r={live} t={t} />
             <RecordRow name="Backtest exam" r={exam} t={t} />
           </tbody>
         </table>
@@ -483,8 +485,8 @@ function RecordRow({ name, r, t }: { name: string; r: RecordSummary; t: Leaderbo
 }
 
 /**
- * The same model over 7, 30 and 90 days, from the leaderboard of each window (the shared cache
- * already holds the one on screen, and hovering the window switch prefetches the others).
+ * The same model over 24 hours and 7 days, from the leaderboard of each window (the shared cache
+ * already holds the one on screen, and hovering the window switch prefetches the other).
  */
 function WindowsTable({
   entry,
@@ -500,7 +502,6 @@ function WindowsTable({
   const boards = [
     usePolling<Leaderboard>(`${api}/models?days=${WINDOWS[0]}`, 120_000),
     usePolling<Leaderboard>(`${api}/models?days=${WINDOWS[1]}`, 120_000),
-    usePolling<Leaderboard>(`${api}/models?days=${WINDOWS[2]}`, 120_000),
   ];
   return (
     <div className="table-wrap">
@@ -522,7 +523,7 @@ function WindowsTable({
             const r = row?.composite.live ?? null;
             return (
               <tr key={w} className={w === days ? "selected" : ""}>
-                <td>{w} days</td>
+                <td>{windowLong(w)}</td>
                 {r ? (
                   <>
                     <td className="r num">{r.graded.toLocaleString()}</td>
