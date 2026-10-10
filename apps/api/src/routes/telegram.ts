@@ -2,9 +2,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  ALERT_LINKS,
   ALERT_PARTS,
+  MAX_MCAP_FLOOR,
   TELEGRAM_LINK_CODE_TTL_MS,
   alertParts,
+  alertStyle,
   TelegramApi,
   dashboardUrl,
   formatTestMessage,
@@ -43,6 +46,9 @@ const CHAT_SELECT = {
   modelCalls: true,
   enabled: true,
   hidden: true,
+  layout: true,
+  links: true,
+  alertsMinMcapUsd: true,
   lastSentAt: true,
   lastError: true,
   createdAt: true,
@@ -148,6 +154,12 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
       enabled: z.boolean(),
       /** The parts of the card switched off (ALERT_PARTS); [] shows everything. */
       hidden: z.array(z.enum(ALERT_PARTS)).max(ALERT_PARTS.length),
+      /** "full" or "compact", as /settings sets it in the chat. */
+      layout: z.enum(["full", "compact"]),
+      /** The trade and chart links each alert carries (ALERT_LINKS). */
+      links: z.array(z.enum(ALERT_LINKS)).max(ALERT_LINKS.length),
+      /** /alerts leaves out alerts under this market cap, in USD; 0 lists them all. */
+      alertsMinMcapUsd: z.number().min(0).max(MAX_MCAP_FLOOR),
     })
     .partial()
     .strict()
@@ -171,6 +183,7 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
       data: {
         ...parsed.data,
         ...(parsed.data.hidden ? { hidden: [...new Set(parsed.data.hidden)] } : {}),
+        ...(parsed.data.links ? { links: ALERT_LINKS.filter((l) => parsed.data.links!.includes(l)) } : {}),
         ...(parsed.data.enabled === true ? { failures: 0, lastError: null } : {}),
       },
     });
@@ -211,12 +224,12 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
       const { id } = request.params as { id: string };
       const row = await prisma.telegramChat.findFirst({
         where: { id, userId: request.user!.userId, revokedAt: null },
-        select: { chatId: true, hidden: true },
+        select: { chatId: true, hidden: true, layout: true, links: true },
       });
       if (!row) return reply.code(404).send({ error: "not_found" });
       const result = await api.sendAlert(
         row.chatId,
-        formatTestMessage({ dashboardUrl: dashboardUrl(env) }, alertParts(row.hidden)),
+        formatTestMessage({ dashboardUrl: dashboardUrl(env) }, alertParts(row.hidden), alertStyle(row)),
       );
       if (!result.ok) {
         await prisma.telegramChat.updateMany({

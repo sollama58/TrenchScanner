@@ -319,4 +319,78 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     expect((await handleTelegramUpdate(api, message(nextChat--, "/alerts"))).action).toBe("ignored");
     expect(api.sent()).toHaveLength(0);
   });
+
+  it("shows /settings, and its buttons and /mincap change the chat's alerts", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const { code } = await issueTelegramLinkCode(userId);
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    let row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    // Nothing changes for a chat until it changes a setting.
+    expect(row).toMatchObject({
+      layout: "full",
+      links: ["terminal", "axiom", "gmgn"],
+      alertsMinMcapUsd: 5000,
+    });
+
+    expect((await handleTelegramUpdate(api, message(chatId, "/settings"))).action).toBe("settings");
+    expect(String(api.calls.at(-1)!.params.text)).toContain("Alert settings");
+    const press = (data: string): TelegramUpdate => ({
+      update_id: 10,
+      callback_query: {
+        id: `cb-${data}`,
+        from: me,
+        data,
+        message: { message_id: 77, chat: { id: chatId, type: "private", first_name: "Ada" }, date: 0 },
+      },
+    });
+    await handleTelegramUpdate(api, press("st:lay:compact"));
+    await handleTelegramUpdate(api, press("st:p:reasons"));
+    await handleTelegramUpdate(api, press("st:k:dexscreener"));
+    await handleTelegramUpdate(api, press("st:m:25000"));
+    row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row).toMatchObject({
+      layout: "compact",
+      hidden: ["reasons"],
+      links: ["terminal", "axiom", "gmgn", "dexscreener"],
+      alertsMinMcapUsd: 25000,
+    });
+    const edit = api.calls.filter((c) => c.method === "editMessageText").at(-1)!;
+    expect(edit.params.message_id).toBe(77);
+    expect(JSON.stringify(edit.params.reply_markup)).toContain("• $25k •");
+
+    await handleTelegramUpdate(api, press("st:prev"));
+    expect(api.sent().at(-1)!.text).toContain("$PREVIEW");
+
+    await handleTelegramUpdate(api, message(chatId, "/mincap 1.5m"));
+    row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row?.alertsMinMcapUsd).toBe(1_500_000);
+    await handleTelegramUpdate(api, message(chatId, "/mincap lots"));
+    expect(api.sent().at(-1)!.text).toContain("Give a market cap");
+  });
+
+  it("lets only a group admin change /settings in a group, by button or /mincap", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const { code } = await issueTelegramLinkCode(userId);
+    api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
+    await handleTelegramUpdate(api, message(chatId, `/link ${code}`, "supergroup"));
+    api.answers.set("getChatMember", { ok: true, result: { status: "member" } });
+    const press: TelegramUpdate = {
+      update_id: 11,
+      callback_query: {
+        id: "cb-g",
+        from: me,
+        data: "st:lay:compact",
+        message: { message_id: 3, chat: { id: chatId, type: "supergroup", title: "Degens" }, date: 0 },
+      },
+    };
+    expect((await handleTelegramUpdate(api, press)).action).toBe("refused");
+    expect(api.calls.at(-1)).toMatchObject({ method: "answerCallbackQuery" });
+    expect((await handleTelegramUpdate(api, message(chatId, "/mincap 50k", "supergroup"))).action).toBe(
+      "refused",
+    );
+    const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
+    expect(row).toMatchObject({ layout: "full", alertsMinMcapUsd: 5000 });
+  });
 });

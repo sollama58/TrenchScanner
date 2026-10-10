@@ -24,15 +24,27 @@ import {
   ALERT_PARTS,
   ALERT_PART_LABELS,
   alertParts,
+  alertStyle,
   escapeHtml,
   isAlertPart,
   type AlertLinks,
 } from "./format.js";
+import {
+  SETTINGS_CALLBACK_PREFIX,
+  applySettingsPress,
+  floorText,
+  formatPreviewMessage,
+  formatSettings,
+  parseMcap,
+  settingsKeyboard,
+  type ChatSettings,
+} from "./settings.js";
 import { looksLikeTelegramCode, redeemTelegramLinkCode } from "./link.js";
 
 /**
  * What the bot does with each update Telegram delivers: links a chat on `/start <code>` (or
- * `/link <code>`), answers /status, /alerts, /trenchboard and /stop, and notices when it is blocked or removed. Every
+ * `/link <code>`), answers /status, /alerts, /trenchboard, /settings and /stop, and notices when it is
+ * blocked or removed. Every
  * reply is best effort - the webhook always answers 200, so Telegram never re-delivers an update
  * the bot already acted on.
  */
@@ -54,7 +66,8 @@ export interface UpdateOutcome {
     | "welcomed"
     | "parts"
     | "alerts"
-    | "board";
+    | "board"
+    | "settings";
 }
 
 function shortWallet(address: string): string {
@@ -239,7 +252,7 @@ export async function handleTelegramUpdate(
       if (!opts.boards) return { action: "ignored" };
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
-        select: { id: true },
+        select: { id: true, ...SETTINGS_SELECT },
       });
       if (!row) {
         await api.sendMessage(
@@ -250,14 +263,54 @@ export async function handleTelegramUpdate(
       }
       const links = opts.links ?? { dashboardUrl: "" };
       if (parsed.command === "alerts") {
-        const alerts = await opts.boards.activeAlerts(row.id);
-        await api.sendMessage(chatId, formatActiveAlerts(alerts, links), { keyboard: ALERTS_KEYBOARD });
+        await api.sendMessage(chatId, await activeAlertsText(opts.boards, row, links), {
+          keyboard: ALERTS_KEYBOARD,
+        });
         return { action: "alerts" };
       }
       const window = boardWindow(parsed.arg) ?? BOARD_WINDOWS.find((w) => w.key === DEFAULT_BOARD_WINDOW)!;
       const stats = await opts.boards.board(row.id, window.hours);
       await api.sendMessage(chatId, formatTrenchboard(stats), { keyboard: trenchboardKeyboard(window.key) });
       return { action: "board" };
+    }
+    case "settings":
+    case "customize":
+    case "mincap": {
+      const row = await prisma.telegramChat.findFirst({
+        where: { chatId, revokedAt: null },
+        select: { id: true, ...SETTINGS_SELECT },
+      });
+      if (!row) {
+        await api.sendMessage(
+          chatId,
+          `Not linked to any account yet.\n\n${isPrivate ? HELP_PRIVATE : HELP_GROUP}`,
+        );
+        return { action: "settings" };
+      }
+      if (parsed.command === "mincap" && parsed.arg) {
+        const floor = parseMcap(parsed.arg);
+        if (floor === null) {
+          await api.sendMessage(
+            chatId,
+            "Give a market cap, like <code>/mincap 10k</code>, <code>/mincap 1.5m</code> or <code>/mincap off</code>.",
+          );
+          return { action: "settings" };
+        }
+        if (isGroup && !(await isGroupAdmin(api, message))) {
+          await api.sendMessage(chatId, "Only a group admin can change the settings here.");
+          return { action: "refused" };
+        }
+        await prisma.telegramChat.updateMany({ where: { id: row.id }, data: { alertsMinMcapUsd: floor } });
+        await api.sendMessage(
+          chatId,
+          floor > 0
+            ? `📡 /alerts now leaves out alerts under <b>${floorText(floor)}</b> market cap.`
+            : "📡 /alerts now lists every tracked alert, whatever its market cap.",
+        );
+        return { action: "settings" };
+      }
+      await api.sendMessage(chatId, formatSettings(row), { keyboard: settingsKeyboard(row) });
+      return { action: "settings" };
     }
     case "stop":
     case "unlink": {
@@ -294,19 +347,23 @@ async function handleButton(
   const data = query.data ?? "";
   const message = query.message;
   const isBoard = data.startsWith(BOARD_CALLBACK_PREFIX);
-  if (!opts.boards || !message || (!isBoard && data !== ALERTS_REFRESH_CALLBACK)) {
+  const isSettings = data.startsWith(SETTINGS_CALLBACK_PREFIX);
+  const isAlerts = data === ALERTS_REFRESH_CALLBACK;
+  if (!message || !(isSettings || ((isBoard || isAlerts) && opts.boards))) {
     await api.answerCallbackQuery(query.id);
     return { action: "ignored" };
   }
   const chatId = BigInt(message.chat.id);
   const row = await prisma.telegramChat.findFirst({
     where: { chatId, revokedAt: null },
-    select: { id: true },
+    select: { id: true, ...SETTINGS_SELECT },
   });
   if (!row) {
     await api.answerCallbackQuery(query.id, "This chat isn't linked any more.");
     return { action: "refused" };
   }
+  const links = opts.links ?? { dashboardUrl: "" };
+  if (isSettings) return settingsButton(api, query, message, row, links);
   let edited;
   if (isBoard) {
     const key = data.slice(BOARD_CALLBACK_PREFIX.length) as BoardWindowKey;
@@ -315,26 +372,95 @@ async function handleButton(
       await api.answerCallbackQuery(query.id);
       return { action: "ignored" };
     }
-    const stats = await opts.boards.board(row.id, window.hours);
+    const stats = await opts.boards!.board(row.id, window.hours);
     edited = await api.editMessageText(chatId, message.message_id, formatTrenchboard(stats), {
       keyboard: trenchboardKeyboard(window.key),
     });
   } else {
-    const alerts = await opts.boards.activeAlerts(row.id);
     edited = await api.editMessageText(
       chatId,
       message.message_id,
-      formatActiveAlerts(alerts, opts.links ?? { dashboardUrl: "" }),
+      await activeAlertsText(opts.boards!, row, links),
       { keyboard: ALERTS_KEYBOARD },
     );
   }
-  // Pressing the window already shown, with nothing moved since, is "message is not modified".
+  await answerAfterEdit(api, query.id, chatId, edited);
+  return { action: isBoard ? "board" : "alerts" };
+}
+
+/** Pressing the window already shown, with nothing moved since, is "message is not modified". */
+async function answerAfterEdit(
+  api: TelegramApi,
+  queryId: string,
+  chatId: bigint,
+  edited: Awaited<ReturnType<TelegramApi["editMessageText"]>>,
+) {
   const unchanged = !edited.ok && /not modified/i.test(edited.description);
   if (!edited.ok && !unchanged) {
     logger.warn("telegram button edit failed", { chatId: String(chatId), description: edited.description });
   }
-  await api.answerCallbackQuery(query.id, unchanged ? "Up to date" : undefined);
-  return { action: isBoard ? "board" : "alerts" };
+  await api.answerCallbackQuery(queryId, unchanged ? "Up to date" : undefined);
+}
+
+/** The columns /settings reads and writes, and /alerts reads for its floor and links. */
+const SETTINGS_SELECT = { hidden: true, layout: true, links: true, alertsMinMcapUsd: true } as const;
+
+async function activeAlertsText(
+  boards: TelegramBoards,
+  row: { id: string } & ChatSettings,
+  links: AlertLinks,
+): Promise<string> {
+  const alerts = await boards.activeAlerts(row.id);
+  return formatActiveAlerts(alerts, links, Date.now(), {
+    minMcapUsd: row.alertsMinMcapUsd,
+    style: alertStyle(row),
+  });
+}
+
+/**
+ * A press on /settings: a preview goes to anyone; a change, in a group, only to an admin, as
+ * /hide does. The message is rewritten with the new state.
+ */
+async function settingsButton(
+  api: TelegramApi,
+  query: NonNullable<TelegramUpdate["callback_query"]>,
+  message: TelegramMessage,
+  row: { id: string } & ChatSettings,
+  links: AlertLinks,
+): Promise<UpdateOutcome> {
+  const press = applySettingsPress(row, query.data ?? "");
+  const chatId = BigInt(message.chat.id);
+  if (!press) {
+    await api.answerCallbackQuery(query.id);
+    return { action: "ignored" };
+  }
+  if (press.kind === "preview") {
+    await api.sendAlert(chatId, formatPreviewMessage(row, links));
+    await api.answerCallbackQuery(query.id);
+    return { action: "settings" };
+  }
+  if (message.chat.type !== "private") {
+    const member = await api.getChatMember(message.chat.id, query.from.id);
+    if (!member.ok || !GROUP_ADMIN_STATUSES.has(member.result.status)) {
+      await api.answerCallbackQuery(query.id, "Only a group admin can change the settings here.");
+      return { action: "refused" };
+    }
+  }
+  const next = press.settings;
+  await prisma.telegramChat.updateMany({
+    where: { id: row.id, revokedAt: null },
+    data: {
+      hidden: next.hidden,
+      layout: next.layout,
+      links: next.links,
+      alertsMinMcapUsd: next.alertsMinMcapUsd,
+    },
+  });
+  const edited = await api.editMessageText(chatId, message.message_id, formatSettings(next), {
+    keyboard: settingsKeyboard(next),
+  });
+  await answerAfterEdit(api, query.id, chatId, edited);
+  return { action: "settings" };
 }
 
 /** The /show answer: each part of the card with its switch, and how to flip one. */

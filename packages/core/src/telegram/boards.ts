@@ -1,5 +1,14 @@
 import type { InlineKeyboard } from "./api.js";
-import { DIVIDER, escapeHtml, usd, type AlertLinks } from "./format.js";
+import {
+  DEFAULT_STYLE,
+  DIVIDER,
+  alertLinkUrl,
+  escapeHtml,
+  shortUsd,
+  usd,
+  type AlertLinks,
+  type AlertStyle,
+} from "./format.js";
 
 /**
  * The bot's two read-back commands: /alerts (the alerts this chat got that are still being
@@ -164,24 +173,33 @@ function dashboardLink(links: AlertLinks, text: string): string | null {
 
 /** The /alerts answer: each tracked alert, newest first, with its return now and its Peak. */
 export function formatActiveAlerts(
-  alerts: readonly ActiveAlert[],
+  all: readonly ActiveAlert[],
   links: AlertLinks,
   now = Date.now(),
+  opts: { minMcapUsd?: number; style?: AlertStyle } = {},
 ): string {
+  const floor = opts.minMcapUsd ?? 0;
+  const style = opts.style ?? DEFAULT_STYLE;
+  // Judged on the market cap now, else at the alert when there is no reading since.
+  const alerts = all.filter((a) => floor <= 0 || (a.nowMcapUsd ?? a.alertMcapUsd ?? 0) >= floor);
+  const under = all.length - alerts.length;
+  const floorNote =
+    under > 0 ? `<i>${under} under ${shortUsd(floor)} market cap not shown; /mincap changes that.</i>` : null;
   if (alerts.length === 0) {
     return [
       "📡 <b>Active alerts</b>",
       DIVIDER,
       "Nothing this chat was alerted on is being tracked right now.",
+      ...(floorNote ? ["", floorNote] : []),
       "",
       "See how the past ones did with /trenchboard.",
     ].join("\n");
   }
   const sorted = [...alerts].sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
   const lines = [`📡 <b>Active alerts</b>  ·  ${alerts.length} tracking`, DIVIDER];
+  const first = style.links[0];
   sorted.slice(0, ACTIVE_ALERTS_MAX).forEach((a, i) => {
     const icon = a.source.kind === "model" ? "🟢" : "🎯";
-    const m = encodeURIComponent(a.mintAddress);
     const head =
       `<b>${i + 1}.</b> ${icon} <b>${escapeHtml(label(a))}</b>  ·  ${agoText(a.sentAt, now)}  ·  ` +
       statusText(a);
@@ -190,12 +208,13 @@ export function formatActiveAlerts(
       `Now <b>${signedPct(ret)}</b>`,
       a.nowMcapUsd !== null ? `MC ${usd(a.nowMcapUsd)}` : null,
       a.peakPct !== null ? `Peak ${signedPct(a.peakPct)}` : null,
-      `<a href="https://trade.padre.gg/trade/solana/${m}">trade ↗</a>`,
+      first ? `<a href="${escapeHtml(alertLinkUrl(first, a.mintAddress))}">trade ↗</a>` : null,
     ].filter(Boolean);
     lines.push(...(i > 0 ? [""] : []), head, `     ${facts.join("  ·  ")}`);
   });
   if (sorted.length > ACTIVE_ALERTS_MAX) lines.push("", `… and ${sorted.length - ACTIVE_ALERTS_MAX} more`);
   lines.push("", "<i>Returns are on the market cap at each alert.</i>");
+  if (floorNote) lines.push(floorNote);
   const dash = dashboardLink(links, "Open the Live feed");
   if (dash) lines.push(dash);
   return lines.join("\n");
