@@ -95,7 +95,9 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
         <p>
           Every 6 hours the weights are refit on the last week of graded tokens, rewarding the mix that best
           picks out the 2x, 4x and 10x runners. Each change moves only half way and is kept only if it ranks
-          the newest tokens better, so scores drift slowly rather than jump.
+          the newest tokens better. When the weights change, the score is rescaled so its spread on recent
+          filter matches stays where it was: a saved min score keeps letting through about the same share of
+          tokens, now ranked a little better.
           {adoptedAt
             ? ` Last changed ${new Date(adoptedAt).toLocaleString()}.`
             : " Still on the starting weights."}

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { fitScoreWeights, rankAuc, type ScoreFitRow } from "./scoreWeights.js";
-import { DEFAULT_SCORE_WEIGHTS, getScoreWeights, scoreToken, setScoreWeights } from "./scorer.js";
+import { anchorForWeights, fitScoreWeights, rankAuc, type ScoreFitRow } from "./scoreWeights.js";
+import {
+  DEFAULT_SCORE_WEIGHTS,
+  getScoreAnchor,
+  getScoreWeights,
+  IDENTITY_SCORE_ANCHOR,
+  scoreToken,
+  setScoreAnchor,
+  setScoreWeights,
+  type ScoreAnchor,
+  type ScoreWeights,
+} from "./scorer.js";
 
 /** Rows where only `signal` predicts the outcome; the other two parts are noise. */
 function rows(signal: "momentum" | "freshness" | "holderQuality", n = 4_000, seed = 7): ScoreFitRow[] {
@@ -61,6 +71,65 @@ describe("fitScoreWeights", () => {
     const result = fitScoreWeights(rows("momentum"), current);
     expect(result.adopted).toBe(false);
     expect(result.weights).toEqual(current);
+  });
+});
+
+/** The p-th quantile of the score a weight set and rescale give the match rows. */
+function matchQuantile(rs: ScoreFitRow[], w: ScoreWeights, a: ScoreAnchor, p: number): number {
+  const scores = rs
+    .filter((r) => r.population === "match")
+    .map(
+      (r) =>
+        a.scale *
+          (w.momentum * r.momentum +
+            w.freshness * r.freshness +
+            w.holderQuality * r.holderQuality +
+            w.narrative * (r.narrative ?? 50)) +
+        a.offset,
+    )
+    .sort((x, y) => x - y);
+  return scores[Math.round((scores.length - 1) * p)]!;
+}
+
+describe("score rescale on adoption", () => {
+  it("keeps the matches' 10th and 90th percentiles where today's score has them", () => {
+    const rs = rows("holderQuality");
+    const result = fitScoreWeights(rs, DEFAULT_SCORE_WEIGHTS);
+    expect(result.adopted).toBe(true);
+    for (const p of [0.1, 0.9]) {
+      expect(matchQuantile(rs, result.weights, result.anchor, p)).toBeCloseTo(
+        matchQuantile(rs, DEFAULT_SCORE_WEIGHTS, IDENTITY_SCORE_ANCHOR, p),
+        0,
+      );
+    }
+  });
+
+  it("chains from today's rescale, not from the raw sum", () => {
+    const rs = rows("freshness");
+    const today = { scale: 1.2, offset: -8 };
+    const next = { momentum: 0.2, freshness: 0.5, holderQuality: 0.15, narrative: 0.15 };
+    const anchor = anchorForWeights(rs, DEFAULT_SCORE_WEIGHTS, today, next)!;
+    expect(matchQuantile(rs, next, anchor, 0.9)).toBeCloseTo(
+      matchQuantile(rs, DEFAULT_SCORE_WEIGHTS, today, 0.9),
+      0,
+    );
+  });
+
+  it("keeps today's rescale when nothing is adopted, and refuses too few rows", () => {
+    const today = { scale: 1.1, offset: 3 };
+    const current = { momentum: 0.75, freshness: 0.05, holderQuality: 0.05, narrative: 0.15 };
+    expect(fitScoreWeights(rows("momentum"), current, today).anchor).toEqual(today);
+    expect(anchorForWeights(rows("momentum", 100), current, today, DEFAULT_SCORE_WEIGHTS)).toBeNull();
+  });
+
+  it("is applied by scoreToken, and an unusable rescale is ignored", () => {
+    const token = { mintAddress: "m", priceUsd: 1, marketCapUsd: 10_000, narrativeTags: [], ageMinutes: 2 };
+    const raw = scoreToken(token).total;
+    setScoreAnchor({ scale: 0.5, offset: 10 });
+    expect(scoreToken(token).total).toBeCloseTo(raw * 0.5 + 10, 6);
+    setScoreAnchor({ scale: 0, offset: 0 });
+    expect(getScoreAnchor()).toEqual({ scale: 0.5, offset: 10 });
+    setScoreAnchor(IDENTITY_SCORE_ANCHOR);
   });
 });
 

@@ -1,6 +1,7 @@
 import {
   createLogger,
   fitScoreWeights,
+  getScoreAnchor,
   getScoreWeights,
   prisma,
   refreshScoreWeights,
@@ -31,13 +32,14 @@ export async function runScoreWeightsJob(now = new Date()): Promise<JobRunMeta> 
   const current = getScoreWeights();
   const since = new Date(now.getTime() - SCORE_FIT_WINDOW_DAYS * 86_400_000);
   const rows = [...(await loadFitRows("event", since)), ...(await loadFitRows("match", since))];
-  const result = fitScoreWeights(rows, current);
+  const result = fitScoreWeights(rows, current, getScoreAnchor());
   await saveScoreWeightsRun(result);
   if (result.adopted) await refreshScoreWeights(true);
   logger.info("score weights fit", {
     adopted: result.adopted,
     reason: result.reason,
     weights: result.weights,
+    anchor: result.anchor,
     fitted: result.fitted,
     rows: result.rows,
   });
@@ -47,6 +49,8 @@ export async function runScoreWeightsJob(now = new Date()): Promise<JobRunMeta> 
     freshness: result.weights.freshness,
     holderQuality: result.weights.holderQuality,
     narrative: result.weights.narrative,
+    anchorScale: result.anchor.scale,
+    anchorOffset: result.anchor.offset,
     holdoutCurrent: result.holdoutCurrent,
     holdoutProposed: result.holdoutProposed,
     ...result.rows,
@@ -103,6 +107,7 @@ async function loadFitRows(population: "event" | "match", since: Date): Promise<
         momentum: parts.momentum,
         freshness: parts.age,
         holderQuality: parts.holderHealth,
+        narrative: parts.narrative,
         win: r.hit2xIn1h === true,
         goal: r.hit4xIn1h === true,
         ...(r.hit10xIn1h !== null ? { tenX: r.hit10xIn1h } : {}),
