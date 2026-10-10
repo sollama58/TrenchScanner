@@ -323,6 +323,156 @@ export function TrendLines({
   );
 }
 
+export interface LineSeries {
+  key: string;
+  label: string;
+  /** Its CSS class: s1..s5 for the categorical slots, "ref" for the market, "all" for the pooled line. */
+  tone: string;
+  /** One value per label, oldest first; null leaves a gap. */
+  values: (number | null)[];
+}
+
+/**
+ * Several rates over the same days as lines: up to five picked series in the categorical slots
+ * plus the yardsticks ("ref" dashed, "all" in ink). The axis fits the data, as TrendLines does.
+ */
+export function MultiLines({
+  labels,
+  series,
+  height = 220,
+  signed = false,
+  subs,
+}: {
+  labels: string[];
+  series: LineSeries[];
+  height?: number;
+  signed?: boolean;
+  /** Shown in the tooltip under the values, one per label. */
+  subs?: string[];
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(560);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(
+      ([entry]) => entry && setWidth(Math.max(280, Math.round(entry.contentRect.width))),
+    );
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const padL = 40;
+  const padR = 12;
+  const padT = 10;
+  const padB = 26;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const values = series.flatMap((s) => s.values).filter((v): v is number => v !== null);
+  const hi = Math.max(0, ...values) * 1.15;
+  const low = signed ? Math.min(0, ...values) * 1.15 : 0;
+  const span = Math.max(10, hi - low);
+  const step = span <= 30 ? 10 : span <= 60 ? 20 : span <= 125 ? 25 : span <= 250 ? 50 : 100;
+  const top = Math.max(10, Math.ceil(hi / step) * step);
+  const bottom = Math.floor(low / step) * step;
+  const ticks = Array.from({ length: Math.round((top - bottom) / step) + 1 }, (_, i) => bottom + i * step);
+  const n = labels.length;
+  const x = (i: number) => padL + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const y = (v: number) =>
+    padT + plotH - ((Math.min(top, Math.max(bottom, v)) - bottom) / (top - bottom)) * plotH;
+  const fmt = (v: number | null) => (v === null ? "–" : signed ? signedPct(v, 1) : `${v.toFixed(1)}%`);
+  const path = (vals: (number | null)[]) => {
+    let d = "";
+    let pen = false;
+    vals.forEach((v, i) => {
+      if (v === null) {
+        pen = false;
+        return;
+      }
+      d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+      pen = true;
+    });
+    return d;
+  };
+  const every = Math.max(1, Math.ceil((n * 44) / Math.max(1, plotW)));
+  const slot = n <= 1 ? plotW : plotW / (n - 1);
+  const tipX = hover === null ? 0 : Math.min(Math.max(x(hover), 100), Math.max(100, width - 100));
+  // Yardsticks first so the picked models draw over them.
+  const drawn = [...series].sort((a, b) => Number(/^s\d$/.test(a.tone)) - Number(/^s\d$/.test(b.tone)));
+
+  return (
+    <figure className="chart">
+      <div className="legend">
+        {series.map((s) => (
+          <span className="key" key={s.key}>
+            <i className={`swatch ${s.tone}`} /> {s.label}
+          </span>
+        ))}
+      </div>
+      <div className="chart-box" ref={boxRef}>
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          height={height}
+          role="img"
+          aria-label={`${series.map((s) => s.label).join(", ")} by day`}
+        >
+          {ticks.map((t) => (
+            <g key={t}>
+              <line className="grid" x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} />
+              <text className="tick" x={padL - 6} y={y(t) + 3} textAnchor="end">
+                {signed && t > 0 ? "+" : ""}
+                {t}%
+              </text>
+            </g>
+          ))}
+          {drawn.map((s) => (
+            <path key={s.key} className={`line ${s.tone}`} d={path(s.values)} />
+          ))}
+          {labels.map((label, i) => (
+            <g key={label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+              <rect className="hit" x={x(i) - slot / 2} y={padT} width={slot} height={plotH + padB} />
+              {drawn.map((s) => {
+                const v = s.values[i] ?? null;
+                return v === null ? null : (
+                  <circle
+                    key={s.key}
+                    className={`dot ${s.tone}`}
+                    cx={x(i)}
+                    cy={y(v)}
+                    r={hover === i ? 4 : 2.5}
+                  />
+                );
+              })}
+              {(i % every === 0 || i === n - 1) && (
+                <text
+                  className="tick"
+                  x={x(i)}
+                  y={height - 8}
+                  textAnchor={i === n - 1 ? "end" : i === 0 ? "start" : "middle"}
+                >
+                  {label}
+                </text>
+              )}
+            </g>
+          ))}
+          <line className="axis" x1={padL} x2={width - padR} y1={y(0)} y2={y(0)} />
+        </svg>
+        {hover !== null && (
+          <div className="tooltip" style={{ left: `${(tipX / width) * 100}%` }}>
+            <strong>{labels[hover]}</strong>
+            {series.map((s) => (
+              <span key={s.key}>
+                <i className={`swatch ${s.tone}`} /> {s.label}: {fmt(s.values[hover] ?? null)}
+              </span>
+            ))}
+            {subs?.[hover] && <span className="muted">{subs[hover]}</span>}
+          </div>
+        )}
+      </div>
+    </figure>
+  );
+}
+
 /** A bar whose top corners are rounded 4px and whose base sits square on the baseline. */
 function barPath(x: number, top: number, w: number, base: number): string {
   const h = base - top;

@@ -13,7 +13,7 @@ import {
   type AiJudgeState,
   runExamRates,
 } from "../api";
-import { HBarChart, MarkerBars, Skeleton, TargetBars, TrendLines } from "../components/Charts";
+import { HBarChart, MarkerBars, MultiLines, Skeleton, TargetBars, TrendLines } from "../components/Charts";
 import {
   ArrowRightIcon,
   BrainIcon,
@@ -47,6 +47,7 @@ import {
 } from "./modelShared";
 import { ModelDetailModal } from "./ModelDetail";
 import { renderLearningCard, type LearningCardData } from "./learningCard";
+import { renderWeekCard, type WeekCardData } from "./weekCard";
 
 /**
  * The Model tab: the curator contest. Several models train on the same graded history, each calls
@@ -188,6 +189,8 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
       />
 
       <LearningPanel learning={data.learning} board={lb} days={days} now={now} />
+
+      <WeekPanel learning={data.learning} board={lb} now={now} />
 
       <WinnerRunsPanel data={data} days={days} />
 
@@ -1507,6 +1510,33 @@ const LEARNING_METRICS = {
 type LearningMetric = keyof typeof LEARNING_METRICS;
 const LEARNING_METRIC_KEYS = Object.keys(LEARNING_METRICS) as LearningMetric[];
 
+const sumOf = (rows: LearningRates[], f: (r: LearningRates) => number | undefined) =>
+  rows.reduce((n, r) => n + (f(r) ?? 0), 0);
+
+/** Days' rates pooled into one figure per measure: wins over graded calls, not a mean of daily rates. */
+function pooledRates(rows: LearningRates[]): Record<LearningMetric, number | null> {
+  const share = (won: number, of: number) => (of > 0 ? (won / of) * 100 : null);
+  const g = sumOf(rows, (r) => r.graded);
+  return {
+    "2x": share(
+      sumOf(rows, (r) => r.won2x),
+      g,
+    ),
+    "4x": share(
+      sumOf(rows, (r) => r.won4x),
+      g,
+    ),
+    "10x": share(
+      sumOf(rows, (r) => r.won10x),
+      sumOf(rows, (r) => r.tenXGraded),
+    ),
+    ret:
+      sumOf(rows, (r) => r.simCalls) > 0
+        ? sumOf(rows, (r) => r.sumSimReturnPct) / sumOf(rows, (r) => r.simCalls)
+        : null,
+  };
+}
+
 /**
  * Day over day: is a model getting better as data accumulates? Hit rates alone can't say - on a
  * day the whole market doubles twice as often every model looks twice as good - and the score
@@ -1592,33 +1622,9 @@ function LearningPanel({
   // Its record over the whole window, for the share image.
   const card = (): LearningCardData => {
     const days = mine?.days ?? [];
-    const sum = (rows: LearningRates[], f: (r: LearningRates) => number | undefined) =>
-      rows.reduce((n, r) => n + (f(r) ?? 0), 0);
-    const pooled = (rows: LearningRates[]) => {
-      const share = (won: number, of: number) => (of > 0 ? (won / of) * 100 : null);
-      const g = sum(rows, (r) => r.graded);
-      return {
-        "2x": share(
-          sum(rows, (r) => r.won2x),
-          g,
-        ),
-        "4x": share(
-          sum(rows, (r) => r.won4x),
-          g,
-        ),
-        "10x": share(
-          sum(rows, (r) => r.won10x),
-          sum(rows, (r) => r.tenXGraded),
-        ),
-        ret:
-          sum(rows, (r) => r.simCalls) > 0
-            ? sum(rows, (r) => r.sumSimReturnPct) / sum(rows, (r) => r.simCalls)
-            : null,
-      };
-    };
-    const model = pooled(days.map((d) => d.rates));
+    const model = pooledRates(days.map((d) => d.rates));
     // The market on the same days it called, so the comparison is like for like.
-    const market = pooled(learning.days.filter((d) => own.has(d.day)).map((d) => d.market));
+    const market = pooledRates(learning.days.filter((d) => own.has(d.day)).map((d) => d.market));
     return {
       model: name,
       windowDays,
@@ -1801,6 +1807,253 @@ function LearningPanel({
           caption={`${name} vs the market, on TrenchScanner`}
           link="trenchscanner.app"
           render={() => renderLearningCard(card())}
+          onClose={() => setSharing(false)}
+        />
+      )}
+    </section>
+  );
+}
+
+/** Most models the week panel draws at once: one per categorical color slot. */
+const WEEK_MAX_MODELS = 5;
+const WEEK_DAYS = 7;
+
+/** The UTC day keys of the `n` days ending at `last` (YYYY-MM-DD), oldest first. */
+function dayKeys(last: string, n: number): string[] {
+  const end = Date.parse(`${last}T00:00:00Z`);
+  return Array.from({ length: n }, (_, i) =>
+    new Date(end - (n - 1 - i) * 86_400_000).toISOString().slice(0, 10),
+  );
+}
+
+/**
+ * The last seven days side by side: the market and every model pooled always drawn, plus up to
+ * five models the reader picks, on one chart and one share image. Where LearningPanel follows one
+ * model's lift, this answers "who beat the market this week, and by how much".
+ */
+function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: Leaderboard; now: number }) {
+  const series = new Map((learning.models ?? []).map((m) => [m.model, m]));
+  const seats = board.entries.map((e) => ({ id: e.id, name: e.name }));
+  const today = new Date(now).toISOString().slice(0, 10);
+  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  const [withToday, setWithToday] = useState(false);
+  const [metric, setMetric] = useState<LearningMetric>("2x");
+  const [sharing, setSharing] = useState(false);
+  const keys = dayKeys(withToday ? today : yesterday, WEEK_DAYS);
+  const inWeek = new Set(keys);
+  const callsInWeek = (id: string) =>
+    (series.get(id)?.days ?? []).reduce((n, d) => n + (inWeek.has(d.day) ? d.rates.graded : 0), 0);
+  // Until the reader picks, the board's top three that called this week.
+  const [chosen, setChosen] = useState<string[] | null>(null);
+  const picked = (chosen ?? seats.filter((s) => callsInWeek(s.id) > 0).map((s) => s.id))
+    .filter((id) => seats.some((s) => s.id === id))
+    .slice(0, chosen ? WEEK_MAX_MODELS : 3);
+  const toggle = (id: string) =>
+    setChosen(
+      picked.includes(id)
+        ? picked.filter((x) => x !== id)
+        : picked.length < WEEK_MAX_MODELS
+          ? [...picked, id]
+          : picked,
+    );
+
+  const m = LEARNING_METRICS[metric];
+  const byDay = new Map(learning.days.map((d) => [d.day, d]));
+  const labels = keys.map((k) => (k === today ? "Today" : shortDay(k)));
+  const nameOf = (id: string) => seats.find((s) => s.id === id)?.name ?? series.get(id)?.name ?? id;
+  const modelRows = picked.map((id, i) => {
+    const own = new Map((series.get(id)?.days ?? []).map((d) => [d.day, d.rates]));
+    const rows = keys.map((k) => own.get(k)).filter((r): r is LearningRates => !!r);
+    return {
+      key: id,
+      label: nameOf(id),
+      tone: `s${i + 1}`,
+      // A day needs a few graded calls, as on the single-model chart; fewer leave a gap.
+      values: keys.map((k) => {
+        const r = own.get(k);
+        return r && r.graded >= MIN_CALLS_PER_POINT ? m.of(r) : null;
+      }),
+      week: pooledRates(rows),
+      graded: sumOf(rows, (r) => r.graded),
+    };
+  });
+  const marketRows = keys.map((k) => byDay.get(k)?.market).filter((r): r is LearningRates => !!r);
+  const feedRows = keys.map((k) => byDay.get(k)?.feed).filter((r): r is LearningRates => !!r);
+  const market = {
+    key: "market",
+    label: "Market",
+    tone: "ref",
+    values: keys.map((k) => {
+      const r = byDay.get(k)?.market;
+      return r && r.graded > 0 ? m.of(r) : null;
+    }),
+    week: pooledRates(marketRows),
+    graded: sumOf(marketRows, (r) => r.graded),
+  };
+  const all = {
+    key: "all",
+    label: "All models",
+    tone: "all",
+    values: keys.map((k) => {
+      const r = byDay.get(k)?.feed;
+      return r && r.graded >= MIN_CALLS_PER_POINT ? m.of(r) : null;
+    }),
+    week: pooledRates(feedRows),
+    graded: sumOf(feedRows, (r) => r.graded),
+  };
+  const lines = [...modelRows, all, market];
+  const anyData = lines.some((l) => l.values.some((v) => v !== null));
+  const fmt = (v: number | null) => (metric === "ret" ? signedPct(v, 1) : pct(v, 1));
+  const vsMarket = (v: number | null) => {
+    const base = market.week[metric];
+    if (v === null || base === null) return "–";
+    if (metric === "ret") return signedPct(v - base, 1);
+    return base > 0 ? `${(v / base).toFixed(1)}x` : "–";
+  };
+
+  const card = (): WeekCardData => ({
+    metric,
+    labels,
+    lines: lines.map((l) => ({ label: l.label, tone: l.tone, values: l.values, week: l.week[metric] })),
+    graded: all.graded,
+  });
+
+  return (
+    <section className="panel learning-panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <ChartIcon size={13} /> Last {WEEK_DAYS} days
+          </span>
+          <h3>Who beat the market this week?</h3>
+          <p className="muted small">
+            Up to {WEEK_MAX_MODELS} models day by day, next to the market (a random pick from the moments the
+            models choose from) and every model&apos;s calls pooled. A line above the dashed market line is a
+            model earning its keep that day.
+          </p>
+        </div>
+        <div className="learning-tools">
+          <button
+            type="button"
+            className="ghost share-btn"
+            disabled={!anyData}
+            onClick={() => setSharing(true)}
+          >
+            <ShareIcon size={14} /> Share
+          </button>
+        </div>
+      </header>
+
+      {seats.length > 0 ? (
+        <div className="model-pick" role="group" aria-label={`Models, up to ${WEEK_MAX_MODELS}`}>
+          {seats.map((s) => {
+            const at = picked.indexOf(s.id);
+            const on = at >= 0;
+            const full = !on && picked.length >= WEEK_MAX_MODELS;
+            const has = callsInWeek(s.id) > 0;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                aria-pressed={on}
+                className={`${on ? "on" : ""}${has ? "" : " quiet"}`}
+                disabled={full}
+                onClick={() => toggle(s.id)}
+                title={
+                  full
+                    ? `Up to ${WEEK_MAX_MODELS} models; drop one to add another`
+                    : has
+                      ? undefined
+                      : `No graded calls in these ${WEEK_DAYS} days`
+                }
+              >
+                {on && <i className={`swatch s${at + 1}`} />}
+                {s.name}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="empty">No models on the board yet.</p>
+      )}
+
+      <div className="row learning-controls">
+        <div className="segmented small" role="tablist" aria-label="Measure">
+          {LEARNING_METRIC_KEYS.map((k) => (
+            <button key={k} className={k === metric ? "on" : ""} onClick={() => setMetric(k)}>
+              {LEARNING_METRICS[k].tab}
+            </button>
+          ))}
+        </div>
+        <div className="segmented small" role="tablist" aria-label="Today">
+          <button className={withToday ? "" : "on"} onClick={() => setWithToday(false)}>
+            Ending yesterday
+          </button>
+          <button className={withToday ? "on" : ""} onClick={() => setWithToday(true)}>
+            Ending today
+          </button>
+        </div>
+        <span className="muted small">
+          {picked.length} of {WEEK_MAX_MODELS} picked
+        </span>
+      </div>
+
+      {anyData ? (
+        <MultiLines
+          labels={labels}
+          series={lines}
+          signed={metric === "ret"}
+          subs={keys.map((k) => {
+            const d = byDay.get(k);
+            return d
+              ? `${d.feed.graded} graded calls across all models; ${d.market.graded.toLocaleString()} moments`
+              : "No data";
+          })}
+        />
+      ) : (
+        <p className="empty">No graded calls in these {WEEK_DAYS} days yet.</p>
+      )}
+
+      <div className="table-wrap">
+        <table className="week-table">
+          <thead>
+            <tr>
+              <th>{WEEK_DAYS}-day total</th>
+              <th className="r">{m.fig}</th>
+              <th className="r">Vs market</th>
+              <th className="r">Graded</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l) => (
+              <tr key={l.key}>
+                <td>
+                  <i className={`swatch ${l.tone}`} />
+                  {l.label}
+                </td>
+                <td className={`r num${metric === "ret" ? ` ${profitTone(l.week[metric])}` : ""}`}>
+                  {fmt(l.week[metric])}
+                </td>
+                <td className="r num">{l.key === "market" ? "–" : vsMarket(l.week[metric])}</td>
+                <td className="r num">{l.graded.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="faint small">
+        {m.note} A model&apos;s day shows once it has {MIN_CALLS_PER_POINT} graded calls; fewer leave a gap.
+        The table pools each line&apos;s calls over the {WEEK_DAYS} days. For the market, &quot;graded&quot;
+        counts decision moments.
+      </p>
+
+      {sharing && (
+        <ShareImageDialog
+          title={`Last ${WEEK_DAYS} days, ${m.tab}`}
+          fileName="trenchscanner-last-7-days-vs-market"
+          caption="TrenchScanner models vs the market, last 7 days"
+          link="trenchscanner.app"
+          render={() => renderWeekCard(card())}
           onClose={() => setSharing(false)}
         />
       )}
