@@ -1155,8 +1155,12 @@ export interface TelegramChat {
 /** The parts of a Telegram alert a chat can switch off, in the order the card shows them. */
 export const TELEGRAM_ALERT_PARTS = [
   { key: "image", label: "Token picture" },
-  { key: "stats", label: "Mcap, holders, volume, age" },
+  { key: "stats", label: "Market cap" },
+  { key: "holders", label: "Holders" },
+  { key: "volume", label: "Volume 1h" },
+  { key: "age", label: "Token age" },
   { key: "conviction", label: "Model conviction" },
+  { key: "calibrated", label: "2x rate of calls like it" },
   { key: "reasons", label: "Reasons" },
   { key: "filters", label: "Filter and score" },
   { key: "mint", label: "Mint address" },

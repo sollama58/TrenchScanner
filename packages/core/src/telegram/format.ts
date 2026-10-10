@@ -72,7 +72,11 @@ export const DIGEST_MAX_ENTRIES = 12;
 export const ALERT_PARTS = [
   "image",
   "stats",
+  "holders",
+  "volume",
+  "age",
   "conviction",
+  "calibrated",
   "reasons",
   "filters",
   "mint",
@@ -82,8 +86,12 @@ export const ALERT_PARTS = [
 export type AlertPart = (typeof ALERT_PARTS)[number];
 export const ALERT_PART_LABELS: Record<AlertPart, string> = {
   image: "the token's picture",
-  stats: "market cap, holders, volume and age",
+  stats: "the market cap",
+  holders: "the holder count",
+  volume: "the last hour's volume",
+  age: "how old the token is",
   conviction: "each model's conviction line",
+  calibrated: "how often calls like it 2x'd",
   reasons: "the strongest call's reasons",
   filters: "which filter caught it, with the score",
   mint: "the mint address",
@@ -158,6 +166,13 @@ export function usd(n: number | null | undefined): string {
   return `$${n.toFixed(0)}`;
 }
 
+/** A round amount without the decimal: $5k, $25k, $1.5m. */
+export function shortUsd(n: number): string {
+  if (n >= 1e6) return `$${Number((n / 1e6).toFixed(2))}m`;
+  if (n >= 1e3) return `$${Number((n / 1e3).toFixed(1))}k`;
+  return `$${Math.round(n)}`;
+}
+
 export function ageText(firstSeenAt: Date | null, now: number): string | null {
   if (!firstSeenAt) return null;
   const mins = Math.max(0, Math.round((now - firstSeenAt.getTime()) / 60_000));
@@ -195,13 +210,69 @@ function dashboardLink(links: AlertLinks, text: string): string | null {
   return base ? `<a href="${escapeHtml(base)}/#live">${text}</a>` : null;
 }
 
-function tradeLinks(mint: string): string {
+/**
+ * The trade, chart and explorer links an alert can carry; each chat picks its own (TelegramChat
+ * .links), the first three by default, as the Live feed's quick links.
+ */
+export const ALERT_LINKS = ["terminal", "axiom", "gmgn", "dexscreener", "birdeye", "solscan"] as const;
+export type AlertLink = (typeof ALERT_LINKS)[number];
+export const DEFAULT_ALERT_LINKS: readonly AlertLink[] = ["terminal", "axiom", "gmgn"];
+export const ALERT_LINK_LABELS: Record<AlertLink, string> = {
+  terminal: "Terminal",
+  axiom: "Axiom",
+  gmgn: "GMGN",
+  dexscreener: "DexScreener",
+  birdeye: "Birdeye",
+  solscan: "Solscan",
+};
+
+export function alertLinkUrl(link: AlertLink, mint: string): string {
   const m = encodeURIComponent(mint);
-  return [
-    `<a href="https://trade.padre.gg/trade/solana/${m}">Terminal</a>`,
-    `<a href="https://axiom.trade/t/${m}">Axiom</a>`,
-    `<a href="https://gmgn.ai/sol/token/${m}">GMGN</a>`,
-  ].join("  │  ");
+  switch (link) {
+    case "terminal":
+      return `https://trade.padre.gg/trade/solana/${m}`;
+    case "axiom":
+      return `https://axiom.trade/t/${m}`;
+    case "gmgn":
+      return `https://gmgn.ai/sol/token/${m}`;
+    case "dexscreener":
+      return `https://dexscreener.com/solana/${m}`;
+    case "birdeye":
+      return `https://birdeye.so/token/${m}?chain=solana`;
+    case "solscan":
+      return `https://solscan.io/token/${m}`;
+  }
+}
+
+export function isAlertLink(key: string): key is AlertLink {
+  return (ALERT_LINKS as readonly string[]).includes(key);
+}
+
+/** How a chat's alerts are laid out, and which links they carry. */
+export interface AlertStyle {
+  /** "full" is the whole card; "compact" drops the rule, the reasons and the bars, a few lines in all. */
+  layout: "full" | "compact";
+  links: readonly AlertLink[];
+}
+
+export const DEFAULT_STYLE: AlertStyle = { layout: "full", links: DEFAULT_ALERT_LINKS };
+
+/** A chat row's style, with anything unknown dropped and the links kept in their menu order. */
+export function alertStyle(
+  row: { layout?: string | null; links?: readonly string[] | null } = {},
+): AlertStyle {
+  const chosen = new Set(row.links ?? DEFAULT_ALERT_LINKS);
+  return {
+    layout: row.layout === "compact" ? "compact" : "full",
+    links: ALERT_LINKS.filter((l) => chosen.has(l)),
+  };
+}
+
+function tradeLinks(mint: string, style: AlertStyle): string | null {
+  if (style.links.length === 0) return null;
+  return style.links
+    .map((l) => `<a href="${escapeHtml(alertLinkUrl(l, mint))}">${ALERT_LINK_LABELS[l]}</a>`)
+    .join("  │  ");
 }
 
 /** A 0-100 conviction as ten blocks, e.g. ▰▰▰▰▰▰▰▱▱▱ for 72. */
@@ -232,25 +303,38 @@ function strongestFirst(card: AlertCard): AlertCard {
 }
 
 /** The numbers, two to a line so they read as a small grid on a phone. */
-function factsLines(card: AlertCard, now: number): string | null {
+function factsLines(card: AlertCard, now: number, parts: AlertParts, compact: boolean): string | null {
   const facts: string[] = [];
-  if (card.snapshot) facts.push(`💰 MC <b>${usd(card.snapshot.marketCapUsd)}</b>`);
-  if (card.snapshot?.holderCount != null) facts.push(`👥 <b>${card.snapshot.holderCount}</b> holders`);
-  if (card.snapshot?.volume1hUsd != null) facts.push(`📊 Vol 1h <b>${usd(card.snapshot.volume1hUsd)}</b>`);
-  const age = ageText(card.token.firstSeenAt, now);
+  if (parts.stats && card.snapshot) facts.push(`💰 MC <b>${usd(card.snapshot.marketCapUsd)}</b>`);
+  if (parts.holders && card.snapshot?.holderCount != null)
+    facts.push(`👥 <b>${card.snapshot.holderCount}</b> holders`);
+  if (parts.volume && card.snapshot?.volume1hUsd != null)
+    facts.push(`📊 Vol 1h <b>${usd(card.snapshot.volume1hUsd)}</b>`);
+  const age = parts.age ? ageText(card.token.firstSeenAt, now) : null;
   if (age) facts.push(`⏱ ${age}`);
   if (facts.length === 0) return null;
+  if (compact) return facts.join("  ·  ");
   const lines: string[] = [];
   for (let i = 0; i < facts.length; i += 2) lines.push(facts.slice(i, i + 2).join("   ·   "));
   return lines.join("\n");
 }
 
-function callLines(call: AlertCall, withReasons: boolean): string[] {
+function callLines(call: AlertCall, withReasons: boolean, parts: AlertParts, compact: boolean): string[] {
   const pct = Math.round(call.confidence);
+  if (compact) {
+    const bits = [
+      `🤖 <b>${escapeHtml(call.modelName)}</b> <b>${pct}%</b>${call.tier === "high" ? " 🔥" : ""}`,
+    ];
+    if (parts.calibrated && call.calibratedPct !== null)
+      bits.push(`${Math.round(call.calibratedPct)}% like it 2x'd`);
+    if (call.narrativeVerdict === "agrees") bits.push("📝 agrees");
+    if (call.narrativeVerdict === "warns") bits.push("⚠️ warns");
+    return [bits.join("  ·  ")];
+  }
   let head = `🤖 <b>${escapeHtml(call.modelName)}</b>  ${convictionBar(pct)}  <b>${pct}%</b> conviction`;
   if (call.tier === "high") head += "  🔥 high";
   const lines = [head];
-  if (call.calibratedPct !== null)
+  if (parts.calibrated && call.calibratedPct !== null)
     lines.push(`     ${Math.round(call.calibratedPct)}% of calls like it 2x'd`);
   if (call.narrativeVerdict === "agrees") lines.push("     📝 Narrative agrees");
   if (call.narrativeVerdict === "warns") lines.push("     ⚠️ Narrative warns");
@@ -263,45 +347,56 @@ function callLines(call: AlertCall, withReasons: boolean): string[] {
  * One alert as a Telegram HTML message: the token and who raised it over a rule, the numbers,
  * each model's call (strongest first, with a conviction bar) and its reasons, each filter that
  * caught it (highest score first), then the mint to copy, the places to trade and the reads.
- * Blank lines between the blocks; short enough to ride as a photo caption.
+ * Blank lines between the blocks; short enough to ride as a photo caption. The compact layout
+ * keeps the same facts in a few lines: no rule, no bars, no reasons, the filters on one line.
  */
 export function formatAlert(
   card: AlertCard,
   links: AlertLinks,
   now = Date.now(),
   parts: AlertParts = ALL_PARTS,
+  style: AlertStyle = DEFAULT_STYLE,
 ): string {
+  const compact = style.layout === "compact";
   const c = strongestFirst(card);
   const t = c.token;
   const icon = c.calls.length > 0 ? "🟢" : "🎯";
   const title =
-    t.name && t.symbol
+    t.name && t.symbol && !compact
       ? `${icon} <b>${escapeHtml(tokenLabel(t))}</b>  ·  ${escapeHtml(t.name)}`
       : `${icon} <b>${escapeHtml(tokenLabel(t))}</b>`;
-  const sections: string[] = [`${title}\n<i>${escapeHtml(headline(c))}</i>\n${DIVIDER}`];
+  const sections: string[] = [
+    compact
+      ? `${title}  ·  <i>${escapeHtml(headline(c))}</i>`
+      : `${title}\n<i>${escapeHtml(headline(c))}</i>\n${DIVIDER}`,
+  ];
 
-  const facts = parts.stats ? factsLines(c, now) : null;
+  const facts = factsLines(c, now, parts, compact);
   if (facts) sections.push(facts);
 
   // The strongest call carries the reasons; the others go without, which keeps the whole
   // message inside a photo caption.
   const calls: string[] = [];
+  const withReasons = (i: number) => i === 0 && parts.reasons && !compact;
   if (parts.conviction)
-    c.calls.forEach((call, i) => calls.push(...callLines(call, i === 0 && parts.reasons)));
-  else if (parts.reasons && c.calls[0])
-    calls.push(...callLines(c.calls[0], true).filter((l) => l.startsWith("<blockquote>")));
+    c.calls.forEach((call, i) => calls.push(...callLines(call, withReasons(i), parts, compact)));
+  else if (withReasons(0) && c.calls[0])
+    calls.push(...callLines(c.calls[0], true, parts, false).filter((l) => l.startsWith("<blockquote>")));
   if (calls.length > 0) sections.push(calls.join("\n"));
 
   if (parts.filters && c.filters.length > 0)
     sections.push(
-      c.filters
-        .map((f) => `🎯 <b>“${escapeHtml(f.name)}”</b>  ·  score <b>${Math.round(f.score)}</b>`)
-        .join("\n"),
+      compact
+        ? `🎯 ${c.filters.map((f) => `“${escapeHtml(f.name)}” <b>${Math.round(f.score)}</b>`).join("  ·  ")}`
+        : c.filters
+            .map((f) => `🎯 <b>“${escapeHtml(f.name)}”</b>  ·  score <b>${Math.round(f.score)}</b>`)
+            .join("\n"),
     );
 
   const tail: string[] = [];
   if (parts.mint) tail.push(`<code>${escapeHtml(t.mintAddress)}</code>`);
-  if (parts.links) tail.push(tradeLinks(t.mintAddress));
+  const trade = parts.links ? tradeLinks(t.mintAddress, style) : null;
+  if (trade) tail.push(trade);
   const reads: string[] = [];
   const dash = parts.links ? dashboardLink(links, "TrenchScanner") : null;
   if (dash) reads.push(dash);
@@ -311,6 +406,7 @@ export function formatAlert(
   if (tail.length > 0) sections.push(tail.join("\n"));
   // The rule closes the title block, so the numbers sit right under it; blank lines elsewhere.
   const [head, ...body] = sections;
+  if (compact) return sections.join("\n");
   return body.length > 0 ? `${head}\n${body.join("\n\n")}` : head!;
 }
 
@@ -320,9 +416,10 @@ export function alertMessage(
   links: AlertLinks,
   now = Date.now(),
   parts: AlertParts = ALL_PARTS,
+  style: AlertStyle = DEFAULT_STYLE,
 ): AlertMessage {
   return {
-    html: formatAlert(card, links, now, parts),
+    html: formatAlert(card, links, now, parts, style),
     imageUrl: parts.image ? alertImage(card.token) : null,
   };
 }
@@ -344,7 +441,12 @@ function digestWho(card: AlertCard): string {
  * strongest call is the first line a person reads, and each entry
  * links straight to the terminal.
  */
-export function formatDigest(cards: AlertCard[], links: AlertLinks, parts: AlertParts = ALL_PARTS): string {
+export function formatDigest(
+  cards: AlertCard[],
+  links: AlertLinks,
+  parts: AlertParts = ALL_PARTS,
+  style: AlertStyle = DEFAULT_STYLE,
+): string {
   const ranked = sortCards(cards);
   const lines = [`⚡ <b>${cards.length} new alerts</b>  ·  strongest first`, DIVIDER];
   ranked.slice(0, DIGEST_MAX_ENTRIES).forEach((card, i) => {
@@ -355,8 +457,10 @@ export function formatDigest(cards: AlertCard[], links: AlertLinks, parts: Alert
       escapeHtml(digestWho(card)),
     ];
     if (parts.stats && card.snapshot) bits.push(usd(card.snapshot.marketCapUsd));
-    const m = encodeURIComponent(card.token.mintAddress);
-    if (parts.links) bits.push(`<a href="https://trade.padre.gg/trade/solana/${m}">trade ↗</a>`);
+    // The chat's first link, so a chat that trades on Axiom gets Axiom here too.
+    const first = style.links[0];
+    if (parts.links && first)
+      bits.push(`<a href="${escapeHtml(alertLinkUrl(first, card.token.mintAddress))}">trade ↗</a>`);
     else if (parts.mint) bits.push(`<code>${escapeHtml(card.token.mintAddress)}</code>`);
     // A blank line between entries, so a wrapped entry doesn't run into the next one.
     lines.push(...(i > 0 ? [""] : []), bits.join(" · "));
@@ -372,13 +476,18 @@ export function digestMessage(
   cards: AlertCard[],
   links: AlertLinks,
   parts: AlertParts = ALL_PARTS,
+  style: AlertStyle = DEFAULT_STYLE,
 ): AlertMessage {
   const top = parts.image ? sortCards(cards).find((c) => alertImage(c.token) !== null) : undefined;
-  return { html: formatDigest(cards, links, parts), imageUrl: top ? alertImage(top.token) : null };
+  return { html: formatDigest(cards, links, parts, style), imageUrl: top ? alertImage(top.token) : null };
 }
 
 /** The sample alert the Filters tab sends, pictured with the app's own icon. */
-export function formatTestMessage(links: AlertLinks, parts: AlertParts = ALL_PARTS): AlertMessage {
+export function formatTestMessage(
+  links: AlertLinks,
+  parts: AlertParts = ALL_PARTS,
+  style: AlertStyle = DEFAULT_STYLE,
+): AlertMessage {
   const base = links.dashboardUrl.replace(/\/$/, "");
   const html = formatAlert(
     {
@@ -397,6 +506,7 @@ export function formatTestMessage(links: AlertLinks, parts: AlertParts = ALL_PAR
     links,
     Date.now(),
     parts,
+    style,
   ).replace(/^🎯 <b>/, "🔔 <b>");
   return { html, imageUrl: parts.image && base.startsWith("https://") ? `${base}/icon-512.png` : null };
 }

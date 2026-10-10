@@ -477,6 +477,8 @@ export class TelegramApi {
         { command: "start", description: "Link this chat with a code from the Filters tab" },
         { command: "alerts", description: "The alerts here still being tracked, with their return now" },
         { command: "trenchboard", description: "How this chat's alerts did over 3h, 6h, 12h, 24h or 7d" },
+        { command: "settings", description: "Choose what alerts show, their layout and links" },
+        { command: "mincap", description: "The lowest market cap /alerts lists, e.g. /mincap 10k" },
         { command: "status", description: "Which account this chat is linked to" },
         { command: "show", description: "What each alert includes; /show reasons turns a part on" },
         { command: "hide", description: "Turn a part of the alert off, e.g. /hide links" },

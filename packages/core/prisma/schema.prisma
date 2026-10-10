@@ -144,21 +144,28 @@ model TelegramChat {
   linkedByName       String?
 
   /// Which alerts this chat gets.
-  filterMatches Boolean   @default(true)
-  modelCalls    Boolean   @default(true)
+  filterMatches    Boolean   @default(true)
+  modelCalls       Boolean   @default(true)
   /// Paused by the user from the dashboard; the chat stays linked.
-  enabled       Boolean   @default(true)
+  enabled          Boolean   @default(true)
   /// The parts of an alert this chat has switched off (ALERT_PARTS in telegram/format.ts:
   /// "image", "stats", "conviction", "reasons", "filters", "mint", "links"). Empty means the
   /// whole card. Set from the dashboard or with /show and /hide in the chat.
-  hidden        String[]  @default([])
+  hidden           String[]  @default([])
+  /// "full" (the whole card) or "compact" (a few lines: no rule, reasons or per-filter lines).
+  /// Set with /settings in the chat.
+  layout           String    @default("full")
+  /// Which trade and chart links an alert carries (ALERT_LINKS in telegram/format.ts), in order.
+  links            String[]  @default(["terminal", "axiom", "gmgn"])
+  /// /alerts leaves out alerts whose market cap now is under this, in USD; 0 lists them all.
+  alertsMinMcapUsd Float     @default(5000)
   /// Alerts raised at or before this were sent (or never due) - the dispatcher's cursor per chat.
   /// Starts at link time, so linking never replays the backlog.
-  sentThrough   DateTime  @default(now())
-  lastSentAt    DateTime?
+  sentThrough      DateTime  @default(now())
+  lastSentAt       DateTime?
   /// What Telegram last answered when a send failed; cleared on the next success.
-  lastError     String?
-  failures      Int       @default(0)
+  lastError        String?
+  failures         Int       @default(0)
 
   createdAt DateTime  @default(now())
   /// Unlinked from the dashboard, or the bot was blocked / removed from the group. Kept for the
@@ -495,8 +502,8 @@ model CuratedAlert {
   /// deep read lands, usually after the call went out, and instead of a second card it leaves
   /// this note on the one already showing (decided 2026-10-07). Null until the deep read decides,
   /// and on the Narrative seat's own calls.
-  narrativeVerdict String?
-  narrativeNotedAt DateTime?
+  narrativeVerdict   String?
+  narrativeNotedAt   DateTime?
   /// What the Narrative seat's verdict rests on (curation/narrativeNote.ts NarrativeRationale): its
   /// probability, calibrated 2x rate, and the inputs that moved it most each way. Written with
   /// narrativeVerdict on a noted card and on the seat's own calls, for the TokenSage view. Null on
@@ -891,25 +898,25 @@ model TokenSnapshot {
   buys1h            Int?
   sells1h           Int?
 
-  holderCount         Int?
-  holderGrowthPct     Float?
-  top10HolderPct      Float?
-  devWalletPct        Float?
+  holderCount          Int?
+  holderGrowthPct      Float?
+  top10HolderPct       Float?
+  devWalletPct         Float?
   // RugCheck's own composite risk score/named flags - stored raw (not just baked into
   // rugScreenPassed) now that a user can filter on them directly. See rugScreen.ts's
   // CRITICAL_RISK_FLAGS for which named flags matter to excludeCriticalRiskFlags.
-  riskScore           Float?
-  riskFlags           String[] @default([])
+  riskScore            Float?
+  riskFlags            String[] @default([])
   // % of the (pool-excluded) top-10 holders whose wallet was funded <24h ago - a sniper/insider
   // signal. Null whenever there was no holder list to check (e.g. RugCheck hadn't indexed the
   // mint) or part of the list was deferred by the per-cycle Helius lookup budget - see
   // apps/worker/src/jobs/walletFreshness.ts. Deliberately null rather than 0 in every one of
   // those cases: 0 would claim we checked the full list and found none fresh.
-  freshTop10WalletPct Float?
+  freshTop10WalletPct  Float?
   // % of the top-10 holder list holding under WALLET_HOLDINGS_MIN_USD of tokens that are neither
   // cash nor gas. Null under exactly the same conditions as freshTop10WalletPct above, plus one
   // more: an endpoint that doesn't serve the DAS API can't answer it at all.
-  emptyTop10WalletPct Float?
+  emptyTop10WalletPct  Float?
   // % of the same top-10 list that were among the launch's first 25 buyers (the dev aside) - the
   // snipers still holding. Null until the launch's first buyers have been read (the worker's
   // launchSnipers.ts) or with no holder list.
@@ -918,23 +925,23 @@ model TokenSnapshot {
   // intent, not by guarantee - pool and LP addresses are excluded from it - so a card that wants
   // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots
   // written before this column existed, and on any snapshot with no holder list at all.
-  top10WalletsChecked Int?
+  top10WalletsChecked  Int?
   // Of the first 25 wallets to buy after launch (the dev aside), how many still hold it, out of
   // firstBuyersSeen (under 25 only while the launch has had fewer buyers). From the worker's
   // PumpPortal trade stream (curation/tradeFlow.ts), so null for a launch it didn't see.
-  firstBuyersHolding  Int?
-  firstBuyersSeen     Int?
+  firstBuyersHolding   Int?
+  firstBuyersSeen      Int?
   // Whether the dev still holds the token (resolveDevHolding: the trade stream's view of the dev's
   // bag, else RugCheck's creator balance). Null when neither knew.
-  devHolding          Boolean?
+  devHolding           Boolean?
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
   // was screened out. Null means the check never ran or failed, which the screen also rejects.
-  isMayhemMode        Boolean?
+  isMayhemMode         Boolean?
   // Whether the mint has graduated off a Pump.fun bonding curve to a real AMM, derived from
   // DexScreener's dexId (see dexscreener.ts's deriveGraduated) - null for anything DexScreener
   // hasn't indexed a pair for at all.
-  graduated           Boolean?
+  graduated            Boolean?
 
   mintAuthorityActive   Boolean?
   freezeAuthorityActive Boolean?

@@ -15,6 +15,7 @@ import {
   alertImage,
   alertMessage,
   alertParts,
+  alertStyle,
   digestMessage,
   type AlertCard,
   type AlertLinks,
@@ -172,6 +173,8 @@ function loadChats() {
       filterMatches: true,
       modelCalls: true,
       hidden: true,
+      layout: true,
+      links: true,
       sentThrough: true,
       lastSentAt: true,
       failures: true,
@@ -533,9 +536,10 @@ async function dispatchPass(
   const send = async (q: Queue) => {
     const item = q.pending[0]!;
     const parts = alertParts(q.chat.hidden);
+    const style = alertStyle(q.chat);
     const message = isDigest(item.card)
-      ? digestMessage(item.card.digest, links, parts)
-      : alertMessage(item.card, links, now(), parts);
+      ? digestMessage(item.card.digest, links, parts, style)
+      : alertMessage(item.card, links, now(), parts, style);
     const result = await api.sendAlert(q.chat.chatId, message, { photos });
     const spacing = q.chat.kind === "private" ? PRIVATE_GAP_MS : GROUP_GAP_MS;
     if (result.ok) {
