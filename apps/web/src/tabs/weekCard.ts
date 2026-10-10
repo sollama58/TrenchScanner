@@ -14,13 +14,14 @@ import {
   pill,
   roundRect,
 } from "../shareCard";
-import type { CardMetric } from "./learningCard";
 
 /**
  * The Models tab's week share image: up to five picked models' chosen measure over the last seven
  * days, with the market and every model pooled always drawn, and each line's figure over the week
  * beside the chart, in the shared branded frame (shareCard.ts).
  */
+export type CardMetric = "2x" | "4x" | "10x" | "ret";
+
 export interface WeekCardData {
   metric: CardMetric;
   /** One per day, oldest first. */
@@ -170,7 +171,7 @@ const SUB: Record<CardMetric, string> = {
 export async function renderWeekCard(d: WeekCardData): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
   if (!ctx) return canvas;
-  frame(ctx, icon, "Who beat the market this week?", SUB[d.metric], {
+  frame(ctx, icon, "Is it getting better?", SUB[d.metric], {
     badge: (c, right, cy) => pill(c, right, cy, `Last ${d.labels.length} days`),
     footer: `${d.graded.toLocaleString("en-US")} live calls · market = a random pick from the same moments`,
     link: "trenchscanner.app",
