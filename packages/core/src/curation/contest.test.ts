@@ -10,7 +10,7 @@ import {
 } from "./contestants.js";
 import { foundingLanes } from "./evolution.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
-import { LEARNER_FEATURE_NAMES } from "./features.js";
+import { LEARNER_FEATURE_NAMES, SAFETY_FEATURES } from "./features.js";
 import { NARRATIVE_BACKGROUND_KIND, NARRATIVE_MIN_ROWS, narrativeTrainingSet } from "./trainingRun.js";
 import { isDecisionRow, type TrainingRow } from "./trainer.js";
 import { STACKED_MODEL_KIND } from "./stacking.js";
@@ -48,18 +48,19 @@ describe("contestant roster", () => {
     expect(CONTESTANTS.find((c) => c.id === "narrative")?.role).toBe("narrative");
   });
 
-  it("points the Narrative model at every TokenSage input and only four market readings", () => {
+  it("points the Narrative model at every TokenSage input and only the safety readings", () => {
     const recipe = CONTESTANTS.find((c) => c.id === "narrative")?.recipe;
     expect(recipe?.featureNames).toBe(NARRATIVE_SEAT_FEATURES);
     const tokenSage = LEARNER_FEATURE_NAMES.filter((f) => f.startsWith("ns"));
     expect(tokenSage.length).toBeGreaterThan(30);
     expect(NARRATIVE_SEAT_FEATURES.filter((f) => f.startsWith("ns"))).toEqual(tokenSage);
-    expect(NARRATIVE_SEAT_FEATURES.filter((f) => !f.startsWith("ns"))).toEqual([
-      "ageMinutes",
-      "volumeAccel",
-      "holderGrowth10mPct",
-      "pathRet15mPct",
-    ]);
+    expect(NARRATIVE_SEAT_FEATURES.filter((f) => !f.startsWith("ns"))).toEqual(SAFETY_FEATURES);
+    // No price, volume or age.
+    for (const market of ["ageMinutes", "volumeAccel", "holderGrowth10mPct", "pathRet15mPct", "mcapUsd"]) {
+      expect(NARRATIVE_SEAT_FEATURES).not.toContain(market);
+    }
+    expect(SAFETY_FEATURES).toContain("top10HolderPct");
+    expect(SAFETY_FEATURES.every((f) => LEARNER_FEATURE_NAMES.includes(f))).toBe(true);
   });
 
   it("keeps a Trees twin that reads every learner input but TokenSage's", () => {

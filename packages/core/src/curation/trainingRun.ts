@@ -702,11 +702,11 @@ export const NARRATIVE_MIN_ROWS = 300;
 export const NARRATIVE_BACKGROUND_KIND = "narrative-background";
 
 /**
- * The Narrative seat's training set: every row of the run plus its second looks, newest first.
- * Trained on the deep-read rows alone it ranked those same moments clearly worse (walk-forward
- * AUC 0.65 vs 0.68 on 2026-10-08 production rows; user decision 2026-10-08 to train on every
- * row). It still decides only with the deep read in hand, so it is graded and calibrated only on
+ * The narrative seats' training set: every row of the run plus the second looks, newest first.
+ * The seats decide only with the deep read in hand, so they are graded and calibrated only on
  * rows that carry it: every row without it (nsDepthFull != 1) becomes NARRATIVE_BACKGROUND_KIND.
+ * Narrative Blend trains on all of it; the Narrative seat, since it stopped reading
+ * price, volume and age (user decision 2026-10-10), on the deep-read rows alone (see runEvolvingContest).
  */
 export function narrativeTrainingSet(
   rows: readonly TrainingRow[],
@@ -984,7 +984,21 @@ export async function runEvolvingContest(
     const ownFeatures = runFeatures(deepRead, cfg);
     const runnerReport = runnerTraitsReport(deepRead);
     for (const spec of narrativeSpecs) {
-      const exam = await examineLearner(own, cfg, spec.id, spec.name, spec.recipe!, null, ownFeatures.usable);
+      // The one-step seat trains on the deep-read rows alone: with no market inputs left, the
+      // rows without a read could teach it only the safety readings, and its picks would rest on
+      // those rather than the narrative (shuffling the safety readings moved 75% of its top-10%
+      // picks trained on every row, 69% on the deep-read rows; 2026-10-07 to 10-10). Narrative
+      // Blend's market stage still learns from every row.
+      const seatRows = spec.recipe!.narrativeBlend ? own : deepRead;
+      const exam = await examineLearner(
+        seatRows,
+        cfg,
+        spec.id,
+        spec.name,
+        spec.recipe!,
+        null,
+        ownFeatures.usable,
+      );
       exam.result.metrics.runnerReport = runnerReport;
       if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
       results.push(exam.result);

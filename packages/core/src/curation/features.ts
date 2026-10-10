@@ -285,6 +285,25 @@ export function learnerSubset(names: readonly CandidateFeatureName[]): Candidate
   return names.filter((name) => !RETIRED_LEARNER_INPUTS.has(name));
 }
 
+/**
+ * The safety readings: who holds the coin and how its launch was set up - the inputs behind the
+ * rug screen's wallet cuts (scoring/rugScreen.ts, passesWalletSafetyCuts) and the RugCheck risk,
+ * plus how much of the supply the launch's own buyers and dev took. The Narrative seat reads
+ * these and the TokenSage inputs, nothing about price, volume or age (user decision 2026-10-10:
+ * it decides on the narrative, with market data only as safety checks).
+ */
+export const SAFETY_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
+  "top10HolderPct",
+  "freshTop10WalletPct",
+  "emptyTop10WalletPct",
+  "sniperTop10WalletPct",
+  "riskScore",
+  "firstBuyersSupplyPct",
+  "launchBundledBuyers",
+  "devBuySupplyPct",
+  "firstBuyersHolding",
+]);
+
 /** The order-flow features, in vector order - each is a TradeFlowFeatures field of the same name. */
 export const TRADE_FLOW_FEATURES = [
   "uniqueBuyers5m",
