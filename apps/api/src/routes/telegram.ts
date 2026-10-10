@@ -17,6 +17,7 @@ import {
   type TelegramUpdate,
 } from "@trenchscanner/core";
 import { clientIp } from "../clientIp.js";
+import { createTelegramBoards } from "../telegramBoards.js";
 
 /**
  * Telegram alerts, the dashboard half: mint a one-time link code for the signed-in account, list
@@ -61,6 +62,7 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
   const configured = telegramConfigured(token);
   const api = configured ? new TelegramApi(token) : null;
   const secret = configured ? webhookSecret(token) : "";
+  const boards = createTelegramBoards();
 
   // The bot's @username, for the t.me links. Asked once and kept; asked again on the next
   // request if Telegram was unreachable the first time.
@@ -248,7 +250,11 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
     const update = request.body as TelegramUpdate | null;
     if (!update || typeof update !== "object" || typeof update.update_id !== "number") return { ok: true };
     try {
-      const outcome = await handleTelegramUpdate(api!, update, { botUsername: lookupBot });
+      const outcome = await handleTelegramUpdate(api!, update, {
+        botUsername: lookupBot,
+        boards,
+        links: { dashboardUrl: dashboardUrl(env) },
+      });
       if (outcome.action !== "ignored")
         request.log.info({ action: outcome.action }, "telegram update handled");
     } catch (err) {

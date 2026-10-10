@@ -15,6 +15,7 @@ import {
   resolveOutcome,
   callPeakPct,
   type CallGroup,
+  type CuratedAlertWithRelations,
   type ModelCall,
 } from "../curatedFeed.js";
 import {
@@ -229,7 +230,7 @@ const SHARED_CALL_READ_TTL_MS = 10_000;
 const MAX_SHARED_CALL_READ_KEYS = 200;
 
 /** The match columns resolveOutcome reads, plus the link to the row grading it. */
-const MATCH_OUTCOME_SELECT = {
+export const MATCH_OUTCOME_SELECT = {
   matchedAt: true,
   candidateOutcomeId: true,
   peak1hReturnPct: true,
@@ -263,7 +264,10 @@ async function openOutcomeRows(matches: readonly MatchOutcomeRow[]) {
 }
 
 /** How a filter alert is going / went, from its open grading row while there is one. */
-function matchOutcome(m: MatchOutcomeRow, rowById: Awaited<ReturnType<typeof openOutcomeRows>>) {
+export function matchOutcome(
+  m: MatchOutcomeRow,
+  rowById: ReadonlyMap<string, NonNullable<CuratedAlertWithRelations["candidateOutcome"]>>,
+) {
   return resolveOutcome({
     createdAt: m.matchedAt,
     peak1hReturnPct: m.peak1hReturnPct,

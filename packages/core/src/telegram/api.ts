@@ -175,11 +175,26 @@ export interface TelegramChatMemberUpdated {
   new_chat_member: { status: string; user: TelegramUser };
 }
 
+/** A press on a button under one of the bot's messages. */
+export interface TelegramCallbackQuery {
+  id: string;
+  from: TelegramUser;
+  /** The message the button was under; absent when it is too old for Telegram to say. */
+  message?: TelegramMessage;
+  data?: string;
+}
+
+/** Buttons under a message, row by row. Each press comes back as a callback_query with its data. */
+export interface InlineKeyboard {
+  inline_keyboard: { text: string; callback_data: string }[][];
+}
+
 /** An incoming update, as Telegram POSTs it to the webhook. Only the kinds this app asked for. */
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   my_chat_member?: TelegramChatMemberUpdated;
+  callback_query?: TelegramCallbackQuery;
 }
 
 export type TelegramResult<T> =
@@ -285,7 +300,7 @@ export class TelegramApi {
   sendMessage(
     chatId: number | bigint,
     html: string,
-    opts: { silent?: boolean } = {},
+    opts: { silent?: boolean; keyboard?: InlineKeyboard } = {},
   ): Promise<TelegramResult<TelegramMessage>> {
     return this.call<TelegramMessage>("sendMessage", {
       chat_id: String(chatId),
@@ -293,6 +308,32 @@ export class TelegramApi {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
       disable_notification: opts.silent === true,
+      ...(opts.keyboard ? { reply_markup: opts.keyboard } : {}),
+    });
+  }
+
+  /** Rewrites one of the bot's text messages in place, buttons and all. */
+  editMessageText(
+    chatId: number | bigint,
+    messageId: number,
+    html: string,
+    opts: { keyboard?: InlineKeyboard } = {},
+  ): Promise<TelegramResult<TelegramMessage | true>> {
+    return this.call<TelegramMessage | true>("editMessageText", {
+      chat_id: String(chatId),
+      message_id: messageId,
+      text: html,
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      ...(opts.keyboard ? { reply_markup: opts.keyboard } : {}),
+    });
+  }
+
+  /** Stops the button's spinner; `text` shows as a small toast. Telegram wants one per press. */
+  answerCallbackQuery(id: string, text?: string): Promise<TelegramResult<boolean>> {
+    return this.call<boolean>("answerCallbackQuery", {
+      callback_query_id: id,
+      ...(text ? { text } : {}),
     });
   }
 
@@ -424,7 +465,7 @@ export class TelegramApi {
     return this.call<boolean>("setWebhook", {
       url,
       secret_token: webhookSecret(this.token),
-      allowed_updates: ["message", "my_chat_member"],
+      allowed_updates: ["message", "my_chat_member", "callback_query"],
       drop_pending_updates: false,
     });
   }
@@ -434,6 +475,8 @@ export class TelegramApi {
     await this.call("setMyCommands", {
       commands: [
         { command: "start", description: "Link this chat with a code from the Filters tab" },
+        { command: "alerts", description: "The alerts here still being tracked, with their return now" },
+        { command: "trenchboard", description: "How this chat's alerts did over 3h, 6h, 12h, 24h or 7d" },
         { command: "status", description: "Which account this chat is linked to" },
         { command: "show", description: "What each alert includes; /show reasons turns a part on" },
         { command: "hide", description: "Turn a part of the alert off, e.g. /hide links" },
