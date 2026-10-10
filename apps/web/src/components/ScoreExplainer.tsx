@@ -5,7 +5,7 @@ import { useScoreWeights } from "../scoreWeights";
 
 /** The composite score in one line, for hover titles. */
 export const SCORE_SUMMARY =
-  "0-100: how much a token looks like the launches that double fast, from its last 5 minutes, its age and its holders.";
+  "0-100: how much a token looks like the launches that double fast, from its last 5 minutes, its age, its holders and TokenSage's narrative read.";
 
 /**
  * A small info button that opens a plain-words explanation of the token composite score (the
@@ -112,8 +112,12 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
         )}
         <h3>Reading the number</h3>
         <p>
-          Most fresh launches score between 60 and 88. On recent filter matches, tokens scoring 80 or more
-          doubled about 16% of the time, against 12% for all matches.
+          {scale && scale.sample > 0
+            ? `Most of the last day's alerts scored between ${Math.round(scale.p10)} and ${Math.round(scale.p90)}. `
+            : ""}
+          On graded filter matches since 7 October, the top third of scores doubled about 21% of the time,
+          against 15% for all matches and 7% for the bottom third. Above the top third the rate levels off: a
+          higher score screens out weak launches, it doesn&apos;t single out the big runners.
         </p>
         {scale && (
           <p>

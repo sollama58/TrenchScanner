@@ -156,6 +156,13 @@ describe("evaluateCandidateHeuristic", () => {
       evaluateCandidateHeuristic(strongCandidate({ priceChange5mPct: undefined }), MIN_SCORE).curate,
     ).toBe(true);
   });
+
+  it("doesn't praise a thin top 10 on a pre-bond launch, which the score reads as a red flag", () => {
+    const thin = (graduated: boolean) =>
+      evaluateCandidateHeuristic(strongCandidate({ graduated, top10HolderPct: 12 }), MIN_SCORE).reasons;
+    expect(thin(true)).toContain("top-10 wallets hold only 12%");
+    expect(thin(false).some((r) => r.startsWith("top-10 wallets hold only"))).toBe(false);
+  });
 });
 
 describe("curationRankScore", () => {
