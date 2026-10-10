@@ -180,33 +180,33 @@ export function TargetBars({
   );
 }
 
-export interface TrendPoint {
+export interface LineSeries {
+  key: string;
   label: string;
-  a: number | null;
-  b: number | null;
-  /** Shown in the tooltip under the two values, e.g. the day's lift and call count. */
-  sub?: string;
+  /** Its CSS class: s1..s5 for the categorical slots, "ref" for the market, "all" for the pooled line. */
+  tone: string;
+  /** One value per label, oldest first; null leaves a gap. */
+  values: (number | null)[];
 }
 
 /**
- * Two rates over time as lines, for "is this moving": `a` is the series being judged (the feed's
- * 2x rate), `b` the yardstick it is judged against (the market's). The y-axis fits the data rather
- * than running to 100%, because the point is the gap between the lines and how it changes, not
- * the distance to a target - TargetBars does that.
+ * Several rates over the same days as lines: up to five picked series in the categorical slots
+ * plus the yardsticks ("ref" dashed, "all" in ink). The y-axis fits the data rather
+ * than running to 100%, because the point is the gap between the lines and how it changes.
  */
-export function TrendLines({
-  data,
-  aLabel,
-  bLabel,
-  height = 180,
+export function MultiLines({
+  labels,
+  series,
+  height = 220,
   signed = false,
+  subs,
 }: {
-  data: TrendPoint[];
-  aLabel: string;
-  bLabel: string;
+  labels: string[];
+  series: LineSeries[];
   height?: number;
-  /** Values can go below zero (returns): the axis reaches down to them and values carry a sign. */
   signed?: boolean;
+  /** Shown in the tooltip under the values, one per label. */
+  subs?: string[];
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -226,8 +226,7 @@ export function TrendLines({
   const padB = 26;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
-  const values = data.flatMap((d) => [d.a, d.b]).filter((v): v is number => v !== null);
-  // Headroom above the tallest point (and below the lowest, when signed), on a round step.
+  const values = series.flatMap((s) => s.values).filter((v): v is number => v !== null);
   const hi = Math.max(0, ...values) * 1.15;
   const low = signed ? Math.min(0, ...values) * 1.15 : 0;
   const span = Math.max(10, hi - low);
@@ -235,15 +234,15 @@ export function TrendLines({
   const top = Math.max(10, Math.ceil(hi / step) * step);
   const bottom = Math.floor(low / step) * step;
   const ticks = Array.from({ length: Math.round((top - bottom) / step) + 1 }, (_, i) => bottom + i * step);
-  const x = (i: number) => padL + (data.length <= 1 ? plotW / 2 : (i / (data.length - 1)) * plotW);
+  const n = labels.length;
+  const x = (i: number) => padL + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
   const y = (v: number) =>
     padT + plotH - ((Math.min(top, Math.max(bottom, v)) - bottom) / (top - bottom)) * plotH;
   const fmt = (v: number | null) => (v === null ? "–" : signed ? signedPct(v, 1) : `${v.toFixed(1)}%`);
-  const path = (pick: (d: TrendPoint) => number | null) => {
+  const path = (vals: (number | null)[]) => {
     let d = "";
     let pen = false;
-    data.forEach((p, i) => {
-      const v = pick(p);
+    vals.forEach((v, i) => {
       if (v === null) {
         pen = false;
         return;
@@ -253,28 +252,27 @@ export function TrendLines({
     });
     return d;
   };
-  // Label every point when they fit, else every nth, always the last.
-  const every = Math.max(1, Math.ceil((data.length * 44) / Math.max(1, plotW)));
-  const hovered = hover !== null ? data[hover] : undefined;
-  const slot = data.length <= 1 ? plotW : plotW / (data.length - 1);
-  const tipX = hover === null ? 0 : Math.min(Math.max(x(hover), 90), Math.max(90, width - 90));
+  const every = Math.max(1, Math.ceil((n * 44) / Math.max(1, plotW)));
+  const slot = n <= 1 ? plotW : plotW / (n - 1);
+  const tipX = hover === null ? 0 : Math.min(Math.max(x(hover), 100), Math.max(100, width - 100));
+  // Yardsticks first so the picked models draw over them.
+  const drawn = [...series].sort((a, b) => Number(/^s\d$/.test(a.tone)) - Number(/^s\d$/.test(b.tone)));
 
   return (
     <figure className="chart">
       <div className="legend">
-        <span className="key">
-          <i className="swatch s1" /> {aLabel}
-        </span>
-        <span className="key">
-          <i className="swatch s2" /> {bLabel}
-        </span>
+        {series.map((s) => (
+          <span className="key" key={s.key}>
+            <i className={`swatch ${s.tone}`} /> {s.label}
+          </span>
+        ))}
       </div>
       <div className="chart-box" ref={boxRef}>
         <svg
           viewBox={`0 0 ${width} ${height}`}
           height={height}
           role="img"
-          aria-label={`${aLabel} and ${bLabel} over time`}
+          aria-label={`${series.map((s) => s.label).join(", ")} by day`}
         >
           {ticks.map((t) => (
             <g key={t}>
@@ -285,37 +283,47 @@ export function TrendLines({
               </text>
             </g>
           ))}
-          <path className="line s2" d={path((d) => d.b)} />
-          <path className="line s1" d={path((d) => d.a)} />
-          {data.map((d, i) => (
-            <g key={d.label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+          {drawn.map((s) => (
+            <path key={s.key} className={`line ${s.tone}`} d={path(s.values)} />
+          ))}
+          {labels.map((label, i) => (
+            <g key={label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
               <rect className="hit" x={x(i) - slot / 2} y={padT} width={slot} height={plotH + padB} />
-              {d.b !== null && <circle className="dot s2" cx={x(i)} cy={y(d.b)} r={hover === i ? 4 : 2.5} />}
-              {d.a !== null && <circle className="dot s1" cx={x(i)} cy={y(d.a)} r={hover === i ? 4 : 2.5} />}
-              {(i % every === 0 || i === data.length - 1) && (
+              {drawn.map((s) => {
+                const v = s.values[i] ?? null;
+                return v === null ? null : (
+                  <circle
+                    key={s.key}
+                    className={`dot ${s.tone}`}
+                    cx={x(i)}
+                    cy={y(v)}
+                    r={hover === i ? 4 : 2.5}
+                  />
+                );
+              })}
+              {(i % every === 0 || i === n - 1) && (
                 <text
                   className="tick"
                   x={x(i)}
                   y={height - 8}
-                  textAnchor={i === data.length - 1 ? "end" : i === 0 ? "start" : "middle"}
+                  textAnchor={i === n - 1 ? "end" : i === 0 ? "start" : "middle"}
                 >
-                  {d.label}
+                  {label}
                 </text>
               )}
             </g>
           ))}
           <line className="axis" x1={padL} x2={width - padR} y1={y(0)} y2={y(0)} />
         </svg>
-        {hovered && (
+        {hover !== null && (
           <div className="tooltip" style={{ left: `${(tipX / width) * 100}%` }}>
-            <strong>{hovered.label}</strong>
-            <span>
-              <i className="swatch s1" /> {aLabel}: {fmt(hovered.a)}
-            </span>
-            <span>
-              <i className="swatch s2" /> {bLabel}: {fmt(hovered.b)}
-            </span>
-            {hovered.sub && <span className="muted">{hovered.sub}</span>}
+            <strong>{labels[hover]}</strong>
+            {series.map((s) => (
+              <span key={s.key}>
+                <i className={`swatch ${s.tone}`} /> {s.label}: {fmt(s.values[hover] ?? null)}
+              </span>
+            ))}
+            {subs?.[hover] && <span className="muted">{subs[hover]}</span>}
           </div>
         )}
       </div>

@@ -1639,6 +1639,48 @@ tr.muted td {
 .dot.s2 {
   stroke: var(--series-2);
 }
+/* MultiLines: three more categorical slots, the market (dashed) and every model pooled (ink). */
+.swatch.s3 {
+  background: var(--series-3);
+}
+.swatch.s4 {
+  background: var(--series-4);
+}
+.swatch.s5 {
+  background: var(--series-5);
+}
+.swatch.ref {
+  background: var(--muted);
+}
+.swatch.all {
+  background: var(--ink);
+}
+.line.s3,
+.dot.s3 {
+  stroke: var(--series-3);
+}
+.line.s4,
+.dot.s4 {
+  stroke: var(--series-4);
+}
+.line.s5,
+.dot.s5 {
+  stroke: var(--series-5);
+}
+.line.ref,
+.dot.ref {
+  stroke: var(--muted);
+}
+.line.ref {
+  stroke-dasharray: 6 5;
+}
+.line.all,
+.dot.all {
+  stroke: var(--ink);
+}
+.line.all {
+  stroke-width: 2.5;
+}
 .dot {
   fill: var(--surface-solid);
   stroke-width: 2;
@@ -7532,7 +7574,9 @@ button.small-btn {
 
 /* Chart legend and tooltip keys. The appearance picker's round .swatch buttons share the class
    name and are declared later, so the charts' small squares are restated here, last. */
-.chart .swatch {
+.chart .swatch,
+.model-pick .swatch,
+.week-table .swatch {
   position: static;
   width: 10px;
   height: 10px;
@@ -7552,5 +7596,29 @@ button.small-btn {
   .learning-panel .family-figs {
     grid-template-columns: repeat(2, 1fr);
     row-gap: 12px;
+  }
+}
+
+/* ---------- Last 7 days panel (ModelTab WeekPanel) ---------- */
+.model-pick button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.model-pick button .swatch,
+.week-table td .swatch {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: 0;
+}
+@media (max-width: 640px) {
+  .week-table th,
+  .week-table td {
+    padding-left: 6px;
+    padding-right: 6px;
+    font-size: 12.5px;
+  }
+  .week-table th:first-child,
+  .week-table td:first-child {
+    padding-left: 0;
   }
 }

@@ -13,7 +13,7 @@ import {
   type AiJudgeState,
   runExamRates,
 } from "../api";
-import { HBarChart, MarkerBars, Skeleton, TargetBars, TrendLines } from "../components/Charts";
+import { HBarChart, MarkerBars, MultiLines, Skeleton, TargetBars } from "../components/Charts";
 import {
   ArrowRightIcon,
   BrainIcon,
@@ -46,7 +46,7 @@ import {
   rateTone,
 } from "./modelShared";
 import { ModelDetailModal } from "./ModelDetail";
-import { renderLearningCard, type LearningCardData } from "./learningCard";
+import { renderWeekCard, type WeekCardData } from "./weekCard";
 
 /**
  * The Model tab: the curator contest. Several models train on the same graded history, each calls
@@ -187,7 +187,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         refreshKey={String(pick)}
       />
 
-      <LearningPanel learning={data.learning} board={lb} days={days} now={now} />
+      <WeekPanel learning={data.learning} board={lb} now={now} />
 
       <WinnerRunsPanel data={data} days={days} />
 
@@ -1457,10 +1457,6 @@ const TREND_STATE: Record<LearningTrend["verdict"], string> = {
   "too-early": "early",
 };
 
-function lift(value: number | null | undefined): string {
-  return value === null || value === undefined ? "–" : `${value.toFixed(2)}x`;
-}
-
 function shortDay(day: string): string {
   const d = new Date(`${day}T00:00:00Z`);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
@@ -1507,156 +1503,158 @@ const LEARNING_METRICS = {
 type LearningMetric = keyof typeof LEARNING_METRICS;
 const LEARNING_METRIC_KEYS = Object.keys(LEARNING_METRICS) as LearningMetric[];
 
+const sumOf = (rows: LearningRates[], f: (r: LearningRates) => number | undefined) =>
+  rows.reduce((n, r) => n + (f(r) ?? 0), 0);
+
+/** Days' rates pooled into one figure per measure: wins over graded calls, not a mean of daily rates. */
+function pooledRates(rows: LearningRates[]): Record<LearningMetric, number | null> {
+  const share = (won: number, of: number) => (of > 0 ? (won / of) * 100 : null);
+  const g = sumOf(rows, (r) => r.graded);
+  return {
+    "2x": share(
+      sumOf(rows, (r) => r.won2x),
+      g,
+    ),
+    "4x": share(
+      sumOf(rows, (r) => r.won4x),
+      g,
+    ),
+    "10x": share(
+      sumOf(rows, (r) => r.won10x),
+      sumOf(rows, (r) => r.tenXGraded),
+    ),
+    ret:
+      sumOf(rows, (r) => r.simCalls) > 0
+        ? sumOf(rows, (r) => r.sumSimReturnPct) / sumOf(rows, (r) => r.simCalls)
+        : null,
+  };
+}
+
+/** Most models the week panel draws at once: one per categorical color slot. */
+const WEEK_MAX_MODELS = 5;
+const WEEK_DAYS = 7;
+
+/** The UTC day keys of the `n` days ending at `last` (YYYY-MM-DD), oldest first. */
+function dayKeys(last: string, n: number): string[] {
+  const end = Date.parse(`${last}T00:00:00Z`);
+  return Array.from({ length: n }, (_, i) =>
+    new Date(end - (n - 1 - i) * 86_400_000).toISOString().slice(0, 10),
+  );
+}
+
 /**
- * Day over day: is a model getting better as data accumulates? Hit rates alone can't say - on a
- * day the whole market doubles twice as often every model looks twice as good - and the score
- * can't either, since it climbs with evidence at a constant skill. A model's LIFT over the market
- * (its 2x rate divided by the 2x rate of the moments the models decided on) is what carries across
- * days, so that is what this panel tracks: one model at a time, picked by the reader, by day for
- * its live calls and by run for its exams. Its window is the page's (PAGE_DAYS).
+ * Is it getting better? The last seven days side by side: the market and every model pooled always
+ * drawn, plus up to five models the reader picks, on one chart and one share image. Hit rates alone
+ * move with the market - on a day the whole market doubles twice as often every model looks twice
+ * as good - so each line is read against the market's line for the same day.
  */
-function LearningPanel({
-  learning,
-  board,
-  days: windowDays,
-  now,
-}: {
-  learning: LearningCurve;
-  board: Leaderboard;
-  days: number;
-  now: number;
-}) {
+function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: Leaderboard; now: number }) {
   const series = new Map((learning.models ?? []).map((m) => [m.model, m]));
-  // The board's seats in its order; a seat with no calls in the window stays pickable.
   const seats = board.entries.map((e) => ({ id: e.id, name: e.name }));
-  const firstWithCalls = seats.find((s) => (series.get(s.id)?.days.length ?? 0) > 0) ?? seats[0] ?? null;
-  const [picked, setPicked] = useState<string | null>(null);
-  const [sharing, setSharing] = useState(false);
-  const [showRuns, setShowRuns] = useState(false);
-  const [metric, setMetric] = useState<LearningMetric>("2x");
-  // Today is still filling in, so it is left off the chart unless asked for.
-  const [withToday, setWithToday] = useState(false);
   const today = new Date(now).toISOString().slice(0, 10);
-  const seat = seats.find((s) => s.id === picked) ?? firstWithCalls;
-  const mine = seat ? (series.get(seat.id) ?? null) : null;
-  const name = seat?.name ?? mine?.name ?? "This model";
-  const trend = mine?.trend ?? null;
-  const span = learning.trendSpanDays;
+  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  const [withToday, setWithToday] = useState(false);
+  const [metric, setMetric] = useState<LearningMetric>("2x");
+  const [sharing, setSharing] = useState(false);
+  const keys = dayKeys(withToday ? today : yesterday, WEEK_DAYS);
+  const inWeek = new Set(keys);
+  const callsInWeek = (id: string) =>
+    (series.get(id)?.days ?? []).reduce((n, d) => n + (inWeek.has(d.day) ? d.rates.graded : 0), 0);
+  // Until the reader picks, the board's top three that called this week.
+  const [chosen, setChosen] = useState<string[] | null>(null);
+  const picked = (chosen ?? seats.filter((s) => callsInWeek(s.id) > 0).map((s) => s.id))
+    .filter((id) => seats.some((s) => s.id === id))
+    .slice(0, chosen ? WEEK_MAX_MODELS : 3);
+  const toggle = (id: string) =>
+    setChosen(
+      picked.includes(id)
+        ? picked.filter((x) => x !== id)
+        : picked.length < WEEK_MAX_MODELS
+          ? [...picked, id]
+          : picked,
+    );
 
   const m = LEARNING_METRICS[metric];
-  // Every day the market or the model had something, with the model's figure where it called.
-  const own = new Map((mine?.days ?? []).map((d) => [d.day, d]));
-  const points = learning.days
-    .filter((d) => (d.market.graded > 0 || own.has(d.day)) && (withToday || d.day !== today))
-    .map((d) => {
-      const day = own.get(d.day);
-      return {
-        day: d.day,
-        label: d.day === today ? "Today" : shortDay(d.day),
-        // A day's point needs a few graded calls behind it; one or two calls swing it 0 to 100%.
-        model: day && day.rates.graded >= MIN_CALLS_PER_POINT ? m.of(day.rates) : null,
-        market: m.of(d.market),
-        graded: day?.rates.graded ?? 0,
-        moments: d.market.graded,
-      };
-    });
-  const graded = (mine?.days ?? []).reduce((n, d) => n + d.rates.graded, 0);
-  const runs = learning.runs;
-  const runRows = seat
-    ? runs.map((r) => ({ run: r, own: r.models.find((x) => x.contestant === seat.id) ?? null }))
-    : [];
-  const ranInRuns = runRows.some((r) => r.own);
-
-  const recent = trend?.recent ?? null;
-  const compareLine = (() => {
-    if (!recent || recent.feed.graded === 0)
-      return `${name} has no graded calls in the last ${span} days yet.`;
-    const mine_ = m.of(recent.feed);
-    const market = m.of(recent.market);
-    if (metric === "ret")
-      return `Over the last ${span} days its ${recent.feed.graded} graded calls averaged ${signedPct(mine_, 1)} each under one fixed exit plan, against ${signedPct(
-        market,
-        1,
-      )} for a random pick from the same moments.`;
-    const times = mine_ !== null && market ? ` That is ${(mine_ / market).toFixed(1)}x the market rate.` : "";
-    const lately = `Over the last ${span} days ${pct(mine_, 1)} of its ${recent.feed.graded} graded calls ${m.hit}, against ${pct(
-      market,
-      1,
-    )} for the market.${times}`;
-    const before = trend?.prior?.lift2x;
-    return metric === "2x" && before != null
-      ? `${lately} The ${span} days before, it doubled ${before.toFixed(1)}x as often as the market.`
-      : lately;
-  })();
-
-  // Its record over the whole window, for the share image.
-  const card = (): LearningCardData => {
-    const days = mine?.days ?? [];
-    const sum = (rows: LearningRates[], f: (r: LearningRates) => number | undefined) =>
-      rows.reduce((n, r) => n + (f(r) ?? 0), 0);
-    const pooled = (rows: LearningRates[]) => {
-      const share = (won: number, of: number) => (of > 0 ? (won / of) * 100 : null);
-      const g = sum(rows, (r) => r.graded);
-      return {
-        "2x": share(
-          sum(rows, (r) => r.won2x),
-          g,
-        ),
-        "4x": share(
-          sum(rows, (r) => r.won4x),
-          g,
-        ),
-        "10x": share(
-          sum(rows, (r) => r.won10x),
-          sum(rows, (r) => r.tenXGraded),
-        ),
-        ret:
-          sum(rows, (r) => r.simCalls) > 0
-            ? sum(rows, (r) => r.sumSimReturnPct) / sum(rows, (r) => r.simCalls)
-            : null,
-      };
-    };
-    const model = pooled(days.map((d) => d.rates));
-    // The market on the same days it called, so the comparison is like for like.
-    const market = pooled(learning.days.filter((d) => own.has(d.day)).map((d) => d.market));
+  const byDay = new Map(learning.days.map((d) => [d.day, d]));
+  const labels = keys.map((k) => (k === today ? "Today" : shortDay(k)));
+  const nameOf = (id: string) => seats.find((s) => s.id === id)?.name ?? series.get(id)?.name ?? id;
+  const modelRows = picked.map((id, i) => {
+    const own = new Map((series.get(id)?.days ?? []).map((d) => [d.day, d.rates]));
+    const rows = keys.map((k) => own.get(k)).filter((r): r is LearningRates => !!r);
     return {
-      model: name,
-      windowDays,
-      metric,
-      points: points.map((p) => ({ label: p.label, model: p.model, market: p.market })),
-      rates: model,
-      market: market[metric],
-      graded,
+      key: id,
+      label: nameOf(id),
+      tone: `s${i + 1}`,
+      // A day needs a few graded calls, as on the single-model chart; fewer leave a gap.
+      values: keys.map((k) => {
+        const r = own.get(k);
+        return r && r.graded >= MIN_CALLS_PER_POINT ? m.of(r) : null;
+      }),
+      week: pooledRates(rows),
+      graded: sumOf(rows, (r) => r.graded),
     };
+  });
+  const marketRows = keys.map((k) => byDay.get(k)?.market).filter((r): r is LearningRates => !!r);
+  const feedRows = keys.map((k) => byDay.get(k)?.feed).filter((r): r is LearningRates => !!r);
+  const market = {
+    key: "market",
+    label: "Market",
+    tone: "ref",
+    values: keys.map((k) => {
+      const r = byDay.get(k)?.market;
+      return r && r.graded > 0 ? m.of(r) : null;
+    }),
+    week: pooledRates(marketRows),
+    graded: sumOf(marketRows, (r) => r.graded),
   };
+  const all = {
+    key: "all",
+    label: "All models",
+    tone: "all",
+    values: keys.map((k) => {
+      const r = byDay.get(k)?.feed;
+      return r && r.graded >= MIN_CALLS_PER_POINT ? m.of(r) : null;
+    }),
+    week: pooledRates(feedRows),
+    graded: sumOf(feedRows, (r) => r.graded),
+  };
+  const lines = [...modelRows, all, market];
+  const anyData = lines.some((l) => l.values.some((v) => v !== null));
+  const fmt = (v: number | null) => (metric === "ret" ? signedPct(v, 1) : pct(v, 1));
+  const vsMarket = (v: number | null) => {
+    const base = market.week[metric];
+    if (v === null || base === null) return "–";
+    if (metric === "ret") return signedPct(v - base, 1);
+    return base > 0 ? `${(v / base).toFixed(1)}x` : "–";
+  };
+
+  const card = (): WeekCardData => ({
+    metric,
+    labels,
+    lines: lines.map((l) => ({ label: l.label, tone: l.tone, values: l.values, week: l.week[metric] })),
+    graded: all.graded,
+  });
 
   return (
     <section className="panel learning-panel">
       <header className="section-head">
         <div>
           <span className="eyebrow">
-            <ChartIcon size={13} /> Learning
+            <ChartIcon size={13} /> Learning, last {WEEK_DAYS} days
           </span>
           <h3>Is it getting better?</h3>
           <p className="muted small">
-            Pick a model and a measure to see it day by day next to the market: the same measure for a random
-            pick from the moments the models choose from. A model that is learning pulls further above the
-            market over time. If both lines rise together, that&apos;s the market, not the model.
+            Up to {WEEK_MAX_MODELS} models day by day, next to the market (a random pick from the moments the
+            models choose from) and every model&apos;s calls pooled. A model that is learning pulls further
+            above the dashed market line over the days. If every line rises together, that&apos;s the market,
+            not the models.
           </p>
         </div>
         <div className="learning-tools">
-          {trend && (
-            <span
-              className={`state ${TREND_STATE[trend.verdict]}`}
-              title={`2x rate against the market, last ${span} days vs the ${span} before`}
-            >
-              {TREND_TEXT[trend.verdict]}
-            </span>
-          )}
           <button
             type="button"
             className="ghost share-btn"
-            disabled={!seat || points.length === 0}
+            disabled={!anyData}
             onClick={() => setSharing(true)}
           >
             <ShareIcon size={14} /> Share
@@ -1665,19 +1663,29 @@ function LearningPanel({
       </header>
 
       {seats.length > 0 ? (
-        <div className="model-pick" role="radiogroup" aria-label="Model">
+        <div className="model-pick" role="group" aria-label={`Models, up to ${WEEK_MAX_MODELS}`}>
           {seats.map((s) => {
-            const has = (series.get(s.id)?.days.length ?? 0) > 0;
+            const at = picked.indexOf(s.id);
+            const on = at >= 0;
+            const full = !on && picked.length >= WEEK_MAX_MODELS;
+            const has = callsInWeek(s.id) > 0;
             return (
               <button
                 key={s.id}
                 type="button"
-                role="radio"
-                aria-checked={s.id === seat?.id}
-                className={`${s.id === seat?.id ? "on" : ""}${has ? "" : " quiet"}`}
-                onClick={() => setPicked(s.id)}
-                title={has ? undefined : `No calls in the last ${windowDays} days`}
+                aria-pressed={on}
+                className={`${on ? "on" : ""}${has ? "" : " quiet"}`}
+                disabled={full}
+                onClick={() => toggle(s.id)}
+                title={
+                  full
+                    ? `Up to ${WEEK_MAX_MODELS} models; drop one to add another`
+                    : has
+                      ? undefined
+                      : `No graded calls in these ${WEEK_DAYS} days`
+                }
               >
+                {on && <i className={`swatch s${at + 1}`} />}
                 {s.name}
               </button>
             );
@@ -1687,120 +1695,83 @@ function LearningPanel({
         <p className="empty">No models on the board yet.</p>
       )}
 
-      {seat && (
-        <>
-          <div className="family-figs">
-            {LEARNING_METRIC_KEYS.map((k) => {
-              const v = recent ? LEARNING_METRICS[k].of(recent.feed) : null;
-              return (
-                <div key={k}>
-                  <label>
-                    {LEARNING_METRICS[k].fig}, last {span}d
-                  </label>
-                  <span className={`num${k === "ret" ? ` ${profitTone(v)}` : ""}`}>
-                    {k === "ret" ? signedPct(v, 1) : pct(v, 1)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <p className="muted small">{compareLine}</p>
+      <div className="row learning-controls">
+        <div className="segmented small" role="tablist" aria-label="Measure">
+          {LEARNING_METRIC_KEYS.map((k) => (
+            <button key={k} className={k === metric ? "on" : ""} onClick={() => setMetric(k)}>
+              {LEARNING_METRICS[k].tab}
+            </button>
+          ))}
+        </div>
+        <div className="segmented small" role="tablist" aria-label="Today">
+          <button className={withToday ? "" : "on"} onClick={() => setWithToday(false)}>
+            Ending yesterday
+          </button>
+          <button className={withToday ? "on" : ""} onClick={() => setWithToday(true)}>
+            Ending today
+          </button>
+        </div>
+        <span className="muted small">
+          {picked.length} of {WEEK_MAX_MODELS} picked
+        </span>
+      </div>
 
-          <div className="row learning-controls">
-            <div className="segmented small" role="tablist" aria-label="Measure">
-              {LEARNING_METRIC_KEYS.map((k) => (
-                <button key={k} className={k === metric ? "on" : ""} onClick={() => setMetric(k)}>
-                  {LEARNING_METRICS[k].tab}
-                </button>
-              ))}
-            </div>
-            <div className="segmented small" role="tablist" aria-label="Today">
-              <button className={withToday ? "" : "on"} onClick={() => setWithToday(false)}>
-                Without today
-              </button>
-              <button className={withToday ? "on" : ""} onClick={() => setWithToday(true)}>
-                With today
-              </button>
-            </div>
-          </div>
-          {points.length > 1 ? (
-            <TrendLines
-              aLabel={`${name} ${m.series}`}
-              bLabel={`Market ${m.series}`}
-              signed={metric === "ret"}
-              data={points.map((p) => ({
-                label: p.label,
-                a: p.model,
-                b: p.market,
-                sub: `${p.graded} graded call${p.graded === 1 ? "" : "s"}; ${p.moments.toLocaleString()} moments`,
-              }))}
-            />
-          ) : (
-            <p className="empty">Needs a couple of days of graded calls.</p>
-          )}
-          <p className="faint small">
-            Live calls over the last {windowDays} days. {m.note} A day shows once {name} has{" "}
-            {MIN_CALLS_PER_POINT} graded calls in it; fewer leave a gap. Today is still filling in, so it is
-            off unless you add it. The verdict compares its 2x rate against the market over the last {span}{" "}
-            days and the {span} before.
-          </p>
-        </>
+      {anyData ? (
+        <MultiLines
+          labels={labels}
+          series={lines}
+          signed={metric === "ret"}
+          subs={keys.map((k) => {
+            const d = byDay.get(k);
+            return d
+              ? `${d.feed.graded} graded calls across all models; ${d.market.graded.toLocaleString()} moments`
+              : "No data";
+          })}
+        />
+      ) : (
+        <p className="empty">No graded calls in these {WEEK_DAYS} days yet.</p>
       )}
 
-      {seat && runs.length > 0 && (
-        <details className="folds" onToggle={(e) => setShowRuns((e.target as HTMLDetailsElement).open)}>
-          <summary>
-            {name} in each training run ({runs.length})
-          </summary>
-          {showRuns && (
-            <>
-              <p className="muted small">
-                Each run&apos;s exam grades the newest half of its decision moments out of sample.
-                &quot;Market 2x&quot; is what a random pick from them would have earned; the next two columns
-                are {name}&apos;s exam 2x rate and how many times the market rate that is. The exam window
-                moves with the data, so compare the multiples, not the rates.
-                {ranInRuns ? "" : ` ${name} sat out these runs' exams.`}
-              </p>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Run</th>
-                      <th className="r">History</th>
-                      <th className="r">Moments</th>
-                      <th className="r">Market 2x</th>
-                      <th className="r">{name} 2x</th>
-                      <th className="r">Vs market</th>
-                      <th>Best that run</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {runRows.map(({ run: r, own: m }) => (
-                      <tr key={r.at}>
-                        <td className="muted">{ago(r.at, now)}</td>
-                        <td className="r num">{r.historyDays.toFixed(1)}d</td>
-                        <td className="r num">{r.exam.decisionRows.toLocaleString()}</td>
-                        <td className="r num">{pct(r.exam.baseRate2xPct, 1)}</td>
-                        <td className="r num">{pct(m?.rate2xPct, 1)}</td>
-                        <td className="r num">{lift(m?.lift2x)}</td>
-                        <td>{r.best ? (r.best.name ?? r.best.contestant) : "–"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </details>
-      )}
+      <div className="table-wrap">
+        <table className="week-table">
+          <thead>
+            <tr>
+              <th>{WEEK_DAYS}-day total</th>
+              <th className="r">{m.fig}</th>
+              <th className="r">Vs market</th>
+              <th className="r">Graded</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l) => (
+              <tr key={l.key}>
+                <td>
+                  <i className={`swatch ${l.tone}`} />
+                  {l.label}
+                </td>
+                <td className={`r num${metric === "ret" ? ` ${profitTone(l.week[metric])}` : ""}`}>
+                  {fmt(l.week[metric])}
+                </td>
+                <td className="r num">{l.key === "market" ? "–" : vsMarket(l.week[metric])}</td>
+                <td className="r num">{l.graded.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="faint small">
+        {m.note} A model&apos;s day shows once it has {MIN_CALLS_PER_POINT} graded calls; fewer leave a gap.
+        The table pools each line&apos;s calls over the {WEEK_DAYS} days. For the market, &quot;graded&quot;
+        counts decision moments.
+      </p>
 
-      {sharing && seat && (
+      {sharing && (
         <ShareImageDialog
-          title={`${name}'s calls, ${LEARNING_METRICS[metric].tab}`}
-          fileName={`trenchscanner-${name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-vs-market`}
-          caption={`${name} vs the market, on TrenchScanner`}
+          title={`Last ${WEEK_DAYS} days, ${m.tab}`}
+          fileName="trenchscanner-last-7-days-vs-market"
+          caption="TrenchScanner models vs the market, last 7 days"
           link="trenchscanner.app"
-          render={() => renderLearningCard(card())}
+          render={() => renderWeekCard(card())}
           onClose={() => setSharing(false)}
         />
       )}
