@@ -106,6 +106,10 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <td>Top-10 snipers</td>
               <td>80% or more</td>
             </tr>
+            <tr>
+              <td>Top-10 holders&apos; share of supply</td>
+              <td>40% or more (pool aside)</td>
+            </tr>
           </tbody>
         </table>
         <p>

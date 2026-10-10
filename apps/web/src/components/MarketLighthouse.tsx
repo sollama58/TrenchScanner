@@ -743,7 +743,7 @@ function Screened({ s, span, compact = false }: { s: ScreenedData; span: string;
   const latest = buckets.length - 1;
   const shown = hover !== null && hover <= latest ? hover : latest;
   const focus = buckets[shown];
-  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty and under ${s.checks.sniperWalletRejectPct ?? 80}% launch-sniper top-10 wallets) and looks ready to decide on.`;
+  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty and under ${s.checks.sniperWalletRejectPct ?? 80}% launch-sniper top-10 wallets, top 10 owning under ${s.checks.top10HolderRejectPct ?? 40}%) and looks ready to decide on.`;
 
   return (
     <section className="lh-section lh-screened">
@@ -1082,6 +1082,7 @@ function PreChecks({ s }: { s: ScreenedData }) {
             Under {c.sniperWalletRejectPct ?? 80}% of the top 10 holders being the launch&apos;s first 25
             buyers.
           </li>
+          <li>The top 10 holders own under {c.top10HolderRejectPct ?? 40}% of supply, pool aside.</li>
         </ul>
         <p className="faint small">Anything that can&apos;t be checked fails.</p>
       </div>

@@ -1375,6 +1375,8 @@ export interface MarketLighthouse {
       emptyWalletRejectPct: number;
       /** Rejected at this share of the top 10 holders being launch snipers or more. */
       sniperWalletRejectPct?: number;
+      /** Rejected when the top 10 holders own this share of supply or more. */
+      top10HolderRejectPct?: number;
       mcapMinUsd: number;
       mcapMaxUsd: number;
       maxAgeMinutes: number;
