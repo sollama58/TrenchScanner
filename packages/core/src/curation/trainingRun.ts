@@ -705,8 +705,8 @@ export const NARRATIVE_BACKGROUND_KIND = "narrative-background";
  * The narrative seats' training set: every row of the run plus the second looks, newest first.
  * The seats decide only with the deep read in hand, so they are graded and calibrated only on
  * rows that carry it: every row without it (nsDepthFull != 1) becomes NARRATIVE_BACKGROUND_KIND.
- * Narrative Blend's first stage trains on all of it; the Narrative seat, since it stopped reading
- * the market (user decision 2026-10-10), on the deep-read rows alone (see runEvolvingContest).
+ * Narrative Blend trains on all of it; the Narrative seat, since it stopped reading
+ * price, volume and age (user decision 2026-10-10), on the deep-read rows alone (see runEvolvingContest).
  */
 export function narrativeTrainingSet(
   rows: readonly TrainingRow[],
@@ -987,8 +987,8 @@ export async function runEvolvingContest(
       // The one-step seat trains on the deep-read rows alone: with no market inputs left, the
       // rows without a read could teach it only the safety readings, and its picks would rest on
       // those rather than the narrative (shuffling the safety readings moved 75% of its top-10%
-      // picks trained on every row, 69% on the deep-read rows; 2026-10-07 to 10-10). The two-step
-      // seat's first stage still learns the safety readings from every row.
+      // picks trained on every row, 69% on the deep-read rows; 2026-10-07 to 10-10). Narrative
+      // Blend's market stage still learns from every row.
       const seatRows = spec.recipe!.narrativeBlend ? own : deepRead;
       const exam = await examineLearner(
         seatRows,

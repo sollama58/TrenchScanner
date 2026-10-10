@@ -288,9 +288,9 @@ export function learnerSubset(names: readonly CandidateFeatureName[]): Candidate
 /**
  * The safety readings: who holds the coin and how its launch was set up - the inputs behind the
  * rug screen's wallet cuts (scoring/rugScreen.ts, passesWalletSafetyCuts) and the RugCheck risk,
- * plus how much of the supply the launch's own buyers and dev took. The narrative seats read
+ * plus how much of the supply the launch's own buyers and dev took. The Narrative seat reads
  * these and the TokenSage inputs, nothing about price, volume or age (user decision 2026-10-10:
- * the narrative seats decide on the narrative, with market data only as safety checks).
+ * it decides on the narrative, with market data only as safety checks).
  */
 export const SAFETY_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
   "top10HolderPct",

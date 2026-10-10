@@ -38,12 +38,12 @@ import type { CuratorLearner } from "./trainer.js";
  *    stored (user decision 2026-10-07): on a decision moment that already carries it, and on a
  *    "second look" the scan takes when the deep read lands after the first decision
  *    (CandidateOutcome.sampleKind "second"). Graded only on the deep-read rows (trainingRun.ts,
- *    narrativeTrainingSet): the Narrative seat also trains on those alone, Narrative Blend's first
- *    stage on every row plus the second looks. Not a "learner": the combiners don't stack on it,
- *    it doesn't breed, and the other seats never train on its second-look rows. Lives behind
- *    TOKENSAGE_ENABLED. Two seats hold the role: Narrative (the narrative and the safety readings
- *    in one model) and Narrative Blend (the same two in two
- *    steps). Neither reads price, volume or age (user decision 2026-10-10).
+ *    narrativeTrainingSet): the Narrative seat also trains on those alone, Narrative Blend on
+ *    every row plus the second looks. Not a "learner": the combiners don't stack on it, it
+ *    doesn't breed, and the other seats never train on its second-look rows. Lives behind
+ *    TOKENSAGE_ENABLED. Two seats hold the role: Narrative (the narrative and the safety readings,
+ *    no price, volume or age; user decision 2026-10-10) and Narrative Blend (the market and the
+ *    narrative in two steps).
  *
  * Ids are stable storage keys (CuratedAlert.model, CuratorModel.contestant, User.curatedModel):
  * never rename one; retire it and add a new id instead.
@@ -131,12 +131,13 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubse
 
 /**
  * The Narrative seat's inputs: every TokenSage input the learners read, plus the safety readings
- * (SAFETY_FEATURES) and no other market data. User decision 2026-10-10: the narrative seats decide
- * on the narrative, with market data only as safety checks. Before, the seat also read age, volume
- * acceleration, 10-minute holder growth and the 15-minute price path, and shuffling those four
- * moved 68% of its top-10% picks: most of its edge was the market's. Walk-forward on 2,857
- * deep-read decision rows (2026-10-07 to 10-10): top-10% 2x rate 16.5% with these inputs, 20.8%
- * with the four market readings, 10.9% on TokenSage alone (base 12.6%).
+ * (SAFETY_FEATURES) and no other market data. User decision 2026-10-10: the seat decides on the
+ * narrative, with market data only as safety checks (Narrative Blend keeps its market stage).
+ * Before, it also read age, volume acceleration, 10-minute holder growth and the 15-minute price
+ * path, and shuffling those four moved 68% of its top-10% picks: most of its edge was the
+ * market's. Walk-forward on 2,857 deep-read decision rows (2026-10-07 to 10-10): top-10% 2x rate
+ * 16.5% with these inputs, 20.8% with the four market readings, 10.9% on TokenSage alone (base
+ * 12.6%).
  * New TokenSage inputs join automatically: anything named ns* on the learner list.
  */
 export const NARRATIVE_SEAT_FEATURES: readonly CandidateFeatureName[] = [
@@ -329,17 +330,16 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     recipe: { learner: "gbdt", featureNames: NARRATIVE_SEAT_FEATURES },
   },
   {
-    // The Narrative seat's two-step sibling (user decision 2026-10-08): the safety readings and
-    // the narrative each get a stage (until 2026-10-10 the first stage read every market input;
-    // the user asked for the narrative seats to use the market only as a safety check). Same
-    // deep-read gate; it files its own calls like a learner seat (the agrees/warns note on other
-    // cards stays the Narrative seat's).
+    // The Narrative seat's two-step sibling (user decision 2026-10-08): the market and the
+    // narrative each get a stage, so it weighs both, where the Narrative seat is mostly the
+    // narrative. Same rows and the same deep-read gate; it files its own calls like a learner
+    // seat (the agrees/warns note on other cards stays the Narrative seat's).
     id: NARRATIVE_BLEND_CONTESTANT,
     name: "Narrative Blend",
     description:
-      "Two steps: boosted trees score the coin's safety readings (holder concentration, fresh, empty and sniper wallets, launch bundles, the dev's buy, RugCheck risk), then shallow trees trained on deep-read coins weigh that score against TokenSage's read; no price, volume or age; decides only once the deep read is in",
+      "Two steps: boosted trees score the coin from every market input, then shallow trees trained on deep-read coins weigh that score against TokenSage's read; decides only once the deep read is in",
     summary:
-      "Takes a safety read of who holds the coin and TokenSage's deep read of its story, and decides from the two, with no price or volume.",
+      "Takes the market's read of the coin and TokenSage's deep read of its story, and weighs the two together.",
     role: "narrative",
     recipe: { learner: "gbdt", narrativeBlend: true },
   },

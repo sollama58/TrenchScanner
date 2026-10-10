@@ -38,7 +38,7 @@ import {
   walkForwardEvaluate,
   TWO_STAGE_MODEL_KIND,
   NARRATIVE_BLEND_MODEL_KIND,
-  SAFETY_SCORE_INPUT,
+  MARKET_SCORE_INPUT,
   modelRationale,
   type ScoredOutcome,
   type TrainingRow,
@@ -449,28 +449,20 @@ describe("two-stage model", () => {
 });
 
 describe("narrative blend model", () => {
-  // A safety reading (top-10 concentration, low = safe) drives the odds, a market reading
-  // (volumeAccel) does too; on the coins TokenSage read deeply, a story it rates (nsStory) lifts
-  // the odds on top of that. The seat may read the first and TokenSage, never the market one.
+  // Heat drives the market; on the coins TokenSage read deeply, a story it rates (nsStory) lifts
+  // the odds on top of that.
   const market = (deepShare: number) => {
     const rand = rng(33);
     const rows: TrainingRow[] = [];
     for (let i = 0; i < 2000; i++) {
-      const safe = rand();
       const heat = rand();
       const deep = rand() < deepShare;
       const story = deep ? rand() : null;
-      const p =
-        (safe > 0.6 ? 0.25 : 0.04) * (heat > 0.5 ? 1.5 : 0.7) * (story !== null && story > 0.7 ? 3 : 1);
+      const p = (heat > 0.6 ? 0.25 : 0.04) * (story !== null && story > 0.7 ? 3 : 1);
       rows.push({
         tokenId: `t${Math.floor(i / 2)}`,
         anchorAt: new Date(T0 + i * MIN),
-        features: {
-          top10HolderPct: 1 - safe,
-          volumeAccel: heat,
-          nsDepthFull: deep ? 1 : null,
-          nsStory: story,
-        },
+        features: { heat, nsDepthFull: deep ? 1 : null, nsStory: story },
         labelValue: rand() < p ? 1 : 0,
         anchorPriceUsd: 1,
         anchorMcapUsd: 50_000,
@@ -478,32 +470,28 @@ describe("narrative blend model", () => {
     }
     return rows;
   };
-  const names = ["top10HolderPct", "volumeAccel", "nsDepthFull", "nsStory"];
+  const names = ["heat", "nsDepthFull", "nsStory"];
 
-  it("scores the safety readings first, then weighs that score against the deep read", async () => {
+  it("scores the market first, then weighs that score against the deep read", async () => {
     const params = await trainCuratorModel(market(0.5), { narrativeBlend: true, featureNames: names });
     expect(params.kind).toBe(NARRATIVE_BLEND_MODEL_KIND);
     if (params.kind !== NARRATIVE_BLEND_MODEL_KIND) return;
-    // The first stage reads only the safety readings; the blend stage only its score and TokenSage.
-    expect(
-      scoreCandidateWithModel(params.market, { top10HolderPct: 0.1, volumeAccel: 0.9, nsStory: 0.9 }),
-    ).toBe(scoreCandidateWithModel(params.market, { top10HolderPct: 0.1, volumeAccel: 0.1, nsStory: 0.1 }));
-    expect(params.blend.featureNames).toEqual([SAFETY_SCORE_INPUT, "nsDepthFull", "nsStory"]);
-    const coin = (top10HolderPct: number, nsStory: number) =>
-      scoreCandidateWithModel(params, { top10HolderPct, volumeAccel: 0.5, nsDepthFull: 1, nsStory });
-    expect(coin(0.1, 0.9)).toBeGreaterThan(coin(0.1, 0.1));
-    expect(coin(0.1, 0.9)).toBeGreaterThan(coin(0.9, 0.9));
-    expect(coin(0.1, 0.9)).toBeLessThanOrEqual(1);
-    // Price and volume never move the seat.
-    const quiet = { top10HolderPct: 0.1, nsDepthFull: 1, nsStory: 0.9 };
-    expect(scoreCandidateWithModel(params, { ...quiet, volumeAccel: 0.05 })).toBe(
-      scoreCandidateWithModel(params, { ...quiet, volumeAccel: 0.95 }),
+    // The market stage never reads TokenSage; the blend stage reads only its score and TokenSage.
+    expect(scoreCandidateWithModel(params.market, { heat: 0.9, nsStory: 0.9 })).toBe(
+      scoreCandidateWithModel(params.market, { heat: 0.9, nsStory: 0.1 }),
     );
-    const why = modelRationale(params, { ...quiet, volumeAccel: 0.9 });
-    expect(JSON.stringify(why)).not.toContain(SAFETY_SCORE_INPUT);
+    expect(params.blend.featureNames).toEqual([MARKET_SCORE_INPUT, "nsDepthFull", "nsStory"]);
+    const hotStory = scoreCandidateWithModel(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.9 });
+    const hotFlat = scoreCandidateWithModel(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.1 });
+    const coldStory = scoreCandidateWithModel(params, { heat: 0.1, nsDepthFull: 1, nsStory: 0.9 });
+    expect(hotStory).toBeGreaterThan(hotFlat);
+    expect(hotStory).toBeGreaterThan(coldStory);
+    expect(hotStory).toBeLessThanOrEqual(1);
+    const why = modelRationale(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.9 });
+    expect(JSON.stringify(why)).not.toContain(MARKET_SCORE_INPUT);
   });
 
-  it("ships the safety stage alone without enough deep reads", async () => {
+  it("ships the market stage alone without enough deep reads", async () => {
     const params = await trainCuratorModel(market(0.01), { narrativeBlend: true, featureNames: names });
     expect(params.kind).not.toBe(NARRATIVE_BLEND_MODEL_KIND);
   });
