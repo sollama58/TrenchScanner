@@ -6,6 +6,7 @@ import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { HBarChart, Skeleton } from "./Charts";
 import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
+import { SafetyGauge } from "./SafetyGauge";
 import { WeatherGauge } from "./WeatherGauge";
 
 /**
@@ -176,6 +177,7 @@ function LighthouseWindow({ base, days, compact = false }: { base: string; days:
 
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
+      {d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
       <Screened s={d.screened} span={span} compact={compact} />
       <h3 className="lh-part">
         What TokenSage sees

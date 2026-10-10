@@ -25,6 +25,21 @@ const DAY_MS = 24 * HOUR_MS;
 /** Hours re-summed on every run, so late grades and re-reads land. */
 export const RECOMPUTE_HOURS = 72;
 
+/**
+ * Hours whose safety-screen counts (screenAccepted / screenRejected) are re-summed on every run,
+ * so a token that clears the screen a while after it was first scanned moves over. Shorter than
+ * RECOMPUTE_HOURS on purpose: the counts read TokenSnapshot, and the cleanup deletes an untracked
+ * token's snapshots after SNAPSHOT_UNTRACKED_RETENTION_HOURS (48), so an hour summed again past
+ * that would lose its rejected tokens. Older hours keep the counts they were last summed with.
+ */
+export const SCREEN_RECOMPUTE_HOURS = 24;
+
+/**
+ * How far back the screen counts are summed when no hour carries any yet (the first run after
+ * they were added): as far as every scanned token still has all its snapshots, with a margin.
+ */
+export const SCREEN_BACKFILL_HOURS = 46;
+
 /** The label breakdowns kept per day; LighthouseDayLabel.dimension takes these values. */
 export const LABEL_DIMENSIONS = [
   "category",
@@ -82,6 +97,8 @@ const emptyHour = (): HourRow => ({
   alertsTenXGraded: 0,
   alertsReturnN: 0,
   alertsReturnSum: 0,
+  screenAccepted: 0,
+  screenRejected: 0,
 });
 
 /**
@@ -107,6 +124,19 @@ async function rollupStart(now: Date): Promise<{ from: Date; backfill: boolean }
   return { from: floorHour(Math.min(oldest.getTime(), trailing.getTime())), backfill: true };
 }
 
+/**
+ * Where a run starts re-summing the screen counts: the trailing SCREEN_RECOMPUTE_HOURS, or
+ * SCREEN_BACKFILL_HOURS while no hour carries any yet.
+ */
+async function screenStart(now: Date): Promise<Date> {
+  const any = await prisma.lighthouseHour.findFirst({
+    where: { OR: [{ screenAccepted: { gt: 0 } }, { screenRejected: { gt: 0 } }] },
+    select: { hour: true },
+  });
+  const hours = any ? SCREEN_RECOMPUTE_HOURS : SCREEN_BACKFILL_HOURS;
+  return floorHour(now.getTime() - hours * HOUR_MS);
+}
+
 interface ScreenedHourRow {
   hour: Date;
   calls: bigint;
@@ -117,6 +147,12 @@ interface ScreenedHourRow {
   ten_x_graded: bigint;
   ret_n: bigint;
   ret_sum: number | null;
+}
+
+interface ScreenHourRow {
+  hour: Date;
+  accepted: bigint;
+  rejected: bigint;
 }
 
 interface ReadsHourRow {
@@ -148,9 +184,34 @@ interface AlertsHourRow {
   ret_sum: number | null;
 }
 
-/** The hourly sums over [from, to), as rows keyed by the hour's epoch ms; hours with nothing stay absent. */
-async function sumHours(from: Date, to: Date): Promise<Map<number, HourRow>> {
-  const [screened, reads, alerts] = await Promise.all([
+/**
+ * What the safety screen made of the tokens first scanned in [from, to), by that hour: accepted
+ * if any of a token's snapshots passed runRugScreen, rejected if it was scanned and none did. A
+ * token is scanned (and gets its Token row and first snapshot, pass or fail) by processCandidate
+ * in the scan job; tokens with no snapshot were never screened and count as neither. Two index
+ * probes per token on TokenSnapshot(tokenId, takenAt), never a walk of the table by time.
+ */
+function screenHours(from: Date, to: Date) {
+  return prisma.$queryRaw<ScreenHourRow[]>`
+    SELECT date_trunc('hour', t."firstSeenAt") AS hour,
+           count(*) FILTER (WHERE v.passed) AS accepted,
+           count(*) FILTER (WHERE NOT v.passed) AS rejected
+    FROM "Token" t
+    CROSS JOIN LATERAL (
+      SELECT EXISTS (SELECT 1 FROM "TokenSnapshot" s WHERE s."tokenId" = t.id AND s."rugScreenPassed") AS passed
+    ) v
+    WHERE t."firstSeenAt" >= ${from} AND t."firstSeenAt" < ${to}
+      AND EXISTS (SELECT 1 FROM "TokenSnapshot" s WHERE s."tokenId" = t.id)
+    GROUP BY 1`;
+}
+
+/**
+ * The hourly sums over [from, to), as rows keyed by the hour's epoch ms; hours with nothing stay
+ * absent. The screen counts are summed from `screenFrom` only (see SCREEN_RECOMPUTE_HOURS).
+ */
+async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<number, HourRow>> {
+  const screenStart = screenFrom > from ? screenFrom : from;
+  const [screened, reads, alerts, screen] = await Promise.all([
     // The same counting and the same population as the Live tab's Lighthouse: rows the safety
     // screen would reject today (wallet cuts) stay out, a 2x after the stop is a loss, and the
     // 10x rate's denominator is every row whose 10x verdict is in (a loss settles it at once).
@@ -203,6 +264,7 @@ async function sumHours(from: Date, to: Date): Promise<Map<number, HourRow>> {
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
       WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to}
       GROUP BY 1`,
+    screenStart < to ? screenHours(screenStart, to) : Promise.resolve([] as ScreenHourRow[]),
   ]);
   const hours = new Map<number, HourRow>();
   const at = (hour: Date) => {
@@ -252,21 +314,30 @@ async function sumHours(from: Date, to: Date): Promise<Map<number, HourRow>> {
     h.alertsReturnN = n(r.ret_n);
     h.alertsReturnSum = r.ret_sum ?? 0;
   }
+  for (const r of screen) {
+    const h = at(r.hour);
+    h.screenAccepted = n(r.accepted);
+    h.screenRejected = n(r.rejected);
+  }
   return hours;
 }
 
-/** Writes every hour in [from, to): the summed row, or zeros, so a quiet hour reads as quiet, not missing. */
-async function writeHours(from: Date, to: Date): Promise<number> {
-  const sums = await sumHours(from, to);
+/**
+ * Writes every hour in [from, to): the summed row, or zeros, so a quiet hour reads as quiet, not
+ * missing. An hour before `screenFrom` keeps the screen counts it already has.
+ */
+async function writeHours(from: Date, to: Date, screenFrom: Date): Promise<number> {
+  const sums = await sumHours(from, to, screenFrom);
   const computedAt = new Date();
   const writes: Prisma.PrismaPromise<unknown>[] = [];
   for (let t = from.getTime(); t < to.getTime(); t += HOUR_MS) {
     const row = sums.get(t) ?? emptyHour();
+    const { screenAccepted: _accepted, screenRejected: _rejected, ...unscreened } = row;
     writes.push(
       prisma.lighthouseHour.upsert({
         where: { hour: new Date(t) },
         create: { hour: new Date(t), ...row, computedAt },
-        update: { ...row, computedAt },
+        update: { ...(t >= screenFrom.getTime() ? row : unscreened), computedAt },
       }),
     );
   }
@@ -511,9 +582,11 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
     });
   }
 
+  const screenFrom = opts.from ? from : await screenStart(now);
+
   let hoursWritten = 0;
   for (let t = from.getTime(); t < to.getTime(); t += DAY_MS) {
-    hoursWritten += await writeHours(new Date(t), new Date(Math.min(t + DAY_MS, to.getTime())));
+    hoursWritten += await writeHours(new Date(t), new Date(Math.min(t + DAY_MS, to.getTime())), screenFrom);
   }
   let daysWritten = 0;
   let labelRows = 0;
@@ -525,6 +598,7 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
     from: from.toISOString(),
     to: to.toISOString(),
     backfill: start.backfill,
+    screenFrom: screenFrom.toISOString(),
     hoursWritten,
     daysWritten,
     labelRows,

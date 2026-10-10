@@ -1341,6 +1341,12 @@ model LighthouseHour {
   alertsReturnN    Int   @default(0)
   alertsReturnSum  Float @default(0)
 
+  /// The safety screen's verdict on the tokens first scanned in the hour: cleared it at least once
+  /// (accepted) or never (rejected, the Lighthouse's "Likely Rugs"). Re-summed only while the
+  /// tokens' snapshots are all still kept (lighthouseRollupJob.ts SCREEN_RECOMPUTE_HOURS), then frozen.
+  screenAccepted Int @default(0)
+  screenRejected Int @default(0)
+
   computedAt DateTime @default(now())
 }
 

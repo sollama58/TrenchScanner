@@ -130,6 +130,18 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
         },
       ],
     });
+    // The safety screen's verdicts: the first dog failed then cleared it (accepted), the second
+    // cleared it (accepted), the AI coin never did (rejected), and the last was never scanned.
+    const snap = { priceUsd: 1, marketCapUsd: 50_000 };
+    await prisma.tokenSnapshot.createMany({
+      data: [
+        { ...snap, tokenId: tokens[0]!.id, takenAt: AT, rugScreenPassed: false },
+        { ...snap, tokenId: tokens[0]!.id, takenAt: new Date(AT.getTime() + 60_000), rugScreenPassed: true },
+        { ...snap, tokenId: tokens[1]!.id, takenAt: AT, rugScreenPassed: true },
+        { ...snap, tokenId: tokens[2]!.id, takenAt: AT, rugScreenPassed: false },
+        { ...snap, tokenId: tokens[2]!.id, takenAt: new Date(AT.getTime() + 60_000), rugScreenPassed: false },
+      ],
+    });
     const base = { source: TAG, confidence: 80, anchorPriceUsd: 1, anchorMcapUsd: 50_000, createdAt: AT };
     await prisma.curatedAlert.createMany({
       data: [
@@ -188,11 +200,13 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
       alertsWon4x: 0,
       alertsReturnN: 3,
       alertsReturnSum: -50,
+      screenAccepted: 2,
+      screenRejected: 1,
     });
     expect(hour.referentConfidenceSum).toBeCloseTo(1.2);
 
     const quiet = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour: DAY } });
-    expect(quiet).toMatchObject({ screenedCalls: 0, readsTotal: 0, alerts: 0 });
+    expect(quiet).toMatchObject({ screenedCalls: 0, readsTotal: 0, alerts: 0, screenAccepted: 0 });
   });
 
   it("keeps each day's label breakdowns with the calls on those coins", async () => {
