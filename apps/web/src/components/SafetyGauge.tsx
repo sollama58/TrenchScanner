@@ -1,0 +1,109 @@
+import { useState } from "react";
+import type { MarketLighthouse } from "../api";
+import { ago } from "../format";
+import { ShareIcon } from "./Icons";
+import { ShareImageDialog } from "./ShareImageDialog";
+import { renderSafetyCard } from "./safetyCard";
+
+type SafetyScreen = NonNullable<MarketLighthouse["safetyScreen"]>;
+
+const pctText = (v: number) => `${v.toFixed(v > 0 && v < 10 ? 1 : 0)}%`;
+
+/**
+ * The Lighthouse's safety-screen scale: of every token the scanner checked in the window, the
+ * share that cleared the safety screen against the share it turned away, which the Lighthouse
+ * calls Likely Rugs. One track, accepted filling from the left and Likely Rugs from the right,
+ * with a knob at the split, and a share image of the same.
+ */
+export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; days: number }) {
+  const [sharing, setSharing] = useState(false);
+  const total = s.accepted + s.rejected;
+  const rugPct = total > 0 ? (s.rejected / total) * 100 : null;
+  const okPct = rugPct === null ? null : 100 - rugPct;
+  // The rollup only began counting recently: say so while it covers less than the window.
+  const partialSince =
+    s.oldestHour && new Date(s.oldestHour).getTime() > Date.now() - days * 86_400_000 + 3_600_000
+      ? new Date(s.oldestHour)
+      : null;
+
+  return (
+    <section className="lh-section lh-safety">
+      <div className="lh-screened-head">
+        <h3>Safety screen</h3>
+        <button
+          type="button"
+          className="ghost share-btn"
+          disabled={total === 0}
+          onClick={() => setSharing(true)}
+          title="Share this as an image"
+        >
+          <ShareIcon size={14} /> Share
+        </button>
+      </div>
+      <p className="faint small">
+        Every new token the scanner checked in the last {span}: the ones that cleared our safety screen, and
+        the ones it turned away as Likely Rugs (mint or freeze authority kept, liquidity not locked, Mayhem
+        Mode, or a top 10 that is farmed, sniped or too concentrated).
+      </p>
+
+      {okPct === null || rugPct === null ? (
+        <p className="muted small">No tokens have been screened in this window yet.</p>
+      ) : (
+        <>
+          <div className="lh-safety-figures">
+            <div className="lh-safety-figure ok">
+              <span className="lh-safety-value num">{pctText(okPct)}</span>
+              <span className="muted small">
+                Accepted · <span className="num">{s.accepted.toLocaleString()}</span> tokens
+              </span>
+            </div>
+            <div className="lh-safety-figure rug">
+              <span className="lh-safety-value num">{pctText(rugPct)}</span>
+              <span className="muted small">
+                Likely Rugs · <span className="num">{s.rejected.toLocaleString()}</span> tokens
+              </span>
+            </div>
+          </div>
+          <div
+            className="lh-safety-track"
+            role="meter"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(rugPct)}
+            aria-label={`Likely Rugs: ${pctText(rugPct)} of ${total.toLocaleString()} tokens screened; ${pctText(okPct)} accepted`}
+          >
+            <span className="lh-safety-ok" style={{ width: `${okPct}%` }} />
+            <span className="lh-safety-rug" style={{ width: `${rugPct}%` }} />
+            <span className="lh-safety-knob" style={{ left: `${okPct}%` }} aria-hidden />
+          </div>
+          <div className="lh-safety-ticks faint small num" aria-hidden>
+            <span>0%</span>
+            <span>25%</span>
+            <span>50%</span>
+            <span>75%</span>
+            <span>100%</span>
+          </div>
+          <p className="faint small lh-foot">
+            {total.toLocaleString()} tokens screened, each counted once by the hour it was first scanned
+            {partialSince
+              ? `, since ${partialSince.toLocaleString([], { month: "short", day: "numeric", hour: "numeric" })} when this count began`
+              : ""}
+            . Accepted means it cleared the screen at least once.
+            {s.summedAt ? ` Summed ${ago(s.summedAt)}.` : ""}
+          </p>
+        </>
+      )}
+
+      {sharing && (
+        <ShareImageDialog
+          title={`Safety screen, last ${span}`}
+          fileName={`trenchscanner-likely-rugs-${days === 1 ? "24h" : `${days}d`}`}
+          caption={`TrenchScanner: ${rugPct === null ? "–" : pctText(rugPct)} of new tokens are Likely Rugs, last ${span}`}
+          link="trenchscanner.app"
+          render={() => renderSafetyCard({ accepted: s.accepted, rejected: s.rejected, span })}
+          onClose={() => setSharing(false)}
+        />
+      )}
+    </section>
+  );
+}

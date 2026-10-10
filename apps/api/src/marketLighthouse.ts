@@ -212,6 +212,36 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
   };
 }
 
+/**
+ * What the safety screen made of the tokens first scanned in the window: accepted (cleared it at
+ * least once) against rejected (never did), the Lighthouse's "Likely Rugs". Summed from the
+ * hourly rollup (LighthouseHour.screenAccepted / screenRejected), since the snapshots it reads are
+ * swept after two days for tokens nobody called; whole hours from the one `since` falls in.
+ */
+async function buildSafetyScreen(since: Date) {
+  const fromHour = new Date(Math.floor(since.getTime() / HOUR_MS) * HOUR_MS);
+  const rows = await prisma.$queryRaw<
+    { accepted: bigint | null; rejected: bigint | null; oldest: Date | null; summed_at: Date | null }[]
+  >`
+    SELECT sum(h."screenAccepted") AS accepted, sum(h."screenRejected") AS rejected,
+           min(h."hour") FILTER (WHERE h."screenAccepted" + h."screenRejected" > 0) AS oldest,
+           max(h."computedAt") AS summed_at
+    FROM "LighthouseHour" h
+    WHERE h."hour" >= ${fromHour}`;
+  const r = rows[0];
+  const accepted = Number(r?.accepted ?? 0);
+  const rejected = Number(r?.rejected ?? 0);
+  return {
+    accepted,
+    rejected,
+    /** Rejected tokens' share of every token screened, percent; null before any were. */
+    rejectedPct: rate(rejected, accepted + rejected),
+    /** The first hour in the window with any token screened: later than `since` while history is short. */
+    oldestHour: r?.oldest ?? null,
+    summedAt: r?.summed_at ?? null,
+  };
+}
+
 interface ScreenedHourRow {
   hour: Date;
   calls: number;
@@ -333,6 +363,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     averages,
     alertRows,
     screened,
+    safetyScreen,
   ] = await Promise.all([
     tokenSageWorkerStatus(),
     prisma.tokenNarrative.groupBy({
@@ -401,6 +432,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,
     buildScreenedOutcomes(env, since, days),
+    buildSafetyScreen(since),
   ]);
 
   // ---- Reads ----
@@ -484,6 +516,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     copies: counts(copies),
     news: counts(news),
     screened,
+    safetyScreen,
     outcomes: {
       alerts: alertRows.length,
       described: alertsDescribed,

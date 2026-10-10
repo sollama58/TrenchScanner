@@ -1385,6 +1385,19 @@ export interface MarketLighthouse {
       minBuySharePct: number;
     };
   };
+  /**
+   * The safety screen's verdict on the tokens first scanned in the window: cleared it at least
+   * once (accepted) or never (rejected, shown as Likely Rugs). Absent from older API builds.
+   */
+  safetyScreen?: {
+    accepted: number;
+    rejected: number;
+    /** Rejected tokens' share of all screened, percent; null before any were screened. */
+    rejectedPct: number | null;
+    /** The first hour with anything screened: later than the window's start while history is short. */
+    oldestHour: string | null;
+    summedAt: string | null;
+  };
   outcomes: {
     alerts: number;
     described: number;

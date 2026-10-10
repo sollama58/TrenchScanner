@@ -23,9 +23,15 @@ const MINTS = [MINT_DOG, MINT_DOG2, MINT_AI, MINT_BAD];
 const ROLLUP_HOUR = new Date(Date.UTC(2021, 0, 5, 13));
 const SUMMER_HOUR = new Date(Date.UTC(2021, 6, 5, 13));
 const SUMMER_CALLS = 100_000;
+// Recent rollup hours for the safety screen's counts: one inside the last day, one only in the week.
+const NOW_HOUR = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+const SCREEN_DAY_HOUR = new Date(NOW_HOUR - 2 * 3_600_000);
+const SCREEN_WEEK_HOUR = new Date(NOW_HOUR - 3 * 24 * 3_600_000);
 
 async function cleanup() {
-  await prisma.lighthouseHour.deleteMany({ where: { hour: { in: [ROLLUP_HOUR, SUMMER_HOUR] } } });
+  await prisma.lighthouseHour.deleteMany({
+    where: { hour: { in: [ROLLUP_HOUR, SUMMER_HOUR, SCREEN_DAY_HOUR, SCREEN_WEEK_HOUR] } },
+  });
   await prisma.curatedAlert.deleteMany({ where: { source: TAG } });
   await prisma.candidateOutcome.deleteMany({ where: { token: { mintAddress: { in: MINTS } } } });
   await prisma.token.deleteMany({ where: { mintAddress: { in: MINTS } } });
@@ -140,6 +146,8 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
           screenedReturnSum: 40,
         },
         { hour: SUMMER_HOUR, screenedCalls: SUMMER_CALLS },
+        { hour: SCREEN_DAY_HOUR, screenAccepted: 3, screenRejected: 9 },
+        { hour: SCREEN_WEEK_HOUR, screenAccepted: 100, screenRejected: 100 },
       ],
     });
   });
@@ -236,6 +244,18 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     const unknown = await app.inject({ method: "GET", url: url("Etc/Unknown") });
     expect(unknown.statusCode).toBe(200);
     expect(unknown.json<MarketLighthouse>().screened.byHourOfDay.timeZone).toBe("UTC");
+  });
+
+  it("counts the safety screen's accepted and Likely Rug tokens over the window", async () => {
+    const day = (
+      await app.inject({ method: "GET", url: "/guest/lighthouse?days=1" })
+    ).json<MarketLighthouse>();
+    expect(day.safetyScreen).toMatchObject({ accepted: 3, rejected: 9, rejectedPct: 75 });
+    expect(new Date(day.safetyScreen.oldestHour!).getTime()).toBe(SCREEN_DAY_HOUR.getTime());
+    const week = (
+      await app.inject({ method: "GET", url: "/guest/lighthouse?days=7" })
+    ).json<MarketLighthouse>();
+    expect(week.safetyScreen).toMatchObject({ accepted: 103, rejected: 109 });
   });
 
   it("serves the 7-day window and rejects others", async () => {
