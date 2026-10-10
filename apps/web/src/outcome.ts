@@ -14,9 +14,12 @@ export function outcomeBadge(outcome: Outcome | null): { text: string; tone: str
       if (outcome.hitTenX) return { text: "✓✓✓ 10x win", tone: "good" };
       return outcome.hitGoal ? { text: "✓✓ 4x win", tone: "good" } : { text: "✓ 2x win", tone: "good" };
     case "disqualified":
-      return { text: "✕ Stopped out", tone: "bad" };
+      // Only a call that went on to double can be stopped out (curation/labels.ts), so every
+      // stop-out ran after the stop: the arrow says it went, the words and tone that it's a loss.
+      return { text: "↗ Stopped out", tone: "bad" };
     case "missed":
       if (ranLater(outcome)) return { text: "↗ Ran later", tone: "info" };
+      if (stoppedThenRan(outcome)) return { text: "↗ Stopped, ran later", tone: "bad" };
       return { text: "✕ Missed 2x", tone: "bad" };
     default:
       return { text: "Ungraded", tone: "neutral" };
@@ -33,6 +36,21 @@ export function ranLater(outcome: Outcome): boolean {
     outcome.status === "missed" &&
     outcome.maxDrawdown1hPct !== null &&
     outcome.maxDrawdown1hPct > -50 &&
+    outcome.peak24hReturnPct !== null &&
+    outcome.peak24hReturnPct >= 100
+  );
+}
+
+/**
+ * A miss that fell through the stop (50% below the alert price) inside the label window and still
+ * reached 2x on its run peak afterwards. A loss for the hit rate like any stop-out; the badge
+ * carries the same arrow as a late runner so it doesn't read as a coin that never went.
+ */
+export function stoppedThenRan(outcome: Outcome): boolean {
+  return (
+    outcome.status === "missed" &&
+    outcome.maxDrawdown1hPct !== null &&
+    outcome.maxDrawdown1hPct <= -50 &&
     outcome.peak24hReturnPct !== null &&
     outcome.peak24hReturnPct >= 100
   );
