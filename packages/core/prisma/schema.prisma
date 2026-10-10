@@ -162,7 +162,23 @@ model TelegramChat {
   /// record; a fresh /start in the same chat revives the row.
   revokedAt DateTime?
 
+  alertsSent TelegramAlertSent[]
+
   @@index([userId])
+}
+
+/// A token this chat has already had an alert about. The dispatcher sends one alert per token per
+/// chat: a model calling the coin after another model (or the chat's filter) already did is not
+/// sent again. Swept after a week by the cleanup job.
+model TelegramAlertSent {
+  chatId  String
+  chat    TelegramChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  /// Token.id. No relation: the stale-token sweep shouldn't have to know about this table.
+  tokenId String
+  sentAt  DateTime     @default(now())
+
+  @@id([chatId, tokenId])
+  @@index([sentAt])
 }
 
 /// A phone that has been linked to an account, and the thing that makes those sessions revocable.
