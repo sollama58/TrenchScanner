@@ -353,9 +353,10 @@ const envSchema = z.object({
   // MIN_TRAINING_ROWS is the promotion floor - below it the job still trains and records the
   // evaluation (the learning panel shows progress) but never lets the model take over.
   // Which jobs this worker process runs - see HEARTBEAT_JOB_ROLE in heartbeat.ts. Production
-  // runs two processes (render.yaml): one "scanner" on the alert path and one "trainer" for the
-  // model and nightly batch work. "all" runs everything in one process.
-  WORKER_ROLE: z.enum(["all", "scanner", "trainer"]).default("all"),
+  // runs three processes (render.yaml): one "scanner" on the alert path, one "trainer" for the
+  // model and nightly batch work, and one "trader" for the trading bot alone (the only process
+  // that holds kms:Decrypt for the bot's wallets). "all" runs everything in one process.
+  WORKER_ROLE: z.enum(["all", "scanner", "trainer", "trader"]).default("all"),
   // Every 2 hours since 2026-10-05, when training moved to its own process: a run no longer
   // costs the scan anything, and a model that just earned (or lost) a seat, a fresh calibration
   // table and new cutoffs take effect within two hours of the evidence.
@@ -731,6 +732,63 @@ const envSchema = z.object({
   // mint's measured ~53 tx/day that is ~21k signatures, which the cursor walks across a few
   // passes; it is a one-time cost on a fresh install, not a recurring one.
   BURN_SCAN_COLD_START_DAYS: z.coerce.number().positive().default(400),
+
+  // The trading bot (packages/core/src/trading): custodial wallets that buy the signals of a
+  // user's filters and models and sell them on the exit plan. Admin-only while it is new. Off by
+  // default: the api's /trading routes answer 404 and the worker's trading-bot job does nothing.
+  TRADING_BOT_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  // Who wraps the wallets' keys (trading/keyVault.ts). "kms" (production): AWS KMS envelope
+  // encryption - give the api an IAM user allowed only kms:GenerateDataKey on the key (it creates
+  // wallets) and the worker one allowed only kms:Decrypt (it signs), so the internet-facing api
+  // can never open a wallet. "local": a master key from TRADING_LOCAL_MASTER_KEY, for local
+  // development only - refused when NODE_ENV=production.
+  TRADING_KEY_PROVIDER: z.enum(["kms", "local"]).default("kms"),
+  TRADING_KMS_KEY_ID: z.string().optional().default(""),
+  TRADING_KMS_REGION: z.string().optional().default("us-east-1"),
+  TRADING_AWS_ACCESS_KEY_ID: pastedKey,
+  TRADING_AWS_SECRET_ACCESS_KEY: pastedKey,
+  // Only for temporary credentials (an assumed role); empty for an IAM user's keys.
+  TRADING_AWS_SESSION_TOKEN: pastedKey,
+  // 64 hex characters (openssl rand -hex 32); only read with TRADING_KEY_PROVIDER=local.
+  TRADING_LOCAL_MASTER_KEY: pastedKey,
+  // Jupiter key for swaps and the bot's prices, the bot's own (never the scan's JUPITER_API_KEY:
+  // a sale must not queue behind a price sweep on a shared plan). Empty: Jupiter's keyless host. Its own key keeps a stop-loss from queueing behind the scan's
+  // price sweeps on a shared 60-a-minute plan.
+  TRADING_JUPITER_API_KEY: pastedKey,
+  TRADING_JUPITER_BASE_URL: z.string().optional().default(""),
+  // How often the worker's trading-bot job runs (seconds): settles swaps, manages exits, buys.
+  TRADING_BOT_INTERVAL_SECONDS: z.coerce.number().min(2).default(5),
+  // Server-wide ceilings, whatever a bot's settings say: they bound what a stolen admin session
+  // could make a bot do (buy into a pool the thief controls, at a slippage that pays them).
+  // One entry, in SOL.
+  TRADING_MAX_BUY_SOL: z.coerce.number().positive().default(1),
+  // Entries per rolling 24 hours, in SOL.
+  TRADING_MAX_DAILY_SPEND_SOL: z.coerce.number().positive().default(5),
+  // Priority fee on any one swap, in SOL. Fees go to validators, not to a thief, but a stolen
+  // session could otherwise set 0.1 SOL a transaction.
+  TRADING_MAX_PRIORITY_FEE_SOL: z.coerce.number().min(0).max(0.1).default(0.005),
+  // Slippage on any swap, in basis points (2500 = 25%).
+  TRADING_MAX_SLIPPAGE_BPS: z.coerce.number().int().min(50).max(5000).default(2500),
+  // The server wallet (trading/serverWallet.ts): one wallet whose private key you supply here,
+  // traded by a bot every admin controls from the Bot tab. The secret goes on the TRADER ONLY -
+  // base58 as Phantom/Solflare export it, or a solana-keygen JSON byte array. The address is
+  // public and goes on the api and the trader; the trader refuses a key that doesn't match it.
+  // Withdrawals go only to TRADING_SERVER_WALLET_WITHDRAW_TO (api + trader); empty turns them off.
+  TRADING_SERVER_WALLET_SECRET_KEY: pastedKey,
+  TRADING_SERVER_WALLET_ADDRESS: z.string().optional().default(""),
+  TRADING_SERVER_WALLET_WITHDRAW_TO: z.string().optional().default(""),
+  // Build Pump.fun trades with PumpPortal when Jupiter has no route for the token. OFF by default:
+  // tested against mainnet (2026-10-09), Jupiter routes bonding-curve tokens itself; PumpPortal
+  // routes them through its own proxy program, which the guard refuses (not on its allowlist),
+  // and for graduated tokens its own price estimate ran ~30% low, failing on chain at sane
+  // slippage. Kept for when that changes; the guard checks its transactions like Jupiter's.
+  TRADING_PUMPPORTAL_FALLBACK: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
 });
 
 /**

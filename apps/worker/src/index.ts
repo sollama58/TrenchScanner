@@ -35,6 +35,7 @@ import { aiReviewEnabled } from "./ai/reviewer.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
+import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import {
   scheduleInterval,
   scheduleDailyAt,
@@ -78,6 +79,13 @@ const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
 async function main() {
   const env = loadEnv();
   const role = env.WORKER_ROLE;
+  // The server wallet's secret belongs on the trader only: a scanner or trainer holding it would
+  // put a spendable key on a process that has no need for one.
+  if (env.TRADING_SERVER_WALLET_SECRET_KEY && role !== "trader" && role !== "all") {
+    throw new Error(
+      `TRADING_SERVER_WALLET_SECRET_KEY is set on the ${role} worker. Remove it: it belongs on trenchscanner-trader only.`,
+    );
+  }
   const jobs: { name: HeartbeatJob; job: ScheduledJob }[] = [];
   /** Starts a schedule only when this process's role owns the job. */
   const schedule = (job: HeartbeatJob, start: () => ScheduledJob) => {
@@ -217,6 +225,19 @@ async function main() {
       },
     );
   });
+  // The trading bot (admin-only): settles swaps, walks open positions through their exit plans,
+  // and buys the signals each enabled bot follows - see packages/core/src/trading/engine.ts.
+  if (role === "trader" && !env.TRADING_BOT_ENABLED) {
+    logger.warn("WORKER_ROLE=trader but TRADING_BOT_ENABLED is off: this process runs nothing");
+  }
+  if (env.TRADING_BOT_ENABLED && runsJob(role, "trading-bot")) {
+    const runTradingBot = createTradingBotRunner(env);
+    schedule("trading-bot", () =>
+      scheduleInterval("trading-bot", runTradingBot, env.TRADING_BOT_INTERVAL_SECONDS / 60, {
+        deadlineMinutes: 10,
+      }),
+    );
+  }
   // Says when a stage of the alert path stops producing (new tokens, decision moments, TokenSage
   // reads, model alerts, Telegram delivery) although every job is still running, and tells the
   // admin wallets' private Telegram chats - see runPipelineWatch. A stall that lasts 10 minutes

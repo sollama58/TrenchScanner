@@ -37,6 +37,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "telegram-dispatch": 10 * 60_000,
   // Every minute: says when a stage of the alert path stops producing (pipelineWatchJob.ts).
   "pipeline-watch": 10 * 60_000,
+  // Every TRADING_BOT_INTERVAL_SECONDS (5 by default) when the trading bot is on; while it is down
+  // open positions are not watched for their exits.
+  "trading-bot": 5 * 60_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
   // Runs every CURATOR_TRAINING_INTERVAL_HOURS (2h by default), not daily - same "expected

@@ -8,6 +8,7 @@ import {
   loadModelTab,
   loadSettingsTab,
   loadSignIn,
+  loadTradingTab,
   tabFromHash,
 } from "./routes";
 import "./fonts.css";
@@ -20,6 +21,7 @@ else if (tab === "lighthouse") void loadLighthouseTab();
 else if (tab === "filters") void loadFiltersTab();
 else if (tab === "settings") void loadSettingsTab();
 else if (tab === "admin") void loadAdminTab();
+else if (tab === "trading") void loadTradingTab();
 // A signed-out visitor needs the sign-in code next; fetch it as soon as the session check says so.
 void window.__boot?.["/auth/me"]?.then(
   (res) => {

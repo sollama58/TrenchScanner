@@ -20,7 +20,8 @@ export type HeartbeatJob =
   | "score-weights"
   | "lighthouse-rollup"
   | "telegram-dispatch"
-  | "pipeline-watch";
+  | "pipeline-watch"
+  | "trading-bot";
 
 /**
  * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
@@ -30,7 +31,7 @@ export type HeartbeatJob =
  * the 30-second scan. WORKER_ROLE picks which one a process is; "all" (the default, for local
  * dev and tests) runs every job in one process as before.
  */
-export type WorkerRole = "all" | "scanner" | "trainer";
+export type WorkerRole = "all" | "scanner" | "trainer" | "trader";
 export type JobRole = Exclude<WorkerRole, "all">;
 
 export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
@@ -43,6 +44,10 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "telegram-dispatch": "scanner",
   // Holds the Telegram bot token and the admin wallets it notifies (the trainer has neither).
   "pipeline-watch": "scanner",
+  // The trading bot runs alone in its own process: it is the only one that can open the bot's
+  // wallets (kms:Decrypt), so those credentials live nowhere else, and a slow scan cycle or a
+  // crashed retrain never delays a stop-loss.
+  "trading-bot": "trader",
   cleanup: "trainer",
   "outcome-tracking": "trainer",
   "curator-training": "trainer",
