@@ -89,7 +89,8 @@ export interface ScoreScale {
   sample: number;
 }
 
-export const SCORE_SCALE_FALLBACK: ScoreScale = { p10: 60, p90: 88, sample: 0 };
+/** The last day's alerts' spread when last measured (2026-10-10), for a quiet day with too few alerts. */
+export const SCORE_SCALE_FALLBACK: ScoreScale = { p10: 40, p90: 76, sample: 0 };
 /** When the rebuilt score (PR #185) reached production; older stored scores use the old scale. */
 const SCORE_V2_LIVE = new Date("2026-10-06T21:10:00Z");
 const SCALE_WINDOW_MS = 24 * 60 * 60_000;

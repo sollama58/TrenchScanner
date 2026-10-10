@@ -286,7 +286,11 @@ function buildReasons(scored: ScoredToken, buyRatio: number | undefined): string
   if (scored.holderGrowthPct !== undefined && scored.holderGrowthPct > 0) {
     reasons.push(`holders +${scored.holderGrowthPct.toFixed(1)}% over the growth window`);
   }
-  if (scored.top10HolderPct !== undefined && scored.top10HolderPct <= 25) {
+  // Not on a pre-bond launch at 15% or less: there a thin top 10 is supply spread over throwaway
+  // wallets, and the composite score's holder part marks it 0 (scoring/scorer.ts).
+  const thinPreBondBook =
+    scored.graduated === false && scored.top10HolderPct !== undefined && scored.top10HolderPct <= 15;
+  if (scored.top10HolderPct !== undefined && scored.top10HolderPct <= 25 && !thinPreBondBook) {
     reasons.push(`top-10 wallets hold only ${scored.top10HolderPct.toFixed(0)}%`);
   }
   if (scored.freshTop10WalletPct !== undefined && scored.freshTop10WalletPct === 0) {
