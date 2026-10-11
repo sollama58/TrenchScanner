@@ -53,6 +53,11 @@ export const COMMIT_GRACE_MS = 1_000;
 export const MAX_COMMIT_WAIT_MS = 20_000;
 /** An alert older than this when the job gets to it is not news; the cursor steps over it. */
 export const MAX_ALERT_AGE_MS = 15 * 60_000;
+/**
+ * A token a chat was alerted on is not sent to it again for this long. Past it, a fresh call or
+ * match on the same coin (one that died and came back) is news again and goes out.
+ */
+export const REALERT_AFTER_MS = 24 * 3_600_000;
 /** More than this many alerts for one chat in one pass become a single digest message. */
 export const DIGEST_THRESHOLD = 4;
 /** How long one pass may spend sending before it leaves the rest for the next one. */
@@ -410,21 +415,23 @@ async function dispatchPass(
       )
     : false;
 
-  // One alert per token per chat: a token a chat already heard about (a model called it, or its
-  // filter caught it, in an earlier pass) is not sent again when another model calls it later.
-  // Each pass groups what it reads by token, but models call a coin minutes apart, so without this
-  // the second model's call went out as a second alert for the same coin.
-  const alreadySent = new Set(
-    (
-      await prisma.telegramAlertSent.findMany({
-        where: {
-          chatId: { in: chats.map((c) => c.id) },
-          tokenId: { in: [...new Set([...matches, ...calls].map((a) => a.tokenId))] },
-        },
-        select: { chatId: true, tokenId: true },
-      })
-    ).map((r) => `${r.chatId}:${r.tokenId}`),
-  );
+  // One alert per token per chat for REALERT_AFTER_MS: a token a chat already heard about (a model
+  // called it, or its filter caught it, in an earlier pass) is not sent again when another model
+  // calls it later. Each pass groups what it reads by token, but models call a coin minutes apart,
+  // so without this the second model's call went out as a second alert for the same coin.
+  const realertBefore = startedAt - REALERT_AFTER_MS;
+  const alreadySent = new Set<string>();
+  /** Sent before, but long enough ago to be sent again; its row's sentAt moves up when it is. */
+  const sentLongAgo = new Set<string>();
+  for (const r of await prisma.telegramAlertSent.findMany({
+    where: {
+      chatId: { in: chats.map((c) => c.id) },
+      tokenId: { in: [...new Set([...matches, ...calls].map((a) => a.tokenId))] },
+    },
+    select: { chatId: true, tokenId: true, sentAt: true },
+  })) {
+    (r.sentAt.getTime() > realertBefore ? alreadySent : sentLongAgo).add(`${r.chatId}:${r.tokenId}`);
+  }
 
   const access = new Map<string, Promise<boolean>>();
   const accessOf = (wallet: string) => {
@@ -532,6 +539,8 @@ async function dispatchPass(
   const failed: { chat: ChatRow; what: string }[] = [];
   const inFlight = new Set<Promise<void>>();
   const busy = new Set<Queue>();
+  /** Chats Telegram answered with a 429 in this pass. */
+  const rateLimited = new Set<string>();
   let lastSendAt = 0;
   const send = async (q: Queue) => {
     const item = q.pending[0]!;
@@ -552,6 +561,15 @@ async function dispatchPass(
         data: item.tokenIds.map((tokenId) => ({ chatId: q.chat.id, tokenId })),
         skipDuplicates: true,
       });
+      const resent = item.tokenIds.filter((tokenId) => sentLongAgo.has(`${q.chat.id}:${tokenId}`));
+      if (resent.length > 0) {
+        // A re-alert: the row now dates from this send, which restarts the window and is the send
+        // /alerts and /trenchboard grade.
+        await prisma.telegramAlertSent.updateMany({
+          where: { chatId: q.chat.id, tokenId: { in: resent } },
+          data: { sentAt: new Date() },
+        });
+      }
       await prisma.telegramChat.updateMany({
         where: { id: q.chat.id, revokedAt: null },
         data: { sentThrough: item.through, lastSentAt: new Date(), lastError: null, failures: 0 },
@@ -603,10 +621,13 @@ async function dispatchPass(
     }
     if (result.code === 429) {
       const wait = Math.min(MAX_RETRY_AFTER_MS, (result.retryAfter ?? 5) * 1_000);
-      logger.warn("telegram rate limited", { chat: q.chat.id, wait });
+      rateLimited.add(q.chat.id);
+      logger.warn("telegram rate limited", { chat: q.chat.id, wait, chats: rateLimited.size });
       q.nextAt = now() + wait;
-      // Every chat waits: a 429 is usually the global limit.
-      for (const other of queues) other.nextAt = Math.max(other.nextAt, q.nextAt);
+      // One chat limited is usually that chat's own limit (a group's twenty a minute, which its
+      // commands and previews share), so only it waits. A second chat limited in the same pass
+      // means the bot-wide limit, and then every chat waits.
+      if (rateLimited.size >= 2) for (const other of queues) other.nextAt = Math.max(other.nextAt, q.nextAt);
       return;
     }
     if (result.code === 400) {

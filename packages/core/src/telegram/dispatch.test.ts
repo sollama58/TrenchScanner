@@ -8,12 +8,14 @@ import {
   DIGEST_THRESHOLD,
   COMMIT_GRACE_MS,
   MAX_COMMIT_WAIT_MS,
+  REALERT_AFTER_MS,
   dashboardUrl,
   oldestOpenTransaction,
   runTelegramDispatch,
   TELEGRAM_DISPATCH_LOCK,
 } from "./dispatch.js";
 import { FakeTelegramApi } from "./fakeApi.js";
+import type { TelegramResult } from "./api.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `tgdisp-test-${Date.now()}`;
@@ -255,6 +257,34 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     // Nothing waits on it: the cursor steps past the suppressed alert.
     const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(later.getTime());
+  });
+
+  it("alerts a token again once a day has passed since the chat heard about it", async () => {
+    await rewind();
+    const at = new Date(Date.now() - 30_000);
+    // The chat was alerted on this coin a day and a bit ago; it died, and now a model calls it again.
+    await prisma.telegramAlertSent.create({
+      data: { chatId: chatRowId, tokenId, sentAt: new Date(Date.now() - REALERT_AFTER_MS - 60_000) },
+    });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId,
+        source: "test",
+        confidence: 80,
+        anchorPriceUsd: 0.001,
+        anchorMcapUsd: 50_000,
+        model: "rules",
+        modelName: "Rules",
+        createdAt: at,
+      },
+    });
+    const api = new FakeTelegramApi();
+    expect((await run(api)).sent).toBe(1);
+    // The record now dates from this send, so the window starts again.
+    const row = await prisma.telegramAlertSent.findUnique({
+      where: { chatId_tokenId: { chatId: chatRowId, tokenId } },
+    });
+    expect(Date.now() - row!.sentAt.getTime()).toBeLessThan(60_000);
   });
 
   it("never reads the model state on a pass with nothing new", async () => {
@@ -622,5 +652,71 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
     expect(peak).toBeLessThanOrEqual(8);
     expect(Date.now() - started).toBeLessThan(CHATS * 200);
     expect(mine[0]).toBe(String(chatIds[CHATS - 1]));
+  });
+
+  /** A pass on a clock that only moves when the pass sleeps, recording when each chat was sent to. */
+  const limitedPass = async (limitedChats: Set<string>) => {
+    await prisma.telegramChat.updateMany({
+      where: { chatId: { in: chatIds } },
+      data: { sentThrough: new Date(Date.now() - 60_000), lastSentAt: new Date() },
+    });
+    // The limited chats were served longest ago, so they go first and the rest come after the 429s.
+    await prisma.telegramChat.updateMany({
+      where: { chatId: { in: [...limitedChats].map((id) => BigInt(id)) } },
+      data: { lastSentAt: null },
+    });
+    await prisma.telegramAlertSent.deleteMany({ where: { chat: { chatId: { in: chatIds } } } });
+    const start = Date.now();
+    let t = start;
+    const limitedOnce = new Set<string>();
+    const sentAt = new Map<string, number>();
+    const api = new (class extends FakeTelegramApi {
+      override async call<T>(method: string, params: Record<string, unknown> = {}) {
+        if (method === "sendMessage" || method === "sendPhoto") {
+          const id = String(params.chat_id);
+          if (limitedChats.has(id) && !limitedOnce.has(id)) {
+            limitedOnce.add(id);
+            this.calls.push({ method, params });
+            return {
+              ok: false,
+              code: 429,
+              description: "Too Many Requests",
+              retryAfter: 10,
+            } as TelegramResult<T>;
+          }
+          sentAt.set(id, t - start);
+        }
+        return super.call<T>(method, params);
+      }
+    })();
+    await runTelegramDispatch(env, {
+      api,
+      now: () => t,
+      // Each sleep also yields for a moment of real time, so the database writes keep pace.
+      sleep: async (ms) => {
+        t += ms;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      },
+      hasAccess: async () => true,
+      oldestOpenTransaction: async () => null,
+      feedModelState: async () => state,
+    });
+    return sentAt;
+  };
+
+  it("on a 429 from one chat, holds back only that chat", async () => {
+    const limited = String(chatIds[CHATS - 1]);
+    const sentAt = await limitedPass(new Set([limited]));
+    expect(sentAt.get(limited)).toBeGreaterThanOrEqual(10_000);
+    const others = chatIds.map(String).filter((id) => id !== limited);
+    expect(others.every((id) => sentAt.has(id) && sentAt.get(id)! < 10_000)).toBe(true);
+  });
+
+  it("on 429s from two chats in a pass, holds back every chat", async () => {
+    const limited = new Set([String(chatIds[CHATS - 1]), String(chatIds[CHATS - 2])]);
+    const sentAt = await limitedPass(limited);
+    const waited = chatIds.map(String).filter((id) => !limited.has(id) && sentAt.get(id)! >= 10_000);
+    expect(waited.length).toBeGreaterThan(0);
+    expect(chatIds.every((id) => sentAt.has(String(id)))).toBe(true);
   });
 });
