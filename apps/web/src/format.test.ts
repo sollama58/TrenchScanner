@@ -26,6 +26,8 @@ describe("format", () => {
     expect(multiple(100)).toBe("2.0x");
     expect(multiple(300)).toBe("4.0x");
     expect(multiple(1900)).toBe("20x");
+    expect(multiple(897)).toBe("10x");
+    expect(multiple(894)).toBe("9.9x");
     expect(multiple(null)).toBe("–");
   });
 

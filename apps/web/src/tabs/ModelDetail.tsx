@@ -160,6 +160,9 @@ function ModelDetail({
   const myRuns = history.data?.runs ?? runs.filter((r) => r.contestant === e.id);
   const [allRuns, setAllRuns] = useState(false);
   const latestRun = myRuns[0] ?? null;
+  // The held-out exam figure, as the Previous iterations table below shows it (the in-sample
+  // calibration only when a run has no held-out exam).
+  const latestExam = latestRun ? runExamRates(latestRun) : null;
   const seat = board.evolution.history.filter((h) => h.slot === e.id);
   const basis = e.composite.basis ?? null;
 
@@ -278,10 +281,10 @@ function ModelDetail({
           <p className="muted small">
             Trained {ago(latestRun.createdAt, now)} as {LEARNER_NAME[latestRun.learner].toLowerCase()} on{" "}
             {latestRun.trainingRows.toLocaleString()} graded moments.
-            {latestRun.precisionCalibration?.support
-              ? ` At its live cutoff it made ${latestRun.precisionCalibration.support} exam calls: ${pct(
-                  latestRun.precisionCalibration.winRatePct,
-                )} doubled, ${pct(latestRun.precisionCalibration.goalRatePct)} hit 4x.`
+            {latestExam?.calls
+              ? ` At its live cutoff it made ${latestExam.calls} exam calls: ${pct(
+                  latestExam.winRatePct,
+                )} doubled, ${pct(latestExam.goalRatePct)} hit 4x.`
               : ""}
             {latestRun.verdict ? ` ${latestRun.verdict.reason}` : ""}
           </p>

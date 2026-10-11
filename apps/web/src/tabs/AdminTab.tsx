@@ -1271,25 +1271,35 @@ function Levers({ onDone }: { onDone: () => void }) {
       note="Grant extends any current subscription. Whitelisting gives access with no end date."
     >
       <div className="admin-form">
-        <input placeholder="Wallet address" value={wallet} onChange={(e) => setWallet(e.target.value)} />
+        <input
+          placeholder="Wallet address"
+          aria-label="Wallet address"
+          value={wallet}
+          onChange={(e) => setWallet(e.target.value)}
+        />
         <input
           className="admin-days"
           type="number"
           min={1}
           max={730}
+          step={1}
           value={days}
           onChange={(e) => setDays(e.target.value)}
           aria-label="Days"
         />
         <button
           className="button primary"
-          disabled={busy || !wallet.trim() || !(dayCount >= 1 && dayCount <= 730)}
+          disabled={
+            busy || !wallet.trim() || !(Number.isInteger(dayCount) && dayCount >= 1 && dayCount <= 730)
+          }
           onClick={() => void act("grant")}
         >
           Grant {dayCount >= 1 ? dayCount : 0} days
         </button>
         <input
           placeholder="Whitelist note (optional)"
+          aria-label="Whitelist note (optional)"
+          maxLength={200}
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />
