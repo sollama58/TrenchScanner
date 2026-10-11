@@ -1,4 +1,11 @@
-import { prisma, createLogger, walletSafetyCutsSql, Prisma } from "@trenchscanner/core";
+import {
+  prisma,
+  createLogger,
+  walletSafetyCutsSql,
+  firstCallOnRowSql,
+  notRetiredModelSql,
+  Prisma,
+} from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("lighthouse-rollup");
@@ -262,7 +269,8 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
-      WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to}
+      WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to} AND ${notRetiredModelSql()}
+        AND ${firstCallOnRowSql()}
       GROUP BY 1`,
     screenStart < to ? screenHours(screenStart, to) : Promise.resolve([] as ScreenHourRow[]),
   ]);
@@ -495,7 +503,8 @@ function alertRows(from: Date, to: Date) {
     FROM "CuratedAlert" a
     JOIN "Token" t ON t.id = a."tokenId"
     LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
-    WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to}
+    WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to} AND ${notRetiredModelSql()}
+      AND ${firstCallOnRowSql()}
     ORDER BY a."createdAt" DESC
     LIMIT 50000`;
 }

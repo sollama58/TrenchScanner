@@ -1664,9 +1664,9 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
           <h3>Is it getting better?</h3>
           <p className="muted small">
             Up to {WEEK_MAX_MODELS} models day by day, next to the market (a random pick from the moments the
-            models choose from) and every model&apos;s calls pooled. A model that is learning pulls further
-            above the dashed market line over the days. If every line rises together, that&apos;s the market,
-            not the models.
+            models choose from) and every model&apos;s calls pooled, each token counted once however many
+            models called it. A model that is learning pulls further above the dashed market line over the
+            days. If every line rises together, that&apos;s the market, not the models.
           </p>
         </div>
         <div className="learning-tools">

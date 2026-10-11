@@ -10,7 +10,6 @@ import {
   buildLearningTrend,
   chooseRuns,
   MIN_GRADED_FOR_LIFT,
-  poolModelDays,
   TREND_SPAN_DAYS,
 } from "./learningCurve.js";
 
@@ -86,14 +85,6 @@ describe("per-model curves", () => {
     modelRaw(null, null, "2026-10-02", 2, 2, 2),
   ];
 
-  it("pools every model's rows into the feed's day rows", () => {
-    const feed = buildLearningDays(market, poolModelDays(rows));
-    expect(feed.map((d) => [d.day, d.feed.calls, d.feed.won2x])).toEqual([
-      ["2026-10-01", 10, 3],
-      ["2026-10-02", 34, 12],
-    ]);
-  });
-
   it("gives each model its own days and lift against the same market, most graded first", () => {
     const models = buildLearningModels(market, rows);
     expect(models.map((m) => m.model)).toEqual(["seat-a", "seat-b"]);
@@ -121,10 +112,7 @@ describe("per-model curves", () => {
     });
     const [day] = buildLearningDays(
       [withSim(raw("2026-10-01", 100, 100, 10), 100, -800)],
-      poolModelDays([
-        withSim(modelRaw("seat-a", "Alpha", "2026-10-01", 10, 10, 3), 10, 150),
-        withSim(modelRaw("seat-b", "Beta", "2026-10-01", 10, 10, 2), 10, 50),
-      ]),
+      [withSim(raw("2026-10-01", 20, 20, 5), 20, 200)],
     );
     expect(day!.market.avgReturnPct).toBe(-8);
     expect(day!.feed.avgReturnPct).toBe(10);
@@ -295,6 +283,59 @@ describe.skipIf(!dbAvailable)("buildLearningCurve", () => {
       expect(mine.trend?.prior?.feed.graded).toBe(13 - TREND_SPAN_DAYS);
     } finally {
       await prisma.curatedAlert.deleteMany({ where: { model } });
+      await prisma.token.delete({ where: { id: token.id } });
+    }
+  });
+
+  it("counts a token several models called once in the feed, and once in each model's own line", async () => {
+    const tag = `lc-first-${Date.now()}`;
+    const token = await prisma.token.create({ data: { mintAddress: `${tag}-mint`, symbol: "LCF" } });
+    const until = new Date();
+    const since = new Date(until.getTime() - 7 * 86_400_000);
+    const at = new Date(until.getTime() - 3_600_000);
+    const outcome = await prisma.candidateOutcome.create({
+      data: {
+        tokenId: token.id,
+        sampleKind: "emission",
+        anchorAt: at,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 1,
+        features: {},
+        nextCheckAt: until,
+        peak1hPriceUsd: 3,
+        low1hPriceUsd: 1,
+        lowBefore2xPriceUsd: 1,
+        peak24hPriceUsd: 3,
+      },
+    });
+    const call = (model: string, offsetMs: number) => ({
+      source: "test",
+      confidence: 70,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 1,
+      tokenId: token.id,
+      candidateOutcomeId: outcome.id,
+      model,
+      modelName: model,
+      createdAt: new Date(at.getTime() + offsetMs),
+      hit2xIn1h: true,
+      hit4xIn1h: false,
+      disqualified: false,
+      simReturnPct: 100,
+    });
+    try {
+      const before = await buildLearningCurve(since, until, { hitRate2xPct: 75, hitRate4xPct: 50 }, 7);
+      const day = at.toISOString().slice(0, 10);
+      const feedOn = (c: typeof before) => c.days.find((d) => d.day === day)?.feed.graded ?? 0;
+      await prisma.curatedAlert.createMany({ data: [call(`${tag}-a`, 0), call(`${tag}-b`, 1_000)] });
+      const after = await buildLearningCurve(since, until, { hitRate2xPct: 75, hitRate4xPct: 50 }, 7);
+      expect(feedOn(after) - feedOn(before)).toBe(1);
+      for (const model of [`${tag}-a`, `${tag}-b`]) {
+        expect(after.models.find((m) => m.model === model)?.days[0]?.rates.graded).toBe(1);
+      }
+    } finally {
+      await prisma.curatedAlert.deleteMany({ where: { tokenId: token.id } });
+      await prisma.candidateOutcome.delete({ where: { id: outcome.id } });
       await prisma.token.delete({ where: { id: token.id } });
     }
   });

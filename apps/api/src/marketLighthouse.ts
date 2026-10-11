@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   describeExitPlan,
+  firstCallOnRowSql,
+  notRetiredModelSql,
   MAX_EVENT_AGE_MINUTES,
   MIN_BUY_RATIO,
   prisma,
@@ -433,7 +435,8 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
-      WHERE a."createdAt" > ${since}
+      WHERE a."createdAt" > ${since} AND ${notRetiredModelSql()}
+        AND ${firstCallOnRowSql()}
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,
     buildScreenedOutcomes(env, since, days),
@@ -571,7 +574,8 @@ export async function buildLighthouseSignals(days: number): Promise<LighthouseSi
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
-      WHERE a."createdAt" > ${since}
+      WHERE a."createdAt" > ${since} AND ${notRetiredModelSql()}
+        AND ${firstCallOnRowSql()}
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,
   ]);

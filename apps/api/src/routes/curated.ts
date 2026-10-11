@@ -8,6 +8,8 @@ import {
   type Env,
   RULES_CONTESTANT,
   walletSafetyCutsSql,
+  firstCallOnRowSql,
+  notRetiredModelSql,
 } from "@trenchscanner/core";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { currentMarketCap } from "./matches.js";
@@ -528,15 +530,17 @@ export async function registerCuratedRoutes(
    */
   const curatorRecords30d = async (since: Date) => {
     // Both curators, both ledgers, in two grouped passes: this used to be twelve separate counts,
-    // and the shadow ones each joined through CandidateOutcome on their own.
+    // and the shadow ones each joined through CandidateOutcome on their own. The model side pools
+    // every model, so each side counts a token once however many of its models called it.
     const [live, shadow] = await Promise.all([
       prisma.$queryRaw<{ heuristic: boolean; emitted: bigint; graded: bigint; wins: bigint }[]>`
         SELECT ("source" = ${HEURISTIC_CURATOR_SOURCE}) AS heuristic,
                count(*) AS emitted,
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
                count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins
-        FROM "CuratedAlert"
-        WHERE "createdAt" >= ${since}
+        FROM "CuratedAlert" a
+        WHERE "createdAt" >= ${since} AND ${notRetiredModelSql()}
+          AND ${firstCallOnRowSql({ heuristicSource: HEURISTIC_CURATOR_SOURCE })}
         GROUP BY 1`,
       prisma.$queryRaw<{ heuristic: boolean; emitted: bigint; graded: bigint; wins: bigint }[]>`
         SELECT (s."source" = ${HEURISTIC_CURATOR_SOURCE}) AS heuristic,
@@ -546,6 +550,7 @@ export async function registerCuratedRoutes(
         FROM "CuratedShadowEmission" s
         LEFT JOIN "CandidateOutcome" o ON o."id" = s."candidateOutcomeId"
         WHERE s."createdAt" >= ${since}
+          AND ${firstCallOnRowSql({ alias: "s", table: "CuratedShadowEmission", heuristicSource: HEURISTIC_CURATOR_SOURCE })}
         GROUP BY 1`,
     ]);
     const record = (heuristic: boolean) => {

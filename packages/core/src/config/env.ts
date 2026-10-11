@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { createLogger } from "../logger.js";
-import { CONTESTANT_IDS, contestantSpec, isContestantId } from "../curation/contestants.js";
+import {
+  ACTIVE_CONTESTANT_IDS,
+  contestantSpec,
+  isContestantId,
+  RETIRED_CONTESTANT_IDS,
+} from "../curation/contestants.js";
 
 /**
  * Central env schema shared by the api and worker apps. Each app calls
@@ -126,6 +131,13 @@ const envSchema = z.object({
   // screen's concentration cut and the wallet checks model calls wait on can run without RugCheck.
   // Mints read per scan cycle, each answer reused for RUGCHECK_CACHE_TTL_MINUTES. 0 turns it off.
   ONCHAIN_HOLDERS_MAX_PER_CYCLE: z.coerce.number().int().min(0).default(60),
+  // The safety screen's pre-bond cut: a graduated Pump.fun token whose bonding curve filled less
+  // than this many seconds after launch is never alerted (a bundled launch - see rugScreen.ts).
+  // 0 turns the cut off.
+  SAFETY_MIN_PREBOND_SECONDS: z.coerce.number().min(0).default(5),
+  // Pump.fun launch-time lookups one scan cycle may make for graduated tokens the cut can't clear
+  // from what's already known (see the worker's launchTimes.ts). Answers are kept for good.
+  PREBOND_LOOKUPS_MAX_PER_CYCLE: z.coerce.number().int().min(0).default(30),
   // The wall-clock span holderGrowthPct is measured over: growth is compared against the newest
   // snapshot at least this old, rather than against whatever the previous snapshot happened to be.
   // Anchoring it this way is what keeps the number's meaning independent of SCAN_INTERVAL_MINUTES
@@ -449,12 +461,13 @@ const envSchema = z.object({
   // on; the consensus needs at least two learners.
   CURATOR_CONTESTANTS: z
     .string()
-    .default(CONTESTANT_IDS.join(","))
+    .default(ACTIVE_CONTESTANT_IDS.join(","))
     .transform((v) =>
       v
         .split(",")
         .map((s) => s.trim())
-        .filter((s) => s.length > 0),
+        // A retired seat (Ranker, 2026-10-11) left in a configured list is dropped, not an error.
+        .filter((s) => s.length > 0 && !RETIRED_CONTESTANT_IDS.includes(s)),
     )
     .pipe(z.array(z.string().refine(isContestantId, "unknown contestant id")).min(1)),
   // Evolution (curation/evolution.ts): each training run breeds this many challengers - mutated
