@@ -117,3 +117,30 @@ describe("PumpFunClient discovered coins", () => {
     expect(created.get("Late")).toBeUndefined();
   });
 });
+
+describe("PumpFunClient.launchTime", () => {
+  async function serveCoin(status: number, body: unknown): Promise<string> {
+    server = createServer((_req, res) => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (typeof address === "string" || address === null) throw new Error("failed to bind test server");
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  it("reads the coin's created_timestamp", async () => {
+    const url = await serveCoin(200, { mint: "m", created_timestamp: 1_791_674_763_000 });
+    expect(await new PumpFunClient({ baseUrl: url }).launchTime("m")).toEqual(new Date(1_791_674_763_000));
+  });
+
+  it("answers null for a coin Pump.fun doesn't have, and throws when it can't answer", async () => {
+    const url = await serveCoin(404, { message: "Not Found" });
+    expect(await new PumpFunClient({ baseUrl: url }).launchTime("m")).toBeNull();
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    const failing = await serveCoin(500, {});
+    await expect(new PumpFunClient({ baseUrl: failing }).launchTime("m")).rejects.toThrow();
+  });
+});

@@ -1,4 +1,4 @@
-import { fetchJson } from "./httpClient.js";
+import { fetchJson, HttpError } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { normalizeSocialUrl } from "./tokensage.js";
 
@@ -153,6 +153,25 @@ export class PumpFunClient {
     } catch (err) {
       logger.warn("king-of-the-hill failed", { error: String(err) });
       return null;
+    }
+  }
+
+  /**
+   * When a coin was launched on its bonding curve (Pump.fun's `created_timestamp`, read from the
+   * single-coin endpoint). Null when Pump.fun has no such coin or no usable timestamp - not a
+   * Pump.fun launch, so there is nothing to ask again. Throws on a transport failure, so the
+   * caller can tell "no answer" from "no launch time".
+   */
+  async launchTime(mintAddress: string): Promise<Date | null> {
+    try {
+      const coin = await fetchJson<PumpFunCoin | null>(
+        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        { timeoutMs: 5000, retries: 0 },
+      );
+      return launchDate(coin?.created_timestamp) ?? null;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
     }
   }
 

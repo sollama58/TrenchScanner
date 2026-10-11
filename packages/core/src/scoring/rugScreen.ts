@@ -35,6 +35,14 @@ export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 
 /**
+ * A graduated token must have spent at least this long on its bonding curve (user decision
+ * 2026-10-11, 10s at first, then 5s). A curve filled within seconds of launch is a coordinated bundle - the launcher's
+ * own wallets buying the whole curve in the first blocks - and the bundle sells into whoever buys
+ * the pool. The default; the scan applies SAFETY_MIN_PREBOND_SECONDS (0 turns the cut off).
+ */
+export const SAFETY_MIN_PREBOND_SECONDS = 5;
+
+/**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
  * user, independent of their filter settings - this is the "auto-filter
  * scams" behavior chosen in planning, not something users can turn off.
@@ -74,6 +82,15 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
       profile.isMayhemMode === true
         ? "Pump.fun Mayhem Mode token (AI-driven supply and trading)"
         : "Mayhem Mode status unverified - failing closed",
+    );
+  }
+
+  // Applies only once measured, like the wallet cuts: a token whose launch or graduation time is
+  // unknown passes this one.
+  const minPreBond = profile.minPreBondSeconds ?? SAFETY_MIN_PREBOND_SECONDS;
+  if (typeof profile.preBondSeconds === "number" && profile.preBondSeconds < minPreBond) {
+    reasons.push(
+      `bonding curve filled ${Math.max(0, profile.preBondSeconds).toFixed(0)}s after launch (under ${minPreBond}s)`,
     );
   }
 

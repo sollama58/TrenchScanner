@@ -440,8 +440,27 @@ export class DexScreenerClient {
       if (list) list.push(pair);
       else byMint.set(mint, [pair]);
     }
-    return [...byMint.values()].map((list) => toCandidateToken(pickCanonicalPair(list)));
+    return [...byMint.values()].map((list) => {
+      const token = toCandidateToken(pickCanonicalPair(list));
+      const graduatedAt = deriveGraduated(token.dexId) ? pumpSwapPoolCreatedAt(list) : undefined;
+      return graduatedAt ? { ...token, graduatedAt } : token;
+    });
   }
+}
+
+/**
+ * When a graduated Pump.fun mint left its bonding curve: the creation time of its PumpSwap pool,
+ * which Pump.fun's migration opens in the same transaction that completes the curve. The earliest
+ * pool counts - a pool someone opened by hand before graduation only makes the curve look longer,
+ * never shorter. Undefined without a PumpSwap pool (an older Raydium graduation, or none listed).
+ */
+export function pumpSwapPoolCreatedAt(
+  pairs: Pick<DexScreenerPair, "dexId" | "pairCreatedAt">[],
+): Date | undefined {
+  const times = pairs
+    .filter((p) => p.dexId === "pumpswap" && typeof p.pairCreatedAt === "number" && p.pairCreatedAt > 0)
+    .map((p) => p.pairCreatedAt as number);
+  return times.length > 0 ? new Date(Math.min(...times)) : undefined;
 }
 
 /** Below this, a non-curve pool is too thin to be a trustworthy price source. */
