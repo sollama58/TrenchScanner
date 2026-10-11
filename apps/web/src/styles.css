@@ -30,6 +30,8 @@
   --good-ink: #4ade80;
   --good-wash: rgba(34, 197, 94, 0.1);
   --warn: #fab219;
+  /* --warn as text: the fill colour is too pale to read on the light theme's white. */
+  --warn-ink: #fab219;
   --bad: #d03b3b;
   --bad-ink: #ff8080;
   --bad-wash: rgba(239, 68, 68, 0.1);
@@ -70,6 +72,7 @@
     --good-ink: #067a2a;
     --good-wash: rgba(12, 163, 12, 0.08);
     --bad-ink: #b42626;
+    --warn-ink: #9a6700;
     --bad-wash: rgba(208, 59, 59, 0.08);
     --info-wash: rgba(42, 120, 214, 0.09);
     --shadow: 0 1px 2px rgba(12, 14, 20, 0.04), 0 12px 32px -20px rgba(12, 14, 20, 0.25);
@@ -101,6 +104,7 @@
   --good-ink: #067a2a;
   --good-wash: rgba(12, 163, 12, 0.08);
   --bad-ink: #b42626;
+  --warn-ink: #9a6700;
   --bad-wash: rgba(208, 59, 59, 0.08);
   --info-wash: rgba(42, 120, 214, 0.09);
   --shadow: 0 1px 2px rgba(12, 14, 20, 0.04), 0 12px 32px -20px rgba(12, 14, 20, 0.25);
@@ -453,7 +457,7 @@ input[type="checkbox"] {
   color: var(--good-ink);
 }
 .status-pill.warn {
-  color: var(--warn);
+  color: var(--warn-ink);
 }
 /* The pill's hover/focus card: when each stage of the alert path last produced, then each job. A
    sibling of the pill, not a child, so the phone layout's font-size: 0 on the pill doesn't hide it. */
@@ -531,7 +535,7 @@ input[type="checkbox"] {
   text-align: right;
 }
 .status-tip-val.warn {
-  color: var(--warn);
+  color: var(--warn-ink);
 }
 .pulse {
   width: 7px;
@@ -2310,7 +2314,7 @@ legend {
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface-2);
-  color: var(--warn);
+  color: var(--warn-ink);
   white-space: nowrap;
 }
 .in-feed.locked {
@@ -3136,7 +3140,7 @@ button.small-btn {
   color: var(--good-ink);
 }
 .cp-status.urgent {
-  color: var(--warn);
+  color: var(--warn-ink);
 }
 .cp-actions {
   display: flex;
@@ -3363,9 +3367,11 @@ button.small-btn {
     width: 56px;
     height: 56px;
   }
+  /* Wraps rather than running off the card: beside the mint and the Sage button the last links
+     had no room on a phone. */
   .card-links {
-    gap: 12px;
-    flex-wrap: nowrap;
+    gap: 0 12px;
+    min-width: 0;
   }
   .card-links a {
     padding: 6px 0;
@@ -3535,7 +3541,7 @@ button.small-btn {
   color: var(--good-ink);
 }
 .admin .kpi.admin-warn .kpi-value {
-  color: var(--warn);
+  color: var(--warn-ink);
 }
 .admin .kpi-value {
   font-size: 26px;
@@ -3563,7 +3569,7 @@ button.small-btn {
   background: var(--good-wash);
 }
 .admin-tag-warn {
-  color: var(--warn);
+  color: var(--warn-ink);
 }
 .admin-tag-bad {
   color: var(--bad-ink);
@@ -6077,7 +6083,7 @@ button.small-btn {
   font: inherit;
   font-size: 11px;
   line-height: 1.6;
-  color: var(--ink-3);
+  color: var(--muted);
   text-decoration: line-through;
   transition:
     background 0.12s,
@@ -6450,7 +6456,7 @@ button.small-btn {
   color: var(--bad-ink);
 }
 .sage-flag.sev-warn .sage-flag-code {
-  color: var(--warn);
+  color: var(--warn-ink);
 }
 .sage-flag-detail {
   color: var(--ink-2);

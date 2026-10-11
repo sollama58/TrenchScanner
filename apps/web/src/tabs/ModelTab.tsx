@@ -166,7 +166,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             </span>
             <span className="muted small">
               {trend?.recent.lift2x != null
-                ? `Lately your feed's picks double ${trend.recent.lift2x.toFixed(1)}x as often as the average token it could have picked${
+                ? `Lately the models' picks double ${trend.recent.lift2x.toFixed(1)}x as often as the average token they could have picked${
                     trend.prior?.lift2x != null ? ` (${trend.prior.lift2x.toFixed(1)}x before)` : ""
                   }.`
                 : "Needs a few days of graded calls to tell."}
@@ -356,6 +356,10 @@ function DayBaselineChart(props: BaselineProps & BaselineView) {
       board={own.data ?? props.board}
       base={own.data ? (own.data.baseline ?? null) : props.base}
       loading={own.data === null || own.stale}
+      // The 7-day bars stand in only while this window loads: under a failed load they would read
+      // as this window's numbers.
+      failed={own.data === null && own.error !== null}
+      refreshing={props.refreshing || own.stale}
     />
   );
 }
@@ -378,7 +382,8 @@ function BaselineChart({
   opened,
   setOpened,
   loading,
-}: BaselineProps & BaselineView & { loading: boolean }) {
+  failed = false,
+}: BaselineProps & BaselineView & { loading: boolean; failed?: boolean }) {
   const t = board.targets;
   const baseRate = base
     ? metric === "2x"
@@ -442,101 +447,111 @@ function BaselineChart({
               </button>
             ))}
           </div>
-          <div className="segmented small" role="tablist" aria-label="Hit">
-            <button className={metric === "2x" ? "on" : ""} onClick={() => setMetric("2x")}>
-              2x
-            </button>
-            <button className={metric === "4x" ? "on" : ""} onClick={() => setMetric("4x")}>
-              4x
-            </button>
-            <button className={metric === "10x" ? "on" : ""} onClick={() => setMetric("10x")}>
-              10x
-            </button>
+          <div className="segmented small" role="group" aria-label="Hit">
+            {(["2x", "4x", "10x"] as const).map((m) => (
+              <button
+                key={m}
+                className={metric === m ? "on" : ""}
+                aria-pressed={metric === m}
+                onClick={() => setMetric(m)}
+              >
+                {m}
+              </button>
+            ))}
           </div>
         </div>
       </header>
 
-      <div className="family-figs">
-        <div>
-          <label>Baseline {metric}</label>
-          <span className="num">{pct(baseRate, 1)}</span>
-        </div>
-        <div>
-          <label>Moments it covers</label>
-          <span className="num">{base ? base.graded.toLocaleString() : "–"}</span>
-        </div>
-        <div>
-          <label>Goal</label>
-          <span className="num">{goal}%</span>
-        </div>
-      </div>
-
-      {rows.length > 0 ? (
+      {failed && (
+        <p className="error">Couldn&apos;t load the last {windowLong(days)}. It will try again shortly.</p>
+      )}
+      {!failed && (
         <>
-          <MarkerBars
-            data={rows.map((e) => {
-              const rate = rateOf(e);
-              const profit = e.composite.live.avgSimReturnPct ?? null;
-              return {
-                id: e.id,
-                label: e.name,
-                value: rate,
-                sub: `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
-                display: rate === null ? "–" : `${rate.toFixed(1)}%`,
-                note: `${signedPct(profit)} profit`,
-                noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
-                thin: thin(e),
-              };
-            })}
-            markers={[
-              ...(baseRate !== null ? [{ label: "Baseline", value: baseRate, kind: "base" as const }] : []),
-              { label: "Goal", value: goal, kind: "goal" as const },
-            ]}
-            selected={selected?.id ?? null}
-            onSelect={setPicked}
-            onOpen={setOpened}
-            columns={{ label: "Model", value: `${metric} hit rate`, note: "avg profit per call" }}
-          />
-          {selected && (
-            <p className="baseline-readout">
-              <strong>{selected.name}</strong>:{" "}
-              {selRate === null
-                ? `no graded calls in the last ${windowLong(days)} yet.`
-                : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
-                    selLift === null
-                      ? "."
-                      : selLift >= 1
-                        ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
-                        : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
-                  }`}
-              {selected.composite.live.avgSimReturnPct != null
-                ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
-                : ""}
-              {selected.composite.warmingUp ? " Still too few calls to lean on." : ""}
-            </p>
+          <div className="family-figs">
+            <div>
+              <label>Baseline {metric}</label>
+              <span className="num">{pct(baseRate, 1)}</span>
+            </div>
+            <div>
+              <label>Moments it covers</label>
+              <span className="num">{base ? base.graded.toLocaleString() : "–"}</span>
+            </div>
+            <div>
+              <label>Goal</label>
+              <span className="num">{goal}%</span>
+            </div>
+          </div>
+
+          {rows.length > 0 ? (
+            <>
+              <MarkerBars
+                data={rows.map((e) => {
+                  const rate = rateOf(e);
+                  const profit = e.composite.live.avgSimReturnPct ?? null;
+                  return {
+                    id: e.id,
+                    label: e.name,
+                    value: rate,
+                    sub: `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
+                    display: rate === null ? "–" : `${rate.toFixed(1)}%`,
+                    note: `${signedPct(profit)} profit`,
+                    noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
+                    thin: thin(e),
+                  };
+                })}
+                markers={[
+                  ...(baseRate !== null
+                    ? [{ label: "Baseline", value: baseRate, kind: "base" as const }]
+                    : []),
+                  { label: "Goal", value: goal, kind: "goal" as const },
+                ]}
+                selected={selected?.id ?? null}
+                onSelect={setPicked}
+                onOpen={setOpened}
+                columns={{ label: "Model", value: `${metric} hit rate`, note: "avg profit per call" }}
+              />
+              {selected && (
+                <p className="baseline-readout">
+                  <strong>{selected.name}</strong>:{" "}
+                  {selRate === null
+                    ? `no graded calls in the last ${windowLong(days)} yet.`
+                    : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
+                        selLift === null
+                          ? "."
+                          : selLift >= 1
+                            ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
+                            : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
+                      }`}
+                  {selected.composite.live.avgSimReturnPct != null
+                    ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
+                    : ""}
+                  {selected.composite.warmingUp ? " Still too few calls to lean on." : ""}
+                </p>
+              )}
+              <p className="faint small">
+                Live calls over the last {windowLong(days)}, against the baseline over the same window. Under
+                each rate is its average profit per call, following every call with one fixed exit plan. Faded
+                bars rest on too few calls. <strong>Tap or click a model</strong> for its full record, past
+                versions and exam results.
+              </p>
+              <ModelDetailModal
+                entry={board.entries.find((e) => e.id === opened) ?? null}
+                board={board}
+                base={base}
+                runs={runs}
+                days={days}
+                api={api}
+                guest={guest}
+                now={now}
+                onClose={() => setOpened(null)}
+                onSetModels={onSetModels}
+                refreshing={refreshing}
+              />
+            </>
+          ) : (
+            <p className="empty">No models on the board yet.</p>
           )}
-          <p className="faint small">
-            Live calls over the last {windowLong(days)}, against the baseline over the same window. Under each
-            rate is its average profit per call, following every call with one fixed exit plan. Faded bars
-            rest on too few calls. <strong>Tap or click a model</strong> for its full record, past versions
-            and exam results.
-          </p>
-          <ModelDetailModal
-            entry={board.entries.find((e) => e.id === opened) ?? null}
-            board={board}
-            base={base}
-            runs={runs}
-            days={days}
-            api={api}
-            guest={guest}
-            now={now}
-            onClose={() => setOpened(null)}
-            onSetModels={onSetModels}
-            refreshing={refreshing}
-          />
         </>
-      ) : (
-        <p className="empty">No models on the board yet.</p>
       )}
 
       <details className="folds">
@@ -1696,18 +1711,31 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
       )}
 
       <div className="row learning-controls">
-        <div className="segmented small" role="tablist" aria-label="Measure">
+        <div className="segmented small" role="group" aria-label="Measure">
           {LEARNING_METRIC_KEYS.map((k) => (
-            <button key={k} className={k === metric ? "on" : ""} onClick={() => setMetric(k)}>
+            <button
+              key={k}
+              className={k === metric ? "on" : ""}
+              aria-pressed={k === metric}
+              onClick={() => setMetric(k)}
+            >
               {LEARNING_METRICS[k].tab}
             </button>
           ))}
         </div>
-        <div className="segmented small" role="tablist" aria-label="Today">
-          <button className={withToday ? "" : "on"} onClick={() => setWithToday(false)}>
+        <div className="segmented small" role="group" aria-label="Last day">
+          <button
+            className={withToday ? "" : "on"}
+            aria-pressed={!withToday}
+            onClick={() => setWithToday(false)}
+          >
             Ending yesterday
           </button>
-          <button className={withToday ? "on" : ""} onClick={() => setWithToday(true)}>
+          <button
+            className={withToday ? "on" : ""}
+            aria-pressed={withToday}
+            onClick={() => setWithToday(true)}
+          >
             Ending today
           </button>
         </div>

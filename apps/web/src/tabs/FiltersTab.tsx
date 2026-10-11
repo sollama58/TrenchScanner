@@ -92,6 +92,9 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
   );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // A failed save, shown in the editor too: on a phone the list's notice is off-screen above it.
+  const [saveError, setSaveError] = useState<{ opened: number; text: string | null } | null>(null);
+  const lastError = useRef<string | null>(null);
 
   const list = filters.data ?? [];
   const full = list.length >= MAX_FILTERS;
@@ -99,13 +102,15 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
   const run = async (action: () => Promise<unknown>, done?: string) => {
     setBusy(true);
     setMessage(null);
+    lastError.current = null;
     try {
       await action();
       if (done) setMessage(done);
       filters.reload();
       return true;
     } catch (e) {
-      setMessage(e instanceof ApiError || e instanceof Error ? e.message : String(e));
+      lastError.current = e instanceof ApiError || e instanceof Error ? e.message : String(e);
+      setMessage(lastError.current);
       return false;
     } finally {
       setBusy(false);
@@ -114,11 +119,13 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
 
   const save = async () => {
     if (!editing) return;
+    setSaveError(null);
     const ok = await run(
       () => (editing.id ? patch(`/filters/${editing.id}`, editing.draft) : post("/filters", editing.draft)),
       editing.id ? "Filter saved." : "Filter created.",
     );
     if (ok) setEditing(null);
+    else setSaveError({ opened: editing.opened, text: lastError.current });
   };
 
   // Old #top links land here; bring the leaderboard card into view for them.
@@ -260,6 +267,7 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
               onChange={(draft) => setEditing({ ...editing, draft })}
               onCancel={() => setEditing(null)}
               onSave={save}
+              saveError={saveError?.opened === editing.opened ? saveError.text : null}
             />
           ) : (
             <div className="editor-empty">
@@ -316,6 +324,7 @@ function FilterEditor({
   onChange,
   onCancel,
   onSave,
+  saveError,
 }: {
   draft: FilterInput;
   isNew: boolean;
@@ -324,6 +333,7 @@ function FilterEditor({
   onChange: (d: FilterInput) => void;
   onCancel: () => void;
   onSave: () => void;
+  saveError: string | null;
 }) {
   const [keywords, setKeywords] = useState(draft.narrativeKeywords.join(", "));
   const themes = config?.narrativeCategories ?? [];
@@ -406,6 +416,8 @@ function FilterEditor({
                   type="number"
                   inputMode="decimal"
                   step={f.step ?? "any"}
+                  min={f.min}
+                  max={f.max}
                   placeholder="any"
                   value={draft[f.key] ?? ""}
                   onChange={(e) => set(f.key, num(e.target.value))}
@@ -527,6 +539,7 @@ function FilterEditor({
         <p className="muted small">Changing any setting starts this filter's leaderboard record over.</p>
       )}
 
+      {saveError && <p className="error small">Couldn&apos;t save: {saveError}</p>}
       <div className="row gap-s end">
         <button type="button" onClick={onCancel} disabled={busy}>
           Cancel

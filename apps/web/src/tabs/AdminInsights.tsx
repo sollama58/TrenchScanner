@@ -214,7 +214,11 @@ function RetrainNow() {
       ? `Queued ${ago(s.pending.requestedAt)}, waiting for the trainer to pick it up.`
       : s?.job
         ? `Last run ${ago(s.job.lastRunAt)}${s.job.durationMs ? `, took ${Math.round(s.job.durationMs / 60_000)}m` : ""}${s.job.lastError ? ", failed" : ""}.`
-        : "No training run recorded yet.";
+        : q.error
+          ? `Couldn't load the trainer's status: ${q.error.message}`
+          : q.loading
+            ? "Loading…"
+            : "No training run recorded yet.";
   return (
     <Panel
       title="Retrain models"
@@ -1056,6 +1060,7 @@ export function FiltersAdmin() {
               actions={
                 <input
                   placeholder="Search name or wallet"
+                  aria-label="Search filters by name or wallet"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />

@@ -16,9 +16,13 @@ export function PnlShare({ data, onClose }: { data: PnlCardData; onClose: () => 
     void renderPnlCard(data)
       .then(canvasToPng)
       .then((blob) => {
-        if (!live || !blob) return;
+        if (!live) return;
+        if (!blob) throw new Error("no image");
         url = URL.createObjectURL(blob);
         setPng({ blob, url });
+      })
+      .catch(() => {
+        if (live) setNote("Couldn't draw the image here.");
       });
     return () => {
       live = false;
@@ -56,7 +60,7 @@ export function PnlShare({ data, onClose }: { data: PnlCardData; onClose: () => 
       {png ? (
         <img src={png.url} alt={`PnL card for ${data.symbol ?? "this token"}`} className="pnl-preview" />
       ) : (
-        <div className="pnl-preview pnl-loading">Drawing your card…</div>
+        <div className="pnl-preview pnl-loading">{note ?? "Drawing your card…"}</div>
       )}
       <div className="pnl-actions">
         {canShare && (
@@ -82,7 +86,7 @@ export function PnlShare({ data, onClose }: { data: PnlCardData; onClose: () => 
         <button type="button" className="ghost" onClick={onClose}>
           Close
         </button>
-        {note && <small className="muted">{note}</small>}
+        {png && note && <small className="muted">{note}</small>}
       </div>
     </div>
   );

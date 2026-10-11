@@ -233,7 +233,8 @@ export function MultiLines({
   const step = span <= 30 ? 10 : span <= 60 ? 20 : span <= 125 ? 25 : span <= 250 ? 50 : 100;
   const top = Math.max(10, Math.ceil(hi / step) * step);
   const bottom = Math.floor(low / step) * step;
-  const ticks = Array.from({ length: Math.round((top - bottom) / step) + 1 }, (_, i) => bottom + i * step);
+  // Up to `top` only: when every value is negative, `top` is the 10% floor, short of a whole step.
+  const ticks = Array.from({ length: Math.floor((top - bottom) / step) + 1 }, (_, i) => bottom + i * step);
   const n = labels.length;
   const x = (i: number) => padL + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
   const y = (v: number) =>
@@ -496,7 +497,7 @@ export function MarkerBars({
           </span>
         ))}
       </div>
-      <div className={`mbar${onOpen ? " opens" : ""}`} role="list">
+      <div className={`mbar${onOpen ? " opens" : ""}`}>
         {columns && (
           <div className="mbar-row head-row" aria-hidden="true">
             <span>{columns.label}</span>
@@ -511,7 +512,6 @@ export function MarkerBars({
         {data.map((d) => (
           <button
             type="button"
-            role="listitem"
             className={`mbar-row${selected === d.id ? " on" : ""}${d.thin ? " thin" : ""}`}
             key={d.id}
             onMouseEnter={() => onSelect(d.id)}
@@ -522,7 +522,6 @@ export function MarkerBars({
             }}
             aria-pressed={onOpen ? undefined : selected === d.id}
             aria-haspopup={onOpen ? "dialog" : undefined}
-            aria-label={onOpen ? `${d.label}: open its details` : undefined}
           >
             <span className="mbar-label">
               {d.label}

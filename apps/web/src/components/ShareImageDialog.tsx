@@ -38,9 +38,13 @@ export function ShareImageDialog({
     void render()
       .then(canvasToPng)
       .then((blob) => {
-        if (!live || !blob) return;
+        if (!live) return;
+        if (!blob) throw new Error("no image");
         url = URL.createObjectURL(blob);
         setPng({ blob, url });
+      })
+      .catch(() => {
+        if (live) setNote("Couldn't draw the image here.");
       });
     return () => {
       live = false;
@@ -93,7 +97,7 @@ export function ShareImageDialog({
         {png ? (
           <img src={png.url} alt={`Share image: ${title}`} className="pnl-preview" />
         ) : (
-          <div className="pnl-preview pnl-loading">Drawing the image…</div>
+          <div className="pnl-preview pnl-loading">{note ?? "Drawing the image…"}</div>
         )}
         <div className="pnl-actions">
           {canShare && (
@@ -116,7 +120,7 @@ export function ShareImageDialog({
               Save image
             </a>
           ) : null}
-          {note && <small className="muted">{note}</small>}
+          {png && note && <small className="muted">{note}</small>}
         </div>
       </div>
     </dialog>
