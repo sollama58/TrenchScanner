@@ -594,7 +594,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     });
     await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 9 }), env);
     const retired = await prisma.match.findUniqueOrThrow({ where: { id: linked.id } });
-    expect(retired.peak24hReturnPct).toBeCloseTo(800);
+    // The retiring tick lands past the 24 hours, so it closes the run without raising its peak.
+    expect(retired.peak24hReturnPct).toBeCloseTo(340);
     expect((await prisma.match.findUniqueOrThrow({ where: { id: other.id } })).peak24hReturnPct).toBeNull();
     await prisma.user.delete({ where: { id: user.id } });
   });

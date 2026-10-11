@@ -240,6 +240,17 @@ const MAX_IMAGE_URL_CHARS = 500;
 const clip = (v: string | undefined, max: number): string | undefined =>
   typeof v === "string" ? v.slice(0, max) : undefined;
 
+/**
+ * The coin's creation time, or undefined unless it is a real date no later than now (a minute of
+ * clock skew allowed). One Invalid Date reached the watchlist's createMany and failed the whole
+ * scan cycle, every cycle the coin stayed on a discovery page.
+ */
+function launchDate(ms: unknown, now = Date.now()): Date | undefined {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0 || ms > now + 60_000) return undefined;
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
 function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {
   const imageUrl = clip(coin.image_uri, MAX_IMAGE_URL_CHARS);
   return {
@@ -250,7 +261,7 @@ function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {
     // is stored.
     imageUrl: imageUrl?.startsWith("https://") ? imageUrl : undefined,
     description: coin.description,
-    createdAt: coin.created_timestamp ? new Date(coin.created_timestamp) : undefined,
+    createdAt: launchDate(coin.created_timestamp),
     graduated: coin.complete ?? false,
     marketCapUsd: coin.usd_market_cap ?? coin.market_cap_usd,
     hasTwitter: Boolean(coin.twitter),

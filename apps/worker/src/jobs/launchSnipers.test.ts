@@ -174,8 +174,14 @@ describe("withLaunchSnipers", () => {
       launchBundledBuyers: 3,
       devBuySupplyPct: 2,
     });
+    // The stream's snipers figure stands; the launch shape, which only the chain read has, is added.
     const streamed = { ...EMPTY_TRADE_FLOW, firstBuyersHolding: 3, firstBuyersSeen: 25 };
-    expect(withLaunchSnipers(streamed, snipers)).toBe(streamed);
+    expect(withLaunchSnipers(streamed, snipers)).toEqual({
+      ...streamed,
+      firstBuyersSupplyPct: 25,
+      launchBundledBuyers: 3,
+      devBuySupplyPct: 2,
+    });
     expect(withLaunchSnipers(undefined, undefined)).toBeUndefined();
   });
 });

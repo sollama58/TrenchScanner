@@ -16,6 +16,14 @@ export class HttpError extends Error {
 export interface FetchJsonOptions extends RequestInit {
   timeoutMs?: number;
   retries?: number;
+  /**
+   * Whether a client-side timeout is retried like a 5xx (default true). Off for heavy reads the
+   * provider has most likely already served and billed by the time we stop waiting: sending the
+   * identical request again pays twice and, on a slow provider, usually times out again.
+   */
+  retryOnTimeout?: boolean;
+  /** Called before each retry is sent, so a caller metering its requests counts every attempt. */
+  onRetry?: () => void;
   /** Base delay for exponential backoff on 429/5xx, in ms. */
   retryDelayMs?: number;
   /** Called with the headers of the successful response, before its body is read. */
@@ -81,7 +89,16 @@ export function redactUrl(rawUrl: string): string {
  * never ends up in application logs, regardless of how a caller later logs the error it catches.
  */
 export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}): Promise<T> {
-  const { timeoutMs = 10_000, retries = 2, retryDelayMs = 500, onHeaders, gate, ...init } = options;
+  const {
+    timeoutMs = 10_000,
+    retries = 2,
+    retryDelayMs = 500,
+    retryOnTimeout = true,
+    onRetry,
+    onHeaders,
+    gate,
+    ...init
+  } = options;
   const safeUrl = redactUrl(url);
 
   let attempt = 0;
@@ -108,6 +125,7 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
         gate.throttled(backoffDelay(retryDelayMs, attempt, res.headers.get("retry-after")));
         if (attempt < retries) {
           attempt += 1;
+          onRetry?.();
           continue;
         }
       } else if (retryable && attempt < retries) {
@@ -115,16 +133,18 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
         logger.warn("retrying after non-2xx response", { url: safeUrl, status: res.status, attempt, delay });
         await sleep(delay);
         attempt += 1;
+        onRetry?.();
         continue;
       }
       throw new HttpError(res.status, safeUrl);
     } catch (err) {
       const isAbort = err instanceof Error && err.name === "AbortError";
-      if (isAbort && attempt < retries) {
+      if (isAbort && retryOnTimeout && attempt < retries) {
         const delay = backoffDelay(retryDelayMs, attempt, null);
         logger.warn("retrying after timeout", { url: safeUrl, attempt, delay });
         await sleep(delay);
         attempt += 1;
+        onRetry?.();
         continue;
       }
       if (err instanceof HttpError) throw err;

@@ -92,3 +92,28 @@ describe("PumpFunClient discovery paging", () => {
     expect(offsets).toEqual(offsets.map((_, i) => i * limit));
   });
 });
+
+describe("PumpFunClient discovered coins", () => {
+  it("keeps a real creation time and drops one that isn't a date", async () => {
+    const coin = (mint: string, created_timestamp: unknown) => ({
+      mint,
+      symbol: "X",
+      name: "X",
+      created_timestamp,
+    });
+    const { url } = await serve([
+      [
+        coin("Good111111111111111111111111111111111111111", 1_760_000_000_000),
+        coin("Huge111111111111111111111111111111111111111", 1e20),
+        coin("Text111111111111111111111111111111111111111", "1760000000000"),
+        coin("Late111111111111111111111111111111111111111", Date.now() + 86_400_000),
+      ],
+    ]);
+    const found = await new PumpFunClient({ baseUrl: url }).discoverNewMints();
+    const created = new Map(found.map((c) => [c.mintAddress.slice(0, 4), c.createdAt]));
+    expect(created.get("Good")).toEqual(new Date(1_760_000_000_000));
+    expect(created.get("Huge")).toBeUndefined();
+    expect(created.get("Text")).toBeUndefined();
+    expect(created.get("Late")).toBeUndefined();
+  });
+});

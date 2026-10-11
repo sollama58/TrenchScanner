@@ -339,8 +339,11 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
     // Only a clean win can reach the tier - the peak alone would credit a stopped-out run.
     const tenX = hit2x && !disqualifiedByDrawdown(live) ? tenXOf(null) : null;
 
-    if (elapsedMin >= WIN_WINDOW_MINUTES) {
-      const disqualified = hit2x && disqualifiedByDrawdown(live);
+    // A 2x that came after the stop is settled the moment it lands: the trough froze at the first
+    // 2x, so nothing later in the window can change it. Shown as the stop-out it is, not as a
+    // green "2x hit" that flips to a loss when the window closes.
+    const disqualified = hit2x && disqualifiedByDrawdown(live);
+    if (elapsedMin >= WIN_WINDOW_MINUTES || disqualified) {
       return {
         status: disqualified ? "disqualified" : hit2x ? "won" : "missed",
         hit2x,

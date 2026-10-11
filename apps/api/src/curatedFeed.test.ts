@@ -369,6 +369,23 @@ describe("resolveOutcome", () => {
     expect(view.finalized).toBe(false);
   });
 
+  it("settles a 2x reached after the stop as a stop-out at once, not a green 2x until the window closes", () => {
+    const view = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(9),
+          hit2xAt: minutesAgo(1),
+          lowBefore2xPriceUsd: 0.45,
+          low1hPriceUsd: 0.45,
+          peak1hPriceUsd: 2.1,
+          peak24hPriceUsd: 2.1,
+        }),
+      }),
+    );
+    expect(view.status).toBe("disqualified");
+    expect(view.minutesLeft).toBeNull();
+  });
+
   it("flips the 2x badge the moment it is observed, before the window closes", () => {
     const view = resolveOutcome(
       alert({

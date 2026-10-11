@@ -197,12 +197,22 @@ export async function resolveAlertTargets(opts: {
    * filter puts a ceiling on (see awaitsWalletFigure). Omitted means the env default.
    */
   walletWaitMs?: number;
+  /**
+   * Whether a token that no longer has a match waiting may drop its wallet-figure hold (default
+   * true). The fast lane passes false: it scores on thinner data (no holder-growth baseline, no
+   * description), so a filter the scan matched can fail there, and clearing the hold every 15
+   * seconds restarted it on each scan - the FILTER_WALLET_MAX_WAIT_SECONDS bound never ran out.
+   */
+  clearWalletWait?: boolean;
 }): Promise<FilterWithUser[]> {
   const { tokenId, scored, activeFilters } = opts;
+  const clearWait = () => {
+    if (opts.clearWalletWait !== false) clearFilterWalletWait(scored.mintAddress);
+  };
 
   const allMatching = activeFilters.filter((filter) => matchesFilter(scored, filter));
   if (allMatching.length === 0) {
-    clearFilterWalletWait(scored.mintAddress);
+    clearWait();
     return [];
   }
 
@@ -224,7 +234,7 @@ export async function resolveAlertTargets(opts: {
   const waiting = settled.filter((f) => awaitsWalletFigure(scored, f));
   let matching = settled;
   if (waiting.length === 0) {
-    clearFilterWalletWait(scored.mintAddress);
+    clearWait();
   } else if (!filterWalletWaitOver(scored.mintAddress, opts.walletWaitMs ?? DEFAULT_WALLET_WAIT_MS, now)) {
     matching = settled.filter((f) => !waiting.includes(f));
   }
