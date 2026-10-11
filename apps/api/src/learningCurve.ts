@@ -3,6 +3,7 @@ import {
   recordScore,
   walletSafetyCutsSql,
   firstCallOnRowSql,
+  notRetiredModelSql,
   CURRENT_LABEL_RULE,
   type PrecisionTargets,
 } from "@trenchscanner/core";
@@ -527,7 +528,7 @@ export async function buildLearningCurve(
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()})::float8 AS sim_first_sum
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-    WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until}
+    WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
       AND (co."labelRule" IS NULL OR co."labelRule" >= ${CURRENT_LABEL_RULE})
     GROUP BY 1, 2`;
   // Which runs to show: every run of a short window, the last run of each UTC day of a longer one

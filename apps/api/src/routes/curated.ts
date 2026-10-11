@@ -5,6 +5,7 @@ import {
   corsOriginList,
   createLogger,
   HEURISTIC_CURATOR_SOURCE,
+  notRetiredModelSql,
   type Env,
   RULES_CONTESTANT,
   walletSafetyCutsSql,
@@ -536,7 +537,7 @@ export async function registerCuratedRoutes(
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
                count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins
         FROM "CuratedAlert"
-        WHERE "createdAt" >= ${since}
+        WHERE "createdAt" >= ${since} AND ${notRetiredModelSql("CuratedAlert")}
         GROUP BY 1`,
       prisma.$queryRaw<{ heuristic: boolean; emitted: bigint; graded: bigint; wins: bigint }[]>`
         SELECT (s."source" = ${HEURISTIC_CURATOR_SOURCE}) AS heuristic,

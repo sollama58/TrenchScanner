@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { RETIRED_CONTESTANT_IDS } from "./contestants.js";
 
 /**
  * Whether a CuratedAlert row is the first call on its grading row, as a SQL condition.
@@ -22,5 +23,23 @@ export function firstCallOnRowSql(alias = "a", sameColumn?: string): Prisma.Sql 
   return Prisma.sql`(${a}."candidateOutcomeId" IS NULL OR NOT EXISTS (
     SELECT 1 FROM "CuratedAlert" e
     WHERE e."candidateOutcomeId" = ${a}."candidateOutcomeId"${same}
+      AND ${retiredExcluded("e")}
       AND (e."createdAt" < ${a}."createdAt" OR (e."createdAt" = ${a}."createdAt" AND e."id" < ${a}."id"))))`;
+}
+
+/**
+ * A CuratedAlert row from a seat that still runs, as a SQL condition: a retired seat's calls
+ * (ContestantSpec.retired - Ranker since 2026-10-11) stay in the table but out of live stats and
+ * pooled averages. A pooled figure filters on this; a call on a row a retired seat called first
+ * then counts as that row's first (firstCallOnRowSql skips the retired call too).
+ */
+export function notRetiredModelSql(alias = "a"): Prisma.Sql {
+  return retiredExcluded(alias);
+}
+
+function retiredExcluded(alias: string): Prisma.Sql {
+  if (RETIRED_CONTESTANT_IDS.length === 0) return Prisma.sql`TRUE`;
+  const model = Prisma.raw(`"${alias}"."model"`);
+  // A call from before the ledgers (model NULL) is no retired seat's.
+  return Prisma.sql`(${model} IS NULL OR ${model} NOT IN (${Prisma.join(RETIRED_CONTESTANT_IDS)}))`;
 }

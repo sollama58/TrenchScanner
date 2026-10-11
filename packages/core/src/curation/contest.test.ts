@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  ACTIVE_CONTESTANT_IDS,
   CONTESTANTS,
   CONTESTANT_IDS,
+  contestantSpec,
+  RETIRED_CONTESTANT_IDS,
   NARRATIVE_SEAT_FEATURES,
   ORDER_FLOW_FEATURES,
   TREES_NO_TOKENSAGE_CONTESTANT,
@@ -83,6 +86,21 @@ describe("contestant roster", () => {
     expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(
       TREES_NO_TOKENSAGE_CONTESTANT,
     );
+  });
+});
+
+describe("a retired seat", () => {
+  it("leaves the roster, the combiners' members and the default list, but keeps its spec", () => {
+    expect(RETIRED_CONTESTANT_IDS).toEqual(["ranker"]);
+    expect(contestantSpec("ranker")?.name).toBe("Ranker");
+    expect(enabledContestants(["consensus", "linear", "trees", "ranker"]).map((c) => c.id)).toEqual([
+      "consensus",
+      "rules",
+      "linear",
+      "trees",
+    ]);
+    expect(ACTIVE_CONTESTANT_IDS).not.toContain("ranker");
+    expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain("ranker");
   });
 });
 
