@@ -46,6 +46,21 @@ function isOnCurve(bytes: Uint8Array): boolean {
   }
 }
 
+/**
+ * Whether an address can belong to a wallet: a public key on the ed25519 curve. Program-derived
+ * addresses (a Pump.fun bonding curve, an AMM pool's authority, any program vault) are off the
+ * curve by construction, so no one holds a private key for them. False for anything that does not
+ * decode to 32 bytes.
+ */
+export function isWalletAddress(address: string): boolean {
+  try {
+    const bytes = bs58.decode(address);
+    return bytes.length === 32 && isOnCurve(bytes);
+  } catch {
+    return false;
+  }
+}
+
 function concatBytes(chunks: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
   let offset = 0;

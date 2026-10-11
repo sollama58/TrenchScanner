@@ -30,6 +30,7 @@ import {
   type HeliusClient,
   type MintAuthorityResult,
   type OnChainProfile,
+  type OnChainHolders,
   type CandidateToken,
   type ScoredToken,
   type DiscoveredCoin,
@@ -65,6 +66,7 @@ import {
 import { seedQuotes } from "./walletValuation.js";
 import { alertAwaitingWallets, noteAlertWallets } from "./walletPriority.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
+import { resolveOnChainHolders } from "./onChainHolders.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import {
   launchSnipersFromCache,
@@ -588,6 +590,26 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     .map((c) => c.mintAddress);
   const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius, env);
   lap("mintAuthority");
+  // The same mints' top-10 holders, read from the chain (see onChainHolders.ts), for the ones the
+  // fallback profile can pass on: renounced authorities on a Pump.fun venue. Without a holder list
+  // the concentration cut and the wallet checks can't run, and model calls wait for them.
+  const onChainHolders = await resolveOnChainHolders(
+    candidates
+      .filter((c) => {
+        const a = mintAuthorities.get(c.mintAddress);
+        return (
+          !rugProfiles.has(c.mintAddress) &&
+          a?.status === "found" &&
+          !a.mintAuthorityActive &&
+          !a.freezeAuthorityActive &&
+          pumpVenue(c.dexId)
+        );
+      })
+      .map((c) => c.mintAddress),
+    deps.helius,
+    env,
+  );
+  lap("onChainHolders");
 
   // Profiles are assembled in two passes, because Mayhem Mode is the ONE rug-screen condition
   // that costs a network call. The first pass leaves it unresolved and asks only what the
@@ -596,7 +618,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // lookup. On a Pump.fun-heavy watchlist that is most of them, and since Mayhem caches
   // permanently, first-sight lookups ARE the recurring cost - the watchlist turns over daily.
   const baseProfileByMint = new Map<string, OnChainProfile | null>(
-    candidates.map((c) => [c.mintAddress, buildOnChainProfile(c, rugProfiles, mintAuthorities)]),
+    candidates.map((c) => [
+      c.mintAddress,
+      buildOnChainProfile(c, rugProfiles, mintAuthorities, onChainHolders),
+    ]),
   );
   const mayhemCandidates = candidates
     .filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress)))
@@ -1864,23 +1889,26 @@ export function secondLookDue(
 }
 
 /**
- * Prefers RugCheck's full risk profile. Falls back to a bare mint/freeze authority check when
- * RugCheck hasn't indexed the mint yet. A failed authority lookup yields null rather than a
+ * Prefers RugCheck's full risk profile. Falls back to what the chain answers when RugCheck has
+ * no report (not indexed yet, or RugCheck down): mint/freeze authority and, when it was read, the
+ * top-10 holders (onChainHolders.ts). A failed authority lookup yields null rather than a
  * fabricated profile - "we couldn't check" must not read as "nothing is active".
  *
  * What the fallback says about liquidity depends on the venue. A mint still on its Pump.fun
  * bonding curve (DexScreener dexId "pumpfun") has no pool to pull: the curve is a program
- * account nobody holds LP for, so with authorities verified on chain it can pass the screen
- * without waiting for RugCheck - which matters because that wait lands exactly in the first
- * minutes of a launch. A graduated mint's pool is a real rug vector, so its LP stays unverified
- * (lpBurned: false, failing closed) until RugCheck reports it. The fallback has no
- * top10HolderAddresses either, so the wallet checks can't run on it: user filters can match it
- * early, while curated calls (CURATED_REQUIRE_WALLET_CHECKS) still wait for the RugCheck report.
+ * account nobody holds LP for. A mint that graduated to PumpSwap ("pumpswap") trades in the pool
+ * Pump.fun's migration created, whose liquidity is locked by the protocol - the same market
+ * RugCheck's LP check reads for a Pump.fun token (rugcheck.ts, PUMP_MARKET_TYPES). Any other pool
+ * is a real rug vector, so its LP stays unverified (lpBurned: false, failing closed) until RugCheck
+ * reports it. With the holder list in, the concentration cut and the wallet checks run as on a
+ * RugCheck profile, so curated calls (CURATED_REQUIRE_WALLET_CHECKS) no longer wait for RugCheck;
+ * the creator, holder count and risk score stay unknown.
  */
 export function buildOnChainProfile(
   candidate: Pick<CandidateToken, "mintAddress" | "dexId">,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
+  onChainHolders: Map<string, OnChainHolders> = new Map(),
 ): OnChainProfile | null {
   // isMayhemMode is deliberately left unset here and filled in later for the candidates that
   // earn a lookup (see the two-pass assembly in runScanCycle). Unset means unverified, which the
@@ -1892,12 +1920,21 @@ export function buildOnChainProfile(
   const authorities = mintAuthorities.get(mintAddress);
   if (!authorities || authorities.status !== "found") return null;
 
+  const holders = onChainHolders.get(mintAddress);
   return {
     mintAddress,
     mintAuthorityActive: authorities.mintAuthorityActive,
     freezeAuthorityActive: authorities.freezeAuthorityActive,
-    lpBurned: deriveGraduated(candidate.dexId) === false,
+    lpBurned: pumpVenue(candidate.dexId),
+    ...(holders
+      ? { top10HolderPct: holders.top10HolderPct, top10HolderAddresses: holders.top10HolderAddresses }
+      : {}),
   };
+}
+
+/** A Pump.fun bonding curve or the PumpSwap pool it graduates into: liquidity nobody can pull. */
+function pumpVenue(dexId: string | undefined): boolean {
+  return deriveGraduated(dexId) === false || dexId === "pumpswap";
 }
 
 /**

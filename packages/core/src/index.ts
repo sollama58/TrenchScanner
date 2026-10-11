@@ -16,6 +16,7 @@ export * from "./datasources/jupiter.js";
 export * from "./datasources/rateGate.js";
 export * from "./datasources/pumpfun.js";
 export * from "./datasources/rugcheck.js";
+export * from "./datasources/onChainHolders.js";
 export * from "./datasources/helius.js";
 export * from "./datasources/launchBuyers.js";
 export * from "./datasources/tokensage.js";

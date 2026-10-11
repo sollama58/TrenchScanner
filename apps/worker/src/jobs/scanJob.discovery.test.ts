@@ -43,9 +43,18 @@ describe("buildOnChainProfile without a RugCheck report", () => {
     expect(runRugScreen({ ...profile!, isMayhemMode: false }).passed).toBe(true);
   });
 
-  it("keeps a graduated mint's pool unverified until RugCheck reports it", () => {
-    const profile = buildOnChainProfile({ mintAddress: "Grad", dexId: "pumpswap" }, none, authorities);
-    expect(profile?.lpBurned).toBe(false);
+  it("counts a PumpSwap pool as locked, but keeps any other pool unverified until RugCheck reports it", () => {
+    const pumpswap = buildOnChainProfile({ mintAddress: "Grad", dexId: "pumpswap" }, none, authorities);
+    expect(pumpswap?.lpBurned).toBe(true);
+    const raydium = buildOnChainProfile({ mintAddress: "Grad", dexId: "raydium" }, none, authorities);
+    expect(raydium?.lpBurned).toBe(false);
+    expect(runRugScreen({ ...raydium!, isMayhemMode: false }).passed).toBe(false);
+  });
+
+  it("carries the holders read from the chain, so the concentration cut and wallet checks run", () => {
+    const holders = new Map([["Pre", { top10HolderPct: 45, top10HolderAddresses: ["w1", "w2"] }]]);
+    const profile = buildOnChainProfile({ mintAddress: "Pre", dexId: "pumpfun" }, none, authorities, holders);
+    expect(profile).toMatchObject({ top10HolderPct: 45, top10HolderAddresses: ["w1", "w2"] });
     expect(runRugScreen({ ...profile!, isMayhemMode: false }).passed).toBe(false);
   });
 

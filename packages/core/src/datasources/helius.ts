@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
+import { holdersFromLargestAccounts, type LargestAccount, type OnChainHolders } from "./onChainHolders.js";
 
 const logger = createLogger("helius");
 
@@ -90,6 +91,9 @@ export type LaunchBuyersResult =
 
 export type MintAuthorityResult =
   { status: "found"; mintAuthorityActive: boolean; freezeAuthorityActive: boolean } | { status: "failed" };
+
+/** A mint's largest holders read from the chain (see holdersFromLargestAccounts); "failed" when any read had no usable answer. */
+export type LargestHoldersResult = { status: "found"; holders: OnChainHolders } | { status: "failed" };
 
 /** Whether a mint was launched in Pump.fun's Mayhem Mode. "failed" is kept distinct from a
  *  definitive false for the same reason as EarliestActivityResult: the rug screen treats an
@@ -615,6 +619,75 @@ export class HeliusClient {
         mintAuthorityActive: Boolean(info.mintAuthority),
         freezeAuthorityActive: Boolean(info.freezeAuthority),
       });
+    }
+    return out;
+  }
+
+  /**
+   * The ten largest wallets of each mint and their share of supply, straight from the chain: the
+   * backup for a mint RugCheck has no report for. Per mint, getTokenLargestAccounts (its 20
+   * largest token accounts) and getTokenSupply in one batch, then one getMultipleAccounts over
+   * every account found for the wallets that own them. Any read without a usable answer makes
+   * that mint "failed", never a partial list read as complete.
+   */
+  async getLargestHoldersBatch(mintAddresses: string[]): Promise<Map<string, LargestHoldersResult>> {
+    const unique = [...new Set(mintAddresses)];
+    const out = new Map<string, LargestHoldersResult>();
+    if (unique.length === 0) return out;
+
+    const calls: RpcCall[] = unique.flatMap((mint) => [
+      { id: `lta-${mint}`, method: "getTokenLargestAccounts", params: [mint, { commitment: "confirmed" }] },
+      { id: `sup-${mint}`, method: "getTokenSupply", params: [mint, { commitment: "confirmed" }] },
+    ]);
+    const responses = await this.sendBatched<{ value?: unknown }>(calls, 10_000);
+
+    const accountsByMint = new Map<string, { address: string; amount: bigint }[]>();
+    const supplyByMint = new Map<string, bigint>();
+    for (const mint of unique) {
+      const largest = responses.get(`lta-${mint}`)?.result?.value;
+      const supply = (responses.get(`sup-${mint}`)?.result?.value as { amount?: unknown } | undefined)
+        ?.amount;
+      if (!Array.isArray(largest) || typeof supply !== "string" || !/^\d+$/.test(supply)) {
+        out.set(mint, { status: "failed" });
+        continue;
+      }
+      const accounts: { address: string; amount: bigint }[] = [];
+      for (const entry of largest as { address?: unknown; amount?: unknown }[]) {
+        if (
+          typeof entry?.address === "string" &&
+          typeof entry.amount === "string" &&
+          /^\d+$/.test(entry.amount)
+        )
+          accounts.push({ address: entry.address, amount: BigInt(entry.amount) });
+      }
+      accountsByMint.set(mint, accounts);
+      supplyByMint.set(mint, BigInt(supply));
+    }
+
+    const tokenAccounts = [...new Set([...accountsByMint.values()].flat().map((a) => a.address))];
+    const owners =
+      tokenAccounts.length > 0
+        ? await this.getMultipleAccounts<{ data?: { parsed?: { info?: { owner?: unknown } } } }>(
+            tokenAccounts,
+            {
+              encoding: "jsonParsed",
+            },
+          )
+        : new Map();
+    for (const [mint, accounts] of accountsByMint) {
+      const withOwners: LargestAccount[] = [];
+      let complete = true;
+      for (const a of accounts) {
+        const account = owners.get(a.address);
+        const owner = account && account !== "failed" ? account.value?.data?.parsed?.info?.owner : undefined;
+        if (typeof owner !== "string") {
+          complete = false;
+          break;
+        }
+        withOwners.push({ owner, amount: a.amount });
+      }
+      const holders = complete ? holdersFromLargestAccounts(withOwners, supplyByMint.get(mint)!) : null;
+      out.set(mint, holders ? { status: "found", holders } : { status: "failed" });
     }
     return out;
   }
