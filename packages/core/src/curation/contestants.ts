@@ -88,6 +88,12 @@ export interface ContestantSpec {
    * and it never becomes the default model. It exists to be compared against, not followed.
    */
   control?: boolean;
+  /**
+   * A retired seat: it no longer trains, calls, joins a combiner, breeds or shows on the roster,
+   * and its past calls stay in the database but out of live stats (RETIRED_CONTESTANT_IDS). The
+   * spec stays so its id is never reused and old rows still have a name.
+   */
+  retired?: boolean;
 }
 
 /** The consensus - what every subscriber sees until they pick another model. */
@@ -170,7 +176,7 @@ export const TREES_NO_TOKENSAGE_FEATURES: readonly CandidateFeatureName[] = LEAR
 
 /** A learner the combiners stack and evolution works on: every learner but the control seats. */
 export function isMemberLearner(spec: ContestantSpec): boolean {
-  return spec.role === "learner" && spec.control !== true;
+  return spec.role === "learner" && spec.control !== true && spec.retired !== true;
 }
 
 export const CONTESTANTS: readonly ContestantSpec[] = [
@@ -309,6 +315,10 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
       "Learns to put each hour's biggest runners at the top of the list, rather than to guess the odds of a double.",
     role: "learner",
     recipe: { learner: "gbdt", boosting: { objective: "lambdarank" } },
+    // User decision 2026-10-11: it called the most of any seat at about the market's rate and
+    // flooded on tied scores (144 calls in one 6h replay block, 77 on a single score), pulling
+    // down the pooled averages.
+    retired: true,
   },
   {
     id: "runner",
@@ -347,6 +357,16 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
 
 export const CONTESTANT_IDS: readonly string[] = CONTESTANTS.map((c) => c.id);
 
+/** Seats that no longer run (see ContestantSpec.retired): their calls stay out of live stats. */
+export const RETIRED_CONTESTANT_IDS: readonly string[] = CONTESTANTS.filter((c) => c.retired).map(
+  (c) => c.id,
+);
+
+/** The seats that can run: every id but the retired ones (the roster's default). */
+export const ACTIVE_CONTESTANT_IDS: readonly string[] = CONTESTANTS.filter((c) => !c.retired).map(
+  (c) => c.id,
+);
+
 export function contestantSpec(id: string): ContestantSpec | undefined {
   return CONTESTANTS.find((c) => c.id === id);
 }
@@ -364,7 +384,8 @@ export const COMBINER_ROLES: readonly ContestantRole[] = ["stacked", "blend", "a
  * in (it costs nothing to run and is the fallback default).
  */
 export function enabledContestants(ids: readonly string[]): ContestantSpec[] {
-  const wanted = new Set(ids);
+  // A retired id left in a configured list is skipped, not an error.
+  const wanted = new Set(ids.filter((id) => !RETIRED_CONTESTANT_IDS.includes(id)));
   wanted.add(RULES_CONTESTANT);
   const learners = CONTESTANTS.filter((c) => isMemberLearner(c) && wanted.has(c.id));
   return CONTESTANTS.filter(
