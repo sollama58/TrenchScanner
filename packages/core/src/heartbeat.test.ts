@@ -57,6 +57,17 @@ describe.skipIf(!dbAvailable)("recordRunStart", () => {
     expect(runningSinceFrom(done.meta)).toBeNull();
   });
 
+  it("keeps an error on a successful run only when one is given", async () => {
+    await prisma.systemHeartbeat.deleteMany({ where: { job } });
+    await recordHeartbeat(job, { success: false, error: "boom" });
+    await recordHeartbeat(job, { success: true, error: "1 stage failed" });
+    const partial = await prisma.systemHeartbeat.findUniqueOrThrow({ where: { job } });
+    expect(partial.lastSuccessAt).not.toBeNull();
+    expect(partial.lastError).toBe("1 stage failed");
+    await recordHeartbeat(job, { success: true });
+    expect((await prisma.systemHeartbeat.findUniqueOrThrow({ where: { job } })).lastError).toBeNull();
+  });
+
   it("is a no-op for a job with no row yet", async () => {
     await prisma.systemHeartbeat.deleteMany({ where: { job } });
     await recordRunStart(job);

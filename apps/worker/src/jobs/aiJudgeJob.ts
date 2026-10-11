@@ -1,7 +1,7 @@
 import { prisma, createLogger, type Env } from "@trenchscanner/core";
 import { anthropicConfigured } from "../ai/client.js";
 import { pollReplayRuns } from "../ai/replay.js";
-import { maybeEvolvePlaybook, settleEvolutionRun } from "../ai/playbook.js";
+import { maybeEvolvePlaybook, settleEvolutionRun, unsettledEvolutionRuns } from "../ai/playbook.js";
 import { refitAiBlend } from "../ai/blend.js";
 
 const logger = createLogger("ai-judge");
@@ -19,8 +19,20 @@ export async function runAiJudgeJob(env: Env): Promise<Record<string, string | n
   const meta: Record<string, string | number | boolean> = {};
   const scored = await pollReplayRuns(env);
   meta.replaysScored = scored.length;
-  for (const run of scored) {
-    if (run.purpose === "evolution") meta.evolution = await settleEvolutionRun(run, env);
+  // pollReplayRuns marks a run scored before it is settled here, so a settle that failed (or a
+  // pass that died in between) used to leave that round's candidates "candidate" for good, the
+  // run never picked up again. Every pass also settles any scored round still left like that -
+  // which includes the ones just scored - each on its own, so one failure doesn't stop the rest.
+  for (const run of await unsettledEvolutionRuns()) {
+    try {
+      meta.evolution = await settleEvolutionRun(run, env);
+    } catch (err) {
+      logger.error("could not settle a playbook evolution round - retrying next pass", {
+        run: run.id,
+        error: String(err),
+      });
+      meta.evolution = "error";
+    }
   }
 
   try {

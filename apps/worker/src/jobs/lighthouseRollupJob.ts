@@ -588,13 +588,21 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
   const screenFloor = floorHour(now.getTime() - SCREEN_BACKFILL_HOURS * HOUR_MS);
   const screenFrom = opts.from ? (from > screenFloor ? from : screenFloor) : await screenStart(now);
 
+  // A day at a time: its hours, then at once its labels. Writing every hour first and every
+  // label after meant a first-run backfill cut short (a deadline exit, a deploy) left the label
+  // days it never reached unwritten for good - the next run resumes from the newest HOUR, and
+  // those were all in. Now a run cut anywhere has labelled every day before the one it was on,
+  // and that one is inside the resume's trailing hours.
   let hoursWritten = 0;
-  for (let t = from.getTime(); t < to.getTime(); t += DAY_MS) {
-    hoursWritten += await writeHours(new Date(t), new Date(Math.min(t + DAY_MS, to.getTime())), screenFrom);
-  }
   let daysWritten = 0;
   let labelRows = 0;
   for (let d = floorDay(from.getTime()).getTime(); d < to.getTime(); d += DAY_MS) {
+    const hoursFrom = Math.max(d, from.getTime());
+    hoursWritten += await writeHours(
+      new Date(hoursFrom),
+      new Date(Math.min(d + DAY_MS, to.getTime())),
+      screenFrom,
+    );
     labelRows += await writeDay(new Date(d));
     daysWritten += 1;
   }

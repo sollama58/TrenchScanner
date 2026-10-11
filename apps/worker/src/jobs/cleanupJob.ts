@@ -1,5 +1,5 @@
 import { prisma, createLogger, type Env } from "@trenchscanner/core";
-import type { JobRunMeta } from "../scheduler.js";
+import { PartialJobFailure, type JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("cleanup-job");
 const DAY_MS = 86_400_000;
@@ -328,11 +328,12 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
 
   // Each sweep below runs on its own: one that fails (a statement_timeout on the weekly snapshot
   // walk, a lock it could not get) is logged and the rest still run, because every stage guards
-  // its own references and none depends on another having finished. The run is still reported
-  // failed at the end, so the heartbeat shows it and the scheduler's retry re-runs it - and a
-  // stage that already did its work is a no-op the second time.
+  // its own references and none depends on another having finished. The failed stages are still
+  // reported at the end, on the heartbeat's lastError - see the end of the run.
   const failedStages: Record<string, string> = {};
+  let stagesRun = 0;
   const stage = async <T>(name: string, fallback: T, run: () => Promise<T>): Promise<T> => {
+    stagesRun += 1;
     try {
       return await run();
     } catch (err) {
@@ -674,7 +675,19 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
       failedStages,
       ...counts,
     });
-    throw new Error(`cleanup: ${failed.length} stage(s) failed: ${failed.join(", ")}`);
+    const message = `cleanup: ${failed.length} stage(s) failed: ${failed.join(", ")}`;
+    // Every stage failing is the database, not a stage: a failed run, which the scheduler retries.
+    if (failed.length === stagesRun) throw new Error(message);
+    // A success with the error kept (PartialJobFailure), not a failed run: a stage that fails
+    // every night (a sweep that keeps hitting statement_timeout) used to fail the whole run, so
+    // the scheduler re-ran every sweep three more times and each boot's catch-up ran it all
+    // again. The stage's own work is redone by tomorrow's run anyway. The row's lastError names
+    // the stages - /health/worker and the admin panel show it until a clean run - and meta
+    // carries each one's error.
+    throw new PartialJobFailure(message, {
+      ...counts,
+      failedStages: failed.map((name) => `${name}: ${failedStages[name]}`).join("; "),
+    });
   }
   logger.info("cleanup job complete", { durationMs: Date.now() - startedAt, ...counts });
   return counts;

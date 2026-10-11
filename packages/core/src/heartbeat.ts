@@ -60,6 +60,11 @@ export function runsJob(role: WorkerRole, job: HeartbeatJob): boolean {
 
 export interface HeartbeatResult {
   success: boolean;
+  /**
+   * The row's lastError. On a success it is normally absent (clearing the last error); a run that
+   * succeeded with a part of it failing (the worker's PartialJobFailure) keeps one, so the row
+   * says "ran, but this went wrong" without counting as a failed run.
+   */
   error?: string;
   meta?: Prisma.InputJsonValue;
 }
@@ -79,13 +84,13 @@ export async function recordHeartbeat(job: HeartbeatJob, result: HeartbeatResult
       job,
       lastRunAt: now,
       lastSuccessAt: result.success ? now : null,
-      lastError: result.success ? null : (result.error ?? "unknown error"),
+      lastError: result.success ? (result.error ?? null) : (result.error ?? "unknown error"),
       meta: result.meta ?? undefined,
     },
     update: {
       lastRunAt: now,
       lastSuccessAt: result.success ? now : undefined,
-      lastError: result.success ? null : (result.error ?? "unknown error"),
+      lastError: result.success ? (result.error ?? null) : (result.error ?? "unknown error"),
       meta: result.meta ?? undefined,
     },
   });
