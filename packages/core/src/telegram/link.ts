@@ -108,6 +108,12 @@ export async function redeemTelegramLinkCode(
       // Never replay what happened before the link.
       sentThrough: new Date(),
     };
+    const moved = existing !== null && existing.userId !== row.userId;
+    if (existing && moved) {
+      // What the chat was sent for the old account: the new one's /trenchboard and /alerts must not
+      // count it, and the one-alert-per-token dedupe must not hold back the new account's alerts.
+      await tx.telegramAlertSent.deleteMany({ where: { chatId: existing.id } });
+    }
     const saved = existing
       ? await tx.telegramChat.update({ where: { id: existing.id }, data, select: { id: true } })
       : await tx.telegramChat.create({ data: { chatId: chat.chatId, ...data }, select: { id: true } });
@@ -116,7 +122,7 @@ export async function redeemTelegramLinkCode(
       userId: row.user.id,
       walletAddress: row.user.walletAddress,
       chatRowId: saved.id,
-      moved: existing !== null && existing.userId !== row.userId,
+      moved,
     };
   });
 }

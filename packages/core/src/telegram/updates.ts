@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { createLogger } from "../logger.js";
 import {
@@ -65,6 +66,7 @@ export interface UpdateOutcome {
     | "removed"
     | "welcomed"
     | "parts"
+    | "migrated"
     | "alerts"
     | "board"
     | "settings";
@@ -138,6 +140,7 @@ export async function handleTelegramUpdate(
 
   const message = update.message;
   if (!message) return { action: "ignored" };
+  if (message.migrate_to_chat_id !== undefined) return migrated(message.chat.id, message.migrate_to_chat_id);
   const parsed = parseCommand(message.text);
   if (!parsed) return { action: "ignored" };
   // A bot that is a group admin sees every command there, "/stop@OtherBot" included.
@@ -336,6 +339,41 @@ export async function handleTelegramUpdate(
 }
 
 /**
+ * A group became a supergroup, which has a new chat id. The link follows it now, so commands in
+ * the supergroup find it straight away instead of answering "Not linked" until the next alert's
+ * send fails over to the new id (dispatch.ts does the same when a send says the group moved).
+ */
+async function migrated(fromId: number, toId: number): Promise<UpdateOutcome> {
+  const from = BigInt(fromId);
+  const to = BigInt(toId);
+  try {
+    const moved = await prisma.telegramChat.updateMany({
+      where: { chatId: from, revokedAt: null },
+      data: { chatId: to, kind: "supergroup" },
+    });
+    if (moved.count > 0)
+      logger.info("telegram group upgraded, link followed", { from: String(from), to: String(to) });
+  } catch (err) {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;
+    // The supergroup's id already has a row (linked on its own, or an old unlink): that row is the
+    // chat now, and the group's row is retired rather than left sending to an id that is gone.
+    await prisma.telegramChat.updateMany({
+      where: { chatId: from, revokedAt: null },
+      data: { revokedAt: new Date(), lastError: "The group became a supergroup; link it again there." },
+    });
+  }
+  return { action: "migrated" };
+}
+
+/** Sends from the Preview button, per chat row: one per PREVIEW_COOLDOWN_MS, whoever presses. */
+const lastPreviewAt = new Map<string, number>();
+/**
+ * Anyone in a group may press Preview, and each press is a message to the whole group that also
+ * spends the group's share of Telegram's send limit, which the chat's real alerts need.
+ */
+export const PREVIEW_COOLDOWN_MS = 15_000;
+
+/**
  * A press on a button under /alerts or /trenchboard: the same message is rewritten with the
  * window picked (or the list refreshed). Anyone in the chat may press; both are read-only.
  */
@@ -435,6 +473,13 @@ async function settingsButton(
     return { action: "ignored" };
   }
   if (press.kind === "preview") {
+    const t = Date.now();
+    if (t - (lastPreviewAt.get(row.id) ?? 0) < PREVIEW_COOLDOWN_MS) {
+      await api.answerCallbackQuery(query.id, "A preview was just sent; try again in a few seconds.");
+      return { action: "settings" };
+    }
+    if (lastPreviewAt.size >= 1_000) lastPreviewAt.clear();
+    lastPreviewAt.set(row.id, t);
     await api.sendAlert(chatId, formatPreviewMessage(row, links));
     await api.answerCallbackQuery(query.id);
     return { action: "settings" };

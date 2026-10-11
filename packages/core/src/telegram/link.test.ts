@@ -86,6 +86,9 @@ describe.skipIf(!dbAvailable)("telegram link codes", () => {
       data: { revokedAt: new Date(), enabled: false },
     });
 
+    const before = await prisma.telegramChat.findUnique({ where: { chatId: c.chatId } });
+    await prisma.telegramAlertSent.create({ data: { chatId: before!.id, tokenId: "tok-old-account" } });
+
     const other = (await prisma.user.create({ data: { walletAddress: `${TAG}-${Math.random()}` } })).id;
     const second = await issueTelegramLinkCode(other);
     const result = await redeemTelegramLinkCode(second.code, c);
@@ -95,5 +98,7 @@ describe.skipIf(!dbAvailable)("telegram link codes", () => {
     expect(row?.revokedAt).toBeNull();
     expect(row?.enabled).toBe(true);
     expect(await prisma.telegramChat.count({ where: { chatId: c.chatId } })).toBe(1);
+    // What the old account was sent neither counts for the new one nor holds its alerts back.
+    expect(await prisma.telegramAlertSent.count({ where: { chatId: row!.id } })).toBe(0);
   });
 });
