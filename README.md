@@ -91,14 +91,14 @@ The worker runs against the real, live Pump.fun/DexScreener/RugCheck APIs even i
 
 ### Useful scripts
 
-| Command                   | What it does                                                                       |
-| ------------------------- | ---------------------------------------------------------------------------------- |
-| `npm run build`           | Builds every workspace                                                             |
-| `npm test`                | Runs `packages/core`'s vitest suite (scoring, rug screen, filter matching)         |
-| `npm run typecheck`       | Typechecks every workspace                                                         |
-| `npm run prisma:generate` | Regenerates the Prisma client after a schema change                                |
-| `npm run prisma:migrate`  | Creates + applies a new migration (interactive, local dev)                         |
-| `npm run prisma:deploy`   | Applies pending migrations non-interactively (used by Render's `preDeployCommand`) |
+| Command                   | What it does                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------- |
+| `npm run build`           | Builds every workspace                                                                   |
+| `npm test`                | Runs `packages/core`'s vitest suite (scoring, rug screen, filter matching)               |
+| `npm run typecheck`       | Typechecks every workspace                                                               |
+| `npm run prisma:generate` | Regenerates the Prisma client after a schema change                                      |
+| `npm run prisma:migrate`  | Creates + applies a new migration (interactive, local dev)                               |
+| `npm run prisma:deploy`   | Applies pending migrations non-interactively, with retries (Render's `preDeployCommand`) |
 
 ## Deploying to Render
 
@@ -137,7 +137,7 @@ The old onrender.com hosts keep working throughout. The HolDEX site should keep 
 `trenchscanner-api.onrender.com`: on `api.trenchscanner.app` its cookie would be `Lax`, which a
 page on `holdex.live` never sends.
 
-Database migrations run automatically on every API deploy via `preDeployCommand` - no manual step needed after the first setup.
+Database migrations run automatically before every api, worker and trainer deploy via `preDeployCommand` - no manual step needed after the first setup. `npm run prisma:deploy` (`scripts/migrate-deploy.sh`) waits out a run another service already started and retries a migration that hit its `lock_timeout`. A new migration that ALTERs a large table (Token, TokenSnapshot, Match, CandidateOutcome, CuratedAlert, ...) starts with `SET LOCAL lock_timeout = '5s';` so it gives up rather than stall the live services behind a long read; CI checks this (`scripts/check-migration-locks.sh`).
 
 ### Cost
 

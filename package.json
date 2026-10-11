@@ -21,7 +21,7 @@
     "format:check": "prettier --check .",
     "prisma:generate": "dotenv -e .env -- prisma generate --schema packages/core/prisma/schema.prisma",
     "prisma:migrate": "dotenv -e .env -- prisma migrate dev --schema packages/core/prisma/schema.prisma",
-    "prisma:deploy": "dotenv -e .env -- prisma migrate deploy --schema packages/core/prisma/schema.prisma",
+    "prisma:deploy": "dotenv -e .env -- ./scripts/migrate-deploy.sh",
     "dev:api": "npm run dev -w @trenchscanner/api",
     "dev:worker": "npm run dev -w @trenchscanner/worker",
     "dev:web": "npm run dev -w @trenchscanner/web",
