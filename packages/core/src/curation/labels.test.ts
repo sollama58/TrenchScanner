@@ -367,3 +367,15 @@ describe("runWeight", () => {
     expect(runDoublings({ labelValue: 0, survived: true, runPeakMultiple: 1.9 })).toBe(0);
   });
 });
+
+describe("the 24-hour run peak", () => {
+  it("takes ticks up to 24 hours after the anchor and none after", () => {
+    const agg = replay(1, [
+      [2.2, 5],
+      [6, 24 * 60],
+      [9, 24 * 60 + 30],
+    ]);
+    expect(agg.peak24hPriceUsd).toBe(6);
+    expect(agg.peak24hAt).toEqual(minutes(24 * 60));
+  });
+});

@@ -312,21 +312,28 @@ function startSniperStage(
 
 /**
  * The trade stream's order flow with the snipers figure filled in from the chain when the stream
- * has none (it only has one for a launch it watched). Unknown stays unknown: no chain figure and
- * no stream figure leaves the flow as it was.
+ * has none (it only has one for a launch it watched), and the launch-shape figures from the chain
+ * always. Unknown stays unknown: no chain figure and no stream figure leaves the flow as it was.
  */
 export function withLaunchSnipers(
   flow: TradeFlowFeatures | undefined,
   snipers: LaunchSnipers | undefined,
 ): TradeFlowFeatures | undefined {
-  if (!snipers || (flow?.firstBuyersHolding ?? null) !== null) return flow;
+  if (!snipers) return flow;
+  const base = flow ?? EMPTY_TRADE_FLOW;
+  // The launch-shape figures come only from the chain read (the stream never computes them), so
+  // they are filled whichever side supplied the snipers figure.
+  const launchShape = {
+    firstBuyersSupplyPct: base.firstBuyersSupplyPct ?? snipers.firstBuyersSupplyPct,
+    launchBundledBuyers: base.launchBundledBuyers ?? snipers.launchBundledBuyers,
+    devBuySupplyPct: base.devBuySupplyPct ?? snipers.devBuySupplyPct,
+  };
+  if ((flow?.firstBuyersHolding ?? null) !== null) return { ...base, ...launchShape };
   return {
-    ...(flow ?? EMPTY_TRADE_FLOW),
+    ...base,
     firstBuyersHolding: snipers.holding,
     firstBuyersSeen: snipers.seen,
-    firstBuyersSupplyPct: snipers.firstBuyersSupplyPct,
-    launchBundledBuyers: snipers.launchBundledBuyers,
-    devBuySupplyPct: snipers.devBuySupplyPct,
+    ...launchShape,
   };
 }
 

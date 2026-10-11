@@ -40,11 +40,10 @@ export function resetMintAuthorityFailureBackoff(): void {
  *    same thing. It now caches with a short TTL (MINT_AUTHORITY_ACTIVE_TTL_MINUTES): a
  *    renouncement is still noticed within minutes, at a small fraction of the calls.
  *
- * Worth knowing what this path is actually worth: a mint reaching it has no RugCheck report, so
- * its profile carries lpBurned:false and the rug screen rejects it whatever the authorities say
- * (see buildOnChainProfile in scanJob.ts). The lookup exists to make the recorded snapshot and
- * its rejection reasons honest, not to change an outcome - which is precisely why it should be
- * cheap, and why nothing here is worth spending a call on twice.
+ * What this path decides: a mint reaching it has no RugCheck report. A graduated one carries
+ * lpBurned:false and is rejected whatever the authorities say, but a mint still on its Pump.fun
+ * bonding curve passes the screen on this answer alone (see buildOnChainProfile in scanJob.ts) -
+ * so the lookup must stay correct and fail closed, not just cheap.
  */
 /** Mints whose mint and freeze authorities are both revoked - final, so held in memory too. */
 export const revokedMints = new SettledAnswers<true>(20_000);

@@ -259,7 +259,10 @@ export function applyPriceTick(
     else if (priceUsd > agg.peakBeforeStop60mPriceUsd) updates.peakBeforeStop60mPriceUsd = priceUsd;
   }
 
-  if (priceUsd > agg.peak24hPriceUsd) {
+  // Bounded like its name: the retiring tick, or the first after a worker outage, can land past
+  // the 24 hours and would otherwise stretch the run peak (runWeight, run size) beyond them.
+  const withinRunWindow = at.getTime() - agg.anchorAt.getTime() <= CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
+  if (withinRunWindow && priceUsd > agg.peak24hPriceUsd) {
     updates.peak24hPriceUsd = priceUsd;
     updates.peak24hAt = at;
   }

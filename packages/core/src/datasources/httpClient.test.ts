@@ -81,6 +81,36 @@ describe("fetchJson", () => {
   });
 });
 
+describe("fetchJson timeouts", () => {
+  it("retries a timeout unless told not to, and reports every retry", async () => {
+    const { createServer } = await import("node:http");
+    let hits = 0;
+    const server = createServer(() => {
+      hits += 1; // never answers
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const { port } = server.address() as { port: number };
+    const url = `http://127.0.0.1:${port}/`;
+    try {
+      let retried = 0;
+      await expect(
+        fetchJson(url, { timeoutMs: 100, retries: 1, retryDelayMs: 1, onRetry: () => (retried += 1) }),
+      ).rejects.toMatchObject({ status: 408 });
+      expect([hits, retried]).toEqual([2, 1]);
+
+      hits = 0;
+      retried = 0;
+      await expect(
+        fetchJson(url, { timeoutMs: 100, retries: 1, retryOnTimeout: false, onRetry: () => (retried += 1) }),
+      ).rejects.toMatchObject({ status: 408 });
+      expect([hits, retried]).toEqual([1, 0]);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+});
+
 describe("backoffDelay", () => {
   it("honours a Retry-After in seconds, capped", () => {
     expect(backoffDelay(500, 0, "2")).toBe(2000);

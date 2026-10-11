@@ -443,6 +443,24 @@ describe("HeliusClient.getEarliestActivityBatch when the exact lookup fails", ()
   });
 });
 
+describe("HeliusClient.getEarliestActivityBatch when the cheap lookup fails", () => {
+  it("leaves the wallet failed rather than paying for getTransactionsForAddress", async () => {
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } })),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+
+    const result = await client.getEarliestActivityBatch(["a", "b"], {
+      boundSufficientBefore: new Date(SECONDS * 1000),
+    });
+
+    const methods = requests.flatMap((r) => (r.body as { method: string }[]).map((c) => c.method));
+    expect(methods).not.toContain("getTransactionsForAddress");
+    expect(result.get("a")).toEqual({ status: "failed" });
+    expect(result.get("b")).toEqual({ status: "failed" });
+  });
+});
+
 describe("HeliusClient.getMintAuthorityStatusBatch", () => {
   function mintAccount(mintAuthority: string | null, freezeAuthority: string | null) {
     return { data: { parsed: { info: { mintAuthority, freezeAuthority } } } };

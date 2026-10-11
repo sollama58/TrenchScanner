@@ -91,6 +91,7 @@ async function loadFitRows(population: "event" | "match", since: Date): Promise<
         hit2xIn1h: true,
         hit4xIn1h: true,
         hit10xIn1h: true,
+        disqualified: true,
       },
     });
     read += page.length;
@@ -108,7 +109,8 @@ async function loadFitRows(population: "event" | "match", since: Date): Promise<
         freshness: parts.age,
         holderQuality: parts.holderHealth,
         narrative: parts.narrative,
-        win: r.hit2xIn1h === true,
+        // The product's win: a 2x reached after the 0.5x stop is a stop-out, as on every board.
+        win: r.hit2xIn1h === true && r.disqualified !== true,
         goal: r.hit4xIn1h === true,
         ...(r.hit10xIn1h !== null ? { tenX: r.hit10xIn1h } : {}),
       };

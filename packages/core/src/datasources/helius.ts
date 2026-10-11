@@ -483,15 +483,22 @@ export class HeliusClient {
    * by position. An empty map means the whole request failed - callers treat that as "no answer
    * for any of these", not "no data for any of these".
    */
-  private async sendBatch<T>(calls: RpcCall[], timeoutMs: number): Promise<Map<string, RpcResponse<T>>> {
+  private async sendBatch<T>(
+    calls: RpcCall[],
+    timeoutMs: number,
+    opts: { retryOnTimeout?: boolean } = {},
+  ): Promise<Map<string, RpcResponse<T>>> {
     const byId = new Map<string, RpcResponse<T>>();
     if (calls.length === 0) return byId;
 
     // Counted before the request, not after: a batch that fails in transit still consumed the
     // attempt, and undercounting spend on exactly the unhealthy path would be the wrong bias.
-    for (const call of calls) {
-      this.callCounts.set(call.method, (this.callCounts.get(call.method) ?? 0) + 1);
-    }
+    const count = () => {
+      for (const call of calls) {
+        this.callCounts.set(call.method, (this.callCounts.get(call.method) ?? 0) + 1);
+      }
+    };
+    count();
 
     try {
       const body = calls.map((c) => ({ jsonrpc: "2.0", id: c.id, method: c.method, params: c.params }));
@@ -501,6 +508,9 @@ export class HeliusClient {
         body: JSON.stringify(body),
         timeoutMs,
         retries: 1,
+        // A retry is another billed request: counted like the first.
+        onRetry: count,
+        ...(opts.retryOnTimeout === false ? { retryOnTimeout: false } : {}),
       });
 
       // A malformed batch can come back as a single error object rather than an array.
@@ -527,7 +537,7 @@ export class HeliusClient {
   private async sendBatched<T>(
     calls: RpcCall[],
     timeoutMs: number,
-    opts: { batchSize?: number; concurrency?: number } = {},
+    opts: { batchSize?: number; concurrency?: number; retryOnTimeout?: boolean } = {},
   ): Promise<Map<string, RpcResponse<T>>> {
     const size = opts.batchSize ?? RPC_BATCH_SIZE;
     const chunks: RpcCall[][] = [];
@@ -537,7 +547,7 @@ export class HeliusClient {
 
     const merged = new Map<string, RpcResponse<T>>();
     await forEachWithConcurrency(chunks, opts.concurrency ?? BATCH_CONCURRENCY, async (chunk) => {
-      const result = await this.sendBatch<T>(chunk, timeoutMs);
+      const result = await this.sendBatch<T>(chunk, timeoutMs, { retryOnTimeout: opts.retryOnTimeout });
       for (const [id, res] of result) merged.set(id, res);
     });
     return merged;
@@ -640,11 +650,12 @@ export class HeliusClient {
     if (opts.boundSufficientBefore && this.gtfaUsable) {
       const sufficientMs = opts.boundSufficientBefore.getTime();
       const cheap = await this.earliestViaSignatures(unique);
+      // Only a bound inside the window goes on to the exact method. A cheap lookup that failed
+      // stays failed (the caller backs it off and asks again): escalating it sent every wallet of
+      // a timed-out signatures batch to the 10-credit method on the same slow provider.
       const unsettled = unique.filter((address) => {
         const r = cheap.get(address);
-        return (
-          !r || r.status === "failed" || (r.status === "older-than" && r.boundAt.getTime() >= sufficientMs)
-        );
+        return r?.status === "older-than" && r.boundAt.getTime() >= sufficientMs;
       });
       if (unsettled.length === 0) return cheap;
       const exact = await this.earliestViaGetTransactionsForAddress(unsettled);
@@ -813,7 +824,9 @@ export class HeliusClient {
       const responses = await this.sendBatched<{ data?: RawLaunchTx[]; paginationToken?: string | null }>(
         calls,
         15_000,
-        { batchSize: 1, concurrency: LAUNCH_READ_CONCURRENCY },
+        // A page of 100 full transactions that timed out was most likely served and billed
+        // anyway; the same request again pays twice. The mint is re-read on a later cycle.
+        { batchSize: 1, concurrency: LAUNCH_READ_CONCURRENCY, retryOnTimeout: false },
       );
 
       const next: string[] = [];
@@ -923,7 +936,10 @@ export class HeliusClient {
       method: "getTransactionsForAddress",
       params: [address, { sortOrder: "asc", limit: 1, transactionDetails: "signatures" }],
     }));
-    const responses = await this.sendBatched<TransactionsForAddressResult>(calls, 15_000);
+    // Not retried on a timeout, for the launch read's reason (10 credits an address, already billed).
+    const responses = await this.sendBatched<TransactionsForAddressResult>(calls, 15_000, {
+      retryOnTimeout: false,
+    });
 
     let usable = 0;
     let answered = 0;
@@ -1112,7 +1128,8 @@ export class HeliusClient {
     params: unknown,
     timeoutMs: number,
   ): Promise<RpcResponse<T> | null> {
-    this.callCounts.set(method, (this.callCounts.get(method) ?? 0) + 1);
+    const count = () => this.callCounts.set(method, (this.callCounts.get(method) ?? 0) + 1);
+    count();
     try {
       return await fetchJson<RpcResponse<T>>(this.rpcUrl, {
         method: "POST",
@@ -1120,6 +1137,7 @@ export class HeliusClient {
         body: JSON.stringify({ jsonrpc: "2.0", id: "1", method, params }),
         timeoutMs,
         retries: 1,
+        onRetry: count,
       });
     } catch (err) {
       logger.warn("rpc single request failed", { method, error: String(err) });

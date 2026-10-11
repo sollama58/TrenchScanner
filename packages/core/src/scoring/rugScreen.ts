@@ -93,7 +93,7 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
  * The screen's top-10 cuts: three on who the wallets are, one on how much they hold. A holder list that is mostly brand-new wallets is a sniper
  * or insider farm, one that is mostly empty wallets (funded only to hold this launch) is a
  * bundled or farmed launch, and one that is mostly the launch's first buyers is still the snipers'
- * book - whatever anyone's filter says. A top ten owning half the supply or more can sell it out from
+ * book - whatever anyone's filter says. A top ten owning 40% of the supply or more can sell it out from
  * under anyone. Each applies only once measured: until
  * the wallet lookups land the figure is unknown, and model calls wait for it anyway
  * (CURATED_REQUIRE_WALLET_CHECKS).
