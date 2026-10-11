@@ -36,11 +36,11 @@ export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 
 /**
  * A graduated token must have spent at least this long on its bonding curve (user decision
- * 2026-10-11). A curve filled within seconds of launch is a coordinated bundle - the launcher's
+ * 2026-10-11, 10s at first, then 5s). A curve filled within seconds of launch is a coordinated bundle - the launcher's
  * own wallets buying the whole curve in the first blocks - and the bundle sells into whoever buys
  * the pool. The default; the scan applies SAFETY_MIN_PREBOND_SECONDS (0 turns the cut off).
  */
-export const SAFETY_MIN_PREBOND_SECONDS = 10;
+export const SAFETY_MIN_PREBOND_SECONDS = 5;
 
 /**
  * Hard exclusion gate. A token must pass this before it's ever shown to a

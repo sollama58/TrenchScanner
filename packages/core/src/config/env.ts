@@ -134,7 +134,7 @@ const envSchema = z.object({
   // The safety screen's pre-bond cut: a graduated Pump.fun token whose bonding curve filled less
   // than this many seconds after launch is never alerted (a bundled launch - see rugScreen.ts).
   // 0 turns the cut off.
-  SAFETY_MIN_PREBOND_SECONDS: z.coerce.number().min(0).default(10),
+  SAFETY_MIN_PREBOND_SECONDS: z.coerce.number().min(0).default(5),
   // Pump.fun launch-time lookups one scan cycle may make for graduated tokens the cut can't clear
   // from what's already known (see the worker's launchTimes.ts). Answers are kept for good.
   PREBOND_LOOKUPS_MAX_PER_CYCLE: z.coerce.number().int().min(0).default(30),
