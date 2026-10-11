@@ -67,6 +67,7 @@ import { seedQuotes } from "./walletValuation.js";
 import { alertAwaitingWallets, noteAlertWallets } from "./walletPriority.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
+import { rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import {
   launchSnipersFromCache,
@@ -439,6 +440,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     ...(koth ? [toWatchlistCandidate(koth, "pumpfun-koth")] : []),
   ];
   await addNewMintsToWatchlist(discovered);
+  // Pump.fun's launch times, for the safety screen's pre-bond cut (see launchTimes.ts).
+  rememberLaunchTimes([...newMints, ...active, ...(koth ? [koth] : [])]);
   // TokenSage's quick read for each new launch, sent now rather than at the cycle's end so it
   // has the cycle's whole run to land (TOKENSAGE_BASIC_AT_DISCOVERY; off by default).
   const launchReads = noteLaunchNarratives(
@@ -629,15 +632,31 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const mayhemByMint = await resolveMayhemMode(mayhemCandidates, deps.helius);
   lap("mayhem");
 
+  // Seconds on the bonding curve for graduated candidates, for the screen's pre-bond cut. Only
+  // asked about candidates still passing the local screen: the rest are rejected anyway.
+  const preBondByMint = await resolvePreBondSeconds(
+    candidates.filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress))),
+    firstSeenByMint,
+    deps.pumpFun,
+    env,
+  );
+  lap("preBond");
+
   // Anything not looked up keeps isMayhemMode undefined, which the screen rejects - the same
   // verdict its local conditions already reached, with the reason it actually failed on first.
   const onChainByMint = new Map<string, OnChainProfile | null>(
     candidates.map((c) => {
       const base = baseProfileByMint.get(c.mintAddress) ?? null;
       const mayhem = mayhemByMint.get(c.mintAddress);
+      const profile =
+        base && mayhem?.status === "found" ? { ...base, isMayhemMode: mayhem.isMayhemMode } : base;
       return [
         c.mintAddress,
-        base && mayhem?.status === "found" ? { ...base, isMayhemMode: mayhem.isMayhemMode } : base,
+        profile && {
+          ...profile,
+          preBondSeconds: preBondByMint.get(c.mintAddress),
+          minPreBondSeconds: env.SAFETY_MIN_PREBOND_SECONDS,
+        },
       ];
     }),
   );

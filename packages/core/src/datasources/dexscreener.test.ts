@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DexScreenerClient, pickCanonicalPair } from "./dexscreener.js";
+import { DexScreenerClient, pickCanonicalPair, pumpSwapPoolCreatedAt } from "./dexscreener.js";
 import { GeckoTerminalClient, parseGeckoTokens } from "./geckoterminal.js";
 
 describe("pickCanonicalPair", () => {
@@ -55,6 +55,49 @@ describe("pickCanonicalPair", () => {
     const a = { dexId: "meteora", liquidity: { usd: 10 } };
     const b = { dexId: "raydium", liquidity: { usd: 500 } };
     expect(pickCanonicalPair([a, b])).toBe(b);
+  });
+});
+
+describe("graduation time", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is the earliest PumpSwap pool's creation, ignoring other venues", () => {
+    expect(
+      pumpSwapPoolCreatedAt([
+        { dexId: "pumpfun", pairCreatedAt: 1_000 },
+        { dexId: "meteora", pairCreatedAt: 2_000 },
+        { dexId: "pumpswap", pairCreatedAt: 5_000 },
+        { dexId: "pumpswap", pairCreatedAt: 3_000 },
+      ]),
+    ).toEqual(new Date(3_000));
+    expect(pumpSwapPoolCreatedAt([{ dexId: "raydium", pairCreatedAt: 1_000 }])).toBeUndefined();
+  });
+
+  it("is set on a graduated mint's candidate and not on one still on its curve", async () => {
+    const pairs = [
+      {
+        chainId: "solana",
+        dexId: "pumpswap",
+        baseToken: { address: "grad" },
+        liquidity: { usd: 30_000 },
+        marketCap: 80_000,
+        pairCreatedAt: 1_791_674_763_000,
+      },
+      {
+        chainId: "solana",
+        dexId: "pumpfun",
+        baseToken: { address: "curve" },
+        volume: { h1: 500 },
+        pairCreatedAt: 1,
+      },
+    ];
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response(JSON.stringify(pairs))));
+    const tokens = await new DexScreenerClient().getTokensByAddresses(["grad", "curve"], 1, { retries: 0 });
+    const by = new Map(tokens.map((t) => [t.mintAddress, t]));
+    expect(by.get("grad")?.graduatedAt).toEqual(new Date(1_791_674_763_000));
+    expect(by.get("curve")?.graduatedAt).toBeUndefined();
   });
 });
 

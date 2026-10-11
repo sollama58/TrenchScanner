@@ -38,6 +38,20 @@ describe("runRugScreen", () => {
     expect(runRugScreen({ ...safeProfile, emptyTop10WalletPct: undefined }).passed).toBe(true);
   });
 
+  it("rejects a graduated token whose curve filled under 10s after launch, and only once measured", () => {
+    const instant = runRugScreen({ ...safeProfile, preBondSeconds: 0 });
+    expect(instant.passed).toBe(false);
+    expect(instant.reasons[0]).toMatch(/bonding curve filled 0s after launch \(under 10s\)/);
+    expect(runRugScreen({ ...safeProfile, preBondSeconds: 9.5 }).passed).toBe(false);
+    expect(runRugScreen({ ...safeProfile, preBondSeconds: 10 }).passed).toBe(true);
+    expect(runRugScreen({ ...safeProfile, preBondSeconds: undefined }).passed).toBe(true);
+  });
+
+  it("applies the configured pre-bond floor, and none at 0", () => {
+    expect(runRugScreen({ ...safeProfile, preBondSeconds: 20, minPreBondSeconds: 30 }).passed).toBe(false);
+    expect(runRugScreen({ ...safeProfile, preBondSeconds: 0, minPreBondSeconds: 0 }).passed).toBe(true);
+  });
+
   it("fails closed when no profile is available", () => {
     const result = runRugScreen(null);
     expect(result.passed).toBe(false);

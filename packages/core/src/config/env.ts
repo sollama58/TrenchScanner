@@ -131,6 +131,13 @@ const envSchema = z.object({
   // screen's concentration cut and the wallet checks model calls wait on can run without RugCheck.
   // Mints read per scan cycle, each answer reused for RUGCHECK_CACHE_TTL_MINUTES. 0 turns it off.
   ONCHAIN_HOLDERS_MAX_PER_CYCLE: z.coerce.number().int().min(0).default(60),
+  // The safety screen's pre-bond cut: a graduated Pump.fun token whose bonding curve filled less
+  // than this many seconds after launch is never alerted (a bundled launch - see rugScreen.ts).
+  // 0 turns the cut off.
+  SAFETY_MIN_PREBOND_SECONDS: z.coerce.number().min(0).default(10),
+  // Pump.fun launch-time lookups one scan cycle may make for graduated tokens the cut can't clear
+  // from what's already known (see the worker's launchTimes.ts). Answers are kept for good.
+  PREBOND_LOOKUPS_MAX_PER_CYCLE: z.coerce.number().int().min(0).default(30),
   // The wall-clock span holderGrowthPct is measured over: growth is compared against the newest
   // snapshot at least this old, rather than against whatever the previous snapshot happened to be.
   // Anchoring it this way is what keeps the number's meaning independent of SCAN_INTERVAL_MINUTES

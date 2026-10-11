@@ -69,6 +69,12 @@ export interface CandidateToken {
   dexId?: string;
   /** Whether the mint has ever appeared on DexScreener's paid-boost feed (Token.dexBoosted). */
   dexBoosted?: boolean;
+  /**
+   * When a graduated Pump.fun mint's PumpSwap pool was created, i.e. when it left its bonding
+   * curve (pumpSwapPoolCreatedAt in dexscreener.ts). Undefined while on the curve, or when no
+   * PumpSwap pool is listed.
+   */
+  graduatedAt?: Date;
 }
 
 /**
@@ -161,6 +167,15 @@ export interface OnChainProfile {
    * all-clear (see runRugScreen), so it must not be defaulted to false anywhere.
    */
   isMayhemMode?: boolean;
+  /**
+   * Seconds a graduated Pump.fun mint spent on its bonding curve: launch (Pump.fun's
+   * created_timestamp) to graduation (its PumpSwap pool's creation, CandidateToken.graduatedAt).
+   * Undefined while on the curve, or when either end is unknown - the screen's pre-bond cut
+   * applies only once measured.
+   */
+  preBondSeconds?: number;
+  /** The pre-bond floor the screen applies (SAFETY_MIN_PREBOND_SECONDS); undefined = the default. */
+  minPreBondSeconds?: number;
 }
 
 /** A CandidateToken enriched with on-chain data and derived metrics, ready to score. */
