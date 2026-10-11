@@ -128,6 +128,17 @@ describe("loadEnv", () => {
     resetEnvCacheForTests();
   });
 
+  it("drops a retired seat from the roster, by default or when a configured list still names it", () => {
+    resetEnvCacheForTests();
+    expect(loadEnv({ DATABASE_URL: "postgres://x" }).CURATOR_CONTESTANTS).not.toContain("ranker");
+    resetEnvCacheForTests();
+    expect(
+      loadEnv({ DATABASE_URL: "postgres://x", CURATOR_CONTESTANTS: "linear,ranker,trees" })
+        .CURATOR_CONTESTANTS,
+    ).toEqual(["linear", "trees"]);
+    resetEnvCacheForTests();
+  });
+
   it("accepts 0 on the training guards, naming each one as off", () => {
     resetEnvCacheForTests();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { createLogger } from "../logger.js";
-import { CONTESTANT_IDS, contestantSpec, isContestantId } from "../curation/contestants.js";
+import {
+  ACTIVE_CONTESTANT_IDS,
+  contestantSpec,
+  isContestantId,
+  RETIRED_CONTESTANT_IDS,
+} from "../curation/contestants.js";
 
 /**
  * Central env schema shared by the api and worker apps. Each app calls
@@ -449,12 +454,13 @@ const envSchema = z.object({
   // on; the consensus needs at least two learners.
   CURATOR_CONTESTANTS: z
     .string()
-    .default(CONTESTANT_IDS.join(","))
+    .default(ACTIVE_CONTESTANT_IDS.join(","))
     .transform((v) =>
       v
         .split(",")
         .map((s) => s.trim())
-        .filter((s) => s.length > 0),
+        // A retired seat (Ranker, 2026-10-11) left in a configured list is dropped, not an error.
+        .filter((s) => s.length > 0 && !RETIRED_CONTESTANT_IDS.includes(s)),
     )
     .pipe(z.array(z.string().refine(isContestantId, "unknown contestant id")).min(1)),
   // Evolution (curation/evolution.ts): each training run breeds this many challengers - mutated

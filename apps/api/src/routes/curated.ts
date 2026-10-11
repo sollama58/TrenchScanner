@@ -9,6 +9,7 @@ import {
   RULES_CONTESTANT,
   walletSafetyCutsSql,
   firstCallOnRowSql,
+  notRetiredModelSql,
 } from "@trenchscanner/core";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { currentMarketCap } from "./matches.js";
@@ -538,7 +539,7 @@ export async function registerCuratedRoutes(
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
                count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins
         FROM "CuratedAlert" a
-        WHERE "createdAt" >= ${since}
+        WHERE "createdAt" >= ${since} AND ${notRetiredModelSql()}
           AND ${firstCallOnRowSql({ heuristicSource: HEURISTIC_CURATOR_SOURCE })}
         GROUP BY 1`,
       prisma.$queryRaw<{ heuristic: boolean; emitted: bigint; graded: bigint; wins: bigint }[]>`

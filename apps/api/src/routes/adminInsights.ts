@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, firstCallOnRowSql, HEARTBEAT_JOB_ROLE, type HeartbeatJob } from "@trenchscanner/core";
+import {
+  prisma,
+  firstCallOnRowSql,
+  notRetiredModelSql,
+  HEARTBEAT_JOB_ROLE,
+  type HeartbeatJob,
+} from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { summarizeHeartbeat } from "./health.js";
 
@@ -248,7 +254,7 @@ async function buildTokenSageReport(days: number) {
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
-      WHERE a."createdAt" > ${since}
+      WHERE a."createdAt" > ${since} AND ${notRetiredModelSql()}
         AND ${firstCallOnRowSql()}
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,

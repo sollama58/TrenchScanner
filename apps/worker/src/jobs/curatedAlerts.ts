@@ -201,6 +201,35 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
     }
   }
 
+  // A retired seat's model still scores, silently, while a combiner trained beside it is active:
+  // the combiner's tables expect it, and dropping it would sit every combiner out until the next
+  // run retires both. It files no calls and can't be the default (spec.retired).
+  const memberIds = new Set(
+    entries.flatMap((e) =>
+      e.role === "stacked" || e.role === "blend" || e.role === "agreement" || e.role === "topslice"
+        ? e.model.params.members.map((m) => m.contestant)
+        : [],
+    ),
+  );
+  const retiredMembers = CONTESTANTS.filter((c) => c.retired && c.role === "learner" && memberIds.has(c.id));
+  if (retiredMembers.length > 0) {
+    const retiredRows = await prisma.curatorModel.findMany({
+      where: { status: "active", contestant: { in: retiredMembers.map((c) => c.id) } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, contestant: true, kind: true, params: true },
+    });
+    for (const spec of retiredMembers) {
+      const row = retiredRows.find((r) => r.contestant === spec.id);
+      if (row && SUPPORTED_CURATOR_MODEL_KINDS.includes(row.kind)) {
+        entries.push({
+          role: "learner",
+          spec,
+          model: { id: row.id, params: row.params as unknown as TrainedCuratorParams },
+        });
+      }
+    }
+  }
+
   // The combiners read their members' probabilities through quantile tables built
   // from exactly the models they were trained beside. If a member's current model is a different
   // generation (or missing), those tables describe the wrong scale - the combiner sits out until
@@ -231,7 +260,10 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
   const champion = await loadChampion();
   const canCall = (id: string) =>
     usable.some(
-      (e) => e.spec.id === id && (e.role === "rules" || e.model.params.threshold < NEVER_EMIT_THRESHOLD),
+      (e) =>
+        e.spec.id === id &&
+        e.spec.retired !== true &&
+        (e.role === "rules" || e.model.params.threshold < NEVER_EMIT_THRESHOLD),
     );
   const roster: CuratorRoster = {
     entries: usable,
@@ -355,7 +387,8 @@ function decideCurations(
   const decisions = new Map<string, CurationDecision>();
   const probabilities = new Map<string, number>();
   const learners = new Map<string, ModelRef<TrainedCuratorParams>>();
-  const names = new Map(roster.entries.map((e) => [e.spec.id, e.spec.name]));
+  // A retired seat still scoring for a combiner isn't named on its cards.
+  const names = new Map(roster.entries.filter((e) => !e.spec.retired).map((e) => [e.spec.id, e.spec.name]));
   const deepRead = scored.narrative?.depth === "full";
 
   for (const entry of roster.entries) {
@@ -388,6 +421,8 @@ function decideCurations(
       const probability = safeScore(entry.spec.id, id, () => scoreCandidateWithModel(params, features));
       if (probability === null) continue;
       probabilities.set(entry.spec.id, probability);
+      // A retired seat scores only for the combiners still trained beside it.
+      if (entry.spec.retired) continue;
       learners.set(entry.spec.id, entry.model);
       const curate = probability >= params.threshold;
       decisions.set(entry.spec.id, {

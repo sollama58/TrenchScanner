@@ -13,6 +13,7 @@ import {
   CURRENT_LABEL_RULE,
   walletSafetyCutsSql,
   firstCallOnRowSql,
+  notRetiredModelSql,
   type Env,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
@@ -530,7 +531,7 @@ export async function buildHitRateReport(
   const curatedFrom = Prisma.sql`
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}`;
+    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}`;
 
   // By curator (a."source": the heuristic, or one CuratorModel version, each of which calls a
   // token once at most).
@@ -608,7 +609,7 @@ export async function buildHitRateReport(
              COALESCE(a."disqualified", co."disqualified") AS dq
       FROM "CuratedAlert" a
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
       UNION ALL
       SELECT s."source", s."confidence", co."hit2xIn1h", co."hit4xIn1h", co."disqualified"
       FROM "CuratedShadowEmission" s
@@ -763,7 +764,7 @@ export async function buildHitRateReport(
              (a."outcomeFinalizedAt" IS NOT NULL OR co."finalized24hAt" IS NOT NULL) AS done
       FROM "CuratedAlert" a
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
         AND COALESCE(a."hit2xIn1h", co."hit2xIn1h")
         AND NOT COALESCE(a."disqualified", co."disqualified", false)
         AND ${firstCallOnRowSql()}

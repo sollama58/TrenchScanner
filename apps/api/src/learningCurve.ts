@@ -4,6 +4,7 @@ import {
   recordScore,
   walletSafetyCutsSql,
   firstCallOnRowSql,
+  notRetiredModelSql,
   CURRENT_LABEL_RULE,
   type PrecisionTargets,
 } from "@trenchscanner/core";
@@ -471,7 +472,7 @@ export async function buildLearningCurve(
   const callsFrom = Prisma.sql`
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-    WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until}
+    WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
       AND (co."labelRule" IS NULL OR co."labelRule" >= ${CURRENT_LABEL_RULE})`;
   const modelRows = prisma.$queryRaw<RawModelDay[]>`
     SELECT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day,

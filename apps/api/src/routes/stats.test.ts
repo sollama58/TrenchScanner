@@ -207,6 +207,23 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
       });
     }
 
+    // A retired seat's call (Ranker): kept in the table, out of every figure below.
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId,
+        candidateOutcomeId: live[0]!,
+        createdAt: at(6),
+        source: "ranker-model",
+        model: "ranker",
+        confidence: 85,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+        hit2xIn1h: true,
+        hit4xIn1h: true,
+        disqualified: false,
+      },
+    });
+
     // Shadow: the bench model, one win and one loss.
     for (const [i, verdict] of [{ hit2x: true }, { hit2x: false }].entries()) {
       await prisma.curatedShadowEmission.create({
