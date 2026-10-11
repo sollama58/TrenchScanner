@@ -215,6 +215,41 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     expect(b.ranked.map((e) => e.id)).not.toContain(weak.id);
   });
 
+  it("lets the owner take a retired filter off the board, and nothing else", async () => {
+    const strong = await prisma.userFilter.findFirstOrThrow({ where: { userId: ownerId, name: "strong!" } });
+    expect(strong.deletedAt).not.toBeNull();
+    // Unsharing has to be the whole change; anyone else's attempt is a 404 like any other filter.
+    expect(
+      (await call(ownerCookie, "PATCH", `/filters/${strong.id}`, { shareOnLeaderboard: false, name: "x" }))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await call(ownerCookie, "PATCH", `/filters/${strong.id}`, { shareOnLeaderboard: true })).statusCode,
+    ).toBe(404);
+    expect(
+      (await call(readerCookie, "PATCH", `/filters/${strong.id}`, { shareOnLeaderboard: false })).statusCode,
+    ).toBe(404);
+
+    // Prime the board cache with it on, so the unshare has to clear it.
+    expect((await call(readerCookie, "GET", "/filters/leaderboard")).statusCode).toBe(200);
+    expect(
+      (await call(ownerCookie, "PATCH", `/filters/${strong.id}`, { shareOnLeaderboard: false })).statusCode,
+    ).toBe(200);
+    const res = await call(readerCookie, "GET", "/filters/leaderboard");
+    const after = res.json() as { ranked: { id: string }[]; warmingUp: { id: string }[] };
+    expect([...after.ranked, ...after.warmingUp].map((e) => e.id)).not.toContain(strong.id);
+    // Retired and unshared: no longer copyable either.
+    expect((await call(readerCookie, "POST", `/filters/leaderboard/${strong.id}/copy`)).statusCode).toBe(404);
+  });
+
+  it("deletes an unshared filter outright, however well it once ranked", async () => {
+    // Retiring keeps a record on the board; a filter that isn't on the board has none to keep.
+    const hidden = await prisma.userFilter.findFirstOrThrow({ where: { userId: ownerId, name: "hidden" } });
+    await prisma.userFilter.update({ where: { id: hidden.id }, data: { bestRank: 1 } });
+    expect((await call(ownerCookie, "DELETE", `/filters/${hidden.id}`)).statusCode).toBe(204);
+    expect(await prisma.userFilter.findUnique({ where: { id: hidden.id } })).toBeNull();
+  });
+
   it("covers every criterion column of UserFilter in FILTER_CRITERIA_KEYS", async () => {
     // A new filter field must be added to the copy list too, or copies would silently drop it.
     const row = await prisma.userFilter.findFirstOrThrow({ where: { userId: ownerId } });

@@ -8,6 +8,7 @@ import {
   filterLeaderboardCache,
   KEEP_IF_EVER_RANKED_WITHIN,
 } from "../filterLeaderboard.js";
+import { clearReaderCaches } from "./matches.js";
 
 // A factory (rather than a module-level constant) so mcapMin/mcapMax default to this deployment's
 // own MCAP_FILTER_MIN/MAX instead of a hardcoded literal that could drift out of sync with them -
@@ -188,7 +189,15 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     const result = await prisma.$transaction(async (tx) => {
       await lockUserFilters(tx, userId);
       const existing = await tx.userFilter.findUnique({ where: { id } });
-      if (!existing || existing.userId !== userId || existing.deletedAt) return { error: 404 as const };
+      if (!existing || existing.userId !== userId) return { error: 404 as const };
+      if (existing.deletedAt) {
+        // A retired filter is gone as far as its owner's filter list goes, with one exception:
+        // they can still take it off the public board. Nothing else about it can change.
+        const unshareOnly = Object.keys(parsed.data).length === 1 && parsed.data.shareOnLeaderboard === false;
+        if (!unshareOnly) return { error: 404 as const };
+        const updated = await tx.userFilter.update({ where: { id }, data: { shareOnLeaderboard: false } });
+        return { updated, boardChanged: existing.shareOnLeaderboard };
+      }
       const merged = { ...existing, ...parsed.data };
       const rangeError = filterError(merged);
       if (rangeError) return { error: 400 as const, message: rangeError };
@@ -219,10 +228,12 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
   });
 
   /**
-   * Deleting a filter deletes every alert it raised with it (Match cascades) - unless it ever
-   * ranked in the leaderboard's top KEEP_IF_EVER_RANKED_WITHIN. Such a filter is retired instead:
+   * Deleting a filter deletes every alert it raised with it (Match cascades) - unless it is on the
+   * board and ever ranked in its top KEEP_IF_EVER_RANKED_WITHIN. Such a filter is retired instead:
    * hidden from its owner, switched off for good, no longer counted against their cap, but its
-   * alert history and record stay on the board (user decision 2026-10-06).
+   * alert history and record stay on the board (user decision 2026-10-06). An unshared filter is
+   * not on the board, so there is no record there to keep: it is deleted whatever it once ranked.
+   * The owner can still unshare a retired one (PATCH above), which leaves it off the board for good.
    */
   app.delete("/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -233,7 +244,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       await lockUserFilters(tx, userId);
       const row = await tx.userFilter.findUnique({ where: { id } });
       if (!row || row.userId !== userId || row.deletedAt) return null;
-      if (row.bestRank !== null && row.bestRank <= KEEP_IF_EVER_RANKED_WITHIN) {
+      if (row.shareOnLeaderboard && row.bestRank !== null && row.bestRank <= KEEP_IF_EVER_RANKED_WITHIN) {
         await tx.userFilter.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
       } else {
         await tx.userFilter.delete({ where: { id } });
@@ -242,6 +253,9 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     });
     if (!existing) return reply.code(404).send({ error: "filter not found" });
     if (existing.shareOnLeaderboard) filterLeaderboardCache.clear();
+    // The cascade announces nothing, so the owner's cached stats and deep-page counts would still
+    // include the deleted alerts until their TTL ran out.
+    clearReaderCaches(userId);
     return reply.code(204).send();
   });
 
@@ -257,7 +271,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
 
   /**
    * Copies a shared filter's criteria into a new saved filter for the caller: inactive, not shared,
-   * and counted against their MAX_FILTERS_PER_USER like any other.
+   * and counted against their MAX_FILTERS_PER_USER like any other. A retired filter can still be
+   * copied while it is on the board; once its owner unshares it, it can't, like any other.
    */
   app.post("/leaderboard/:id/copy", async (request, reply) => {
     const { id } = request.params as { id: string };

@@ -59,6 +59,12 @@ const LIVE_REFRESH_TOKEN_LIMIT = LIVE_TICK_MAX_TOKENS;
  * distinct pages ticking every 10s; past it readers see the worker's once-a-minute numbers.
  */
 const LIVE_REFRESH_CALLS_PER_MINUTE = 120;
+/**
+ * The share of that one reader may spend. One dashboard ticking every 10s needs about 6 a minute;
+ * 15 leaves room for paging and a second tab, while keeping one subscriber walking
+ * /matches?page=2..500 from spending the budget every other reader's live tick runs on.
+ */
+const LIVE_REFRESH_CALLS_PER_USER_PER_MINUTE = 15;
 /** A request this slow gets a log line of its own, so a slow call shows up without asking. */
 const SLOW_REQUEST_LOG_MS = 2_000;
 
@@ -386,6 +392,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     maxAgeMs: env.LIVE_PRICE_INTERVAL_MINUTES * 60_000,
     limit: LIVE_REFRESH_TOKEN_LIMIT,
     callsPerMinute: LIVE_REFRESH_CALLS_PER_MINUTE,
+    callsPerUserPerMinute: LIVE_REFRESH_CALLS_PER_USER_PER_MINUTE,
     peakWindowDays: env.SNAPSHOT_RETENTION_DAYS,
   });
 

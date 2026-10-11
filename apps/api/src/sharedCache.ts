@@ -11,7 +11,10 @@ export interface SharedCacheOptions {
    * dozens of aggregates and take most of a second in production: without it, whoever happened
    * to arrive first after each expiry paid that second on their page load, every few minutes,
    * for figures that move hourly. Past this window the cache is treated as cold and the reader
-   * waits, so an idle cache never serves something arbitrarily old. Zero (the default) keeps the
+   * waits for a fresh fill, so an idle cache doesn't answer with something arbitrarily old while
+   * the database is fine. If that fill fails, though, the reader still gets the last good value,
+   * however old (see fill()): during an outage a dated answer beats an error page, on purpose.
+   * Only a cache that never filled propagates the error. Zero (the default) keeps the
    * strict behaviour, which is what the feed pages need: they are cleared the moment a new alert
    * lands and must never answer with the pre-alert rows.
    */
@@ -164,7 +167,12 @@ export class SharedCacheMap<T> {
 
   /** Forgets every value whose key starts with `keyPrefix` (all of them by default). */
   clear(keyPrefix = ""): void {
-    for (const [key, cache] of this.caches) if (key.startsWith(keyPrefix)) cache.clear();
+    this.clearWhere((key) => key.startsWith(keyPrefix));
+  }
+
+  /** Forgets every value whose key passes `test`. */
+  clearWhere(test: (key: string) => boolean): void {
+    for (const [key, cache] of this.caches) if (test(key)) cache.clear();
   }
 
   /** Test seam: how many keys are held. */

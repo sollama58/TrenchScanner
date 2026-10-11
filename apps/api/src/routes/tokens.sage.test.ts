@@ -19,6 +19,7 @@ const mint = (seed: string) =>
 const READ = mint(`${TAG}-read`);
 const NONE = mint(`${TAG}-none`);
 const EXPIRED = mint(`${TAG}-expired`);
+const FAILED = mint(`${TAG}-failed`);
 const full = JSON.parse(
   readFileSync(
     new URL("../../../../packages/core/src/datasources/fixtures/tokensage/full.json", import.meta.url),
@@ -83,6 +84,15 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
         categories: [{ label: "animal/squirrel", confidence: 0.97 }],
       },
     });
+    // TokenSage said no, with its own explanation after the code.
+    await prisma.tokenNarrative.create({
+      data: {
+        mintAddress: FAILED,
+        depth: "basic",
+        status: "failed",
+        failReason: "not_found: upstream said https://internal.example/x had nothing",
+      },
+    });
     app = await buildServer(env);
     cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
       userId,
@@ -93,7 +103,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
   afterAll(async () => {
     await prisma.whitelist.deleteMany({ where: { walletAddress: `${TAG}-wallet` } });
     await app?.close();
-    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { in: [READ, EXPIRED] } } });
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { in: [READ, EXPIRED, FAILED] } } });
     await prisma.token.deleteMany({ where: { mintAddress: READ } });
     await prisma.user.deleteMany({ where: { id: userId } });
   });
@@ -127,6 +137,9 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
     expect(none).toMatchObject({ status: "none", read: null, token: null, marketCap: [], narrative: null });
     const expired = (await get(EXPIRED)).json() as SageView;
     expect(expired).toMatchObject({ status: "expired", read: null });
+    // Only the failure's code, never TokenSage's raw text behind it.
+    const failed = (await get(FAILED)).json() as SageView;
+    expect(failed).toMatchObject({ status: "failed", failReason: "not_found", read: null });
     expect((await get("not-a-mint")).statusCode).toBe(400);
     expect((await get(READ, false)).statusCode).toBe(401);
   });

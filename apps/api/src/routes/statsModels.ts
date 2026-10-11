@@ -13,6 +13,8 @@ const HOUR_MS = 3_600_000;
 const STATS_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 
 const modelsQuerySchema = z.object({ days: z.coerce.number().int().min(1).max(30).default(7) });
+/** How long one /stats/models answer stands - see modelsCaches. */
+const MODELS_CACHE_MS = 60_000;
 const featuresQuerySchema = z.object({ hours: z.coerce.number().int().min(1).max(48).default(6) });
 
 /**
@@ -35,6 +37,45 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
     }
   }
 
+  // One cache per window (days is 1-30, so at most 30 of them). The leaderboard and learning curve
+  // are dozens of aggregates and move as calls are graded, so a minute old is current; without it
+  // every poll of a monitoring script re-ran them all.
+  const modelsCaches = new Map<number, SharedCache<Awaited<ReturnType<typeof buildModelsReport>>>>();
+  async function buildModelsReport(days: number) {
+    const until = new Date();
+    const since = new Date(until.getTime() - days * DAY_MS);
+    const targets = {
+      hitRate2xPct: opts.env.CURATED_TARGET_WIN_RATE_PCT,
+      hitRate4xPct: opts.env.CURATED_TARGET_GOAL_RATE_PCT,
+    };
+    const [board, learning] = await Promise.all([
+      buildLeaderboard(opts.env, days),
+      buildLearningCurve(since, until, targets, days),
+    ]);
+    return {
+      window: { days, since, until },
+      defaultModel: board.defaultModel,
+      champion: board.champion,
+      // The ranking and each seat's records - descriptions and lineage are the Models tab's.
+      entries: board.entries.map((e) => ({
+        rank: e.rank,
+        id: e.id,
+        name: e.name,
+        status: e.status,
+        isDefault: e.isDefault,
+        score: e.composite.score,
+        band: e.composite.band,
+        warmingUp: e.composite.warmingUp,
+        live: e.composite.live,
+        vsMarket: e.vsMarket,
+        exam: e.composite.exam,
+        highConviction: e.highConviction,
+      })),
+      // Feed vs market by day, and the trend verdict the Models tab's lift panel shows.
+      learning: { days: learning.days, trend: learning.trend, minGradedForLift: learning.minGradedForLift },
+    };
+  }
+
   app.get(
     "/models",
     { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
@@ -45,39 +86,14 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
         return;
       }
       const { days } = parsed.data;
-      const until = new Date();
-      const since = new Date(until.getTime() - days * DAY_MS);
-      const targets = {
-        hitRate2xPct: opts.env.CURATED_TARGET_WIN_RATE_PCT,
-        hitRate4xPct: opts.env.CURATED_TARGET_GOAL_RATE_PCT,
-      };
-      const [board, learning] = await Promise.all([
-        buildLeaderboard(opts.env, days),
-        buildLearningCurve(since, until, targets, days),
-      ]);
+      let cache = modelsCaches.get(days);
+      if (!cache) {
+        cache = new SharedCache(MODELS_CACHE_MS);
+        modelsCaches.set(days, cache);
+      }
+      const report = await cache.get(() => buildModelsReport(days));
       reply.header("cache-control", "no-store");
-      return {
-        window: { days, since, until },
-        defaultModel: board.defaultModel,
-        champion: board.champion,
-        // The ranking and each seat's records - descriptions and lineage are the Models tab's.
-        entries: board.entries.map((e) => ({
-          rank: e.rank,
-          id: e.id,
-          name: e.name,
-          status: e.status,
-          isDefault: e.isDefault,
-          score: e.composite.score,
-          band: e.composite.band,
-          warmingUp: e.composite.warmingUp,
-          live: e.composite.live,
-          vsMarket: e.vsMarket,
-          exam: e.composite.exam,
-          highConviction: e.highConviction,
-        })),
-        // Feed vs market by day, and the trend verdict the Models tab's lift panel shows.
-        learning: { days: learning.days, trend: learning.trend, minGradedForLift: learning.minGradedForLift },
-      };
+      return report;
     },
   );
 

@@ -6,6 +6,12 @@ const logger = createLogger("live-refresh");
 const ADDRESSES_PER_CALL = 30;
 const BUDGET_WINDOW_MS = 60_000;
 const MAX_DURATIONS = 200;
+/**
+ * Readers whose per-user call windows are tracked at once. Past this, the least recently
+ * charged reader's window is forgotten - at worst they get a fresh sub-budget early, and the
+ * global budget still caps the total.
+ */
+const MAX_BUDGET_USERS = 5_000;
 
 /** The shape GET /matches already has to hand for every token on the page. */
 export interface RefreshableToken {
@@ -31,6 +37,14 @@ export interface OnDemandLiveRefresherOptions {
    * slower, never broken.
    */
   callsPerMinute?: number;
+  /**
+   * Upstream calls one reader may spend per minute, on top of the global budget. Without it a
+   * single subscriber paging through /matches?page=2..500 (or rotating /live/market token sets)
+   * could spend the whole global budget alone and leave every other reader's live tick on the
+   * worker's numbers. Only applies to calls that name a reader; anonymous ones count against the
+   * global budget only.
+   */
+  callsPerUserPerMinute?: number;
   /** Where the refreshed tokens' matches get their peak raised - see refreshLiveMarketData. */
   peakWindowDays?: number;
 }
@@ -61,6 +75,11 @@ export class OnDemandLiveRefresher {
   private readonly attemptedAt = new Map<string, number>();
   private readonly calls: number[] = [];
   /**
+   * Each reader's calls in the last minute, oldest first. Insertion order doubles as "least
+   * recently charged" (a charge re-inserts the key), which is what the size cap evicts by.
+   */
+  private readonly userCalls = new Map<string, number[]>();
+  /**
    * Since start: lookups made, tokens asked for and how many came back with data (the gap is
    * what DexScreener had nothing for, or a call that failed inside the client), lookups that
    * threw, and refreshes skipped for budget.
@@ -71,6 +90,8 @@ export class OnDemandLiveRefresher {
     updated: 0,
     failures: 0,
     overBudget: 0,
+    /** The subset of overBudget refused by a reader's own sub-budget rather than the global one. */
+    userOverBudget: 0,
     since: new Date(),
   };
   /** Age (ms) of the oldest reading in each live tick answer, newest last - see noteServed. */
@@ -87,8 +108,8 @@ export class OnDemandLiveRefresher {
    * Fire-and-forget: never awaited by the request handler, so a slow DexScreener can't slow down
    * (or fail) the page load that triggered it.
    */
-  request(tokens: readonly RefreshableToken[]): void {
-    void this.refresh(tokens).catch((err) => {
+  request(tokens: readonly RefreshableToken[], userKey?: string): void {
+    void this.refresh(tokens, Date.now(), undefined, userKey).catch((err) => {
       logger.warn("on-demand live refresh failed", { error: String(err) });
     });
   }
@@ -97,17 +118,18 @@ export class OnDemandLiveRefresher {
    * Refreshes whatever of `tokens` is older than `maxAgeMs` and waits - at most `timeoutMs` - for
    * that and for any lookup already in flight for these tokens. Resolves true when anything was
    * looked up or waited on, i.e. when re-reading the rows can find newer numbers. Never throws.
+   * `userKey` names the reader whose sub-budget a new lookup is charged to.
    */
   async refreshAndWait(
     tokens: readonly RefreshableToken[],
-    { maxAgeMs, timeoutMs }: { maxAgeMs: number; timeoutMs: number },
+    { maxAgeMs, timeoutMs, userKey }: { maxAgeMs: number; timeoutMs: number; userKey?: string },
   ): Promise<boolean> {
     const pending = new Set<Promise<unknown>>();
     for (const token of tokens) {
       const running = this.inFlight.get(token.mintAddress);
       if (running) pending.add(running);
     }
-    const own = this.start(tokens, Date.now(), maxAgeMs);
+    const own = this.start(tokens, Date.now(), maxAgeMs, userKey);
     if (own) pending.add(own);
     if (pending.size === 0) return false;
 
@@ -125,18 +147,28 @@ export class OnDemandLiveRefresher {
   }
 
   /** Awaitable form of {@link request}. Returns how many tokens it actually looked up. */
-  async refresh(tokens: readonly RefreshableToken[], now = Date.now(), maxAgeMs?: number): Promise<number> {
-    return (await this.start(tokens, now, maxAgeMs)) ?? 0;
+  async refresh(
+    tokens: readonly RefreshableToken[],
+    now = Date.now(),
+    maxAgeMs?: number,
+    userKey?: string,
+  ): Promise<number> {
+    return (await this.start(tokens, now, maxAgeMs, userKey)) ?? 0;
   }
 
   /**
    * Picks what is due and starts one lookup for it, synchronously, so a caller knows at once
    * whether there is anything to wait for. Null when nothing is due or the budget is spent.
    */
-  private start(tokens: readonly RefreshableToken[], now: number, maxAgeMs?: number): Promise<number> | null {
+  private start(
+    tokens: readonly RefreshableToken[],
+    now: number,
+    maxAgeMs?: number,
+    userKey?: string,
+  ): Promise<number> | null {
     const due = this.selectDue(tokens, now, maxAgeMs);
     if (due.length === 0) return null;
-    if (!this.takeBudget(Math.ceil(due.length / ADDRESSES_PER_CALL), now)) return null;
+    if (!this.takeBudget(Math.ceil(due.length / ADDRESSES_PER_CALL), now, userKey)) return null;
 
     for (const token of due) this.attemptedAt.set(token.mintAddress, now);
     const startedAt = Date.now();
@@ -193,18 +225,54 @@ export class OnDemandLiveRefresher {
     return due;
   }
 
-  /** Records `count` upstream calls if the last minute's budget has room for them. */
-  private takeBudget(count: number, now: number): boolean {
+  /**
+   * Records `count` upstream calls if the last minute's budget - and, for a named reader, that
+   * reader's own sub-budget - has room for them. Both are checked before either is charged, so a
+   * call refused by one never spends the other.
+   */
+  private takeBudget(count: number, now: number, userKey?: string): boolean {
     const budget = this.options.callsPerMinute;
-    if (budget === undefined) return true;
-    while (this.calls.length > 0 && now - this.calls[0]! >= BUDGET_WINDOW_MS) this.calls.shift();
-    if (this.calls.length + count > budget) {
+    const userBudget = userKey === undefined ? undefined : this.options.callsPerUserPerMinute;
+    if (budget !== undefined) {
+      while (this.calls.length > 0 && now - this.calls[0]! >= BUDGET_WINDOW_MS) this.calls.shift();
+    }
+    let mine: number[] | undefined;
+    if (userBudget !== undefined) {
+      this.pruneUserCalls(now);
+      mine = this.userCalls.get(userKey!) ?? [];
+      if (mine.length + count > userBudget) {
+        this.counters.overBudget += 1;
+        this.counters.userOverBudget += 1;
+        logger.debug("live refresh over this reader's call budget, skipping", { userBudget });
+        return false;
+      }
+    }
+    if (budget !== undefined && this.calls.length + count > budget) {
       this.counters.overBudget += 1;
       logger.debug("live refresh over its call budget, skipping", { budget });
       return false;
     }
-    for (let i = 0; i < count; i += 1) this.calls.push(now);
+    for (let i = 0; i < count; i += 1) {
+      if (budget !== undefined) this.calls.push(now);
+      mine?.push(now);
+    }
+    if (mine) {
+      // Re-insert so the map's order stays least-recently-charged first.
+      this.userCalls.delete(userKey!);
+      this.userCalls.set(userKey!, mine);
+      if (this.userCalls.size > MAX_BUDGET_USERS) {
+        this.userCalls.delete(this.userCalls.keys().next().value!);
+      }
+    }
     return true;
+  }
+
+  /** Drops calls older than the window, and readers left with none, from the per-user map. */
+  private pruneUserCalls(now: number): void {
+    for (const [key, times] of this.userCalls) {
+      while (times.length > 0 && now - times[0]! >= BUDGET_WINDOW_MS) times.shift();
+      if (times.length === 0) this.userCalls.delete(key);
+    }
   }
 
   /**
@@ -222,6 +290,8 @@ export class OnDemandLiveRefresher {
       ...this.counters,
       callsLastMinute: this.calls.filter((t) => Date.now() - t < BUDGET_WINDOW_MS).length,
       callsPerMinuteBudget: this.options.callsPerMinute ?? null,
+      callsPerUserPerMinuteBudget: this.options.callsPerUserPerMinute ?? null,
+      budgetedUsers: this.userCalls.size,
       lookupMs: percentiles(this.durations),
       servedOldestAgeMs: percentiles(this.served),
     };

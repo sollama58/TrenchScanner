@@ -123,6 +123,27 @@ describe("OnDemandLiveRefresher live tick", () => {
     expect(await r.refresh([token("C", null)], NOW + MINUTE + 2)).toBe(1);
   });
 
+  it("caps each reader's share of the budget without starving the others", async () => {
+    // One subscriber paging through /matches?page=2..500 used to spend the whole global budget
+    // and leave every other reader's live tick on the worker's numbers.
+    const r = new OnDemandLiveRefresher(
+      { getTokensByAddresses: async () => [] } as unknown as DexScreenerClient,
+      { maxAgeMs: MINUTE, limit: 12, callsPerMinute: 4, callsPerUserPerMinute: 2 },
+    );
+    expect(await r.refresh([token("A", null)], NOW, undefined, "pager")).toBe(1);
+    expect(await r.refresh([token("B", null)], NOW + 1, undefined, "pager")).toBe(1);
+    expect(await r.refresh([token("C", null)], NOW + 2, undefined, "pager")).toBe(0);
+    // Someone else still has room, and the refused call spent none of the global budget.
+    expect(await r.refresh([token("D", null)], NOW + 3, undefined, "other")).toBe(1);
+    // An anonymous call counts against the global budget only.
+    expect(await r.refresh([token("E", null)], NOW + 4)).toBe(1);
+    expect(await r.refresh([token("F", null)], NOW + 5, undefined, "third")).toBe(0);
+    expect(r.stats()).toMatchObject({ overBudget: 2, userOverBudget: 1, budgetedUsers: 2 });
+    // A minute on every window has emptied out, and the idle readers are pruned from the map.
+    expect(await r.refresh([token("C", null)], NOW + MINUTE + 10, undefined, "pager")).toBe(1);
+    expect(r.stats().budgetedUsers).toBe(1);
+  });
+
   it("waits on a lookup another request already started for the same token", async () => {
     const { client, release } = gatedClient();
     const r = new OnDemandLiveRefresher(client as unknown as DexScreenerClient, {

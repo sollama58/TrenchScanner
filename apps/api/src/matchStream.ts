@@ -110,7 +110,7 @@ interface Subscriber {
 export class MatchStream {
   private readonly subscribers = new Set<Subscriber>();
   /** Work to run on this instance when a curated alert is announced - see onCuratedAlert. */
-  private readonly curatedListeners = new Set<() => void>();
+  private readonly curatedListeners = new Set<(model?: string) => void>();
   /** Set after the first successful LISTEN, so a later one is known to be a reconnect. */
   private hasListened = false;
   /** Work to run on this instance when a match is announced, given its user - see onMatch. */
@@ -217,10 +217,14 @@ export class MatchStream {
     }
   }
 
-  private runCuratedListeners(): void {
+  /**
+   * `model` is the ledger the new call is on, when the notification said; undefined (the reconnect
+   * path, or an old worker's payload) means "could be any of them", and listeners clear everything.
+   */
+  private runCuratedListeners(model?: string): void {
     for (const listener of this.curatedListeners) {
       try {
-        listener();
+        listener(model);
       } catch (err) {
         logger.warn("curated notification listener failed", { error: String(err) });
       }
@@ -325,7 +329,7 @@ export class MatchStream {
     // 30-second fallback poll, which is the latency the stream exists to remove. Under
     // continuous polling by several subscribers the cache is warm nearly all the time, so this
     // was the common case rather than a rare one.
-    this.runCuratedListeners();
+    this.runCuratedListeners(typeof notification.model === "string" ? notification.model : undefined);
 
     const frame = `event: curated\ndata: ${JSON.stringify({ alertId: notification.alertId })}\n\n`;
     for (const subscriber of this.subscribers) {
@@ -353,8 +357,11 @@ export class MatchStream {
    * client's schedule - the feed's page cache invalidating itself is the motivating case. Kept
    * separate from subscribe() because these are not stream clients: nothing is written to them
    * and they are not subject to the subscriber cap.
+   *
+   * Called with the call's model when the notification carries one, so a listener can clear only
+   * what that ledger feeds; with none (see runCuratedListeners) it must assume any model changed.
    */
-  onCuratedAlert(listener: () => void): () => void {
+  onCuratedAlert(listener: (model?: string) => void): () => void {
     this.curatedListeners.add(listener);
     return () => this.curatedListeners.delete(listener);
   }
