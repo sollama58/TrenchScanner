@@ -34,7 +34,7 @@ export interface ModelPrice {
 }
 
 /**
- * Anthropic first-party list prices, per million tokens (checked 2026-10-04 against the
+ * Anthropic first-party list prices, per million tokens (checked 2026-10-11 against the
  * claude-api reference). A dated snapshot id resolves to its family. An id not listed here is
  * priced as the most expensive model, so a new or mistyped model id can only make the cap trip
  * early, never late.
@@ -52,6 +52,7 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2 },
   "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2 },
   "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
   "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1 },
 };
 const UNKNOWN_MODEL_PRICE: ModelPrice = { input: 10, output: 50, cacheRead: 1 };

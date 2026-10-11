@@ -169,8 +169,10 @@ export function anchorForWeights(
   const matches = rows.filter((r) => r.population === "match");
   const basis = matches.length >= MIN_ANCHOR_ROWS ? matches : rows;
   if (basis.length < MIN_ANCHOR_ROWS) return null;
+  // Today's scores as they are served - clamped to 0-100 - so a p90 past 100 doesn't set a target
+  // no token can show, pinning more of them at 100 with each adoption.
   const today = basis
-    .map((r) => currentAnchor.scale * rawSum(r, current) + currentAnchor.offset)
+    .map((r) => Math.min(100, Math.max(0, currentAnchor.scale * rawSum(r, current) + currentAnchor.offset)))
     .sort((a, b) => a - b);
   const proposed = basis.map((r) => rawSum(r, next)).sort((a, b) => a - b);
   const span = quantile(proposed, 0.9) - quantile(proposed, 0.1);
