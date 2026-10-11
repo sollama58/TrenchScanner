@@ -582,7 +582,11 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
     });
   }
 
-  const screenFrom = opts.from ? from : await screenStart(now);
+  // Never further back than every scanned token still has all its snapshots, even when asked to
+  // re-sum from an older hour: past that the cleanup has taken untracked tokens' snapshots, so a
+  // re-sum would drop most rejected tokens and overwrite the counts those hours were frozen with.
+  const screenFloor = floorHour(now.getTime() - SCREEN_BACKFILL_HOURS * HOUR_MS);
+  const screenFrom = opts.from ? (from > screenFloor ? from : screenFloor) : await screenStart(now);
 
   let hoursWritten = 0;
   for (let t = from.getTime(); t < to.getTime(); t += DAY_MS) {

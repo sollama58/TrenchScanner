@@ -377,6 +377,19 @@ describe("storableAnalysis", () => {
       warn.mockRestore();
     }
   });
+
+  it("measures the cap in UTF-8 bytes, not string length", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { analysis } = fixture("full");
+      // Under the cap by string length, three times over it in bytes.
+      const cjk = "柴".repeat(STORED_ANALYSIS_MAX_BYTES - 1000);
+      const stored = storableAnalysis({ ...analysis, x: { ...analysis.x, text: cjk } })!;
+      expect((stored.x as Record<string, unknown>).text).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe("narrativeDetails", () => {

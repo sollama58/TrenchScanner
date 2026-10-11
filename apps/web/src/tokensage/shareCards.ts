@@ -377,7 +377,7 @@ function drawHeadline(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
       { value: compact(d.last24h.reads), label: "read in the last 24 hours" },
       { value: compact(t.deep), label: "deep reads" },
       { value: pctOf(t.copiesRecent, t.copiesAnswered), label: "copy a recent coin" },
-      { value: pctOf(t.alertsDescribed, t.alerts), label: "of model calls had a read" },
+      { value: pctOf(t.alertsDescribed, t.alerts), label: "of model calls' coins have a read" },
     ],
     BODY_BOTTOM - 28,
   );
@@ -431,7 +431,13 @@ function drawFlags(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
   );
 }
 
-function drawCounts(ctx: CanvasRenderingContext2D, rows: ShowcaseCount[], pick = named<ShowcaseCount>) {
+/** `of` names what the shares are of: the rows are only the reads that answered this question. */
+function drawCounts(
+  ctx: CanvasRenderingContext2D,
+  rows: ShowcaseCount[],
+  of: string,
+  pick = named<ShowcaseCount>,
+) {
   const shown = pick(rows);
   const total = rows.reduce((sum, r) => sum + r.count, 0);
   bars(
@@ -440,7 +446,7 @@ function drawCounts(ctx: CanvasRenderingContext2D, rows: ShowcaseCount[], pick =
       label: prettyLabel(r.label),
       value: r.count,
       display: compact(r.count),
-      note: `${pctOf(r.count, total)} of coins read`,
+      note: `${pctOf(r.count, total)} ${of}`,
     })),
   );
 }
@@ -562,8 +568,8 @@ const DRAW: Record<
   themes: drawThemes,
   lineage: drawLineage,
   flags: drawFlags,
-  logos: (ctx, d) => drawCounts(ctx, d.anatomy.logo, logoKinds),
-  fees: (ctx, d) => drawCounts(ctx, d.anatomy.fee),
+  logos: (ctx, d) => drawCounts(ctx, d.anatomy.logo, "of logos read", logoKinds),
+  fees: (ctx, d) => drawCounts(ctx, d.anatomy.fee, "of fee setups read"),
   models: (ctx, _d, lh) => drawModels(ctx, lh),
 };
 
