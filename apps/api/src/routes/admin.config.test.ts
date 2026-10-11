@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadEnv, prisma, type Env } from "@trenchscanner/core";
+import { loadEnv, prisma, Prisma, type Env } from "@trenchscanner/core";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 
@@ -117,6 +117,48 @@ describe.skipIf(!dbAvailable)("GET /admin/config", () => {
       // Skip anything unset locally - an empty string would match everything.
       if (typeof value !== "string" || value.length < 8) continue;
       expect(serialised, `${secret} leaked into /admin/config`).not.toContain(value);
+    }
+  });
+
+  it("shows the worker's own values where its scan heartbeat reports them, and says which process each came from", async () => {
+    const before = await prisma.systemHeartbeat.findUnique({ where: { job: "scan" } });
+    const meta = {
+      ...(before?.meta && typeof before.meta === "object" ? before.meta : {}),
+      workerConfig: { scanIntervalMinutes: 0.5, workerRole: "scanner", aiTextFeatures: { nested: 1 } },
+      workerCredentials: { anthropicApiKey: true, heliusApiKey: "yes" },
+    };
+    await prisma.systemHeartbeat.upsert({
+      where: { job: "scan" },
+      create: { job: "scan", lastRunAt: new Date(), meta },
+      update: { meta },
+    });
+    try {
+      const payload = await fetchConfig();
+      const env = loadEnv();
+      const sources = payload.sources as Record<string, string>;
+      expect(payload.scanIntervalMinutes).toBe(0.5);
+      expect(payload.workerRole).toBe("scanner");
+      expect(sources).toMatchObject({ scanIntervalMinutes: "worker", workerRole: "worker" });
+      // Anything not a plain value is not taken; the API's own then stands.
+      expect(payload.aiTextFeatures).toBe(env.AI_TEXT_FEATURES);
+      expect(sources.aiTextFeatures).toBe("api");
+      expect(payload.cleanupHourUtc).toBe(env.CLEANUP_HOUR_UTC);
+      expect(sources.cleanupHourUtc).toBe("api");
+      const credentials = payload.credentialsSet as Record<string, boolean>;
+      expect(credentials.anthropicApiKey).toBe(true);
+      expect(sources["credentialsSet.anthropicApiKey"]).toBe("worker");
+      expect(credentials.heliusApiKey).toBe(env.HELIUS_API_KEY.length > 0);
+      expect(sources["credentialsSet.heliusApiKey"]).toBe("api");
+      expect(payload.workerReportedAt).not.toBeNull();
+    } finally {
+      if (before) {
+        await prisma.systemHeartbeat.update({
+          where: { job: "scan" },
+          data: { meta: before.meta ?? Prisma.DbNull },
+        });
+      } else {
+        await prisma.systemHeartbeat.deleteMany({ where: { job: "scan" } });
+      }
     }
   });
 

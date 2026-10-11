@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./logger.js";
 export * from "./config/env.js";
+export * from "./config/workerConfig.js";
 export * from "./db.js";
 export * from "./heartbeat.js";
 export * from "./concurrency.js";

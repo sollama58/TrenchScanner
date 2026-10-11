@@ -18,6 +18,7 @@ import {
   runTelegramDispatch,
   onAlertWritten,
   COMMIT_GRACE_MS,
+  workerConfigMeta,
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
@@ -144,11 +145,19 @@ async function main() {
   // call that decides what gets screened - and on each other. Each reschedules from its own run's
   // end, so this only sets where they begin.
   const DEX_BURST_OFFSET_MS = { "fast-match": 7_000, "candidate-watch": 12_000, "live-price": 20_000 };
+  // The scan's heartbeat also carries the settings this process runs with (failed runs too), so
+  // the admin panel's Config shows the scanner's values rather than the API's own environment.
+  const configMeta = workerConfigMeta(env);
   schedule("scan", () =>
-    scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
-      deadlineMinutes: 20,
-      failureMeta: scanFailureMeta,
-    }),
+    scheduleInterval(
+      "scan",
+      async () => ({ ...(await runScanCycle(deps, env)), ...configMeta }),
+      env.SCAN_INTERVAL_MINUTES,
+      {
+        deadlineMinutes: 20,
+        failureMeta: () => ({ ...scanFailureMeta(), ...configMeta }),
+      },
+    ),
   );
   // Runs far more often than the scan cycle, but only touches tokens someone currently has open
   // and only fetches market data - see runLivePriceJob's own comment.

@@ -9,6 +9,7 @@ import {
   alertParts,
   alertStyle,
   TelegramApi,
+  adminWalletSet,
   dashboardUrl,
   formatTestMessage,
   handleTelegramUpdate,
@@ -69,6 +70,9 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
   const api = configured ? new TelegramApi(token) : null;
   const secret = configured ? webhookSecret(token) : "";
   const boards = createTelegramBoards();
+  // /alerts and /trenchboard answer only for a chat whose owner still has access, by the same
+  // rule the worker applies before sending it alerts.
+  const admins = adminWalletSet(env);
 
   // The bot's @username, for the t.me links. Asked once and kept; asked again on the next
   // request if Telegram was unreachable the first time.
@@ -267,8 +271,10 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
         botUsername: lookupBot,
         boards,
         links: { dashboardUrl: dashboardUrl(env) },
+        admins,
       });
-      if (outcome.action !== "ignored")
+      // A throttled command is someone hammering it: not worth a log line each.
+      if (outcome.action !== "ignored" && outcome.action !== "throttled")
         request.log.info({ action: outcome.action }, "telegram update handled");
     } catch (err) {
       request.log.error({ err }, "telegram update failed");

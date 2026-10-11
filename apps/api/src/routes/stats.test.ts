@@ -4,7 +4,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
-import { bearerMatches, buildDbReport, buildStorageReport, sumCounts, withRates } from "./stats.js";
+import {
+  baselineRates,
+  bearerMatches,
+  buildDbReport,
+  buildStorageReport,
+  sumCounts,
+  withRates,
+} from "./stats.js";
 
 const TOKEN = "stats-test-token-0123456789abcdef0123456789";
 const TARGETS = { hitRate2xPct: 75, hitRate4xPct: 50 };
@@ -344,6 +351,29 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
         expect.objectContaining({ kind: "event", calls: 3 }),
       ]),
     );
+  });
+
+  it("draws the leaderboard's baseline from the same market as the lift, and leaves the raw samples raw", async () => {
+    // A clean event row, one graded under the legacy rule, and one past a wallet safety cut.
+    await outcome(200, "event", { hit2x: true });
+    const legacy = await outcome(201, "event", { hit2x: true });
+    await prisma.candidateOutcome.update({ where: { id: legacy }, data: { labelRule: 1 } });
+    const unsafe = await outcome(202, "event", { hit2x: false });
+    await prisma.candidateOutcome.update({
+      where: { id: unsafe },
+      data: { features: { emptyTop10WalletPct: 95 } },
+    });
+    expect(await baselineRates(at(200), TARGETS, at(300))).toMatchObject({
+      calls: 1,
+      graded: 1,
+      won2x: 1,
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/stats/hit-rates?since=${at(200).toISOString()}&until=${at(300).toISOString()}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.json().samples.byKind).toEqual([expect.objectContaining({ kind: "event", calls: 3 })]);
   });
 
   it("caps the window whichever way it is spelled", async () => {

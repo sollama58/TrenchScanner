@@ -59,7 +59,10 @@ export class JobFailure extends Error {
 
 /** What a job may hand back about its own run - stored on its heartbeat row and served by
  *  GET /health/worker, which is the only view of production timing that needs no log access. */
-export type JobRunMeta = Record<string, string | number | boolean | null | Record<string, number>>;
+export type JobRunMeta = Record<
+  string,
+  string | number | boolean | null | Record<string, string | number | boolean | null>
+>;
 
 /**
  * A run still going after this many intervals is logged as stalled, and again each time that much

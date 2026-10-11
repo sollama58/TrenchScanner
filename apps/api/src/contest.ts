@@ -292,7 +292,10 @@ export interface LeaderboardEntry {
 export interface Leaderboard {
   window: { days: number; since: Date };
   targets: { hitRate2xPct: number; hitRate4xPct: number };
-  /** The random-pick baseline over the same window: every "event" moment the models choose from. */
+  /**
+   * The random-pick baseline over the same window: every "event" moment the models choose from,
+   * on the same market definition as `lifts` (baselineRates).
+   */
   baseline: GradedRates;
   scoring: {
     weights: typeof COMPOSITE_WEIGHTS;

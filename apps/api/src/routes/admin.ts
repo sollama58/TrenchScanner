@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, AccessSource, type Env } from "@trenchscanner/core";
+import { prisma, AccessSource, readWorkerConfig, type Env } from "@trenchscanner/core";
 
 const DAY_MS = 86_400_000;
 
@@ -162,10 +162,11 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
    * etc. Secrets (DATABASE_URL, JWT_SECRET, HELIUS_API_KEY) are deliberately
    * left out; this exists so an admin can see what's actually configured on this deployment
    * without digging through the Render dashboard, not to expose credentials over the API.
+   * The worker's settings come from the scanning worker's own report (see `sources`).
    */
   app.get("/config", async () => {
     const { env } = opts;
-    return {
+    const own = {
       scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
       livePriceIntervalMinutes: env.LIVE_PRICE_INTERVAL_MINUTES,
       livePriceMaxTracked: env.LIVE_PRICE_MAX_TRACKED,
@@ -242,6 +243,37 @@ export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env
       adminWallets: env.ADMIN_WALLET_ADDRESSES.split(",")
         .map((a) => a.trim())
         .filter(Boolean),
+    };
+    // The above is this (the API) process's environment. What the scanning worker published on its
+    // heartbeat (workerConfigMeta) wins where it reports a value: the API's environment is not the
+    // worker's. Without a report, everything stays the API's.
+    const scanBeat = await prisma.systemHeartbeat.findUnique({
+      where: { job: "scan" },
+      select: { meta: true, lastRunAt: true },
+    });
+    const worker = readWorkerConfig(scanBeat?.meta);
+    const { credentialsSet, adminWallets, ...settings } = own;
+    const sources: Record<string, "worker" | "api"> = {};
+    const merged: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(settings)) {
+      const fromWorker = worker !== null && k in worker.settings;
+      merged[k] = fromWorker ? worker.settings[k] : v;
+      sources[k] = fromWorker ? "worker" : "api";
+    }
+    const credentials: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(credentialsSet)) {
+      const fromWorker = worker !== null && k in worker.credentials;
+      credentials[k] = fromWorker ? worker.credentials[k]! : v;
+      sources[`credentialsSet.${k}`] = fromWorker ? "worker" : "api";
+    }
+    return {
+      ...merged,
+      credentialsSet: credentials,
+      adminWallets,
+      // Which process each value above came from ("credentialsSet.<name>" for a credential), and
+      // when the worker last reported (null: no report, so every value is the API's).
+      sources,
+      workerReportedAt: worker ? (scanBeat?.lastRunAt ?? null) : null,
     };
   });
 }

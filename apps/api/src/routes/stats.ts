@@ -10,6 +10,8 @@ import {
   WIN_WINDOW_MINUTES,
   GOAL_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
+  CURRENT_LABEL_RULE,
+  walletSafetyCutsSql,
   type Env,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
@@ -257,11 +259,19 @@ const RAN_LATER = Prisma.sql`
                                   (co."peak24hPriceUsd" / NULLIF(co."anchorPriceUsd", 0) - 1) * 100, 0) >= 100)`;
 
 /**
- * The baseline a model's pick has to beat: every "event" moment anchored since `since`, graded
- * the same way as the "event" row of the hit-rate report's samples.byKind. The leaderboard carries
- * it so the Models vs baseline chart can switch windows without the full insights report.
+ * The baseline a model's pick has to beat: every "event" moment anchored since `since` that passes
+ * the wallet safety cuts and was graded under the current label rule - the same market as the week
+ * chart's Market line (learningCurve.ts) and the leaderboard's lift (liveMarketLift in
+ * curation/laneStore.ts), so the three never disagree about what "the market" did. The hit-rate
+ * report's samples.byKind stays the raw count of every banked row. The leaderboard carries it so
+ * the Models vs baseline chart can switch windows without the full insights report.
  */
-export async function baselineRates(since: Date, targets: Targets): Promise<GradedRates> {
+export async function baselineRates(
+  since: Date,
+  targets: Targets,
+  /** The window's end; open (up to now) unless given, as the leaderboard reads it. */
+  until?: Date,
+): Promise<GradedRates> {
   const [row] = await prisma.$queryRaw<RawCounts[]>`
     SELECT count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
@@ -272,7 +282,10 @@ export async function baselineRates(since: Date, targets: Targets): Promise<Grad
                               AND (co."hit10xIn1h" IS NOT NULL OR NOT (co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
     FROM "CandidateOutcome" co
-    WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${since}`;
+    WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${since}
+      ${until ? Prisma.sql`AND co."anchorAt" < ${until}` : Prisma.empty}
+      AND co."labelRule" >= ${CURRENT_LABEL_RULE}
+      AND ${walletSafetyCutsSql(Prisma.raw('co."features"'))}`;
   return withRates(
     row
       ? toCounts(row)

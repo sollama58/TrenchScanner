@@ -266,7 +266,7 @@ function Backups() {
           "They replace the running models straight away. What runs now is backed up first, so this can be undone. " +
           "The next training run retrains the restored recipes on fresh data." +
           (seats.length > 0
-            ? "\n\nRestoring single models: the Consensus sits out until that next run if it was built on the models being replaced."
+            ? "\n\nRestoring single models: any model built on the ones being replaced (a blend, agreement, top slice or the Consensus) sits out until that next run."
             : ""),
       )
     )
@@ -1750,18 +1750,29 @@ function Config() {
     >
       <Load q={q}>
         {(c) => {
-          const { credentialsSet, adminWallets, ...rest } = c as {
+          const { credentialsSet, adminWallets, sources, workerReportedAt, ...rest } = c as {
             credentialsSet?: Record<string, boolean>;
             adminWallets?: string[];
+            sources?: Record<string, string>;
+            workerReportedAt?: string | null;
           } & Record<string, unknown>;
+          // Which process a value came from: the scanning worker's heartbeat, or the API's own
+          // environment (older API builds send no sources).
+          const from = (key: string) => <span className="muted small">{sources?.[key] ?? "api"}</span>;
           return (
             <div className="stack">
+              <p className="small muted">
+                {workerReportedAt
+                  ? `"worker" values are the scanning worker's own, as of its scan at ${new Date(workerReportedAt).toLocaleString()}; "api" values are the API process's environment.`
+                  : "The worker has not reported its settings yet, so every value is the API process's environment."}
+              </p>
               {credentialsSet && (
                 <Table
-                  head={["Credential", "Set"]}
+                  head={["Credential", "Set", "From"]}
                   rows={Object.entries(credentialsSet).map(([k, v]) => [
                     k,
                     v ? <Tag tone="ok">set</Tag> : <Tag tone="warn">missing</Tag>,
+                    from(`credentialsSet.${k}`),
                   ])}
                 />
               )}
@@ -1777,12 +1788,13 @@ function Config() {
                 </p>
               )}
               <Table
-                head={["Setting", "Value"]}
+                head={["Setting", "Value", "From"]}
                 rows={Object.entries(rest).map(([k, v]) => [
                   k,
                   <code>
                     {v === null ? "default" : typeof v === "object" ? JSON.stringify(v) : String(v)}
                   </code>,
+                  from(k),
                 ])}
               />
             </div>

@@ -41,6 +41,7 @@ import {
   type ChatSettings,
 } from "./settings.js";
 import { looksLikeTelegramCode, redeemTelegramLinkCode } from "./link.js";
+import { resolveAccess } from "../subscription/access.js";
 
 /**
  * What the bot does with each update Telegram delivers: links a chat on `/start <code>` (or
@@ -69,7 +70,9 @@ export interface UpdateOutcome {
     | "migrated"
     | "alerts"
     | "board"
-    | "settings";
+    | "settings"
+    | "expired"
+    | "throttled";
 }
 
 function shortWallet(address: string): string {
@@ -94,19 +97,74 @@ const HELP_GROUP =
   "<b>Filters → Telegram alerts</b>, presses <b>Link a group</b> and picks this group. " +
   "Or paste the code there as <code>/link &lt;code&gt;</code> in this group.";
 
-export async function handleTelegramUpdate(
-  api: TelegramApi,
-  update: TelegramUpdate,
+/**
+ * Command replies per chat: one per CHAT_REPLY_COOLDOWN_MS for /alerts, /trenchboard, /settings
+ * and the /alerts and /trenchboard buttons, whoever sends them. Any member of a group can send
+ * these, each board or alerts reply reads up to a few thousand rows, and each reply spends the
+ * group's share of Telegram's send limit, which the chat's real alerts need. Keyed by Telegram's
+ * chat id, so an unlinked chat's "Not linked" replies are held to it too.
+ */
+export const CHAT_REPLY_COOLDOWN_MS = 3_000;
+/** Bounds the map below against a flood of distinct chats; far more than are ever busy at once. */
+const MAX_COOLDOWN_CHATS = 5_000;
+const lastReplyAt = new Map<string, number>();
+
+/**
+ * Takes the chat's reply slot, or says it was taken less than CHAT_REPLY_COOLDOWN_MS ago. Every
+ * take re-inserts its key, so the map is in time order and pruning stops at the first live entry.
+ */
+export function takeReplySlot(chatId: bigint | number, t: number): boolean {
+  const key = String(chatId);
+  const last = lastReplyAt.get(key);
+  if (last !== undefined && t - last >= 0 && t - last < CHAT_REPLY_COOLDOWN_MS) return false;
+  lastReplyAt.delete(key);
+  lastReplyAt.set(key, t);
+  for (const [k, at] of lastReplyAt) {
+    if (lastReplyAt.size <= MAX_COOLDOWN_CHATS && t - at < CHAT_REPLY_COOLDOWN_MS) break;
+    lastReplyAt.delete(k);
+  }
+  return true;
+}
+
+/** How many chats the cooldown is holding, for tests. */
+export function replyCooldownSize(): number {
+  return lastReplyAt.size;
+}
+
+const EXPIRED_TEXT =
+  "The TrenchScanner subscription on the account linked here has expired, so the live boards are " +
+  "paused along with the alerts. Renew it from the dashboard and both come straight back.";
+
+export interface UpdateOptions {
   /**
    * The bot's @username (null when unknown), asked only for a command addressed to a bot by name:
    * one addressed to another bot is left to that bot.
    */
-  opts: {
-    botUsername?: () => Promise<string | null>;
-    /** The reads behind /alerts and /trenchboard; without them those commands are not offered. */
-    boards?: TelegramBoards;
-    links?: AlertLinks;
-  } = {},
+  botUsername?: () => Promise<string | null>;
+  /** The reads behind /alerts and /trenchboard; without them those commands are not offered. */
+  boards?: TelegramBoards;
+  links?: AlertLinks;
+  /**
+   * ADMIN_WALLET_ADDRESSES, for the access check in front of /alerts and /trenchboard - the same
+   * rule (resolveAccess) the dispatcher applies before it sends a chat its alerts.
+   */
+  admins?: ReadonlySet<string>;
+  /** Test seam: whether the chat owner's wallet has access. Defaults to resolveAccess. */
+  hasAccess?: (walletAddress: string) => Promise<boolean>;
+  /** Test seam: the clock for the per-chat reply cooldown. */
+  now?: () => number;
+}
+
+/** A lapsed subscription stops the live boards as it stops the sends (dispatch.ts). */
+async function ownerHasAccess(opts: UpdateOptions, walletAddress: string): Promise<boolean> {
+  if (opts.hasAccess) return opts.hasAccess(walletAddress);
+  return (await resolveAccess(walletAddress, opts.admins ?? new Set())).hasAccess;
+}
+
+export async function handleTelegramUpdate(
+  api: TelegramApi,
+  update: TelegramUpdate,
+  opts: UpdateOptions = {},
 ): Promise<UpdateOutcome> {
   if (update.callback_query) return handleButton(api, update.callback_query, opts);
 
@@ -253,9 +311,11 @@ export async function handleTelegramUpdate(
     case "trenchboard":
     case "board": {
       if (!opts.boards) return { action: "ignored" };
+      // Inside the cooldown: dropped without a word, since a reply is what is being rationed.
+      if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
-        select: { id: true, ...SETTINGS_SELECT },
+        select: { id: true, ...SETTINGS_SELECT, user: { select: { walletAddress: true } } },
       });
       if (!row) {
         await api.sendMessage(
@@ -263,6 +323,10 @@ export async function handleTelegramUpdate(
           `Not linked to any account yet.\n\n${isPrivate ? HELP_PRIVATE : HELP_GROUP}`,
         );
         return { action: parsed.command === "alerts" ? "alerts" : "board" };
+      }
+      if (!(await ownerHasAccess(opts, row.user.walletAddress))) {
+        await api.sendMessage(chatId, EXPIRED_TEXT);
+        return { action: "expired" };
       }
       const links = opts.links ?? { dashboardUrl: "" };
       if (parsed.command === "alerts") {
@@ -279,6 +343,7 @@ export async function handleTelegramUpdate(
     case "settings":
     case "customize":
     case "mincap": {
+      if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
         select: { id: true, ...SETTINGS_SELECT },
@@ -380,7 +445,7 @@ export const PREVIEW_COOLDOWN_MS = 15_000;
 async function handleButton(
   api: TelegramApi,
   query: NonNullable<TelegramUpdate["callback_query"]>,
-  opts: { boards?: TelegramBoards; links?: AlertLinks },
+  opts: UpdateOptions,
 ): Promise<UpdateOutcome> {
   const data = query.data ?? "";
   const message = query.message;
@@ -392,9 +457,16 @@ async function handleButton(
     return { action: "ignored" };
   }
   const chatId = BigInt(message.chat.id);
+  // The board and alerts buttons re-read the board, so they share the chat's command cooldown; a
+  // press inside it only stops the spinner. The settings buttons are cheap edits (a change is an
+  // admin's, in a group) and Preview has its own cooldown, so they are left to run.
+  if (!isSettings && !takeReplySlot(chatId, (opts.now ?? Date.now)())) {
+    await api.answerCallbackQuery(query.id, "Slow down a moment, then try again.");
+    return { action: "throttled" };
+  }
   const row = await prisma.telegramChat.findFirst({
     where: { chatId, revokedAt: null },
-    select: { id: true, ...SETTINGS_SELECT },
+    select: { id: true, ...SETTINGS_SELECT, user: { select: { walletAddress: true } } },
   });
   if (!row) {
     await api.answerCallbackQuery(query.id, "This chat isn't linked any more.");
@@ -402,6 +474,10 @@ async function handleButton(
   }
   const links = opts.links ?? { dashboardUrl: "" };
   if (isSettings) return settingsButton(api, query, message, row, links);
+  if (!(await ownerHasAccess(opts, row.user.walletAddress))) {
+    await api.answerCallbackQuery(query.id, "The subscription on the account linked here has expired.");
+    return { action: "expired" };
+  }
   let edited;
   if (isBoard) {
     const key = data.slice(BOARD_CALLBACK_PREFIX.length) as BoardWindowKey;
