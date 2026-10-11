@@ -121,6 +121,11 @@ const envSchema = z.object({
   // for a cycle - see resolveRugProfiles. Steady state needs far fewer; this bounds the cold cycle
   // after downtime, when every candidate's answer has aged out at once.
   RUGCHECK_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(150),
+  // Backup for a mint RugCheck has no report for (not indexed yet, or RugCheck down): its top-10
+  // holders read from the chain through Helius (see the worker's onChainHolders.ts), so the safety
+  // screen's concentration cut and the wallet checks model calls wait on can run without RugCheck.
+  // Mints read per scan cycle, each answer reused for RUGCHECK_CACHE_TTL_MINUTES. 0 turns it off.
+  ONCHAIN_HOLDERS_MAX_PER_CYCLE: z.coerce.number().int().min(0).default(60),
   // The wall-clock span holderGrowthPct is measured over: growth is compared against the newest
   // snapshot at least this old, rather than against whatever the previous snapshot happened to be.
   // Anchoring it this way is what keeps the number's meaning independent of SCAN_INTERVAL_MINUTES

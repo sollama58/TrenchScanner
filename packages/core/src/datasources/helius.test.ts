@@ -1,6 +1,12 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HeliusClient } from "./helius.js";
+import { ed25519 } from "@noble/curves/ed25519";
+import bs58 from "bs58";
+import { mayhemStateAddress } from "../solana.js";
+
+const WALLET = bs58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(7)));
+const CURVE = mayhemStateAddress(WALLET);
 
 /**
  * These run against a real local HTTP server rather than a mocked fetch, so they exercise the
@@ -644,5 +650,52 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
     for (const r of requests) expect(r.body as unknown[]).toHaveLength(1);
     // An empty history is a mint too new for the index: retried, not answered.
     expect(out.get("m2")).toEqual({ status: "failed" });
+  });
+});
+
+describe("HeliusClient.getLargestHoldersBatch", () => {
+  it("reads the largest accounts and supply, then each account's owner", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        if (c.method === "getTokenLargestAccounts")
+          return {
+            jsonrpc: "2.0",
+            id: c.id,
+            result: {
+              value: [
+                { address: "acct1", amount: "600" },
+                { address: "acct2", amount: "100" },
+              ],
+            },
+          };
+        if (c.method === "getTokenSupply")
+          return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
+        // getMultipleAccounts: the first account belongs to a program address, the second to a wallet.
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: {
+            value: [
+              { data: { parsed: { info: { owner: CURVE } } } },
+              { data: { parsed: { info: { owner: WALLET } } } },
+            ],
+          },
+        };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    const result = await client.getLargestHoldersBatch(["mintA"]);
+    expect(result.get("mintA")).toEqual({
+      status: "found",
+      holders: { top10HolderPct: 10, top10HolderAddresses: [WALLET] },
+    });
+  });
+
+  it("fails a mint whose reads came back without an answer", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    expect((await client.getLargestHoldersBatch(["mintA"])).get("mintA")).toEqual({ status: "failed" });
   });
 });
