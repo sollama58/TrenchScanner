@@ -160,7 +160,7 @@ async function readJobs(): Promise<JobCheck[]> {
       job,
       lastRunAt: row?.lastRunAt ?? null,
       intervalMs: interval,
-      runningSince: runningSinceFrom(row?.meta),
+      runningSince: runningSinceFrom(row?.meta, row?.lastRunAt),
     };
   });
 }
@@ -305,14 +305,42 @@ export interface PipelineWatchDeps {
   restart?: () => void;
 }
 
+/** The stall state as stored on the heartbeat row, read back by previousState. */
+function stateMeta(state: WatchState): JobRunMeta {
+  return {
+    stalledKeys: [...state.keys].join(","),
+    stalledSince: state.stalledSince === null ? null : new Date(state.stalledSince).toISOString(),
+    warned: state.warned,
+    lastRestartAt: state.lastRestartAt === null ? null : new Date(state.lastRestartAt).toISOString(),
+  };
+}
+
 export async function runPipelineWatch(env: Env, deps: PipelineWatchDeps = {}): Promise<JobRunMeta> {
+  // The stall state lives only on this job's heartbeat row, and the scheduler replaces that row's
+  // meta on any error that is not a JobFailure. So an ordinary error (a pool timeout mid-run) used
+  // to wipe it: the next run re-sent every "stalled" notice, restarted the stall clock, and forgot
+  // lastRestartAt - letting the next process restart again inside the hourly cap. Any error is
+  // rethrown as a JobFailure carrying the newest state known.
+  let known: WatchState | null = null;
+  try {
+    return await watchOnce(env, deps, (state) => {
+      known = state;
+    });
+  } catch (err) {
+    if (err instanceof JobFailure || known === null) throw err;
+    throw new JobFailure(String(err), stateMeta(known));
+  }
+}
+
+async function watchOnce(
+  env: Env,
+  deps: PipelineWatchDeps,
+  remember: (state: WatchState) => void,
+): Promise<JobRunMeta> {
   const now = deps.now ?? Date.now();
-  const [flows, jobs, before, cursor] = await Promise.all([
-    countFlows(now),
-    readJobs(),
-    previousState(),
-    oldestChatCursor(),
-  ]);
+  const before = await previousState();
+  remember(before);
+  const [flows, jobs, cursor] = await Promise.all([countFlows(now), readJobs(), oldestChatCursor()]);
   const problems = findProblems(flows, jobs, now, cursor);
   const keys = new Set(problems.map((p) => p.key));
   const started = problems.filter((p) => !before.keys.has(p.key));
@@ -326,17 +354,22 @@ export async function runPipelineWatch(env: Env, deps: PipelineWatchDeps = {}): 
   if (started.length > 0 || cleared.length > 0) notices.push(notificationText(started, cleared, problems));
   if (problems.length === 0 && before.keys.size > 0) await endBanners(now);
 
+  // From here on a failure keeps this run's warning level and any restart it scheduled. The
+  // stalled keys stay the previous run's until the notices go out, so a failed send is retried.
+  remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
   const step = restartStep(stalledSince === null ? null : now - stalledSince, warned, lastRestartAt, now);
   if (step === "warn5" || step === "warn1") {
-    await postBanner(BANNER[step], now);
     warned = step === "warn5" ? 1 : 2;
     if (step === "warn1") {
       lastRestartAt = now + RESTART_DELAY_MS;
       notices.push("<b>🔄 Restarting the scanner in about a minute</b> to clear the stall.");
       (deps.restart ?? exitForRestart)();
     }
+    remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
+    await postBanner(BANNER[step], now);
   } else if (step === "capped") {
     warned = -1;
+    remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
     notices.push(
       "<b>Not restarting:</b> the scanner already restarted in the last hour, so this stall needs a look.",
     );

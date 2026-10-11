@@ -117,13 +117,21 @@ export async function recordRunProgress(job: HeartbeatJob, stagesMs: Record<stri
     WHERE job = ${job}`;
 }
 
-/** When the run in flight started, read back from a heartbeat row's meta - see recordRunStart. */
-export function runningSinceFrom(meta: unknown): Date | null {
+/**
+ * When the run in flight started, read back from a heartbeat row's meta - see recordRunStart.
+ *
+ * Pass the row's lastRunAt: a heartbeat written without meta (the worker marking a run
+ * interrupted at shutdown) leaves the stamp behind, and a run that finished after it started
+ * is not in flight. Without this, a deploy during training left "a run is going" (and Retrain now
+ * refused) until the next scheduled run, hours later.
+ */
+export function runningSinceFrom(meta: unknown, lastRunAt?: Date | null): Date | null {
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
   const raw = (meta as Record<string, unknown>).runningSince;
   if (typeof raw !== "string") return null;
   const at = new Date(raw);
-  return Number.isNaN(at.getTime()) ? null : at;
+  if (Number.isNaN(at.getTime())) return null;
+  return lastRunAt && lastRunAt.getTime() > at.getTime() ? null : at;
 }
 
 /** When a job last finished a run (successfully or not), or null if it never has. */

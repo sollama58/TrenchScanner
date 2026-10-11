@@ -21,6 +21,14 @@ describe("runningSinceFrom", () => {
     expect(runningSinceFrom(null)).toBeNull();
     expect(runningSinceFrom(["runningSince"])).toBeNull();
   });
+
+  it("ignores a stamp left behind by a run that has since finished (an interrupted-at-shutdown heartbeat)", () => {
+    const meta = { runningSince: "2026-10-03T20:33:00.000Z" };
+    expect(runningSinceFrom(meta, new Date("2026-10-03T20:40:00.000Z"))).toBeNull();
+    expect(runningSinceFrom(meta, new Date("2026-10-03T18:00:00.000Z"))?.toISOString()).toBe(
+      "2026-10-03T20:33:00.000Z",
+    );
+  });
 });
 
 describe.skipIf(!dbAvailable)("recordRunStart", () => {

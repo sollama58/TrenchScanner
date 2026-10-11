@@ -191,6 +191,52 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
     await prisma.user.delete({ where: { id: user.id } });
   });
 
+  it("keeps the stall state and the restart cap when a run fails for an ordinary reason", async () => {
+    const now = Date.now();
+    const wallet = `${TAG}-admin2`;
+    const user = await prisma.user.create({ data: { walletAddress: wallet } });
+    await prisma.telegramChat.create({
+      data: { chatId: BigInt(now) + 7n, kind: "private", userId: user.id },
+    });
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.tokenNarrative.create({
+      data: {
+        mintAddress: `${TAG}-f`,
+        depth: "basic",
+        status: "complete",
+        checkedAt: new Date(now - 60 * MIN),
+      },
+    });
+    await jobsRanAt(now);
+    // A stall already warned about, with a restart 5 minutes ago: this run is "capped" and tells the admins.
+    const first = (await runPipelineWatch(env, { now }).catch((e: unknown) => e)) as JobFailure;
+    const lastRestartAt = new Date(now - 5 * MIN).toISOString();
+    const stalledSince = new Date(now - 20 * MIN).toISOString();
+    await prisma.systemHeartbeat.create({
+      data: {
+        job: "pipeline-watch",
+        lastRunAt: new Date(now - MIN),
+        meta: { stalledKeys: String(first.meta.stalledKeys), stalledSince, warned: 2, lastRestartAt },
+      },
+    });
+    const sendMessage = vi.fn().mockRejectedValue(new Error("pool timeout"));
+    const err = await runPipelineWatch(
+      { ...env, ADMIN_WALLET_ADDRESSES: wallet },
+      { now, telegram: { sendMessage } },
+    ).catch((e: unknown) => e);
+    expect(sendMessage).toHaveBeenCalled();
+    // A JobFailure, so the scheduler stores this meta instead of wiping the row's.
+    expect(err).toBeInstanceOf(JobFailure);
+    expect((err as JobFailure).message).toContain("pool timeout");
+    expect((err as JobFailure).meta).toMatchObject({
+      stalledKeys: first.meta.stalledKeys,
+      stalledSince,
+      warned: -1,
+      lastRestartAt,
+    });
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
   it("warns visitors, restarts once, and takes the banner down when it flows again", async () => {
     const t0 = Date.now();
     await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });

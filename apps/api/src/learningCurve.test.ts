@@ -257,4 +257,45 @@ describe.skipIf(!dbAvailable)("buildLearningCurve", () => {
     expect(Array.isArray(curve.runs)).toBe(true);
     expect(Array.isArray(curve.models)).toBe(true);
   });
+
+  it("gives a 7-day window's trend a full prior span, and keeps the series to the window", async () => {
+    const model = `lc-trend-${Date.now()}`;
+    const token = await prisma.token.create({ data: { mintAddress: `${model}-mint`, symbol: "LCT" } });
+    const until = new Date();
+    const since = new Date(until.getTime() - 7 * 86_400_000);
+    const dayStart = Date.UTC(until.getUTCFullYear(), until.getUTCMonth(), until.getUTCDate());
+    // One graded call at noon on each of the last 13 UTC days: 6 fall in the prior span.
+    const calls = Array.from(
+      { length: 13 },
+      (_, i) => new Date(dayStart - (i + 1) * 86_400_000 + 12 * 3_600_000),
+    );
+    try {
+      await prisma.curatedAlert.createMany({
+        data: calls.map((createdAt) => ({
+          source: "test",
+          confidence: 70,
+          anchorPriceUsd: 0.0001,
+          anchorMcapUsd: 50_000,
+          tokenId: token.id,
+          model,
+          modelName: "Trend test",
+          createdAt,
+          hit2xIn1h: true,
+          hit4xIn1h: false,
+          disqualified: false,
+        })),
+      });
+      const curve = await buildLearningCurve(since, until, { hitRate2xPct: 75, hitRate4xPct: 50 }, 7);
+      const mine = curve.models.find((m) => m.model === model)!;
+      const firstDay = since.toISOString().slice(0, 10);
+      expect(mine.days.every((d) => d.day >= firstDay)).toBe(true);
+      expect(curve.days.every((d) => d.day >= firstDay)).toBe(true);
+      // Recent: the 7 days ending on the newest call. Prior: the 7 before, read past the window.
+      expect(mine.trend?.recent.feed.graded).toBe(TREND_SPAN_DAYS);
+      expect(mine.trend?.prior?.feed.graded).toBe(13 - TREND_SPAN_DAYS);
+    } finally {
+      await prisma.curatedAlert.deleteMany({ where: { model } });
+      await prisma.token.delete({ where: { id: token.id } });
+    }
+  });
 });

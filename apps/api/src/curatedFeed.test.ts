@@ -492,6 +492,20 @@ describe("resolveOutcome", () => {
       }),
     );
     expect(live.status).toBe("disqualified");
+
+    // Settled the moment the 2x lands after the stop, not after the 15-minute window.
+    const early = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(5),
+          hit2xAt: minutesAgo(1),
+          lowBefore2xPriceUsd: 0.4,
+          peak1hPriceUsd: 2.2,
+        }),
+      }),
+    );
+    expect(early.status).toBe("disqualified");
+    expect(early.minutesLeft).toBeNull();
   });
 
   it("falls back to the copied columns after the training row is pruned", () => {
