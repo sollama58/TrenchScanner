@@ -232,15 +232,14 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     }
   });
 
-  it("keeps full-depth requests under our own daily cap", async () => {
+  it("sends every deep read asked for: no daily cap of our own", async () => {
     const { client, batch } = fakeClient();
     batch.mockResolvedValue(ok([]));
-    const capped = { ...env, TOKENSAGE_FULL_PER_DAY: 1 };
-    noteNarrativeWanted(`${TAG}-h1`, "full", capped);
-    noteNarrativeWanted(`${TAG}-h2`, "full", capped);
-    await flushNarrativeRequests(capped, client);
-    const fullCalls = batch.mock.calls.filter((c) => c[1] === "full");
-    expect(fullCalls.map(cas)).toEqual([[`${TAG}-h1`]]);
+    const many = Array.from({ length: 30 }, (_, i) => `${TAG}-h${i}`);
+    for (const m of many) noteNarrativeWanted(m, "full", env);
+    await flushNarrativeRequests(env, client);
+    const fullSent = batch.mock.calls.filter((c) => c[1] === "full").flatMap(cas);
+    expect(fullSent.sort()).toEqual([...many].sort());
   });
 
   it("reads why a re-sent mint's job ended, and stops asking for a definitive failure", async () => {
@@ -481,24 +480,23 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     }
   });
 
-  it("sends early deep reads on their own budget, then falls back to the quick read", async () => {
+  it("sends every early deep read, and counts them apart from decision-row reads", async () => {
     const { client, batch } = fakeClient();
     batch.mockImplementation(async (entries: { ca: string }[]) =>
       ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 1 }))),
     );
-    const capped = { ...env, TOKENSAGE_EARLY_FULL_PER_DAY: 1 };
     const u1 = `${TAG}-u1`;
     const u2 = `${TAG}-u2`;
     const u3 = `${TAG}-u3`;
-    noteNarrativeWanted(u1, "full", capped, undefined, { early: true });
-    noteNarrativeWanted(u2, "full", capped, undefined, { early: true });
-    // A decision-row read isn't held to the early budget, and outranks an early note.
-    noteNarrativeWanted(u3, "full", capped, undefined, { early: true });
-    noteNarrativeWanted(u3, "full", capped);
-    await flushNarrativeRequests(capped, client);
+    noteNarrativeWanted(u1, "full", env, undefined, { early: true });
+    noteNarrativeWanted(u2, "full", env, undefined, { early: true });
+    // A decision-row read outranks an early note.
+    noteNarrativeWanted(u3, "full", env, undefined, { early: true });
+    noteNarrativeWanted(u3, "full", env);
+    await flushNarrativeRequests(env, client);
     const sent = Object.fromEntries(batch.mock.calls.map((c) => [c[1], cas(c).sort()]));
-    expect(sent).toEqual({ full: [u1, u3].sort(), basic: [u2] });
-    expect(takeTokenSageStats()).toMatchObject({ fullToday: 2, earlyFullToday: 1 });
+    expect(sent).toEqual({ full: [u1, u2, u3].sort() });
+    expect(takeTokenSageStats()).toMatchObject({ fullToday: 3, earlyFullToday: 2 });
   });
 
   it("asks for the quick read at launch only when switched on, with the richer hints", async () => {

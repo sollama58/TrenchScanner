@@ -28,7 +28,7 @@ const logger = createLogger("tokensage");
  * entry that most first decisions follow within a minute), full depth (which also reads the X
  * link, its match with the token, and trends) when the mint gets a decision ("event") row.
  * A coin with an X link that reaches the watchlist young gets the full read at once instead
- * (its own daily budget, TOKENSAGE_EARLY_FULL_PER_DAY), and startNarrativePolling re-sends
+ * (no daily cap of our own since 2026-10-11, user decision), and startNarrativePolling re-sends
  * what is queued between cycles. At the end of each cycle flushNarrativeRequests
  * sends them in batches and is never awaited: nothing in the scan, matching or alerting path
  * waits on TokenSage. A batch answers cached mints at once and queues the rest; a queued mint is
@@ -39,8 +39,8 @@ const logger = createLogger("tokensage");
  * Failures cost only the narrative:
  * - a 429 or 503 on the whole batch pauses requests for a minute;
  * - an item turned away for quota or load is re-sent later, and once the day's full-depth quota
- *   is spent (X-Quota-Full-Remaining, or our own TOKENSAGE_FULL_PER_DAY) full requests fall
- *   back to basic until midnight UTC;
+ *   is spent on TokenSage's side (X-Quota-Full-Remaining, or an item answered quota_exceeded)
+ *   full requests fall back to basic until midnight UTC. We keep no daily cap of our own;
  * - a mint TokenSage can't analyse is cached as "failed" so it isn't asked again;
  * - a partial answer (an upstream source failed, or the mint isn't on-chain yet) is stored and
  *   asked again a little later, a few times (from rules 0.28.0 metadata that never resolves ends
@@ -503,8 +503,6 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
         })
       : [];
   const storedByMint = new Map(stored.map((r) => [r.mintAddress, r]));
-  let fullBudget = fullOpen ? Math.max(0, env.TOKENSAGE_FULL_PER_DAY - fullSentToday) : 0;
-  let earlyBudget = Math.max(0, env.TOKENSAGE_EARLY_FULL_PER_DAY - earlySentToday);
   const earlyMints = new Set<string>();
   for (const [mint, w] of wanted) {
     if (w.depth === "basic" && now - w.notedAt > WANTED_BASIC_MAX_AGE_MS) {
@@ -527,20 +525,19 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
         continue;
       }
     }
-    if (w.depth === "full" && fullBudget > 0 && (!w.early || earlyBudget > 0)) {
-      fullBudget -= 1;
-      if (w.early) {
-        earlyBudget -= 1;
-        earlyMints.add(mint);
-      }
+    // No daily cap of our own (user decision 2026-10-11): every deep read the scan asks for is
+    // sent, unless TokenSage itself has said its full quota is spent for the day.
+    if (w.depth === "full" && fullOpen) {
+      if (w.early) earlyMints.add(mint);
       byDepth.full.push({ ca: mint, hints: w.hints });
     } else if (w.early) {
-      // Out of early budget: the basic read, as for any other coin, unless one is on its way.
+      // TokenSage's full quota is spent: the basic read, as for any other coin, unless one is on
+      // its way.
       if (queued || row) wanted.delete(mint);
       else byDepth.basic.push({ ca: mint, hints: w.hints });
     } else if (queued || (w.depth === "full" && row && row.status !== "failed")) {
-      // Out of full-depth quota with a basic answer stored or on its way: the full request
-      // stays noted for when the quota is back.
+      // TokenSage's full quota is spent, with a basic answer stored or on its way: the full
+      // request stays noted for when the quota is back.
       continue;
     } else {
       byDepth.basic.push({ ca: mint, hints: w.hints });

@@ -1737,7 +1737,7 @@ async function processCandidate(
     : undefined;
   // A young coin with an X link gets the deep read straight away (user decision 2026-10-07): the
   // deep read is the one that opens the X post, and asked at the first decision it lands after
-  // that decision for most coins. Held to its own daily budget (TOKENSAGE_EARLY_FULL_PER_DAY).
+  // that decision for most coins.
   const earlyDeep =
     narrativeHints?.twitter !== undefined &&
     env.TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES > 0 &&

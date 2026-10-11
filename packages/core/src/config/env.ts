@@ -604,15 +604,14 @@ const envSchema = z.object({
   // reads the X link and trends), and stores the answer in TokenNarrative. Nothing in the scan,
   // matching or alerting path waits on it. Off until TOKENSAGE_ENABLED=true and both the URL and
   // the API key are set. TOKENSAGE_MAX_BATCHES_PER_CYCLE bounds the calls per scan cycle (each
-  // carries up to TOKENSAGE_PREFETCH_CHUNK mints) and TOKENSAGE_FULL_PER_DAY keeps full-depth
-  // requests under the key's daily quota on TokenSage's side (20,000/day on the deployed service).
+  // carries up to TOKENSAGE_PREFETCH_CHUNK mints). There is no daily cap of our own on deep reads
+  // (user decision 2026-10-11, the TOKENSAGE_FULL_PER_DAY and TOKENSAGE_EARLY_FULL_PER_DAY caps
+  // are gone); when TokenSage's own key quota is spent, deep reads fall back to basic until
+  // midnight UTC.
   //
   // Early deep read (user decision 2026-10-07): a coin with an X link that reaches the watchlist
   // under TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES old gets the full read at once instead of the
-  // basic one, so the X match is usually in before its first decision. Those early reads are
-  // capped at TOKENSAGE_EARLY_FULL_PER_DAY, so at least TOKENSAGE_FULL_PER_DAY minus that is left
-  // for the decision-row reads; past the cap a young coin gets the basic read as before. 0 turns
-  // it off. TOKENSAGE_POLL_SECONDS re-sends queued requests between scan cycles, so a finished
+  // basic one, so the X match is usually in before its first decision. 0 turns it off. TOKENSAGE_POLL_SECONDS re-sends queued requests between scan cycles, so a finished
   // read is picked up within seconds rather than at the next 30-second scan (0: scan only).
   TOKENSAGE_ENABLED: z
     .enum(["true", "false"])
@@ -624,9 +623,7 @@ const envSchema = z.object({
   TOKENSAGE_API_KEY: pastedKey,
   TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(2),
-  TOKENSAGE_FULL_PER_DAY: z.coerce.number().int().min(0).default(6000),
   TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES: z.coerce.number().min(0).default(10),
-  TOKENSAGE_EARLY_FULL_PER_DAY: z.coerce.number().int().min(0).default(4500),
   TOKENSAGE_POLL_SECONDS: z.coerce.number().min(0).default(8),
   // Quick read at launch instead of at the first watchlist scan (tokensage/prefetch.ts,
   // noteLaunchNarratives). On the first day of live reads the first scan was also the first
