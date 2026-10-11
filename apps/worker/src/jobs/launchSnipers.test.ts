@@ -186,6 +186,23 @@ describe("withLaunchSnipers", () => {
   });
 });
 
+describe("sniperWalletsFromCache on a short list", () => {
+  beforeEach(() => resetLaunchSnipersCache());
+
+  it("measures against a list of fewer than 25 only while its read is fresh", async () => {
+    const groups = [
+      { mintAddress: "S", contender: true },
+      { mintAddress: "F", contender: true },
+    ];
+    await resolveLaunchSnipers(groups, fakeHelius({ found: { S: 9, F: 25 } }).helius, { ...opts, now: 0 });
+    expect(sniperWalletsFromCache("S", 60_000)?.size).toBe(18);
+    // Later buyers are missing from a stale short list: unknown, so the decision waits for the re-read.
+    expect(sniperWalletsFromCache("S", 3 * 60_000)).toBeUndefined();
+    // A full list never changes.
+    expect(sniperWalletsFromCache("F", 24 * 3_600_000)?.size).toBe(50);
+  });
+});
+
 describe("snipers in the top 10", () => {
   beforeEach(() => resetLaunchSnipersCache());
 

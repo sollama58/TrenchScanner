@@ -832,7 +832,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     const skipped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(skipped.stoppedAt).toBeNull();
     expect(skipped.low1hPriceUsd).toBe(1.0);
-    expect(skipped.lastPriceUsd).toBe(1.1);
+    // The contradicting snapshot stands in as this sweep's tick.
+    expect(skipped.lastPriceUsd).toBe(1.05);
     expect((summary as Record<string, number>).crashTicksSkipped).toBeGreaterThanOrEqual(1);
 
     // The scan sees the crash too: a real rug, and it lands.
@@ -847,6 +848,74 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     const stopped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(stopped.stoppedAt).not.toBeNull();
     expect(stopped.low1hPriceUsd).toBe(0.02);
+  });
+
+  it("holds a crash tick nothing confirms for one sweep, and lands it when the next sweep still sees it", async () => {
+    // Above the band the scan takes no snapshots, so nothing can contradict a fetched glitch.
+    const token = await createToken("crash-unconfirmed");
+    const anchorAt = new Date(Date.now() - 4 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      entryAt: new Date(anchorAt.getTime() + 70_000),
+      lastPriceUsd: 1.1,
+      lastCheckedAt: new Date(Date.now() - 60_000),
+      peakBeforeStopPriceUsd: 1.1,
+    });
+    const first = await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 0.02 }), env);
+    const held = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(held.stoppedAt).toBeNull();
+    expect(held.lastPriceUsd).toBe(1.1);
+    expect((first as Record<string, number>).crashTicksDeferred).toBeGreaterThanOrEqual(1);
+
+    // A glitch is gone a sweep later: nothing lands.
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.2 }), env);
+    const recovered = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(recovered.stoppedAt).toBeNull();
+    expect(recovered.low1hPriceUsd).toBe(1.0);
+
+    // A real crash is still there a sweep later: it lands, stopped at the time it was first seen.
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 0.02 }), env);
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    const firstSeen = Date.now();
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 0.019 }), env);
+    const stopped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(stopped.stoppedAt).not.toBeNull();
+    expect(stopped.stoppedAt!.getTime()).toBeLessThan(firstSeen);
+    expect(stopped.low1hPriceUsd).toBe(0.019);
+  });
+
+  it("holds a crash price from a scan snapshot standing in for a missed fetch, like a fetched one", async () => {
+    const token = await createToken("crash-snapshot");
+    const anchorAt = new Date(Date.now() - 4 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      entryAt: new Date(anchorAt.getTime() + 70_000),
+      lastPriceUsd: 1.1,
+      lastCheckedAt: new Date(Date.now() - 60_000),
+      peakBeforeStopPriceUsd: 1.1,
+    });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: token.id,
+        takenAt: new Date(Date.now() - 20_000),
+        priceUsd: 0.02,
+        marketCapUsd: 2_000,
+      },
+    });
+    // The fetch missed the mint; the snapshot alone says crash.
+    await runCandidateWatchJob(stubDexScreener({}), env);
+    const held = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(held.stoppedAt).toBeNull();
+    expect(held.lastPriceUsd).toBe(1.1);
   });
 
   it("reschedules a row to be due when the next sweep starts, one interval after this one", async () => {

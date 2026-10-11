@@ -71,10 +71,23 @@ export function quoteFromToken(
 const priceCache = new Map<string, { quote: MintQuote; at: number }>();
 const decimalsCache = new Map<string, number>();
 
-/** Test hook: forget every cached price and decimals reading. */
+type BalanceReading =
+  Awaited<ReturnType<HeliusClient["getTokenBalancesBatch"]>> extends Map<string, infer R> ? R : never;
+/**
+ * The balances of wallets that came back deferred, kept for the retry: when pricing is throttled
+ * or past its deadline every such wallet is retried next cycle, and reading its balances again
+ * (two Helius calls) only to defer it again paid ~80 credits a cycle while learning nothing.
+ * Short-lived, since a holder of the launch itself can be selling, and dropped once used.
+ */
+const deferredBalances = new Map<string, { reading: BalanceReading; at: number }>();
+const DEFERRED_BALANCES_TTL_MS = 5 * 60_000;
+const MAX_DEFERRED_BALANCES = 5_000;
+
+/** Test hook: forget every cached price, decimals and deferred balances reading. */
 export function resetValuationCaches(): void {
   priceCache.clear();
   decimalsCache.clear();
+  deferredBalances.clear();
 }
 
 function trimOldest<K, V>(map: Map<K, V>, max: number): void {
@@ -143,7 +156,16 @@ export async function valueWalletsFromBalances(
   const unique = [...new Set(addresses)];
   if (unique.length === 0) return out;
 
-  const balances = await deps.helius.getTokenBalancesBatch(unique);
+  const kept = new Map<string, BalanceReading>();
+  for (const address of unique) {
+    const hit = deferredBalances.get(address);
+    deferredBalances.delete(address);
+    if (hit && now - hit.at <= DEFERRED_BALANCES_TTL_MS) kept.set(address, hit.reading);
+  }
+  const toRead = unique.filter((address) => !kept.has(address));
+  const balances = toRead.length > 0 ? await deps.helius.getTokenBalancesBatch(toRead) : new Map();
+  for (const [address, reading] of kept) balances.set(address, reading);
+  const readAt = new Map(unique.map((a) => [a, kept.has(a) ? null : now]));
   const plans: WalletPlan[] = [];
   for (const address of unique) {
     const reading = balances.get(address);
@@ -222,13 +244,19 @@ export async function valueWalletsFromBalances(
     } else {
       out.set(plan.address, { status: "deferred" });
       deferred += 1;
+      // A reading already reused once isn't kept again: the next try reads afresh.
+      const reading = balances.get(plan.address);
+      const at = readAt.get(plan.address);
+      if (reading && at != null) deferredBalances.set(plan.address, { reading, at });
     }
   }
+  trimOldest(deferredBalances, MAX_DEFERRED_BALANCES);
   logger.info("valued wallets from balances", {
     wallets: unique.length,
     newPrices: toPrice.size,
     newDecimals,
     deferred,
+    balancesReused: kept.size,
   });
   return out;
 }

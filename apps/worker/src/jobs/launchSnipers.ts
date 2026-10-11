@@ -136,12 +136,16 @@ export function launchSnipersFromCache(
 /**
  * The launch's first buyers' wallets, once read - what the top-10 snipers share
  * (sniperTop10WalletPct) is measured against. Undefined until the read, and for a launch with no
- * buyers found (unknown, never "no snipers"). Who the first buyers were never changes, so no
- * freshness limit applies.
+ * buyers found (unknown, never "no snipers"). A full list of 25 never changes, so no freshness
+ * limit applies to it. A list read with fewer is only as good as its read: buyers who came after
+ * it are first buyers too, and a share measured without them reads too low - so past
+ * CONTENDER_INCOMPLETE_RETRY_MS (when a contender's list is re-read) it is unknown again, and a
+ * decision waits for the re-read rather than go ahead on the short list.
  */
-export function sniperWalletsFromCache(mint: string): ReadonlySet<string> | undefined {
+export function sniperWalletsFromCache(mint: string, now = Date.now()): ReadonlySet<string> | undefined {
   const e = entries.get(mint);
   if (!e || e.buyers.length === 0) return undefined;
+  if (!e.complete && now - e.readAt > CONTENDER_INCOMPLETE_RETRY_MS) return undefined;
   // The token accounts too: a holder list entry falls back to the token account when RugCheck
   // gives no owner for it (rugcheck.ts), and a sniper must not read as a later holder then.
   return new Set(e.buyers.flatMap((b) => [b.wallet, b.tokenAccount]));
