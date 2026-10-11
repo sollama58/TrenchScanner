@@ -12,6 +12,7 @@ import {
   CANDIDATE_EXTENDED_WATCH_HOURS,
   CURRENT_LABEL_RULE,
   walletSafetyCutsSql,
+  firstCallOnRowSql,
   type Env,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
@@ -520,9 +521,9 @@ export async function buildHitRateReport(
                               AND (COALESCE(a."hit10xIn1h", co."hit10xIn1h") IS NOT NULL OR NOT (COALESCE(a."hit2xIn1h", co."hit2xIn1h") AND NOT COALESCE(a."disqualified", co."disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()}) AS sim_calls,
            sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()})::float8 AS sim_sum,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
                               AND (a."outcomeFinalizedAt" IS NOT NULL
                                    OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable,
@@ -573,9 +574,9 @@ export async function buildHitRateReport(
                               AND (COALESCE(a."hit10xIn1h", co."hit10xIn1h") IS NOT NULL OR NOT (COALESCE(a."hit2xIn1h", co."hit2xIn1h") AND NOT COALESCE(a."disqualified", co."disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql("a", "tier")}) AS sim_calls,
            sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql("a", "tier")})::float8 AS sim_sum,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
                               AND (a."outcomeFinalizedAt" IS NOT NULL
                                    OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable,

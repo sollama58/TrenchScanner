@@ -1,4 +1,4 @@
-import { prisma, createLogger, walletSafetyCutsSql, Prisma } from "@trenchscanner/core";
+import { prisma, createLogger, walletSafetyCutsSql, firstCallOnRowSql, Prisma } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("lighthouse-rollup");
@@ -257,8 +257,8 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
              count(*) FILTER (WHERE a."hit10xIn1h") AS won10x,
              count(*) FILTER (WHERE a."hit2xIn1h" IS NOT NULL
                                 AND (a."hit10xIn1h" IS NOT NULL OR NOT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)))) AS ten_x_graded,
-             count(a."simReturnPct") AS ret_n,
-             sum(a."simReturnPct")::float8 AS ret_sum
+             count(a."simReturnPct") FILTER (WHERE ${firstCallOnRowSql()}) AS ret_n,
+             sum(a."simReturnPct") FILTER (WHERE ${firstCallOnRowSql()})::float8 AS ret_sum
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"

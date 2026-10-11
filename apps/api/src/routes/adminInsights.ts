@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, HEARTBEAT_JOB_ROLE, type HeartbeatJob } from "@trenchscanner/core";
+import { prisma, firstCallOnRowSql, HEARTBEAT_JOB_ROLE, type HeartbeatJob } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { summarizeHeartbeat } from "./health.js";
 
@@ -242,7 +242,7 @@ async function buildTokenSageReport(days: number) {
     // window (CuratedAlert has a createdAt index) and capped, newest first.
     prisma.$queryRaw<AlertOutcomeRow[]>`
       SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
-             a."simReturnPct"::float8 AS sim_return,
+             CASE WHEN ${firstCallOnRowSql()} THEN a."simReturnPct" END::float8 AS sim_return,
              n.status, n.categories, n."mainCategory" AS main_category, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
              CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind, n.flags
       FROM "CuratedAlert" a
