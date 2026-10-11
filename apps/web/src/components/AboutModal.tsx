@@ -221,8 +221,9 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
           <p className="tour-lead">
             We start the clock at the price when it alerted. Doubling within 15 minutes is a win{" "}
             <b className="good">✓</b>. Reaching 4x within 30 minutes is <b className="good">✓✓</b>, and 10x
-            within an hour is <b className="good">✓✓✓</b>. If it halves first it&apos;s a loss{" "}
-            <b className="bad">✕</b>, marked <b className="bad">↗</b> when it runs later anyway.
+            within an hour is <b className="good">✓✓✓</b>. If it halves first it&apos;s a loss: stopped out{" "}
+            <b className="bad">⊘</b>, even when it runs later anyway. A coin that just runs out of time is{" "}
+            <b className="bad">✕</b>, and <b>↗</b> marks one that never halved and doubled later.
           </p>
           <div className="tour-goal">
             <span className="num">{t.hitRate2xPct}%</span>

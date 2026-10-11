@@ -66,7 +66,7 @@ describe("outcomeBadge", () => {
     expect(outcomeBadge(watching({ status: "won", hit2x: true, hitGoal: false })).text).toBe("✓ 2x win");
     expect(outcomeBadge(watching({ status: "missed" })).text).toBe("✕ Missed 2x");
     expect(outcomeBadge(watching({ status: "disqualified" }))).toEqual({
-      text: "↗ Stopped out",
+      text: "⊘ Stopped out",
       tone: "bad",
     });
   });
@@ -87,8 +87,8 @@ describe("outcomeBadge", () => {
   it("gives a stop-out that went on to run the arrow, still as a loss", () => {
     const stopped = watching({ status: "missed", maxDrawdown1hPct: -60, peak24hReturnPct: 250 });
     expect(stoppedThenRan(stopped)).toBe(true);
-    expect(outcomeBadge(stopped)).toEqual({ text: "↗ Stopped, ran later", tone: "bad" });
-    expect(outcomeBadge({ ...stopped, maxDrawdown1hPct: -50 }).text).toBe("↗ Stopped, ran later");
+    expect(outcomeBadge(stopped)).toEqual({ text: "⊘ Stopped, ran later", tone: "bad" });
+    expect(outcomeBadge({ ...stopped, maxDrawdown1hPct: -50 }).text).toBe("⊘ Stopped, ran later");
     // Fell through the stop and never got back to 2x, or the run peak isn't known: a plain miss.
     expect(outcomeBadge({ ...stopped, peak24hReturnPct: 90 }).text).toBe("✕ Missed 2x");
     expect(outcomeBadge({ ...stopped, peak24hReturnPct: null }).text).toBe("✕ Missed 2x");

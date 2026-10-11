@@ -195,8 +195,10 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <dd>The 15 minutes ran out before it doubled.</dd>
           <dt>↗ Ran later</dt>
           <dd>Missed the 15 minutes without falling 50%, then doubled later in the day. Counts as a miss.</dd>
-          <dt className="fp-bad">↗ Stopped out</dt>
-          <dd>Fell 50% below the alert price, then doubled. The arrow shows it went; it counts as a loss.</dd>
+          <dt className="fp-bad">⊘ Stopped out</dt>
+          <dd>Fell 50% below the alert price, then doubled within its 15 minutes. It counts as a loss.</dd>
+          <dt className="fp-bad">⊘ Stopped, ran later</dt>
+          <dd>Fell 50% below the alert price, then doubled later in the day. Still a loss.</dd>
           <dt>Grading</dt>
           <dd>The window has closed and the result is being worked out.</dd>
         </dl>
