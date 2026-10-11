@@ -149,7 +149,7 @@ model TelegramChat {
   /// Paused by the user from the dashboard; the chat stays linked.
   enabled          Boolean   @default(true)
   /// The parts of an alert this chat has switched off (ALERT_PARTS in telegram/format.ts:
-  /// "image", "stats", "conviction", "reasons", "filters", "mint", "links"). Empty means the
+  /// "image", "stats" (market cap), "holders", "volume", "age", "conviction", ...). Empty means the
   /// whole card. Set from the dashboard or with /show and /hide in the chat.
   hidden           String[]  @default([])
   /// "full" (the whole card) or "compact" (a few lines: no rule, reasons or per-filter lines).

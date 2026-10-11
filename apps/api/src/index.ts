@@ -8,19 +8,21 @@ const logger = createLogger("api");
 const SHUTDOWN_DEADLINE_MS = 20_000;
 
 const INSECURE_DEFAULT_JWT_SECRET = "dev-insecure-default-jwt-secret-change-me";
+/** .env.example's placeholder: long enough to pass the schema's 32-character minimum. */
+const EXAMPLE_JWT_SECRET = "change-me-to-a-random-64-char-hex-string";
 
 async function main() {
   const env = loadEnv();
 
-  if (env.JWT_SECRET === INSECURE_DEFAULT_JWT_SECRET) {
+  if (env.JWT_SECRET === INSECURE_DEFAULT_JWT_SECRET || env.JWT_SECRET === EXAMPLE_JWT_SECRET) {
     if (process.env.NODE_ENV === "production") {
       // A guessable JWT_SECRET lets anyone forge session cookies for any user - unlike most
       // misconfiguration, this is worth refusing to boot over rather than just logging a warning.
       throw new Error(
-        "JWT_SECRET is unset (using the insecure default) while NODE_ENV=production. Set a real JWT_SECRET before deploying.",
+        "JWT_SECRET is unset or still a placeholder while NODE_ENV=production. Set a real JWT_SECRET before deploying.",
       );
     }
-    logger.warn("JWT_SECRET is unset - using an insecure default. Fine for local dev, never for production.");
+    logger.warn("JWT_SECRET is unset or a placeholder - insecure. Fine for local dev, never for production.");
   }
 
   const app = await buildServer(env);

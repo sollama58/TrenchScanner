@@ -31,7 +31,9 @@ if [ -z "$schema_keys" ]; then
 fi
 
 # Every key render.yaml sets, in any service's or group's envVars.
-render_keys=$(grep -E '^\s*- key: [A-Z][A-Z0-9_]*\s*$' "$RENDER_YAML" | sed -E 's/.*- key: ([A-Z0-9_]+).*/\1/' | sort -u)
+# A key may carry a trailing comment or quotes (`- key: "NAME" # note`); the match allows both, so
+# such a line is still checked rather than silently skipped.
+render_keys=$(grep -E '^\s*- key: ["'"'"']?[A-Za-z][A-Za-z0-9_]*["'"'"']?\s*(#.*)?$' "$RENDER_YAML" | sed -E 's/.*- key: ["'"'"']?([A-Za-z0-9_]+).*/\1/' | sort -u)
 if [ -z "$render_keys" ]; then
   echo "check-env-keys: found no envVars keys in $RENDER_YAML - has its layout changed?" >&2
   exit 1
