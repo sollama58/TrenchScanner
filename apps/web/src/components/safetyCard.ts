@@ -23,12 +23,28 @@ export interface SafetyCardData {
   rejected: number;
   /** "24 hours" or "7 days". */
   span: string;
+  /** When the count began, if after the window's start: the card then says "since" that hour (UTC). */
+  since?: Date | null;
 }
 
 const GOOD = "#34d399";
 const BAD = "#f87171";
 
-const pctText = (v: number) => `${v.toFixed(v > 0 && v < 10 ? 1 : 0)}%`;
+/**
+ * The two shares as shown side by side, adding up to 100: one decimal for both when the smaller
+ * one is under 10% (so 3.4% / 96.6%, not 3.4% / 97%), and the accepted side taken from the
+ * rounded Likely Rugs figure so the pair never reads 100.4% or 99%.
+ */
+export function splitPctText(okPct: number, rugPct: number): { ok: string; rug: string } {
+  const low = Math.min(okPct, rugPct);
+  const dp = low > 0 && low < 10 ? 1 : 0;
+  const rug = rugPct.toFixed(dp);
+  return { ok: `${(100 - Number(rug)).toFixed(dp)}%`, rug: `${rug}%` };
+}
+
+/** "Oct 10, 23:00 UTC": the image is seen by people in any timezone. */
+export const sinceUtc = (d: Date) =>
+  `${d.toLocaleString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}, ${d.toLocaleString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC`;
 
 export async function renderSafetyCard(d: SafetyCardData): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
@@ -36,14 +52,21 @@ export async function renderSafetyCard(d: SafetyCardData): Promise<HTMLCanvasEle
   const total = d.accepted + d.rejected;
   const rugPct = total > 0 ? (d.rejected / total) * 100 : 0;
   const okPct = total > 0 ? 100 - rugPct : 0;
+  const text = total > 0 ? splitPctText(okPct, rugPct) : { ok: "–", rug: "–" };
+  // While the count is younger than the window, the card says how far back it really goes.
+  const since = d.since ? sinceUtc(d.since) : null;
   frame(
     ctx,
     icon,
     "How many new tokens are Likely Rugs?",
-    `Every token we scanned in the last ${d.span}, through our safety screen.`,
+    since
+      ? `Every token we scanned since ${since}, through our safety screen.`
+      : `Every token we scanned in the last ${d.span}, through our safety screen.`,
     {
       badge: (c, right, cy) => pill(c, right, cy, `Last ${d.span}`),
-      footer: `${total.toLocaleString("en-US")} tokens screened`,
+      footer: since
+        ? `${total.toLocaleString("en-US")} tokens screened since ${since}`
+        : `${total.toLocaleString("en-US")} tokens screened`,
       link: "trenchscanner.app",
     },
   );
@@ -57,14 +80,14 @@ export async function renderSafetyCard(d: SafetyCardData): Promise<HTMLCanvasEle
   ctx.textAlign = "left";
   ctx.fillStyle = GOOD;
   ctx.font = `800 76px ${FONT}`;
-  ctx.fillText(pctText(okPct), x0, BODY_TOP + 96);
+  ctx.fillText(text.ok, x0, BODY_TOP + 96);
   ctx.fillStyle = INK2;
   ctx.font = `600 22px ${FONT}`;
   ctx.fillText(`Accepted · ${d.accepted.toLocaleString("en-US")} tokens`, x0, BODY_TOP + 134);
   ctx.textAlign = "right";
   ctx.fillStyle = BAD;
   ctx.font = `800 76px ${FONT}`;
-  ctx.fillText(pctText(rugPct), x1, BODY_TOP + 96);
+  ctx.fillText(text.rug, x1, BODY_TOP + 96);
   ctx.fillStyle = INK2;
   ctx.font = `600 22px ${FONT}`;
   ctx.fillText(`Likely Rugs · ${d.rejected.toLocaleString("en-US")} tokens`, x1, BODY_TOP + 134);

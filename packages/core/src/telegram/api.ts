@@ -166,6 +166,8 @@ export interface TelegramMessage {
   /** A photo message's sizes, smallest first; every size shares the picture's file_ids. */
   photo?: { file_id: string; width: number; height: number }[];
   entities?: { type: string; offset: number; length: number }[];
+  /** A service message in a group that became a supergroup: the supergroup's new chat id. */
+  migrate_to_chat_id?: number;
 }
 
 export interface TelegramChatMemberUpdated {

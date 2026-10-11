@@ -319,6 +319,32 @@ export type DecisionPopulation = "event" | "second";
  * source is its CuratorModel row id, so every call is traceable to the exact weights that made
  * it. Reasons are computed only for calls (they cost a pass over the model).
  */
+/** Models already reported as unscorable, so a broken model logs once per process, not per coin. */
+const unscorableModels = new Set<string>();
+
+/**
+ * One seat's probability, or null when its model throws or scores NaN/Infinity (a malformed
+ * restored model): that seat sits out instead of taking every other seat's decision down with it.
+ */
+function safeScore(seat: string, modelId: string, score: () => number): number | null {
+  let probability: number;
+  try {
+    probability = score();
+  } catch (err) {
+    if (!unscorableModels.has(modelId)) {
+      unscorableModels.add(modelId);
+      logger.warn("seat's model failed to score - it sits out", { seat, modelId, error: String(err) });
+    }
+    return null;
+  }
+  if (Number.isFinite(probability)) return probability;
+  if (!unscorableModels.has(modelId)) {
+    unscorableModels.add(modelId);
+    logger.warn("seat's model scored a non-finite probability - it sits out", { seat, modelId });
+  }
+  return null;
+}
+
 function decideCurations(
   scored: ScoredToken,
   roster: CuratorRoster,
@@ -336,7 +362,8 @@ function decideCurations(
     if (entry.role === "narrative") {
       if (!deepRead) continue;
       const { params, id } = entry.model;
-      const probability = scoreCandidateWithModel(params, features);
+      const probability = safeScore(entry.spec.id, id, () => scoreCandidateWithModel(params, features));
+      if (probability === null) continue;
       const curate = probability >= params.threshold;
       decisions.set(entry.spec.id, {
         curate,
@@ -358,7 +385,8 @@ function decideCurations(
       );
     } else if (entry.role === "learner") {
       const { params, id } = entry.model;
-      const probability = scoreCandidateWithModel(params, features);
+      const probability = safeScore(entry.spec.id, id, () => scoreCandidateWithModel(params, features));
+      if (probability === null) continue;
       probabilities.set(entry.spec.id, probability);
       learners.set(entry.spec.id, entry.model);
       const curate = probability >= params.threshold;

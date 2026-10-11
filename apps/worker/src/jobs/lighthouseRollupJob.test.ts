@@ -29,10 +29,10 @@ async function cleanup() {
   await prisma.token.deleteMany({ where: { mintAddress: { in: MINTS } } });
   await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { in: MINTS } } });
   await prisma.lighthouseHour.deleteMany({
-    where: { hour: { gte: DAY, lt: new Date(DAY.getTime() + 2 * 24 * HOUR_MS) } },
+    where: { hour: { gte: DAY, lt: new Date(DAY.getTime() + 4 * 24 * HOUR_MS) } },
   });
   await prisma.lighthouseDayLabel.deleteMany({
-    where: { day: { gte: DAY, lt: new Date(DAY.getTime() + 2 * 24 * HOUR_MS) } },
+    where: { day: { gte: DAY, lt: new Date(DAY.getTime() + 4 * 24 * HOUR_MS) } },
   });
 }
 
@@ -254,5 +254,15 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
     ).toBe(14);
     const hour = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour: HOUR } });
     expect(hour.screenedCalls).toBe(4);
+  });
+
+  it("keeps an old hour's screen counts when re-summed past the snapshot horizon", async () => {
+    // Three days on, the cleanup has taken the untracked rejected token's snapshots: a re-sum
+    // asked to start at that hour re-sums everything else but leaves the frozen screen counts alone.
+    const ai = await prisma.token.findUniqueOrThrow({ where: { mintAddress: MINT_AI } });
+    await prisma.tokenSnapshot.deleteMany({ where: { tokenId: ai.id } });
+    await runLighthouseRollupJob({ from: DAY, now: new Date(DAY.getTime() + 72 * HOUR_MS) });
+    const hour = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour: HOUR } });
+    expect(hour).toMatchObject({ screenedCalls: 4, screenAccepted: 2, screenRejected: 1 });
   });
 });

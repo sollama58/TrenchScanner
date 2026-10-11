@@ -267,6 +267,8 @@ describe("AI review brief", () => {
     expect(clampProbability(-0.2)).toBe(0);
     expect(clampProbability(Number.NaN)).toBe(0);
     expect(clampProbability(0.35)).toBe(0.35);
+    expect(clampProbability(35)).toBeCloseTo(0.35);
+    expect(clampProbability(250)).toBe(1);
   });
 });
 

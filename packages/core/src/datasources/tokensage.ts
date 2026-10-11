@@ -905,6 +905,9 @@ const STORED_ANALYSIS_TRIMMED_PATHS: readonly (readonly string[])[] = [
  * rejects them), anything that isn't plain JSON dropped, and no larger than
  * STORED_ANALYSIS_MAX_BYTES. Null if it isn't an object, or can't be brought under the cap.
  */
+/** Serialized size in UTF-8 bytes: a string's length counts UTF-16 units, under a third of that for CJK. */
+const jsonBytes = (doc: unknown) => new TextEncoder().encode(JSON.stringify(doc)).length;
+
 export function storableAnalysis(analysis: unknown): Record<string, unknown> | null {
   const clean = (value: unknown, depth: number): unknown => {
     if (typeof value === "string") return value.replace(NUL, "");
@@ -922,7 +925,7 @@ export function storableAnalysis(analysis: unknown): Record<string, unknown> | n
   };
   if (!asRecord(analysis)) return null;
   const doc = clean(analysis, 0) as Record<string, unknown>;
-  const size = JSON.stringify(doc).length;
+  const size = jsonBytes(doc);
   if (size <= STORED_ANALYSIS_MAX_BYTES) return doc;
 
   let dropped = 0;
@@ -935,7 +938,7 @@ export function storableAnalysis(analysis: unknown): Record<string, unknown> | n
       dropped += 1;
     }
   }
-  const trimmedSize = JSON.stringify(doc).length;
+  const trimmedSize = jsonBytes(doc);
   const mint = typeof doc.mint === "string" ? doc.mint : undefined;
   if (trimmedSize <= STORED_ANALYSIS_MAX_BYTES) {
     logger.warn("TokenSage analysis over the stored size cap; stored without its free text", {

@@ -503,7 +503,7 @@ function Sections({
         <div className="tsg-card tsg-ring-card">
           <Ring
             value={t.alerts > 0 ? (t.alertsDescribed / t.alerts) * 100 : null}
-            label="of model calls had a read in hand"
+            label="of model calls' coins have a read"
           />
           <ol className="tsg-steps">
             <li>

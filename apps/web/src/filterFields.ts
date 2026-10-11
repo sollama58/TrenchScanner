@@ -12,6 +12,9 @@ export interface FieldSpec {
   hint: string;
   unit?: string;
   step?: number;
+  /** The API's bounds (apps/api/src/routes/filters.ts), so the browser stops a value it would reject. */
+  min?: number;
+  max?: number;
   /** Shows the composite-score explainer (components/ScoreExplainer.tsx) beside the label. */
   explainScore?: boolean;
 }
@@ -26,6 +29,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
     fields: [
       {
         key: "minVolumeMcapRatio",
+        min: 0,
         label: "Min 24h volume ÷ market cap",
         hint: "e.g. 0.5 = volume at least half the market cap",
         step: 0.1,
@@ -33,6 +37,8 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       { key: "minHolderGrowthPct", label: "Min holder growth", hint: "over the last 30 minutes", unit: "%" },
       {
         key: "minScore",
+        min: 0,
+        max: 100,
         label: MIN_SCORE_LABEL,
         hint: "0-100, how much a token looks like the launches that double fast; most fresh launches score 60-88",
         explainScore: true,
@@ -43,29 +49,51 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
     title: "Safety",
     blurb: "Screens out the setups that usually end in a rug.",
     fields: [
-      { key: "maxTop10HolderPct", label: "Max top-10 holders", hint: "share of supply", unit: "%" },
-      { key: "maxDevWalletPct", label: "Max dev wallet", hint: "share of supply", unit: "%" },
-      { key: "maxRiskScore", label: "Max RugCheck risk", hint: "0-100, lower is safer" },
+      {
+        key: "maxTop10HolderPct",
+        min: 0,
+        max: 100,
+        label: "Max top-10 holders",
+        hint: "share of supply",
+        unit: "%",
+      },
+      {
+        key: "maxDevWalletPct",
+        min: 0,
+        max: 100,
+        label: "Max dev wallet",
+        hint: "share of supply",
+        unit: "%",
+      },
+      { key: "maxRiskScore", min: 0, max: 100, label: "Max RugCheck risk", hint: "0-100, lower is safer" },
       {
         key: "maxFreshTop10WalletPct",
+        min: 0,
+        max: 100,
         label: "Max fresh wallets",
         hint: "top-10 holders on wallets under a day old",
         unit: "%",
       },
       {
         key: "maxEmptyTop10WalletPct",
+        min: 0,
+        max: 100,
         label: "Max empty holder wallets",
         hint: "top-10 holders with nothing else; 80% and over is always rejected",
         unit: "%",
       },
       {
         key: "maxSniperTop10WalletPct",
+        min: 0,
+        max: 100,
         label: "Max snipers in the top 10",
         hint: "top-10 holders that were among the first 25 buyers; 80% and over is always rejected",
         unit: "%",
       },
       {
         key: "minFirstBuyersHolding",
+        min: 0,
+        max: 25,
         label: "Min first buyers holding",
         hint: "of the first 25 buyers; tokens without a count are skipped",
         unit: "of 25",
@@ -73,6 +101,8 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       },
       {
         key: "maxFirstBuyersHolding",
+        min: 0,
+        max: 25,
         label: "Max first buyers holding",
         hint: "of the first 25 buyers, e.g. 10 = snipers mostly gone",
         unit: "of 25",
@@ -86,12 +116,13 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
     fields: [
       {
         key: "minTokenAgeMinutes",
+        min: 0,
         label: "Min age",
         hint: "minutes; 0.5 = 30 seconds",
         unit: "min",
         step: 0.25,
       },
-      { key: "maxTokenAgeMinutes", label: "Max age", hint: "minutes", unit: "min" },
+      { key: "maxTokenAgeMinutes", min: 0, label: "Max age", hint: "minutes", unit: "min" },
     ],
   },
 ];

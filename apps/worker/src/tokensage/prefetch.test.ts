@@ -172,7 +172,8 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     noteNarrativeWanted(e2, "full", env);
     await flushNarrativeRequests(env, client);
     expect(await prisma.tokenNarrative.count({ where: { mintAddress: e2 } })).toBe(0);
-    expect(takeTokenSageStats()).toMatchObject({ stored: 1, turnedAway: 1 });
+    // Only e1 started a job: e2 was turned away, so it costs no request and no full budget.
+    expect(takeTokenSageStats()).toMatchObject({ stored: 1, turnedAway: 1, requested: 1, fullToday: 1 });
 
     batch.mockResolvedValueOnce(ok([]));
     await flushNarrativeRequests(env, client);

@@ -7,6 +7,7 @@ describe("AI pricing", () => {
     expect(modelPrice("claude-opus-5").input).toBe(5);
     expect(modelPrice("claude-sonnet-5-5").output).toBe(10);
     expect(modelPrice("claude-haiku-4-5-20251001").input).toBe(1);
+    expect(modelPrice("claude-haiku-5-5").input).toBe(0.1);
     expect(modelPrice("anthropic.claude-opus-5-5").input).toBe(4);
     expect(modelPrice("claude-opus-5-55").input).toBe(10);
     expect(modelPrice("something-new").output).toBe(50);

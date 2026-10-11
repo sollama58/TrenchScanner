@@ -432,7 +432,10 @@ export async function runCandidateWatchJob(
       const tickAt = observedAt;
       const fetched = priceByMint.get(row.token.mintAddress);
       const latest = snapshotByMint.get(row.token.mintAddress);
-      const newer = latest && latest.at > (row.lastCheckedAt ?? row.anchorAt) ? latest : undefined;
+      // Newer than both the last check and the anchor: an alert moves a row's anchor to send time
+      // after it may have been checked, and a snapshot from before the alert must not fill it.
+      const seenUpTo = Math.max(row.lastCheckedAt?.getTime() ?? 0, row.anchorAt.getTime());
+      const newer = latest && latest.at.getTime() > seenUpTo ? latest : undefined;
       const crashContradicted =
         isSuspect(row) &&
         newer !== undefined &&

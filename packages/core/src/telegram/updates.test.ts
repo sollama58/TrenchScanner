@@ -361,12 +361,44 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
 
     await handleTelegramUpdate(api, press("st:prev"));
     expect(api.sent().at(-1)!.text).toContain("$PREVIEW");
+    // A second press straight after is a toast, not another message in the chat.
+    const sentBefore = api.sent().length;
+    await handleTelegramUpdate(api, press("st:prev"));
+    expect(api.sent()).toHaveLength(sentBefore);
+    expect(api.calls.at(-1)).toMatchObject({ method: "answerCallbackQuery" });
 
     await handleTelegramUpdate(api, message(chatId, "/mincap 1.5m"));
     row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row?.alertsMinMcapUsd).toBe(1_500_000);
     await handleTelegramUpdate(api, message(chatId, "/mincap lots"));
     expect(api.sent().at(-1)!.text).toContain("Give a market cap");
+  });
+
+  it("follows a group that becomes a supergroup", async () => {
+    const api = new FakeTelegramApi();
+    const groupId = nextChat--;
+    const superId = nextChat--;
+    const { code } = await issueTelegramLinkCode(userId);
+    api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
+    await handleTelegramUpdate(api, message(groupId, `/link ${code}`, "group"));
+    const upgrade: TelegramUpdate = {
+      update_id: 12,
+      message: {
+        message_id: 9,
+        from: me,
+        chat: { id: groupId, type: "group", title: "Degens" },
+        date: 0,
+        migrate_to_chat_id: superId,
+      },
+    };
+    expect((await handleTelegramUpdate(api, upgrade)).action).toBe("migrated");
+    const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(superId) } });
+    expect(row).toMatchObject({ userId, kind: "supergroup", revokedAt: null });
+    expect(await prisma.telegramChat.count({ where: { chatId: BigInt(groupId) } })).toBe(0);
+    expect((await handleTelegramUpdate(api, message(superId, "/status", "supergroup"))).action).toBe(
+      "status",
+    );
+    expect(api.sent().at(-1)!.text).toContain("Linked to wallet");
   });
 
   it("lets only a group admin change /settings in a group, by button or /mincap", async () => {

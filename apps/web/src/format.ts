@@ -40,7 +40,8 @@ export function stakes(totalPct: number | null | undefined): string {
 export function multiple(returnPct: number | null | undefined): string {
   if (returnPct === null || returnPct === undefined || !Number.isFinite(returnPct)) return "–";
   const x = 1 + returnPct / 100;
-  return `${x >= 10 ? x.toFixed(0) : x.toFixed(1)}x`;
+  // Decided on the rounded figure, so 9.97x reads "10x" rather than "10.0x".
+  return `${Math.round(x * 10) / 10 >= 10 ? x.toFixed(0) : x.toFixed(1)}x`;
 }
 
 /** Signed percent change between two values. */

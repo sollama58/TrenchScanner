@@ -193,7 +193,11 @@ export async function runCuratorTrainingJob(
   // that lost half its rows, every calling seat gone silent - keeps the running models instead.
   if (env.CURATOR_TRAINING_GUARD) {
     const verdict = assessTrainingRun({
-      incumbents: await loadIncumbents(),
+      // A seat that sat out keeps its running model, so it neither goes silent nor counts as a
+      // running model this run replaces.
+      incumbents: (await loadIncumbents()).filter(
+        (m) => m.contestant === null || !kept.includes(m.contestant),
+      ),
       results: results.map((r) => ({ contestant: r.contestant, kind: r.params.kind, params: r.params })),
       trainingRows: trainingRows.length,
       maxRows: env.CURATOR_TRAINING_MAX_ROWS,

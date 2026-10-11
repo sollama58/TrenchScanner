@@ -46,8 +46,8 @@ jobs:
 
       - run: npm ci
 
-      # Fails on a high or critical advisory in what ships (dev tooling is checked separately by
-      # Dependabot) - a known-vulnerable runtime dependency should not reach a deploy unnoticed.
+      # Fails on a high or critical advisory in what ships (dev-only advisories are not gated here)
+      # - a known-vulnerable runtime dependency should not reach a deploy unnoticed.
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 

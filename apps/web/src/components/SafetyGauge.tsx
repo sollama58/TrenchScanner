@@ -3,11 +3,9 @@ import type { MarketLighthouse } from "../api";
 import { ago } from "../format";
 import { ShareIcon } from "./Icons";
 import { ShareImageDialog } from "./ShareImageDialog";
-import { renderSafetyCard } from "./safetyCard";
+import { renderSafetyCard, sinceUtc, splitPctText } from "./safetyCard";
 
 type SafetyScreen = NonNullable<MarketLighthouse["safetyScreen"]>;
-
-const pctText = (v: number) => `${v.toFixed(v > 0 && v < 10 ? 1 : 0)}%`;
 
 /**
  * The Lighthouse's safety-screen scale: of every token the scanner checked in the window, the
@@ -20,6 +18,7 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
   const total = s.accepted + s.rejected;
   const rugPct = total > 0 ? (s.rejected / total) * 100 : null;
   const okPct = rugPct === null ? null : 100 - rugPct;
+  const text = okPct === null || rugPct === null ? null : splitPctText(okPct, rugPct);
   // The rollup only began counting recently: say so while it covers less than the window.
   const partialSince =
     s.oldestHour && new Date(s.oldestHour).getTime() > Date.now() - days * 86_400_000 + 3_600_000
@@ -46,19 +45,19 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
         Mode, or a top 10 that is farmed, sniped or too concentrated).
       </p>
 
-      {okPct === null || rugPct === null ? (
+      {okPct === null || rugPct === null || text === null ? (
         <p className="muted small">No tokens have been screened in this window yet.</p>
       ) : (
         <>
           <div className="lh-safety-figures">
             <div className="lh-safety-figure ok">
-              <span className="lh-safety-value num">{pctText(okPct)}</span>
+              <span className="lh-safety-value num">{text.ok}</span>
               <span className="muted small">
                 Accepted · <span className="num">{s.accepted.toLocaleString()}</span> tokens
               </span>
             </div>
             <div className="lh-safety-figure rug">
-              <span className="lh-safety-value num">{pctText(rugPct)}</span>
+              <span className="lh-safety-value num">{text.rug}</span>
               <span className="muted small">
                 Likely Rugs · <span className="num">{s.rejected.toLocaleString()}</span> tokens
               </span>
@@ -70,11 +69,17 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round(rugPct)}
-            aria-label={`Likely Rugs: ${pctText(rugPct)} of ${total.toLocaleString()} tokens screened; ${pctText(okPct)} accepted`}
+            aria-valuetext={`${text.rug} Likely Rugs, ${text.ok} accepted`}
+            aria-label={`Likely Rugs: ${text.rug} of ${total.toLocaleString()} tokens screened; ${text.ok} accepted`}
           >
             <span className="lh-safety-ok" style={{ width: `${okPct}%` }} />
             <span className="lh-safety-rug" style={{ width: `${rugPct}%` }} />
-            <span className="lh-safety-knob" style={{ left: `${okPct}%` }} aria-hidden />
+            <span
+              className="lh-safety-knob"
+              // Kept inside the track at either end, like the share image's knob.
+              style={{ left: `clamp(4px, ${okPct}%, calc(100% - 4px))` }}
+              aria-hidden
+            />
           </div>
           <div className="lh-safety-ticks faint small num" aria-hidden>
             <span>0%</span>
@@ -98,9 +103,11 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
         <ShareImageDialog
           title={`Safety screen, last ${span}`}
           fileName={`trenchscanner-likely-rugs-${days === 1 ? "24h" : `${days}d`}`}
-          caption={`TrenchScanner: ${rugPct === null ? "–" : pctText(rugPct)} of new tokens are Likely Rugs, last ${span}`}
+          caption={`TrenchScanner: ${text?.rug ?? "–"} of new tokens are Likely Rugs, ${partialSince ? `since ${sinceUtc(partialSince)}` : `last ${span}`}`}
           link="trenchscanner.app"
-          render={() => renderSafetyCard({ accepted: s.accepted, rejected: s.rejected, span })}
+          render={() =>
+            renderSafetyCard({ accepted: s.accepted, rejected: s.rejected, span, since: partialSince })
+          }
           onClose={() => setSharing(false)}
         />
       )}

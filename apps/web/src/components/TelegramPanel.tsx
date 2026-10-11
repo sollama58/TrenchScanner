@@ -147,12 +147,14 @@ export function TelegramPanel() {
     body: Partial<Pick<TelegramChat, "filterMatches" | "modelCalls" | "enabled" | "hidden">>,
   ) => run(chat.id, () => patch(`/telegram/chats/${encodeURIComponent(chat.id)}`, body));
 
-  const togglePart = (chat: TelegramChat, part: TelegramAlertPart) => {
-    const hidden = chat.hidden.includes(part)
-      ? chat.hidden.filter((p) => p !== part)
-      : [...chat.hidden, part];
-    return change(chat, { hidden });
-  };
+  // The API replaces the whole list, and the chat's /show, /hide and /settings change it too, so the
+  // toggle starts from the chat's current list rather than the one this panel loaded.
+  const togglePart = (chat: TelegramChat, part: TelegramAlertPart) =>
+    run(chat.id, async () => {
+      const now = (await api<TelegramState>("/telegram")).chats.find((c) => c.id === chat.id) ?? chat;
+      const hidden = now.hidden.includes(part) ? now.hidden.filter((p) => p !== part) : [...now.hidden, part];
+      await patch(`/telegram/chats/${encodeURIComponent(chat.id)}`, { hidden });
+    });
 
   const unlink = (chat: TelegramChat) => {
     if (!window.confirm(`Unlink “${chatName(chat)}”? It gets no more alerts until it's linked again.`))

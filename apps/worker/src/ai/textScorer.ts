@@ -108,9 +108,11 @@ async function scoreText(
     "background",
   );
   if (!reservation) return false;
-  // Haiku takes neither an effort setting nor server-side fallbacks; the current models take both
-  // (a declined read is re-run on a fallback model inside the same call).
+  // Haikus take no server-side fallbacks, and Haiku 4.5 no effort setting either; the other current
+  // models take both (a declined read is re-run on a fallback model inside the same call). Haiku
+  // 5.5 takes effort, and without it runs at its own default (medium), not AI_TEXT_EFFORT.
   const haiku = env.AI_TEXT_MODEL.startsWith("claude-haiku");
+  const noEffort = env.AI_TEXT_MODEL.startsWith("claude-haiku-4");
   let response;
   try {
     response = await anthropicClient(env).beta.messages.parse({
@@ -120,7 +122,7 @@ async function scoreText(
       system: TEXT_SCORER_SYSTEM_PROMPT,
       messages: [{ role: "user", content: buildTextScoringBrief(token) }],
       output_config: {
-        ...(haiku ? {} : { effort: env.AI_TEXT_EFFORT }),
+        ...(noEffort ? {} : { effort: env.AI_TEXT_EFFORT }),
         format: betaZodOutputFormat(TextScoresSchema),
       },
     });
