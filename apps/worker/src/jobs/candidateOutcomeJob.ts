@@ -76,6 +76,13 @@ const CRASH_TICK_FRACTION = 0.1;
 /** A scan snapshot at least this share of the last price, taken since the previous sweep,
  *  contradicts a crash tick. */
 const CRASH_CONTRADICTION_FRACTION = 0.3;
+/**
+ * Suspect crash ticks nothing confirmed or contradicted, by row, waiting one sweep for a second
+ * reading - see the suspect-tick note in runCandidateWatchJob. In process: a restart only costs
+ * such a tick one more sweep's wait.
+ */
+const pendingCrashTicks = new Map<string, { priceUsd: number; at: Date }>();
+const MAX_PENDING_CRASH_TICKS = 10_000;
 
 /**
  * Banks one training sample for the curated-alerts learner: this candidate, at this moment, with
@@ -427,6 +434,7 @@ export async function runCandidateWatchJob(
   let unobserved = 0;
   let fromSnapshots = 0;
   let crashTicksSkipped = 0;
+  let crashTicksDeferred = 0;
   await forEachWithConcurrency(due, UPDATE_CONCURRENCY, async (row) => {
     try {
       const tickAt = observedAt;
@@ -436,22 +444,58 @@ export async function runCandidateWatchJob(
       // after it may have been checked, and a snapshot from before the alert must not fill it.
       const seenUpTo = Math.max(row.lastCheckedAt?.getTime() ?? 0, row.anchorAt.getTime());
       const newer = latest && latest.at.getTime() > seenUpTo ? latest : undefined;
-      const crashContradicted =
-        isSuspect(row) &&
-        newer !== undefined &&
-        newer.priceUsd >= referencePrice(row) * CRASH_CONTRADICTION_FRACTION;
-      const dexPrice = crashContradicted ? undefined : fetched;
-      const snapshot = fetched === undefined ? newer : undefined;
-      if (crashContradicted) crashTicksSkipped += 1;
-      if (snapshot) fromSnapshots += 1;
-      const price = dexPrice ?? snapshot?.priceUsd;
+      const reference = referencePrice(row);
+      const crashLike = (p: number) => p < reference * CRASH_TICK_FRACTION;
+      // The tick this sweep would fold in: the fetched price, else the scan's newer snapshot.
+      let candidate: { priceUsd: number; at: Date; fromSnapshot: boolean } | undefined =
+        fetched !== undefined
+          ? { priceUsd: fetched, at: seenAt.get(row.token.mintAddress) ?? tickAt, fromSnapshot: false }
+          : newer && { ...newer, fromSnapshot: true };
+      // Suspect crash ticks (see above). A fetched one the scan's newer snapshot contradicts is
+      // skipped, and that snapshot stands in as this sweep's tick. One nothing confirms or
+      // contradicts - a snapshot standing in for a missed fetch, or a fetch on a token the scan
+      // no longer snapshots (above the band) - waits one sweep and lands only if the next sweep
+      // still sees it, at the time it was first seen. One the scan confirms lands at once.
+      const ticks: { priceUsd: number; at: Date }[] = [];
+      const pending = pendingCrashTicks.get(row.id);
+      pendingCrashTicks.delete(row.id);
+      const closing =
+        row.finalizedAt === null &&
+        tickAt.getTime() - row.anchorAt.getTime() >= CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
+      // A sweep with no price at all says nothing either way: the held tick keeps waiting.
+      if (!candidate && pending) pendingCrashTicks.set(row.id, pending);
+      if (candidate && crashLike(candidate.priceUsd)) {
+        const confirmedByScan =
+          !candidate.fromSnapshot &&
+          newer !== undefined &&
+          newer.priceUsd < reference * CRASH_CONTRADICTION_FRACTION;
+        if (!candidate.fromSnapshot && newer !== undefined && !confirmedByScan) {
+          crashTicksSkipped += 1;
+          candidate = { ...newer, fromSnapshot: true };
+        } else if (!confirmedByScan && !pending && !closing) {
+          crashTicksDeferred += 1;
+          pendingCrashTicks.set(row.id, { priceUsd: candidate.priceUsd, at: candidate.at });
+          candidate = undefined;
+        } else if (pending && pending.at < candidate.at) {
+          ticks.push(pending);
+        }
+      }
+      if (candidate) ticks.push({ priceUsd: candidate.priceUsd, at: candidate.at });
+      if (candidate?.fromSnapshot) fromSnapshots += 1;
+      const last = ticks.at(-1);
+      const price = last?.priceUsd;
       // When the price was seen: its batch's answer, or the snapshot's own time - a 2x or a stop is
       // timed by when the price existed, not by when this sweep got round to it.
-      const priceAt = snapshot?.at ?? seenAt.get(row.token.mintAddress) ?? tickAt;
+      const priceAt = last?.at ?? tickAt;
 
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
-      const aggUpdates = price !== undefined ? applyPriceTick(row, price, priceAt) : {};
-      const merged: OutcomeAggregates = { ...row, ...aggUpdates };
+      const merged: OutcomeAggregates = { ...row };
+      const aggUpdates: Partial<OutcomeAggregates> = {};
+      for (const t of ticks) {
+        const u = applyPriceTick(merged, t.priceUsd, t.at);
+        Object.assign(merged, u);
+        Object.assign(aggUpdates, u);
+      }
       // The exit plan's trailing exit: armed by the plan's first sale (a tick at the first rung
       // before the stop) inside the window or at its close, then moved by every tick until it
       // fires or the hold cap. An unarmed row past its close never arms: the ladder is graded on
@@ -459,12 +503,14 @@ export async function runCandidateWatchJob(
       // closed (the return is written, the exit never fired) stops moving: a row kept on the 24h
       // watch past the cap would otherwise go on raising its high and could book an exit hours
       // after the return it no longer describes.
-      const trailUpdates =
-        price !== undefined &&
-        (row.finalizedAt === null || (row.trailHighPriceUsd != null && row.simReturnPct === null))
-          ? applyTrailTick(merged, price, priceAt)
-          : {};
-      Object.assign(merged, trailUpdates);
+      const trailUpdates: ReturnType<typeof applyTrailTick> = {};
+      if (row.finalizedAt === null || (row.trailHighPriceUsd != null && row.simReturnPct === null)) {
+        for (const t of ticks) {
+          const u = applyTrailTick(merged, t.priceUsd, t.at);
+          Object.assign(merged, u);
+          Object.assign(trailUpdates, u);
+        }
+      }
 
       // lastCheckedAt is the bar a later snapshot has to clear ("newer" above), so it records the
       // moment of the price this row just folded in, never an earlier one.
@@ -721,6 +767,11 @@ export async function runCandidateWatchJob(
       logger.error("failed to update candidate outcome", { id: row.id, error: String(err) });
     }
   });
+  // Oldest first: a row that retired or left the sweep holding one never claims it.
+  for (const id of pendingCrashTicks.keys()) {
+    if (pendingCrashTicks.size <= MAX_PENDING_CRASH_TICKS) break;
+    pendingCrashTicks.delete(id);
+  }
 
   const repaired =
     (await repairCuratedVerdicts()) + (await repairUngradedAlerts()) + (await repairSettledReturns());
@@ -735,6 +786,7 @@ export async function runCandidateWatchJob(
     pricesFound: fromDex,
     fromSnapshots,
     crashTicksSkipped,
+    crashTicksDeferred,
     finalized,
     retired,
     retiredUngraded: unobserved,

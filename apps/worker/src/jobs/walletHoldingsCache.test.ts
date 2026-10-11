@@ -137,7 +137,8 @@ describe.skipIf(!dbAvailable)("resolveWalletHoldings cache coverage", () => {
     expect(result.has(busy)).toBe(false);
     expect(await prisma.walletHoldingsCache.findUnique({ where: { address: busy } })).toBeNull();
 
-    // No failure back-off for a deferred wallet: the next call asks again (the shell is cached).
+    // No failure back-off for a deferred wallet: the next call tries it again (the shell is
+    // cached), on the balances it already read rather than reading them again.
     await resolveWalletHoldings(
       groups,
       helius,
@@ -146,6 +147,7 @@ describe.skipIf(!dbAvailable)("resolveWalletHoldings cache coverage", () => {
         valuation: { dexScreener },
       },
     );
-    expect(balanceCalls).toBe(2);
+    expect(balanceCalls).toBe(1);
+    expect(result.has(busy)).toBe(false);
   });
 });

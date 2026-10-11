@@ -124,6 +124,18 @@ describe("valueWalletsFromBalances", () => {
     expect(out.get("gone")).toEqual({ status: "failed" });
   });
 
+  it("reuses a deferred wallet's balances on its next try instead of reading them again", async () => {
+    const { d } = deps({ w: { [LAUNCH]: 1_000_000n, [MEME]: 1_000_000n } }, [token(LAUNCH, 1)], {
+      failedMints: [MEME],
+    });
+    const read = vi.spyOn(d.helius, "getTokenBalancesBatch");
+    expect((await valueWalletsFromBalances(["w"], [LAUNCH], d, 25)).get("w")).toEqual({ status: "deferred" });
+    expect((await valueWalletsFromBalances(["w"], [LAUNCH], d, 25)).get("w")).toEqual({ status: "deferred" });
+    // Reused once, then read afresh.
+    await valueWalletsFromBalances(["w"], [LAUNCH], d, 25);
+    expect(read.mock.calls.map((c) => c[0])).toEqual([["w"], ["w"]]);
+  });
+
   it("finishes early once holdings outside the launch already clear the bar", async () => {
     seedQuotes([token(LAUNCH, 1), token(MEME, 100)]);
     const { d, getTokensByAddresses } = deps(
