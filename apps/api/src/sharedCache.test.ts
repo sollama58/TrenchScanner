@@ -229,4 +229,15 @@ describe("SharedCacheMap", () => {
     caches.clear();
     expect(await caches.for("bob:24").get(fill)).toBe(6);
   });
+
+  it("clears only the keys a predicate picks", async () => {
+    const caches = new SharedCacheMap<number>(60_000, 10);
+    let fills = 0;
+    const fill = async () => ++fills;
+    await caches.for("alice:rules").get(fill);
+    await caches.for("bob:trees").get(fill);
+    caches.clearWhere((key) => key.endsWith(":rules"));
+    expect(await caches.for("alice:rules").get(fill)).toBe(3);
+    expect(await caches.for("bob:trees").get(fill)).toBe(2);
+  });
 });

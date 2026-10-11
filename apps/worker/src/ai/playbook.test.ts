@@ -2,7 +2,12 @@
 import "../bootstrap-env.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv, summarizeJudgeRecord, type JudgedCall } from "@trenchscanner/core";
-import { settleEvolutionRun, maybeEvolvePlaybook, resetEvolutionBackoff } from "./playbook.js";
+import {
+  settleEvolutionRun,
+  maybeEvolvePlaybook,
+  resetEvolutionBackoff,
+  unsettledEvolutionRuns,
+} from "./playbook.js";
 import { activePlaybook, resetActivePlaybookCache } from "./playbookStore.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -86,6 +91,42 @@ describe.skipIf(!dbAvailable)("playbook evolution", () => {
     const rows = await prisma.aiPlaybook.findMany({ orderBy: { version: "asc" } });
     expect(rows.map((r) => r.status)).toEqual(["active", "rejected", "rejected"]);
     expect(rows[0]!.metrics).not.toBeNull();
+  });
+
+  it("finds a scored round whose candidates were never settled, and only until it is settled", async () => {
+    const { incumbent, a, b } = await round();
+    const run = await prisma.aiReplayRun.create({
+      data: {
+        purpose: "evolution",
+        status: "scored",
+        model: "m",
+        playbookIds: [incumbent.id, a.id, b.id],
+        windowStart: new Date(),
+        windowEnd: new Date(),
+        requestCount: 0,
+        metrics: { [incumbent.id]: record(12, 20), [a.id]: record(12, 20), [b.id]: record(4, 20) } as object,
+      },
+    });
+    // A baseline run of the incumbent alone is never a round to settle.
+    await prisma.aiReplayRun.create({
+      data: {
+        purpose: "baseline",
+        status: "scored",
+        model: "m",
+        playbookIds: [incumbent.id],
+        windowStart: new Date(),
+        windowEnd: new Date(),
+        requestCount: 0,
+      },
+    });
+    const pending = await unsettledEvolutionRuns();
+    expect(pending.map((r) => r.id)).toEqual([run.id]);
+    expect(Object.keys(pending[0]!.summaries)).toHaveLength(3);
+
+    await settleEvolutionRun(pending[0]!, env);
+    expect(await unsettledEvolutionRuns()).toEqual([]);
+    const rows = await prisma.aiPlaybook.findMany({ orderBy: { version: "asc" } });
+    expect(rows.map((r) => r.status)).toEqual(["active", "rejected", "rejected"]);
   });
 
   it("waits while a replay is running, and when the last round is recent", async () => {

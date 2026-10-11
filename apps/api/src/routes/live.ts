@@ -120,6 +120,7 @@ export async function registerLiveRoutes(
     const refreshed = await opts.liveRefresher.refreshAndWait(rows, {
       maxAgeMs: LIVE_TICK_MAX_AGE_MS,
       timeoutMs: LIVE_TICK_WAIT_MS,
+      userKey: request.user?.userId,
     });
     if (refreshed) rows = await read(false);
 

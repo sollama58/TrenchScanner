@@ -136,7 +136,7 @@ export async function registerTokenRoutes(app: FastifyInstance) {
           : row && row.analysis === null
             ? "expired"
             : "none",
-      failReason: row?.status === "failed" ? (row.failReason ?? null) : null,
+      failReason: row?.status === "failed" ? failCode(row.failReason) : null,
       read,
       marketCap: snapshots
         .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
@@ -146,4 +146,14 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       narrative: sageNarrative(judged),
     };
   });
+}
+
+/**
+ * The code part of a stored TokenSage failure ("not_found: <upstream message>" -> "not_found").
+ * The rest is TokenSage's own text, which can carry upstream detail no subscriber needs to see.
+ */
+export function failCode(reason: string | null): string | null {
+  if (reason === null) return null;
+  const colon = reason.indexOf(":");
+  return (colon === -1 ? reason : reason.slice(0, colon)).trim() || null;
 }

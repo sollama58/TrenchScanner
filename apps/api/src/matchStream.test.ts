@@ -293,6 +293,17 @@ describe("MatchStream.dispatchCurated", () => {
 
     expect(curated.written).toEqual([]);
   });
+
+  it("hands curated listeners the call's model, or nothing when the payload has none", () => {
+    // The feed caches clear only what that model's ledger feeds; with no model they must assume
+    // any ledger changed.
+    const s = stream();
+    const seen: Array<string | undefined> = [];
+    s.onCuratedAlert((model) => seen.push(model));
+    s.dispatchCurated(JSON.stringify({ alertId: "alert-1", model: "rules" }));
+    s.dispatchCurated(JSON.stringify({ alertId: "alert-2" }));
+    expect(seen).toEqual(["rules", undefined]);
+  });
 });
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);

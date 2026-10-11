@@ -2,13 +2,22 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "../db.js";
 import { FakeTelegramApi } from "./fakeApi.js";
 import { issueTelegramLinkCode } from "./link.js";
-import { handleTelegramUpdate, parseCommand } from "./updates.js";
+import {
+  CHAT_REPLY_COOLDOWN_MS,
+  handleTelegramUpdate,
+  parseCommand,
+  replyCooldownSize,
+  takeReplySlot,
+} from "./updates.js";
 import type { TelegramUpdate } from "./api.js";
 import type { TelegramBoards } from "./boards.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `tgupd-test-${Date.now()}`;
 let nextChat = -2_000_000_000_000 - Math.floor(Math.random() * 1_000_000);
+/** A clock past the per-chat reply cooldown on every read, for tests that send commands back to back. */
+let clock = Date.now();
+const tick = () => (clock += CHAT_REPLY_COOLDOWN_MS);
 
 const me = { id: 7, is_bot: false, first_name: "Ada", username: "ada" };
 function message(
@@ -37,6 +46,24 @@ describe("parseCommand", () => {
     expect(parseCommand("/status")).toEqual({ command: "status", arg: "" });
     expect(parseCommand("hello")).toBeNull();
     expect(parseCommand(undefined)).toBeNull();
+  });
+});
+
+describe("takeReplySlot", () => {
+  it("gives a chat one reply per cooldown, each chat its own", () => {
+    const t = clock;
+    expect(takeReplySlot(-1, t)).toBe(true);
+    expect(takeReplySlot(-1, t + 1_000)).toBe(false);
+    expect(takeReplySlot(-2, t + 1_000)).toBe(true);
+    expect(takeReplySlot(-1, t + CHAT_REPLY_COOLDOWN_MS)).toBe(true);
+  });
+
+  it("stays bounded under a flood of chats, and lets go of the quiet ones", () => {
+    const t = clock + 60_000;
+    for (let i = 0; i < 6_000; i++) takeReplySlot(-1_000_000 - i, t);
+    expect(replyCooldownSize()).toBeLessThanOrEqual(5_000);
+    takeReplySlot(-3, t + CHAT_REPLY_COOLDOWN_MS);
+    expect(replyCooldownSize()).toBe(1);
   });
 });
 
@@ -261,7 +288,12 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
         };
       },
     };
-    const opts = { boards, links: { dashboardUrl: "https://trenchscanner.app" } };
+    const opts = {
+      boards,
+      links: { dashboardUrl: "https://trenchscanner.app" },
+      hasAccess: async () => true,
+      now: tick,
+    };
     // Not linked: no numbers, just how to link.
     expect((await handleTelegramUpdate(api, message(chatId, "/alerts"), opts)).action).toBe("alerts");
     expect(api.sent()[0]!.text).toContain("Not linked");
@@ -314,6 +346,118 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     expect((await handleTelegramUpdate(api, odd, opts)).action).toBe("ignored");
   });
 
+  it("drops board commands inside the per-chat cooldown, and a button there only stops the spinner", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    let reads = 0;
+    const boards: TelegramBoards = {
+      activeAlerts: async () => {
+        reads++;
+        return [];
+      },
+      board: async () => {
+        reads++;
+        throw new Error("not asked");
+      },
+    };
+    const { code } = await issueTelegramLinkCode(userId);
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    let t = clock + 1_000_000;
+    const opts = { boards, hasAccess: async () => true, now: () => t };
+    expect((await handleTelegramUpdate(api, message(chatId, "/alerts"), opts)).action).toBe("alerts");
+    const sentBefore = api.sent().length;
+    t += 1_000;
+    expect((await handleTelegramUpdate(api, message(chatId, "/alerts"), opts)).action).toBe("throttled");
+    expect((await handleTelegramUpdate(api, message(chatId, "/settings"), opts)).action).toBe("throttled");
+    const press: TelegramUpdate = {
+      update_id: 13,
+      callback_query: {
+        id: "cb-fast",
+        from: me,
+        data: "al",
+        message: { message_id: 5, chat: { id: chatId, type: "private", first_name: "Ada" }, date: 0 },
+      },
+    };
+    expect((await handleTelegramUpdate(api, press, opts)).action).toBe("throttled");
+    expect(api.calls.at(-1)).toMatchObject({
+      method: "answerCallbackQuery",
+      params: { callback_query_id: "cb-fast" },
+    });
+    expect(api.sent()).toHaveLength(sentBefore);
+    expect(api.calls.some((c) => c.method === "editMessageText")).toBe(false);
+    expect(reads).toBe(1);
+    // Past the window the next one is answered.
+    t += CHAT_REPLY_COOLDOWN_MS;
+    expect((await handleTelegramUpdate(api, press, opts)).action).toBe("alerts");
+    expect(reads).toBe(2);
+  });
+
+  it("answers /alerts and /trenchboard with a lapsed-subscription note once the owner's access is gone", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    const owner = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet-lapsed` } });
+    await prisma.subscription.create({
+      data: { userId: owner.id, expiresAt: new Date(Date.now() - 60_000), source: "BURN" },
+    });
+    let reads = 0;
+    const boards: TelegramBoards = {
+      activeAlerts: async () => {
+        reads++;
+        return [];
+      },
+      board: async (_chat, hours) => {
+        reads++;
+        return {
+          hours,
+          alerts: 0,
+          graded: 0,
+          won: 0,
+          lost: 0,
+          pending: 0,
+          settled: 0,
+          avgReturnPct: null,
+          best: null,
+          recordedSince: null,
+        };
+      },
+    };
+    const { code } = await issueTelegramLinkCode(owner.id);
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    // The real rule (resolveAccess), not the seam.
+    const opts = { boards, now: tick };
+    expect((await handleTelegramUpdate(api, message(chatId, "/trenchboard"), opts)).action).toBe("expired");
+    expect(api.sent().at(-1)!.text).toContain("subscription");
+    expect((await handleTelegramUpdate(api, message(chatId, "/alerts"), opts)).action).toBe("expired");
+    const press: TelegramUpdate = {
+      update_id: 14,
+      callback_query: {
+        id: "cb-lapsed",
+        from: me,
+        data: "tb:6h",
+        message: { message_id: 6, chat: { id: chatId, type: "private", first_name: "Ada" }, date: 0 },
+      },
+    };
+    expect((await handleTelegramUpdate(api, press, opts)).action).toBe("expired");
+    expect(api.calls.at(-1)).toMatchObject({ method: "answerCallbackQuery" });
+    expect(reads).toBe(0);
+    // An admin wallet has access whatever its subscription says.
+    expect(
+      (
+        await handleTelegramUpdate(api, message(chatId, "/trenchboard"), {
+          ...opts,
+          admins: new Set([owner.walletAddress]),
+        })
+      ).action,
+    ).toBe("board");
+    // And a renewal brings the board back.
+    await prisma.subscription.update({
+      where: { userId: owner.id },
+      data: { expiresAt: new Date(Date.now() + 86_400_000) },
+    });
+    expect((await handleTelegramUpdate(api, message(chatId, "/alerts"), opts)).action).toBe("alerts");
+    expect(reads).toBe(2);
+  });
+
   it("leaves /alerts and /trenchboard alone when the boards aren't wired in", async () => {
     const api = new FakeTelegramApi();
     expect((await handleTelegramUpdate(api, message(nextChat--, "/alerts"))).action).toBe("ignored");
@@ -333,7 +477,9 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
       alertsMinMcapUsd: 5000,
     });
 
-    expect((await handleTelegramUpdate(api, message(chatId, "/settings"))).action).toBe("settings");
+    expect((await handleTelegramUpdate(api, message(chatId, "/settings"), { now: tick })).action).toBe(
+      "settings",
+    );
     expect(String(api.calls.at(-1)!.params.text)).toContain("Alert settings");
     const press = (data: string): TelegramUpdate => ({
       update_id: 10,
@@ -367,10 +513,10 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     expect(api.sent()).toHaveLength(sentBefore);
     expect(api.calls.at(-1)).toMatchObject({ method: "answerCallbackQuery" });
 
-    await handleTelegramUpdate(api, message(chatId, "/mincap 1.5m"));
+    await handleTelegramUpdate(api, message(chatId, "/mincap 1.5m"), { now: tick });
     row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row?.alertsMinMcapUsd).toBe(1_500_000);
-    await handleTelegramUpdate(api, message(chatId, "/mincap lots"));
+    await handleTelegramUpdate(api, message(chatId, "/mincap lots"), { now: tick });
     expect(api.sent().at(-1)!.text).toContain("Give a market cap");
   });
 

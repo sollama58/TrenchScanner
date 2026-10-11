@@ -224,8 +224,12 @@ const MERGED_RUN_CACHE_TTL_MS = 60_000;
  * minute old is current enough. Cleared with the stats when a new card lands.
  */
 const FEED_RETURNS_CACHE_TTL_MS = 60_000;
-/** Readers' caches held per process: a few hundred keys, each a few kilobytes at most. */
-const MAX_CACHED_READER_KEYS = 500;
+/**
+ * Readers' caches held per process, each key a few kilobytes at most. One reader can hold several
+ * keys (a stats window each, plus returns and the merged-run count), so 500 evicted active readers
+ * once a few hundred were online; 2000 keeps them all for a few megabytes.
+ */
+const MAX_CACHED_READER_KEYS = 2000;
 /**
  * How long one read of the followed models' calls is shared across readers.
  *
@@ -298,6 +302,34 @@ export function matchOutcome(
   });
 }
 
+/**
+ * One clearer per registered match-routes instance (one per process in production; tests build
+ * several servers). See clearReaderCaches.
+ */
+const readerCacheClearers = new Set<(userId: string) => void>();
+
+/**
+ * Forgets one reader's cached feed answers (stats, returns, merged-run count) on this process.
+ *
+ * For changes to a user's matches that announce nothing: a new match NOTIFYs and clears these
+ * through onMatch, but a filter hard-delete cascades its Match rows away silently, and without this
+ * the reader's stats and deep pages would count the vanished alerts until the TTL ran out.
+ */
+export function clearReaderCaches(userId: string): void {
+  for (const clear of readerCacheClearers) clear(userId);
+}
+
+/**
+ * Whether a cache key's model set - the comma-joined last segment every key below ends with -
+ * includes `model`. A key with no models (model alerts off) never does: no call is in that answer.
+ */
+export function keyFollowsModel(key: string, model: string): boolean {
+  return key
+    .slice(key.lastIndexOf(":") + 1)
+    .split(",")
+    .includes(model);
+}
+
 export async function registerMatchRoutes(
   app: FastifyInstance,
   opts: {
@@ -310,8 +342,8 @@ export async function registerMatchRoutes(
   // The feed itself, and the live stream that pushes to it. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
 
-  // Both keyed by user first, so one user's new match clears only their own entries; a curated
-  // alert is in every follower's feed, so it clears everything.
+  // Keyed by user first, so one user's new match clears only their own entries; and by model set
+  // last, so a curated alert clears every reader following that model and nobody else.
   const statsCache = new SharedCacheMap<FeedStatsResponse>(FEED_STATS_CACHE_TTL_MS, MAX_CACHED_READER_KEYS);
   const mergedRunCache = new SharedCacheMap<number>(MERGED_RUN_CACHE_TTL_MS, MAX_CACHED_READER_KEYS);
   const returnsCache = new SharedCacheMap<FeedReturnsResponse>(
@@ -323,20 +355,27 @@ export async function registerMatchRoutes(
   const sharedCallReads = new SharedCacheMap<unknown>(SHARED_CALL_READ_TTL_MS, MAX_SHARED_CALL_READ_KEYS);
   const sharedCallRead = <T>(key: string, read: () => Promise<T>): Promise<T> =>
     sharedCallReads.for(key).get(read) as Promise<T>;
-  const stopCuratedListener = opts.matchStream.onCuratedAlert(() => {
-    sharedCallReads.clear();
-    statsCache.clear();
-    returnsCache.clear();
-    mergedRunCache.clear();
+  const stopCuratedListener = opts.matchStream.onCuratedAlert((model) => {
+    // No model (a LISTEN reconnect, or an older worker's payload): any ledger may have changed.
+    // Model ids are roster slugs; one that could collide with the key separators clears it all.
+    const affected =
+      model === undefined || /[:,]/.test(model) ? () => true : (key: string) => keyFollowsModel(key, model);
+    sharedCallReads.clearWhere(affected);
+    statsCache.clearWhere(affected);
+    returnsCache.clearWhere(affected);
+    mergedRunCache.clearWhere(affected);
   });
-  const stopMatchListener = opts.matchStream.onMatch((userId) => {
+  const clearReader = (userId: string) => {
     statsCache.clear(`${userId}:`);
     returnsCache.clear(`${userId}:`);
     mergedRunCache.clear(`${userId}:`);
-  });
+  };
+  const stopMatchListener = opts.matchStream.onMatch(clearReader);
+  readerCacheClearers.add(clearReader);
   app.addHook("onClose", async () => {
     stopCuratedListener();
     stopMatchListener();
+    readerCacheClearers.delete(clearReader);
   });
 
   /**
@@ -995,7 +1034,10 @@ export async function registerMatchRoutes(
     // specific tokens to be refreshed right now. Deliberately not awaited: the numbers in *this*
     // response are the ones we already have, and the dashboard's live tick (routes/live.ts) picks up
     // the new ones within seconds. A slow or broken DexScreener can't delay or fail the page load.
-    opts.liveRefresher.request(cards.map((c) => c.token));
+    opts.liveRefresher.request(
+      cards.map((c) => c.token),
+      request.user?.userId,
+    );
 
     return {
       // Still `matches`, and every entry still Match-shaped, so a bundle deployed before this

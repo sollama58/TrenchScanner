@@ -227,4 +227,17 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     res = await call("admin", "PUT", "/curated/feed", { followBest: false });
     expect(res.json()).toMatchObject({ selectedModels: [start.defaultModel], followBest: false });
   });
+
+  it("never lets 'keep my picks' overwrite picks saved by a concurrent request", async () => {
+    // Seeding today's best used to read the auth-time snapshot (no picks yet) and write after
+    // the concurrent PUT had saved real picks, replacing them with the default.
+    type Board = { selectedModels: string[]; followBest: boolean };
+    await call("admin", "PUT", "/curated/feed", { models: null });
+    await Promise.all([
+      call("admin", "PUT", "/curated/feed", { models: ["rules", "trees"] }),
+      call("admin", "PUT", "/curated/feed", { followBest: false }),
+    ]);
+    const after = (await call("admin", "GET", "/curated/models?days=30")).json() as Board;
+    expect(after).toMatchObject({ selectedModels: ["rules", "trees"], followBest: false });
+  });
 });

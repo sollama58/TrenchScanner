@@ -5,6 +5,7 @@ import {
   recordRunStart,
   type HeartbeatJob,
 } from "@trenchscanner/core";
+import { exitForRestart } from "./processExit.js";
 
 const logger = createLogger("scheduler");
 
@@ -57,9 +58,35 @@ export class JobFailure extends Error {
   }
 }
 
+/**
+ * Thrown by a job whose run did its work but some independent part of it failed (a cleanup stage
+ * that timed out while the other sweeps ran): recorded as a SUCCESS - lastSuccessAt advances, so
+ * neither the daily retries nor the next boot's catch-up re-run the whole job for one part - with
+ * this message kept as the row's lastError, so GET /health/worker and the admin panel still show
+ * it until a clean run clears it. `meta` is kept like a success's.
+ */
+export class PartialJobFailure extends Error {
+  constructor(
+    message: string,
+    readonly meta: JobRunMeta,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Thrown by a job that did not run because another worker process is running it right now (see
+ * jobLock.ts) - two processes side by side during a deploy. Nothing is written to the heartbeat
+ * row: it is the other process's run that row describes, and it records its own outcome.
+ */
+export class JobSkipped extends Error {}
+
 /** What a job may hand back about its own run - stored on its heartbeat row and served by
  *  GET /health/worker, which is the only view of production timing that needs no log access. */
-export type JobRunMeta = Record<string, string | number | boolean | null | Record<string, number>>;
+export type JobRunMeta = Record<
+  string,
+  string | number | boolean | null | Record<string, string | number | boolean | null>
+>;
 
 /**
  * A run still going after this many intervals is logged as stalled, and again each time that much
@@ -117,7 +144,7 @@ export function scheduleInterval(
 ): ScheduledJob {
   const intervalMs = intervalMinutes * 60_000;
   const stallMs = Math.max(STALL_FLOOR_MS, intervalMs * STALL_INTERVALS);
-  const { deadlineMinutes, onDeadline = exitForRestart } = opts;
+  const { deadlineMinutes, onDeadline = exitOnDeadline } = opts;
   let stopped = false;
   let next: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
@@ -177,6 +204,18 @@ export function scheduleInterval(
         meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt, intervalMs },
       });
     } catch (err) {
+      if (err instanceof JobSkipped) {
+        logger.info("run skipped - another process is running this job", { job: name, reason: err.message });
+        return;
+      }
+      if (err instanceof PartialJobFailure) {
+        await recordHeartbeat(name, {
+          success: true,
+          error: err.message,
+          meta: { ...err.meta, durationMs: Date.now() - startedAt, intervalMs },
+        }).catch(() => {});
+        return;
+      }
       logger.error("job threw an unhandled error", { job: name, error: String(err) });
       // A job that fails on purpose (pipeline-watch flagging a stall) keeps its counts on the row.
       const errMeta = { ...opts.failureMeta?.(), ...(err instanceof JobFailure ? err.meta : {}) };
@@ -311,10 +350,26 @@ export function scheduleDailyAt(
     return inFlight;
   };
 
+  /**
+   * After a run skipped because another process holds the job (a deploy's old and new worker side
+   * by side), the slot is asked about again later rather than given up: the other run may be the
+   * old process's, cut short by that same deploy, and only the heartbeat row says whether it
+   * finished. start() re-reads it - a slot already done just waits for the next one.
+   */
+  const recheckAfterSkip = () => {
+    if (stopped) return;
+    next = setTimeout(() => {
+      next = undefined;
+      void start();
+    }, retryAfterMinutes * 60_000);
+  };
+
   const runOnce = async () => {
     running = true;
     const startedAt = Date.now();
+    const previousStartedAt = lastStartedAt;
     lastStartedAt = startedAt;
+    let skipped = false;
     const watchdog = setInterval(() => {
       logger.error("daily job run has not returned", { job: name, runningForMs: Date.now() - startedAt });
     }, DAILY_STALL_MS);
@@ -322,30 +377,47 @@ export function scheduleDailyAt(
     try {
       await recordRunStart(name, new Date(startedAt)).catch(() => {});
       let meta: JobRunMeta | void;
+      let partialError: string | undefined;
       try {
         meta = await fn();
       } catch (err) {
-        // Only the job itself failing earns a retry - not the heartbeat write after a good run.
-        failuresInARow += 1;
-        throw err;
+        if (err instanceof PartialJobFailure) {
+          // Recorded as a success with the error kept - see PartialJobFailure. No retry.
+          meta = err.meta;
+          partialError = err.message;
+        } else {
+          // Only the job itself failing earns a retry - not the heartbeat write after a good run.
+          if (!(err instanceof JobSkipped)) failuresInARow += 1;
+          throw err;
+        }
       }
       failuresInARow = 0;
       // The slot rides on the row, as intervalMs does for interval jobs - see scheduleInterval.
       await recordHeartbeat(name, {
         success: true,
+        ...(partialError !== undefined ? { error: partialError } : {}),
         meta: { ...(meta ?? {}), durationMs: Date.now() - startedAt, dailyAtHourUtc: hourUtc },
       });
     } catch (err) {
-      logger.error("job threw an unhandled error", { job: name, error: String(err) });
-      await recordHeartbeat(name, {
-        success: false,
-        error: String(err),
-        meta: { durationMs: Date.now() - startedAt, dailyAtHourUtc: hourUtc },
-      }).catch(() => {});
+      if (err instanceof JobSkipped) {
+        skipped = true;
+        // This process did not take the slot after all - the catch-up must not think it did.
+        lastStartedAt = previousStartedAt;
+        failuresInARow = 0;
+        logger.info("run skipped - another process is running this job", { job: name, reason: err.message });
+      } else {
+        logger.error("job threw an unhandled error", { job: name, error: String(err) });
+        await recordHeartbeat(name, {
+          success: false,
+          error: String(err),
+          meta: { durationMs: Date.now() - startedAt, dailyAtHourUtc: hourUtc },
+        }).catch(() => {});
+      }
     } finally {
       clearInterval(watchdog);
       running = false;
-      scheduleNext();
+      if (skipped) recheckAfterSkip();
+      else scheduleNext();
     }
   };
 
@@ -408,10 +480,20 @@ const EXIT_HEARTBEAT_TIMEOUT_MS = 5_000;
  * of "the scan passed its deadline and the worker restarted" was the log, and GET /health/worker
  * showed the previous run's (possibly clean) result under a runningSince the next process
  * overwrote within a minute.
+ *
+ * Then the worker's own shutdown (processExit.ts), not a bare process.exit: the other jobs' runs
+ * get the grace period to finish, and the ones that can't are marked interrupted. The hung run
+ * holds none of that up - settle() gives up on it after the grace like any other run - and keeps
+ * the deadline message written here rather than being re-stamped "interrupted".
  */
-function exitForRestart(job: HeartbeatJob, runningForMs: number): void {
+function exitOnDeadline(job: HeartbeatJob, runningForMs: number): void {
   logger.error("job run passed its deadline - exiting so the worker restarts", { job, runningForMs });
-  const exit = () => process.exit(1);
+  let exiting = false;
+  const exit = () => {
+    if (exiting) return;
+    exiting = true;
+    exitForRestart({ reason: `${job} run passed its deadline`, keepHeartbeatOf: job });
+  };
   const giveUp = setTimeout(exit, EXIT_HEARTBEAT_TIMEOUT_MS);
   giveUp.unref?.();
   void recordHeartbeat(job, {
@@ -420,7 +502,10 @@ function exitForRestart(job: HeartbeatJob, runningForMs: number): void {
     meta: { durationMs: runningForMs },
   })
     .catch(() => {})
-    .finally(exit);
+    .finally(() => {
+      clearTimeout(giveUp);
+      exit();
+    });
 }
 
 /** A daily run going this long is logged as stalled, and again each time this much more passes. */

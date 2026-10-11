@@ -81,7 +81,10 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
   const data = insights.data;
   const lb = board.data;
   const t = lb.targets;
-  const base = data.samples.byKind.find((k) => k.kind === "event");
+  // The leaderboard's baseline is the same market as the week chart's Market line and the lift
+  // (safety cuts, current label rule); samples.byKind counts every banked row, so it is only the
+  // stand-in for an older API build without one.
+  const base = lb.baseline ?? data.samples.byKind.find((k) => k.kind === "event");
   const following = lb.entries.filter((e) => lb.selectedModels.includes(e.id));
   const consensus = lb.entries.find((e) => e.role === "stacked") ?? null;
   const contenders = lb.entries.filter((e) => e.role !== "stacked");
@@ -302,7 +305,8 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
 
 /**
  * Every model's hit rate against the baseline: the rate of the decision moments the models pick
- * from (the "event" training rows, GET /curated/insights samples.byKind). A model is only adding
+ * from (the "event" training rows past the wallet safety cuts and graded under the current label
+ * rule: the leaderboard's baseline, GET /curated/models, the same market as the lift). A model is only adding
  * anything above that line, so it sits up front, as a chart with the baseline drawn through it.
  * The population is fixed in the worker: a moment is banked only after the safety screen passes
  * (scanJob.ts returns before sampling on a fail) and the event pre-check (passesEventPreGate in

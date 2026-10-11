@@ -9,6 +9,7 @@ import {
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { JobFailure, type JobRunMeta } from "../scheduler.js";
+import { exitForRestart } from "../processExit.js";
 
 const logger = createLogger("pipeline-watch");
 
@@ -289,10 +290,15 @@ async function endBanners(now: number): Promise<void> {
   });
 }
 
-function exitForRestart(): void {
+/**
+ * Through the worker's graceful shutdown (processExit.ts), so the runs still in flight - the
+ * stalled one included, bounded by the shutdown's grace - are settled or marked interrupted
+ * rather than cut mid-write.
+ */
+function restartForStall(): void {
   const timer = setTimeout(() => {
     logger.error("restarting the scanner to clear a pipeline stall");
-    process.exit(1);
+    exitForRestart({ reason: "pipeline stall" });
   }, RESTART_DELAY_MS);
   // Kept referenced: the restart must happen even if nothing else is scheduled.
   void timer;
@@ -363,7 +369,7 @@ async function watchOnce(
     if (step === "warn1") {
       lastRestartAt = now + RESTART_DELAY_MS;
       notices.push("<b>🔄 Restarting the scanner in about a minute</b> to clear the stall.");
-      (deps.restart ?? exitForRestart)();
+      (deps.restart ?? restartForStall)();
     }
     remember({ keys: before.keys, stalledSince, warned, lastRestartAt });
     await postBanner(BANNER[step], now);

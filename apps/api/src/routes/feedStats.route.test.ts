@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
+import { clearReaderCaches } from "./matches.js";
 
 /** GET /matches/stats: the Live tab's tiles, over the reader's own feed. */
 
@@ -22,7 +23,7 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
   let userId = "";
   let bCallAt: Date;
 
-  const call = (method: "GET" | "PUT", url: string, payload?: unknown) =>
+  const call = (method: "GET" | "PUT" | "DELETE", url: string, payload?: unknown) =>
     app.inject({ method, url, payload: payload as never, cookies: { [SESSION_COOKIE_NAME]: cookie } });
 
   beforeAll(async () => {
@@ -226,6 +227,24 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
     await call("PUT", "/curated/feed", { showModelAlerts: false });
     const off = await windows();
     expect(off[168]).toMatchObject({ alerts: 4, settled: 1, avgReturnPct: -20 });
+  });
+
+  it("drops a deleted filter's alerts from the stats at once, though the cascade announces nothing", async () => {
+    const tokenId = (await prisma.token.findUniqueOrThrow({ where: { mintAddress: `${TAG}-a` } })).id;
+    const doomed = await prisma.userFilter.create({ data: { userId, name: "doomed", isActive: false } });
+    const snapshotId = (
+      await prisma.tokenSnapshot.create({ data: { tokenId, priceUsd: 0.0001, marketCapUsd: 50_000 } })
+    ).id;
+    await prisma.match.create({
+      data: { userId, filterId: doomed.id, tokenId, snapshotId, matchedAt: new Date(), score: 70 },
+    });
+    // Written straight to the database, so nothing NOTIFYed: start from a cold cache.
+    clearReaderCaches(userId);
+    const before = (await call("GET", "/matches/stats?hours=24")).json() as { alerts: number };
+
+    expect((await call("DELETE", `/filters/${doomed.id}`)).statusCode).toBe(204);
+    const after = (await call("GET", "/matches/stats?hours=24")).json() as { alerts: number };
+    expect(after.alerts).toBe(before.alerts - 1);
   });
 
   it("rejects an out-of-range window", async () => {

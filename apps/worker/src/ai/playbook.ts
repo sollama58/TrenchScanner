@@ -380,6 +380,33 @@ async function reviewRecord(
 }
 
 /**
+ * Scored evolution runs whose round was never settled: a candidate of theirs (every playbook after
+ * the first) is still "candidate". settleEvolutionRun moves every candidate of a round out of that
+ * state, so a settled round never comes back here - which is what makes settling these on every
+ * pass safe. Oldest first, with the summaries pollReplayRuns stored on the run.
+ */
+export async function unsettledEvolutionRuns(): Promise<ScoredReplayRun[]> {
+  const runs = await prisma.$queryRaw<{ id: string; playbookIds: string[]; metrics: unknown }[]>`
+    SELECT r.id, r."playbookIds", r.metrics
+    FROM "AiReplayRun" r
+    WHERE r.purpose = 'evolution' AND r.status = 'scored'
+      AND EXISTS (
+        SELECT 1 FROM "AiPlaybook" p
+        WHERE p.id = ANY(r."playbookIds"[2:]) AND p.status = 'candidate'
+      )
+    ORDER BY r."createdAt" ASC`;
+  return runs.map((r) => ({
+    id: r.id,
+    purpose: "evolution",
+    playbookIds: r.playbookIds,
+    // No usable summaries: settleEvolutionRun voids the round (no incumbent record).
+    summaries: (typeof r.metrics === "object" && r.metrics !== null && !Array.isArray(r.metrics)
+      ? r.metrics
+      : {}) as Record<string, JudgeRecordSummary>,
+  }));
+}
+
+/**
  * Settles a scored evolution run: the incumbent (the run's first playbook) keeps the job unless a
  * candidate beat it clearly on the same alerts (decidePlaybookPromotion). If the incumbent is no
  * longer the active playbook by now, the round is void and its candidates are rejected.

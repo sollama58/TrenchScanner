@@ -15,7 +15,8 @@ vi.mock("@trenchscanner/core", () => ({
   lastSuccessfulRunAt: async () => null,
 }));
 
-const { scheduleInterval, scheduleDailyAt } = await import("./scheduler.js");
+const { scheduleInterval, scheduleDailyAt, JobSkipped, PartialJobFailure } = await import("./scheduler.js");
+const { registerShutdown } = await import("./processExit.js");
 
 /** A job whose every run takes `ms` of (fake) time. */
 function jobTaking(ms: number, runs: number[]) {
@@ -236,6 +237,56 @@ describe("scheduleInterval", () => {
     expect(await job.settle(1_000)).toBe("idle");
   });
 
+  it("ends a run past its deadline through the worker's shutdown, keeping the deadline on its row", async () => {
+    const calls: [number, unknown][] = [];
+    registerShutdown(async (code, request) => void calls.push([code, request]));
+    try {
+      const job = scheduleInterval("scan", () => new Promise(() => {}), 1, { deadlineMinutes: 1 });
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      job.stop();
+      expect(heartbeats.at(-1)).toMatchObject({ job: "scan", success: false });
+      expect(calls).toEqual([[1, { reason: "scan run passed its deadline", keepHeartbeatOf: "scan" }]]);
+    } finally {
+      registerShutdown(undefined);
+    }
+  });
+
+  it("writes nothing for a run skipped because another process holds the job", async () => {
+    const runs: number[] = [];
+    const job = scheduleInterval(
+      "ai-judge",
+      async () => {
+        runs.push(Date.now());
+        throw new JobSkipped("another process holds the ai-judge lock");
+      },
+      10,
+    );
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
+    job.stop();
+    expect(runs).toEqual([0, 600_000]);
+    expect(heartbeats).toEqual([]);
+  });
+
+  it("records a partly failed run as a success that keeps its error", async () => {
+    const job = scheduleInterval(
+      "ai-judge",
+      async () => {
+        throw new PartialJobFailure("1 stage failed: a", { failedStages: "a: timeout" });
+      },
+      10,
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    job.stop();
+    expect(heartbeats).toEqual([
+      {
+        job: "ai-judge",
+        success: true,
+        error: "1 stage failed: a",
+        meta: { failedStages: "a: timeout", durationMs: 0, intervalMs: 600_000 },
+      },
+    ]);
+  });
+
   it("holds the first run for a whole interval when the delay can't be read", async () => {
     const runs: number[] = [];
     const job = scheduleInterval("curator-training", jobTaking(0, runs), 60, {
@@ -393,6 +444,62 @@ describe("scheduleDailyAt", () => {
     job.stop();
     const MIN = 60_000;
     expect(runs).toEqual([T0, T0 + 30 * MIN, T0 + 60 * MIN, T0 + 90 * MIN]);
+  });
+
+  it("does not retry a run whose only failures are its stages, and keeps their error on the row", async () => {
+    const runs: number[] = [];
+    const job = scheduleDailyAt(
+      "cleanup",
+      async () => {
+        runs.push(Date.now());
+        throw new PartialJobFailure("cleanup: 1 stage(s) failed: nonces", {
+          deletedTokens: 3,
+          failedStages: "nonces: timeout",
+        });
+      },
+      4,
+      { catchUpAfterHours: 26, lastRunAt: async () => null },
+    );
+    await vi.advanceTimersByTimeAsync(17 * HOUR);
+    job.stop();
+    expect(runs).toEqual([T0]);
+    expect(heartbeats).toEqual([
+      {
+        job: "cleanup",
+        success: true,
+        error: "cleanup: 1 stage(s) failed: nonces",
+        meta: { deletedTokens: 3, failedStages: "nonces: timeout", durationMs: 0, dailyAtHourUtc: 4 },
+      },
+    ]);
+  });
+
+  it("after a run skipped for another process's, asks again and runs only if that run didn't finish", async () => {
+    // The other process (a deploy's old worker) is mid-run at boot, then dies with the deploy.
+    for (const otherFinished of [true, false]) {
+      heartbeats.length = 0;
+      vi.setSystemTime(Date.UTC(2026, 9, 4, 4, 10, 0));
+      const slotDone = Date.UTC(2026, 9, 4, 4, 30, 0);
+      let lastSuccess = new Date(Date.UTC(2026, 9, 3, 4, 30, 0));
+      const runs: number[] = [];
+      const job = scheduleDailyAt(
+        "cleanup",
+        async () => {
+          runs.push(Date.now());
+          if (runs.length === 1) {
+            if (otherFinished) lastSuccess = new Date(slotDone);
+            throw new JobSkipped("another process holds the cleanup lock");
+          }
+        },
+        4,
+        { catchUpAfterHours: 26, lastRunAt: async () => lastSuccess },
+      );
+      await vi.advanceTimersByTimeAsync(HOUR);
+      job.stop();
+      const boot = Date.UTC(2026, 9, 4, 4, 10, 0);
+      expect(runs).toEqual(otherFinished ? [boot] : [boot, boot + 30 * 60_000]);
+      // The skipped run wrote nothing over the other process's row.
+      expect(heartbeats).toHaveLength(otherFinished ? 0 : 1);
+    }
   });
 
   it("goes back to its daily slot once a retry succeeds", async () => {

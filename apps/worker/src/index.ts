@@ -18,6 +18,7 @@ import {
   runTelegramDispatch,
   onAlertWritten,
   COMMIT_GRACE_MS,
+  workerConfigMeta,
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
@@ -42,6 +43,8 @@ import {
   type JobRunMeta,
   type ScheduledJob,
 } from "./scheduler.js";
+import { registerShutdown } from "./processExit.js";
+import { withJobLock } from "./jobLock.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
 
@@ -66,6 +69,8 @@ const LIGHTHOUSE_ROLLUP_MINUTES = 60;
  * SIGTERM and SIGKILL; the rest is kept for the heartbeat writes and the disconnect.
  */
 const SHUTDOWN_GRACE_MS = 20_000;
+/** What a shutdown allows the interrupted-run heartbeats and the disconnect after the grace. */
+const SHUTDOWN_WRITES_MS = 8_000;
 /** How often the composite score's weights are refit (runScoreWeightsJob). */
 const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
 
@@ -144,11 +149,19 @@ async function main() {
   // call that decides what gets screened - and on each other. Each reschedules from its own run's
   // end, so this only sets where they begin.
   const DEX_BURST_OFFSET_MS = { "fast-match": 7_000, "candidate-watch": 12_000, "live-price": 20_000 };
+  // The scan's heartbeat also carries the settings this process runs with (failed runs too), so
+  // the admin panel's Config shows the scanner's values rather than the API's own environment.
+  const configMeta = workerConfigMeta(env);
   schedule("scan", () =>
-    scheduleInterval("scan", () => runScanCycle(deps, env), env.SCAN_INTERVAL_MINUTES, {
-      deadlineMinutes: 20,
-      failureMeta: scanFailureMeta,
-    }),
+    scheduleInterval(
+      "scan",
+      async () => ({ ...(await runScanCycle(deps, env)), ...configMeta }),
+      env.SCAN_INTERVAL_MINUTES,
+      {
+        deadlineMinutes: 20,
+        failureMeta: () => ({ ...scanFailureMeta(), ...configMeta }),
+      },
+    ),
   );
   // Runs far more often than the scan cycle, but only touches tokens someone currently has open
   // and only fetches market data - see runLivePriceJob's own comment.
@@ -285,15 +298,20 @@ async function main() {
       deadlineMinutes: 30,
     }),
   );
+  // Cleanup, outcome tracking and the AI judge each run under a lock shared by every worker
+  // process (see withJobLock): a deploy's old and new trainer side by side ran each of them twice.
   schedule("cleanup", () =>
-    scheduleDailyAt("cleanup", () => runCleanupJob(env), env.CLEANUP_HOUR_UTC, {
+    scheduleDailyAt("cleanup", () => withJobLock("cleanup", () => runCleanupJob(env)), env.CLEANUP_HOUR_UTC, {
       catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS,
     }),
   );
   schedule("outcome-tracking", () =>
     scheduleDailyAt(
       "outcome-tracking",
-      () => runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
+      () =>
+        withJobLock("outcome-tracking", () =>
+          runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
+        ),
       env.OUTCOME_TRACKING_HOUR_UTC,
       { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS },
     ),
@@ -366,7 +384,11 @@ async function main() {
   // The AI reviewer's learning loop: collects replay batches, runs playbook evolution and refits
   // the AI blend - see runAiJudgeJob. Inert without ANTHROPIC_API_KEY.
   schedule("ai-judge", () =>
-    scheduleInterval("ai-judge", () => runAiJudgeJob(env), AI_JUDGE_INTERVAL_MINUTES),
+    scheduleInterval(
+      "ai-judge",
+      () => withJobLock("ai-judge", () => runAiJudgeJob(env)),
+      AI_JUDGE_INTERVAL_MINUTES,
+    ),
   );
 
   logger.info("worker started", {
@@ -395,18 +417,29 @@ async function main() {
   // time (cleanup, a retrain) is stamped as interrupted on its heartbeat row - visible on
   // GET /health/worker, and for the daily jobs what makes the next boot run the cut slot again
   // (see scheduleDailyAt's catch-up).
+  //
+  // The worker's own restarts (a run past its deadline, a pipeline stall) come through here too,
+  // with exit code 1 - see processExit.ts.
   let shuttingDown = false;
-  const shutdown = async (signal: string) => {
+  const shutdown = async (signal: string, code = 0, keepHeartbeatOf?: HeartbeatJob) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS });
+    // The runs' settle is bounded by the grace, but the writes after it are not: the restarts
+    // that come through here are mostly for a dead connection, and a heartbeat write or the
+    // disconnect on one can wait out the 180s socket timeout. The process ends regardless.
+    const hardExit = setTimeout(() => process.exit(code), SHUTDOWN_GRACE_MS + SHUTDOWN_WRITES_MS);
+    void hardExit;
+    logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS, exitCode: code });
     for (const { job } of jobs) job.stop();
     stream?.stop();
     stopNarrativePolling?.();
     const outcomes = await Promise.all(
       jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
     );
-    const interrupted = outcomes.filter((o) => o.outcome === "interrupted").map((o) => o.name);
+    // The run that passed its deadline already says so on its row; "interrupted" would hide it.
+    const interrupted = outcomes
+      .filter((o) => o.outcome === "interrupted" && o.name !== keepHeartbeatOf)
+      .map((o) => o.name);
     if (interrupted.length > 0) {
       logger.warn("runs still in flight at shutdown, marking them interrupted", { jobs: interrupted });
       await Promise.all(
@@ -416,8 +449,9 @@ async function main() {
       );
     }
     await prisma.$disconnect().catch(() => {});
-    process.exit(0);
+    process.exit(code);
   };
+  registerShutdown((code, { reason, keepHeartbeatOf }) => shutdown(reason, code, keepHeartbeatOf));
   // Node 22 ends the process on an unhandled rejection. Every known fire-and-forget path catches
   // its own, so one reaching here is a bug in a side path - logged, not worth every job over.
   process.on("unhandledRejection", (reason) => {

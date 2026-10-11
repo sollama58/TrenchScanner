@@ -293,8 +293,12 @@ export async function registerCuratedRoutes(
    * nearly all the time, so this was the usual outcome rather than an unlucky one. The API
    * already holds the LISTEN connection that feeds the nudge, so it can simply invalidate first.
    */
-  const stopListening = opts.matchStream.onCuratedAlert(() => {
-    for (const cache of pageCache.values()) cache.clear();
+  const stopListening = opts.matchStream.onCuratedAlert((model) => {
+    // Pages are keyed by the ledger they read (`model:page`, the model already resolved from the
+    // default), so only that ledger's pages can hold the pre-alert rows. With no model - a LISTEN
+    // reconnect, or an older worker's payload - every page goes.
+    const prefix = model === undefined ? "" : `${model}:`;
+    for (const [key, cache] of pageCache) if (key.startsWith(prefix)) cache.clear();
   });
   app.addHook("onClose", async () => stopListening());
 
@@ -386,7 +390,10 @@ export async function registerCuratedRoutes(
     // subscriber, so writing here meant every concurrent reader contending for the same twelve
     // rows. See ViewStampBuffer.
     opts.viewStamps.record(cards.map((c) => c.tokenId));
-    opts.liveRefresher.request(cards.map((c) => c.token));
+    opts.liveRefresher.request(
+      cards.map((c) => c.token),
+      request.user?.userId,
+    );
 
     const isAdmin = request.access?.reason === "admin";
     return {
@@ -461,22 +468,23 @@ export async function registerCuratedRoutes(
       data.followBestModel = ordered.length === 0;
     }
     if (showModelAlerts !== undefined) data.showModelAlerts = showModelAlerts;
-    if (followBest !== undefined) {
-      data.followBestModel = followBest;
-      if (!followBest && models === undefined) {
-        // Switching to "keep my picks" with nothing picked yet keeps today's best as the pick,
-        // so the feed stays on it when the best performer changes.
-        const saved = await savedFeed(request);
-        if (saved.models.length === 0) {
+    if (followBest !== undefined) data.followBestModel = followBest;
+    const userId = request.user!.userId;
+    // Switching to "keep my picks" with nothing picked yet keeps today's best as the pick, so the
+    // feed stays on it when the best performer changes. That reads the current picks, so the read
+    // and the write share the user's row lock: reading the auth-time snapshot instead let a
+    // concurrent PUT that ticked models land in between and be overwritten with the default.
+    const seedsPick = followBest === false && models === undefined;
+    const user = await prisma.$transaction(async (tx) => {
+      if (seedsPick) {
+        const rows = await tx.$queryRaw<{ feedModels: string[] }[]>`
+          SELECT "feedModels" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+        if (rows.length > 0 && rows[0]!.feedModels.length === 0) {
           data.feedModels = [state.defaultModel];
           data.curatedModel = state.defaultModel;
         }
       }
-    }
-    const user = await prisma.user.update({
-      where: { id: request.user!.userId },
-      data,
-      select: SAVED_FEED_SELECT,
+      return tx.user.update({ where: { id: userId }, data, select: SAVED_FEED_SELECT });
     });
     const saved = toSavedFeed(user);
     const feed = resolveFeedModels(state, saved);

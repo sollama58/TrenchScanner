@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currentMarketCap, listQuerySchema } from "./matches.js";
+import { currentMarketCap, keyFollowsModel, listQuerySchema } from "./matches.js";
 
 const T = (isoMinutesAgo: number) => new Date(Date.now() - isoMinutesAgo * 60_000);
 
@@ -84,5 +84,17 @@ describe("listQuerySchema - includeCurated", () => {
     expect(parse({ includeCurated: "false" }).includeCurated).toBe("off");
     expect(parse({ includeCurated: "0" }).includeCurated).toBe("off");
     expect(parse({ includeCurated: "" }).includeCurated).toBe("off");
+  });
+});
+
+describe("keyFollowsModel", () => {
+  it("matches a model anywhere in the key's trailing model set, and only a whole id", () => {
+    // What a curated alert clears: only the readers whose answers can hold that model's calls.
+    expect(keyFollowsModel("user1:24:on:rules,trees", "trees")).toBe(true);
+    expect(keyFollowsModel("feed:36:rules", "rules")).toBe(true);
+    expect(keyFollowsModel("user1:24:on:narrative-blend", "narrative")).toBe(false);
+    expect(keyFollowsModel("user1:24:on:rules,trees", "consensus")).toBe(false);
+    // Model alerts off: no calls in the answer, so no model's alert affects it.
+    expect(keyFollowsModel("user1:24:off:", "rules")).toBe(false);
   });
 });

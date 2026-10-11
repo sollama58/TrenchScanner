@@ -117,6 +117,16 @@ describe.skipIf(!dbAvailable)("GET /stats/models", () => {
       expect(Array.isArray(body.entries)).toBe(true);
       expect(body.entries[0]).toHaveProperty("score");
       expect(Array.isArray(body.learning.days)).toBe(true);
+      expect(res.headers["cache-control"]).toBe("no-store");
+
+      // Served from the window's cache for a minute: the same answer, down to its timestamp.
+      const again = await app.inject({
+        method: "GET",
+        url: "/stats/models?days=2",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(again.json().window.until).toBe(body.window.until);
+      expect(again.headers["cache-control"]).toBe("no-store");
     } finally {
       await app.close();
     }

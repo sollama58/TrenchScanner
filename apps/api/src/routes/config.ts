@@ -13,6 +13,15 @@ import {
   scanBand,
   scoreWeightsHistory,
 } from "@trenchscanner/core";
+import { SharedCache } from "../sharedCache.js";
+
+/**
+ * The score weights move only when a retrain adopts new ones, so one fill serves every visitor
+ * for five minutes and refills behind them for an hour after - single-flight, so a cold cache
+ * under load runs the reads once, and a failed refill keeps serving the last good answer.
+ */
+const SCORE_CACHE_MS = 5 * 60_000;
+const SCORE_STALE_MS = 60 * 60_000;
 
 /**
  * Public (no auth) on purpose, like /health - the filter builder needs this before it can validate
@@ -46,31 +55,10 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
   // The composite score's current weights and how they moved (scoring/scoreWeights.ts), for the
   // card tooltip and the score explainer, plus the recent alerts' score spread the cards color
   // against. Public like the rest: nothing here is per-user.
-  let cached: { at: number; body: unknown } | null = null;
-  app.get("/score", async () => {
-    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.body;
-    const [{ weights, adoptedAt }, history, scale] = await Promise.all([
-      loadAdoptedScoreWeights(),
-      scoreWeightsHistory(10),
-      // The color scale is a nicety: a failed read falls back rather than failing the weights.
-      recentScoreScale().catch(() => ({ ...SCORE_SCALE_FALLBACK })),
-    ]);
-    const body = {
-      weights,
-      adoptedAt,
-      scale,
-      history: history.map((h) => ({
-        at: h.createdAt,
-        momentum: h.momentum,
-        freshness: h.freshness,
-        holderQuality: h.holderQuality,
-        narrative: h.narrative,
-        reason: h.reason,
-      })),
-    };
-    cached = { at: Date.now(), body };
-    return body;
+  const scoreCache = new SharedCache<Awaited<ReturnType<typeof buildScoreConfig>>>(SCORE_CACHE_MS, {
+    staleWhileRevalidateMs: SCORE_STALE_MS,
   });
+  app.get("/score", () => scoreCache.get(buildScoreConfig));
 
   // Whether the Narrative seat's "agrees"/"warns" note shows on cards for readers who haven't set
   // the Customize toggle (curation/narrativeNote.ts), with the record behind it for the toggle's
@@ -84,4 +72,27 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
       return narrativeNoteReadiness(emptyRecord());
     }
   });
+}
+
+/** The body of GET /config/score - see scoreCache. */
+async function buildScoreConfig() {
+  const [{ weights, adoptedAt }, history, scale] = await Promise.all([
+    loadAdoptedScoreWeights(),
+    scoreWeightsHistory(10),
+    // The color scale is a nicety: a failed read falls back rather than failing the weights.
+    recentScoreScale().catch(() => ({ ...SCORE_SCALE_FALLBACK })),
+  ]);
+  return {
+    weights,
+    adoptedAt,
+    scale,
+    history: history.map((h) => ({
+      at: h.createdAt,
+      momentum: h.momentum,
+      freshness: h.freshness,
+      holderQuality: h.holderQuality,
+      narrative: h.narrative,
+      reason: h.reason,
+    })),
+  };
 }
