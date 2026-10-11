@@ -393,9 +393,14 @@ function devWalletText(scored: ScoredToken): string {
   return creatorKnown && scored.top10HolderPct !== undefined ? "not among the top holders" : "unknown";
 }
 
-/** Clamps a model-reported probability into [0, 1]; anything non-finite becomes 0. */
+/**
+ * Clamps a model-reported probability into [0, 1]; anything non-finite becomes 0. A value from 2 to
+ * 100 can only be a percent (35 for 35%), so it is read as one rather than clamped to certainty.
+ */
 export function clampProbability(p: number): number {
-  return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0;
+  if (!Number.isFinite(p)) return 0;
+  const share = p >= 2 && p <= 100 ? p / 100 : p;
+  return Math.min(1, Math.max(0, share));
 }
 
 /**

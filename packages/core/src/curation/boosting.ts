@@ -464,6 +464,9 @@ function hourGroups(rows: BoostingRow[]): Uint32Array[] {
 
 const discount = (rank: number) => 1 / Math.log2(rank + 2);
 
+/** A fixed scramble of a row index (Knuth's multiplicative hash), for order-free tie breaks. */
+const tieKey = (i: number) => Math.imul(i + 1, 2654435761) >>> 0;
+
 /**
  * The LambdaRank gradients for one group (see BoostingObjective). `gains` is 2^tier - 1 per row;
  * the group's rows are ranked by their current margin and each (better, worse) pair that reaches
@@ -478,7 +481,10 @@ function lambdaRankGroup(
   grad: Float64Array | null,
   hess: Float64Array | null,
 ): number {
-  const order = Array.from(group).sort((a, b) => margin[b]! - margin[a]!);
+  // Ties (every row on the first tree, rows sharing leaves after) break on a scrambled index, not
+  // the rows' time order: a stable sort would hand the top slots - and so all the pairs - to each
+  // group's earliest rows.
+  const order = Array.from(group).sort((a, b) => margin[b]! - margin[a]! || tieKey(a) - tieKey(b));
   const ideal = Array.from(group)
     .map((i) => gains[i]!)
     .sort((a, b) => b - a);
