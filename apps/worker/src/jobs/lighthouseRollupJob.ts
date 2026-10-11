@@ -264,12 +264,13 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
              count(*) FILTER (WHERE a."hit10xIn1h") AS won10x,
              count(*) FILTER (WHERE a."hit2xIn1h" IS NOT NULL
                                 AND (a."hit10xIn1h" IS NOT NULL OR NOT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)))) AS ten_x_graded,
-             count(a."simReturnPct") FILTER (WHERE ${firstCallOnRowSql()}) AS ret_n,
-             sum(a."simReturnPct") FILTER (WHERE ${firstCallOnRowSql()})::float8 AS ret_sum
+             count(a."simReturnPct") AS ret_n,
+             sum(a."simReturnPct")::float8 AS ret_sum
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
       WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to} AND ${notRetiredModelSql()}
+        AND ${firstCallOnRowSql()}
       GROUP BY 1`,
     screenStart < to ? screenHours(screenStart, to) : Promise.resolve([] as ScreenHourRow[]),
   ]);
@@ -503,6 +504,7 @@ function alertRows(from: Date, to: Date) {
     JOIN "Token" t ON t.id = a."tokenId"
     LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
     WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to} AND ${notRetiredModelSql()}
+      AND ${firstCallOnRowSql()}
     ORDER BY a."createdAt" DESC
     LIMIT 50000`;
 }

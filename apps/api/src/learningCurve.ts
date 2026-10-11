@@ -1,5 +1,6 @@
 import {
   prisma,
+  Prisma,
   recordScore,
   walletSafetyCutsSql,
   firstCallOnRowSql,
@@ -172,17 +173,7 @@ type RawDay = {
   sim_sum?: number | null;
 };
 
-type RawModelDay = RawDay & {
-  model: string | null;
-  model_name: string | null;
-  /**
-   * The same return counted only on the first call on each grading row (firstCallOnRowSql), so the
-   * pooled feed counts a token several models called once. Absent from older fixtures: the feed
-   * then falls back to sim_calls / sim_sum.
-   */
-  sim_first_calls?: bigint;
-  sim_first_sum?: number | null;
-};
+type RawModelDay = RawDay & { model: string | null; model_name: string | null };
 
 type RawRun = {
   at: Date;
@@ -283,46 +274,6 @@ export function buildLearningDays(marketRows: RawDay[], feedRows: RawDay[]): Lea
       lift10x: ratio(f.won10x ?? 0, f.tenXGraded ?? 0, m.won10x ?? 0, m.tenXGraded ?? 0, MIN_GRADED_FOR_LIFT),
     };
   });
-}
-
-/** A model day's share of the feed's return: its first calls on each grading row, when known. */
-function pooledSim(r: RawModelDay): { sim_calls: bigint; sim_sum: number } {
-  return r.sim_first_calls !== undefined
-    ? { sim_calls: r.sim_first_calls, sim_sum: r.sim_first_sum ?? 0 }
-    : { sim_calls: r.sim_calls ?? 0n, sim_sum: r.sim_sum ?? 0 };
-}
-
-/** Pure: the feed's day rows - every model's calls pooled per day - from the per-model rows. */
-export function poolModelDays(rows: RawModelDay[]): RawDay[] {
-  const byDay = new Map<string, RawDay>();
-  for (const r of rows) {
-    const d = byDay.get(r.day);
-    if (!d) {
-      byDay.set(r.day, {
-        day: r.day,
-        calls: r.calls,
-        graded: r.graded,
-        won2x: r.won2x,
-        won4x: r.won4x,
-        won10x: r.won10x,
-        ten_x_graded: r.ten_x_graded,
-        doubled_after_stop: r.doubled_after_stop,
-        ...pooledSim(r),
-      });
-      continue;
-    }
-    d.calls += r.calls;
-    d.graded += r.graded;
-    d.won2x += r.won2x;
-    d.won4x += r.won4x;
-    d.won10x += r.won10x;
-    d.ten_x_graded += r.ten_x_graded;
-    d.doubled_after_stop += r.doubled_after_stop;
-    const sim = pooledSim(r);
-    d.sim_calls = (d.sim_calls ?? 0n) + sim.sim_calls;
-    d.sim_sum = (d.sim_sum ?? 0) + sim.sim_sum;
-  }
-  return [...byDay.values()];
 }
 
 /**
@@ -499,14 +450,10 @@ export async function buildLearningCurve(
       AND ${walletSafetyCutsSql()}
       AND "labelRule" >= ${CURRENT_LABEL_RULE}
     GROUP BY 1`;
-  // Every model's calls by UTC day and model, graded the same way (see buildHitRateReport for the
-  // label sources); the feed is their sum per day. A call whose training row was graded under the
-  // legacy rule is left out for the same reason as above; one whose row is gone keeps its own
-  // copied verdict.
-  const modelRows = prisma.$queryRaw<RawModelDay[]>`
-    SELECT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day,
-           a."model" AS model,
-           max(a."modelName") AS model_name,
+  // Every model's calls by UTC day, graded the same way (see buildHitRateReport for the label
+  // sources). A call whose training row was graded under the legacy rule is left out for the same
+  // reason as above; one whose row is gone keeps its own copied verdict.
+  const callCols = Prisma.sql`
            count(*) AS calls,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
@@ -521,16 +468,25 @@ export async function buildLearningCurve(
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
            sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
-           count(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()}) AS sim_first_calls,
-           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()})::float8 AS sim_first_sum
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum`;
+  const callsFrom = Prisma.sql`
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
-      AND (co."labelRule" IS NULL OR co."labelRule" >= ${CURRENT_LABEL_RULE})
+      AND (co."labelRule" IS NULL OR co."labelRule" >= ${CURRENT_LABEL_RULE})`;
+  const modelRows = prisma.$queryRaw<RawModelDay[]>`
+    SELECT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day,
+           a."model" AS model,
+           max(a."modelName") AS model_name, ${callCols}
+    ${callsFrom}
     GROUP BY 1, 2`;
+  // The feed: every model's calls pooled, each token once (several models calling one token share
+  // its grading row; counting it once per model would read high - firstCallOnRowSql).
+  const feedRows = prisma.$queryRaw<RawDay[]>`
+    SELECT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day, ${callCols}
+    ${callsFrom}
+      AND ${firstCallOnRowSql()}
+    GROUP BY 1`;
   // Which runs to show: every run of a short window, the last run of each UTC day of a longer one
   // (a 90-day window at twelve runs a day would be a thousand rows nobody reads). Columns are
   // timestamp(3) without a zone, stored in UTC, so date_trunc groups by UTC day.
@@ -569,8 +525,8 @@ export async function buildLearningCurve(
     WHERE m."trainingTo" = ANY(${chosen.map((d) => d.toISOString())}::timestamp(3)[])
       AND m."contestant" IS NOT NULL
     ORDER BY m."trainingTo" DESC`;
-  const [market, perModel, runs] = await Promise.all([marketRows, modelRows, runRows]);
-  const dayseries = buildLearningDays(market, poolModelDays(perModel));
+  const [market, perModel, feed, runs] = await Promise.all([marketRows, modelRows, feedRows, runRows]);
+  const dayseries = buildLearningDays(market, feed);
   const firstDay = since.toISOString().slice(0, 10);
   const inWindow = <T extends { day: string }>(rows: T[]) => rows.filter((d) => d.day >= firstDay);
   const precision: PrecisionTargets = {

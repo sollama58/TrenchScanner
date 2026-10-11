@@ -510,34 +510,7 @@ export async function buildHitRateReport(
 ) {
   // A curated alert carries outcome copies once its window closes; until the copy lands (or after
   // its training row is pruned) the linked row is the other source. Either way the same label.
-  const curatedRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
-    SELECT a."source" AS source,
-           count(*) AS calls,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
-                              AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
-           count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
-           count(*) FILTER (WHERE COALESCE(a."hit10xIn1h", co."hit10xIn1h")) AS won10x,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL
-                              AND (COALESCE(a."hit10xIn1h", co."hit10xIn1h") IS NOT NULL OR NOT (COALESCE(a."hit2xIn1h", co."hit2xIn1h") AND NOT COALESCE(a."disqualified", co."disqualified", false)))) AS ten_x_graded,
-           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
-           count(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()}) AS sim_calls,
-           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()})::float8 AS sim_sum,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
-                              AND (a."outcomeFinalizedAt" IS NOT NULL
-                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable,
-           ${RAN_LATER} AS ran_later
-    FROM "CuratedAlert" a
-    LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
-    GROUP BY a."source"
-    ORDER BY calls DESC`;
-
-  // The same calls by contestant ledger (CuratedAlert.model) - the curator contest's live records.
-  const modelRows = prisma.$queryRaw<(RawCounts & { model: string })[]>`
-    SELECT COALESCE(a."model", 'unassigned') AS model,
+  const curatedCountCols = Prisma.sql`
            count(*) AS calls,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
@@ -554,37 +527,41 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
                               AND (a."outcomeFinalizedAt" IS NOT NULL
                                    OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable,
-           ${RAN_LATER} AS ran_later
+           ${RAN_LATER} AS ran_later`;
+  const curatedFrom = Prisma.sql`
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
+    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}`;
+
+  // By curator (a."source": the heuristic, or one CuratorModel version, each of which calls a
+  // token once at most).
+  const curatedRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
+    SELECT a."source" AS source, ${curatedCountCols}
+    ${curatedFrom}
+    GROUP BY a."source"
+    ORDER BY calls DESC`;
+
+  // Every curator's calls together, each token once: several models calling one token share its
+  // grading row, and counting it once per model would read high (firstCallOnRowSql).
+  const curatedTotalRows = prisma.$queryRaw<RawCounts[]>`
+    SELECT ${curatedCountCols}
+    ${curatedFrom}
+      AND ${firstCallOnRowSql()}`;
+
+  // The same calls by contestant ledger (CuratedAlert.model) - the curator contest's live records.
+  const modelRows = prisma.$queryRaw<(RawCounts & { model: string })[]>`
+    SELECT COALESCE(a."model", 'unassigned') AS model, ${curatedCountCols}
+    ${curatedFrom}
     GROUP BY 1
     ORDER BY calls DESC`;
 
   // The same calls by conviction tier (CuratedAlert.tier): the high-conviction tier is the
-  // precision-curve top the feed is operated by, so its own rate is the one to watch.
+  // precision-curve top the feed is operated by, so its own rate is the one to watch. Each tier
+  // counts a token once, however many models called it at that tier.
   const tierRows = prisma.$queryRaw<(RawCounts & { tier: string })[]>`
-    SELECT COALESCE(a."tier", 'untiered') AS tier,
-           count(*) AS calls,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
-                              AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
-           count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
-           count(*) FILTER (WHERE COALESCE(a."hit10xIn1h", co."hit10xIn1h")) AS won10x,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL
-                              AND (COALESCE(a."hit10xIn1h", co."hit10xIn1h") IS NOT NULL OR NOT (COALESCE(a."hit2xIn1h", co."hit2xIn1h") AND NOT COALESCE(a."disqualified", co."disqualified", false)))) AS ten_x_graded,
-           count(*) FILTER (WHERE COALESCE(a."disqualified", co."disqualified")) AS doubled_after_stop,
-           count(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql("a", "tier")}) AS sim_calls,
-           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql("a", "tier")})::float8 AS sim_sum,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NULL
-                              AND (a."outcomeFinalizedAt" IS NOT NULL
-                                   OR (co."finalized24hAt" IS NOT NULL AND co."finalizedAt" IS NULL))) AS ungradable,
-           ${RAN_LATER} AS ran_later
-    FROM "CuratedAlert" a
-    LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
+    SELECT COALESCE(a."tier", 'untiered') AS tier, ${curatedCountCols}
+    ${curatedFrom}
+      AND ${firstCallOnRowSql({ sameColumn: "tier" })}
     GROUP BY 1
     ORDER BY 1`;
 
@@ -596,8 +573,7 @@ export async function buildHitRateReport(
     FROM "CandidateOutcome"
     WHERE "sampleKind" IN ('hourly', 'event') AND "anchorAt" >= now() - INTERVAL '7 days'`;
 
-  const shadowRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
-    SELECT s."source" AS source,
+  const shadowCountCols = Prisma.sql`
            count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
            count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
@@ -607,12 +583,21 @@ export async function buildHitRateReport(
                               AND (co."hit10xIn1h" IS NOT NULL OR NOT (co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop,
            count(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS sim_calls,
-           sum(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
+           sum(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL)::float8 AS sim_sum`;
+  const shadowFrom = Prisma.sql`
     FROM "CuratedShadowEmission" s
     LEFT JOIN "CandidateOutcome" co ON co."id" = s."candidateOutcomeId"
-    WHERE s."createdAt" >= ${since} AND s."createdAt" < ${until}
+    WHERE s."createdAt" >= ${since} AND s."createdAt" < ${until}`;
+  const shadowRows = prisma.$queryRaw<(RawCounts & { source: string })[]>`
+    SELECT s."source" AS source, ${shadowCountCols}
+    ${shadowFrom}
     GROUP BY s."source"
     ORDER BY calls DESC`;
+  // The bench's calls together, each token once (as curatedTotalRows).
+  const shadowTotalRows = prisma.$queryRaw<RawCounts[]>`
+    SELECT ${shadowCountCols}
+    ${shadowFrom}
+      AND ${firstCallOnRowSql({ alias: "s", table: "CuratedShadowEmission" })}`;
 
   // Confidence bands across both curators' live and shadow calls - where a cutoff would have to
   // sit for the calls above it to reach the targets.
@@ -782,6 +767,7 @@ export async function buildHitRateReport(
       WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
         AND COALESCE(a."hit2xIn1h", co."hit2xIn1h")
         AND NOT COALESCE(a."disqualified", co."disqualified", false)
+        AND ${firstCallOnRowSql()}
       UNION ALL
       SELECT 'samples', co."peak24hReturnPct", co."runPeakMinutes", co."finalized24hAt" IS NOT NULL
       FROM "CandidateOutcome" co
@@ -816,6 +802,8 @@ export async function buildHitRateReport(
     byTier,
     continuity,
     winnerRuns,
+    [curatedTotal],
+    [shadowTotal],
   ] = await Promise.all([
     curatedRows,
     modelRows,
@@ -829,6 +817,8 @@ export async function buildHitRateReport(
     tierRows,
     continuityRows,
     winnerRunRows,
+    curatedTotalRows,
+    shadowTotalRows,
   ]);
 
   const rated = (c: GradedCounts, min?: number) => withRates(c, targets, min);
@@ -878,7 +868,7 @@ export async function buildHitRateReport(
     targets,
     minGradedForVerdict: MIN_GRADED_FOR_VERDICT,
     curatedAlerts: {
-      total: rated(sumCounts(curatedCounts)),
+      total: rated(curatedTotal ? toCounts(curatedTotal) : sumCounts([])),
       bySource: curatedCounts.map((r) => ({ ...r, ...rated(r) })),
       byModel: byModel.map((r) => {
         const counts = toCounts(r);
@@ -890,7 +880,7 @@ export async function buildHitRateReport(
       }),
     },
     shadowEmissions: {
-      total: rated(sumCounts(shadowCounts)),
+      total: rated(shadowTotal ? toCounts(shadowTotal) : sumCounts([])),
       bySource: shadowCounts.map((r) => ({ ...r, ...rated(r) })),
     },
     // Live and shadow calls together, bucketed by curator confidence (0-100, bands of 10).

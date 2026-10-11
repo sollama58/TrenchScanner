@@ -429,13 +429,14 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     // cap as the Admin report; only the columns the tallies need, never the mint.
     prisma.$queryRaw<AlertOutcomeRow[]>`
       SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
-             CASE WHEN ${firstCallOnRowSql()} THEN a."simReturnPct" END::float8 AS sim_return,
+             a."simReturnPct"::float8 AS sim_return,
              n.status, n.categories, n."mainCategory" AS main_category, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
              CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind, n.flags
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
       WHERE a."createdAt" > ${since} AND ${notRetiredModelSql()}
+        AND ${firstCallOnRowSql()}
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,
     buildScreenedOutcomes(env, since, days),
@@ -568,12 +569,13 @@ export async function buildLighthouseSignals(days: number): Promise<LighthouseSi
       >[]
     >`
       SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
-             CASE WHEN ${firstCallOnRowSql()} THEN a."simReturnPct" END::float8 AS sim_return,
+             a."simReturnPct"::float8 AS sim_return,
              n.status, n.categories, n."mainCategory" AS main_category, n."copiesRecent" AS copies_recent
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
       WHERE a."createdAt" > ${since} AND ${notRetiredModelSql()}
+        AND ${firstCallOnRowSql()}
       ORDER BY a."createdAt" DESC
       LIMIT 20000`,
   ]);
