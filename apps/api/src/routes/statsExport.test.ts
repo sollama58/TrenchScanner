@@ -6,7 +6,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
-import { csvCell, exportChunks, exportQuerySchema, startExportStream } from "./statsExport.js";
+import {
+  csvCell,
+  csvColumns,
+  exportChunks,
+  exportQuerySchema,
+  narrativeText,
+  startExportStream,
+} from "./statsExport.js";
 
 const TOKEN = "stats-test-token-0123456789abcdef0123456789";
 
@@ -17,6 +24,26 @@ describe("export query", () => {
     expect(q.format).toBe("jsonl");
     expect(exportQuerySchema.safeParse({ dataset: "outcomes", sampleKind: "bogus" }).success).toBe(false);
     expect(exportQuerySchema.safeParse({ dataset: "tokens" }).success).toBe(false);
+  });
+
+  it("pulls the narrative's names out of a stored TokenSage analysis", () => {
+    const t = narrativeText({
+      referent: { label: "Peanut (squirrel)", desc: "pet squirrel seized by NY officials" },
+      lineage: { of_name: "Peanut", of_ticker: "PNUT" },
+      copy_of: [{ name: "Peanut the Squirrel", ticker: "PNUT", mint: "abc", recent: true, signals: ["x"] }],
+      x: { text: "gm" },
+    });
+    expect(t).toEqual({
+      referentDesc: "pet squirrel seized by NY officials",
+      lineageOfName: "Peanut",
+      lineageOfTicker: "PNUT",
+      copyOf: [{ name: "Peanut the Squirrel", ticker: "PNUT", mint: "abc", recent: true }],
+      tickerExplanation: null,
+      xText: "gm",
+    });
+    expect(narrativeText(null).copyOf).toEqual([]);
+    expect(exportQuerySchema.parse({ dataset: "narratives" }).dataset).toBe("narratives");
+    expect(csvColumns("narratives")).toContain("referentLabel");
   });
 
   it("quotes CSV cells only when it has to", () => {
