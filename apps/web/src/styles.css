@@ -3233,6 +3233,10 @@ button.small-btn {
   letter-spacing: -0.04em;
   padding: 2px 9px;
 }
+.card-result .result-stop {
+  font-size: 0.78em;
+  line-height: 1;
+}
 .rank-inline {
   display: none;
 }

@@ -60,7 +60,7 @@ export function AlertCard({
   const athMcap = hasPeak && alertMcap > 0 ? alertMcap * (1 + peak / 100) : null;
   // The result badge (top right) shows once a target hit or the window closed; nothing while grading.
   const showVerdict = outcome !== null && !(outcome.status === "watching" && !outcome.hit2x);
-  // Marks only: ✓ 2x, ✓✓ 4x, ✓✓✓ 10x, ↗ ran later or stopped out then ran, ✕ missed (the words stay
+  // Marks only: ✓ 2x, ✓✓ 4x, ✓✓✓ 10x, ↗ ran later, ⊘ stopped out, ✕ missed (the words stay
   // in the tooltip).
   // An ungraded result has no mark, so nothing shows.
   const resultMark = showVerdict && badge.tone !== "neutral" ? badge.text.split(" ")[0] : null;
@@ -184,7 +184,8 @@ export function AlertCard({
         </div>
         {resultMark && show("result") && (
           <span className={`badge card-result ${badge.tone}`} title={badge.text} aria-label={badge.text}>
-            {resultMark}
+            {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
+            {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
           </span>
         )}
       </header>

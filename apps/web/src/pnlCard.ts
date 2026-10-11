@@ -156,6 +156,10 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   ctx.fillStyle = up ? UP : DOWN;
   ctx.font = `700 44px ${FONT}`;
   ctx.fillText(signedPct(data.peakPct, 0), pad + xWidth + 24, 300 + xSize * 0.82);
+  // The figure is the highest point since the alert, not a return anyone banked: say so.
+  ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+  ctx.font = `700 22px ${FONT}`;
+  ctx.fillText("PEAK SINCE ALERT", pad + xWidth + 24, 300 + xSize * 0.82 - 58);
 
   // Footer: when, the mint, where.
   const when = new Date(data.at).toLocaleString(undefined, {

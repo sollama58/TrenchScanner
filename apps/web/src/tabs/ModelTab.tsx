@@ -1986,8 +1986,8 @@ const OUTCOME_TEXT: Record<ModelInsights["recentAiReviews"][number]["outcome"], 
   won4x: "✓✓ 4x",
   won10x: "✓✓✓ 10x",
   missed: "✕ missed",
-  // A stop-out always went on to double after the stop (curation/labels.ts), so it gets the arrow.
-  stopped: "↗ stopped out",
+  // A loss with its own mark, as on the feed's cards (outcome.ts).
+  stopped: "⊘ stopped out",
   unknown: "–",
 };
 
