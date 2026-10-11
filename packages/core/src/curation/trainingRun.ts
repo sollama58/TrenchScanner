@@ -220,8 +220,11 @@ interface RecipeExam {
   extras: ServedCuratorExtras;
   /** The high-conviction tier's out-of-sample record, when tiering is on. */
   highConviction: StoredEvalMetrics["highConviction"];
-  /** The shipped model's probabilities over the reference rows (aligned with it). */
-  shippedProbabilities: Float64Array;
+  /**
+   * The shipped model's served scale over the reference rows: ascending, NOT aligned with them
+   * (see servedScale). What the calibration table and the combiners' member tables read.
+   */
+  servedProbabilities: Float64Array;
 }
 
 /** The out-of-sample record of every call at or above a rank cutoff, cooldown replayed. */
@@ -267,7 +270,7 @@ function servedExtras(
     "highConvictionRank" | "calibrationWindowDays" | "cooldownHours" | "targets"
   >,
   outOfSampleRanks: ScoredOutcome[],
-  shippedProbabilities: ArrayLike<number>,
+  servedProbabilities: ArrayLike<number>,
   translate: (rank: number) => number | null,
   cutoff: number | null,
 ): { extras: ServedCuratorExtras; highConviction: StoredEvalMetrics["highConviction"] } {
@@ -292,7 +295,7 @@ function servedExtras(
   }
   const calibration = buildCalibration(
     outOfSampleRanks,
-    quantileTable(shippedProbabilities),
+    quantileTable(servedProbabilities),
     (cfg.calibrationWindowDays ?? Infinity) * 86_400_000,
   );
   if (calibration) extras.calibration = calibration;
@@ -397,6 +400,26 @@ export function servedTranslate(
   };
 }
 
+/**
+ * The scale servedTranslate puts the cutoffs on, as a distribution: at every rank the higher of
+ * the cross-fitted and in-sample scores (both sorted ascending, so it is no row's own score).
+ * The card's calibration and the combiners' member tables read a live probability's rank on
+ * this, so a model's calls land at the rank its cutoff was set at. On the cross-fitted scale
+ * alone, a group the shipped model scores far above its halves (Survivor's and Ranker's brand-new
+ * coins) reads near the top: the combiners counted those as member calls far more often than in
+ * their exams, and the cards read high (live, Survivor's alerts claimed 27.4% and hit 20.8%).
+ */
+export function servedScale(
+  shipped: UnthresholdedCuratorParams,
+  reference: readonly TrainingRow[],
+  crossFitted: ArrayLike<number>,
+): Float64Array {
+  const own = Float64Array.from(reference, (r) => scoreCandidateWithModel(shipped, r.features)).sort();
+  return Float64Array.from(crossFitted)
+    .sort()
+    .map((p, i) => Math.max(p, own[i]!));
+}
+
 /** Fewer training rows than this and a cross-fit half keeps the shipped model's own scores. */
 const MIN_CROSS_FIT_ROWS = 300;
 
@@ -482,8 +505,9 @@ async function shipRecipe(
     runWeightPerDoubling: cfg.runWeightPerDoubling,
   };
   const trained = await trainCuratorModel(rows, trainOpts);
-  // The shipped model's scale on tokens it has never seen: the cutoff, the high-conviction line,
-  // the calibration table and the combiners' quantile tables all read these same probabilities.
+  // The shipped model's scale on tokens it has never seen, raised where it scores higher itself
+  // (servedTranslate, servedScale): the cutoff, the high-conviction line, the calibration table
+  // and the combiners' quantile tables all read it.
   const shippedProbabilities = await crossFittedProbabilities(
     rows,
     evaluation.decisionReference,
@@ -491,6 +515,7 @@ async function shipRecipe(
     (train) => trainCuratorModel(train, trainOpts),
   );
   const translate = servedTranslate(trained, evaluation.decisionReference, shippedProbabilities);
+  const servedProbabilities = servedScale(trained, evaluation.decisionReference, shippedProbabilities);
   // The targets are what the feed aims for, not a gate: when no cutoff met them, the model ships
   // at its best-effort cutoff (see chooseCutoff) and still competes on its exam. Only an exam
   // with no judgeable cutoff at all leaves it without one.
@@ -499,7 +524,7 @@ async function shipRecipe(
   const { extras, highConviction } = servedExtras(
     cfg,
     evaluation.outOfSampleRanks,
-    shippedProbabilities,
+    servedProbabilities,
     translate,
     precisionCalibration.threshold,
   );
@@ -510,7 +535,7 @@ async function shipRecipe(
     deployedThreshold,
     extras,
     highConviction,
-    shippedProbabilities,
+    servedProbabilities,
   };
 }
 
@@ -723,8 +748,9 @@ interface LearnerExam {
   result: ContestantTrainingResult;
   examScore: number | null;
   evaluation: WalkForwardResult;
-  /** Out-of-sample fold probabilities and the shipped model's probabilities, per reference row. */
+  /** Out-of-sample fold probabilities, per reference row. */
   foldRanks: Float64Array | null;
+  /** The shipped model's served scale over the reference rows (RecipeExam.servedProbabilities). */
   shipped: Float64Array | null;
   /**
    * 1 where the exam sent this model's call, per reference row: its fold's own cutoff and the
@@ -818,7 +844,7 @@ async function shipLearner(
     examScore: sat.examScore,
     evaluation,
     foldRanks: aligned ? Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability) : null,
-    shipped: aligned ? exam.shippedProbabilities : null,
+    shipped: aligned ? exam.servedProbabilities : null,
     calls: sat.calls,
     callRank: rankCutoff,
   };
