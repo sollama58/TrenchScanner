@@ -622,9 +622,14 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
       if (!entry) continue;
       try {
         // New unless a job at least this deep is already queued: a full read sent over a
-        // queued basic one starts a full job, which costs full quota.
+        // queued basic one starts a full job, which costs full quota. A mint turned away
+        // (quota, overload) or refused as invalid started no job, so it costs no budget: counting
+        // it spent the day's full and early budgets on retries while TokenSage was overloaded.
         const queued = pending.get(item.ca);
-        if (!queued || !narrativeDepthCovers(queued.depth, depth)) {
+        const turnedAway =
+          item.status === "invalid" ||
+          (item.status === "failed" && (item.error === "quota_exceeded" || item.error === "overloaded"));
+        if (!turnedAway && (!queued || !narrativeDepthCovers(queued.depth, depth))) {
           stats.requested += 1;
           if (depth === "full") fullSentToday += 1;
           if (depth === "full" && earlyMints.has(item.ca)) earlySentToday += 1;
@@ -676,7 +681,14 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
           } else {
             pausedUntil = Math.max(pausedUntil, Date.now() + Math.max(5, item.retry_after_s ?? 30) * 1000);
           }
-          if (!wanted.has(item.ca)) wanted.set(item.ca, { depth, hints: entry.hints, notedAt: Date.now() });
+          // An early deep read keeps its place on the early budget when it is asked for again.
+          if (!wanted.has(item.ca))
+            wanted.set(item.ca, {
+              depth,
+              hints: entry.hints,
+              ...(depth === "full" && earlyMints.has(item.ca) ? { early: true } : {}),
+              notedAt: Date.now(),
+            });
         } else if (item.status === "invalid") {
           pending.delete(item.ca);
           await storeFailure(item.ca, depth, `invalid_ca: ${item.error ?? "not a token address"}`);
@@ -687,7 +699,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
           // A done status without a document, or a status this version doesn't know: ask again
           // after a cool-off rather than every cycle.
           pending.delete(item.ca);
-          notFoundUntil.set(item.ca, Date.now() + NOT_FOUND_COOLDOWN_MS);
+          rememberNotFound(item.ca, Date.now() + NOT_FOUND_COOLDOWN_MS);
         }
       } catch (err) {
         // One bad item (an odd document, a DB hiccup) must not lose the rest of the batch.

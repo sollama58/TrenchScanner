@@ -216,10 +216,12 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
  * What the safety screen made of the tokens first scanned in the window: accepted (cleared it at
  * least once) against rejected (never did), the Lighthouse's "Likely Rugs". Summed from the
  * hourly rollup (LighthouseHour.screenAccepted / screenRejected), since the snapshots it reads are
- * swept after two days for tokens nobody called; whole hours from the one `since` falls in.
+ * swept after two days for tokens nobody called; whole hours from the first one after `since`.
  */
 async function buildSafetyScreen(since: Date) {
-  const fromHour = new Date(Math.floor(since.getTime() / HOUR_MS) * HOUR_MS);
+  // Whole hours inside the window: the hour `since` falls in started before it, so it is left out
+  // rather than stretching "the last 24 hours" to nearly 25.
+  const fromHour = new Date(Math.ceil(since.getTime() / HOUR_MS) * HOUR_MS);
   const rows = await prisma.$queryRaw<
     { accepted: bigint | null; rejected: bigint | null; oldest: Date | null; summed_at: Date | null }[]
   >`
