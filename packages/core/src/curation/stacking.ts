@@ -224,7 +224,10 @@ export interface StackingInput {
   reference: TrainingRow[];
   /** Per member: its fold-model confidence rank on each reference row (aligned with reference). */
   memberFoldRanks: ReadonlyMap<string, ArrayLike<number>>;
-  /** Per member: its SHIPPED model's probability on each reference row - the quantile source. */
+  /**
+   * Per member: its SHIPPED model's served scale over the reference rows - the quantile source,
+   * read as a distribution only (servedScale in trainingRun.ts), not row by row.
+   */
   memberShippedProbabilities: ReadonlyMap<string, ArrayLike<number>>;
   /**
    * Per member: its exam's rank cutoff (null = none set). A fold rank at or above it is a call

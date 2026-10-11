@@ -4,6 +4,7 @@ import {
   runCuratorTraining,
   runEvolvingContest,
   NEVER_EMIT_THRESHOLD,
+  servedScale,
   servedTranslate,
   type FamilyResult,
 } from "./trainingRun.js";
@@ -17,6 +18,7 @@ import {
 } from "./trainer.js";
 import { syntheticMarket } from "./syntheticMarket.js";
 import { enabledContestants } from "./contestants.js";
+import { quantileTable, rankFromQuantiles } from "./stacking.js";
 
 const family = (
   learner: FamilyResult["learner"],
@@ -158,5 +160,26 @@ describe("servedTranslate", () => {
     // Live share at the served cutoff stays near the rank's share.
     const cut = lower(rank)!;
     expect(own.filter((p) => p >= cut).length / own.length).toBeLessThanOrEqual(0.04);
+  });
+});
+
+describe("servedScale", () => {
+  it("puts the served cutoff back at its rank, where the cross-fitted scale alone reads it near the top", async () => {
+    const rows = syntheticMarket({ tokens: 600, days: 10, truth: "interactions", seed: 5 });
+    const shipped = await trainCuratorModel(rows, { learner: "logistic" });
+    const reference = rows.slice(-400);
+    const own = reference.map((r) => scoreCandidateWithModel(shipped, r.features));
+    const lower = own.map((p) => p * 0.5);
+    const rank = 0.97;
+    const cut = servedTranslate(shipped, reference, lower)(rank)!;
+    const served = servedScale(shipped, reference, lower);
+    // Ascending, one entry per reference row, the higher of the two at every rank.
+    expect(served).toHaveLength(reference.length);
+    expect([...served]).toEqual([...own].sort((a, b) => a - b));
+    expect(rankFromQuantiles(quantileTable(served), cut)).toBeCloseTo(rank, 1);
+    expect(rankFromQuantiles(quantileTable(lower), cut)).toBeGreaterThan(0.99);
+    // A cross-fit that scores higher is its own served scale.
+    const higher = own.map((p) => Math.min(1, p * 1.5));
+    expect([...servedScale(shipped, reference, higher)]).toEqual([...higher].sort((a, b) => a - b));
   });
 });
