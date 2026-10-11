@@ -63,6 +63,10 @@ jobs:
       - name: Apply migrations to the CI database
         run: npm run prisma:deploy
 
+      # A new migration that ALTERs a large table must set a lock_timeout - see the script.
+      - name: Check big-table migrations set a lock_timeout
+        run: ./scripts/check-migration-locks.sh
+
       - name: Check migrations re-run safely and match the schema
         run: |
           psql "$DATABASE_URL" -c 'CREATE DATABASE shadow'
