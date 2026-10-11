@@ -2,6 +2,7 @@ import {
   prisma,
   recordScore,
   walletSafetyCutsSql,
+  firstCallOnRowSql,
   CURRENT_LABEL_RULE,
   type PrecisionTargets,
 } from "@trenchscanner/core";
@@ -170,7 +171,17 @@ type RawDay = {
   sim_sum?: number | null;
 };
 
-type RawModelDay = RawDay & { model: string | null; model_name: string | null };
+type RawModelDay = RawDay & {
+  model: string | null;
+  model_name: string | null;
+  /**
+   * The same return counted only on the first call on each grading row (firstCallOnRowSql), so the
+   * pooled feed counts a token several models called once. Absent from older fixtures: the feed
+   * then falls back to sim_calls / sim_sum.
+   */
+  sim_first_calls?: bigint;
+  sim_first_sum?: number | null;
+};
 
 type RawRun = {
   at: Date;
@@ -273,6 +284,13 @@ export function buildLearningDays(marketRows: RawDay[], feedRows: RawDay[]): Lea
   });
 }
 
+/** A model day's share of the feed's return: its first calls on each grading row, when known. */
+function pooledSim(r: RawModelDay): { sim_calls: bigint; sim_sum: number } {
+  return r.sim_first_calls !== undefined
+    ? { sim_calls: r.sim_first_calls, sim_sum: r.sim_first_sum ?? 0 }
+    : { sim_calls: r.sim_calls ?? 0n, sim_sum: r.sim_sum ?? 0 };
+}
+
 /** Pure: the feed's day rows - every model's calls pooled per day - from the per-model rows. */
 export function poolModelDays(rows: RawModelDay[]): RawDay[] {
   const byDay = new Map<string, RawDay>();
@@ -288,8 +306,7 @@ export function poolModelDays(rows: RawModelDay[]): RawDay[] {
         won10x: r.won10x,
         ten_x_graded: r.ten_x_graded,
         doubled_after_stop: r.doubled_after_stop,
-        sim_calls: r.sim_calls ?? 0n,
-        sim_sum: r.sim_sum ?? 0,
+        ...pooledSim(r),
       });
       continue;
     }
@@ -300,8 +317,9 @@ export function poolModelDays(rows: RawModelDay[]): RawDay[] {
     d.won10x += r.won10x;
     d.ten_x_graded += r.ten_x_graded;
     d.doubled_after_stop += r.doubled_after_stop;
-    d.sim_calls = (d.sim_calls ?? 0n) + (r.sim_calls ?? 0n);
-    d.sim_sum = (d.sim_sum ?? 0) + (r.sim_sum ?? 0);
+    const sim = pooledSim(r);
+    d.sim_calls = (d.sim_calls ?? 0n) + sim.sim_calls;
+    d.sim_sum = (d.sim_sum ?? 0) + sim.sim_sum;
   }
   return [...byDay.values()];
 }
@@ -502,7 +520,11 @@ export async function buildLearningCurve(
            count(COALESCE(a."simReturnPct", co."simReturnPct"))
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS sim_calls,
            sum(COALESCE(a."simReturnPct", co."simReturnPct"))
-             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum,
+           count(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()}) AS sim_first_calls,
+           sum(COALESCE(a."simReturnPct", co."simReturnPct"))
+             FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL AND ${firstCallOnRowSql()})::float8 AS sim_first_sum
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until}

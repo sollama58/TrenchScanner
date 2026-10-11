@@ -131,6 +131,30 @@ describe("per-model curves", () => {
     // Rows read before the return was counted carry none.
     expect(buildLearningDays([raw("2026-10-01", 1, 1, 0)], [])[0]!.market.avgReturnPct).toBeNull();
   });
+
+  it("pools the feed's return over the first call on each grading row, not once per model", () => {
+    // Alpha and Beta both called one token (+300); Alpha also called a loser (-50) alone.
+    const [day] = buildLearningDays(
+      [raw("2026-10-01", 10, 10, 1)],
+      poolModelDays([
+        {
+          ...modelRaw("seat-a", "Alpha", "2026-10-01", 2, 2, 1),
+          sim_calls: 2n,
+          sim_sum: 250,
+          sim_first_calls: 2n,
+          sim_first_sum: 250,
+        },
+        {
+          ...modelRaw("seat-b", "Beta", "2026-10-01", 1, 1, 1),
+          sim_calls: 1n,
+          sim_sum: 300,
+          sim_first_calls: 0n,
+          sim_first_sum: null,
+        },
+      ]),
+    );
+    expect(day!.feed.avgReturnPct).toBe(125);
+  });
 });
 
 describe("buildLearningTrend", () => {
