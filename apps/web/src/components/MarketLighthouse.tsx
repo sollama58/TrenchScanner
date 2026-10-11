@@ -386,7 +386,7 @@ function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => 
         </Section>
         <Section
           title="Best-performing narratives"
-          note="Points of average return under the exit plan above or below the average of every model call, with each narrative's own return and 2x rate."
+          note="Points of average return under the exit plan above or below the average of every model call (each token once), with each narrative's own return and 2x rate."
         >
           <HitRates rows={best} cls={cls} baseline={narrativeBaseline(d.outcomes.byCategory)} />
         </Section>
