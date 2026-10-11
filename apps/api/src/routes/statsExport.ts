@@ -33,7 +33,15 @@ function windowDays(q: { days: number; since?: Date; until?: Date }, now = new D
   return (until.getTime() - since.getTime()) / DAY_MS;
 }
 
-export const EXPORT_DATASETS = ["outcomes", "paths", "alerts", "shadow", "ai-reviews", "screen"] as const;
+export const EXPORT_DATASETS = [
+  "outcomes",
+  "paths",
+  "alerts",
+  "shadow",
+  "ai-reviews",
+  "screen",
+  "narratives",
+] as const;
 export type ExportDataset = (typeof EXPORT_DATASETS)[number];
 
 const SAMPLE_KINDS = ["hourly", "event", "second", "emission", "match"] as const;
@@ -375,6 +383,114 @@ async function* createdAtPages<T extends { id: string; createdAt: Date }>(
 
 const ORDER = [{ createdAt: "asc" as const }, { id: "asc" as const }];
 
+/**
+ * TokenNarrative's scalar columns: what TokenSage said each coin is, who it copies and how it was
+ * read. Keyed on mintAddress, windowed on checkedAt (indexed). The raw analysis document stays
+ * out; NARRATIVE_TEXT picks the few parts of it that name the narrative.
+ */
+const NARRATIVE_COLUMNS = [
+  "mintAddress",
+  "depth",
+  "status",
+  "categories",
+  "mainCategory",
+  "referentLabel",
+  "referentKind",
+  "referentConfidence",
+  "referentGeneric",
+  "summary",
+  "flags",
+  "copiesRecent",
+  "lineageKind",
+  "lineageRank",
+  "lineageRankOf",
+  "lineageOfMint",
+  "originalAgeS",
+  "originalCurveProgress",
+  "originalComplete",
+  "siblings1h",
+  "siblings24h",
+  "waveLaunches1h",
+  "waveLaunches24h",
+  "xVerdict",
+  "xRelation",
+  "xFit",
+  "xAuthorFollowers",
+  "trendMatched",
+  "trendScore",
+  "pairKind",
+  "pairSymbol",
+  "logoLabel",
+  "feeDestination",
+  "rulesVersion",
+  "analyzedAt",
+  "checkedAt",
+] as const;
+
+/** The narrative text inside the stored analysis, flattened to one record's worth of strings. */
+const NARRATIVE_TEXT = [
+  "referentDesc",
+  "lineageOfName",
+  "lineageOfTicker",
+  "copyOf",
+  "tickerExplanation",
+  "xText",
+] as const;
+
+function str(v: unknown, max: number): string | null {
+  return typeof v === "string" && v.length > 0 ? v.slice(0, max) : null;
+}
+
+function rec(v: unknown): Rec {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : {};
+}
+
+/** The parts of a stored TokenSage analysis that say what the narrative is (null-safe on old rows). */
+export function narrativeText(analysis: unknown): Record<(typeof NARRATIVE_TEXT)[number], unknown> {
+  const doc = rec(analysis);
+  const lineage = rec(doc.lineage);
+  const copies = Array.isArray(doc.copy_of) ? doc.copy_of.slice(0, 3).map(rec) : [];
+  return {
+    referentDesc: str(rec(doc.referent).desc, 300),
+    lineageOfName: str(lineage.of_name, 120),
+    lineageOfTicker: str(lineage.of_ticker, 40),
+    copyOf: copies.map((c) => ({
+      name: str(c.name, 120),
+      ticker: str(c.ticker, 40),
+      mint: str(c.mint, 60),
+      recent: c.recent ?? null,
+    })),
+    tickerExplanation: str(doc.ticker_explanation, 300),
+    xText: str(rec(doc.x).text, 500),
+  };
+}
+
+async function* narrativePages(since: Date, until: Date, pageSize = EXPORT_PAGE_SIZE) {
+  let last: { at: Date; id: string } | null = null;
+  for (;;) {
+    const where: Prisma.TokenNarrativeWhereInput = {
+      AND: [
+        { checkedAt: { gte: since, lt: until } },
+        last
+          ? { OR: [{ checkedAt: { gt: last.at } }, { checkedAt: last.at, mintAddress: { gt: last.id } }] }
+          : {},
+      ],
+    };
+    const rows = await prisma.tokenNarrative.findMany({
+      where,
+      orderBy: [{ checkedAt: "asc" }, { mintAddress: "asc" }],
+      take: pageSize,
+      select: { ...Object.fromEntries(NARRATIVE_COLUMNS.map((c) => [c, true])), analysis: true },
+    });
+    if (rows.length === 0) return;
+    yield rows.map(({ analysis, ...r }) => ({ ...r, ...narrativeText(analysis) }) as Rec);
+    // The select is built from NARRATIVE_COLUMNS, so Prisma can't type the key columns.
+    const tail = rows[rows.length - 1] as unknown as { checkedAt: Date; mintAddress: string };
+    last = { at: tail.checkedAt, id: tail.mintAddress };
+    if (rows.length < pageSize) return;
+  }
+}
+
 const ALERT_COLUMNS = [
   "id",
   "tokenId",
@@ -473,6 +589,8 @@ function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): 
       return pathPages(q, since, until, pageSize);
     case "screen":
       return screenPages(q, since, until, pageSize);
+    case "narratives":
+      return narrativePages(since, until, pageSize);
     case "alerts":
       return createdAtPages(
         async (where, take) =>
@@ -539,6 +657,8 @@ export function csvColumns(dataset: ExportDataset): string[] {
       return [...SHADOW_COLUMNS];
     case "ai-reviews":
       return [...AI_REVIEW_COLUMNS];
+    case "narratives":
+      return [...NARRATIVE_COLUMNS, ...NARRATIVE_TEXT];
   }
 }
 
