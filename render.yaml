@@ -31,6 +31,10 @@
 #   - TOKENSAGE_API_URL, TOKENSAGE_API_KEY (worker)  optional: the user's TokenSage service
 #         TokenSage says what each scanned coin is about (tokensage/prefetch.ts), stored in
 #         TokenNarrative. Off until TOKENSAGE_ENABLED=true is also set; nothing waits on it.
+#         Set TOKENSAGE_ENABLED the same on all three Node services (api, worker AND trainer):
+#         it decides whether the Narrative model seat is on the roster in each process
+#         (packages/core/src/config/env.ts), so a flag set on the worker alone has the scanner
+#         wait on a seat the trainer never trains.
 #   - COINGECKO_API_KEY (both api + worker)        optional: a CoinGecko paid-plan key
 #         Market data falls back to GeckoTerminal whenever DexScreener answers lookups blank (it
 #         did on 2026-10-07). Free, that is 30 calls a minute; with this key it is CoinGecko's

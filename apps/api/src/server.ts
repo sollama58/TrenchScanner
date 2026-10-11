@@ -47,6 +47,7 @@ import { OnDemandLiveRefresher } from "./liveRefresh.js";
 import { registerLiveRoutes, LIVE_TICK_MAX_TOKENS } from "./routes/live.js";
 import { clientIp } from "./clientIp.js";
 import { RouteTimings } from "./routeTimings.js";
+import { fastifyLogger } from "./fastifyLogger.js";
 
 const logger = createLogger("api");
 
@@ -62,7 +63,7 @@ const LIVE_REFRESH_CALLS_PER_MINUTE = 120;
 const SLOW_REQUEST_LOG_MS = 2_000;
 
 export async function buildServer(env: Env): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false, trustProxy: true });
+  const app = Fastify({ loggerInstance: fastifyLogger(), disableRequestLogging: true, trustProxy: true });
 
   // Set before any route plugin is registered: Fastify hands each plugin the error handler in
   // force when it is registered, so a handler set at the end only covered the root context and
