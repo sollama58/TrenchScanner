@@ -446,6 +446,18 @@ export async function buildLearningCurve(
   targets: Targets,
   days: number,
 ): Promise<LearningCurve> {
+  // The trend compares the newest TREND_SPAN_DAYS days with the TREND_SPAN_DAYS before them, so
+  // the day reads reach back two spans even when the window is shorter. Reading only the window
+  // left a 7-day window's "prior" span as the oldest day's last few hours (288 graded calls
+  // against 13,534), and the verdict said "worsening" off that sliver. Days outside the window
+  // feed the trend only; the series below is cut back to the window.
+  const trendSince = new Date(
+    Math.min(
+      since.getTime(),
+      Date.UTC(until.getUTCFullYear(), until.getUTCMonth(), until.getUTCDate()) -
+        (2 * TREND_SPAN_DAYS - 1) * 86_400_000,
+    ),
+  );
   // Decision moments by UTC day. Only current-rule labels: rows graded from the scan price answer
   // an easier question (about twice the base rate), and a day of them next to a day of fill-graded
   // rows would read as the market halving.
@@ -464,7 +476,7 @@ export async function buildLearningCurve(
            sum("simReturnPct") FILTER (WHERE "hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event'
-      AND "anchorAt" >= ${since} AND "anchorAt" < ${until}
+      AND "anchorAt" >= ${trendSince} AND "anchorAt" < ${until}
       AND ${walletSafetyCutsSql()}
       AND "labelRule" >= ${CURRENT_LABEL_RULE}
     GROUP BY 1`;
@@ -493,7 +505,7 @@ export async function buildLearningCurve(
              FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL)::float8 AS sim_sum
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+    WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until}
       AND (co."labelRule" IS NULL OR co."labelRule" >= ${CURRENT_LABEL_RULE})
     GROUP BY 1, 2`;
   // Which runs to show: every run of a short window, the last run of each UTC day of a longer one
@@ -536,6 +548,8 @@ export async function buildLearningCurve(
     ORDER BY m."trainingTo" DESC`;
   const [market, perModel, runs] = await Promise.all([marketRows, modelRows, runRows]);
   const dayseries = buildLearningDays(market, poolModelDays(perModel));
+  const firstDay = since.toISOString().slice(0, 10);
+  const inWindow = <T extends { day: string }>(rows: T[]) => rows.filter((d) => d.day >= firstDay);
   const precision: PrecisionTargets = {
     winRate: targets.hitRate2xPct / 100,
     goalRate: targets.hitRate4xPct / 100,
@@ -544,8 +558,10 @@ export async function buildLearningCurve(
   };
   return {
     window: { since: since.toISOString(), until: until.toISOString() },
-    days: dayseries,
-    models: buildLearningModels(market, perModel),
+    days: inWindow(dayseries),
+    models: buildLearningModels(market, perModel)
+      .map((m) => ({ ...m, days: inWindow(m.days) }))
+      .filter((m) => m.days.length > 0),
     runs: buildLearningRuns(runs, precision),
     trend: buildLearningTrend(dayseries),
     minGradedForLift: MIN_GRADED_FOR_LIFT,

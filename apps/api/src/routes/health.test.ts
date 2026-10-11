@@ -23,6 +23,15 @@ describe("public worker health: error text", () => {
     expect(publicErrorText("x".repeat(400))).toHaveLength(300);
   });
 
+  it("blanks the engine's split host`:`port form and bare hostnames too", () => {
+    expect(
+      publicErrorText("Can't reach database server at `dpg-abc123-a.oregon-postgres.render.com`:`5432`"),
+    ).toBe("Can't reach database server at <host>");
+    expect(publicErrorText("getaddrinfo ENOTFOUND dpg-abc123-a.oregon-postgres.render.com")).toBe(
+      "getaddrinfo ENOTFOUND <host>",
+    );
+  });
+
   it("is applied on the public summary and not the admin one", () => {
     const row = {
       job: "scan",

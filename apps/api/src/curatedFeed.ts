@@ -339,8 +339,11 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
     // Only a clean win can reach the tier - the peak alone would credit a stopped-out run.
     const tenX = hit2x && !disqualifiedByDrawdown(live) ? tenXOf(null) : null;
 
-    if (elapsedMin >= WIN_WINDOW_MINUTES) {
-      const disqualified = hit2x && disqualifiedByDrawdown(live);
+    // A 2x reached after the stop is settled the moment it lands: the trough that decides it
+    // freezes at the first 2x (see applyPriceTick), so nothing left in the window can change it.
+    // Showing it as "watching" put a green 2x check on a stopped-out call for up to 15 minutes.
+    const disqualified = hit2x && disqualifiedByDrawdown(live);
+    if (elapsedMin >= WIN_WINDOW_MINUTES || disqualified) {
       return {
         status: disqualified ? "disqualified" : hit2x ? "won" : "missed",
         hit2x,

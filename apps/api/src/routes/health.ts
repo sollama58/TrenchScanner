@@ -92,11 +92,17 @@ const SCHEDULE_META_KEYS = new Set(["intervalMs", "dailyAtHourUtc"]);
  * full text).
  */
 export function publicErrorText(error: string): string {
-  return (error.split("\n")[0] ?? "")
-    .replace(/https?:\/\/\S+/g, "<url>")
-    .replace(/\b[a-z0-9.-]+\.[a-z]{2,}:\d{2,5}\b/gi, "<host>")
-    .replace(/\b[a-z0-9-]+:\d{2,5}\b/gi, "<host>")
-    .slice(0, MAX_ERROR_LENGTH);
+  return (
+    (error.split("\n")[0] ?? "")
+      .replace(/https?:\/\/\S+/g, "<url>")
+      // Prisma's engine quotes them apart: Can't reach database server at `dpg-x.render.com`:`5432`.
+      .replace(/`[^`]+`:`\d{2,5}`/g, "<host>")
+      .replace(/\b[a-z0-9.-]+\.[a-z]{2,}:\d{2,5}\b/gi, "<host>")
+      .replace(/\b[a-z0-9-]+:\d{2,5}\b/gi, "<host>")
+      // A bare hostname, as in "getaddrinfo ENOTFOUND dpg-x.oregon-postgres.render.com".
+      .replace(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|app|dev|cloud|internal|local)\b/gi, "<host>")
+      .slice(0, MAX_ERROR_LENGTH)
+  );
 }
 
 /**
@@ -194,7 +200,7 @@ export function summarizeHeartbeat(h: HeartbeatRow, now: number, opts: { fullErr
   // A run in flight for longer than the stale threshold is a hung run, not a slow one -
   // reported separately because "last finished Sep 21, running since 20:33" and "last
   // finished Sep 21, nothing running" call for different fixes.
-  const runningSince = runningSinceFrom(h.meta);
+  const runningSince = runningSinceFrom(h.meta, h.lastRunAt);
   const runningForMs = runningSince ? now - runningSince.getTime() : null;
   return {
     job: h.job,

@@ -185,8 +185,21 @@ export const listQuerySchema = z.object({
     ),
 });
 
+/**
+ * Windows /matches/stats answers. A fixed set, not any hour from 1 to 168: each value is its own
+ * per-reader and shared cache key, so cycling it re-ran the full 5k-row reads on every request
+ * and pushed other readers' entries out of the bounded caches. The dashboard asks for 24.
+ */
+export const FEED_STATS_HOURS = [1, 6, 24, 168] as const;
+
 export const feedStatsQuerySchema = z.object({
-  hours: z.coerce.number().int().min(1).max(168).default(24),
+  hours: z.coerce
+    .number()
+    .int()
+    .refine((h) => (FEED_STATS_HOURS as readonly number[]).includes(h), {
+      message: `hours must be one of ${FEED_STATS_HOURS.join(", ")}`,
+    })
+    .default(24),
 });
 
 /** Per source: far above any real feed's day, so it only bounds a runaway window. */
@@ -377,6 +390,9 @@ export async function registerMatchRoutes(
 
     request.raw.on("close", dispose);
     request.raw.on("error", dispose);
+    // A client that gave up while the auth check was running has already fired "close", so the
+    // listener above never runs; without this its slot (of the 8 per user) waited for a heartbeat.
+    if (request.raw.destroyed || reply.raw.destroyed) dispose();
   });
 
   /**

@@ -68,7 +68,10 @@ export const lighthouseQuerySchema = z.object({
 
 function canonicalTimeZone(tz: string): string | null {
   try {
-    return new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
+    const zone = new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
+    // Named zones only. ICU also accepts bare offsets ("+05:30", "-0800": ~2,800 distinct values),
+    // and each one would get a cache of its own below; browsers report a named zone anyway.
+    return /^[+-]/.test(zone) ? null : zone;
   } catch {
     return null;
   }
@@ -690,7 +693,7 @@ export function createLighthouseCache() {
     let hourCache = hourCaches.get(timeZone);
     if (!hourCache) {
       hourCache = new SharedCache<ScreenedByHourOfDay>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
-      // Bounded by the schema: canonical IANA zones only, a few hundred at most.
+      // Bounded by the schema: canonical named zones only (canonicalTimeZone), a few hundred.
       hourCaches.set(timeZone, hourCache);
     }
     const [m, byHourOfDay] = await Promise.all([

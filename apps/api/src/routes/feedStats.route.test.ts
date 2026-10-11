@@ -230,5 +230,7 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
 
   it("rejects an out-of-range window", async () => {
     expect((await call("GET", "/matches/stats?hours=0")).statusCode).toBe(400);
+    // Off the fixed list: each value would be a cache key of its own.
+    expect((await call("GET", "/matches/stats?hours=23")).statusCode).toBe(400);
   });
 });

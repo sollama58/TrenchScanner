@@ -341,6 +341,8 @@ export async function registerCuratedRoutes(
 
     request.raw.on("close", dispose);
     request.raw.on("error", dispose);
+    // Aborted during the auth check: "close" already fired (see /matches/stream).
+    if (request.raw.destroyed || reply.raw.destroyed) dispose();
   });
 
   /**

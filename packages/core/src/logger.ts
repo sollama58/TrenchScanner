@@ -12,7 +12,16 @@ function write(level: Level, scope: string, msg: string, meta?: Record<string, u
     msg,
     ...(meta ? { meta } : {}),
   };
-  const line = JSON.stringify(entry);
+  let line: string;
+  try {
+    // A BigInt (a raw count(*)) or a circular object in meta made JSON.stringify throw, turning a
+    // log call inside a catch block into a new rejection.
+    line = JSON.stringify(entry, (_key, value: unknown) =>
+      typeof value === "bigint" ? value.toString() : value,
+    );
+  } catch {
+    line = JSON.stringify({ ts: entry.ts, level, scope, msg, meta: "[unserializable]" });
+  }
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
   else console.log(line);

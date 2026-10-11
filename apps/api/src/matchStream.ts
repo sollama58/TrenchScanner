@@ -111,6 +111,8 @@ export class MatchStream {
   private readonly subscribers = new Set<Subscriber>();
   /** Work to run on this instance when a curated alert is announced - see onCuratedAlert. */
   private readonly curatedListeners = new Set<() => void>();
+  /** Set after the first successful LISTEN, so a later one is known to be a reconnect. */
+  private hasListened = false;
   /** Work to run on this instance when a match is announced, given its user - see onMatch. */
   private readonly matchListeners = new Set<(userId: string) => void>();
   private client: Client | undefined;
@@ -203,10 +205,25 @@ export class MatchStream {
       logger.info("listening for match + curated notifications", {
         channels: [MATCH_CHANNEL, CURATED_CHANNEL],
       });
+      // Whatever was NOTIFYed while the connection was down is gone, and the caches the curated
+      // listeners clear (feed pages, model-call reads, per-reader stats) may hold rows from before
+      // it. Clear them once on every reconnect, as a missed notification would have.
+      if (this.hasListened) this.runCuratedListeners();
+      this.hasListened = true;
     } catch (err) {
       logger.warn("failed to open listen connection", { error: String(err) });
       await client.end().catch(() => {});
       this.scheduleReconnect();
+    }
+  }
+
+  private runCuratedListeners(): void {
+    for (const listener of this.curatedListeners) {
+      try {
+        listener();
+      } catch (err) {
+        logger.warn("curated notification listener failed", { error: String(err) });
+      }
     }
   }
 
@@ -308,13 +325,7 @@ export class MatchStream {
     // 30-second fallback poll, which is the latency the stream exists to remove. Under
     // continuous polling by several subscribers the cache is warm nearly all the time, so this
     // was the common case rather than a rare one.
-    for (const listener of this.curatedListeners) {
-      try {
-        listener();
-      } catch (err) {
-        logger.warn("curated notification listener failed", { error: String(err) });
-      }
-    }
+    this.runCuratedListeners();
 
     const frame = `event: curated\ndata: ${JSON.stringify({ alertId: notification.alertId })}\n\n`;
     for (const subscriber of this.subscribers) {

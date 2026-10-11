@@ -60,7 +60,9 @@ export async function runLivePriceJob(dexScreener: DexScreenerClient, env: Env):
     });
   } catch (err) {
     logger.warn("live price refresh failed", { viewed: stale.length, error: String(err) });
-    return;
+    // Rethrown so the heartbeat records the failure: swallowing it kept /health/worker green while
+    // every refresh failed. The scheduler waits the usual interval before the next try.
+    throw err;
   }
 
   logger.info("live price refresh complete", {

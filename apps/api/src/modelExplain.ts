@@ -77,8 +77,11 @@ function asFeatures(value: unknown): Features | null {
 
 async function loadParams(id: string): Promise<ContestantParams | null> {
   const row = await prisma.curatorModel.findUnique({ where: { id }, select: { params: true } });
-  const params = row?.params as ContestantParams | null | undefined;
-  return params && typeof params === "object" && typeof params.kind === "string" ? params : null;
+  const params = row?.params as (ContestantParams & { pruned?: unknown }) | null | undefined;
+  if (!params || typeof params !== "object" || typeof params.kind !== "string") return null;
+  // A retired model's weights are pruned to {kind, pruned} a week after it retires (cleanupJob);
+  // scoring that shape threw, so explaining any call older than that answered a 500.
+  return params.pruned === true ? null : params;
 }
 
 /** Deepest root-to-leaf path in a tree stored as parallel arrays (-1 = leaf). */

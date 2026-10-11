@@ -19,6 +19,26 @@ const IP_LITERAL = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]+)$/;
 export function clientIp(request: FastifyRequest): string {
   const header = request.headers["cf-connecting-ip"];
   const cf = Array.isArray(header) ? header[0] : header;
-  if (cf && IP_LITERAL.test(cf.trim())) return cf.trim();
-  return request.ip;
+  if (cf && IP_LITERAL.test(cf.trim())) return rateLimitPrefix(cf.trim());
+  return rateLimitPrefix(request.ip);
+}
+
+/**
+ * An IPv6 address is keyed by its /64. A home line or a VPS is handed a whole /64 and can pick a
+ * fresh source address per request from it, so keying the full address gave such a client a new
+ * rate-limit bucket every time. IPv4 (and anything unparseable) is returned as is.
+ */
+export function rateLimitPrefix(ip: string): string {
+  if (!ip.includes(":") || ip.includes(".")) return ip;
+  const halves = ip.toLowerCase().split("::");
+  if (halves.length > 2) return ip;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - head.length - tail.length;
+  if (missing < 0 || (halves.length === 1 && missing !== 0)) return ip;
+  const groups = [...head, ...Array<string>(missing).fill("0"), ...tail];
+  return `${groups
+    .slice(0, 4)
+    .map((g) => g.replace(/^0+(?=.)/, ""))
+    .join(":")}::/64`;
 }
