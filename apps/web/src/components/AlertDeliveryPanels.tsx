@@ -278,6 +278,10 @@ export function ModelPanel({
   const [error, setError] = useState<string | null>(null);
   const following = board?.followBest ?? board?.followsDefault ?? true;
   const best = board?.entries.find((e) => e.id === board.defaultModel) ?? null;
+  const tops = board
+    ? (board.defaultModels ?? [board.defaultModel]).flatMap((id) => board.entries.filter((e) => e.id === id))
+    : [];
+  const rule = board?.defaultRule;
   const mine = board ? board.entries.filter((e) => board.selectedModels.includes(e.id)) : [];
 
   const toggle = async () => {
@@ -309,21 +313,24 @@ export function ModelPanel({
         <div className={stale ? "stale" : ""}>
           <Switch
             on={following}
-            label="Always follow the best-performing model"
+            label="Always follow the top models"
             disabled={busy || stale}
             onToggle={() => void toggle()}
           />
           <p className="muted">
             {following ? (
               <>
-                Your feed shows <strong>{best?.name ?? "–"}</strong>, the best performer right now, and
-                switches by itself whenever a new best is chosen (after each training run, every{" "}
-                {board.evolution.runEveryHours}h). Ticking a model below switches you to your own picks.
+                Your feed shows <strong>{tops.map((e) => e.name).join(", ") || "–"}</strong>
+                {rule
+                  ? `, the ${rule.count} models with the best 2x hit rate over the last ${rule.windowHours}h, and
+                switches by itself as that ranking changes (rechecked every ${rule.refreshMinutes} minutes).`
+                  : ", the best performer right now, and switches by itself whenever a new best is chosen."}{" "}
+                Ticking a model below switches you to your own picks.
               </>
             ) : (
               <>
                 Your feed keeps your own picks: <strong>{mine.map((e) => e.name).join(", ") || "–"}</strong>.
-                It won&apos;t change when a new best performer is chosen.
+                It won&apos;t change when the top models do.
               </>
             )}
           </p>

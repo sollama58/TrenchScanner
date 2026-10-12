@@ -55,6 +55,8 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
     return {
       window: { days, since, until },
       defaultModel: board.defaultModel,
+      defaultModels: board.defaultModels,
+      bestModel: board.bestModel,
       champion: board.champion,
       // The ranking and each seat's records - descriptions and lineage are the Models tab's.
       entries: board.entries.map((e) => ({
@@ -63,6 +65,7 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
         name: e.name,
         status: e.status,
         isDefault: e.isDefault,
+        isBest: e.isBest,
         score: e.composite.score,
         band: e.composite.band,
         warmingUp: e.composite.warmingUp,

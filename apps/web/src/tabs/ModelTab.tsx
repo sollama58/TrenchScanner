@@ -896,7 +896,7 @@ function LeaderboardPanel({
             disabled={busy !== null || refreshing}
             onClick={() => void use("default", null)}
           >
-            Follow the best performer
+            Follow the top models
           </button>
         )}
       </header>
@@ -964,9 +964,20 @@ function LeaderboardPanel({
                     <div className="row">
                       <span className="rank-inline num">#{e.rank}</span>
                       <strong>{e.name}</strong>
-                      {e.isDefault && (
-                        <span className="chip chip-model" title="The best performer: the default feed">
+                      {e.isBest && (
+                        <span
+                          className="chip chip-model"
+                          title="The best average return under the exit plan over the last day"
+                        >
                           best
+                        </span>
+                      )}
+                      {e.isDefault && (
+                        <span
+                          className="chip"
+                          title="One of the top models by 2x hit rate over the last day: the default feed"
+                        >
+                          top
                         </span>
                       )}
                       {mine && <span className="chip">{guest ? "guest feed" : "your feed"}</span>}
@@ -1387,10 +1398,23 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           trained on.
         </li>
         <li>
-          <strong>The default.</strong> After each run the best performer on this board (with at least{" "}
-          {board.champion?.minLiveGraded ?? 10} graded live calls) becomes the default feed, and everyone who
-          follows the best switches to it. Until a model qualifies, the default is the Consensus when it can
-          call, else Rules.
+          <strong>The default.</strong>{" "}
+          {board.defaultRule ? (
+            <>
+              The default feed is the {board.defaultRule.count} models with the best 2x hit rate over the last{" "}
+              {board.defaultRule.windowHours}h, among those with at least {board.defaultRule.minGraded} graded
+              calls in that window, rechecked every {board.defaultRule.refreshMinutes} minutes. Everyone who
+              follows the default sees their calls combined. Until enough models qualify, it is the best
+              performer on this board alone.
+            </>
+          ) : (
+            <>
+              After each run the best performer on this board (with at least{" "}
+              {board.champion?.minLiveGraded ?? 10} graded live calls) becomes the default feed, and everyone
+              who follows the best switches to it. Until a model qualifies, the default is the Consensus when
+              it can call, else Rules.
+            </>
+          )}
         </li>
       </ol>
     </section>

@@ -3,6 +3,7 @@ import { activeModelCutoffs, loadChampion, resolveDefaultModel } from "./champio
 import { CONSENSUS_CONTESTANT, enabledContestants, type ContestantSpec } from "./contestants.js";
 import { withLanes } from "./evolution.js";
 import { loadCurrentLanes } from "./laneStore.js";
+import { loadTopModels } from "./topModels.js";
 import { NEVER_EMIT_THRESHOLD, defaultContestant } from "./trainingRun.js";
 
 /**
@@ -11,10 +12,23 @@ import { NEVER_EMIT_THRESHOLD, defaultContestant } from "./trainingRun.js";
  * person's feed" the same way, so the rule lives here and both read it.
  */
 
-/** The part of the contest state the rule needs: the roster and today's default (best performer). */
+/** The part of the contest state the rule needs: the roster and today's default feed. */
 export interface FeedModelState {
   roster: readonly ContestantSpec[];
+  /** The single best performer (champion.ts): the AI reviewer's model, and the fallback below. */
   defaultModel: string;
+  /**
+   * The default feed: the top models by 24h 2x hit rate (topModels.ts), best first; just
+   * [defaultModel] while too few models qualify.
+   */
+  defaultModels: string[];
+  /** The best average exit-plan return over the same 24h (the "best" marker); null when none qualify. */
+  bestModel: string | null;
+}
+
+/** The default feed: the top models when enough qualify, else the single default. */
+export function resolveDefaultModels(top: readonly string[] | null, defaultModel: string): string[] {
+  return top && top.length > 0 ? [...top] : [defaultModel];
 }
 
 /** What a user saved about their feed: the User columns the feeds read. */
@@ -28,26 +42,28 @@ export interface SavedFeedModels {
 }
 
 /**
- * The ledgers the combined feed reads, in roster order: the default (the best performer) while the
- * user follows it; else their checked models that are still on the roster, else their single
- * pick, else the default. `followsDefault` is true when the feed is showing the default.
+ * The ledgers the combined feed reads: the default feed (the top models) while the user follows
+ * it; else their checked models that are still on the roster, in roster order, else their single
+ * pick, else the default feed. `followsDefault` is true when the feed is showing the default.
  */
 export function resolveFeedModels(
   state: FeedModelState,
   saved: SavedFeedModels,
 ): { models: string[]; followsDefault: boolean } {
-  if (saved.followBest) return { models: [state.defaultModel], followsDefault: true };
+  if (saved.followBest) return { models: [...state.defaultModels], followsDefault: true };
   const checked = new Set(saved.models);
   const models = state.roster.filter((c) => checked.has(c.id)).map((c) => c.id);
   if (models.length > 0) return { models, followsDefault: false };
-  const single =
-    saved.model !== null && state.roster.some((c) => c.id === saved.model) ? saved.model : state.defaultModel;
-  return { models: [single], followsDefault: single !== saved.model };
+  if (saved.model !== null && state.roster.some((c) => c.id === saved.model)) {
+    return { models: [saved.model], followsDefault: false };
+  }
+  return { models: [...state.defaultModels], followsDefault: true };
 }
 
 /**
- * The roster and the default model as the worker sees them: the same reads the API's
- * contestState makes (lanes, the champion, each contestant's active cutoff), without its cache.
+ * The roster and the default feed as the worker sees them: the same reads the API's
+ * contestState makes (lanes, the champion, each contestant's active cutoff, the 24h top models),
+ * without its cache.
  */
 export async function loadFeedModelState(env: Env): Promise<FeedModelState> {
   const [lanes, champion] = await Promise.all([loadCurrentLanes(), loadChampion()]);
@@ -61,12 +77,11 @@ export async function loadFeedModelState(env: Env): Promise<FeedModelState> {
     return typeof threshold === "number" && threshold < NEVER_EMIT_THRESHOLD;
   };
   const consensusEnabled = roster.some((c) => c.id === CONSENSUS_CONTESTANT);
-  return {
-    roster,
-    defaultModel: resolveDefaultModel(
-      champion?.contestant ?? null,
-      canCall,
-      defaultContestant(consensusEnabled ? cutoffs.get(CONSENSUS_CONTESTANT)?.threshold : null),
-    ),
-  };
+  const defaultModel = resolveDefaultModel(
+    champion?.contestant ?? null,
+    canCall,
+    defaultContestant(consensusEnabled ? cutoffs.get(CONSENSUS_CONTESTANT)?.threshold : null),
+  );
+  const { top, best } = await loadTopModels(roster, lanes, canCall);
+  return { roster, defaultModel, defaultModels: resolveDefaultModels(top, defaultModel), bestModel: best };
 }

@@ -896,7 +896,10 @@ export interface LeaderboardEntry {
   /** The same in plain words. Absent from older API builds. */
   summary?: string;
   role: ContestantRole;
+  /** In the default feed (one of the top models). */
   isDefault: boolean;
+  /** The best average exit-plan return over the last 24h (absent from older API builds). */
+  isBest?: boolean;
   status: "calling" | "silent" | "untrained";
   composite: {
     score: number | null;
@@ -973,7 +976,17 @@ export interface Leaderboard {
   };
   /** The fixed exit plan the simulated returns follow, in a sentence (absent from older API builds). */
   exitPlan?: string;
+  /** The single best performer (the champion). */
   defaultModel: string;
+  /**
+   * The default feed: the top models by 2x hit rate over the last day, best first (absent from
+   * older API builds, where the default was defaultModel alone).
+   */
+  defaultModels?: string[];
+  /** The best average exit-plan return over the last 24h; null when none qualify (absent from older API builds). */
+  bestModel?: string | null;
+  /** How defaultModels is picked (absent from older API builds). */
+  defaultRule?: { count: number; windowHours: number; minGraded: number; refreshMinutes: number };
   /** The first of selectedModels (the single-model feed other clients read). */
   selectedModel: string;
   /** Every model whose calls this user's combined feed shows, in roster order. */

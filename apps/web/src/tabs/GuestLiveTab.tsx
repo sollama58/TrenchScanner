@@ -11,9 +11,11 @@ import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { GUEST_DELAY_MINUTES } from "../session";
 import { introSeen, markIntroSeen } from "../intro";
 
-/** GET /guest/feed: the default model's calls, as feed cards, plus which model that is. */
+/** GET /guest/feed: the default feed's calls, as feed cards, plus which models those are. */
 export interface GuestPage extends MatchPage {
   model: { id: string; name: string };
+  /** Every model in the default feed, best first (absent from older API builds). */
+  models?: { id: string; name: string }[];
   /** How long after each call guests see it (absent from API builds before the delay). */
   delayMinutes?: number;
 }
@@ -24,7 +26,7 @@ const GUEST_MAX_PAGES = 5;
 const TARGETS = { hitRate2xPct: 75, hitRate4xPct: 50 };
 
 /**
- * The Live tab for a visitor without a wallet: the recommended model's calls from the read-only
+ * The Live tab for a visitor without a wallet: the top models' calls from the read-only
  * guest endpoint, each one shown a few minutes after it was made (and said so, twice: in the
  * banner and on the feed itself). Everything that is saved to a wallet (model picks, the model-alerts switch,
  * feed stats, the look of the feed) shows greyed out with a prompt to connect one, and nothing
@@ -41,7 +43,9 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
   const feed = usePolling<GuestPage>(feedPath(page), 30_000);
   const data = feed.data;
   const hasMore = (data?.hasMore ?? false) && page < GUEST_MAX_PAGES;
-  const modelName = data?.model.name ?? "the recommended model";
+  const models = data ? (data.models ?? [data.model]) : [];
+  const modelName = models.length > 0 ? models.map((m) => m.name).join(", ") : "the top models";
+  const many = models.length > 1;
   const delay = data?.delayMinutes ?? GUEST_DELAY_MINUTES;
   const lockTitle = "Connect a wallet to use this";
 
@@ -61,9 +65,10 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
         <p>
           <strong>Guest mode: calls are delayed {delay} minutes.</strong>{" "}
           <span className="muted">
-            You see calls from {data ? <strong>{modelName}</strong> : "the recommended model"}
-            {data && ", the recommended model"}, {delay} minutes after it makes them. Connect a wallet to get
-            them live, plus your own filters, model picks, alerts and stats.
+            You see calls from {data ? <strong>{modelName}</strong> : "the top models"}
+            {data && (many ? ", the top models by 2x hit rate over the last day" : ", the recommended model")}
+            , {delay} minutes after they are made. Connect a wallet to get them live, plus your own filters,
+            model picks, alerts and stats.
           </span>
         </p>
         <button className="button primary" onClick={onConnect}>
@@ -105,7 +110,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
             </button>
             <button type="button" className="ghost stats-btn" disabled title={lockTitle}>
               <LockIcon size={13} />
-              {data ? data.model.name : "Model"}
+              {many ? `Top ${models.length}` : data ? data.model.name : "Model"}
             </button>
             <span className="delay-pill" title={`Guests see each call ${delay} minutes after it is made`}>
               <ClockIcon size={13} />
@@ -119,7 +124,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
           <div className="empty-state">
             <RadarIcon size={28} />
             <p>
-              Nothing from {modelName} yet. Calls land here {delay} minutes after the model makes them.
+              Nothing from {modelName} yet. Calls land here {delay} minutes after they are made.
             </p>
           </div>
         )}

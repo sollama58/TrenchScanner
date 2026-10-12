@@ -403,7 +403,7 @@ export async function registerCuratedRoutes(
       page,
       pageSize: PAGE_SIZE,
       totalCount,
-      model: { ...modelLabel(state, model), isDefault: model === state.defaultModel },
+      model: { ...modelLabel(state, model), isDefault: state.defaultModels.includes(model) },
     };
   });
 
@@ -472,8 +472,8 @@ export async function registerCuratedRoutes(
     if (showModelAlerts !== undefined) data.showModelAlerts = showModelAlerts;
     if (followBest !== undefined) data.followBestModel = followBest;
     const userId = request.user!.userId;
-    // Switching to "keep my picks" with nothing picked yet keeps today's best as the pick, so the
-    // feed stays on it when the best performer changes. That reads the current picks, so the read
+    // Switching to "keep my picks" with nothing picked yet keeps today's default models as the
+    // picks, so the feed stays on them when the top models change. That reads the current picks, so the read
     // and the write share the user's row lock: reading the auth-time snapshot instead let a
     // concurrent PUT that ticked models land in between and be overwritten with the default.
     const seedsPick = followBest === false && models === undefined;
@@ -482,8 +482,9 @@ export async function registerCuratedRoutes(
         const rows = await tx.$queryRaw<{ feedModels: string[] }[]>`
           SELECT "feedModels" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
         if (rows.length > 0 && rows[0]!.feedModels.length === 0) {
-          data.feedModels = [state.defaultModel];
-          data.curatedModel = state.defaultModel;
+          const keep = new Set(state.defaultModels);
+          data.feedModels = state.roster.filter((c) => keep.has(c.id)).map((c) => c.id);
+          data.curatedModel = data.feedModels[0] ?? null;
         }
       }
       return tx.user.update({ where: { id: userId }, data, select: SAVED_FEED_SELECT });

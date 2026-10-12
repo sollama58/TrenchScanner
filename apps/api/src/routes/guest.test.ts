@@ -1,11 +1,19 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadEnv, prisma, type Env } from "@trenchscanner/core";
+import {
+  loadEnv,
+  loadTopModels,
+  prisma,
+  resetTopModelsCache,
+  TOP_MODELS_MIN_GRADED,
+  type ContestantSpec,
+  type Env,
+} from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { contestState, resetContestStateCache } from "../contest.js";
-import { GUEST_DELAY_MINUTES } from "./guest.js";
+import { GUEST_DELAY_MINUTES, loadGuestRows } from "./guest.js";
 
 /**
  * GET /guest/feed: the default model's calls, 5 minutes late, for a visitor with no wallet - no session needed,
@@ -141,5 +149,79 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
     expect(
       (await app.inject({ method: "GET", url: `/curated/models/${defaultModel}/runs` })).statusCode,
     ).toBe(401);
+  });
+});
+
+/**
+ * The default feed as top models: the three best 24h 2x hit rates (with enough graded calls) are
+ * picked, and a token several of them called is one guest card. Seeded under model ids no real
+ * roster has, so the shared test database's real default never changes under other test files.
+ */
+describe.skipIf(!dbAvailable)("top-models default feed", () => {
+  const TOP = `top-models-test-${Date.now()}`;
+  const ids = ["a", "b", "c", "d", "lucky"].map((k) => `${TOP}-${k}`);
+  const [a, b, c, d, lucky] = ids as [string, string, string, string, string];
+  const roster = ids.map((id) => ({ id, name: id, role: "learner" }) as unknown as ContestantSpec);
+  let shared = "";
+
+  beforeAll(async () => {
+    const n = TOP_MODELS_MIN_GRADED;
+    const token = async (k: string) =>
+      (await prisma.token.create({ data: { mintAddress: `${TOP}-${k}` } })).id;
+    shared = await token("shared");
+    const solo = await token("solo");
+    const base = { source: "test", confidence: 70, anchorPriceUsd: 0.0001, anchorMcapUsd: 50_000 };
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
+    // a 50%, b 40%, c 30%, d 20%: a, b and c make the cut. lucky is 2 for 2, under the floor.
+    // d has the worst 2x rate but the best average exit-plan return: the "best" marker, not top 3.
+    const graded = (model: string, wins: number, sim = -10) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...base,
+        tokenId: solo,
+        model,
+        hit2xIn1h: i < wins,
+        simReturnPct: sim,
+        createdAt: hoursAgo(3 + i / 100),
+      }));
+    await prisma.curatedAlert.createMany({
+      data: [
+        ...graded(a, n * 0.5),
+        ...graded(b, n * 0.4),
+        ...graded(c, n * 0.3),
+        ...graded(d, n * 0.2, 25),
+        { ...base, tokenId: solo, model: lucky, hit2xIn1h: true, simReturnPct: 300, createdAt: hoursAgo(3) },
+        { ...base, tokenId: solo, model: lucky, hit2xIn1h: true, simReturnPct: 300, createdAt: hoursAgo(3) },
+        // The newest calls: two top models on one token a minute apart, past the guest delay.
+        { ...base, tokenId: shared, model: b, createdAt: hoursAgo(1) },
+        { ...base, tokenId: shared, model: a, createdAt: new Date(hoursAgo(1).getTime() + 60_000) },
+      ],
+    });
+  });
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    resetTopModelsCache();
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TOP } } });
+  });
+
+  it("picks the three best 2x hit rates among models with enough graded calls", async () => {
+    resetTopModelsCache();
+    expect(await loadTopModels(roster, [], () => true)).toEqual({ top: [a, b, c], best: d });
+  });
+
+  it("leaves out models that can't call, and gives up below three", async () => {
+    resetTopModelsCache();
+    expect((await loadTopModels(roster, [], (id) => id !== b)).top).toEqual([a, c, d]);
+    resetTopModelsCache();
+    expect((await loadTopModels(roster, [], (id) => id === a || id === b)).top).toBeNull();
+  });
+
+  it("shows a token the top models both called as one card, at its first call", async () => {
+    const rows = await loadGuestRows([a, b, c], 1);
+    const card = rows.find((r) => r.alert.tokenId === shared)!;
+    expect(rows[0]!.alert.tokenId).toBe(shared);
+    expect(rows.filter((r) => r.alert.tokenId === shared)).toHaveLength(1);
+    expect(card.alert.model).toBe(b);
+    expect(card.calledBy.map((x) => x.model)).toEqual([b, a]);
   });
 });

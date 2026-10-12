@@ -207,8 +207,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
         <>
           <p className="tour-lead">
             Every few hours each model studies the latest coins, then sits a test on weeks it has never seen.
-            The one closest to the goal leads and becomes your default feed. New models are bred from the
-            winners, and a newcomer that beats the weakest takes its seat.
+            The three with the best 2x hit rate over the last day make up your default feed. New models are
+            bred from the winners, and a newcomer that beats the weakest takes its seat.
           </p>
         </>
       ),
@@ -279,7 +279,7 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             body: (
               <>
                 <p className="tour-lead">
-                  You see the leading model&apos;s calls {GUEST_DELAY_MINUTES} minutes after it makes them.
+                  You see the top models&apos; calls {GUEST_DELAY_MINUTES} minutes after it makes them.
                   Connect a wallet to get them live, plus your own filters, model picks, alerts and stats.
                 </p>
                 <p className="tour-note">Tap the ⓘ by the feed title to see this tour again.</p>

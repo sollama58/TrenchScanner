@@ -23,7 +23,12 @@ let nextChat = -3_000_000_000_000 - Math.floor(Math.random() * 1_000_000);
 
 const spec = (id: string): ContestantSpec =>
   ({ id, name: id, description: "", role: "rules" }) as ContestantSpec;
-const state = { roster: [spec("rules"), spec("trees")], defaultModel: "rules" };
+const state = {
+  roster: [spec("rules"), spec("trees")],
+  defaultModel: "rules",
+  defaultModels: ["rules"],
+  bestModel: null,
+};
 const env = {
   ...loadEnv(),
   TELEGRAM_BOT_TOKEN: "123:abc",

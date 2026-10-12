@@ -599,6 +599,13 @@ export interface ModelCall {
   alertedAt: Date;
 }
 
+/**
+ * A curated alert and one of a user's matches for the same token, this close together, are
+ * the same event seen twice - the scanner alerted them and the curator picked it. The feed shows
+ * one card carrying both facts rather than two cards for one token.
+ */
+export const CURATED_MATCH_LINK_WINDOW_MS = 6 * 3_600_000;
+
 /** Calls on one token collapsed into one card. */
 export interface CallGroup<T> {
   /** The first call: the card shows it (that is when the token was alerted, and its alert price). */

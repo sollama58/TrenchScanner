@@ -13,6 +13,7 @@ import {
   groupSameTokenCalls,
   serializeCuratedAlert,
   resolveOutcome,
+  CURATED_MATCH_LINK_WINDOW_MS,
   callPeakPct,
   type CallGroup,
   type CuratedAlertWithRelations,
@@ -34,13 +35,6 @@ import { SharedCacheMap } from "../sharedCache.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
 const PAGE_SIZE = 12;
-
-/**
- * A curated alert and one of this user's matches for the same token, this close together, are
- * the same event seen twice - the scanner alerted them and the curator picked it. The feed shows
- * one card carrying both facts rather than two cards for one token.
- */
-const CURATED_MATCH_LINK_WINDOW_MS = 6 * 3_600_000;
 
 /**
  * How deep the interleaved feed stays interleaved. Merging two time-ordered sources exactly
