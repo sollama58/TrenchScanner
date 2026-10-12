@@ -12,7 +12,8 @@ import { liveCallRecords } from "./laneStore.js";
  *  - a model needs TOP_MODELS_MIN_GRADED graded calls in the window to be ranked, so two lucky
  *    calls can't win a slot;
  *  - the ranking is recomputed on a fixed cadence (TOP_MODELS_REFRESH_MINUTES), aligned to the
- *    clock, so the API and the worker's Telegram dispatcher rank the same window and agree;
+ *    clock, over a window with a fixed end (topModelsWindow), so the API and the worker's
+ *    Telegram dispatcher rank the same calls and agree whenever in the slot each one reads;
  *  - with fewer than TOP_MODELS_COUNT qualifying models the default stays on the single champion.
  *
  * The same read also names the "best" model (user decision 2026-10-12): the best average return
@@ -24,6 +25,12 @@ export const TOP_MODELS_WINDOW_HOURS = 24;
 /** Graded calls in the window a model needs before it can take a slot. */
 export const TOP_MODELS_MIN_GRADED = 30;
 export const TOP_MODELS_REFRESH_MINUTES = 15;
+/**
+ * The window ends this long before the refresh slot starts. A call is graded about 30 minutes
+ * after it is made, so a window running up to the slot would gain grades while the slot lasts,
+ * and two processes reading it a few minutes apart could rank different records.
+ */
+export const TOP_MODELS_GRADE_LAG_MINUTES = 45;
 
 export interface TopModelStanding {
   id: string;
@@ -100,11 +107,15 @@ export function pickBestReturnModel(
   )[0]!.id;
 }
 
-/** The window the ranking reads: the 24 hours up to the start of the current refresh slot. */
-export function topModelsWindow(now: Date): { since: Date; slot: number } {
+/**
+ * The window the ranking reads: the 24 hours of calls ending TOP_MODELS_GRADE_LAG_MINUTES before
+ * the current refresh slot starts, so every call in it has been graded.
+ */
+export function topModelsWindow(now: Date): { since: Date; until: Date; slot: number } {
   const step = TOP_MODELS_REFRESH_MINUTES * 60_000;
   const slot = Math.floor(now.getTime() / step) * step;
-  return { since: new Date(slot - TOP_MODELS_WINDOW_HOURS * 3_600_000), slot };
+  const until = slot - TOP_MODELS_GRADE_LAG_MINUTES * 60_000;
+  return { since: new Date(until - TOP_MODELS_WINDOW_HOURS * 3_600_000), until: new Date(until), slot };
 }
 
 const cache = new Map<string, Promise<TopModels>>();
@@ -124,7 +135,7 @@ export function loadTopModels(
   canCall: (id: string) => boolean,
   now: Date = new Date(),
 ): Promise<TopModels> {
-  const { since, slot } = topModelsWindow(now);
+  const { since, until, slot } = topModelsWindow(now);
   const ids = roster.map((c) => c.id);
   const calling = roster.filter((c) => c.control !== true && canCall(c.id)).map((c) => c.id);
   const lanesKey = lanes.map((l) => `${l.slot}=${l.name}`).join(",");
@@ -133,7 +144,7 @@ export function loadTopModels(
   if (hit) return hit;
   // One slot's answers are all a reader needs; older slots are dropped as a new one fills.
   for (const k of cache.keys()) if (!k.startsWith(`${slot}|`)) cache.delete(k);
-  const read = liveCallRecords(ids, since, lanes).then((live) => {
+  const read = liveCallRecords(ids, since, lanes, { until }).then((live) => {
     const standings = ids.map((id) => {
       const r = live.get(id);
       return {

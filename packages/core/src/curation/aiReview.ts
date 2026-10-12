@@ -46,7 +46,7 @@ Each alert is a token that already passed an automated rug screen (mint and free
 
 Decide whether the trader should buy it right now. An alert is a WIN only if the price reaches ${WIN_MULTIPLE}x the alert price within ${WIN_WINDOW_MINUTES} minutes WITHOUT first falling to ${Math.round(
   DISQUALIFYING_DRAWDOWN_FRACTION * 100,
-)}% of it (that is a stop-out). The trader's standard is strict: at least 75% of the alerts they buy should win, and at least 50% should reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. Most alerts will not meet that bar, so "no_buy" is the expected answer unless the evidence is genuinely strong. Missing a winner costs far less than buying a loser.
+)}% of it (that is a stop-out). The trader's standard is strict: at least 75% of the alerts they buy should win, and at least 50% should reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. The trader also wants as few winners as possible to slip past: a winner you pass on is a run they never hear about. Both mistakes count, so say "no_buy" when the evidence points to a loss or a stop-out, not merely because a token is unproven.
 
 Weigh momentum and order flow against holder health: concentrated, fresh-wallet or empty-wallet holders, a large dev bag, a dump in the last minutes, thin liquidity, or a name or description that looks like a copy of another token are reasons to pass. Unknown values are unknown, not good news.
 
