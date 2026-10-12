@@ -222,8 +222,8 @@ export function ModelPicker({
             <p className="mp-foot faint small">
               <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by score
               make up the default feed. <span className="mp-badge best">★ best</span> has the highest average
-              return under the exit plan. Both need {minGraded} graded calls in the last 24h; rechecked every{" "}
-              {board.defaultRule?.refreshMinutes ?? 15} min.
+              return under the exit plan. Both need {minGraded} graded calls in the last 24h; picked every{" "}
+              {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00, 06, 12 and 18 UTC).
             </p>
           )}
           {board.followBest === false && (

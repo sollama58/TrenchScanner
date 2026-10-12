@@ -663,6 +663,16 @@ model CuratorChampion {
   @@index([chosenAt])
 }
 
+/// The default feed's top models for one refresh slot (TOP_MODELS_REFRESH_MINUTES in topModels.ts),
+/// picked once when the slot starts and held until the next one, so a restart or a training run in
+/// between can't reshuffle the feed (user decision 2026-10-12: every 6 hours). An empty list means
+/// too few models qualified and the default fell back to the single champion.
+model TopModelsPick {
+  slotStart DateTime @id
+  models    String[]
+  pickedAt  DateTime @default(now())
+}
+
 model CuratorLane {
   id            String    @id @default(cuid())
   slot          String

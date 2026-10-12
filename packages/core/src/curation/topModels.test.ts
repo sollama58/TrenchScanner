@@ -86,12 +86,17 @@ describe("pickBestReturnModel", () => {
 });
 
 describe("topModelsWindow", () => {
-  it("aligns the 24h window to the refresh slot, ending before calls still being graded", () => {
-    const a = topModelsWindow(new Date("2026-10-12T02:31:00Z"));
-    const b = topModelsWindow(new Date("2026-10-12T02:44:59Z"));
+  it("aligns the 24h window to the 6-hour slot, ending before calls still being graded", () => {
+    const a = topModelsWindow(new Date("2026-10-12T06:00:00Z"));
+    const b = topModelsWindow(new Date("2026-10-12T11:59:59Z"));
     expect(a).toEqual(b);
-    expect(a.until.toISOString()).toBe("2026-10-12T01:45:00.000Z");
-    expect(a.since.toISOString()).toBe("2026-10-11T01:45:00.000Z");
+    expect(new Date(a.slot).toISOString()).toBe("2026-10-12T06:00:00.000Z");
+    expect(a.until.toISOString()).toBe("2026-10-12T05:15:00.000Z");
+    expect(a.since.toISOString()).toBe("2026-10-11T05:15:00.000Z");
+    // The next slot starts at 12:00 UTC.
+    expect(new Date(topModelsWindow(new Date("2026-10-12T12:00:00Z")).slot).toISOString()).toBe(
+      "2026-10-12T12:00:00.000Z",
+    );
   });
 });
 

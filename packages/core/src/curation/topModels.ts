@@ -1,3 +1,4 @@
+import { prisma } from "../db.js";
 import { CHAMPION_WINDOW_DAYS } from "./champion.js";
 import type { ContestantSpec } from "./contestants.js";
 import type { Lane } from "./evolution.js";
@@ -19,9 +20,11 @@ import type { PrecisionTargets } from "./trainer.js";
  * Guards against noise:
  *  - a model needs TOP_MODELS_MIN_GRADED graded calls in the last 24 hours to be ranked, so a
  *    model that has gone quiet, or a new seat on a handful of calls, can't win a slot;
- *  - the ranking is recomputed on a fixed cadence (TOP_MODELS_REFRESH_MINUTES), aligned to the
- *    clock, over a window with a fixed end (topModelsWindow), so the API and the worker's
- *    Telegram dispatcher rank the same calls and agree whenever in the slot each one reads;
+ *  - the top 3 is picked once per TOP_MODELS_REFRESH_MINUTES slot (6 hours, starting 00/06/12/18
+ *    UTC; user decision 2026-10-12 - every 15 minutes it changed in about one hour of every three),
+ *    over a window with a fixed end (topModelsWindow), and stored (TopModelsPick), so the API and
+ *    the worker's Telegram dispatcher read the same pick for the whole slot, through restarts and
+ *    the training runs in between;
  *  - with fewer than TOP_MODELS_COUNT qualifying models the default stays on the single champion.
  *
  * The same read also names the "best" model (user decision 2026-10-12): the best average return
@@ -32,7 +35,7 @@ export const TOP_MODELS_COUNT = 3;
 export const TOP_MODELS_WINDOW_HOURS = 24;
 /** Graded calls in the window a model needs before it can take a slot. */
 export const TOP_MODELS_MIN_GRADED = 30;
-export const TOP_MODELS_REFRESH_MINUTES = 15;
+export const TOP_MODELS_REFRESH_MINUTES = 360;
 /**
  * The window ends this long before the refresh slot starts. A call is graded about 30 minutes
  * after it is made, so a window running up to the slot would gain grades while the slot lasts,
@@ -135,6 +138,22 @@ export function topModelsWindow(now: Date): { since: Date; until: Date; slot: nu
   return { since: new Date(until - TOP_MODELS_WINDOW_HOURS * 3_600_000), until: new Date(until), slot };
 }
 
+/**
+ * The slot's stored pick, storing `fresh` first when the slot has none. The first process to read a
+ * slot decides it; any other reads the stored one, so a pick made by the API and one made by the
+ * worker can't differ. Models no longer on the roster are dropped from a stored pick.
+ */
+async function heldTopModels(
+  slotStart: Date,
+  fresh: string[] | null,
+  roster: readonly string[],
+): Promise<string[] | null> {
+  await prisma.topModelsPick.createMany({ data: [{ slotStart, models: fresh ?? [] }], skipDuplicates: true });
+  const held = await prisma.topModelsPick.findUnique({ where: { slotStart } });
+  const models = (held?.models ?? fresh ?? []).filter((id) => roster.includes(id));
+  return models.length > 0 ? models : null;
+}
+
 const cache = new Map<string, Promise<TopModels>>();
 
 /** Test hook. */
@@ -168,7 +187,7 @@ export function loadTopModels(
   const read = Promise.all([
     liveCallRecords(ids, since, lanes, { until }),
     liveCallRecords(ids, scoreSince, lanes, { until }),
-  ]).then(([live, longLive]) => {
+  ]).then(async ([live, longLive]) => {
     const standings = ids.map((id) => {
       const r = live.get(id);
       return {
@@ -183,7 +202,7 @@ export function loadTopModels(
       };
     });
     return {
-      top: pickTopModels(standings),
+      top: await heldTopModels(new Date(slot), pickTopModels(standings), ids),
       best: pickBestReturnModel(standings),
       last24h: new Map(standings.map((s) => [s.id, last24hOf(s)])),
     };

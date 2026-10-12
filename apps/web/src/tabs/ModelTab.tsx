@@ -1505,9 +1505,10 @@ function HowItWorks({ board }: { board: Leaderboard }) {
             <>
               The default feed is the {board.defaultRule.count} models with the best score, among those with
               at least {board.defaultRule.minGraded} graded calls over the last{" "}
-              {board.defaultRule.windowHours}h, rechecked every {board.defaultRule.refreshMinutes} minutes.
-              Everyone who follows the default sees their calls combined. Until enough models qualify, it is
-              the best performer on this board alone.
+              {board.defaultRule.windowHours}h, picked every{" "}
+              {Math.round(board.defaultRule.refreshMinutes / 60)} hours (00, 06, 12 and 18 UTC) and held until
+              the next pick. Everyone who follows the default sees their calls combined. Until enough models
+              qualify, it is the best performer on this board alone.
             </>
           ) : (
             <>

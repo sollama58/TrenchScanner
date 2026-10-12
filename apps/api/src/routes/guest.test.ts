@@ -202,14 +202,20 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
     if (!dbAvailable) return;
     resetTopModelsCache();
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TOP } } });
+    await prisma.topModelsPick.deleteMany({});
   });
 
   // No exams: each score is read off the live calls alone, so it follows the 2x rates seeded here.
   const NO_EXAMS = new Map();
+  // Each slot's pick is stored and held; these cases re-pick within one slot, so start each afresh.
+  const forgetPicks = async () => {
+    resetTopModelsCache();
+    await prisma.topModelsPick.deleteMany({});
+  };
   const TARGETS = { winRate: 0.75, goalRate: 0.5, minSupport: 30 };
 
   it("picks the three best scores among models with enough graded calls", async () => {
-    resetTopModelsCache();
+    await forgetPicks();
     const picked = await loadTopModels(roster, [], () => true, NO_EXAMS, TARGETS);
     expect(picked).toMatchObject({ top: [a, b, c], best: d });
     expect(picked.last24h.get(a)).toEqual({
@@ -222,9 +228,9 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
   });
 
   it("leaves out models that can't call, and gives up below three", async () => {
-    resetTopModelsCache();
+    await forgetPicks();
     expect((await loadTopModels(roster, [], (id) => id !== b, NO_EXAMS, TARGETS)).top).toEqual([a, c, d]);
-    resetTopModelsCache();
+    await forgetPicks();
     expect((await loadTopModels(roster, [], (id) => id === a || id === b, NO_EXAMS, TARGETS)).top).toBeNull();
   });
 
