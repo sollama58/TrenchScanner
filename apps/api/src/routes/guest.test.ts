@@ -6,6 +6,7 @@ import {
   loadTopModels,
   prisma,
   resetTopModelsCache,
+  topModelsWindow,
   TOP_MODELS_MIN_GRADED,
   type ContestantSpec,
   type Env,
@@ -172,6 +173,9 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
     const solo = await token("solo");
     const base = { source: "test", confidence: 70, anchorPriceUsd: 0.0001, anchorMcapUsd: 50_000 };
     const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
+    // The ranked calls sit inside the current 6-hour slot's window, which ends before the slot starts.
+    const windowEnd = topModelsWindow(new Date()).until.getTime();
+    const beforeWindowEnd = (h: number) => new Date(windowEnd - h * 3_600_000);
     // a 50%, b 40%, c 30%, d 20%: a, b and c make the cut. lucky is 2 for 2, under the floor.
     // d has the worst 2x rate but the best average exit-plan return: the "best" marker, not top 3.
     const graded = (model: string, wins: number, sim = -10) =>
@@ -181,7 +185,7 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
         model,
         hit2xIn1h: i < wins,
         simReturnPct: sim,
-        createdAt: hoursAgo(3 + i / 100),
+        createdAt: beforeWindowEnd(1 + i / 100),
       }));
     await prisma.curatedAlert.createMany({
       data: [
@@ -189,8 +193,22 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
         ...graded(b, n * 0.4),
         ...graded(c, n * 0.3),
         ...graded(d, n * 0.2, 25),
-        { ...base, tokenId: solo, model: lucky, hit2xIn1h: true, simReturnPct: 300, createdAt: hoursAgo(3) },
-        { ...base, tokenId: solo, model: lucky, hit2xIn1h: true, simReturnPct: 300, createdAt: hoursAgo(3) },
+        {
+          ...base,
+          tokenId: solo,
+          model: lucky,
+          hit2xIn1h: true,
+          simReturnPct: 300,
+          createdAt: beforeWindowEnd(1),
+        },
+        {
+          ...base,
+          tokenId: solo,
+          model: lucky,
+          hit2xIn1h: true,
+          simReturnPct: 300,
+          createdAt: beforeWindowEnd(1),
+        },
         // The newest calls: two top models on one token a minute apart, past the guest delay.
         { ...base, tokenId: shared, model: b, createdAt: hoursAgo(1) },
         { ...base, tokenId: shared, model: a, createdAt: new Date(hoursAgo(1).getTime() + 60_000) },
