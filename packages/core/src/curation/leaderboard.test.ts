@@ -4,6 +4,7 @@ import {
   compositeScore,
   emptyRecord,
   explainScore,
+  liveCatch,
   marketLift,
   noteRunners,
   pooledRecord,
@@ -312,6 +313,47 @@ describe("marketLift", () => {
   it("shows no lift on too few graded calls", () => {
     const lifts = marketLift([{ model: "m", hour: "2026-10-08T10", graded: 5, wins: 2 }], market);
     expect(lifts.get("m")).toEqual({ lift: null, marketRatePct: 14, graded: 5 });
+  });
+});
+
+describe("liveCatch", () => {
+  const at = (h: number) => new Date(Date.UTC(2026, 9, 10, h));
+
+  it("counts each runner once, against each seat's own start, and the board's together", () => {
+    const { byModel, field } = liveCatch(
+      [
+        { token: "a", at: at(1) },
+        { token: "a", at: at(9) }, // the latest winning moment counts
+        { token: "b", at: at(2) },
+        { token: "c", at: at(10) },
+        { token: "d", at: at(11) }, // a runner only a seat's call graded
+      ],
+      [
+        { model: "old", token: "a" },
+        { model: "old", token: "b" },
+        { model: "new", token: "c" },
+        { model: "new", token: "d" },
+        { model: "retired", token: "a" }, // not on the board: neither its own line nor the field's
+        { model: "old", token: "zz" }, // not a runner: ignored
+      ],
+      new Map([
+        ["old", at(0)],
+        ["new", at(5)],
+        ["quiet", at(0)],
+      ]),
+    );
+    expect(byModel.get("old")).toEqual({ runners: 4, caught: 2, pct: 50 });
+    // Born at 05:00: b's only winning moment came before it, so b isn't charged to it.
+    expect(byModel.get("new")).toEqual({ runners: 3, caught: 2, pct: 66.7 });
+    expect(byModel.get("quiet")).toEqual({ runners: 4, caught: 0, pct: 0 });
+    expect(byModel.has("retired")).toBe(false);
+    expect(field).toEqual({ runners: 4, caught: 4, pct: 100 });
+  });
+
+  it("reads null with no runners", () => {
+    const { byModel, field } = liveCatch([], [], new Map([["m", at(0)]]));
+    expect(byModel.get("m")).toEqual({ runners: 0, caught: 0, pct: null });
+    expect(field.pct).toBeNull();
   });
 });
 

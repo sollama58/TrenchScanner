@@ -538,6 +538,55 @@ export function marketLift(
   return out;
 }
 
+/** Runners seen live and how many of them were called at a winning moment (see liveCatch). */
+export interface LiveCatch {
+  /** Distinct tokens with a clean 2x from a moment graded since the model's own start. */
+  runners: number;
+  /** Of those, the tokens it called at a winning moment (one of its own calls was a clean 2x). */
+  caught: number;
+  /** caught over runners, in percent; null with no runners. */
+  pct: number | null;
+}
+
+/**
+ * The live twin of the exam's catch rate (noteRunners): of the tokens that ran, how many a model
+ * called at a winning moment. A runner is a token with a clean 2x graded from a market moment (an
+ * "event" row past the safety screen, the same market the lift and the baseline read) or from
+ * any seat's call; `at` is its latest such moment, so a seat born after a runner's last winning
+ * moment isn't charged with missing it. `field` is every seat together: the runners the whole
+ * board let slip are the ones no seat caught.
+ */
+export function liveCatch(
+  runners: readonly { token: string; at: Date }[],
+  caught: readonly { model: string; token: string }[],
+  froms: ReadonlyMap<string, Date>,
+): { byModel: Map<string, LiveCatch>; field: LiveCatch } {
+  const lastWin = new Map<string, number>();
+  for (const r of runners) lastWin.set(r.token, Math.max(lastWin.get(r.token) ?? 0, r.at.getTime()));
+  const caughtBy = new Map<string, Set<string>>();
+  for (const c of caught) {
+    if (!lastWin.has(c.token)) continue;
+    let set = caughtBy.get(c.model);
+    if (!set) caughtBy.set(c.model, (set = new Set()));
+    set.add(c.token);
+  }
+  const summary = (seen: number, got: number): LiveCatch => ({
+    runners: seen,
+    caught: got,
+    pct: seen > 0 ? round1((got / seen) * 100) : null,
+  });
+  const byModel = new Map<string, LiveCatch>();
+  for (const [model, from] of froms) {
+    let seen = 0;
+    for (const at of lastWin.values()) if (at >= from.getTime()) seen += 1;
+    // A caught token's winning call is its own moment, so it is always among the runners seen.
+    byModel.set(model, summary(seen, caughtBy.get(model)?.size ?? 0));
+  }
+  const any = new Set<string>();
+  for (const [model, set] of caughtBy) if (froms.has(model)) for (const t of set) any.add(t);
+  return { byModel, field: summary(lastWin.size, any.size) };
+}
+
 /**
  * The board's order: seasoned contestants before warming-up ones (as rankByComposite); within
  * the seasoned, highest lift over the market first (user decision 2026-10-09), those without one

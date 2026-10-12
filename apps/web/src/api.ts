@@ -828,6 +828,13 @@ export interface ScoreBand {
 }
 
 /** How a score was earned: the proven rates, the points they made, and the evidence behind them. */
+/** Runners seen live and how many were called at a winning moment. */
+export interface LiveCatch {
+  runners: number;
+  caught: number;
+  pct: number | null;
+}
+
 export interface ScoreBasis {
   points2x: number;
   points4x: number;
@@ -931,6 +938,11 @@ export interface LeaderboardEntry {
    * models. Null with no graded calls; absent from older API builds.
    */
   vsMarket?: { lift: number | null; marketRatePct: number | null; graded: number } | null;
+  /**
+   * Its live catch rate: of the tokens that ran since its start in the window, how many it called
+   * at a winning moment. Null or absent from older API builds.
+   */
+  liveCatch?: LiveCatch | null;
   /** The score in a sentence. Absent from older API builds. */
   scoreExplained?: string;
   /** Its live record on high-conviction calls alone; null with none graded. */
@@ -972,6 +984,8 @@ export interface Leaderboard {
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   /** The random-pick baseline over the same window ("event" moments; absent from older API builds). */
   baseline?: GradedRates;
+  /** Runners over the window and how many any model caught (absent from older API builds). */
+  runners?: LiveCatch;
   scoring: {
     weights: {
       winRate: number;
