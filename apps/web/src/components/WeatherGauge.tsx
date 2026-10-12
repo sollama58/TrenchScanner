@@ -2,6 +2,8 @@ import type { MarketWeather } from "../api";
 import { usePolling } from "../hooks";
 import { pct } from "../format";
 import { Skeleton } from "./Charts";
+import { renderWeatherCard } from "./lighthouseCards";
+import { ShareButton } from "./ShareImageDialog";
 
 /**
  * Market weather as a needle gauge: how often launches are doubling within 15 minutes over the
@@ -108,7 +110,15 @@ export function WeatherGauge({ base }: { base: string }) {
         />
       </div>
       <div className="lh-weather-text">
-        <span className="eyebrow">Market weather · last {w.recentHours}h</span>
+        <div className="lh-weather-head">
+          <span className="eyebrow">Market weather · last {w.recentHours}h</span>
+          <ShareButton
+            title="Market weather"
+            fileName="trenchscanner-market-weather"
+            caption={`TrenchScanner market weather: ${w.condition === "unknown" ? "too early to read" : `${CONDITION_LABEL[w.condition].toLowerCase()} market`}, last ${w.recentHours} hours`}
+            render={() => renderWeatherCard(w)}
+          />
+        </div>
         <h3>
           <span className="weather-dot" aria-hidden="true" />
           {w.condition === "unknown" ? "Too early to read" : `${CONDITION_LABEL[w.condition]} market`}

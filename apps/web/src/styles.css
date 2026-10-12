@@ -5663,6 +5663,23 @@ button.small-btn {
   flex-wrap: wrap;
   gap: 8px;
 }
+.lh-head-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lh-part-share {
+  margin-left: auto;
+  font-size: 14px;
+  font-weight: 400;
+}
+.lh-weather-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .lh-screened-head h3 {
   margin: 0;
   font-size: 17px;

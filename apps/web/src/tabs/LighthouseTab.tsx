@@ -4,6 +4,8 @@ import { usePolling } from "../hooks";
 import { ago } from "../format";
 import { Skeleton } from "../components/Charts";
 import { TrendChart } from "../components/TrendChart";
+import { renderTrendCard, type TrendCardData } from "../components/lighthouseCards";
+import { ShareButton } from "../components/ShareImageDialog";
 import { LighthouseBody, WINDOWS as NOW_WINDOWS, type Days } from "../components/MarketLighthouse";
 import {
   ArrowRightIcon,
@@ -75,7 +77,8 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
   const api = guest ? "/guest" : "/curated";
   const [view, setView] = useState<View>(loadView);
   const [panels, setPanels] = useState<Panel[]>(loadPanels);
-  const [nowDays, setNowDays] = useState<Days>(7);
+  // The last day first: what's happening now is what most visits come for.
+  const [nowDays, setNowDays] = useState<Days>(1);
   // The charts start folded away; most visits only want the headline numbers and Right now.
   const [chartsOpen, setChartsOpen] = useState(false);
   useEffect(() => {
@@ -344,7 +347,12 @@ function ChartPanel({
   onMove: (dir: -1 | 1) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  // What the chart below draws, handed up for the share image.
+  const [drawn, setDrawn] = useState<Omit<TrendCardData, "title" | "badge"> | null>(null);
   const breakdown = "breakdown" in panel;
+  const title = panelTitle(panel);
+  const win = WINDOWS.find((w) => w.days === view.days);
+  const per = BUCKETS.find((b) => b.id === view.bucket)?.label.toLowerCase() ?? view.bucket;
   const setKind = (k: ChartKind) => onChange((p) => ({ ...p, kind: k }));
   const setDimension = (dimension: LighthouseDimension) =>
     onChange((p) => ("breakdown" in p ? { ...p, dimension } : p));
@@ -365,7 +373,7 @@ function ChartPanel({
   return (
     <article className="lht-panel">
       <header className="lht-panel-head">
-        <h3>{panelTitle(panel)}</h3>
+        <h3>{title}</h3>
         <div className="lht-panel-tools">
           {breakdown && (
             <select
@@ -395,6 +403,20 @@ function ChartPanel({
               </button>
             ))}
           </div>
+          <ShareButton
+            iconOnly
+            title={title}
+            fileName={`trenchscanner-lighthouse-${view.days === 0 ? "all" : `${view.days}d`}-${view.bucket}`}
+            caption={`TrenchScanner Lighthouse: ${title}, ${win?.days ? `last ${win.long}` : "all history"}`}
+            disabled={!drawn || drawn.series.length === 0}
+            render={() =>
+              renderTrendCard({
+                ...drawn!,
+                title,
+                badge: `${win?.days ? `Last ${win.long}` : "All history"} · ${per}`,
+              })
+            }
+          />
           <button
             type="button"
             className={`ghost icon-btn${editing ? " on" : ""}`}
@@ -496,26 +518,31 @@ function ChartPanel({
           </div>
         ))}
       {"breakdown" in panel ? (
-        <BreakdownChart panel={panel} api={api} view={view} fallback={history} />
+        <BreakdownChart panel={panel} api={api} view={view} fallback={history} onDrawn={setDrawn} />
       ) : (
-        <MetricsChart panel={panel} history={history} targets={targets} />
+        <MetricsChart panel={panel} history={history} targets={targets} onDrawn={setDrawn} />
       )}
     </article>
   );
 }
 
+type Drawn = Omit<TrendCardData, "title" | "badge">;
+
 function MetricsChart({
   panel,
   history,
   targets,
+  onDrawn,
 }: {
   panel: Extract<Panel, { metrics: MetricId[] }>;
   history: LighthouseHistory;
   targets: { hitRate2xPct: number; hitRate4xPct: number };
+  onDrawn: (d: Drawn) => void;
 }) {
   const bucket = history.window.bucket;
   const labels = useMemo(() => history.series.map((p) => bucketLabel(p.at, bucket)), [history, bucket]);
   const series = useMemo(() => metricSeries(history, panel.metrics, targets), [history, panel, targets]);
+  useEffect(() => onDrawn({ labels, series, kind: panel.kind }), [labels, series, panel.kind, onDrawn]);
   return <TrendChart labels={labels} series={series} kind={panel.kind} partialLast />;
 }
 
@@ -529,11 +556,13 @@ function BreakdownChart({
   api,
   view,
   fallback,
+  onDrawn,
 }: {
   panel: Extract<Panel, { breakdown: BreakdownMode }>;
   api: string;
   view: View;
   fallback: LighthouseHistory;
+  onDrawn: (d: Drawn) => void;
 }) {
   const own = usePolling<LighthouseHistory>(historyPath(api, view, panel.dimension), 300_000);
   const history = own.data ?? (panel.dimension === fallback.window.dimension ? fallback : null);
@@ -541,6 +570,10 @@ function BreakdownChart({
   const bucket = h.labels.bucket;
   const labels = useMemo(() => h.labels.buckets.map((p) => bucketLabel(p.at, bucket)), [h, bucket]);
   const series = useMemo(() => breakdownSeries(h, panel.breakdown), [h, panel.breakdown]);
+  const kind = panel.kind === "bars" ? "stacked" : "line";
+  useEffect(() => {
+    if (history) onDrawn({ labels, series, kind });
+  }, [history, labels, series, kind, onDrawn]);
   if (!history) {
     if (own.error) return <p className="error">Couldn&apos;t load this breakdown: {own.error.message}</p>;
     return <Skeleton lines={5} />;
@@ -548,12 +581,7 @@ function BreakdownChart({
   const stale = own.stale || (!own.data && !!history);
   return (
     <div className={stale ? "stale" : undefined} aria-busy={stale}>
-      <TrendChart
-        labels={labels}
-        series={series}
-        kind={panel.kind === "bars" ? "stacked" : "line"}
-        partialLast
-      />
+      <TrendChart labels={labels} series={series} kind={kind} partialLast />
     </div>
   );
 }
