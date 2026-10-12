@@ -623,6 +623,17 @@ export interface TokenNarrativeFields {
   xPredatesTokenS: number | null;
   /** How many other coins have linked the same post (x.reuse_count). */
   xReuseCount: number | null;
+  /**
+   * Rules 0.30.0+ (x.engagement, x.created_at): the linked post's likes, reposts, replies and
+   * views as TokenSage last counted them, when it counted them (engagement.as_of), and when the
+   * post went up. All null when the post was not read, and on older reads.
+   */
+  xLikes: number | null;
+  xReposts: number | null;
+  xReplies: number | null;
+  xViews: number | null;
+  xEngagementAt: Date | null;
+  xPostedAt: Date | null;
   /** The name matched a Wikipedia or news spike (trend.matched); null until the full read says. */
   trendMatched: boolean | null;
   /**
@@ -828,12 +839,42 @@ export function narrativeFieldsFromAnalysis(
     xAuthorFollowers: xRead ? count(asRecord(x.author)?.followers) : null,
     xPredatesTokenS: xRead ? count(x.predates_token_by_s) : null,
     xReuseCount: xRead ? count(x.reuse_count) : null,
+    ...engagementFields(xRead ? x : null),
     trendMatched: trend !== null && typeof trend.matched === "boolean" ? trend.matched : null,
     highFlagCount: severityCount("high"),
     warnFlagCount: severityCount("warn"),
     rulesVersion: clip(asRecord(doc.versions)?.rules),
     lexiconVersion: clip(asRecord(doc.versions)?.lexicon)?.slice(0, 40) ?? null,
     analyzedAt: analyzedAt && !Number.isNaN(analyzedAt.getTime()) ? analyzedAt : null,
+  };
+}
+
+/** Postgres INTEGER's ceiling: a viral post's views stay countable without a wider column. */
+const MAX_STORED_COUNT = 2_147_483_647;
+
+/** A timestamp string as a Date, or null when it is missing or unreadable. */
+function isoDate(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/** The engagement columns from a read post (rules 0.30.0+); all null without one. */
+function engagementFields(
+  x: Record<string, unknown> | null,
+): Pick<TokenNarrativeFields, "xLikes" | "xReposts" | "xReplies" | "xViews" | "xEngagementAt" | "xPostedAt"> {
+  const engagement = asRecord(x?.engagement);
+  const n = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.min(MAX_STORED_COUNT, Math.round(value))
+      : null;
+  return {
+    xLikes: n(engagement?.likes),
+    xReposts: n(engagement?.reposts),
+    xReplies: n(engagement?.replies),
+    xViews: n(engagement?.views),
+    xEngagementAt: engagement ? isoDate(engagement.as_of) : null,
+    xPostedAt: x ? isoDate(x.created_at) : null,
   };
 }
 

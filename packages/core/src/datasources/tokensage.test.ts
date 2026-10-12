@@ -72,6 +72,28 @@ describe("narrativeFieldsFromAnalysis", () => {
     expect(f.analyzedAt?.toISOString()).toBe("2026-10-06T18:00:00.000Z");
   });
 
+  it("keeps the read post's engagement counts and times (rules 0.30.0), none without a read post", () => {
+    const withPost = {
+      ...doc,
+      x: {
+        status: "ok",
+        created_at: "2026-10-06T17:50:00Z",
+        engagement: { likes: 12, reposts: 3.4, replies: -1, views: 4e9, as_of: "2026-10-06T17:58:00Z" },
+      },
+    } as unknown as TokenSageAnalysis;
+    const f = narrativeFieldsFromAnalysis(withPost, "complete");
+    expect(f).toMatchObject({ xLikes: 12, xReposts: 3, xReplies: null, xViews: 2_147_483_647 });
+    expect(f.xEngagementAt?.toISOString()).toBe("2026-10-06T17:58:00.000Z");
+    expect(f.xPostedAt?.toISOString()).toBe("2026-10-06T17:50:00.000Z");
+    const unread = { ...withPost, x: { ...withPost.x, status: "failed" } } as unknown as TokenSageAnalysis;
+    expect(narrativeFieldsFromAnalysis(unread, "complete")).toMatchObject({
+      xLikes: null,
+      xViews: null,
+      xEngagementAt: null,
+      xPostedAt: null,
+    });
+  });
+
   it("reads the X match, treating an unknown verdict as missing", () => {
     const withMatch = { ...doc, x: { match: { fit: 0.55, verdict: "related" as const } } };
     expect(narrativeFieldsFromAnalysis(withMatch, "complete")).toMatchObject({
