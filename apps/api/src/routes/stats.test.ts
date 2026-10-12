@@ -564,7 +564,7 @@ describe.skipIf(!dbAvailable)("GET /stats/screen-funnel", () => {
     const byMint = new Map(
       (res.json().tokens as { mint: string; snapshotMinutes?: number[] }[]).map((t) => [t.mint, t]),
     );
-    expect(byMint.get(`${tag}-screened`)?.snapshotMinutes).toEqual([5, 8]);
+    expect(byMint.get(`${tag}-screened`)?.snapshotMinutes).toEqual([3, 5, 8]);
     expect(byMint.get(`${tag}-unpriced`)?.snapshotMinutes).toEqual([]);
   });
 
