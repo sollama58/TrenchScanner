@@ -11,6 +11,8 @@ export interface BandFilterOptions {
   mcapMax: number;
   /** Widen the net beyond the exact band so tokens approaching/leaving it are still tracked across cycles. */
   bandPaddingRatio?: number;
+  /** Newest launches, asked of the fallback while DexScreener has no pair - see fallbackIfUnlisted. */
+  newestLaunches?: string[];
 }
 
 /**
@@ -71,7 +73,7 @@ export async function refreshAndFilterToBand(
     return { inBand: [], liveMints: [], liveMarketCaps: [], marketData: [], partial: false };
   }
 
-  const { mcapMin, mcapMax, bandPaddingRatio } = options;
+  const { mcapMin, mcapMax, bandPaddingRatio, newestLaunches } = options;
   const { min: lowerBound, max: upperBound } = scanBand(mcapMin, mcapMax, bandPaddingRatio);
 
   // Tighter than fetchJson's defaults (10s, two retries), which let one slow batch hold the whole
@@ -88,6 +90,7 @@ export async function refreshAndFilterToBand(
     // What puts a coin in front of the safety screen: first call on a fallback's budget.
     priority: true,
     failed,
+    fallbackIfUnlisted: newestLaunches,
   });
   return {
     partial: failed.size > 0,

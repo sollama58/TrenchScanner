@@ -2,7 +2,7 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
-import { selectWatchlist } from "./scanJob.js";
+import { newestLaunches, selectWatchlist } from "./scanJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -120,8 +120,9 @@ describe.skipIf(!dbAvailable)("selectWatchlist", () => {
         lastLiveAt: new Date(now - MINUTE),
       },
     });
+    // Past the few minutes in which a launch is moved up (see the next case).
     await prisma.token.create({
-      data: { mintAddress: `${TAG}-priority-new`, firstSeenAt: new Date(now - MINUTE) },
+      data: { mintAddress: `${TAG}-priority-new`, firstSeenAt: new Date(now - 10 * MINUTE) },
     });
 
     const { tracked } = await selectWatchlist(env);
@@ -129,6 +130,36 @@ describe.skipIf(!dbAvailable)("selectWatchlist", () => {
     expect(positions.get(`${TAG}-priority-alive`)).toBeDefined();
     expect(positions.get(`${TAG}-priority-new`)).toBeDefined();
     expect(positions.get(`${TAG}-priority-alive`)!).toBeLessThan(positions.get(`${TAG}-priority-new`)!);
+  });
+
+  it("refreshes launches of the last few minutes right after the near-band tier", async () => {
+    // Most launch runs that double do it in their first two minutes; at the back of a full
+    // watchlist the newest launches were the batches the refresh deadline cut.
+    const now = Date.now();
+    await prisma.token.createMany({
+      data: [
+        {
+          mintAddress: `${TAG}-order-near`,
+          firstSeenAt: new Date(now - 3_600_000),
+          lastLiveAt: new Date(now - MINUTE),
+          lastMcapUsd: Math.max(env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD, env.MCAP_FILTER_MIN),
+        },
+        {
+          mintAddress: `${TAG}-order-rest`,
+          firstSeenAt: new Date(now - 30 * MINUTE),
+          lastLiveAt: new Date(now - MINUTE),
+          lastMcapUsd: 3_000,
+        },
+        { mintAddress: `${TAG}-order-fresh`, firstSeenAt: new Date(now - MINUTE) },
+        { mintAddress: `${TAG}-order-older`, firstSeenAt: new Date(now - 20 * MINUTE) },
+      ],
+    });
+
+    const { tracked } = await selectWatchlist(env);
+    const order = tracked
+      .filter((t) => t.mintAddress.startsWith(`${TAG}-order-`))
+      .map((t) => t.mintAddress.slice(`${TAG}-order-`.length));
+    expect(order).toEqual(["near", "fresh", "rest", "older"]);
   });
 
   it("keeps an old near-band climber over a saturated set of newer launch-level mints", async () => {
@@ -207,5 +238,22 @@ describe.skipIf(!dbAvailable)("selectWatchlist", () => {
 
     const { tracked } = await selectWatchlist(env);
     expect(tracked.map((t) => t.mintAddress)).not.toContain(`${TAG}-genuinely-dead`);
+  });
+});
+
+describe("newestLaunches", () => {
+  it("lists the selection's launches of the last few minutes, newest first", () => {
+    const now = Date.now();
+    const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+    expect(
+      newestLaunches(
+        [
+          { mintAddress: "older", firstSeenAt: at(1) },
+          { mintAddress: "stale", firstSeenAt: at(10) },
+          { mintAddress: "newest", firstSeenAt: at(0.2) },
+        ],
+        now,
+      ),
+    ).toEqual(["newest", "older"]);
   });
 });
