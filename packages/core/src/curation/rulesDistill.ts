@@ -2,7 +2,7 @@ import { paceBudget } from "./governor.js";
 import { runDoublings } from "./labels.js";
 import { FRIENDLY_FEATURE_LABELS, type CandidateFeatureName } from "./features.js";
 import { NARRATIVE_BIT_FEATURES, NARRATIVE_SHARE_FEATURES } from "./narrativeFeatures.js";
-import { emptyRecord, type CallRecord } from "./leaderboard.js";
+import { emptyRecord, noteRunners, type CallRecord } from "./leaderboard.js";
 import {
   applyCooldown,
   calibrateThresholdForPrecision,
@@ -365,11 +365,22 @@ export function examineRuleScores(
     foldIndexes.push(idx);
     start += size;
   }
-  const record: CallRecord = { ...emptyRecord(), tenX: 0, tenXGraded: 0, sumRun: 0 };
+  const record: CallRecord = {
+    ...emptyRecord(),
+    tenX: 0,
+    tenXGraded: 0,
+    sumRun: 0,
+    runnersSeen: 0,
+    runnersCaught: 0,
+  };
   for (const [f, fold] of folds.entries()) {
     const others = foldIndexes.flatMap((idx, g) => (g === f ? [] : idx.map(call)));
+    const graded = foldIndexes[f]!.map((i) => reference[i]!);
     const cutoff = calibrateThresholdForPrecision(others, cfg.targets, { cooldownMs }).threshold;
-    if (cutoff === null) continue;
+    if (cutoff === null) {
+      noteRunners(record, graded, []);
+      continue;
+    }
     const spanHours = Math.max(1, (Date.parse(fold.testTo) - Date.parse(fold.testFrom)) / 3_600_000);
     const sent = applyCooldown(
       foldIndexes[f]!.flatMap((i) =>
@@ -389,6 +400,11 @@ export function examineRuleScores(
       record.sumLabel += row.labelValue;
       record.sumRun! += runDoublings(row);
     }
+    noteRunners(
+      record,
+      graded,
+      sent.map((s) => s.row),
+    );
   }
   const outOfSample = foldIndexes.flat().map(call);
   return { record, outOfSample };

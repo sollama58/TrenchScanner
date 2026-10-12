@@ -17,7 +17,7 @@ import {
 } from "./stacking.js";
 import { examChunks } from "./blend.js";
 import { paceBudget } from "./governor.js";
-import type { CallRecord } from "./leaderboard.js";
+import { noteRunners, type CallRecord } from "./leaderboard.js";
 
 /**
  * The Top Slice contestant: only the most confident calls of the tree seats. Each member keeps
@@ -164,7 +164,11 @@ export function trainTopSliceCurator(input: TopSliceInput): TopSliceResult | nul
       const callRank = callRanks.get(m.contestant) ?? null;
       return callRank === null ? [] : [{ ranks: m.ranks, sliceRank: topSliceRank(callRank) }];
     });
-    if (slices.length === 0) continue;
+    const graded = chunk.indexes.map((i) => input.reference[i]!);
+    if (slices.length === 0) {
+      noteRunners(exam, graded, []);
+      continue;
+    }
     const called = chunk.indexes.flatMap((i) => {
       let inSlice = 0;
       let deepest = 0;
@@ -181,6 +185,11 @@ export function trainTopSliceCurator(input: TopSliceInput): TopSliceResult | nul
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, paceBudget(input.targetPerHour, chunk.spanHours));
     for (const { row } of sent) addCall(exam, row);
+    noteRunners(
+      exam,
+      graded,
+      sent.map((s) => s.row),
+    );
   }
   const winRate = exam.graded > 0 ? exam.wins / exam.graded : null;
   const goalRate = exam.graded > 0 ? exam.goals / exam.graded : null;

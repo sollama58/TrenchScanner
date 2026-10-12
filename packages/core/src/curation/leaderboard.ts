@@ -7,11 +7,17 @@ import type { PrecisionTargets } from "./trainer.js";
  *
  * THE SCORE IS HOW FAR A MODEL HAS PROVEN ITSELF TOWARD THE GOAL, 0-100. The goal is the two
  * hit-rate targets, 2x on 75% of calls and 4x on 50% (CURATED_TARGET_*), plus catching the big
- * runs these tokens make: a model that has shown, with confidence, that it meets all of them scores
- * 100; one that has shown nothing scores 0.
+ * runs these tokens make, and not letting the runners slip by: a model that has shown, with
+ * confidence, that it meets all of them scores 100; one that has shown nothing scores 0.
  *
- *  - 50 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
- *  - 30 points for the 4x rate: the same against the 4x target.
+ *  - 40 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
+ *  - 25 points for the 4x rate: the same against the 4x target.
+ *  - 15 points for catching runners (user ask 2026-10-12: "not only hit the % targets but also not
+ *    let things slip through the cracks"): of the tokens that doubled at a moment the exam graded,
+ *    the share it called at a winning moment, against CATCH_TARGET_RATE. The rates alone reward
+ *    the narrowest slice that wins a little more often, however many runners it misses. Only an
+ *    exam knows every runner a model could have called, so the live record carries none; a record
+ *    without it (live-only, older stored exams) is scored on the other parts, scaled to 100.
  *  - 10 points for the 10x rate (10x within an hour, the third tier, user decision 2026-10-06): the
  *    same against TEN_X_TARGET_RATE, proven over the calls whose 10x is settled (tenXGradedOf). A
  *    record that doesn't track it (older stored exams) adds no 10x evidence either way.
@@ -78,12 +84,31 @@ export interface CallRecord {
    */
   simCalls?: number;
   sumSimReturnPct?: number;
+  /**
+   * Runners the record could have caught: distinct tokens that doubled (a clean 2x) at a moment
+   * the exam graded. Exam records only; absent on live records and older stored exams.
+   */
+  runnersSeen?: number;
+  /** Of those, the tokens it called at a winning moment. */
+  runnersCaught?: number;
 }
 
 /** labelValue is log2 of the peak multiple for clean wins: the 4x goal is labelValue >= 2. */
 export const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
-export const COMPOSITE_WEIGHTS = { winRate: 0.5, goalRate: 0.3, tenXRate: 0.1, runSize: 0.1 } as const;
+export const COMPOSITE_WEIGHTS = {
+  winRate: 0.4,
+  goalRate: 0.25,
+  tenXRate: 0.1,
+  runSize: 0.1,
+  catchRate: 0.15,
+} as const;
+/**
+ * The catch-rate target: half the runners the exam saw called at a winning moment. A single model
+ * caught 30-40% on the 10-08..10-11 replay (notes/feed-slowdown-2026-10-12.md), the whole field
+ * about 80%.
+ */
+export const CATCH_TARGET_RATE = 0.5;
 /** The 10x tier's target rate: 10x within an hour on one call in four (user decision 2026-10-06, was 10%). */
 export const TEN_X_TARGET_RATE = 0.25;
 /**
@@ -98,6 +123,32 @@ export const PRIOR_CALLS = 10;
 /** The calls a record's 10x rate is over: none when it doesn't track the tier. */
 export function tenXGradedOf(record: CallRecord): number {
   return record.tenX === undefined ? 0 : (record.tenXGraded ?? record.graded);
+}
+
+/** Whether a record tracks the runners it could have caught (exam records). */
+export function tracksCatch(record: CallRecord): boolean {
+  return record.runnersSeen !== undefined && record.runnersSeen > 0;
+}
+
+/** The distinct runners among rows: tokens with a clean 2x (rows without a token count alone). */
+function runnerKeys(rows: Iterable<{ labelValue: number; tokenId?: string }>): Set<unknown> {
+  const keys = new Set<unknown>();
+  for (const r of rows) if (r.labelValue > 0) keys.add(r.tokenId ?? r);
+  return keys;
+}
+
+/**
+ * Adds one exam slice's runners to a record: the runners among the rows it graded, and those
+ * among the calls it sent. Call it for every slice, including one where no cutoff was set and
+ * nothing was sent: its runners were missed.
+ */
+export function noteRunners(
+  record: CallRecord,
+  graded: Iterable<{ labelValue: number; tokenId?: string }>,
+  sent: Iterable<{ labelValue: number; tokenId?: string }>,
+): void {
+  record.runnersSeen = (record.runnersSeen ?? 0) + runnerKeys(graded).size;
+  record.runnersCaught = (record.runnersCaught ?? 0) + runnerKeys(sent).size;
 }
 
 /** A record's run-size sum: sumRun when it tracks one, else the label-window doublings. */
@@ -144,6 +195,8 @@ export interface RecordSummary {
   avgRunDoublings: number | null;
   /** The run size this record proves, the same way as the rates; null with nothing graded. */
   provenRunDoublings: number | null;
+  /** Share of the runners it could have caught that it did; null when not tracked (live records). */
+  catchRatePct?: number | null;
   /** Graded calls with a simulated return under the fixed exit plan. */
   simCalls: number;
   /** Average simulated return per call, in percent of the stake; null with none. */
@@ -171,6 +224,9 @@ export function summarizeRecord(record: CallRecord, targets: PrecisionTargets): 
     avgReturnDoublings: g > 0 ? record.sumLabel / g : null,
     avgRunDoublings: g > 0 ? round2(runSum(record) / g) : null,
     provenRunDoublings: g > 0 ? round2(provenRate(runSum(record), g)) : null,
+    catchRatePct: tracksCatch(record)
+      ? round1(((record.runnersCaught ?? 0) / record.runnersSeen!) * 100)
+      : null,
     simCalls,
     avgSimReturnPct: simCalls > 0 ? round1((record.sumSimReturnPct ?? 0) / simCalls) : null,
     totalSimReturnPct: simCalls > 0 ? round1(record.sumSimReturnPct ?? 0) : null,
@@ -201,6 +257,13 @@ export interface ScoreParts {
   proven10xPct: number;
   /** The proven run size the run points came from, in doublings per call. */
   provenRunDoublings: number;
+  /**
+   * Points from catching runners, against CATCH_TARGET_RATE; null when the record doesn't track
+   * them, and the other parts are then scaled to 100 (see partsTotal).
+   */
+  pointsCatch: number | null;
+  /** The proven catch rate, in percent (runners caught over runners seen plus PRIOR_CALLS). */
+  provenCatchPct: number | null;
 }
 
 export function scoreParts(record: CallRecord, targets: PrecisionTargets): ScoreParts | null {
@@ -211,6 +274,7 @@ export function scoreParts(record: CallRecord, targets: PrecisionTargets): Score
   const proven4x = provenRate(record.goals, n);
   const provenRun = provenRate(runSum(record), n);
   const proven10x = provenRate(record.tenX ?? 0, tenXGradedOf(record));
+  const provenCatch = tracksCatch(record) ? provenRate(record.runnersCaught ?? 0, record.runnersSeen!) : null;
   return {
     points2x: round1(100 * COMPOSITE_WEIGHTS.winRate * part(proven2x, targets.winRate)),
     points4x: round1(100 * COMPOSITE_WEIGHTS.goalRate * part(proven4x, targets.goalRate)),
@@ -220,6 +284,11 @@ export function scoreParts(record: CallRecord, targets: PrecisionTargets): Score
     proven4xPct: round1(proven4x * 100),
     proven10xPct: round1(proven10x * 100),
     provenRunDoublings: round2(provenRun),
+    pointsCatch:
+      provenCatch === null
+        ? null
+        : round1(100 * COMPOSITE_WEIGHTS.catchRate * part(provenCatch, CATCH_TARGET_RATE)),
+    provenCatchPct: provenCatch === null ? null : round1(provenCatch * 100),
   };
 }
 
@@ -230,8 +299,12 @@ export function recordScore(record: CallRecord, targets: PrecisionTargets): numb
   return partsTotal(parts);
 }
 
+/** The parts summed; without a catch part, the rest scaled to 100 so records compare on one scale. */
 function partsTotal(parts: ScoreParts): number {
-  return round1(parts.points2x + parts.points4x + parts.points10x + parts.pointsRun);
+  const rest = parts.points2x + parts.points4x + parts.points10x + parts.pointsRun;
+  return parts.pointsCatch === null
+    ? round1(rest / (1 - COMPOSITE_WEIGHTS.catchRate))
+    : round1(rest + parts.pointsCatch);
 }
 
 /**
@@ -254,7 +327,7 @@ export const SCORE_BANDS: readonly ScoreBand[] = [
     id: "on-target",
     min: 90,
     label: "On target",
-    meaning: "Its proven hit rates and run size meet, or all but meet, every target.",
+    meaning: "Its proven hit rates, run size and catch rate meet, or all but meet, every target.",
   },
   {
     id: "closing-in",
@@ -285,6 +358,8 @@ export function scoreBand(score: number | null): ScoreBand | null {
 /**
  * The one record the score is read off: the live record plus the backtest, the backtest scaled
  * down to at most `cap` calls' worth. `backtestCalls` is how many calls' worth it contributed.
+ * The catch rate is the backtest's alone, unscaled: it is a share of the runners, not of calls,
+ * and the live record has none.
  */
 export function pooledRecord(
   live: CallRecord,
@@ -304,6 +379,7 @@ export function pooledRecord(
       sumRun: runSum(live) + runSum(exam) * k,
       tenX: (live.tenX ?? 0) + (exam.tenX ?? 0) * k,
       tenXGraded: tenXGradedOf(live) + tenXGradedOf(exam) * k,
+      ...(tracksCatch(exam) ? { runnersSeen: exam.runnersSeen, runnersCaught: exam.runnersCaught ?? 0 } : {}),
     },
   };
 }
@@ -371,8 +447,14 @@ export function explainScore(composite: CompositeScore, targets: PrecisionTarget
     `Proven to hit 2x on at least ${b.proven2xPct.toFixed(0)}% of calls (target ${Math.round(targets.winRate * 100)}%) ` +
     `4x on at least ${b.proven4xPct.toFixed(0)}% (target ${Math.round(targets.goalRate * 100)}%) ` +
     `and 10x within an hour on at least ${b.proven10xPct.toFixed(0)}% (target ${Math.round(TEN_X_TARGET_RATE * 100)}%), ` +
-    `with runs worth ${b.provenRunDoublings.toFixed(2)} doublings a call (target ${RUN_SIZE_TARGET_DOUBLINGS}, a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average), ` +
-    `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} + ${b.points10x.toFixed(0)} + ${b.pointsRun.toFixed(0)} = ` +
+    `with runs worth ${b.provenRunDoublings.toFixed(2)} doublings a call (target ${RUN_SIZE_TARGET_DOUBLINGS}, a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average)` +
+    (b.provenCatchPct === null
+      ? ", "
+      : ` and catching at least ${b.provenCatchPct.toFixed(0)}% of the runners in its backtest (target ${Math.round(CATCH_TARGET_RATE * 100)}%), `) +
+    `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} + ${b.points10x.toFixed(0)} + ${b.pointsRun.toFixed(0)}` +
+    (b.pointsCatch === null
+      ? `, scaled to 100 without a catch rate, = `
+      : ` + ${b.pointsCatch.toFixed(0)} = `) +
     `${composite.score.toFixed(0)} of 100.`
   );
 }

@@ -840,6 +840,9 @@ export interface ScoreBasis {
   proven4xPct: number;
   /** The run size proven, in doublings per call. */
   provenRunDoublings?: number;
+  /** Points from catching runners; null when the record doesn't track them (absent from older API builds). */
+  pointsCatch?: number | null;
+  provenCatchPct?: number | null;
   /** Calls' worth of evidence: graded live calls plus the backtest's share. */
   evidenceCalls: number;
   backtestCalls: number;
@@ -970,9 +973,18 @@ export interface Leaderboard {
   /** The random-pick baseline over the same window ("event" moments; absent from older API builds). */
   baseline?: GradedRates;
   scoring: {
-    weights: { winRate: number; goalRate: number; tenXRate?: number; runSize?: number; avgReturn?: number };
+    weights: {
+      winRate: number;
+      goalRate: number;
+      tenXRate?: number;
+      runSize?: number;
+      catchRate?: number;
+      avgReturn?: number;
+    };
     /** The 10x-within-an-hour rate target, in percent (absent from older API builds). */
     tenXTargetPct?: number;
+    /** The catch-rate target, in percent (absent from older API builds). */
+    catchTargetPct?: number;
     /** Run-size target, in doublings per call (2 = a 4x average). */
     runTargetDoublings?: number;
     /** Calls' worth the backtest counts for at most; live weighs the same at this many graded calls. */

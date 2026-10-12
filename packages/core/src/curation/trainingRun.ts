@@ -565,6 +565,8 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
   let sumRun: number | null = 0;
   let tenX: number | null = 0;
   let tenXGraded: number | null = 0;
+  let runnersSeen: number | null = 0;
+  let runnersCaught = 0;
   for (const fold of folds) {
     const s = fold[side];
     record.calls += s.emitted;
@@ -581,11 +583,20 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
     else tenX = null;
     if (s.tenXGraded !== undefined && tenXGraded !== null) tenXGraded += s.tenXGraded;
     else tenXGraded = null;
+    // And the runners it could have caught: folds stored before they were counted leave none.
+    if (s.runnersSeen !== undefined && runnersSeen !== null) {
+      runnersSeen += s.runnersSeen;
+      runnersCaught += s.runnersCaught ?? 0;
+    } else runnersSeen = null;
   }
   if (sumRun !== null) record.sumRun = sumRun;
   if (tenX !== null && folds.length > 0) {
     record.tenX = tenX;
     if (tenXGraded !== null) record.tenXGraded = tenXGraded;
+  }
+  if (runnersSeen !== null && folds.length > 0) {
+    record.runnersSeen = runnersSeen;
+    record.runnersCaught = runnersCaught;
   }
   return record;
 }
