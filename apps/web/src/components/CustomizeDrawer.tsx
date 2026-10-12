@@ -1,11 +1,5 @@
 import { useEffect, useRef } from "react";
-import {
-  DEFAULT_APPEARANCE,
-  sameAppearance,
-  setAppearance,
-  useAppearance,
-  useAppearanceSave,
-} from "../appearance";
+import { defaultLook, sameAppearance, setAppearance, useAppearance, useAppearanceSave } from "../appearance";
 import { AppearanceControls, SaveNote } from "./AppearancePanel";
 import { CloseIcon, PaletteIcon } from "./Icons";
 
@@ -49,8 +43,8 @@ export function CustomizeDrawer({ open, onClose }: { open: boolean; onClose: () 
         <div className="drawer-actions">
           <button
             className="ghost small-btn"
-            disabled={sameAppearance(look, DEFAULT_APPEARANCE)}
-            onClick={() => setAppearance(DEFAULT_APPEARANCE)}
+            disabled={sameAppearance(look, defaultLook(look))}
+            onClick={() => setAppearance(defaultLook(look))}
           >
             Reset
           </button>

@@ -4,7 +4,8 @@ import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
 import { AppearancePanel } from "../components/AppearancePanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
-import { ShieldIcon, SlidersIcon } from "../components/Icons";
+import { ShieldIcon, SlidersIcon, StreamIcon } from "../components/Icons";
+import { setAppearance, useAppearance } from "../appearance";
 import { useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
 
@@ -26,10 +27,46 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters") => void }) {
         </button>
         .
       </p>
+      <TabsPanel />
       <AppearancePanel />
       <ConnectPhonePanel />
       <AccountPanel account={settings?.account ?? null} />
     </div>
+  );
+}
+
+/** Optional tabs, off until switched on here. Saved with the feed appearance, so it follows the wallet. */
+function TabsPanel() {
+  const { streamTab } = useAppearance();
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <StreamIcon size={13} /> Tabs
+          </span>
+          <h2>Extra tabs</h2>
+        </div>
+      </header>
+      <div className="tab-option">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={streamTab}
+          className={`switch${streamTab ? " on" : ""}`}
+          onClick={() => setAppearance({ streamTab: !streamTab })}
+        >
+          <span className="switch-track">
+            <span className="switch-thumb" />
+          </span>
+          Stream
+        </button>
+        <p className="muted small">
+          A tab showing every new token the moment it passes the safety screen inside the band, newest first,
+          on the same cards as your Live feed.
+        </p>
+      </div>
+    </section>
   );
 }
 

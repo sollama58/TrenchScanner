@@ -1,23 +1,21 @@
 /** The dashboard's tabs, and the code-split chunks behind them. */
-export type Tab = "live" | "model" | "lighthouse" | "filters" | "settings" | "admin";
+export type Tab = "live" | "stream" | "model" | "lighthouse" | "filters" | "settings" | "admin";
 
 export function tabFromHash(): Tab {
   const h = window.location.hash.replace("#", "");
   // Top filters used to be its own tab; it is a card on the Filters tab now, so old links land there.
   if (h === "top") return "filters";
-  return h === "model" || h === "lighthouse" || h === "filters" || h === "settings" || h === "admin"
+  return h === "stream" ||
+    h === "model" ||
+    h === "lighthouse" ||
+    h === "filters" ||
+    h === "settings" ||
+    h === "admin"
     ? h
     : "live";
 }
 
-/** The Stream (components/StreamView.tsx): a focus mode over the tabs, opened at #stream. */
-export const STREAM_HASH = "stream";
-
-export function streamFromHash(): boolean {
-  return window.location.hash.replace("#", "") === STREAM_HASH;
-}
-
-/** The Stream's own data, for index.html's boot prefetch and the warm-up. */
+/** The Stream tab's own data (components/StreamView.tsx), for index.html's boot prefetch and the warm-up. */
 export const STREAM_DATA = "/launches";
 
 type ModelTabModule = typeof import("./tabs/ModelTab");
@@ -76,6 +74,8 @@ export const TAB_DATA: Record<Tab, string[]> = {
     "/curated/stats",
     "/curated/models?days=30",
   ],
+  // Nothing warmed: the tab is off unless switched on in Settings.
+  stream: [],
   model: ["/curated/insights?days=7", "/curated/models?days=7"],
   lighthouse: [
     "/curated/lighthouse/history?days=30&bucket=day&dimension=category",

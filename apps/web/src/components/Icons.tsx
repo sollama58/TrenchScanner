@@ -29,11 +29,11 @@ export const PulseIcon = (p: IconProps) => (
   </Svg>
 );
 
-/** Opens in a window of its own. */
-export const PopOutIcon = (p: IconProps) => (
+/** The Stream tab: rows arriving one after another. */
+export const StreamIcon = (p: IconProps) => (
   <Svg {...p}>
-    <rect x="3" y="7" width="13" height="13" rx="2" />
-    <path d="M10 4h10v10M20 4l-8 8" />
+    <path d="M4 6h16M4 12h11M4 18h7" />
+    <circle cx="19" cy="17" r="2" />
   </Svg>
 );
 

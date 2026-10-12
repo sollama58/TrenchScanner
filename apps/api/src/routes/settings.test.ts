@@ -52,6 +52,10 @@ describe("parseFeedAppearance", () => {
     expect(saved.sniperTop10).toBe(false);
     expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(false);
     expect(parseFeedAppearance({ sniperTop10: true }).sniperTop10).toBe(true);
+    // The Stream tab is opt-in, and an account saved before it has it off.
+    expect(DEFAULT_FEED_APPEARANCE.streamTab).toBe(false);
+    expect(parseFeedAppearance({}).streamTab).toBe(false);
+    expect(parseFeedAppearance({ streamTab: true }).streamTab).toBe(true);
     expect(
       parseFeedAppearance({ reasons: true, quickLinks: ["gmgn", "padre", "gmgn", "axiom"] }),
     ).toMatchObject({

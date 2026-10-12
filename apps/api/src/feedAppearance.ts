@@ -83,6 +83,8 @@ export const feedAppearanceSchema = z
      * (the default) follows curation/narrativeNote.ts: off until the seat proves itself live.
      */
     narrativeNote: z.boolean().nullable().default(null),
+    /** The Stream tab (every new token that passes the safety screen in the band); off by default. */
+    streamTab: z.boolean().default(false),
     /** Trading sites each card links to, in this order; Padre's Trading Terminal by default. */
     quickLinks: z
       .array(z.enum(QUICK_LINKS))
@@ -119,6 +121,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   reasons: false,
   sniperTop10: false,
   narrativeNote: null,
+  streamTab: false,
   quickLinks: ["terminal"],
   hidden: [],
 };

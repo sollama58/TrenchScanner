@@ -18,6 +18,7 @@ import {
   PulseIcon,
   ShieldIcon,
   SlidersIcon,
+  StreamIcon,
 } from "./components/Icons";
 import {
   TAB_DATA,
@@ -28,7 +29,6 @@ import {
   loadSettingsTab,
   loadSignIn,
   loaded,
-  streamFromHash,
   tabFromHash,
   type Tab,
 } from "./routes";
@@ -38,7 +38,8 @@ import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
-import { StreamButton, StreamView } from "./components/StreamView";
+import { StreamView } from "./components/StreamView";
+import { useAppearance } from "./appearance";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -55,6 +56,8 @@ const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ def
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
+  // Hidden unless switched on in Settings (FeedAppearance.streamTab); see shownTabs below.
+  { id: "stream", label: "Stream", Icon: StreamIcon },
   // Filters sits right after Live: it is where the feed is tuned and where alerts are set up.
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
@@ -85,9 +88,6 @@ export function App() {
     return isGuest() ? { state: "guest" } : { state: "loading" };
   });
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
-  // The Stream (#stream): its own window's whole page. Opened in an ordinary tab instead, its bar
-  // leads back to the tab underneath.
-  const [wantsStream, setStream] = useState(streamFromHash);
   const sageMint = useSageMint();
 
   const checkSession = (maxAgeMs: number) => {
@@ -121,11 +121,7 @@ export function App() {
     if (linkCode !== undefined) redeem(linkCode);
     // A guest has no session to check: asking would only fetch a 401.
     else if (session.state !== "guest" && session.state !== "linking") checkSession(10_000);
-    const onHash = () => {
-      const streaming = streamFromHash();
-      setStream(streaming);
-      if (!streaming) setTab(tabFromHash());
-    };
+    const onHash = () => setTab(tabFromHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -170,7 +166,6 @@ export function App() {
   const goTo = (t: Tab) => {
     window.location.hash = t === "live" ? "" : t;
     setTab(t);
-    setStream(false);
     window.scrollTo({ top: 0 });
   };
 
@@ -207,23 +202,25 @@ export function App() {
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
   const isAdmin = signedIn && session.user.isAdmin;
-  const tabs = isAdmin ? [...TABS, ADMIN_TAB] : TABS;
-  // #admin without an admin wallet reads as the Live tab, so a tab is always the highlighted one.
-  const tab: Tab = wantedTab === "admin" && !isAdmin ? "live" : wantedTab;
-  // Subscribers only: it is a feed. A guest or a signed-out visitor opening #stream gets the page.
-  const stream = wantsStream && signedIn;
-  // A new tab, the Stream, or signing in or out, is a new page: its load gets the full loader.
-  useEffect(markNavigation, [tab, stream, session.state]);
-  const loaderLabel = stream
-    ? "Loading Stream"
-    : session.state === "signed-in" || session.state === "guest"
+  // The Stream tab only for a signed-in reader who switched it on in Settings.
+  const streamOn = useAppearance().streamTab && signedIn;
+  const shownTabs = TABS.filter((t) => t.id !== "stream" || streamOn);
+  const tabs = isAdmin ? [...shownTabs, ADMIN_TAB] : shownTabs;
+  // #admin without an admin wallet, or #stream with the tab off, reads as the Live tab, so a tab
+  // is always the highlighted one.
+  const tab: Tab =
+    (wantedTab === "admin" && !isAdmin) || (wantedTab === "stream" && !streamOn) ? "live" : wantedTab;
+  // A new tab, or signing in or out, is a new page: its load gets the full loader.
+  useEffect(markNavigation, [tab, session.state]);
+  const loaderLabel =
+    session.state === "signed-in" || session.state === "guest"
       ? `Loading ${tabs.find((t) => t.id === tab)?.label ?? "TrenchScanner"}`
       : "Loading TrenchScanner";
 
   return (
-    <div className={`app${stream ? " streaming" : ""}`}>
+    <div className="app">
       <div className="backdrop" aria-hidden />
-      <header className="topbar" hidden={stream}>
+      <header className={`topbar${streamOn ? " packed" : ""}`}>
         <div className="topbar-inner">
           <a className="brand" href="#" onClick={() => goTo("live")}>
             <LogoMark />
@@ -233,7 +230,7 @@ export function App() {
           </a>
           {guest && (
             <nav className="tabs" role="tablist">
-              {TABS.map(({ id, label, Icon }) => {
+              {shownTabs.map(({ id, label, Icon }) => {
                 // Live, Models and the Lighthouse work read-only without a wallet; the rest are
                 // saved to one.
                 const locked = id !== "live" && id !== "model" && id !== "lighthouse";
@@ -282,7 +279,6 @@ export function App() {
             </nav>
           )}
           <div className="topbar-right">
-            {signedIn && <StreamButton />}
             <WorkerStatus showJobs={isAdmin} />
             {guest && (
               <button className="button primary connect-btn" onClick={connectWallet}>
@@ -304,7 +300,7 @@ export function App() {
       <main className="content">
         <PageLoader label={loaderLabel} />
         {/* The Admin tab's broadcast: for everyone, signed in, guest or signed out. */}
-        {session.state !== "linking" && !stream && <AnnouncementBar />}
+        {session.state !== "linking" && <AnnouncementBar />}
         {session.state === "loading" && <Boot />}
         {session.state === "linking" &&
           (session.error ? (
@@ -388,22 +384,17 @@ export function App() {
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
-            {stream ? (
-              <div className="tab-view" key="stream">
-                <StreamView onExit={() => goTo(tab)} />
-              </div>
-            ) : (
-              <div className="tab-view" key={tab}>
-                <Suspense fallback={<Boot />}>
-                  {tab === "live" && <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} />}
-                  {tab === "model" && <ModelTab />}
-                  {tab === "lighthouse" && <LighthouseTab />}
-                  {tab === "filters" && <FiltersTab goTo={goTo} />}
-                  {tab === "settings" && <SettingsTab goTo={goTo} />}
-                  {tab === "admin" && <AdminTab goTo={goTo} />}
-                </Suspense>
-              </div>
-            )}
+            <div className="tab-view" key={tab}>
+              <Suspense fallback={<Boot />}>
+                {tab === "live" && <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} />}
+                {tab === "stream" && <StreamView />}
+                {tab === "model" && <ModelTab />}
+                {tab === "lighthouse" && <LighthouseTab />}
+                {tab === "filters" && <FiltersTab goTo={goTo} />}
+                {tab === "settings" && <SettingsTab goTo={goTo} />}
+                {tab === "admin" && <AdminTab goTo={goTo} />}
+              </Suspense>
+            </div>
             {sageMint && (
               <Suspense fallback={null}>
                 <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
@@ -413,7 +404,7 @@ export function App() {
         )}
       </main>
 
-      <footer className="site-foot faint small" hidden={stream}>
+      <footer className="site-foot faint small">
         Alerts are for research, not financial advice. Memecoins can go to zero in minutes.
         {" | "}
         <a href="https://alonisthe.dev" target="_blank" rel="noopener noreferrer">

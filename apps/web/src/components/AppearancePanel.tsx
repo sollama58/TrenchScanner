@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Card, CardField, NarrativeNoteReadiness, QuickLink } from "../api";
 import {
   CARD_FIELD_GROUPS,
-  DEFAULT_APPEARANCE,
+  defaultLook,
   PRESETS,
   QUICK_LINK_SITES,
   SWATCHES,
@@ -31,7 +31,7 @@ export function AppearancePanel() {
   const [sample, setSample] = useState<"won" | "missed">("won");
   const hidden = useMemo(() => cardHideSet(look), [look]);
   const cards = useMemo(() => sampleCards(now), [now]);
-  const isDefault = sameAppearance(look, DEFAULT_APPEARANCE);
+  const isDefault = sameAppearance(look, defaultLook(look));
 
   return (
     <section className="panel appearance" id="feed-appearance">
@@ -48,7 +48,7 @@ export function AppearancePanel() {
         </div>
         <div className="appearance-actions">
           <SaveNote save={save} />
-          <button className="ghost" disabled={isDefault} onClick={() => setAppearance(DEFAULT_APPEARANCE)}>
+          <button className="ghost" disabled={isDefault} onClick={() => setAppearance(defaultLook(look))}>
             Reset to default
           </button>
         </div>
