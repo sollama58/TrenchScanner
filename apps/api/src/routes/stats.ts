@@ -396,7 +396,10 @@ export async function registerStatsRoutes(
         return;
       }
       reply.header("cache-control", "no-store");
-      return buildScreenFunnel(parsed.data.hours, { minutes: parsed.data.minutes === "true" });
+      return buildScreenFunnel(parsed.data.hours, {
+        minutes: parsed.data.minutes === "true",
+        band: { min: opts.env.MCAP_FILTER_MIN, max: opts.env.MCAP_FILTER_MAX },
+      });
     },
   );
 

@@ -2,7 +2,7 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
-import { newestLaunches, selectWatchlist } from "./scanJob.js";
+import { LIVE_LAUNCH_MAX, liveLaunchSource, newestLaunches, selectWatchlist } from "./scanJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -255,5 +255,49 @@ describe("newestLaunches", () => {
         now,
       ),
     ).toEqual(["newest", "older"]);
+  });
+});
+
+describe("liveLaunchSource", () => {
+  const now = Date.now();
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+  const takeCallStats = () => ({ requests: 0, throttled: 0, waitedMs: 0, gaveUp: 0 });
+
+  it("prices the selection's launches of the last ten minutes live, newest first", () => {
+    const getLaunches = async () => [];
+    const live = liveLaunchSource(
+      { takeCallStats, getLaunches },
+      [
+        { mintAddress: "eight-minutes", firstSeenAt: at(8) },
+        { mintAddress: "an-hour", firstSeenAt: at(60) },
+        { mintAddress: "just-now", firstSeenAt: at(0.1) },
+      ],
+      now,
+    );
+    expect(live?.mints).toEqual(["just-now", "eight-minutes"]);
+  });
+
+  it("caps how many go to Jupiter a cycle", () => {
+    const tracked = Array.from({ length: LIVE_LAUNCH_MAX + 50 }, (_, i) => ({
+      mintAddress: `m${i}`,
+      firstSeenAt: at(i / 1000),
+    }));
+    const live = liveLaunchSource({ takeCallStats, getLaunches: async () => [] }, tracked, now);
+    expect(live?.mints).toHaveLength(LIVE_LAUNCH_MAX);
+    expect(live?.mints[0]).toBe("m0");
+  });
+
+  it("is off without a Jupiter client, or with no young launch", () => {
+    expect(liveLaunchSource(undefined, [{ mintAddress: "a", firstSeenAt: at(1) }], now)).toBeUndefined();
+    expect(
+      liveLaunchSource({ takeCallStats }, [{ mintAddress: "a", firstSeenAt: at(1) }], now),
+    ).toBeUndefined();
+    expect(
+      liveLaunchSource(
+        { takeCallStats, getLaunches: async () => [] },
+        [{ mintAddress: "a", firstSeenAt: at(30) }],
+        now,
+      ),
+    ).toBeUndefined();
   });
 });

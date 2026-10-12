@@ -102,4 +102,73 @@ describe("refreshAndFilterToBand", () => {
       partial: false,
     });
   });
+
+  describe("live launch readings", () => {
+    const liveAt = new Date("2026-10-12T20:00:05Z");
+    const source = (tokens: CandidateToken[]) => ({
+      getLaunches: async (mints: string[], options?: { seenAt?: Map<string, Date> }) => {
+        const answered = tokens.filter((t) => mints.includes(t.mintAddress));
+        for (const t of answered) options?.seenAt?.set(t.mintAddress, liveAt);
+        return answered;
+      },
+    });
+
+    it("decides the band on the live price: a listed launch keeps its pair, an unlisted one is the live reading", async () => {
+      let fallbackAsked: string[] | undefined;
+      const dexScreener = {
+        getTokensByAddresses: async (
+          _m: string[],
+          _c: number,
+          options: { fallbackIfUnlisted?: string[] },
+        ) => {
+          fallbackAsked = options.fallbackIfUnlisted;
+          // DexScreener's reading trails the launch: still under the padded band.
+          return [
+            { ...candidate("listed", 4_000), buys5m: 12, dexId: "pumpfun" },
+            candidate("older", 30_000),
+          ];
+        },
+      } as unknown as DexScreenerClient;
+
+      const result = await refreshAndFilterToBand(dexScreener, ["listed", "unlisted", "untraded", "older"], {
+        mcapMin: 10_000,
+        mcapMax: 1_000_000,
+        newestLaunches: ["unlisted", "untraded"],
+        liveLaunches: {
+          source: source([
+            { ...candidate("listed", 11_000), priceUsd: 0.000011 },
+            { ...candidate("unlisted", 10_500), dexId: "pumpfun" },
+          ]),
+          mints: ["listed", "unlisted", "untraded"],
+        },
+      });
+      const byMint = new Map(result.inBand.map((t) => [t.mintAddress, t]));
+      expect([...byMint.keys()].sort()).toEqual(["listed", "older", "unlisted"]);
+      expect(byMint.get("listed")).toMatchObject({ marketCapUsd: 11_000, priceUsd: 0.000011, buys5m: 12 });
+      expect(byMint.get("unlisted")).toMatchObject({ marketCapUsd: 10_500, dexId: "pumpfun" });
+      expect(result.seenAt.get("listed")).toEqual(liveAt);
+      expect(result.liveMarketCaps).toContainEqual({ mintAddress: "unlisted", marketCapUsd: 10_500 });
+      // Only the launch the live read could not price is left for GeckoTerminal.
+      expect(fallbackAsked).toEqual(["untraded"]);
+    });
+
+    it("goes on with DexScreener's readings when the live read fails", async () => {
+      const dexScreener = {
+        getTokensByAddresses: async () => [candidate("listed", 12_000)],
+      } as unknown as DexScreenerClient;
+      const result = await refreshAndFilterToBand(dexScreener, ["listed"], {
+        mcapMin: 10_000,
+        mcapMax: 1_000_000,
+        liveLaunches: {
+          source: {
+            getLaunches: async () => {
+              throw new Error("429");
+            },
+          },
+          mints: ["listed"],
+        },
+      });
+      expect(result.inBand).toEqual([candidate("listed", 12_000)]);
+    });
+  });
 });
