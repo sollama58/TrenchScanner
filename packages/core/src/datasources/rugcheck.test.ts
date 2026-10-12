@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RugCheckClient, toProfile, type RugCheckReport } from "./rugcheck.js";
+import { RugCheckClient, toProfile, withoutVenueHolder, type RugCheckReport } from "./rugcheck.js";
 
 const MINT = "9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump";
 const POOL_AUTHORITY = "FnzKY6x7entQ1eR3D225dQyT7ybfka4PskBMQhb8L3CC";
@@ -193,5 +193,48 @@ describe("RugCheckClient.getProfileResult", () => {
     expect(results.get("first")).toEqual({ status: "absent" });
     expect(results.has("second")).toBe(false);
     expect(asked).toHaveLength(1);
+  });
+});
+
+describe("withoutVenueHolder", () => {
+  const NEW_POOL = "NewPumpSwapPool111111111111111111111111111";
+  // RugCheck's report predates the new PumpSwap pool: its markets list the curve only, so the
+  // pool's vault (owned by the pool address) reads as a 21.7% holder.
+  const report = baseReport({
+    topHolders: [
+      { address: "vault", owner: NEW_POOL, pct: 21.7 },
+      { address: "acct-2", owner: "wallet-2", pct: 9.2 },
+      { address: "acct-3", owner: "wallet-3", pct: 12 },
+    ],
+    markets: [],
+  });
+
+  it("takes the coin's own pool out of the top ten", () => {
+    const profile = toProfile(MINT, report);
+    expect(profile.top10HolderPct).toBeCloseTo(42.9);
+    const fixed = withoutVenueHolder(profile, NEW_POOL);
+    expect(fixed.top10HolderPct).toBeCloseTo(21.2);
+    expect(fixed.top10HolderAddresses).toEqual(["wallet-2", "wallet-3"]);
+  });
+
+  it("leaves the profile alone when the pool is not a holder, unknown, or the shares are missing", () => {
+    const profile = toProfile(MINT, report);
+    expect(withoutVenueHolder(profile, "SomeOtherPool")).toBe(profile);
+    expect(withoutVenueHolder(profile, undefined)).toBe(profile);
+    const cachedBefore = { ...profile, topHolderShares: undefined };
+    expect(withoutVenueHolder(cachedBefore, NEW_POOL)).toBe(cachedBefore);
+  });
+
+  it("refills the top ten from the eleventh holder", () => {
+    const holders = [
+      { address: "vault", owner: NEW_POOL, pct: 20 },
+      ...Array.from({ length: 11 }, (_, i) => ({ address: `a${i}`, owner: `w${i}`, pct: 3 })),
+    ];
+    const fixed = withoutVenueHolder(
+      toProfile(MINT, baseReport({ topHolders: holders, markets: [] })),
+      NEW_POOL,
+    );
+    expect(fixed.top10HolderPct).toBeCloseTo(30);
+    expect(fixed.top10HolderAddresses).toHaveLength(10);
   });
 });

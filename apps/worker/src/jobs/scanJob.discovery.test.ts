@@ -12,6 +12,7 @@ import {
 import {
   addNewMintsToWatchlist,
   buildOnChainProfile,
+  freshGraduatesOverCut,
   noteSnapshotWritten,
   persistSnapshot,
   reviveMovingMints,
@@ -27,6 +28,54 @@ const RUN = Date.now()
   .toString(36)
   .replace(/[0lIO]/g, "x");
 const mint = (n: number) => `Disc${RUN}${String(n).padStart(3, "1")}`.padEnd(44, "A").replace(/[0lIO]/g, "x");
+
+describe("a fresh graduate's own pool in its RugCheck holders", () => {
+  const POOL = "FreshPool1111111111111111111111111111111111";
+  const now = Date.parse("2026-10-12T04:00:00Z");
+  const profile = (top10: number, shares?: { owner: string; pct: number }[]): RugCheckProfile => ({
+    mintAddress: "Fresh",
+    top10HolderPct: top10,
+    top10HolderAddresses: shares?.map((s) => s.owner) ?? [],
+    mintAuthorityActive: false,
+    freezeAuthorityActive: false,
+    lpBurned: true,
+    riskFlags: [],
+    ...(shares ? { topHolderShares: shares } : {}),
+  });
+  const poolCounted = profile(52, [
+    { owner: POOL, pct: 21.7 },
+    { owner: "w1", pct: 20.3 },
+    { owner: "w2", pct: 10 },
+  ]);
+
+  it("is left out of the profile the screen reads", () => {
+    const built = buildOnChainProfile(
+      { mintAddress: "Fresh", dexId: "pumpswap", pairAddress: POOL },
+      new Map([["Fresh", poolCounted]]),
+      new Map(),
+    );
+    expect(built?.top10HolderPct).toBeCloseTo(30.3);
+    expect(built?.top10HolderAddresses).toEqual(["w1", "w2"]);
+  });
+
+  it("re-reads only coins graduated in the last five minutes still over the cut without their pool", () => {
+    const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+    const profiles = new Map<string, RugCheckProfile>([
+      ["Over", { ...profile(78), mintAddress: "Over" }],
+      ["PoolOnly", { ...poolCounted, mintAddress: "PoolOnly" }],
+      ["Old", { ...profile(78), mintAddress: "Old" }],
+      ["Under", { ...profile(20), mintAddress: "Under" }],
+    ]);
+    const candidates = [
+      { mintAddress: "Over", pairAddress: "p1", graduatedAt: at(2) },
+      { mintAddress: "PoolOnly", pairAddress: POOL, graduatedAt: at(1) },
+      { mintAddress: "Old", pairAddress: "p3", graduatedAt: at(6) },
+      { mintAddress: "Under", pairAddress: "p4", graduatedAt: at(1) },
+      { mintAddress: "Curve", pairAddress: "p5" },
+    ];
+    expect(freshGraduatesOverCut(candidates, profiles, now)).toEqual(["Over"]);
+  });
+});
 
 describe("buildOnChainProfile without a RugCheck report", () => {
   const authorities = new Map<string, MintAuthorityResult>([

@@ -13,6 +13,8 @@ import {
   scoreToken,
   refreshScoreWeights,
   runRugScreen,
+  withoutVenueHolder,
+  SAFETY_REJECT_TOP10_HOLDER_PCT,
   sniperShareOfTop10,
   passesLocalRugScreen,
   passesEventPreGate,
@@ -582,6 +584,18 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     { refreshStaleInBackground: true },
   );
   lap("rugCheck");
+  // A coin that graduated minutes ago and reads over the concentration cut is re-read every minute
+  // until FRESH_GRADUATE_RECHECK_MINUTES after graduation, instead of keeping that reading for the
+  // whole cache TTL: the first report on a new pool often predates it or the holders' first
+  // trades, and those minutes are when a fresh graduate is decided on.
+  const freshGraduates = freshGraduatesOverCut(candidates, rugProfiles);
+  if (freshGraduates.length > 0) {
+    const recheck = await resolveRugProfiles(freshGraduates, deps.rugCheck, 1, FRESH_GRADUATE_RECHECK_MAX, {
+      awaitDeadlineMs: FRESH_GRADUATE_RECHECK_DEADLINE_MS,
+    });
+    for (const [mint, profile] of recheck.profiles) rugProfiles.set(mint, profile);
+    lap("rugCheckRecheck");
+  }
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
   // do.
@@ -1925,7 +1939,7 @@ export function secondLookDue(
  * the creator, holder count and risk score stay unknown.
  */
 export function buildOnChainProfile(
-  candidate: Pick<CandidateToken, "mintAddress" | "dexId">,
+  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress">,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
   onChainHolders: Map<string, OnChainHolders> = new Map(),
@@ -1935,7 +1949,8 @@ export function buildOnChainProfile(
   // rug screen rejects - so a candidate that never gets checked is never accidentally admitted.
   const { mintAddress } = candidate;
   const rugProfile = rugProfiles.get(mintAddress);
-  if (rugProfile) return rugProfile;
+  // The coin's own pool out of the holder list, for a report written before RugCheck listed it.
+  if (rugProfile) return withoutVenueHolder(rugProfile, candidate.pairAddress);
 
   const authorities = mintAuthorities.get(mintAddress);
   if (!authorities || authorities.status !== "found") return null;
@@ -1950,6 +1965,32 @@ export function buildOnChainProfile(
       ? { top10HolderPct: holders.top10HolderPct, top10HolderAddresses: holders.top10HolderAddresses }
       : {}),
   };
+}
+
+/** How long after graduating a coin over the concentration cut is re-read every minute. */
+export const FRESH_GRADUATE_RECHECK_MINUTES = 5;
+/** Most such re-reads per cycle, and how long the cycle waits on them. */
+const FRESH_GRADUATE_RECHECK_MAX = 20;
+const FRESH_GRADUATE_RECHECK_DEADLINE_MS = 5_000;
+
+/**
+ * Graduated in the last FRESH_GRADUATE_RECHECK_MINUTES, with a RugCheck report (its own pool left
+ * out) whose top ten are at or over the safety screen's concentration cut. Exported for tests.
+ */
+export function freshGraduatesOverCut(
+  candidates: Pick<CandidateToken, "mintAddress" | "pairAddress" | "graduatedAt">[],
+  rugProfiles: Map<string, RugCheckProfile>,
+  now = Date.now(),
+): string[] {
+  return candidates
+    .filter((c) => {
+      if (!c.graduatedAt || now - c.graduatedAt.getTime() > FRESH_GRADUATE_RECHECK_MINUTES * 60_000)
+        return false;
+      const profile = rugProfiles.get(c.mintAddress);
+      const top10 = profile ? withoutVenueHolder(profile, c.pairAddress).top10HolderPct : undefined;
+      return typeof top10 === "number" && top10 >= SAFETY_REJECT_TOP10_HOLDER_PCT;
+    })
+    .map((c) => c.mintAddress);
 }
 
 /** A Pump.fun bonding curve or the PumpSwap pool it graduates into: liquidity nobody can pull. */
