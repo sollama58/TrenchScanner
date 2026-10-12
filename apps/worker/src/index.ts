@@ -300,7 +300,7 @@ async function main() {
     }),
   );
   // Re-grades history to label rule 4 from Pump.fun's minute candles (labelRegradeJob.ts), a
-  // few dozen coins a minute under a lock like the batch jobs below, until nothing is left.
+  // hundred-odd coins a minute under a lock like the batch jobs below, until nothing is left.
   schedule("label-regrade", () =>
     scheduleInterval(
       "label-regrade",
