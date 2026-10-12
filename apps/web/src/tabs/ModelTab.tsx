@@ -1186,8 +1186,9 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
       <div className="score-guide-body">
         <p className="muted small">
           A model's score is how far it has <strong>proven</strong> itself toward the goal: 2x on{" "}
-          {t.hitRate2xPct}% of its calls and 4x on {t.hitRate4xPct}%, and catching the big runs these tokens
-          make. 100 means its record meets every target. 0 means it has proven nothing yet.
+          {t.hitRate2xPct}% of its calls and 4x on {t.hitRate4xPct}%, catching the big runs these tokens make,
+          and not letting the runners slip by. 100 means its record meets every target. 0 means it has proven
+          nothing yet.
         </p>
         {bands.length > 0 && (
           <ul className="score-bands">
@@ -1227,6 +1228,15 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
               averaged over every call against a target of {runTarget} (a {2 ** runTarget}x average). A call
               scores 0 if it fell 50% before running or never doubled. A 2x that stops there and one that runs
               to 50x earn the same points above; this is what tells them apart.
+            </li>
+          )}
+          {w.catchRate != null && (
+            <li>
+              <strong>{Math.round(w.catchRate * 100)} points for catching runners.</strong> Of the tokens that
+              doubled in its backtest, the share it called at a winning moment, against a{" "}
+              {sc.catchTargetPct ?? 50}% target. The hit rates alone reward a model for calling only its
+              surest few; this part counts the runners it let slip by. Only the backtest knows every runner a
+              model could have called, so a model without one is scored on the other parts, scaled to 100.
             </li>
           )}
           <li>
@@ -1271,6 +1281,14 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
                 and a run size of <span className="num">{b.provenRunDoublings.toFixed(2)}</span> doublings a
                 call ({Math.round(w.runSize * 100)} × {b.provenRunDoublings.toFixed(2)}/{runTarget} ={" "}
                 <span className="num">{b.pointsRun.toFixed(0)}</span> points)
+              </>
+            )}
+            {b.pointsCatch != null && b.provenCatchPct != null && w.catchRate != null && (
+              <>
+                {" "}
+                and a catch rate of <span className="num">{b.provenCatchPct.toFixed(0)}%</span> (
+                {Math.round(w.catchRate * 100)} × {b.provenCatchPct.toFixed(0)}/{sc.catchTargetPct ?? 50} ={" "}
+                <span className="num">{b.pointsCatch.toFixed(0)}</span> points)
               </>
             )}
             , for a score of <span className="num">{example.composite.score.toFixed(0)}</span>

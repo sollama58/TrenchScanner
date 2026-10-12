@@ -199,6 +199,11 @@ describe("walkForwardEvaluate", () => {
         (fold.model.avgLabel ?? 0) * fold.model.emitted - 1e-9,
       );
       expect(fold.heuristic.sumRun).toBeDefined();
+      // And the runners it could have caught: never more caught than seen, and some caught.
+      expect(fold.model.runnersSeen).toBeGreaterThan(0);
+      expect(fold.model.runnersCaught).toBeGreaterThan(0);
+      expect(fold.model.runnersCaught!).toBeLessThanOrEqual(fold.model.runnersSeen!);
+      expect(fold.heuristic.runnersSeen).toBe(fold.model.runnersSeen);
       // The synthetic signal is strong: the model's picks should far outrun the base rate.
       expect(fold.model.precisionPct ?? 0).toBeGreaterThan(fold.baseWinRatePct * 1.5);
     }
@@ -471,6 +476,26 @@ describe("calibrateThresholdForPrecision", () => {
     expect(calibrateThresholdForPrecision(set, { ...targets, minSupportShare: 0.05 }).support).toBe(
       countOnly,
     );
+  });
+
+  it("with a coverage tolerance, takes a looser cutoff whose record is nearly as good", () => {
+    // The top 20 win 10 times (50%); below them, 4 wins in every 10 calls. The best record is the
+    // top 20; a 10-point tolerance lets the cutoff go as deep as the bound stays within it,
+    // catching more of the winners further down.
+    const set = calls(100, (i) => (i < 20 ? (i % 2 === 0 ? 2 : 0) : i % 10 < 4 ? 1 : 0));
+    const best = calibrateThresholdForPrecision(set, { ...targets, minSupport: 20 });
+    const covered = calibrateThresholdForPrecision(set, {
+      ...targets,
+      minSupport: 20,
+      coverageTolerance: 0.1,
+    });
+    expect(covered.meetsTargets).toBe(false);
+    expect(covered.support).toBeGreaterThan(best.support);
+    expect(covered.winRatePct!).toBeLessThanOrEqual(best.winRatePct!);
+    // No tolerance (or 0) leaves the best record alone.
+    expect(
+      calibrateThresholdForPrecision(set, { ...targets, minSupport: 20, coverageTolerance: 0 }).support,
+    ).toBe(best.support);
   });
 
   it("has no cutoff only when nothing had enough alerts to judge", () => {

@@ -425,6 +425,12 @@ const envSchema = z.object({
   // the runners caught from 38% to 30% (trees) and 57% to 32% (linear) - see
   // notes/feed-slowdown-2026-10-12.md. 0 = the count alone.
   CURATED_MIN_CALIBRATION_SHARE: z.coerce.number().min(0).max(0.5).default(0.1),
+  // When no cutoff meets the targets, a looser cutoff whose 2x lower bound is within this much
+  // (0.01 = 1 point) of the best one is chosen over it, for catching more runners (user ask
+  // 2026-10-12: "not let things slip through the cracks"). On the 10-08..10-11 walk-forward
+  // replay it raised the runners caught from 38% to 58% (trees) and 57% to 82% (linear) for a 2x
+  // rate of 22.2% vs 22.4% and 19.0% vs 19.5%. 0 = the best record alone.
+  CURATED_CUTOFF_COVERAGE_TOLERANCE: z.coerce.number().min(0).max(0.1).default(0.01),
   // How sure a cutoff's out-of-sample record must make us that it meets the targets, as a normal
   // z-score: a cutoff counts as meeting them when the Wilson LOWER BOUND of its hit rates does.
   // Choosing the lowest of hundreds of cutoffs that shows 75% favours lucky ones; the bound

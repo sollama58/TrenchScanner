@@ -22,6 +22,7 @@ import {
   CONSENSUS_CONTESTANT,
   BACKTEST_EVIDENCE_CAP,
   MIN_LIVE_CALLS_TO_RANK,
+  CATCH_TARGET_RATE,
   COMPOSITE_WEIGHTS,
   RUN_SIZE_TARGET_DOUBLINGS,
   TEN_X_TARGET_RATE,
@@ -331,6 +332,8 @@ export interface Leaderboard {
     runTargetDoublings: number;
     /** The 10x-within-an-hour rate target, in percent. */
     tenXTargetPct: number;
+    /** The catch-rate target: share of the backtest's runners called, in percent. */
+    catchTargetPct: number;
     /** Calls' worth of evidence the backtest counts for at most; live weighs the same at this many graded calls. */
     livePivotCalls: number;
     /** Calls counted as misses on top of every record, so a short streak can't prove a high rate. */
@@ -515,6 +518,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       weights: COMPOSITE_WEIGHTS,
       runTargetDoublings: RUN_SIZE_TARGET_DOUBLINGS,
       tenXTargetPct: TEN_X_TARGET_RATE * 100,
+      catchTargetPct: CATCH_TARGET_RATE * 100,
       livePivotCalls: BACKTEST_EVIDENCE_CAP,
       priorCalls: PRIOR_CALLS,
       minLiveCallsToRank: MIN_LIVE_CALLS_TO_RANK,
@@ -523,8 +527,10 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
         `The score is how far a model has proven itself toward the goal, 0-100: ${Math.round(COMPOSITE_WEIGHTS.winRate * 100)} points ` +
         `for its 2x rate against ${env.CURATED_TARGET_WIN_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.goalRate * 100)} for its 4x rate against ` +
         `${env.CURATED_TARGET_GOAL_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.tenXRate * 100)} for its rate of 10x within an hour against ` +
-        `${TEN_X_TARGET_RATE * 100}%, and ${Math.round(COMPOSITE_WEIGHTS.runSize * 100)} for run size: how far its calls ran over 24h, ` +
-        `in doublings per call, against ${RUN_SIZE_TARGET_DOUBLINGS} (a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average). Rates and run size are proven, not raw: ${PRIOR_CALLS} extra calls count as misses, so a short streak ` +
+        `${TEN_X_TARGET_RATE * 100}%, ${Math.round(COMPOSITE_WEIGHTS.runSize * 100)} for run size: how far its calls ran over 24h, ` +
+        `in doublings per call, against ${RUN_SIZE_TARGET_DOUBLINGS} (a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average), and ${Math.round(COMPOSITE_WEIGHTS.catchRate * 100)} for catching runners: ` +
+        `the share of the tokens that doubled in its backtest that it called, against ${CATCH_TARGET_RATE * 100}%. ` +
+        `Rates and run size are proven, not raw: ${PRIOR_CALLS} extra calls count as misses, so a short streak ` +
         `can't score like a long record. The backtest counts for at most ${BACKTEST_EVIDENCE_CAP} calls' worth; live calls take over from there. ` +
         `Models with fewer than ${MIN_LIVE_CALLS_TO_RANK} graded live calls are still warming up and rank below the rest.`,
     },

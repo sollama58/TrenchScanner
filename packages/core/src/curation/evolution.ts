@@ -594,8 +594,9 @@ export interface BootstrapRows {
  * in which the challenger's call record scores higher than the lane's. Both sides are given as
  * their call masks over the same rows - "would it have called row i" - so the comparison is
  * paired: both see the same lucky and unlucky rows in every resample. Each resample is scored
- * with recordScore, the exam's own score, on all four of its parts (2x, 4x, 10x and run size),
- * so a challenger that out-examines a lane on run size is judged on that too. Null when either
+ * with recordScore, the exam's own score, on all five of its parts (2x, 4x, 10x, run size and
+ * catch rate, here counted per winning moment drawn rather than per token), so a challenger that
+ * out-examines a lane on run size or on runners caught is judged on that too. Null when either
  * side called nothing (no record to compare).
  */
 export function pairedBootstrapConfidence(
@@ -623,8 +624,15 @@ export function pairedBootstrapConfidence(
     const l = bootstrapRecord(tenX !== undefined);
     for (let k = 0; k < n; k++) {
       const i = Math.floor(rng() * n);
-      if (!challengerCalls[i] && !laneCalls[i]) continue;
       const label = labels[i]!;
+      // Every drawn winning moment is a runner both sides could have caught.
+      if (label > 0) {
+        c.runnersSeen! += 1;
+        l.runnersSeen! += 1;
+        if (challengerCalls[i]) c.runnersCaught! += 1;
+        if (laneCalls[i]) l.runnersCaught! += 1;
+      }
+      if (!challengerCalls[i] && !laneCalls[i]) continue;
       const run = runs === undefined ? label : runs[i]!;
       const ten = tenX === undefined ? undefined : tenX[i]!;
       if (challengerCalls[i]) add(c, label, run, ten);
@@ -638,7 +646,16 @@ export function pairedBootstrapConfidence(
 }
 
 function bootstrapRecord(tracksTenX: boolean): CallRecord {
-  const record: CallRecord = { calls: 0, graded: 0, wins: 0, goals: 0, sumLabel: 0, sumRun: 0 };
+  const record: CallRecord = {
+    calls: 0,
+    graded: 0,
+    wins: 0,
+    goals: 0,
+    sumLabel: 0,
+    sumRun: 0,
+    runnersSeen: 0,
+    runnersCaught: 0,
+  };
   if (tracksTenX) {
     record.tenX = 0;
     record.tenXGraded = 0;

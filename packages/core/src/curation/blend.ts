@@ -12,7 +12,7 @@ import {
   type TrainingRow,
 } from "./trainer.js";
 import { addCall, examRecord, quantileTable, rankFromQuantiles, type StackedMember } from "./stacking.js";
-import type { CallRecord } from "./leaderboard.js";
+import { noteRunners, type CallRecord } from "./leaderboard.js";
 
 /**
  * The Blend contestant: the members' confidence ranks averaged, nothing fitted. The consensus
@@ -194,8 +194,12 @@ export function examUnfittedScores(
       anchorAt: reference[i]!.anchorAt,
     }));
     if (others.length === 0) continue;
+    const graded = chunk.indexes.map((i) => reference[i]!);
     const cutoff = calibrateThresholdForPrecision(others, input.targets, { cooldownMs }).threshold;
-    if (cutoff === null) continue;
+    if (cutoff === null) {
+      noteRunners(exam, graded, []);
+      continue;
+    }
     const budget = paceBudget(input.targetPerHour, chunk.spanHours);
     const sent = applyCooldown(
       chunk.indexes.flatMap((i) => (s[i]! >= cutoff ? [{ row: reference[i]!, confidence: s[i]! }] : [])),
@@ -204,6 +208,11 @@ export function examUnfittedScores(
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, budget);
     for (const { row } of sent) addCall(exam, row);
+    noteRunners(
+      exam,
+      graded,
+      sent.map((s) => s.row),
+    );
   }
   return { exam, examChunks: chunks.length };
 }

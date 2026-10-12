@@ -19,6 +19,7 @@ import {
   TEN_X_WINDOW_MINUTES,
 } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
+import { emptyRecord, noteRunners } from "./leaderboard.js";
 import {
   BOOSTED_MODEL_KIND,
   boostedContributions,
@@ -752,6 +753,13 @@ export interface PrecisionTargets {
    */
   minSupportShare?: number;
   /**
+   * When no cutoff meets the targets, how far (as a fraction, 0.02 = 2 points) below the best 2x
+   * lower bound a looser cutoff may sit and still be chosen for sending more calls. The best-record
+   * rule alone values hit rate only, so it picks the narrowest slice that wins slightly more often
+   * and lets the runners outside it slip by. 0 or omitted = the best record alone.
+   */
+  coverageTolerance?: number;
+  /**
    * How sure a cutoff's record must make us, as a normal z-score: a cutoff qualifies only when
    * the Wilson lower bound of its hit rates (not the rates themselves) meets the targets. Picking
    * the lowest of hundreds of candidate cutoffs that happens to show 75% on the evidence is a
@@ -824,7 +832,9 @@ interface CutoffRecord {
  *    ties. The bound, rather than the raw rate, keeps "best" from meaning "the luckiest 30
  *    calls": it favours a strong rate on many alerts over a slightly stronger one on barely
  *    enough. The feed then sends its best calls, and the stored record shows how far they are
- *    from the targets.
+ *    from the targets. With coverageTolerance, the loosest cutoff whose 2x bound is within that
+ *    much of the best one is chosen instead: hit rate barely moves between the top 5% and top 30%
+ *    of moments, so the best record alone tends to be a narrow slice that lets runners slip by.
  */
 function chooseCutoff(records: CutoffRecord[], targets: PrecisionTargets): PrecisionCalibration {
   const point = (r: CutoffRecord, meets: boolean): PrecisionCalibration => ({
@@ -853,6 +863,14 @@ function chooseCutoff(records: CutoffRecord[], targets: PrecisionTargets): Preci
     if (score[0]! > bestScore[0]! || (score[0] === bestScore[0] && score[1]! > bestScore[1]!)) {
       best = r;
       bestScore = score;
+    }
+  }
+  // Catching runners counts too: the loosest cutoff whose 2x lower bound is within
+  // coverageTolerance of the best one sends more of the runners for about the same hit rate.
+  const tolerance = targets.coverageTolerance ?? 0;
+  if (tolerance > 0) {
+    for (const r of judged) {
+      if (r.n > best.n && wilsonLowerBound(r.wins, r.n, z) >= bestScore[0]! - tolerance) best = r;
     }
   }
   return point(best, false);
@@ -1107,6 +1125,12 @@ export interface FoldSide {
    * Absent on older stored folds.
    */
   tenXGraded?: number;
+  /**
+   * Runners in the fold (distinct tokens that doubled at a graded moment) and how many of them
+   * this side called at a winning moment - its catch rate (leaderboard.ts). Absent on older stored folds.
+   */
+  runnersSeen?: number;
+  runnersCaught?: number;
 }
 
 export interface EvalFold {
@@ -1304,8 +1328,10 @@ export function isDecisionRow(row: TrainingRow, band?: McapBand): boolean {
   );
 }
 
-function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
+function sideMetrics(emittedRows: TrainingRow[], spanHours: number, graded: TrainingRow[]): FoldSide {
   const emitted = emittedRows.length;
+  const runners = emptyRecord();
+  noteRunners(runners, graded, emittedRows);
   const wins = emittedRows.filter((r) => r.labelValue > 0).length;
   const goals = emittedRows.filter((r) => r.labelValue >= GOAL_LABEL).length;
   return {
@@ -1317,6 +1343,8 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number): FoldSide {
     sumRun: emittedRows.reduce((s, r) => s + runDoublings(r), 0),
     tenX: emittedRows.filter((r) => r.hit10x === true).length,
     tenXGraded: emittedRows.filter((r) => r.labelValue <= 0 || r.hit10x !== undefined).length,
+    runnersSeen: runners.runnersSeen!,
+    runnersCaught: runners.runnersCaught!,
   };
 }
 
@@ -1561,8 +1589,8 @@ export async function walkForwardEvaluate(
         testEmittable.length > 0
           ? testEmittable.reduce((s, r) => s + r.labelValue, 0) / testEmittable.length
           : 0,
-      model: sideMetrics(modelSent, fold.spanHours),
-      heuristic: sideMetrics(takeBest(heuristicCalls), fold.spanHours),
+      model: sideMetrics(modelSent, fold.spanHours, testEmittable),
+      heuristic: sideMetrics(takeBest(heuristicCalls), fold.spanHours, testEmittable),
     };
   });
 

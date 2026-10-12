@@ -5,6 +5,7 @@ import {
   emptyRecord,
   explainScore,
   marketLift,
+  noteRunners,
   pooledRecord,
   rankByComposite,
   rankByMarketLift,
@@ -22,6 +23,11 @@ function record(graded: number, wins: number, goals: number, avgLabel: number, t
   return { calls: graded, graded, wins, goals, tenX, sumLabel: avgLabel * graded };
 }
 
+/** The same with the runners its exam saw and caught. */
+function examined(base: CallRecord, runnersSeen: number, runnersCaught: number): CallRecord {
+  return { ...base, runnersSeen, runnersCaught };
+}
+
 describe("recordScore", () => {
   it("is null with nothing graded", () => {
     expect(recordScore(emptyRecord(), targets)).toBeNull();
@@ -30,8 +36,9 @@ describe("recordScore", () => {
   it("is 100 for a long record that meets every target, and no more for beating them", () => {
     expect(recordScore(record(1000, 900, 700, 2.5, 300), targets)).toBe(100);
     expect(recordScore(record(1000, 1000, 1000, 3, 1000), targets)).toBe(100);
+    expect(recordScore(examined(record(1000, 900, 700, 2.5, 300), 1000, 600), targets)).toBe(100);
     // Without a single 10x it can't: that part is 10 of the 100.
-    expect(recordScore(record(1000, 900, 700, 2.5), targets)).toBe(90);
+    expect(recordScore(examined(record(1000, 900, 700, 2.5), 1000, 600), targets)).toBe(90);
   });
 
   it("discounts a short perfect streak below a long good record", () => {
@@ -40,8 +47,12 @@ describe("recordScore", () => {
     expect(streak).toBeLessThan(steady);
     // 3 of 3 proves 3 / (3 + 10) = 23% of each rate.
     expect(scoreParts(record(3, 3, 3, 3), targets)).toMatchObject({ proven2xPct: 23.1, proven4xPct: 23.1 });
-    // 3 of 3 averaging 3 doublings proves 9 / 13 = 0.69 doublings a call.
-    expect(streak).toBeCloseTo(50 * (23.1 / 75) + 30 * (23.1 / 50) + 10 * (23.1 / 25) + 10 * (0.69 / 2), 0);
+    // 3 of 3 averaging 3 doublings proves 9 / 13 = 0.69 doublings a call. No catch rate tracked:
+    // the other parts are scaled to 100.
+    expect(streak).toBeCloseTo(
+      (40 * (23.1 / 75) + 25 * (23.1 / 50) + 10 * (23.1 / 25) + 10 * (0.69 / 2)) / 0.85,
+      0,
+    );
     expect(steady).toBeGreaterThan(90);
   });
 
@@ -55,8 +66,9 @@ describe("recordScore", () => {
     const short = recordScore(record(100, 40, 20, 0.5), targets)!;
     const long = recordScore(record(100, 40, 20, 1.5), targets)!;
     expect(long).toBeGreaterThan(short);
-    // 0.5 vs 1.5 doublings a call over 110 proven calls: 10 × (1 / 1.1) / 2 ≈ 4.5 points apart.
-    expect(long - short).toBeCloseTo(4.5, 0);
+    // 0.5 vs 1.5 doublings a call over 110 proven calls: 10 × (1 / 1.1) / 2 ≈ 4.5 points apart,
+    // scaled by 1 / 0.85 without a catch rate.
+    expect(long - short).toBeCloseTo(4.5 / 0.85, 0);
   });
 
   it("reads run size from sumRun when the record tracks it, sumLabel otherwise", () => {
@@ -71,22 +83,72 @@ describe("recordScore", () => {
     expect(scoreParts({ ...record(1000, 0, 0, 0), sumRun: 6000 }, targets)!.pointsRun).toBe(10);
   });
 
-  it("is 50 points of 2x rate, 30 of 4x rate, 10 of 10x rate and 10 of run size, each the proven share of its target", () => {
-    const parts = scoreParts(record(400, 300, 100, 1, 20), targets)!;
+  it("is 40 points of 2x rate, 25 of 4x rate, 10 of 10x rate, 10 of run size and 15 of catch rate, each the proven share of its target", () => {
+    const exam = examined(record(400, 300, 100, 1, 20), 100, 40);
+    const parts = scoreParts(exam, targets)!;
     // 75% raw on 400 calls proves 300/410 = 73%; 25% raw proves 24%; 1 doubling a call proves 0.98.
     expect(parts.proven2xPct).toBeGreaterThan(70);
     expect(parts.proven2xPct).toBeLessThan(75);
-    expect(parts.points2x).toBeCloseTo(50 * (parts.proven2xPct / 75), 0);
-    expect(parts.points4x).toBeCloseTo(30 * (parts.proven4xPct / 50), 0);
+    expect(parts.points2x).toBeCloseTo(40 * (parts.proven2xPct / 75), 0);
+    expect(parts.points4x).toBeCloseTo(25 * (parts.proven4xPct / 50), 0);
     expect(parts.provenRunDoublings).toBeCloseTo(400 / 410, 2);
     expect(parts.pointsRun).toBeCloseTo(10 * (parts.provenRunDoublings / 2), 0);
     // 20 of 400 proves 20/410 = 4.9% against the 25% target.
     expect(parts.proven10xPct).toBeCloseTo(4.9, 1);
     expect(parts.points10x).toBeCloseTo(10 * (parts.proven10xPct / 25), 0);
-    expect(recordScore(record(400, 300, 100, 1, 20), targets)).toBeCloseTo(
-      parts.points2x + parts.points4x + parts.points10x + parts.pointsRun,
+    // 40 of 100 runners caught proves 40/110 = 36.4% against the 50% target.
+    expect(parts.provenCatchPct).toBeCloseTo(36.4, 1);
+    expect(parts.pointsCatch!).toBeCloseTo(15 * (36.4 / 50), 0);
+    expect(recordScore(exam, targets)).toBeCloseTo(
+      parts.points2x + parts.points4x + parts.points10x + parts.pointsRun + parts.pointsCatch!,
       1,
     );
+  });
+
+  it("scores letting runners slip by: the same hit rates catching more runners score higher", () => {
+    // The narrow model's 120 calls and the broad one's 400 hit at the same rates; the broad one
+    // caught 60 of 100 runners, the narrow one 18.
+    const narrow = recordScore(examined(record(120, 36, 12, 0.6, 3), 100, 18), targets)!;
+    const broad = recordScore(examined(record(400, 120, 40, 0.6, 10), 100, 60), targets)!;
+    expect(broad).toBeGreaterThan(narrow + 5);
+  });
+
+  it("scores a record that doesn't track runners on the other parts, scaled to 100", () => {
+    const parts = scoreParts(record(400, 300, 100, 1, 20), targets)!;
+    expect(parts.pointsCatch).toBeNull();
+    expect(recordScore(record(400, 300, 100, 1, 20), targets)).toBeCloseTo(
+      (parts.points2x + parts.points4x + parts.points10x + parts.pointsRun) / 0.85,
+      1,
+    );
+  });
+});
+
+describe("noteRunners", () => {
+  it("counts distinct tokens that doubled, among the graded rows and among the calls", () => {
+    const rec = emptyRecord();
+    const graded = [
+      { labelValue: 1, tokenId: "a" },
+      { labelValue: 2, tokenId: "a" },
+      { labelValue: 1, tokenId: "b" },
+      { labelValue: 0, tokenId: "c" },
+      { labelValue: 1, tokenId: "d" },
+    ];
+    // A call on "c" (no run) and on "b" at a winning moment: one runner caught of three.
+    noteRunners(rec, graded, [graded[2]!, graded[3]!]);
+    expect(rec).toMatchObject({ runnersSeen: 3, runnersCaught: 1 });
+    // A slice with no cutoff still adds its runners, all missed.
+    noteRunners(rec, [{ labelValue: 1, tokenId: "e" }], []);
+    expect(rec).toMatchObject({ runnersSeen: 4, runnersCaught: 1 });
+  });
+});
+
+describe("pooledRecord and the catch rate", () => {
+  it("carries the backtest's catch rate unscaled, since live records have none", () => {
+    const live = record(200, 60, 20, 0.6, 5);
+    const exam = examined(record(600, 180, 60, 0.6, 15), 150, 75);
+    const { record: pooled } = pooledRecord(live, exam);
+    expect(pooled).toMatchObject({ runnersSeen: 150, runnersCaught: 75 });
+    expect(pooledRecord(live, record(600, 180, 60, 0.6)).record.runnersSeen).toBeUndefined();
   });
 });
 

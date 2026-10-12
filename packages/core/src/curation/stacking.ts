@@ -19,7 +19,7 @@ import {
   type ServedCuratorExtras,
   type TrainingRow,
 } from "./trainer.js";
-import { emptyRecord, GOAL_LABEL, type CallRecord } from "./leaderboard.js";
+import { emptyRecord, GOAL_LABEL, noteRunners, type CallRecord } from "./leaderboard.js";
 
 /**
  * The consensus contestant: a second-order model whose inputs are the other contestants' calls.
@@ -362,7 +362,10 @@ export async function trainStackedCurator(
     const others = judged.filter((_, j) => j !== k);
     if (others.length === 0) continue;
     const cutoff = calibrateThresholdForPrecision(calls(others), input.targets, { cooldownMs }).threshold;
-    if (cutoff === null) continue;
+    if (cutoff === null) {
+      noteRunners(exam, chunk.rows, []);
+      continue;
+    }
     const budget = paceBudget(input.targetPerHour, chunk.spanHours);
     const sent = applyCooldown(
       chunk.rows.flatMap((row, i) =>
@@ -373,6 +376,11 @@ export async function trainStackedCurator(
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, budget);
     for (const { row } of sent) addCall(exam, row);
+    noteRunners(
+      exam,
+      chunk.rows,
+      sent.map((s) => s.row),
+    );
   }
 
   const meta = await train(metaRows);
@@ -406,7 +414,7 @@ export async function trainStackedCurator(
 
 /** An empty exam record that tracks every part of the score, for addCall to fill. */
 export function examRecord(): CallRecord {
-  return { ...emptyRecord(), tenX: 0, tenXGraded: 0, sumRun: 0 };
+  return { ...emptyRecord(), tenX: 0, tenXGraded: 0, sumRun: 0, runnersSeen: 0, runnersCaught: 0 };
 }
 
 /**
