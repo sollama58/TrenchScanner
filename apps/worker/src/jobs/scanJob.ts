@@ -98,6 +98,8 @@ import {
   type CuratedCycle,
 } from "./curatedAlerts.js";
 
+import type { BandEntryWatch } from "../bandEntryWatch.js";
+
 const logger = createLogger("scan-job");
 
 /** How many candidates get their own DB writes + rug/match processing in flight at once. Safe to
@@ -130,6 +132,8 @@ export interface ScanDeps {
    * misses (LiveLaunchQuotes). Optional: unset, every mint is read from DexScreener alone.
    */
   liveLaunches?: LaunchQuoteSource & { takeStats?(): LiveLaunchStats };
+  /** Starts the next cycle early when a young launch crosses into the band (BandEntryWatch). */
+  bandEntryWatch?: Pick<BandEntryWatch, "note" | "takeStats">;
   rugCheck: RugCheckClient;
   helius: HeliusClient;
   /** The live PumpPortal launch/graduation feed, drained once per cycle. Optional: off when unset. */
@@ -542,6 +546,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   let candidates: CandidateToken[];
   let refreshPartial: boolean;
   let refreshedMarketData: CandidateToken[];
+  const live = liveLaunchSource(deps.liveLaunches, tracked);
   try {
     const refreshed = await refreshAndFilterToBand(
       deps.dexScreener,
@@ -550,9 +555,15 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
         mcapMin: env.MCAP_FILTER_MIN,
         mcapMax: env.MCAP_FILTER_MAX,
         newestLaunches: newestLaunches(tracked),
-        liveLaunches: liveLaunchSource(deps.liveLaunches, tracked),
+        liveLaunches: live,
       },
     );
+    // The young launches just under the floor, for the watch that starts the next cycle early when
+    // one crosses (see BandEntryWatch).
+    if (deps.bandEntryWatch && live) {
+      const young = new Set(live.mints);
+      deps.bandEntryWatch.note(refreshed.marketData.filter((t) => young.has(t.mintAddress)));
+    }
     candidates = refreshed.inBand;
     refreshPartial = refreshed.partial;
     refreshedMarketData = refreshed.marketData;
@@ -1004,6 +1015,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const jupiterCalls = deps.jupiter?.takeCallStats();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
   const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
+  // Band-entry checks between cycles, and the cycles they started early (this one among them).
+  const bandEntryWatch = deps.bandEntryWatch?.takeStats();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
@@ -1022,6 +1035,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
     ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
+    ...(bandEntryWatch ? { bandEntryWatch: { ...bandEntryWatch } } : {}),
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,
