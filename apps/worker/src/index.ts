@@ -22,6 +22,7 @@ import {
   workerConfigMeta,
   type HeartbeatJob,
 } from "@trenchscanner/core";
+import { BAND_ENTRY_CHECK_MS, BandEntryWatch } from "./bandEntryWatch.js";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob, repairOutcomeBookkeeping } from "./jobs/outcomeTrackingJob.js";
@@ -131,6 +132,8 @@ async function main() {
     priceLookup: jupiter ? new JupiterFirstLookup(jupiter, dexScreener) : dexScreener,
     // The newest launches' live prices in the band refresh: Jupiter, CoinGecko for what it misses.
     liveLaunches: jupiter ? new LiveLaunchQuotes(jupiter, geckoTerminal) : undefined,
+    // Starts the scan early when a young launch crosses into the band between cycles.
+    bandEntryWatch: jupiter ? new BandEntryWatch(jupiter, env.MCAP_FILTER_MIN) : undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     stream,
@@ -166,6 +169,16 @@ async function main() {
       {
         deadlineMinutes: 20,
         failureMeta: () => ({ ...scanFailureMeta(), ...configMeta }),
+        // A young launch crossing into the band starts the next cycle now, not up to 30 s later.
+        ...(deps.bandEntryWatch
+          ? {
+              runEarly: {
+                everyMs: BAND_ENTRY_CHECK_MS,
+                quiet: true,
+                due: () => deps.bandEntryWatch!.due(),
+              },
+            }
+          : {}),
       },
     ),
   );
