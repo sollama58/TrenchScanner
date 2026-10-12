@@ -86,6 +86,22 @@ describe("parseJupiterQuotes", () => {
 describe("JupiterClient", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("gives no fresh quotes, at once, while Jupiter rate-limits us - the decision goes ahead on DexScreener's price", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", () => {
+      calls += 1;
+      return Promise.resolve(new Response("slow down", { status: 429, headers: { "retry-after": "30" } }));
+    });
+    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 6000 });
+    const mints = Array.from({ length: 250 }, (_, i) => `m${i}`);
+    expect((await client.getFreshQuotes(mints, { deadlineMs: 2_500 })).size).toBe(0);
+    // The next cycle doesn't wait out the pause or call again: it gives up on the spot.
+    const startedAt = Date.now();
+    expect((await client.getFreshQuotes(mints, { deadlineMs: 2_500 })).size).toBe(0);
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(calls).toBeLessThanOrEqual(3);
+  });
+
   it("gives fresh quotes stamped with when they arrived, and nothing for an answer past the deadline", async () => {
     vi.stubGlobal("fetch", (url: string) => {
       const list = decodeURIComponent(url.split("query=")[1]!).split(",");
