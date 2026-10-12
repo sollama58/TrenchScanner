@@ -40,10 +40,57 @@ describe("export query", () => {
       copyOf: [{ name: "Peanut the Squirrel", ticker: "PNUT", mint: "abc", recent: true }],
       tickerExplanation: null,
       xText: "gm",
+      xPostedAt: null,
+      xLikes: null,
+      xReposts: null,
+      xReplies: null,
+      xQuotes: null,
+      xViews: null,
+      xEngagementAsOf: null,
+      xQuotedViews: null,
+      xMediaCount: null,
+      referentPostId: null,
+      lineageSameTicker: null,
+      timedOut: [],
     });
     expect(narrativeText(null).copyOf).toEqual([]);
     expect(exportQuerySchema.parse({ dataset: "narratives" }).dataset).toBe("narratives");
     expect(csvColumns("narratives")).toContain("referentLabel");
+  });
+
+  it("pulls the X post's engagement and the newer read fields (TokenSage rules 0.30.0+)", () => {
+    const t = narrativeText({
+      referent: { label: "Woods the Tiger", post_id: "1977" },
+      lineage: { same_ticker: 3 },
+      timed_out: ["x_media", 7],
+      x: {
+        created_at: "2026-10-12T03:00:00Z",
+        engagement: {
+          likes: 120,
+          reposts: 14,
+          replies: 9,
+          quotes: null,
+          views: 40000,
+          as_of: "2026-10-12T03:20:00Z",
+        },
+        quoted: { engagement: { views: 900 } },
+        media: [{ kind: "photo" }],
+      },
+    });
+    expect(t).toMatchObject({
+      xPostedAt: "2026-10-12T03:00:00Z",
+      xLikes: 120,
+      xReposts: 14,
+      xReplies: 9,
+      xQuotes: null,
+      xViews: 40000,
+      xEngagementAsOf: "2026-10-12T03:20:00Z",
+      xQuotedViews: 900,
+      xMediaCount: 1,
+      referentPostId: "1977",
+      lineageSameTicker: 3,
+      timedOut: ["x_media"],
+    });
   });
 
   it("quotes CSV cells only when it has to", () => {
