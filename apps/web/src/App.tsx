@@ -28,7 +28,6 @@ import {
   loadSettingsTab,
   loadSignIn,
   loaded,
-  STREAM_HASH,
   streamFromHash,
   tabFromHash,
   type Tab,
@@ -39,7 +38,7 @@ import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
-import { StreamSwitch, StreamView } from "./components/StreamView";
+import { StreamButton, StreamView } from "./components/StreamView";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -86,7 +85,8 @@ export function App() {
     return isGuest() ? { state: "guest" } : { state: "loading" };
   });
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
-  // The Stream's focus mode (#stream). The tab underneath is kept, so switching back returns to it.
+  // The Stream (#stream): its own window's whole page. Opened in an ordinary tab instead, its bar
+  // leads back to the tab underneath.
   const [wantsStream, setStream] = useState(streamFromHash);
   const sageMint = useSageMint();
 
@@ -171,12 +171,6 @@ export function App() {
     window.location.hash = t === "live" ? "" : t;
     setTab(t);
     setStream(false);
-    window.scrollTo({ top: 0 });
-  };
-
-  const openStream = () => {
-    window.location.hash = STREAM_HASH;
-    setStream(true);
     window.scrollTo({ top: 0 });
   };
 
@@ -288,7 +282,7 @@ export function App() {
             </nav>
           )}
           <div className="topbar-right">
-            {signedIn && <StreamSwitch on={false} onToggle={openStream} />}
+            {signedIn && <StreamButton />}
             <WorkerStatus showJobs={isAdmin} />
             {guest && (
               <button className="button primary connect-btn" onClick={connectWallet}>

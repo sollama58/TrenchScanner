@@ -6,7 +6,7 @@ import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { AlertCard } from "./AlertCard";
 import { SkeletonCards } from "./Charts";
 import { CustomizeDrawer } from "./CustomizeDrawer";
-import { LogoMark, PaletteIcon, PopOutIcon, RadarIcon, StreamIcon } from "./Icons";
+import { ArrowRightIcon, LogoMark, PaletteIcon, PopOutIcon, RadarIcon } from "./Icons";
 
 /** How often the Stream asks for new arrivals. The scan writes a cycle's verdicts about a minute apart. */
 const STREAM_POLL_MS = 10_000;
@@ -26,8 +26,10 @@ export function popOutStream() {
 
 /**
  * The Stream: every new token the moment it has passed the safety screen inside the band, newest
- * first, drawn with the Live feed's cards and the reader's own card settings. A focus mode: the
- * header and tabs give way to one slim bar holding the switch back.
+ * first, drawn with the Live feed's cards and the reader's own card settings. It opens in a window
+ * of its own (the header's Stream button), where the header and tabs give way to one slim bar.
+ * Opened in an ordinary tab instead (a browser that won't make popups, or a #stream link), the bar
+ * also offers the way back to the dashboard.
  */
 export function StreamView({ onExit }: { onExit: () => void }) {
   const now = useNow(5_000);
@@ -63,17 +65,11 @@ export function StreamView({ onExit }: { onExit: () => void }) {
             <span className="stream-btn-label">Customize</span>
           </button>
           {!popup && (
-            <button
-              type="button"
-              className="ghost stats-btn stream-popout"
-              onClick={popOutStream}
-              title="Open the Stream in its own window"
-            >
-              <PopOutIcon size={14} />
-              <span className="stream-btn-label">Pop out</span>
+            <button type="button" className="ghost stats-btn" onClick={onExit} title="Back to the dashboard">
+              <span className="stream-btn-label">Dashboard</span>
+              <ArrowRightIcon size={13} />
             </button>
           )}
-          <StreamSwitch on onToggle={onExit} label />
         </span>
       </div>
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
@@ -99,31 +95,17 @@ export function StreamView({ onExit }: { onExit: () => void }) {
   );
 }
 
-/** The Stream's on/off switch: in the header to go in, on the Stream's own bar to come back out. */
-export function StreamSwitch({
-  on,
-  onToggle,
-  label = false,
-}: {
-  on: boolean;
-  onToggle: () => void;
-  label?: boolean;
-}) {
+/** The header's way to the Stream: opens it in a window of its own. */
+export function StreamButton() {
   return (
     <button
       type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label="Stream"
-      className={`switch stream-switch${on ? " on" : ""}`}
-      onClick={onToggle}
-      title={on ? "Back to the dashboard" : "Only the Stream of new tokens, full screen"}
+      className="ghost stats-btn stream-open"
+      onClick={popOutStream}
+      title="Open the Stream of new tokens in its own window"
     >
-      <span className="switch-track">
-        <span className="switch-thumb" />
-      </span>
-      <StreamIcon size={15} className="stream-switch-icon" />
-      {label && <span className="stream-switch-label">Stream</span>}
+      <PopOutIcon size={14} />
+      <span>Stream</span>
     </button>
   );
 }
