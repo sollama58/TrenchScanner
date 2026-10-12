@@ -101,6 +101,29 @@ describe("graduation time", () => {
   });
 });
 
+describe("pumpSwapGraduation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the mint's own PumpSwap pool from the per-token pairs, and null without one", async () => {
+    const pairs = [
+      { chainId: "solana", dexId: "pumpfun", baseToken: { address: "m" }, pairCreatedAt: 1_000 },
+      { chainId: "solana", dexId: "pumpswap", baseToken: { address: "m" }, pairCreatedAt: 1_000 },
+      { chainId: "solana", dexId: "pumpswap", baseToken: { address: "other" }, pairCreatedAt: 500 },
+    ];
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      return Promise.resolve(new Response(JSON.stringify(url.endsWith("/m") ? pairs : [pairs[0]])));
+    });
+    const client = new DexScreenerClient();
+    expect(await client.pumpSwapGraduation("m")).toEqual(new Date(1_000));
+    expect(await client.pumpSwapGraduation("n")).toBeNull();
+    expect(urls[0]).toMatch(/\/token-pairs\/v1\/solana\/m$/);
+  });
+});
+
 describe("getTokensByAddresses deadline", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

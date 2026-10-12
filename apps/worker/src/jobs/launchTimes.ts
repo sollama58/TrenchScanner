@@ -1,102 +1,193 @@
-import { createLogger, forEachWithConcurrency, type Env, type PumpFunClient } from "@trenchscanner/core";
+import {
+  createLogger,
+  forEachWithConcurrency,
+  type DexScreenerClient,
+  type Env,
+  type PumpFunClient,
+} from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
 
 const logger = createLogger("launch-times");
 
 /**
  * How long each graduated candidate spent on its bonding curve, for the safety screen's pre-bond
- * cut (SAFETY_MIN_PREBOND_SECONDS): launch to graduation. Graduation is the PumpSwap pool's
- * creation time from the DexScreener pairs the scan already fetches (CandidateToken.graduatedAt);
- * launch is Pump.fun's created_timestamp, taken from the discovery lists for free
- * (rememberLaunchTimes) and otherwise asked of Pump.fun once per mint. A launch time never
- * changes, so answers are kept for good; failures back off and are never cached.
+ * cut (SAFETY_MIN_PREBOND_SECONDS): launch to graduation. Both ends never change, so answers are
+ * kept for good; failed lookups back off and are never cached.
  *
- * Most graduated tokens never need the lookup: the first time the scanner knew of a mint is never
- * before its launch, so a mint known a full floor before its graduation clears the cut as is.
+ * Graduation, first source that has it:
+ *  - the PumpSwap pool's creation time in the DexScreener pairs the scan already fetches
+ *    (CandidateToken.graduatedAt);
+ *  - the PumpPortal stream's migration event (rememberGraduations);
+ *  - DexScreener's per-token pairs, asked once for a curve that looks bought out (see
+ *    looksBoughtOut). A coin whose curve filled in its launch second is the case all three exist
+ *    for: DexScreener's batch lookup goes on listing only its frozen curve, so the scan read it as
+ *    a pre-bond token at the graduation price and the cut never saw it graduate (2026-10-11: six
+ *    such coins, 57 calls).
+ *
+ * Launch: the curve pair's own creation time, Pump.fun's created_timestamp from the discovery
+ * lists (rememberLaunchTimes), and otherwise Pump.fun asked once per mint. Most graduated tokens
+ * never need that lookup: the first time the scanner knew of a mint is never before its launch,
+ * so a mint known a full floor before its graduation clears the cut as is.
  */
 const launches = new Map<string, number | null>();
+const graduations = new Map<string, number>();
 const CACHE_MAX = 50_000;
-const failureBackoff = new FailureBackoff();
+const launchBackoff = new FailureBackoff();
+const graduationBackoff = new FailureBackoff();
 const LOOKUP_CONCURRENCY = 4;
+const POOL_RECHECK_MINUTES = 3;
 
 /** Test hook. */
 export function resetLaunchTimes(): void {
   launches.clear();
-  failureBackoff.clear();
+  graduations.clear();
+  launchBackoff.clear();
+  graduationBackoff.clear();
 }
 
-function remember(mint: string, launchMs: number | null): void {
-  if (!launches.has(mint) && launches.size >= CACHE_MAX) {
-    // Oldest first (insertion order): the mints launched longest ago are the least likely to
-    // graduate now.
-    const drop = launches.size - CACHE_MAX + 1 + Math.floor(CACHE_MAX / 10);
+function remember<V>(map: Map<string, V>, mint: string, ms: V): void {
+  if (!map.has(mint) && map.size >= CACHE_MAX) {
+    // Oldest first (insertion order): the mints seen longest ago are the least likely to matter now.
+    const drop = map.size - CACHE_MAX + 1 + Math.floor(CACHE_MAX / 10);
     let n = 0;
-    for (const key of launches.keys()) {
+    for (const key of map.keys()) {
       if (n++ >= drop) break;
-      launches.delete(key);
+      map.delete(key);
     }
   }
-  launches.set(mint, launchMs);
+  map.set(mint, ms);
 }
+
+const validMs = (d: Date | undefined): number | undefined => {
+  const ms = d?.getTime();
+  return typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : undefined;
+};
 
 /** Seeds launch times the discovery lists already carry (Pump.fun's created_timestamp). */
 export function rememberLaunchTimes(coins: ReadonlyArray<{ mintAddress: string; createdAt?: Date }>): void {
   for (const coin of coins) {
-    const ms = coin.createdAt?.getTime();
-    if (typeof ms === "number" && Number.isFinite(ms) && launches.get(coin.mintAddress) == null) {
-      remember(coin.mintAddress, ms);
-    }
+    const ms = validMs(coin.createdAt);
+    if (ms !== undefined && launches.get(coin.mintAddress) == null) remember(launches, coin.mintAddress, ms);
   }
 }
 
+/** Seeds graduation times from the stream's migration events; the earliest seen for a mint stands. */
+export function rememberGraduations(events: ReadonlyArray<{ mintAddress: string; at: Date }>): void {
+  for (const e of events) {
+    const ms = validMs(e.at);
+    const known = graduations.get(e.mintAddress);
+    if (ms !== undefined && (known === undefined || ms < known)) remember(graduations, e.mintAddress, ms);
+  }
+}
+
+export interface PreBondCandidate {
+  mintAddress: string;
+  graduatedAt?: Date;
+  dexId?: string;
+  pairCreatedAt?: Date;
+  buys24h?: number;
+  sells24h?: number;
+}
+
 /**
- * Seconds on the curve for each graduated candidate whose launch time is known (after this cycle's
+ * A curve pair that has been bought and never sold: what DexScreener shows for a coin whose curve
+ * a bundle filled in one go and that has traded only in its pool since. Any curve still trading
+ * has sellers.
+ */
+function looksBoughtOut(c: PreBondCandidate): boolean {
+  return c.dexId === "pumpfun" && (c.buys24h ?? 0) > 0 && c.sells24h === 0;
+}
+
+/**
+ * Seconds on the curve for each graduated candidate whose two ends are known (after this cycle's
  * lookups). A mint missing from the result is unknown - or already known to clear the floor - and
  * passes the cut. `knownSince` is the earliest time the scanner knew of each mint (its watchlist
  * first-seen time), an upper bound on its launch.
  */
 export async function resolvePreBondSeconds(
-  candidates: ReadonlyArray<{ mintAddress: string; graduatedAt?: Date }>,
+  candidates: ReadonlyArray<PreBondCandidate>,
   knownSince: ReadonlyMap<string, Date | undefined>,
-  pumpFun: Pick<PumpFunClient, "launchTime">,
+  clients: {
+    pumpFun: Pick<PumpFunClient, "launchTime">;
+    dexScreener: Pick<DexScreenerClient, "pumpSwapGraduation">;
+  },
   env: Pick<Env, "SAFETY_MIN_PREBOND_SECONDS" | "PREBOND_LOOKUPS_MAX_PER_CYCLE">,
   now = Date.now(),
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   const floorMs = env.SAFETY_MIN_PREBOND_SECONDS * 1000;
   if (floorMs <= 0) return out;
+  let budget = env.PREBOND_LOOKUPS_MAX_PER_CYCLE;
 
-  const graduated = candidates.filter(
-    (c): c is { mintAddress: string; graduatedAt: Date } =>
-      c.graduatedAt instanceof Date && !Number.isNaN(c.graduatedAt.getTime()),
-  );
-  const toLookUp: string[] = [];
-  for (const c of graduated) {
-    if (launches.has(c.mintAddress)) continue;
-    const known = knownSince.get(c.mintAddress)?.getTime();
-    if (typeof known === "number" && c.graduatedAt.getTime() - known >= floorMs) continue;
-    if (failureBackoff.blocked(c.mintAddress, now)) continue;
-    if (toLookUp.length >= env.PREBOND_LOOKUPS_MAX_PER_CYCLE) continue;
-    toLookUp.push(c.mintAddress);
+  // A curve pair is created with the coin: its creation time is the launch.
+  for (const c of candidates) {
+    const ms = validMs(c.pairCreatedAt);
+    if (c.dexId === "pumpfun" && ms !== undefined && launches.get(c.mintAddress) == null) {
+      remember(launches, c.mintAddress, ms);
+    }
   }
 
+  const graduatedAt = (c: PreBondCandidate): number | undefined =>
+    validMs(c.graduatedAt) ?? graduations.get(c.mintAddress);
+
+  const poolLookups = candidates
+    .filter(
+      (c) =>
+        graduatedAt(c) === undefined && looksBoughtOut(c) && !graduationBackoff.blocked(c.mintAddress, now),
+    )
+    .slice(0, budget)
+    .map((c) => c.mintAddress);
+  budget -= poolLookups.length;
   let failed = 0;
-  await forEachWithConcurrency(toLookUp, LOOKUP_CONCURRENCY, async (mint) => {
+  await forEachWithConcurrency(poolLookups, LOOKUP_CONCURRENCY, async (mint) => {
     try {
-      const launched = await pumpFun.launchTime(mint);
-      remember(mint, launched ? launched.getTime() : null);
-      failureBackoff.succeed(mint);
+      const at = await clients.dexScreener.pumpSwapGraduation(mint);
+      if (at) {
+        remember(graduations, mint, at.getTime());
+        graduationBackoff.succeed(mint);
+      } else {
+        // No pool listed: still on its curve, or a pool DexScreener hasn't indexed yet. Asked
+        // again in a few minutes rather than settled for good.
+        graduationBackoff.fail(mint, now, POOL_RECHECK_MINUTES);
+      }
     } catch {
       failed += 1;
-      failureBackoff.fail(mint, now);
+      graduationBackoff.fail(mint, now);
     }
   });
-  failureBackoff.prune(now);
-  if (failed > 0) logger.info("launch-time lookups without an answer", { failed, asked: toLookUp.length });
 
-  for (const c of graduated) {
+  const launchLookups: string[] = [];
+  for (const c of candidates) {
+    const grad = graduatedAt(c);
+    if (grad === undefined || launches.has(c.mintAddress)) continue;
+    const known = validMs(knownSince.get(c.mintAddress));
+    if (known !== undefined && grad - known >= floorMs) continue;
+    if (launchBackoff.blocked(c.mintAddress, now) || launchLookups.length >= budget) continue;
+    launchLookups.push(c.mintAddress);
+  }
+  await forEachWithConcurrency(launchLookups, LOOKUP_CONCURRENCY, async (mint) => {
+    try {
+      const launched = await clients.pumpFun.launchTime(mint);
+      remember(launches, mint, launched ? launched.getTime() : null);
+      launchBackoff.succeed(mint);
+    } catch {
+      failed += 1;
+      launchBackoff.fail(mint, now);
+    }
+  });
+  launchBackoff.prune(now);
+  graduationBackoff.prune(now);
+  if (failed > 0) {
+    logger.info("pre-bond lookups without an answer", {
+      failed,
+      asked: poolLookups.length + launchLookups.length,
+    });
+  }
+
+  for (const c of candidates) {
+    const grad = graduatedAt(c);
     const launched = launches.get(c.mintAddress);
-    if (typeof launched === "number") out.set(c.mintAddress, (c.graduatedAt.getTime() - launched) / 1000);
+    if (grad !== undefined && typeof launched === "number") out.set(c.mintAddress, (grad - launched) / 1000);
   }
   return out;
 }

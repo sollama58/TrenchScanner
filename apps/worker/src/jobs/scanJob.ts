@@ -67,7 +67,7 @@ import { seedQuotes } from "./walletValuation.js";
 import { alertAwaitingWallets, noteAlertWallets } from "./walletPriority.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
-import { rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
+import { rememberGraduations, rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
 import { resolveMayhemMode } from "./mayhemMode.js";
 import {
   launchSnipersFromCache,
@@ -442,6 +442,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   await addNewMintsToWatchlist(discovered);
   // Pump.fun's launch times, for the safety screen's pre-bond cut (see launchTimes.ts).
   rememberLaunchTimes([...newMints, ...active, ...(koth ? [koth] : [])]);
+  rememberGraduations(streamed.filter((e) => e.kind === "migrate"));
   // TokenSage's quick read for each new launch, sent now rather than at the cycle's end so it
   // has the cycle's whole run to land (TOKENSAGE_BASIC_AT_DISCOVERY; off by default).
   const launchReads = noteLaunchNarratives(
@@ -637,7 +638,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const preBondByMint = await resolvePreBondSeconds(
     candidates.filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress))),
     firstSeenByMint,
-    deps.pumpFun,
+    { pumpFun: deps.pumpFun, dexScreener: deps.dexScreener },
     env,
   );
   lap("preBond");
