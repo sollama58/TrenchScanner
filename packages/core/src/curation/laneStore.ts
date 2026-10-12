@@ -2,7 +2,7 @@ import { Prisma, prisma } from "../db.js";
 import type { CuratorRecipe } from "./contestants.js";
 import type { Lane } from "./evolution.js";
 import { CURRENT_LABEL_RULE, LABEL_LOG2_CAP } from "./labels.js";
-import { marketLift, type CallRecord, type MarketLift } from "./leaderboard.js";
+import { liveCatch, marketLift, type CallRecord, type LiveCatch, type MarketLift } from "./leaderboard.js";
 import { walletSafetyCutsSql } from "../scoring/rugScreen.js";
 
 /**
@@ -195,6 +195,57 @@ export async function liveCallRecords(
     });
   }
   return out;
+}
+
+/**
+ * Each model's live catch rate (see liveCatch): of the tokens that doubled cleanly from a graded
+ * market moment or a seat's call since its own start, the share it called at a winning moment;
+ * and the same for every seat together. Over the same seats and calls liveCallRecords counts, and
+ * the same market liveMarketLift reads.
+ */
+export async function liveCatchRates(
+  models: readonly string[],
+  since: Date,
+  lanes: readonly Lane[],
+): Promise<{ byModel: Map<string, LiveCatch>; field: LiveCatch }> {
+  const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
+  const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
+  const froms = new Map(
+    models.map((model) => {
+      const born = bornAt.get(model);
+      return [model, born && born > since ? born : since] as const;
+    }),
+  );
+  if (models.length === 0) return liveCatch([], [], froms);
+  const [market, calls] = await Promise.all([
+    prisma.$queryRaw<{ token: string; at: Date }[]>`
+      SELECT "tokenId" AS token, max("anchorAt") AS at
+      FROM "CandidateOutcome"
+      WHERE "sampleKind" = 'event'
+        AND "anchorAt" >= ${since}
+        AND "hit2xIn1h" AND NOT COALESCE("disqualified", false)
+        AND "labelRule" >= ${CURRENT_LABEL_RULE}
+        AND ${walletSafetyCutsSql()}
+      GROUP BY 1`,
+    prisma.$queryRaw<{ model: string; token: string; at: Date }[]>`
+      WITH seats AS (
+        SELECT * FROM unnest(
+          ${[...models]}::text[],
+          ${models.map((m) => froms.get(m)!.toISOString())}::timestamp(3)[],
+          ${models.map((m) => laneName.get(m) ?? "-")}::text[]
+        ) AS s(model, since, lane)
+      )
+      SELECT a."model" AS model, a."tokenId" AS token, max(a."createdAt") AS at
+      FROM "CuratedAlert" a
+      JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
+        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" = seats.lane)
+      LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+      WHERE a."createdAt" >= ${since}
+        AND COALESCE(a."hit2xIn1h", co."hit2xIn1h")
+        AND NOT COALESCE(a."disqualified", co."disqualified", false)
+      GROUP BY 1, 2`,
+  ]);
+  return liveCatch([...market, ...calls], calls, froms);
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   enabledContestants,
   liveCallRecords,
   liveMarketLift,
+  liveCatchRates,
   loadCurrentLanes,
   rankByMarketLift,
   withLanes,
@@ -36,6 +37,7 @@ import {
   type CompositeScore,
   type Last24h,
   type MarketLift,
+  type LiveCatch,
   type RecordSummary,
   type ContestantSpec,
   type Env,
@@ -289,6 +291,11 @@ export interface LeaderboardEntry {
   composite: CompositeScore;
   /** Its live 2x rate against the market's in the hours it called; null with no graded calls. */
   vsMarket: MarketLift | null;
+  /**
+   * Of the tokens that ran (a clean 2x from a graded market moment or any seat's call) since its
+   * own start in the window, how many it called at a winning moment: the live catch rate.
+   */
+  liveCatch: LiveCatch | null;
   /** The score in a sentence: what it proves, from how much evidence, and the points. */
   scoreExplained: string;
   /** Its live record on high-conviction calls alone (CuratedAlert.tier = "high"); null with none graded. */
@@ -326,6 +333,8 @@ export interface Leaderboard {
    * on the same market definition as `lifts` (baselineRates).
    */
   baseline: GradedRates;
+  /** The runners over the window and how many any seat caught: the ones the whole board let slip. */
+  runners: LiveCatch;
   scoring: {
     weights: typeof COMPOSITE_WEIGHTS;
     /** Run-size target, in doublings per call (2 = a 4x average). */
@@ -403,7 +412,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
   const state = await contestState(env);
-  const [live, liveHigh, history, probation, lifts, baseline] = await Promise.all([
+  const [live, liveHigh, history, probation, lifts, baseline, catches] = await Promise.all([
     liveCallRecords(
       state.roster.map((c) => c.id),
       since,
@@ -444,6 +453,11 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
       hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
     }),
+    liveCatchRates(
+      state.roster.map((c) => c.id),
+      since,
+      state.lanes,
+    ),
   ]);
   const laneBySlot = new Map(state.lanes.map((l) => [l.slot, l]));
 
@@ -471,6 +485,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       status,
       composite,
       vsMarket: lifts.get(spec.id) ?? null,
+      liveCatch: catches.byModel.get(spec.id) ?? null,
       scoreExplained: explainScore(composite, targets),
       highConviction: (() => {
         const record = liveHigh.get(spec.id);
@@ -514,6 +529,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
     },
     baseline,
+    runners: catches.field,
     scoring: {
       weights: COMPOSITE_WEIGHTS,
       runTargetDoublings: RUN_SIZE_TARGET_DOUBLINGS,

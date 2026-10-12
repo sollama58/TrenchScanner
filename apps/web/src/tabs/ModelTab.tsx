@@ -901,6 +901,14 @@ function LeaderboardPanel({
         )}
       </header>
       {error && <p className="error small">Couldn&apos;t change your feed: {error}</p>}
+      {board.runners && board.runners.runners > 0 && (
+        <p className="muted small">
+          <strong>Caught</strong> counts the runners: of the {board.runners.runners} tokens that doubled
+          cleanly in the last {days} days, the share a model called at a winning moment. All models together
+          caught {board.runners.caught} ({pct(board.runners.pct)}); the other{" "}
+          {board.runners.runners - board.runners.caught} slipped by every model.
+        </p>
+      )}
       <div className="table-wrap">
         <table className="leaderboard">
           <thead>
@@ -915,6 +923,12 @@ function LeaderboardPanel({
                 title="Its 2x rate over the market's 2x rate in the same hours: 2.0x means its calls doubled twice as often as a random pick then. The board ranks by this."
               >
                 vs market
+              </th>
+              <th
+                className="r"
+                title="Of the tokens that doubled cleanly in the window, the share it called at a winning moment: the runners it didn't let slip"
+              >
+                Caught
               </th>
               <th className="r">{detailed ? "4x" : "Hit 4x"}</th>
               <th
@@ -1036,6 +1050,17 @@ function LeaderboardPanel({
                     }
                   >
                     {e.vsMarket?.lift != null ? `${e.vsMarket.lift.toFixed(1)}x` : "–"}
+                  </td>
+                  <td
+                    className="r num"
+                    data-label="Caught"
+                    title={
+                      e.liveCatch && e.liveCatch.runners > 0
+                        ? `Called ${e.liveCatch.caught} of the ${e.liveCatch.runners} tokens that doubled since it started calling in this window`
+                        : undefined
+                    }
+                  >
+                    {pct(e.liveCatch?.pct ?? null)}
                   </td>
                   <td
                     className={`r num ${rateTone(live.goalRatePct, t.hitRate4xPct)}`}

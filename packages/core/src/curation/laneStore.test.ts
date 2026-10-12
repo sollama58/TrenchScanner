@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "../db.js";
-import { liveCallRecord, liveCallRecords } from "./laneStore.js";
+import { liveCallRecord, liveCallRecords, liveCatchRates } from "./laneStore.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `lanestore-test-${Date.now()}`;
@@ -87,5 +87,83 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
       sumSimReturnPct: 0,
       sumRun: expect.any(Number),
     });
+  });
+});
+
+/**
+ * liveCatchRates: the runners are clean 2x market moments past the safety screen plus any seat's
+ * winning call; a seat catches a token by calling it at a winning moment. Other test files share
+ * the database, so only this file's seats' catches are asserted exactly.
+ */
+describe.skipIf(!dbAvailable)("liveCatchRates", () => {
+  const tag = `${TAG}-catch`;
+  afterAll(async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: tag } } });
+  });
+
+  it("counts a seat's winning calls on runners, once per token", async () => {
+    const now = Date.now();
+    const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+    const [ran, unsafe, callOnly] = await Promise.all(
+      ["ran", "unsafe", "call-only"].map((n) =>
+        prisma.token.create({ data: { mintAddress: `${tag}-${n}` } }),
+      ),
+    );
+    const row = (tokenId: string, minutesAgo: number, win: boolean, features: object = {}) =>
+      prisma.candidateOutcome.create({
+        data: {
+          tokenId,
+          anchorAt: at(minutesAgo),
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 10_000,
+          sampleKind: "event",
+          labelRule: 3,
+          features,
+          nextCheckAt: at(minutesAgo),
+          peak1hPriceUsd: win ? 2 : 1,
+          low1hPriceUsd: 1,
+          lowBefore2xPriceUsd: 1,
+          peak24hPriceUsd: win ? 2 : 1,
+          finalizedAt: at(minutesAgo - 30),
+          hit2xIn1h: win,
+          disqualified: false,
+        },
+      });
+    const ranRow = await row(ran!.id, 60, true);
+    await row(unsafe!.id, 60, true, { top10HolderPct: 99 });
+    const alert = (
+      model: string,
+      tokenId: string,
+      minutesAgo: number,
+      hit2xIn1h: boolean,
+      outcome?: string,
+    ) => ({
+      tokenId,
+      model: `${tag}-${model}`,
+      source: "test",
+      confidence: 0.5,
+      anchorPriceUsd: 1,
+      anchorMcapUsd: 10_000,
+      createdAt: at(minutesAgo),
+      hit2xIn1h,
+      disqualified: false,
+      candidateOutcomeId: outcome ?? null,
+    });
+    await prisma.curatedAlert.createMany({
+      data: [
+        alert("a", ran!.id, 60, true, ranRow.id),
+        alert("a", ran!.id, 50, true), // the same runner twice: caught once
+        alert("a", callOnly!.id, 40, true), // a runner no market moment graded
+        alert("a", unsafe!.id, 40, false),
+        alert("b", ran!.id, 30, false),
+      ],
+    });
+    const models = [`${tag}-a`, `${tag}-b`];
+    const { byModel, field } = await liveCatchRates(models, at(120), []);
+    expect(byModel.get(`${tag}-a`)!.caught).toBe(2);
+    expect(byModel.get(`${tag}-b`)!.caught).toBe(0);
+    expect(byModel.get(`${tag}-a`)!.runners).toBe(byModel.get(`${tag}-b`)!.runners);
+    expect(field.runners).toBeGreaterThanOrEqual(2);
+    expect(field.caught).toBe(2);
   });
 });
