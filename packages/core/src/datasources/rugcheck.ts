@@ -169,6 +169,15 @@ export class RugCheckClient {
   }
 }
 
+/**
+ * The owner RugCheck reports for a token account that no longer exists: the System Program's
+ * address, with the account's last balance still attached (seen at 6% of supply on a two-hour-old
+ * coin, 2026-10-12). It is nobody's wallet. Kept in the list, its stale share inflated the top-10
+ * concentration, and as a "holder" it read as a years-old, never-fresh wallet in the denominator
+ * of the fresh-wallet share - one per report, since both wallet checks deduplicate owners.
+ */
+const CLOSED_ACCOUNT_OWNER = "11111111111111111111111111111111";
+
 export function toProfile(mintAddress: string, report: RugCheckReport): RugCheckProfile {
   const markets = report.markets ?? [];
 
@@ -178,7 +187,10 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   // risk. Confirmed against live data: a market's `pubkey` is exactly the `owner` that shows up
   // on the pool's token holdings in topHolders.
   const poolAuthorities = new Set(markets.map((m) => m.pubkey));
-  const realHolders = (report.topHolders ?? []).filter((h) => !poolAuthorities.has(h.owner ?? h.address));
+  const realHolders = (report.topHolders ?? []).filter((h) => {
+    const owner = h.owner ?? h.address;
+    return !poolAuthorities.has(owner) && owner !== CLOSED_ACCOUNT_OWNER;
+  });
   const top10HolderPct = realHolders
     .slice(0, TOP_N_FOR_CONCENTRATION)
     .reduce((sum, h) => sum + (h.pct ?? 0), 0);
