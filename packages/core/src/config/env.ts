@@ -373,10 +373,11 @@ const envSchema = z.object({
   // runs two processes (render.yaml): one "scanner" on the alert path and one "trainer" for the
   // model and nightly batch work. "all" runs everything in one process.
   WORKER_ROLE: z.enum(["all", "scanner", "trainer"]).default("all"),
-  // Every 2 hours since 2026-10-05, when training moved to its own process: a run no longer
-  // costs the scan anything, and a model that just earned (or lost) a seat, a fresh calibration
-  // table and new cutoffs take effect within two hours of the evidence.
-  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().min(0.25).default(2),
+  // Every 6 hours since 2026-10-12 (2 from 2026-10-05). Each run refits every seat and re-picks
+  // its cutoff, and consecutive runs' call volume swung about 2x for 2 hours' more data (alerts
+  // 10-10..10-12, notes/audit-2026-10-12/training.md). Models 6-12 hours old ranked as well as
+  // 0-6 hours old on the walk-forward replay. "Retrain now" still runs one at once.
+  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().min(0.25).default(6),
   // Three weeks: on 2026-10-04 the scan banked ~7,700 training rows a day, so this is about the
   // row ceiling below, and it is the window - not the ceiling - that should set how far back the
   // models look. The recency half-life below tilts the fit toward the newest part of it.
