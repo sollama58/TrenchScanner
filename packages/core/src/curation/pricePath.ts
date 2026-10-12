@@ -87,7 +87,12 @@ interface Tick {
   at: number;
   priceUsd: number;
   holders: number | null;
+  /** When the holder count was read (its source's time, not the scan's); `at` when not known. */
+  holdersAt: number;
 }
+
+/** The holder slope needs two readings at least this far apart: closer, they are mostly one report. */
+const HOLDER_SLOPE_MIN_SPAN_MS = 5 * 60_000;
 
 /** How much tape a mint keeps: the hour the features look back over, plus a little slack. */
 const TAPE_MS = 65 * 60_000;
@@ -117,7 +122,7 @@ export class PricePathBook {
   private readonly tapes = new Map<string, Tick[]>();
 
   /** Records one observation. Out-of-order observations (older than the newest tick) are ignored. */
-  observe(mint: string, at: Date, priceUsd: number, holders?: number | null): void {
+  observe(mint: string, at: Date, priceUsd: number, holders?: number | null, holdersAt?: Date): void {
     if (!Number.isFinite(priceUsd) || priceUsd <= 0) return;
     const t = at.getTime();
     let tape = this.tapes.get(mint);
@@ -134,7 +139,7 @@ export class PricePathBook {
       }
       if (last && t - last.at < MIN_TICK_SPACING_MS) tape.pop();
     }
-    tape.push({ at: t, priceUsd, holders: holders ?? null });
+    tape.push({ at: t, priceUsd, holders: holders ?? null, holdersAt: holdersAt?.getTime() ?? t });
     const cutoff = t - TAPE_MS;
     while (tape.length > 0 && tape[0]!.at < cutoff) tape.shift();
     this.tapes.set(mint, tape);
@@ -216,15 +221,19 @@ export class PricePathBook {
         if (tick.priceUsd > prev.priceUsd) ups += 1;
       }
     }
+    // Measured between readings of the count, not scans: the scan can serve one cached RugCheck
+    // report for several cycles, which read as no growth at all over what looked like minutes.
     for (const tick of tape) {
-      if (tick.at <= from10 + MINUTE / 2 && tick.holders !== null) holdersThen = tick;
+      if (tick.holdersAt <= from10 + MINUTE / 2 && tick.holders !== null) holdersThen = tick;
     }
-    // Same bound as the returns: a baseline from before a gap would spread an hour's growth over
-    // what reads as ten minutes.
-    if (holdersThen && from10 - holdersThen.at > priceAgoTolerance(10)) holdersThen = null;
+    // A report is re-read every few minutes (the RugCheck cache's TTL), so the baseline reading may
+    // sit a few minutes before the mark, but not past twice the window: a baseline from before a
+    // gap in the tape would spread an hour's growth over what reads as ten minutes.
+    if (holdersThen && now.at - holdersThen.holdersAt > 2 * 10 * MINUTE) holdersThen = null;
+    const holderSpan = holdersThen ? now.holdersAt - holdersThen.holdersAt : 0;
     const holderSlope =
-      holdersThen && now.holders !== null && now.at > holdersThen.at
-        ? (now.holders - holdersThen.holders!) / ((now.at - holdersThen.at) / MINUTE)
+      holdersThen && now.holders !== null && holderSpan >= HOLDER_SLOPE_MIN_SPAN_MS
+        ? (now.holders - holdersThen.holders!) / (holderSpan / MINUTE)
         : null;
 
     const dd15 = drawdown(15);

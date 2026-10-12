@@ -165,6 +165,21 @@ describe("PricePathBook", () => {
     expect(gap.features("m").pathRet1mPct).toBeNull();
   });
 
+  it("measures the holder slope between readings of the count, not between scans", () => {
+    // Scanned every minute, but the holder count is a report re-read every 5 minutes.
+    const book = new PricePathBook();
+    for (let m = 0; m <= 20; m++) {
+      const readMin = Math.floor(m / 5) * 5;
+      book.observe("h", new Date(T0 + m * MIN), 1, 100 + readMin * 3, new Date(T0 + readMin * MIN));
+    }
+    // Newest reading at minute 20 (160), baseline the reading at minute 10 (130): 3 a minute.
+    expect(book.features("h").pathHolderSlope10m!).toBeCloseTo(3, 6);
+    // One report served for 15 minutes is no reading of growth at all.
+    const stale = new PricePathBook();
+    for (let m = 0; m <= 15; m++) stale.observe("s", new Date(T0 + m * MIN), 1, 100, new Date(T0));
+    expect(stale.features("s").pathHolderSlope10m).toBeNull();
+  });
+
   it("forgets mints that stopped being observed", () => {
     const book = new PricePathBook();
     book.observe("a", new Date(T0), 1);

@@ -60,6 +60,15 @@ export interface RugProfileResolution {
   };
 }
 
+/**
+ * The profile with the time its report was read (OnChainProfile.holderCountAt): the cache row's
+ * checkedAt for a cached or stale answer, the lookup's own time for a fresh one. A copy, never
+ * written back to the cache - the row's checkedAt already says it.
+ */
+function readAt(profile: RugCheckProfile, at: Date): RugCheckProfile {
+  return { ...profile, holderCountAt: at };
+}
+
 /** Added to the awaited lookups' deadline for the requests already in flight when it passes. */
 const AWAIT_GRACE_MS = 2_000;
 
@@ -181,7 +190,7 @@ export async function resolveRugProfiles(
       logger.warn("discarding unparseable cached profile", { mint: row.mintAddress });
       continue;
     }
-    profiles.set(row.mintAddress, parsed.data as RugCheckProfile);
+    profiles.set(row.mintAddress, readAt(parsed.data as RugCheckProfile, row.checkedAt));
     hit.add(row.mintAddress);
   }
 
@@ -216,7 +225,7 @@ export async function resolveRugProfiles(
     }
     const parsed = cachedProfileSchema.safeParse(row.profile);
     if (!parsed.success) return false;
-    profiles.set(mint, parsed.data as RugCheckProfile);
+    profiles.set(mint, readAt(parsed.data as RugCheckProfile, row.checkedAt));
     reused += 1;
     return true;
   };
@@ -269,6 +278,7 @@ export async function resolveRugProfiles(
       expired,
     ]);
     clearTimeout(timer);
+    const answeredAt = new Date();
     if (late) {
       void fetching.catch((err: unknown) =>
         logger.warn("rugcheck lookups failed after the cycle stopped waiting", { error: String(err) }),
@@ -277,7 +287,7 @@ export async function resolveRugProfiles(
     for (const mint of awaited) {
       const result = results.get(mint);
       if (result?.status === "found") {
-        profiles.set(mint, result.profile);
+        profiles.set(mint, readAt(result.profile, answeredAt));
         lookupBackoff.succeed(mint);
       } else if (result?.status === "absent") {
         absent.add(mint);

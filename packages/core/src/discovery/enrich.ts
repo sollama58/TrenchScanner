@@ -8,8 +8,13 @@ export interface EnrichOptions {
   createdAt?: Date;
   /** Holder count from the previous snapshot of this token, if any, used to derive growth %. */
   previousHolderCount?: number;
+  /** When that count was read (its snapshot's holderCountAt, else its takenAt). */
+  previousHolderCountAt?: Date;
   /** Holder count from the newest snapshot at least 10 minutes old - see holderGrowth10mPct. */
   previousHolderCount10m?: number;
+  previousHolderCount10mAt?: Date;
+  /** The window previousHolderCount was taken over (env HOLDER_GROWTH_WINDOW_MINUTES); 30 if unset. */
+  holderGrowthWindowMinutes?: number;
   /** When the scan first saw this token inside the curated band (Token.firstInBandAt). */
   firstInBandAt?: Date;
 }
@@ -35,12 +40,28 @@ export function enrichToken(
       ? candidate.volume24hUsd / candidate.marketCapUsd
       : undefined;
 
-  const growthFrom = (previous: number | undefined): number | undefined =>
-    previous && previous > 0 && onChain?.holderCount !== undefined
-      ? ((onChain.holderCount - previous) / previous) * 100
-      : undefined;
-  const holderGrowthPct = growthFrom(options.previousHolderCount);
-  const holderGrowth10mPct = growthFrom(options.previousHolderCount10m);
+  // Growth is between two readings of the count. RugCheck's report is cached and served stale
+  // through backoff, the lookup budget and background refreshes, so the baseline and today's
+  // count can be the same report (growth exactly 0 by construction) or two reports only minutes
+  // apart. Under half the window between the two readings, the growth is unknown, not flat.
+  const growthFrom = (
+    previous: number | undefined,
+    previousAt: Date | undefined,
+    windowMinutes: number,
+  ): number | undefined => {
+    if (!previous || previous <= 0 || onChain?.holderCount === undefined) return undefined;
+    const readAt = onChain.holderCountAt;
+    if (readAt && previousAt && readAt.getTime() - previousAt.getTime() < (windowMinutes / 2) * 60_000) {
+      return undefined;
+    }
+    return ((onChain.holderCount - previous) / previous) * 100;
+  };
+  const holderGrowthPct = growthFrom(
+    options.previousHolderCount,
+    options.previousHolderCountAt,
+    options.holderGrowthWindowMinutes ?? 30,
+  );
+  const holderGrowth10mPct = growthFrom(options.previousHolderCount10m, options.previousHolderCount10mAt, 10);
   const minutesSinceFirstInBand = options.firstInBandAt
     ? Math.max(0, Math.round(((now.getTime() - options.firstInBandAt.getTime()) / 60_000) * 100) / 100)
     : undefined;

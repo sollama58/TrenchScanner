@@ -47,6 +47,7 @@ export function snapshotDataFor(
     buys1h: scored.buys1h,
     sells1h: scored.sells1h,
     holderCount: scored.holderCount,
+    holderCountAt: scored.holderCountAt ?? null,
     holderGrowthPct: scored.holderGrowthPct,
     top10HolderPct: scored.top10HolderPct,
     devWalletPct: scored.devWalletPct,

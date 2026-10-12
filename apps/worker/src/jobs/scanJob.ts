@@ -1422,8 +1422,11 @@ export interface CandidatePrior {
    * for hours and came back has no baseline, rather than reporting hours of change as N minutes'.
    */
   holderCount: number | null;
+  /** When that baseline count was read (its snapshot's holderCountAt, else its takenAt). */
+  holderCountAt?: Date | null;
   /** The short-window sibling: newest snapshot 10-20 minutes old (holderGrowth10mPct). */
   holderCount10m: number | null;
+  holderCount10mAt?: Date | null;
   /** An hourly training sample already exists inside its spacing window. */
   recentHourlySample: boolean;
   /** Has a user match or a curated alert, so the feeds read its newest snapshot - see persistSnapshot. */
@@ -1440,7 +1443,9 @@ export interface CandidatePrior {
 const NO_PRIORS: CandidatePrior = {
   token: null,
   holderCount: null,
+  holderCountAt: null,
   holderCount10m: null,
+  holderCount10mAt: null,
   recentHourlySample: false,
   alerted: false,
 };
@@ -1470,17 +1475,23 @@ export async function loadCandidatePriors(
   const growth10mFloor = new Date(now - HOLDER_BASELINE_MAX_SPAN * 10 * 60_000);
   const spacingCutoff = new Date(now - env.CANDIDATE_SAMPLE_SPACING_MINUTES * 60_000);
   const [baselines, recentHourly, alertedRows, narratives, lastDecisions] = await Promise.all([
-    prisma.$queryRaw<{ id: string; h: number | null; h10: number | null }[]>`
-      SELECT t.id, b."holderCount" AS h, b10."holderCount" AS h10
+    // Fast-lane snapshots are left out: they repeat the scan snapshot's holder count under a later
+    // stamp, so as a baseline they shortened the span the growth was measured over.
+    prisma.$queryRaw<
+      { id: string; h: number | null; hAt: Date | null; h10: number | null; h10At: Date | null }[]
+    >`
+      SELECT t.id, b."holderCount" AS h, b.at AS "hAt", b10."holderCount" AS h10, b10.at AS "h10At"
       FROM unnest(${ids}::text[]) AS t(id)
       LEFT JOIN LATERAL (
-        SELECT s."holderCount" FROM "TokenSnapshot" s
+        SELECT s."holderCount", COALESCE(s."holderCountAt", s."takenAt") AS at FROM "TokenSnapshot" s
         WHERE s."tokenId" = t.id AND s."takenAt" <= ${growthCutoff} AND s."takenAt" >= ${growthFloor}
+          AND s."source" <> 'fast'
         ORDER BY s."takenAt" DESC LIMIT 1
       ) b ON true
       LEFT JOIN LATERAL (
-        SELECT s."holderCount" FROM "TokenSnapshot" s
+        SELECT s."holderCount", COALESCE(s."holderCountAt", s."takenAt") AS at FROM "TokenSnapshot" s
         WHERE s."tokenId" = t.id AND s."takenAt" <= ${growth10mCutoff} AND s."takenAt" >= ${growth10mFloor}
+          AND s."source" <> 'fast'
         ORDER BY s."takenAt" DESC LIMIT 1
       ) b10 ON true`,
     prisma.$queryRaw<{ tokenId: string }[]>`
@@ -1512,7 +1523,9 @@ export async function loadCandidatePriors(
     out.set(token.mintAddress, {
       token,
       holderCount: b?.h ?? null,
+      holderCountAt: b?.hAt ?? null,
       holderCount10m: b?.h10 ?? null,
+      holderCount10mAt: b?.h10At ?? null,
       recentHourlySample: recent.has(token.id),
       alerted: alerted.has(token.id),
       narrative: narratives.get(token.mintAddress),
@@ -1690,7 +1703,10 @@ async function processCandidate(
     {
       createdAt,
       previousHolderCount: prior.holderCount ?? undefined,
+      previousHolderCountAt: prior.holderCountAt ?? undefined,
       previousHolderCount10m: prior.holderCount10m ?? undefined,
+      previousHolderCount10mAt: prior.holderCount10mAt ?? undefined,
+      holderGrowthWindowMinutes: env.HOLDER_GROWTH_WINDOW_MINUTES,
       firstInBandAt,
     },
   );
@@ -1705,7 +1721,13 @@ async function processCandidate(
   // The price tape: this cycle's observation goes on first, then the path features read back
   // over the last hour of it.
   if (pricePath) {
-    pricePath.observe(candidate.mintAddress, new Date(), scored.priceUsd, scored.holderCount ?? null);
+    pricePath.observe(
+      candidate.mintAddress,
+      new Date(),
+      scored.priceUsd,
+      scored.holderCount ?? null,
+      scored.holderCountAt,
+    );
     scored.pricePath = pricePath.features(candidate.mintAddress);
   }
   if (marketContext) scored.marketContext = marketContext;
