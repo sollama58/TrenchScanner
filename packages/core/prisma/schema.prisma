@@ -417,6 +417,8 @@ model Token {
   // table - every mint ever discovered - which was 20s of each production cycle on 2026-10-03.
   @@index([firstSeenAt])
   @@index([lastViewedAt])
+  // The dashboard's Stream: the tokens that most recently entered the band (apps/api's launches.ts).
+  @@index([firstInBandAt])
 }
 
 /// A token the curator promoted to the Curated Alerts feed - the public, self-grading output of

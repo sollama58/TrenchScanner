@@ -45,6 +45,7 @@ import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
 import { registerLiveRoutes, LIVE_TICK_MAX_TOKENS } from "./routes/live.js";
+import { registerLaunchRoutes } from "./routes/launches.js";
 import { clientIp } from "./clientIp.js";
 import { RouteTimings } from "./routeTimings.js";
 import { fastifyLogger } from "./fastifyLogger.js";
@@ -449,6 +450,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     viewStamps,
   });
   await app.register(registerLiveRoutes, { prefix: "/live", liveRefresher, viewStamps });
+  // The dashboard's Stream: every new token that passed the safety screen inside the band.
+  await app.register(registerLaunchRoutes, { prefix: "/launches", env });
   // Report caches warm themselves once the server is actually listening - so a real start pays
   // for its first fills before any reader does, and a test server (inject, never listen) runs none.
   const warmers: (() => void)[] = [];

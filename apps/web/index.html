@@ -74,24 +74,27 @@
         var paths = ["/auth/me", "/subscription", "/health/worker", "/settings"].concat(
           h === "model"
             ? ["/curated/insights?days=7", "/curated/models?days=7"]
-            : h === "filters" || h === "top"
-              ? ["/filters", "/config", "/filters/leaderboard", "/curated/models?days=30", "/telegram"]
-              : h === "settings"
-                ? []
-                : h === "admin"
+            : h === "stream"
+              ? // The Stream (src/components/StreamView.tsx), as src/routes.ts STREAM_DATA.
+                ["/launches"]
+              : h === "filters" || h === "top"
+                ? ["/filters", "/config", "/filters/leaderboard", "/curated/models?days=30", "/telegram"]
+                : h === "settings"
                   ? []
-                  : h === "lighthouse"
-                    ? [
-                        "/curated/lighthouse/history?days=30&bucket=day&dimension=category",
-                        lighthouse("/curated"),
-                        "/curated/models?days=30",
-                      ]
-                    : [
-                        "/matches?page=1&includeCurated=saved",
-                        "/matches/stats?hours=24",
-                        "/curated/stats",
-                        "/curated/models?days=30",
-                      ],
+                  : h === "admin"
+                    ? []
+                    : h === "lighthouse"
+                      ? [
+                          "/curated/lighthouse/history?days=30&bucket=day&dimension=category",
+                          lighthouse("/curated"),
+                          "/curated/models?days=30",
+                        ]
+                      : [
+                          "/matches?page=1&includeCurated=saved",
+                          "/matches/stats?hours=24",
+                          "/curated/stats",
+                          "/curated/models?days=30",
+                        ],
         );
         var boot = (window.__boot = {});
         if (!window.fetch) return;

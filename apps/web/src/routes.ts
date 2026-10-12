@@ -10,6 +10,16 @@ export function tabFromHash(): Tab {
     : "live";
 }
 
+/** The Stream (components/StreamView.tsx): a focus mode over the tabs, opened at #stream. */
+export const STREAM_HASH = "stream";
+
+export function streamFromHash(): boolean {
+  return window.location.hash.replace("#", "") === STREAM_HASH;
+}
+
+/** The Stream's own data, for index.html's boot prefetch and the warm-up. */
+export const STREAM_DATA = "/launches";
+
 type ModelTabModule = typeof import("./tabs/ModelTab");
 type LighthouseTabModule = typeof import("./tabs/LighthouseTab");
 type FiltersTabModule = typeof import("./tabs/FiltersTab");

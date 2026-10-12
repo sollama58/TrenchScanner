@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 /** A small stroke icon set (24px grid, currentColor), so icons follow the text color they sit in. */
 
 type IconProps = { size?: number; className?: string };
@@ -24,6 +26,22 @@ function Svg({ size = 16, className, children }: IconProps & { children: React.R
 export const PulseIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M3 12h4l3-8 4 16 3-8h4" />
+  </Svg>
+);
+
+/** The Stream: rows arriving one after another. */
+export const StreamIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 6h16M4 12h11M4 18h7" />
+    <circle cx="19" cy="17" r="2" />
+  </Svg>
+);
+
+/** Opens in a window of its own. */
+export const PopOutIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="7" width="13" height="13" rx="2" />
+    <path d="M10 4h10v10M20 4l-8 8" />
   </Svg>
 );
 
@@ -163,15 +181,18 @@ export const LogoutIcon = (p: IconProps) => (
  * variant of the logo in public/favicon.svg (thicker strokes, no inner arcs) so it reads at 24 px.
  */
 export function LogoMark({ size = 26 }: { size?: number }) {
+  // Its own gradient id per mark: with a shared one, every mark drew from the first in the page,
+  // and none painted while that one sat in a hidden header (the Stream's focus mode).
+  const gradient = useId();
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden className="logo-mark">
       <defs>
-        <linearGradient id="lm" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="var(--brand-a)" />
           <stop offset="1" stopColor="var(--brand-b)" />
         </linearGradient>
       </defs>
-      <rect width="64" height="64" rx="15" fill="url(#lm)" />
+      <rect width="64" height="64" rx="15" fill={`url(#${gradient})`} />
       <g transform="translate(32 35.627) scale(0.093)" fill="none" stroke="#fff" strokeWidth="40">
         <path
           d="M0 0L180 -174A250 250 0 0 0 -250 0L-250 17L-85 17L-80 0Z"

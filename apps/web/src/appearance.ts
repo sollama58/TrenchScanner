@@ -271,6 +271,19 @@ function applyTheme(a: FeedAppearance) {
 }
 applyTheme(current);
 
+// Another window of the dashboard (the Stream's pop-out) changed it: show the same look here. Only
+// shown - that window saves it to the account.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== APPEARANCE_KEY) return;
+    const next = readLocal();
+    if (sameAppearance(next, current)) return;
+    current = next;
+    applyTheme(current);
+    emit();
+  });
+}
+
 export function useAppearance(): FeedAppearance {
   return useSyncExternalStore(subscribe, () => current);
 }
