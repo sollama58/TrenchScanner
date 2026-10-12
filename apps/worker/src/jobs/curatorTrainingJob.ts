@@ -115,6 +115,7 @@ export async function runCuratorTrainingJob(
     winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
     goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
     minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
+    minSupportShare: env.CURATED_MIN_CALIBRATION_SHARE,
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
   // The field as it stands: each learner seat trains its current lane's recipe. Seats that have

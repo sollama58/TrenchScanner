@@ -457,6 +457,22 @@ describe("calibrateThresholdForPrecision", () => {
     expect(result.threshold).toBeCloseTo(set[9]!.probability);
   });
 
+  it("raises the support floor to minSupportShare of the calls when that is larger", () => {
+    // The top 12 all win, then misses. The 10-call floor lets the best record sit near the 12
+    // sure winners; a 30% share of 100 calls lifts the floor to 30, so the cutoff sends 30.
+    const set = calls(100, (i) => (i < 12 ? 2 : 0));
+    const countOnly = calibrateThresholdForPrecision(set, targets).support;
+    expect(countOnly).toBeLessThan(30);
+    const result = calibrateThresholdForPrecision(set, { ...targets, minSupportShare: 0.3 });
+    expect(result.meetsTargets).toBe(false);
+    expect(result.support).toBe(30);
+    expect(result.threshold).toBeCloseTo(set[29]!.probability);
+    // A share below the count leaves the count in charge.
+    expect(calibrateThresholdForPrecision(set, { ...targets, minSupportShare: 0.05 }).support).toBe(
+      countOnly,
+    );
+  });
+
   it("has no cutoff only when nothing had enough alerts to judge", () => {
     const result = calibrateThresholdForPrecision(
       calls(5, () => 2),
@@ -489,6 +505,22 @@ describe("calibrateThresholdForPrecision", () => {
 describe("calibrateThresholdForPrecision with the alert cooldown", () => {
   const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 10 };
   const DAY = 24 * HOUR;
+
+  it("applies the share floor on the cooldown path too", () => {
+    // 100 tokens once each, most confident first; the top 12 win. A 30% share floors at 30 calls.
+    const set = Array.from({ length: 100 }, (_, i) => ({
+      probability: 1 - i / 101,
+      labelValue: i < 12 ? 2 : 0,
+      tokenId: `t${i}`,
+      anchorAt: new Date(T0 + i * HOUR),
+    }));
+    const result = calibrateThresholdForPrecision(
+      set,
+      { ...targets, minSupportShare: 0.3 },
+      { cooldownMs: DAY },
+    );
+    expect(result.support).toBeGreaterThanOrEqual(30);
+  });
 
   it("counts one hot token once per cooldown, not once per hourly sample", () => {
     // One token, sampled hourly for a day at high probability, wins every time; ten other tokens

@@ -743,6 +743,15 @@ export interface PrecisionTargets {
   goalRate: number;
   minSupport: number;
   /**
+   * A second support floor, as a share of the calls the cutoff is calibrated on (0.1 = a cutoff
+   * must have sent at least a tenth of them). minSupport is a count, so as the exam's history
+   * grew from two days to a week the same 50 calls became an ever thinner slice, and the
+   * best-effort cutoff drifted toward the strictest few percent of moments - sending a handful a
+   * day for no better hit rate (notes/feed-slowdown-2026-10-12.md). The larger floor applies.
+   * 0 or omitted = minSupport alone.
+   */
+  minSupportShare?: number;
+  /**
    * How sure a cutoff's record must make us, as a normal z-score: a cutoff qualifies only when
    * the Wilson lower bound of its hit rates (not the rates themselves) meets the targets. Picking
    * the lowest of hundreds of candidate cutoffs that happens to show 75% on the evidence is a
@@ -861,12 +870,13 @@ export function calibrateThresholdForPrecision(
   targets: PrecisionTargets,
   opts: { cooldownMs?: number } = {},
 ): PrecisionCalibration {
+  const floored = withShareFloor(targets, calls.length);
   if (
     opts.cooldownMs !== undefined &&
     calls.length > 0 &&
     calls.every((c) => c.tokenId !== undefined && c.anchorAt !== undefined)
   ) {
-    return calibrateWithCooldown(calls, targets, opts.cooldownMs);
+    return calibrateWithCooldown(calls, floored, opts.cooldownMs);
   }
   const sorted = [...calls].sort((a, b) => b.probability - a.probability);
   const records: CutoffRecord[] = [];
@@ -881,7 +891,14 @@ export function calibrateThresholdForPrecision(
     if (next !== undefined && next.probability === call.probability) continue;
     records.push({ cutoff: call.probability, n: i + 1, wins, goals });
   }
-  return chooseCutoff(records, targets);
+  return chooseCutoff(records, floored);
+}
+
+/** The targets with minSupport raised to minSupportShare of `calls` calls, when that is larger. */
+function withShareFloor(targets: PrecisionTargets, calls: number): PrecisionTargets {
+  const share = targets.minSupportShare ?? 0;
+  if (!(share > 0)) return targets;
+  return { ...targets, minSupport: Math.max(targets.minSupport, Math.ceil(share * calls)) };
 }
 
 /** How many candidate cutoffs the cooldown-aware calibration evaluates at most. */
