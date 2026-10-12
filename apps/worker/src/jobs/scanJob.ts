@@ -62,6 +62,7 @@ import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser 
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
+import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import {
   resolveWalletHoldings,
   computeEmptyPct,
@@ -224,6 +225,37 @@ function startWalletBackfill(
   });
 }
 
+/** How long the decisions wait on the launch buyers' wallet lookups before reading the cache. */
+const LAUNCH_BUYER_FRESHNESS_BUDGET_MS = 3_000;
+
+/** The launch-buyer wallet lookups still running, possibly past a cycle's wait. */
+let launchBuyerStageInFlight: Promise<unknown> | null = null;
+
+/**
+ * Starts this cycle's lookups for the launch-buyer fresh-wallet share (launchBuyerFreshness.ts),
+ * or answers from what is known while the previous cycle's are still running. Never rejects.
+ */
+function startLaunchBuyerFreshness(
+  mints: string[],
+  helius: HeliusClient,
+  env: Env,
+): Promise<Map<string, number>> {
+  if (launchBuyerStageInFlight || env.LAUNCH_BUYER_FRESHNESS_LOOKUPS_PER_CYCLE <= 0) {
+    return Promise.resolve(launchBuyerFreshnessFromCache(mints));
+  }
+  const work = resolveLaunchBuyerFreshness(mints, helius, {
+    maxNewLookups: env.LAUNCH_BUYER_FRESHNESS_LOOKUPS_PER_CYCLE,
+  }).catch((err: unknown) => {
+    logger.warn("launch-buyer wallet lookups failed - using known shares", { error: String(err) });
+    return launchBuyerFreshnessFromCache(mints);
+  });
+  launchBuyerStageInFlight = work;
+  void work.finally(() => {
+    if (launchBuyerStageInFlight === work) launchBuyerStageInFlight = null;
+  });
+  return work;
+}
+
 /** `work`'s result, or null if it has not settled within `ms`. Rejections propagate. */
 async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> {
   let timer: NodeJS.Timeout | undefined;
@@ -340,8 +372,12 @@ function startSniperStage(
 export function withLaunchSnipers(
   flow: TradeFlowFeatures | undefined,
   snipers: LaunchSnipers | undefined,
+  freshLaunchBuyerPct?: number,
 ): TradeFlowFeatures | undefined {
-  if (!snipers) return flow;
+  if (!snipers) {
+    // Known from the launch read alone, so it stands even while the holdings figure is stale.
+    return freshLaunchBuyerPct === undefined ? flow : { ...(flow ?? EMPTY_TRADE_FLOW), freshLaunchBuyerPct };
+  }
   const base = flow ?? EMPTY_TRADE_FLOW;
   // The launch-shape figures come only from the chain read (the stream never computes them), so
   // they are filled whichever side supplied the snipers figure.
@@ -349,6 +385,7 @@ export function withLaunchSnipers(
     firstBuyersSupplyPct: base.firstBuyersSupplyPct ?? snipers.firstBuyersSupplyPct,
     launchBundledBuyers: base.launchBundledBuyers ?? snipers.launchBundledBuyers,
     devBuySupplyPct: base.devBuySupplyPct ?? snipers.devBuySupplyPct,
+    freshLaunchBuyerPct: freshLaunchBuyerPct ?? base.freshLaunchBuyerPct ?? null,
   };
   if ((flow?.firstBuyersHolding ?? null) !== null) return { ...base, ...launchShape };
   return {
@@ -885,6 +922,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)),
     )) ?? launchSnipersFromCache(sniperGroups.map((g) => g.mintAddress));
   lap("snipers");
+  // The launch buyers' fresh-wallet share, from the buyers the sniper stage just read: started
+  // now so it overlaps the quotes and priors below, and waited on briefly before the decisions.
+  const launchBuyerMints = sniperGroups.map((g) => g.mintAddress);
+  const launchBuyerWork = startLaunchBuyerFreshness(launchBuyerMints, deps.helius, env);
 
   // Summed after the fact rather than accumulated with `matchCount += await ...`: that reads the
   // counter BEFORE the await and writes it after, so two candidates finishing close together can
@@ -919,6 +960,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   pruneSniperWaits(Date.now());
   const freshQuotes = await freshQuotesWork;
   lap("freshQuotes");
+  const freshLaunchBuyers =
+    (await withinBudget(launchBuyerWork, LAUNCH_BUYER_FRESHNESS_BUDGET_MS)) ??
+    launchBuyerFreshnessFromCache(launchBuyerMints);
   const perCandidateMatches: number[] = [];
   const curatedCycle = newCuratedCycle();
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
@@ -937,6 +981,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           withLaunchSnipers(
             deps.stream?.tradeFlow?.(candidate.mintAddress),
             sniperByMint.get(candidate.mintAddress),
+            freshLaunchBuyers.get(candidate.mintAddress),
           ),
           deps.pricePath,
           marketContext,

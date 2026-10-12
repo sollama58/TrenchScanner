@@ -18,6 +18,11 @@ export const FLOW_WINDOW_MS = 5 * 60_000;
 
 /** How many of the launch's first buyers the still-holding count follows. */
 export const FIRST_BUYERS = 25;
+/**
+ * How many of the first buyers the launch-buyer fresh-wallet share reads (freshLaunchBuyerPct):
+ * the first ten, where a launch bundle sits, at two fifths of the wallet lookups all 25 would cost.
+ */
+export const FRESH_LAUNCH_BUYERS = 10;
 /** A first buyer left holding under this share of what they bought counts as sold out (dust). */
 const HOLDING_DUST_SHARE = 0.01;
 
@@ -92,6 +97,12 @@ export interface TradeFlowFeatures {
   firstBuyersSupplyPct: number | null;
   launchBundledBuyers: number | null;
   devBuySupplyPct: number | null;
+  /**
+   * Of the launch's first FRESH_LAUNCH_BUYERS buyers, the % whose wallet was first used within
+   * 24h before the launch (the worker's launchBuyerFreshness.ts). Null until every one of them
+   * has been read.
+   */
+  freshLaunchBuyerPct: number | null;
 }
 
 export const EMPTY_TRADE_FLOW: TradeFlowFeatures = {
@@ -112,6 +123,7 @@ export const EMPTY_TRADE_FLOW: TradeFlowFeatures = {
   firstBuyersSupplyPct: null,
   launchBundledBuyers: null,
   devBuySupplyPct: null,
+  freshLaunchBuyerPct: null,
 };
 
 interface Bag {
