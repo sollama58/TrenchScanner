@@ -900,6 +900,16 @@ export interface LeaderboardEntry {
   isDefault: boolean;
   /** The best average exit-plan return over the last 24h (absent from older API builds). */
   isBest?: boolean;
+  /**
+   * Its record over the last 24h, the window the top models and "best" are picked on (absent
+   * from older API builds). `qualifies`: enough graded calls (and able to call) to be ranked.
+   */
+  last24h?: {
+    graded: number;
+    hitRate2xPct: number | null;
+    avgReturnPct: number | null;
+    qualifies: boolean;
+  } | null;
   status: "calling" | "silent" | "untrained";
   composite: {
     score: number | null;
