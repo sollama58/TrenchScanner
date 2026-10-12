@@ -189,7 +189,7 @@ function LighthouseWindow({ base, days, compact = false }: { base: string; days:
 
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
-      {d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
+      {!compact && d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
       <Screened s={d.screened} span={span} days={days} compact={compact} />
       <h3 className="lh-part">
         What TokenSage sees
