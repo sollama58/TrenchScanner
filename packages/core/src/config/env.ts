@@ -418,6 +418,13 @@ const envSchema = z.object({
   CURATED_TARGET_WIN_RATE_PCT: z.coerce.number().min(0).max(100).default(75),
   CURATED_TARGET_GOAL_RATE_PCT: z.coerce.number().min(0).max(100).default(50),
   CURATED_MIN_CALIBRATION_ALERTS: z.coerce.number().int().positive().default(50),
+  // The same floor as a share of the exam's out-of-sample calls: a cutoff must have sent at least
+  // this share of them. The count alone let the best-effort cutoff shrink toward the strictest
+  // few percent as the exam's history grew, and on a walk-forward replay of 10-04..10-11 that
+  // strictness bought no hit rate (top 5% of moments doubled 22.4%, top 30% 21.8%) while it cut
+  // the runners caught from 38% to 30% (trees) and 57% to 32% (linear) - see
+  // notes/feed-slowdown-2026-10-12.md. 0 = the count alone.
+  CURATED_MIN_CALIBRATION_SHARE: z.coerce.number().min(0).max(0.5).default(0.1),
   // How sure a cutoff's out-of-sample record must make us that it meets the targets, as a normal
   // z-score: a cutoff counts as meeting them when the Wilson LOWER BOUND of its hit rates does.
   // Choosing the lowest of hundreds of cutoffs that shows 75% favours lucky ones; the bound
