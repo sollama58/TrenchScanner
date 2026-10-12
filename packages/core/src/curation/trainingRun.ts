@@ -443,6 +443,12 @@ async function sitRecipeExam(
 ): Promise<RecipeTrial> {
   const recipe = narrowRecipe(wholeRecipe, usable);
   const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
+  // A paced seat is examined and calibrated under its own ceiling (CuratorRecipe.callsPerHour);
+  // it is still scored against the field's targets.
+  const targets: PrecisionTargets =
+    recipe.callsPerHour !== undefined
+      ? { ...cfg.targets, maxCallsPerHour: recipe.callsPerHour }
+      : cfg.targets;
   const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? cfg.recencyHalfLifeDays;
   const evaluation = await walkForwardEvaluate(rows, {
     targetPerHour: cfg.targetPerHour,
@@ -456,7 +462,7 @@ async function sitRecipeExam(
     decisionRowsOnly: true,
     cooldownHours: cfg.cooldownHours,
     // Both sides are graded at the hit-rate cutoffs production holds them to, not at a pace.
-    targets: cfg.targets,
+    targets,
     heuristicPrecisionGate: cfg.heuristicPrecisionGate,
     learner: recipe.learner,
     featureNames: recipe.featureNames,
@@ -471,11 +477,7 @@ async function sitRecipeExam(
   // Calibrated in RANK units: each fold model and the shipped model put probabilities on their
   // own scales, so a raw probability that hit 75% on the fold models says nothing about the
   // same number on the shipped one. "The top r of decision moments" does carry over.
-  const precisionCalibration = calibrateThresholdForPrecision(
-    evaluation.outOfSampleRanks,
-    cfg.targets,
-    cooldown,
-  );
+  const precisionCalibration = calibrateThresholdForPrecision(evaluation.outOfSampleRanks, targets, cooldown);
   return { recipe, recencyHalfLifeDays, evaluation, precisionCalibration };
 }
 
@@ -1002,9 +1004,9 @@ export async function runEvolvingContest(
     exam.result.metrics.runnerReport = runnerReport;
     Object.assign(exam.result.metrics, heldFeatures);
     results.push(exam.result);
-    // A control seat ships and calls on its own ledger, but feeds no combiner, the rules seat or
-    // evolution (contestants.ts, ContestantSpec.control).
-    if (spec.control) continue;
+    // A control or standalone seat ships and calls on its own ledger, but feeds no combiner, the
+    // rules seat or evolution (contestants.ts, ContestantSpec.control and .standalone).
+    if (spec.control || spec.standalone) continue;
     laneExamScores.set(spec.id, exam.examScore);
     keep(spec.id, exam);
   }

@@ -769,6 +769,15 @@ export interface PrecisionTargets {
    * never silences the feed - see chooseCutoff.
    */
   confidenceZ?: number;
+  /**
+   * A pace ceiling, in calls per hour of evidence: when set, only cutoffs whose calls (cooldown
+   * replayed) came to at most this many per hour are candidates, and among them the usual rule
+   * picks - the targets first, else the best 2x lower bound, loosened by coverageTolerance.
+   * minSupportShare doesn't apply: it sets a floor on calls, which is what the ceiling is there
+   * to stop. For the high-precision seats (CuratorRecipe.callsPerHour): few calls, the best hit
+   * rate at that volume. 0 or omitted = no ceiling.
+   */
+  maxCallsPerHour?: number;
 }
 
 /**
@@ -888,28 +897,47 @@ export function calibrateThresholdForPrecision(
   targets: PrecisionTargets,
   opts: { cooldownMs?: number } = {},
 ): PrecisionCalibration {
-  const floored = withShareFloor(targets, calls.length);
+  const paced = paceCeiling(calls, targets);
+  const floored = paced === null ? withShareFloor(targets, calls.length) : targets;
+  let records: CutoffRecord[];
   if (
     opts.cooldownMs !== undefined &&
     calls.length > 0 &&
     calls.every((c) => c.tokenId !== undefined && c.anchorAt !== undefined)
   ) {
-    return calibrateWithCooldown(calls, floored, opts.cooldownMs);
+    records = cooldownRecords(calls, opts.cooldownMs);
+  } else {
+    const sorted = [...calls].sort((a, b) => b.probability - a.probability);
+    records = [];
+    let wins = 0;
+    let goals = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const call = sorted[i]!;
+      if (call.labelValue > 0) wins += 1;
+      if (call.labelValue >= GOAL_LABEL) goals += 1;
+      // Only judge at a boundary between distinct probabilities - a cutoff can't split a tie.
+      const next = sorted[i + 1];
+      if (next !== undefined && next.probability === call.probability) continue;
+      records.push({ cutoff: call.probability, n: i + 1, wins, goals });
+    }
   }
-  const sorted = [...calls].sort((a, b) => b.probability - a.probability);
-  const records: CutoffRecord[] = [];
-  let wins = 0;
-  let goals = 0;
-  for (let i = 0; i < sorted.length; i++) {
-    const call = sorted[i]!;
-    if (call.labelValue > 0) wins += 1;
-    if (call.labelValue >= GOAL_LABEL) goals += 1;
-    // Only judge at a boundary between distinct probabilities - a cutoff can't split a tie.
-    const next = sorted[i + 1];
-    if (next !== undefined && next.probability === call.probability) continue;
-    records.push({ cutoff: call.probability, n: i + 1, wins, goals });
-  }
-  return chooseCutoff(records, floored);
+  return chooseCutoff(paced === null ? records : records.filter((r) => r.n <= paced), floored);
+}
+
+/**
+ * The most calls a cutoff may send under targets.maxCallsPerHour, or null when there is no
+ * ceiling. The evidence's hours are the distinct clock hours its calls fall in, not first to
+ * last: the exam grades one fold on the folds either side of it, and a gap in the middle is no
+ * hour a call could have gone out in.
+ */
+function paceCeiling(calls: ScoredOutcome[], targets: PrecisionTargets): number | null {
+  const perHour = targets.maxCallsPerHour ?? 0;
+  if (!(perHour > 0)) return null;
+  const hours = new Set<number>();
+  for (const c of calls)
+    if (c.anchorAt !== undefined) hours.add(Math.floor(c.anchorAt.getTime() / 3_600_000));
+  if (hours.size === 0) return null;
+  return perHour * hours.size;
 }
 
 /** The targets with minSupport raised to minSupportShare of `calls` calls, when that is larger. */
@@ -923,7 +951,7 @@ function withShareFloor(targets: PrecisionTargets, calls: number): PrecisionTarg
 const COOLDOWN_CALIBRATION_GRID = 400;
 
 /**
- * The cutoff search, replaying the per-token alert cooldown. In production a token is alerted
+ * The cutoff records, replaying the per-token alert cooldown. In production a token is alerted
  * the FIRST time it clears the cutoff and then not again for the cooldown, so the calls a cutoff
  * really sends are not "every row above it" - hourly samples of one hot token would otherwise
  * count many times and make a cutoff look better supported (and usually more accurate) than the
@@ -934,11 +962,7 @@ const COOLDOWN_CALIBRATION_GRID = 400;
  * That makes each cutoff a full pass, so cutoffs are taken from a grid over the distinct
  * probabilities (at most COOLDOWN_CALIBRATION_GRID of them) rather than all of them.
  */
-function calibrateWithCooldown(
-  calls: ScoredOutcome[],
-  targets: PrecisionTargets,
-  cooldownMs: number,
-): PrecisionCalibration {
+function cooldownRecords(calls: ScoredOutcome[], cooldownMs: number): CutoffRecord[] {
   const byTime = [...calls].sort((a, b) => a.anchorAt!.getTime() - b.anchorAt!.getTime());
   const distinct = [...new Set(calls.map((c) => c.probability))].sort((a, b) => b - a);
   const step = Math.max(1, Math.floor(distinct.length / COOLDOWN_CALIBRATION_GRID));
@@ -965,7 +989,7 @@ function calibrateWithCooldown(
     }
     records.push({ cutoff, n, wins, goals });
   }
-  return chooseCutoff(records, targets);
+  return records;
 }
 
 /** One point on the hit-rate curve: what sending everything at or above `minProbability` earned. */
@@ -1556,8 +1580,11 @@ export async function walkForwardEvaluate(
         calibrateThresholdForPrecision(calls, opts.targets!, { cooldownMs });
       const modelCutoff = calibrate(others.flatMap((o) => o.model.map((m) => call(m.row, m.rank)))).threshold;
       modelCalls = modelCutoff === null ? [] : fold.model.filter((m) => m.rank >= modelCutoff);
-      const heuristicCalibration = calibrate(
+      // A paced seat's ceiling is its own: the heuristic plays the field's rule, as it does live.
+      const heuristicCalibration = calibrateThresholdForPrecision(
         others.flatMap((o) => o.heuristic.map((h) => call(h.row, h.confidence))),
+        { ...opts.targets, maxCallsPerHour: undefined },
+        { cooldownMs },
       );
       // Same rule as production (heuristicGate in curatedAlerts.ts): no cutoff (no evidence)
       // leaves the gate alone; otherwise the heuristic sends at its calibrated cutoff.

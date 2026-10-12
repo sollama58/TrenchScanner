@@ -498,6 +498,43 @@ describe("calibrateThresholdForPrecision", () => {
     ).toBe(best.support);
   });
 
+  it("under a pace ceiling, picks only among cutoffs that sent at most that many calls an hour", () => {
+    // 100 calls, one every 6 minutes over 10 hours: 10 an hour in all. The top 12 all win, then
+    // 4 in 10. Without a ceiling a 30% share floor sends 30; at 2 an hour no cutoff may send more
+    // than 20 (10 distinct hours), and the share floor no longer applies.
+    const at = (i: number) => new Date(Date.UTC(2026, 9, 12, 0, 0) + i * 6 * 60_000);
+    const set = calls(100, (i) => (i < 12 ? 2 : i % 10 < 4 ? 1 : 0)).map((c, i) => ({
+      ...c,
+      tokenId: `t${i}`,
+      anchorAt: at(i),
+    }));
+    const field = { ...targets, minSupportShare: 0.3 };
+    expect(calibrateThresholdForPrecision(set, field).support).toBeGreaterThanOrEqual(30);
+    const paced = calibrateThresholdForPrecision(set, { ...field, maxCallsPerHour: 2 });
+    expect(paced.support).toBeGreaterThanOrEqual(targets.minSupport);
+    expect(paced.support).toBeLessThanOrEqual(20);
+    expect(paced.meetsTargets).toBe(true);
+    // The same with the cooldown replayed.
+    const cooled = calibrateThresholdForPrecision(
+      set,
+      { ...field, maxCallsPerHour: 2 },
+      { cooldownMs: 3_600_000 },
+    );
+    expect(cooled.support).toBeLessThanOrEqual(20);
+    // Hours are the distinct clock hours the calls fall in: a gap between them counts for nothing.
+    const gapped = set.map((c, i) => ({
+      ...c,
+      anchorAt: i < 50 ? at(i) : new Date(at(i).getTime() + 48 * 3_600_000),
+    }));
+    expect(
+      calibrateThresholdForPrecision(gapped, { ...field, maxCallsPerHour: 2 }).support,
+    ).toBeLessThanOrEqual(20);
+    // 0 is no ceiling.
+    expect(calibrateThresholdForPrecision(set, { ...field, maxCallsPerHour: 0 }).support).toBe(
+      calibrateThresholdForPrecision(set, field).support,
+    );
+  });
+
   it("has no cutoff only when nothing had enough alerts to judge", () => {
     const result = calibrateThresholdForPrecision(
       calls(5, () => 2),

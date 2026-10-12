@@ -32,6 +32,9 @@ import type { CuratorLearner } from "./trainer.js";
  *    consensus's unlearned rival.
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
  *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
+ *    Two learner seats are "standalone" (Sharp Trees, Sharp Deep Trees): an existing recipe at
+ *    a cutoff held to a few calls an hour for the best hit rate, outside the combiners and
+ *    evolution (see ContestantSpec.standalone).
  *  - "topslice": only the most confident calls of the tree seats - a token one of them ranks in
  *    the top quarter of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
  *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
@@ -67,6 +70,12 @@ export interface CuratorRecipe {
   twoStage?: boolean;
   /** Two-step narrative shape (see NarrativeBlendCuratorParams in trainer.ts): narrative seats only. */
   narrativeBlend?: boolean;
+  /**
+   * A pace ceiling on the seat's cutoff (PrecisionTargets.maxCallsPerHour): its exam and its
+   * cutoff only consider cutoffs that sent at most this many calls an hour, and pick the best hit
+   * rate among them. Unset = the field's rule, which leans toward catching more runners.
+   */
+  callsPerHour?: number;
 }
 
 export interface ContestantSpec {
@@ -89,6 +98,14 @@ export interface ContestantSpec {
    */
   control?: boolean;
   /**
+   * A seat with its own cutoff rule (learners only, CuratorRecipe.callsPerHour): it trains, sits
+   * the exam, calls and can become the default like any learner, but no combiner stacks it and
+   * evolution neither breeds from nor replaces it. Its recipe is another seat's, so stacking it
+   * would count that seat twice, and a bred recipe taking the seat would drop the rule it is there
+   * for.
+   */
+  standalone?: boolean;
+  /**
    * A retired seat: it no longer trains, calls, joins a combiner, breeds or shows on the roster,
    * and its past calls stay in the database but out of live stats (RETIRED_CONTESTANT_IDS). The
    * spec stays so its id is never reused and old rows still have a name.
@@ -105,6 +122,10 @@ export const TOP_SLICE_CONTESTANT = "top-slice";
 export const NARRATIVE_CONTESTANT = "narrative";
 /** The two-step narrative seat - see the "narrative" role above and NarrativeBlendCuratorParams. */
 export const NARRATIVE_BLEND_CONTESTANT = "narrative-blend";
+
+/** The high-precision seats - see HIGH_PRECISION_CALLS_PER_HOUR. */
+export const SHARP_TREES_CONTESTANT = "sharp-trees";
+export const SHARP_DEEP_TREES_CONTESTANT = "sharp-deep-trees";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
 export const RECENT_HALF_LIFE_DAYS = 3;
@@ -174,10 +195,30 @@ export const TREES_NO_TOKENSAGE_FEATURES: readonly CandidateFeatureName[] = LEAR
   (name) => !name.startsWith("ns") && !(ALL_NARRATIVE_FEATURES as readonly string[]).includes(name),
 );
 
-/** A learner the combiners stack and evolution works on: every learner but the control seats. */
+/**
+ * A learner the combiners stack and evolution works on: every learner but the control and
+ * standalone seats.
+ */
 export function isMemberLearner(spec: ContestantSpec): boolean {
-  return spec.role === "learner" && spec.control !== true && spec.retired !== true;
+  return (
+    spec.role === "learner" && spec.control !== true && spec.standalone !== true && spec.retired !== true
+  );
 }
+
+/**
+ * The high-precision seats' pace ceiling (user ask 2026-10-12: "not call that many tokens, but
+ * have an incredibly high hit rate for runners", at a rate still tradeable, about 6 an hour).
+ * Each sits the exam and picks its cutoff under this ceiling (PrecisionTargets.maxCallsPerHour):
+ * among the cutoffs that sent at most this many calls an hour, the best 2x lower bound, loosened
+ * by the field's coverage tolerance. The governor holds it there live (seatPacePerHour).
+ * Walk-forward replay, 12-hour blocks 10-07..10-12 (8,758 decision moments, base 2x rate 13.0%),
+ * each block's cutoff chosen on the three days before it: the Trees recipe sent 2.5 calls an hour
+ * at 30.1% 2x (+-2.5) and 12.8% 4x, against 14.3 an hour at 22.9% under the field's rule; Deep
+ * Trees 2.9 an hour at 28.3% and 12.7%, against 12.3 at 23.8%. 2x rate climbs only at the very
+ * top of the ranking (the top call an hour: 33-35%), so the cutoff settles well under the
+ * ceiling. Combining seats (mean or minimum rank) did no better.
+ */
+export const HIGH_PRECISION_CALLS_PER_HOUR = 6;
 
 export const CONTESTANTS: readonly ContestantSpec[] = [
   {
@@ -328,6 +369,30 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary: "Predicts how big the run will be, so a likely 5x ranks above a sure 2x.",
     role: "learner",
     recipe: { learner: "gbdt", boosting: { objective: "runSize" } },
+  },
+  {
+    id: SHARP_TREES_CONTESTANT,
+    name: "Sharp Trees",
+    description: `Trees' recipe held to its best hit rate at no more than ${HIGH_PRECISION_CALLS_PER_HOUR} calls an hour: the cutoff with the best 2x record among those that sent that few in its exam`,
+    summary:
+      "Calls only the tokens Trees is surest of, a few an hour, for the best hit rate rather than catching every runner.",
+    role: "learner",
+    recipe: { learner: "gbdt", callsPerHour: HIGH_PRECISION_CALLS_PER_HOUR },
+    standalone: true,
+  },
+  {
+    id: SHARP_DEEP_TREES_CONTESTANT,
+    name: "Sharp Deep Trees",
+    description: `Deep Trees' recipe held to its best hit rate at no more than ${HIGH_PRECISION_CALLS_PER_HOUR} calls an hour: the cutoff with the best 2x record among those that sent that few in its exam`,
+    summary:
+      "Calls only the tokens Deep Trees is surest of, a few an hour, for the best hit rate rather than catching every runner.",
+    role: "learner",
+    recipe: {
+      learner: "gbdt",
+      boosting: { maxDepth: 5, minLeafRows: 50, maxTrees: 200 },
+      callsPerHour: HIGH_PRECISION_CALLS_PER_HOUR,
+    },
+    standalone: true,
   },
   {
     id: NARRATIVE_CONTESTANT,
