@@ -77,7 +77,8 @@ async function buildLeaderboard() {
         {
           matchId: match.id,
           token: match.token,
-          alertMcapUsd: match.snapshot.marketCapUsd,
+          // The price the alert was priced at (see Match.alertMcapUsd), which returnPct counts from.
+          alertMcapUsd: match.alertMcapUsd ?? match.snapshot.marketCapUsd,
           peakMcapUsd: match.peakMcapUsd,
           peakMcapAt: match.peakMcapAt,
           returnPct: match.peakReturnPct,

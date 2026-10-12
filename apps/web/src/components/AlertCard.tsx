@@ -653,15 +653,23 @@ export function recordedPeakOf(card: Card): { pct: number | null; isRunPeak: boo
 export const CALL_READING_LAG_MS = 60_000;
 
 /**
- * The card's "Now" market cap, or null while the only reading is from a model call's first minute
- * (see CALL_READING_LAG_MS). A filter alert's own figure is DexScreener's like its readings, so it
- * shows every one.
+ * The card's "Now" market cap, or null while the only reading is from the first minute after a
+ * price read fresh (see CALL_READING_LAG_MS): a model call's, or a filter alert's priced from a
+ * fresh quote (alertMcapUsd). A filter alert on the snapshot's own DexScreener figure lags like its
+ * readings, so it shows every one.
  */
 export function nowReading(card: Card): number | null {
   const mcap = card.currentMarketCapUsd;
-  if (mcap === null || card.kind === "match" || !card.curated) return mcap;
+  if (mcap === null) return mcap;
+  const pricedAt =
+    card.kind === "match"
+      ? card.alertMcapUsd != null
+        ? card.matchedAt
+        : null
+      : (card.curated?.alertedAt ?? null);
+  if (pricedAt === null) return mcap;
   const at = card.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : NaN;
-  const calledAt = Date.parse(card.curated.alertedAt);
+  const calledAt = Date.parse(pricedAt);
   if (!Number.isFinite(at) || !Number.isFinite(calledAt)) return mcap;
   return at >= calledAt + CALL_READING_LAG_MS ? mcap : null;
 }

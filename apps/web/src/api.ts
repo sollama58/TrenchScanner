@@ -231,6 +231,11 @@ export interface Card {
   matchedAt: string;
   score: number;
   peakReturnPct: number | null;
+  /**
+   * A filter alert priced from a fresh quote: the market cap it was priced at, which `snapshot`
+   * already shows and its Peak counts from. Null (or absent) on one priced from the snapshot.
+   */
+  alertMcapUsd?: number | null;
   token: Token;
   snapshot: Snapshot;
   latestSnapshot: Snapshot | null;

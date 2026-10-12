@@ -95,8 +95,14 @@ describe("nowReading", () => {
     expect(nowReading(call("curated", at(60)))).toBe(47_500);
   });
 
-  it("shows every reading on a filter alert, whose own figure lags the same way", () => {
+  it("shows every reading on a filter alert priced from its snapshot, which lags the same way", () => {
     expect(nowReading(call("match", at(14)))).toBe(47_500);
+  });
+
+  it("leaves out the first minute on a filter alert priced from a fresh quote", () => {
+    const match = { ...call("match", at(14)), matchedAt: called, alertMcapUsd: 11_400 } as Card;
+    expect(nowReading(match)).toBeNull();
+    expect(nowReading({ ...match, currentMarketCapAt: at(75) })).toBe(47_500);
   });
 
   it("shows the reading when it has no time (older API builds)", () => {

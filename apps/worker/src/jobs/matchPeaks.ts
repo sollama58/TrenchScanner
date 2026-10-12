@@ -1,7 +1,15 @@
-import { prisma, createLogger } from "@trenchscanner/core";
+import { prisma, createLogger, CALL_PEAK_READING_LAG_MS } from "@trenchscanner/core";
 import { recordCuratedPeaks } from "./curatedPeaks.js";
 
 const logger = createLogger("match-peaks");
+
+/**
+ * CALL_PEAK_READING_LAG_MS in whole seconds. A match priced from a fresh quote (Match.alertMcapUsd)
+ * counts readings toward its peak only from a minute after it: DexScreener runs 45-60 s behind the
+ * quote, so earlier ones still show the market before the alert. A match on the scan snapshot's
+ * own (DexScreener) price lags the same way as its readings, and counts them all.
+ */
+const LAG_SECS = CALL_PEAK_READING_LAG_MS / 1000;
 
 export interface PeakRecordingResult {
   fromSnapshots: number;
@@ -86,12 +94,12 @@ export async function recordMatchPeaks(
         SELECT s."marketCapUsd", s."takenAt"
         FROM "TokenSnapshot" s
         WHERE s."tokenId" = m2."tokenId"
-          AND s."takenAt" >= m2."matchedAt"
+          AND s."takenAt" >= m2."matchedAt" + CASE WHEN m2."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
         ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
         LIMIT 1
       ) best ON TRUE
       WHERE m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
-        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
+        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), COALESCE(m2."alertMcapUsd", alert."marketCapUsd"))
     ) p
     -- Re-checked on the row being updated, not just on the m2 copy above: if another pass raised
     -- this match's peak while this statement waited on its row lock, Postgres re-evaluates only
@@ -121,7 +129,7 @@ export async function recordMatchPeaks(
         FROM "TokenSnapshot" s
         WHERE s."tokenId" = m2."tokenId"
           AND s."takenAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
-          AND s."takenAt" >= m2."matchedAt"
+          AND s."takenAt" >= m2."matchedAt" + CASE WHEN m2."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
         ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
         LIMIT 1
       ) best ON TRUE
@@ -143,7 +151,7 @@ export async function recordMatchPeaks(
           )
         )
         AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
-        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
+        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), COALESCE(m2."alertMcapUsd", alert."marketCapUsd"))
     ) p
     -- Re-checked on the row being updated, not just on the m2 copy above: if another pass raised
     -- this match's peak while this statement waited on its row lock, Postgres re-evaluates only
@@ -170,8 +178,8 @@ export async function recordMatchPeaks(
       AND m."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
       AND t."liveMarketCapUsd" IS NOT NULL
       AND t."liveDataAt" IS NOT NULL
-      AND t."liveDataAt" >= m."matchedAt"
-      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")
+      AND t."liveDataAt" >= m."matchedAt" + CASE WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
+      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))
   `
       : await prisma.$executeRaw`
     UPDATE "Match" m
@@ -184,8 +192,8 @@ export async function recordMatchPeaks(
       AND t."liveMarketCapUsd" IS NOT NULL
       AND t."liveDataAt" IS NOT NULL
       AND t."liveDataAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
-      AND t."liveDataAt" >= m."matchedAt"
-      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")
+      AND t."liveDataAt" >= m."matchedAt" + CASE WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
+      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))
   `;
 
   if (fromSnapshots > 0 || fromLivePings > 0) {
@@ -305,13 +313,13 @@ async function recordWindowedPeaksForTokens(
         FROM "TokenSnapshot" s
         WHERE s."tokenId" = m2."tokenId"
           AND s."takenAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
-          AND s."takenAt" >= m2."matchedAt"
+          AND s."takenAt" >= m2."matchedAt" + CASE WHEN m2."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
         ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
         LIMIT 1
       ) best ON TRUE
       WHERE m2."tokenId" = ANY(${tokenIds.snapshots}::text[])
         AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
-        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
+        AND best."marketCapUsd" > GREATEST(COALESCE(m2."peakMcapUsd", 0), COALESCE(m2."alertMcapUsd", alert."marketCapUsd"))
     ) p
     -- Re-checked on the row being updated - see the same line in recordMatchPeaks.
     WHERE m.id = p.id
@@ -332,8 +340,8 @@ async function recordWindowedPeaksForTokens(
       AND t."liveMarketCapUsd" IS NOT NULL
       AND t."liveDataAt" IS NOT NULL
       AND t."liveDataAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
-      AND t."liveDataAt" >= m."matchedAt"
-      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")
+      AND t."liveDataAt" >= m."matchedAt" + CASE WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
+      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))
   `;
   if (fromSnapshots > 0 || fromLivePings > 0) {
     logger.info("recorded new match peaks", { fromSnapshots, fromLivePings });
@@ -419,9 +427,9 @@ async function recordMatchPeaksForTokens(
       FROM "Match" m2
       JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
       JOIN (
-        SELECT a."tokenId", a."matchedAt", b."marketCapUsd" AS peak_mcap, b."takenAt" AS peak_at
+        SELECT a."tokenId", a."matchedAt", a.fresh, b."marketCapUsd" AS peak_mcap, b."takenAt" AS peak_at
         FROM (
-          SELECT DISTINCT "tokenId", "matchedAt" FROM "Match"
+          SELECT DISTINCT "tokenId", "matchedAt", "alertMcapUsd" IS NOT NULL AS fresh FROM "Match"
           WHERE "tokenId" = ANY(${tokenIds})
             AND "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
         ) a
@@ -429,14 +437,19 @@ async function recordMatchPeaksForTokens(
           SELECT s."marketCapUsd", s."takenAt"
           FROM "TokenSnapshot" s
           WHERE s."tokenId" = a."tokenId"
-            AND s."takenAt" >= GREATEST(a."matchedAt", ${snapshotsSince})
+            AND s."takenAt" >= GREATEST(
+              a."matchedAt" + CASE WHEN a.fresh THEN MAKE_INTERVAL(secs => ${LAG_SECS}::int) ELSE INTERVAL '0 seconds' END,
+              ${snapshotsSince}
+            )
           ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
           LIMIT 1
         ) b ON TRUE
-      ) best ON best."tokenId" = m2."tokenId" AND best."matchedAt" = m2."matchedAt"
+      ) best ON best."tokenId" = m2."tokenId"
+        AND best."matchedAt" = m2."matchedAt"
+        AND best.fresh = (m2."alertMcapUsd" IS NOT NULL)
       WHERE m2."tokenId" = ANY(${tokenIds})
         AND m2."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
-        AND best.peak_mcap > GREATEST(COALESCE(m2."peakMcapUsd", 0), alert."marketCapUsd")
+        AND best.peak_mcap > GREATEST(COALESCE(m2."peakMcapUsd", 0), COALESCE(m2."alertMcapUsd", alert."marketCapUsd"))
     ) p
     -- Re-checked on the row being updated, not just on the m2 copy above: if another pass raised
     -- this match's peak while this statement waited on its row lock, Postgres re-evaluates only
@@ -455,8 +468,8 @@ async function recordMatchPeaksForTokens(
       AND m."matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
       AND t."liveMarketCapUsd" IS NOT NULL
       AND t."liveDataAt" IS NOT NULL
-      AND t."liveDataAt" >= m."matchedAt"
-      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")
+      AND t."liveDataAt" >= m."matchedAt" + CASE WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
+      AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))
   `;
   return { fromSnapshots, fromLivePings };
 }

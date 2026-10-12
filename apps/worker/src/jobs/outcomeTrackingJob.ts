@@ -22,7 +22,10 @@ export const LEADERBOARD_QUALIFYING_RETURN_PCT = 100;
 
 /** The persisted outcome state of one Match, plus the alert-time mcap it's all measured against. */
 export interface MatchOutcomeState {
-  /** snapshot.marketCapUsd - the mcap at match time, frozen forever. The baseline for every %. */
+  /**
+   * The mcap at match time, frozen forever: Match.alertMcapUsd when the alert was priced from a
+   * fresh quote, else snapshot.marketCapUsd. The baseline for every %.
+   */
   alertMcapUsd: number;
   peakMcapUsd: number | null;
   peakMcapAt: Date | null;
@@ -168,6 +171,7 @@ export async function runOutcomeTrackingJob(
       peakReturnPct: true,
       hitHundredPctAt: true,
       token: { select: { mintAddress: true } },
+      alertMcapUsd: true,
       snapshot: { select: { marketCapUsd: true } },
     },
   });
@@ -198,7 +202,7 @@ export async function runOutcomeTrackingJob(
 
       const update = reconcileMatchOutcome(
         {
-          alertMcapUsd: match.snapshot.marketCapUsd,
+          alertMcapUsd: match.alertMcapUsd ?? match.snapshot.marketCapUsd,
           peakMcapUsd: match.peakMcapUsd,
           peakMcapAt: match.peakMcapAt,
           peakReturnPct: match.peakReturnPct,
@@ -283,8 +287,9 @@ export async function repairOutcomeBookkeeping(options: { sinceMinutes?: number 
     FROM (
       SELECT m2.id,
              CASE
-               WHEN alert."marketCapUsd" > 0
-               THEN (m2."peakMcapUsd" - alert."marketCapUsd") / alert."marketCapUsd" * 100
+               WHEN COALESCE(m2."alertMcapUsd", alert."marketCapUsd") > 0
+               THEN (m2."peakMcapUsd" - COALESCE(m2."alertMcapUsd", alert."marketCapUsd"))
+                 / COALESCE(m2."alertMcapUsd", alert."marketCapUsd") * 100
              END AS pct
       FROM "Match" m2
       JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
@@ -313,8 +318,9 @@ export async function repairOutcomeBookkeeping(options: { sinceMinutes?: number 
              -- A zero alert mcap can't produce a meaningful multiple; NULL is the honest answer,
              -- and the WHERE below then leaves the row alone rather than reselecting it forever.
              CASE
-               WHEN alert."marketCapUsd" > 0
-               THEN (m2."peakMcapUsd" - alert."marketCapUsd") / alert."marketCapUsd" * 100
+               WHEN COALESCE(m2."alertMcapUsd", alert."marketCapUsd") > 0
+               THEN (m2."peakMcapUsd" - COALESCE(m2."alertMcapUsd", alert."marketCapUsd"))
+                 / COALESCE(m2."alertMcapUsd", alert."marketCapUsd") * 100
              END AS pct
       FROM "Match" m2
       JOIN "TokenSnapshot" alert ON alert.id = m2."snapshotId"
