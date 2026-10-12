@@ -119,10 +119,14 @@ export async function liveCallRecords(
   models: readonly string[],
   since: Date,
   lanes: readonly Lane[],
-  /** Only calls of this tier (CuratedAlert.tier), e.g. "high" for the high-conviction record. */
-  opts: { tier?: string } = {},
+  /**
+   * tier: only calls of this tier (CuratedAlert.tier), e.g. "high" for the high-conviction record.
+   * until: only calls made before this moment (the window's end; open-ended without it).
+   */
+  opts: { tier?: string; until?: Date } = {},
 ): Promise<Map<string, CallRecord>> {
   const tier = opts.tier ?? null;
+  const until = opts.until?.toISOString() ?? null;
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
   const out = new Map<string, CallRecord>();
@@ -162,6 +166,7 @@ export async function liveCallRecords(
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${earliest}
         AND (${tier}::text IS NULL OR a."tier" = ${tier}::text)
+        AND (${until}::text IS NULL OR a."createdAt" < ${until}::timestamp(3))
     )
     SELECT model,
            count(*) AS calls,
