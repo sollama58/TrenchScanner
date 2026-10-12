@@ -16,6 +16,8 @@ interface DexScreenerPair {
   baseToken: { address: string; name?: string; symbol?: string };
   quoteToken: { address: string; symbol?: string };
   priceUsd?: string;
+  /** Price in the quote token (SOL for a Pump.fun curve). */
+  priceNative?: string;
   marketCap?: number;
   fdv?: number;
   liquidity?: { usd?: number };
@@ -268,21 +270,73 @@ export class DexScreenerClient {
    * lists the pool. Null when no PumpSwap pool is listed; throws when DexScreener can't answer.
    */
   async pumpSwapGraduation(mintAddress: string): Promise<Date | null> {
+    const gate = {
+      acquire: () => this.gate.acquire(),
+      throttled: (delayMs: number) => this.gate.throttled(delayMs),
+    };
+    return pumpSwapPoolCreatedAt(await this.tokenPairs(mintAddress, gate)) ?? null;
+  }
+
+  /**
+   * Re-reads, from the per-token pairs endpoint, each mint whose batch answer is a Pump.fun curve
+   * at its graduation price. The batch lookup can go on listing only a graduated mint's old curve -
+   * frozen at the graduation price forever, with no PumpSwap pool beside it - so the scan priced
+   * such a coin at ~$45k for as long as it stayed on the watchlist, whatever its pool traded at
+   * (2026-10-11/12: seven coins, one of them dead at $2.7k and still read in band). The per-token
+   * endpoint lists the pool. A curve that is merely close to graduating costs one extra request
+   * and keeps its answer. Bounded per batch; a failed re-read keeps the batch's answer.
+   */
+  private async repairFrozenCurves(
+    pairs: DexScreenerPair[],
+    tokens: CandidateToken[],
+    gate: { acquire: () => Promise<void>; throttled: (delayMs: number) => void },
+  ): Promise<CandidateToken[]> {
+    const atGraduation = new Set(
+      pairs
+        .filter(
+          (p) =>
+            p.chainId === SOLANA_CHAIN_ID &&
+            p.dexId === "pumpfun" &&
+            p.quoteToken?.address === WRAPPED_SOL_MINT &&
+            Number(p.priceNative) >= CURVE_GRADUATION_PRICE_SOL,
+        )
+        .map((p) => p.baseToken?.address),
+    );
+    const suspects = tokens
+      .filter((t) => t.dexId === "pumpfun" && atGraduation.has(t.mintAddress))
+      .slice(0, MAX_CURVE_REPAIRS_PER_BATCH);
+    if (suspects.length === 0) return tokens;
+    const repaired = new Map<string, CandidateToken>();
+    await Promise.all(
+      suspects.map(async (t) => {
+        try {
+          const own = await this.tokenPairs(t.mintAddress, gate);
+          // The curve is known to be at its graduation price, so any PumpSwap pool above dust is
+          // the market - even a drained one beside a curve whose last hour still shows the bundle.
+          const pools = own.filter(
+            (p) => p.dexId === "pumpswap" && (p.liquidity?.usd ?? 0) >= MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD,
+          );
+          if (pools.length === 0) return;
+          const [token] = this.selectCanonicalPairs(own.filter((p) => p.dexId !== "pumpfun"));
+          if (token) repaired.set(t.mintAddress, token);
+        } catch (err) {
+          logger.warn("frozen-curve re-read failed", { error: String(err) });
+        }
+      }),
+    );
+    return tokens.map((t) => repaired.get(t.mintAddress) ?? t);
+  }
+
+  /** Every pair DexScreener lists for one mint as its base token (/token-pairs/v1). */
+  private async tokenPairs(
+    mintAddress: string,
+    gate: { acquire: () => Promise<void>; throttled: (delayMs: number) => void },
+  ): Promise<DexScreenerPair[]> {
     const pairs = await fetchJson<DexScreenerPair[]>(
       `${this.baseUrl}/token-pairs/v1/${SOLANA_CHAIN_ID}/${encodeURIComponent(mintAddress)}`,
-      {
-        timeoutMs: 5000,
-        retries: 0,
-        gate: {
-          acquire: () => this.gate.acquire(),
-          throttled: (delayMs: number) => this.gate.throttled(delayMs),
-        },
-      },
+      { timeoutMs: 5000, retries: 0, gate },
     );
-    const own = (pairs ?? []).filter(
-      (p) => p.chainId === SOLANA_CHAIN_ID && p.baseToken?.address === mintAddress,
-    );
-    return pumpSwapPoolCreatedAt(own) ?? null;
+    return (pairs ?? []).filter((p) => p.chainId === SOLANA_CHAIN_ID && p.baseToken?.address === mintAddress);
   }
 
   /** One DexScreener lookup; `answeredOut` collects the mints whose batch came back. */
@@ -347,7 +401,11 @@ export class DexScreenerClient {
         const answered = new Date();
         for (const mint of chunk) settled.add(mint);
         for (const mint of chunk) answeredOut?.add(mint);
-        const tokens = this.selectCanonicalPairs(pairs ?? [], new Set(chunk));
+        const tokens = await this.repairFrozenCurves(
+          pairs ?? [],
+          this.selectCanonicalPairs(pairs ?? [], new Set(chunk)),
+          gate,
+        );
         if (seenAt) for (const t of tokens) seenAt.set(t.mintAddress, answered);
         this.rememberQuotes(tokens, answered);
         results.push(...tokens.map((t) => ({ ...t })));
@@ -486,6 +544,16 @@ export function pumpSwapPoolCreatedAt(
     .map((p) => p.pairCreatedAt as number);
   return times.length > 0 ? new Date(Math.min(...times)) : undefined;
 }
+
+const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+/**
+ * A Pump.fun curve at or above this price (SOL per token) is at its graduation price or within a
+ * few percent of it: a completed curve stops at about 4.11e-7 (85 SOL raised), and DexScreener's
+ * frozen curves read 3.94e-7 to 4.11e-7 - the last bundle buy can stop short of the top.
+ */
+const CURVE_GRADUATION_PRICE_SOL = 3.8e-7;
+/** Frozen-curve re-reads one batch of 30 may make (see repairFrozenCurves). */
+const MAX_CURVE_REPAIRS_PER_BATCH = 5;
 
 /** Below this, a non-curve pool is too thin to be a trustworthy price source. */
 const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;

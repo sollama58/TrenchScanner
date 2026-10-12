@@ -124,6 +124,73 @@ describe("pumpSwapGraduation", () => {
   });
 });
 
+describe("frozen graduation curves", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const SOL = { address: "So11111111111111111111111111111111111111112" };
+  const curve = (mint: string, priceNative: string, marketCap: number) => ({
+    chainId: "solana",
+    dexId: "pumpfun",
+    baseToken: { address: mint },
+    quoteToken: SOL,
+    priceNative,
+    marketCap,
+    volume: { h1: 9_500 },
+    pairCreatedAt: 1_000,
+  });
+
+  it("re-reads a curve stuck at its graduation price and prices the mint off its PumpSwap pool", async () => {
+    // DOWO, 2026-10-12: /tokens/v1 listed only the curve, frozen at $45.9k; the pool traded at $176k.
+    const frozen = curve("dowo", "0.0000004097", 45_904);
+    const live = curve("live", "0.0000001200", 13_000);
+    const pool = {
+      chainId: "solana",
+      dexId: "pumpswap",
+      baseToken: { address: "dowo" },
+      quoteToken: SOL,
+      liquidity: { usd: 37_957 },
+      marketCap: 176_049,
+      pairCreatedAt: 1_000,
+    };
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      const body = url.includes("/token-pairs/") ? [frozen, pool] : [frozen, live];
+      return Promise.resolve(new Response(JSON.stringify(body)));
+    });
+    const tokens = await new DexScreenerClient().getTokensByAddresses(["dowo", "live"], 1, { retries: 0 });
+    const by = new Map(tokens.map((t) => [t.mintAddress, t]));
+    expect(by.get("dowo")).toMatchObject({
+      dexId: "pumpswap",
+      marketCapUsd: 176_049,
+      graduatedAt: new Date(1_000),
+    });
+    expect(by.get("live")).toMatchObject({ dexId: "pumpfun", marketCapUsd: 13_000 });
+    expect(urls.filter((u) => u.includes("/token-pairs/"))).toEqual([
+      "https://api.dexscreener.com/token-pairs/v1/solana/dowo",
+    ]);
+  });
+
+  it("keeps the batch answer when no pool is listed or the re-read fails", async () => {
+    const nearTop = curve("near", "0.0000003900", 43_000);
+    const broken = curve("broken", "0.0000004100", 45_000);
+    vi.stubGlobal("fetch", (url: string) => {
+      if (url.endsWith("/broken")) return Promise.resolve(new Response("{}", { status: 500 }));
+      const body = url.includes("/token-pairs/") ? [nearTop] : [nearTop, broken];
+      return Promise.resolve(new Response(JSON.stringify(body)));
+    });
+    const tokens = await new DexScreenerClient().getTokensByAddresses(["near", "broken"], 1, { retries: 0 });
+    expect(tokens.map((t) => [t.mintAddress, t.dexId, t.marketCapUsd])).toEqual(
+      expect.arrayContaining([
+        ["near", "pumpfun", 43_000],
+        ["broken", "pumpfun", 45_000],
+      ]),
+    );
+  });
+});
+
 describe("getTokensByAddresses deadline", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
