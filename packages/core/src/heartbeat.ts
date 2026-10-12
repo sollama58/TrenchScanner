@@ -19,6 +19,7 @@ export type HeartbeatJob =
   | "model-backup"
   | "score-weights"
   | "lighthouse-rollup"
+  | "label-regrade"
   | "telegram-dispatch"
   | "pipeline-watch";
 
@@ -51,6 +52,7 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "model-backup": "trainer",
   "score-weights": "trainer",
   "lighthouse-rollup": "trainer",
+  "label-regrade": "trainer",
 };
 
 /** Whether a process in `role` schedules `job`. */

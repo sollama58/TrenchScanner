@@ -45,6 +45,7 @@ import {
 } from "./scheduler.js";
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
+import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
 
@@ -297,6 +298,16 @@ async function main() {
     scheduleInterval("lighthouse-rollup", () => runLighthouseRollupJob(), LIGHTHOUSE_ROLLUP_MINUTES, {
       deadlineMinutes: 30,
     }),
+  );
+  // Re-grades history to label rule 4 from Pump.fun's minute candles (labelRegradeJob.ts), a
+  // few dozen coins a minute under a lock like the batch jobs below, until nothing is left.
+  schedule("label-regrade", () =>
+    scheduleInterval(
+      "label-regrade",
+      () => withJobLock("label-regrade", () => runLabelRegradeJob(deps.pumpFun)),
+      1,
+      { deadlineMinutes: 15 },
+    ),
   );
   // Cleanup, outcome tracking and the AI judge each run under a lock shared by every worker
   // process (see withJobLock): a deploy's old and new trainer side by side ran each of them twice.

@@ -758,6 +758,14 @@ model CandidateOutcome {
   /// and the exam grades rule 3 and up.
   labelRule      Int       @default(3)
 
+  /// When the history re-grade (apps/worker/src/jobs/labelRegradeJob.ts) looked at this rule-3
+  /// row: re-graded to rule 4 from Pump.fun's minute candles, or left as it was when they couldn't
+  /// vouch for it (rule3Grade null then). Null on rows it hasn't reached and on rows born rule 4.
+  regradedAt     DateTime?
+  /// The row's rule-3 grade (anchor, aggregates, labels) as it was before the re-grade replaced
+  /// it - enough to read the two side by side, or to put it back.
+  rule3Grade     Json?
+
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
   /// snapshot knew, NOT a snapshot reference, so training data outlives the 30-day
   /// TokenSnapshot purge without forcing snapshots to live 6 months. Names are the stable
