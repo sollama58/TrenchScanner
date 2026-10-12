@@ -227,6 +227,7 @@ export function buildPending(
     matchedAt: Date;
     score: number;
     filter: { name: string };
+    alertMcapUsd?: number | null;
     token: AlertCard["token"];
     snapshot: AlertCard["snapshot"];
   }[],
@@ -269,7 +270,13 @@ export function buildPending(
   if (chat.filterMatches) {
     for (const m of matches) {
       if (!inWindow(m.matchedAt)) continue;
-      const p = take(m.tokenId, m.matchedAt, m.token, m.snapshot);
+      // The price the alert was priced at when the scan had a fresh quote (Match.alertMcapUsd),
+      // over the snapshot's DexScreener figure, 45-60 s behind.
+      const snapshot =
+        m.snapshot && m.alertMcapUsd != null && m.alertMcapUsd > 0
+          ? { ...m.snapshot, marketCapUsd: m.alertMcapUsd }
+          : m.snapshot;
+      const p = take(m.tokenId, m.matchedAt, m.token, snapshot);
       if (!p.card.filters.some((f) => f.name === m.filter.name)) {
         p.card.filters.push({ name: m.filter.name, score: m.score });
       }
@@ -388,6 +395,7 @@ async function dispatchPass(
             matchedAt: true,
             score: true,
             filter: { select: { name: true } },
+            alertMcapUsd: true,
             token: { select: TOKEN_SELECT },
             snapshot: { select: SNAPSHOT_SELECT },
           },

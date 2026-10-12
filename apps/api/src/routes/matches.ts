@@ -257,6 +257,25 @@ export const MATCH_OUTCOME_SELECT = {
 type MatchOutcomeRow = Prisma.MatchGetPayload<{ select: typeof MATCH_OUTCOME_SELECT }>;
 
 /**
+ * A filter alert's snapshot as its card shows it: with the price the alert was priced at when the
+ * scan had a fresh quote (Match.alertMcapUsd, the anchor its verdict and Peak count from) in place
+ * of the snapshot's DexScreener figures, 45-60 s behind. As serializeCuratedAlert does for a call:
+ * a coin caught on its way up showed an Alert far below what a buyer paid, and a Peak of 2.5x
+ * beside a verdict that it missed 2x.
+ */
+export function matchAlertSnapshot<S extends { priceUsd: number; marketCapUsd: number }>(
+  snapshot: S,
+  alertMcapUsd: number | null,
+): S {
+  if (alertMcapUsd === null || !(alertMcapUsd > 0) || !(snapshot.marketCapUsd > 0)) return snapshot;
+  return {
+    ...snapshot,
+    marketCapUsd: alertMcapUsd,
+    priceUsd: (snapshot.priceUsd / snapshot.marketCapUsd) * alertMcapUsd,
+  };
+}
+
+/**
  * A filter alert is graded by its own outcome row (the watcher copies the verdict onto the match
  * when the window closes). Reads the rows still open for these matches, so a 2x shows the moment
  * it lands and the card doesn't say "Live" for the whole window after the token doubled.
@@ -975,6 +994,7 @@ export async function registerMatchRoutes(
       const current = currentMarketCap(token, latestSnapshot);
       return {
         ...match,
+        snapshot: matchAlertSnapshot(match.snapshot, match.alertMcapUsd),
         kind: "match" as const,
         token,
         latestSnapshot,

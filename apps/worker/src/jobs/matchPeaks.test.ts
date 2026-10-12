@@ -9,6 +9,7 @@ import {
   recordMatchPeaks,
   recordMatchPeaksFullSweep,
 } from "./matchPeaks.js";
+import { repairOutcomeBookkeeping } from "./outcomeTrackingJob.js";
 
 const MIN = 60_000;
 const HOUR = 3_600_000;
@@ -51,7 +52,7 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
     name: string,
     alertMcap: number,
     mcaps: number[],
-    opts: { preMatchMcap?: number } = {},
+    opts: { preMatchMcap?: number; alertMcapUsd?: number; firstMinuteMcap?: number } = {},
   ) {
     const token = await prisma.token.create({
       data: { mintAddress: `${TAG}-${name}`, symbol: name, name },
@@ -68,12 +69,24 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
       await snapshot(opts.preMatchMcap, new Date(matchedAt.getTime() - HOUR));
     }
     const alert = await snapshot(alertMcap, matchedAt);
+    // DexScreener's reading 20 s after the alert, still showing the market from before it.
+    if (opts.firstMinuteMcap !== undefined) {
+      await snapshot(opts.firstMinuteMcap, new Date(matchedAt.getTime() + 20_000));
+    }
     for (const [i, mcap] of mcaps.entries()) {
       await snapshot(mcap, new Date(matchedAt.getTime() + (i + 1) * 7 * MIN));
     }
 
     const match = await prisma.match.create({
-      data: { userId, filterId, tokenId: token.id, snapshotId: alert.id, matchedAt, score: 70 },
+      data: {
+        userId,
+        filterId,
+        tokenId: token.id,
+        snapshotId: alert.id,
+        matchedAt,
+        score: 70,
+        alertMcapUsd: opts.alertMcapUsd ?? null,
+      },
     });
     return { token, match };
   }
@@ -235,6 +248,33 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
       });
       expect((await reload(other.match.id)).peakMcapUsd).toBe(260_000);
     });
+  });
+
+  it("on an alert priced from a fresh quote, counts from that price and skips the first minute", async () => {
+    // Snapshot $40k (DexScreener, a minute behind); the quote said $60k. The reading 20 s later still
+    // shows the $90k from before the alert; the real high after it is $100k.
+    const fresh = await seedMatch("fresh", 40_000, [100_000, 50_000], {
+      alertMcapUsd: 60_000,
+      firstMinuteMcap: 150_000,
+    });
+    await recordMatchPeaks(RETENTION_DAYS);
+    expect((await reload(fresh.match.id)).peakMcapUsd).toBe(100_000);
+    // Its Peak % counts from the quote's $60k too, not the snapshot's $40k (+150%).
+    await repairOutcomeBookkeeping();
+    expect((await reload(fresh.match.id)).peakReturnPct).toBeCloseTo((100_000 / 60_000 - 1) * 100, 6);
+
+    // Below the quote's price, though above the snapshot's: never a peak.
+    const flat = await seedMatch("fresh-flat", 40_000, [55_000], { alertMcapUsd: 60_000 });
+    await recordMatchPeaksFullSweep(RETENTION_DAYS);
+    expect((await reload(flat.match.id)).peakMcapUsd).toBeNull();
+
+    // The nightly sweep applies the same first-minute rule.
+    const swept = await seedMatch("fresh-swept", 40_000, [70_000], {
+      alertMcapUsd: 60_000,
+      firstMinuteMcap: 150_000,
+    });
+    await recordMatchPeaksFullSweep(RETENTION_DAYS);
+    expect((await reload(swept.match.id)).peakMcapUsd).toBe(70_000);
   });
 
   it("the batched nightly sweep recovers the same full-history peaks", async () => {

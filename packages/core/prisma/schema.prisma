@@ -1043,6 +1043,12 @@ model Match {
   // (the mcap at match time), not these fields - see outcomeTrackingJob.ts for why.
   peakMcapUsd     Float?
   peakMcapAt      DateTime?
+  // The market cap the alert was priced at when the scan had a fresh quote (label rule 4, the
+  // price its grading row is anchored at), on DexScreener's supply. When set it replaces
+  // snapshot.marketCapUsd as the baseline for every figure below and for the card's Alert figure,
+  // and readings from the first minute after the match don't count toward its peak
+  // (CALL_PEAK_READING_LAG_MS): DexScreener runs 45-60 s behind the quote. Null: the snapshot's.
+  alertMcapUsd    Float?
   // (peakMcapUsd - snapshot.marketCapUsd) / snapshot.marketCapUsd * 100 - kept in step with
   // peakMcapUsd by the outcome-tracking job, which recomputes it whenever the peak rises AND
   // repairs it wherever the two have drifted apart (rows whose peak was recorded before this

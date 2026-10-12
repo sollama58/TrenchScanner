@@ -166,9 +166,13 @@ async function raiseMatchPeaks(
       WHERE m."tokenId" = v.id
         AND alert.id = m."snapshotId"
         AND m."matchedAt" > now() - MAKE_INTERVAL(days => ${windowDays}::int)
-        -- A reading taken before the alert (a lookup spans seconds) is not its peak.
-        AND v.at >= m."matchedAt"
-        AND v.mcap > GREATEST(COALESCE(m."peakMcapUsd", 0), alert."marketCapUsd")`;
+        -- A reading taken before the alert (a lookup spans seconds) is not its peak; nor, on an
+        -- alert priced from a fresh quote, one from the minute after it (see Match.alertMcapUsd).
+        AND v.at >= m."matchedAt" + CASE
+          WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds'
+          ELSE MAKE_INTERVAL(secs => ${CALL_PEAK_READING_LAG_MS / 1000}::int)
+        END
+        AND v.mcap > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))`;
   } catch (err) {
     logger.warn("failed to record live match peaks", { count: rows.length, error: String(err) });
   }

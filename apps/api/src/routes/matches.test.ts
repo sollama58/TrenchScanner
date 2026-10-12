@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currentMarketCap, keyFollowsModel, listQuerySchema } from "./matches.js";
+import { currentMarketCap, matchAlertSnapshot, keyFollowsModel, listQuerySchema } from "./matches.js";
 
 const T = (isoMinutesAgo: number) => new Date(Date.now() - isoMinutesAgo * 60_000);
 
@@ -96,5 +96,20 @@ describe("keyFollowsModel", () => {
     expect(keyFollowsModel("user1:24:on:rules,trees", "consensus")).toBe(false);
     // Model alerts off: no calls in the answer, so no model's alert affects it.
     expect(keyFollowsModel("user1:24:off:", "rules")).toBe(false);
+  });
+});
+
+describe("matchAlertSnapshot", () => {
+  const snapshot = { id: "s", priceUsd: 0.00004, marketCapUsd: 40_000 };
+
+  it("shows the price a fresh-quote alert was priced at, on the snapshot's supply", () => {
+    const shown = matchAlertSnapshot(snapshot, 60_000);
+    expect(shown).toMatchObject({ id: "s", marketCapUsd: 60_000 });
+    expect(shown.priceUsd).toBeCloseTo(0.00006, 12);
+  });
+
+  it("keeps the snapshot's own figures on an alert priced from it", () => {
+    expect(matchAlertSnapshot(snapshot, null)).toBe(snapshot);
+    expect(matchAlertSnapshot({ ...snapshot, marketCapUsd: 0 }, 60_000).marketCapUsd).toBe(0);
   });
 });

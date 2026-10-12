@@ -73,7 +73,10 @@ interface GradedAlert {
   returnPct: number | null;
   /** Its grading row is still watching it. */
   tracking: boolean;
-  /** A model call's time: market-cap readings from its first minute don't count as "now". */
+  /**
+   * When a model call, or a filter alert priced from a fresh quote, went out: market-cap readings
+   * from its first minute don't count as "now".
+   */
   calledAt: Date | null;
 }
 
@@ -129,6 +132,7 @@ async function gradedAlerts(chatRowId: string, since: Date) {
         peakReturnPct: true,
         filter: { select: { name: true } },
         snapshot: { select: { marketCapUsd: true } },
+        alertMcapUsd: true,
         ...MATCH_OUTCOME_SELECT,
       },
     }),
@@ -181,11 +185,16 @@ async function gradedAlerts(chatRowId: string, since: Date) {
         ...base,
         source: { kind: "filter", name: match.filter.name },
         outcome,
-        alertMcapUsd: match.snapshot.marketCapUsd > 0 ? match.snapshot.marketCapUsd : null,
+        // The price it was priced at (Match.alertMcapUsd), which its Peak counts from.
+        alertMcapUsd:
+          (match.alertMcapUsd ?? match.snapshot.marketCapUsd) > 0
+            ? (match.alertMcapUsd ?? match.snapshot.marketCapUsd)
+            : null,
         peakPct: match.peakReturnPct ?? outcome.peak24hReturnPct,
         returnPct: row?.simReturnPct ?? null,
         tracking: row !== null && row.finalized24hAt === null,
-        calledAt: null,
+        // Priced from a fresh quote: its readings from the first minute lag behind it, as a call's.
+        calledAt: match.alertMcapUsd !== null ? match.matchedAt : null,
       });
       continue;
     }

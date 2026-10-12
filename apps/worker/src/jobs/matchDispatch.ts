@@ -9,6 +9,8 @@ import {
   type MatchAlertGuardMode,
   type ScoredToken,
   type UserFilter,
+  decisionAnchor,
+  FRESH_ANCHOR_LABEL_RULE,
 } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
@@ -306,6 +308,11 @@ export async function createMatchesForTargets(opts: {
       // inserting them one by one held this token's lock (and a pooled connection) for as many
       // round trips, against the 15s body timeout below.
       if (confirmed.length === 0) return [];
+      // Priced from a fresh quote when the scan read one, as the alert's grading row is (see
+      // anchorMatchOutcome): its Alert figure and peaks then count from that price, not from the
+      // snapshot's DexScreener one, which runs 45-60 s behind.
+      const anchor = decisionAnchor(scored);
+      const alertMcapUsd = anchor.labelRule === FRESH_ANCHOR_LABEL_RULE ? anchor.marketCapUsd : null;
       return tx.match.createManyAndReturn({
         data: confirmed.map((filter) => ({
           userId: filter.userId,
@@ -313,6 +320,7 @@ export async function createMatchesForTargets(opts: {
           tokenId: token.id,
           snapshotId: snapshot.id,
           score: scored.score.total,
+          alertMcapUsd,
           deliveredDashboard: true,
         })),
       });
