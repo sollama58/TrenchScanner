@@ -467,6 +467,10 @@ model CuratedAlert {
 
   anchorPriceUsd Float
   anchorMcapUsd  Float
+  /// The market cap Pump.fun reported as the call went out. The anchor is DexScreener's price,
+  /// which runs 45-60s behind the market (2026-10-12 audit), so cards show this when it is set.
+  /// Display only: every grade still starts from the anchor. Null when Pump.fun didn't answer.
+  liveMcapUsd    Float?
 
   /// Outcome copies - written by the watcher when the linked row's goal window (and, for
   /// winners, its 24h watch) closes. Null until then; the API prefers the live candidateOutcome

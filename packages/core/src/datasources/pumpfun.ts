@@ -176,6 +176,26 @@ export class PumpFunClient {
   }
 
   /**
+   * The market cap Pump.fun reports for a coin right now, in USD. Read from the coin's own bonding
+   * curve or pool state, it tracks the last trade within seconds, where DexScreener's runs 45-60s
+   * behind (2026-10-12). Null when Pump.fun has no such coin or no usable figure; throws on a
+   * transport failure.
+   */
+  async liveMarketCap(mintAddress: string, timeoutMs = 2_000): Promise<number | null> {
+    try {
+      const coin = await fetchJson<PumpFunCoin | null>(
+        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        { timeoutMs, retries: 0 },
+      );
+      const mcap = coin?.usd_market_cap ?? coin?.market_cap_usd;
+      return typeof mcap === "number" && Number.isFinite(mcap) && mcap > 0 ? mcap : null;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
    * Which coins have a Pump.fun livestream on right now, with how many people are watching each
    * (`num_participants`). About 75 coins were live at once on 2026-10-08, so two pages on most
    * cycles; a further page is read only while one comes back full. The page size stays under the

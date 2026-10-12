@@ -407,6 +407,12 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
     tier: alert.tier,
     /** The 2x rate of recent out-of-sample calls ranked like this one at emission, in percent. */
     calibratedPct: alert.calibratedPct,
+    /**
+     * Pump.fun's market cap as the call went out, null when it didn't answer. The card's alert
+     * price is DexScreener's, 45-60s behind the market; this is closer to what a buyer pays.
+     * Display only: Peak and the verdict are measured from the alert price.
+     */
+    liveMcapUsd: alert.liveMcapUsd,
     // An "AI: ..." line was how a gate-mode reviewer's reasoning reached public cards; that is now
     // admin-only (see attachAiReviewsForAdmin), so any such line already stored is held back too.
     reasons: alert.reasons.filter((r) => !r.startsWith("AI: ")),

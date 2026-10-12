@@ -577,6 +577,8 @@ export interface CuratedContender {
   confidence: number;
   /** Set on a retry: when the original deferral expires (see deferContender). */
   retryUntil?: number;
+  /** Pump.fun's market cap as the pass ran, when it answered in time - see readLiveMarketCaps. */
+  liveMcapUsd?: number;
 }
 
 /** Which contestants' ledgers a deferred token is still contending for, and until when. */
@@ -800,8 +802,14 @@ function rationaleColumn(r: NarrativeRationale | null): Prisma.InputJsonObject |
  *
  * Returns the number of calls sent across every ledger.
  */
-export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<number> {
+export async function emitCuratedCycle(
+  cycle: CuratedCycle,
+  env: Env,
+  /** Pump.fun's live market cap per mint - see readLiveMarketCaps. Without it cards show the anchor. */
+  liveMarketCap?: (mint: string) => Promise<number | null>,
+): Promise<number> {
   if (cycle.byModel.size === 0) return 0;
+  if (liveMarketCap) await readLiveMarketCaps(cycle, liveMarketCap);
 
   const now = Date.now();
   pruneDeferredContenders(now);
@@ -844,6 +852,55 @@ export async function emitCuratedCycle(cycle: CuratedCycle, env: Env): Promise<n
     }
   }
   return emitted;
+}
+
+/** How long the pass waits for Pump.fun's live market caps before sending without them. */
+const LIVE_MCAP_BUDGET_MS = 2_000;
+const LIVE_MCAP_CONCURRENCY = 4;
+/**
+ * A live reading this far from the anchor in either direction is taken for a bad answer, not the
+ * market: the anchor is at most about a minute old.
+ */
+const LIVE_MCAP_MAX_RATIO = 5;
+
+/**
+ * Stamps each contender with the market cap Pump.fun reports for its coin right now. The anchor
+ * is DexScreener's price, which runs 45-60s behind the market: on 2026-10-12 half of calls showed
+ * a price more than ~25% from the next minute's open on Pump.fun, while Pump.fun's own figure
+ * matched the last trade within ~2%. Display only - the anchor, and every grade, stay as they
+ * are. One read per coin (a handful a cycle), bounded by LIVE_MCAP_BUDGET_MS so a slow Pump.fun
+ * delays a call by at most that; a coin it doesn't answer for goes out without one.
+ */
+export async function readLiveMarketCaps(
+  cycle: CuratedCycle,
+  liveMarketCap: (mint: string) => Promise<number | null>,
+): Promise<void> {
+  const byMint = new Map<string, CuratedContender[]>();
+  for (const contenders of cycle.byModel.values()) {
+    for (const c of contenders) {
+      const list = byMint.get(c.token.mintAddress);
+      if (list) list.push(c);
+      else byMint.set(c.token.mintAddress, [c]);
+    }
+  }
+  const work = forEachWithConcurrency([...byMint.entries()], LIVE_MCAP_CONCURRENCY, async ([mint, list]) => {
+    // A lookup that throws, even synchronously, only costs this coin its live figure.
+    const mcap = await Promise.resolve()
+      .then(() => liveMarketCap(mint))
+      .catch(() => null);
+    const anchor = list[0]!.scored.marketCapUsd;
+    if (mcap === null || !(anchor > 0)) return;
+    const ratio = mcap / anchor;
+    if (ratio > LIVE_MCAP_MAX_RATIO || ratio < 1 / LIVE_MCAP_MAX_RATIO) return;
+    for (const c of list) c.liveMcapUsd = mcap;
+  });
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    work,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, LIVE_MCAP_BUDGET_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -1078,6 +1135,7 @@ async function emitCuratedAlert(
           ),
           anchorPriceUsd: scored.priceUsd,
           anchorMcapUsd: scored.marketCapUsd,
+          liveMcapUsd: pick.liveMcapUsd ?? null,
         },
       });
       return { anchor, alert };
