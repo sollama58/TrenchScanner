@@ -39,9 +39,9 @@ const RULE_3_SINCE = new Date("2026-10-05T00:00:00Z");
 const SETTLED_AFTER_MS = 25 * 3_600_000;
 const TRAINING_KINDS = ["hourly", "event", "second"];
 /** Coins re-graded per run. */
-export const REGRADE_COINS_PER_RUN = 40;
+export const REGRADE_COINS_PER_RUN = 120;
 /** Pause between Pump.fun calls. */
-const CALL_SPACING_MS = 1_200;
+const CALL_SPACING_MS = 400;
 /**
  * Where the oldest pending row was last run: pending rows only ever get older than it by a coin's
  * read failing, which leaves its rows at or after it anyway. Saves each run walking every row
