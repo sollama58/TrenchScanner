@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { put, type Leaderboard } from "../api";
+import { put, type Leaderboard, type LeaderboardEntry } from "../api";
 import { invalidate } from "../cache";
 
 /**
@@ -30,6 +30,23 @@ export function toggledModels(board: Leaderboard, id: string): string[] {
   if (checked.has(id)) checked.delete(id);
   else checked.add(id);
   return board.entries.filter((e) => checked.has(e.id)).map((e) => e.id);
+}
+
+/**
+ * The dropdown's order: models ranked on the last 24h (enough graded calls) by 2x rate, best
+ * first, the way the top models are picked; then the rest, longest record first.
+ */
+export function byLast24h(entries: readonly LeaderboardEntry[]): LeaderboardEntry[] {
+  const rate = (e: LeaderboardEntry) => e.last24h?.hitRate2xPct ?? -1;
+  const graded = (e: LeaderboardEntry) => e.last24h?.graded ?? 0;
+  const ranked = (e: LeaderboardEntry) => e.last24h?.qualifies === true;
+  return [...entries].sort(
+    (a, b) =>
+      Number(ranked(b)) - Number(ranked(a)) ||
+      (ranked(a) ? rate(b) - rate(a) : 0) ||
+      graded(b) - graded(a) ||
+      a.rank - b.rank,
+  );
 }
 
 /**
@@ -86,6 +103,17 @@ export function ModelPicker({
     }
   };
 
+  // Older API builds carry no 24h records: the list falls back to the 30-day board score.
+  const daily = board.entries.some((e) => e.last24h !== undefined);
+  const rows = daily ? byLast24h(board.entries) : board.entries;
+  const minGraded = board.defaultRule?.minGraded ?? 30;
+  // Bars are drawn against the best ranked 2x rate, so the spread between models shows. A model
+  // without enough calls to rank gets no bar: its rate is too thin to compare.
+  const scaleTop = Math.max(
+    1,
+    ...rows.map((e) => (e.last24h?.qualifies ? (e.last24h.hitRate2xPct ?? 0) : 0)),
+  );
+
   const following = board.followBest === true && pending === null;
   const summary = following
     ? names.length > 1
@@ -111,28 +139,93 @@ export function ModelPicker({
               Following the top models. Ticking a model switches to your own picks.
             </p>
           )}
-          {board.entries.map((e) => {
+          {daily ? (
+            <div className="mp-head" aria-hidden>
+              <span>Last 24h</span>
+              <span>2x rate</span>
+              <span>Avg return</span>
+            </div>
+          ) : null}
+          {rows.map((e, i) => {
             const on = checked.has(e.id);
             const last = on && checked.size === 1;
+            const day = e.last24h ?? null;
+            const ranked = daily && day?.qualifies === true;
+            const rate = day?.hitRate2xPct ?? null;
+            const ret = day?.avgReturnPct ?? null;
             return (
-              <label key={e.id} className={`checklist-row${on ? " on" : ""}`} title={e.description}>
+              <label
+                key={e.id}
+                className={`checklist-row mp-row${on ? " on" : ""}${daily && !ranked ? " unranked" : ""}`}
+                title={e.description}
+              >
                 <input
                   type="checkbox"
                   checked={on}
                   disabled={disabled || saving || last}
                   onChange={() => void save(toggledModels({ ...board, selectedModels: [...checked] }, e.id))}
                 />
-                <span className="checklist-name">
-                  <span className="faint num">#{e.rank}</span> {e.name}
-                  {e.isBest && <span className="chip chip-model">best</span>}
-                  {e.isDefault && <span className="chip">top</span>}
-                </span>
-                <span className="num muted">
-                  {e.composite.score === null ? "–" : e.composite.score.toFixed(0)}
-                </span>
+                {daily ? (
+                  <>
+                    <span className="mp-main">
+                      <span className="checklist-name">
+                        <span
+                          className={`mp-rank num${e.isDefault ? " top" : ""}`}
+                          title={e.isDefault ? "One of the top models: the default feed" : undefined}
+                        >
+                          {ranked ? i + 1 : "–"}
+                        </span>
+                        <span className="mp-name">{e.name}</span>
+                        {e.isBest && (
+                          <span className="mp-badge best" title="Highest average return over the last 24h">
+                            ★<span className="mp-word"> best</span>
+                          </span>
+                        )}
+                      </span>
+                      <span className="mp-bar" aria-hidden>
+                        <span
+                          className={`mp-fill${e.isDefault ? " top" : ""}`}
+                          style={{
+                            width: `${rate === null || !ranked ? 0 : Math.max(3, (rate / scaleTop) * 100)}%`,
+                          }}
+                        />
+                      </span>
+                      <span className="mp-sub">
+                        {day === null || day.graded === 0
+                          ? "no graded calls today"
+                          : ranked
+                            ? `${day.graded} graded calls`
+                            : `${day.graded} of ${minGraded} calls to rank`}
+                      </span>
+                    </span>
+                    <span className="mp-rate num">{rate === null ? "–" : `${rate.toFixed(0)}%`}</span>
+                    <span className={`mp-ret num ${ret === null ? "" : ret >= 0 ? "up" : "down"}`}>
+                      {ret === null ? "–" : `${ret >= 0 ? "+" : ""}${ret.toFixed(1)}%`}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="checklist-name">
+                      <span className="faint num">#{e.rank}</span> {e.name}
+                      {e.isBest && <span className="chip chip-model">best</span>}
+                      {e.isDefault && <span className="chip">top</span>}
+                    </span>
+                    <span className="num muted">
+                      {e.composite.score === null ? "–" : e.composite.score.toFixed(0)}
+                    </span>
+                  </>
+                )}
               </label>
             );
           })}
+          {daily && (
+            <p className="mp-foot faint small">
+              <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by 2x rate
+              make up the default feed. <span className="mp-badge best">★ best</span> has the highest average
+              return under the exit plan. Both need {minGraded} graded calls in the last 24h; rechecked every{" "}
+              {board.defaultRule?.refreshMinutes ?? 15} min.
+            </p>
+          )}
           {board.followBest === false && (
             <button className="ghost small-btn" disabled={disabled || saving} onClick={() => void save(null)}>
               Follow the top models

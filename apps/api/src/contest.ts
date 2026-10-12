@@ -33,6 +33,7 @@ import {
   summarizeRecord,
   type ChampionRecord,
   type CompositeScore,
+  type Last24h,
   type MarketLift,
   type RecordSummary,
   type ContestantSpec,
@@ -81,6 +82,8 @@ export interface ContestState {
   defaultModels: string[];
   /** The best average exit-plan return over the last 24h (core curation/topModels.ts); null when none qualify. */
   bestModel: string | null;
+  /** Each model's record over the same 24h window. */
+  last24h: Map<string, Last24h>;
   /** The stored best-performer pick (curation/champion.ts); null before the first one. */
   champion: ChampionRecord | null;
 }
@@ -161,7 +164,7 @@ export function contestState(env: Env): Promise<ContestState> {
       canCall,
       defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
     );
-    const { top, best } = await loadTopModels(roster, lanes, canCall);
+    const { top, best, last24h } = await loadTopModels(roster, lanes, canCall);
     return {
       roster,
       lanes,
@@ -170,6 +173,7 @@ export function contestState(env: Env): Promise<ContestState> {
       defaultModel,
       defaultModels: resolveDefaultModels(top, defaultModel),
       bestModel: best,
+      last24h,
     };
   });
 }
@@ -273,6 +277,8 @@ export interface LeaderboardEntry {
   isDefault: boolean;
   /** The best average exit-plan return over the last 24h (the "best" marker). */
   isBest: boolean;
+  /** Its record over the default rule's 24h window (the Live tab's model dropdown). */
+  last24h: Last24h | null;
   /**
    * calling: it has a cutoff and can send. silent: trained, but its exam had nothing to set a
    * cutoff from, so it sends nothing this generation. untrained: no training run has produced it
@@ -458,6 +464,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       role: spec.role,
       isDefault: state.defaultModels.includes(spec.id),
       isBest: spec.id === state.bestModel,
+      last24h: state.last24h.get(spec.id) ?? null,
       status,
       composite,
       vsMarket: lifts.get(spec.id) ?? null,

@@ -206,7 +206,15 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
 
   it("picks the three best 2x hit rates among models with enough graded calls", async () => {
     resetTopModelsCache();
-    expect(await loadTopModels(roster, [], () => true)).toEqual({ top: [a, b, c], best: d });
+    const picked = await loadTopModels(roster, [], () => true);
+    expect(picked).toMatchObject({ top: [a, b, c], best: d });
+    expect(picked.last24h.get(a)).toEqual({
+      graded: 30,
+      hitRate2xPct: 50,
+      avgReturnPct: -10,
+      qualifies: true,
+    });
+    expect(picked.last24h.get(lucky)).toMatchObject({ graded: 2, hitRate2xPct: 100, qualifies: false });
   });
 
   it("leaves out models that can't call, and gives up below three", async () => {

@@ -36,11 +36,33 @@ export interface TopModelStanding {
   sumSimReturnPct?: number;
 }
 
+/** One model's record over the window, as the dropdown shows it. */
+export interface Last24h {
+  graded: number;
+  /** 2x hit rate in percent; null with nothing graded. */
+  hitRate2xPct: number | null;
+  /** Average exit-plan return in percent; null with no simulated returns. */
+  avgReturnPct: number | null;
+  /** Has the graded calls (and can call) to be ranked for the top models and "best". */
+  qualifies: boolean;
+}
+
+export function last24hOf(s: TopModelStanding, minGraded = TOP_MODELS_MIN_GRADED): Last24h {
+  return {
+    graded: s.graded,
+    hitRate2xPct: s.graded > 0 ? (100 * s.wins) / s.graded : null,
+    avgReturnPct: (s.simCalls ?? 0) > 0 ? (s.sumSimReturnPct ?? 0) / s.simCalls! : null,
+    qualifies: s.calling && s.graded >= minGraded,
+  };
+}
+
 export interface TopModels {
   /** The default feed's models, best 2x rate first; null when too few qualify. */
   top: string[] | null;
   /** The best average exit-plan return; null when no model qualifies. */
   best: string | null;
+  /** Every roster model's record over the window. */
+  last24h: Map<string, Last24h>;
 }
 
 /**
@@ -123,7 +145,11 @@ export function loadTopModels(
         sumSimReturnPct: r?.sumSimReturnPct ?? 0,
       };
     });
-    return { top: pickTopModels(standings), best: pickBestReturnModel(standings) };
+    return {
+      top: pickTopModels(standings),
+      best: pickBestReturnModel(standings),
+      last24h: new Map(standings.map((s) => [s.id, last24hOf(s)])),
+    };
   });
   cache.set(key, read);
   read.catch(() => cache.delete(key));
