@@ -37,9 +37,9 @@ describe("recordScore", () => {
   it("is 100 for a long record that meets every target, and no more for beating them", () => {
     expect(recordScore(record(1000, 900, 700, 2.5, 300), targets)).toBe(100);
     expect(recordScore(record(1000, 1000, 1000, 3, 1000), targets)).toBe(100);
-    expect(recordScore(examined(record(1000, 900, 700, 2.5, 300), 1000, 600), targets)).toBe(100);
+    expect(recordScore(examined(record(1000, 900, 700, 2.5, 300), 1000, 800), targets)).toBe(100);
     // Without a single 10x it can't: that part is 10 of the 100.
-    expect(recordScore(examined(record(1000, 900, 700, 2.5), 1000, 600), targets)).toBe(90);
+    expect(recordScore(examined(record(1000, 900, 700, 2.5), 1000, 800), targets)).toBe(90);
   });
 
   it("discounts a short perfect streak below a long good record", () => {
@@ -97,9 +97,9 @@ describe("recordScore", () => {
     // 20 of 400 proves 20/410 = 4.9% against the 25% target.
     expect(parts.proven10xPct).toBeCloseTo(4.9, 1);
     expect(parts.points10x).toBeCloseTo(10 * (parts.proven10xPct / 25), 0);
-    // 40 of 100 runners caught proves 40/110 = 36.4% against the 50% target.
+    // 40 of 100 runners caught proves 40/110 = 36.4% against the 75% target.
     expect(parts.provenCatchPct).toBeCloseTo(36.4, 1);
-    expect(parts.pointsCatch!).toBeCloseTo(15 * (36.4 / 50), 0);
+    expect(parts.pointsCatch!).toBeCloseTo(15 * (36.4 / 75), 0);
     expect(recordScore(exam, targets)).toBeCloseTo(
       parts.points2x + parts.points4x + parts.points10x + parts.pointsRun + parts.pointsCatch!,
       1,

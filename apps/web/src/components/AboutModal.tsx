@@ -228,7 +228,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
           <div className="tour-goal">
             <span className="num">{t.hitRate2xPct}%</span>
             <span>
-              The goal: {t.hitRate2xPct}% of alerts double, and {t.hitRate4xPct}% reach 4x.
+              The goal: {t.hitRate2xPct}% of alerts double, {t.hitRate4xPct}% reach 4x, and the models catch
+              75% of all the tokens that double.
             </span>
           </div>
         </>

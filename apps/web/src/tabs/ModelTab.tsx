@@ -123,7 +123,8 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
               {lb.entries.length} models compete to spot tokens that double within 15 minutes. Every call is
               graded the same way, and the goal is a 2x within 15 minutes on {t.hitRate2xPct}% of calls and a
               4x within 30 minutes on {t.hitRate4xPct}%, with 10x within an hour on{" "}
-              {lb.scoring.tenXTargetPct ?? 25}% as the big-run tier.{" "}
+              {lb.scoring.tenXTargetPct ?? 25}% as the big-run tier, while catching{" "}
+              {lb.scoring.catchTargetPct ?? 75}% of all the tokens that double.{" "}
               {guest ? "As a guest you see calls from" : "Your feed shows calls from"}{" "}
               <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
               {lb.followBest ? " (whichever model is doing best; it switches automatically)" : ""}
@@ -158,6 +159,9 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
               Goal {t.hitRate2xPct}% · reached 4x on {pct(leadLive?.goalRatePct)} (goal {t.hitRate4xPct}%)
               {leadLive?.tenXRatePct != null
                 ? ` · 10x within an hour on ${pct(leadLive.tenXRatePct, 1)}`
+                : ""}
+              {leader?.liveCatch?.pct != null
+                ? ` · caught ${pct(leader.liveCatch.pct)} of runners (goal ${lb.scoring.catchTargetPct ?? 75}%)`
                 : ""}
               {leadLive ? ` · ${leadLive.graded} graded calls in ${days} days` : ""}
             </span>
@@ -243,7 +247,8 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
               <span className="stage-title">Goal</span>
               <span className="stage-rate num">{t.hitRate2xPct}%</span>
               <span className="stage-caption">
-                hit 2x · {t.hitRate4xPct}% hit 4x · {lb.scoring.tenXTargetPct ?? 25}% hit 10x
+                hit 2x · {t.hitRate4xPct}% hit 4x · {lb.scoring.tenXTargetPct ?? 25}% hit 10x ·{" "}
+                {lb.scoring.catchTargetPct ?? 75}% of runners caught
               </span>
             </li>
           </ol>
@@ -325,11 +330,20 @@ type BaselineProps = {
   refreshKey: string;
 };
 
+/** The chart's measures: the three hit rates, and the share of the runners caught. */
+type BaselineMetric = "2x" | "4x" | "10x" | "caught";
+const BASELINE_METRICS: readonly { id: BaselineMetric; label: string }[] = [
+  { id: "2x", label: "2x" },
+  { id: "4x", label: "4x" },
+  { id: "10x", label: "10x" },
+  { id: "caught", label: "Caught" },
+];
+
 type BaselineView = {
   days: WindowDays;
   setDays: (d: WindowDays) => void;
-  metric: "2x" | "4x" | "10x";
-  setMetric: (m: "2x" | "4x" | "10x") => void;
+  metric: BaselineMetric;
+  setMetric: (m: BaselineMetric) => void;
   picked: string | null;
   setPicked: (id: string | null) => void;
   opened: string | null;
@@ -338,7 +352,7 @@ type BaselineView = {
 
 function BaselinePanel(props: BaselineProps) {
   const [days, setDays] = useState<WindowDays>(PAGE_DAYS);
-  const [metric, setMetric] = useState<"2x" | "4x" | "10x">("2x");
+  const [metric, setMetric] = useState<BaselineMetric>("2x");
   const [picked, setPicked] = useState<string | null>(null);
   // The model whose detail dialog is open (it follows the board, so a window switch refreshes it).
   const [opened, setOpened] = useState<string | null>(null);
@@ -389,21 +403,35 @@ function BaselineChart({
   failed = false,
 }: BaselineProps & BaselineView & { loading: boolean; failed?: boolean }) {
   const t = board.targets;
-  const baseRate = base
-    ? metric === "2x"
-      ? base.hitRate2xPct
-      : metric === "4x"
-        ? base.hitRate4xPct
-        : (base.hitRate10xPct ?? null)
-    : null;
+  const caught = metric === "caught";
+  // The catch rate has no random-pick baseline (a random picker's share of the runners only grows
+  // with how many it calls), so its reference line is the whole field's: the runners any model caught.
+  const field = board.runners ?? null;
+  const baseRate = caught
+    ? (field?.pct ?? null)
+    : base
+      ? metric === "2x"
+        ? base.hitRate2xPct
+        : metric === "4x"
+          ? base.hitRate4xPct
+          : (base.hitRate10xPct ?? null)
+      : null;
   const goal =
-    metric === "2x" ? t.hitRate2xPct : metric === "4x" ? t.hitRate4xPct : (board.scoring.tenXTargetPct ?? 25);
+    metric === "2x"
+      ? t.hitRate2xPct
+      : metric === "4x"
+        ? t.hitRate4xPct
+        : metric === "10x"
+          ? (board.scoring.tenXTargetPct ?? 25)
+          : (board.scoring.catchTargetPct ?? 75);
   const rateOf = (e: LeaderboardEntry) =>
     metric === "2x"
       ? e.composite.live.winRatePct
       : metric === "4x"
         ? e.composite.live.goalRatePct
-        : (e.composite.live.tenXRatePct ?? null);
+        : metric === "10x"
+          ? (e.composite.live.tenXRatePct ?? null)
+          : (e.liveCatch?.pct ?? null);
   // Seasoned records first: a 33% on three calls shouldn't sit above a 15% on a hundred.
   const thin = (e: LeaderboardEntry) => e.composite.warmingUp === true || e.composite.live.graded === 0;
   const rows = [...board.entries].sort(
@@ -415,11 +443,12 @@ function BaselineChart({
   const selRate = selected ? rateOf(selected) : null;
   const selLift = liftOf(selRate);
   const hit =
-    metric === "2x"
-      ? "doubled within 15 minutes"
-      : metric === "4x"
-        ? "reached 4x within 30 minutes"
-        : "reached 10x within an hour";
+    metric === "4x"
+      ? "reached 4x within 30 minutes"
+      : metric === "10x"
+        ? "reached 10x within an hour"
+        : "doubled within 15 minutes";
+  const selCatch = selected?.liveCatch ?? null;
 
   return (
     <section className={`panel${loading ? " stale" : ""}`} aria-busy={loading}>
@@ -430,8 +459,18 @@ function BaselineChart({
           </span>
           <h3>Are the models beating a random pick?</h3>
           <p className="muted small">
-            The baseline is how often a token {hit} if you picked at random from the same moments the models
-            choose from. A model is only adding value to the right of that line.
+            {caught ? (
+              <>
+                Of the tokens that doubled cleanly, the share each model called at a winning moment: the
+                runners it didn&apos;t let slip. The line is every model together; the goal is {goal}% of the
+                runners.
+              </>
+            ) : (
+              <>
+                The baseline is how often a token {hit} if you picked at random from the same moments the
+                models choose from. A model is only adding value to the right of that line.
+              </>
+            )}
           </p>
         </div>
         <div className="row baseline-controls">
@@ -451,15 +490,16 @@ function BaselineChart({
               </button>
             ))}
           </div>
-          <div className="segmented small" role="group" aria-label="Hit">
-            {(["2x", "4x", "10x"] as const).map((m) => (
+          <div className="segmented small" role="group" aria-label="Measure">
+            {BASELINE_METRICS.map((m) => (
               <button
-                key={m}
-                className={metric === m ? "on" : ""}
-                aria-pressed={metric === m}
-                onClick={() => setMetric(m)}
+                key={m.id}
+                className={metric === m.id ? "on" : ""}
+                aria-pressed={metric === m.id}
+                title={m.id === "caught" ? "Share of the runners each model called" : undefined}
+                onClick={() => setMetric(m.id)}
               >
-                {m}
+                {m.label}
               </button>
             ))}
           </div>
@@ -473,12 +513,20 @@ function BaselineChart({
         <>
           <div className="family-figs">
             <div>
-              <label>Baseline {metric}</label>
+              <label>{caught ? "All models caught" : `Baseline ${metric}`}</label>
               <span className="num">{pct(baseRate, 1)}</span>
             </div>
             <div>
-              <label>Moments it covers</label>
-              <span className="num">{base ? base.graded.toLocaleString() : "–"}</span>
+              <label>{caught ? "Runners" : "Moments it covers"}</label>
+              <span className="num">
+                {caught
+                  ? field
+                    ? field.runners.toLocaleString()
+                    : "–"
+                  : base
+                    ? base.graded.toLocaleString()
+                    : "–"}
+              </span>
             </div>
             <div>
               <label>Goal</label>
@@ -496,7 +544,10 @@ function BaselineChart({
                     id: e.id,
                     label: e.name,
                     value: rate,
-                    sub: `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
+                    sub:
+                      caught && e.liveCatch
+                        ? `${e.liveCatch.caught} of ${e.liveCatch.runners} runner${e.liveCatch.runners === 1 ? "" : "s"}`
+                        : `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
                     display: rate === null ? "–" : `${rate.toFixed(1)}%`,
                     note: `${signedPct(profit)} profit`,
                     noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
@@ -505,27 +556,37 @@ function BaselineChart({
                 })}
                 markers={[
                   ...(baseRate !== null
-                    ? [{ label: "Baseline", value: baseRate, kind: "base" as const }]
+                    ? [{ label: caught ? "All models" : "Baseline", value: baseRate, kind: "base" as const }]
                     : []),
                   { label: "Goal", value: goal, kind: "goal" as const },
                 ]}
                 selected={selected?.id ?? null}
                 onSelect={setPicked}
                 onOpen={setOpened}
-                columns={{ label: "Model", value: `${metric} hit rate`, note: "avg profit per call" }}
+                columns={{
+                  label: "Model",
+                  value: caught ? "runners caught" : `${metric} hit rate`,
+                  note: "avg profit per call",
+                }}
               />
               {selected && (
                 <p className="baseline-readout">
                   <strong>{selected.name}</strong>:{" "}
-                  {selRate === null
-                    ? `no graded calls in the last ${windowLong(days)} yet.`
-                    : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
-                        selLift === null
-                          ? "."
-                          : selLift >= 1
-                            ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
-                            : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
-                      }`}
+                  {caught
+                    ? selCatch === null || selCatch.runners === 0 || selRate === null
+                      ? `no runners since it started calling in the last ${windowLong(days)} yet.`
+                      : `called ${selCatch.caught} of the ${selCatch.runners} tokens that doubled since it started calling in the last ${windowLong(days)}, ${pct(selRate, 1)} of the runners against the ${goal}% goal${
+                          baseRate === null ? "." : ` (every model together: ${pct(baseRate, 1)}).`
+                        }`
+                    : selRate === null
+                      ? `no graded calls in the last ${windowLong(days)} yet.`
+                      : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
+                          selLift === null
+                            ? "."
+                            : selLift >= 1
+                              ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
+                              : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
+                        }`}
                   {selected.composite.live.avgSimReturnPct != null
                     ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
                     : ""}
@@ -533,9 +594,10 @@ function BaselineChart({
                 </p>
               )}
               <p className="faint small">
-                Live calls over the last {windowLong(days)}, against the baseline over the same window. Under
-                each rate is its average profit per call, following every call with one fixed exit plan. Faded
-                bars rest on too few calls. <strong>Tap or click a model</strong> for its full record, past
+                Live calls over the last {windowLong(days)}, against{" "}
+                {caught ? "every model's catch together" : "the baseline"} over the same window. Under each
+                rate is its average profit per call, following every call with one fixed exit plan. Faded bars
+                rest on too few calls. <strong>Tap or click a model</strong> for its full record, past
                 versions and exam results.
               </p>
               <ModelDetailModal
@@ -1209,8 +1271,8 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
         <p className="muted small">
           A model's score is how far it has <strong>proven</strong> itself toward the goal: 2x on{" "}
           {t.hitRate2xPct}% of its calls and 4x on {t.hitRate4xPct}%, catching the big runs these tokens make,
-          and not letting the runners slip by. 100 means its record meets every target. 0 means it has proven
-          nothing yet.
+          and calling {board.scoring.catchTargetPct ?? 75}% of the runners rather than letting them slip by.
+          100 means its record meets every target. 0 means it has proven nothing yet.
         </p>
         {bands.length > 0 && (
           <ul className="score-bands">
@@ -1256,7 +1318,7 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
             <li>
               <strong>{Math.round(w.catchRate * 100)} points for catching runners.</strong> Of the tokens that
               doubled in its backtest, the share it called at a winning moment, against a{" "}
-              {sc.catchTargetPct ?? 50}% target. The hit rates alone reward a model for calling only its
+              {sc.catchTargetPct ?? 75}% target. The hit rates alone reward a model for calling only its
               surest few; this part counts the runners it let slip by. Only the backtest knows every runner a
               model could have called, so a model without one is scored on the other parts, scaled to 100.
             </li>
@@ -1309,7 +1371,7 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
               <>
                 {" "}
                 and a catch rate of <span className="num">{b.provenCatchPct.toFixed(0)}%</span> (
-                {Math.round(w.catchRate * 100)} × {b.provenCatchPct.toFixed(0)}/{sc.catchTargetPct ?? 50} ={" "}
+                {Math.round(w.catchRate * 100)} × {b.provenCatchPct.toFixed(0)}/{sc.catchTargetPct ?? 75} ={" "}
                 <span className="num">{b.pointsCatch.toFixed(0)}</span> points)
               </>
             )}
