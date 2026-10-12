@@ -90,6 +90,7 @@ const SHARE_INPUTS: ReadonlySet<string> = new Set([
   "earlyBuyerSoldShare",
   "devSoldShare",
   "pathGreenShare10m",
+  "jup5mBuyVolumeShare",
   ...NARRATIVE_SHARE_FEATURES,
 ]);
 

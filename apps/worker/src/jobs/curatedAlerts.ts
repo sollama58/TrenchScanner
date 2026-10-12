@@ -6,6 +6,7 @@ import {
   inMcapBand,
   notifyCuratedAlert,
   buildCandidateFeatures,
+  decisionAnchor,
   scoreCandidateWithModel,
   topModelReasons,
   modelRationale,
@@ -1133,9 +1134,10 @@ async function emitCuratedAlert(
           narrativeRationale: rationaleColumn(
             model === NARRATIVE_CONTESTANT ? narrativeRationaleJson(decision) : null,
           ),
-          anchorPriceUsd: scored.priceUsd,
-          anchorMcapUsd: scored.marketCapUsd,
-          liveMcapUsd: pick.liveMcapUsd ?? null,
+          anchorPriceUsd: decisionAnchor(scored).priceUsd,
+          anchorMcapUsd: decisionAnchor(scored).marketCapUsd,
+          // Pump.fun's read at emission, else the quote the decision was priced from.
+          liveMcapUsd: pick.liveMcapUsd ?? scored.freshQuote?.marketCapUsd ?? null,
         },
       });
       return { anchor, alert };
@@ -1225,8 +1227,8 @@ async function recordAiReview(
       latencyMs: review.latencyMs,
       inputTokens: review.inputTokens,
       outputTokens: review.outputTokens,
-      anchorPriceUsd: pick.scored.priceUsd,
-      anchorMcapUsd: pick.scored.marketCapUsd,
+      anchorPriceUsd: decisionAnchor(pick.scored).priceUsd,
+      anchorMcapUsd: decisionAnchor(pick.scored).marketCapUsd,
       playbookId: review.playbookId ?? null,
       brief: review.brief ?? null,
       curatorProbability: review.curatorProbability ?? null,

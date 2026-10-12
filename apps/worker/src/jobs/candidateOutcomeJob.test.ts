@@ -108,6 +108,21 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(await prisma.candidateOutcome.count({ where: { tokenId: zeroPriceToken.id } })).toBe(0);
   });
 
+  it("anchors on the fresh quote when the scan read one, graded under rule 4", async () => {
+    const token = await createToken("fresh-anchor");
+    const scored = {
+      ...scoredFixture(token.mintAddress, 0.002),
+      freshQuote: { priceUsd: 0.0026, marketCapUsd: 2_600_000, fetchedAt: new Date() },
+    };
+    const ref = await recordCandidateSample(token.id, scored, env, { kind: "event" });
+    const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: ref!.id } });
+    expect(row.anchorPriceUsd).toBe(0.0026);
+    expect(row.anchorMcapUsd).toBe(2_600_000);
+    expect(row.peak1hPriceUsd).toBe(0.0026);
+    expect(row.labelRule).toBe(4);
+    expect((row.features as Record<string, number>).freshGapPct).toBeCloseTo(30);
+  });
+
   it("folds a mid-window tick into the aggregates and reschedules the row", async () => {
     const token = await createToken("tick");
     const anchorAt = new Date(Date.now() - 5 * MINUTE);

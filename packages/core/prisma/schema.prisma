@@ -753,7 +753,9 @@ model CandidateOutcome {
   /// Which grading rule the labels follow (LEGACY_LABEL_RULE / CURRENT_LABEL_RULE in
   /// curation/labels.ts): 1 = the scan price under the old 1-hour rule (before 2026-10-03),
   /// 2 = a realistic fill (2026-10-03 to 10-05, re-graded to 3 where the aggregates allow),
-  /// 3 = the alert price. The trainer down-weights older rules and the exam grades rule 3 only.
+  /// 3 = the alert price, 4 = the alert price from a seconds-old Jupiter quote rather than
+  /// DexScreener's (2026-10-12; decisionAnchor in labels.ts). The trainer down-weights older rules
+  /// and the exam grades rule 3 and up.
   labelRule      Int       @default(3)
 
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the

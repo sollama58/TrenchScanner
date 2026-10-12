@@ -54,6 +54,7 @@ const UNTRANSFORMED_FEATURES = new Set([
   "ctxHourCos",
   "ctxWeekend",
   "livestreamLive",
+  "jup5mBuyVolumeShare",
   ...NARRATIVE_UNTRANSFORMED_FEATURES,
 ]);
 

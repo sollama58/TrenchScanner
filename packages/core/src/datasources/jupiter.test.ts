@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { JupiterClient, JupiterFirstLookup, parseJupiterTokens } from "./jupiter.js";
+import { JupiterClient, JupiterFirstLookup, parseJupiterQuotes, parseJupiterTokens } from "./jupiter.js";
 import type { CandidateToken } from "../types.js";
 
 describe("parseJupiterTokens", () => {
@@ -35,8 +35,74 @@ describe("parseJupiterTokens", () => {
   });
 });
 
+describe("parseJupiterQuotes", () => {
+  it("reads the price, cap, update time and 5m/1h activity, and drops quotes without a price or cap", () => {
+    const body = [
+      {
+        id: "a",
+        usdPrice: 0.00005,
+        mcap: 50_000,
+        updatedAt: "2026-10-12T10:00:00Z",
+        stats5m: {
+          priceChange: 12.5,
+          buyVolume: 4_000,
+          sellVolume: 1_000,
+          numBuys: 40,
+          numSells: 9,
+          numTraders: 30,
+          numNetBuyers: 11,
+          holderChange: 7,
+        },
+        stats1h: { priceChange: 80, holderChange: 60 },
+      },
+      { id: "b", usdPrice: 0, mcap: 1_000 },
+      { id: "c", usdPrice: 1, mcap: null, fdv: null },
+      { id: "d", usdPrice: 0.00001, fdv: 10_000, updatedAt: "not a date" },
+    ];
+    const quotes = parseJupiterQuotes(body, new Set(["a", "b", "c", "d"]));
+    expect(quotes.map((q) => q.mintAddress)).toEqual(["a", "d"]);
+    expect(quotes[0]!.quote).toMatchObject({
+      priceUsd: 0.00005,
+      marketCapUsd: 50_000,
+      updatedAt: new Date("2026-10-12T10:00:00Z"),
+      stats5m: {
+        priceChangePct: 12.5,
+        buyVolumeUsd: 4_000,
+        buys: 40,
+        traders: 30,
+        netBuyers: 11,
+        holderChange: 7,
+      },
+      stats1h: { priceChangePct: 80, holderChange: 60 },
+    });
+    expect(quotes[1]!.quote).toMatchObject({
+      marketCapUsd: 10_000,
+      updatedAt: undefined,
+      stats5m: undefined,
+    });
+  });
+});
+
 describe("JupiterClient", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("gives fresh quotes stamped with when they arrived, and nothing for an answer past the deadline", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = decodeURIComponent(url.split("query=")[1]!).split(",");
+      const body = JSON.stringify(list.map((id) => ({ id, usdPrice: 0.0001, mcap: 100_000 })));
+      // The second batch answers after the deadline.
+      const late = list.includes("m100");
+      return new Promise((resolve) => setTimeout(() => resolve(new Response(body)), late ? 300 : 0));
+    });
+    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 6000 });
+    const mints = Array.from({ length: 150 }, (_, i) => `m${i}`);
+    const before = Date.now();
+    const quotes = await client.getFreshQuotes(mints, { deadlineMs: 100 });
+    expect(quotes.size).toBe(100);
+    expect(quotes.get("m0")).toMatchObject({ priceUsd: 0.0001, marketCapUsd: 100_000 });
+    expect(quotes.get("m0")!.fetchedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(quotes.has("m120")).toBe(false);
+  });
 
   it("asks 100 mints a call with the key, and fails the mints of a batch that errors", async () => {
     const urls: string[] = [];

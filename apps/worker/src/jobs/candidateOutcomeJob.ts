@@ -16,7 +16,7 @@ import {
   CANDIDATE_EXTENDED_WATCH_HOURS,
   WIN_WINDOW_MINUTES,
   TEN_X_WINDOW_MINUTES,
-  CURRENT_LABEL_RULE,
+  decisionAnchor,
   type Env,
   type DexScreenerClient,
   type ScoredToken,
@@ -145,6 +145,8 @@ export async function recordCandidateSample(
 ): Promise<CandidateSampleRef | null> {
   // A label is "did the price multiply from the anchor" - a zero/absent anchor has no multiples.
   if (!Number.isFinite(scored.priceUsd) || scored.priceUsd <= 0) return null;
+  // The fresh quote's price when the scan read one, else DexScreener's (see decisionAnchor).
+  const anchor = decisionAnchor(scored);
 
   const kind: CandidateSampleKind = opts.kind ?? (opts.bypassSpacing ? "emission" : "hourly");
 
@@ -164,21 +166,21 @@ export async function recordCandidateSample(
       const sameAlertPrice =
         recent !== null &&
         (kind !== "match" ||
-          Math.abs(recent.anchorPriceUsd - scored.priceUsd) <=
+          Math.abs(recent.anchorPriceUsd - anchor.priceUsd) <=
             recent.anchorPriceUsd * MATCH_ANCHOR_SHARE_TOLERANCE);
       if (recent && sameAlertPrice) return { id: recent.id, created: false };
     }
 
     const anchorAt = new Date();
-    const agg = initialOutcomeAggregates(scored.priceUsd, anchorAt);
+    const agg = initialOutcomeAggregates(anchor.priceUsd, anchorAt);
     const row = await db.candidateOutcome.create({
       data: {
         tokenId,
         anchorAt,
-        anchorPriceUsd: scored.priceUsd,
-        anchorMcapUsd: scored.marketCapUsd,
+        anchorPriceUsd: anchor.priceUsd,
+        anchorMcapUsd: anchor.marketCapUsd,
         sampleKind: kind,
-        labelRule: CURRENT_LABEL_RULE,
+        labelRule: anchor.labelRule,
         features: buildCandidateFeatures(scored) as Prisma.InputJsonValue,
         score: scored.score.total,
         nextCheckAt: new Date(anchorAt.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
