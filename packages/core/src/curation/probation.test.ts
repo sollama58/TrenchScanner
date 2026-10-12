@@ -29,7 +29,7 @@ function rows(start: number, n: number, winFrom: number): TrainingRow[] {
       anchorPriceUsd: 1,
       anchorMcapUsd: 20_000,
       sampleKind: "event",
-      labelRule: 3,
+      labelRule: 4,
       features: { scoreTotal: x, ageMinutes: 10 },
       labelValue: x >= winFrom ? 1.2 : 0,
     } as TrainingRow;

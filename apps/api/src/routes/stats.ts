@@ -10,7 +10,7 @@ import {
   WIN_WINDOW_MINUTES,
   GOAL_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
-  CURRENT_LABEL_RULE,
+  REPORTED_LABEL_RULE,
   walletSafetyCutsSql,
   firstCallOnRowSql,
   notRetiredModelSql,
@@ -263,7 +263,7 @@ const RAN_LATER = Prisma.sql`
 
 /**
  * The baseline a model's pick has to beat: every "event" moment anchored since `since` that passes
- * the wallet safety cuts and was graded under the current label rule - the same market as the week
+ * the wallet safety cuts and was graded under a reported label rule - the same market as the week
  * chart's Market line (learningCurve.ts) and the leaderboard's lift (liveMarketLift in
  * curation/laneStore.ts), so the three never disagree about what "the market" did. The hit-rate
  * report's samples.byKind stays the raw count of every banked row. The leaderboard carries it so
@@ -287,7 +287,7 @@ export async function baselineRates(
     FROM "CandidateOutcome" co
     WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${since}
       ${until ? Prisma.sql`AND co."anchorAt" < ${until}` : Prisma.empty}
-      AND co."labelRule" >= ${CURRENT_LABEL_RULE}
+      AND co."labelRule" >= ${REPORTED_LABEL_RULE}
       AND ${walletSafetyCutsSql(Prisma.raw('co."features"'))}`;
   return withRates(
     row

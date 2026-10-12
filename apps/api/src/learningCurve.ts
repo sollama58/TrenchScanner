@@ -5,7 +5,7 @@ import {
   walletSafetyCutsSql,
   firstCallOnRowSql,
   notRetiredModelSql,
-  CURRENT_LABEL_RULE,
+  REPORTED_LABEL_RULE,
   type PrecisionTargets,
 } from "@trenchscanner/core";
 import { MIN_GRADED_FOR_VERDICT, type GradedCounts, type Targets } from "./routes/stats.js";
@@ -70,7 +70,7 @@ export interface DayRates extends GradedCounts {
 export interface LearningDay {
   /** UTC calendar day, YYYY-MM-DD. */
   day: string;
-  /** The decision moments the models saw that day: graded "event" rows under the current label rule. */
+  /** The decision moments the models saw that day: graded "event" rows under a reported label rule (REPORTED_LABEL_RULE). */
   market: DayRates;
   /** Every model's calls that day, pooled, graded by the same rule. */
   feed: DayRates;
@@ -448,7 +448,7 @@ export async function buildLearningCurve(
     WHERE "sampleKind" = 'event'
       AND "anchorAt" >= ${trendSince} AND "anchorAt" < ${until}
       AND ${walletSafetyCutsSql()}
-      AND "labelRule" >= ${CURRENT_LABEL_RULE}
+      AND "labelRule" >= ${REPORTED_LABEL_RULE}
     GROUP BY 1`;
   // Every model's calls by UTC day, graded the same way (see buildHitRateReport for the label
   // sources). A call whose training row was graded under the legacy rule is left out for the same
@@ -473,7 +473,7 @@ export async function buildLearningCurve(
     FROM "CuratedAlert" a
     LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
     WHERE a."createdAt" >= ${trendSince} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
-      AND (co."labelRule" IS NULL OR co."labelRule" >= ${CURRENT_LABEL_RULE})`;
+      AND (co."labelRule" IS NULL OR co."labelRule" >= ${REPORTED_LABEL_RULE})`;
   const modelRows = prisma.$queryRaw<RawModelDay[]>`
     SELECT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day,
            a."model" AS model,

@@ -41,10 +41,22 @@
  *   3 - the price the token was detected and alerted at (user decision 2026-10-05),
  *   4 - the same moment, priced from a seconds-old quote (Jupiter) instead of DexScreener's,
  *       which runs 45-60 s behind the market (user decision 2026-10-12; decisionAnchor below).
- *       Rule-4 rows count as current under rule 3 until history is re-graded to the fresh price.
+ *       History from rule 3 was re-graded to it from Pump.fun's minute candles where they could
+ *       vouch for the price (labelRegradeJob in the worker); the rest stays on rule 3.
+ *
+ * Training and the exam weigh rule-4 rows as current and rule-3 rows as legacy. The live record
+ * and the charts read both (REPORTED_LABEL_RULE).
  */
 export const LEGACY_LABEL_RULE = 1;
-export const CURRENT_LABEL_RULE = 3;
+export const CURRENT_LABEL_RULE = 4;
+/** The rule a decision anchored on DexScreener's price is graded under (no usable fresh quote). */
+export const DEXSCREENER_ANCHOR_LABEL_RULE = 3;
+/**
+ * The oldest rule the live record, catch rates and charts count. A curated alert keeps the rule-3
+ * grade it went out with (its verdict is copied from that row), so dropping rule 3 there would drop
+ * every call made before fresh pricing, and the winners they caught.
+ */
+export const REPORTED_LABEL_RULE = 3;
 /** The rule a row anchored on a fresh quote is graded under - see decisionAnchor. */
 export const FRESH_ANCHOR_LABEL_RULE = 4;
 /**
@@ -90,7 +102,11 @@ export function decisionAnchor(scored: {
       return { priceUsd: q.priceUsd, marketCapUsd: mcap, labelRule: FRESH_ANCHOR_LABEL_RULE };
     }
   }
-  return { priceUsd: scored.priceUsd, marketCapUsd: scored.marketCapUsd, labelRule: CURRENT_LABEL_RULE };
+  return {
+    priceUsd: scored.priceUsd,
+    marketCapUsd: scored.marketCapUsd,
+    labelRule: DEXSCREENER_ANCHOR_LABEL_RULE,
+  };
 }
 
 /** Whether a row's label was graded under the current rule - see CURRENT_LABEL_RULE. */
