@@ -39,7 +39,7 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "pipeline-watch": 10 * 60_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
-  // Runs every CURATOR_TRAINING_INTERVAL_HOURS (2h by default), not daily - same "expected
+  // Runs every CURATOR_TRAINING_INTERVAL_HOURS (6h by default; its heartbeat interval raises this), not daily - same "expected
   // cadence + 2h" buffer as the daily jobs above, scaled to its own interval.
   "curator-training": 4 * 3_600_000,
   // Every 10 minutes; replay batches and playbook rounds wait on it, nothing user-facing does.
