@@ -462,3 +462,84 @@ describe.skipIf(!dbAvailable)("GET /stats/live", () => {
     }
   });
 });
+
+describe.skipIf(!dbAvailable)("GET /stats/screen-funnel", () => {
+  const tag = `funnel-test-${Date.now()}`;
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildServer({ ...loadEnv(), STATS_API_TOKEN: TOKEN });
+    const recent = new Date(Date.now() - 10 * 60_000);
+    await prisma.token.create({ data: { mintAddress: `${tag}-unpriced`, firstSeenAt: recent } });
+    await prisma.token.create({
+      data: { mintAddress: `${tag}-priced`, firstSeenAt: recent, lastLiveAt: recent, lastMcapUsd: 3_000 },
+    });
+    const screened = await prisma.token.create({
+      data: { mintAddress: `${tag}-screened`, firstSeenAt: recent, lastLiveAt: recent, lastMcapUsd: 9_000 },
+    });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: screened.id,
+        priceUsd: 1,
+        marketCapUsd: 12_000,
+        score: 50,
+        takenAt: new Date(Date.now() - 5 * 60_000),
+        rugScreenPassed: true,
+      },
+    });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: screened.id,
+        priceUsd: 1,
+        marketCapUsd: 9_000,
+        score: 50,
+        takenAt: new Date(Date.now() - 2 * 60_000),
+        rugScreenPassed: false,
+        rugScreenReasons: ["45% of supply held by the top 10 holders"],
+      },
+    });
+    await prisma.token.create({
+      data: { mintAddress: `${tag}-old`, firstSeenAt: new Date(Date.now() - 3 * 3_600_000) },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.tokenSnapshot.deleteMany({ where: { token: { mintAddress: { startsWith: tag } } } });
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: tag } } });
+    await app.close();
+  });
+
+  it("lists each token discovered in the window with how far down the funnel it got", async () => {
+    expect((await app.inject({ method: "GET", url: "/stats/screen-funnel" })).statusCode).toBe(401);
+    const res = await app.inject({
+      method: "GET",
+      url: "/stats/screen-funnel?hours=1",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const mine = (body.tokens as { mint: string }[]).filter((t) => t.mint.startsWith(tag));
+    const byMint = new Map(mine.map((t) => [t.mint.slice(tag.length + 1), t]));
+    expect([...byMint.keys()].sort()).toEqual(["priced", "screened", "unpriced"]);
+    expect(byMint.get("unpriced")).toMatchObject({ lastLiveAt: null, snapshots: 0, everPassed: false });
+    expect(byMint.get("priced")).toMatchObject({ lastMcapUsd: 3_000, snapshots: 0, latestPassed: null });
+    expect(byMint.get("screened")).toMatchObject({
+      snapshots: 2,
+      firstSnapshotMcapUsd: 12_000,
+      latestPassed: false,
+      latestReasons: ["45% of supply held by the top 10 holders"],
+      everPassed: true,
+    });
+    expect(body.discovered).toBeGreaterThanOrEqual(3);
+    expect(body.screened).toBeGreaterThanOrEqual(1);
+  });
+
+  it("caps the window", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/stats/screen-funnel?hours=24",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

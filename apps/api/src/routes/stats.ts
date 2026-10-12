@@ -20,6 +20,7 @@ import type { RouteTimings } from "../routeTimings.js";
 import { SharedCache } from "../sharedCache.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { exportQuerySchema, exportWindow, startExport } from "./statsExport.js";
+import { buildScreenFunnel, SCREEN_FUNNEL_MAX_HOURS } from "../screenFunnel.js";
 
 const logger = createLogger("stats");
 
@@ -373,6 +374,27 @@ export async function registerStatsRoutes(
     async (_request, reply) => {
       reply.header("cache-control", "no-store");
       return storageCache.get(buildStorageReport);
+    },
+  );
+
+  /**
+   * The admin safety-screen panel's funnel, per mint: every token discovered in the last `hours`
+   * with whether it was ever priced, scanned in the band, and passed - see screenFunnel.ts.
+   */
+  const funnelQuery = z.object({
+    hours: z.coerce.number().int().min(1).max(SCREEN_FUNNEL_MAX_HOURS).default(1),
+  });
+  app.get(
+    "/screen-funnel",
+    { config: { rateLimit: { max: 6, timeWindow: "1 minute" } }, preHandler: guard },
+    async (request, reply) => {
+      const parsed = funnelQuery.safeParse(request.query);
+      if (!parsed.success) {
+        reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten() });
+        return;
+      }
+      reply.header("cache-control", "no-store");
+      return buildScreenFunnel(parsed.data.hours);
     },
   );
 
