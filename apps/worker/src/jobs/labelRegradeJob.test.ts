@@ -95,6 +95,58 @@ describe.skipIf(!dbAvailable)("label regrade job", () => {
     }
   });
 
+  it("leaves a row a curated alert points at, and puts back the old grade on one already re-graded", async () => {
+    const { token, row } = await seed("alerted");
+    const alertOn = (candidateOutcomeId: string, tokenId: string) =>
+      prisma.curatedAlert.create({
+        data: {
+          tokenId,
+          candidateOutcomeId,
+          source: "heuristic-v1",
+          confidence: 80,
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 1e9,
+        },
+      });
+    await alertOn(row.id, token.id);
+    const candles = path(-3, [1, 1.3, 1.6, 2, 2.5, ...Array(40).fill(1.5)]);
+    await runLabelRegradeJob(
+      { minuteCandles: async (mint) => (mint === token.mintAddress ? candles : []) },
+      { spacingMs: 0, now: () => NOW, coinsPerRun: 1000 },
+    );
+    expect(await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      labelRule: 3,
+      regradedAt: null,
+      anchorPriceUsd: 1,
+    });
+
+    // Re-graded before alerts were left alone: restored from rule3Grade on the next run.
+    const late = await seed("alerted-late");
+    await runLabelRegradeJob(
+      { minuteCandles: async (mint) => (mint === late.token.mintAddress ? candles : []) },
+      { spacingMs: 0, now: () => NOW, coinsPerRun: 1000 },
+    );
+    expect((await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: late.row.id } })).labelRule).toBe(
+      4,
+    );
+    await alertOn(late.row.id, late.token.id);
+    const meta = await runLabelRegradeJob(
+      { minuteCandles: async () => [] },
+      { spacingMs: 0, now: () => NOW },
+    );
+    expect(meta.restored).toBeGreaterThanOrEqual(1);
+    const back = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: late.row.id } });
+    expect(back).toMatchObject({
+      labelRule: 3,
+      anchorPriceUsd: 1,
+      hit2xIn1h: true,
+      labelValue: 1.3,
+      rule3Grade: null,
+    });
+    expect(back.hit2xAt?.getTime()).toBe(ANCHOR + 3 * 60_000);
+    expect((back.features as Record<string, unknown>).freshGapPct).toBeUndefined();
+  });
+
   it("stops at Pump.fun's first 429 and leaves the coin for a later run", async () => {
     const { row } = await seed("throttled");
     const meta = await runLabelRegradeJob(

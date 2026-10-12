@@ -25,8 +25,9 @@ const logger = createLogger("label-regrade");
  * can be read side by side or the old grade put back. Rows the candles can't vouch for keep their
  * grade and are only stamped as looked at.
  *
- * Training rows only (hourly, event and second moments, past their 24h watch). Curated alerts and
- * user-filter matches keep the verdicts they were published with.
+ * Training rows only (hourly, event and second moments, past their 24h watch), and none a curated
+ * alert points at: alerts and user-filter matches keep the verdicts they were published with, and
+ * so do the rows those verdicts were copied from.
  *
  * Gentle on Pump.fun, which answers 429 quickly: a few coins a run, one call each, a pause between
  * them, and the run stops at the first 429. A no-op once nothing is left.
@@ -94,7 +95,6 @@ const ROW_SELECT = {
   anchorAt: true,
   features: true,
   labelRule: true,
-  curatedAlerts: { select: { id: true } },
   ...Object.fromEntries(GRADE_FIELDS.map((f) => [f, true])),
 } as Prisma.CandidateOutcomeSelect;
 
@@ -102,7 +102,6 @@ type GradeRow = {
   id: string;
   anchorAt: Date;
   features: Prisma.JsonValue;
-  curatedAlerts: { id: string }[];
 } & Record<(typeof GRADE_FIELDS)[number], unknown> & { anchorPriceUsd: number; anchorMcapUsd: number };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -115,7 +114,48 @@ function pendingWhere(nowMs: number, from: Date = RULE_3_SINCE): Prisma.Candidat
     finalized24hAt: { not: null },
     sampleKind: { in: TRAINING_KINDS },
     anchorAt: { gte: from, lt: new Date(nowMs - SETTLED_AFTER_MS) },
+    // A curated alert's verdict is copied from the row it points at; re-grading that row would
+    // leave the copy and the row disagreeing, so it keeps the grade the alert went out with.
+    curatedAlerts: { none: {} },
   };
+}
+
+/**
+ * Puts back the rule-3 grade on any re-graded row a curated alert points at (the first build
+ * re-graded those too, and an alert can come to point at a row after it was re-graded): the
+ * alert's copied verdict and its row must agree. Rows from rule3Grade, so nothing is lost.
+ */
+async function restoreAlertRows(): Promise<number> {
+  const rows = await prisma.candidateOutcome.findMany({
+    where: {
+      labelRule: FRESH_ANCHOR_LABEL_RULE,
+      rule3Grade: { not: Prisma.DbNull },
+      curatedAlerts: { some: {} },
+    },
+    select: { id: true, features: true, rule3Grade: true },
+    take: 500,
+  });
+  for (const row of rows) {
+    const old = row.rule3Grade as Record<string, unknown>;
+    const data: Record<string, unknown> = {};
+    for (const f of GRADE_FIELDS) {
+      const v = old[f];
+      // Dates went through JSON as strings.
+      data[f] = typeof v === "string" && /At$/.test(f) ? new Date(v) : v;
+    }
+    const { freshGapPct: _gap, ...features } = row.features as Record<string, unknown>;
+    await prisma.candidateOutcome.updateMany({
+      where: { id: row.id, labelRule: FRESH_ANCHOR_LABEL_RULE },
+      data: {
+        ...(data as Prisma.CandidateOutcomeUpdateManyMutationInput),
+        labelRule: 3,
+        rule3Grade: Prisma.DbNull,
+        features: features as Prisma.InputJsonValue,
+      },
+    });
+  }
+  if (rows.length > 0) logger.info("restored the rule-3 grade on alert rows", { count: rows.length });
+  return rows.length;
 }
 
 export async function runLabelRegradeJob(
@@ -125,6 +165,7 @@ export async function runLabelRegradeJob(
   const now = opts.now ?? Date.now;
   const coinsPerRun = opts.coinsPerRun ?? REGRADE_COINS_PER_RUN;
   const spacingMs = opts.spacingMs ?? CALL_SPACING_MS;
+  const restored = await restoreAlertRows();
   // The oldest pending rows name the next coins; each coin's pending rows are then done together
   // from one candle read.
   const next = await prisma.candidateOutcome.findMany({
@@ -173,7 +214,7 @@ export async function runLabelRegradeJob(
             {
               anchorAt: row.anchorAt,
               anchorPriceUsd: row.anchorPriceUsd,
-              startsExtended: row.curatedAlerts.length > 0,
+              startsExtended: false,
             },
             candles,
             nowMs,
@@ -241,5 +282,5 @@ export async function runLabelRegradeJob(
   const remaining = await prisma.candidateOutcome.count({ where: pendingWhere(now(), cursor) });
   if (throttled) logger.warn("pump.fun throttled the candle reads - the rest wait for the next run");
   logger.info("label regrade run", { ...counts, ...skips, remaining, throttled });
-  return { ...counts, skipped: skips, remaining, throttled };
+  return { ...counts, restored, skipped: skips, remaining, throttled };
 }

@@ -80,7 +80,7 @@ export class JupiterClient {
     concurrency = 2,
     options: TokenLookupOptions = {},
   ): Promise<CandidateToken[]> {
-    const { seenAt, ...rest } = options;
+    const { seenAt, freshSources: _fresh, ...rest } = options;
     const found = await this.search(mintAddresses, concurrency, rest, parseJupiterTokens);
     if (seenAt) for (const { token, answered } of found) seenAt.set(token.mintAddress, answered);
     return found.map((f) => f.token);
@@ -267,6 +267,7 @@ export class JupiterFirstLookup {
       failed: jupiterFailed,
     });
     const priced = new Set(found.filter((t) => t.priceUsd > 0).map((t) => t.mintAddress));
+    if (options.freshSources) for (const mint of priced) options.freshSources.add(mint);
     const rest = unique.filter(
       (mint) => jupiterFailed.has(mint) || (!options.mayBeUnindexed && !priced.has(mint)),
     );

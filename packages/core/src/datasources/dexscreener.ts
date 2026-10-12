@@ -121,6 +121,12 @@ export interface TokenLookupOptions {
    */
   failed?: Set<string>;
   /**
+   * When supplied, collects the mints whose price came from a seconds-old source (Jupiter, via
+   * JupiterFirstLookup) rather than DexScreener, whose prices run 45-60 s behind the market. A
+   * mint left out was priced by DexScreener (or its fallback).
+   */
+  freshSources?: Set<string>;
+  /**
    * The scan's own watchlist refresh: first call on the fallback's budget while DexScreener is
    * blank (see GeckoTerminalClient). DexScreener itself ignores it.
    */
@@ -445,6 +451,7 @@ export class DexScreenerClient {
       priority: _priority,
       fresh,
       fallbackIfUnlisted: _fallbackIfUnlisted,
+      freshSources: _freshSources,
       ...fetchOptions
     } = options;
 

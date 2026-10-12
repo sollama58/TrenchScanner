@@ -158,7 +158,12 @@ describe("JupiterFirstLookup", () => {
     };
     const dex = { getTokensByAddresses: vi.fn(async (mints: string[]) => mints.map((m) => token(m, 2))) };
     const lookup = new JupiterFirstLookup(jupiter, dex);
-    const out = await lookup.getTokensByAddresses(["priced", "zero", "absent", "unanswered"], 5, {});
+    const freshSources = new Set<string>();
+    const out = await lookup.getTokensByAddresses(["priced", "zero", "absent", "unanswered"], 5, {
+      freshSources,
+    });
+    // Only the price Jupiter itself gave is marked seconds-old.
+    expect([...freshSources]).toEqual(["priced"]);
     expect(dex.getTokensByAddresses.mock.calls[0]![0]).toEqual(["zero", "absent", "unanswered"]);
     expect(Object.fromEntries(out.map((t) => [t.mintAddress, t.priceUsd]))).toEqual({
       priced: 1,
