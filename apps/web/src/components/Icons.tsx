@@ -29,14 +29,6 @@ export const PulseIcon = (p: IconProps) => (
   </Svg>
 );
 
-/** The Stream: rows arriving one after another. */
-export const StreamIcon = (p: IconProps) => (
-  <Svg {...p}>
-    <path d="M4 6h16M4 12h11M4 18h7" />
-    <circle cx="19" cy="17" r="2" />
-  </Svg>
-);
-
 /** Opens in a window of its own. */
 export const PopOutIcon = (p: IconProps) => (
   <Svg {...p}>
