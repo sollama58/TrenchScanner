@@ -28,6 +28,8 @@ import {
   loadSettingsTab,
   loadSignIn,
   loaded,
+  STREAM_HASH,
+  streamFromHash,
   tabFromHash,
   type Tab,
 } from "./routes";
@@ -37,6 +39,7 @@ import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
+import { StreamSwitch, StreamView } from "./components/StreamView";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -83,6 +86,8 @@ export function App() {
     return isGuest() ? { state: "guest" } : { state: "loading" };
   });
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
+  // The Stream's focus mode (#stream). The tab underneath is kept, so switching back returns to it.
+  const [wantsStream, setStream] = useState(streamFromHash);
   const sageMint = useSageMint();
 
   const checkSession = (maxAgeMs: number) => {
@@ -116,7 +121,11 @@ export function App() {
     if (linkCode !== undefined) redeem(linkCode);
     // A guest has no session to check: asking would only fetch a 401.
     else if (session.state !== "guest" && session.state !== "linking") checkSession(10_000);
-    const onHash = () => setTab(tabFromHash());
+    const onHash = () => {
+      const streaming = streamFromHash();
+      setStream(streaming);
+      if (!streaming) setTab(tabFromHash());
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -161,6 +170,13 @@ export function App() {
   const goTo = (t: Tab) => {
     window.location.hash = t === "live" ? "" : t;
     setTab(t);
+    setStream(false);
+    window.scrollTo({ top: 0 });
+  };
+
+  const openStream = () => {
+    window.location.hash = STREAM_HASH;
+    setStream(true);
     window.scrollTo({ top: 0 });
   };
 
@@ -200,17 +216,20 @@ export function App() {
   const tabs = isAdmin ? [...TABS, ADMIN_TAB] : TABS;
   // #admin without an admin wallet reads as the Live tab, so a tab is always the highlighted one.
   const tab: Tab = wantedTab === "admin" && !isAdmin ? "live" : wantedTab;
-  // A new tab, or signing in or out, is a new page: its load gets the full loader.
-  useEffect(markNavigation, [tab, session.state]);
-  const loaderLabel =
-    session.state === "signed-in" || session.state === "guest"
+  // Subscribers only: it is a feed. A guest or a signed-out visitor opening #stream gets the page.
+  const stream = wantsStream && signedIn;
+  // A new tab, the Stream, or signing in or out, is a new page: its load gets the full loader.
+  useEffect(markNavigation, [tab, stream, session.state]);
+  const loaderLabel = stream
+    ? "Loading Stream"
+    : session.state === "signed-in" || session.state === "guest"
       ? `Loading ${tabs.find((t) => t.id === tab)?.label ?? "TrenchScanner"}`
       : "Loading TrenchScanner";
 
   return (
-    <div className="app">
+    <div className={`app${stream ? " streaming" : ""}`}>
       <div className="backdrop" aria-hidden />
-      <header className="topbar">
+      <header className="topbar" hidden={stream}>
         <div className="topbar-inner">
           <a className="brand" href="#" onClick={() => goTo("live")}>
             <LogoMark />
@@ -269,6 +288,7 @@ export function App() {
             </nav>
           )}
           <div className="topbar-right">
+            {signedIn && <StreamSwitch on={false} onToggle={openStream} />}
             <WorkerStatus showJobs={isAdmin} />
             {guest && (
               <button className="button primary connect-btn" onClick={connectWallet}>
@@ -290,7 +310,7 @@ export function App() {
       <main className="content">
         <PageLoader label={loaderLabel} />
         {/* The Admin tab's broadcast: for everyone, signed in, guest or signed out. */}
-        {session.state !== "linking" && <AnnouncementBar />}
+        {session.state !== "linking" && !stream && <AnnouncementBar />}
         {session.state === "loading" && <Boot />}
         {session.state === "linking" &&
           (session.error ? (
@@ -374,16 +394,22 @@ export function App() {
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
-            <div className="tab-view" key={tab}>
-              <Suspense fallback={<Boot />}>
-                {tab === "live" && <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} />}
-                {tab === "model" && <ModelTab />}
-                {tab === "lighthouse" && <LighthouseTab />}
-                {tab === "filters" && <FiltersTab goTo={goTo} />}
-                {tab === "settings" && <SettingsTab goTo={goTo} />}
-                {tab === "admin" && <AdminTab goTo={goTo} />}
-              </Suspense>
-            </div>
+            {stream ? (
+              <div className="tab-view" key="stream">
+                <StreamView onExit={() => goTo(tab)} />
+              </div>
+            ) : (
+              <div className="tab-view" key={tab}>
+                <Suspense fallback={<Boot />}>
+                  {tab === "live" && <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} />}
+                  {tab === "model" && <ModelTab />}
+                  {tab === "lighthouse" && <LighthouseTab />}
+                  {tab === "filters" && <FiltersTab goTo={goTo} />}
+                  {tab === "settings" && <SettingsTab goTo={goTo} />}
+                  {tab === "admin" && <AdminTab goTo={goTo} />}
+                </Suspense>
+              </div>
+            )}
             {sageMint && (
               <Suspense fallback={null}>
                 <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
@@ -393,7 +419,7 @@ export function App() {
         )}
       </main>
 
-      <footer className="site-foot faint small">
+      <footer className="site-foot faint small" hidden={stream}>
         Alerts are for research, not financial advice. Memecoins can go to zero in minutes.
         {" | "}
         <a href="https://alonisthe.dev" target="_blank" rel="noopener noreferrer">

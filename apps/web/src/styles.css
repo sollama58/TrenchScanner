@@ -7994,3 +7994,112 @@ button.small-btn {
   justify-content: space-between;
   margin: 6px 0 0;
 }
+
+/* ---------- Stream (components/StreamView.tsx) ---------- */
+/* The header's way in: an on/off switch like the feed's, with the Stream icon for its label (the
+   header row has no room to spare beside the tabs). */
+.stream-switch .icon {
+  color: var(--brand-ink);
+}
+.stream-bar .stream-switch .stream-switch-icon {
+  display: none;
+}
+/* Narrower desktop windows: the tabs pad a little less, and the scanner pill and the admin tag give
+   up their extras, so the header row still fits beside the Stream switch. */
+@media (min-width: 981px) and (max-width: 1439px) {
+  .tabs button,
+  .tabs .tab-link {
+    padding: 7px 11px;
+  }
+  .topbar .status-pill .faint,
+  .topbar .wallet-pill .admin-tag {
+    display: none;
+  }
+}
+/* Focus mode: the header, tabs, banner and footer give way to the Stream's own slim bar, and the
+   cards take the whole width of the window. */
+.app.streaming .topbar,
+.app.streaming .site-foot {
+  display: none;
+}
+.app.streaming .content {
+  max-width: none;
+  padding: 0 20px 20px;
+}
+.stream-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 -20px 16px;
+  padding: 8px 20px;
+  background: color-mix(in srgb, var(--page) 72%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+.stream-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.stream-title strong {
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+.stream-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stream-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+/* A card arriving slides in at the top; the ones already there don't move again. */
+.stream-cards > .card {
+  animation: rise 0.45s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stream-cards > .card {
+    animation: none;
+  }
+}
+@media (max-width: 900px) {
+  .stream-sub {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .stream-bar .stream-switch .stream-switch-label {
+    display: none;
+  }
+  .stream-bar .stream-switch .stream-switch-icon {
+    display: block;
+  }
+  .app.streaming .content {
+    padding: 0 12px 12px;
+  }
+  .stream-bar {
+    margin: 0 -12px 12px;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .stream-btn-label {
+    display: none;
+  }
+  /* A phone has no windows to pop out into. */
+  .stream-popout {
+    display: none;
+  }
+  /* No bottom tab bar on the Stream, so the Customize sheet sits on the bottom edge. */
+  .app.streaming .customize-drawer {
+    bottom: 0;
+  }
+}

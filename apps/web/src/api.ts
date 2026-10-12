@@ -226,7 +226,8 @@ export interface LiveMarket {
 /** One feed card - a filter match or a curated alert, which the API serializes alike. */
 export interface Card {
   id: string;
-  kind: "match" | "curated";
+  /** "stream": a token on the Stream (GET /launches) - no filter caught it and no model called it. */
+  kind: "match" | "curated" | "stream";
   tokenId: string;
   matchedAt: string;
   score: number;
@@ -254,6 +255,11 @@ export interface Card {
   hit4xIn1h?: boolean | null;
   hit10xIn1h?: boolean | null;
   disqualified?: boolean | null;
+}
+
+/** GET /launches: the Stream - new tokens that passed the safety screen inside the band, newest first. */
+export interface LaunchPage {
+  launches: Card[];
 }
 
 export interface CuratedPage {
