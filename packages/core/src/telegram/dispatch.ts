@@ -241,6 +241,7 @@ export function buildPending(
     reasons: string[];
     narrativeVerdict: string | null;
     liveMcapUsd?: number | null;
+    anchorMcapUsd?: number;
     token: AlertCard["token"];
     snapshot: AlertCard["snapshot"];
   }[],
@@ -275,13 +276,24 @@ export function buildPending(
     }
   }
   if (chat.modelCalls) {
+    // Per coin, which of a call's figures its card's market cap was set from.
+    const callMcapSet = new Map<string, "live" | "anchor">();
     for (const c of calls) {
       if (!inWindow(c.createdAt)) continue;
       const p = take(c.tokenId, c.createdAt, c.token, c.snapshot);
-      // Pump.fun's market cap as the call went out, over the scan snapshot's (a filter match's
-      // included): that one is DexScreener's, 45-60s behind the market (CuratedAlert.liveMcapUsd).
-      if (c.liveMcapUsd != null && p.card.snapshot) {
-        p.card.snapshot = { ...p.card.snapshot, marketCapUsd: c.liveMcapUsd };
+      // The call's price as it went out, over the scan snapshot's (a filter match's included):
+      // that one is DexScreener's, 45-60s behind the market. Pump.fun's market cap at send when a
+      // call on the coin has it (CuratedAlert.liveMcapUsd), else the first call's own anchor, the
+      // "Alert" figure the dashboard shows.
+      const set = callMcapSet.get(c.tokenId);
+      if (p.card.snapshot && set !== "live") {
+        if (c.liveMcapUsd != null) {
+          p.card.snapshot = { ...p.card.snapshot, marketCapUsd: c.liveMcapUsd };
+          callMcapSet.set(c.tokenId, "live");
+        } else if (set === undefined && c.anchorMcapUsd !== undefined && c.anchorMcapUsd > 0) {
+          p.card.snapshot = { ...p.card.snapshot, marketCapUsd: c.anchorMcapUsd };
+          callMcapSet.set(c.tokenId, "anchor");
+        }
       }
       const modelName = c.modelName ?? c.model ?? "A model";
       if (!p.card.calls.some((k) => k.modelName === modelName)) {
@@ -396,6 +408,7 @@ async function dispatchPass(
             reasons: true,
             narrativeVerdict: true,
             liveMcapUsd: true,
+            anchorMcapUsd: true,
             token: { select: TOKEN_SELECT },
             snapshot: { select: SNAPSHOT_SELECT },
           },

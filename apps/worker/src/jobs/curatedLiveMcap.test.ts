@@ -1,7 +1,12 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
-import { newCuratedCycle, readLiveMarketCaps, type CuratedContender } from "./curatedAlerts.js";
+import {
+  freshQuoteMcap,
+  newCuratedCycle,
+  readLiveMarketCaps,
+  type CuratedContender,
+} from "./curatedAlerts.js";
 
 const contender = (mint: string, marketCapUsd: number): CuratedContender =>
   ({
@@ -50,5 +55,28 @@ describe("readLiveMarketCaps", () => {
     await readLiveMarketCaps(cycle, () => new Promise(() => {}));
     expect(Date.now() - startedAt).toBeLessThan(3_000);
     expect(slow.liveMcapUsd).toBeUndefined();
+  });
+});
+
+describe("freshQuoteMcap", () => {
+  it("puts the quote's price on DexScreener's supply, not Jupiter's post-burn one", () => {
+    // DexScreener: $0.00002 at $20k (1B). Jupiter: $0.00003, with an mcap on 0.914B.
+    const scored = {
+      priceUsd: 0.00002,
+      marketCapUsd: 20_000,
+      freshQuote: { priceUsd: 0.00003, marketCapUsd: 27_420 },
+    };
+    expect(freshQuoteMcap(scored)).toBeCloseTo(30_000, 6);
+  });
+
+  it("is null without a quote, and the quote's own figure without a DexScreener price", () => {
+    expect(freshQuoteMcap({ priceUsd: 0.00002, marketCapUsd: 20_000 })).toBeNull();
+    expect(
+      freshQuoteMcap({
+        priceUsd: 0,
+        marketCapUsd: 0,
+        freshQuote: { priceUsd: 0.00003, marketCapUsd: 27_420 },
+      }),
+    ).toBe(27_420);
   });
 });

@@ -83,16 +83,16 @@ export async function writeLiveMarketData(
   const rows = tokens
     .flatMap((t) => {
       const data = byMint.get(t.mintAddress);
-      // A pair with no market cap or FDV yet reads as 0 - not a reading, so written as NULL
-      // (like any non-finite figure) rather than stamped: the card showed "$0" as the freshest
-      // figure. refreshAndFilterToBand skips these for the same reason. The price likewise: a
-      // pair with no priceUsd parses as 0 (toCandidateToken), and a $0 live price was stamped
-      // as the freshest one.
-      return data
+      // A pair with no market cap or FDV yet reads as 0: not a reading, so the row is left as it
+      // was, last figure and its time, rather than stamped. Writing it as NULL with a fresh
+      // liveDataAt erased the last good figure while the row looked just refreshed (and the
+      // live-price job then skipped the token as fresh). refreshAndFilterToBand skips these for
+      // the same reason. A non-finite or $0 price alongside a real market cap is written as NULL.
+      return data && data.marketCapUsd > 0 && Number.isFinite(data.marketCapUsd)
         ? [
             {
               id: t.id,
-              mcap: data.marketCapUsd > 0 ? data.marketCapUsd : NaN,
+              mcap: data.marketCapUsd,
               price: data.priceUsd > 0 ? data.priceUsd : NaN,
               at: seenAt?.get(t.mintAddress) ?? fetchedAt,
             },
@@ -118,7 +118,11 @@ export async function writeLiveMarketData(
         ${floatArrayParam(rows.map((r) => r.price))}::text::float8[],
         ${rows.map((r) => r.at.toISOString())}::text[]::timestamptz[]
       ) AS v(id, mcap, price, at)
-      WHERE t.id = v.id`;
+      WHERE t.id = v.id
+        -- The scan, the live-price job and the API refresher each read on their own client and
+        -- cache: a reading older than the one already stored (a cached quote, a slow batch) must
+        -- not take its place and move the card's figure backwards.
+        AND (t."liveDataAt" IS NULL OR t."liveDataAt" <= v.at)`;
   } catch (err) {
     logger.warn("failed to persist live market data", { count: rows.length, error: String(err) });
   }

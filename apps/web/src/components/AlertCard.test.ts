@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card } from "../api";
-import { recordedPeakOf } from "./AlertCard";
+import { nowReading, recordedPeakOf } from "./AlertCard";
 
 /** Just the fields recordedPeakOf reads. */
 function card(over: {
@@ -74,5 +74,32 @@ describe("recordedPeakOf", () => {
       }),
     );
     expect(peak).toEqual({ pct: 300, isRunPeak: false });
+  });
+});
+
+describe("nowReading", () => {
+  const called = "2026-10-12T12:00:00.000Z";
+  const at = (secondsAfter: number) => new Date(Date.parse(called) + secondsAfter * 1000).toISOString();
+  const call = (kind: Card["kind"], readAt: string | null) =>
+    ({
+      kind,
+      currentMarketCapUsd: 47_500,
+      currentMarketCapAt: readAt,
+      curated: { alertedAt: called },
+    }) as unknown as Card;
+
+  it("leaves out a model call's readings from its first minute", () => {
+    // CASINO: called at $11.4K, but the scan reading 14 s later still showed $47.5K.
+    expect(nowReading(call("curated", at(14)))).toBeNull();
+    expect(nowReading(call("curated", at(-5)))).toBeNull();
+    expect(nowReading(call("curated", at(60)))).toBe(47_500);
+  });
+
+  it("shows every reading on a filter alert, whose own figure lags the same way", () => {
+    expect(nowReading(call("match", at(14)))).toBe(47_500);
+  });
+
+  it("shows the reading when it has no time (older API builds)", () => {
+    expect(nowReading(call("curated", null))).toBe(47_500);
   });
 });

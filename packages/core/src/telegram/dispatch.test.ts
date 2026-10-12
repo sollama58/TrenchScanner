@@ -286,6 +286,29 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(api.sent()[0]!.text).toContain("MC <b>$43.2k</b>");
   });
 
+  it("shows the call's anchor, not the lagging scan snapshot's, when Pump.fun didn't answer", async () => {
+    await rewind();
+    // Only this call on the coin: one with a Pump.fun figure would set the card's.
+    await prisma.curatedAlert.deleteMany({ where: { tokenId } });
+    const at = new Date(Date.now() - 30_000);
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId,
+        snapshotId,
+        source: "test",
+        confidence: 80,
+        anchorPriceUsd: 0.0000114,
+        anchorMcapUsd: 11_400,
+        model: "rules",
+        modelName: "Rules",
+        createdAt: at,
+      },
+    });
+    const api = new FakeTelegramApi();
+    expect((await run(api)).sent).toBe(1);
+    expect(api.sent()[0]!.text).toContain("MC <b>$11.4k</b>");
+  });
+
   it("alerts a token again once a day has passed since the chat heard about it", async () => {
     await rewind();
     const at = new Date(Date.now() - 30_000);

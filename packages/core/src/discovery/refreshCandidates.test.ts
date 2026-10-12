@@ -65,6 +65,28 @@ describe("refreshAndFilterToBand", () => {
     expect(result.partial).toBe(true);
   });
 
+  it("returns when each reading was taken, not when the refresh finished", async () => {
+    // The scan writes live figures (and call peaks) from these; a reading cached 10 s earlier
+    // must keep its own time.
+    const at = new Date("2026-10-12T12:00:00Z");
+    const dexScreener = {
+      getTokensByAddresses: async (
+        mints: string[],
+        _chunk: number,
+        options: { seenAt?: Map<string, Date> },
+      ) => {
+        options.seenAt?.set(mints[0]!, at);
+        return [candidate(mints[0]!, 100_000)];
+      },
+    } as unknown as DexScreenerClient;
+
+    const result = await refreshAndFilterToBand(dexScreener, ["cached"], {
+      mcapMin: 50_000,
+      mcapMax: 500_000,
+    });
+    expect(result.seenAt.get("cached")).toEqual(at);
+  });
+
   it("returns empty for an empty watchlist without touching the client", async () => {
     const dexScreener = {
       getTokensByAddresses: async () => {
@@ -76,6 +98,7 @@ describe("refreshAndFilterToBand", () => {
       liveMints: [],
       liveMarketCaps: [],
       marketData: [],
+      seenAt: new Map(),
       partial: false,
     });
   });

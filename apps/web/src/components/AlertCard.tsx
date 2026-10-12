@@ -41,7 +41,7 @@ export function AlertCard({
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const alertMcap = s.marketCapUsd;
-  const nowMcap = card.currentMarketCapUsd;
+  const nowMcap = nowReading(card);
   const move = change(alertMcap, nowMcap);
   const curated = card.curated;
   // Re-derived from the alert time, so a call whose window ran out by the clock stops reading as pending.
@@ -201,7 +201,9 @@ export function AlertCard({
           {show("now") && (
             <div className="fig">
               <label>Now</label>
-              <span className="num">{usd(nowMcap)}</span>
+              <span className="num" title={nowTitle(card, nowMcap, now)}>
+                {usd(nowMcap)}
+              </span>
               {move !== null && (
                 <small className={`num delta ${move >= 0 ? "up" : "down"}`}>
                   {move >= 0 ? "▲" : "▼"} {pct(Math.abs(move))}
@@ -638,6 +640,41 @@ export function recordedPeakOf(card: Card): { pct: number | null; isRunPeak: boo
       : callPeak;
   const pct = maxKnown(callHere, card.peakReturnPct);
   return { pct, isRunPeak: pct !== null && pct === callHere && runPeak !== null && callPeak === runPeak };
+}
+
+/**
+ * How long after a model call a market-cap reading starts to say where the coin is now. The call
+ * is priced from a seconds-old quote, while the readings behind "Now" (scan snapshots and live
+ * pings, both DexScreener) run 45-60 s behind the market: one from the first minute still shows
+ * the market from before the call. The server ignores those for the call's Peak
+ * (CALL_PEAK_READING_LAG_MS); folded into the Peak here, CASINO's $11.4K call read "Now $47.5K
+ * ▲316%" and an ATH of $47.5K for its first minute.
+ */
+export const CALL_READING_LAG_MS = 60_000;
+
+/**
+ * The card's "Now" market cap, or null while the only reading is from a model call's first minute
+ * (see CALL_READING_LAG_MS). A filter alert's own figure is DexScreener's like its readings, so it
+ * shows every one.
+ */
+export function nowReading(card: Card): number | null {
+  const mcap = card.currentMarketCapUsd;
+  if (mcap === null || card.kind === "match" || !card.curated) return mcap;
+  const at = card.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : NaN;
+  const calledAt = Date.parse(card.curated.alertedAt);
+  if (!Number.isFinite(at) || !Number.isFinite(calledAt)) return mcap;
+  return at >= calledAt + CALL_READING_LAG_MS ? mcap : null;
+}
+
+/** The "Now" figure's tooltip: why it is blank in a call's first minute, or how old it is. */
+function nowTitle(card: Card, nowMcap: number | null, now: number): string | undefined {
+  if (nowMcap === null && card.currentMarketCapUsd !== null) {
+    return "Shows from the first reading a minute after the call: earlier ones lag the market";
+  }
+  const at = card.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : NaN;
+  if (nowMcap === null || !Number.isFinite(at)) return undefined;
+  const minutes = Math.floor((now - at) / 60_000);
+  return minutes >= 2 ? `Read ${minutes} minutes ago` : undefined;
 }
 
 /** The larger of two peaks either of which may be missing. */

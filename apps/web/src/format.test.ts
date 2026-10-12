@@ -19,6 +19,10 @@ describe("format", () => {
     expect(usd(950)).toBe("$950");
     expect(usd(12_345)).toBe("$12.3K");
     expect(usd(1_250_000)).toBe("$1.25M");
+    // Rounding up into the next unit shows in that unit, not as "$1000K".
+    expect(usd(999_600)).toBe("$1.00M");
+    expect(usd(999_400)).toBe("$999K");
+    expect(usd(999.7)).toBe("$1.00K");
     expect(usd(null)).toBe("–");
   });
 

@@ -48,6 +48,12 @@ export interface BandRefreshResult {
    */
   marketData: CandidateToken[];
   /**
+   * Per mint in `marketData`, when its reading was taken (its batch's answer, or the cached
+   * reading's own time). A live figure or a call's peak written from these must carry this time,
+   * not the moment the write landed: up to the 10 s deadline plus 10 s of cache reuse later.
+   */
+  seenAt: Map<string, Date>;
+  /**
    * True when at least one requested mint got no answer - its batch failed or was still in
    * flight at the deadline. `inBand` is then a subset of what the band holds, and a caller that
    * treats one refresh as "every in-band token was looked at" (the settling-in pass of a newly
@@ -70,7 +76,14 @@ export async function refreshAndFilterToBand(
   options: BandFilterOptions,
 ): Promise<BandRefreshResult> {
   if (mintAddresses.length === 0) {
-    return { inBand: [], liveMints: [], liveMarketCaps: [], marketData: [], partial: false };
+    return {
+      inBand: [],
+      liveMints: [],
+      liveMarketCaps: [],
+      marketData: [],
+      seenAt: new Map(),
+      partial: false,
+    };
   }
 
   const { mcapMin, mcapMax, bandPaddingRatio, newestLaunches } = options;
@@ -83,6 +96,7 @@ export async function refreshAndFilterToBand(
   // throttled DexScreener still held cycles for 20-50s at five seconds a batch. Callers pass the
   // mints that matter most first (selectWatchlist puts the near-band tier ahead).
   const failed = new Set<string>();
+  const seenAt = new Map<string, Date>();
   const marketData = await dexScreener.getTokensByAddresses(mintAddresses, 5, {
     timeoutMs: 5000,
     retries: 1,
@@ -90,6 +104,7 @@ export async function refreshAndFilterToBand(
     // What puts a coin in front of the safety screen: first call on a fallback's budget.
     priority: true,
     failed,
+    seenAt,
     fallbackIfUnlisted: newestLaunches,
   });
   return {
@@ -102,5 +117,6 @@ export async function refreshAndFilterToBand(
       .filter((t) => t.marketCapUsd > 0)
       .map((t) => ({ mintAddress: t.mintAddress, marketCapUsd: t.marketCapUsd })),
     marketData,
+    seenAt,
   };
 }

@@ -865,6 +865,24 @@ const LIVE_MCAP_CONCURRENCY = 4;
 const LIVE_MCAP_MAX_RATIO = 5;
 
 /**
+ * The fresh quote's market cap on DexScreener's (and Pump.fun's) supply of 1B, or null without a
+ * quote. Jupiter's own figure counts the supply after burns: 0.91-0.97B on some coins (live probe
+ * 2026-10-12), so shown beside the DexScreener readings a call's Peak counts from, it read up to
+ * ~9% low.
+ */
+export function freshQuoteMcap(scored: {
+  priceUsd: number;
+  marketCapUsd: number;
+  freshQuote?: { priceUsd: number; marketCapUsd: number };
+}): number | null {
+  const q = scored.freshQuote;
+  if (!q || !(q.priceUsd > 0)) return null;
+  if (scored.priceUsd > 0 && scored.marketCapUsd > 0)
+    return (scored.marketCapUsd / scored.priceUsd) * q.priceUsd;
+  return q.marketCapUsd > 0 ? q.marketCapUsd : null;
+}
+
+/**
  * Stamps each contender with the market cap Pump.fun reports for its coin right now. The anchor
  * is DexScreener's price, which runs 45-60s behind the market: on 2026-10-12 half of calls showed
  * a price more than ~25% from the next minute's open on Pump.fun, while Pump.fun's own figure
@@ -889,7 +907,9 @@ export async function readLiveMarketCaps(
     const mcap = await Promise.resolve()
       .then(() => liveMarketCap(mint))
       .catch(() => null);
-    const anchor = list[0]!.scored.marketCapUsd;
+    // Checked against the price the call goes out at, not DexScreener's from 45-60 s earlier: on a
+    // fast move that one can be far enough off to drop a fair reading.
+    const anchor = decisionAnchor(list[0]!.scored).marketCapUsd;
     if (mcap === null || !(anchor > 0)) return;
     const ratio = mcap / anchor;
     if (ratio > LIVE_MCAP_MAX_RATIO || ratio < 1 / LIVE_MCAP_MAX_RATIO) return;
@@ -1137,7 +1157,7 @@ async function emitCuratedAlert(
           anchorPriceUsd: decisionAnchor(scored).priceUsd,
           anchorMcapUsd: decisionAnchor(scored).marketCapUsd,
           // Pump.fun's read at emission, else the quote the decision was priced from.
-          liveMcapUsd: pick.liveMcapUsd ?? scored.freshQuote?.marketCapUsd ?? null,
+          liveMcapUsd: pick.liveMcapUsd ?? freshQuoteMcap(scored),
         },
       });
       return { anchor, alert };
