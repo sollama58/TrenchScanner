@@ -17,6 +17,7 @@ import {
   WIN_WINDOW_MINUTES,
   TEN_X_WINDOW_MINUTES,
   decisionAnchor,
+  FRESH_ANCHOR_LABEL_RULE,
   type Env,
   type DexScreenerClient,
   type ScoredToken,
@@ -73,6 +74,12 @@ const REPAIR_LOOKBACK_MS = 7 * 86_400_000;
  * against the scan before it is folded in - see the suspect-tick note in runCandidateWatchJob.
  */
 const CRASH_TICK_FRACTION = 0.1;
+/**
+ * How far behind the market DexScreener's prices run (45-60 s measured against Pump.fun's trades,
+ * notes/audit-2026-10-12/timing.md). The low end: stamping a price too early would let it land
+ * before the moment it really traded.
+ */
+export const DEXSCREENER_LAG_MS = 45_000;
 /** A scan snapshot at least this share of the last price, taken since the previous sweep,
  *  contradicts a crash tick. */
 const CRASH_CONTRADICTION_FRACTION = 0.3;
@@ -360,12 +367,15 @@ export async function runCandidateWatchJob(
   // already answered are used and the scan's snapshots stand in for the rest (below), instead of
   // one sweep running for minutes while the next one queues behind it.
   const seenAt = new Map<string, Date>();
+  // The mints Jupiter priced (seconds old); the rest were priced by DexScreener - see restamp below.
+  const freshSources = new Set<string>();
   try {
     for (const candidate of await dexScreener.getTokensByAddresses(mints, undefined, {
       timeoutMs: 8_000,
       retries: 1,
       deadlineMs: PRICE_FETCH_DEADLINE_MS,
       seenAt,
+      freshSources,
       // Its own reading, not the one the scan just took: the crash-tick guard below checks a
       // fetched price against the scan's snapshot, which proves nothing if they are one quote.
       fresh: true,
@@ -453,6 +463,18 @@ export async function runCandidateWatchJob(
         fetched !== undefined
           ? { priceUsd: fetched, at: seenAt.get(row.token.mintAddress) ?? tickAt, fromSnapshot: false }
           : newer && { ...newer, fromSnapshot: true };
+      // A row anchored on a fresh quote (rule 4) is graded on when each price really traded: a
+      // DexScreener price - fetched, or the scan's snapshot of one - is about DEXSCREENER_LAG_MS
+      // behind the market, so it is stamped that much earlier, and one that then lands at or
+      // before the anchor is a price from before the decision and not a tick at all. Rule-3 rows
+      // are anchored on DexScreener's own lagged price and keep reading its prices as they were.
+      const restamp = (c: typeof candidate): typeof candidate => {
+        if (!c || row.labelRule < FRESH_ANCHOR_LABEL_RULE) return c;
+        if (!c.fromSnapshot && freshSources.has(row.token.mintAddress)) return c;
+        const at = new Date(c.at.getTime() - DEXSCREENER_LAG_MS);
+        return at > row.anchorAt ? { ...c, at } : undefined;
+      };
+      candidate = restamp(candidate);
       // Suspect crash ticks (see above). A fetched one the scan's newer snapshot contradicts is
       // skipped, and that snapshot stands in as this sweep's tick. One nothing confirms or
       // contradicts - a snapshot standing in for a missed fetch, or a fetch on a token the scan
@@ -473,7 +495,7 @@ export async function runCandidateWatchJob(
           newer.priceUsd < reference * CRASH_CONTRADICTION_FRACTION;
         if (!candidate.fromSnapshot && newer !== undefined && !confirmedByScan) {
           crashTicksSkipped += 1;
-          candidate = { ...newer, fromSnapshot: true };
+          candidate = restamp({ ...newer, fromSnapshot: true });
         } else if (!confirmedByScan && !pending && !closing) {
           crashTicksDeferred += 1;
           pendingCrashTicks.set(row.id, { priceUsd: candidate.priceUsd, at: candidate.at });

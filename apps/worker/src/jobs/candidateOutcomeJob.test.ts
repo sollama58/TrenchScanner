@@ -123,6 +123,44 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect((row.features as Record<string, number>).freshGapPct).toBeCloseTo(30);
   });
 
+  it("stamps DexScreener prices on fresh-anchored rows when they traded, not when they were read", async () => {
+    // Anchored 20 s ago: a DexScreener price read now traded about 45 s ago, before the decision.
+    const anchorAt = new Date(Date.now() - 20_000);
+    const fresh = await seedRow((await createToken("restamp-fresh")).id, anchorAt, 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+      labelRule: 4,
+    });
+    const scan = await seedRow((await createToken("restamp-scan")).id, anchorAt, 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+      labelRule: 3,
+    });
+    const jup = await seedRow((await createToken("restamp-jup")).id, anchorAt, 1.0, {
+      entryAt: null,
+      signalPriceUsd: null,
+      labelRule: 4,
+    });
+    const tokens = await prisma.token.findMany({
+      where: { id: { in: [fresh.tokenId, scan.tokenId, jup.tokenId] } },
+      select: { id: true, mintAddress: true },
+    });
+    const mintOf = (tokenId: string) => tokens.find((t) => t.id === tokenId)!.mintAddress;
+    const lookup = {
+      getTokensByAddresses: async (mints: string[], _c?: number, opts?: { freshSources?: Set<string> }) => {
+        opts?.freshSources?.add(mintOf(jup.tokenId));
+        return mints.map((mint) => ({ mintAddress: mint, priceUsd: 1.1, marketCapUsd: 100_000 }));
+      },
+    } as unknown as DexScreenerClient;
+    await runCandidateWatchJob(lookup, env);
+    const read = (id: string) => prisma.candidateOutcome.findUniqueOrThrow({ where: { id } });
+    // Rule 4, DexScreener: the price predates the decision, so it isn't a tick.
+    expect((await read(fresh.id)).entryAt).toBeNull();
+    // Rule 3 reads DexScreener's prices as before; a Jupiter price is seconds old and lands as read.
+    expect((await read(scan.id)).entryAt).not.toBeNull();
+    expect((await read(jup.id)).entryAt).not.toBeNull();
+  });
+
   it("folds a mid-window tick into the aggregates and reschedules the row", async () => {
     const token = await createToken("tick");
     const anchorAt = new Date(Date.now() - 5 * MINUTE);
