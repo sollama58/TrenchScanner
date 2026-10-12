@@ -86,6 +86,30 @@ describe.skipIf(!dbAvailable)("recordCuratedPeaks", () => {
     expect(await peakOf(callId)).toBeNull();
   });
 
+  it("ignores readings from the first minute after the call, which still show the market before it", async () => {
+    const { tokenId, callId } = await seedCall("lagged", 11_000, [20_000]);
+    const call = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: callId } });
+    // DexScreener's view of a pre-call wick, read 14 s after the call.
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId,
+        priceUsd: 1,
+        marketCapUsd: 70_000,
+        takenAt: new Date(call.createdAt.getTime() + 14_000),
+      },
+    });
+    await recordCuratedPeaks(RETENTION_DAYS);
+    expect(await peakOf(callId)).toBe(20_000);
+
+    // A live ping from that minute doesn't count either.
+    await prisma.token.update({
+      where: { id: tokenId },
+      data: { liveMarketCapUsd: 80_000, liveDataAt: new Date(call.createdAt.getTime() + 30_000) },
+    });
+    await recordCuratedPeaks(RETENTION_DAYS, { tokenIds: { snapshots: [], livePings: [tokenId] } });
+    expect(await peakOf(callId)).toBe(20_000);
+  });
+
   it("the nightly sweep reads a call's whole history when it has no high yet", async () => {
     const { callId } = await seedCall("late", 50_000, [70_000, 300_000]);
     // Bounded to the last minute, an unrecorded call still reads everything since it was made.

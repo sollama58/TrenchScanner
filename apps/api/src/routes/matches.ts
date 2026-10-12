@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
-import { prisma, corsOriginList, type Env } from "@trenchscanner/core";
+import { prisma, corsOriginList, CALL_PEAK_READING_LAG_MS, type Env } from "@trenchscanner/core";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import {
   attachAiReviewsForAdmin,
@@ -110,7 +110,9 @@ async function liveMarketCapPeaks(
   const byToken = new Map(live.map((t) => [t.id, { mcap: t.liveMarketCapUsd!, at: t.liveDataAt! }]));
   for (const c of calls) {
     const r = byToken.get(c.tokenId);
-    if (!r || !(c.anchorMcapUsd > 0) || r.at < c.createdAt) continue;
+    // A reading from the first minute after the call still shows the market before it.
+    if (!r || !(c.anchorMcapUsd > 0) || r.at.getTime() < c.createdAt.getTime() + CALL_PEAK_READING_LAG_MS)
+      continue;
     const pct = (r.mcap / c.anchorMcapUsd - 1) * 100;
     if (Number.isFinite(pct) && pct > 0) out.set(c.id, pct);
   }

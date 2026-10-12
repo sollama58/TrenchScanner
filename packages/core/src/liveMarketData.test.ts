@@ -163,7 +163,18 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
   it("raises a model call's high from a live reading above it, and only above its market cap", async () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-call` } });
+    // Two minutes old: a reading in a call's first minute still shows the market before it.
     const call = await prisma.curatedAlert.create({
+      data: {
+        source: "test",
+        confidence: 50,
+        anchorPriceUsd: 0.001,
+        anchorMcapUsd: 1000,
+        tokenId: token.id,
+        createdAt: new Date(Date.now() - 2 * 60_000),
+      },
+    });
+    const fresh = await prisma.curatedAlert.create({
       data: { source: "test", confidence: 50, anchorPriceUsd: 0.001, anchorMcapUsd: 1000, tokenId: token.id },
     });
     let mcap = 900;
@@ -180,5 +191,7 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
     expect(await highAfter(3000)).toBe(3000);
     // The high between two worker passes stays once the price falls back.
     expect(await highAfter(2000)).toBe(3000);
+    // The call made seconds ago keeps no high from these readings.
+    expect((await prisma.curatedAlert.findUniqueOrThrow({ where: { id: fresh.id } })).peakMcapUsd).toBeNull();
   });
 });
