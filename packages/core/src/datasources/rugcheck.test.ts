@@ -152,6 +152,25 @@ describe("toProfile", () => {
     expect(profile.top10HolderAddresses).toEqual(["wallet-2", "wallet-3"]);
     expect(profile.top10HolderAddresses).not.toContain(POOL_AUTHORITY);
   });
+
+  it("leaves out closed token accounts RugCheck still lists under the System Program", () => {
+    const closed = "11111111111111111111111111111111";
+    const profile = toProfile(
+      MINT,
+      baseReport({
+        topHolders: [
+          { address: POOL_AUTHORITY, owner: POOL_AUTHORITY, pct: 49.1 },
+          { address: "wallet-2", owner: "wallet-2", pct: 9.2 },
+          { address: "closed-1", owner: closed, pct: 6.4 },
+          { address: "wallet-3", owner: "wallet-3", pct: 0.95 },
+          { address: "closed-2", owner: closed, pct: 3.6 },
+        ],
+      }),
+    );
+    expect(profile.top10HolderAddresses).toEqual(["wallet-2", "wallet-3"]);
+    expect(profile.top10HolderPct).toBeCloseTo(10.15);
+    expect(profile.topHolderShares?.map((h) => h.owner)).toEqual(["wallet-2", "wallet-3"]);
+  });
 });
 
 describe("RugCheckClient.getProfileResult", () => {
