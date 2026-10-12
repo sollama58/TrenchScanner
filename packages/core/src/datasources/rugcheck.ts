@@ -27,6 +27,36 @@ export interface RugCheckProfile extends OnChainProfile {
   /** 0-100, higher = riskier (rugcheck's score_normalised). Undefined when the report has none - unknown, not safe. */
   riskScore?: number;
   riskFlags: string[];
+  /**
+   * The market-excluded holders behind top10HolderPct, owner and % of supply, one more than the
+   * ten: enough to recompute the top ten without one of them (withoutVenueHolder). Absent on
+   * profiles cached before it existed, or when the shares can't be trusted.
+   */
+  topHolderShares?: { owner: string; pct: number }[];
+}
+
+/**
+ * The profile without the token's own pool among its holders. RugCheck leaves out the pools its
+ * markets list names, but in the first minutes after a Pump.fun coin graduates the report can
+ * predate the new PumpSwap pool, which then reads as a holder (its vault's owner is the pool's own
+ * address) and pushes the top ten over the safety screen's concentration cut. `venueAddress` is
+ * the pool DexScreener reports for the coin. Returns the profile unchanged when the pool is not
+ * among its holders or the shares to recompute from are missing.
+ */
+export function withoutVenueHolder(
+  profile: RugCheckProfile,
+  venueAddress: string | undefined,
+): RugCheckProfile {
+  const shares = profile.topHolderShares;
+  if (!venueAddress || !shares?.some((h) => h.owner === venueAddress)) return profile;
+  const rest = shares.filter((h) => h.owner !== venueAddress);
+  const top = rest.slice(0, TOP_N_FOR_CONCENTRATION);
+  return {
+    ...profile,
+    top10HolderPct: top.length > 0 ? top.reduce((sum, h) => sum + h.pct, 0) : undefined,
+    top10HolderAddresses: [...new Set(top.map((h) => h.owner))],
+    topHolderShares: rest,
+  };
 }
 
 /**
@@ -228,5 +258,12 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     // Deduplicated: RugCheck lists token accounts, and one owner with two accounts in the top ten
     // would otherwise be counted twice by both wallet checks.
     top10HolderAddresses: [...new Set(top10Holders.map((h) => h.owner ?? h.address))],
+    ...(sharesConsistent && realHolders.length > 0
+      ? {
+          topHolderShares: realHolders
+            .slice(0, TOP_N_FOR_CONCENTRATION + 1)
+            .map((h) => ({ owner: h.owner ?? h.address, pct: h.pct ?? 0 })),
+        }
+      : {}),
   };
 }
