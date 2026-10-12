@@ -127,6 +127,7 @@ describe("pumpSwapGraduation", () => {
 describe("frozen graduation curves", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   const SOL = { address: "So11111111111111111111111111111111111111112" };
@@ -188,6 +189,52 @@ describe("frozen graduation curves", () => {
         ["broken", "pumpfun", 45_000],
       ]),
     );
+  });
+
+  it("backs off re-reading a curve whose pool isn't listed, and finds a pool listed later", async () => {
+    // 2026-10-12: ~13 of 182 near-band mints were ordinary graduates whose curve sat at the
+    // graduation price with no pool listed anywhere; each cost a re-read in every lookup.
+    const quiet = curve("quiet", "0.0000004100", 45_000);
+    const pool = {
+      chainId: "solana",
+      dexId: "pumpswap",
+      baseToken: { address: "quiet" },
+      quoteToken: SOL,
+      liquidity: { usd: 20_000 },
+      marketCap: 90_000,
+      pairCreatedAt: 1_000,
+    };
+    let listed = false;
+    const reReads: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      if (url.includes("/token-pairs/")) reReads.push(url);
+      const body = url.includes("/token-pairs/") && listed ? [quiet, pool] : [quiet];
+      return Promise.resolve(new Response(JSON.stringify(body)));
+    });
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const client = new DexScreenerClient();
+    const lookup = async () =>
+      (await client.getTokensByAddresses(["quiet"], 1, { retries: 0, fresh: true }))[0];
+
+    expect(await lookup()).toMatchObject({ dexId: "pumpfun", marketCapUsd: 45_000 });
+    expect(reReads).toHaveLength(1);
+    now += 30_000;
+    await lookup();
+    expect(reReads).toHaveLength(1); // still inside the first minute's backoff
+    now += 31_000;
+    await lookup();
+    expect(reReads).toHaveLength(2); // a second miss doubles the wait to two minutes
+    now += 90_000;
+    await lookup();
+    expect(reReads).toHaveLength(2);
+    listed = true;
+    now += 31_000;
+    expect(await lookup()).toMatchObject({ dexId: "pumpswap", marketCapUsd: 90_000 });
+    expect(reReads).toHaveLength(3);
+    // Found: re-read on every lookup again, so the pool's price stays live.
+    await lookup();
+    expect(reReads).toHaveLength(4);
   });
 });
 

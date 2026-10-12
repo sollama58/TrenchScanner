@@ -152,6 +152,11 @@ export class DexScreenerClient {
   private readonly quotes = new Map<string, { token: CandidateToken; at: Date }>();
   /** Lookups answered from the quote cache since the last takeQuoteCacheHits(). */
   private quoteHits = 0;
+  /**
+   * Curves whose re-read found no pool, by mint: when to ask again and how many times in a row it
+   * found none - see repairFrozenCurves.
+   */
+  private readonly curveRechecks = new Map<string, { at: number; misses: number }>();
 
   constructor(options: DexScreenerClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://api.dexscreener.com";
@@ -283,8 +288,9 @@ export class DexScreenerClient {
    * frozen at the graduation price forever, with no PumpSwap pool beside it - so the scan priced
    * such a coin at ~$45k for as long as it stayed on the watchlist, whatever its pool traded at
    * (2026-10-11/12: seven coins, one of them dead at $2.7k and still read in band). The per-token
-   * endpoint lists the pool. A curve that is merely close to graduating costs one extra request
-   * and keeps its answer. Bounded per batch; a failed re-read keeps the batch's answer.
+   * endpoint lists the pool. A curve with no pool listed keeps its answer and is not re-read
+   * again until its backoff passes (see noteCurveWithoutPool). Bounded per batch; a failed
+   * re-read keeps the batch's answer.
    */
   private async repairFrozenCurves(
     pairs: DexScreenerPair[],
@@ -302,8 +308,14 @@ export class DexScreenerClient {
         )
         .map((p) => p.baseToken?.address),
     );
+    const now = Date.now();
     const suspects = tokens
-      .filter((t) => t.dexId === "pumpfun" && atGraduation.has(t.mintAddress))
+      .filter(
+        (t) =>
+          t.dexId === "pumpfun" &&
+          atGraduation.has(t.mintAddress) &&
+          (this.curveRechecks.get(t.mintAddress)?.at ?? 0) <= now,
+      )
       .slice(0, MAX_CURVE_REPAIRS_PER_BATCH);
     if (suspects.length === 0) return tokens;
     const repaired = new Map<string, CandidateToken>();
@@ -316,7 +328,11 @@ export class DexScreenerClient {
           const pools = own.filter(
             (p) => p.dexId === "pumpswap" && (p.liquidity?.usd ?? 0) >= MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD,
           );
-          if (pools.length === 0) return;
+          if (pools.length === 0) {
+            this.noteCurveWithoutPool(t.mintAddress, now);
+            return;
+          }
+          this.curveRechecks.delete(t.mintAddress);
           const [token] = this.selectCanonicalPairs(own.filter((p) => p.dexId !== "pumpfun"));
           if (token) repaired.set(t.mintAddress, token);
         } catch (err) {
@@ -325,6 +341,27 @@ export class DexScreenerClient {
       }),
     );
     return tokens.map((t) => repaired.get(t.mintAddress) ?? t);
+  }
+
+  /**
+   * A re-read found no pool beside the curve: most such curves are ordinary graduates whose pool
+   * DexScreener lists nowhere, quiet for hours, and re-reading each of them in every lookup cost
+   * the scan's refresh ~30 requests a cycle and its 10 s deadline (worker health, 2026-10-12: 4
+   * batches given up every cycle). The next re-read waits CURVE_RECHECK_FIRST_MS, doubling with
+   * each miss up to CURVE_RECHECK_MAX_MS, so a pool that is only slow to be indexed is still found
+   * within a minute or two.
+   */
+  private noteCurveWithoutPool(mint: string, now: number): void {
+    const misses = (this.curveRechecks.get(mint)?.misses ?? 0) + 1;
+    const wait = Math.min(CURVE_RECHECK_MAX_MS, CURVE_RECHECK_FIRST_MS * 2 ** (misses - 1));
+    this.curveRechecks.delete(mint);
+    this.curveRechecks.set(mint, { at: now + wait, misses });
+    if (this.curveRechecks.size <= CURVE_RECHECK_MAX_MINTS) return;
+    // Insertion order is last-miss order (re-inserted above), so the longest quiet go first.
+    for (const key of this.curveRechecks.keys()) {
+      if (this.curveRechecks.size <= CURVE_RECHECK_MAX_MINTS) break;
+      this.curveRechecks.delete(key);
+    }
   }
 
   /** Every pair DexScreener lists for one mint as its base token (/token-pairs/v1). */
@@ -554,6 +591,11 @@ const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
 const CURVE_GRADUATION_PRICE_SOL = 3.8e-7;
 /** Frozen-curve re-reads one batch of 30 may make (see repairFrozenCurves). */
 const MAX_CURVE_REPAIRS_PER_BATCH = 5;
+/** The wait before re-reading a curve whose last re-read found no pool, doubling per miss. */
+const CURVE_RECHECK_FIRST_MS = 60_000;
+const CURVE_RECHECK_MAX_MS = 15 * 60_000;
+/** Curves whose re-read backoff is remembered at once. */
+const CURVE_RECHECK_MAX_MINTS = 5_000;
 
 /** Below this, a non-curve pool is too thin to be a trustworthy price source. */
 const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;
