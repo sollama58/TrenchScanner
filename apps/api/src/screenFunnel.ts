@@ -26,6 +26,12 @@ export interface ScreenFunnelRow {
   latestPassed: boolean | null;
   latestReasons: string[] | null;
   everPassed: boolean;
+  /**
+   * With `minutes`: the whole minutes after firstSeenAt in which it has a scan snapshot, ascending -
+   * when it was actually in front of the screen, so a script can tell "watched while it ran" from
+   * "seen early, dropped off the watchlist, back too late".
+   */
+  snapshotMinutes?: number[];
 }
 
 /**
@@ -35,7 +41,7 @@ export interface ScreenFunnelRow {
  * (Pump.fun's own market-cap history, say) to tell "never reached the band" from "never looked at".
  * One index probe per token through Token(firstSeenAt) and TokenSnapshot(tokenId, takenAt).
  */
-export async function buildScreenFunnel(hours: number) {
+export async function buildScreenFunnel(hours: number, opts: { minutes?: boolean } = {}) {
   const since = new Date(Date.now() - hours * 3_600_000);
   const rows = await prisma.$queryRaw<
     {
@@ -56,6 +62,7 @@ export async function buildScreenFunnel(hours: number) {
       latest_passed: boolean | null;
       latest_reasons: string[] | null;
       ever_passed: boolean;
+      snapshot_minutes: number[] | null;
     }[]
   >`
     SELECT t."mintAddress" AS mint, t.symbol, t."discoverySource" AS discovery_source,
@@ -67,10 +74,13 @@ export async function buildScreenFunnel(hours: number) {
            pass_s."takenAt" AS first_pass_at, pass_s."marketCapUsd" AS first_pass_mcap,
            agg.max_mcap,
            last_s."rugScreenPassed" AS latest_passed, last_s."rugScreenReasons" AS latest_reasons,
-           COALESCE(agg.ever_passed, false) AS ever_passed
+           COALESCE(agg.ever_passed, false) AS ever_passed, agg.minutes AS snapshot_minutes
     FROM "Token" t
     CROSS JOIN LATERAL (
-      SELECT count(*) AS n, bool_or("rugScreenPassed") AS ever_passed, max("marketCapUsd") AS max_mcap
+      SELECT count(*) AS n, bool_or("rugScreenPassed") AS ever_passed, max("marketCapUsd") AS max_mcap,
+             CASE WHEN ${opts.minutes === true}
+               THEN array_agg(DISTINCT floor(extract(epoch FROM ("takenAt" - t."firstSeenAt")) / 60)::int)
+             END AS minutes
       FROM "TokenSnapshot" WHERE "tokenId" = t.id
     ) agg
     LEFT JOIN LATERAL (
@@ -108,6 +118,7 @@ export async function buildScreenFunnel(hours: number) {
     latestPassed: r.latest_passed,
     latestReasons: r.latest_reasons,
     everPassed: r.ever_passed,
+    ...(opts.minutes ? { snapshotMinutes: (r.snapshot_minutes ?? []).sort((a, b) => a - b) } : {}),
   }));
   return {
     window: { hours, since },

@@ -87,6 +87,9 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
       sumSimReturnPct: 0,
       sumRun: expect.any(Number),
     });
+    // A window with an end leaves out the calls made after it: a's 10-minute-old win.
+    const ended = await liveCallRecords(models, since, lanes, { until: at(15) });
+    expect(ended.get(`${TAG}-a`)).toMatchObject({ calls: 2, graded: 1, wins: 0 });
   });
 });
 
