@@ -124,7 +124,7 @@ describe("refreshAndFilterToBand", () => {
           fallbackAsked = options.fallbackIfUnlisted;
           // DexScreener's reading trails the launch: still under the padded band.
           return [
-            { ...candidate("listed", 4_000), buys5m: 12, dexId: "pumpfun" },
+            { ...candidate("listed", 4_000), priceUsd: 0.000004, buys5m: 12, dexId: "pumpfun" },
             candidate("older", 30_000),
           ];
         },
@@ -136,7 +136,8 @@ describe("refreshAndFilterToBand", () => {
         newestLaunches: ["unlisted", "untraded"],
         liveLaunches: {
           source: source([
-            { ...candidate("listed", 11_000), priceUsd: 0.000011 },
+            // Jupiter's own cap counts a smaller, post-burn supply: the pair's supply wins.
+            { ...candidate("listed", 10_010), priceUsd: 0.000011 },
             { ...candidate("unlisted", 10_500), dexId: "pumpfun" },
           ]),
           mints: ["listed", "unlisted", "untraded"],

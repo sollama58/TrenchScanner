@@ -164,9 +164,9 @@ export async function refreshAndFilterToBand(
 
 /**
  * Puts the live launch readings into DexScreener's answer, in place. A launch DexScreener has
- * listed keeps its pair (activity counts, venue, pair age, socials) with the live price and market
- * cap: the band is decided on where the coin is now. One it has not listed yet is the live
- * reading itself. Each carries the live reading's time.
+ * listed keeps its pair (activity counts, venue, pair age, socials) with the live price, and the
+ * market cap that price makes on the pair's own supply: the band is decided on where the coin is
+ * now. One it has not listed yet is the live reading itself. Each carries the live reading's time.
  */
 function mergeLiveLaunches(
   marketData: CandidateToken[],
@@ -179,7 +179,12 @@ function mergeLiveLaunches(
     const reading = live.get(pair.mintAddress);
     if (!reading) continue;
     listed.add(pair.mintAddress);
-    marketData[i] = { ...pair, priceUsd: reading.token.priceUsd, marketCapUsd: reading.token.marketCapUsd };
+    // The live price on the pair's own supply, so the cap means what DexScreener's always has.
+    const marketCapUsd =
+      pair.priceUsd > 0 && pair.marketCapUsd > 0
+        ? (pair.marketCapUsd / pair.priceUsd) * reading.token.priceUsd
+        : reading.token.marketCapUsd;
+    marketData[i] = { ...pair, priceUsd: reading.token.priceUsd, marketCapUsd };
     seenAt.set(pair.mintAddress, reading.at);
   }
   for (const [mint, reading] of live) {

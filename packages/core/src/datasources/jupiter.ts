@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import type { DexScreenerClient, TokenLookupOptions } from "./dexscreener.js";
 import type { CandidateToken, FreshQuote, FreshQuoteStats } from "../types.js";
+import { PUMP_TOTAL_SUPPLY } from "../curation/tradeFlow.js";
 
 const logger = createLogger("jupiter");
 
@@ -235,9 +236,13 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
   for (const t of body as JupiterToken[]) {
     if (!t || typeof t.id !== "string" || !requested.has(t.id) || out.has(t.id)) continue;
     const priceUsd = finite(t.usdPrice);
-    const marketCapUsd = finite(t.mcap) ?? finite(t.fdv);
-    if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
     const pump = t.launchpad === "pump.fun";
+    // On the 1B supply DexScreener and Pump.fun quote a Pump.fun coin on: Jupiter's `mcap` counts
+    // supply after burns, up to ~9% lower (notes/price-sourcing-audit-2026-10-12.md), which would
+    // move the band floor and every market-cap input. Other coins take the full-supply fdv.
+    const marketCapUsd =
+      pump && priceUsd !== undefined ? priceUsd * PUMP_TOTAL_SUPPLY : (finite(t.fdv) ?? finite(t.mcap));
+    if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
     const dexId = pump ? (t.graduatedPool ? "pumpswap" : "pumpfun") : undefined;
     const liquidity = finite(t.liquidity);
     const createdAt = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;

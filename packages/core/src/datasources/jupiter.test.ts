@@ -60,7 +60,8 @@ describe("parseJupiterLaunches", () => {
       {
         id: "graduate",
         usdPrice: 0.00005,
-        mcap: 50_000,
+        // Counted on the supply left after burns: the cap is read on Pump.fun's 1B instead.
+        mcap: 45_500,
         liquidity: 10_000,
         launchpad: "pump.fun",
         graduatedPool: "pool",
@@ -88,6 +89,7 @@ describe("parseJupiterLaunches", () => {
       volume24hUsd: 2_500,
     });
     expect(graduate).toMatchObject({
+      marketCapUsd: 50_000,
       dexId: "pumpswap",
       graduatedAt: new Date("2026-10-12T20:50:00Z"),
       liquidityUsd: 20_000,
