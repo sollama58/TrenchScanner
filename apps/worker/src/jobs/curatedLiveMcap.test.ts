@@ -19,7 +19,8 @@ const contender = (
 ): CuratedContender =>
   ({
     token: { id: `id-${mint}`, mintAddress: mint },
-    scored: { priceUsd: 0.00001, marketCapUsd, freshQuote },
+    // A 1B supply, as a Pump.fun coin's: the anchor reads the quote's price on that supply.
+    scored: { priceUsd: marketCapUsd / 1e9, marketCapUsd, freshQuote },
     cycleSample: null,
     decision: { curate: true, confidence: 50, reasons: [], source: "m" },
     confidence: 50,
@@ -72,7 +73,7 @@ describe("the alert floor", () => {
   it("prices a call at the lowest current reading, not DexScreener's lagged one", () => {
     // DexScreener still reads $11k; the fresh quote says the coin is at $8k.
     const quoted = contender("q", 11_000, { priceUsd: 0.000008, marketCapUsd: 8_000 });
-    expect(callMcapUsd(quoted)).toBe(8_000);
+    expect(callMcapUsd(quoted)).toBeCloseTo(8_000, 6);
     quoted.liveMcapUsd = 7_200;
     expect(callMcapUsd(quoted)).toBe(7_200);
     // No fresh quote and no live read: the scan's figure is all there is.
