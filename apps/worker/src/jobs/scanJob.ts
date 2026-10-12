@@ -122,7 +122,8 @@ export interface ScanDeps {
    * is priced from (ScoredToken.freshQuote). getFreshQuotes is optional so a test double can
    * leave it out: then no quote, and every row anchors on DexScreener's price.
    */
-  jupiter?: Pick<JupiterClient, "takeCallStats"> & Partial<Pick<JupiterClient, "getFreshQuotes">>;
+  jupiter?: Pick<JupiterClient, "takeCallStats"> &
+    Partial<Pick<JupiterClient, "getFreshQuotes" | "getLaunches">>;
   rugCheck: RugCheckClient;
   helius: HeliusClient;
   /** The live PumpPortal launch/graduation feed, drained once per cycle. Optional: off when unset. */
@@ -539,7 +540,12 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     const refreshed = await refreshAndFilterToBand(
       deps.dexScreener,
       tracked.map((t) => t.mintAddress),
-      { mcapMin: env.MCAP_FILTER_MIN, mcapMax: env.MCAP_FILTER_MAX, newestLaunches: newestLaunches(tracked) },
+      {
+        mcapMin: env.MCAP_FILTER_MIN,
+        mcapMax: env.MCAP_FILTER_MAX,
+        newestLaunches: newestLaunches(tracked),
+        liveLaunches: liveLaunchSource(deps.jupiter, tracked),
+      },
     );
     candidates = refreshed.inBand;
     refreshPartial = refreshed.partial;
@@ -1200,6 +1206,35 @@ export function newestLaunches(
     .filter((t) => t.firstSeenAt.getTime() > cutoff)
     .sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime())
     .map((t) => t.mintAddress);
+}
+
+/** How young a launch is priced live rather than from DexScreener - see liveLaunchSource. */
+export const LIVE_LAUNCH_MINUTES = 10;
+/** The most launches priced live a cycle: four of Jupiter's 100-mint calls. */
+export const LIVE_LAUNCH_MAX = 400;
+
+/**
+ * The launches of the last LIVE_LAUNCH_MINUTES among the selection, newest first and at most
+ * LIVE_LAUNCH_MAX, with Jupiter to price them (see refreshAndFilterToBand's liveLaunches): the
+ * band refresh reads them at Jupiter's seconds-old price instead of DexScreener's, which trails a
+ * new launch by 30-50 s. Undefined without a Jupiter key. Exported for tests.
+ */
+export function liveLaunchSource(
+  jupiter: ScanDeps["jupiter"],
+  tracked: { mintAddress: string; firstSeenAt: Date }[],
+  now = Date.now(),
+):
+  | { source: { getLaunches: NonNullable<NonNullable<ScanDeps["jupiter"]>["getLaunches"]> }; mints: string[] }
+  | undefined {
+  const getLaunches = jupiter?.getLaunches?.bind(jupiter);
+  if (!getLaunches) return undefined;
+  const cutoff = now - LIVE_LAUNCH_MINUTES * 60_000;
+  const mints = tracked
+    .filter((t) => t.firstSeenAt.getTime() > cutoff)
+    .sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime())
+    .slice(0, LIVE_LAUNCH_MAX)
+    .map((t) => t.mintAddress);
+  return mints.length > 0 ? { source: { getLaunches }, mints } : undefined;
 }
 
 /** How long a cycle waits on any one discovery source - see discoverWithin. */

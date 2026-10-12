@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import type { DexScreenerClient, TokenLookupOptions } from "./dexscreener.js";
 import type { CandidateToken, FreshQuote, FreshQuoteStats } from "../types.js";
+import { PUMP_TOTAL_SUPPLY } from "../curation/tradeFlow.js";
 
 const logger = createLogger("jupiter");
 
@@ -29,8 +30,17 @@ interface JupiterToken {
   liquidity?: number | null;
   stats5m?: JupiterStats | null;
   stats1h?: JupiterStats | null;
+  stats6h?: JupiterStats | null;
   stats24h?: JupiterStats | null;
   updatedAt?: string | null;
+  /** The launchpad the mint was created on ("pump.fun", ...). */
+  launchpad?: string | null;
+  /** The pool a launchpad coin moved to when its curve filled; absent while on the curve. */
+  graduatedPool?: string | null;
+  /** When it did. */
+  graduatedAt?: string | null;
+  /** The mint's first pool: for a Pump.fun launch, its bonding curve, opened at launch. */
+  firstPool?: { id?: string; createdAt?: string | null } | null;
 }
 
 /** The search endpoint takes up to 100 comma-separated mints a call. */
@@ -82,6 +92,18 @@ export class JupiterClient {
   ): Promise<CandidateToken[]> {
     const { seenAt, freshSources: _fresh, ...rest } = options;
     const found = await this.search(mintAddresses, concurrency, rest, parseJupiterTokens);
+    if (seenAt) for (const { token, answered } of found) seenAt.set(token.mintAddress, answered);
+    return found.map((f) => f.token);
+  }
+
+  /**
+   * The newest launches priced the way the scan's band refresh reads DexScreener (see
+   * parseJupiterLaunches), for the ones DexScreener has not listed yet. Same contract as
+   * getTokensByAddresses (deadline, seenAt, failed).
+   */
+  async getLaunches(mintAddresses: string[], options: TokenLookupOptions = {}): Promise<CandidateToken[]> {
+    const { seenAt, freshSources: _fresh, ...rest } = options;
+    const found = await this.search(mintAddresses, 2, rest, parseJupiterLaunches);
     if (seenAt) for (const { token, answered } of found) seenAt.set(token.mintAddress, answered);
     return found.map((f) => f.token);
   }
@@ -189,6 +211,69 @@ export function parseJupiterTokens(body: unknown, requested: Set<string>): Candi
       buys24h: finite(stats?.numBuys),
       sells24h: finite(stats?.numSells),
       priceChange24hPct: finite(stats?.priceChange),
+    });
+  }
+  return [...out.values()];
+}
+
+const sumOrUndefined = (a: number | undefined, b: number | undefined): number | undefined =>
+  a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
+
+/**
+ * Exported for tests. A launch as the scan's band refresh reads a DexScreener pair: price, cap and
+ * the 5m/1h/24h activity, the venue and when its first pool opened. Only the requested mints, each
+ * once, and only with a positive price and market cap: a launch nobody has traded yet has neither,
+ * and the refresh has nothing to place in or out of the band.
+ *
+ * The venue is DexScreener's spelling, which the safety screen and graduation logic read: a
+ * Pump.fun coin is "pumpfun" (still on its bonding curve) until it has a graduated pool, then
+ * "pumpswap". A curve's liquidity is left unset, as DexScreener and GeckoTerminal leave it, so a
+ * coin reads the same whichever of them priced it.
+ */
+export function parseJupiterLaunches(body: unknown, requested: Set<string>): CandidateToken[] {
+  if (!Array.isArray(body)) return [];
+  const out = new Map<string, CandidateToken>();
+  for (const t of body as JupiterToken[]) {
+    if (!t || typeof t.id !== "string" || !requested.has(t.id) || out.has(t.id)) continue;
+    const priceUsd = finite(t.usdPrice);
+    const pump = t.launchpad === "pump.fun";
+    // On the 1B supply DexScreener and Pump.fun quote a Pump.fun coin on: Jupiter's `mcap` counts
+    // supply after burns, up to ~9% lower (notes/price-sourcing-audit-2026-10-12.md), which would
+    // move the band floor and every market-cap input. Other coins take the full-supply fdv.
+    const marketCapUsd =
+      pump && priceUsd !== undefined ? priceUsd * PUMP_TOTAL_SUPPLY : (finite(t.fdv) ?? finite(t.mcap));
+    if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
+    const dexId = pump ? (t.graduatedPool ? "pumpswap" : "pumpfun") : undefined;
+    const liquidity = finite(t.liquidity);
+    const createdAt = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;
+    const graduatedAt = dexId === "pumpswap" && t.graduatedAt ? new Date(t.graduatedAt) : undefined;
+    const m5 = t.stats5m ?? undefined;
+    const h1 = t.stats1h ?? undefined;
+    const h24 = t.stats24h ?? undefined;
+    out.set(t.id, {
+      mintAddress: t.id,
+      symbol: t.symbol,
+      name: t.name,
+      priceUsd,
+      marketCapUsd,
+      // Doubled, as parseJupiterTokens does: Jupiter counts one side of the pool.
+      liquidityUsd: dexId === "pumpfun" || liquidity === undefined ? undefined : liquidity * 2,
+      volume24hUsd: sumOrUndefined(finite(h24?.buyVolume), finite(h24?.sellVolume)),
+      buys24h: finite(h24?.numBuys),
+      sells24h: finite(h24?.numSells),
+      priceChange5mPct: finite(m5?.priceChange),
+      priceChange1hPct: finite(h1?.priceChange),
+      priceChange6hPct: finite(t.stats6h?.priceChange),
+      priceChange24hPct: finite(h24?.priceChange),
+      volume5mUsd: sumOrUndefined(finite(m5?.buyVolume), finite(m5?.sellVolume)),
+      volume1hUsd: sumOrUndefined(finite(h1?.buyVolume), finite(h1?.sellVolume)),
+      buys5m: finite(m5?.numBuys),
+      sells5m: finite(m5?.numSells),
+      buys1h: finite(h1?.numBuys),
+      sells1h: finite(h1?.numSells),
+      pairCreatedAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : undefined,
+      dexId,
+      graduatedAt: graduatedAt && !Number.isNaN(graduatedAt.getTime()) ? graduatedAt : undefined,
     });
   }
   return [...out.values()];

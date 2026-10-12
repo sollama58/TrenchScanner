@@ -1,4 +1,4 @@
-import type { DexScreenerClient } from "../datasources/dexscreener.js";
+import type { DexScreenerClient, TokenLookupOptions } from "../datasources/dexscreener.js";
 import type { CandidateToken } from "../types.js";
 
 /** Default widen-the-net factor - see BandFilterOptions.bandPaddingRatio. Exported so anything
@@ -13,7 +13,23 @@ export interface BandFilterOptions {
   bandPaddingRatio?: number;
   /** Newest launches, asked of the fallback while DexScreener has no pair - see fallbackIfUnlisted. */
   newestLaunches?: string[];
+  /**
+   * Young launches priced from a live source instead of DexScreener's reading - see
+   * refreshAndFilterToBand. Optional: without it every mint is read from DexScreener alone.
+   */
+  liveLaunches?: { source: LaunchQuoteSource; mints: string[] };
 }
+
+/** Where young launches' live prices come from (JupiterClient.getLaunches). */
+export interface LaunchQuoteSource {
+  getLaunches(mintAddresses: string[], options?: TokenLookupOptions): Promise<CandidateToken[]>;
+}
+
+/**
+ * How long the live launch read may take. Jupiter answers a batch in a few hundred milliseconds;
+ * past this the refresh goes on with DexScreener's readings, as it did before the read existed.
+ */
+export const LIVE_LAUNCH_BUDGET_MS = 2_500;
 
 /**
  * The true range of market caps a token could ever be scanned/scored/matched at - the configured
@@ -86,8 +102,31 @@ export async function refreshAndFilterToBand(
     };
   }
 
-  const { mcapMin, mcapMax, bandPaddingRatio, newestLaunches } = options;
+  const { mcapMin, mcapMax, bandPaddingRatio, newestLaunches, liveLaunches } = options;
   const { min: lowerBound, max: upperBound } = scanBand(mcapMin, mcapMax, bandPaddingRatio);
+
+  // Young launches are read live first. DexScreener lists a new Pump.fun launch 30-50 s after
+  // Jupiter prices it, and once listed its market cap still trails Jupiter's by about as much
+  // (2026-10-12 probe of every launch under 8 minutes old: DexScreener showed a launch past $10k a
+  // median 32 s after Jupiter and Pump.fun did, and its cap best matched Jupiter's from ~45-50 s
+  // earlier). Most launch runs that double cross $10k inside their first two minutes, so on
+  // DexScreener's figures alone a launch reached the band - and the Stream and the models - at
+  // $12-15k or more, a minute or more after it crossed $10k.
+  const live = new Map<string, { token: CandidateToken; at: Date }>();
+  if (liveLaunches && liveLaunches.mints.length > 0) {
+    const liveSeenAt = new Map<string, Date>();
+    const read = await liveLaunches.source
+      .getLaunches(liveLaunches.mints, {
+        timeoutMs: LIVE_LAUNCH_BUDGET_MS,
+        retries: 0,
+        deadlineMs: LIVE_LAUNCH_BUDGET_MS,
+        seenAt: liveSeenAt,
+      })
+      .catch(() => [] as CandidateToken[]);
+    const now = new Date();
+    for (const token of read)
+      live.set(token.mintAddress, { token, at: liveSeenAt.get(token.mintAddress) ?? now });
+  }
 
   // Tighter than fetchJson's defaults (10s, two retries), which let one slow batch hold the whole
   // scan cycle for half a minute or more - 47s on 2026-10-04 - when a batch normally answers in
@@ -105,8 +144,10 @@ export async function refreshAndFilterToBand(
     priority: true,
     failed,
     seenAt,
-    fallbackIfUnlisted: newestLaunches,
+    // A launch the live read priced needs no GeckoTerminal call: that budget stays for the rest.
+    fallbackIfUnlisted: newestLaunches?.filter((m) => !live.has(m)),
   });
+  if (live.size > 0) mergeLiveLaunches(marketData, live, seenAt);
   return {
     partial: failed.size > 0,
     inBand: marketData.filter((t) => t.marketCapUsd >= lowerBound && t.marketCapUsd <= upperBound),
@@ -119,4 +160,36 @@ export async function refreshAndFilterToBand(
     marketData,
     seenAt,
   };
+}
+
+/**
+ * Puts the live launch readings into DexScreener's answer, in place. A launch DexScreener has
+ * listed keeps its pair (activity counts, venue, pair age, socials) with the live price, and the
+ * market cap that price makes on the pair's own supply: the band is decided on where the coin is
+ * now. One it has not listed yet is the live reading itself. Each carries the live reading's time.
+ */
+function mergeLiveLaunches(
+  marketData: CandidateToken[],
+  live: Map<string, { token: CandidateToken; at: Date }>,
+  seenAt: Map<string, Date>,
+): void {
+  const listed = new Set<string>();
+  for (let i = 0; i < marketData.length; i++) {
+    const pair = marketData[i]!;
+    const reading = live.get(pair.mintAddress);
+    if (!reading) continue;
+    listed.add(pair.mintAddress);
+    // The live price on the pair's own supply, so the cap means what DexScreener's always has.
+    const marketCapUsd =
+      pair.priceUsd > 0 && pair.marketCapUsd > 0
+        ? (pair.marketCapUsd / pair.priceUsd) * reading.token.priceUsd
+        : reading.token.marketCapUsd;
+    marketData[i] = { ...pair, priceUsd: reading.token.priceUsd, marketCapUsd };
+    seenAt.set(pair.mintAddress, reading.at);
+  }
+  for (const [mint, reading] of live) {
+    if (listed.has(mint)) continue;
+    marketData.push({ ...reading.token });
+    seenAt.set(mint, reading.at);
+  }
 }

@@ -23,6 +23,14 @@ export interface ScreenFunnelRow {
   firstPassMcapUsd: number | null;
   /** Highest market cap on any of its snapshots. */
   maxSnapshotMcapUsd: number | null;
+  /** When the scan first read it inside the curated band (Token.firstInBandAt). */
+  firstInBandAt: Date | null;
+  /**
+   * Its Stream entry: the first scan snapshot that passed the screen inside the curated band
+   * (routes/launches.ts). Null without a `band`, or when it never had one.
+   */
+  streamAt: Date | null;
+  streamMcapUsd: number | null;
   latestPassed: boolean | null;
   latestReasons: string[] | null;
   everPassed: boolean;
@@ -41,7 +49,12 @@ export interface ScreenFunnelRow {
  * (Pump.fun's own market-cap history, say) to tell "never reached the band" from "never looked at".
  * One index probe per token through Token(firstSeenAt) and TokenSnapshot(tokenId, takenAt).
  */
-export async function buildScreenFunnel(hours: number, opts: { minutes?: boolean } = {}) {
+export async function buildScreenFunnel(
+  hours: number,
+  opts: { minutes?: boolean; band?: { min: number; max: number } } = {},
+) {
+  // With no band the Stream lateral matches nothing (min above max).
+  const band = opts.band ?? { min: 1, max: 0 };
   const since = new Date(Date.now() - hours * 3_600_000);
   const rows = await prisma.$queryRaw<
     {
@@ -59,6 +72,9 @@ export async function buildScreenFunnel(hours: number, opts: { minutes?: boolean
       first_pass_at: Date | null;
       first_pass_mcap: number | null;
       max_mcap: number | null;
+      first_in_band_at: Date | null;
+      stream_at: Date | null;
+      stream_mcap: number | null;
       latest_passed: boolean | null;
       latest_reasons: string[] | null;
       ever_passed: boolean;
@@ -72,7 +88,8 @@ export async function buildScreenFunnel(hours: number, opts: { minutes?: boolean
            first_s."marketCapUsd" AS first_snapshot_mcap,
            first_s."rugScreenPassed" AS first_passed, first_s."rugScreenReasons" AS first_reasons,
            pass_s."takenAt" AS first_pass_at, pass_s."marketCapUsd" AS first_pass_mcap,
-           agg.max_mcap,
+           agg.max_mcap, t."firstInBandAt" AS first_in_band_at,
+           stream_s."takenAt" AS stream_at, stream_s."marketCapUsd" AS stream_mcap,
            last_s."rugScreenPassed" AS latest_passed, last_s."rugScreenReasons" AS latest_reasons,
            COALESCE(agg.ever_passed, false) AS ever_passed, agg.minutes AS snapshot_minutes
     FROM "Token" t
@@ -93,6 +110,12 @@ export async function buildScreenFunnel(hours: number, opts: { minutes?: boolean
       WHERE "tokenId" = t.id AND "rugScreenPassed" AND agg.ever_passed
       ORDER BY "takenAt" ASC LIMIT 1
     ) pass_s ON true
+    LEFT JOIN LATERAL (
+      SELECT "takenAt", "marketCapUsd" FROM "TokenSnapshot"
+      WHERE "tokenId" = t.id AND "source" = 'scan' AND "rugScreenPassed" AND agg.ever_passed
+        AND "marketCapUsd" BETWEEN ${band.min} AND ${band.max}
+      ORDER BY "takenAt" ASC LIMIT 1
+    ) stream_s ON true
     LEFT JOIN LATERAL (
       SELECT "rugScreenPassed", "rugScreenReasons" FROM "TokenSnapshot" WHERE "tokenId" = t.id
       ORDER BY "takenAt" DESC LIMIT 1
@@ -115,6 +138,9 @@ export async function buildScreenFunnel(hours: number, opts: { minutes?: boolean
     firstPassAt: r.first_pass_at,
     firstPassMcapUsd: r.first_pass_mcap,
     maxSnapshotMcapUsd: r.max_mcap,
+    firstInBandAt: r.first_in_band_at,
+    streamAt: r.stream_at,
+    streamMcapUsd: r.stream_mcap,
     latestPassed: r.latest_passed,
     latestReasons: r.latest_reasons,
     everPassed: r.ever_passed,

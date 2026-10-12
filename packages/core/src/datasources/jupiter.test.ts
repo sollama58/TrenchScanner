@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { JupiterClient, JupiterFirstLookup, parseJupiterQuotes, parseJupiterTokens } from "./jupiter.js";
+import {
+  JupiterClient,
+  JupiterFirstLookup,
+  parseJupiterLaunches,
+  parseJupiterQuotes,
+  parseJupiterTokens,
+} from "./jupiter.js";
 import type { CandidateToken } from "../types.js";
 
 describe("parseJupiterTokens", () => {
@@ -32,6 +38,65 @@ describe("parseJupiterTokens", () => {
     expect(b).toMatchObject({ mintAddress: "b", priceUsd: 0, marketCapUsd: 5_000, liquidityUsd: undefined });
     expect(b!.volume24hUsd).toBeUndefined();
     expect(parseJupiterTokens({ error: "nope" }, new Set(["a"]))).toEqual([]);
+  });
+});
+
+describe("parseJupiterLaunches", () => {
+  it("reads a launch the way the band refresh reads a DexScreener pair", () => {
+    const body = [
+      {
+        id: "curve",
+        symbol: "CRV",
+        name: "Curve coin",
+        usdPrice: 0.0000105,
+        mcap: 10_500,
+        liquidity: 8_000,
+        launchpad: "pump.fun",
+        firstPool: { id: "curve", createdAt: "2026-10-12T20:47:03Z" },
+        stats5m: { priceChange: 240, buyVolume: 2_000, sellVolume: 500, numBuys: 30, numSells: 9 },
+        stats1h: { priceChange: 240, buyVolume: 2_000, sellVolume: 500, numBuys: 30, numSells: 9 },
+        stats24h: { priceChange: 240, buyVolume: 2_000, sellVolume: 500, numBuys: 30, numSells: 9 },
+      },
+      {
+        id: "graduate",
+        usdPrice: 0.00005,
+        // Counted on the supply left after burns: the cap is read on Pump.fun's 1B instead.
+        mcap: 45_500,
+        liquidity: 10_000,
+        launchpad: "pump.fun",
+        graduatedPool: "pool",
+        graduatedAt: "2026-10-12T20:50:00Z",
+      },
+      { id: "untraded", usdPrice: null, mcap: null, launchpad: "pump.fun" },
+      { id: "stranger", usdPrice: 1, mcap: 1 },
+    ];
+    const [curve, graduate, ...rest] = parseJupiterLaunches(body, new Set(["curve", "graduate", "untraded"]));
+    expect(rest).toEqual([]);
+    expect(curve).toMatchObject({
+      mintAddress: "curve",
+      symbol: "CRV",
+      priceUsd: 0.0000105,
+      marketCapUsd: 10_500,
+      // A curve reads with no liquidity, as it does on DexScreener.
+      liquidityUsd: undefined,
+      dexId: "pumpfun",
+      pairCreatedAt: new Date("2026-10-12T20:47:03Z"),
+      priceChange5mPct: 240,
+      volume5mUsd: 2_500,
+      buys5m: 30,
+      sells5m: 9,
+      buys1h: 30,
+      volume24hUsd: 2_500,
+    });
+    expect(graduate).toMatchObject({
+      marketCapUsd: 50_000,
+      dexId: "pumpswap",
+      graduatedAt: new Date("2026-10-12T20:50:00Z"),
+      liquidityUsd: 20_000,
+      volume5mUsd: undefined,
+    });
+    expect(curve!.graduatedAt).toBeUndefined();
+    expect(parseJupiterLaunches({ error: "nope" }, new Set(["curve"]))).toEqual([]);
   });
 });
 
