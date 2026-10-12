@@ -491,6 +491,17 @@ describe.skipIf(!dbAvailable)("GET /stats/screen-funnel", () => {
       data: {
         tokenId: screened.id,
         priceUsd: 1,
+        marketCapUsd: 8_000,
+        score: 50,
+        takenAt: new Date(Date.now() - 7 * 60_000),
+        rugScreenPassed: false,
+        rugScreenReasons: ["Mayhem Mode status unverified - failing closed"],
+      },
+    });
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: screened.id,
+        priceUsd: 1,
         marketCapUsd: 9_000,
         score: 50,
         takenAt: new Date(Date.now() - 2 * 60_000),
@@ -522,10 +533,19 @@ describe.skipIf(!dbAvailable)("GET /stats/screen-funnel", () => {
     const byMint = new Map(mine.map((t) => [t.mint.slice(tag.length + 1), t]));
     expect([...byMint.keys()].sort()).toEqual(["priced", "screened", "unpriced"]);
     expect(byMint.get("unpriced")).toMatchObject({ lastLiveAt: null, snapshots: 0, everPassed: false });
-    expect(byMint.get("priced")).toMatchObject({ lastMcapUsd: 3_000, snapshots: 0, latestPassed: null });
+    expect(byMint.get("priced")).toMatchObject({
+      lastMcapUsd: 3_000,
+      snapshots: 0,
+      latestPassed: null,
+      firstPassAt: null,
+    });
     expect(byMint.get("screened")).toMatchObject({
-      snapshots: 2,
-      firstSnapshotMcapUsd: 12_000,
+      snapshots: 3,
+      firstSnapshotMcapUsd: 8_000,
+      firstPassed: false,
+      firstReasons: ["Mayhem Mode status unverified - failing closed"],
+      firstPassMcapUsd: 12_000,
+      maxSnapshotMcapUsd: 12_000,
       latestPassed: false,
       latestReasons: ["45% of supply held by the top 10 holders"],
       everPassed: true,
