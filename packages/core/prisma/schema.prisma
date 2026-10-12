@@ -899,6 +899,10 @@ model TokenSnapshot {
   sells1h           Int?
 
   holderCount          Int?
+  // When holderCount was read (RugCheck's report time; a stale report served past its TTL keeps
+  // its own). The holder-growth baselines compare readings, not scans. Null on snapshots written
+  // before it existed (read as takenAt) and when the count's time is unknown.
+  holderCountAt        DateTime?
   holderGrowthPct      Float?
   top10HolderPct       Float?
   devWalletPct         Float?

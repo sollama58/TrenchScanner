@@ -102,4 +102,30 @@ describe("enrichToken", () => {
     expect(enriched.minutesSinceFirstInBand).toBe(45);
     expect(enrichToken(candidate, onChain).holderGrowth10mPct).toBeUndefined();
   });
+
+  it("leaves holder growth unknown when the baseline and today's count are one report, or minutes apart", () => {
+    const readAt = new Date("2026-01-01T00:48:00Z");
+    const read = { ...onChain, holderCountAt: readAt };
+    // A stale report served again: the 10-minute baseline is the same reading.
+    const same = enrichToken(candidate, read, {
+      previousHolderCount10m: 220,
+      previousHolderCount10mAt: readAt,
+      previousHolderCount: 200,
+      previousHolderCountAt: new Date("2026-01-01T00:40:00Z"),
+      holderGrowthWindowMinutes: 30,
+    });
+    expect(same.holderGrowth10mPct).toBeUndefined();
+    // 8 minutes is under half the 30-minute window too.
+    expect(same.holderGrowthPct).toBeUndefined();
+    // Readings 6 and 20 minutes apart are real growth.
+    const apart = enrichToken(candidate, read, {
+      previousHolderCount10m: 176,
+      previousHolderCount10mAt: new Date("2026-01-01T00:42:00Z"),
+      previousHolderCount: 176,
+      previousHolderCountAt: new Date("2026-01-01T00:28:00Z"),
+      holderGrowthWindowMinutes: 30,
+    });
+    expect(apart.holderGrowth10mPct).toBeCloseTo(25);
+    expect(apart.holderGrowthPct).toBeCloseTo(25);
+  });
 });

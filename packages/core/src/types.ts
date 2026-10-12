@@ -108,6 +108,13 @@ export interface WatchlistCandidate {
 export interface OnChainProfile {
   mintAddress: string;
   holderCount?: number;
+  /**
+   * When holderCount was read: RugCheck's report time (its cache row's checkedAt, which a stale
+   * answer keeps while it is served past the TTL), not when the scan used it. Holder growth and
+   * the tape's holder slope measure change between readings, so two cycles that served the same
+   * report are one reading, not ten minutes of no growth. Undefined when not known.
+   */
+  holderCountAt?: Date;
   top10HolderPct?: number;
   devWalletPct?: number;
   /**
