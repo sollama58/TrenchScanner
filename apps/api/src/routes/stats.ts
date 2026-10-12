@@ -383,6 +383,8 @@ export async function registerStatsRoutes(
    */
   const funnelQuery = z.object({
     hours: z.coerce.number().int().min(1).max(SCREEN_FUNNEL_MAX_HOURS).default(1),
+    /** Each token's snapshot minutes too (see ScreenFunnelRow.snapshotMinutes). */
+    minutes: z.enum(["true", "false"]).default("false"),
   });
   app.get(
     "/screen-funnel",
@@ -394,7 +396,7 @@ export async function registerStatsRoutes(
         return;
       }
       reply.header("cache-control", "no-store");
-      return buildScreenFunnel(parsed.data.hours);
+      return buildScreenFunnel(parsed.data.hours, { minutes: parsed.data.minutes === "true" });
     },
   );
 
