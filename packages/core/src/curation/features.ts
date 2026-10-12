@@ -1,6 +1,7 @@
 import type { ScoredToken } from "../types.js";
 import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
+import { freshQuoteMcapUsd } from "./labels.js";
 import type { TextScores } from "./textFeatures.js";
 import {
   EMPTY_MARKET_CONTEXT,
@@ -879,7 +880,7 @@ const FRESH_QUOTE_FEATURES = [
 
 /** The fresh-quote inputs (see CANDIDATE_FEATURE_NAMES), all null without a quote. */
 export function freshQuoteFeatures(
-  scored: Pick<ScoredToken, "priceUsd" | "freshQuote">,
+  scored: Pick<ScoredToken, "priceUsd" | "marketCapUsd" | "freshQuote">,
 ): Record<(typeof FRESH_QUOTE_FEATURES)[number], number | null> {
   const q = scored.freshQuote;
   if (!q) return Object.fromEntries(FRESH_QUOTE_FEATURES.map((k) => [k, null])) as never;
@@ -889,6 +890,7 @@ export function freshQuoteFeatures(
   const buyVol = s5?.buyVolumeUsd;
   const sellVol = s5?.sellVolumeUsd;
   const totalVol = buyVol !== undefined && sellVol !== undefined ? buyVol + sellVol : undefined;
+  const quoteMcap = freshQuoteMcapUsd(scored);
   return {
     freshGapPct: scored.priceUsd > 0 ? (q.priceUsd / scored.priceUsd - 1) * 100 : null,
     jup5mPriceChangePct: n(s5?.priceChangePct),
@@ -897,7 +899,9 @@ export function freshQuoteFeatures(
     jup5mSellVolumeUsd: n(sellVol),
     // No trades is no share, not an even split.
     jup5mBuyVolumeShare: totalVol !== undefined && totalVol > 0 ? buyVol! / totalVol : null,
-    jup5mVolumeToMcap: totalVol !== undefined && q.marketCapUsd > 0 ? totalVol / q.marketCapUsd : null,
+    // On DexScreener's supply, like the anchor (freshQuoteMcapUsd), not Jupiter's post-burn one.
+    jup5mVolumeToMcap:
+      totalVol !== undefined && quoteMcap !== null && quoteMcap > 0 ? totalVol / quoteMcap : null,
     // A window Jupiter reports at all with no trades in it has counts of zero; one it left out
     // entirely is unknown.
     jup5mBuys: s5 ? (s5.buys ?? 0) : null,

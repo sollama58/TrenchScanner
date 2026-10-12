@@ -117,7 +117,9 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     const ref = await recordCandidateSample(token.id, scored, env, { kind: "event" });
     const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: ref!.id } });
     expect(row.anchorPriceUsd).toBe(0.0026);
-    expect(row.anchorMcapUsd).toBe(2_600_000);
+    // The quote's price on DexScreener's supply (the fixture's mcap at 0.002, scaled by 1.3), not
+    // Jupiter's own figure: call peaks and the mcap band are DexScreener's.
+    expect(row.anchorMcapUsd).toBeCloseTo((scored.marketCapUsd / 0.002) * 0.0026, 6);
     expect(row.peak1hPriceUsd).toBe(0.0026);
     expect(row.labelRule).toBe(4);
     expect((row.features as Record<string, number>).freshGapPct).toBeCloseTo(30);
