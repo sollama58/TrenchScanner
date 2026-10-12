@@ -498,6 +498,43 @@ describe("calibrateThresholdForPrecision", () => {
     ).toBe(best.support);
   });
 
+  it("at a pace floor, picks the best record among cutoffs that sent at least that many an hour", () => {
+    // 100 calls, one every 6 minutes over 10 hours: 10 an hour in all. The top 12 all win, then
+    // 4 in 10. Without a floor the best record is the sure winners at the top; at 4 an hour no
+    // cutoff may send fewer than 40 (10 distinct hours), and the best record among those is taken.
+    const at = (i: number) => new Date(Date.UTC(2026, 9, 12, 0, 0) + i * 6 * 60_000);
+    const set = calls(100, (i) => (i < 12 ? 2 : i % 10 < 4 ? 1 : 0)).map((c, i) => ({
+      ...c,
+      tokenId: `t${i}`,
+      anchorAt: at(i),
+    }));
+    const field = { ...targets, confidenceZ: 1, coverageTolerance: 0.5 };
+    const paced = calibrateThresholdForPrecision(set, { ...field, minCallsPerHour: 4 });
+    // 22 wins in the top 40, 26 in the top 44: the best bound past the floor is at 44.
+    expect(paced.support).toBe(44);
+    expect(paced.threshold).toBeCloseTo(set[43]!.probability);
+    // The coverage tolerance doesn't loosen it further: the floor sets the volume.
+    expect(
+      calibrateThresholdForPrecision(set, { ...field, coverageTolerance: 0, minCallsPerHour: 4 }).support,
+    ).toBe(44);
+    // The same with the cooldown replayed.
+    expect(
+      calibrateThresholdForPrecision(set, { ...field, minCallsPerHour: 4 }, { cooldownMs: 3_600_000 })
+        .support,
+    ).toBeGreaterThanOrEqual(40);
+    // Hours are the distinct clock hours the calls fall in: a gap between them counts for nothing.
+    const gapped = set.map((c, i) => ({
+      ...c,
+      anchorAt: i < 50 ? at(i) : new Date(at(i).getTime() + 48 * 3_600_000),
+    }));
+    expect(calibrateThresholdForPrecision(gapped, { ...field, minCallsPerHour: 4 }).support).toBe(44);
+    // A floor nothing reaches leaves every cutoff a candidate; 0 is no floor.
+    expect(calibrateThresholdForPrecision(set, { ...field, minCallsPerHour: 50 }).threshold).not.toBeNull();
+    expect(calibrateThresholdForPrecision(set, { ...field, minCallsPerHour: 0 }).support).toBe(
+      calibrateThresholdForPrecision(set, field).support,
+    );
+  });
+
   it("has no cutoff only when nothing had enough alerts to judge", () => {
     const result = calibrateThresholdForPrecision(
       calls(5, () => 2),

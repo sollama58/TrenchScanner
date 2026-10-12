@@ -9,7 +9,11 @@ import {
   ORDER_FLOW_FEATURES,
   TREES_NO_TOKENSAGE_CONTESTANT,
   TREES_NO_TOKENSAGE_FEATURES,
+  HIGH_PRECISION_CALLS_PER_HOUR,
+  SHARP_DEEP_TREES_CONTESTANT,
+  SHARP_TREES_CONTESTANT,
   enabledContestants,
+  isMemberLearner,
 } from "./contestants.js";
 import { foundingLanes } from "./evolution.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
@@ -86,6 +90,30 @@ describe("contestant roster", () => {
     expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(
       TREES_NO_TOKENSAGE_CONTESTANT,
     );
+  });
+});
+
+describe("the high-precision seats", () => {
+  it("are learners at a pace floor, outside the combiners and evolution, and can be the default", () => {
+    for (const id of [SHARP_TREES_CONTESTANT, SHARP_DEEP_TREES_CONTESTANT]) {
+      const spec = contestantSpec(id)!;
+      expect(spec.role).toBe("learner");
+      expect(spec.standalone).toBe(true);
+      expect(spec.control).toBeUndefined();
+      expect(spec.recipe?.callsPerHour).toBe(HIGH_PRECISION_CALLS_PER_HOUR);
+      expect(isMemberLearner(spec)).toBe(false);
+      expect(ACTIVE_CONTESTANT_IDS).toContain(id);
+    }
+    expect(contestantSpec(SHARP_TREES_CONTESTANT)!.recipe?.boosting?.minLeafRows).toBe(100);
+    expect(contestantSpec(SHARP_DEEP_TREES_CONTESTANT)!.recipe?.boosting).toEqual(
+      contestantSpec("deep-trees")!.recipe?.boosting,
+    );
+    expect(enabledContestants(["consensus", "linear", SHARP_TREES_CONTESTANT]).map((c) => c.id)).toEqual([
+      "rules",
+      "linear",
+      SHARP_TREES_CONTESTANT,
+    ]);
+    expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(SHARP_TREES_CONTESTANT);
   });
 });
 
@@ -219,6 +247,35 @@ describe("runContestTraining", () => {
       const combiner = results.find((r) => r.contestant === id)!.params as StackedCuratorParams;
       expect(combiner.members.map((m) => m.contestant)).toEqual(["linear", "trees"]);
     }
+  }, 60_000);
+});
+
+describe("a paced seat in the contest", () => {
+  it("sends at least its floor in the exam and is stacked by no combiner", async () => {
+    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
+    const results = await runContestTraining(rows, {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 1500,
+      recencyHalfLifeDays: 14,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      // The synthetic market brings a few tokens an hour, so the floor is scaled down to match.
+      contestants: enabledContestants(["consensus", "linear", "trees", SHARP_TREES_CONTESTANT]).map((c) =>
+        c.id === SHARP_TREES_CONTESTANT
+          ? { ...c, recipe: { learner: "gbdt" as const, callsPerHour: 0.6 } }
+          : c,
+      ),
+    });
+    const trees = results.find((r) => r.contestant === "trees")!;
+    const sharp = results.find((r) => r.contestant === SHARP_TREES_CONTESTANT)!;
+    expect(sharp.metrics.exam!.calls).toBeGreaterThan(0);
+    expect(sharp.metrics.precisionCalibration!.support).toBeGreaterThan(
+      trees.metrics.precisionCalibration!.support,
+    );
+    const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
+    expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "trees"]);
   }, 60_000);
 });
 
