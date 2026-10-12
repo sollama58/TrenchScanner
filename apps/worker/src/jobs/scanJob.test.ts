@@ -261,12 +261,11 @@ describe("newestLaunches", () => {
 describe("liveLaunchSource", () => {
   const now = Date.now();
   const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
-  const takeCallStats = () => ({ requests: 0, throttled: 0, waitedMs: 0, gaveUp: 0 });
+  const source = { getLaunches: async () => [] };
 
   it("prices the selection's launches of the last ten minutes live, newest first", () => {
-    const getLaunches = async () => [];
     const live = liveLaunchSource(
-      { takeCallStats, getLaunches },
+      source,
       [
         { mintAddress: "eight-minutes", firstSeenAt: at(8) },
         { mintAddress: "an-hour", firstSeenAt: at(60) },
@@ -275,29 +274,21 @@ describe("liveLaunchSource", () => {
       now,
     );
     expect(live?.mints).toEqual(["just-now", "eight-minutes"]);
+    expect(live?.source).toBe(source);
   });
 
-  it("caps how many go to Jupiter a cycle", () => {
+  it("caps how many are priced live a cycle", () => {
     const tracked = Array.from({ length: LIVE_LAUNCH_MAX + 50 }, (_, i) => ({
       mintAddress: `m${i}`,
       firstSeenAt: at(i / 1000),
     }));
-    const live = liveLaunchSource({ takeCallStats, getLaunches: async () => [] }, tracked, now);
+    const live = liveLaunchSource(source, tracked, now);
     expect(live?.mints).toHaveLength(LIVE_LAUNCH_MAX);
     expect(live?.mints[0]).toBe("m0");
   });
 
-  it("is off without a Jupiter client, or with no young launch", () => {
+  it("is off without a live source, or with no young launch", () => {
     expect(liveLaunchSource(undefined, [{ mintAddress: "a", firstSeenAt: at(1) }], now)).toBeUndefined();
-    expect(
-      liveLaunchSource({ takeCallStats }, [{ mintAddress: "a", firstSeenAt: at(1) }], now),
-    ).toBeUndefined();
-    expect(
-      liveLaunchSource(
-        { takeCallStats, getLaunches: async () => [] },
-        [{ mintAddress: "a", firstSeenAt: at(30) }],
-        now,
-      ),
-    ).toBeUndefined();
+    expect(liveLaunchSource(source, [{ mintAddress: "a", firstSeenAt: at(30) }], now)).toBeUndefined();
   });
 });

@@ -22,6 +22,7 @@ export * from "./datasources/launchBuyers.js";
 export * from "./datasources/tokensage.js";
 
 export * from "./discovery/refreshCandidates.js";
+export * from "./discovery/liveLaunchQuotes.js";
 export * from "./discovery/enrich.js";
 
 export * from "./narratives/keywords.js";

@@ -26,10 +26,10 @@ export interface LaunchQuoteSource {
 }
 
 /**
- * How long the live launch read may take. Jupiter answers a batch in a few hundred milliseconds;
- * past this the refresh goes on with DexScreener's readings, as it did before the read existed.
+ * How long the live launch read may take: Jupiter, then its backup for what Jupiter missed (see
+ * LiveLaunchQuotes). Past this the refresh goes on with DexScreener's readings.
  */
-export const LIVE_LAUNCH_BUDGET_MS = 2_500;
+export const LIVE_LAUNCH_BUDGET_MS = 5_000;
 
 /**
  * The true range of market caps a token could ever be scanned/scored/matched at - the configured
