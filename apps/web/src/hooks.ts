@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_URL, api, type Card, type LiveMarket } from "./api";
 import { cachedGet, peek } from "./cache";
+import { beginWait } from "./loadTracker";
 import { sessionToken } from "./session";
 
 export interface Loadable<T> {
@@ -125,7 +126,11 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   }, [path, key, intervalMs, run, reload]);
 
   const data = held?.data ?? null;
-  return { data, stale: held !== null && (held.for !== want || held.saved), error, loading, reload };
+  const stale = held !== null && (held.for !== want || held.saved);
+  // Nothing current to show yet: the page's loading bar waits on this answer.
+  const waiting = loading && (data === null || stale);
+  useEffect(() => (waiting ? beginWait() : undefined), [waiting, want]);
+  return { data, stale, error, loading, reload };
 }
 
 /** First wait before reopening a dropped nudge stream; doubles per failure up to the cap. */

@@ -123,7 +123,96 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Shown while the app's code downloads; React replaces it on its first render. Same look
+           as the loader in src/components/PageLoader.tsx. -->
+      <style>
+        .pre-boot {
+          position: fixed;
+          inset: 0;
+          display: grid;
+          place-items: center;
+          background: #07080c;
+          font:
+            600 14px system-ui,
+            -apple-system,
+            "Segoe UI",
+            sans-serif;
+          color: #f3f5fa;
+        }
+        .pre-boot div {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 16px;
+        }
+        .pre-boot img {
+          width: 48px;
+          height: 48px;
+          animation: pre-boot-breathe 1.8s ease-in-out infinite;
+        }
+        .pre-boot i {
+          display: block;
+          width: 180px;
+          height: 6px;
+          border-radius: 999px;
+          background: #1f2330;
+          overflow: hidden;
+        }
+        .pre-boot i::after {
+          content: "";
+          display: block;
+          width: 40%;
+          height: 100%;
+          border-radius: inherit;
+          background: linear-gradient(90deg, #8b5cf6, #3b82f6);
+          animation: pre-boot-slide 1.2s ease-in-out infinite;
+        }
+        @keyframes pre-boot-breathe {
+          50% {
+            opacity: 0.5;
+            transform: scale(0.95);
+          }
+        }
+        @keyframes pre-boot-slide {
+          from {
+            transform: translateX(-100%);
+          }
+          to {
+            transform: translateX(250%);
+          }
+        }
+        @media (prefers-color-scheme: light) {
+          :root:not([data-theme="dark"]) .pre-boot {
+            background: #f4f5f9;
+            color: #0c0e14;
+          }
+          :root:not([data-theme="dark"]) .pre-boot i {
+            background: #eceef4;
+          }
+        }
+        :root[data-theme="light"] .pre-boot {
+          background: #f4f5f9;
+          color: #0c0e14;
+        }
+        :root[data-theme="light"] .pre-boot i {
+          background: #eceef4;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .pre-boot img,
+          .pre-boot i::after {
+            animation: none;
+          }
+        }
+      </style>
+      <div class="pre-boot" role="progressbar" aria-label="Loading TrenchScanner">
+        <div>
+          <img src="/favicon.svg" alt="" />
+          <span>Loading TrenchScanner</span>
+          <i></i>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
