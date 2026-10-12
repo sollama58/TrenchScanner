@@ -7,6 +7,7 @@ import {
   DexScreenerClient,
   GeckoTerminalClient,
   JupiterClient,
+  LiveLaunchQuotes,
   JupiterFirstLookup,
   PumpFunClient,
   RugCheckClient,
@@ -102,19 +103,21 @@ async function main() {
   // startNarrativePolling. The queue lives in the scanning process.
   const stopNarrativePolling = scans ? startNarrativePolling(env) : undefined;
 
+  // One client, so its rate budget is shared by both of its uses below.
+  const geckoTerminal = new GeckoTerminalClient(
+    env.COINGECKO_API_KEY
+      ? {
+          apiKey: env.COINGECKO_API_KEY,
+          priorityPerMinute: Math.ceil(env.COINGECKO_REQUESTS_PER_MINUTE * 0.6),
+          backgroundPerMinute: Math.floor(env.COINGECKO_REQUESTS_PER_MINUTE * 0.4),
+        }
+      : {},
+  );
   const dexScreener = new DexScreenerClient({
     baseUrl: env.DEXSCREENER_BASE_URL,
     requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
     // Answers token lookups while DexScreener answers them blank (2026-10-07).
-    fallback: new GeckoTerminalClient(
-      env.COINGECKO_API_KEY
-        ? {
-            apiKey: env.COINGECKO_API_KEY,
-            priorityPerMinute: Math.ceil(env.COINGECKO_REQUESTS_PER_MINUTE * 0.6),
-            backgroundPerMinute: Math.floor(env.COINGECKO_REQUESTS_PER_MINUTE * 0.4),
-          }
-        : {},
-    ),
+    fallback: geckoTerminal,
   });
   // With a Jupiter key, the price-only jobs (candidate-watch, the empty-wallet check) ask Jupiter
   // first, so DexScreener's per-IP budget goes to the scan's refresh and fast-match.
@@ -126,6 +129,8 @@ async function main() {
     dexScreener,
     jupiter,
     priceLookup: jupiter ? new JupiterFirstLookup(jupiter, dexScreener) : dexScreener,
+    // The newest launches' live prices in the band refresh: Jupiter, CoinGecko for what it misses.
+    liveLaunches: jupiter ? new LiveLaunchQuotes(jupiter, geckoTerminal) : undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     stream,

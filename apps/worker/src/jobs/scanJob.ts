@@ -6,6 +6,8 @@ import {
   Prisma,
   createLogger,
   refreshAndFilterToBand,
+  type LaunchQuoteSource,
+  type LiveLaunchStats,
   writeLiveMarketData,
   scanBand,
   inMcapBand,
@@ -122,8 +124,12 @@ export interface ScanDeps {
    * is priced from (ScoredToken.freshQuote). getFreshQuotes is optional so a test double can
    * leave it out: then no quote, and every row anchors on DexScreener's price.
    */
-  jupiter?: Pick<JupiterClient, "takeCallStats"> &
-    Partial<Pick<JupiterClient, "getFreshQuotes" | "getLaunches">>;
+  jupiter?: Pick<JupiterClient, "takeCallStats"> & Partial<Pick<JupiterClient, "getFreshQuotes">>;
+  /**
+   * Live prices for the newest launches in the band refresh: Jupiter, then CoinGecko for what it
+   * misses (LiveLaunchQuotes). Optional: unset, every mint is read from DexScreener alone.
+   */
+  liveLaunches?: LaunchQuoteSource & { takeStats?(): LiveLaunchStats };
   rugCheck: RugCheckClient;
   helius: HeliusClient;
   /** The live PumpPortal launch/graduation feed, drained once per cycle. Optional: off when unset. */
@@ -544,7 +550,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
         mcapMin: env.MCAP_FILTER_MIN,
         mcapMax: env.MCAP_FILTER_MAX,
         newestLaunches: newestLaunches(tracked),
-        liveLaunches: liveLaunchSource(deps.jupiter, tracked),
+        liveLaunches: liveLaunchSource(deps.liveLaunches, tracked),
       },
     );
     candidates = refreshed.inBand;
@@ -996,6 +1002,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       ? { ...dexScreenerStats, quoteCacheHits }
       : dexScreenerStats;
   const jupiterCalls = deps.jupiter?.takeCallStats();
+  // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
+  const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
@@ -1013,6 +1021,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     rpcCalls,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
+    ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,
@@ -1215,26 +1224,24 @@ export const LIVE_LAUNCH_MAX = 400;
 
 /**
  * The launches of the last LIVE_LAUNCH_MINUTES among the selection, newest first and at most
- * LIVE_LAUNCH_MAX, with Jupiter to price them (see refreshAndFilterToBand's liveLaunches): the
- * band refresh reads them at Jupiter's seconds-old price instead of DexScreener's, which trails a
- * new launch by 30-50 s. Undefined without a Jupiter key. Exported for tests.
+ * LIVE_LAUNCH_MAX, with the live source to price them (see refreshAndFilterToBand's liveLaunches):
+ * the band refresh reads them at Jupiter's seconds-old price, CoinGecko's where Jupiter can't
+ * answer, instead of DexScreener's, which trails a new launch by 30-50 s. Undefined without a
+ * live source (no Jupiter key). Exported for tests.
  */
 export function liveLaunchSource(
-  jupiter: ScanDeps["jupiter"],
+  source: LaunchQuoteSource | undefined,
   tracked: { mintAddress: string; firstSeenAt: Date }[],
   now = Date.now(),
-):
-  | { source: { getLaunches: NonNullable<NonNullable<ScanDeps["jupiter"]>["getLaunches"]> }; mints: string[] }
-  | undefined {
-  const getLaunches = jupiter?.getLaunches?.bind(jupiter);
-  if (!getLaunches) return undefined;
+): { source: LaunchQuoteSource; mints: string[] } | undefined {
+  if (!source) return undefined;
   const cutoff = now - LIVE_LAUNCH_MINUTES * 60_000;
   const mints = tracked
     .filter((t) => t.firstSeenAt.getTime() > cutoff)
     .sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime())
     .slice(0, LIVE_LAUNCH_MAX)
     .map((t) => t.mintAddress);
-  return mints.length > 0 ? { source: { getLaunches }, mints } : undefined;
+  return mints.length > 0 ? { source, mints } : undefined;
 }
 
 /** How long a cycle waits on any one discovery source - see discoverWithin. */
