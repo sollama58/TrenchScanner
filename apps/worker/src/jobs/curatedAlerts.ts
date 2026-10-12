@@ -15,7 +15,6 @@ import {
   type NarrativeRationale,
   governorCapacity,
   paceLimited,
-  seatPacePerHour,
   selectEmissions,
   enabledContestants,
   loadCurrentLanes,
@@ -39,7 +38,6 @@ import {
   RULES_CONTESTANT,
   NARRATIVE_CONTESTANT,
   CONTESTANTS,
-  contestantSpec,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
   BLEND_MODEL_KIND,
@@ -968,15 +966,14 @@ async function emitForModel(
   env: Env,
   clock: { now: number; hourAgo: Date; burstAgo: Date },
 ): Promise<number> {
-  // No pace set (the default for most seats): nothing to count, every contender has a slot.
-  const pace = seatPacePerHour(env.CURATED_TARGET_PER_HOUR, contestantSpec(model)?.recipe?.callsPerHour);
-  const [lastHour, lastBurstWindow] = paceLimited(pace)
+  // No pace set (the default): nothing to count, every contender has a slot.
+  const [lastHour, lastBurstWindow] = paceLimited(env.CURATED_TARGET_PER_HOUR)
     ? await Promise.all([
         prisma.curatedAlert.count({ where: { model, createdAt: { gt: clock.hourAgo } } }),
         prisma.curatedAlert.count({ where: { model, createdAt: { gt: clock.burstAgo } } }),
       ])
     : [0, 0];
-  const capacity = governorCapacity({ lastHour, lastBurstWindow }, pace);
+  const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
   const reviewing = isDefault && aiReviewEnabled(env);
   // Gate mode only once the reviewer has earned it, one of two ways: a learned blend of its odds
   // and the model's that beat the model alone out of sample (ai/blend.ts) - which then decides

@@ -46,16 +46,6 @@ export function governorBurstCap(targetPerHour: number): number {
   return Math.max(1, Math.round(targetPerHour / 3));
 }
 
-/**
- * The pace one seat's calls are held to: the field's CURATED_TARGET_PER_HOUR, or the seat's own
- * ceiling (CuratorRecipe.callsPerHour) when it has one, whichever is tighter. Zero = no ceiling.
- * A paced seat's cutoff already aims below its ceiling; this holds it there in a hot hour.
- */
-export function seatPacePerHour(fieldPerHour: number, seatPerHour: number | undefined): number {
-  const set = [fieldPerHour, seatPerHour ?? 0].filter(paceLimited);
-  return set.length === 0 ? 0 : Math.min(...set);
-}
-
 /** Whether a pace is set at all: a target of zero (the default) means no ceiling. */
 export function paceLimited(targetPerHour: number): boolean {
   return targetPerHour > 0;

@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  governorBurstCap,
-  governorCapacity,
-  paceBudget,
-  seatPacePerHour,
-  selectEmissions,
-} from "./governor.js";
+import { governorBurstCap, governorCapacity, paceBudget, selectEmissions } from "./governor.js";
 
 describe("governorCapacity", () => {
   it("caps the hour at the target and the burst window at a third of it", () => {
@@ -61,15 +55,5 @@ describe("selectEmissions", () => {
     const contenders = [c("a", 10), c("b", 90)];
     selectEmissions(contenders, 1);
     expect(contenders.map((x) => x.id)).toEqual(["a", "b"]);
-  });
-});
-
-describe("seatPacePerHour", () => {
-  it("holds a paced seat to its own ceiling, or the field's when that is tighter", () => {
-    expect(seatPacePerHour(0, undefined)).toBe(0);
-    expect(seatPacePerHour(0, 6)).toBe(6);
-    expect(seatPacePerHour(10, 6)).toBe(6);
-    expect(seatPacePerHour(4, 6)).toBe(4);
-    expect(seatPacePerHour(4, undefined)).toBe(4);
   });
 });

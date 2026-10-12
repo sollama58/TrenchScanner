@@ -443,11 +443,11 @@ async function sitRecipeExam(
 ): Promise<RecipeTrial> {
   const recipe = narrowRecipe(wholeRecipe, usable);
   const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
-  // A paced seat is examined and calibrated under its own ceiling (CuratorRecipe.callsPerHour);
+  // A paced seat is examined and calibrated at its own pace floor (CuratorRecipe.callsPerHour);
   // it is still scored against the field's targets.
   const targets: PrecisionTargets =
     recipe.callsPerHour !== undefined
-      ? { ...cfg.targets, maxCallsPerHour: recipe.callsPerHour }
+      ? { ...cfg.targets, minCallsPerHour: recipe.callsPerHour }
       : cfg.targets;
   const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? cfg.recencyHalfLifeDays;
   const evaluation = await walkForwardEvaluate(rows, {

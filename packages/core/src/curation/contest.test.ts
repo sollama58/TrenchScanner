@@ -94,7 +94,7 @@ describe("contestant roster", () => {
 });
 
 describe("the high-precision seats", () => {
-  it("are learners on a paced cutoff, outside the combiners and evolution, and can be the default", () => {
+  it("are learners at a pace floor, outside the combiners and evolution, and can be the default", () => {
     for (const id of [SHARP_TREES_CONTESTANT, SHARP_DEEP_TREES_CONTESTANT]) {
       const spec = contestantSpec(id)!;
       expect(spec.role).toBe("learner");
@@ -104,7 +104,7 @@ describe("the high-precision seats", () => {
       expect(isMemberLearner(spec)).toBe(false);
       expect(ACTIVE_CONTESTANT_IDS).toContain(id);
     }
-    expect(contestantSpec(SHARP_TREES_CONTESTANT)!.recipe).toEqual({ learner: "gbdt", callsPerHour: 6 });
+    expect(contestantSpec(SHARP_TREES_CONTESTANT)!.recipe?.boosting?.minLeafRows).toBe(100);
     expect(contestantSpec(SHARP_DEEP_TREES_CONTESTANT)!.recipe?.boosting).toEqual(
       contestantSpec("deep-trees")!.recipe?.boosting,
     );
@@ -251,26 +251,27 @@ describe("runContestTraining", () => {
 });
 
 describe("a paced seat in the contest", () => {
-  it("sends fewer exam calls than its unpaced recipe and is stacked by no combiner", async () => {
+  it("sends at least its floor in the exam and is stacked by no combiner", async () => {
     const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
     const results = await runContestTraining(rows, {
-      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1, coverageTolerance: 0.02 },
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
       targetPerHour: 6,
       heuristicMinScore: 55,
       minRowsToPromote: 1500,
       recencyHalfLifeDays: 14,
       cooldownHours: 24,
       heuristicPrecisionGate: true,
-      // The synthetic market brings a few tokens an hour, so the seat's ceiling is lowered to bind.
+      // The synthetic market brings a few tokens an hour, so the floor is scaled down to match.
       contestants: enabledContestants(["consensus", "linear", "trees", SHARP_TREES_CONTESTANT]).map((c) =>
-        c.id === SHARP_TREES_CONTESTANT ? { ...c, recipe: { ...c.recipe!, callsPerHour: 0.2 } } : c,
+        c.id === SHARP_TREES_CONTESTANT
+          ? { ...c, recipe: { learner: "gbdt" as const, callsPerHour: 0.6 } }
+          : c,
       ),
     });
     const trees = results.find((r) => r.contestant === "trees")!;
     const sharp = results.find((r) => r.contestant === SHARP_TREES_CONTESTANT)!;
     expect(sharp.metrics.exam!.calls).toBeGreaterThan(0);
-    expect(sharp.metrics.exam!.calls).toBeLessThan(trees.metrics.exam!.calls);
-    expect(sharp.metrics.precisionCalibration!.support).toBeLessThan(
+    expect(sharp.metrics.precisionCalibration!.support).toBeGreaterThan(
       trees.metrics.precisionCalibration!.support,
     );
     const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;

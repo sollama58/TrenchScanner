@@ -770,14 +770,15 @@ export interface PrecisionTargets {
    */
   confidenceZ?: number;
   /**
-   * A pace ceiling, in calls per hour of evidence: when set, only cutoffs whose calls (cooldown
-   * replayed) came to at most this many per hour are candidates, and among them the usual rule
-   * picks - the targets first, else the best 2x lower bound, loosened by coverageTolerance.
-   * minSupportShare doesn't apply: it sets a floor on calls, which is what the ceiling is there
-   * to stop. For the high-precision seats (CuratorRecipe.callsPerHour): few calls, the best hit
-   * rate at that volume. 0 or omitted = no ceiling.
+   * A pace floor, in calls per hour of evidence: when set, only cutoffs whose calls (cooldown
+   * replayed) came to at least this many per hour are candidates, and among them the usual rule
+   * picks - the targets first, else the best 2x lower bound, with no coverage tolerance: the floor
+   * already sets the volume, so the rest is hit rate. minSupportShare doesn't apply either. Since
+   * hit rate climbs toward the top of a model's ranking, this usually lands the cutoff at about
+   * the floor. For the high-precision seats (CuratorRecipe.callsPerHour). When no cutoff reaches
+   * the floor (a quiet stretch), every cutoff is a candidate. 0 or omitted = no floor.
    */
-  maxCallsPerHour?: number;
+  minCallsPerHour?: number;
 }
 
 /**
@@ -897,8 +898,9 @@ export function calibrateThresholdForPrecision(
   targets: PrecisionTargets,
   opts: { cooldownMs?: number } = {},
 ): PrecisionCalibration {
-  const paced = paceCeiling(calls, targets);
-  const floored = paced === null ? withShareFloor(targets, calls.length) : targets;
+  const paced = paceFloor(calls, targets);
+  const floored =
+    paced === null ? withShareFloor(targets, calls.length) : { ...targets, coverageTolerance: 0 };
   let records: CutoffRecord[];
   if (
     opts.cooldownMs !== undefined &&
@@ -921,17 +923,18 @@ export function calibrateThresholdForPrecision(
       records.push({ cutoff: call.probability, n: i + 1, wins, goals });
     }
   }
-  return chooseCutoff(paced === null ? records : records.filter((r) => r.n <= paced), floored);
+  const atPace = paced === null ? [] : records.filter((r) => r.n >= paced);
+  return chooseCutoff(atPace.length > 0 ? atPace : records, floored);
 }
 
 /**
- * The most calls a cutoff may send under targets.maxCallsPerHour, or null when there is no
- * ceiling. The evidence's hours are the distinct clock hours its calls fall in, not first to
- * last: the exam grades one fold on the folds either side of it, and a gap in the middle is no
- * hour a call could have gone out in.
+ * The fewest calls a cutoff must send under targets.minCallsPerHour, or null when there is no
+ * floor. The evidence's hours are the distinct clock hours its calls fall in, not first to last:
+ * the exam grades one fold on the folds either side of it, and a gap in the middle is no hour a
+ * call could have gone out in.
  */
-function paceCeiling(calls: ScoredOutcome[], targets: PrecisionTargets): number | null {
-  const perHour = targets.maxCallsPerHour ?? 0;
+function paceFloor(calls: ScoredOutcome[], targets: PrecisionTargets): number | null {
+  const perHour = targets.minCallsPerHour ?? 0;
   if (!(perHour > 0)) return null;
   const hours = new Set<number>();
   for (const c of calls)
@@ -1580,10 +1583,10 @@ export async function walkForwardEvaluate(
         calibrateThresholdForPrecision(calls, opts.targets!, { cooldownMs });
       const modelCutoff = calibrate(others.flatMap((o) => o.model.map((m) => call(m.row, m.rank)))).threshold;
       modelCalls = modelCutoff === null ? [] : fold.model.filter((m) => m.rank >= modelCutoff);
-      // A paced seat's ceiling is its own: the heuristic plays the field's rule, as it does live.
+      // A paced seat's floor is its own: the heuristic plays the field's rule, as it does live.
       const heuristicCalibration = calibrateThresholdForPrecision(
         others.flatMap((o) => o.heuristic.map((h) => call(h.row, h.confidence))),
-        { ...opts.targets, maxCallsPerHour: undefined },
+        { ...opts.targets, minCallsPerHour: undefined },
         { cooldownMs },
       );
       // Same rule as production (heuristicGate in curatedAlerts.ts): no cutoff (no evidence)

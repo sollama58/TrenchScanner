@@ -32,8 +32,8 @@ import type { CuratorLearner } from "./trainer.js";
  *    consensus's unlearned rival.
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
  *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
- *    Two learner seats are "standalone" (Sharp Trees, Sharp Deep Trees): an existing recipe at
- *    a cutoff held to a few calls an hour for the best hit rate, outside the combiners and
+ *    Two learner seats are "standalone" (Sharp Trees, Sharp Deep Trees): a tree recipe at the
+ *    best-hit-rate cutoff that still sends about 8 calls an hour, outside the combiners and
  *    evolution (see ContestantSpec.standalone).
  *  - "topslice": only the most confident calls of the tree seats - a token one of them ranks in
  *    the top quarter of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
@@ -71,9 +71,9 @@ export interface CuratorRecipe {
   /** Two-step narrative shape (see NarrativeBlendCuratorParams in trainer.ts): narrative seats only. */
   narrativeBlend?: boolean;
   /**
-   * A pace ceiling on the seat's cutoff (PrecisionTargets.maxCallsPerHour): its exam and its
-   * cutoff only consider cutoffs that sent at most this many calls an hour, and pick the best hit
-   * rate among them. Unset = the field's rule, which leans toward catching more runners.
+   * A pace floor on the seat's cutoff (PrecisionTargets.minCallsPerHour): its exam and its cutoff
+   * only consider cutoffs that sent at least this many calls an hour, and pick the best hit rate
+   * among them. Unset = the field's rule, which leans toward catching more runners.
    */
   callsPerHour?: number;
 }
@@ -100,9 +100,8 @@ export interface ContestantSpec {
   /**
    * A seat with its own cutoff rule (learners only, CuratorRecipe.callsPerHour): it trains, sits
    * the exam, calls and can become the default like any learner, but no combiner stacks it and
-   * evolution neither breeds from nor replaces it. Its recipe is another seat's, so stacking it
-   * would count that seat twice, and a bred recipe taking the seat would drop the rule it is there
-   * for.
+   * evolution neither breeds from nor replaces it. A recipe close to another seat's would count
+   * twice in the combiners, and a bred recipe taking the seat would drop the rule it is there for.
    */
   standalone?: boolean;
   /**
@@ -206,19 +205,21 @@ export function isMemberLearner(spec: ContestantSpec): boolean {
 }
 
 /**
- * The high-precision seats' pace ceiling (user ask 2026-10-12: "not call that many tokens, but
- * have an incredibly high hit rate for runners", at a rate still tradeable, about 6 an hour).
- * Each sits the exam and picks its cutoff under this ceiling (PrecisionTargets.maxCallsPerHour):
- * among the cutoffs that sent at most this many calls an hour, the best 2x lower bound, loosened
- * by the field's coverage tolerance. The governor holds it there live (seatPacePerHour).
+ * The high-precision seats' pace floor (user ask 2026-10-12: "the highest % 2x/4x/10x possible,
+ * while also trying to only alert about 6/hr ... can be more but generally shouldn't be less").
+ * Each sits the exam and picks its cutoff at this floor (PrecisionTargets.minCallsPerHour): among
+ * the cutoffs that sent at least this many calls an hour, the best 2x lower bound, which lands at
+ * about the floor because hit rate climbs toward the top of a ranking. 8 rather than 6: launches
+ * thinned over the replay, so a cutoff set on the exam's busier days sends fewer calls on the
+ * day it ships: at a floor of 6, Deep Trees ran 4.3-6.9 an hour over the last three 12-hour blocks.
  * Walk-forward replay, 12-hour blocks 10-07..10-12 (8,758 decision moments, base 2x rate 13.0%),
- * each block's cutoff chosen on the three days before it: the Trees recipe sent 2.5 calls an hour
- * at 30.1% 2x (+-2.5) and 12.8% 4x, against 14.3 an hour at 22.9% under the field's rule; Deep
- * Trees 2.9 an hour at 28.3% and 12.7%, against 12.3 at 23.8%. 2x rate climbs only at the very
- * top of the ranking (the top call an hour: 33-35%), so the cutoff settles well under the
- * ceiling. Combining seats (mean or minimum rank) did no better.
+ * each block's cutoff chosen on the three days before it: Deep Trees at a floor of 8 sent 8.6
+ * calls an hour (5.0-7.8 in the last three blocks) at 26.1% 2x (+-1.3) and 10.9% 4x, against
+ * 12.3 an hour at 23.8% and 9.6% under the field's rule; the slower, coarser trees of Sharp
+ * Trees 9.4 an hour at 24.6% and 10.1% (17.7 at 22.7% and 8.9%). Every recipe tried, and mean or
+ * minimum ranks across seats, sat on one curve: about 25% 2x at 6 calls an hour, 30% at 2, 35% at 1.
  */
-export const HIGH_PRECISION_CALLS_PER_HOUR = 6;
+export const HIGH_PRECISION_CALLS_PER_HOUR = 8;
 
 export const CONTESTANTS: readonly ContestantSpec[] = [
   {
@@ -373,19 +374,25 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   {
     id: SHARP_TREES_CONTESTANT,
     name: "Sharp Trees",
-    description: `Trees' recipe held to its best hit rate at no more than ${HIGH_PRECISION_CALLS_PER_HOUR} calls an hour: the cutoff with the best 2x record among those that sent that few in its exam`,
+    description:
+      "Slow, coarse boosted trees (depth 4, 100 rows a leaf) calling only their surest tokens: the cutoff with the best 2x record among those that sent about 8 calls an hour in the exam",
     summary:
-      "Calls only the tokens Trees is surest of, a few an hour, for the best hit rate rather than catching every runner.",
+      "Calls only the tokens it is surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
     role: "learner",
-    recipe: { learner: "gbdt", callsPerHour: HIGH_PRECISION_CALLS_PER_HOUR },
+    recipe: {
+      learner: "gbdt",
+      boosting: { maxDepth: 4, minLeafRows: 100, learningRate: 0.03, maxTrees: 400 },
+      callsPerHour: HIGH_PRECISION_CALLS_PER_HOUR,
+    },
     standalone: true,
   },
   {
     id: SHARP_DEEP_TREES_CONTESTANT,
     name: "Sharp Deep Trees",
-    description: `Deep Trees' recipe held to its best hit rate at no more than ${HIGH_PRECISION_CALLS_PER_HOUR} calls an hour: the cutoff with the best 2x record among those that sent that few in its exam`,
+    description:
+      "Deep Trees' recipe calling only its surest tokens: the cutoff with the best 2x record among those that sent about 8 calls an hour in the exam",
     summary:
-      "Calls only the tokens Deep Trees is surest of, a few an hour, for the best hit rate rather than catching every runner.",
+      "Calls only the tokens Deep Trees is surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
     role: "learner",
     recipe: {
       learner: "gbdt",
