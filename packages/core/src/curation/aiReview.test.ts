@@ -46,6 +46,19 @@ describe("AI review brief", () => {
     expect(AI_REVIEW_SYSTEM_PROMPT).toContain("4x within 30 minutes");
   });
 
+  it("shows the market cap the call is graded from beside DexScreener's lagging one", () => {
+    const price = scored.priceUsd;
+    const brief = buildAiReviewBrief(
+      { ...scored, freshQuote: { priceUsd: price * 1.2, marketCapUsd: 1, fetchedAt: new Date() } },
+      decision,
+    );
+    expect(brief).toContain("the price this call is graded from): $102,000");
+    expect(brief).toContain(
+      "runs 45-60 s behind and is what the other market figures here come from: $85,000",
+    );
+    expect(brief).toContain("(the quote is 20.0% from it)");
+  });
+
   it("carries the token's numbers and spells out what is unknown", () => {
     const brief = buildAiReviewBrief(scored, decision);
     expect(brief).toContain("symbol: PEPE2");

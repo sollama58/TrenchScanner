@@ -1,4 +1,5 @@
 import {
+  CALL_PEAK_READING_LAG_MS,
   MAX_ALERT_AGE_MS,
   prisma,
   type ActiveAlert,
@@ -7,7 +8,7 @@ import {
 } from "@trenchscanner/core";
 import { callPeakPct, curatedAlertInclude, latestSnapshotsByToken, resolveOutcome } from "./curatedFeed.js";
 import { summarizeFeed, type FeedStatsCard } from "./feedStats.js";
-import { MATCH_OUTCOME_SELECT, matchOutcome } from "./routes/matches.js";
+import { MATCH_OUTCOME_SELECT, currentMarketCap, matchOutcome } from "./routes/matches.js";
 
 /**
  * The numbers behind the bot's /alerts and /trenchboard, for one linked chat: the tokens that
@@ -29,8 +30,8 @@ const ALERT_LOOKAHEAD_MS = 5_000;
  * reaching before it counts only what came after.
  */
 export const TELEGRAM_SENT_RECORD_START = new Date("2026-10-10T21:30:00Z");
-/** A live market-cap reading older than this is passed over for the newest snapshot. */
-const LIVE_READING_MAX_AGE_MS = 15 * 60_000;
+/** A market-cap reading older than this is not shown as "now". */
+const NOW_READING_MAX_AGE_MS = 15 * 60_000;
 /** Bounds a pathological chat; a real one is far below it even over a week. */
 const MAX_SENT_ROWS = 5_000;
 
@@ -72,6 +73,8 @@ interface GradedAlert {
   returnPct: number | null;
   /** Its grading row is still watching it. */
   tracking: boolean;
+  /** A model call's time: market-cap readings from its first minute don't count as "now". */
+  calledAt: Date | null;
 }
 
 /** The earliest of `rows` raised for a send at `sentAt`. */
@@ -166,6 +169,7 @@ async function gradedAlerts(chatRowId: string, since: Date) {
         peakPct: callPeakPct(outcome.peak24hReturnPct, call),
         returnPct: call.simReturnPct ?? call.candidateOutcome?.simReturnPct ?? null,
         tracking: call.candidateOutcome !== null && call.candidateOutcome.finalized24hAt === null,
+        calledAt: call.createdAt,
       });
       continue;
     }
@@ -181,6 +185,7 @@ async function gradedAlerts(chatRowId: string, since: Date) {
         peakPct: match.peakReturnPct ?? outcome.peak24hReturnPct,
         returnPct: row?.simReturnPct ?? null,
         tracking: row !== null && row.finalized24hAt === null,
+        calledAt: null,
       });
       continue;
     }
@@ -206,14 +211,23 @@ async function gradedAlerts(chatRowId: string, since: Date) {
       peakPct: null,
       returnPct: null,
       tracking: false,
+      calledAt: null,
     });
   }
   return { chat, alerts };
 }
 
-/** Each token's market cap now: its live reading while fresh, else its newest snapshot. */
-async function marketCapsNow(tokenIds: string[], now: number): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
+/**
+ * Each token's market cap now: the newer of its live reading and its newest snapshot (as the
+ * dashboard's "Now", currentMarketCap), with when it was read. A reading older than
+ * NOW_READING_MAX_AGE_MS is left out rather than shown as "now". This used to take a 14-minute-old
+ * live ping over a snapshot from seconds ago, and fall back to a snapshot of any age.
+ */
+async function marketCapsNow(
+  tokenIds: string[],
+  now: number,
+): Promise<Map<string, { marketCapUsd: number; at: Date }>> {
+  const out = new Map<string, { marketCapUsd: number; at: Date }>();
   if (tokenIds.length === 0) return out;
   const [live, snaps] = await Promise.all([
     prisma.token.findMany({
@@ -223,18 +237,40 @@ async function marketCapsNow(tokenIds: string[], now: number): Promise<Map<strin
     latestSnapshotsByToken(tokenIds),
   ]);
   for (const t of live) {
-    if (
-      t.liveMarketCapUsd !== null &&
-      t.liveDataAt &&
-      now - t.liveDataAt.getTime() <= LIVE_READING_MAX_AGE_MS
-    ) {
-      out.set(t.id, t.liveMarketCapUsd);
-    }
-  }
-  for (const [id, snap] of snaps) {
-    if (!out.has(id) && snap.marketCapUsd > 0) out.set(id, snap.marketCapUsd);
+    const current = currentMarketCap(t, snaps.get(t.id) ?? null);
+    if (current.marketCapUsd === null || !(current.marketCapUsd > 0) || !current.at) continue;
+    if (now - current.at.getTime() > NOW_READING_MAX_AGE_MS) continue;
+    out.set(t.id, { marketCapUsd: current.marketCapUsd, at: current.at });
   }
   return out;
+}
+
+/**
+ * An active alert's "now" market cap, or null when there is none to show: a model call's readings
+ * from its first minute still show the market from before the call (CALL_PEAK_READING_LAG_MS).
+ */
+export function nowMcapFor(
+  alert: { calledAt: Date | null },
+  reading: { marketCapUsd: number; at: Date } | undefined,
+): number | null {
+  if (!reading) return null;
+  if (alert.calledAt && reading.at.getTime() < alert.calledAt.getTime() + CALL_PEAK_READING_LAG_MS)
+    return null;
+  return reading.marketCapUsd;
+}
+
+/**
+ * The Peak an active alert shows: a "now" above the recorded peak is already a peak (the worker
+ * banks it on its next pass), so "Now +316% · Peak +50%" can't show, as on the dashboard's card.
+ */
+export function activePeakPct(
+  peakPct: number | null,
+  alertMcapUsd: number | null,
+  nowMcapUsd: number | null,
+) {
+  if (alertMcapUsd === null || !(alertMcapUsd > 0) || nowMcapUsd === null) return peakPct;
+  const move = (nowMcapUsd / alertMcapUsd - 1) * 100;
+  return move > 0 ? Math.max(peakPct ?? 0, move) : peakPct;
 }
 
 /** The longest any alert is tracked: a clean winner's 24-hour watch. */
@@ -250,19 +286,22 @@ export function createTelegramBoards(now: () => number = Date.now): TelegramBoar
         tracking.map((a) => a.tokenId),
         t,
       );
-      return tracking.map((a): ActiveAlert => ({
-        mintAddress: a.mintAddress,
-        symbol: a.symbol,
-        name: a.name,
-        sentAt: a.sentAt,
-        source: a.source,
-        alertMcapUsd: a.alertMcapUsd,
-        nowMcapUsd: mcaps.get(a.tokenId) ?? null,
-        peakPct: a.peakPct,
-        status: a.outcome.status,
-        hit2x: a.outcome.hit2x,
-        minutesLeft: a.outcome.minutesLeft,
-      }));
+      return tracking.map((a): ActiveAlert => {
+        const nowMcapUsd = nowMcapFor(a, mcaps.get(a.tokenId));
+        return {
+          mintAddress: a.mintAddress,
+          symbol: a.symbol,
+          name: a.name,
+          sentAt: a.sentAt,
+          source: a.source,
+          alertMcapUsd: a.alertMcapUsd,
+          nowMcapUsd,
+          peakPct: activePeakPct(a.peakPct, a.alertMcapUsd, nowMcapUsd),
+          status: a.outcome.status,
+          hit2x: a.outcome.hit2x,
+          minutesLeft: a.outcome.minutesLeft,
+        };
+      });
     },
 
     async board(chatRowId, hours): Promise<BoardStats> {

@@ -170,6 +170,39 @@ export interface TokenSageCreatorFee {
  * or null (the sharing config's admin on a fee-shared coin), and the raw curve field moved to
  * `creator_onchain`.
  */
+/**
+ * The oldest a copied coin's original's curve reading may be, against the read it rides on, to
+ * count. TokenSage serves a stored curve up to 5 minutes old, and on an RPC failure one of any age
+ * (labelled with its `as_of`): a curve at 0.30 three days ago says nothing about a coin that has
+ * since graduated or died.
+ */
+export const ORIGINAL_CURVE_MAX_AGE_MS = 10 * 60_000;
+
+/**
+ * The curve reading of the coin the lineage names as the original, or null: when another copy_of
+ * item's (the fallback for reads without `lineage.of_mint`) would describe a different coin, or
+ * when the reading is older than ORIGINAL_CURVE_MAX_AGE_MS at the read's time.
+ */
+function originalCurve(
+  original: Record<string, unknown> | null,
+  lineageOfMint: string | null,
+  analyzedAt: Date | null,
+): Record<string, unknown> | null {
+  if (original === null) return null;
+  if (lineageOfMint !== null && original.mint !== lineageOfMint) return null;
+  const market = asRecord(original.original_market);
+  const asOf = typeof market?.as_of === "string" ? Date.parse(market.as_of) : NaN;
+  if (
+    market &&
+    analyzedAt &&
+    Number.isFinite(asOf) &&
+    analyzedAt.getTime() - asOf > ORIGINAL_CURVE_MAX_AGE_MS
+  ) {
+    return null;
+  }
+  return market;
+}
+
 export interface TokenSageAnalysis {
   schema_version?: string;
   mint?: string;
@@ -772,7 +805,7 @@ export function narrativeFieldsFromAnalysis(
     copies.find((c) => c !== null && lineageOfMint !== null && c.mint === lineageOfMint) ??
     copies.find((c) => c !== null && typeof c.original_age_s === "number") ??
     null;
-  const originalMarket = asRecord(original?.original_market);
+  const originalMarket = originalCurve(original, lineageOfMint, analyzedAt);
   const wave = asRecord(referent?.wave);
   // Rules 0.20.0+ name the main category; older reads fall back to the one TokenSage is surest of.
   const main = asRecord(doc.main_category);

@@ -516,13 +516,15 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   });
   const trackedMints = new Set(tracked.map((t) => t.mintAddress));
   const viewedOffWatchlist = activelyViewed.filter((t) => !trackedMints.has(t.mintAddress));
+  // When each reading below was taken, so the live figures written from them carry that time.
+  const readingSeenAt = new Map<string, Date>();
   const viewedLookup =
     viewedOffWatchlist.length > 0
       ? deps.dexScreener
           .getTokensByAddresses(
             viewedOffWatchlist.map((t) => t.mintAddress),
             5,
-            { timeoutMs: 5000, retries: 1, deadlineMs: 10_000 },
+            { timeoutMs: 5000, retries: 1, deadlineMs: 10_000, seenAt: readingSeenAt },
           )
           .catch((err: unknown) => {
             logger.warn("failed to refresh actively-viewed out-of-band tokens", { error: String(err) });
@@ -542,6 +544,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     candidates = refreshed.inBand;
     refreshPartial = refreshed.partial;
     refreshedMarketData = refreshed.marketData;
+    for (const [mint, at] of refreshed.seenAt) readingSeenAt.set(mint, at);
     // The stamp the liveness-prioritized selection above runs on.
     await stampLiveMarketCaps(refreshed.liveMarketCaps, env);
   } catch (err) {
@@ -560,7 +563,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // Every viewed token was just priced, here or by the refresh: that IS the dashboard's live
   // figure, so it is written now instead of the live-price job asking DexScreener again 20s later
   // (it skips tokens read this recently - see LIVE_PRICE_FRESH_MS).
+  // Stamped with each reading's own time: stamped at write time, a reading cached 10 s before a
+  // call and written 10 s after it cleared the 60 s guard on the call's peak a minute early.
   await writeLiveMarketData(activelyViewed, [...viewedLookedUp, ...refreshedMarketData], {
+    seenAt: readingSeenAt,
     fetchedAt: new Date(),
     peakWindowDays: env.SNAPSHOT_RETENTION_DAYS,
   }).catch((err: unknown) => logger.warn("failed to write viewed tokens' live data", { error: String(err) }));

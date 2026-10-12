@@ -245,7 +245,9 @@ function claim(keys: string[]): string[] {
 function describe(card: Card): { title: string; body: string } {
   const t = card.token;
   const name = t.symbol ? `$${t.symbol}` : (t.name ?? `${t.mintAddress.slice(0, 4)}…`);
-  const mcap = card.currentMarketCapUsd ?? card.snapshot?.marketCapUsd ?? null;
+  // "Called at" is the price the alert went out at (a call's anchor), not the latest reading: in a
+  // call's first minute that reading still shows the market from before it.
+  const mcap = card.snapshot?.marketCapUsd ?? null;
   const at = mcap !== null ? ` at ${usd(mcap)} mcap` : "";
   if (card.kind === "curated") {
     const model = card.curated?.modelName ?? "A model";

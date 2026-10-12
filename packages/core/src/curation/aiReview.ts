@@ -4,6 +4,7 @@ import { FIRST_BUYERS, resolveDevHolding } from "./tradeFlow.js";
 import { CREATOR_UNKNOWN_FLAG } from "../datasources/rugcheck.js";
 import { TOKENSAGE_LOGO_MIN_SCORE } from "../datasources/tokensage.js";
 import { buildCandidateFeatures } from "./features.js";
+import { decisionAnchor, FRESH_ANCHOR_LABEL_RULE } from "./labels.js";
 import { LINEAGE_KIND, narrativeIsCopycat, narrativeXRead, type NarrativeRead } from "./narrativeFeatures.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
@@ -165,7 +166,7 @@ export function buildAiReviewBrief(
     `</token>`,
     ``,
     `market:`,
-    `- market cap: ${fmtUsd(scored.marketCapUsd)}`,
+    ...marketCapLines(scored, features.freshGapPct),
     `- age: ${scored.ageMinutes === undefined ? "unknown" : `${Math.round(scored.ageMinutes)} minutes`}`,
     `- graduated from bonding curve: ${fmtBool(scored.graduated)}`,
     `- trading pool opened: ${pairAgeText(features.pairAgeMinutes, scored.graduated)}`,
@@ -203,6 +204,21 @@ export function buildAiReviewBrief(
     `- curator reasons: ${decision.reasons.length > 0 ? decision.reasons.join("; ") : "none given"}`,
     ...(comparables !== undefined ? [``, formatComparables(comparables)] : []),
   ].join("\n");
+}
+
+/**
+ * The market cap the call is priced and graded at (decisionAnchor): a seconds-old quote when there
+ * is one, said with DexScreener's figure beside it, which every other market line here comes from
+ * and which runs 45-60 s behind. The brief used to show only DexScreener's, so the reviewer read
+ * CASINO at $47.5k on the way up while the call was priced, and graded, at $11.4k.
+ */
+function marketCapLines(scored: ScoredToken, freshGapPct: number | null): string[] {
+  const anchor = decisionAnchor(scored);
+  if (anchor.labelRule !== FRESH_ANCHOR_LABEL_RULE) return [`- market cap: ${fmtUsd(scored.marketCapUsd)}`];
+  return [
+    `- market cap now (seconds-old quote, the price this call is graded from): ${fmtUsd(anchor.marketCapUsd)}`,
+    `- market cap on DexScreener, which runs 45-60 s behind and is what the other market figures here come from: ${fmtUsd(scored.marketCapUsd)} (the quote is ${fmtPct(freshGapPct ?? undefined)} from it)`,
+  ];
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   computeOutcomeLabels,
   CURRENT_LABEL_RULE,
   decisionAnchor,
+  freshQuoteMcapUsd,
   FRESH_ANCHOR_LABEL_RULE,
   isCurrentLabelRule,
   initialOutcomeAggregates,
@@ -389,8 +390,20 @@ describe("decisionAnchor", () => {
 
   it("anchors on the fresh quote under rule 4, which still counts as current", () => {
     const a = decisionAnchor({ priceUsd: 0.0001, marketCapUsd: 100_000, freshQuote: fresh(0.00014) });
-    expect(a).toEqual({ priceUsd: 0.00014, marketCapUsd: 140_000, labelRule: FRESH_ANCHOR_LABEL_RULE });
+    expect(a).toMatchObject({ priceUsd: 0.00014, labelRule: FRESH_ANCHOR_LABEL_RULE });
+    expect(a.marketCapUsd).toBeCloseTo(140_000, 6);
     expect(isCurrentLabelRule(a)).toBe(true);
+  });
+
+  it("puts the quote's price on DexScreener's supply, not Jupiter's post-burn one", () => {
+    // DexScreener: $0.0001 at $100k (1B). Jupiter: $0.00014, with an mcap on 0.914B ($127,960).
+    const a = decisionAnchor({
+      priceUsd: 0.0001,
+      marketCapUsd: 100_000,
+      freshQuote: { priceUsd: 0.00014, marketCapUsd: 127_960 },
+    });
+    expect(a.marketCapUsd).toBeCloseTo(140_000, 6);
+    expect(freshQuoteMcapUsd({ priceUsd: 0.0001, marketCapUsd: 100_000 })).toBeNull();
   });
 
   it("falls back to the scan price without a quote, or with one too far off to be a move", () => {

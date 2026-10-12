@@ -237,9 +237,11 @@ describe("buildCandidateFeatures - fresh quote", () => {
     const f = buildCandidateFeatures(
       scored({
         priceUsd: 0.0001,
+        marketCapUsd: 100_000,
         freshQuote: {
           priceUsd: 0.00013,
-          marketCapUsd: 130_000,
+          // Jupiter's own figure, on a post-burn supply: the ratio uses DexScreener's (130,000).
+          marketCapUsd: 118_820,
           fetchedAt: new Date(),
           stats5m: {
             priceChangePct: 25,

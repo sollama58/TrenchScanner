@@ -54,8 +54,28 @@ export const FRESH_ANCHOR_LABEL_RULE = 4;
 export const FRESH_ANCHOR_MAX_RATIO = 5;
 
 /**
+ * The fresh quote's market cap on DexScreener's supply, or null without a usable quote: the quote's
+ * price times the supply DexScreener's own figures imply (1B for a Pump.fun coin, as Pump.fun's).
+ * Jupiter's own `mcap` counts the supply after burns, 0.91-0.97B on some coins (live probe
+ * 2026-10-12), so set beside the DexScreener readings a call's Peak and the mcap band are measured
+ * in, it read up to ~9% low and every multiple off it ~9% high.
+ */
+export function freshQuoteMcapUsd(scored: {
+  priceUsd: number;
+  marketCapUsd: number;
+  freshQuote?: { priceUsd: number; marketCapUsd: number };
+}): number | null {
+  const q = scored.freshQuote;
+  if (!q || !(q.priceUsd > 0)) return null;
+  if (scored.priceUsd > 0 && scored.marketCapUsd > 0)
+    return (scored.marketCapUsd / scored.priceUsd) * q.priceUsd;
+  return q.marketCapUsd > 0 ? q.marketCapUsd : null;
+}
+
+/**
  * The price a decision is graded from, and the rule that grading follows: the fresh quote read
  * just before the decision when there is a plausible one, else the scan's (DexScreener) price.
+ * The market cap is the quote's price on DexScreener's supply (freshQuoteMcapUsd).
  */
 export function decisionAnchor(scored: {
   priceUsd: number;
@@ -65,8 +85,9 @@ export function decisionAnchor(scored: {
   const q = scored.freshQuote;
   if (q && q.priceUsd > 0 && q.marketCapUsd > 0 && scored.priceUsd > 0) {
     const ratio = q.priceUsd / scored.priceUsd;
-    if (ratio <= FRESH_ANCHOR_MAX_RATIO && ratio >= 1 / FRESH_ANCHOR_MAX_RATIO) {
-      return { priceUsd: q.priceUsd, marketCapUsd: q.marketCapUsd, labelRule: FRESH_ANCHOR_LABEL_RULE };
+    const mcap = freshQuoteMcapUsd(scored);
+    if (mcap !== null && ratio <= FRESH_ANCHOR_MAX_RATIO && ratio >= 1 / FRESH_ANCHOR_MAX_RATIO) {
+      return { priceUsd: q.priceUsd, marketCapUsd: mcap, labelRule: FRESH_ANCHOR_LABEL_RULE };
     }
   }
   return { priceUsd: scored.priceUsd, marketCapUsd: scored.marketCapUsd, labelRule: CURRENT_LABEL_RULE };
