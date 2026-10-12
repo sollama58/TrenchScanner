@@ -261,6 +261,30 @@ export class DexScreenerClient {
     return gecko;
   }
 
+  /**
+   * When a graduated Pump.fun mint's PumpSwap pool was created, read from DexScreener's per-token
+   * pairs endpoint. The batch lookup (/tokens/v1) can list only a graduated mint's old curve pair -
+   * seen on every coin whose curve filled in its launch second (2026-10-11) - while this endpoint
+   * lists the pool. Null when no PumpSwap pool is listed; throws when DexScreener can't answer.
+   */
+  async pumpSwapGraduation(mintAddress: string): Promise<Date | null> {
+    const pairs = await fetchJson<DexScreenerPair[]>(
+      `${this.baseUrl}/token-pairs/v1/${SOLANA_CHAIN_ID}/${encodeURIComponent(mintAddress)}`,
+      {
+        timeoutMs: 5000,
+        retries: 0,
+        gate: {
+          acquire: () => this.gate.acquire(),
+          throttled: (delayMs: number) => this.gate.throttled(delayMs),
+        },
+      },
+    );
+    const own = (pairs ?? []).filter(
+      (p) => p.chainId === SOLANA_CHAIN_ID && p.baseToken?.address === mintAddress,
+    );
+    return pumpSwapPoolCreatedAt(own) ?? null;
+  }
+
   /** One DexScreener lookup; `answeredOut` collects the mints whose batch came back. */
   private async lookup(
     unique: string[],
