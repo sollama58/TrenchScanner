@@ -1,8 +1,24 @@
 import { fetchJson, HttpError } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { normalizeSocialUrl } from "./tokensage.js";
+import type { MinuteCandle } from "../curation/regrade.js";
 
 const logger = createLogger("pumpfun");
+
+/** Candles per answer of Pump.fun's candle API: its most recent minutes with trades. */
+export const MINUTE_CANDLE_PAGE = 1000;
+
+/** Exported for tests. Candles with a usable start and close, oldest first. */
+export function parseMinuteCandles(body: unknown): MinuteCandle[] {
+  if (!Array.isArray(body)) return [];
+  const out: MinuteCandle[] = [];
+  for (const c of body as { timestamp?: unknown; close?: unknown }[]) {
+    const startMs = typeof c?.timestamp === "number" ? c.timestamp : Number.NaN;
+    const close = typeof c?.close === "string" || typeof c?.close === "number" ? Number(c.close) : Number.NaN;
+    if (Number.isFinite(startMs) && Number.isFinite(close) && close > 0) out.push({ startMs, close });
+  }
+  return out.sort((a, b) => a.startMs - b.startMs);
+}
 
 /**
  * Pump.fun's frontend API is unofficial/undocumented (no public API contract),
@@ -56,6 +72,8 @@ export interface DiscoveredCoin {
 
 export interface PumpFunClientOptions {
   baseUrl?: string;
+  /** Pump.fun's trade API (the chart's candles). */
+  swapBaseUrl?: string;
 }
 
 /**
@@ -70,9 +88,11 @@ type SortOrder = "ASC" | "DESC";
 
 export class PumpFunClient {
   private readonly baseUrl: string;
+  private readonly swapBaseUrl: string;
 
   constructor(options: PumpFunClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://frontend-api-v3.pump.fun";
+    this.swapBaseUrl = options.swapBaseUrl ?? "https://swap-api.pump.fun";
   }
 
   /**
@@ -189,6 +209,26 @@ export class PumpFunClient {
       );
       const mcap = coin?.usd_market_cap ?? coin?.market_cap_usd;
       return typeof mcap === "number" && Number.isFinite(mcap) && mcap > 0 ? mcap : null;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * The coin's one-minute USD candles from its own trades, curve and PumpSwap pool alike (the
+   * chart on its Pump.fun page): the most recent MINUTE_CANDLE_PAGE minutes that had a trade,
+   * oldest first, as each minute's start and closing price. A minute with no trade has no candle.
+   * The API takes no time range, so a list shorter than the page is the coin's whole history.
+   * Null when Pump.fun has no such coin; throws on a transport failure (a 429 included).
+   */
+  async minuteCandles(mintAddress: string, timeoutMs = 10_000): Promise<MinuteCandle[] | null> {
+    try {
+      const body = await fetchJson<unknown>(
+        `${this.swapBaseUrl}/v1/coins/${encodeURIComponent(mintAddress)}/candles?interval=1m&limit=${MINUTE_CANDLE_PAGE}&currency=USD`,
+        { timeoutMs, retries: 0 },
+      );
+      return parseMinuteCandles(body);
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return null;
       throw err;
