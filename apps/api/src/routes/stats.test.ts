@@ -554,6 +554,20 @@ describe.skipIf(!dbAvailable)("GET /stats/screen-funnel", () => {
     expect(body.screened).toBeGreaterThanOrEqual(1);
   });
 
+  it("lists each token's snapshot minutes when asked", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/stats/screen-funnel?hours=1&minutes=true",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const byMint = new Map(
+      (res.json().tokens as { mint: string; snapshotMinutes?: number[] }[]).map((t) => [t.mint, t]),
+    );
+    expect(byMint.get(`${tag}-screened`)?.snapshotMinutes).toEqual([3, 5, 8]);
+    expect(byMint.get(`${tag}-unpriced`)?.snapshotMinutes).toEqual([]);
+  });
+
   it("caps the window", async () => {
     const res = await app.inject({
       method: "GET",
