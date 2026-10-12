@@ -1,6 +1,7 @@
 import {
   prisma,
   compositeScore,
+  curatedTargets,
   defaultContestant,
   loadChampion,
   loadTopModels,
@@ -167,7 +168,8 @@ export function contestState(env: Env): Promise<ContestState> {
       canCall,
       defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
     );
-    const { top, best, last24h } = await loadTopModels(roster, lanes, canCall);
+    const exams = new Map(roster.map((c) => [c.id, current.get(c.id)?.metrics.exam]));
+    const { top, best, last24h } = await loadTopModels(roster, lanes, canCall, exams, curatedTargets(env));
     return {
       roster,
       lanes,

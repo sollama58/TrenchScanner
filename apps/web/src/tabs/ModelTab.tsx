@@ -987,10 +987,7 @@ function LeaderboardPanel({
                         </span>
                       )}
                       {e.isDefault && (
-                        <span
-                          className="chip"
-                          title="One of the top models by 2x hit rate over the last day: the default feed"
-                        >
+                        <span className="chip" title="One of the top models by score: the default feed">
                           top
                         </span>
                       )}
@@ -1444,11 +1441,11 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           <strong>The default.</strong>{" "}
           {board.defaultRule ? (
             <>
-              The default feed is the {board.defaultRule.count} models with the best 2x hit rate over the last{" "}
-              {board.defaultRule.windowHours}h, among those with at least {board.defaultRule.minGraded} graded
-              calls in that window, rechecked every {board.defaultRule.refreshMinutes} minutes. Everyone who
-              follows the default sees their calls combined. Until enough models qualify, it is the best
-              performer on this board alone.
+              The default feed is the {board.defaultRule.count} models with the best score, among those with
+              at least {board.defaultRule.minGraded} graded calls over the last{" "}
+              {board.defaultRule.windowHours}h, rechecked every {board.defaultRule.refreshMinutes} minutes.
+              Everyone who follows the default sees their calls combined. Until enough models qualify, it is
+              the best performer on this board alone.
             </>
           ) : (
             <>

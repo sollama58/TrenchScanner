@@ -322,7 +322,7 @@ export function ModelPanel({
               <>
                 Your feed shows <strong>{tops.map((e) => e.name).join(", ") || "–"}</strong>
                 {rule
-                  ? `, the ${rule.count} models with the best 2x hit rate over the last ${rule.windowHours}h, and
+                  ? `, the ${rule.count} models with the best score, and
                 switches by itself as that ranking changes (rechecked every ${rule.refreshMinutes} minutes).`
                   : ", the best performer right now, and switches by itself whenever a new best is chosen."}{" "}
                 Ticking a model below switches you to your own picks.

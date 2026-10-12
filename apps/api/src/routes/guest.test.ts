@@ -153,7 +153,7 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
 });
 
 /**
- * The default feed as top models: the three best 24h 2x hit rates (with enough graded calls) are
+ * The default feed as top models: the three best scores (with enough graded calls in 24h) are
  * picked, and a token several of them called is one guest card. Seeded under model ids no real
  * roster has, so the shared test database's real default never changes under other test files.
  */
@@ -204,9 +204,13 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TOP } } });
   });
 
-  it("picks the three best 2x hit rates among models with enough graded calls", async () => {
+  // No exams: each score is read off the live calls alone, so it follows the 2x rates seeded here.
+  const NO_EXAMS = new Map();
+  const TARGETS = { winRate: 0.75, goalRate: 0.5, minSupport: 30 };
+
+  it("picks the three best scores among models with enough graded calls", async () => {
     resetTopModelsCache();
-    const picked = await loadTopModels(roster, [], () => true);
+    const picked = await loadTopModels(roster, [], () => true, NO_EXAMS, TARGETS);
     expect(picked).toMatchObject({ top: [a, b, c], best: d });
     expect(picked.last24h.get(a)).toEqual({
       graded: 30,
@@ -219,9 +223,9 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
 
   it("leaves out models that can't call, and gives up below three", async () => {
     resetTopModelsCache();
-    expect((await loadTopModels(roster, [], (id) => id !== b)).top).toEqual([a, c, d]);
+    expect((await loadTopModels(roster, [], (id) => id !== b, NO_EXAMS, TARGETS)).top).toEqual([a, c, d]);
     resetTopModelsCache();
-    expect((await loadTopModels(roster, [], (id) => id === a || id === b)).top).toBeNull();
+    expect((await loadTopModels(roster, [], (id) => id === a || id === b, NO_EXAMS, TARGETS)).top).toBeNull();
   });
 
   it("shows a token the top models both called as one card, at its first call", async () => {
