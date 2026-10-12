@@ -3,7 +3,7 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import type { DexScreenerClient, TokenLookupOptions } from "./dexscreener.js";
-import type { CandidateToken } from "../types.js";
+import type { CandidateToken, FreshQuote, FreshQuoteStats } from "../types.js";
 
 const logger = createLogger("jupiter");
 
@@ -14,6 +14,9 @@ interface JupiterStats {
   sellVolume?: number | null;
   numBuys?: number | null;
   numSells?: number | null;
+  numTraders?: number | null;
+  numNetBuyers?: number | null;
+  holderChange?: number | null;
 }
 
 interface JupiterToken {
@@ -24,7 +27,10 @@ interface JupiterToken {
   mcap?: number | null;
   fdv?: number | null;
   liquidity?: number | null;
+  stats5m?: JupiterStats | null;
+  stats1h?: JupiterStats | null;
   stats24h?: JupiterStats | null;
+  updatedAt?: string | null;
 }
 
 /** The search endpoint takes up to 100 comma-separated mints a call. */
@@ -74,14 +80,39 @@ export class JupiterClient {
     concurrency = 2,
     options: TokenLookupOptions = {},
   ): Promise<CandidateToken[]> {
-    const {
-      deadlineMs,
-      seenAt,
-      failed,
-      priority: _priority,
-      mayBeUnindexed: _unindexed,
-      ...fetchOptions
-    } = options;
+    const { seenAt, ...rest } = options;
+    const found = await this.search(mintAddresses, concurrency, rest, parseJupiterTokens);
+    if (seenAt) for (const { token, answered } of found) seenAt.set(token.mintAddress, answered);
+    return found.map((f) => f.token);
+  }
+
+  /**
+   * Seconds-old prices and the last minutes' activity for the coins a scan is about to decide on
+   * (ScoredToken.freshQuote). Mints Jupiter didn't answer, or answered without a price, are left
+   * out; past the deadline the lookup gives what it has.
+   */
+  async getFreshQuotes(
+    mintAddresses: string[],
+    options: { deadlineMs?: number; concurrency?: number } = {},
+  ): Promise<Map<string, FreshQuote>> {
+    const found = await this.search(
+      mintAddresses,
+      options.concurrency ?? 3,
+      { deadlineMs: options.deadlineMs, timeoutMs: options.deadlineMs, retries: 0 },
+      (body, requested) => parseJupiterQuotes(body, requested),
+    );
+    return new Map(
+      found.map(({ token, answered }) => [token.mintAddress, { ...token.quote, fetchedAt: answered }]),
+    );
+  }
+
+  private async search<T>(
+    mintAddresses: string[],
+    concurrency: number,
+    options: Omit<TokenLookupOptions, "seenAt">,
+    parse: (body: unknown, requested: Set<string>) => T[],
+  ): Promise<{ token: T; answered: Date }[]> {
+    const { deadlineMs, failed, priority: _priority, mayBeUnindexed: _unindexed, ...fetchOptions } = options;
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
     const chunks: string[][] = [];
@@ -92,7 +123,7 @@ export class JupiterClient {
       acquire: () => this.gate.acquire(deadline),
       throttled: (delayMs: number) => this.gate.throttled(delayMs),
     };
-    const results: CandidateToken[] = [];
+    const results: { token: T; answered: Date }[] = [];
     const settled = new Set<string>();
     const work = forEachWithConcurrency(chunks, concurrency, async (chunk) => {
       if (Date.now() >= deadline) return;
@@ -102,10 +133,11 @@ export class JupiterClient {
           { ...fetchOptions, gate, headers: this.headers },
         );
         const answered = new Date();
+        // Late answers are dropped: the caller has moved on, and a later read must not be fed
+        // something it never waited for.
+        if (Date.now() > deadline) return;
         for (const mint of chunk) settled.add(mint);
-        const tokens = parseJupiterTokens(body, new Set(chunk));
-        if (seenAt) for (const t of tokens) seenAt.set(t.mintAddress, answered);
-        results.push(...tokens);
+        for (const token of parse(body, new Set(chunk))) results.push({ token, answered });
       } catch (err) {
         if (err instanceof RateGateDeadlineError) return;
         logger.warn("failed to fetch token batch", { chunkSize: chunk.length, error: String(err) });
@@ -157,6 +189,50 @@ export function parseJupiterTokens(body: unknown, requested: Set<string>): Candi
       buys24h: finite(stats?.numBuys),
       sells24h: finite(stats?.numSells),
       priceChange24hPct: finite(stats?.priceChange),
+    });
+  }
+  return [...out.values()];
+}
+
+function parseStats(stats: JupiterStats | null | undefined): FreshQuoteStats | undefined {
+  if (!stats) return undefined;
+  return {
+    priceChangePct: finite(stats.priceChange),
+    buyVolumeUsd: finite(stats.buyVolume),
+    sellVolumeUsd: finite(stats.sellVolume),
+    buys: finite(stats.numBuys),
+    sells: finite(stats.numSells),
+    traders: finite(stats.numTraders),
+    netBuyers: finite(stats.numNetBuyers),
+    holderChange: finite(stats.holderChange),
+  };
+}
+
+/**
+ * Exported for tests. Only the requested mints, each once, and only with a positive price and
+ * market cap: a quote without them anchors nothing.
+ */
+export function parseJupiterQuotes(
+  body: unknown,
+  requested: Set<string>,
+): { mintAddress: string; quote: Omit<FreshQuote, "fetchedAt"> }[] {
+  if (!Array.isArray(body)) return [];
+  const out = new Map<string, { mintAddress: string; quote: Omit<FreshQuote, "fetchedAt"> }>();
+  for (const t of body as JupiterToken[]) {
+    if (!t || typeof t.id !== "string" || !requested.has(t.id) || out.has(t.id)) continue;
+    const priceUsd = finite(t.usdPrice);
+    const marketCapUsd = finite(t.mcap) ?? finite(t.fdv);
+    if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
+    const updatedAt = typeof t.updatedAt === "string" ? new Date(t.updatedAt) : undefined;
+    out.set(t.id, {
+      mintAddress: t.id,
+      quote: {
+        priceUsd,
+        marketCapUsd,
+        updatedAt: updatedAt && !Number.isNaN(updatedAt.getTime()) ? updatedAt : undefined,
+        stats5m: parseStats(t.stats5m),
+        stats1h: parseStats(t.stats1h),
+      },
     });
   }
   return [...out.values()];

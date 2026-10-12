@@ -232,6 +232,44 @@ describe("buildCandidateFeatures - livestream", () => {
   });
 });
 
+describe("buildCandidateFeatures - fresh quote", () => {
+  it("records the gap to DexScreener's price and Jupiter's activity, all null without a quote", () => {
+    const f = buildCandidateFeatures(
+      scored({
+        priceUsd: 0.0001,
+        freshQuote: {
+          priceUsd: 0.00013,
+          marketCapUsd: 130_000,
+          fetchedAt: new Date(),
+          stats5m: {
+            priceChangePct: 25,
+            buyVolumeUsd: 9_000,
+            sellVolumeUsd: 3_000,
+            traders: 50,
+            netBuyers: 12,
+          },
+          stats1h: { priceChangePct: 140, holderChange: 90 },
+        },
+      }),
+    );
+    expect(f.freshGapPct).toBeCloseTo(30);
+    expect(f.jup5mPriceChangePct).toBe(25);
+    expect(f.jup1hPriceChangePct).toBe(140);
+    expect(f.jup5mBuyVolumeShare).toBeCloseTo(0.75);
+    expect(f.jup5mVolumeToMcap).toBeCloseTo(12_000 / 130_000);
+    // The window was reported, so missing counts are zero trades; the holder change was not.
+    expect(f.jup5mBuys).toBe(0);
+    expect(f.jup5mHolderChange).toBeNull();
+    expect(f.jup1hHolderChange).toBe(90);
+    expect(LEARNER_FEATURE_NAMES).toContain("freshGapPct");
+
+    const none = buildCandidateFeatures(scored({}));
+    for (const k of ["freshGapPct", "jup5mPriceChangePct", "jup5mBuys", "jup5mBuyVolumeShare"] as const) {
+      expect(none[k]).toBeNull();
+    }
+  });
+});
+
 describe("withCurrentNarrativeTiming", () => {
   it("reads TokenSage inputs as missing on rows from before the read arrived at decision time", () => {
     const old = {

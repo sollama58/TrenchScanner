@@ -18,6 +18,8 @@ import {
   sniperShareOfTop10,
   passesLocalRugScreen,
   passesEventPreGate,
+  FRESH_ANCHOR_MAX_RATIO,
+  type FreshQuote,
   walletChecksKnown,
   deriveGraduated,
   forEachWithConcurrency,
@@ -115,8 +117,12 @@ export interface ScanDeps {
    * (JupiterFirstLookup), else DexScreener itself. Optional: unset means `dexScreener`.
    */
   priceLookup?: Pick<DexScreenerClient, "getTokensByAddresses">;
-  /** The Jupiter client behind priceLookup, for its call counts. */
-  jupiter?: Pick<JupiterClient, "takeCallStats">;
+  /**
+   * The Jupiter client behind priceLookup, for its call counts and the fresh quote each decision
+   * is priced from (ScoredToken.freshQuote). getFreshQuotes is optional so a test double can
+   * leave it out: then no quote, and every row anchors on DexScreener's price.
+   */
+  jupiter?: Pick<JupiterClient, "takeCallStats"> & Partial<Pick<JupiterClient, "getFreshQuotes">>;
   rugCheck: RugCheckClient;
   helius: HeliusClient;
   /** The live PumpPortal launch/graduation feed, drained once per cycle. Optional: off when unset. */
@@ -859,6 +865,18 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // order-flow features need a few minutes of watching before they say anything.
   deps.stream?.watch?.(candidates.map((c) => c.mintAddress));
 
+  // Seconds-old prices for the coins about to be decided on (ScoredToken.freshQuote), read now
+  // rather than with the refresh: DexScreener's figures were already 45-60 s behind the market,
+  // and the stages since have added up to the wallet budget again. The ones that can be decided
+  // on (past the safety screen) are asked for, contenders first in case the deadline cuts it.
+  const freshQuotesWork = readFreshQuotes(
+    deps.jupiter,
+    candidates
+      .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
+      .sort((a, b) => Number(passesEventPreGate(b, curatedBand)) - Number(passesEventPreGate(a, curatedBand)))
+      .map((c) => c.mintAddress),
+  );
+
   const loaded = await priorsPromise;
   if ("error" in loaded) throw loaded.error;
   const { priors } = loaded;
@@ -870,6 +888,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // Read once for the cycle: whether a curated decision should wait for the top-10 snipers share.
   const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;
   pruneSniperWaits(Date.now());
+  const freshQuotes = await freshQuotesWork;
+  lap("freshQuotes");
   const perCandidateMatches: number[] = [];
   const curatedCycle = newCuratedCycle();
   await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
@@ -894,6 +914,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           liveStreams,
           sniperWalletsFromCache(candidate.mintAddress),
           sniperChainAvailable,
+          freshQuotes.get(candidate.mintAddress),
         ),
       );
     } catch (err) {
@@ -1670,6 +1691,34 @@ export function persistSnapshot(tokenId: string, prior: CandidatePrior, now: num
   return true;
 }
 
+/** How long the decision's fresh-quote read may take (see readFreshQuotes). */
+export const FRESH_QUOTE_BUDGET_MS = 2_500;
+
+/**
+ * Jupiter's seconds-old quotes for the given mints, within FRESH_QUOTE_BUDGET_MS. Never throws:
+ * without a client, or past the budget, a mint simply has no quote and its row anchors on
+ * DexScreener's price.
+ */
+export async function readFreshQuotes(
+  jupiter: Partial<Pick<JupiterClient, "getFreshQuotes">> | undefined,
+  mints: string[],
+): Promise<Map<string, FreshQuote>> {
+  if (!jupiter?.getFreshQuotes || mints.length === 0) return new Map();
+  try {
+    return await jupiter.getFreshQuotes(mints, { deadlineMs: FRESH_QUOTE_BUDGET_MS });
+  } catch (err) {
+    logger.warn("fresh quote read failed", { error: String(err) });
+    return new Map();
+  }
+}
+
+/** A quote within FRESH_ANCHOR_MAX_RATIO of DexScreener's price (see decisionAnchor). */
+function plausibleFreshQuote(quote: FreshQuote, dexPriceUsd: number): boolean {
+  if (!(dexPriceUsd > 0)) return false;
+  const ratio = quote.priceUsd / dexPriceUsd;
+  return ratio <= FRESH_ANCHOR_MAX_RATIO && ratio >= 1 / FRESH_ANCHOR_MAX_RATIO;
+}
+
 async function processCandidate(
   candidate: CandidateToken,
   prior: CandidatePrior,
@@ -1686,6 +1735,7 @@ async function processCandidate(
   liveStreams?: ReadonlyMap<string, LiveStream> | null,
   sniperWallets?: ReadonlySet<string>,
   sniperChainAvailable = false,
+  freshQuote?: FreshQuote,
 ): Promise<number> {
   const existingToken = prior.token;
   const onChain = withWalletSignals(
@@ -1763,6 +1813,7 @@ async function processCandidate(
     scored.pricePath = pricePath.features(candidate.mintAddress);
   }
   if (marketContext) scored.marketContext = marketContext;
+  if (freshQuote && plausibleFreshQuote(freshQuote, scored.priceUsd)) scored.freshQuote = freshQuote;
   if (liveStreams) {
     const stream = liveStreams.get(candidate.mintAddress);
     scored.livestream = { live: stream !== undefined, viewers: stream?.viewers ?? null };

@@ -218,12 +218,44 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
    */
   livestream?: { live: boolean; viewers: number | null };
   /**
+   * Jupiter's quote for the coin, read just before the decision (JupiterClient.getFreshQuotes).
+   * DexScreener's prices, which every other market figure here comes from, run 45-60 s behind
+   * the market; Jupiter's are seconds old. The decision's anchor - the price its labels and the
+   * alert's grade start from - is this quote's price when there is one (decisionAnchor in
+   * curation/labels.ts). Undefined when Jupiter didn't answer in time or its price was implausible.
+   */
+  freshQuote?: FreshQuote;
+  /**
    * TokenSage's read of what the coin is about (curation/narrativeFeatures.ts), as stored in
    * TokenNarrative when the coin was scored. Undefined until the read lands, and whenever
    * TokenSage is off. Feeds the ns* model inputs, the narrative filter criteria and the score's
    * narrative part.
    */
   narrative?: NarrativeRead;
+}
+
+/** Jupiter's activity figures over one window (stats5m / stats1h on a Tokens API v2 answer). */
+export interface FreshQuoteStats {
+  priceChangePct?: number;
+  buyVolumeUsd?: number;
+  sellVolumeUsd?: number;
+  buys?: number;
+  sells?: number;
+  traders?: number;
+  netBuyers?: number;
+  holderChange?: number;
+}
+
+/** A seconds-old price and the last minutes' activity for one coin, from Jupiter's Tokens API. */
+export interface FreshQuote {
+  priceUsd: number;
+  marketCapUsd: number;
+  /** When the answer arrived. */
+  fetchedAt: Date;
+  /** When Jupiter last updated the token's figures, if it said. */
+  updatedAt?: Date;
+  stats5m?: FreshQuoteStats;
+  stats1h?: FreshQuoteStats;
 }
 
 export interface RugScreenResult {

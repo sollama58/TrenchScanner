@@ -204,6 +204,26 @@ export const CANDIDATE_FEATURE_NAMES = [
   // per minute it has been up, and how old the counts are. Null without a read post, and on every
   // row banked before. Never backfilled.
   ...NARRATIVE_FEATURES_V7,
+  // Added 2026-10-12 (user decision, notes/audit-2026-10-12/timing.md): Jupiter's quote, read just
+  // before the decision (ScoredToken.freshQuote). DexScreener, where every market input above
+  // comes from, runs 45-60 s behind the market; Jupiter's figures are seconds old. The gap is how
+  // far the price has moved since DexScreener's reading (the decision is graded from Jupiter's
+  // price - decisionAnchor in labels.ts), and the rest is the last 5 minutes and hour as Jupiter
+  // counts them. Null without a quote, and on every row banked before. Never backfilled from
+  // Jupiter (it keeps no history); freshGapPct alone can be rebuilt from Pump.fun's minute candles.
+  "freshGapPct",
+  "jup5mPriceChangePct",
+  "jup1hPriceChangePct",
+  "jup5mBuyVolumeUsd",
+  "jup5mSellVolumeUsd",
+  "jup5mBuyVolumeShare",
+  "jup5mVolumeToMcap",
+  "jup5mBuys",
+  "jup5mSells",
+  "jup5mTraders",
+  "jup5mNetBuyers",
+  "jup5mHolderChange",
+  "jup1hHolderChange",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -582,6 +602,19 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   livestreamViewers: "livestream viewers",
   pairAgeMinutes: "pair age",
   sniperTop10WalletPct: "snipers in the top 10",
+  freshGapPct: "move since DexScreener's price",
+  jup5mPriceChangePct: "5m price change (live)",
+  jup1hPriceChangePct: "1h price change (live)",
+  jup5mBuyVolumeUsd: "5m buy volume (live)",
+  jup5mSellVolumeUsd: "5m sell volume (live)",
+  jup5mBuyVolumeShare: "5m buy share of volume (live)",
+  jup5mVolumeToMcap: "5m volume vs market cap (live)",
+  jup5mBuys: "5m buys (live)",
+  jup5mSells: "5m sells (live)",
+  jup5mTraders: "5m traders (live)",
+  jup5mNetBuyers: "5m net buyers (live)",
+  jup5mHolderChange: "5m holder change (live)",
+  jup1hHolderChange: "1h holder change (live)",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -824,6 +857,55 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
       scored.livestream === undefined ? null : scored.livestream.live ? scored.livestream.viewers : 0,
     // A pair time a few seconds ahead of this clock is skew, not a pool from the future.
     pairAgeMinutes: pairAgeMinutes === undefined ? null : Math.max(0, pairAgeMinutes),
+    ...freshQuoteFeatures(scored),
+  };
+}
+
+const FRESH_QUOTE_FEATURES = [
+  "freshGapPct",
+  "jup5mPriceChangePct",
+  "jup1hPriceChangePct",
+  "jup5mBuyVolumeUsd",
+  "jup5mSellVolumeUsd",
+  "jup5mBuyVolumeShare",
+  "jup5mVolumeToMcap",
+  "jup5mBuys",
+  "jup5mSells",
+  "jup5mTraders",
+  "jup5mNetBuyers",
+  "jup5mHolderChange",
+  "jup1hHolderChange",
+] as const satisfies readonly CandidateFeatureName[];
+
+/** The fresh-quote inputs (see CANDIDATE_FEATURE_NAMES), all null without a quote. */
+export function freshQuoteFeatures(
+  scored: Pick<ScoredToken, "priceUsd" | "freshQuote">,
+): Record<(typeof FRESH_QUOTE_FEATURES)[number], number | null> {
+  const q = scored.freshQuote;
+  if (!q) return Object.fromEntries(FRESH_QUOTE_FEATURES.map((k) => [k, null])) as never;
+  const s5 = q.stats5m;
+  const s1h = q.stats1h;
+  const n = (v: number | undefined) => v ?? null;
+  const buyVol = s5?.buyVolumeUsd;
+  const sellVol = s5?.sellVolumeUsd;
+  const totalVol = buyVol !== undefined && sellVol !== undefined ? buyVol + sellVol : undefined;
+  return {
+    freshGapPct: scored.priceUsd > 0 ? (q.priceUsd / scored.priceUsd - 1) * 100 : null,
+    jup5mPriceChangePct: n(s5?.priceChangePct),
+    jup1hPriceChangePct: n(s1h?.priceChangePct),
+    jup5mBuyVolumeUsd: n(buyVol),
+    jup5mSellVolumeUsd: n(sellVol),
+    // No trades is no share, not an even split.
+    jup5mBuyVolumeShare: totalVol !== undefined && totalVol > 0 ? buyVol! / totalVol : null,
+    jup5mVolumeToMcap: totalVol !== undefined && q.marketCapUsd > 0 ? totalVol / q.marketCapUsd : null,
+    // A window Jupiter reports at all with no trades in it has counts of zero; one it left out
+    // entirely is unknown.
+    jup5mBuys: s5 ? (s5.buys ?? 0) : null,
+    jup5mSells: s5 ? (s5.sells ?? 0) : null,
+    jup5mTraders: n(s5?.traders),
+    jup5mNetBuyers: n(s5?.netBuyers),
+    jup5mHolderChange: n(s5?.holderChange),
+    jup1hHolderChange: n(s1h?.holderChange),
   };
 }
 

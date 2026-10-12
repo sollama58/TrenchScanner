@@ -38,10 +38,39 @@
  *   1 - the scan price, with the old pipeline's features (rows from before 2026-10-03),
  *   2 - a "realistic fill": the first price a minute after the alert plus slippage (2026-10-03 to
  *       2026-10-05; re-graded to rule 3 from their recorded aggregates where they could be),
- *   3 - the price the token was detected and alerted at (user decision 2026-10-05).
+ *   3 - the price the token was detected and alerted at (user decision 2026-10-05),
+ *   4 - the same moment, priced from a seconds-old quote (Jupiter) instead of DexScreener's,
+ *       which runs 45-60 s behind the market (user decision 2026-10-12; decisionAnchor below).
+ *       Rule-4 rows count as current under rule 3 until history is re-graded to the fresh price.
  */
 export const LEGACY_LABEL_RULE = 1;
 export const CURRENT_LABEL_RULE = 3;
+/** The rule a row anchored on a fresh quote is graded under - see decisionAnchor. */
+export const FRESH_ANCHOR_LABEL_RULE = 4;
+/**
+ * A fresh quote further than this factor from DexScreener's price is not trusted as the anchor (a
+ * wrong pool or a stale entry on one side, not a move): the row anchors on DexScreener's price.
+ */
+export const FRESH_ANCHOR_MAX_RATIO = 5;
+
+/**
+ * The price a decision is graded from, and the rule that grading follows: the fresh quote read
+ * just before the decision when there is a plausible one, else the scan's (DexScreener) price.
+ */
+export function decisionAnchor(scored: {
+  priceUsd: number;
+  marketCapUsd: number;
+  freshQuote?: { priceUsd: number; marketCapUsd: number };
+}): { priceUsd: number; marketCapUsd: number; labelRule: number } {
+  const q = scored.freshQuote;
+  if (q && q.priceUsd > 0 && q.marketCapUsd > 0 && scored.priceUsd > 0) {
+    const ratio = q.priceUsd / scored.priceUsd;
+    if (ratio <= FRESH_ANCHOR_MAX_RATIO && ratio >= 1 / FRESH_ANCHOR_MAX_RATIO) {
+      return { priceUsd: q.priceUsd, marketCapUsd: q.marketCapUsd, labelRule: FRESH_ANCHOR_LABEL_RULE };
+    }
+  }
+  return { priceUsd: scored.priceUsd, marketCapUsd: scored.marketCapUsd, labelRule: CURRENT_LABEL_RULE };
+}
 
 /** Whether a row's label was graded under the current rule - see CURRENT_LABEL_RULE. */
 export function isCurrentLabelRule(row: { labelRule?: number }): boolean {
