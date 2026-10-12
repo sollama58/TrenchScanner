@@ -382,7 +382,10 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
         return [];
       }),
       [],
-      (coins) => addNewMintsToWatchlist(coins.map((c) => toWatchlistCandidate(c, "pumpfun"))),
+      async (coins) => {
+        await addNewMintsToWatchlist(coins.map((c) => toWatchlistCandidate(c, "pumpfun")));
+        await reviveMovingMints(movingCoins(coins), env);
+      },
     ),
     discoverWithin(
       "dexscreener",
@@ -453,11 +456,14 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   );
   if (launchReads > 0) void flushNarrativeRequests(env);
 
-  // Moving mints jump the watchlist queue: Pump.fun's own market cap for the recently-traded and
-  // king-of-the-hill coins, and the near-band floor for a graduation (a mint that just bonded is
-  // near the band by construction; the refresh below replaces the placeholder with the real cap).
+  // Moving mints jump the watchlist queue: Pump.fun's own market cap for the newest launches, the
+  // recently-traded and the king-of-the-hill coins, and the near-band floor for a graduation (a
+  // mint that just bonded is near the band by construction; the refresh below replaces the
+  // placeholder with the real cap). The newest launches matter most: one DexScreener has not
+  // priced yet sits in probation, which the refresh reaches last and cuts first at its deadline,
+  // so a launch already past the near-band floor on Pump.fun was seen a cycle or more late.
   const moving = [
-    ...movingCoins([...active, ...(koth ? [koth] : [])]),
+    ...movingCoins([...newMints, ...active, ...(koth ? [koth] : [])]),
     ...streamed
       .filter((e) => e.kind === "migrate")
       .map((e) => ({ mintAddress: e.mintAddress, marketCapUsd: env.WATCHLIST_NEAR_BAND_MIN_MCAP_USD })),
@@ -525,7 +531,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     const refreshed = await refreshAndFilterToBand(
       deps.dexScreener,
       tracked.map((t) => t.mintAddress),
-      { mcapMin: env.MCAP_FILTER_MIN, mcapMax: env.MCAP_FILTER_MAX },
+      { mcapMin: env.MCAP_FILTER_MIN, mcapMax: env.MCAP_FILTER_MAX, newestLaunches: newestLaunches(tracked) },
     );
     candidates = refreshed.inBand;
     refreshPartial = refreshed.partial;
@@ -1140,7 +1146,33 @@ export async function selectWatchlist(
         })
       : [];
   const alive = [...nearBand, ...rest];
-  return { tracked: [...alive, ...probation], alive: alive.length };
+  // The refresh prices mints in this order and drops the tail at its deadline. Launches of the last
+  // few minutes go right after the near-band tier rather than last: most launch runs that double do
+  // it in the first two minutes (2026-10-12: 94 of 135 young runners), and at the back of a full
+  // watchlist they were the batches cut.
+  const freshCutoff = now - FRESH_LAUNCH_MINUTES * 60_000;
+  const fresh = probation.filter((t) => t.firstSeenAt.getTime() > freshCutoff);
+  const older = probation.filter((t) => t.firstSeenAt.getTime() <= freshCutoff);
+  return { tracked: [...nearBand, ...fresh, ...rest, ...older], alive: alive.length };
+}
+
+/** How young a never-priced launch is moved up the refresh order - see selectWatchlist. */
+const FRESH_LAUNCH_MINUTES = 3;
+
+/**
+ * The launches of the last FRESH_LAUNCH_MINUTES among the selection, newest first: those
+ * DexScreener has not listed yet are asked of GeckoTerminal (see fallbackIfUnlisted, which keeps one
+ * batch of them). Exported for tests.
+ */
+export function newestLaunches(
+  tracked: { mintAddress: string; firstSeenAt: Date }[],
+  now = Date.now(),
+): string[] {
+  const cutoff = now - FRESH_LAUNCH_MINUTES * 60_000;
+  return tracked
+    .filter((t) => t.firstSeenAt.getTime() > cutoff)
+    .sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime())
+    .map((t) => t.mintAddress);
 }
 
 /** How long a cycle waits on any one discovery source - see discoverWithin. */

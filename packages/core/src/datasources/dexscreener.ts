@@ -93,6 +93,8 @@ export interface DexScreenerClientOptions {
  * DexScreener being blank, not as that many unindexed mints.
  */
 const BLANK_MIN_MINTS = 25;
+/** The longest the fallback is waited on for unpriced or not-yet-listed mints - see fillFromFallback. */
+const FALLBACK_FILL_DEADLINE_MS = 4_000;
 /** How long a blank DexScreener is routed around before it must prove blank again. */
 const BLANK_HOLD_MS = 10 * 60_000;
 
@@ -123,6 +125,14 @@ export interface TokenLookupOptions {
    * blank (see GeckoTerminalClient). DexScreener itself ignores it.
    */
   priority?: boolean;
+  /**
+   * Mints to ask the fallback (GeckoTerminal) about when DexScreener answers with no pair for them:
+   * the scan's newest launches. DexScreener lists a new Pump.fun launch a median ~43 s after it, and
+   * GeckoTerminal ~22 s (both measured 2026-10-12), while most launch runs that double do it in the
+   * first two minutes. At most one fallback batch (30 mints), in the order given. Only read on a
+   * `priority` lookup.
+   */
+  fallbackIfUnlisted?: string[];
   /**
    * The mints asked for may well have no pair at all (a holder's other holdings: airdrops,
    * NFTs, dead coins - see walletValuation). An all-empty answer to such a lookup is then not
@@ -252,7 +262,11 @@ export class DexScreenerClient {
 
     const answered = new Set<string>();
     const results = await this.lookup(unique, concurrency, options, answered);
-    if (results.length > 0 || answered.size < BLANK_MIN_MINTS || options.mayBeUnindexed) return results;
+    if (results.length > 0 || answered.size < BLANK_MIN_MINTS || options.mayBeUnindexed) {
+      return options.priority
+        ? this.fillFromFallback(fallback, results, answered, options, remaining())
+        : results;
+    }
     this.blankUntil = Date.now() + BLANK_HOLD_MS;
     logger.warn("dexscreener answered a lookup with no pairs at all - using geckoterminal", {
       answered: answered.size,
@@ -266,6 +280,47 @@ export class DexScreenerClient {
     });
     if (options.failed) for (const mint of geckoFailed) options.failed.add(mint);
     return gecko;
+  }
+
+  /**
+   * Asks the fallback for what DexScreener answered without a price: pairs quoted in another
+   * token rather than SOL or a dollar (Pump.fun lets a launch pair with any coin - PEPE, ASTER -
+   * and DexScreener reports those with no USD price, market cap or volume, so the scan never saw
+   * them: 4 of 135 young runners on 2026-10-12, each doubling over 8-17 minutes), and the caller's
+   * `fallbackIfUnlisted` mints DexScreener has no pair for yet. One batch, inside what is left of the
+   * lookup's deadline; when the fallback can't answer, DexScreener's answer stands.
+   */
+  private async fillFromFallback(
+    fallback: GeckoTerminalClient,
+    results: CandidateToken[],
+    answered: Set<string>,
+    options: TokenLookupOptions,
+    remainingMs: number | undefined,
+  ): Promise<CandidateToken[]> {
+    const listed = new Set(results.map((t) => t.mintAddress));
+    const ask = [
+      ...results.filter((t) => t.priceUsd <= 0 && t.marketCapUsd <= 0).map((t) => t.mintAddress),
+      ...(options.fallbackIfUnlisted ?? []).filter((m) => answered.has(m) && !listed.has(m)),
+    ].slice(0, BATCH_SIZE);
+    if (ask.length === 0 || (remainingMs !== undefined && remainingMs <= 0)) return results;
+    const priced = await fallback
+      .getTokensByAddresses(ask, {
+        priority: true,
+        timeoutMs: options.timeoutMs,
+        retries: 0,
+        deadlineMs: Math.min(remainingMs ?? FALLBACK_FILL_DEADLINE_MS, FALLBACK_FILL_DEADLINE_MS),
+        seenAt: options.seenAt,
+      })
+      .catch((err: unknown) => {
+        logger.warn("fallback lookup for unpriced mints failed", { error: String(err) });
+        return [] as CandidateToken[];
+      });
+    if (priced.length === 0) return results;
+    // Other jobs reading these mints in the next few seconds get the priced answer too.
+    this.rememberQuotes(priced, new Date());
+    const byMint = new Map(results.map((t) => [t.mintAddress, t]));
+    for (const t of priced) byMint.set(t.mintAddress, { ...t });
+    return [...byMint.values()];
   }
 
   /**
@@ -383,7 +438,15 @@ export class DexScreenerClient {
     options: TokenLookupOptions,
     answeredOut?: Set<string>,
   ): Promise<CandidateToken[]> {
-    const { deadlineMs, seenAt, failed, priority: _priority, fresh, ...fetchOptions } = options;
+    const {
+      deadlineMs,
+      seenAt,
+      failed,
+      priority: _priority,
+      fresh,
+      fallbackIfUnlisted: _fallbackIfUnlisted,
+      ...fetchOptions
+    } = options;
 
     // Mints another job priced moments ago are answered from that reading, at its own time.
     const results: CandidateToken[] = [];

@@ -593,3 +593,85 @@ describe("getTokensByAddresses quote cache", () => {
     expect(second!.marketCapUsd).toBe(50_000);
   });
 });
+
+describe("getTokensByAddresses: the fallback prices what DexScreener can't", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const SOL = { address: "So11111111111111111111111111111111111111112" };
+  const gecko = (mints: string[]) => ({
+    data: mints.map((mint) => ({
+      attributes: { address: mint, symbol: "G", fdv_usd: "12000", market_cap_usd: null },
+      relationships: { top_pools: { data: [{ id: `solana_pool_${mint}` }] } },
+    })),
+    included: mints.map((mint) => ({
+      id: `solana_pool_${mint}`,
+      attributes: { base_token_price_usd: "0.000012", volume_usd: { m5: "900" } },
+      relationships: { base_token: { data: { id: `solana_${mint}` } }, dex: { data: { id: "pump-fun" } } },
+    })),
+  });
+
+  function stub(geckoAsked: string[][]) {
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = url.split("/").pop()!.split("?")[0]!.split(",");
+      if (url.includes("geckoterminal")) {
+        geckoAsked.push(list);
+        return Promise.resolve(new Response(JSON.stringify(gecko(list))));
+      }
+      const pairs = [
+        // A launch paired with another coin: DexScreener gives no USD figures at all.
+        {
+          chainId: "solana",
+          dexId: "pumpfun",
+          baseToken: { address: "pepeQuoted" },
+          quoteToken: { address: "PEPEmint" },
+          priceNative: "0.0004",
+        },
+        {
+          chainId: "solana",
+          dexId: "pumpfun",
+          baseToken: { address: "listed" },
+          quoteToken: SOL,
+          marketCap: 9_000,
+        },
+      ].filter((p) => list.includes(p.baseToken.address));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+  }
+  const client = () =>
+    new DexScreenerClient({
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+
+  it("asks GeckoTerminal for a pair with no USD price and for a new launch DexScreener hasn't listed", async () => {
+    const asked: string[][] = [];
+    stub(asked);
+    const tokens = await client().getTokensByAddresses(["listed", "pepeQuoted", "newLaunch", "oldDead"], 5, {
+      retries: 0,
+      priority: true,
+      fallbackIfUnlisted: ["newLaunch"],
+    });
+    expect(asked).toEqual([["pepeQuoted", "newLaunch"]]);
+    const by = new Map(tokens.map((t) => [t.mintAddress, t]));
+    expect(by.get("pepeQuoted")).toMatchObject({
+      marketCapUsd: 12_000,
+      priceUsd: 0.000012,
+      volume5mUsd: 900,
+    });
+    expect(by.get("newLaunch")).toMatchObject({ marketCapUsd: 12_000 });
+    expect(by.get("listed")).toMatchObject({ marketCapUsd: 9_000 });
+    expect(by.has("oldDead")).toBe(false);
+  });
+
+  it("leaves other jobs' lookups to DexScreener alone", async () => {
+    const asked: string[][] = [];
+    stub(asked);
+    const tokens = await client().getTokensByAddresses(["listed", "pepeQuoted"], 5, {
+      retries: 0,
+      fallbackIfUnlisted: ["newLaunch"],
+    });
+    expect(asked).toEqual([]);
+    expect(tokens.find((t) => t.mintAddress === "pepeQuoted")?.marketCapUsd).toBe(0);
+  });
+});
