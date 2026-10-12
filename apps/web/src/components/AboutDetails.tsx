@@ -58,8 +58,15 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             <span className="num">25%</span>
             <span>reach 10x within 1 hour</span>
           </div>
+          <div>
+            <span className="num">75%</span>
+            <span>of all runners (tokens that double) caught</span>
+          </div>
         </div>
-        <p className="fp-note">Targets for the share of alerts that hit each mark.</p>
+        <p className="fp-note">
+          Targets for the share of alerts that hit each mark, and for the share of all runners the models
+          call.
+        </p>
       </section>
 
       <section id="fp-scan">

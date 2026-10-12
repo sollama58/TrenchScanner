@@ -104,11 +104,11 @@ export const COMPOSITE_WEIGHTS = {
   catchRate: 0.15,
 } as const;
 /**
- * The catch-rate target: half the runners the exam saw called at a winning moment. A single model
- * caught 30-40% on the 10-08..10-11 replay (notes/feed-slowdown-2026-10-12.md), the whole field
- * about 80%.
+ * The catch-rate target: three in four of the runners the exam saw called at a winning moment
+ * (user decision 2026-10-12, was half). A single model caught 30-40% on the 10-08..10-11 replay
+ * (notes/feed-slowdown-2026-10-12.md), the whole field about 80%.
  */
-export const CATCH_TARGET_RATE = 0.5;
+export const CATCH_TARGET_RATE = 0.75;
 /** The 10x tier's target rate: 10x within an hour on one call in four (user decision 2026-10-06, was 10%). */
 export const TEN_X_TARGET_RATE = 0.25;
 /**
