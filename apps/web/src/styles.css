@@ -2848,6 +2848,140 @@ button.small-btn {
   margin-top: 4px;
   align-self: flex-start;
 }
+/* The Live tab's model dropdown: each model's last-24h 2x rate and average return */
+.checklist-menu:has(.mp-row) {
+  min-width: 400px;
+  max-height: 480px;
+}
+.mp-head,
+.mp-row {
+  grid-template-columns: auto minmax(0, 1fr) 54px 78px;
+}
+.mp-head {
+  display: grid;
+  gap: 10px;
+  padding: 2px 8px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mp-head span:first-child {
+  grid-column: 1 / span 2;
+  padding-left: 26px;
+}
+.mp-head span:not(:first-child) {
+  text-align: right;
+  white-space: nowrap;
+}
+.checklist-row.mp-row {
+  gap: 10px;
+  padding: 8px;
+  transition: background 0.12s ease;
+}
+.mp-main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mp-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp-rank {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.mp-rank.top {
+  background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+  color: #fff;
+}
+.mp-key {
+  display: inline-grid;
+  vertical-align: -3px;
+  width: 15px;
+  height: 15px;
+  font-size: 9.5px;
+  border-radius: 5px;
+}
+.mp-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.mp-badge.best {
+  color: var(--warn-ink);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.mp-bar {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.mp-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--axis);
+  transition: width 0.3s ease;
+}
+.mp-fill.top {
+  background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+}
+.mp-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+.mp-rate {
+  text-align: right;
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.mp-ret {
+  text-align: right;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.mp-ret.up {
+  color: var(--good-ink);
+}
+.mp-ret.down {
+  color: var(--bad-ink);
+}
+.mp-row.unranked .mp-name,
+.mp-row.unranked .mp-rate {
+  color: var(--ink-2);
+}
+.mp-foot {
+  margin: 6px 8px 2px;
+  line-height: 1.45;
+}
 .in-feed {
   display: inline-flex;
   align-items: center;
@@ -2875,10 +3009,18 @@ button.small-btn {
   .checklist {
     position: static;
   }
-  .checklist-menu {
+  .checklist-menu,
+  .checklist-menu:has(.mp-row) {
     left: 0;
     right: 0;
     min-width: 0;
+  }
+  .mp-head,
+  .mp-row {
+    grid-template-columns: auto minmax(0, 1fr) 44px 64px;
+  }
+  .mp-row .mp-word {
+    display: none;
   }
 }
 
