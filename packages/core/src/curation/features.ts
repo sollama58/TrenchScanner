@@ -16,6 +16,7 @@ import {
   NARRATIVE_FEATURES_V4,
   NARRATIVE_FEATURES_V5,
   NARRATIVE_FEATURES_V6,
+  NARRATIVE_FEATURES_V7,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -198,6 +199,11 @@ export const CANDIDATE_FEATURE_NAMES = [
   "firstBuyersSupplyPct",
   "launchBundledBuyers",
   "devBuySupplyPct",
+  // Added 2026-10-12 (features audit, notes/audit-2026-10-12/features.md), TokenSage rules 0.30.0
+  // (curation/narrativeFeatures.ts): the linked X post's likes, reposts, replies and views, views
+  // per minute it has been up, and how old the counts are. Null without a read post, and on every
+  // row banked before. Never backfilled.
+  ...NARRATIVE_FEATURES_V7,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -273,6 +279,11 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // models learned it as youth. ageMinutes and minutesSinceFirstInBand carry youth without the
   // artefact; it stays recorded as the gauge of how far the other path inputs can be trusted.
   "pathObservedMinutes",
+  // TokenSage's X engagement counts (rules 0.30.0, added 2026-10-12): recorded so they can be
+  // judged, not yet read. On their first two hours 100 reads carried them (median 0 likes, 44
+  // views); bring them in by removing them here once a few days of decision rows show they
+  // separate runners (notes/audit-2026-10-12/features.md).
+  ...NARRATIVE_FEATURES_V7,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -806,7 +817,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     buys5m,
     sells5m,
     buyRatio5m,
-    ...narrativeFeatureValues(scored.narrative),
+    ...narrativeFeatureValues(scored.narrative, now),
     livestreamLive: scored.livestream === undefined ? null : scored.livestream.live ? 1 : 0,
     // Nobody watches a stream that isn't on; a live stream whose count the feed left out is unknown.
     livestreamViewers:

@@ -212,6 +212,23 @@ export const NARRATIVE_FEATURES_V6 = [
   "nsPairPumpfun",
 ] as const;
 
+/**
+ * The seventh wave (TokenSage rules 0.30.0, 2026-10-12): how much attention the linked X post has
+ * drawn - its likes, reposts, replies and views as TokenSage counted them, views per minute the
+ * post has been up, and how old those counts are at the decision (our reads are not refreshed,
+ * so a count taken at the first read stays the count the later decisions see). Null when the
+ * post was not read, and on older reads. Recorded only for now: retired from the learners until
+ * enough decision rows carry them to judge (features.ts RETIRED_LEARNER_INPUTS).
+ */
+export const NARRATIVE_FEATURES_V7 = [
+  "nsXLikes",
+  "nsXReposts",
+  "nsXReplies",
+  "nsXViews",
+  "nsXViewsPerMin",
+  "nsXEngagementAgeMin",
+] as const;
+
 type LogoGroupFeature = (typeof NARRATIVE_FEATURES_V6)[number] &
   ("nsLogoAnimal" | "nsLogoMeme" | "nsLogoPerson" | "nsLogoRobot" | "nsLogoFood" | "nsLogoText");
 
@@ -257,7 +274,8 @@ export type NarrativeFeatureName =
   | (typeof NARRATIVE_FEATURES_V3)[number]
   | (typeof NARRATIVE_FEATURES_V4)[number]
   | (typeof NARRATIVE_FEATURES_V5)[number]
-  | (typeof NARRATIVE_FEATURES_V6)[number];
+  | (typeof NARRATIVE_FEATURES_V6)[number]
+  | (typeof NARRATIVE_FEATURES_V7)[number];
 
 /** Every narrative feature, in the order the waves were added. */
 export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
@@ -267,6 +285,7 @@ export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
   ...NARRATIVE_FEATURES_V4,
   ...NARRATIVE_FEATURES_V5,
   ...NARRATIVE_FEATURES_V6,
+  ...NARRATIVE_FEATURES_V7,
 ];
 
 /** Second-wave features that are counts, ranks or ages: everything else is a 0/1 bit or a 0-1 share. */
@@ -287,6 +306,11 @@ const NARRATIVE_V2_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<Narrative
   "nsXReuseRank",
 ]);
 
+/** Seventh-wave features: counts and rates with tails of several orders of magnitude. */
+const NARRATIVE_V7_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<NarrativeFeatureName>(
+  NARRATIVE_FEATURES_V7,
+);
+
 /**
  * First-wave features that are not small: the post's age at launch (minutes, up to years) and how
  * many coins link the same post (up to hundreds, like its twin nsXReuseRank).
@@ -298,7 +322,10 @@ const NARRATIVE_V1_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<Narrative
 
 /** Narrative features on a raw scale under the log transform: 0/1 flags, 0-1 confidences, small counts. */
 export const NARRATIVE_UNTRANSFORMED_FEATURES: readonly NarrativeFeatureName[] =
-  ALL_NARRATIVE_FEATURES.filter((name) => !NARRATIVE_V1_SCALED.has(name) && !NARRATIVE_V2_SCALED.has(name));
+  ALL_NARRATIVE_FEATURES.filter(
+    (name) =>
+      !NARRATIVE_V1_SCALED.has(name) && !NARRATIVE_V2_SCALED.has(name) && !NARRATIVE_V7_SCALED.has(name),
+  );
 
 /** The narrative inputs that are 0/1 bits, for anything that phrases a threshold as yes/no. */
 export const NARRATIVE_BIT_FEATURES: readonly NarrativeFeatureName[] = [
@@ -429,6 +456,12 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsLogoMatchesTheme: "logo matches the theme",
   nsPairToken: "paired with another coin",
   nsPairPumpfun: "paired with a pump.fun coin",
+  nsXLikes: "X post likes",
+  nsXReposts: "X post reposts",
+  nsXReplies: "X post replies",
+  nsXViews: "X post views",
+  nsXViewsPerMin: "X post views per minute",
+  nsXEngagementAgeMin: "age of the X post counts",
 };
 
 /**
@@ -508,6 +541,16 @@ export interface NarrativeRead {
   /** Rules 0.25.0+, full reads: the logo's best visual class and its score; null without one. */
   logoLabel?: string | null;
   logoScore?: number | null;
+  /**
+   * Rules 0.30.0+: the linked post's likes, reposts, replies and views, when TokenSage counted
+   * them, and when the post went up. Null when the post was not read and on older reads.
+   */
+  xLikes?: number | null;
+  xReposts?: number | null;
+  xReplies?: number | null;
+  xViews?: number | null;
+  xEngagementAt?: Date | null;
+  xPostedAt?: Date | null;
 }
 
 /** The TokenNarrative columns a read is built from (categories is a Json column). */
@@ -564,6 +607,12 @@ export interface NarrativeRow {
   pairPumpfun?: boolean | null;
   logoLabel?: string | null;
   logoScore?: number | null;
+  xLikes?: number | null;
+  xReposts?: number | null;
+  xReplies?: number | null;
+  xViews?: number | null;
+  xEngagementAt?: Date | null;
+  xPostedAt?: Date | null;
 }
 
 /** The columns narrativeReadFromRow needs, for a Prisma `select`. */
@@ -620,6 +669,12 @@ export const NARRATIVE_ROW_SELECT = {
   pairPumpfun: true,
   logoLabel: true,
   logoScore: true,
+  xLikes: true,
+  xReposts: true,
+  xReplies: true,
+  xViews: true,
+  xEngagementAt: true,
+  xPostedAt: true,
 } as const;
 
 /**
@@ -691,6 +746,12 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     pairPumpfun: row.pairPumpfun ?? null,
     logoLabel: row.logoLabel ?? null,
     logoScore: row.logoScore ?? null,
+    xLikes: row.xLikes ?? null,
+    xReposts: row.xReposts ?? null,
+    xReplies: row.xReplies ?? null,
+    xViews: row.xViews ?? null,
+    xEngagementAt: row.xEngagementAt ?? null,
+    xPostedAt: row.xPostedAt ?? null,
   };
 }
 
@@ -811,6 +872,7 @@ const bit = (v: boolean) => (v ? 1 : 0);
 /** The ns* feature values for a read; every one null when there is no read. */
 export function narrativeFeatureValues(
   read: NarrativeRead | undefined,
+  now: Date = new Date(),
 ): Record<NarrativeFeatureName, number | null> {
   if (!read) {
     return Object.fromEntries(ALL_NARRATIVE_FEATURES.map((k) => [k, null])) as Record<
@@ -890,6 +952,37 @@ export function narrativeFeatureValues(
     nsXCredibility23: xRead && gentleCredibility ? read.xCredibility : null,
     ...logoFeatureValues(read),
     ...pairFeatureValues(read),
+    ...engagementFeatureValues(read, xRead, now),
+  };
+}
+
+/** Views per minute need the post up at least this long: a post seconds old reads any count as a flood. */
+const VIEWS_PER_MIN_MIN_AGE_MIN = 1;
+
+function engagementFeatureValues(
+  read: NarrativeRead,
+  xRead: boolean,
+  now: Date,
+): Record<(typeof NARRATIVE_FEATURES_V7)[number], number | null> {
+  const countedAt = read.xEngagementAt ?? null;
+  if (!xRead || countedAt === null) {
+    return Object.fromEntries(NARRATIVE_FEATURES_V7.map((k) => [k, null])) as Record<
+      (typeof NARRATIVE_FEATURES_V7)[number],
+      number | null
+    >;
+  }
+  const views = read.xViews ?? null;
+  const postedAt = read.xPostedAt ?? null;
+  const upMin = postedAt === null ? null : (countedAt.getTime() - postedAt.getTime()) / 60_000;
+  return {
+    nsXLikes: read.xLikes ?? null,
+    nsXReposts: read.xReposts ?? null,
+    nsXReplies: read.xReplies ?? null,
+    nsXViews: views,
+    nsXViewsPerMin:
+      views === null || upMin === null ? null : views / Math.max(VIEWS_PER_MIN_MIN_AGE_MIN, upMin),
+    // A count stamped a few seconds ahead of this clock is skew, not a count from the future.
+    nsXEngagementAgeMin: Math.max(0, (now.getTime() - countedAt.getTime()) / 60_000),
   };
 }
 

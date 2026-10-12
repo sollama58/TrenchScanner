@@ -100,6 +100,15 @@ const MINUTE = 60_000;
 const PRICE_AGO_SLACK_MS = MIN_TICK_SPACING_MS / 2;
 
 /**
+ * How far before "`minutes` ago" the reference tick may sit and still stand for it: a fifth of the
+ * window, and never under 45 s (one missed 30-second scan cycle). Past that the tape has a gap
+ * there and the return is unknown, not the move since whenever the mint was last seen.
+ */
+export function priceAgoTolerance(minutes: number): number {
+  return Math.max(0.75 * MINUTE, 0.2 * minutes * MINUTE);
+}
+
+/**
  * The tape: one short price/holder series per mint, fed by the scan. Memory is bounded by
  * TAPE_MS per mint and MAX_MINTS mints, so a worker that runs for weeks holds the same few
  * megabytes it held after its first hour.
@@ -156,6 +165,10 @@ export class PricePathBook {
     // of one tick's spacing, provided the tape reaches back that far. The slack used to be half a
     // minute, which on the scan's 30-second cadence let the tick from the previous cycle stand
     // in for "a minute ago": pathRet1mPct was a 30-second return, and null only on a one-tick tape.
+    // The tick must also sit near that moment: a mint that left the scan and came back keeps its
+    // old ticks (the tape is pruned only after two hours unseen), so without the bound a coin
+    // revived after 40 minutes read its 40-minute move as the 5, 15 and 30-minute returns, and a
+    // gap of a cycle or two stretched the 1-minute return over three (features audit 2026-10-12).
     const priceAgo = (minutes: number): number | null => {
       const target = now.at - minutes * MINUTE;
       if (first.at > target + PRICE_AGO_SLACK_MS) return null;
@@ -164,7 +177,8 @@ export class PricePathBook {
         if (tick.at <= target + PRICE_AGO_SLACK_MS) best = tick;
         else break;
       }
-      return best ? best.priceUsd : null;
+      if (!best || target - best.at > priceAgoTolerance(minutes)) return null;
+      return best.priceUsd;
     };
     const ret = (minutes: number): number | null => {
       const p = priceAgo(minutes);
@@ -205,6 +219,9 @@ export class PricePathBook {
     for (const tick of tape) {
       if (tick.at <= from10 + MINUTE / 2 && tick.holders !== null) holdersThen = tick;
     }
+    // Same bound as the returns: a baseline from before a gap would spread an hour's growth over
+    // what reads as ten minutes.
+    if (holdersThen && from10 - holdersThen.at > priceAgoTolerance(10)) holdersThen = null;
     const holderSlope =
       holdersThen && now.holders !== null && now.at > holdersThen.at
         ? (now.holders - holdersThen.holders!) / ((now.at - holdersThen.at) / MINUTE)

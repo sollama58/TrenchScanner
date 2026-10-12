@@ -5,6 +5,7 @@ import {
   NARRATIVE_FEATURES_V3,
   NARRATIVE_FEATURES_V4,
   NARRATIVE_FEATURES_V6,
+  NARRATIVE_FEATURES_V7,
   narrativeFeatureValues,
   narrativeIsLateCopy,
   narrativeReferentNamed,
@@ -355,6 +356,51 @@ describe("round trip through a stored feature vector", () => {
       nsXCredibility: 0.032,
       nsXCredibility23: null,
     });
+  });
+
+  it("reads the X post's engagement (rules 0.30.0) as of the decision, and nothing without a read post", () => {
+    const now = new Date("2026-10-12T05:10:00Z");
+    const none = narrativeFeatureValues(narrativeReadFromRow(row()), now);
+    for (const name of NARRATIVE_FEATURES_V7) expect(none[name]).toBeNull();
+    const read = narrativeReadFromRow(
+      row({
+        depth: "full",
+        xRelation: "launch_announcement",
+        xVerdict: "about_this_coin",
+        xLikes: 40,
+        xReposts: 5,
+        xReplies: 2,
+        xViews: 3_000,
+        xPostedAt: new Date("2026-10-12T04:50:00Z"),
+        xEngagementAt: new Date("2026-10-12T05:00:00Z"),
+      }),
+    );
+    expect(narrativeFeatureValues(read, now)).toMatchObject({
+      nsXLikes: 40,
+      nsXReposts: 5,
+      nsXReplies: 2,
+      nsXViews: 3_000,
+      // 3,000 views over the 10 minutes between the post and the count.
+      nsXViewsPerMin: 300,
+      // Counted 10 minutes before the decision.
+      nsXEngagementAgeMin: 10,
+    });
+    // A post seconds old at the count is rated over a minute, not over the seconds.
+    const fresh = narrativeReadFromRow(
+      row({
+        depth: "full",
+        xRelation: "launch_announcement",
+        xViews: 600,
+        xPostedAt: new Date("2026-10-12T04:59:50Z"),
+        xEngagementAt: new Date("2026-10-12T05:00:00Z"),
+      }),
+    );
+    expect(narrativeFeatureValues(fresh, now).nsXViewsPerMin).toBe(600);
+    // Engagement on a post the read could not open is not a reading.
+    const unread = narrativeReadFromRow(
+      row({ depth: "full", xViews: 3_000, xEngagementAt: new Date("2026-10-12T05:00:00Z") }),
+    );
+    expect(narrativeFeatureValues(unread, now).nsXViews).toBeNull();
   });
 
   it("reads the logo (rules 0.25.0) and the pair (rules 0.27.0), and nothing when the read doesn't say", () => {

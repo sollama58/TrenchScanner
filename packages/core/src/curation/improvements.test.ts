@@ -139,6 +139,32 @@ describe("PricePathBook", () => {
     expect(jitter.features("j").pathRet1mPct!).toBeCloseTo(((1.5 - 1.2) / 1.2) * 100, 6);
   });
 
+  it("leaves a return unknown when the tape has a gap where its reference should be", () => {
+    // Seen at minute 0 and 1, gone for 39 minutes (out of the scan), back at minute 40 and 41.
+    const book = new PricePathBook();
+    book.observe("g", new Date(T0), 1, 100);
+    book.observe("g", new Date(T0 + MIN), 1, 100);
+    book.observe("g", new Date(T0 + 40 * MIN), 1.25, 400);
+    book.observe("g", new Date(T0 + 41 * MIN), 1.3, 410);
+    const f = book.features("g");
+    // The 41-minute move is not the 5, 15 or 30-minute return, nor 310 holders "in ten minutes".
+    expect(f.pathRet5mPct).toBeNull();
+    expect(f.pathRet15mPct).toBeNull();
+    expect(f.pathRet30mPct).toBeNull();
+    expect(f.pathHolderSlope10m).toBeNull();
+    // The minute just observed is still a minute.
+    expect(f.pathRet1mPct!).toBeCloseTo(4, 6);
+    // One missed cycle is tolerated: a 1-minute reference 90 s back still counts, 2 minutes doesn't.
+    const missed = new PricePathBook();
+    missed.observe("m", new Date(T0), 1);
+    missed.observe("m", new Date(T0 + 90_000), 1.2);
+    expect(missed.features("m").pathRet1mPct!).toBeCloseTo(20, 6);
+    const gap = new PricePathBook();
+    gap.observe("m", new Date(T0), 1);
+    gap.observe("m", new Date(T0 + 120_000), 1.2);
+    expect(gap.features("m").pathRet1mPct).toBeNull();
+  });
+
   it("forgets mints that stopped being observed", () => {
     const book = new PricePathBook();
     book.observe("a", new Date(T0), 1);

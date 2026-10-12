@@ -1245,6 +1245,15 @@ model TokenNarrative {
   xAuthorFollowers      Int?
   xPredatesTokenS       Int?
   xReuseCount           Int?
+  /// TokenSage rules 0.30.0+ (x.engagement, x.created_at): the linked post's likes, reposts,
+  /// replies and views as last counted, when they were counted (engagement.as_of), and when the
+  /// post went up. Null when the post was not read, and on older reads.
+  xLikes                Int?
+  xReposts              Int?
+  xReplies              Int?
+  xViews                Int?
+  xEngagementAt         DateTime?
+  xPostedAt             DateTime?
   /// The name matched a Wikipedia/news spike (trend.matched, full depth); null until read.
   trendMatched          Boolean?
   /// TokenSage rules 0.15.0+: which copy of what this coin is (lineage.kind "original",
