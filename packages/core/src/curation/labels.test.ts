@@ -3,6 +3,7 @@ import {
   applyPriceTick,
   computeOutcomeLabels,
   CURRENT_LABEL_RULE,
+  DEXSCREENER_ANCHOR_LABEL_RULE,
   decisionAnchor,
   freshQuoteMcapUsd,
   FRESH_ANCHOR_LABEL_RULE,
@@ -388,7 +389,7 @@ describe("the 24-hour run peak", () => {
 describe("decisionAnchor", () => {
   const fresh = (priceUsd: number) => ({ priceUsd, marketCapUsd: priceUsd * 1e9, fetchedAt: new Date() });
 
-  it("anchors on the fresh quote under rule 4, which still counts as current", () => {
+  it("anchors on the fresh quote under rule 4, the current rule", () => {
     const a = decisionAnchor({ priceUsd: 0.0001, marketCapUsd: 100_000, freshQuote: fresh(0.00014) });
     expect(a).toMatchObject({ priceUsd: 0.00014, labelRule: FRESH_ANCHOR_LABEL_RULE });
     expect(a.marketCapUsd).toBeCloseTo(140_000, 6);
@@ -408,7 +409,9 @@ describe("decisionAnchor", () => {
 
   it("falls back to the scan price without a quote, or with one too far off to be a move", () => {
     const scan = { priceUsd: 0.0001, marketCapUsd: 100_000 };
-    const expected = { ...scan, labelRule: CURRENT_LABEL_RULE };
+    const expected = { ...scan, labelRule: DEXSCREENER_ANCHOR_LABEL_RULE };
+    expect(CURRENT_LABEL_RULE).toBe(FRESH_ANCHOR_LABEL_RULE);
+    expect(isCurrentLabelRule(expected)).toBe(false);
     expect(decisionAnchor(scan)).toEqual(expected);
     expect(decisionAnchor({ ...scan, freshQuote: fresh(0.0006) })).toEqual(expected);
     expect(decisionAnchor({ ...scan, freshQuote: fresh(0.00001) })).toEqual(expected);

@@ -1,7 +1,7 @@
 import { Prisma, prisma } from "../db.js";
 import type { CuratorRecipe } from "./contestants.js";
 import type { Lane } from "./evolution.js";
-import { CURRENT_LABEL_RULE, LABEL_LOG2_CAP } from "./labels.js";
+import { REPORTED_LABEL_RULE, LABEL_LOG2_CAP } from "./labels.js";
 import { liveCatch, marketLift, type CallRecord, type LiveCatch, type MarketLift } from "./leaderboard.js";
 import { walletSafetyCutsSql } from "../scoring/rugScreen.js";
 
@@ -229,7 +229,7 @@ export async function liveCatchRates(
       WHERE "sampleKind" = 'event'
         AND "anchorAt" >= ${since}
         AND "hit2xIn1h" AND NOT COALESCE("disqualified", false)
-        AND "labelRule" >= ${CURRENT_LABEL_RULE}
+        AND "labelRule" >= ${REPORTED_LABEL_RULE}
         AND ${walletSafetyCutsSql()}
       GROUP BY 1`,
     prisma.$queryRaw<{ model: string; token: string; at: Date }[]>`
@@ -256,7 +256,7 @@ export async function liveCatchRates(
 /**
  * Each model's live lift over the market in the same UTC hours (see marketLift), over the same
  * calls liveCallRecords counts. The market is every graded decision moment past the safety
- * screen, graded under the current label rule, as on the learning chart.
+ * screen, graded under a reported label rule (REPORTED_LABEL_RULE), as on the learning chart.
  */
 export async function liveMarketLift(
   models: readonly string[],
@@ -299,7 +299,7 @@ export async function liveMarketLift(
       WHERE "sampleKind" = 'event'
         AND "anchorAt" >= ${earliest}
         AND "hit2xIn1h" IS NOT NULL
-        AND "labelRule" >= ${CURRENT_LABEL_RULE}
+        AND "labelRule" >= ${REPORTED_LABEL_RULE}
         AND ${walletSafetyCutsSql()}
       GROUP BY 1`,
   ]);
