@@ -2,7 +2,13 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
 import { currentMarketCap } from "./matches.js";
-import { curatedAlertInclude, serializeCuratedAlert, withLatestSnapshots } from "../curatedFeed.js";
+import {
+  CURATED_MATCH_LINK_WINDOW_MS,
+  curatedAlertInclude,
+  groupSameTokenCalls,
+  serializeCuratedAlert,
+  withLatestSnapshots,
+} from "../curatedFeed.js";
 import { buildLeaderboard, contestState, modelLabel } from "../contest.js";
 import { buildModelInsights } from "../modelInsights.js";
 import { leaderboardDaysSchema, modelRunsRoute, reportDaysSchema, type ReportCaches } from "./curated.js";
@@ -13,8 +19,9 @@ import { lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 import { loadMarketWeather } from "../marketWeather.js";
 
 /**
- * The guest feed: what a visitor who hasn't connected a wallet sees - the default model's calls
- * (the leaderboard champion, the same ledger a new subscriber follows), read-only.
+ * The guest feed: what a visitor who hasn't connected a wallet sees - the default feed's calls (the
+ * top models by 24h 2x hit rate, the same ledgers a new subscriber follows), read-only. A token
+ * several of them called is one card, as on the paid feed.
  *
  * Deliberately its own route rather than a loosened gate on /curated or /matches: those stay
  * behind authenticateSubscriber, and this one only ever answers the one shared ledger, with no
@@ -54,27 +61,55 @@ const querySchema = z.object({
   page: z.coerce.number().int().min(1).max(GUEST_MAX_PAGES).default(1),
 });
 
-type GuestPage = { rows: Awaited<ReturnType<typeof loadRows>>; hasMore: boolean };
+type GuestPage = { rows: Awaited<ReturnType<typeof loadGuestRows>>; hasMore: boolean };
 
-async function loadRows(model: string, page: number) {
+/** Just what grouping needs; only the page's lead calls are then loaded in full. */
+const CALL_SELECT = {
+  id: true,
+  tokenId: true,
+  createdAt: true,
+  model: true,
+  modelName: true,
+  confidence: true,
+  tier: true,
+  calibratedPct: true,
+} as const;
+
+export async function loadGuestRows(models: readonly string[], page: number) {
   const cutoff = new Date(Date.now() - GUEST_DELAY_MINUTES * 60_000);
-  // One extra row says whether an older page exists, without a count over the whole ledger.
-  const rows = await prisma.curatedAlert.findMany({
-    where: { model, createdAt: { lte: cutoff } },
+  // Grouping only looks back from each group's newest call, so the newest (pages x page size x
+  // models) calls hold every group up to the last page whole (see groupSameTokenCalls), plus one
+  // more group to say whether an older page exists.
+  const calls = await prisma.curatedAlert.findMany({
+    where: { model: { in: [...models] }, createdAt: { lte: cutoff } },
     orderBy: { createdAt: "desc" },
-    skip: (page - 1) * PAGE_SIZE,
-    take: PAGE_SIZE + 1,
+    take: (page * PAGE_SIZE + 1) * models.length,
+    select: CALL_SELECT,
+  });
+  const groups = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).slice(
+    (page - 1) * PAGE_SIZE,
+    page * PAGE_SIZE + 1,
+  );
+  if (groups.length === 0) return [];
+  const leads = await prisma.curatedAlert.findMany({
+    where: { id: { in: groups.map((g) => g.lead.id) } },
     include: curatedAlertInclude,
   });
-  return withLatestSnapshots(rows);
+  const byId = new Map((await withLatestSnapshots(leads)).map((a) => [a.id, a]));
+  // In feed order: a card sits at its newest call and shows its first.
+  return groups.flatMap((g) => {
+    const alert = byId.get(g.lead.id);
+    return alert ? [{ alert, calledBy: g.calls }] : [];
+  });
 }
 
 export async function registerGuestRoutes(
   app: FastifyInstance,
   opts: { env: Env; viewStamps: ViewStampBuffer; reports: ReportCaches },
 ) {
-  // Keyed by model and page; bounded by GUEST_MAX_PAGES per model, and the model comes from the
-  // roster, never the request. A new alert needs no invalidation: guests only see it once its
+  // Keyed by the default models and page; bounded by GUEST_MAX_PAGES per set, and the models come
+  // from the roster, never the request. Entries for a set that is no longer the default are dropped
+  // when the set changes. A new alert needs no invalidation: guests only see it once its
   // delay has run out, and the short TTL picks it up then.
   const pageCache = new Map<string, SharedCache<GuestPage>>();
 
@@ -85,20 +120,24 @@ export async function registerGuestRoutes(
     }
     const { page } = parsed.data;
     const state = await contestState(opts.env);
-    const model = state.defaultModel;
+    const models = state.defaultModels;
 
-    const key = `${model}:${page}`;
+    const key = `${models.join(",")}:${page}`;
     let cache = pageCache.get(key);
     if (!cache) {
+      for (const k of pageCache.keys()) if (!k.startsWith(`${models.join(",")}:`)) pageCache.delete(k);
       cache = new SharedCache<GuestPage>(FEED_CACHE_TTL_MS);
       pageCache.set(key, cache);
     }
     const { rows, hasMore } = await cache.get(async () => {
-      const all = await loadRows(model, page);
+      const all = await loadGuestRows(models, page);
       return { rows: all.slice(0, PAGE_SIZE), hasMore: all.length > PAGE_SIZE && page < GUEST_MAX_PAGES };
     });
 
-    const matches = rows.map((alert) => serializeCuratedAlert(alert, currentMarketCap));
+    const matches = rows.map(({ alert, calledBy }) => {
+      const card = serializeCuratedAlert(alert, currentMarketCap);
+      return { ...card, curated: { ...card.curated, calledBy } };
+    });
     // Keeps the cards' "Now" market cap refreshing, as the paid feeds do. Buffered and shared with
     // every subscriber following the same model, so guests add next to nothing. The on-demand
     // live refresher (which spends RPC credits) is left to signed-in readers.
@@ -110,14 +149,16 @@ export async function registerGuestRoutes(
       pageSize: PAGE_SIZE,
       totalCount: (page - 1) * PAGE_SIZE + matches.length + (hasMore ? 1 : 0),
       hasMore,
-      model: modelLabel(state, model),
+      // The best of the default models, for clients that name one; `models` lists them all.
+      model: modelLabel(state, models[0]!),
+      models: models.map((id) => modelLabel(state, id)),
       delayMinutes: GUEST_DELAY_MINUTES,
     };
   });
 
   /**
-   * The Models tab's leaderboard, as a reader who follows the best performer sees it: guests have
-   * no picks of their own, so the "in your feed" marks all point at the default model.
+   * The Models tab's leaderboard, as a reader who follows the default sees it: guests have no picks
+   * of their own, so the "in your feed" marks all point at the default models.
    */
   app.get("/models", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
     const parsed = leaderboardQuerySchema.safeParse(request.query);
@@ -131,8 +172,8 @@ export async function registerGuestRoutes(
     ]);
     return {
       ...board,
-      selectedModel: state.defaultModel,
-      selectedModels: [state.defaultModel],
+      selectedModel: state.defaultModels[0],
+      selectedModels: state.defaultModels,
       followsDefault: true,
       showModelAlerts: true,
       followBest: true,

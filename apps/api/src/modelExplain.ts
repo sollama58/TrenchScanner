@@ -468,7 +468,7 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
       role: spec.role,
       description: spec.description,
       summary: spec.summary ?? spec.description,
-      isDefault: spec.id === state.defaultModel,
+      isDefault: state.defaultModels.includes(spec.id),
       control: spec.control === true,
       status,
       model: current

@@ -58,6 +58,7 @@ export * from "./curation/probation.js";
 export * from "./curation/laneStore.js";
 export * from "./curation/champion.js";
 export * from "./curation/feedModels.js";
+export * from "./curation/topModels.js";
 export * from "./curation/tradeFlow.js";
 export * from "./curation/textFeatures.js";
 export * from "./curation/aiJudge.js";

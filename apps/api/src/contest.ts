@@ -3,7 +3,14 @@ import {
   compositeScore,
   defaultContestant,
   loadChampion,
+  loadTopModels,
   resolveDefaultModel,
+  resolveDefaultModels,
+  resetTopModelsCache,
+  TOP_MODELS_COUNT,
+  TOP_MODELS_MIN_GRADED,
+  TOP_MODELS_REFRESH_MINUTES,
+  TOP_MODELS_WINDOW_HOURS,
   resolveFeedModels as resolveFeedModelsShared,
   emptyRecord,
   enabledContestants,
@@ -65,8 +72,13 @@ export interface ContestState {
   lanes: Lane[];
   /** Each contestant's current (active) model row, when it has one. */
   current: Map<string, ContestantModel>;
-  /** Whose calls a user who hasn't picked sees: the champion while it can call, else the fallback. */
+  /** The single best performer: the champion while it can call, else the fallback. */
   defaultModel: string;
+  /**
+   * Whose calls a user who hasn't picked (and a guest) sees: the top models by 24h 2x hit rate
+   * (core curation/topModels.ts), best first; [defaultModel] while too few qualify.
+   */
+  defaultModels: string[];
   /** The stored best-performer pick (curation/champion.ts); null before the first one. */
   champion: ChampionRecord | null;
 }
@@ -85,6 +97,7 @@ const stateCache = new SharedCache<ContestState>(STATE_CACHE_TTL_MS, {
 /** Test hook. */
 export function resetContestStateCache(): void {
   stateCache.clear();
+  resetTopModelsCache();
 }
 
 export function contestState(env: Env): Promise<ContestState> {
@@ -141,16 +154,18 @@ export function contestState(env: Env): Promise<ContestState> {
       const threshold = current.get(id)?.threshold;
       return typeof threshold === "number" && threshold < NEVER_EMIT_THRESHOLD;
     };
+    const defaultModel = resolveDefaultModel(
+      champion?.contestant ?? null,
+      canCall,
+      defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
+    );
     return {
       roster,
       lanes,
       current,
       champion,
-      defaultModel: resolveDefaultModel(
-        champion?.contestant ?? null,
-        canCall,
-        defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
-      ),
+      defaultModel,
+      defaultModels: resolveDefaultModels(await loadTopModels(roster, lanes, canCall), defaultModel),
     };
   });
 }
@@ -316,6 +331,9 @@ export interface Leaderboard {
   /** The fixed exit plan the simulated returns on the board are worked out under, in a sentence. */
   exitPlan: string;
   defaultModel: string;
+  /** The default feed's models, best first, and the rule that picks them. */
+  defaultModels: string[];
+  defaultRule: { count: number; windowHours: number; minGraded: number; refreshMinutes: number };
   /** When and why the default was last (re-)chosen; null before the first pick. */
   champion: {
     id: string;
@@ -429,7 +447,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       description: spec.description,
       summary: spec.summary ?? spec.description,
       role: spec.role,
-      isDefault: spec.id === state.defaultModel,
+      isDefault: state.defaultModels.includes(spec.id),
       status,
       composite,
       vsMarket: lifts.get(spec.id) ?? null,
@@ -495,6 +513,13 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     },
     exitPlan: describeExitPlan(),
     defaultModel: state.defaultModel,
+    defaultModels: state.defaultModels,
+    defaultRule: {
+      count: TOP_MODELS_COUNT,
+      windowHours: TOP_MODELS_WINDOW_HOURS,
+      minGraded: TOP_MODELS_MIN_GRADED,
+      refreshMinutes: TOP_MODELS_REFRESH_MINUTES,
+    },
     champion:
       state.champion && state.champion.contestant === state.defaultModel
         ? {

@@ -55,6 +55,7 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
     return {
       window: { days, since, until },
       defaultModel: board.defaultModel,
+      defaultModels: board.defaultModels,
       champion: board.champion,
       // The ranking and each seat's records - descriptions and lineage are the Models tab's.
       entries: board.entries.map((e) => ({
