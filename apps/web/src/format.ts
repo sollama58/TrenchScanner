@@ -2,10 +2,12 @@
 
 export function usd(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "–";
+  // The unit is picked on the value as it will be shown: $999.6K rounds to "1000K", which reads
+  // as $1.00M.
   const abs = Math.abs(value);
-  if (abs >= 1_000_000_000) return `$${trim(value / 1_000_000_000)}B`;
-  if (abs >= 1_000_000) return `$${trim(value / 1_000_000)}M`;
-  if (abs >= 1_000) return `$${trim(value / 1_000)}K`;
+  if (abs >= 999_500_000) return `$${trim(value / 1_000_000_000)}B`;
+  if (abs >= 999_500) return `$${trim(value / 1_000_000)}M`;
+  if (abs >= 999.5) return `$${trim(value / 1_000)}K`;
   return `$${Math.round(value)}`;
 }
 

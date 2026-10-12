@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import type { DexScreenerClient } from "./datasources/dexscreener.js";
 import { floatArrayParam, prisma } from "./db.js";
-import { refreshLiveMarketData } from "./liveMarketData.js";
+import { refreshLiveMarketData, writeLiveMarketData } from "./liveMarketData.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -23,16 +23,16 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
 
   // Runs first in the file on purpose. An all-NULL list going first used to fix a wrong parameter
   // type on the connection, and every later write through it failed with 08P01.
-  it("keeps writing after a batch where every number was missing", async () => {
+  it("keeps writing after a batch where every price was missing", async () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-nulls` } });
-    let data = { marketCapUsd: NaN, priceUsd: NaN };
+    let data = { marketCapUsd: 1000, priceUsd: NaN };
     const dexScreener = {
       getTokensByAddresses: async () => [{ mintAddress: token.mintAddress, ...data }],
     } as unknown as DexScreenerClient;
     // Several rounds, so the pool hands back the same connection whichever one went first.
     for (let i = 0; i < 3; i++) {
-      data = { marketCapUsd: NaN, priceUsd: NaN };
+      data = { marketCapUsd: 1000, priceUsd: NaN };
       expect(await refreshLiveMarketData(dexScreener, [token])).toEqual({ requested: 1, updated: 1 });
       data = { marketCapUsd: 1234.5 + i, priceUsd: 3 };
       expect(await refreshLiveMarketData(dexScreener, [token])).toEqual({ requested: 1, updated: 1 });
@@ -65,8 +65,10 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
       [`${TAG}-b`]: { marketCapUsd: 12345.67, priceUsd: 2 },
       [`${TAG}-c`]: { marketCapUsd: NaN, priceUsd: 1e-9 },
     };
+    const before = await prisma.token.findUniqueOrThrow({ where: { id: tokens[2]!.id } });
     const result = await refreshLiveMarketData(dexScreener, tokens);
-    expect(result).toEqual({ requested: 3, updated: 3 });
+    // c's pair has no market cap: not a reading, so its last figure and time stay.
+    expect(result).toEqual({ requested: 3, updated: 2 });
 
     const rows = await prisma.token.findMany({
       where: { mintAddress: { startsWith: TAG } },
@@ -75,9 +77,30 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
     expect(rows.map((r) => [r.liveMarketCapUsd, r.livePriceUsd])).toEqual([
       [54321, 0.0000543],
       [12345.67, 2],
-      [null, 1e-9],
+      [3000, 3],
     ]);
-    expect(rows.every((r) => r.liveDataAt !== null)).toBe(true);
+    expect(rows[2]!.liveDataAt).toEqual(before.liveDataAt);
+  });
+
+  it("never lets an older reading replace a newer one", async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-order` } });
+    const newer = new Date("2026-10-12T12:00:30Z");
+    const older = new Date("2026-10-12T12:00:10Z");
+    const write = (mcap: number, at: Date) =>
+      writeLiveMarketData(
+        [token],
+        [{ mintAddress: token.mintAddress, marketCapUsd: mcap, priceUsd: mcap / 1e9 }],
+        {
+          seenAt: new Map([[token.mintAddress, at]]),
+          fetchedAt: new Date(),
+        },
+      );
+    expect((await write(20_000, newer)).updated).toBe(1);
+    // Another job's cached reading from 20 s earlier lands after it.
+    expect((await write(15_000, older)).updated).toBe(0);
+    const row = await prisma.token.findUniqueOrThrow({ where: { id: token.id } });
+    expect([row.liveMarketCapUsd, row.liveDataAt]).toEqual([20_000, newer]);
   });
 
   it("raises a match's peak from a live reading above it, and only above the alert", async () => {

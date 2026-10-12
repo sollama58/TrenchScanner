@@ -713,6 +713,26 @@ describe("narrativeFieldsFromAnalysis on a rules-0.15.0 document", () => {
     });
   });
 
+  it("drops the original's curve when it is stale or describes another coin", () => {
+    const withCurve = (market: Record<string, unknown>, mint = "OriginalMint") => ({
+      ...doc,
+      analyzed_at: "2026-10-07T20:00:00Z",
+      copy_of: [{ ...doc.copy_of![0]!, mint, original_market: market }],
+    });
+    const fresh = { complete: false, curve_progress: 0.62, as_of: "2026-10-07T19:56:00Z" };
+    expect(narrativeFieldsFromAnalysis(withCurve(fresh), "complete").originalCurveProgress).toBe(0.62);
+    // Three days old: TokenSage's RPC read failed and it served the stored curve.
+    const stale = { ...fresh, as_of: "2026-10-04T19:56:00Z" };
+    expect(narrativeFieldsFromAnalysis(withCurve(stale), "complete")).toMatchObject({
+      originalCurveProgress: null,
+      originalComplete: null,
+    });
+    // The lineage names OriginalMint, but the only curve is another copy's.
+    expect(
+      narrativeFieldsFromAnalysis(withCurve(fresh, "OtherCopy"), "complete").originalCurveProgress,
+    ).toBeNull();
+  });
+
   it("stores the main category (rules 0.20.0) and counts the inputs behind it, not behind derivative", () => {
     const copy = {
       ...doc,
