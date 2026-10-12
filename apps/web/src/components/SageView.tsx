@@ -182,7 +182,7 @@ const LINEAGE: Record<string, { text: string; tone: "good" | "warn" | "neutral" 
   early_copy: { text: "Early copy", tone: "neutral" },
   copy: { text: "Copy", tone: "warn" },
   late_copy: { text: "Late copy", tone: "warn" },
-  reference: { text: "Builds on a known coin", tone: "neutral" },
+  reference: { text: "Reference", tone: "neutral" },
 };
 
 /** TokenSage's logo classes (image.labels) as the tag reads them; others fall back to words(). */
