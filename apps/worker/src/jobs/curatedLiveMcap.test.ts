@@ -1,12 +1,26 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
-import { newCuratedCycle, readLiveMarketCaps, type CuratedContender } from "./curatedAlerts.js";
+import type { Env } from "@trenchscanner/core";
+import {
+  callMcapUsd,
+  dropBelowAlertFloor,
+  newCuratedCycle,
+  readLiveMarketCaps,
+  resetDeferredContenders,
+  takeContenderRetry,
+  type CuratedContender,
+} from "./curatedAlerts.js";
 
-const contender = (mint: string, marketCapUsd: number): CuratedContender =>
+const contender = (
+  mint: string,
+  marketCapUsd: number,
+  freshQuote?: { priceUsd: number; marketCapUsd: number },
+): CuratedContender =>
   ({
     token: { id: `id-${mint}`, mintAddress: mint },
-    scored: { marketCapUsd },
+    // A 1B supply, as a Pump.fun coin's: the anchor reads the quote's price on that supply.
+    scored: { priceUsd: marketCapUsd / 1e9, marketCapUsd, freshQuote },
     cycleSample: null,
     decision: { curate: true, confidence: 50, reasons: [], source: "m" },
     confidence: 50,
@@ -50,5 +64,34 @@ describe("readLiveMarketCaps", () => {
     await readLiveMarketCaps(cycle, () => new Promise(() => {}));
     expect(Date.now() - startedAt).toBeLessThan(3_000);
     expect(slow.liveMcapUsd).toBeUndefined();
+  });
+});
+
+describe("the alert floor", () => {
+  const env = { CURATED_ALERT_MIN_MCAP_USD: 7_500, CURATED_CONTENDER_RETRY_MINUTES: 15 } as Env;
+
+  it("prices a call at the lowest current reading, not DexScreener's lagged one", () => {
+    // DexScreener still reads $11k; the fresh quote says the coin is at $8k.
+    const quoted = contender("q", 11_000, { priceUsd: 0.000008, marketCapUsd: 8_000 });
+    expect(callMcapUsd(quoted)).toBeCloseTo(8_000, 6);
+    quoted.liveMcapUsd = 7_200;
+    expect(callMcapUsd(quoted)).toBe(7_200);
+    // No fresh quote and no live read: the scan's figure is all there is.
+    expect(callMcapUsd(contender("s", 12_000))).toBe(12_000);
+  });
+
+  it("drops a coin that has fallen under the floor, keeps the grace above it, and files a retry", () => {
+    resetDeferredContenders();
+    const cycle = newCuratedCycle();
+    const fallen = contender("fallen", 10_500, { priceUsd: 0.0000069, marketCapUsd: 6_900 });
+    const grace = contender("grace", 10_500, { priceUsd: 0.0000082, marketCapUsd: 8_200 });
+    const liveLow = contender("live-low", 12_000);
+    liveLow.liveMcapUsd = 7_000;
+    cycle.byModel.set("m", [fallen, grace, liveLow]);
+    dropBelowAlertFloor(cycle, env);
+    expect(cycle.byModel.get("m")).toEqual([grace]);
+    expect(takeContenderRetry("id-fallen")?.models).toEqual(["m"]);
+    expect(takeContenderRetry("id-live-low")?.models).toEqual(["m"]);
+    expect(takeContenderRetry("id-grace")).toBeNull();
   });
 });
