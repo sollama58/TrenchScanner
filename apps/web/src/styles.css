@@ -7995,78 +7995,29 @@ button.small-btn {
   margin: 6px 0 0;
 }
 
-/* ---------- Stream (components/StreamView.tsx) ---------- */
-/* The header's way in: a button that opens the Stream in a window of its own. */
-.stream-open {
-  white-space: nowrap;
-}
-.stream-open .icon {
-  color: var(--brand-ink);
-}
-/* With the Stream button the header row is full: a little less space between its groups. */
-@media (min-width: 981px) {
-  .topbar-inner {
-    gap: 12px;
-  }
-}
-/* Narrower desktop windows: the tabs pad a little less, and the scanner pill and the admin tag give
-   up their extras, so the header row still fits beside the Stream button. */
+/* ---------- Stream tab (components/StreamView.tsx) ---------- */
+/* Narrower desktop windows, and any desktop width once the Stream tab is switched on (the header row
+   stops growing at 1360px): the tabs pad a little less, and the scanner pill and the admin tag give
+   up their extras, so the header row still fits. */
 @media (min-width: 981px) and (max-width: 1439px) {
   .tabs button,
   .tabs .tab-link {
     padding: 7px 11px;
   }
   .topbar .status-pill .faint,
-  .topbar .wallet-pill .admin-tag,
-  .stream-open span {
+  .topbar .wallet-pill .admin-tag {
     display: none;
   }
 }
-/* The Stream's window: the header, tabs, banner and footer give way to its own slim bar, and the
-   cards take the whole width of the window. */
-.app.streaming .topbar,
-.app.streaming .site-foot {
-  display: none;
-}
-.app.streaming .content {
-  max-width: none;
-  padding: 0 20px 20px;
-}
-.stream-bar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 0 -20px 16px;
-  padding: 8px 20px;
-  background: color-mix(in srgb, var(--page) 72%, transparent);
-  backdrop-filter: saturate(1.4) blur(14px);
-  -webkit-backdrop-filter: saturate(1.4) blur(14px);
-  border-bottom: 1px solid var(--border);
-}
-.stream-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.stream-title strong {
-  font-size: 16px;
-  letter-spacing: -0.01em;
-}
-.stream-sub {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.stream-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
+@media (min-width: 981px) {
+  .topbar.packed .tabs button,
+  .topbar.packed .tabs .tab-link {
+    padding: 7px 11px;
+  }
+  .topbar.packed .status-pill .faint,
+  .topbar.packed .wallet-pill .admin-tag {
+    display: none;
+  }
 }
 /* A card arriving slides in at the top; the ones already there don't move again. */
 .stream-cards > .card {
@@ -8077,29 +8028,13 @@ button.small-btn {
     animation: none;
   }
 }
-@media (max-width: 900px) {
-  .stream-sub {
-    display: none;
-  }
+/* Settings › Extra tabs: the switch, then what the tab shows. */
+.tab-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
-@media (max-width: 640px) {
-  /* The header's Stream button keeps only its icon beside the scanner and wallet pills. */
-  .stream-open span {
-    display: none;
-  }
-  .app.streaming .content {
-    padding: 0 12px 12px;
-  }
-  .stream-bar {
-    margin: 0 -12px 12px;
-    padding: 8px 12px;
-    gap: 8px;
-  }
-  .stream-btn-label {
-    display: none;
-  }
-  /* No bottom tab bar on the Stream, so the Customize sheet sits on the bottom edge. */
-  .app.streaming .customize-drawer {
-    bottom: 0;
-  }
+.tab-option p {
+  margin: 0;
 }

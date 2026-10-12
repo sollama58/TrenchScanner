@@ -1144,6 +1144,8 @@ export interface FeedAppearance {
    * alerts). Null follows the automatic default (GET /config/narrative-note).
    */
   narrativeNote: boolean | null;
+  /** The Stream tab, switched on in Settings (absent from older API builds: off). */
+  streamTab: boolean;
   /** Trading sites each card links to; Padre's Trading Terminal by default. */
   quickLinks: QuickLink[];
   hidden: CardField[];

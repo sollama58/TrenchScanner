@@ -28,6 +28,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   reasons: false,
   sniperTop10: false,
   narrativeNote: null,
+  streamTab: false,
   quickLinks: ["terminal"],
   hidden: [],
 };
@@ -186,6 +187,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     reasons: typeof r.reasons === "boolean" ? r.reasons : d.reasons,
     sniperTop10: typeof r.sniperTop10 === "boolean" ? r.sniperTop10 : d.sniperTop10,
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
+    streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
     quickLinks: Array.isArray(r.quickLinks)
       ? [
           ...new Set(
@@ -201,7 +203,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
 
 /** A preset applied on top of the default, keeping the user's theme and colors. */
 export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance>): FeedAppearance {
-  const { theme, accent, mine, win, loss, quickLinks, narrativeNote } = current;
+  const { theme, accent, mine, win, loss, quickLinks, narrativeNote, streamTab } = current;
   return normalizeAppearance({
     ...DEFAULT_APPEARANCE,
     ...look,
@@ -212,10 +214,16 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     loss,
     quickLinks,
     narrativeNote,
+    streamTab,
   });
 }
 
 /** Whether two appearances look the same (hidden fields in any order). */
+/** The default look, keeping the reader's tab choice (the Stream tab isn't part of how cards look). */
+export function defaultLook(current: FeedAppearance): FeedAppearance {
+  return { ...DEFAULT_APPEARANCE, streamTab: current.streamTab };
+}
+
 export function sameAppearance(a: FeedAppearance, b: FeedAppearance): boolean {
   const key = (x: FeedAppearance) => JSON.stringify({ ...x, hidden: [...x.hidden].sort() });
   return key(a) === key(b);
