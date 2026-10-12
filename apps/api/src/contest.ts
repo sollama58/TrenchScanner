@@ -79,6 +79,8 @@ export interface ContestState {
    * (core curation/topModels.ts), best first; [defaultModel] while too few qualify.
    */
   defaultModels: string[];
+  /** The best average exit-plan return over the last 24h (core curation/topModels.ts); null when none qualify. */
+  bestModel: string | null;
   /** The stored best-performer pick (curation/champion.ts); null before the first one. */
   champion: ChampionRecord | null;
 }
@@ -159,13 +161,15 @@ export function contestState(env: Env): Promise<ContestState> {
       canCall,
       defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
     );
+    const { top, best } = await loadTopModels(roster, lanes, canCall);
     return {
       roster,
       lanes,
       current,
       champion,
       defaultModel,
-      defaultModels: resolveDefaultModels(await loadTopModels(roster, lanes, canCall), defaultModel),
+      defaultModels: resolveDefaultModels(top, defaultModel),
+      bestModel: best,
     };
   });
 }
@@ -265,7 +269,10 @@ export interface LeaderboardEntry {
   /** The same in plain words, for the Models tab's front leaderboard. */
   summary: string;
   role: ContestantSpec["role"];
+  /** In the default feed: one of the top models by 24h 2x hit rate. */
   isDefault: boolean;
+  /** The best average exit-plan return over the last 24h (the "best" marker). */
+  isBest: boolean;
   /**
    * calling: it has a cutoff and can send. silent: trained, but its exam had nothing to set a
    * cutoff from, so it sends nothing this generation. untrained: no training run has produced it
@@ -333,6 +340,8 @@ export interface Leaderboard {
   defaultModel: string;
   /** The default feed's models, best first, and the rule that picks them. */
   defaultModels: string[];
+  /** The best average exit-plan return over the default rule's window; null when none qualify. */
+  bestModel: string | null;
   defaultRule: { count: number; windowHours: number; minGraded: number; refreshMinutes: number };
   /** When and why the default was last (re-)chosen; null before the first pick. */
   champion: {
@@ -448,6 +457,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       summary: spec.summary ?? spec.description,
       role: spec.role,
       isDefault: state.defaultModels.includes(spec.id),
+      isBest: spec.id === state.bestModel,
       status,
       composite,
       vsMarket: lifts.get(spec.id) ?? null,
@@ -514,6 +524,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     exitPlan: describeExitPlan(),
     defaultModel: state.defaultModel,
     defaultModels: state.defaultModels,
+    bestModel: state.bestModel,
     defaultRule: {
       count: TOP_MODELS_COUNT,
       windowHours: TOP_MODELS_WINDOW_HOURS,

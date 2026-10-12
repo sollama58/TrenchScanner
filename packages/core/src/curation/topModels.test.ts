@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickTopModels, topModelsWindow, TOP_MODELS_MIN_GRADED } from "./topModels.js";
+import { pickBestReturnModel, pickTopModels, topModelsWindow, TOP_MODELS_MIN_GRADED } from "./topModels.js";
 import { resolveDefaultModels, resolveFeedModels } from "./feedModels.js";
 import { CONTESTANTS } from "./contestants.js";
 
@@ -40,6 +40,26 @@ describe("pickTopModels", () => {
   });
 });
 
+describe("pickBestReturnModel", () => {
+  const r = (id: string, avg: number, graded = 40, calling = true) => ({
+    id,
+    wins: 0,
+    graded,
+    calling,
+    simCalls: graded,
+    sumSimReturnPct: avg * graded,
+  });
+
+  it("picks the best average exit-plan return over the floor", () => {
+    expect(pickBestReturnModel([r("a", 5), r("b", 12), r("c", -3)])).toBe("b");
+  });
+
+  it("ignores a short lucky record and models that can't call", () => {
+    expect(pickBestReturnModel([r("a", 5), r("lucky", 300, 2), r("silent", 50, 40, false)])).toBe("a");
+    expect(pickBestReturnModel([r("lucky", 300, 2)])).toBeNull();
+  });
+});
+
 describe("topModelsWindow", () => {
   it("aligns the 24h window to the refresh slot", () => {
     const a = topModelsWindow(new Date("2026-10-12T02:31:00Z"));
@@ -55,6 +75,7 @@ describe("default feed", () => {
     roster,
     defaultModel: "rules",
     defaultModels: resolveDefaultModels(["trees", "linear", "rules"], "rules"),
+    bestModel: null,
   };
 
   it("falls back to the single default when too few models qualify", () => {

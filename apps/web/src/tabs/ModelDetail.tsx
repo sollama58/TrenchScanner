@@ -181,6 +181,7 @@ function ModelDetail({
       </header>
       <div className="row model-detail-chips">
         <span className={`badge ${STATUS_TEXT[e.status].tone}`}>{STATUS_TEXT[e.status].text}</span>
+        {e.isBest && <span className="badge info">best 24h return</span>}
         {e.isDefault && <span className="badge info">default feed</span>}
         {mine && <span className="badge">{guest ? "guest feed" : "in your feed"}</span>}
         {e.composite.warmingUp && <span className="badge">warming up</span>}

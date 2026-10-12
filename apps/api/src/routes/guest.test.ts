@@ -173,12 +173,14 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
     const base = { source: "test", confidence: 70, anchorPriceUsd: 0.0001, anchorMcapUsd: 50_000 };
     const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
     // a 50%, b 40%, c 30%, d 20%: a, b and c make the cut. lucky is 2 for 2, under the floor.
-    const graded = (model: string, wins: number) =>
+    // d has the worst 2x rate but the best average exit-plan return: the "best" marker, not top 3.
+    const graded = (model: string, wins: number, sim = -10) =>
       Array.from({ length: n }, (_, i) => ({
         ...base,
         tokenId: solo,
         model,
         hit2xIn1h: i < wins,
+        simReturnPct: sim,
         createdAt: hoursAgo(3 + i / 100),
       }));
     await prisma.curatedAlert.createMany({
@@ -186,9 +188,9 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
         ...graded(a, n * 0.5),
         ...graded(b, n * 0.4),
         ...graded(c, n * 0.3),
-        ...graded(d, n * 0.2),
-        { ...base, tokenId: solo, model: lucky, hit2xIn1h: true, createdAt: hoursAgo(3) },
-        { ...base, tokenId: solo, model: lucky, hit2xIn1h: true, createdAt: hoursAgo(3) },
+        ...graded(d, n * 0.2, 25),
+        { ...base, tokenId: solo, model: lucky, hit2xIn1h: true, simReturnPct: 300, createdAt: hoursAgo(3) },
+        { ...base, tokenId: solo, model: lucky, hit2xIn1h: true, simReturnPct: 300, createdAt: hoursAgo(3) },
         // The newest calls: two top models on one token a minute apart, past the guest delay.
         { ...base, tokenId: shared, model: b, createdAt: hoursAgo(1) },
         { ...base, tokenId: shared, model: a, createdAt: new Date(hoursAgo(1).getTime() + 60_000) },
@@ -204,14 +206,14 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
 
   it("picks the three best 2x hit rates among models with enough graded calls", async () => {
     resetTopModelsCache();
-    expect(await loadTopModels(roster, [], () => true)).toEqual([a, b, c]);
+    expect(await loadTopModels(roster, [], () => true)).toEqual({ top: [a, b, c], best: d });
   });
 
   it("leaves out models that can't call, and gives up below three", async () => {
     resetTopModelsCache();
-    expect(await loadTopModels(roster, [], (id) => id !== b)).toEqual([a, c, d]);
+    expect((await loadTopModels(roster, [], (id) => id !== b)).top).toEqual([a, c, d]);
     resetTopModelsCache();
-    expect(await loadTopModels(roster, [], (id) => id === a || id === b)).toBeNull();
+    expect((await loadTopModels(roster, [], (id) => id === a || id === b)).top).toBeNull();
   });
 
   it("shows a token the top models both called as one card, at its first call", async () => {

@@ -22,6 +22,8 @@ export interface FeedModelState {
    * [defaultModel] while too few models qualify.
    */
   defaultModels: string[];
+  /** The best average exit-plan return over the same 24h (the "best" marker); null when none qualify. */
+  bestModel: string | null;
 }
 
 /** The default feed: the top models when enough qualify, else the single default. */
@@ -80,9 +82,6 @@ export async function loadFeedModelState(env: Env): Promise<FeedModelState> {
     canCall,
     defaultContestant(consensusEnabled ? cutoffs.get(CONSENSUS_CONTESTANT)?.threshold : null),
   );
-  return {
-    roster,
-    defaultModel,
-    defaultModels: resolveDefaultModels(await loadTopModels(roster, lanes, canCall), defaultModel),
-  };
+  const { top, best } = await loadTopModels(roster, lanes, canCall);
+  return { roster, defaultModel, defaultModels: resolveDefaultModels(top, defaultModel), bestModel: best };
 }

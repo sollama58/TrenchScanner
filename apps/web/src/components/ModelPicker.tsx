@@ -124,7 +124,8 @@ export function ModelPicker({
                 />
                 <span className="checklist-name">
                   <span className="faint num">#{e.rank}</span> {e.name}
-                  {e.isDefault && <span className="chip chip-model">top</span>}
+                  {e.isBest && <span className="chip chip-model">best</span>}
+                  {e.isDefault && <span className="chip">top</span>}
                 </span>
                 <span className="num muted">
                   {e.composite.score === null ? "–" : e.composite.score.toFixed(0)}
