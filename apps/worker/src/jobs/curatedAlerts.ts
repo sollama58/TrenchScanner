@@ -814,6 +814,7 @@ export async function emitCuratedCycle(
 
   const now = Date.now();
   pruneDeferredContenders(now);
+  dropBelowAlertFloor(cycle, env, now);
   const hourAgo = new Date(now - 3_600_000);
   const burstAgo = new Date(now - GOVERNOR_BURST_WINDOW_MINUTES * 60_000);
   const roster = await curatorRoster(env);
@@ -853,6 +854,40 @@ export async function emitCuratedCycle(
     }
   }
   return emitted;
+}
+
+/**
+ * The market cap a call goes out at, as low as any current reading puts it: the fresh quote it is
+ * anchored and shown on (decisionAnchor), and Pump.fun's live figure when the pass read one. The
+ * band check in collectCuratedContender reads DexScreener, 45-60 s behind the market, so on its
+ * own it let through calls on coins that had already fallen out of the band.
+ */
+export function callMcapUsd(contender: Pick<CuratedContender, "scored" | "liveMcapUsd">): number {
+  const anchor = decisionAnchor(contender.scored).marketCapUsd;
+  return contender.liveMcapUsd !== undefined ? Math.min(anchor, contender.liveMcapUsd) : anchor;
+}
+
+/**
+ * Takes out every contender whose call would go out under CURATED_ALERT_MIN_MCAP_USD (see
+ * callMcapUsd). Each is filed as a retry, as a pick that lost its slot is, so it can still go out
+ * if it climbs back before the retry runs out.
+ */
+export function dropBelowAlertFloor(cycle: CuratedCycle, env: Env, now = Date.now()): void {
+  for (const [model, contenders] of cycle.byModel) {
+    const kept = contenders.filter((c) => {
+      const mcap = callMcapUsd(c);
+      if (mcap >= env.CURATED_ALERT_MIN_MCAP_USD) return true;
+      logger.info("curated pick below the alert floor - deferring it", {
+        model,
+        mint: c.token.mintAddress,
+        mcap: Math.round(mcap),
+        scanMcap: Math.round(c.scored.marketCapUsd),
+      });
+      deferContender(c, model, env, now);
+      return false;
+    });
+    cycle.byModel.set(model, kept);
+  }
 }
 
 /** How long the pass waits for Pump.fun's live market caps before sending without them. */

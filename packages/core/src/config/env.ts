@@ -358,6 +358,12 @@ const envSchema = z.object({
   // half at ~4%).
   CURATED_MIN_SCORE: z.coerce.number().min(0).max(100).default(55),
   CURATED_ALERT_COOLDOWN_HOURS: z.coerce.number().positive().default(24),
+  // The lowest market cap a model call may go out at, read at the price the call is made at: the
+  // fresh quote it is anchored and shown on (decisionAnchor) and Pump.fun's live figure when the
+  // pass reads one. The band check runs on DexScreener's figure, 45-60 s behind the market, so a
+  // coin can still read in band there after it has fallen out; this is the grace below
+  // MCAP_FILTER_MIN such a call is allowed. 7,500: user decision 2026-10-12.
+  CURATED_ALERT_MIN_MCAP_USD: z.coerce.number().nonnegative().default(7_500),
 
   // The curator-training job (apps/worker/src/jobs/curatorTrainingJob.ts): trains on the rolling
   // window of finalized CandidateOutcome rows, walk-forward-evaluates against the heuristic, and
