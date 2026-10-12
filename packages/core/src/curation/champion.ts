@@ -3,6 +3,7 @@ import { CONSENSUS_CONTESTANT, RULES_CONTESTANT, type ContestantSpec } from "./c
 import type { Lane } from "./evolution.js";
 import { liveCallRecords } from "./laneStore.js";
 import { compositeScore, emptyRecord, rankByComposite, type CompositeScore } from "./leaderboard.js";
+import type { Env } from "../config/env.js";
 import type { PrecisionTargets } from "./trainer.js";
 import { defaultContestant, NEVER_EMIT_THRESHOLD, type StoredEvalMetrics } from "./trainingRun.js";
 
@@ -125,6 +126,16 @@ export async function loadChampion(): Promise<ChampionRecord | null> {
 }
 
 /** Each contestant's active model cutoff (params.threshold), read in SQL - see contestState. */
+/** The hit-rate targets the score is read against, from the env. */
+export function curatedTargets(env: Env): PrecisionTargets {
+  return {
+    winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
+    goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
+    minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
+    confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
+  };
+}
+
 export async function activeModelCutoffs(
   contestants: readonly string[],
 ): Promise<Map<string, { threshold: number | null; metrics: Partial<StoredEvalMetrics> }>> {

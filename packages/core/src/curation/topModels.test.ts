@@ -3,10 +3,35 @@ import { pickBestReturnModel, pickTopModels, topModelsWindow, TOP_MODELS_MIN_GRA
 import { resolveDefaultModels, resolveFeedModels } from "./feedModels.js";
 import { CONTESTANTS } from "./contestants.js";
 
-const s = (id: string, wins: number, graded: number, calling = true) => ({ id, wins, graded, calling });
+const s = (id: string, wins: number, graded: number, calling = true, score: number | null = wins) => ({
+  id,
+  wins,
+  graded,
+  calling,
+  score,
+});
 
 describe("pickTopModels", () => {
-  it("ranks by 2x hit rate, best first", () => {
+  it("ranks by score, not by the 24h 2x rate", () => {
+    // "hot" hit 2x on 45% of its last day but scores 30; the others hit less often and score more.
+    const hot = s("hot", 18, 40, true, 30);
+    expect(
+      pickTopModels([hot, s("a", 10, 40, true, 39), s("b", 11, 40, true, 38), s("c", 9, 40, true, 36)]),
+    ).toEqual(["a", "b", "c"]);
+  });
+
+  it("puts a model with no score last, then breaks ties on the 2x rate", () => {
+    expect(
+      pickTopModels([
+        s("none", 30, 40, true, null),
+        s("a", 10, 40, true, 35),
+        s("b", 12, 40, true, 35),
+        s("c", 1, 40, true, 20),
+      ]),
+    ).toEqual(["b", "a", "c"]);
+  });
+
+  it("ranks best first", () => {
     expect(pickTopModels([s("a", 10, 40), s("b", 20, 40), s("c", 15, 40), s("d", 5, 40)])).toEqual([
       "b",
       "c",

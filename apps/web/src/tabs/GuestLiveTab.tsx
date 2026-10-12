@@ -66,9 +66,9 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
           <strong>Guest mode: calls are delayed {delay} minutes.</strong>{" "}
           <span className="muted">
             You see calls from {data ? <strong>{modelName}</strong> : "the top models"}
-            {data && (many ? ", the top models by 2x hit rate over the last day" : ", the recommended model")}
-            , {delay} minutes after they are made. Connect a wallet to get them live, plus your own filters,
-            model picks, alerts and stats.
+            {data && (many ? ", the top models by score" : ", the recommended model")}, {delay} minutes after
+            they are made. Connect a wallet to get them live, plus your own filters, model picks, alerts and
+            stats.
           </span>
         </p>
         <button className="button primary" onClick={onConnect}>

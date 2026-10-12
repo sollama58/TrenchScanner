@@ -1,5 +1,5 @@
 import type { Env } from "../config/env.js";
-import { activeModelCutoffs, loadChampion, resolveDefaultModel } from "./champion.js";
+import { activeModelCutoffs, curatedTargets, loadChampion, resolveDefaultModel } from "./champion.js";
 import { CONSENSUS_CONTESTANT, enabledContestants, type ContestantSpec } from "./contestants.js";
 import { withLanes } from "./evolution.js";
 import { loadCurrentLanes } from "./laneStore.js";
@@ -82,6 +82,7 @@ export async function loadFeedModelState(env: Env): Promise<FeedModelState> {
     canCall,
     defaultContestant(consensusEnabled ? cutoffs.get(CONSENSUS_CONTESTANT)?.threshold : null),
   );
-  const { top, best } = await loadTopModels(roster, lanes, canCall);
+  const exams = new Map(roster.map((c) => [c.id, cutoffs.get(c.id)?.metrics.exam]));
+  const { top, best } = await loadTopModels(roster, lanes, canCall, exams, curatedTargets(env));
   return { roster, defaultModel, defaultModels: resolveDefaultModels(top, defaultModel), bestModel: best };
 }

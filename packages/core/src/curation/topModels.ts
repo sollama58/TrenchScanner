@@ -1,16 +1,24 @@
+import { CHAMPION_WINDOW_DAYS } from "./champion.js";
 import type { ContestantSpec } from "./contestants.js";
 import type { Lane } from "./evolution.js";
 import { liveCallRecords } from "./laneStore.js";
+import { compositeScore, emptyRecord, type CallRecord } from "./leaderboard.js";
+import type { PrecisionTargets } from "./trainer.js";
 
 /**
- * The default feed (user decision 2026-10-12): the calls of the three models with the best 2x hit
- * rate over the last 24 hours, combined. Everyone who follows the default sees it, and so do
+ * The default feed: the calls of the three models with the best SCORE (the leaderboard's composite,
+ * on the champion's 30-day live record pooled with the latest exam, so it counts runners caught as
+ * well as hit rates), combined - user decision 2026-10-12, replacing the best 24h 2x rate. On an
+ * hour-by-hour replay of 10-06..10-12 the score's top 3 hit 2x as often (22.0% vs 22.4%) and caught
+ * more of the runners (31.8% vs 27.5%), and since the catch rate joined the score the score's
+ * order predicted the next hours' 2x rate and return where the 24h rate did not (see
+ * notes/feed-slowdown-2026-10-12.md). Everyone who follows the default sees it, and so do
  * guests. The single champion (champion.ts) still exists for what needs one model: the AI
  * reviewer, and the fallback below.
  *
  * Guards against noise:
- *  - a model needs TOP_MODELS_MIN_GRADED graded calls in the window to be ranked, so two lucky
- *    calls can't win a slot;
+ *  - a model needs TOP_MODELS_MIN_GRADED graded calls in the last 24 hours to be ranked, so a
+ *    model that has gone quiet, or a new seat on a handful of calls, can't win a slot;
  *  - the ranking is recomputed on a fixed cadence (TOP_MODELS_REFRESH_MINUTES), aligned to the
  *    clock, over a window with a fixed end (topModelsWindow), so the API and the worker's
  *    Telegram dispatcher rank the same calls and agree whenever in the slot each one reads;
@@ -41,6 +49,8 @@ export interface TopModelStanding {
   /** Graded calls with a simulated exit-plan return, and their sum in percent. */
   simCalls?: number;
   sumSimReturnPct?: number;
+  /** The leaderboard score the top models are ranked on; null or absent = none yet. */
+  score?: number | null;
 }
 
 /** One model's record over the window, as the dropdown shows it. */
@@ -64,7 +74,7 @@ export function last24hOf(s: TopModelStanding, minGraded = TOP_MODELS_MIN_GRADED
 }
 
 export interface TopModels {
-  /** The default feed's models, best 2x rate first; null when too few qualify. */
+  /** The default feed's models, best score first; null when too few qualify. */
   top: string[] | null;
   /** The best average exit-plan return; null when no model qualifies. */
   best: string | null;
@@ -73,8 +83,9 @@ export interface TopModels {
 }
 
 /**
- * The `count` best 2x hit rates among calling models with at least `minGraded` graded calls,
- * best first (ties: more graded calls, then id). Null when fewer than `count` qualify.
+ * The `count` best scores among calling models with at least `minGraded` graded calls in the
+ * window, best first (a model with no score last; ties: the better 2x rate, more graded calls,
+ * then id). Null when fewer than `count` qualify.
  */
 export function pickTopModels(
   standings: readonly TopModelStanding[],
@@ -84,7 +95,13 @@ export function pickTopModels(
   const eligible = standings.filter((s) => s.calling && s.graded >= minGraded && s.graded > 0);
   if (eligible.length < count) return null;
   return [...eligible]
-    .sort((a, b) => b.wins / b.graded - a.wins / a.graded || b.graded - a.graded || a.id.localeCompare(b.id))
+    .sort(
+      (a, b) =>
+        (b.score ?? -1) - (a.score ?? -1) ||
+        b.wins / b.graded - a.wins / a.graded ||
+        b.graded - a.graded ||
+        a.id.localeCompare(b.id),
+    )
     .slice(0, count)
     .map((s) => s.id);
 }
@@ -127,12 +144,15 @@ export function resetTopModelsCache(): void {
 
 /**
  * Today's top models (and best-return model) for this roster, read once per refresh slot per process. A failed read is
- * not kept, so the next caller retries it.
+ * not kept, so the next caller retries it. `exams` are each model's latest exam record (the active
+ * model's evalMetrics.exam), scored with its live record the way the champion is.
  */
 export function loadTopModels(
   roster: readonly ContestantSpec[],
   lanes: readonly Lane[],
   canCall: (id: string) => boolean,
+  exams: ReadonlyMap<string, CallRecord | undefined>,
+  targets: PrecisionTargets,
   now: Date = new Date(),
 ): Promise<TopModels> {
   const { since, until, slot } = topModelsWindow(now);
@@ -144,10 +164,16 @@ export function loadTopModels(
   if (hit) return hit;
   // One slot's answers are all a reader needs; older slots are dropped as a new one fills.
   for (const k of cache.keys()) if (!k.startsWith(`${slot}|`)) cache.delete(k);
-  const read = liveCallRecords(ids, since, lanes, { until }).then((live) => {
+  const scoreSince = new Date(until.getTime() - CHAMPION_WINDOW_DAYS * 86_400_000);
+  const read = Promise.all([
+    liveCallRecords(ids, since, lanes, { until }),
+    liveCallRecords(ids, scoreSince, lanes, { until }),
+  ]).then(([live, longLive]) => {
     const standings = ids.map((id) => {
       const r = live.get(id);
       return {
+        score: compositeScore(longLive.get(id) ?? emptyRecord(), exams.get(id) ?? emptyRecord(), targets)
+          .score,
         id,
         calling: calling.includes(id),
         graded: r?.graded ?? 0,

@@ -1015,7 +1015,7 @@ export interface Leaderboard {
   /** The single best performer (the champion). */
   defaultModel: string;
   /**
-   * The default feed: the top models by 2x hit rate over the last day, best first (absent from
+   * The default feed: the top models by score, best first (absent from
    * older API builds, where the default was defaultModel alone).
    */
   defaultModels?: string[];
