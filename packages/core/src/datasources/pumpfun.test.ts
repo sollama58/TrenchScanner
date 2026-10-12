@@ -144,3 +144,37 @@ describe("PumpFunClient.launchTime", () => {
     await expect(new PumpFunClient({ baseUrl: failing }).launchTime("m")).rejects.toThrow();
   });
 });
+
+describe("PumpFunClient.liveMarketCap", () => {
+  /** A stand-in that answers the single-coin endpoint with `coin` (null body for "none"). */
+  async function serveCoin(coin: unknown, status = 200): Promise<{ url: string; paths: string[] }> {
+    const paths: string[] = [];
+    server = createServer((req, res) => {
+      paths.push(req.url ?? "");
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(coin));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (typeof address === "string" || address === null) throw new Error("failed to bind test server");
+    return { url: `http://127.0.0.1:${address.port}`, paths };
+  }
+
+  it("reads the coin's usd_market_cap from the single-coin endpoint", async () => {
+    const { url, paths } = await serveCoin({ mint: "m", usd_market_cap: 13_164.2 });
+    expect(await new PumpFunClient({ baseUrl: url }).liveMarketCap("m")).toBe(13_164.2);
+    expect(paths).toEqual(["/coins-v2/m"]);
+  });
+
+  it("is null for an unknown coin or one with no usable figure, and throws on a server error", async () => {
+    let { url } = await serveCoin({ error: "not found" }, 404);
+    expect(await new PumpFunClient({ baseUrl: url }).liveMarketCap("m")).toBeNull();
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    ({ url } = await serveCoin({ mint: "m", usd_market_cap: 0 }));
+    expect(await new PumpFunClient({ baseUrl: url }).liveMarketCap("m")).toBeNull();
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    ({ url } = await serveCoin({}, 500));
+    await expect(new PumpFunClient({ baseUrl: url }).liveMarketCap("m")).rejects.toThrow();
+  });
+});

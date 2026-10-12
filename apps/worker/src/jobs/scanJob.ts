@@ -926,7 +926,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // (those alerts must never wait on this), before the peak bookkeeping.
   let curatedEmitted = 0;
   try {
-    curatedEmitted = await emitCuratedCycle(curatedCycle, env);
+    curatedEmitted = await emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint));
   } catch (err) {
     logger.error("curated emission pass failed", { error: String(err) });
   }

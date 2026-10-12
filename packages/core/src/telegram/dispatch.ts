@@ -240,6 +240,7 @@ export function buildPending(
     calibratedPct: number | null;
     reasons: string[];
     narrativeVerdict: string | null;
+    liveMcapUsd?: number | null;
     token: AlertCard["token"];
     snapshot: AlertCard["snapshot"];
   }[],
@@ -277,6 +278,11 @@ export function buildPending(
     for (const c of calls) {
       if (!inWindow(c.createdAt)) continue;
       const p = take(c.tokenId, c.createdAt, c.token, c.snapshot);
+      // Pump.fun's market cap as the call went out, over the scan snapshot's (a filter match's
+      // included): that one is DexScreener's, 45-60s behind the market (CuratedAlert.liveMcapUsd).
+      if (c.liveMcapUsd != null && p.card.snapshot) {
+        p.card.snapshot = { ...p.card.snapshot, marketCapUsd: c.liveMcapUsd };
+      }
       const modelName = c.modelName ?? c.model ?? "A model";
       if (!p.card.calls.some((k) => k.modelName === modelName)) {
         p.card.calls.push({
@@ -389,6 +395,7 @@ async function dispatchPass(
             calibratedPct: true,
             reasons: true,
             narrativeVerdict: true,
+            liveMcapUsd: true,
             token: { select: TOKEN_SELECT },
             snapshot: { select: SNAPSHOT_SELECT },
           },

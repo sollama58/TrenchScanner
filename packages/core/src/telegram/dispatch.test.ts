@@ -264,6 +264,28 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(later.getTime());
   });
 
+  it("shows Pump.fun's market cap at the call instead of the lagging scan snapshot's", async () => {
+    await rewind();
+    const at = new Date(Date.now() - 30_000);
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId,
+        snapshotId,
+        source: "test",
+        confidence: 80,
+        anchorPriceUsd: 0.001,
+        anchorMcapUsd: 50_000,
+        liveMcapUsd: 43_200,
+        model: "rules",
+        modelName: "Rules",
+        createdAt: at,
+      },
+    });
+    const api = new FakeTelegramApi();
+    expect((await run(api)).sent).toBe(1);
+    expect(api.sent()[0]!.text).toContain("MC <b>$43.2k</b>");
+  });
+
   it("alerts a token again once a day has passed since the chat heard about it", async () => {
     await rewind();
     const at = new Date(Date.now() - 30_000);
