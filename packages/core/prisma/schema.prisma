@@ -1710,3 +1710,16 @@ model CuratorRetrainRequest {
 
   @@index([startedAt])
 }
+
+/// CuratedAlert.peakMcapUsd/peakMcapAt as they were before migration 20261012170000 corrected them:
+/// highs banked from a DexScreener reading taken in the first minute after a call, which still
+/// showed the market from before it (CALL_PEAK_READING_LAG_MS). Kept so the correction can be read
+/// back or undone:
+///   UPDATE "CuratedAlert" c SET "peakMcapUsd" = b."peakMcapUsd", "peakMcapAt" = b."peakMcapAt"
+///   FROM "CuratedPeakCorrection" b WHERE c.id = b."alertId";
+model CuratedPeakCorrection {
+  alertId     String   @id
+  peakMcapUsd Float
+  peakMcapAt  DateTime
+  correctedAt DateTime @default(now())
+}

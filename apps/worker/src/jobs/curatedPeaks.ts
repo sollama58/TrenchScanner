@@ -1,4 +1,4 @@
-import { prisma, createLogger } from "@trenchscanner/core";
+import { prisma, createLogger, CALL_PEAK_READING_LAG_MS } from "@trenchscanner/core";
 
 const logger = createLogger("curated-peaks");
 
@@ -14,6 +14,9 @@ const logger = createLogger("curated-peaks");
  *
  * Both statements only raise: the guards mean a row already at its high is not rewritten.
  */
+/** CALL_PEAK_READING_LAG_MS in whole seconds, for the statements below. */
+const LAG_SECS = CALL_PEAK_READING_LAG_MS / 1000;
+
 export async function recordCuratedPeaks(
   snapshotRetentionDays: number,
   options: {
@@ -49,8 +52,10 @@ export async function recordCuratedPeaks(
         SELECT s."marketCapUsd", s."takenAt"
         FROM "TokenSnapshot" s
         WHERE s."tokenId" = c2."tokenId"
+          -- Readings from the first minute after the call still show the market before it
+          -- (CALL_PEAK_READING_LAG_MS).
           AND s."takenAt" >= GREATEST(
-            c2."createdAt",
+            c2."createdAt" + MAKE_INTERVAL(secs => ${LAG_SECS}::int),
             CASE WHEN ${backfill} AND c2."peakMcapUsd" IS NULL THEN c2."createdAt" ELSE ${since} END
           )
         ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
@@ -78,7 +83,7 @@ export async function recordCuratedPeaks(
       AND (${liveTokens}::text[] IS NULL OR c."tokenId" = ANY(${liveTokens}::text[]))
       AND t."liveMarketCapUsd" IS NOT NULL
       AND t."liveDataAt" IS NOT NULL
-      AND t."liveDataAt" >= c."createdAt"
+      AND t."liveDataAt" >= c."createdAt" + MAKE_INTERVAL(secs => ${LAG_SECS}::int)
       AND (${backfill} OR t."liveDataAt" >= ${since})
       AND t."liveMarketCapUsd" > GREATEST(COALESCE(c."peakMcapUsd", 0), c."anchorMcapUsd")
   `;

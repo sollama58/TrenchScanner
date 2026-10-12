@@ -4,6 +4,16 @@ import type { DexScreenerClient } from "./datasources/dexscreener.js";
 
 const logger = createLogger("live-market-data");
 
+/**
+ * How long after a model call a DexScreener reading (a scan snapshot or a live ping) starts to
+ * count toward the call's market-cap high. DexScreener runs 45-60 s behind the market, and a call
+ * is priced from a seconds-old Jupiter quote (label rule 4), so a reading taken in the first minute
+ * still shows the market from before the call: CASINO, called at $11k on its way down from an $83k
+ * wick, banked a $70k "high since the call" from a reading taken 14 s after it. A real high in that
+ * minute is still caught by the call's run peak, which the watcher follows on Jupiter's prices.
+ */
+export const CALL_PEAK_READING_LAG_MS = 60_000;
+
 /** What one refresh pass managed to do. `requested - updated` is what DexScreener had no data for. */
 export interface LiveMarketDataRefresh {
   requested: number;
@@ -181,7 +191,8 @@ async function raiseCuratedPeaks(
       ) AS v(id, mcap, at)
       WHERE c."tokenId" = v.id
         AND c."createdAt" > now() - MAKE_INTERVAL(days => ${windowDays}::int)
-        AND v.at >= c."createdAt"
+        -- A reading from the first minute after the call still shows the market before it.
+        AND v.at >= c."createdAt" + MAKE_INTERVAL(secs => ${CALL_PEAK_READING_LAG_MS / 1000}::int)
         AND v.mcap > GREATEST(COALESCE(c."peakMcapUsd", 0), c."anchorMcapUsd")`;
   } catch (err) {
     logger.warn("failed to record live call peaks", { count: rows.length, error: String(err) });

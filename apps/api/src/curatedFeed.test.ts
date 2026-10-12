@@ -223,6 +223,24 @@ describe("serializeCuratedAlert", () => {
     expect(card.snapshot.graduated).toBeNull();
   });
 
+  it("shows the call's anchor as its alert figures, not the scan snapshot's staler price", () => {
+    // CASINO: DexScreener's scan read $47.5k while the call was priced from a $11.4k Jupiter
+    // quote; its 6.2x Peak on the snapshot's market cap made an ATH of $294k.
+    const row = alertRow({
+      anchorPriceUsd: 0.0000114,
+      anchorMcapUsd: 11_400,
+      peakMcapUsd: 70_700,
+      snapshot: { id: "snap1", priceUsd: 0.0000475, marketCapUsd: 47_500, holderCount: 120 },
+    });
+    const card = serializeCuratedAlert(row as any, currentMarketCap);
+    expect(card.snapshot.marketCapUsd).toBe(11_400);
+    expect(card.snapshot.priceUsd).toBe(0.0000114);
+    // The scan's other readings stay.
+    expect(card.snapshot.holderCount).toBe(120);
+    // The ATH the card draws: alert market cap at the Peak multiple.
+    expect(card.snapshot.marketCapUsd * (1 + card.peakReturnPct! / 100)).toBeCloseTo(70_700);
+  });
+
   it("derives the card's peak from the outcome watcher, since supply is fixed", () => {
     const row = alertRow({
       peak24hReturnPct: 240,

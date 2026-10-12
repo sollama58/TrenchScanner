@@ -408,9 +408,9 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
     /** The 2x rate of recent out-of-sample calls ranked like this one at emission, in percent. */
     calibratedPct: alert.calibratedPct,
     /**
-     * Pump.fun's market cap as the call went out, null when it didn't answer. The card's alert
-     * price is DexScreener's, 45-60s behind the market; this is closer to what a buyer pays.
-     * Display only: Peak and the verdict are measured from the alert price.
+     * Pump.fun's market cap as the call went out, else the Jupiter quote the call was priced from;
+     * null when neither answered. Display only: Peak and the verdict are measured from the alert
+     * price (the call's anchor).
      */
     liveMcapUsd: alert.liveMcapUsd,
     // An "AI: ..." line was how a gate-mode reviewer's reasoning reached public cards; that is now
@@ -463,7 +463,7 @@ export function serializeCuratedAlert(
   const current = currentMarketCap(token, latestSnapshot);
   const outcome = resolveOutcome(alert);
 
-  const snapshot = alert.snapshot ?? {
+  const stored = alert.snapshot ?? {
     id: `${alert.id}-anchor`,
     tokenId: alert.tokenId,
     takenAt: alert.createdAt,
@@ -504,6 +504,11 @@ export function serializeCuratedAlert(
     rugScreenPassed: true,
     rugScreenReasons: [],
   };
+  // The card's alert figures are the call's anchor, the price its Peak and verdict count from.
+  // Since calls are priced from a fresh Jupiter quote (label rule 4), the scan snapshot's
+  // DexScreener price can be far from it (45-60 s stale): the snapshot's market cap under a Peak
+  // counted from the anchor put a $11k call's 6x on a $47k alert, an ATH of $294k.
+  const snapshot = { ...stored, priceUsd: alert.anchorPriceUsd, marketCapUsd: alert.anchorMcapUsd };
 
   // The peak the card's ATH section shows. Derived from the outcome watcher's peak rather than
   // the Match peak job (which only tracks matches): supply is fixed for these tokens, so a price
