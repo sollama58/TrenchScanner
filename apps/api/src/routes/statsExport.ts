@@ -435,10 +435,26 @@ const NARRATIVE_TEXT = [
   "copyOf",
   "tickerExplanation",
   "xText",
+  "xPostedAt",
+  "xLikes",
+  "xReposts",
+  "xReplies",
+  "xQuotes",
+  "xViews",
+  "xEngagementAsOf",
+  "xQuotedViews",
+  "xMediaCount",
+  "referentPostId",
+  "lineageSameTicker",
+  "timedOut",
 ] as const;
 
 function str(v: unknown, max: number): string | null {
   return typeof v === "string" && v.length > 0 ? v.slice(0, max) : null;
+}
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 function rec(v: unknown): Rec {
@@ -449,6 +465,9 @@ function rec(v: unknown): Rec {
 export function narrativeText(analysis: unknown): Record<(typeof NARRATIVE_TEXT)[number], unknown> {
   const doc = rec(analysis);
   const lineage = rec(doc.lineage);
+  const x = rec(doc.x);
+  // TokenSage rules 0.30.0+: the post's counts as of engagement.as_of (null on older reads).
+  const engagement = rec(x.engagement);
   const copies = Array.isArray(doc.copy_of) ? doc.copy_of.slice(0, 3).map(rec) : [];
   return {
     referentDesc: str(rec(doc.referent).desc, 300),
@@ -461,7 +480,19 @@ export function narrativeText(analysis: unknown): Record<(typeof NARRATIVE_TEXT)
       recent: c.recent ?? null,
     })),
     tickerExplanation: str(doc.ticker_explanation, 300),
-    xText: str(rec(doc.x).text, 500),
+    xText: str(x.text, 500),
+    xPostedAt: str(x.created_at, 40),
+    xLikes: num(engagement.likes),
+    xReposts: num(engagement.reposts),
+    xReplies: num(engagement.replies),
+    xQuotes: num(engagement.quotes),
+    xViews: num(engagement.views),
+    xEngagementAsOf: str(engagement.as_of, 40),
+    xQuotedViews: num(rec(rec(x.quoted).engagement).views),
+    xMediaCount: Array.isArray(x.media) ? x.media.length : null,
+    referentPostId: str(rec(doc.referent).post_id, 40),
+    lineageSameTicker: num(lineage.same_ticker),
+    timedOut: Array.isArray(doc.timed_out) ? doc.timed_out.filter((t) => typeof t === "string") : [],
   };
 }
 
