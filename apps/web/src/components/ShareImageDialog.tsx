@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { canvasToPng } from "../pnlCard";
-import { CloseIcon } from "./Icons";
+import { CloseIcon, ShareIcon } from "./Icons";
 
 /**
  * A branded share image (shareCard.ts) in a dialog, with the ways to send it, as the PnL card
@@ -124,5 +124,55 @@ export function ShareImageDialog({
         </div>
       </div>
     </dialog>
+  );
+}
+
+/**
+ * A section's Share button and the dialog it opens. `render` is only called once the dialog
+ * opens, so a section drawing nothing until someone shares costs nothing.
+ */
+export function ShareButton({
+  title,
+  fileName,
+  caption,
+  link = "trenchscanner.app",
+  render,
+  disabled = false,
+  iconOnly = false,
+}: {
+  title: string;
+  fileName: string;
+  caption: string;
+  link?: string;
+  render: () => Promise<HTMLCanvasElement>;
+  disabled?: boolean;
+  /** A bare icon, for a toolbar of icon buttons. */
+  iconOnly?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        className={iconOnly ? "ghost icon-btn" : "ghost share-btn"}
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        title="Share this as an image"
+        aria-label={iconOnly ? `Share ${title} as an image` : undefined}
+      >
+        <ShareIcon size={14} />
+        {iconOnly ? null : " Share"}
+      </button>
+      {open && (
+        <ShareImageDialog
+          title={title}
+          fileName={fileName}
+          caption={caption}
+          link={link}
+          render={render}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
   );
 }

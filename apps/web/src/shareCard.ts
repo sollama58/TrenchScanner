@@ -99,6 +99,8 @@ export function frame(
     footer: string;
     /** The footer's right side: where the card points. */
     link: string;
+    /** Stamps the footer with the time as well as the date (in UTC), for figures that move by the hour. */
+    time?: boolean;
   },
 ) {
   const W = CARD_W;
@@ -155,13 +157,32 @@ export function frame(
   ctx.textBaseline = "middle";
   ctx.fillStyle = MUTED;
   ctx.font = `500 18px ${FONT}`;
-  const date = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-  ctx.fillText(`${opts.footer} · ${date}`, PAD, H - 44);
+  ctx.font = `700 22px ${FONT}`;
+  const linkW = ctx.measureText(opts.link).width;
+  ctx.font = `500 18px ${FONT}`;
+  ctx.fillText(
+    clip(ctx, `${opts.footer} · ${stamp(new Date(), opts.time)}`, W - PAD * 2 - linkW - 32),
+    PAD,
+    H - 44,
+  );
   ctx.textAlign = "right";
   ctx.fillStyle = INK;
   ctx.font = `700 22px ${FONT}`;
   ctx.fillText(opts.link, W - PAD, H - 44);
   ctx.textAlign = "left";
+}
+
+/** "October 12, 2026", or with `time` "Oct 12, 2026, 16:05 UTC": the image is seen in any timezone. */
+export function stamp(d: Date, time = false): string {
+  if (!time) return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  const day = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const hm = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+  return `${day}, ${hm} UTC`;
 }
 
 /** A gradient pill with a label, right-aligned at `right`; `glyph` draws a 24px icon before it. */

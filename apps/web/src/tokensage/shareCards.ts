@@ -467,7 +467,10 @@ const DOWN = "#ff8080";
  * above or below it, its own return and 2x rate with that rate's gap, and how many calls it rests
  * on. Thin narratives are faded, as on the page.
  */
-function drawModels(ctx: CanvasRenderingContext2D, lh: LighthouseSignals | null) {
+export function drawNarrativesPay(
+  ctx: CanvasRenderingContext2D,
+  lh: { outcomes: { byCategory: LighthouseTally[] } } | null,
+) {
   if (!lh) return empty(ctx);
   const all = narratives(lh.outcomes.byCategory);
   const rows = all.slice(0, 6);
@@ -570,7 +573,7 @@ const DRAW: Record<
   flags: drawFlags,
   logos: (ctx, d) => drawCounts(ctx, d.anatomy.logo, "of logos read", logoKinds),
   fees: (ctx, d) => drawCounts(ctx, d.anatomy.fee, "of fee setups read"),
-  models: (ctx, _d, lh) => drawModels(ctx, lh),
+  models: (ctx, _d, lh) => drawNarrativesPay(ctx, lh),
 };
 
 /** The subtitle under each card's title. */

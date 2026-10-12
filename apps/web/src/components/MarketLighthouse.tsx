@@ -6,7 +6,16 @@ import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { HBarChart, Skeleton } from "./Charts";
 import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
+import {
+  renderNarrativeMixCard,
+  renderNarrativesPayCard,
+  renderScreenedCard,
+  renderSignalsCard,
+  renderSubNarrativesCard,
+  renderTokenSageCard,
+} from "./lighthouseCards";
 import { SafetyGauge } from "./SafetyGauge";
+import { ShareButton } from "./ShareImageDialog";
 import { WeatherGauge } from "./WeatherGauge";
 
 /**
@@ -28,6 +37,9 @@ export type Days = (typeof WINDOWS)[number];
 const SIGNAL_WINDOWS = [1, 7, 30] as const;
 type SignalDays = (typeof SIGNAL_WINDOWS)[number];
 const windowLabel = (days: number) => (days === 1 ? "24h" : days === 7 ? "7d" : "1mo");
+const spanOf = (days: number) => (days === 1 ? "24 hours" : `${days} days`);
+/** A share image's file name for a window: "trenchscanner-narrative-mix-24h". */
+const fileFor = (name: string, days: number) => `trenchscanner-${name}-${windowLabel(days)}`;
 
 /** Graded alerts below which a narrative's hit rate shows as early rather than as a verdict. */
 export const MIN_GRADED = 5;
@@ -178,13 +190,23 @@ function LighthouseWindow({ base, days, compact = false }: { base: string; days:
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
       {d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
-      <Screened s={d.screened} span={span} compact={compact} />
+      <Screened s={d.screened} span={span} days={days} compact={compact} />
       <h3 className="lh-part">
         What TokenSage sees
         <span className={`lh-pill ${d.tokenSage.on ? "on" : "off"}`}>
           <span className="lh-pill-dot" aria-hidden />
           {d.tokenSage.on ? "live" : "off"}
         </span>
+        {!compact && d.reads.total > 0 && (
+          <span className="lh-part-share">
+            <ShareButton
+              title={`What TokenSage sees, last ${span}`}
+              fileName={fileFor("tokensage", days)}
+              caption={`TrenchScanner: ${d.reads.described.toLocaleString("en-US")} new coins read by TokenSage in the last ${span}`}
+              render={() => renderTokenSageCard(d, span)}
+            />
+          </span>
+        )}
       </h3>
       {d.reads.total === 0 ? (
         <div className="lh-empty">
@@ -229,10 +251,30 @@ function TokenSageSections({
         <Section
           title="Narrative mix"
           note={`Share of the ${d.reads.described.toLocaleString()} coins read.`}
+          share={
+            <ShareButton
+              title={`Narrative mix, last ${span}`}
+              fileName={fileFor("narrative-mix", days)}
+              caption={`TrenchScanner: the narrative mix of new Solana coins, last ${span}`}
+              render={() => renderNarrativeMixCard(d, span)}
+            />
+          }
         >
           <Donut d={d} cls={cls} />
         </Section>
-        <Section title="Hottest sub-narratives" note="Coins carrying each label, any confidence.">
+        <Section
+          title="Hottest sub-narratives"
+          note="Coins carrying each label, any confidence."
+          share={
+            <ShareButton
+              title={`Hottest sub-narratives, last ${span}`}
+              fileName={fileFor("sub-narratives", days)}
+              caption={`TrenchScanner: the hottest sub-narratives on new Solana coins, last ${span}`}
+              disabled={d.categories.length === 0}
+              render={() => renderSubNarrativesCard(d, span)}
+            />
+          }
+        >
           {d.categories.length ? (
             <HBarChart
               data={d.categories.slice(0, 8).map((c) => ({
@@ -249,6 +291,15 @@ function TokenSageSections({
 
       <Section
         title="Which narratives pay"
+        share={
+          <ShareButton
+            title={`Which narratives pay, last ${span}`}
+            fileName={fileFor("narratives-pay", days)}
+            caption={`TrenchScanner: which narratives pay, last ${span}`}
+            disabled={narratives(d.outcomes.byCategory).length === 0}
+            render={() => renderNarrativesPayCard(d.outcomes, span)}
+          />
+        }
         note={`Model calls in the last ${span} by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Narratives under ${MIN_GRADED} graded calls stay faded. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
       >
         <HitRates rows={narratives(d.outcomes.byCategory)} cls={cls} baseline={base} />
@@ -273,23 +324,36 @@ function TokenSageSections({
  */
 function SignalsAtAGlance({ d, base, days }: { d: MarketLighthouse; base: string; days: Days }) {
   const [picked, setPicked] = useState<SignalDays | null>(null);
+  const [fetched, setFetched] = useState<{ days: number; s: LighthouseSignals } | null>(null);
   const shown = picked ?? days;
+  const s: LighthouseSignals | null = shown === days ? d : fetched?.days === shown ? fetched.s : null;
   return (
     <section className="lh-section">
       <div className="lh-section-head">
         <h3>Signals at a glance</h3>
-        <div className="segmented small" role="tablist" aria-label="Signals window">
-          {SIGNAL_WINDOWS.map((w) => (
-            <button
-              key={w}
-              role="tab"
-              aria-selected={w === shown}
-              className={w === shown ? "on" : ""}
-              onClick={() => setPicked(w)}
-            >
-              {windowLabel(w)}
-            </button>
-          ))}
+        <div className="lh-head-tools">
+          <ShareButton
+            title={`Signals at a glance, last ${spanOf(shown)}`}
+            fileName={fileFor("signals", shown)}
+            caption={`TrenchScanner: what TokenSage found behind new Solana coins, last ${spanOf(shown)}`}
+            disabled={!s}
+            render={() =>
+              renderSignalsCard({ ...s!, deep: s!.reads.deep, described: s!.reads.described }, spanOf(shown))
+            }
+          />
+          <div className="segmented small" role="tablist" aria-label="Signals window">
+            {SIGNAL_WINDOWS.map((w) => (
+              <button
+                key={w}
+                role="tab"
+                aria-selected={w === shown}
+                className={w === shown ? "on" : ""}
+                onClick={() => setPicked(w)}
+              >
+                {windowLabel(w)}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       <p className="faint small">
@@ -308,14 +372,27 @@ function SignalsAtAGlance({ d, base, days }: { d: MarketLighthouse; base: string
           }}
         />
       ) : (
-        <FetchedSignals base={base} days={shown} />
+        <FetchedSignals base={base} days={shown} onData={(s) => setFetched({ days: shown, s })} />
       )}
     </section>
   );
 }
 
-function FetchedSignals({ base, days }: { base: string; days: number }) {
+function FetchedSignals({
+  base,
+  days,
+  onData,
+}: {
+  base: string;
+  days: number;
+  /** Hands the answer up, for the section's share image. */
+  onData: (s: LighthouseSignals) => void;
+}) {
   const q = usePolling<LighthouseSignals>(`${base}/lighthouse/signals?days=${days}`, 300_000);
+  useEffect(() => {
+    if (q.data) onData(q.data);
+    // onData is a fresh closure each render; the answer is what changes.
+  }, [q.data]);
   if (!q.data) {
     if (q.error) return <p className="error">Couldn&apos;t load these signals: {q.error.message}</p>;
     return <Skeleton lines={4} />;
@@ -460,10 +537,28 @@ function Kpi({
   );
 }
 
-function Section({ title, note, children }: { title: string; note?: string; children: React.ReactNode }) {
+function Section({
+  title,
+  note,
+  share,
+  children,
+}: {
+  title: string;
+  note?: string;
+  /** The section's Share button, beside its title. */
+  share?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <section className="lh-section">
-      <h3>{title}</h3>
+      {share ? (
+        <div className="lh-section-head">
+          <h3>{title}</h3>
+          {share}
+        </div>
+      ) : (
+        <h3>{title}</h3>
+      )}
       {note && <p className="faint small">{note}</p>}
       {children}
     </section>
@@ -731,7 +826,17 @@ function screenedBucketLabel(iso: string, bucketHours: number) {
  * and the average return under the fixed exit plan, overall and per bucket. One axis per chart:
  * the rates share a 0-100% scale, the return gets its own chart around zero.
  */
-function Screened({ s, span, compact = false }: { s: ScreenedData; span: string; compact?: boolean }) {
+function Screened({
+  s,
+  span,
+  days,
+  compact = false,
+}: {
+  s: ScreenedData;
+  span: string;
+  days: number;
+  compact?: boolean;
+}) {
   const [hover, setHover] = useState<number | null>(null);
   const [explain, setExplain] = useState(false);
   const buckets = s.byBucket.filter((b) => b.graded > 0);
@@ -751,17 +856,28 @@ function Screened({ s, span, compact = false }: { s: ScreenedData; span: string;
     <section className="lh-section lh-screened">
       <div className="lh-screened-head">
         <h3>How screened tokens did</h3>
-        <button
-          type="button"
-          className="ghost lh-info"
-          aria-expanded={explain}
-          aria-controls="lh-checks"
-          title={summary}
-          onClick={() => setExplain((o) => !o)}
-        >
-          <InfoIcon size={14} />
-          {explain ? "Hide the pre-checks" : "What are the pre-checks?"}
-        </button>
+        <div className="lh-head-tools">
+          <button
+            type="button"
+            className="ghost lh-info"
+            aria-expanded={explain}
+            aria-controls="lh-checks"
+            title={summary}
+            onClick={() => setExplain((o) => !o)}
+          >
+            <InfoIcon size={14} />
+            {explain ? "Hide the pre-checks" : "What are the pre-checks?"}
+          </button>
+          {!compact && (
+            <ShareButton
+              title={`How screened tokens did, last ${span}`}
+              fileName={fileFor("screened", days)}
+              caption={`TrenchScanner: ${pct(s.hit2xPct, 1)} of screened tokens hit 2x in the last ${span}`}
+              disabled={s.graded === 0}
+              render={() => renderScreenedCard(s, span)}
+            />
+          )}
+        </div>
       </div>
       <p className="faint small">
         Every token that passed our pre-checks in the last {span}, graded from the price when it first looked
