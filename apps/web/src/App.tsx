@@ -35,6 +35,8 @@ import { AlertNotifier, resetSettings } from "./alerts";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
+import { PageLoader } from "./components/PageLoader";
+import { beginWait, markNavigation } from "./loadTracker";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -198,6 +200,12 @@ export function App() {
   const tabs = isAdmin ? [...TABS, ADMIN_TAB] : TABS;
   // #admin without an admin wallet reads as the Live tab, so a tab is always the highlighted one.
   const tab: Tab = wantedTab === "admin" && !isAdmin ? "live" : wantedTab;
+  // A new tab, or signing in or out, is a new page: its load gets the full loader.
+  useEffect(markNavigation, [tab, session.state]);
+  const loaderLabel =
+    session.state === "signed-in" || session.state === "guest"
+      ? `Loading ${tabs.find((t) => t.id === tab)?.label ?? "TrenchScanner"}`
+      : "Loading TrenchScanner";
 
   return (
     <div className="app">
@@ -280,6 +288,7 @@ export function App() {
       </header>
 
       <main className="content">
+        <PageLoader label={loaderLabel} />
         {/* The Admin tab's broadcast: for everyone, signed in, guest or signed out. */}
         {session.state !== "linking" && <AnnouncementBar />}
         {session.state === "loading" && <Boot />}
@@ -586,7 +595,9 @@ function GuestLocked({ label, onConnect }: { label: string; onConnect: () => voi
   );
 }
 
+/** Stands in for a screen whose code or session check is still loading; the loader waits on it. */
 function Boot() {
+  useEffect(() => beginWait(), []);
   return (
     <div className="boot">
       <LogoMark size={40} />
