@@ -230,6 +230,8 @@ export interface OnChainProfile {
   sameTimeClusterCount?: number;
   /** Holders in a same-minute group, of linkedWalletsChecked (user ask 2026-10-13: "N/20"). */
   sameTimeFundedCount?: number;
+  /** Holders sharing a funder or a funding minute with another, each once (LinkedWalletsReading.bundledWalletCount). */
+  bundledWalletCount?: number;
   sameTimeClusters?: SameTimeCluster[];
   /**
    * Of the largest holders (up to 20, the creator aside), the % an exchange or a busy service paid
@@ -396,6 +398,8 @@ export interface FilterCriteria {
   maxSameTimeFundedPct?: number | null;
   /** Max how many of the top-20 holders were funded within a minute of each other (sameTimeFundedCount). */
   maxSameTimeFundedCount?: number | null;
+  /** Max how many of the top-20 holders share a funder or a funding minute with another (bundledWalletCount). */
+  maxBundledWalletCount?: number | null;
   /** Max % of supply held by top holders tied to the creator (linkedCreatorPct). Skipped while unknown. */
   maxLinkedCreatorPct?: number | null;
   /** Min holders as Jupiter counts them at the decision (freshQuote.holderCount). Fails closed without a quote. */

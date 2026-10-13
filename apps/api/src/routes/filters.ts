@@ -56,6 +56,7 @@ function buildFilterInputSchema(env: Env) {
     maxCexFundedCount: z.number().int().min(0).max(20).nullable().optional(),
     maxSameTimeFundedPct: z.number().min(0).max(100).nullable().optional(),
     maxSameTimeFundedCount: z.number().int().min(0).max(20).nullable().optional(),
+    maxBundledWalletCount: z.number().int().min(0).max(20).nullable().optional(),
     maxLinkedCreatorPct: z.number().min(0).max(100).nullable().optional(),
     minLiveHolderCount: z.number().int().min(0).max(100_000).nullable().optional(),
     minFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),

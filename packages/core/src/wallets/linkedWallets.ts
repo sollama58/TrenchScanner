@@ -197,6 +197,12 @@ export interface LinkedWalletsReading {
   sameTimeClusterCount: number;
   /** How many holders are in a same-minute group, of linkedWalletsChecked: the "N/20". */
   sameTimeFundedCount: number;
+  /**
+   * How many holders share a funder or a funding minute with another holder, each counted once:
+   * the union of the linked clusters and the same-minute groups (user ask 2026-10-13, "Bundled").
+   * A wallet in both counts once, so this is at most linkedWalletCount + sameTimeFundedCount.
+   */
+  bundledWalletCount: number;
   sameTimeClusters: SameTimeCluster[];
 }
 
@@ -359,6 +365,10 @@ export function linkedWallets(
     sameTimeFundedPct: round2(sameTime.reduce((s, c) => s + c.pct, 0)),
     sameTimeClusterCount: sameTime.length,
     sameTimeFundedCount: sameTime.reduce((n, c) => n + c.wallets.length, 0),
+    bundledWalletCount: new Set([
+      ...clusters.flatMap((c) => c.wallets.map((w) => w.wallet)),
+      ...sameTime.flatMap((c) => c.wallets.map((w) => w.wallet)),
+    ]).size,
     sameTimeClusters: sameTime,
   };
 }

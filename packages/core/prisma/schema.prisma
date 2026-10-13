@@ -279,6 +279,9 @@ model UserFilter {
   /// Max how many of the top-20 holders were funded within a minute of each other
   /// (TokenSnapshot.sameTimeFundedCount, "N/20"). Skipped while unknown.
   maxSameTimeFundedCount     Int?
+  /// Max how many of the top-20 holders share a funder or a funding minute with another
+  /// (TokenSnapshot.bundledWalletCount, "Bundled"). Skipped while unknown.
+  maxBundledWalletCount      Int?
   /// Max % of supply held by top holders tied to the creator: wallets the creator funded, that
   /// funded the creator, or with the creator's funder (TokenSnapshot.linkedCreatorPct). Skipped
   /// while unknown.
@@ -1018,6 +1021,8 @@ model TokenSnapshot {
   sameTimeFundedPct       Float?
   sameTimeClusterCount    Int?
   sameTimeFundedCount     Int?
+  /// Top holders sharing a funder or a funding minute with another, each once ("Bundled", N/20).
+  bundledWalletCount      Int?
   sameTimeClusters        Json?
   // Of the largest holders (up to 20, the creator aside), the % an exchange or a busy service paid
   // for (core's cexFundedReading), how many, and how many were read. Null until all were read.

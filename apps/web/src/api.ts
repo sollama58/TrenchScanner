@@ -178,6 +178,8 @@ export interface Snapshot {
   sameTimeClusterCount?: number | null;
   /** How many top holders are in a same-minute group; null on scans before it was kept. */
   sameTimeFundedCount?: number | null;
+  /** How many top holders share a funder or a funding minute with another (each counted once); null on scans before it was kept. */
+  bundledWalletCount?: number | null;
   /** The same-minute groups, largest first; null or absent with none. */
   sameTimeClusters?:
     | {
@@ -813,6 +815,7 @@ export interface FilterInput {
   maxCexFundedCount: number | null;
   maxSameTimeFundedPct: number | null;
   maxSameTimeFundedCount: number | null;
+  maxBundledWalletCount: number | null;
   maxLinkedCreatorPct: number | null;
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
@@ -1208,6 +1211,7 @@ export type CardField =
   | "sniperTop10"
   | "linked"
   | "cexFunded"
+  | "bundled"
   | "dev"
   | "reasons"
   | "mint"
@@ -1246,6 +1250,8 @@ export interface FeedAppearance {
   sniperTop10: boolean;
   /** The CEX-funded tile; off by default (absent from older API builds: off). */
   cexFunded: boolean;
+  /** The Bundled tile; off by default (absent from older API builds: off). */
+  bundled: boolean;
   /**
    * The Narrative model's "agrees" / "warns" pill on other models' cards (and the line in Telegram
    * alerts). Null follows the automatic default (GET /config/narrative-note).

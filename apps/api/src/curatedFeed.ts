@@ -497,6 +497,7 @@ export function serializeCuratedAlert(
     sameTimeFundedPct: null,
     sameTimeClusterCount: null,
     sameTimeFundedCount: null,
+    bundledWalletCount: null,
     sameTimeClusters: null,
     cexFundedCount: null,
     cexFundedHolders: null,

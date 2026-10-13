@@ -87,6 +87,14 @@ export const CEX_FUNDED_FEATURES = ["cexFundedPct"] as const;
 export const SAME_TIME_FUNDING_FEATURES = ["sameTimeFundedPct", "sameTimeClusterCount"] as const;
 
 /**
+ * Added 2026-10-13 (user ask, "Bundled"): of the top-20 holders, how many sit in a same-minute
+ * funding group, and how many share a funder or a funding minute with another holder, each counted
+ * once (core's linkedWallets). Null until every holder's funder is read, and on every row banked
+ * before. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const BUNDLED_FEATURES = ["sameTimeFundedCount", "bundledWalletCount"] as const;
+
+/**
  * Added 2026-10-13: flagged wallets (risky or known dumpers, core's wallets/liveFlags.ts) trading
  * the coin in its newest page of trades, read from Helius before the decision: how many bought and
  * sold, and the SOL each way. Null without a recent page or the wallet scores, and on every row
@@ -353,6 +361,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   // novelty, and the trend and story heat as they stand at the decision. Null without a
   // refresh, and on every row banked before. Never backfilled.
   ...NARRATIVE_FEATURES_V8,
+  ...BUNDLED_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -456,6 +465,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // ask "build all of the fixes"): recorded first. Bring them in by removing them here once two
   // days of decision rows show they separate runners (notes/tokensage-trend-heat-2026-10-13.md).
   ...NARRATIVE_FEATURES_V8,
+  // The same-minute and bundled holder counts (added 2026-10-13): recorded first, on the same terms.
+  ...BUNDLED_FEATURES,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -784,6 +795,8 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   cexFundedPct: "top holders funded from an exchange",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
+  sameTimeFundedCount: "top holders funded in the same minute",
+  bundledWalletCount: "bundled top holders (shared funder or funding minute)",
   flaggedBuyers: "flagged wallets buying",
   flaggedSellers: "flagged wallets selling",
   flaggedBuySol: "SOL bought by flagged wallets",
@@ -1003,6 +1016,8 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     cexFundedPct: scored.cexFundedPct ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
+    sameTimeFundedCount: scored.sameTimeFundedCount ?? null,
+    bundledWalletCount: scored.bundledWalletCount ?? null,
     flaggedBuyers: scored.flaggedBuyers ?? null,
     flaggedSellers: scored.flaggedSellers ?? null,
     flaggedBuySol: scored.flaggedBuySol ?? null,

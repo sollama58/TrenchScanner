@@ -13,7 +13,7 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { openSage } from "../sage";
-import { linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
+import { bundledCount, linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -99,6 +99,7 @@ export function AlertCard({
     sniperAtAlert,
     linkedPct,
     linkedCount: linkedN,
+    bundledCount: bundled,
     linkedAtAlert,
     linkedClusters,
     cexPct,
@@ -127,6 +128,7 @@ export function AlertCard({
         "sniperTop10",
         "linked",
         "cexFunded",
+        "bundled",
         "dev",
       ] as const
     ).filter(show).length + (show("vol") ? 3 : 0);
@@ -414,6 +416,22 @@ export function AlertCard({
               </dd>
             </div>
           )}
+          {show("bundled") && (
+            <div
+              title={
+                bundled === null
+                  ? "Bundled: not checked yet."
+                  : `Bundled: ${bundled.linked} of the ${bundled.of} largest holders share a funder or a funding minute with another top holder, each counted once, ${
+                      linkedAtAlert ? "at alert time" : "from a scan after the alert"
+                    }.`
+              }
+            >
+              <dt>Bundled</dt>
+              <dd className={bundled === null ? "muted" : "num"}>
+                {bundled === null ? "Not checked" : linkedCountText(bundled)}
+              </dd>
+            </div>
+          )}
           {show("dev") && (
             <div
               title={
@@ -558,6 +576,7 @@ export function cardReadings(card: Card) {
     sniperAtAlert,
     linkedPct: linkedFrom?.linkedWalletPct ?? null,
     linkedCount: linkedFrom ? linkedCount(linkedFrom) : null,
+    bundledCount: linkedFrom ? bundledCount(linkedFrom) : null,
     linkedAtAlert: linkedFrom === s,
     linkedClusters: linkedFrom?.linkedClusters ?? [],
     cexPct: cexFrom?.cexFundedPct ?? null,

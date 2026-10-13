@@ -111,6 +111,15 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         step: 1,
       },
       {
+        key: "maxBundledWalletCount",
+        min: 0,
+        max: 20,
+        label: "Max bundled top holders",
+        hint: "of the 20 largest holders, how many share a funder or a funding minute with another, each counted once; tokens not checked yet wait",
+        unit: "of 20",
+        step: 1,
+      },
+      {
         key: "maxLinkedWalletPct",
         min: 0,
         max: 100,

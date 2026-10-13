@@ -61,6 +61,7 @@ export function awaitsWalletFigure(
     | "cexFundedCount"
     | "sameTimeFundedPct"
     | "sameTimeFundedCount"
+    | "bundledWalletCount"
     | "linkedCreatorPct"
   >,
   filter: Pick<
@@ -75,6 +76,7 @@ export function awaitsWalletFigure(
     | "maxCexFundedCount"
     | "maxSameTimeFundedPct"
     | "maxSameTimeFundedCount"
+    | "maxBundledWalletCount"
     | "maxLinkedCreatorPct"
   >,
 ): boolean {
@@ -89,6 +91,7 @@ export function awaitsWalletFigure(
       scored.cexFundedCount === undefined) ||
     (filter.maxSameTimeFundedPct != null && scored.sameTimeFundedPct === undefined) ||
     (filter.maxSameTimeFundedCount != null && scored.sameTimeFundedCount === undefined) ||
+    (filter.maxBundledWalletCount != null && scored.bundledWalletCount === undefined) ||
     (filter.maxLinkedCreatorPct != null && scored.linkedCreatorPct === undefined)
   );
 }

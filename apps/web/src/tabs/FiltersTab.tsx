@@ -51,6 +51,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxCexFundedCount: null,
     maxSameTimeFundedPct: null,
     maxSameTimeFundedCount: null,
+    maxBundledWalletCount: null,
     maxLinkedCreatorPct: null,
     minLiveHolderCount: null,
     minFirstBuyersHolding: null,
