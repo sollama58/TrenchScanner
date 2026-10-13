@@ -24,11 +24,13 @@ import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import {
-  buildModelInsights,
   buildModelRunHistory,
-  type ModelInsights,
+  fullModelInsights,
+  insightsView,
+  type FullModelInsights,
   type ModelRunHistory,
 } from "../modelInsights.js";
+import { createMarketRows } from "../marketRows.js";
 import {
   createLighthouseCache,
   lighthouseQuerySchema,
@@ -88,8 +90,8 @@ const WEATHER_CACHE_TTL_MS = 15 * 60_000;
  * waiting most of a second for a fill on every expiry.
  */
 const REPORT_STALE_MS = 6 * 3_600_000;
-/** How often the Lighthouse caches are checked for a due refill (createLighthouseCache's keepWarm). */
-const LIGHTHOUSE_KEEP_WARM_MS = 60_000;
+/** How often the report keeper (createReportCaches' keepWarm) checks for a refill falling due. */
+const REPORT_KEEP_WARM_MS = 60_000;
 
 /** What the cache holds: the database rows, not the rendered cards. */
 type CuratedPage = {
@@ -99,9 +101,11 @@ type CuratedPage = {
 
 /**
  * How long the Model tab's report is reused. It runs the hit-rate report's aggregates, which
- * move hourly at most (outcomes finalize on the hour, training every few hours).
+ * move hourly at most (outcomes finalize on the hour, training every few hours). Ten minutes, not
+ * five: a refill is the heaviest the API runs (about ten seconds of aggregates on production's
+ * database), and the keeper now refills it whether or not anyone is reading.
  */
-const INSIGHTS_CACHE_TTL_MS = 5 * 60_000;
+const INSIGHTS_CACHE_TTL_MS = 10 * 60_000;
 
 /**
  * The windows the Model tab offers, and the only ones served. Each is its own cache entry, and
@@ -171,36 +175,55 @@ const feedSettingsSchema = z
   );
 
 /**
+ * How far ahead of expiry the keeper (keepWarm below) refills a cache. It runs every
+ * REPORT_KEEP_WARM_MS, so a little over that: each value is replaced before it expires, and no
+ * reader is the one to start the refill.
+ */
+const REPORT_KEEP_AHEAD_MS = 75_000;
+
+/**
  * The report caches behind the Models tab, shared by the subscriber routes here and the guest
  * routes (routes/guest.ts), so a guest opening the tab reads the same fill instead of a second one.
  */
-export function createReportCaches() {
+export function createReportCaches(env: Env) {
+  // The market every leaderboard window and the week chart measure against, read once for all of
+  // them (marketRows.ts).
+  const market = createMarketRows();
   const leaderboardCache = new Map<number, SharedCache<Leaderboard>>();
   const leaderboardFor = (days: number) => {
     let cache = leaderboardCache.get(days);
     if (!cache) {
       cache = new SharedCache<Leaderboard>(LEADERBOARD_CACHE_TTL_MS, {
         staleWhileRevalidateMs: REPORT_STALE_MS,
+        name: `leaderboard ${days}d`,
       });
       // Bounded by the schema: one per LEADERBOARD_WINDOWS_DAYS.
       leaderboardCache.set(days, cache);
     }
     return cache;
   };
+  const leaderboard = (days: number) => leaderboardFor(days).get(() => buildLeaderboard(env, days, market));
 
-  const insightsCache = new Map<string, SharedCache<ModelInsights>>();
-  const insightsFor = (days: number, isAdmin: boolean) => {
-    const key = `${days}:${isAdmin ? "admin" : "subscriber"}`;
-    let cache = insightsCache.get(key);
+  // One fill per window for every audience: the full report, with what only admins see stripped
+  // per reader (insightsView). It used to be a fill per window and audience, so an admin opening
+  // the tab paid for a second ten-second fill of the same aggregates.
+  const insightsCache = new Map<number, SharedCache<FullModelInsights>>();
+  const insightsFor = (days: number) => {
+    let cache = insightsCache.get(days);
     if (!cache) {
-      cache = new SharedCache<ModelInsights>(INSIGHTS_CACHE_TTL_MS, {
+      cache = new SharedCache<FullModelInsights>(INSIGHTS_CACHE_TTL_MS, {
         staleWhileRevalidateMs: REPORT_STALE_MS,
+        name: `insights ${days}d`,
       });
-      // Bounded by the schema: REPORT_WINDOWS_DAYS x 2 audiences.
-      insightsCache.set(key, cache);
+      // Bounded by the schema: one per REPORT_WINDOWS_DAYS.
+      insightsCache.set(days, cache);
     }
     return cache;
   };
+  const fillInsights = (days: number) => () => fullModelInsights(env, days, market);
+  const insights = async (days: number, isAdmin: boolean) =>
+    insightsView(await insightsFor(days).get(fillInsights(days)), isAdmin);
+
   const runHistoryCache = new Map<string, SharedCache<ModelRunHistory>>();
   /** Callers check `contestant` against the roster first, which bounds the map. */
   const runHistoryFor = (contestant: string) => {
@@ -213,17 +236,46 @@ export function createReportCaches() {
     }
     return cache;
   };
+  const lighthouse = createLighthouseCache();
+  const lighthouseHistory = createLighthouseHistoryCache();
+  /** Market weather: the Stats panel and the Lighthouse's gauge, for subscribers and guests alike. */
+  const weather = new SharedCache<MarketWeather>(WEATHER_CACHE_TTL_MS, {
+    staleWhileRevalidateMs: REPORT_STALE_MS,
+    name: "weather",
+  });
+
+  /**
+   * Refills every report a tab opens on before it expires, one at a time, so no reader waits on a
+   * fill - after a deploy as much as between them. Run every REPORT_KEEP_WARM_MS once listening
+   * (registerCuratedRoutes). One fill at a time keeps the refills from piling onto the pool
+   * together: each is a dozen aggregates, and several at once had every other request queueing
+   * behind them. Windows no tab opens (insights 30/90, the 90-day board) fill on demand, as before.
+   * `extra` runs after the Models tab's and before the rest (the Live tab's stats panel). Never rejects.
+   */
+  const keepWarm = async (extra: () => Promise<void> = async () => {}) => {
+    const ahead = REPORT_KEEP_AHEAD_MS;
+    // The Models tab (PAGE_DAYS in apps/web/src/tabs/modelShared.tsx): its board and report.
+    await leaderboardFor(7).warm(() => buildLeaderboard(env, 7, market), ahead);
+    await insightsFor(7).warm(fillInsights(7), ahead);
+    await extra();
+    // The Lighthouse and Filters tabs' board, then the Lighthouse's own views.
+    await leaderboardFor(30).warm(() => buildLeaderboard(env, 30, market), ahead);
+    await lighthouse.keepWarm(env, ahead);
+    await lighthouseHistory.keepWarm(ahead);
+    // The Models vs baseline chart's 24h view and the model detail's.
+    await leaderboardFor(1).warm(() => buildLeaderboard(env, 1, market), ahead);
+    await weather.warm(() => loadMarketWeather(env), ahead);
+  };
+
   return {
-    leaderboardFor,
-    insightsFor,
+    leaderboard,
+    insights,
     runHistoryFor,
-    lighthouse: createLighthouseCache(),
-    lighthouseHistory: createLighthouseHistoryCache(),
+    lighthouse,
+    lighthouseHistory,
     tokenSageShowcase: createTokenSageShowcaseCache(),
-    /** Market weather: the Stats panel and the Lighthouse's gauge, for subscribers and guests alike. */
-    weather: new SharedCache<MarketWeather>(WEATHER_CACHE_TTL_MS, {
-      staleWhileRevalidateMs: REPORT_STALE_MS,
-    }),
+    weather,
+    keepWarm,
   };
 }
 export type ReportCaches = ReturnType<typeof createReportCaches>;
@@ -260,13 +312,14 @@ export async function registerCuratedRoutes(
     viewStamps: ViewStampBuffer;
     /** The Models tab's report caches, shared with the guest routes. */
     reports: ReportCaches;
-    /** Startup warm-ups: each one starts a report fill so the first reader after a deploy doesn't wait. */
+    /** Started once the server listens: the report keeper's first pass and its timer. */
     warmers?: (() => void)[];
+    /** Called once the keeper's first pass has filled the tabs' reports (or failed trying). */
+    ready?: () => void;
   },
 ) {
   // Part of what the subscription buys - same gate as the Live Feed.
   app.addHook("preHandler", app.authenticateSubscriber);
-  const { leaderboardFor, insightsFor } = opts.reports;
 
   /**
    * One cache per page, because this feed is genuinely shared: every subscriber sees the same
@@ -419,7 +472,7 @@ export async function registerCuratedRoutes(
     }
     const { days } = parsed.data;
     const [board, state, saved] = await Promise.all([
-      leaderboardFor(days).get(() => buildLeaderboard(opts.env, days)),
+      opts.reports.leaderboard(days),
       contestState(opts.env),
       savedFeed(request),
     ]);
@@ -589,6 +642,7 @@ export async function registerCuratedRoutes(
 
   const baseRateCache = new SharedCache<{ finalized: bigint; winners: bigint }[]>(BASE_RATE_CACHE_TTL_MS, {
     staleWhileRevalidateMs: REPORT_STALE_MS,
+    name: "learning panel base rate",
   });
 
   const buildStats = async () => {
@@ -738,6 +792,7 @@ export async function registerCuratedRoutes(
 
   const statsCache = new SharedCache<Awaited<ReturnType<typeof buildStats>>>(STATS_CACHE_TTL_MS, {
     staleWhileRevalidateMs: REPORT_STALE_MS,
+    name: "learning panel stats",
   });
 
   app.get("/stats", async () => statsCache.get(buildStats));
@@ -753,10 +808,7 @@ export async function registerCuratedRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const isAdmin = request.access?.reason === "admin";
-    return insightsFor(parsed.data.days, isAdmin).get(() =>
-      buildModelInsights(opts.env, parsed.data.days, isAdmin),
-    );
+    return opts.reports.insights(parsed.data.days, request.access?.reason === "admin");
   });
 
   /** The Market Lighthouse on the Models tab: TokenSage's reads in aggregate (marketLighthouse.ts). */
@@ -789,47 +841,30 @@ export async function registerCuratedRoutes(
     return opts.reports.lighthouseHistory(parsed.data);
   });
 
-  // What the dashboard asks for first (index.html's boot list): the learning panel, and the Models
-  // tab at its default 30-day window. Run one after another, not together, so a fresh instance
-  // doesn't put a dozen aggregates on the pool at once just as its first readers arrive.
-  opts.warmers?.push(() => {
-    void (async () => {
-      const steps: [string, () => Promise<unknown>][] = [
-        ["stats", () => statsCache.get(buildStats)],
-        ["models", () => leaderboardFor(30).get(() => buildLeaderboard(opts.env, 30))],
-        ["insights", () => insightsFor(30, false).get(() => buildModelInsights(opts.env, 30, false))],
-      ];
-      for (const [name, step] of steps) {
-        await step().catch((err: unknown) =>
-          logger.warn("cache warm-up failed", { cache: name, err: String(err) }),
-        );
-      }
-    })();
-  });
-
-  // The Lighthouse (the tab's Right now, the Live tab's modal) and the tab's opening trends: their
-  // fills take seconds, so they are refilled as they fall due rather than by whichever reader
-  // arrives after an expiry. A check each minute is free when nothing is due; a refill is one
-  // window's queries at a time. Started once listening, like the warm-ups above.
-  let lighthouseTimer: ReturnType<typeof setInterval> | undefined;
-  let lighthouseRunning = false;
-  const keepLighthouseWarm = () => {
-    if (lighthouseRunning) return;
-    lighthouseRunning = true;
-    void opts.reports.lighthouse
-      .keepWarm(opts.env)
-      .then(() => opts.reports.lighthouseHistory.keepWarm())
+  // Every report a tab opens on is refilled before it expires, one at a time (keepWarm in
+  // createReportCaches), the Live tab's stats panel right after the Models tab's reports. The
+  // first pass starts as soon as the server listens, and `opts.ready` is called when it ends: a
+  // fresh instance answers /health only once the tabs' reports are filled (see routes/health.ts),
+  // so a deploy never sends the first readers to an instance whose caches are empty.
+  let keeperTimer: ReturnType<typeof setInterval> | undefined;
+  let keeperRunning = false;
+  const keepReportsWarm = () => {
+    if (keeperRunning) return Promise.resolve();
+    keeperRunning = true;
+    return opts.reports
+      .keepWarm(() => statsCache.warm(buildStats, REPORT_KEEP_AHEAD_MS))
+      .catch((err: unknown) => logger.warn("report keeper failed", { err: String(err) }))
       .finally(() => {
-        lighthouseRunning = false;
+        keeperRunning = false;
       });
   };
   opts.warmers?.push(() => {
-    keepLighthouseWarm();
-    lighthouseTimer ??= setInterval(keepLighthouseWarm, LIGHTHOUSE_KEEP_WARM_MS);
-    lighthouseTimer.unref();
+    void keepReportsWarm().finally(() => opts.ready?.());
+    keeperTimer ??= setInterval(() => void keepReportsWarm(), REPORT_KEEP_WARM_MS);
+    keeperTimer.unref();
   });
   app.addHook("onClose", async () => {
-    clearInterval(lighthouseTimer);
-    lighthouseTimer = undefined;
+    clearInterval(keeperTimer);
+    keeperTimer = undefined;
   });
 }

@@ -21,6 +21,7 @@ import {
 } from "@trenchscanner/core";
 import { buildHitRateReport, type Targets } from "./routes/stats.js";
 import { buildLearningCurve } from "./learningCurve.js";
+import type { MarketRowSource } from "./marketRows.js";
 
 /**
  * The Model tab's data: how the curator and the AI reviewer are learning and how their calls are
@@ -269,7 +270,42 @@ async function importanceFor(id: string): Promise<Importance | null> {
   return importance;
 }
 
-export async function buildModelInsights(env: Env, days: number, isAdmin: boolean) {
+/**
+ * The Model tab's report as one reader sees it: admins everything, anyone else without the
+ * model-written text (the reviewer's reasoning, the playbooks). Built once per window for both
+ * (fullModelInsights), so a subscriber and an admin opening the tab share one fill.
+ */
+export async function buildModelInsights(
+  env: Env,
+  days: number,
+  isAdmin: boolean,
+  market?: MarketRowSource,
+): Promise<ModelInsights> {
+  return insightsView(await fullModelInsights(env, days, market), isAdmin);
+}
+
+export type FullModelInsights = Awaited<ReturnType<typeof fullModelInsights>>;
+
+/** Strips what only admins see from the full report; an admin gets it as is. */
+export function insightsView(full: FullModelInsights, isAdmin: boolean) {
+  if (isAdmin) return full;
+  return {
+    ...full,
+    aiJudge: {
+      ...full.aiJudge,
+      playbooks: full.aiJudge.playbooks.map(({ text: _text, rationale: _rationale, ...p }) => p),
+      replays: full.aiJudge.replays.map(({ error: _error, ...r }) => r),
+    },
+    recentAiReviews: full.recentAiReviews.map(
+      ({ reasoning: _reasoning, risks: _risks, error: _error, ...r }) => r,
+    ),
+  };
+}
+
+export type ModelInsights = ReturnType<typeof insightsView>;
+
+/** Everything, the admin-only text included: callers hand readers insightsView of it. */
+export async function fullModelInsights(env: Env, days: number, market?: MarketRowSource) {
   const until = new Date();
   const since = new Date(until.getTime() - days * 86_400_000);
   const targets: Targets = {
@@ -322,9 +358,9 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
         },
       },
     }),
-    aiJudgeState(isAdmin),
+    aiJudgeState(),
     // Day-over-day: is the feed's edge over the market growing as the data does (learningCurve.ts)?
-    buildLearningCurve(since, until, targets, days),
+    buildLearningCurve(since, until, targets, days, market),
   ]);
 
   // Importance is read from the model that is curating now, else the newest one examined.
@@ -386,8 +422,11 @@ export async function buildModelInsights(env: Env, days: number, isAdmin: boolea
       alerted: r.curatedAlertId !== null,
       token: r.token,
       outcome: reviewOutcome(r.candidateOutcome),
-      // Model output over launcher-written text - admin wallets only, as on the feed cards.
-      ...(isAdmin ? { reasoning: r.reasoning, risks: r.risks, error: r.error } : {}),
+      // Model output over launcher-written text - admin wallets only, as on the feed cards
+      // (insightsView strips it for everyone else).
+      reasoning: r.reasoning,
+      risks: r.risks,
+      error: r.error,
     })),
   };
 }
@@ -400,7 +439,7 @@ const AI_JUDGE_HISTORY_LIMIT = 10;
  * replay that decided it, the recent replay runs, and the learned blend. Playbook text and the
  * review's rationale are model output - admin wallets only, like the reviewer's reasoning.
  */
-async function aiJudgeState(isAdmin: boolean) {
+async function aiJudgeState() {
   const [playbooks, replays, blend] = await Promise.all([
     prisma.aiPlaybook.findMany({
       orderBy: { createdAt: "desc" },
@@ -445,7 +484,8 @@ async function aiJudgeState(isAdmin: boolean) {
       createdAt: p.createdAt,
       decidedAt: p.decidedAt,
       metrics: p.metrics as JudgeRecordSummary | null,
-      ...(isAdmin ? { text: p.text, rationale: p.rationale } : {}),
+      text: p.text,
+      rationale: p.rationale,
     })),
     replays: replays.map((r) => ({
       id: r.id,
@@ -455,7 +495,7 @@ async function aiJudgeState(isAdmin: boolean) {
       scoredAt: r.scoredAt,
       requestCount: r.requestCount,
       playbookVersions: r.playbookIds.map((id) => versionOf.get(id) ?? null),
-      ...(isAdmin ? { error: r.error } : {}),
+      error: r.error,
     })),
     blend: blend
       ? {
@@ -466,8 +506,6 @@ async function aiJudgeState(isAdmin: boolean) {
       : null,
   };
 }
-
-export type ModelInsights = Awaited<ReturnType<typeof buildModelInsights>>;
 
 /** Training runs the per-model history lists (the Models tab's model detail view). */
 export const MODEL_RUN_HISTORY_LIMIT = 30;

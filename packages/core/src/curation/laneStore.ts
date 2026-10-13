@@ -203,6 +203,54 @@ export async function liveCallRecords(
 }
 
 /**
+ * One graded-or-pending market moment: a CandidateOutcome "event" row past the wallet safety cuts
+ * under a reported label rule - the market every model's record is measured against (the
+ * baseline, the lift's market, the catch rate's runners, the week chart's Market line). Every
+ * reader of it applies the same cuts, so the API reads these rows once and shares them, rather
+ * than each report scanning the table again.
+ */
+export interface MarketRow {
+  at: Date;
+  token: string;
+  hit2x: boolean | null;
+  hit4x: boolean | null;
+  hit10x: boolean | null;
+  disqualified: boolean | null;
+  simReturnPct: number | null;
+}
+
+/** A clean double: hit2x and not stopped out first, as `"hit2xIn1h" AND NOT COALESCE("disqualified", false)`. */
+export const marketRowWon = (r: MarketRow) => r.hit2x === true && r.disqualified !== true;
+
+/** liveCatchRates' market read, from rows already held: each token that doubled cleanly, at its latest such moment. */
+function marketWinners(rows: readonly MarketRow[], since: Date): { token: string; at: Date }[] {
+  const latest = new Map<string, Date>();
+  for (const r of rows) {
+    if (r.at < since || !marketRowWon(r)) continue;
+    const seen = latest.get(r.token);
+    if (!seen || r.at > seen) latest.set(r.token, r.at);
+  }
+  return [...latest].map(([token, at]) => ({ token, at }));
+}
+
+/** liveMarketLift's market read, from rows already held: graded moments and clean doubles per UTC hour. */
+function marketByHour(
+  rows: readonly MarketRow[],
+  since: Date,
+): { hour: string; graded: bigint; wins: bigint }[] {
+  const byHour = new Map<string, { graded: number; wins: number }>();
+  for (const r of rows) {
+    if (r.at < since || r.hit2x === null) continue;
+    const hour = r.at.toISOString().slice(0, 13);
+    const h = byHour.get(hour) ?? { graded: 0, wins: 0 };
+    h.graded += 1;
+    if (marketRowWon(r)) h.wins += 1;
+    byHour.set(hour, h);
+  }
+  return [...byHour].map(([hour, h]) => ({ hour, graded: BigInt(h.graded), wins: BigInt(h.wins) }));
+}
+
+/**
  * Each model's live catch rate (see liveCatch): of the tokens that doubled cleanly from a graded
  * market moment or a seat's call since its own start, the share it called at a winning moment;
  * and the same for every seat together. Over the same seats and calls liveCallRecords counts, and
@@ -212,6 +260,8 @@ export async function liveCatchRates(
   models: readonly string[],
   since: Date,
   lanes: readonly Lane[],
+  /** The market's rows since `since` when the caller already holds them (see MarketRow); read here otherwise. */
+  marketRows?: readonly MarketRow[],
 ): Promise<{ byModel: Map<string, LiveCatch>; field: LiveCatch }> {
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
@@ -223,7 +273,9 @@ export async function liveCatchRates(
   );
   if (models.length === 0) return liveCatch([], [], froms);
   const [market, calls] = await Promise.all([
-    prisma.$queryRaw<{ token: string; at: Date }[]>`
+    marketRows
+      ? Promise.resolve(marketWinners(marketRows, since))
+      : prisma.$queryRaw<{ token: string; at: Date }[]>`
       SELECT "tokenId" AS token, max("anchorAt") AS at
       FROM "CandidateOutcome"
       WHERE "sampleKind" = 'event'
@@ -262,6 +314,8 @@ export async function liveMarketLift(
   models: readonly string[],
   since: Date,
   lanes: readonly Lane[],
+  /** The market's rows since `since` when the caller already holds them (see MarketRow); read here otherwise. */
+  marketRows?: readonly MarketRow[],
 ): Promise<Map<string, MarketLift>> {
   if (models.length === 0) return new Map();
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
@@ -291,7 +345,9 @@ export async function liveMarketLift(
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${earliest}
       GROUP BY 1, 2`,
-    prisma.$queryRaw<{ hour: string; graded: bigint; wins: bigint }[]>`
+    marketRows
+      ? Promise.resolve(marketByHour(marketRows, earliest))
+      : prisma.$queryRaw<{ hour: string; graded: bigint; wins: bigint }[]>`
       SELECT to_char(date_trunc('hour', "anchorAt"), 'YYYY-MM-DD"T"HH24') AS hour,
              count(*) AS graded,
              count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS wins

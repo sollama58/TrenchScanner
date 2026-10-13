@@ -337,13 +337,17 @@ export function createLighthouseHistoryCache() {
     const key = `${q.days}:${q.bucket}:${q.dimension}`;
     let cache = caches.get(key);
     if (!cache) {
-      cache = new SharedCache<LighthouseHistory>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
+      cache = new SharedCache<LighthouseHistory>(CACHE_MS, {
+        staleWhileRevalidateMs: STALE_MS,
+        name: `lighthouse history ${key}`,
+      });
       caches.set(key, cache);
     }
     return cache;
   };
   const read = (q: LighthouseHistoryQuery) => cacheFor(q).get(() => buildLighthouseHistory(q));
   /** Refills the opening view when it is due or missing. Never rejects. */
-  const keepWarm = () => cacheFor(DEFAULT_QUERY).warm(() => buildLighthouseHistory(DEFAULT_QUERY));
+  const keepWarm = (aheadMs = 0) =>
+    cacheFor(DEFAULT_QUERY).warm(() => buildLighthouseHistory(DEFAULT_QUERY), aheadMs);
   return Object.assign(read, { keepWarm });
 }

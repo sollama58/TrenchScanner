@@ -136,3 +136,19 @@ describe("public worker health: skipped runs", () => {
     expect(s.lastRun).toEqual({ durationMs: 6, skipped: "reviewer off" });
   });
 });
+
+describe("GET /health while the report caches fill", () => {
+  it("answers 503 until warming ends, then 200", async () => {
+    const { default: Fastify } = await import("fastify");
+    const { registerHealthRoutes } = await import("./health.js");
+    let warming = true;
+    const app = Fastify();
+    await app.register(registerHealthRoutes, { prefix: "/health", warming: () => warming });
+    expect((await app.inject({ url: "/health" })).statusCode).toBe(503);
+    warming = false;
+    const res = await app.inject({ url: "/health" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    await app.close();
+  });
+});
