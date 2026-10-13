@@ -24,6 +24,28 @@ export function resetMayhemFailureBackoff(): void {
   failureBackoff.clear();
 }
 
+/** MayhemModeCache's answers, held in memory too - a mint's Mayhem flag never changes. */
+export const settledMayhem = new SettledAnswers<boolean>(20_000);
+
+/**
+ * The Mayhem answers already known for `mintAddresses`, from memory and then MayhemModeCache - no
+ * network call. A mint missing from the result has never been looked up successfully.
+ */
+export async function cachedMayhemMode(mintAddresses: string[]): Promise<Map<string, boolean>> {
+  const unique = [...new Set(mintAddresses)];
+  const known = settledMayhem.take(unique);
+  const fromTable = unique.filter((mint) => !known.has(mint));
+  const cached =
+    fromTable.length === 0
+      ? []
+      : await prisma.mayhemModeCache.findMany({ where: { mintAddress: { in: fromTable } } });
+  for (const row of cached) {
+    known.set(row.mintAddress, row.isMayhemMode);
+    settledMayhem.remember(row.mintAddress, row.isMayhemMode);
+  }
+  return known;
+}
+
 /**
  * Resolves whether each mint was launched in Pump.fun's Mayhem Mode, in one batched, cached pass.
  * Mayhem tokens are rejected outright by the mandatory rug screen (see rugScreen.ts).
@@ -40,9 +62,6 @@ export function resetMayhemFailureBackoff(): void {
  * would be indistinguishable from a real one and would blacklist a legitimate token forever - it
  * is instead backed off briefly, so retrying stays cheap without becoming permanent.
  */
-/** MayhemModeCache's answers, held in memory too - a mint's Mayhem flag never changes. */
-export const settledMayhem = new SettledAnswers<boolean>(20_000);
-
 export async function resolveMayhemMode(
   mintAddresses: string[],
   helius: HeliusClient,
@@ -54,17 +73,8 @@ export async function resolveMayhemMode(
   const now = Date.now();
   failureBackoff.prune(now);
 
-  for (const [mint, isMayhemMode] of settledMayhem.take(unique)) {
+  for (const [mint, isMayhemMode] of await cachedMayhemMode(unique)) {
     result.set(mint, { status: "found", isMayhemMode });
-  }
-  const fromTable = unique.filter((mint) => !result.has(mint));
-  const cached =
-    fromTable.length === 0
-      ? []
-      : await prisma.mayhemModeCache.findMany({ where: { mintAddress: { in: fromTable } } });
-  for (const row of cached) {
-    result.set(row.mintAddress, { status: "found", isMayhemMode: row.isMayhemMode });
-    settledMayhem.remember(row.mintAddress, row.isMayhemMode);
   }
 
   // A backed-off mint reports "failed" without a call - the same answer it would have produced,

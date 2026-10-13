@@ -111,6 +111,7 @@ import {
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
 import { noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
+import { settledRejects } from "./settledRejects.js";
 import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
 import type { JobRunMeta } from "../scheduler.js";
@@ -750,13 +751,17 @@ async function scanCycle(
   }
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
+  // Coins already known to fail the screen for good (Mayhem, an instant bond): their last RugCheck
+  // report stands, never refreshed - see settledRejects.ts. Asked before RugCheck, from caches only.
+  const settled = await settledRejects(candidates, env, new Set(activelyViewed.map((t) => t.mintAddress)));
   // Cached with a short TTL so the scan cadence and RugCheck's request rate are independent -
   // see resolveRugProfiles. This is what makes a one-minute scan interval affordable.
   // A young coin failing a holder cut is re-read every minute (see youngHolderRecheck.ts).
+  const holderTtl = rugCheckTtlFor(env.RUGCHECK_CACHE_TTL_MINUTES);
   const { profiles: rugProfiles, stats: rugCheckLookups } = await resolveRugProfiles(
     candidates.map((c) => c.mintAddress),
     deps.rugCheck,
-    rugCheckTtlFor(env.RUGCHECK_CACHE_TTL_MINUTES),
+    (mint) => (settled.has(mint) ? Infinity : holderTtl(mint)),
     env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
     {
       refreshStaleInBackground: true,
@@ -773,7 +778,10 @@ async function scanCycle(
   // until FRESH_GRADUATE_RECHECK_MINUTES after graduation, instead of keeping that reading for the
   // whole cache TTL: the first report on a new pool often predates it or the holders' first
   // trades, and those minutes are when a fresh graduate is decided on.
-  const freshGraduates = freshGraduatesOverCut(candidates, rugProfiles);
+  const freshGraduates = freshGraduatesOverCut(
+    candidates.filter((c) => !settled.has(c.mintAddress)),
+    rugProfiles,
+  );
   if (freshGraduates.length > 0) {
     const recheck = await resolveRugProfiles(freshGraduates, deps.rugCheck, 1, FRESH_GRADUATE_RECHECK_MAX, {
       awaitDeadlineMs: FRESH_GRADUATE_RECHECK_DEADLINE_MS,
@@ -833,9 +841,14 @@ async function scanCycle(
   lap("mayhem");
 
   // Seconds on the bonding curve for graduated candidates, for the screen's pre-bond cut. Only
-  // asked about candidates still passing the local screen: the rest are rejected anyway.
+  // asked about candidates still passing the local screen and not Mayhem: the rest are rejected
+  // anyway, and Mayhem's answer is one batched RPC call where this is a Pump.fun call per coin.
   const preBondByMint = await resolvePreBondSeconds(
-    candidates.filter((c) => passesLocalRugScreen(baseProfileByMint.get(c.mintAddress))),
+    candidates.filter((c) => {
+      const mayhem = mayhemByMint.get(c.mintAddress);
+      const isMayhem = mayhem?.status === "found" && mayhem.isMayhemMode;
+      return passesLocalRugScreen(baseProfileByMint.get(c.mintAddress)) && !isMayhem;
+    }),
     firstSeenByMint,
     { pumpFun: deps.pumpFun, dexScreener: deps.dexScreener },
     env,
@@ -1285,6 +1298,8 @@ async function scanCycle(
     // This cycle's RugCheck reports: cached, looked up while the cycle waited (fetched, failed,
     // timedOut), and stale ones served while they refresh behind it - what the rugCheck stage is.
     rugCheckLookups: { ...rugCheckLookups },
+    // In-band coins already rejected for good (Mayhem, an instant bond), kept on their last report.
+    settledRejects: settled.size,
     // Epoch ms of the newest rug-screen (pre-check) pass: the header pill's "last passed pre-check".
     ...(lastScreenPassAt > 0 ? { lastScreenPassAt } : {}),
   };
