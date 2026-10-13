@@ -63,6 +63,11 @@ export const LINKED_WALLET_FEATURES = [
   "linkedClusterCount",
   "linkedLargestClusterPct",
   "linkedCreatorPct",
+  // Added 2026-10-13 (notes/holder-data-eval-2026-10-13): the count form of the same reading, so
+  // "N of 20 top wallets linked" can be judged against the supply share. How many of the covered
+  // holders sit in a cluster, and how many holders the reading covered. Null with the rest.
+  "linkedWalletCount",
+  "linkedWalletsChecked",
 ] as const;
 
 /**
@@ -736,6 +741,8 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   linkedClusterCount: "linked-wallet clusters",
   linkedLargestClusterPct: "largest linked cluster",
   linkedCreatorPct: "supply linked to the creator",
+  linkedWalletCount: "linked top wallets",
+  linkedWalletsChecked: "top wallets checked for links",
   cexFundedPct: "top holders funded from an exchange",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
@@ -938,6 +945,11 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     linkedClusterCount: scored.linkedClusterCount ?? null,
     linkedLargestClusterPct: scored.linkedLargestClusterPct ?? null,
     linkedCreatorPct: scored.linkedCreatorPct ?? null,
+    linkedWalletCount:
+      scored.linkedClusters === undefined
+        ? null
+        : scored.linkedClusters.reduce((n, c) => n + c.wallets.length, 0),
+    linkedWalletsChecked: scored.linkedHolders?.length ?? null,
     cexFundedPct: scored.cexFundedPct ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,

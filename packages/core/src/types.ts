@@ -360,6 +360,10 @@ export interface FilterCriteria {
   maxLinkedWalletPct?: number | null;
   /** Max % of supply held by top holders funded within a minute of each other (sameTimeFundedPct). */
   maxSameTimeFundedPct?: number | null;
+  /** Max % of supply held by top holders tied to the creator (linkedCreatorPct). Skipped while unknown. */
+  maxLinkedCreatorPct?: number | null;
+  /** Min holders as Jupiter counts them at the decision (freshQuote.holderCount). Fails closed without a quote. */
+  minLiveHolderCount?: number | null;
   /** Bounds on the % of the largest holders an exchange paid for (cexFundedPct). Skipped while unknown. */
   minCexFundedPct?: number | null;
   maxCexFundedPct?: number | null;

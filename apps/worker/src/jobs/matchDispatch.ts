@@ -59,6 +59,7 @@ export function awaitsWalletFigure(
     | "flaggedBuySol"
     | "cexFundedPct"
     | "sameTimeFundedPct"
+    | "linkedCreatorPct"
   >,
   filter: Pick<
     FilterCriteria,
@@ -70,6 +71,7 @@ export function awaitsWalletFigure(
     | "minCexFundedPct"
     | "maxCexFundedPct"
     | "maxSameTimeFundedPct"
+    | "maxLinkedCreatorPct"
   >,
 ): boolean {
   return (
@@ -80,7 +82,8 @@ export function awaitsWalletFigure(
     (filter.maxFlaggedBuySol != null && scored.flaggedBuySol === undefined) ||
     ((filter.minCexFundedPct != null || filter.maxCexFundedPct != null) &&
       scored.cexFundedPct === undefined) ||
-    (filter.maxSameTimeFundedPct != null && scored.sameTimeFundedPct === undefined)
+    (filter.maxSameTimeFundedPct != null && scored.sameTimeFundedPct === undefined) ||
+    (filter.maxLinkedCreatorPct != null && scored.linkedCreatorPct === undefined)
   );
 }
 
