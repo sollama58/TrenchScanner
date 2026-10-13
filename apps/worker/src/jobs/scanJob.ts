@@ -772,12 +772,18 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // CURATED_REQUIRE_WALLET_CHECKS on they can't be until both checks are known. Churn orders
   // the rest - the cheap stand-in for "likely to get there" available before scoring runs.
   const curatedBand = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
+  // With the coin's age, which the pre-gate's buy-ratio test depends on (see passesEventPreGate).
+  const contender = (c: CandidateToken) =>
+    passesEventPreGate(
+      { ...c, ageMinutes: candidateAgeMinutes(c.pairCreatedAt, firstSeenByMint.get(c.mintAddress)) },
+      curatedBand,
+    );
   const walletGroups = candidates
     .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
     .map((c) => ({
       mintAddress: c.mintAddress,
       addresses: onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? [],
-      contender: passesEventPreGate(c, curatedBand),
+      contender: contender(c),
       // Alerted on while its empty-wallet share was still unknown, or a user-filter match held
       // for a wallet figure (see resolveAlertTargets): next in line after the contenders, so the
       // reading lands within a cycle or two.
@@ -801,7 +807,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
     .map((c) => ({
       mintAddress: c.mintAddress,
-      contender: passesEventPreGate(c, curatedBand),
+      contender: contender(c),
       // A user-filter match held for its top-10 snipers share (see resolveAlertTargets).
       alerted: alertAwaitingWallets(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
@@ -945,7 +951,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     deps.jupiter,
     candidates
       .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
-      .sort((a, b) => Number(passesEventPreGate(b, curatedBand)) - Number(passesEventPreGate(a, curatedBand)))
+      .sort((a, b) => Number(contender(b)) - Number(contender(a)))
       .map((c) => c.mintAddress),
   );
 
@@ -1798,6 +1804,21 @@ export function persistSnapshot(tokenId: string, prior: CandidatePrior, now: num
       if (now - at >= FAILING_SNAPSHOT_SPACING_MS) lastSnapshotAt.delete(id);
   }
   return true;
+}
+
+/**
+ * Minutes since launch from what the cycle knows before scoring: the earlier of the pair's creation
+ * and the watchlist's first sighting (processCandidate's age anchor, less the Token row's).
+ */
+export function candidateAgeMinutes(
+  pairCreatedAt: Date | undefined,
+  firstSeenAt: Date | undefined,
+  now: number = Date.now(),
+): number | undefined {
+  const anchors = [pairCreatedAt, firstSeenAt]
+    .filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()))
+    .map((d) => d.getTime());
+  return anchors.length > 0 ? (now - Math.min(...anchors)) / 60_000 : undefined;
 }
 
 /** How long the decision's fresh-quote read may take (see readFreshQuotes). */
