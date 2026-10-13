@@ -109,16 +109,13 @@ const LINKS = [
 
 /**
  * The Utilities tab's token lookup opens this same modal for any mint (UtilitiesTab.tsx): its data
- * comes from the lookup's own routes, there is no call to explain, and the TokenSage page and
- * bubble map open only for a wallet with access (their hosts live behind the paywall).
+ * comes from the lookup's own routes, and there is no call to explain.
  */
 export interface UtilityMode {
   /** Where the chart and the TokenSage read come from: "/utilities/token" instead of "/tokens". */
   apiBase: string;
   /** Whether the lookup's fresh scan has landed yet. */
   scan: "scanning" | "scanned";
-  /** Whether the TokenSage page and the bubble map can open (the wallet has access). */
-  extras: boolean;
 }
 
 const UtilityContext = createContext<UtilityMode | null>(null);
@@ -247,17 +244,15 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
           </div>
         </div>
         <div className="tm-actions">
-          {(!utility || utility.extras) && (
-            <button
-              type="button"
-              className="sage-btn"
-              onClick={() => openSage(mint)}
-              title="Open TokenSage's full read of this coin"
-            >
-              <SageIcon size={13} />
-              Sage
-            </button>
-          )}
+          <button
+            type="button"
+            className="sage-btn"
+            onClick={() => openSage(mint)}
+            title="Open TokenSage's full read of this coin"
+          >
+            <SageIcon size={13} />
+            Sage
+          </button>
           <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
             <CloseIcon size={16} />
           </button>
@@ -705,7 +700,7 @@ function StatsCard({ card }: { card: Card }) {
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>
             {r.linkedPct === null ? "Not checked" : pct(r.linkedPct)}
-            {r.linkedClusters.length > 0 && (!utility || utility.extras) && (
+            {r.linkedClusters.length > 0 && (
               <button
                 type="button"
                 className="tm-link bm-open"
@@ -853,11 +848,9 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
           <SageIcon size={14} /> TokenSage
         </span>
         {r && <span className="sage-tag">{r.depth === "full" ? "Deep read" : "Quick read"}</span>}
-        {(!utility || utility.extras) && (
-          <button type="button" className="tm-link" onClick={() => openSage(mint)}>
-            Full read
-          </button>
-        )}
+        <button type="button" className="tm-link" onClick={() => openSage(mint)}>
+          Full read
+        </button>
       </h4>
       {!data && !error && <Skeleton lines={3} />}
       {locked && (
@@ -931,7 +924,6 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
 /** Where the coin comes from: what it copies or builds on, and how crowded its name and theme are. */
 function LineageCard({ read: r }: { read: SageRead }) {
   const l = r.lineage;
-  const utility = useContext(UtilityContext);
   const lineage = l ? LINEAGE[l.kind] : undefined;
   const of = l?.ofMint && l.kind !== "original" && l.kind !== "unknown" ? l.ofMint : null;
   const ofLabel = l?.ofTicker ? `$${l.ofTicker}` : (l?.ofName ?? "the original");
@@ -946,7 +938,7 @@ function LineageCard({ read: r }: { read: SageRead }) {
         <>
           <LineageText read={r} />
           <CrowdChart read={r} />
-          {of && (!utility || utility.extras) && (
+          {of && (
             <button type="button" className="tm-link tm-of" onClick={() => openSage(of)}>
               TokenSage on {ofLabel}
             </button>

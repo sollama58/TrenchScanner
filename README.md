@@ -168,7 +168,8 @@ can run at once, and any of them can be retried, without granting the same burn 
 
 The Utilities tab's lookups (any coin by contract address, any wallet) are paid per use with
 **Burn Credits**, earned by burning $ASDFASDFA: 500 per credit, and 1 credit per lookup, all three
-editable in Admin > Burn Credits. Any signed-in wallet can use them, subscribed or not.
+editable in Admin > Burn Credits. Like every other tab, Utilities needs a subscription; credits
+pay for each lookup on top of it.
 
 A credits burn carries an SPL Memo, `trenchscanner:burn-credits`, in the same transaction. That
 memo is what keeps the two kinds of burn apart on-chain: a burn with it buys credits and never

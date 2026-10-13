@@ -70,7 +70,7 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
   { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
-  // Lookups paid for with Burn Credits: open to any signed-in wallet, subscribed or not.
+  // Lookups paid for with Burn Credits, on top of a subscription.
   { id: "utilities", label: "Utilities", Icon: ToolsIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
@@ -398,21 +398,7 @@ export function App() {
           </Suspense>
         )}
         {signedIn && (
-          <AccessGate
-            walletAddress={session.user.walletAddress}
-            onSignedOut={signOut}
-            openView={
-              // Utilities is paid per lookup with Burn Credits, so a wallet without a subscription
-              // gets the tab itself rather than the paywall.
-              tab === "utilities" ? (
-                <div className="tab-view" key={tab}>
-                  <Suspense fallback={<Boot />}>
-                    <UtilitiesTab walletAddress={session.user.walletAddress} hasAccess={false} />
-                  </Suspense>
-                </div>
-              ) : undefined
-            }
-          >
+          <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
             <div className="tab-view" key={tab}>
               <Suspense fallback={<Boot />}>
@@ -421,7 +407,7 @@ export function App() {
                 {tab === "model" && <ModelTab />}
                 {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab goTo={goTo} />}
-                {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} hasAccess />}
+                {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
@@ -556,13 +542,10 @@ function AccessGate({
   children,
   walletAddress,
   onSignedOut,
-  openView,
 }: {
   children: React.ReactNode;
   walletAddress: string;
   onSignedOut: () => void;
-  /** Shown in place of the paywall to a wallet without access: a tab that doesn't need it. */
-  openView?: React.ReactNode;
 }) {
   const { data, error, reload } = usePolling<Subscription>("/subscription", 300_000);
   const hasAccess = data?.hasAccess === true;
@@ -597,7 +580,6 @@ function AccessGate({
   }
   if (!data) return <Boot />;
   if (!data.hasAccess) {
-    if (openView) return <>{openView}</>;
     return (
       <section className="panel paywall">
         <span className="paywall-icon">

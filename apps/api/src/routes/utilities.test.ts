@@ -48,10 +48,18 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { in: mints } } });
   });
 
-  async function signIn() {
+  /** A signed-in wallet, subscribed unless asked otherwise (Utilities sits behind the paywall). */
+  async function signIn({ subscribed = true } = {}) {
     const walletAddress = random(32);
     wallets.push(walletAddress);
-    const user = await prisma.user.create({ data: { walletAddress } });
+    const user = await prisma.user.create({
+      data: {
+        walletAddress,
+        ...(subscribed
+          ? { subscription: { create: { expiresAt: new Date(Date.now() + 86_400_000), source: "BURN" } } }
+          : {}),
+      },
+    });
     const cookie = await signer.sign({ userId: user.id, walletAddress, sessionVersion: 0 });
     return { walletAddress, cookies: { [SESSION_COOKIE_NAME]: cookie } };
   }
@@ -103,6 +111,12 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
   async function grant(wallet: string, credits: number) {
     await prisma.burnCreditEntry.create({ data: { wallet, delta: credits, kind: "grant", note: TAG } });
   }
+
+  it("sits behind the subscription", async () => {
+    const lapsed = await signIn({ subscribed: false });
+    const res = await app.inject({ method: "GET", url: "/utilities", cookies: lapsed.cookies });
+    expect(res.statusCode).toBe(402);
+  });
 
   it("credits a burn tagged for credits, at the ratio, once", async () => {
     const me = await signIn();

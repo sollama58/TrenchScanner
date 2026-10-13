@@ -1,4 +1,4 @@
-import type { FastifyInstance, preHandlerHookHandler } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { TokenSnapshot } from "@prisma/client";
 import {
@@ -70,14 +70,13 @@ export interface UtilityRouteOptions {
   dexScreener: DexScreenerClient;
   rpc: SolanaRpc;
   viewStamps: ViewStampBuffer;
-  /** Who may use Utilities: any signed-in wallet (the default) or subscribers only. */
-  gate?: "signed-in" | "subscriber";
 }
 
 export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityRouteOptions) {
-  const gate: preHandlerHookHandler =
-    opts.gate === "subscriber" ? app.authenticateSubscriber : app.authenticate;
-  app.addHook("preHandler", gate);
+  // Behind the paywall like the rest of the dashboard (user decision 2026-10-13): lookups cost
+  // credits on top of a subscription. Burns from a wallet without one are still credited by the
+  // reconciler, and wait for it.
+  app.addHook("preHandler", app.authenticateSubscriber);
 
   /** What the Utilities tab opens with. */
   app.get("/", async (request) => {

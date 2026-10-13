@@ -81,11 +81,9 @@ function lookupError(e: unknown): string {
  * The Utilities tab: lookups paid for with Burn Credits, which a wallet earns by burning
  * $ASDFASDFA (500 per credit unless an admin changes it). A credit is taken only once a lookup
  * succeeds, and a lookup can be re-opened free for an hour.
- *
- * Open to any signed-in wallet: the credits are their own payment, so `hasAccess` (a subscription)
- * only decides whether the token view's links to the TokenSage page and the bubble map work.
+ * Behind the subscription, like every other tab: credits pay for each lookup on top of it.
  */
-export function UtilitiesTab({ walletAddress, hasAccess }: { walletAddress: string; hasAccess: boolean }) {
+export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
   const { data, error, reload } = usePolling<UtilitiesOverview>("/utilities", 60_000);
   const [openMint, setOpenMint] = useState<string | null>(null);
 
@@ -115,7 +113,6 @@ export function UtilitiesTab({ walletAddress, hasAccess }: { walletAddress: stri
         <UtilityTokenModal
           key={openMint}
           mint={openMint}
-          hasAccess={hasAccess}
           onClose={() => {
             setOpenMint(null);
             reload();
@@ -626,15 +623,7 @@ function RecentLookups({ data, onOpen }: { data: UtilitiesOverview | null; onOpe
 }
 
 /** A paid lookup in the feed's token modal, refreshed while it is open (its scan lands within a minute). */
-function UtilityTokenModal({
-  mint,
-  hasAccess,
-  onClose,
-}: {
-  mint: string;
-  hasAccess: boolean;
-  onClose: () => void;
-}) {
+function UtilityTokenModal({ mint, onClose }: { mint: string; onClose: () => void }) {
   const path = `/utilities/token/${encodeURIComponent(mint)}`;
   const [poll, setPoll] = useState(10_000);
   const { data, error } = usePolling<UtilityTokenView>(path, poll);
@@ -665,7 +654,7 @@ function UtilityTokenModal({
       card={data.card}
       now={now}
       onClose={onClose}
-      utility={{ apiBase: "/utilities/token", scan: data.scan, extras: hasAccess }}
+      utility={{ apiBase: "/utilities/token", scan: data.scan }}
     />
   );
 }
