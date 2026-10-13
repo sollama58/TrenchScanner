@@ -72,6 +72,30 @@ describe.skipIf(!dbAvailable)("selectWatchlist", () => {
     expect(mine).toEqual(new Set(["alive-old", "fresh-unknown"]));
   });
 
+  it("leaves out a token set aside as Mayhem, alive or on probation", async () => {
+    const now = Date.now();
+    const seed = (suffix: string, lastLiveAt: Date | null, ignoredAt: Date | null) =>
+      prisma.token.create({
+        data: {
+          mintAddress: `${TAG}-${suffix}`,
+          firstSeenAt: new Date(now - 10 * MINUTE),
+          lastLiveAt,
+          ignoredAt,
+        },
+      });
+    await Promise.all([
+      seed("alive", new Date(now - MINUTE), null),
+      seed("alive-mayhem", new Date(now - MINUTE), new Date(now)),
+      seed("new-mayhem", null, new Date(now)),
+    ]);
+
+    const { tracked } = await selectWatchlist(env);
+    const mine = tracked
+      .filter((t) => t.mintAddress.startsWith(TAG))
+      .map((t) => t.mintAddress.slice(TAG.length + 1));
+    expect(mine).toEqual(["alive"]);
+  });
+
   it("always keeps refresh slots for never-live mints, even with the alive set saturated", async () => {
     // The starvation case: a mint cannot become "alive" until it has been refreshed once, so if
     // the alive set is allowed to consume the whole cap, brand-new mints get zero slots, are

@@ -35,7 +35,10 @@ describe("settledRejects", () => {
       ],
       env,
     );
-    expect([...out].sort()).toEqual(["instant", "mayhem"]);
+    expect([...out].sort()).toEqual([
+      ["instant", "preBond"],
+      ["mayhem", "mayhem"],
+    ]);
   });
 
   it("leaves out a coin someone has open, and every pre-bond verdict when the cut is off", async () => {

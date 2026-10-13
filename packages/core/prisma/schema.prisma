@@ -443,6 +443,10 @@ model Token {
   /// refresh slot however old it is, while launch-level mints compete newest-first for what's
   /// left - see selectWatchlist.
   lastMcapUsd Float?
+  /// When the scan stopped watching this mint for good: it is a Pump.fun Mayhem Mode token, which
+  /// the safety screen always rejects (user decision 2026-10-13: once known, no more data on it).
+  /// selectWatchlist skips it; a token someone has open is still priced for its card.
+  ignoredAt   DateTime?
 
   snapshots              TokenSnapshot[]
   matches                Match[]

@@ -99,7 +99,7 @@ import { alertAwaitingWallets, noteAlertWallets } from "./walletPriority.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
 import { rememberGraduations, rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
-import { resolveMayhemMode } from "./mayhemMode.js";
+import { ignoreMayhemMints, resolveMayhemMode } from "./mayhemMode.js";
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
@@ -595,6 +595,10 @@ async function scanCycle(
     ...(koth ? [toWatchlistCandidate(koth, "pumpfun-koth")] : []),
   ];
   await addNewMintsToWatchlist(discovered);
+  // Mayhem coins, by Pump.fun's own flag, leave the watchlist before they cost a lookup.
+  await ignoreMayhemMints(
+    [...newMints, ...active, ...(koth ? [koth] : [])].filter((c) => c.mayhemMode).map((c) => c.mintAddress),
+  );
   // Pump.fun's launch times, for the safety screen's pre-bond cut (see launchTimes.ts).
   rememberLaunchTimes([...newMints, ...active, ...(koth ? [koth] : [])]);
   rememberGraduations(streamed.filter((e) => e.kind === "migrate"));
@@ -840,6 +844,11 @@ async function scanCycle(
     .map((c) => c.mintAddress);
   const mayhemByMint = await resolveMayhemMode(mayhemCandidates, deps.helius);
   lap("mayhem");
+  // Every Mayhem coin known by now leaves the watchlist: this cycle rejects it, and none reads it again.
+  void ignoreMayhemMints([
+    ...[...settled].filter(([, why]) => why === "mayhem").map(([mint]) => mint),
+    ...[...mayhemByMint].filter(([, m]) => m.status === "found" && m.isMayhemMode).map(([mint]) => mint),
+  ]);
 
   // Seconds on the bonding curve for graduated candidates, for the screen's pre-bond cut. Only
   // asked about candidates still passing the local screen and not Mayhem: the rest are rejected
@@ -1418,12 +1427,13 @@ export async function selectWatchlist(
   // and a whole Token row carries the description and every sticky flag.
   const select = { id: true, mintAddress: true, firstSeenAt: true } as const;
   const bandCeiling = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
-  const aliveWhere = { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff } };
+  // Mayhem coins are set aside for good (Token.ignoredAt; see ignoreMayhemMints).
+  const aliveWhere = { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff }, ignoredAt: null };
   // Probation and the near-band tier side by side: near-band's share depends on how many probation
   // takes, so it is fetched at the full cap and trimmed - a few hundred narrow rows at most.
   const [probation, nearBandAll] = await Promise.all([
     prisma.token.findMany({
-      where: { firstSeenAt: { gt: probationCutoff }, lastLiveAt: null },
+      where: { firstSeenAt: { gt: probationCutoff }, lastLiveAt: null, ignoredAt: null },
       orderBy: { firstSeenAt: "desc" },
       take: probationReserve,
       select,
