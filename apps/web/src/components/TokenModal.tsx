@@ -41,10 +41,9 @@ import {
 } from "./SageView";
 import { WeekChart } from "./WeekChart";
 import { Skeleton } from "./Charts";
-import { openBubbleMap } from "../bubbleMap";
+import { BubbleMapSection } from "./BubbleMap";
 import {
   BrainIcon,
-  BubblesIcon,
   ChartIcon,
   CheckIcon,
   CloseIcon,
@@ -257,6 +256,8 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         <StatsCard card={card} />
         <CallCard card={card} />
       </div>
+
+      <BubbleMapSection token={card.token} snapshot={linkedSeed(card)?.snapshot ?? null} />
 
       <SageSection mint={mint} />
 
@@ -654,16 +655,6 @@ function StatsCard({ card }: { card: Card }) {
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>
             {r.linkedPct === null ? "Not checked" : pct(r.linkedPct)}
-            {r.linkedClusters.length > 0 && (
-              <button
-                type="button"
-                className="tm-link bm-open"
-                onClick={() => openBubbleMap(card.token.mintAddress, linkedSeed(card))}
-                title="Open the bubble map of the linked wallets"
-              >
-                <BubblesIcon size={13} /> Map
-              </button>
-            )}
           </dd>
         </div>
         <div title="How many of the launch's first 25 buyers still hold it">

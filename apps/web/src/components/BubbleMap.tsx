@@ -7,6 +7,7 @@ import {
   bubblesLink,
   buildGraph,
   closeBubbleMap,
+  openBubbleMap,
   graphBounds,
   layoutGraph,
   pickReading,
@@ -209,7 +210,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
   );
 }
 
-function MapView({ graph }: { graph: BubbleGraph }) {
+function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boolean }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
   const node = graph.nodes.find((n) => n.id === picked) ?? null;
@@ -240,6 +241,7 @@ function MapView({ graph }: { graph: BubbleGraph }) {
       </dl>
       <BubbleSvg
         graph={graph}
+        compact={compact}
         picked={picked}
         lit={lit}
         onPick={(id) => {
@@ -273,24 +275,28 @@ function MapView({ graph }: { graph: BubbleGraph }) {
           </li>
         ))}
       </ul>
-      <p className="faint small bm-note">
-        Each bubble is a top holder, sized by its share of supply. Wallets one funder paid for share a colour
-        and a line to that funder; grey ones are linked to no other. A red ring marks a risky wallet or known
-        dumper.
-        {graph.nodes.some((n) => n.kind === "rest") &&
-          " The dashed bubble is the rest of the top 10 together."}
-      </p>
+      {!compact && (
+        <p className="faint small bm-note">
+          Each bubble is a top holder, sized by its share of supply. Wallets one funder paid for share a
+          colour and a line to that funder; grey ones are linked to no other. A red ring marks a risky wallet
+          or known dumper.
+          {graph.nodes.some((n) => n.kind === "rest") &&
+            " The dashed bubble is the rest of the top 10 together."}
+        </p>
+      )}
     </>
   );
 }
 
 function BubbleSvg({
   graph,
+  compact,
   picked,
   lit,
   onPick,
 }: {
   graph: BubbleGraph;
+  compact: boolean;
   picked: string | null;
   lit: number | null;
   onPick: (id: string) => void;
@@ -304,7 +310,7 @@ function BubbleSvg({
   const ids = Array.from({ length: CLUSTER_COLOURS }, (_, i) => i);
 
   return (
-    <div className="bm-stage">
+    <div className={`bm-stage${compact ? " compact" : ""}`}>
       <svg
         className="bm-svg"
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
@@ -493,5 +499,56 @@ function NodeDetail({ node: n, graph }: { node: MapNode | null; graph: BubbleGra
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * The bubble map inside the token modal: the same map, a little shorter, for the reading the
+ * card shows, with Share and a button that opens it full size (with its link) in its own dialog.
+ * Nothing when the coin has no linked cluster.
+ */
+export function BubbleMapSection({ token, snapshot }: { token: Token; snapshot: Snapshot | null }) {
+  const [flagged, setFlagged] = useState<FlaggedHolder[]>([]);
+  const mint = token.mintAddress;
+  useEffect(() => {
+    let live = true;
+    // The chart card asks for the same path; the cache hands both the one answer.
+    cachedGet<{ wallets?: FlaggedHolder[] }>(`/tokens/${encodeURIComponent(mint)}/chart`, 60_000)
+      .then((c) => live && setFlagged(c.wallets ?? []))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [mint]);
+  const graph = useMemo(
+    () => (snapshot ? layoutGraph(buildGraph(snapshot, flagged)) : null),
+    [snapshot, flagged],
+  );
+  if (!graph || !graph.nodes.some((n) => n.kind === "holder") || graph.clusters.length === 0) return null;
+  const label = tokenLabel(token);
+  return (
+    <section className="sage-card bm-section">
+      <h4>
+        <BubblesIcon size={14} /> Bubble map
+        <span className="bm-section-actions">
+          <ShareButton
+            title={`${label} bubble map`}
+            fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
+            caption={`${label} linked wallets on TrenchScanner`}
+            iconOnly
+            render={() => renderBubbleCard(graph, token)}
+          />
+          <button
+            type="button"
+            className="tm-link"
+            onClick={() => (snapshot ? openBubbleMap(mint, { token, snapshot }) : openBubbleMap(mint))}
+            title="Open the bubble map full size, with a link to share"
+          >
+            Expand
+          </button>
+        </span>
+      </h4>
+      <MapView graph={graph} compact />
+    </section>
   );
 }
