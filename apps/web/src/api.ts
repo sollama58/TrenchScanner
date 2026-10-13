@@ -1553,6 +1553,8 @@ export interface MarketLighthouse {
       top10HolderRejectPct?: number;
       cexFundedRejectCount?: number;
       linkedRejectCount?: number;
+      /** A graduated token whose bonding curve filled faster than this is rejected; 0 = off. */
+      minPreBondSeconds?: number;
       mcapMinUsd: number;
       mcapMaxUsd: number;
       maxAgeMinutes: number;

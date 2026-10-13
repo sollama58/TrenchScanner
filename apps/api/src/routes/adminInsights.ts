@@ -8,6 +8,7 @@ import {
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
+import { screenReasonLabel } from "../screenReasons.js";
 import { summarizeHeartbeat } from "./health.js";
 
 const HOUR_MS = 3_600_000;
@@ -357,14 +358,13 @@ async function buildScreenReport(hours: number) {
       WHERE t."firstSeenAt" > ${since}`,
   ]);
 
-  // The reasons carry the measured figure ("82% of top-10 holders..."): grouped without it.
-  const normalize = (r: string) => r.replace(/^\d+(\.\d+)?%/, "N%");
   const reasonCounts = new Map<string, number>();
   let passed = 0;
   let everPassed = 0;
   for (const row of latest) {
     if (row.passed) passed += 1;
-    for (const r of new Set(row.reasons.map(normalize))) reasonCounts.set(r, (reasonCounts.get(r) ?? 0) + 1);
+    for (const r of new Set(row.reasons.map(screenReasonLabel)))
+      reasonCounts.set(r, (reasonCounts.get(r) ?? 0) + 1);
   }
   // "Passed at some point" needs the whole path; ask only for tokens failing now.
   const failingMints = latest.filter((r) => !r.passed).map((r) => r.mint);

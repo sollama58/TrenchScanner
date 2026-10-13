@@ -221,6 +221,7 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
       top10HolderRejectPct: SAFETY_REJECT_TOP10_HOLDER_PCT,
       cexFundedRejectCount: SAFETY_REJECT_CEX_FUNDED_COUNT,
       linkedRejectCount: SAFETY_REJECT_LINKED_COUNT,
+      minPreBondSeconds: env.SAFETY_MIN_PREBOND_SECONDS,
       mcapMinUsd: env.MCAP_FILTER_MIN,
       mcapMaxUsd: env.MCAP_FILTER_MAX,
       maxAgeMinutes: MAX_EVENT_AGE_MINUTES,
