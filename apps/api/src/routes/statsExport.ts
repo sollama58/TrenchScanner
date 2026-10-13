@@ -41,6 +41,8 @@ export const EXPORT_DATASETS = [
   "ai-reviews",
   "screen",
   "narratives",
+  "wallets",
+  "wallet-activity",
 ] as const;
 export type ExportDataset = (typeof EXPORT_DATASETS)[number];
 
@@ -651,6 +653,110 @@ const PATH_COLUMNS = [
   "source",
 ];
 
+/**
+ * The wallet book (WalletRisk, rebuilt hourly by the worker's walletRiskJob): every scored
+ * wallet's counts and both composite scores. The window does not apply: the table is one
+ * rebuild, and this is how its label cutoffs get measured off the database.
+ */
+const WALLET_COLUMNS = [
+  "wallet",
+  "score",
+  "appearances",
+  "dumps",
+  "fastExits",
+  "snipes",
+  "wins",
+  "earlyWins",
+  "winScore",
+  "medianSupplyPct",
+  "solIn",
+  "solOut",
+  "lastSeenAt",
+  "computedAt",
+] as const;
+
+async function* walletPages(pageSize = EXPORT_PAGE_SIZE) {
+  let last: string | null = null;
+  for (;;) {
+    const rows: (Rec & { wallet: string })[] = await prisma.walletRisk.findMany({
+      where: last === null ? undefined : { wallet: { gt: last } },
+      orderBy: { wallet: "asc" },
+      take: pageSize,
+      select: Object.fromEntries(WALLET_COLUMNS.map((c) => [c, true])) as Record<
+        (typeof WALLET_COLUMNS)[number],
+        true
+      >,
+    });
+    if (rows.length === 0) return;
+    yield rows as Rec[];
+    last = rows[rows.length - 1]!.wallet;
+    if (rows.length < pageSize) return;
+  }
+}
+
+/**
+ * What each wallet did in each read coin (TokenWalletActivity, written by the worker's trade-tape
+ * job), with the tape's anchor and the reference row's grade beside it, so a wallet's record can
+ * be rebuilt per coin and against that coin's own result. Windowed on when the tape was read
+ * (createdAt), the same clock the wallet book counts by.
+ */
+const WALLET_ACTIVITY_COLUMNS = [
+  "id",
+  "wallet",
+  "tokenId",
+  "mintAddress",
+  "symbol",
+  "readAt",
+  "tapeStatus",
+  "tapeReason",
+  "anchorAt",
+  "hit2xIn15m",
+  "disqualified",
+  "stoppedAt",
+  "hit2xAt",
+  "buys",
+  "sells",
+  "solIn",
+  "solOut",
+  "firstBuyAt",
+  "firstSellAt",
+  "heldPctAtAnchor",
+  "boughtPct",
+  "isCreator",
+  "firstBuyerRank",
+  "launchSniper",
+  "top10AtAnchor",
+  "fastExit",
+  "dumpedIntoStop",
+  "dumpSol",
+] as const;
+
+async function* walletActivityPages(since: Date, until: Date, pageSize = EXPORT_PAGE_SIZE) {
+  let last: { at: Date; id: string } | null = null;
+  for (;;) {
+    const rows: (Rec & { id: string; readAt: Date })[] = await prisma.$queryRaw`
+      SELECT a."id", a."wallet", a."tokenId", tk."mintAddress", tk."symbol",
+             a."createdAt" AS "readAt", t."status" AS "tapeStatus", t."reason" AS "tapeReason", t."anchorAt",
+             co."hit2xIn15m", co."disqualified", co."stoppedAt", co."hit2xAt",
+             a."buys", a."sells", a."solIn", a."solOut", a."firstBuyAt", a."firstSellAt",
+             a."heldPctAtAnchor", a."boughtPct", a."isCreator", a."firstBuyerRank", a."launchSniper",
+             a."top10AtAnchor", a."fastExit", a."dumpedIntoStop", a."dumpSol"
+      FROM "TokenWalletActivity" a
+      JOIN "Token" tk ON tk."id" = a."tokenId"
+      LEFT JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId"
+      LEFT JOIN "CandidateOutcome" co ON co."id" = t."outcomeId"
+      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until}
+        AND (${last === null} OR (a."createdAt", a."id") > (${last?.at ?? since}, ${last?.id ?? ""}))
+      ORDER BY a."createdAt" ASC, a."id" ASC
+      LIMIT ${pageSize}`;
+    if (rows.length === 0) return;
+    yield rows;
+    const tail = rows[rows.length - 1]!;
+    last = { at: tail.readAt, id: tail.id };
+    if (rows.length < pageSize) return;
+  }
+}
+
 function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): AsyncGenerator<Rec[]> {
   switch (q.dataset) {
     case "outcomes":
@@ -661,6 +767,10 @@ function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): 
       return screenPages(q, since, until, pageSize);
     case "narratives":
       return narrativePages(since, until, pageSize);
+    case "wallets":
+      return walletPages(pageSize);
+    case "wallet-activity":
+      return walletActivityPages(since, until, pageSize);
     case "alerts":
       return createdAtPages(
         async (where, take) =>
@@ -729,6 +839,10 @@ export function csvColumns(dataset: ExportDataset): string[] {
       return [...AI_REVIEW_COLUMNS];
     case "narratives":
       return [...NARRATIVE_COLUMNS, ...NARRATIVE_TEXT];
+    case "wallets":
+      return [...WALLET_COLUMNS];
+    case "wallet-activity":
+      return [...WALLET_ACTIVITY_COLUMNS];
   }
 }
 
