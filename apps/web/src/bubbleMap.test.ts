@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  bubbleNameFit,
+  cexGroupsOf,
+  cexLinksOf,
+  MAP_COLOURS,
+  nodeSlot,
+  sameTimeSlot,
   bubblesFromUrl,
   bubblesLink,
   buildGraph,
@@ -9,6 +15,7 @@ import {
   clusterHalos,
   graphBounds,
   hasHolderList,
+  holderFreshness,
   layoutGraph,
   pickReading,
 } from "./bubbleMap";
@@ -244,5 +251,102 @@ describe("sameTimeCount", () => {
       }),
     ).toEqual({ linked: 2, of: 20 });
     expect(sameTimeCount({ sameTimeFundedPct: null })).toBeNull();
+  });
+});
+
+describe("holderFreshness", () => {
+  const at = "2026-10-13T23:00:00.000Z";
+  const t = Date.parse(at);
+  it("puts the next update one scan after the reading", () => {
+    expect(holderFreshness(at, t + 20_000)).toEqual({ last: t, next: t + 60_000 });
+  });
+  it("says it is due now once that scan is late", () => {
+    expect(holderFreshness(at, t + 3 * 60_000)).toEqual({ last: t, next: t + 3 * 60_000 });
+  });
+  it("has no next update once the coin has gone unscanned for ten minutes", () => {
+    expect(holderFreshness(at, t + 10 * 60_000)).toEqual({ last: t, next: null });
+  });
+});
+
+describe("bubbleNameFit", () => {
+  it("fits a short name whole, small", () => {
+    const fit = bubbleNameFit(40, "Binance");
+    expect(fit?.text).toBe("Binance");
+    expect(fit!.size).toBeLessThanOrEqual(10);
+    expect(fit!.radius).toBeLessThan(40);
+  });
+  it("clips a long name to what the arc holds", () => {
+    const fit = bubbleNameFit(18, "A very long wallet name indeed");
+    expect(fit?.text.endsWith("…")).toBe(true);
+    expect(fit!.text.length).toBeLessThan(30);
+  });
+  it("keeps a Pump.fun name's quotes, clipped or not", () => {
+    expect(bubbleNameFit(40, "degen", true)?.text).toBe('"degen"');
+    const clipped = bubbleNameFit(18, "averyveryverylongusername", true)!.text;
+    expect(clipped.startsWith('"')).toBe(true);
+    expect(clipped.endsWith('…"')).toBe(true);
+  });
+  it("leaves a bubble too small for a few letters without one", () => {
+    expect(bubbleNameFit(12, "Binance")).toBeNull();
+  });
+});
+
+describe("same-exchange ties", () => {
+  it("ties each holder an exchange funded to the largest of its group, and counts the tile", () => {
+    const g = buildGraph({
+      linkedHolders: [
+        { wallet: A, pct: 5, cexFunder: "EX1" },
+        { wallet: B, pct: 3, cexFunder: "EX2" },
+        { wallet: C, pct: 2, cexFunder: "EX1" },
+        { wallet: D, pct: 1, cexFunder: "EX1" },
+      ],
+      cexFundedCount: 4,
+      cexFundedHolders: 20,
+      cexFundedPct: 20,
+      top10HolderPct: null,
+      top10WalletsChecked: null,
+    });
+    expect(g.cexLinks).toEqual([
+      { from: `h:${C}`, to: `h:${A}`, funder: "EX1" },
+      { from: `h:${D}`, to: `h:${A}`, funder: "EX1" },
+    ]);
+    expect(g.cexCount).toEqual({ linked: 4, of: 20 });
+    // Drawn only: the Linked reading and the clusters don't move.
+    expect(g.clusters).toEqual([]);
+    expect(g.links).toEqual([]);
+  });
+  it("lists each exchange's holders and share, largest first", () => {
+    const g = buildGraph({
+      linkedHolders: [
+        { wallet: A, pct: 5, cexFunder: "EX1" },
+        { wallet: B, pct: 3, cexFunder: "EX2" },
+        { wallet: C, pct: 2, cexFunder: "EX1" },
+        { wallet: D, pct: 4, cexFunder: "EX2" },
+      ],
+      top10HolderPct: null,
+      top10WalletsChecked: null,
+    });
+    expect(cexGroupsOf(g).map((x) => [x.funder, x.nodes.length, x.pct])).toEqual([
+      ["EX1", 2, 7],
+      ["EX2", 2, 7],
+    ]);
+  });
+  it("draws nothing for a holder off the map or on older scans", () => {
+    expect(cexLinksOf([{ wallet: A, pct: 5, cexFunder: "EX1" }], [])).toEqual([]);
+    expect(
+      buildGraph({ linkedHolders: [{ wallet: A, pct: 5 }], top10HolderPct: null, top10WalletsChecked: null })
+        .cexLinks,
+    ).toEqual([]);
+  });
+});
+
+describe("colour slots", () => {
+  const graph = { clusters: [{}, {}] } as unknown as Parameters<typeof sameTimeSlot>[0];
+  it("gives clusters the first slots and same-minute groups the next, so none repeat", () => {
+    expect(nodeSlot({ cluster: 1, sameTime: 0 }, graph)).toBe(1);
+    expect(sameTimeSlot(graph, 0)).toBe(2);
+    expect(nodeSlot({ cluster: null, sameTime: 1 }, graph)).toBe(3);
+    expect(nodeSlot({ cluster: null, sameTime: null }, graph)).toBeNull();
+    expect(sameTimeSlot(graph, MAP_COLOURS - 2)).toBe(0);
   });
 });

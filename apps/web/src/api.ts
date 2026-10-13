@@ -170,7 +170,7 @@ export interface Snapshot {
       }[]
     | null;
   /** Every holder behind the linked reading and its %, largest first; stored with the clusters only. */
-  linkedHolders?: { wallet: string; pct: number }[] | null;
+  linkedHolders?: { wallet: string; pct: number; cexFunder?: string }[] | null;
   /** Of the largest holders (up to 20), the % an exchange or a busy service paid for; null when not read. */
   cexFundedPct?: number | null;
   /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */
@@ -1249,6 +1249,8 @@ export interface FeedAppearance {
   sniperTop10: boolean;
   /** The CEX-funded tile; off by default (absent from older API builds: off). */
   cexFunded: boolean;
+  /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
+  bubbleCexLinks: boolean;
   /**
    * The Narrative model's "agrees" / "warns" pill on other models' cards (and the line in Telegram
    * alerts). Null follows the automatic default (GET /config/narrative-note).

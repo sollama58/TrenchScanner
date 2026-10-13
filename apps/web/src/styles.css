@@ -8685,13 +8685,6 @@ img.tm-avatar {
   stroke-linejoin: round;
   stroke-linecap: round;
 }
-.pc-glow {
-  fill: none;
-  stroke-width: 7;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-  opacity: 0.14;
-}
 .pc-base {
   stroke: var(--muted);
   stroke-width: 1;
@@ -8745,6 +8738,14 @@ img.tm-avatar {
 }
 .pc-last rect {
   fill: var(--tone);
+}
+/* Model View's end: where the window stops, not the latest reading. */
+.pc-last.end rect {
+  fill: var(--surface-3);
+  stroke: var(--border-strong);
+}
+.pc-last.end text {
+  fill: var(--ink-2);
 }
 .pc-last text {
   fill: #fff;
@@ -8894,7 +8895,7 @@ img.tm-avatar {
 .pc-badge-face {
   fill: color-mix(in srgb, var(--side) 88%, #000);
   stroke: var(--mk);
-  stroke-width: 2.2;
+  stroke-width: 1.6;
 }
 .pc-badge text {
   fill: #fff;
@@ -8925,20 +8926,15 @@ img.tm-avatar {
 }
 .pc-flow-buy {
   fill: var(--good);
-  opacity: 0.8;
+  opacity: 0.6;
 }
 .pc-flow-sell {
   fill: var(--bad);
-  opacity: 0.8;
+  opacity: 0.6;
 }
 .pc-flow-label {
   font-size: 10px;
-}
-.pc-flow-label.buy {
-  fill: var(--good);
-}
-.pc-flow-label.sell {
-  fill: var(--bad);
+  fill: var(--muted);
 }
 .pc-swatch {
   display: inline-block;
@@ -9234,7 +9230,11 @@ img.tm-avatar {
   --bm-2: var(--series-2);
   --bm-3: var(--brand-a);
   --bm-4: #06b6d4;
+  --bm-5: #84cc16;
+  --bm-6: #ec4899;
   --bm-none: #6b7280;
+  /* Same-exchange ties: a neutral dash, apart from the cluster colours and the reserved markers. */
+  --bm-cex: color-mix(in srgb, var(--ink-2) 75%, transparent);
 }
 @media (min-width: 641px) {
   .bm-modal {
@@ -9380,16 +9380,60 @@ img.tm-avatar {
 .bm-same-ring {
   fill: none;
   stroke: var(--ink-2);
-  stroke-width: 2;
+  stroke-width: 2.6;
   stroke-dasharray: 0.1 4.5;
   stroke-linecap: round;
 }
+/* Same-exchange ties: drawn only, behind a toggle (off by default; Settings sets the default). */
+.bm-cex-link {
+  stroke: var(--bm-cex);
+  stroke-width: 1.6;
+  stroke-dasharray: 5 4;
+  stroke-linecap: round;
+  stroke-opacity: 0.9;
+  transition: stroke-opacity 0.2s;
+}
+.bm-cex-link.dim {
+  stroke-opacity: 0.12;
+}
+.bm-cex-tag rect {
+  fill: var(--surface-2);
+  stroke: var(--bm-cex);
+  stroke-width: 1;
+}
+.bm-cex-tag text {
+  fill: var(--ink-2);
+  font-size: 8.5px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.bm-cex-tags {
+  pointer-events: none;
+}
+.bm-cex-dot {
+  grid-area: dot;
+  align-self: center;
+}
+.bm-cex-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -4px 0 8px;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.bm-cex-key {
+  width: 18px;
+  border-top: 2px dashed var(--bm-cex);
+}
 .bm-same-link {
   stroke: var(--ink-2);
-  stroke-width: 1.8;
+  stroke-width: 2.6;
   stroke-dasharray: 0.1 5;
   stroke-linecap: round;
-  stroke-opacity: 0.8;
+  stroke-opacity: 0.95;
   transition: stroke-opacity 0.2s;
 }
 .bm-same-link.dim {
@@ -9400,7 +9444,7 @@ img.tm-avatar {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 2px dotted var(--ink-2);
+  border: 2px dotted var(--bm, var(--ink-2));
 }
 .bm-same {
   cursor: default;
@@ -9417,6 +9461,21 @@ img.tm-avatar {
   paint-order: stroke;
   stroke: rgba(0, 0, 0, 0.25);
   stroke-width: 2px;
+}
+.bm-name {
+  fill: rgba(255, 255, 255, 0.86);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-anchor: middle;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.3);
+  stroke-width: 2px;
+}
+/* A Pump.fun username: light green, as in the lists (.pumpfun-name). */
+.bm-name.pumpfun {
+  fill: #4ade80;
+  stroke: rgba(0, 0, 0, 0.6);
 }
 .bm-badge circle {
   stroke: var(--surface-solid);
@@ -9982,6 +10041,11 @@ img.tm-avatar {
   height: 1px;
   background: linear-gradient(90deg, var(--border-strong), transparent);
 }
+.tm-holders-when {
+  margin: -6px 0 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
 .tm-group > .tm-grid,
 .tm-group > .tm-holders {
   margin-top: 0;
@@ -10291,70 +10355,62 @@ img.tm-avatar {
 }
 
 /* The chart's buy/sell balance: who's winning among the flagged wallets in view. */
-.tm-flow {
+.tm-bal {
   flex: 1 1 100%;
   display: grid;
-  gap: 6px;
-  padding: 10px 12px;
-  margin-bottom: 4px;
-  border-radius: 10px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
+  gap: 5px;
+  padding: 2px 0 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
 }
-.tm-flow.buying {
-  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
-}
-.tm-flow.selling {
-  border-color: color-mix(in srgb, var(--bad) 40%, var(--border));
-}
-.tm-flow-head {
+.tm-bal-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 4px 12px;
 }
-.tm-flow-title {
+.tm-bal-title {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
-.tm-flow-verdict {
-  font-size: 13.5px;
+.tm-bal-verdict {
+  font-size: 12.5px;
   color: var(--ink);
 }
-.tm-flow.buying .tm-flow-verdict {
+.tm-bal.buying .tm-bal-verdict {
   color: var(--good);
 }
-.tm-flow.selling .tm-flow-verdict {
+.tm-bal.selling .tm-bal-verdict {
   color: var(--bad);
 }
-.tm-flow-bar {
+.tm-bal-bar {
   display: flex;
-  gap: 3px;
-  height: 8px;
+  gap: 2px;
+  height: 4px;
 }
-.tm-flow-bar > span {
+.tm-bal-bar > span {
   flex-basis: 0;
   border-radius: 999px;
 }
-.tm-flow-bar .buy {
+.tm-bal-bar .buy {
   background: var(--good);
 }
-.tm-flow-bar .sell {
+.tm-bal-bar .sell {
   background: var(--bad);
 }
-.tm-flow-sides {
+.tm-bal-sides {
   display: flex;
   justify-content: space-between;
   gap: 12px;
 }
-.tm-flow-sides .buy {
+.tm-bal-sides .buy {
   color: var(--good);
 }
-.tm-flow-sides .sell {
+.tm-bal-sides .sell {
   color: var(--bad);
 }
 .tm-bs {
@@ -10383,21 +10439,7 @@ img.tm-avatar {
 /* Model View: what came after the call is shaded; the scans the model read are dots. */
 .pc-unseen rect {
   fill: var(--ink);
-  opacity: 0.045;
-}
-.pc-zone {
-  paint-order: stroke;
-  stroke: var(--surface-2);
-  stroke-width: 4px;
-  stroke-linejoin: round;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  fill: var(--muted);
-}
-.pc-zone.seen {
-  fill: var(--brand-ink);
+  opacity: 0.035;
 }
 .pc-scan {
   fill: var(--surface-2);
@@ -10418,4 +10460,22 @@ img.tm-avatar {
   border-radius: 50%;
   border: 2px solid var(--brand-ink);
   background: var(--surface-2);
+}
+/* Model View cut off before now: the latest reading, under the window's end tag. */
+.pc-now {
+  pointer-events: none;
+  --tone: var(--good);
+}
+.pc-now.down {
+  --tone: var(--bad);
+}
+.pc-now rect {
+  fill: var(--tone);
+}
+.pc-now text {
+  fill: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
 }

@@ -3,6 +3,11 @@ import { ApiError, type Snapshot, type Token } from "../api";
 import { cachedGet } from "../cache";
 import { ago, pct, shortAddress, tokenLabel } from "../format";
 import {
+  bubbleNameFit,
+  cexGroupsOf,
+  MAP_COLOURS,
+  nodeSlot,
+  sameTimeSlot,
   bubbleSeed,
   bubblesLink,
   buildGraph,
@@ -21,9 +26,15 @@ import {
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
-import { useWalletNames, walletText, type WalletNames } from "../walletNames";
+import { isPumpfunName, useWalletNames, walletText, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
-import { LINKED_WARN_PCT, SAFETY_REJECT_LINKED_COUNT } from "./AlertCard";
+import {
+  cexCountText,
+  LINKED_WARN_PCT,
+  SAFETY_REJECT_CEX_FUNDED_COUNT,
+  SAFETY_REJECT_LINKED_COUNT,
+} from "./AlertCard";
+import { useAppearance } from "../appearance";
 import { ShareButton } from "./ShareImageDialog";
 import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
 
@@ -31,13 +42,20 @@ import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
 type TokenDetail = Token & { snapshots: Snapshot[] };
 
 /** How many cluster colours there are (styles.css .bm-modal --bm-0..4); more clusters reuse them. */
-export const CLUSTER_COLOURS = 5;
+export const CLUSTER_COLOURS = MAP_COLOURS;
 
 /** The names of every wallet on the map (holders and funders), in one read. */
 function useGraphNames(graph: BubbleGraph | null): WalletNames {
   return useWalletNames(
     useMemo(
-      () => (graph ? [...graph.nodes.map((n) => n.wallet), ...graph.clusters.map((c) => c.funder)] : []),
+      () =>
+        graph
+          ? [
+              ...graph.nodes.map((n) => n.wallet),
+              ...graph.clusters.map((c) => c.funder),
+              ...graph.cexLinks.map((l) => l.funder),
+            ]
+          : [],
       [graph],
     ),
   );
@@ -244,6 +262,11 @@ function MapView({
   const lit = node ? node.cluster : focus;
   const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
   const largest = graph.clusters[0]?.pct ?? null;
+  // Same-exchange ties: the viewer's default from Settings, switchable here (user ask 2026-10-13).
+  const { bubbleCexLinks } = useAppearance();
+  const [cexOn, setCexOn] = useState<boolean | null>(null);
+  const showCex = (cexOn ?? bubbleCexLinks) && graph.cexLinks.length > 0;
+  const cex = graph.cexCount;
 
   return (
     <>
@@ -287,13 +310,34 @@ function MapView({
           <dt>Risky holders</dt>
           <dd className="num">{risky.length}</dd>
         </div>
+        <div
+          className={cex !== null && cex.linked >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined}
+          title={
+            cex === null
+              ? "CEX-funded: not checked yet"
+              : `CEX-funded: ${cex.linked} of the ${cex.of} largest holders were opened from an exchange (or a busy service like a bridge)`
+          }
+        >
+          <dt>CEX-funded</dt>
+          <dd className="num">
+            {cex === null ? "-" : (cexCountText(cex.linked, cex.of) ?? pct(graph.cexPct, 0))}
+          </dd>
+        </div>
       </dl>
+      {graph.cexLinks.length > 0 && (
+        <label className="bm-cex-toggle">
+          <input type="checkbox" checked={showCex} onChange={() => setCexOn(!showCex)} />
+          <span className="bm-cex-key" aria-hidden />
+          Link wallets funded by the same exchange
+        </label>
+      )}
       <BubbleSvg
         graph={graph}
         names={names}
         compact={compact}
         picked={picked}
         lit={lit}
+        cexLinks={showCex}
         onPick={(id) => {
           setPicked(id);
           setFocus(null);
@@ -329,11 +373,30 @@ function MapView({
           </li>
         ))}
       </ul>
+      {showCex && (
+        <ul className="bm-clusters bm-cex-groups">
+          {cexGroupsOf(graph).map((g) => (
+            <li key={g.funder}>
+              <div className="bm-cluster bm-same" style={{ "--bm": "var(--bm-none)" } as React.CSSProperties}>
+                <i className="bm-cex-key bm-cex-dot" aria-hidden="true" />
+                <span className="bm-cluster-name">
+                  Exchange <WalletText wallet={g.funder} names={names} />
+                </span>
+                <span className="muted small">{g.nodes.length} wallets it funded</span>
+                <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
       {graph.sameTimeGroups.length > 0 && (
         <ul className="bm-clusters bm-same-groups">
-          {graph.sameTimeGroups.map((g) => (
+          {graph.sameTimeGroups.map((g, i) => (
             <li key={g.atMs}>
-              <div className="bm-cluster bm-same">
+              <div
+                className="bm-cluster bm-same"
+                style={{ "--bm": `var(--bm-${sameTimeSlot(graph, i)})` } as React.CSSProperties}
+              >
                 <i className="bm-same-dot" aria-hidden="true" />
                 <span className="bm-cluster-name">
                   Funded together <span className="num">{fundingTime(g.atMs)}</span>
@@ -354,7 +417,7 @@ function MapView({
           colour and a line to that funder; grey ones are linked to no other. A red ring marks a risky wallet
           or known dumper.
           {graph.sameTimeGroups.length > 0 &&
-            " A dotted ring and line join holders whose wallets were funded within the same minute, whoever paid."}
+            " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
         </p>
@@ -369,6 +432,7 @@ function BubbleSvg({
   compact,
   picked,
   lit,
+  cexLinks,
   onPick,
 }: {
   graph: BubbleGraph;
@@ -376,6 +440,8 @@ function BubbleSvg({
   compact: boolean;
   picked: string | null;
   lit: number | null;
+  /** Draw the same-exchange ties. */
+  cexLinks: boolean;
   onPick: (id: string) => void;
 }) {
   const uid = useId().replace(/:/g, "");
@@ -441,8 +507,28 @@ function BubbleSvg({
             );
           })}
         </g>
+        {cexLinks && (
+          <g className="bm-cex-links">
+            {graph.cexLinks.map((l) => {
+              const a = index.get(l.from);
+              const b = index.get(l.to);
+              if (!a || !b) return null;
+              return (
+                <line
+                  key={`${l.from}-${l.to}`}
+                  x1={a.x}
+                  y1={a.y}
+                  x2={b.x}
+                  y2={b.y}
+                  className={`bm-cex-link${lit !== null ? " dim" : ""}`}
+                />
+              );
+            })}
+          </g>
+        )}
         <g className="bm-same-links">
           {graph.sameTimeLinks.map((l) => {
+            const stroke = `var(--bm-${sameTimeSlot(graph, l.group)})`;
             const a = index.get(l.from);
             const b = index.get(l.to);
             if (!a || !b) return null;
@@ -454,6 +540,7 @@ function BubbleSvg({
                 x2={b.x}
                 y2={b.y}
                 className={`bm-same-link${lit !== null ? " dim" : ""}`}
+                style={{ stroke }}
               />
             );
           })}
@@ -478,17 +565,59 @@ function BubbleSvg({
             <Bubble
               node={n}
               names={names}
-              fill={n.cluster === null ? `url(#${uid}-gn)` : `url(#${uid}-g${n.cluster % CLUSTER_COLOURS})`}
+              slot={nodeSlot(n, graph)}
+              sameSlot={n.sameTime === null ? null : sameTimeSlot(graph, n.sameTime)}
+              uid={uid}
             />
           </g>
         ))}
+        {cexLinks && (
+          // Drawn last, over the bubbles, so a name never hides behind one.
+          <g className="bm-cex-tags">
+            {cexGroupsOf(graph).map((g) => {
+              // The exchange's name, on the group's first tie.
+              const l = graph.cexLinks.find((x) => x.funder === g.funder);
+              const a = l && index.get(l.from);
+              const b = l && index.get(l.to);
+              if (!a || !b) return null;
+              const text = clipName(walletText(g.funder, names), 14);
+              const w = text.length * 5.1 + 10;
+              const x = (a.x + b.x) / 2;
+              const y = (a.y + b.y) / 2;
+              return (
+                <g key={`tag-${g.funder}`} className="bm-cex-tag">
+                  <rect x={x - w / 2} y={y - 7} width={w} height={14} rx={7} />
+                  <text x={x} y={y}>
+                    {text}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
       </svg>
     </div>
   );
 }
 
-function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: WalletNames }) {
-  const colour = n.cluster === null ? "var(--bm-none)" : `var(--bm-${n.cluster % CLUSTER_COLOURS})`;
+function Bubble({
+  node: n,
+  names,
+  slot,
+  sameSlot,
+  uid,
+}: {
+  node: MapNode;
+  names: WalletNames;
+  /** Its colour slot (nodeSlot): a holder in no cluster takes its same-minute group's colour. */
+  slot: number | null;
+  sameSlot: number | null;
+  /** The map's id prefix, for the bubble gradients. */
+  uid: string;
+}) {
+  const arcId = `bm-arc${useId().replace(/:/g, "")}`;
+  const colour = slot === null ? "var(--bm-none)" : `var(--bm-${slot})`;
+  const fill = slot === null ? `url(#${uid}-gn)` : `url(#${uid}-g${slot})`;
   if (n.kind === "funder") {
     const s = n.r * 1.25;
     return (
@@ -527,10 +656,19 @@ function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: 
   const fontSize = Math.max(8, Math.min(17, n.r * 0.46));
   const bx = n.x + n.r * 0.72;
   const by = n.y - n.r * 0.72;
+  const named = n.wallet ? names[n.wallet] : undefined;
+  const pumpfun = isPumpfunName(named);
+  const fit = named ? bubbleNameFit(n.r, named.name, pumpfun) : null;
   return (
     <>
       {n.sameTime !== null && (
-        <circle cx={n.x} cy={n.y} r={n.r + (flaggedRisk ? 9 : 4.5)} className="bm-same-ring" />
+        <circle
+          cx={n.x}
+          cy={n.y}
+          r={n.r + (flaggedRisk ? 9 : 4.5)}
+          className="bm-same-ring"
+          style={{ stroke: `var(--bm-${sameSlot})` }}
+        />
       )}
       {flaggedRisk && <circle cx={n.x} cy={n.y} r={n.r + 4.5} className="bm-risk-ring" />}
       <circle cx={n.x} cy={n.y} r={n.r} fill={fill} className="bm-bubble" style={{ stroke: colour }} />
@@ -548,6 +686,21 @@ function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: 
         <text x={n.x} y={n.y} className="bm-pct" style={{ fontSize }}>
           {pctText(n.pct)}
         </text>
+      )}
+      {fit && (
+        <>
+          {/* Left to right through the bottom, so the name reads upright along the inside edge. */}
+          <path
+            id={arcId}
+            d={`M ${n.x - fit.radius} ${n.y} A ${fit.radius} ${fit.radius} 0 0 0 ${n.x + fit.radius} ${n.y}`}
+            fill="none"
+          />
+          <text className={`bm-name${pumpfun ? " pumpfun" : ""}`} style={{ fontSize: fit.size }}>
+            <textPath href={`#${arcId}`} startOffset="50%">
+              {fit.text}
+            </textPath>
+          </text>
+        </>
       )}
       {(flaggedRisk || dev) && (
         <g className={`bm-badge ${dev ? "dev" : "risk"}`}>

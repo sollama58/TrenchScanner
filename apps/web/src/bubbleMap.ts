@@ -131,6 +131,34 @@ export interface MapLink {
   cluster: number;
 }
 
+/**
+ * Colour slots on every bubble map (styles.css --bm-0 to --bm-6; bubbleMapCard's CLUSTER): clusters
+ * take the first, same-minute groups the next, so no two share a colour while the slots last.
+ */
+export const MAP_COLOURS = 7;
+
+/** A same-minute group's colour slot: after the clusters'. */
+export function sameTimeSlot(graph: Pick<BubbleGraph, "clusters">, group: number): number {
+  return (graph.clusters.length + group) % MAP_COLOURS;
+}
+
+/** A node's colour slot: its cluster's, else its same-minute group's; null for grey (linked to none). */
+export function nodeSlot(
+  n: Pick<MapNode, "cluster" | "sameTime">,
+  graph: Pick<BubbleGraph, "clusters">,
+): number | null {
+  if (n.cluster !== null) return n.cluster % MAP_COLOURS;
+  return n.sameTime !== null ? sameTimeSlot(graph, n.sameTime) : null;
+}
+
+/** Holders one exchange (or busy service) funded: each tied to the group's largest. Drawn only. */
+export interface CexLink {
+  from: string;
+  to: string;
+  /** The exchange's address. */
+  funder: string;
+}
+
 /** A same-minute group's tie: each holder to the group's first-funded one. */
 export interface SameTimeLink {
   from: string;
@@ -153,6 +181,11 @@ export interface BubbleGraph {
   /** How many top holders are linked, of how many were read. */
   linkedCount: { linked: number; of: number } | null;
   top10Pct: number | null;
+  /** Ties between holders the same exchange funded, on scans that kept it (drawn only, never counted). */
+  cexLinks: CexLink[];
+  /** How many top holders an exchange funded, of how many were read; and their share of that count. */
+  cexCount: { linked: number; of: number } | null;
+  cexPct: number | null;
 }
 
 /** Flagged holders held under this % of supply at the call are left off the map (not a top holder). */
@@ -199,6 +232,9 @@ export function buildGraph(
     | "sameTimeClusters"
     | "sameTimeFundedPct"
     | "sameTimeFundedCount"
+    | "cexFundedPct"
+    | "cexFundedCount"
+    | "cexFundedHolders"
   >,
   flagged: readonly FlaggedHolder[] = [],
 ): BubbleGraph {
@@ -338,6 +374,12 @@ export function buildGraph(
     links,
     clusters,
     sameTimeLinks,
+    cexLinks: cexLinksOf(snapshot.linkedHolders ?? [], nodes),
+    cexCount:
+      snapshot.cexFundedCount != null && snapshot.cexFundedHolders != null
+        ? { linked: snapshot.cexFundedCount, of: snapshot.cexFundedHolders }
+        : null,
+    cexPct: snapshot.cexFundedPct ?? null,
     sameTimeGroups,
     sameTimePct: snapshot.sameTimeFundedPct ?? null,
     sameTimeCount: sameTimeCount(snapshot),
@@ -345,6 +387,53 @@ export function buildGraph(
     linkedCount: linkedCount(snapshot),
     top10Pct: top10,
   };
+}
+
+/**
+ * Ties between the holders on the map that one exchange funded (linkedHolders' cexFunder): each
+ * to the largest of its group, groups of two or more. Only drawn, so the layout ignores them.
+ */
+export function cexLinksOf(
+  holders: readonly { wallet: string; pct: number; cexFunder?: string }[],
+  nodes: readonly MapNode[],
+): CexLink[] {
+  const onMap = new Map(nodes.filter((n) => n.kind === "holder").map((n) => [n.wallet, n]));
+  const groups = new Map<string, MapNode[]>();
+  for (const h of holders) {
+    const n = h && typeof h.cexFunder === "string" ? onMap.get(h.wallet) : undefined;
+    if (!n) continue;
+    const list = groups.get(h.cexFunder!) ?? [];
+    if (!list.includes(n)) list.push(n);
+    groups.set(h.cexFunder!, list);
+  }
+  const out: CexLink[] = [];
+  for (const [funder, list] of groups) {
+    if (list.length < 2) continue;
+    const [top, ...rest] = [...list].sort((a, b) => b.pct - a.pct);
+    for (const n of rest) out.push({ from: n.id, to: top!.id, funder });
+  }
+  return out;
+}
+
+/** The same-exchange groups behind the ties: each exchange, its holders on the map, and their share; largest first. */
+export function cexGroupsOf(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): {
+  funder: string;
+  nodes: MapNode[];
+  pct: number;
+}[] {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const groups = new Map<string, Set<string>>();
+  for (const l of graph.cexLinks) {
+    const ids = groups.get(l.funder) ?? new Set<string>();
+    ids.add(l.to).add(l.from);
+    groups.set(l.funder, ids);
+  }
+  return [...groups]
+    .map(([funder, ids]) => {
+      const nodes = [...ids].map((id) => byId.get(id)).filter((n): n is MapNode => !!n);
+      return { funder, nodes, pct: Math.round(nodes.reduce((s, n) => s + n.pct, 0) * 100) / 100 };
+    })
+    .sort((a, b) => b.pct - a.pct);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -597,4 +686,44 @@ export function pickReading<S extends Pick<Snapshot, "linkedWalletPct" | "linked
  */
 export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolders">): boolean {
   return (s.linkedHolders?.length ?? 0) > 0 || (s.linkedClusters?.length ?? 0) > 0;
+}
+
+/**
+ * How often the worker saves a reading for a coin it is scanning (SCAN_INTERVAL_MINUTES): each
+ * cycle writes a snapshot with the holder list it holds, read at most RUGCHECK_CACHE_TTL_MINUTES ago.
+ */
+export const HOLDER_SCAN_MS = 60_000;
+/** No reading for this long means the worker has stopped scanning the coin (out of band, unviewed). */
+export const HOLDER_STALE_MS = 10 * 60_000;
+
+/**
+ * When the holder reading was saved and when the next one is due: the next scan, or null once
+ * none has come for HOLDER_STALE_MS, so the coin is no longer being scanned.
+ */
+export function holderFreshness(takenAt: string, now: number): { last: number; next: number | null } {
+  const last = Date.parse(takenAt);
+  if (now - last >= HOLDER_STALE_MS) return { last, next: null };
+  return { last, next: Math.max(last + HOLDER_SCAN_MS, now) };
+}
+
+/**
+ * How a wallet's name sits inside its bubble: small, curved along the inside of the bottom edge,
+ * clipped to what the arc holds. Null when the bubble is too small to hold a few letters; its name
+ * is still in the tooltip and the detail panel.
+ */
+export function bubbleNameFit(
+  r: number,
+  name: string,
+  /** A Pump.fun username: shown in quotes, which stay on when the name is clipped. */
+  quoted = false,
+): { text: string; size: number; radius: number } | null {
+  if (r < 15) return null;
+  const size = Math.min(10, Math.max(7, r * 0.2));
+  const radius = r - size * 0.45 - 2;
+  // About 80% of the lower half-circle, at roughly 0.56em a character.
+  const fits = Math.floor((Math.PI * radius * 0.8) / (size * 0.56));
+  if (fits < 4) return null;
+  const room = quoted ? fits - 2 : fits;
+  const shown = name.length > room ? `${name.slice(0, room - 1)}…` : name;
+  return { text: quoted ? `"${shown}"` : shown, size, radius };
 }

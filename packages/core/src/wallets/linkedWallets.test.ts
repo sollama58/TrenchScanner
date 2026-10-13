@@ -179,7 +179,9 @@ describe("cexFundedReading", () => {
     );
     const r = cexFundedReading(holders, funderOf, { hot, creator: "H1" })!;
     // H1 is the creator: H0..H20 less H1 is the top 20, of which H0, H4, H8, H12, H16, H20 are exchange-funded.
-    expect(r).toEqual({ cexFundedPct: 30, cexFundedCount: 6, cexFundedHolders: CEX_FUNDED_TOP_N });
+    expect(r).toMatchObject({ cexFundedPct: 30, cexFundedCount: 6, cexFundedHolders: CEX_FUNDED_TOP_N });
+    expect(r.cexFunders.map((c) => c.wallet)).toEqual(["H0", "H4", "H8", "H12", "H16", "H20"]);
+    expect(r.cexFunders.every((c) => c.funder === "Binance")).toBe(true);
   });
 
   it("waits while any holder's funder is unknown, and needs holders", () => {
@@ -190,6 +192,7 @@ describe("cexFundedReading", () => {
       cexFundedPct: 100,
       cexFundedCount: 1,
       cexFundedHolders: 1,
+      cexFunders: [{ wallet: "H0", funder: "Binance" }],
     });
   });
 });

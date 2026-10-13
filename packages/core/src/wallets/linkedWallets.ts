@@ -423,6 +423,8 @@ export interface CexFundedReading {
   cexFundedCount: number;
   /** How many holders the reading covers: up to CEX_FUNDED_TOP_N, the creator aside. */
   cexFundedHolders: number;
+  /** Each exchange-funded holder and the exchange (or busy service) that paid for it, largest first. */
+  cexFunders: { wallet: string; funder: string }[];
 }
 
 /**
@@ -443,13 +445,15 @@ export function cexFundedReading(
     .slice(0, CEX_FUNDED_TOP_N);
   if (list.length === 0) return null;
   if (list.some((h) => !funderOf.has(h.owner))) return null;
-  const count = list.filter((h) => {
+  const cexFunders = list.flatMap((h) => {
     const f = funderOf.get(h.owner);
-    return !!f && opts.hot(f);
-  }).length;
+    return f && opts.hot(f) ? [{ wallet: h.owner, funder: f }] : [];
+  });
+  const count = cexFunders.length;
   return {
     cexFundedPct: Math.round((count / list.length) * 1000) / 10,
     cexFundedCount: count,
     cexFundedHolders: list.length,
+    cexFunders,
   };
 }
