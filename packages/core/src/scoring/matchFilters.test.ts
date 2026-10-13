@@ -122,6 +122,28 @@ describe("maxSniperTop10WalletPct", () => {
   });
 });
 
+describe("maxLinkedCreatorPct", () => {
+  it("rejects supply tied to the creator over the ceiling, and skips an unknown reading", () => {
+    const filter = { ...baseFilter, maxLinkedCreatorPct: 5 };
+    expect(matchesFilter(baseToken({ linkedCreatorPct: 9.75 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ linkedCreatorPct: 5 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ linkedCreatorPct: 0 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ linkedCreatorPct: undefined }), filter)).toBe(true);
+  });
+});
+
+describe("minLiveHolderCount", () => {
+  const quote = { priceUsd: 0.001, marketCapUsd: 200_000, fetchedAt: new Date() };
+  it("needs the fresh quote's holder count to clear the floor, and fails closed without one", () => {
+    const filter = { ...baseFilter, minLiveHolderCount: 40 };
+    expect(matchesFilter(baseToken({ freshQuote: { ...quote, holderCount: 25 } }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ freshQuote: { ...quote, holderCount: 40 } }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ freshQuote: { ...quote } }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ freshQuote: undefined }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ freshQuote: undefined }), baseFilter)).toBe(true);
+  });
+});
+
 describe("CEX-funded bounds", () => {
   it("keeps the exchange-funded share within the bounds, and skips an unknown share", () => {
     const filter = { ...baseFilter, minCexFundedPct: 20, maxCexFundedPct: 60 };
