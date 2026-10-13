@@ -45,6 +45,10 @@ export interface WalletProfile {
     dumps: number;
     fastExits: number;
     snipes: number;
+    /** The win side. Absent from older API builds. */
+    wins?: number;
+    earlyWins?: number;
+    winScore?: number;
     medianSupplyPct: number | null;
     lastSeenAt: string;
     computedAt: string;
@@ -87,6 +91,8 @@ interface WalletCoin {
 const COINS_SHOWN = 8;
 const TRADES_SHOWN = 10;
 const RISKY_SCORE = 70;
+/** Mirrors core's WINNER_WALLET_SCORE. */
+const WINNER_SCORE = 70;
 
 /**
  * One wallet in full, in a dialog: what it is (labels), what it holds and how old it is, who paid
@@ -258,6 +264,7 @@ function age(iso: string | null, floor: boolean): string {
 
 function Profile({ p }: { p: WalletProfile }) {
   const risky = p.risk !== null && p.risk.score >= RISKY_SCORE;
+  const winner = p.risk !== null && (p.risk.winScore ?? 0) >= WINNER_SCORE;
   return (
     <>
       {p.kol && <Kol kol={p.kol} />}
@@ -292,6 +299,10 @@ function Profile({ p }: { p: WalletProfile }) {
         <div className={risky ? "risky" : undefined}>
           <dt>Risk score</dt>
           <dd className="num">{p.risk ? Math.round(p.risk.score) : "–"}</dd>
+        </div>
+        <div className={winner ? "good" : undefined}>
+          <dt>Win score</dt>
+          <dd className="num">{p.risk?.winScore !== undefined ? Math.round(p.risk.winScore) : "–"}</dd>
         </div>
       </dl>
       <p className="faint small wm-sub">
@@ -388,6 +399,21 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
           <dt>Launch snipes</dt>
           <dd className="num">{risk.snipes}</dd>
         </div>
+        {risk.winScore !== undefined && (
+          <div>
+            <dt>Win score</dt>
+            <dd className="num">{Math.round(risk.winScore)} / 100</dd>
+          </div>
+        )}
+        {risk.wins !== undefined && (
+          <div>
+            <dt>Coins that doubled</dt>
+            <dd className="num">
+              {risk.wins}
+              {risk.earlyWins !== undefined ? ` (${risk.earlyWins} bought before the call)` : ""}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Median bought</dt>
           <dd className="num">
@@ -397,7 +423,8 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
       </dl>
       <p className="faint small wm-note">
         How often it sold into a call&apos;s stop, against the market&apos;s rate, nudged up by fast exits and
-        launch snipes. Updated {ago(risk.computedAt)}.
+        launch snipes. The win score is the mirror: how often the coins it bought doubled, against the market,
+        nudged up by being in before the call. Updated {ago(risk.computedAt)}.
       </p>
     </section>
   );

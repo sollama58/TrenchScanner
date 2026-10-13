@@ -84,7 +84,7 @@ interface TokenChart {
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
 interface FlaggedWallet {
   wallet: string;
-  tags: ("risky" | "dumper" | "linked" | "creator" | "kol")[];
+  tags: ("risky" | "dumper" | "linked" | "creator" | "kol" | "winner")[];
   score: number | null;
   dumps: number | null;
   coins: number | null;
@@ -97,11 +97,12 @@ interface FlaggedWallet {
   trades: [number, 1 | -1, number | null][];
 }
 
-/** The marker colour a flagged wallet gets: the creator first, then a risky one, a KOL, else linked. */
+/** The marker colour a flagged wallet gets: the creator first, then a risky one, a KOL, a winner, else linked. */
 function kindOf(w: FlaggedWallet): MarkerKind {
   if (w.tags.includes("creator")) return "dev";
   if (w.tags.includes("risky") || w.tags.includes("dumper")) return "risky";
   if (w.tags.includes("kol")) return "kol";
+  if (w.tags.includes("winner")) return "winner";
   return "linked";
 }
 
@@ -749,6 +750,7 @@ const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: stri
   dumper: { text: "Known dumper", tone: "risky" },
   linked: { text: "Linked", tone: "linked" },
   kol: { text: "KOL", tone: "kol" },
+  winner: { text: "Winner", tone: "winner" },
 };
 
 /** The flagged wallets behind the markers: what each is, its score, and what it did in the coin. */
@@ -803,7 +805,9 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                           ? `Funded by ${shortAddress(w.funder)}, like other top holders`
                           : t === "dumper" && w.dumps !== null
                             ? `Sold into ${w.dumps} stopped calls`
-                            : undefined
+                            : t === "winner"
+                              ? "Keeps turning up early in coins that double (win score 70+, or 2+ early wins)"
+                              : undefined
                       }
                     >
                       {t === "kol" && w.kol ? `KOL: ${w.kol}` : TAG_TEXT[t].text}

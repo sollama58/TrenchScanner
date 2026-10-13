@@ -18,9 +18,14 @@ let loading: Promise<void> | null = null;
 export function refreshWalletRiskBook(now = Date.now()): void {
   if (loading || now - loadedAt < RELOAD_MS) return;
   loading = prisma.walletRisk
-    .findMany({ select: { wallet: true, score: true, dumps: true } })
+    .findMany({ select: { wallet: true, score: true, dumps: true, winScore: true, earlyWins: true } })
     .then((rows) => {
-      book = new Map(rows.map((r) => [r.wallet, { score: r.score, dumps: r.dumps }]));
+      book = new Map(
+        rows.map((r) => [
+          r.wallet,
+          { score: r.score, dumps: r.dumps, winScore: r.winScore, earlyWins: r.earlyWins },
+        ]),
+      );
       loadedAt = Date.now();
     })
     .catch((err: unknown) => {

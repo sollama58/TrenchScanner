@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { liveFlags } from "./liveFlags.js";
+import { liveFlags, liveTraders } from "./liveFlags.js";
 import type { TapeTrade } from "./tradeTape.js";
 
 const t = (wallet: string, side: "buy" | "sell", sol: number, atMs: number): TapeTrade => ({
@@ -41,5 +41,24 @@ describe("liveFlags", () => {
       ["dumper", "buy"],
       ["risky", "buy"],
     ]);
+  });
+});
+
+describe("liveTraders", () => {
+  it("counts distinct matching buyers and sellers and the SOL each way", () => {
+    const trades = [
+      { wallet: "k1", side: "buy" as const, sol: 1.5, atMs: 3, tokens: 1, tx: "a" },
+      { wallet: "k1", side: "buy" as const, sol: 0.5, atMs: 2, tokens: 1, tx: "b" },
+      { wallet: "k2", side: "sell" as const, sol: 2, atMs: 1, tokens: 1, tx: "c" },
+      { wallet: "other", side: "buy" as const, sol: 9, atMs: 0, tokens: 1, tx: "d" },
+    ];
+    const kols = new Set(["k1", "k2"]);
+    expect(liveTraders(trades as never, (w) => kols.has(w))).toEqual({
+      buyers: 1,
+      sellers: 1,
+      buySol: 2,
+      sellSol: 2,
+    });
+    expect(liveTraders([], () => true)).toEqual({ buyers: 0, sellers: 0, buySol: 0, sellSol: 0 });
   });
 });
