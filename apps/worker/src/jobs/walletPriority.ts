@@ -90,3 +90,20 @@ export function resetAlertWallets(): void {
   awaiting.clear();
   filterWaitSince.clear();
 }
+
+/**
+ * Coins whose linked-wallets reading (the Linked, Bundled and CEX-funded cuts) was not waited on
+ * this cycle and is not in yet: the scan reads it behind the cycle for coins no decision is waiting
+ * on (see startLinkedWalletStage). A user-filter match on one is held for it like a wallet figure
+ * the filter caps, so no alert goes out before the safety screen's cuts on that reading have run.
+ * Replaced every scan cycle.
+ */
+let linkedPending = new Set<string>();
+
+export function holdForLinked(mints: Iterable<string>): void {
+  linkedPending = new Set(mints);
+}
+
+export function linkedPendingFor(mint: string): boolean {
+  return linkedPending.has(mint);
+}

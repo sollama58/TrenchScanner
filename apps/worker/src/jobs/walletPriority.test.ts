@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  holdForLinked,
+  linkedPendingFor,
   alertAwaitingWallets,
   clearFilterWalletWait,
   filterWalletWaitOver,
@@ -52,5 +54,17 @@ describe("filter matches held for a wallet figure", () => {
     filterWalletWaitOver("mint", 180_000, t0);
     expect(alertAwaitingWallets("mint", t0 + 61 * 60_000)).toBe(false);
     expect(filterWalletWaitOver("mint", 180_000, t0 + 62 * 60_000)).toBe(false);
+  });
+});
+
+describe("coins whose linked reading was left for later", () => {
+  it("holds each cycle's set and only that set", () => {
+    holdForLinked(["a", "b"]);
+    expect(linkedPendingFor("a")).toBe(true);
+    expect(linkedPendingFor("c")).toBe(false);
+    holdForLinked(["c"]);
+    expect(linkedPendingFor("a")).toBe(false);
+    expect(linkedPendingFor("c")).toBe(true);
+    holdForLinked([]);
   });
 });

@@ -86,7 +86,6 @@ import {
   resolveLinkedWallets,
   takeLinkedWalletStats,
   type LinkedGroup,
-  type LinkedWalletLookups,
 } from "./linkedWallets.js";
 import { liveFlagsOf, liveTradersOf, readLiveTape, takeLiveTapeStats } from "./liveTape.js";
 import {
@@ -97,7 +96,7 @@ import {
   type WalletHoldingsOptions,
 } from "./walletHoldings.js";
 import { seedQuotes } from "./walletValuation.js";
-import { alertAwaitingWallets, noteAlertWallets } from "./walletPriority.js";
+import { alertAwaitingWallets, holdForLinked, noteAlertWallets } from "./walletPriority.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
 import { rememberGraduations, rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
@@ -420,35 +419,51 @@ function startLiveTapeStage(mints: string[], helius: HeliusClient, env: Env): Pr
 let linkedStageInFlight: Promise<unknown> | null = null;
 
 /**
- * Starts this cycle's funder reads for the linked-wallets reading (linkedWallets.ts), or answers
- * from the caches while the previous cycle's are still running. Never rejects.
+ * Starts this cycle's funder reads for the linked-wallets reading (linkedWallets.ts), unless the
+ * previous cycle's are still running. Resolves once the first `waitedCount` groups (the coins about
+ * to be decided on, first in order) are read; the rest are read behind the cycle on what budget
+ * those left, and land in the caches for the next one. The reading itself comes from the caches
+ * afterwards. Never rejects.
+ *
+ * The cycle used to wait on every group's reads: 1.4-2.9 s of each cycle on 2026-10-13 (worker
+ * health), for coins no decision this cycle was waiting on. A user-filter match on a coin whose
+ * reading is still out is held for it instead (see holdForLinked).
  */
 function startLinkedWalletStage(
   groups: LinkedGroup[],
+  waitedCount: number,
   helius: HeliusClient,
   env: Env,
-): Promise<LinkedWalletLookups | null> {
-  const cacheOnly = () =>
-    resolveLinkedWallets(groups, helius, { maxNewLookups: 0 }).catch((err: unknown) => {
-      logger.warn("linked-wallet cache read failed", { error: String(err) });
-      return null;
+): Promise<void> {
+  if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || linkedStageInFlight) {
+    return Promise.resolve();
+  }
+  const waited = groups.slice(0, waitedCount);
+  // Copies: the reads behind the cycle put new holder lists on their groups (readTopHolders), and
+  // the cycle is reading these groups at the same time.
+  const rest = groups.slice(waitedCount).map((g) => ({ ...g, holders: [...g.holders] }));
+  let readsLeft = env.LINKED_HOLDER_READS_PER_CYCLE;
+  let lookupsLeft = env.LINKED_WALLET_LOOKUPS_PER_CYCLE;
+  const pass = async (part: LinkedGroup[]) => {
+    if (part.length === 0) return;
+    readsLeft -= await readTopHolders(part, helius, { maxReads: readsLeft }).catch((err: unknown) => {
+      logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) });
+      return 0;
     });
-  if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0) return Promise.resolve(null);
-  if (linkedStageInFlight) return cacheOnly();
-  const work = readTopHolders(groups, helius, { maxReads: env.LINKED_HOLDER_READS_PER_CYCLE })
-    .catch((err: unknown) =>
-      logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) }),
-    )
-    .then(() => resolveLinkedWallets(groups, helius, { maxNewLookups: env.LINKED_WALLET_LOOKUPS_PER_CYCLE }))
-    .catch((err: unknown) => {
-      logger.warn("linked-wallet reads failed - using cached funders", { error: String(err) });
-      return cacheOnly();
-    });
+    await resolveLinkedWallets(part, helius, {
+      maxNewLookups: lookupsLeft,
+      onLookups: (n) => (lookupsLeft -= n),
+    }).catch((err: unknown) =>
+      logger.warn("linked-wallet reads failed - using cached funders", { error: String(err) }),
+    );
+  };
+  const first = pass(waited);
+  const work = first.then(() => pass(rest));
   linkedStageInFlight = work;
   void work.finally(() => {
     if (linkedStageInFlight === work) linkedStageInFlight = null;
   });
-  return work;
+  return first;
 }
 
 /**
@@ -970,7 +985,23 @@ async function scanCycle(
       creator: profile?.creator ?? null,
     };
   });
-  const linkedWork = startLinkedWalletStage(linkedGroups, deps.helius, env);
+  // Waited on for the coins about to be decided (walletGroups' contenders and held alerts lead
+  // the order), or for every coin while a filter caps a figure only this reading gives.
+  const linkedFiltersActive = activeFilters.some(
+    (f) =>
+      f.maxLinkedWalletPct != null ||
+      f.maxLinkedWalletCount != null ||
+      f.maxSameTimeFundedPct != null ||
+      f.maxSameTimeFundedCount != null ||
+      f.maxBundledWalletCount != null ||
+      f.maxLinkedCreatorPct != null ||
+      f.minCexFundedCount != null ||
+      f.maxCexFundedCount != null,
+  );
+  const linkedWaited = linkedFiltersActive
+    ? linkedGroups.length
+    : walletGroups.filter((g) => g.contender || g.alerted).length;
+  const linkedWork = startLinkedWalletStage(linkedGroups, linkedWaited, deps.helius, env);
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
   // for a wallet figure), for the flagged wallets trading it - on the same wait.
   const liveTapeWork = startLiveTapeStage(
@@ -1088,16 +1119,11 @@ async function scanCycle(
       Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)),
     )) ?? launchSnipersFromCache(sniperGroups.map((g) => g.mintAddress));
   lap("snipers");
-  let linkedLookups = await withinBudget(
-    linkedWork,
-    Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)),
-  );
-  if (!linkedLookups) {
-    linkedLookups =
-      env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0
-        ? await resolveLinkedWallets(linkedGroups, deps.helius, { maxNewLookups: 0 }).catch(() => null)
-        : null;
-  }
+  await withinBudget(linkedWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
+  const linkedLookups =
+    env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0
+      ? await resolveLinkedWallets(linkedGroups, deps.helius, { maxNewLookups: 0 }).catch(() => null)
+      : null;
   const linkedByMint = new Map(
     linkedLookups
       ? linkedGroups.map((g) => [g.mintAddress, linkedReadingOf(g, linkedLookups!)] as const)
@@ -1105,6 +1131,14 @@ async function scanCycle(
   );
   const cexByMint = new Map(
     linkedLookups ? linkedGroups.map((g) => [g.mintAddress, cexReadingOf(g, linkedLookups!)] as const) : [],
+  );
+  // The coins whose reading was left for behind the cycle and has not landed: their filter
+  // matches wait for it (see holdForLinked), which also puts them in next cycle's waited set.
+  holdForLinked(
+    linkedGroups
+      .slice(linkedWaited)
+      .filter((g) => !linkedByMint.get(g.mintAddress) || !cexByMint.get(g.mintAddress))
+      .map((g) => g.mintAddress),
   );
   lap("linkedWallets");
   await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));

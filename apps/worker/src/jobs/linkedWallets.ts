@@ -117,7 +117,7 @@ export interface LinkedWalletLookups {
 export async function resolveLinkedWallets(
   groups: readonly LinkedGroup[],
   helius: Pick<HeliusClient, "getFundersBatch" | "getFunderActivityBatch" | "gtfaUsable">,
-  opts: { maxNewLookups: number; nowMs?: number },
+  opts: { maxNewLookups: number; nowMs?: number; onLookups?: (sent: number) => void },
 ): Promise<LinkedWalletLookups> {
   const now = opts.nowMs ?? Date.now();
   failureBackoff.prune(now);
@@ -175,6 +175,7 @@ export async function resolveLinkedWallets(
     }
   }
 
+  opts.onLookups?.(toFetch.length);
   if (toFetch.length > 0) {
     const fetched = await helius.getFundersBatch(toFetch, { nowMs: now });
     calls.getSignaturesForAddress += toFetch.length;
@@ -353,12 +354,13 @@ export function cachedTopHolders(
  * Reads the top-25 holder list (pools aside) for groups without a fresh one, in the groups' order
  * (contenders first), at most `maxReads` mints, and puts each list read on its group: the linked
  * reading's holders past RugCheck's 20 accounts. A failed read leaves the group as it was.
+ * Answers how many mints it asked about.
  */
 export async function readTopHolders(
   groups: LinkedGroup[],
   helius: Pick<HeliusClient, "getTopHoldersBatch">,
   opts: { maxReads: number; nowMs?: number },
-): Promise<void> {
+): Promise<number> {
   const now = opts.nowMs ?? Date.now();
   const due = groups
     .filter((g) => {
@@ -366,7 +368,7 @@ export async function readTopHolders(
       return !entry || now - entry.atMs >= TOP_HOLDERS_REFRESH_MS;
     })
     .slice(0, Math.max(0, opts.maxReads));
-  if (due.length === 0) return;
+  if (due.length === 0) return 0;
   const read = await helius.getTopHoldersBatch(
     due.map((g) => g.mintAddress),
     LINKED_TOP_N + 1,
@@ -382,6 +384,7 @@ export async function readTopHolders(
     topHolderLists.set(g.mintAddress, { holders: r.holders, atMs: now });
     g.holders = r.holders;
   }
+  return due.length;
 }
 
 /**

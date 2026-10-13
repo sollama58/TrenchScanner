@@ -14,7 +14,7 @@ import {
 } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
-import { clearFilterWalletWait, filterWalletWaitOver } from "./walletPriority.js";
+import { clearFilterWalletWait, filterWalletWaitOver, linkedPendingFor } from "./walletPriority.js";
 
 const logger = createLogger("match-dispatch");
 
@@ -262,8 +262,10 @@ export async function resolveAlertTargets(opts: {
 
   // A match whose filter caps a wallet figure that isn't in yet waits for it, up to walletWaitMs:
   // the next scan with the figure decides it for real. Held, like the guard below, without
-  // starting the cooldown. The other filters on the token alert now.
-  const waiting = settled.filter((f) => awaitsWalletFigure(scored, f));
+  // starting the cooldown. The other filters on the token alert now. Every filter waits for a
+  // linked-wallets reading the scan left for later (see holdForLinked): the safety screen cuts on it.
+  const linkedPending = linkedPendingFor(scored.mintAddress);
+  const waiting = settled.filter((f) => linkedPending || awaitsWalletFigure(scored, f));
   let matching = settled;
   if (waiting.length === 0) {
     clearWait();
