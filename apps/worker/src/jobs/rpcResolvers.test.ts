@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv, type HeliusClient } from "@trenchscanner/core";
 import { computeFreshPct, resolveEarliestActivity, resetWalletFailureBackoff } from "./walletFreshness.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
-import { resolveMayhemMode, resetMayhemFailureBackoff } from "./mayhemMode.js";
+import { ignoreMayhemMints, resolveMayhemMode, resetMayhemFailureBackoff } from "./mayhemMode.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -285,5 +285,29 @@ describe.skipIf(!dbAvailable)("resolveMayhemMode", () => {
     // Same verdict both times - unverified, which the rug screen rejects - at half the cost.
     expect(first.get(mint)).toEqual({ status: "failed" });
     expect(second.get(mint)).toEqual({ status: "failed" });
+  });
+});
+
+describe.skipIf(!dbAvailable)("ignoreMayhemMints", () => {
+  afterEach(async () => {
+    if (!dbAvailable) return;
+    await prisma.mayhemModeCache.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  it("sets the token aside, settles the verdict, and answers Mayhem with no lookup after", async () => {
+    const mint = `${TAG}-ignored`;
+    await prisma.token.create({ data: { mintAddress: mint } });
+
+    expect(await ignoreMayhemMints([mint])).toBe(1);
+    const row = await prisma.token.findUnique({ where: { mintAddress: mint } });
+    expect(row?.ignoredAt).toBeInstanceOf(Date);
+
+    const { client, asked } = stubHelius();
+    const result = await resolveMayhemMode([mint], client);
+    expect(result.get(mint)).toEqual({ status: "found", isMayhemMode: true });
+    expect(asked.mints).toHaveLength(0);
+    // Already set aside: nothing is written again.
+    expect(await ignoreMayhemMints([mint])).toBe(0);
   });
 });

@@ -135,3 +135,42 @@ export async function resolveMayhemMode(
 
   return result;
 }
+
+/** Mints already taken off the watchlist by this process - spares rewriting them every cycle. */
+const ignoredMayhem = new SettledAnswers<true>(20_000);
+
+/**
+ * Records `mintAddresses` as Mayhem Mode tokens and takes them off the watchlist for good
+ * (Token.ignoredAt; user decision 2026-10-13: once a coin is known to be Mayhem, nothing more is
+ * read about it). Called with Pump.fun's own flag at discovery, which covers nearly every Mayhem
+ * coin before it costs a single lookup, and with the scan's on-chain verdicts for the rest.
+ * Pump.fun's flag matched the on-chain check on all 1,191 coins compared (notes/audit-2026-10-12).
+ */
+export async function ignoreMayhemMints(mintAddresses: string[]): Promise<number> {
+  const known = ignoredMayhem.take(mintAddresses);
+  const mints = [...new Set(mintAddresses)].filter((m) => !known.has(m));
+  if (mints.length === 0) return 0;
+  try {
+    await prisma.mayhemModeCache.createMany({
+      data: mints.map((mintAddress) => ({ mintAddress, isMayhemMode: true })),
+      skipDuplicates: true,
+    });
+    const { count } = await prisma.token.updateMany({
+      where: { mintAddress: { in: mints }, ignoredAt: null },
+      data: { ignoredAt: new Date() },
+    });
+    for (const mint of mints) settledMayhem.remember(mint, true);
+    // Only a mint whose row is now set aside is skipped next time: one discovered this cycle whose
+    // row a late source has yet to write is retried with its next sighting.
+    const setAside = await prisma.token.findMany({
+      where: { mintAddress: { in: mints }, ignoredAt: { not: null } },
+      select: { mintAddress: true },
+    });
+    for (const { mintAddress } of setAside) ignoredMayhem.remember(mintAddress, true);
+    return count;
+  } catch (err) {
+    // Retried with the next sighting; until then the scan's screen rejects the coin as before.
+    logger.warn("failed to set Mayhem tokens aside", { count: mints.length, error: String(err) });
+    return 0;
+  }
+}

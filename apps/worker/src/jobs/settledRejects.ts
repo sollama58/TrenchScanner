@@ -14,22 +14,22 @@ import { knownPreBondSeconds, type PreBondCandidate } from "./launchTimes.js";
  * agent's wallet, so each was re-read every minute for its first ten (notes/audit-2026-10-12).
  *
  * `except`: mints kept on the normal refresh anyway (a token someone has open, whose card shows the
- * live holder figures).
+ * live holder figures). Mapped to the fact that settles each one.
  */
 export async function settledRejects(
   candidates: ReadonlyArray<PreBondCandidate>,
   env: Pick<Env, "SAFETY_MIN_PREBOND_SECONDS">,
   except: ReadonlySet<string> = new Set(),
-): Promise<Set<string>> {
+): Promise<Map<string, "mayhem" | "preBond">> {
   const mints = candidates.map((c) => c.mintAddress).filter((m) => !except.has(m));
-  const out = new Set<string>();
+  const out = new Map<string, "mayhem" | "preBond">();
   for (const [mint, isMayhemMode] of await cachedMayhemMode(mints)) {
-    if (isMayhemMode) out.add(mint);
+    if (isMayhemMode) out.set(mint, "mayhem");
   }
   const floor = env.SAFETY_MIN_PREBOND_SECONDS;
   if (floor > 0) {
     for (const [mint, seconds] of knownPreBondSeconds(candidates)) {
-      if (seconds < floor && !except.has(mint)) out.add(mint);
+      if (seconds < floor && !except.has(mint) && !out.has(mint)) out.set(mint, "preBond");
     }
   }
   return out;

@@ -46,6 +46,8 @@ interface PumpFunCoin {
   is_currently_live?: boolean;
   /** People watching the livestream right now (the currently-live feed only). */
   num_participants?: number;
+  /** "active", "paused" or "completed" on a Mayhem Mode coin; null on every other. */
+  mayhem_state?: string | null;
 }
 
 /** One coin's Pump.fun livestream as the currently-live feed reports it. */
@@ -69,6 +71,8 @@ export interface DiscoveredCoin {
   /** The launcher's X link and website, https only (normalizeSocialUrl). */
   twitterUrl?: string;
   websiteUrl?: string;
+  /** Launched in Mayhem Mode, per Pump.fun's own flag; undefined when the coin carries none. */
+  mayhemMode?: true;
 }
 
 export interface PumpFunClientOptions {
@@ -393,5 +397,8 @@ function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {
     hasWebsite: Boolean(coin.website),
     twitterUrl: normalizeSocialUrl(coin.twitter, "twitter") ?? undefined,
     websiteUrl: normalizeSocialUrl(coin.website, "website") ?? undefined,
+    ...(typeof coin.mayhem_state === "string" && coin.mayhem_state !== ""
+      ? { mayhemMode: true as const }
+      : {}),
   };
 }

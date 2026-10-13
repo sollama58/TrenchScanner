@@ -118,6 +118,26 @@ describe("PumpFunClient discovered coins", () => {
   });
 });
 
+describe("PumpFunClient Mayhem flag", () => {
+  it("marks a coin Pump.fun reports in any Mayhem state, and no other", async () => {
+    const coin = (mint: string, mayhem_state: unknown) => ({ mint, symbol: "X", name: "X", mayhem_state });
+    const { url } = await serve([
+      [
+        coin("Actv111111111111111111111111111111111111111", "active"),
+        coin("Done111111111111111111111111111111111111111", "completed"),
+        coin("Null111111111111111111111111111111111111111", null),
+        coin("None111111111111111111111111111111111111111", undefined),
+      ],
+    ]);
+    const found = await new PumpFunClient({ baseUrl: url }).discoverNewMints();
+    const flag = new Map(found.map((c) => [c.mintAddress.slice(0, 4), c.mayhemMode]));
+    expect(flag.get("Actv")).toBe(true);
+    expect(flag.get("Done")).toBe(true);
+    expect(flag.get("Null")).toBeUndefined();
+    expect(flag.get("None")).toBeUndefined();
+  });
+});
+
 describe("PumpFunClient.launchTime", () => {
   async function serveCoin(status: number, body: unknown): Promise<string> {
     server = createServer((_req, res) => {
