@@ -14,6 +14,7 @@ import {
   HeliusClient,
   SolanaRpc,
   lastHeartbeatAt,
+  lastSuccessfulRunAt,
   recordHeartbeat,
   runsJob,
   runTelegramDispatch,
@@ -320,10 +321,19 @@ async function main() {
   // batched (see runCleanupJob), so a boot-time run after a long gap is many short statements,
   // not one huge delete racing the first scan cycles.
   // The Lighthouse tab's months of trends, summed from rows the sweeps below delete after weeks.
-  // Immediate on boot: the first run backfills, and every later one is a few short queries.
+  // Immediate on a first boot (the first run backfills); after that the first run waits for the
+  // slot the last successful run set, so a redeploy keeps the hourly cadence. Each run re-sums the
+  // trailing day of screen counts, 1.5-2.5 min of disk-bound reads on the shared database, and
+  // re-running it on every restart (four deploys in 40 minutes on 2026-10-13) stacked those reads
+  // on top of the API's warm-up and slowed page loads to 5-20 s.
   schedule("lighthouse-rollup", () =>
     scheduleInterval("lighthouse-rollup", () => runLighthouseRollupJob(), LIGHTHOUSE_ROLLUP_MINUTES, {
       deadlineMinutes: 30,
+      firstRunDelayMs: async () => {
+        const last = await lastSuccessfulRunAt("lighthouse-rollup");
+        if (!last) return 0;
+        return Math.max(0, last.getTime() + LIGHTHOUSE_ROLLUP_MINUTES * 60_000 - Date.now());
+      },
     }),
   );
   // Re-grades history to label rule 4 from Pump.fun's minute candles (labelRegradeJob.ts), a
