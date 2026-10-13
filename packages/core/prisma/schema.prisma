@@ -1214,6 +1214,15 @@ model WalletActivityCache {
   /// "failed" case in helius.ts and resolveEarliestActivity in walletFreshness.ts.
   earliestActivityAt DateTime?
   checkedAt          DateTime  @default(now())
+  /// When the wallet's current stretch of activity began: its first transaction after its last
+  /// idle gap of a week or more (helius.ts WALLET_DORMANT_GAP_MS), else its first ever. What the
+  /// fresh-wallet checks read, so an aged wallet left empty and paid again today reads fresh.
+  /// Unlike earliestActivityAt this can move - the wallet can go idle and start again - so a row
+  /// holds only until lastActivityAt + that gap, the earliest a new stretch could begin. Rows
+  /// written before it existed have neither and are read again.
+  activeSince        DateTime?
+  /// The wallet's newest transaction when the row was read.
+  lastActivityAt     DateTime?
 
   /// Supports the cleanup job's retention sweep - without it that DELETE full-scans a table
   /// that grows one row per distinct wallet ever seen.

@@ -936,7 +936,7 @@ function StatsCard({ card }: { card: Card }) {
           value={r.freshPct}
           failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
           atAlert={r.freshAtAlert !== null}
-          explain="top-10 holder wallets first used in the last 24h"
+          explain="top-10 holder wallets first used, or used again after a week or more idle, in the last 24h"
         />
         <WalletStat
           label="Empty"

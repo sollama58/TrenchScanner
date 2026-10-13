@@ -4,8 +4,9 @@ import { FRESH_WITHIN_HOURS, resolveEarliestActivity } from "./walletFreshness.j
 
 /**
  * The launch-buyer fresh-wallet share (feature freshLaunchBuyerPct): of the launch's first
- * FRESH_LAUNCH_BUYERS buyers (the dev aside), the % whose wallet was first used within
- * FRESH_WITHIN_HOURS before the launch.
+ * FRESH_LAUNCH_BUYERS buyers (the dev aside), the % whose wallet began its current stretch of
+ * activity (first use, or first use after a week or more idle) within FRESH_WITHIN_HOURS before
+ * the launch.
  *
  * The top-10 fresh-wallet share reads whoever holds the coin when it is scanned, and a bundle of
  * brand-new wallets can be gone before the first scan: on 2026-10-12 eight wallets created 2.7h
@@ -30,7 +31,7 @@ export function resetLaunchBuyerFreshness(): void {
 }
 
 /**
- * % of `wallets` first used at or after `launchAt` minus the freshness window. Null when any
+ * % of `wallets` whose current stretch of activity began at or after `launchAt` minus the freshness window. Null when any
  * wallet is unresolved (absent from the map), as with computeFreshPct: a share of a part-read
  * list would be a made-up low number. A resolved null (no usable timestamp) counts as not fresh.
  */
