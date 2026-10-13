@@ -293,4 +293,37 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
     expect(res.statusCode).toBe(402);
     expect(res.json()).toMatchObject({ code: "not_enough_credits", balance: 0 });
   });
+
+  it("charges a wallet lookup once the profile loads, and re-opens it free", async () => {
+    const me = await signIn();
+    await grant(me.walletAddress, 1);
+    const target = random(32);
+    const res = await app.inject({
+      method: "POST",
+      url: "/utilities/wallet",
+      cookies: me.cookies,
+      payload: { wallet: target },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ wallet: target, charged: 1, balance: 0 });
+
+    const reopen = await app.inject({
+      method: "POST",
+      url: "/utilities/wallet",
+      cookies: me.cookies,
+      payload: { wallet: target },
+    });
+    expect(reopen.json()).toMatchObject({ charged: 0, balance: 0 });
+
+    const other = await app.inject({
+      method: "POST",
+      url: "/utilities/wallet",
+      cookies: me.cookies,
+      payload: { wallet: random(32) },
+    });
+    expect(other.statusCode).toBe(402);
+
+    const overview = await app.inject({ method: "GET", url: "/utilities", cookies: me.cookies });
+    expect(overview.json().lookups[0]).toMatchObject({ utility: "wallet", subject: target, open: true });
+  });
 });

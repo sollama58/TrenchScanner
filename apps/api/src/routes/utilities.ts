@@ -24,6 +24,7 @@ import { creatorFeesByMint, TOKEN_CARD_SELECT } from "../curatedFeed.js";
 import { currentMarketCap } from "./matches.js";
 import { readTokenChart, readTokenSage } from "./tokens.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
+import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 
 /**
  * The Utilities tab: lookups paid for with Burn Credits (core's subscription/credits.ts).
@@ -32,6 +33,8 @@ import type { ViewStampBuffer } from "../viewStamps.js";
  * - POST /utilities/claim       credit a Burn Credits burn, read back from the chain
  * - POST /utilities/token       look up any mint: 1 credit, taken only once the lookup succeeds
  * - GET  /utilities/token/:mint the token view of a paid lookup, plus its chart and TokenSage read
+ * - POST /utilities/wallet      look up any wallet: 1 credit, taken once its profile loads; the
+ *                               dashboard then opens it in the wallet modal (GET /wallets/:wallet)
  *
  * A lookup stays open for LOOKUP_REOPEN_MS after it is paid for: the view's own reads, and
  * looking the same thing up again, are free inside it and refused (402) outside it.
@@ -46,6 +49,7 @@ import type { ViewStampBuffer } from "../viewStamps.js";
 const ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
 const mintSchema = z.object({ mint: z.string().regex(ADDRESS_RE, "That isn't a Solana address.") });
+const walletSchema = z.object({ wallet: z.string().regex(ADDRESS_RE, "That isn't a Solana address.") });
 const claimSchema = z.object({ signature: z.string().regex(SIGNATURE_RE, "invalid transaction signature") });
 
 /** Lookups and claims each spend outside calls (DexScreener, the RPC); a person needs a handful. */
@@ -70,6 +74,8 @@ export interface UtilityRouteOptions {
   dexScreener: DexScreenerClient;
   rpc: SolanaRpc;
   viewStamps: ViewStampBuffer;
+  /** The wallet modal's chain reader (null without a Helius key: the profile is what the database knows). */
+  walletLive: WalletLiveReader | null;
 }
 
 export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityRouteOptions) {
@@ -226,6 +232,43 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost);
     return {
       mint,
+      charged: spent.status === "charged" ? spent.cost : 0,
+      balance: spent.balance,
+    };
+  });
+
+  /**
+   * Look up a wallet: its profile is loaded (warming the wallet modal's own read) and the credit
+   * taken only once that succeeds. The dashboard then opens the wallet modal on it.
+   */
+  app.post("/wallet", { config: { rateLimit: LOOKUP_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = walletSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const subject = parsed.data.wallet;
+    const wallet = request.user!.walletAddress;
+    const cost = (await burnCreditPrices()).cost.wallet;
+
+    const open = await openLookup(wallet, "wallet", subject);
+    if (!open) {
+      const balance = await creditBalance(wallet);
+      if (balance < cost) return notEnough(reply, balance, cost);
+    }
+
+    try {
+      await withApiFeature("utility-wallet", () => loadWalletProfile(subject, opts.walletLive));
+    } catch (err) {
+      request.log.warn({ err, subject }, "utility wallet lookup failed");
+      return reply
+        .code(503)
+        .send({ error: "Couldn't read that wallet just now. No credit was used; try again shortly." });
+    }
+
+    const spent = await spendCredits(wallet, "wallet", subject, cost);
+    if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost);
+    return {
+      wallet: subject,
       charged: spent.status === "charged" ? spent.cost : 0,
       balance: spent.balance,
     };

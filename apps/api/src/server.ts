@@ -522,7 +522,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
   // The Utilities tab: token and wallet lookups paid for with Burn Credits.
-  await app.register(registerUtilityRoutes, { prefix: "/utilities", dexScreener, rpc, viewStamps });
+  await app.register(registerUtilityRoutes, {
+    prefix: "/utilities",
+    dexScreener,
+    rpc,
+    viewStamps,
+    walletLive,
+  });
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });

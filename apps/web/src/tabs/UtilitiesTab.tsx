@@ -17,6 +17,7 @@ import {
 import { usePolling } from "../hooks";
 import { ago, shortAddress, tokenLabel, tokenThumb } from "../format";
 import { onWalletsChanged } from "../wallet";
+import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
 import { TokenModal } from "../components/TokenModal";
 import { ChartIcon, FlameIcon, SearchIcon, ToolsIcon } from "../components/Icons";
@@ -105,11 +106,15 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
       <CreditsPanel walletAddress={walletAddress} data={data} error={error} onCredited={reload} />
 
       <div className="util-grid">
-        <TokenLookup data={data} onOpened={(mint) => (setOpenMint(mint), reload())} />
-        <WalletLookupSoon />
+        <LookupCard utility="token" data={data} onOpened={(mint) => (setOpenMint(mint), reload())} />
+        <LookupCard utility="wallet" data={data} onOpened={(wallet) => (openWallet(wallet), reload())} />
       </div>
 
-      <RecentLookups data={data} onOpen={setOpenMint} />
+      <RecentLookups
+        data={data}
+        onOpen={(utility, subject) => (utility === "wallet" ? openWallet(subject) : setOpenMint(subject))}
+        onPaid={reload}
+      />
 
       {openMint && (
         <UtilityTokenModal
@@ -455,21 +460,48 @@ function CreditBurn({
   );
 }
 
-/** Paste a contract address, pay a credit, see the coin as the feed's token view shows it. */
-function TokenLookup({
+/** What each lookup card says and where it posts. */
+const LOOKUP_CARDS = {
+  token: {
+    path: "/utilities/token",
+    field: "mint",
+    eyebrow: "Token lookup",
+    title: "Scan any coin",
+    blurb:
+      "Paste a contract address for the same view as a coin on the feed: its chart, holders, safety checks, flagged wallets and TokenSage's read. It gets a fresh scan and a fresh TokenSage read.",
+    placeholder: "Contract address (CA)",
+    label: "Token contract address",
+  },
+  wallet: {
+    path: "/utilities/wallet",
+    field: "wallet",
+    eyebrow: "Wallet lookup",
+    title: "Look into any wallet",
+    blurb:
+      "Paste a wallet address to see its full profile: what it holds, who funded it, its risk score and how it traded the coins we track.",
+    placeholder: "Wallet address",
+    label: "Wallet address",
+  },
+} as const;
+
+/** Paste an address, pay a credit, see the coin or wallet as the dashboard's own view shows it. */
+function LookupCard({
+  utility,
   data,
   onOpened,
 }: {
+  utility: "token" | "wallet";
   data: UtilitiesOverview | null;
-  onOpened: (mint: string) => void;
+  onOpened: (address: string) => void;
 }) {
-  const [mint, setMint] = useState("");
+  const card = LOOKUP_CARDS[utility];
+  const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cost = data?.prices.cost.token ?? 1;
-  const value = mint.trim();
+  const cost = data?.prices.cost[utility] ?? 1;
+  const value = address.trim();
   const valid = ADDRESS_RE.test(value);
-  const open = data?.lookups.some((l) => l.utility === "token" && l.subject === value && l.open) ?? false;
+  const open = data?.lookups.some((l) => l.utility === utility && l.subject === value && l.open) ?? false;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -477,8 +509,8 @@ function TokenLookup({
     setBusy(true);
     setError(null);
     try {
-      await post<{ mint: string; charged: number; balance: number }>("/utilities/token", { mint: value });
-      setMint("");
+      await post<{ charged: number; balance: number }>(card.path, { [card.field]: value });
+      setAddress("");
       onOpened(value);
     } catch (err) {
       setError(lookupError(err));
@@ -492,27 +524,24 @@ function TokenLookup({
       <header className="section-head">
         <div>
           <span className="eyebrow">
-            <ChartIcon size={13} /> Token lookup
+            {utility === "token" ? <ChartIcon size={13} /> : <SearchIcon size={13} />} {card.eyebrow}
           </span>
-          <h2>Scan any coin</h2>
+          <h2>{card.title}</h2>
         </div>
         <span className="util-cost num">{plural(cost, "credit")}</span>
       </header>
-      <p className="muted small">
-        Paste a contract address for the same view as a coin on the feed: its chart, holders, safety checks,
-        flagged wallets and TokenSage&apos;s read. It gets a fresh scan and a fresh TokenSage read.
-      </p>
+      <p className="muted small">{card.blurb}</p>
       <form className="util-form" onSubmit={(e) => void submit(e)}>
         <input
           type="text"
           className="num"
-          placeholder="Contract address (CA)"
-          aria-label="Token contract address"
+          placeholder={card.placeholder}
+          aria-label={card.label}
           autoComplete="off"
           spellCheck={false}
-          value={mint}
+          value={address}
           onChange={(e) => {
-            setMint(e.target.value);
+            setAddress(e.target.value);
             setError(null);
           }}
         />
@@ -531,39 +560,29 @@ function TokenLookup({
   );
 }
 
-/** The wallet lookup's place on the tab until the wallet view ships. */
-function WalletLookupSoon() {
-  return (
-    <section className="panel util-card util-soon">
-      <header className="section-head">
-        <div>
-          <span className="eyebrow">
-            <SearchIcon size={13} /> Wallet lookup
-          </span>
-          <h2>Look into any wallet</h2>
-        </div>
-      </header>
-      <p className="muted small">
-        Paste a wallet address to see its full profile: what it holds, who funded it, its risk score and how
-        it traded the coins we track. Coming with the wallet view.
-      </p>
-    </section>
-  );
-}
-
 /** The wallet's recent lookups: open ones re-open free, older ones can be looked up again. */
-function RecentLookups({ data, onOpen }: { data: UtilitiesOverview | null; onOpen: (mint: string) => void }) {
+function RecentLookups({
+  data,
+  onOpen,
+  onPaid,
+}: {
+  data: UtilitiesOverview | null;
+  onOpen: (utility: "token" | "wallet", subject: string) => void;
+  onPaid: () => void;
+}) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const lookups = data?.lookups ?? [];
   if (!data || lookups.length === 0) return null;
 
-  const again = async (mint: string) => {
-    setBusy(mint);
+  const again = async (utility: "token" | "wallet", subject: string) => {
+    setBusy(subject);
     setError(null);
     try {
-      await post("/utilities/token", { mint });
-      onOpen(mint);
+      const card = LOOKUP_CARDS[utility];
+      await post(card.path, { [card.field]: subject });
+      onOpen(utility, subject);
+      onPaid();
     } catch (e) {
       setError(lookupError(e));
     } finally {
@@ -605,9 +624,13 @@ function RecentLookups({ data, onOpen }: { data: UtilitiesOverview | null; onOpe
                   {ago(new Date(l.at))}
                 </span>
               </span>
-              {l.utility === "token" &&
+              {l.utility !== null &&
                 (l.open ? (
-                  <button type="button" className="ghost small-btn" onClick={() => onOpen(subject)}>
+                  <button
+                    type="button"
+                    className="ghost small-btn"
+                    onClick={() => onOpen(l.utility!, subject)}
+                  >
                     Open
                   </button>
                 ) : (
@@ -615,11 +638,11 @@ function RecentLookups({ data, onOpen }: { data: UtilitiesOverview | null; onOpe
                     type="button"
                     className="ghost small-btn"
                     disabled={busy !== null}
-                    onClick={() => void again(subject)}
+                    onClick={() => void again(l.utility!, subject)}
                   >
                     {busy === subject
                       ? "Looking up…"
-                      : `Look up again (${plural(data.prices.cost.token, "credit")})`}
+                      : `Look up again (${plural(data.prices.cost[l.utility], "credit")})`}
                   </button>
                 ))}
             </li>

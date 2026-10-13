@@ -177,7 +177,8 @@ subscription time, a burn without it buys months and never credits. Credits are 
 chain (the burned account's owner, the amount burned), never taken from the client, and land in an
 append-only ledger (`BurnCreditEntry`) whose unique burn signature credits each burn once, through
 `POST /utilities/claim` or the same burn reconciler. A lookup takes its credit only after it
-succeeds, and re-opening it within an hour is free. The Utilities tab redeems up to 100 credits per
+succeeds, and re-opening it within an hour is free. A wallet lookup opens the wallet modal, and
+its credit is taken once the wallet's profile loads. The Utilities tab redeems up to 100 credits per
 burn.
 
 ### Choosing an RPC (`SOLANA_RPC_URL`)
