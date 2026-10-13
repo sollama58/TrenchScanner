@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { signedPct } from "../format";
+import { PricingChangeMark } from "./PricingChangeMark";
 
 /**
  * Small hand-drawn charts. Colors come from CSS tokens (styles.css): --series-1 (blue) and
@@ -200,6 +201,7 @@ export function MultiLines({
   height = 220,
   signed = false,
   subs,
+  pricingChange = null,
 }: {
   labels: string[];
   series: LineSeries[];
@@ -207,6 +209,8 @@ export function MultiLines({
   signed?: boolean;
   /** Shown in the tooltip under the values, one per label. */
   subs?: string[];
+  /** Where pricing changed, in points from the first (pricingChangePoint); null when off-axis. */
+  pricingChange?: number | null;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -284,6 +288,9 @@ export function MultiLines({
               </text>
             </g>
           ))}
+          {pricingChange !== null && n > 1 && (
+            <PricingChangeMark x={x(pricingChange)} top={padT} bottom={padT + plotH} width={width} />
+          )}
           {drawn.map((s) => (
             <path key={s.key} className={`line ${s.tone}`} d={path(s.values)} />
           ))}

@@ -17,6 +17,7 @@ import {
 import { SafetyGauge } from "./SafetyGauge";
 import { ShareButton } from "./ShareImageDialog";
 import { WeatherGauge } from "./WeatherGauge";
+import { PRICING_CHANGE_LABEL, pricingChangeSlot } from "../pricingChange";
 
 /**
  * The Market Lighthouse, beside Stats on the Live tab: how every token that passed the pre-checks
@@ -841,6 +842,21 @@ function Screened({
   const [explain, setExplain] = useState(false);
   const buckets = s.byBucket.filter((b) => b.graded > 0);
   const per = s.bucketHours >= 24 ? "day" : `${s.bucketHours} hours`;
+  const change = pricingChangeSlot(
+    buckets.map((b) => Date.parse(b.at)),
+    s.bucketHours * 3_600_000,
+  );
+  // The second chart repeats the line without the label, under the first one's.
+  const changeMark = (labelled: boolean) =>
+    change === null ? null : (
+      <span
+        className={`lh-change${change / buckets.length > 0.6 ? " flip" : ""}`}
+        style={{ left: `${(change / buckets.length) * 100}%` }}
+        aria-label={labelled ? PRICING_CHANGE_LABEL : undefined}
+      >
+        {labelled && <span>{PRICING_CHANGE_LABEL}</span>}
+      </span>
+    );
   const rateMax = Math.max(
     10,
     ...buckets.flatMap((b) => [b.hit2xPct ?? 0, b.hit4xPct ?? 0, b.hit10xPct ?? 0]),
@@ -948,6 +964,7 @@ function Screened({
               role="img"
               aria-label={`Hit rates of screened tokens per ${per}: 2x ${pct(s.hit2xPct, 1)}, 4x ${pct(s.hit4xPct, 1)}, 10x ${pct(s.hit10xPct, 1)} overall`}
             >
+              {changeMark(true)}
               {buckets.map((b, i) => (
                 <div
                   key={b.at}
@@ -978,6 +995,7 @@ function Screened({
               role="img"
               aria-label={`Average return of screened tokens per ${per}, ${signedPct(s.avgReturnPct, 1)} overall`}
             >
+              {changeMark(false)}
               {buckets.map((b, i) => {
                 const v = b.avgReturnPct ?? 0;
                 const h = (Math.abs(v) / retAbs) * 50;
