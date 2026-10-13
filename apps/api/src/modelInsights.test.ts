@@ -6,10 +6,16 @@ import {
   loadEnv,
   BOOSTED_MODEL_KIND,
   CURATOR_MODEL_KIND,
+  NARRATIVE_LED_MODEL_KIND,
   type BoostedCuratorParams,
   type LogisticCuratorParams,
 } from "@trenchscanner/core";
-import { buildModelInsights, featureImportance, reviewOutcome } from "./modelInsights.js";
+import {
+  buildModelInsights,
+  featureImportance,
+  narrativeLedImportance,
+  reviewOutcome,
+} from "./modelInsights.js";
 
 describe("featureImportance", () => {
   it("ranks a logistic model by standardized weight, value and missing indicator together", () => {
@@ -62,6 +68,40 @@ describe("featureImportance", () => {
         threshold: 1.01,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("narrativeLedImportance", () => {
+  const stage = (featureNames: string[], splits: number[]): Omit<BoostedCuratorParams, "threshold"> =>
+    ({
+      kind: BOOSTED_MODEL_KIND,
+      featureNames,
+      baseScore: 0,
+      trees: [{ feature: splits, threshold: splits.map(() => 0), left: [], right: [], value: [] }],
+    }) as unknown as Omit<BoostedCuratorParams, "threshold">;
+
+  it("scales each stage's shares by its fixed weight in the blend", () => {
+    const ranked = narrativeLedImportance({
+      kind: NARRATIVE_LED_MODEL_KIND,
+      // Story: nsXFit 3 splits, nsCatAnimal 1. Safety: top10HolderPct 1 split.
+      story: stage(["nsXFit", "nsCatAnimal"], [0, 0, 0, 1]),
+      safety: stage(["top10HolderPct"], [0]),
+      storyQuantiles: [],
+      safetyQuantiles: [],
+      storyWeight: 0.7,
+      attributionScale: { story: 1, safety: 1 },
+      threshold: 0.6,
+    });
+    expect(ranked?.threshold).toBe(0.6);
+    expect(ranked?.features.map((f) => [f.feature, f.sharePct])).toEqual([
+      ["nsXFit", 52.5],
+      ["top10HolderPct", 30],
+      ["nsCatAnimal", 17.5],
+    ]);
+  });
+
+  it("ignores any other kind", () => {
+    expect(narrativeLedImportance({ kind: BOOSTED_MODEL_KIND })).toBeNull();
   });
 });
 

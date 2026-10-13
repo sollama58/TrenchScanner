@@ -29,6 +29,13 @@ import {
   type BoostingOptions,
 } from "./boosting.js";
 import { trainForestCurator, type ForestOptions } from "./forest.js";
+import {
+  NARRATIVE_LED_MODEL_KIND,
+  narrativeLedContributions,
+  scoreNarrativeLed,
+  trainNarrativeLedCurator,
+  type NarrativeLedCuratorParams,
+} from "./narrativeLed.js";
 
 export { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform };
 
@@ -259,7 +266,11 @@ export interface ServedCuratorExtras {
  * SUPPORTED_CURATOR_MODEL_KINDS must be ignored, never half-applied.
  */
 export type TrainedCuratorParams = (
-  LogisticCuratorParams | BoostedCuratorParams | TwoStageCuratorParams | NarrativeBlendCuratorParams
+  | LogisticCuratorParams
+  | BoostedCuratorParams
+  | TwoStageCuratorParams
+  | NarrativeBlendCuratorParams
+  | NarrativeLedCuratorParams
 ) &
   ServedCuratorExtras;
 
@@ -268,13 +279,15 @@ export type UnthresholdedCuratorParams =
   | Omit<LogisticCuratorParams, "threshold">
   | Omit<BoostedCuratorParams, "threshold">
   | Omit<TwoStageCuratorParams, "threshold">
-  | Omit<NarrativeBlendCuratorParams, "threshold">;
+  | Omit<NarrativeBlendCuratorParams, "threshold">
+  | Omit<NarrativeLedCuratorParams, "threshold">;
 
 export const SUPPORTED_CURATOR_MODEL_KINDS: readonly string[] = [
   CURATOR_MODEL_KIND,
   BOOSTED_MODEL_KIND,
   TWO_STAGE_MODEL_KIND,
   NARRATIVE_BLEND_MODEL_KIND,
+  NARRATIVE_LED_MODEL_KIND,
 ];
 
 /**
@@ -295,6 +308,11 @@ export interface ModelTrainOptions extends TrainOptions {
   twoStage?: boolean;
   /** Train the two-step narrative model (NARRATIVE_BLEND_MODEL_KIND), its market stage in this family. */
   narrativeBlend?: boolean;
+  /**
+   * Train the Narrative seat's story-led model (NARRATIVE_LED_MODEL_KIND, narrativeLed.ts): a
+   * story stage and a safety stage, blended with this weight on the story.
+   */
+  narrativeLed?: number;
 }
 
 /** Trains one model of the given family (and shape). */
@@ -303,6 +321,19 @@ export async function trainCuratorModel(
   opts: ModelTrainOptions = {},
 ): Promise<UnthresholdedCuratorParams> {
   if (opts.narrativeBlend) return trainNarrativeBlendCurator(rows, opts);
+  if (opts.narrativeLed !== undefined) {
+    const led = await trainNarrativeLedCurator(rows, {
+      featureNames: opts.featureNames ?? LEARNER_FEATURE_NAMES,
+      storyWeight: opts.narrativeLed,
+      boosting: opts.boosting,
+      recencyHalfLifeDays: opts.recencyHalfLifeDays,
+      legacyLabelWeight: opts.legacyLabelWeight,
+      runWeightPerDoubling: opts.runWeightPerDoubling,
+    });
+    // Too few rows for both stages: the plain model on the same inputs.
+    if (led) return led;
+    return trainSingleStage(rows, { ...opts, learner: "gbdt" });
+  }
   if (opts.twoStage) return trainTwoStageCurator(rows, opts);
   return trainSingleStage(rows, opts);
 }
@@ -681,6 +712,7 @@ export function scoreCandidateWithModel(
   if (params.kind === NARRATIVE_BLEND_MODEL_KIND) {
     return scoreBoosted(params.blend, withMarketScore(params, features));
   }
+  if (params.kind === NARRATIVE_LED_MODEL_KIND) return scoreNarrativeLed(params, features);
   const x = vectorize(features, params.featureNames, params.means, params.stdevs, params.transform);
   let z = params.bias;
   for (let j = 0; j < x.length; j++) z += params.weights[j]! * x[j]!;
@@ -1097,6 +1129,10 @@ export function featureContributions(
     const augmented = withMarketScore(params, features);
     return [...boostedContributions(params.blend, augmented)].map(([name, value]) => ({ name, value }));
   }
+  // Both stages', each scaled to its fixed share of the blend.
+  if (params.kind === NARRATIVE_LED_MODEL_KIND) {
+    return [...narrativeLedContributions(params, features)].map(([name, value]) => ({ name, value }));
+  }
   if (params.kind === BOOSTED_MODEL_KIND) {
     return [...boostedContributions(params, features)].map(([name, value]) => ({ name, value }));
   }
@@ -1362,6 +1398,8 @@ export interface WalkForwardOptions {
   twoStage?: boolean;
   /** Train the two-step narrative shape - see NarrativeBlendCuratorParams. */
   narrativeBlend?: boolean;
+  /** Train the story-led narrative shape with this story weight - see NarrativeLedCuratorParams. */
+  narrativeLed?: number;
   /** Weight multiplier for legacy-rule rows in every fold's training - see TrainOptions. */
   legacyLabelWeight?: number;
   /** Extra weight per doubling a winner ran past its 2x - see TrainOptions. */
@@ -1569,6 +1607,7 @@ export async function walkForwardEvaluate(
         forest: opts.forest,
         twoStage: opts.twoStage,
         narrativeBlend: opts.narrativeBlend,
+        narrativeLed: opts.narrativeLed,
         legacyLabelWeight: opts.legacyLabelWeight,
         runWeightPerDoubling: opts.runWeightPerDoubling,
       });

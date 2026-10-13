@@ -481,6 +481,7 @@ async function sitRecipeExam(
     forest: recipe.forest,
     twoStage: recipe.twoStage,
     narrativeBlend: recipe.narrativeBlend,
+    narrativeLed: recipe.narrativeLed,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
     minTestWins: cfg.minTestWins,
@@ -515,6 +516,7 @@ async function shipRecipe(
     forest: recipe.forest,
     twoStage: recipe.twoStage,
     narrativeBlend: recipe.narrativeBlend,
+    narrativeLed: recipe.narrativeLed,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
   };
