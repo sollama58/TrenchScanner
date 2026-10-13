@@ -44,6 +44,30 @@ const snapshot = {
 };
 
 describe("bubble map graph", () => {
+  it("rings holders funded in the same minute and ties each to the first funded", () => {
+    const g = buildGraph({
+      ...snapshot,
+      sameTimeFundedPct: 18,
+      sameTimeClusters: [
+        {
+          atMs: 1_000,
+          spanMs: 40_000,
+          pct: 18,
+          wallets: [
+            { wallet: A, pct: 12, fundedAtMs: 41_000, funder: F },
+            { wallet: R, pct: 6, fundedAtMs: 1_000, funder: null },
+          ],
+        },
+      ],
+    });
+    // R is in no shared-funder cluster: it gets a bubble of its own.
+    expect(g.nodes.find((n) => n.wallet === R)).toMatchObject({ kind: "holder", cluster: null, sameTime: 0 });
+    expect(g.nodes.find((n) => n.wallet === A)?.sameTime).toBe(0);
+    expect(g.sameTimeLinks).toEqual([{ from: `h:${A}`, to: `h:${R}`, group: 0 }]);
+    expect(g.sameTimePct).toBe(18);
+    expect(layoutGraph(g).nodes.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y))).toBe(true);
+  });
+
   it("links each holder to its funder, with a funder node only when the funder holds none", () => {
     const g = buildGraph(snapshot);
     expect(g.nodes.filter((n) => n.kind === "funder").map((n) => n.wallet)).toEqual([F]);

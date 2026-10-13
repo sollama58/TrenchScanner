@@ -80,6 +80,8 @@ export function useBubblesMint(): string | null {
 // The graph
 
 export type Cluster = NonNullable<Snapshot["linkedClusters"]>[number];
+/** Top holders funded within a minute of each other, from any funders (core's sameTimeClusters). */
+export type SameTimeGroup = NonNullable<Snapshot["sameTimeClusters"]>[number];
 
 /** A flagged wallet from the token chart (apps/api/src/tokenChart.ts MarkedWallet), the parts used here. */
 export interface FlaggedHolder {
@@ -106,6 +108,8 @@ export interface MapNode {
   cluster: number | null;
   /** A holder that funded the others in its cluster. */
   hub: boolean;
+  /** Index into the same-minute groups, or null for a holder in none. */
+  sameTime: number | null;
   flags: Flag[];
   /** On the KOL list: its name ("" when unnamed). Absent or null otherwise. */
   kol?: string | null;
@@ -127,10 +131,21 @@ export interface MapLink {
   cluster: number;
 }
 
+/** A same-minute group's tie: each holder to the group's first-funded one. */
+export interface SameTimeLink {
+  from: string;
+  to: string;
+  group: number;
+}
+
 export interface BubbleGraph {
   nodes: MapNode[];
   links: MapLink[];
   clusters: readonly Cluster[];
+  sameTimeLinks: SameTimeLink[];
+  sameTimeGroups: readonly SameTimeGroup[];
+  /** Share of supply in same-minute groups, as read. */
+  sameTimePct: number | null;
   /** Share of supply in linked wallets, and the top 10's share, as read. */
   linkedPct: number | null;
   top10Pct: number | null;
@@ -170,7 +185,13 @@ function flagsOf(w: FlaggedHolder | undefined): Flag[] {
 export function buildGraph(
   snapshot: Pick<
     Snapshot,
-    "linkedClusters" | "linkedHolders" | "linkedWalletPct" | "top10HolderPct" | "top10WalletsChecked"
+    | "linkedClusters"
+    | "linkedHolders"
+    | "linkedWalletPct"
+    | "top10HolderPct"
+    | "top10WalletsChecked"
+    | "sameTimeClusters"
+    | "sameTimeFundedPct"
   >,
   flagged: readonly FlaggedHolder[] = [],
 ): BubbleGraph {
@@ -190,6 +211,7 @@ export function buildGraph(
       pct,
       cluster,
       hub,
+      sameTime: null,
       flags: flagsOf(f),
       kol: kolOf(f),
       score: f?.score ?? null,
@@ -212,6 +234,7 @@ export function buildGraph(
         pct: 0,
         cluster: i,
         hub: true,
+        sameTime: null,
         flags: flagsOf(byWallet.get(c.funder)),
         score: byWallet.get(c.funder)?.score ?? null,
         dumps: byWallet.get(c.funder)?.dumps ?? null,
@@ -237,6 +260,30 @@ export function buildGraph(
     shownPct += n.pct;
     shownCount += 1;
   }
+  // Holders funded in the same minute: each ringed and tied to the group's first-funded holder,
+  // added as a bubble of its own when no cluster placed it.
+  const sameTimeGroups = (snapshot.sameTimeClusters ?? []).filter(
+    (g) => g && Array.isArray(g.wallets) && g.wallets.length > 1,
+  );
+  const sameTimeLinks: SameTimeLink[] = [];
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  sameTimeGroups.forEach((g, i) => {
+    const first = [...g.wallets].sort((a, b) => a.fundedAtMs - b.fundedAtMs)[0]!.wallet;
+    for (const w of g.wallets) {
+      let n = byId.get(`h:${w.wallet}`);
+      if (!n) {
+        seen.add(w.wallet);
+        n = holder(w.wallet, w.pct, null, false);
+        nodes.push(n);
+        byId.set(n.id, n);
+        shownPct += w.pct;
+        shownCount += 1;
+      }
+      n.sameTime ??= i;
+      if (w.wallet !== first) sameTimeLinks.push({ from: `h:${w.wallet}`, to: `h:${first}`, group: i });
+    }
+  });
+
   // The holders in no cluster, each its own bubble, when the scan kept the list.
   for (const h of snapshot.linkedHolders ?? []) {
     if (!h || typeof h.wallet !== "string" || seen.has(h.wallet) || !(h.pct > 0)) continue;
@@ -267,6 +314,7 @@ export function buildGraph(
         pct,
         cluster: null,
         hub: false,
+        sameTime: null,
         flags: [],
         score: null,
         dumps: null,
@@ -282,6 +330,9 @@ export function buildGraph(
     nodes,
     links,
     clusters,
+    sameTimeLinks,
+    sameTimeGroups,
+    sameTimePct: snapshot.sameTimeFundedPct ?? null,
     linkedPct: snapshot.linkedWalletPct ?? null,
     top10Pct: top10,
   };
@@ -351,6 +402,22 @@ export function layoutGraph(graph: BubbleGraph, iterations = 320): BubbleGraph {
       a.y += dy * k;
       b.x -= dx * k * 0.35;
       b.y -= dy * k * 0.35;
+    }
+    // Same-minute ties: a looser pull, so the group sits together without leaving its clusters.
+    for (const l of graph.sameTimeLinks) {
+      const a = index.get(l.from);
+      const b = index.get(l.to);
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy) || 0.01;
+      const want = a.r + b.r + 34;
+      if (dist <= want) continue;
+      const k = ((dist - want) / dist) * 0.04;
+      a.x += dx * k;
+      a.y += dy * k;
+      b.x -= dx * k;
+      b.y -= dy * k;
     }
     // Gravity toward the middle, stronger for the unlinked so clusters keep their room.
     for (const n of nodes) {

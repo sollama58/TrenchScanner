@@ -21,6 +21,8 @@ import {
 const CLUSTER = ["#3987e5", "#199e70", "#d95926", "#8b5cf6", "#06b6d4"];
 const RISK = "#ef4444";
 const DEV = "#fab219";
+/** Same-minute funding: a dotted ring and tie in light ink, apart from the cluster colours. */
+const SAME = "rgba(235, 238, 245, 0.85)";
 
 const colourOf = (n: MapNode) => (n.cluster === null ? OTHER : CLUSTER[n.cluster % CLUSTER.length]!);
 const pctText = (v: number) => `${v < 10 ? v.toFixed(1) : v.toFixed(0)}%`;
@@ -114,6 +116,17 @@ export async function renderBubbleCard(graph: BubbleGraph, token: Token): Promis
     ctx.fillStyle = RISK;
     ctx.font = `600 18px ${FONT}`;
     ctx.fillText(`${risky} risky wallet${risky === 1 ? "" : "s"} among the holders`, PAD, y + 4);
+    y += 32;
+  }
+  const sameWallets = graph.nodes.filter((n) => n.sameTime !== null).length;
+  if (sameWallets > 0 && graph.sameTimePct !== null && y < CARD_H - 110) {
+    ctx.fillStyle = INK2;
+    ctx.font = `600 18px ${FONT}`;
+    ctx.fillText(
+      clip(ctx, `${pctText(graph.sameTimePct)} in ${sameWallets} wallets funded the same minute`, leftW),
+      PAD,
+      y + 4,
+    );
   }
 
   // Right: the map, fitted into its box.
@@ -176,6 +189,21 @@ export async function renderBubbleCard(graph: BubbleGraph, token: Token): Promis
     ctx.quadraticCurveTo(X(mx), Y(my), X(b.x), Y(b.y));
     ctx.stroke();
   }
+
+  // Same-minute ties: dotted, from each holder to its group's first-funded one.
+  ctx.strokeStyle = SAME;
+  ctx.lineWidth = Math.max(2, 2 * scale);
+  ctx.setLineDash([0.1, 7]);
+  for (const l of graph.sameTimeLinks) {
+    const a = index.get(l.from);
+    const b = index.get(l.to);
+    if (!a || !b) continue;
+    ctx.beginPath();
+    ctx.moveTo(X(a.x), Y(a.y));
+    ctx.lineTo(X(b.x), Y(b.y));
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
 
   const order = [...graph.nodes].sort((a, b) => b.r - a.r);
   ctx.textAlign = "center";
@@ -245,6 +273,15 @@ export async function renderBubbleCard(graph: BubbleGraph, token: Token): Promis
     ctx.ellipse(0, 0, r * 0.42, r * 0.26, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
+    if (n.sameTime !== null) {
+      ctx.strokeStyle = SAME;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([0.1, 7]);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + (risk ? 13 : 6), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     if (risk) {
       ctx.strokeStyle = RISK;
       ctx.lineWidth = 3;
