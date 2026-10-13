@@ -664,7 +664,15 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     deps.rugCheck,
     rugCheckTtlFor(env.RUGCHECK_CACHE_TTL_MINUTES),
     env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
-    { refreshStaleInBackground: true },
+    {
+      refreshStaleInBackground: true,
+      // Only a coin that can be decided on this cycle waits for a re-check of "no report".
+      awaitAbsentOnly: new Set(
+        candidates
+          .filter((c) => passesEventPreGate(c, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX }))
+          .map((c) => c.mintAddress),
+      ),
+    },
   );
   lap("rugCheck");
   // A coin that graduated minutes ago and reads over the concentration cut is re-read every minute
