@@ -1,6 +1,22 @@
 import type { FastifyInstance } from "fastify";
-import { NARRATIVE_CONTESTANT, Prisma, prisma, type TokenSageAnalysis } from "@trenchscanner/core";
+import {
+  KNOWN_DUMPER_DUMPS,
+  NARRATIVE_CONTESTANT,
+  Prisma,
+  prisma,
+  RISKY_WALLET_SCORE,
+  type TokenSageAnalysis,
+} from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
+import {
+  CandleCache,
+  KeyedCache,
+  type CandleFetcher,
+  markedWallets,
+  pumpFunCandleFetcher,
+  type MarkedWallet,
+  type McapCandle,
+} from "../tokenChart.js";
 import {
   sageNarrative,
   sageRead,
@@ -18,6 +34,91 @@ const SAGE_CHART_POINTS = 120;
 /** The week of narrative records behind the TokenSage view: the same for every token, moves hourly. */
 const TRACK_DAYS = 7;
 const TRACK_CACHE_MS = 10 * 60_000;
+
+/** Scan market caps sent with the token modal's chart: its fallback when Pump.fun has no candles. */
+const CHART_SNAPSHOT_POINTS = 240;
+
+/** GET /tokens/:mint/chart: the token modal's price chart (web src/components/TokenModal.tsx). */
+export interface TokenChart {
+  mint: string;
+  /** Pump.fun's one-minute candles as market cap, oldest first; null when unavailable. */
+  candles: McapCandle[] | null;
+  /** The scan's market-cap readings, oldest first: drawn when there are no candles. */
+  marketCap: { t: number; usd: number }[];
+  /** The coin's trade tape (TokenTradeTape): null until it is read, which is only for called coins. */
+  tape: { status: string; anchorAt: number; windowEnd: number; readAt: number } | null;
+  /** Flagged wallets in the tape, with their trades to mark. */
+  wallets: MarkedWallet[];
+}
+
+/** One coin's flagged wallets change hourly at most (scores) or once (the tape): a minute's reuse. */
+const WALLETS_CACHE_MS = 60_000;
+
+/** One per process: every reader of a coin shares its Pump.fun call and the call budget. */
+let candleCache = new CandleCache(pumpFunCandleFetcher());
+
+/** Tests: where the chart's candles come from, instead of Pump.fun. */
+export function setCandleFetcherForTests(fetcher: CandleFetcher): void {
+  candleCache = new CandleCache(fetcher);
+}
+const walletCache = new KeyedCache<Pick<TokenChart, "tape" | "wallets">>(WALLETS_CACHE_MS);
+
+/**
+ * The coin's flagged wallets and their trades, from its trade tape (TokenWalletActivity), the
+ * wallet risk scores (WalletRisk) and the linked clusters on its newest snapshot that has them.
+ */
+async function chartWallets(tokenId: string): Promise<Pick<TokenChart, "tape" | "wallets">> {
+  const [tape, rows, clustered] = await Promise.all([
+    prisma.tokenTradeTape.findUnique({
+      where: { tokenId },
+      select: { status: true, anchorAt: true, windowEnd: true, readAt: true },
+    }),
+    prisma.tokenWalletActivity.findMany({
+      where: { tokenId },
+      select: {
+        wallet: true,
+        isCreator: true,
+        solIn: true,
+        solOut: true,
+        heldPctAtAnchor: true,
+        firstBuyAt: true,
+        firstSellAt: true,
+        trades: true,
+      },
+    }),
+    prisma.tokenSnapshot.findFirst({
+      where: { tokenId, linkedClusters: { not: Prisma.DbNull } },
+      orderBy: { takenAt: "desc" },
+      select: { linkedClusters: true },
+    }),
+  ]);
+  const scores =
+    rows.length > 0
+      ? await prisma.walletRisk.findMany({
+          where: { wallet: { in: rows.map((r) => r.wallet) } },
+          select: { wallet: true, score: true, dumps: true, appearances: true },
+        })
+      : [];
+  const clusters = Array.isArray(clustered?.linkedClusters)
+    ? (clustered.linkedClusters as { funder: string; wallets: { wallet: string }[] }[]).filter(
+        (c) => typeof c?.funder === "string" && Array.isArray(c.wallets),
+      )
+    : [];
+  return {
+    tape: tape
+      ? {
+          status: tape.status,
+          anchorAt: tape.anchorAt.getTime(),
+          windowEnd: tape.windowEnd.getTime(),
+          readAt: tape.readAt.getTime(),
+        }
+      : null,
+    wallets: markedWallets(rows, new Map(scores.map((w) => [w.wallet, w])), clusters, {
+      riskyScore: RISKY_WALLET_SCORE,
+      dumperDumps: KNOWN_DUMPER_DUMPS,
+    }),
+  };
+}
 
 /**
  * Token detail is not user-specific (it's the same underlying market data for
@@ -46,6 +147,41 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       take: 50,
     });
     return { ...token, snapshots };
+  });
+
+  /** The token modal's chart: Pump.fun's minute candles, with the scan's market caps behind them. */
+  app.get("/:mintAddress/chart", async (request, reply): Promise<TokenChart | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) {
+      reply.code(400).send({ error: "not a valid mint" });
+      return;
+    }
+    const [candles, token] = await Promise.all([
+      candleCache.get(mintAddress),
+      prisma.token.findUnique({ where: { mintAddress }, select: { id: true } }),
+    ]);
+    const [snapshots, flagged] = token
+      ? await Promise.all([
+          prisma.tokenSnapshot.findMany({
+            where: { tokenId: token.id },
+            orderBy: { takenAt: "desc" },
+            take: CHART_SNAPSHOT_POINTS,
+            select: { takenAt: true, marketCapUsd: true },
+          }),
+          walletCache.get(token.id, () => chartWallets(token.id)),
+        ])
+      : [[], { tape: null, wallets: [] }];
+    // The browser may reuse it for a few seconds; the candles themselves are cached here for 30.
+    reply.header("Cache-Control", "private, max-age=15");
+    return {
+      mint: mintAddress,
+      candles: candles && candles.length > 0 ? candles : null,
+      marketCap: snapshots
+        .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
+        .reverse()
+        .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd })),
+      ...flagged,
+    };
   });
 
   const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);

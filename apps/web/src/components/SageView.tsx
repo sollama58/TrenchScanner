@@ -177,7 +177,7 @@ const INPUTS: { id: string; label: string }[] = [
   { id: "db", label: "Known coins" },
 ];
 
-const LINEAGE: Record<string, { text: string; tone: "good" | "warn" | "neutral" }> = {
+export const LINEAGE: Record<string, { text: string; tone: "good" | "warn" | "neutral" }> = {
   original: { text: "Original", tone: "good" },
   early_copy: { text: "Early copy", tone: "neutral" },
   copy: { text: "Copy", tone: "warn" },
@@ -828,7 +828,7 @@ function WeightBars({
   );
 }
 
-function LineageText({ read: r }: { read: SageRead }) {
+export function LineageText({ read: r }: { read: SageRead }) {
   const l = r.lineage;
   const of = l?.ofTicker ? `$${l.ofTicker}` : (l?.ofName ?? r.copyOf[0]?.name ?? null);
   const parts: string[] = [];
