@@ -18,9 +18,10 @@ const logger = createLogger("linked-wallets");
  *
  * Every answer is cached. A wallet's funder never changes (WalletFunder, kept for good like
  * WalletActivityCache); a funder's hot verdict is re-read after a week (FunderActivity). So the
- * steady state pays only for wallets and funders never seen before: two 1-credit calls per new
- * wallet (its signatures, then its first transaction), 11 for a busy wallet whose first
- * transaction is past the signatures page (the sorted lookup is 10), and one per new funder. New reads are
+ * steady state pays only for wallets and funders never seen before: 1-credit calls per new wallet
+ * (its signatures, then its oldest transactions until the funding shows, usually one or two), 11
+ * for a busy wallet whose first transactions are past the signatures page (the sorted lookup is
+ * 10), and one per new funder. New reads are
  * budgeted per cycle (env LINKED_WALLET_LOOKUPS_PER_CYCLE), a whole candidate at a time and
  * contenders first, as the wallet-freshness pass does: a reading is all-or-nothing, so half a
  * candidate's wallets read is worth nothing yet.
@@ -29,6 +30,13 @@ const logger = createLogger("linked-wallets");
 const DAY_MS = 24 * 3_600_000;
 /** How long a funder's hot verdict stands before it is read again. */
 const FUNDER_RECHECK_MS = 7 * DAY_MS;
+
+/**
+ * Wallets stored as having no funder before this were read from their first transaction alone,
+ * which is often a token account someone opened for them with the SOL a transaction later: they
+ * are read again with the walk (funderFromEarliestTransactions).
+ */
+const NONE_READ_AGAIN_BEFORE = new Date("2026-10-13T22:00:00Z");
 
 /** A wallet's funder, null when it has none ("none", "empty", or "busy" while unreadable). */
 const settledFunders = new SettledAnswers<string | null>(100_000);
@@ -101,7 +109,7 @@ export async function resolveLinkedWallets(
   if (fromTable.length > 0) {
     const rows = await prisma.walletFunder.findMany({
       where: { wallet: { in: fromTable } },
-      select: { wallet: true, funder: true, status: true },
+      select: { wallet: true, funder: true, status: true, checkedAt: true },
     });
     // A wallet stored as "busy" (more history than one signatures page) is read again whenever
     // the sorted lookup can reach its first transaction: busy wallets count too (user decision
@@ -109,6 +117,7 @@ export async function resolveLinkedWallets(
     const rereadBusy = helius.gtfaUsable;
     for (const r of rows) {
       if (r.status === "busy" && rereadBusy) continue;
+      if (r.status === "none" && r.checkedAt < NONE_READ_AGAIN_BEFORE) continue;
       funderOf.set(r.wallet, r.funder);
       if (r.status !== "busy") settledFunders.remember(r.wallet, r.funder);
     }
@@ -157,18 +166,19 @@ export async function resolveLinkedWallets(
         fundedAt: r.status === "found" ? r.fundedAt : null,
       });
     }
-    // A first transaction was read for these (an empty or busy history needs none). A failed one
-    // may or may not have got that far; counted as not, so the figure is a floor.
+    // Transactions read for these (an empty or busy history needs none). A failed one may or may
+    // not have got that far; counted as not, so the figure is a floor.
     const read = [...fetched.values()].filter((r) => r.status === "found" || r.status === "none");
-    calls.getTransaction += read.filter((r) => !r.sorted).length;
+    calls.getTransaction += read.reduce((n, r) => n + (r.sorted ? 0 : (r.reads ?? 1)), 0);
     calls.getTransactionsForAddress += read.filter((r) => r.sorted).length;
     if (rows.length > 0) {
       try {
-        // Rows stored as "busy" before are replaced by the answer read now.
+        // Rows stored as "busy", or as "none" by the first-transaction-only read, are replaced by
+        // the answer read now.
         await prisma.walletFunder.deleteMany({
           where: {
             wallet: { in: rows.filter((r) => r.status !== "busy").map((r) => r.wallet) },
-            status: "busy",
+            OR: [{ status: "busy" }, { status: "none", checkedAt: { lt: NONE_READ_AGAIN_BEFORE } }],
           },
         });
         await prisma.walletFunder.createMany({ data: rows, skipDuplicates: true });

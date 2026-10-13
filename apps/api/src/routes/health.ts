@@ -261,13 +261,15 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // up): whether DexScreener is throttling the shared budget, and how much Jupiter took off it.
   // Who priced the newest launches (liveLaunchQuotes), and the band-entry checks between cycles
   // and the cycles they started early (bandEntryWatch). The cycle's RugCheck reports: cached, and
-  // looked up while it waited (rugCheckLookups).
+  // looked up while it waited (rugCheckLookups). The linked-wallet funder reads and their credits
+  // (linkedWalletCalls).
   for (const key of [
     "dexScreenerCalls",
     "jupiterCalls",
     "liveLaunchQuotes",
     "bandEntryWatch",
     "rugCheckLookups",
+    "linkedWalletCalls",
   ] as const) {
     const calls = stageTimings(meta, key);
     if (calls) out[key] = calls;

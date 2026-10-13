@@ -52,7 +52,10 @@ export interface ChainTx extends RawLaunchTx {
     | null;
   transaction?: {
     signatures?: string[];
-    message?: { accountKeys?: (string | { pubkey?: string })[] };
+    message?: {
+      accountKeys?: (string | { pubkey?: string })[];
+      header?: { numRequiredSignatures?: number };
+    };
   } | null;
 }
 
