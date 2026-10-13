@@ -154,7 +154,7 @@ export interface SageRead {
   caveats: string[];
 }
 
-interface TrackDay {
+export interface TrackDay {
   day: string;
   alerts: number;
   graded: number;
@@ -243,7 +243,7 @@ const VERDICT: Record<string, string> = {
   unrelated: "Unrelated",
 };
 
-const TREND_SOURCE: Record<string, string> = {
+export const TREND_SOURCE: Record<string, string> = {
   wikipedia: "Wikipedia",
   google_trends: "Google Trends",
   news: "News",
@@ -287,7 +287,7 @@ export function amount(n: number): string {
   return n.toFixed(2).replace(/\.?0+$/, "");
 }
 
-const pct0 = (v: number) => `${Math.round(v * 100)}%`;
+export const pct0 = (v: number) => `${Math.round(v * 100)}%`;
 
 /**
  * Mounted once by the app. Renders the view for the mint in the address bar, if any: the read
@@ -856,7 +856,7 @@ export function LineageText({ read: r }: { read: SageRead }) {
 }
 
 /** Namesakes launched before it and coins on the same theme, over 1h / 6h / 24h. */
-function CrowdChart({ read: r }: { read: SageRead }) {
+export function CrowdChart({ read: r }: { read: SageRead }) {
   const l = r.lineage;
   const w = r.referent?.wave;
   const windows = [

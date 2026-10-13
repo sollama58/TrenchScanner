@@ -1,43 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { barWidthMs, groupBars, groupMarkers, linearTicks, logTicks, mcapAxis } from "./priceChart";
+import { groupMarkers, linearTicks, linePoints, logTicks, mcapAxis, pointWidthMs } from "./priceChart";
 
 const M = 60_000;
 
-describe("barWidthMs", () => {
-  it("picks the narrowest width that fits the span", () => {
-    expect(barWidthMs(60 * M, 120)).toBe(M);
-    expect(barWidthMs(6 * 60 * M, 120)).toBe(3 * M);
-    expect(barWidthMs(16 * 60 * M, 90)).toBe(15 * M);
+describe("pointWidthMs", () => {
+  it("picks the narrowest spacing that fits the span", () => {
+    expect(pointWidthMs(60 * M, 120)).toBe(M);
+    expect(pointWidthMs(6 * 60 * M, 120)).toBe(3 * M);
+    expect(pointWidthMs(16 * 60 * M, 90)).toBe(15 * M);
   });
 });
 
-describe("groupBars", () => {
-  it("opens on the first candle, closes on the last, and spans their range", () => {
-    const bars = groupBars(
+describe("linePoints", () => {
+  it("keeps each slot's last close at its own time, from the view's start on", () => {
+    const pts = linePoints(
       [
-        { t: 0, o: 10, h: 12, l: 9, c: 11 },
-        { t: M, o: 11, h: 20, l: 11, c: 18 },
-        { t: 2 * M, o: 18, h: 19, l: 5, c: 6 },
-        { t: 5 * M, o: 6, h: 7, l: 6, c: 7 },
+        { t: 0, v: 10 },
+        { t: M, v: 18 },
+        { t: 2 * M, v: 6 },
+        { t: 5 * M, v: 7 },
+        { t: 7 * M, v: 9 },
       ],
-      0,
+      M,
       3 * M,
     );
-    expect(bars).toEqual([
-      { t: 0, o: 10, h: 20, l: 5, c: 6 },
-      { t: 3 * M, o: 6, h: 7, l: 6, c: 7 },
+    expect(pts).toEqual([
+      { t: 2 * M, v: 6 },
+      { t: 5 * M, v: 7 },
+      { t: 7 * M, v: 9 },
     ]);
-  });
-
-  it("skips candles before the view and doesn't touch its input", () => {
-    const input = [
-      { t: 0, o: 1, h: 1, l: 1, c: 1 },
-      { t: M, o: 2, h: 2, l: 2, c: 2 },
-    ];
-    const bars = groupBars(input, M, M);
-    expect(bars).toEqual([{ t: M, o: 2, h: 2, l: 2, c: 2 }]);
-    bars[0]!.h = 99;
-    expect(input[1]!.h).toBe(2);
   });
 });
 
@@ -75,7 +66,7 @@ describe("ticks", () => {
 });
 
 describe("groupMarkers", () => {
-  const bars = [0, 60_000, 180_000].map((t) => ({ t, o: 1, h: 1, l: 1, c: 1 }));
+  const points = [0, 60_000, 180_000].map((t) => ({ t, v: 1 }));
   const tr = (
     t: number,
     side: 1 | -1,
@@ -90,26 +81,22 @@ describe("groupMarkers", () => {
     kind,
   });
 
-  it("groups candles' trades per bar, kind and side, and drops trades off the bars", () => {
-    const groups = groupMarkers(bars, 60_000, "candles", [
+  it("groups trades on the nearest point per kind and side, and drops trades off the line", () => {
+    const groups = groupMarkers(points, 60_000, [
       tr(10_000, 1, "a"),
       tr(20_000, 1, "b"),
-      tr(30_000, 1, "a", "dev"),
+      tr(25_000, 1, "a", "dev"),
       tr(70_000, -1, "a"),
-      tr(130_000, -1, "a"), // a minute with no candle
-      tr(-5, 1, "a"),
-      tr(250_000, 1, "a"),
+      tr(170_000, -1, "a"),
+      tr(-200_000, 1, "a"),
+      tr(400_000, 1, "a"),
     ]);
-    expect(groups.map((g) => [g.bar, g.kind, g.side, g.trades.length, g.wallets])).toEqual([
+    expect(groups.map((g) => [g.at, g.kind, g.side, g.trades.length, g.wallets])).toEqual([
       [0, "dev", 1, 1, 1],
       [0, "risky", 1, 2, 2],
       [1, "risky", -1, 1, 1],
+      [2, "risky", -1, 1, 1],
     ]);
     expect(groups[1]!.sol).toBe(2);
-  });
-
-  it("puts a line's trades on the nearest reading within a step and a half", () => {
-    const groups = groupMarkers(bars, 60_000, "line", [tr(170_000, 1, "a"), tr(400_000, 1, "b")]);
-    expect(groups.map((g) => g.bar)).toEqual([2]);
   });
 });
