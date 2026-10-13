@@ -1,5 +1,5 @@
 import type { Token } from "./api";
-import { graphBounds, type BubbleGraph, type MapNode } from "./bubbleMap";
+import { clusterHalos, graphBounds, HALO_PAD, type BubbleGraph, type MapNode } from "./bubbleMap";
 import { shortAddress, tokenLabel } from "./format";
 import {
   CARD_H,
@@ -126,6 +126,42 @@ export async function renderBubbleCard(graph: BubbleGraph, token: Token): Promis
   const Y = (v: number) => oy + v * scale;
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
 
+  // Each cluster's halo, as in the dialog: drawn solid on a layer of its own, then laid down
+  // faintly, so the overlapping bubbles and bands don't darken.
+  const layer = document.createElement("canvas");
+  layer.width = canvas.width;
+  layer.height = canvas.height;
+  const lc = layer.getContext("2d");
+  if (lc) {
+    const ratio = canvas.width / CARD_W;
+    for (const h of clusterHalos(graph)) {
+      lc.setTransform(ratio, 0, 0, ratio, 0, 0);
+      lc.clearRect(0, 0, CARD_W, CARD_H);
+      const col = CLUSTER[h.cluster % CLUSTER.length]!;
+      lc.fillStyle = col;
+      lc.strokeStyle = col;
+      lc.lineCap = "round";
+      lc.lineWidth = HALO_PAD * 2.4 * scale;
+      for (const b of h.bands) {
+        lc.beginPath();
+        lc.moveTo(X(b.x1), Y(b.y1));
+        lc.lineTo(X(b.x2), Y(b.y2));
+        lc.stroke();
+      }
+      lc.beginPath();
+      for (const c of h.circles) {
+        lc.moveTo(X(c.x) + c.r * scale, Y(c.y));
+        lc.arc(X(c.x), Y(c.y), c.r * scale, 0, Math.PI * 2);
+      }
+      lc.fill();
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 0.16;
+      ctx.drawImage(layer, 0, 0);
+      ctx.restore();
+    }
+  }
+
   ctx.lineCap = "round";
   for (const l of graph.links) {
     const a = index.get(l.from);
@@ -200,6 +236,15 @@ export async function renderBubbleCard(graph: BubbleGraph, token: Token): Promis
     ctx.strokeStyle = alpha(col, 1);
     ctx.lineWidth = 2;
     ctx.stroke();
+    // The glossy highlight, as in the dialog.
+    ctx.save();
+    ctx.translate(cx - r * 0.32, cy - r * 0.42);
+    ctx.rotate(-Math.PI / 6);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.28)";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 0.42, r * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
     if (risk) {
       ctx.strokeStyle = RISK;
       ctx.lineWidth = 3;

@@ -1,4 +1,14 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { ApiError, type Card } from "../api";
 import { usePolling } from "../hooks";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
@@ -43,6 +53,7 @@ import { WeekChart } from "./WeekChart";
 import { Skeleton } from "./Charts";
 import { openWallet } from "../walletModal";
 import { BubbleMapSection } from "./BubbleMap";
+import { TopHolders } from "./TopHolders";
 import {
   BrainIcon,
   ChartIcon,
@@ -197,6 +208,13 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const label = tokenLabel(card.token);
   const utility = useContext(UtilityContext);
   const what = utility ? "Scanned" : card.kind === "stream" ? "Passed screen" : curated ? "Called" : "Alert";
+  // One poll for the chart and the wallet sections that read the same answer.
+  const chart = usePolling<TokenChart>(`${useTokenApi(mint)}/chart`, CHART_POLL_MS);
+  const flagged = useMemo(() => chart.data?.wallets ?? [], [chart.data]);
+  const linked = linkedSeed(card)?.snapshot ?? null;
+  const ids = useId().replace(/:/g, "");
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const active = useActiveSection(bodyRef, ids);
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -206,7 +224,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   };
 
   return (
-    <div className="about-body tm-body">
+    <div className="about-body tm-body" ref={bodyRef}>
       <header className="tm-head">
         <div className="tm-token">
           <div className={`avatar-wrap tone-${badge.tone}`}>
@@ -260,6 +278,23 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             <CloseIcon size={16} />
           </button>
         </div>
+        <nav className="tm-nav" aria-label="Sections">
+          {SECTIONS.map((x) => (
+            <button
+              key={x.id}
+              type="button"
+              className={`tm-nav-btn${active === x.id ? " on" : ""}`}
+              aria-current={active === x.id ? "true" : undefined}
+              onClick={() =>
+                document
+                  .getElementById(`${ids}-${x.id}`)
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
+              {utility && x.id === "call" ? "Market" : x.label}
+            </button>
+          ))}
+        </nav>
       </header>
 
       <section className="tm-figs" aria-label="Market cap">
@@ -278,7 +313,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         </div>
         <div className={`tm-fig${hasPeak && peak >= 100 ? " hot" : ""}`}>
           <label>Peak</label>
-          <span className="num">{hasPeak ? multiple(peak) : "–"}</span>
+          <span className={hasPeak ? "num" : "num none"}>{hasPeak ? multiple(peak) : "–"}</span>
           {hasPeak && alertMcap > 0 && (
             <small className="num muted">ATH {usd(alertMcap * (1 + peak / 100))}</small>
           )}
@@ -290,21 +325,43 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         </div>
       </section>
 
-      <ChartCard card={card} alertAt={alertAt} alertMcap={alertMcap} what={what} />
+      <section id={`${ids}-chart`} className="tm-group" aria-label="Chart">
+        <ChartCard
+          card={card}
+          chart={chart}
+          flagged={flagged}
+          alertAt={alertAt}
+          alertMcap={alertMcap}
+          what={what}
+        />
+      </section>
 
-      {utility ? (
-        // A lookup has no call to explain: the numbers take the full width.
-        <StatsCard card={card} />
-      ) : (
-        <div className="tm-grid">
-          <StatsCard card={card} />
-          <CallCard card={card} />
+      <section id={`${ids}-holders`} className="tm-group" aria-labelledby={`${ids}-holders-h`}>
+        <GroupLabel id={`${ids}-holders-h`}>Holders</GroupLabel>
+        <div className="tm-holders">
+          <BubbleMapSection token={card.token} snapshot={linked} />
+          <TopHolders snapshot={linked} flagged={flagged} />
         </div>
-      )}
+        {flagged.length > 0 && <WalletsCard wallets={flagged} />}
+      </section>
 
-      <BubbleMapSection token={card.token} snapshot={linkedSeed(card)?.snapshot ?? null} />
+      <section id={`${ids}-call`} className="tm-group" aria-labelledby={`${ids}-call-h`}>
+        <GroupLabel id={`${ids}-call-h`}>{utility ? "Market" : "The call"}</GroupLabel>
+        {utility ? (
+          // A lookup has no call to explain: the numbers take the full width.
+          <StatsCard card={card} />
+        ) : (
+          <div className="tm-grid">
+            <StatsCard card={card} />
+            <CallCard card={card} />
+          </div>
+        )}
+      </section>
 
-      <SageSection mint={mint} />
+      <section id={`${ids}-sage`} className="tm-group" aria-labelledby={`${ids}-sage-h`}>
+        <GroupLabel id={`${ids}-sage-h`}>TokenSage</GroupLabel>
+        <SageSection mint={mint} />
+      </section>
 
       <footer className="tm-foot">
         <button className="mint" onClick={copy} title="Copy mint address">
@@ -330,6 +387,57 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   );
 }
 
+/** The modal's sections, in the order they appear, for the nav under the header. */
+const SECTIONS = [
+  { id: "chart", label: "Chart" },
+  { id: "holders", label: "Holders" },
+  { id: "call", label: "The call" },
+  { id: "sage", label: "TokenSage" },
+] as const;
+type SectionId = (typeof SECTIONS)[number]["id"];
+
+/**
+ * The section the reader is in: the last one whose top has passed under the sticky header, as the
+ * modal scrolls (the dialog itself is the scroller).
+ */
+function useActiveSection(bodyRef: RefObject<HTMLDivElement | null>, ids: string): SectionId {
+  const [active, setActive] = useState<SectionId>("chart");
+  useEffect(() => {
+    const scroller = bodyRef.current?.closest("dialog");
+    if (!scroller) return;
+    let frame = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const head = bodyRef.current?.querySelector(".tm-head")?.getBoundingClientRect().bottom ?? 0;
+        let current: SectionId = "chart";
+        for (const x of SECTIONS) {
+          const el = document.getElementById(`${ids}-${x.id}`);
+          if (el && el.getBoundingClientRect().top <= head + 24) current = x.id;
+        }
+        // Scrolled to the end: the last section, even when it is too short to reach the header.
+        if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) current = "sage";
+        setActive(current);
+      });
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      scroller.removeEventListener("scroll", onScroll);
+    };
+  }, [bodyRef, ids]);
+  return active;
+}
+
+/** A group's heading: a small label with a rule running to the edge. */
+function GroupLabel({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <h3 id={id} className="tm-group-label">
+      <span>{children}</span>
+    </h3>
+  );
+}
+
 /** Why an access-gated part couldn't load, in words. */
 function lockedText(error: Error, what: string): string | null {
   if (error instanceof ApiError && (error.status === 401 || error.status === 402)) {
@@ -340,17 +448,19 @@ function lockedText(error: Error, what: string): string | null {
 
 function ChartCard({
   card,
+  chart: { data, error },
+  flagged,
   alertAt,
   alertMcap,
   what,
 }: {
   card: Card;
+  chart: { data: TokenChart | null; error: Error | null };
+  flagged: FlaggedWallet[];
   alertAt: number;
   alertMcap: number;
   what: string;
 }) {
-  const mint = card.token.mintAddress;
-  const { data, error } = usePolling<TokenChart>(`${useTokenApi(mint)}/chart`, CHART_POLL_MS);
   const utility = useContext(UtilityContext);
   // A lookup has no alert to start from: it opens on the coin's whole history.
   const [range, setRange] = useState<Range>(utility ? "all" : "alert");
@@ -396,7 +506,6 @@ function ChartCard({
     return { points: linePoints(source, from, step), fromCandles, step: fromCandles ? step : undefined };
   }, [data, range, alertAt]);
 
-  const flagged = useMemo(() => data?.wallets ?? [], [data]);
   const markers = useMemo<MarkerTrade[]>(
     () =>
       flagged.flatMap((w) => {
@@ -501,7 +610,6 @@ function ChartCard({
           </div>
         )}
       </section>
-      {flagged.length > 0 && <WalletsCard wallets={flagged} />}
     </>
   );
 }
@@ -549,40 +657,60 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
       <h4>
         Flagged wallets
         <span className="sage-tag">{wallets.length}</span>
+        <span className="tm-h4-meta muted small">trading this coin</span>
       </h4>
-      <ul>
+      <div className="fw-table" role="table" aria-label="Flagged wallets">
+        <div className="fw-row fw-headrow" role="row">
+          <span role="columnheader">Wallet</span>
+          <span role="columnheader" className="fw-score-h" title="Risk score, 0-100">
+            Risk
+          </span>
+          <span role="columnheader" className="fw-num">
+            SOL in
+          </span>
+          <span role="columnheader" className="fw-num">
+            SOL out
+          </span>
+          <span role="columnheader" className="fw-num">
+            Net
+          </span>
+        </div>
         {shown.map((w) => {
           const net = w.solOut - w.solIn;
+          const tone = w.score === null ? "none" : w.score >= 70 ? "high" : w.score >= 40 ? "mid" : "low";
           return (
-            <li key={w.wallet}>
-              <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
-              <button
-                type="button"
-                className="num tm-wallet tm-wallet-btn"
-                onClick={() => openWallet(w.wallet)}
-                title="Open this wallet's details"
-              >
-                {shortAddress(w.wallet)}
-              </button>
-              <span className="tm-tags">
-                {w.tags.map((t) => (
-                  <span
-                    key={t}
-                    className={`tm-tag k-${TAG_TEXT[t].tone}`}
-                    title={
-                      t === "linked" && w.funder
-                        ? `Funded by ${shortAddress(w.funder)}, like other top holders`
-                        : t === "dumper" && w.dumps !== null
-                          ? `Sold into ${w.dumps} stopped calls`
-                          : undefined
-                    }
-                  >
-                    {t === "kol" && w.kol ? `KOL: ${w.kol}` : TAG_TEXT[t].text}
-                  </span>
-                ))}
+            <div key={w.wallet} className="fw-row" role="row">
+              <span className="fw-who" role="cell">
+                <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
+                <button
+                  type="button"
+                  className="num tm-wallet tm-wallet-btn"
+                  onClick={() => openWallet(w.wallet)}
+                  title="Open this wallet's details"
+                >
+                  {shortAddress(w.wallet)}
+                </button>
+                <span className="tm-tags">
+                  {w.tags.map((t) => (
+                    <span
+                      key={t}
+                      className={`tm-tag k-${TAG_TEXT[t].tone}`}
+                      title={
+                        t === "linked" && w.funder
+                          ? `Funded by ${shortAddress(w.funder)}, like other top holders`
+                          : t === "dumper" && w.dumps !== null
+                            ? `Sold into ${w.dumps} stopped calls`
+                            : undefined
+                      }
+                    >
+                      {t === "kol" && w.kol ? `KOL: ${w.kol}` : TAG_TEXT[t].text}
+                    </span>
+                  ))}
+                </span>
               </span>
               <span
-                className="tm-score num"
+                role="cell"
+                className={`fw-score num s-${tone}`}
                 title={
                   w.score === null
                     ? "Not scored: seen in fewer than two read coins"
@@ -591,21 +719,24 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
               >
                 {w.score === null ? "–" : Math.round(w.score)}
               </span>
-              <span className="tm-flow num" title="SOL in and out of this coin">
-                {w.solIn.toFixed(2)} → {w.solOut.toFixed(2)}
-                {/* Before it sells, its SOL in is a position, not a loss. */}
-                {w.solOut > 0 && (
-                  <span className={net >= 0 ? "up" : "down"}>
-                    {" "}
-                    ({net >= 0 ? "+" : ""}
-                    {net.toFixed(2)})
-                  </span>
-                )}
+              <span role="cell" className="fw-num num">
+                {w.solIn.toFixed(2)}
               </span>
-            </li>
+              <span role="cell" className="fw-num num">
+                {w.solOut.toFixed(2)}
+              </span>
+              {/* Before it sells, its SOL in is a position, not a loss. */}
+              <span
+                role="cell"
+                className={`fw-num num ${w.solOut > 0 ? (net >= 0 ? "up" : "down") : "faint"}`}
+                title={w.solOut > 0 ? undefined : "Still holding: nothing sold yet"}
+              >
+                {w.solOut > 0 ? `${net >= 0 ? "+" : ""}${net.toFixed(2)}` : "holding"}
+              </span>
+            </div>
           );
         })}
-      </ul>
+      </div>
       {wallets.length > 6 && (
         <button type="button" className="tm-link tm-more" onClick={() => setAll((a) => !a)}>
           {all ? "Show fewer" : `Show all ${wallets.length}`}
@@ -613,7 +744,7 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
       )}
       <p className="faint small tm-wallets-note">
         Risky: a score of 70+ from selling into earlier calls&apos; stops. Linked: funded by the same wallet
-        as other top holders. Score is 0-100; SOL in → out of this coin.
+        as other top holders. SOL is what each wallet put into and took out of this coin.
       </p>
     </section>
   );
@@ -885,7 +1016,7 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
               {copyMark && <span className={`sage-tag tone-${copyMark.tone}`}>{copyMark.text}</span>}
             </div>
           )}
-          {r.summary && <blockquote className="sage-summary">{r.summary}</blockquote>}
+          {r.summary && <Summary text={r.summary} />}
           {flags.length > 0 && (
             <ul className="sage-flags">
               {flags.map((f) => (
@@ -914,6 +1045,22 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
         </>
       )}
     </section>
+  );
+}
+
+/** TokenSage's summary, clamped to a few lines with a toggle: reads run long. */
+function Summary({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 280;
+  return (
+    <div className="tm-summary">
+      <blockquote className={`sage-summary${long && !open ? " clamped" : ""}`}>{text}</blockquote>
+      {long && (
+        <button type="button" className="tm-link" onClick={() => setOpen((o) => !o)}>
+          {open ? "Show less" : "Read all"}
+        </button>
+      )}
+    </div>
   );
 }
 

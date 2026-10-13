@@ -7,6 +7,8 @@ import {
   bubblesLink,
   buildGraph,
   closeBubbleMap,
+  clusterHalos,
+  HALO_PAD,
   openBubbleMap,
   graphBounds,
   layoutGraph,
@@ -334,6 +336,23 @@ function BubbleSvg({
             <stop offset="100%" style={{ stopColor: "var(--bm-none)" }} />
           </radialGradient>
         </defs>
+        <g className="bm-halos">
+          {clusterHalos(graph).map((h) => (
+            // One flattened layer per cluster: overlapping parts don't darken.
+            <g
+              key={h.cluster}
+              className={`bm-halo${lit !== null && h.cluster !== lit ? " dim" : ""}${lit === h.cluster ? " on" : ""}`}
+              style={{ "--bm": `var(--bm-${h.cluster % CLUSTER_COLOURS})` } as React.CSSProperties}
+            >
+              {h.bands.map((b, j) => (
+                <line key={j} x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} strokeWidth={HALO_PAD * 2.4} />
+              ))}
+              {h.circles.map((c, j) => (
+                <circle key={j} cx={c.x} cy={c.y} r={c.r} />
+              ))}
+            </g>
+          ))}
+        </g>
         <g className="bm-links">
           {graph.links.map((l) => {
             const a = index.get(l.from);
@@ -424,6 +443,15 @@ function Bubble({ node: n, fill }: { node: MapNode; fill: string }) {
     <>
       {flaggedRisk && <circle cx={n.x} cy={n.y} r={n.r + 4.5} className="bm-risk-ring" />}
       <circle cx={n.x} cy={n.y} r={n.r} fill={fill} className="bm-bubble" style={{ stroke: colour }} />
+      {/* A glossy highlight, top left, as on a lit sphere. */}
+      <ellipse
+        cx={n.x - n.r * 0.32}
+        cy={n.y - n.r * 0.42}
+        rx={n.r * 0.42}
+        ry={n.r * 0.26}
+        transform={`rotate(-30 ${n.x - n.r * 0.32} ${n.y - n.r * 0.42})`}
+        className="bm-gloss"
+      />
       {n.hub && <circle cx={n.x} cy={n.y} r={n.r - 3.5} className="bm-hub-ring" />}
       {n.r >= 17 && (
         <text x={n.x} y={n.y} className="bm-pct" style={{ fontSize }}>
