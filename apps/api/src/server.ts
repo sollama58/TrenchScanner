@@ -11,6 +11,7 @@ import {
   createLogger,
   DexScreenerClient,
   GeckoTerminalClient,
+  HeliusClient,
   SolanaRpc,
   resolveAccess,
   decideAccess,
@@ -46,6 +47,8 @@ import { registerStatsModelRoutes } from "./routes/statsModels.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerUtilityRoutes } from "./routes/utilities.js";
+import { registerWalletRoutes } from "./routes/wallets.js";
+import { WalletLiveReader } from "./walletProfile.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
@@ -510,6 +513,12 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // The read-only feed for visitors without a wallet: its own route, so no paid route's gate is loosened.
   await app.register(registerGuestRoutes, { prefix: "/guest", env, viewStamps, reports });
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
+  // The wallet modal. Its chain read (balance, history, a missing funder) needs a Helius key;
+  // without one the modal shows what the database knows.
+  const walletLive = env.HELIUS_API_KEY
+    ? new WalletLiveReader(new HeliusClient({ apiKey: env.HELIUS_API_KEY }))
+    : null;
+  await app.register(registerWalletRoutes, { prefix: "/wallets", live: walletLive });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
   // The Utilities tab: token and wallet lookups paid for with Burn Credits.

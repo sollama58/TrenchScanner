@@ -38,6 +38,7 @@ import { AnnouncementBar } from "./components/AnnouncementBar";
 import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
 import { useBubblesMint } from "./bubbleMap";
+import { useWalletAddress } from "./walletModal";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
 import { StreamView } from "./components/StreamView";
@@ -60,6 +61,10 @@ const BubbleMapHost = lazy(() =>
 );
 // Utilities: its own chunk, loaded the first time the tab opens.
 const UtilitiesTab = lazy(() => import("./tabs/UtilitiesTab").then((m) => ({ default: m.UtilitiesTab })));
+// The wallet detail modal loads the first time a wallet or a ?wallet= link opens it.
+const WalletModalHost = lazy(() =>
+  import("./components/WalletModal").then((m) => ({ default: m.WalletModalHost })),
+);
 const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ default: m.BurnPanel })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
@@ -100,6 +105,7 @@ export function App() {
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
   const sageMint = useSageMint();
   const bubblesMint = useBubblesMint();
+  const walletAddress = useWalletAddress();
 
   const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
@@ -397,6 +403,11 @@ export function App() {
             <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest onConnect={connectWallet} />
           </Suspense>
         )}
+        {guest && walletAddress && (
+          <Suspense fallback={null}>
+            <WalletModalHost key={walletAddress} wallet={walletAddress} guest onConnect={connectWallet} />
+          </Suspense>
+        )}
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
@@ -422,6 +433,16 @@ export function App() {
                 <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest={false} onConnect={connectWallet} />
               </Suspense>
             )}
+            {walletAddress && (
+              <Suspense fallback={null}>
+                <WalletModalHost
+                  key={walletAddress}
+                  wallet={walletAddress}
+                  guest={false}
+                  onConnect={connectWallet}
+                />
+              </Suspense>
+            )}
           </AccessGate>
         )}
       </main>
@@ -432,7 +453,6 @@ export function App() {
         <a href="https://alonisthe.dev" target="_blank" rel="noopener noreferrer">
           alonisthe.dev
         </a>
-        <div className="donation">Donation Wallet: 2wWTXhva24dQHoKRJzXAV98q8KeWL9oTRc3M7aLpvhaA</div>
       </footer>
     </div>
   );

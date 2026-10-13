@@ -112,6 +112,22 @@ export type FunderResult =
   | { status: "busy" }
   | { status: "failed" };
 
+/**
+ * One wallet as the chain has it now, for the wallet modal (getWalletOverview): its SOL balance and
+ * its newest page of signatures. `txCount` is exact when `complete` (the page is its whole history,
+ * so `firstAt` is its first transaction); otherwise it is the page size, a floor.
+ */
+export type WalletOverviewResult =
+  | {
+      status: "found";
+      balanceSol: number | null;
+      txCount: number;
+      complete: boolean;
+      lastAt: Date | null;
+      firstAt: Date | null;
+    }
+  | { status: "failed" };
+
 /** A funder's newest page of signatures, for the hot-funder check (getFunderActivityBatch). */
 export type FunderActivityResult = { status: "found"; fullPageSpanMs: number | null } | { status: "failed" };
 
@@ -1000,6 +1016,39 @@ export class HeliusClient {
       });
     }
     return out;
+  }
+
+  /**
+   * A wallet's SOL balance and newest page of signatures, in one POST of two 1-credit calls. For
+   * the wallet modal, which reads one wallet at a time when someone opens it.
+   */
+  async getWalletOverview(wallet: string): Promise<WalletOverviewResult> {
+    const res = await this.sendBatch<unknown>(
+      [
+        { id: "balance", method: "getBalance", params: [wallet, { commitment: "confirmed" }] },
+        {
+          id: "sigs",
+          method: "getSignaturesForAddress",
+          params: [wallet, { limit: FUNDER_SIGNATURES_LIMIT, commitment: "confirmed" }],
+        },
+      ],
+      10_000,
+    );
+    const sigs = res.get("sigs");
+    if (!sigs || sigs.error || !Array.isArray(sigs.result)) return { status: "failed" };
+    const page = sigs.result as SignaturesResult;
+    const balance = res.get("balance");
+    const lamports = (balance?.result as { value?: unknown } | undefined)?.value;
+    const at = (t: number | null | undefined) => (typeof t === "number" ? new Date(t * 1000) : null);
+    const complete = page.length < FUNDER_SIGNATURES_LIMIT;
+    return {
+      status: "found",
+      balanceSol: typeof lamports === "number" ? lamports / 1_000_000_000 : null,
+      txCount: page.length,
+      complete,
+      lastAt: at(page[0]?.blockTime),
+      firstAt: complete ? at(page[page.length - 1]?.blockTime) : null,
+    };
   }
 
   /**

@@ -278,6 +278,47 @@ export function WeatherArt() {
   );
 }
 
+/** One funder paying for several top holders, drawn as the bubble map draws it, beside lone holders. */
+export function BubblesArt() {
+  const funder = { x: 70, y: 110 };
+  const cluster: [number, number, number][] = [
+    [190, 62, 26],
+    [228, 128, 32],
+    [168, 168, 20],
+    [262, 54, 16],
+  ];
+  const lone: [number, number, number, boolean][] = [
+    [380, 70, 22, false],
+    [440, 132, 18, true],
+    [372, 158, 14, false],
+    [478, 64, 12, false],
+    [500, 150, 10, false],
+  ];
+  return (
+    <Art label="One funder paid for four top holders, drawn as one coloured cluster beside unlinked grey holders, one ringed as risky">
+      {cluster.map(([x, y], i) => (
+        <path key={`l${i}`} className="bm-link" d={`M${funder.x} ${funder.y} L${x} ${y}`} />
+      ))}
+      <circle className="bm-funder" cx={funder.x} cy={funder.y} r="9" />
+      {cluster.map(([x, y, r], i) => (
+        <circle key={`c${i}`} className="bm-bubble linked" cx={x} cy={y} r={r} />
+      ))}
+      {lone.map(([x, y, r, risky], i) => (
+        <circle key={`o${i}`} className={`bm-bubble${risky ? " risky" : ""}`} cx={x} cy={y} r={r} />
+      ))}
+      <text x={funder.x} y="146" className="cap small" textAnchor="middle">
+        One funder
+      </text>
+      <text x="214" y="212" className="cap bad" textAnchor="middle">
+        4 wallets, one buyer: 31%
+      </text>
+      <text x="440" y="212" className="cap" textAnchor="middle">
+        Not linked
+      </text>
+    </Art>
+  );
+}
+
 /** A clock and a wallet: guests see calls a few minutes late. */
 export function GuestArt({ delay }: { delay: number }) {
   return (

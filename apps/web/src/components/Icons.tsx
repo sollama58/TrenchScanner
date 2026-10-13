@@ -343,3 +343,11 @@ export const LinkIcon = (p: IconProps) => (
     <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
   </Svg>
 );
+
+/** A wallet: the wallet detail modal. */
+export const WalletIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-4a2 2 0 0 0 0 4h4a1 1 0 0 0 1-1v-3" />
+    <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
+  </Svg>
+);

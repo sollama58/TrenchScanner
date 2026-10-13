@@ -41,10 +41,10 @@ import {
 } from "./SageView";
 import { WeekChart } from "./WeekChart";
 import { Skeleton } from "./Charts";
-import { openBubbleMap } from "../bubbleMap";
+import { openWallet } from "../walletModal";
+import { BubbleMapSection } from "./BubbleMap";
 import {
   BrainIcon,
-  BubblesIcon,
   ChartIcon,
   CheckIcon,
   CloseIcon,
@@ -299,6 +299,8 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         </div>
       )}
 
+      <BubbleMapSection token={card.token} snapshot={linkedSeed(card)?.snapshot ?? null} />
+
       <SageSection mint={mint} />
 
       <footer className="tm-foot">
@@ -550,14 +552,14 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
           return (
             <li key={w.wallet}>
               <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
-              <a
-                className="num tm-wallet"
-                href={`https://solscan.io/account/${w.wallet}`}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                className="num tm-wallet tm-wallet-btn"
+                onClick={() => openWallet(w.wallet)}
+                title="Open this wallet's details"
               >
                 {shortAddress(w.wallet)}
-              </a>
+              </button>
               <span className="tm-tags">
                 {w.tags.map((t) => (
                   <span
@@ -700,16 +702,6 @@ function StatsCard({ card }: { card: Card }) {
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>
             {r.linkedPct === null ? "Not checked" : pct(r.linkedPct)}
-            {r.linkedClusters.length > 0 && (
-              <button
-                type="button"
-                className="tm-link bm-open"
-                onClick={() => openBubbleMap(card.token.mintAddress, linkedSeed(card))}
-                title="Open the bubble map of the linked wallets"
-              >
-                <BubblesIcon size={13} /> Map
-              </button>
-            )}
           </dd>
         </div>
         <div title="How many of the launch's first 25 buyers still hold it">

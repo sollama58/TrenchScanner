@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Skeleton } from "../components/Charts";
 import type { Loadable } from "../hooks";
 import { ago, shortAddress } from "../format";
+import { openWallet } from "../walletModal";
 
 /** The building blocks every Admin section shares: panels, tables, KPI tiles and formatters. */
 
@@ -120,14 +121,13 @@ export const Tag = ({ tone, children }: { tone: "ok" | "warn" | "bad" | "muted";
 
 export function Wallet({ address }: { address: string }) {
   return (
-    <a
-      className="num"
-      href={`https://solscan.io/account/${address}`}
-      target="_blank"
-      rel="noreferrer"
-      title={address}
+    <button
+      type="button"
+      className="num tm-wallet-btn"
+      onClick={() => openWallet(address)}
+      title={`${address}: open its details`}
     >
       {shortAddress(address)}
-    </a>
+    </button>
   );
 }
