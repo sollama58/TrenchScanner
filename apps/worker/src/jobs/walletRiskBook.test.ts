@@ -25,7 +25,7 @@ describe("wallet risk readings on the scan", () => {
 
   it("reads the top holders and first buyers against the scores", () => {
     setWalletRiskBook([
-      ["risky", { score: 85, dumps: 3 }],
+      ["risky", { score: 85, dumps: 4, dumper: true }],
       ["calm", { score: 20, dumps: 0 }],
     ]);
     const out = withWalletSignals(profile, new Map(), new Map(), env, new Set(["risky", "unknown"]));
