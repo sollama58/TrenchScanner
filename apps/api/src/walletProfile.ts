@@ -131,6 +131,10 @@ export interface WalletProfile {
     dumps: number;
     fastExits: number;
     snipes: number;
+    /** The win side (walletWinScore): coins it bought that doubled, those it was in before the call, and the 0-100 score. */
+    wins: number;
+    earlyWins: number;
+    winScore: number;
     medianSupplyPct: number | null;
     lastSeenAt: string;
     computedAt: string;
@@ -547,6 +551,9 @@ export async function loadWalletProfile(
           dumps: risk.dumps,
           fastExits: risk.fastExits,
           snipes: risk.snipes,
+          wins: risk.wins,
+          earlyWins: risk.earlyWins,
+          winScore: risk.winScore,
           medianSupplyPct: risk.medianSupplyPct,
           lastSeenAt: risk.lastSeenAt.toISOString(),
           computedAt: risk.computedAt.toISOString(),

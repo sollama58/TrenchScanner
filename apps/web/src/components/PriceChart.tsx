@@ -25,6 +25,7 @@ export const MARKER_LABEL: Record<MarkerTrade["kind"], string> = {
   dev: "Dev",
   risky: "Risky wallet",
   kol: "KOL",
+  winner: "Winner wallet",
   linked: "Linked wallet",
 };
 

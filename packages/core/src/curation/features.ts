@@ -92,6 +92,38 @@ export const SAME_TIME_FUNDING_FEATURES = ["sameTimeFundedPct", "sameTimeCluster
  * sold, and the SOL each way. Null without a recent page or the wallet scores, and on every row
  * banked before. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
  */
+/**
+ * Added 2026-10-13 (user ask, notes/holder-data-eval-2026-10-13): the win side of the wallet
+ * scores (WalletRisk.winScore, walletWinScore in core's wallets/riskScore.ts): the highest win
+ * score among the top-10 holders, the first buyers' mean, the % of supply held by top holders
+ * scored WINNER_WALLET_SCORE or more, how many first buyers are known winners, and how many
+ * winner wallets bought and sold in the coin's newest trades. Null on the same terms as the risk
+ * readings. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const WALLET_WIN_FEATURES = [
+  "walletWinTop10Max",
+  "walletWinFirstBuyersMean",
+  "walletWinHighSupplyPct",
+  "knownWinnerFirstBuyers",
+  "winnerRecentBuyers",
+  "winnerRecentSellers",
+] as const;
+
+/**
+ * Added 2026-10-13 (user ask): known KOL wallets (Solana Tracker's roster, KolWallet) among the
+ * coin's top-20 holders (count and their % of supply), among the launch's first buyers, and
+ * buying or selling in the newest trades read before the decision. Null without the roster (no
+ * SOLANA_TRACKER_API_KEY), without the list in question, and on every row banked before.
+ * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const KOL_FEATURES = [
+  "kolTopHolders",
+  "kolTopHolderPct",
+  "kolFirstBuyers",
+  "kolRecentBuyers",
+  "kolRecentSellers",
+] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -315,6 +347,8 @@ export const CANDIDATE_FEATURE_NAMES = [
   // Appended last: the vector's order is fixed, so a saved model reads every older input where it was.
   ...CEX_FUNDED_FEATURES,
   ...SAME_TIME_FUNDING_FEATURES,
+  ...WALLET_WIN_FEATURES,
+  ...KOL_FEATURES,
   // Added 2026-10-13 (TokenSage rules 0.33.0 / 0.34.0, curation/narrativeFeatures.ts): trend
   // novelty, and the trend and story heat as they stand at the decision. Null without a
   // refresh, and on every row banked before. Never backfilled.
@@ -414,6 +448,10 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   ...LIVE_FLAG_FEATURES,
   // The same-minute funding groups (added 2026-10-13): recorded first, on the same terms.
   ...SAME_TIME_FUNDING_FEATURES,
+  // The win-side wallet readings and the KOL counts (added 2026-10-13): recorded first, on the
+  // same terms (notes/holder-data-eval-2026-10-13/report.md).
+  ...WALLET_WIN_FEATURES,
+  ...KOL_FEATURES,
   // TokenSage's trend novelty and decision-time trend and story heat (added 2026-10-13, user
   // ask "build all of the fixes"): recorded first. Bring them in by removing them here once two
   // days of decision rows show they separate runners (notes/tokensage-trend-heat-2026-10-13.md).
@@ -750,6 +788,17 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   flaggedSellers: "flagged wallets selling",
   flaggedBuySol: "SOL bought by flagged wallets",
   flaggedSellSol: "SOL sold by flagged wallets",
+  walletWinTop10Max: "best winner wallet in the top 10",
+  walletWinFirstBuyersMean: "first buyers' win score",
+  walletWinHighSupplyPct: "supply held by winner wallets",
+  knownWinnerFirstBuyers: "known winners among first buyers",
+  winnerRecentBuyers: "winner wallets buying",
+  winnerRecentSellers: "winner wallets selling",
+  kolTopHolders: "KOLs among top holders",
+  kolTopHolderPct: "supply held by KOLs",
+  kolFirstBuyers: "KOLs among first buyers",
+  kolRecentBuyers: "KOLs buying",
+  kolRecentSellers: "KOLs selling",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -957,6 +1006,17 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     flaggedSellers: scored.flaggedSellers ?? null,
     flaggedBuySol: scored.flaggedBuySol ?? null,
     flaggedSellSol: scored.flaggedSellSol ?? null,
+    walletWinTop10Max: scored.walletWinTop10Max ?? null,
+    walletWinFirstBuyersMean: scored.walletWinFirstBuyersMean ?? null,
+    walletWinHighSupplyPct: scored.walletWinHighSupplyPct ?? null,
+    knownWinnerFirstBuyers: scored.knownWinnerFirstBuyers ?? null,
+    winnerRecentBuyers: scored.winnerRecentBuyers ?? null,
+    winnerRecentSellers: scored.winnerRecentSellers ?? null,
+    kolTopHolders: scored.kolTopHolders ?? null,
+    kolTopHolderPct: scored.kolTopHolderPct ?? null,
+    kolFirstBuyers: scored.kolFirstBuyers ?? null,
+    kolRecentBuyers: scored.kolRecentBuyers ?? null,
+    kolRecentSellers: scored.kolRecentSellers ?? null,
     ageMinutes: scored.ageMinutes ?? null,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,

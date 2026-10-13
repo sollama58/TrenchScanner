@@ -25,6 +25,9 @@ interface Overview {
   scoredWallets: number;
   riskyWallets: number;
   riskyScore: number;
+  /** The win side. Absent from older API builds. */
+  winnerWallets?: number;
+  winnerScore?: number;
   tapes: Record<string, number>;
   tapes24h: { status: string; source: string | null; count: number }[];
   stopCauses: {
@@ -40,11 +43,15 @@ interface Overview {
     dumps: number;
     fastExits: number;
     snipes: number;
+    wins?: number;
+    earlyWins?: number;
+    winScore?: number;
     medianSupplyPct: number | null;
     solIn: number;
     solOut: number;
     lastSeenAt: string;
   }[];
+  winners?: Overview["wallets"];
 }
 
 interface WalletDetail {
@@ -87,12 +94,18 @@ const scoreTag = (score: number | null, risky: number) =>
   ) : (
     <Tag tone={score >= risky ? "bad" : score >= 50 ? "warn" : "muted"}>{score.toFixed(0)}</Tag>
   );
+const winTag = (score: number, winner: number) => (
+  <Tag tone={score >= winner ? "ok" : score >= 50 ? "warn" : "muted"}>{score.toFixed(0)}</Tag>
+);
 
 export function WalletsAdmin() {
   const q = usePolling<Overview>("/admin/wallets?limit=50", 120_000);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<string | null>(null);
-  const names = useWalletNames(useMemo(() => q.data?.wallets.map((w) => w.wallet) ?? [], [q.data]));
+  // One read names both tables (the riskiest and the winning wallets).
+  const names = useWalletNames(
+    useMemo(() => [...(q.data?.wallets ?? []), ...(q.data?.winners ?? [])].map((w) => w.wallet), [q.data]),
+  );
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const v = search.trim();
@@ -113,6 +126,11 @@ export function WalletsAdmin() {
                 label={`Risky (${r.riskyScore}+)`}
                 value={n(r.riskyWallets)}
                 tone={r.riskyWallets ? "warn" : undefined}
+              />
+              <Kpi
+                label={`Winners (${r.winnerScore ?? 70}+)`}
+                value={n(r.winnerWallets ?? 0)}
+                tone={r.winnerWallets ? "ok" : undefined}
               />
               <Kpi
                 label="Coins read"
@@ -169,6 +187,39 @@ export function WalletsAdmin() {
                   when(w.lastSeenAt),
                 ])}
                 empty="No wallet scored yet: the trade tape fills over the first hours."
+              />
+            </Panel>
+            <Panel
+              title="Winning wallets"
+              note="Seen in 3+ coins, by win score: how often the coins it bought doubled, against the market, nudged up by buying before the call. Tap a wallet for its coins."
+            >
+              <Table
+                head={[
+                  "Wallet",
+                  "Win score",
+                  "Coins",
+                  "Doubled",
+                  "Bought before the call",
+                  "Risk",
+                  "SOL in / out",
+                  "Last seen",
+                ]}
+                rows={(r.winners ?? []).map((w) => [
+                  <span key="w">
+                    <Wallet address={w.wallet} names={names} />{" "}
+                    <button className="link small" onClick={() => setOpen(w.wallet)}>
+                      coins
+                    </button>
+                  </span>,
+                  winTag(w.winScore ?? 0, r.winnerScore ?? 70),
+                  n(w.appearances),
+                  n(w.wins ?? 0),
+                  n(w.earlyWins ?? 0),
+                  scoreTag(w.score, r.riskyScore),
+                  `${sol(w.solIn)} / ${sol(w.solOut)}`,
+                  when(w.lastSeenAt),
+                ])}
+                empty="No winner yet: a wallet needs a doubled coin on a read tape."
               />
             </Panel>
           </div>
