@@ -8872,26 +8872,67 @@ img.tm-avatar {
 .pc-mark {
   cursor: pointer;
 }
-.pc-mark path {
-  fill: var(--mk);
-  stroke: var(--surface-2);
-  stroke-width: 1.5;
-  stroke-linejoin: round;
+/* A marked trade: a B (green) or S (red) badge ringed in the wallet kind's colour. */
+.pc-mark.buy {
+  --side: var(--good);
+}
+.pc-mark.sell {
+  --side: var(--bad);
+}
+.pc-badge {
   transition: transform 0.12s;
-  transform-box: fill-box;
-  transform-origin: center;
+}
+.pc-badge-back {
+  fill: var(--surface-2);
+}
+.pc-badge-face {
+  fill: color-mix(in srgb, var(--side) 88%, #000);
+  stroke: var(--mk);
+  stroke-width: 2.2;
+}
+.pc-badge text {
+  fill: #fff;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  pointer-events: none;
 }
 .pc-stem {
+  pointer-events: none;
   stroke: var(--mk);
-  stroke-width: 1;
-  opacity: 0.45;
+  stroke-width: 1.2;
+  stroke-dasharray: 2 2;
+  opacity: 0.6;
 }
-.pc-mark.on path {
+.pc-mark.on .pc-badge {
+  transform: scale(1.2);
+}
+.pc-mark.on .pc-badge-face {
   stroke: var(--ink);
-  transform: scale(1.25);
 }
-.pc-mark.on .pc-stem {
-  opacity: 0.9;
+.pc-stem.on {
+  opacity: 1;
+}
+/* The flow lane under the plot: flagged buys up in green, sells down in red. */
+.pc-flow-mid {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+.pc-flow-buy {
+  fill: var(--good);
+  opacity: 0.8;
+}
+.pc-flow-sell {
+  fill: var(--bad);
+  opacity: 0.8;
+}
+.pc-flow-label {
+  font-size: 10px;
+}
+.pc-flow-label.buy {
+  fill: var(--good);
+}
+.pc-flow-label.sell {
+  fill: var(--bad);
 }
 .pc-swatch {
   display: inline-block;
@@ -8928,19 +8969,6 @@ img.tm-avatar {
   align-items: center;
   gap: 4px;
   margin-right: 4px;
-}
-.tm-tri {
-  width: 0;
-  height: 0;
-  border-left: 4.5px solid transparent;
-  border-right: 4.5px solid transparent;
-  margin-left: 4px;
-}
-.tm-tri.up {
-  border-bottom: 8px solid var(--muted);
-}
-.tm-tri.down {
-  border-top: 8px solid var(--muted);
 }
 .tm-chip {
   gap: 6px;
@@ -9193,7 +9221,8 @@ img.tm-avatar {
 /* Linked-wallets bubble map (components/BubbleMap.tsx). Cluster colours: categorical slots 1, 3, 2,
    then brand violet and cyan; slot 5 (magenta) and 4 (amber) stay the risky and dev markers'. */
 .bm-modal,
-.bm-section {
+.bm-section,
+.tm-holders-card {
   --bm-0: var(--series-1);
   --bm-1: var(--series-3);
   --bm-2: var(--series-2);
@@ -9800,4 +9829,524 @@ img.tm-avatar {
   .bm-stage.compact .bm-svg {
     height: min(280px, 40dvh);
   }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Token view overhaul: a wider modal in four groups (chart, holders, the call, TokenSage), a
+   section nav in the sticky header, and one card language across every section. */
+@media (min-width: 1100px) {
+  .tm-modal {
+    width: min(1080px, calc(100vw - 48px));
+  }
+}
+.tm-modal {
+  background: var(--surface-solid);
+}
+.tm-modal .tm-head {
+  flex-wrap: wrap;
+  row-gap: 10px;
+  padding-bottom: 0;
+}
+.tm-nav {
+  display: flex;
+  gap: 2px;
+  flex-basis: 100%;
+  margin: 0 -4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tm-nav::-webkit-scrollbar {
+  display: none;
+}
+.tm-nav-btn {
+  position: relative;
+  flex: none;
+  padding: 7px 12px 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.tm-nav-btn:hover:not(:disabled) {
+  background: transparent;
+  color: var(--ink);
+}
+.tm-nav-btn::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.tm-nav-btn.on {
+  color: var(--ink);
+}
+.tm-nav-btn.on::after {
+  background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+}
+.tm-group {
+  scroll-margin-top: 128px;
+}
+.tm-group + .tm-group {
+  margin-top: 26px;
+}
+.tm-group-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px !important;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tm-group-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border-strong), transparent);
+}
+.tm-group > .tm-grid,
+.tm-group > .tm-holders {
+  margin-top: 0;
+}
+
+/* Cards: one header style, a little more air. */
+.tm-modal .sage-card {
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset;
+}
+.tm-modal .sage-card h4 {
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+.tm-h4-meta {
+  margin-left: auto;
+  font-weight: 500;
+}
+
+/* The figures: four tiles, Now leading with its move. */
+.tm-modal .tm-figs {
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.tm-modal .tm-fig {
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+}
+.tm-modal .tm-fig > span.num {
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+.tm-modal .tm-fig > span.num.none {
+  color: var(--muted);
+}
+.tm-fig .delta {
+  font-weight: 650;
+}
+
+/* Holders: the bubble map beside the top-holder list. */
+.tm-holders {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.tm-holders > .sage-card {
+  margin-top: 0;
+}
+.tm-holders .bm-section .bm-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.th-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.th-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) minmax(60px, 0.6fr) 58px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.th-row:nth-child(odd) {
+  background: var(--surface-3);
+}
+.th-rank {
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: right;
+}
+.th-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+.th-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.th-wallet {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.th-wallet .icon {
+  color: var(--muted);
+}
+.th-bar {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--grid);
+  overflow: hidden;
+}
+.th-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--bm-none);
+}
+.th-pct {
+  text-align: right;
+  font-weight: 650;
+}
+.th-rest .th-bar > span {
+  opacity: 0.5;
+}
+.th-note {
+  margin: 10px 0 0 !important;
+}
+
+/* Flagged wallets as a table. */
+.fw-table {
+  display: grid;
+  gap: 2px;
+}
+.fw-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 70px 70px 76px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.fw-row:not(.fw-headrow):nth-child(even) {
+  background: var(--surface-3);
+}
+.fw-headrow {
+  padding-top: 0;
+  padding-bottom: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.fw-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.fw-num {
+  text-align: right;
+}
+.fw-score-h {
+  text-align: center;
+}
+.fw-score {
+  justify-self: center;
+  min-width: 32px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 12px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+.fw-score.s-high {
+  color: var(--bad-ink);
+  background: var(--bad-wash);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+}
+.fw-score.s-mid {
+  color: var(--warn-ink, var(--ink));
+  background: color-mix(in srgb, var(--series-4) 14%, transparent);
+  border-color: color-mix(in srgb, var(--series-4) 40%, transparent);
+}
+.fw-score.s-none {
+  color: var(--muted);
+}
+
+/* The call: the alert's numbers as quiet tiles. */
+.tm-modal .tm-stats {
+  gap: 8px;
+}
+.tm-modal .tm-stats > div {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  border: 1px solid transparent;
+}
+.tm-modal .tm-stats > div.risky {
+  border-color: color-mix(in srgb, var(--bad) 35%, transparent);
+  background: var(--bad-wash);
+}
+.tm-modal .tm-stats dt {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tm-modal .tm-stats dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+/* TokenSage: the summary clamped until asked for. */
+.tm-summary {
+  margin-bottom: 10px;
+}
+.tm-summary .sage-summary {
+  margin-bottom: 4px;
+}
+.tm-summary .sage-summary.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tm-summary .tm-link {
+  margin-left: 0;
+}
+.tm-modal .tm-foot {
+  margin-top: 26px;
+}
+
+@media (max-width: 640px) {
+  .tm-modal .tm-head {
+    padding-bottom: 0;
+  }
+  .tm-nav-btn {
+    padding: 6px 10px 9px;
+  }
+  .tm-group {
+    scroll-margin-top: 112px;
+  }
+  .tm-modal .sage-card {
+    padding: 14px;
+  }
+  .tm-modal .tm-fig > span.num {
+    font-size: 18px;
+  }
+  .tm-holders {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fw-row {
+    grid-template-columns: minmax(0, 1fr) 40px 64px;
+  }
+  /* On a phone: wallet, risk and net; SOL in and out stay in the row's title. */
+  .fw-row > :nth-child(3),
+  .fw-row > :nth-child(4) {
+    display: none;
+  }
+  .th-row {
+    grid-template-columns: 18px minmax(0, 1fr) 44px 52px;
+    gap: 8px;
+  }
+}
+.th-wallet,
+.fw-who .tm-wallet {
+  white-space: nowrap;
+}
+.fw-who {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+/* Bubble map: a halo behind each cluster and a gloss on each bubble (the share image draws both). */
+.bm-halo {
+  opacity: 0.13;
+  transition: opacity 0.2s;
+}
+.bm-halo circle {
+  fill: var(--bm);
+}
+.bm-halo line {
+  stroke: var(--bm);
+  stroke-linecap: round;
+}
+.bm-halo.on {
+  opacity: 0.22;
+}
+.bm-halo.dim {
+  opacity: 0.03;
+}
+.bm-gloss {
+  fill: #fff;
+  opacity: 0.28;
+  pointer-events: none;
+}
+.bm-node.dim .bm-gloss {
+  opacity: 0.1;
+}
+
+/* The chart's buy/sell balance: who's winning among the flagged wallets in view. */
+.tm-flow {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+.tm-flow.buying {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+}
+.tm-flow.selling {
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--border));
+}
+.tm-flow-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.tm-flow-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tm-flow-verdict {
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.tm-flow.buying .tm-flow-verdict {
+  color: var(--good);
+}
+.tm-flow.selling .tm-flow-verdict {
+  color: var(--bad);
+}
+.tm-flow-bar {
+  display: flex;
+  gap: 3px;
+  height: 8px;
+}
+.tm-flow-bar > span {
+  flex-basis: 0;
+  border-radius: 999px;
+}
+.tm-flow-bar .buy {
+  background: var(--good);
+}
+.tm-flow-bar .sell {
+  background: var(--bad);
+}
+.tm-flow-sides {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tm-flow-sides .buy {
+  color: var(--good);
+}
+.tm-flow-sides .sell {
+  color: var(--bad);
+}
+.tm-bs {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 4px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  color: #fff;
+}
+.tm-bs.buy {
+  background: color-mix(in srgb, var(--good) 88%, #000);
+}
+.tm-bs.sell {
+  background: color-mix(in srgb, var(--bad) 88%, #000);
+}
+.pc-cross,
+.pc-last,
+.pc-peak {
+  pointer-events: none;
+}
+/* Model View: what came after the call is shaded; the scans the model read are dots. */
+.pc-unseen rect {
+  fill: var(--ink);
+  opacity: 0.045;
+}
+.pc-zone {
+  paint-order: stroke;
+  stroke: var(--surface-2);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  fill: var(--muted);
+}
+.pc-zone.seen {
+  fill: var(--brand-ink);
+}
+.pc-scan {
+  fill: var(--surface-2);
+  stroke: var(--brand-ink);
+  stroke-width: 2;
+}
+.tm-model-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+.tm-scan-dot {
+  flex: none;
+  margin-top: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--brand-ink);
+  background: var(--surface-2);
 }

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { bubblesFromUrl, bubblesLink, buildGraph, graphBounds, layoutGraph, pickReading } from "./bubbleMap";
+import {
+  bubblesFromUrl,
+  bubblesLink,
+  buildGraph,
+  clusterHalos,
+  graphBounds,
+  layoutGraph,
+  pickReading,
+} from "./bubbleMap";
 
 const A = "Aaaa1111111111111111111111111111111111111111";
 const B = "Bbbb2222222222222222222222222222222222222222";
@@ -131,5 +139,21 @@ describe("bubble map holders", () => {
     const lone = g.nodes.filter((n) => n.kind === "holder" && n.cluster === null).map((n) => n.wallet);
     expect(lone).toEqual([R, "Lone2", "Lone3"]);
     expect(g.nodes.some((n) => n.kind === "rest")).toBe(false);
+  });
+});
+
+describe("bubble map halos", () => {
+  it("hugs each cluster's own bubbles and links, and the bounds hold every halo", () => {
+    const g = layoutGraph(buildGraph(snapshot));
+    const halos = clusterHalos(g);
+    expect(halos.map((h) => [h.cluster, h.circles.length, h.bands.length])).toEqual([
+      [0, 3, 2],
+      [1, 2, 1],
+    ]);
+    const box = graphBounds(g, 0);
+    for (const c of halos.flatMap((h) => h.circles)) {
+      expect(c.x - c.r).toBeGreaterThanOrEqual(box.x - 1e-6);
+      expect(c.y + c.r).toBeLessThanOrEqual(box.y + box.h + 1e-6);
+    }
   });
 });

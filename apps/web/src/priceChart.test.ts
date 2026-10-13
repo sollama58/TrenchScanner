@@ -12,6 +12,16 @@ describe("pointWidthMs", () => {
 });
 
 describe("linePoints", () => {
+  it("stops at the end of the window when given one", () => {
+    const pts = linePoints(
+      [0, 1, 2, 3, 4].map((m) => ({ t: m * 60_000, v: m })),
+      60_000,
+      60_000,
+      3 * 60_000,
+    );
+    expect(pts.map((p) => p.v)).toEqual([1, 2, 3]);
+  });
+
   it("keeps each slot's last close at its own time, from the view's start on", () => {
     const pts = linePoints(
       [

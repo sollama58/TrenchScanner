@@ -21,15 +21,20 @@ export interface Point {
 }
 
 /**
- * The closes from `fromMs` on, thinned to one point per `widthMs` (aligned to the epoch, so a point
+ * The closes from `fromMs` on (up to `toMs`, when given), thinned to one point per `widthMs` (aligned to the epoch, so a point
  * keeps its place as new minutes arrive): each point is its slot's last close, at that close's
  * time, so the line ends exactly on the latest reading.
  */
-export function linePoints(closes: readonly Point[], fromMs: number, widthMs: number): Point[] {
+export function linePoints(
+  closes: readonly Point[],
+  fromMs: number,
+  widthMs: number,
+  toMs = Infinity,
+): Point[] {
   const out: Point[] = [];
   let slot = Number.NaN;
   for (const p of closes) {
-    if (p.t < fromMs) continue;
+    if (p.t < fromMs || p.t > toMs) continue;
     const s = Math.floor(p.t / widthMs);
     if (s === slot) out[out.length - 1] = { t: p.t, v: p.v };
     else out.push({ t: p.t, v: p.v });

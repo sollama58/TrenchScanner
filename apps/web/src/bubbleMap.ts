@@ -403,7 +403,53 @@ export function graphBounds(graph: BubbleGraph, pad = 18): { x: number; y: numbe
     x1 = Math.max(x1, n.x + n.r);
     y1 = Math.max(y1, n.y + n.r + below);
   }
+  // The cluster halos reach a little past their bubbles.
+  for (const h of clusterHalos(graph)) {
+    for (const c of h.circles) {
+      x0 = Math.min(x0, c.x - c.r);
+      y0 = Math.min(y0, c.y - c.r);
+      x1 = Math.max(x1, c.x + c.r);
+      y1 = Math.max(y1, c.y + c.r);
+    }
+  }
   return { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 };
+}
+
+/** How far a cluster's halo reaches past its bubbles, map units. */
+export const HALO_PAD = 9;
+
+/** One cluster's halo: its bubbles grown by HALO_PAD and its links as thick bands, filled as one. */
+export interface ClusterHalo {
+  cluster: number;
+  circles: { x: number; y: number; r: number }[];
+  bands: { x1: number; y1: number; x2: number; y2: number }[];
+}
+
+/**
+ * A soft shape behind each cluster, hugging only its own bubbles and the lines between them, so
+ * a cluster reads as one group at a glance without swallowing the holders next to it. Drawn as a
+ * single flattened layer (so overlaps don't darken) by the dialog's SVG and the share image alike.
+ */
+export function clusterHalos(graph: BubbleGraph): ClusterHalo[] {
+  const index = new Map(graph.nodes.map((n) => [n.id, n]));
+  const out: ClusterHalo[] = [];
+  graph.clusters.forEach((_, i) => {
+    const members = graph.nodes.filter((n) => n.cluster === i);
+    if (members.length < 2) return;
+    const bands: ClusterHalo["bands"] = [];
+    for (const l of graph.links) {
+      if (l.cluster !== i) continue;
+      const a = index.get(l.from);
+      const b = index.get(l.to);
+      if (a && b) bands.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    }
+    out.push({
+      cluster: i,
+      circles: members.map((n) => ({ x: n.x, y: n.y, r: n.r + HALO_PAD })),
+      bands,
+    });
+  });
+  return out;
 }
 
 /** The reading to draw: the card's, else the newest scan's with a linked reading. */
