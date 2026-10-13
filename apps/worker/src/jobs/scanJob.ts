@@ -58,6 +58,7 @@ import {
   tokenSageEnabled,
 } from "../tokensage/prefetch.js";
 import { loadNarrativeReads } from "../tokensage/narrativeReads.js";
+import type { PricePathSeeder } from "./pricePathSeed.js";
 import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
@@ -147,6 +148,8 @@ export interface ScanDeps {
   };
   /** The per-mint price tape the price-path features read from (curation/pricePath.ts). Optional. */
   pricePath?: PricePathBook;
+  /** Refills that tape from stored snapshots after a restart (pricePathSeed.ts). Optional. */
+  pricePathSeeder?: Pick<PricePathSeeder, "seed">;
 }
 
 /**
@@ -954,6 +957,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // One reading of the market for the whole cycle - the same context on every sample.
   const marketContext = await loadMarketContext(env, candidates.length);
   deps.pricePath?.prune(new Date(Date.now() - 2 * 3_600_000));
+  deps.pricePathSeeder?.seed(
+    candidates.map((c) => ({ mint: c.mintAddress, tokenId: priors.get(c.mintAddress)?.token?.id })),
+  );
 
   // Read once for the cycle: whether a curated decision should wait for the top-10 snipers share.
   const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;

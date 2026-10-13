@@ -48,6 +48,7 @@ import {
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
+import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
 
@@ -125,6 +126,8 @@ async function main() {
   const jupiter = env.JUPITER_API_KEY
     ? new JupiterClient({ apiKey: env.JUPITER_API_KEY, requestsPerMinute: env.JUPITER_REQUESTS_PER_MINUTE })
     : undefined;
+  // The per-mint price tape behind the price-path model inputs - in memory, bounded.
+  const pricePath = new PricePathBook();
   const deps = {
     pumpFun: new PumpFunClient({ baseUrl: env.PUMPFUN_BASE_URL }),
     dexScreener,
@@ -139,8 +142,9 @@ async function main() {
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     stream,
-    // The per-mint price tape behind the price-path model inputs - in memory, bounded.
-    pricePath: new PricePathBook(),
+    pricePath,
+    // Puts the last hour of that tape back from the scan's snapshots after a deploy.
+    pricePathSeeder: new PricePathSeeder(pricePath),
   };
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because

@@ -189,6 +189,41 @@ describe("PricePathBook", () => {
     expect(book.features("a").pathObservedMinutes).toBeNull();
   });
 
+  it("takes stored ticks under the tape after a restart, and only ones older than it", () => {
+    // 40 minutes of stored scan ticks, 30 s apart, climbing 1% a minute.
+    const stored = Array.from({ length: 81 }, (_, i) => ({
+      at: new Date(T0 + i * 30_000),
+      priceUsd: 1 + i * 0.005,
+      holders: 100 + i,
+      holdersAt: new Date(T0 + i * 30_000),
+    }));
+    const restarted = new PricePathBook();
+    // The new process has already observed the mint once, at minute 40.5.
+    restarted.observe("m", new Date(T0 + 40.5 * MIN), 1.41, 182);
+    expect(restarted.features("m").pathRet30mPct).toBeNull();
+    restarted.seed("m", stored);
+    const f = restarted.features("m");
+    expect(f.pathObservedMinutes).toBe(40.5);
+    expect(f.pathRet30mPct!).toBeCloseTo((1.41 / (1 + 21 * 0.005) - 1) * 100, 6);
+    expect(f.pathHolderSlope10m).not.toBeNull();
+
+    // The same as a book that saw every tick itself.
+    const live = new PricePathBook();
+    for (const t of stored) live.observe("m", t.at, t.priceUsd, t.holders, t.holdersAt);
+    live.observe("m", new Date(T0 + 40.5 * MIN), 1.41, 182);
+    expect(f).toEqual(live.features("m"));
+
+    // Seeding twice, or with ticks the tape already covers, changes nothing.
+    restarted.seed("m", stored);
+    restarted.seed("m", [{ at: new Date(T0 + 40.5 * MIN), priceUsd: 9 }]);
+    expect(restarted.features("m")).toEqual(f);
+    // Seeding before the first observation starts the tape; observing then extends it.
+    const early = new PricePathBook();
+    early.seed("m", stored);
+    early.observe("m", new Date(T0 + 40.5 * MIN), 1.41, 182);
+    expect(early.features("m")).toEqual(f);
+  });
+
   it("puts the clock on the unit circle", () => {
     const noon = clockContext(new Date("2026-10-04T12:00:00Z"));
     expect(noon.ctxHourSin).toBeCloseTo(0, 6);
