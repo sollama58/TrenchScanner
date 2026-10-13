@@ -775,7 +775,7 @@ export interface PrecisionTargets {
    * picks - the targets first, else the best 2x lower bound, with no coverage tolerance: the floor
    * already sets the volume, so the rest is hit rate. minSupportShare doesn't apply either. Since
    * hit rate climbs toward the top of a model's ranking, this usually lands the cutoff at about
-   * the floor. For the high-precision seats (CuratorRecipe.callsPerHour). When no cutoff reaches
+   * the floor. Not used by any seat since 2026-10-13 (see HIGH_PRECISION_CUTOFF_SHARE). When no cutoff reaches
    * the floor (a quiet stretch), every cutoff is a candidate. 0 or omitted = no floor.
    */
   minCallsPerHour?: number;
@@ -1341,6 +1341,11 @@ export interface WalkForwardOptions {
    */
   targets?: PrecisionTargets;
   /**
+   * The heuristic's targets, when the model is held to a seat's own (CuratorRecipe.cutoffShare):
+   * the heuristic plays the field's rule, as it does live. Omitted = targets without a pace floor.
+   */
+  heuristicTargets?: PrecisionTargets;
+  /**
    * Mirrors CURATED_HEURISTIC_PRECISION_GATE: whether the heuristic is held to its hit-rate
    * cutoff (only meaningful with targets). Default true.
    */
@@ -1639,10 +1644,10 @@ export async function walkForwardEvaluate(
         calibrateThresholdForPrecision(calls, opts.targets!, { cooldownMs });
       const modelCutoff = calibrate(others.flatMap((o) => o.model.map((m) => call(m.row, m.rank)))).threshold;
       modelCalls = modelCutoff === null ? [] : fold.model.filter((m) => m.rank >= modelCutoff);
-      // A paced seat's floor is its own: the heuristic plays the field's rule, as it does live.
+      // A seat's own cutoff rule is its own: the heuristic plays the field's rule, as it does live.
       const heuristicCalibration = calibrateThresholdForPrecision(
         others.flatMap((o) => o.heuristic.map((h) => call(h.row, h.confidence))),
-        { ...opts.targets, minCallsPerHour: undefined },
+        opts.heuristicTargets ?? { ...opts.targets, minCallsPerHour: undefined },
         { cooldownMs },
       );
       // Same rule as production (heuristicGate in curatedAlerts.ts): no cutoff (no evidence)
