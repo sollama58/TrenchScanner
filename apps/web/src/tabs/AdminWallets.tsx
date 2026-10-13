@@ -27,8 +27,8 @@ interface Overview {
   riskyScore: number;
   /** The win side. Absent from older API builds. */
   winnerWallets?: number;
-  winnerRule?: { minWins: number; minRate: number };
-  dumperRule?: { minDumps: number; minRate: number };
+  winnerRule?: { minWins: number; minRate: number; minCoins?: number };
+  dumperRule?: { minDumps: number; minRate: number; minCoins?: number };
   tapes: Record<string, number>;
   tapes24h: { status: string; source: string | null; count: number }[];
   stopCauses: {
@@ -138,7 +138,7 @@ export function WalletsAdmin() {
                 value={n(r.winnerWallets ?? 0)}
                 sub={
                   r.winnerRule
-                    ? `${r.winnerRule.minWins}+ doubled, ${Math.round(r.winnerRule.minRate * 100)}% of its coins`
+                    ? `${r.winnerRule.minWins}+ doubled, ${Math.round(r.winnerRule.minRate * 100)}% of its coins, ${r.winnerRule.minCoins ?? 10}+ coins`
                     : undefined
                 }
                 tone={r.winnerWallets ? "ok" : undefined}
@@ -172,7 +172,7 @@ export function WalletsAdmin() {
             </Panel>
             <Panel
               title="Riskiest wallets"
-              note={`Seen in 3+ coins. Known dumper needs ${r.dumperRule?.minDumps ?? 4}+ coins sold into the stop and ${Math.round((r.dumperRule?.minRate ?? 0.75) * 100)}% of its coins. Tap a wallet for its coins.`}
+              note={`Seen in 3+ coins. Known dumper needs ${r.dumperRule?.minDumps ?? 4}+ coins sold into the stop and ${Math.round((r.dumperRule?.minRate ?? 0.75) * 100)}% of its coins; no label under ${r.dumperRule?.minCoins ?? 10} coins on record. Tap a wallet for its coins.`}
             >
               <Table
                 head={[

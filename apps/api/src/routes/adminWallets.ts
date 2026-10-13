@@ -4,6 +4,7 @@ import {
   prisma,
   Prisma,
   KNOWN_DUMPER,
+  MIN_LABEL_APPEARANCES,
   RISKY_WALLET_SCORE,
   STOP_ROLES,
   WINNER,
@@ -100,8 +101,12 @@ async function buildOverview(limit: number, minCoins: number) {
     riskyWallets: risky,
     riskyScore: RISKY_WALLET_SCORE,
     winnerWallets: winnerCount,
-    winnerRule: { minWins: WINNER.minWins, minRate: WINNER.minRate },
-    dumperRule: { minDumps: KNOWN_DUMPER.minDumps, minRate: KNOWN_DUMPER.minRate },
+    winnerRule: { minWins: WINNER.minWins, minRate: WINNER.minRate, minCoins: MIN_LABEL_APPEARANCES },
+    dumperRule: {
+      minDumps: KNOWN_DUMPER.minDumps,
+      minRate: KNOWN_DUMPER.minRate,
+      minCoins: MIN_LABEL_APPEARANCES,
+    },
     tapes: Object.fromEntries(tapes.map((t) => [t.status, t._count._all])),
     tapes24h: tapes24h.map((t) => ({ status: t.status, source: t.source, count: t._count._all })),
     stopCauses: summarizeStopCauses(

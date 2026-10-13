@@ -434,9 +434,9 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
       <p className="faint small wm-note">
         How often it sold into a call&apos;s stop, against the market&apos;s rate, nudged up by fast exits and
         launch snipes. The win score is the mirror: how often the coins it bought doubled, against the market,
-        nudged up by being in before the call. Known dumper needs 4+ coins sold into the stop and three
-        quarters of its coins; Winner needs 3+ doubled and 60% of them; a wallet never carries both. Updated{" "}
-        {ago(risk.computedAt)}.
+        nudged up by being in before the call. Labels need 10+ called coins on record: Known dumper is 4+ sold
+        into the stop and three quarters of its coins, Winner is 3+ doubled and 60% of them, and a wallet
+        never carries both. Updated {ago(risk.computedAt)}.
       </p>
     </section>
   );
