@@ -155,11 +155,15 @@ function flagsOf(w: FlaggedHolder | undefined): Flag[] {
 /**
  * The map's nodes and links. Every wallet in a cluster is a holder bubble linked to the cluster's
  * funder (a node of its own, or the holder that funded the rest). Flagged wallets the chart knows
- * hold at least MIN_FLAGGED_HELD_PCT and in no cluster are bubbles too, unlinked. The rest of the
- * top 10 is one dashed bubble: the snapshot keeps clusters, not each holder.
+ * hold at least MIN_FLAGGED_HELD_PCT and in no cluster are bubbles too, unlinked, as is every other
+ * holder when the scan kept the list (linkedHolders, on scans since it was added). What the map
+ * can't place individually is one dashed bubble: on older scans, the rest of the top 10.
  */
 export function buildGraph(
-  snapshot: Pick<Snapshot, "linkedClusters" | "linkedWalletPct" | "top10HolderPct" | "top10WalletsChecked">,
+  snapshot: Pick<
+    Snapshot,
+    "linkedClusters" | "linkedHolders" | "linkedWalletPct" | "top10HolderPct" | "top10WalletsChecked"
+  >,
   flagged: readonly FlaggedHolder[] = [],
 ): BubbleGraph {
   const clusters = (snapshot.linkedClusters ?? []).filter(
@@ -222,6 +226,14 @@ export function buildGraph(
   for (const n of nodes) {
     if (n.kind !== "holder") continue;
     shownPct += n.pct;
+    shownCount += 1;
+  }
+  // The holders in no cluster, each its own bubble, when the scan kept the list.
+  for (const h of snapshot.linkedHolders ?? []) {
+    if (!h || typeof h.wallet !== "string" || seen.has(h.wallet) || !(h.pct > 0)) continue;
+    seen.add(h.wallet);
+    nodes.push(holder(h.wallet, h.pct, null, false));
+    shownPct += h.pct;
     shownCount += 1;
   }
   for (const w of flagged) {

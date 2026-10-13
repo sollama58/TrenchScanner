@@ -714,6 +714,10 @@ const envSchema = z.object({
   // Trimmed, with surrounding quotes or a pasted "Bearer " dropped: a stray space or quote from
   // the Render dashboard otherwise makes every call a 401.
   TOKENSAGE_API_KEY: pastedKey,
+  // TokenSage's ADMIN_KEY, read only by the API for Admin > API usage: TokenSage's own outside
+  // calls and Helius credits shown next to ours (/admin/v1/upstreams and /admin/v1/helius). Unset,
+  // that panel says so and the rest of the page is unaffected.
+  TOKENSAGE_ADMIN_KEY: pastedKey,
   TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(2),
   TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES: z.coerce.number().min(0).default(10),

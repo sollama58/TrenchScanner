@@ -166,6 +166,8 @@ export interface Snapshot {
         creatorLinked: boolean;
       }[]
     | null;
+  /** Every holder behind the linked reading and its %, largest first; stored with the clusters only. */
+  linkedHolders?: { wallet: string; pct: number }[] | null;
   /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
   firstBuyersHolding?: number | null;
   firstBuyersSeen?: number | null;

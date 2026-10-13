@@ -980,6 +980,9 @@ model TokenSnapshot {
   linkedLargestClusterPct Float?
   linkedCreatorPct        Float?
   linkedClusters          Json?
+  // Every top holder the linked reading covered (the creator aside) and its %, largest first, for
+  // the bubble map; stored only alongside linkedClusters.
+  linkedHolders           Json?
   // Flagged wallets (risky or known dumpers) in the coin's newest page of trades, read from Helius
   // before the decision (core's wallets/liveFlags.ts, worker's liveTape.ts): distinct buyers and
   // sellers and the SOL each way. flaggedTrades keeps the trades themselves (wallet, side, SOL,
@@ -1918,4 +1921,25 @@ model FunderActivity {
   checkedAt      DateTime @default(now())
 
   @@index([checkedAt])
+}
+
+/// Outside API calls counted per 5-minute bucket, process, provider, endpoint (the JSON-RPC
+/// method for an RPC host) and feature (the job, and the scan's stage) - core's apiUsage.ts. Each
+/// process adds its in-memory counts in every minute; rows older than 8 days are deleted.
+/// `calls` is the billable unit (a JSON-RPC batch of 80 is 80), `requests` the HTTP requests.
+model ApiUsage {
+  bucket      DateTime
+  process     String
+  provider    String
+  endpoint    String
+  feature     String
+  calls       Int      @default(0)
+  requests    Int      @default(0)
+  errors      Int      @default(0)
+  rateLimited Int      @default(0)
+  credits     Int      @default(0)
+  msTotal     BigInt   @default(0)
+
+  @@id([bucket, process, provider, endpoint, feature])
+  @@index([bucket])
 }
