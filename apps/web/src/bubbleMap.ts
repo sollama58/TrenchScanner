@@ -131,6 +131,26 @@ export interface MapLink {
   cluster: number;
 }
 
+/**
+ * Colour slots on every bubble map (styles.css --bm-0 to --bm-6; bubbleMapCard's CLUSTER): clusters
+ * take the first, same-minute groups the next, so no two share a colour while the slots last.
+ */
+export const MAP_COLOURS = 7;
+
+/** A same-minute group's colour slot: after the clusters'. */
+export function sameTimeSlot(graph: Pick<BubbleGraph, "clusters">, group: number): number {
+  return (graph.clusters.length + group) % MAP_COLOURS;
+}
+
+/** A node's colour slot: its cluster's, else its same-minute group's; null for grey (linked to none). */
+export function nodeSlot(
+  n: Pick<MapNode, "cluster" | "sameTime">,
+  graph: Pick<BubbleGraph, "clusters">,
+): number | null {
+  if (n.cluster !== null) return n.cluster % MAP_COLOURS;
+  return n.sameTime !== null ? sameTimeSlot(graph, n.sameTime) : null;
+}
+
 /** Holders one exchange (or busy service) funded: each tied to the group's largest. Drawn only. */
 export interface CexLink {
   from: string;

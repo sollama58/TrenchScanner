@@ -9230,6 +9230,8 @@ img.tm-avatar {
   --bm-2: var(--series-2);
   --bm-3: var(--brand-a);
   --bm-4: #06b6d4;
+  --bm-5: #84cc16;
+  --bm-6: #ec4899;
   --bm-none: #6b7280;
   /* Same-exchange ties: a neutral dash, apart from the cluster colours and the reserved markers. */
   --bm-cex: color-mix(in srgb, var(--ink-2) 75%, transparent);
@@ -9378,7 +9380,7 @@ img.tm-avatar {
 .bm-same-ring {
   fill: none;
   stroke: var(--ink-2);
-  stroke-width: 2;
+  stroke-width: 2.6;
   stroke-dasharray: 0.1 4.5;
   stroke-linecap: round;
 }
@@ -9409,10 +9411,10 @@ img.tm-avatar {
 }
 .bm-same-link {
   stroke: var(--ink-2);
-  stroke-width: 1.8;
+  stroke-width: 2.6;
   stroke-dasharray: 0.1 5;
   stroke-linecap: round;
-  stroke-opacity: 0.8;
+  stroke-opacity: 0.95;
   transition: stroke-opacity 0.2s;
 }
 .bm-same-link.dim {
@@ -9423,7 +9425,7 @@ img.tm-avatar {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 2px dotted var(--ink-2);
+  border: 2px dotted var(--bm, var(--ink-2));
 }
 .bm-same {
   cursor: default;

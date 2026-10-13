@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   bubbleNameFit,
   cexLinksOf,
+  MAP_COLOURS,
+  nodeSlot,
+  sameTimeSlot,
   bubblesFromUrl,
   bubblesLink,
   buildGraph,
@@ -317,5 +320,16 @@ describe("same-exchange ties", () => {
       buildGraph({ linkedHolders: [{ wallet: A, pct: 5 }], top10HolderPct: null, top10WalletsChecked: null })
         .cexLinks,
     ).toEqual([]);
+  });
+});
+
+describe("colour slots", () => {
+  const graph = { clusters: [{}, {}] } as unknown as Parameters<typeof sameTimeSlot>[0];
+  it("gives clusters the first slots and same-minute groups the next, so none repeat", () => {
+    expect(nodeSlot({ cluster: 1, sameTime: 0 }, graph)).toBe(1);
+    expect(sameTimeSlot(graph, 0)).toBe(2);
+    expect(nodeSlot({ cluster: null, sameTime: 1 }, graph)).toBe(3);
+    expect(nodeSlot({ cluster: null, sameTime: null }, graph)).toBeNull();
+    expect(sameTimeSlot(graph, MAP_COLOURS - 2)).toBe(0);
   });
 });

@@ -4,6 +4,9 @@ import { cachedGet } from "../cache";
 import { ago, pct, shortAddress, tokenLabel } from "../format";
 import {
   bubbleNameFit,
+  MAP_COLOURS,
+  nodeSlot,
+  sameTimeSlot,
   bubbleSeed,
   bubblesLink,
   buildGraph,
@@ -38,7 +41,7 @@ import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
 type TokenDetail = Token & { snapshots: Snapshot[] };
 
 /** How many cluster colours there are (styles.css .bm-modal --bm-0..4); more clusters reuse them. */
-export const CLUSTER_COLOURS = 5;
+export const CLUSTER_COLOURS = MAP_COLOURS;
 
 /** The names of every wallet on the map (holders and funders), in one read. */
 function useGraphNames(graph: BubbleGraph | null): WalletNames {
@@ -364,9 +367,12 @@ function MapView({
       </ul>
       {graph.sameTimeGroups.length > 0 && (
         <ul className="bm-clusters bm-same-groups">
-          {graph.sameTimeGroups.map((g) => (
+          {graph.sameTimeGroups.map((g, i) => (
             <li key={g.atMs}>
-              <div className="bm-cluster bm-same">
+              <div
+                className="bm-cluster bm-same"
+                style={{ "--bm": `var(--bm-${sameTimeSlot(graph, i)})` } as React.CSSProperties}
+              >
                 <i className="bm-same-dot" aria-hidden="true" />
                 <span className="bm-cluster-name">
                   Funded together <span className="num">{fundingTime(g.atMs)}</span>
@@ -387,7 +393,7 @@ function MapView({
           colour and a line to that funder; grey ones are linked to no other. A red ring marks a risky wallet
           or known dumper.
           {graph.sameTimeGroups.length > 0 &&
-            " A dotted ring and line join holders whose wallets were funded within the same minute, whoever paid."}
+            " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
         </p>
@@ -498,6 +504,7 @@ function BubbleSvg({
         )}
         <g className="bm-same-links">
           {graph.sameTimeLinks.map((l) => {
+            const stroke = `var(--bm-${sameTimeSlot(graph, l.group)})`;
             const a = index.get(l.from);
             const b = index.get(l.to);
             if (!a || !b) return null;
@@ -509,6 +516,7 @@ function BubbleSvg({
                 x2={b.x}
                 y2={b.y}
                 className={`bm-same-link${lit !== null ? " dim" : ""}`}
+                style={{ stroke }}
               />
             );
           })}
@@ -533,7 +541,9 @@ function BubbleSvg({
             <Bubble
               node={n}
               names={names}
-              fill={n.cluster === null ? `url(#${uid}-gn)` : `url(#${uid}-g${n.cluster % CLUSTER_COLOURS})`}
+              slot={nodeSlot(n, graph)}
+              sameSlot={n.sameTime === null ? null : sameTimeSlot(graph, n.sameTime)}
+              uid={uid}
             />
           </g>
         ))}
@@ -542,9 +552,24 @@ function BubbleSvg({
   );
 }
 
-function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: WalletNames }) {
+function Bubble({
+  node: n,
+  names,
+  slot,
+  sameSlot,
+  uid,
+}: {
+  node: MapNode;
+  names: WalletNames;
+  /** Its colour slot (nodeSlot): a holder in no cluster takes its same-minute group's colour. */
+  slot: number | null;
+  sameSlot: number | null;
+  /** The map's id prefix, for the bubble gradients. */
+  uid: string;
+}) {
   const arcId = `bm-arc${useId().replace(/:/g, "")}`;
-  const colour = n.cluster === null ? "var(--bm-none)" : `var(--bm-${n.cluster % CLUSTER_COLOURS})`;
+  const colour = slot === null ? "var(--bm-none)" : `var(--bm-${slot})`;
+  const fill = slot === null ? `url(#${uid}-gn)` : `url(#${uid}-g${slot})`;
   if (n.kind === "funder") {
     const s = n.r * 1.25;
     return (
@@ -589,7 +614,13 @@ function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: 
   return (
     <>
       {n.sameTime !== null && (
-        <circle cx={n.x} cy={n.y} r={n.r + (flaggedRisk ? 9 : 4.5)} className="bm-same-ring" />
+        <circle
+          cx={n.x}
+          cy={n.y}
+          r={n.r + (flaggedRisk ? 9 : 4.5)}
+          className="bm-same-ring"
+          style={{ stroke: `var(--bm-${sameSlot})` }}
+        />
       )}
       {flaggedRisk && <circle cx={n.x} cy={n.y} r={n.r + 4.5} className="bm-risk-ring" />}
       <circle cx={n.x} cy={n.y} r={n.r} fill={fill} className="bm-bubble" style={{ stroke: colour }} />
