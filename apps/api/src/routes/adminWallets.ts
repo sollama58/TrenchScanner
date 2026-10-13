@@ -3,9 +3,10 @@ import { z } from "zod";
 import {
   prisma,
   Prisma,
+  KNOWN_DUMPER,
   RISKY_WALLET_SCORE,
-  WINNER_WALLET_SCORE,
   STOP_ROLES,
+  WINNER,
   type StopCause,
   type StopRole,
 } from "@trenchscanner/core";
@@ -73,14 +74,14 @@ async function buildOverview(limit: number, minCoins: number) {
       orderBy: [{ score: "desc" }, { appearances: "desc" }],
       take: limit,
     }),
-    // The win side (user ask 2026-10-13): wallets that keep turning up early in coins that double.
+    // The win side (user ask 2026-10-13): the wallets labelled winners, best record first.
     prisma.walletRisk.findMany({
-      where: { appearances: { gte: minCoins }, wins: { gte: 1 } },
-      orderBy: [{ winScore: "desc" }, { earlyWins: "desc" }, { appearances: "desc" }],
+      where: { appearances: { gte: minCoins }, winner: true },
+      orderBy: [{ winScore: "desc" }, { wins: "desc" }, { appearances: "desc" }],
       take: limit,
     }),
     prisma.walletRisk.count({ where: { score: { gte: RISKY_WALLET_SCORE } } }),
-    prisma.walletRisk.count({ where: { winScore: { gte: WINNER_WALLET_SCORE } } }),
+    prisma.walletRisk.count({ where: { winner: true } }),
     prisma.walletRisk.findFirst({ orderBy: { computedAt: "desc" }, select: { computedAt: true } }),
     prisma.tokenTradeTape.groupBy({ by: ["status"], _count: { _all: true } }),
     prisma.tokenTradeTape.groupBy({
@@ -99,7 +100,8 @@ async function buildOverview(limit: number, minCoins: number) {
     riskyWallets: risky,
     riskyScore: RISKY_WALLET_SCORE,
     winnerWallets: winnerCount,
-    winnerScore: WINNER_WALLET_SCORE,
+    winnerRule: { minWins: WINNER.minWins, minRate: WINNER.minRate },
+    dumperRule: { minDumps: KNOWN_DUMPER.minDumps, minRate: KNOWN_DUMPER.minRate },
     tapes: Object.fromEntries(tapes.map((t) => [t.status, t._count._all])),
     tapes24h: tapes24h.map((t) => ({ status: t.status, source: t.source, count: t._count._all })),
     stopCauses: summarizeStopCauses(
@@ -121,6 +123,9 @@ const walletRow = (w: {
   wins: number;
   earlyWins: number;
   winScore: number;
+  dumper: boolean;
+  winner: boolean;
+  sniper: boolean;
   medianSupplyPct: number | null;
   solIn: number;
   solOut: number;
@@ -135,6 +140,9 @@ const walletRow = (w: {
   wins: w.wins,
   earlyWins: w.earlyWins,
   winScore: w.winScore,
+  dumper: w.dumper,
+  winner: w.winner,
+  sniper: w.sniper,
   medianSupplyPct: w.medianSupplyPct,
   solIn: w.solIn,
   solOut: w.solOut,
@@ -220,7 +228,7 @@ async function coinDetail(mint: string) {
     (
       await prisma.walletRisk.findMany({
         where: { wallet: { in: activity.map((a) => a.wallet) } },
-        select: { wallet: true, score: true, appearances: true, winScore: true, earlyWins: true },
+        select: { wallet: true, score: true, appearances: true, winScore: true, dumper: true, winner: true },
       })
     ).map((w) => [w.wallet, w]),
   );
@@ -240,7 +248,8 @@ async function coinDetail(mint: string) {
         wallet: a.wallet,
         score: scores.get(a.wallet)?.score ?? null,
         winScore: scores.get(a.wallet)?.winScore ?? null,
-        earlyWins: scores.get(a.wallet)?.earlyWins ?? null,
+        dumper: scores.get(a.wallet)?.dumper ?? false,
+        winner: scores.get(a.wallet)?.winner ?? false,
         coins: scores.get(a.wallet)?.appearances ?? null,
         firstBuyerRank: a.firstBuyerRank,
         heldPctAtAnchor: a.heldPctAtAnchor,

@@ -817,9 +817,9 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                         t === "linked" && w.funder
                           ? `Funded by ${walletText(w.funder, names)}, like other top holders`
                           : t === "dumper" && w.dumps !== null
-                            ? `Sold into ${w.dumps} stopped calls`
+                            ? `Sold into the stop on ${w.dumps} of its called coins (4+, and three quarters of them)`
                             : t === "winner"
-                              ? "Keeps turning up early in coins that double (win score 70+, or 2+ early wins)"
+                              ? "3 or more of the called coins it bought doubled, 60% of them or more"
                               : undefined
                       }
                     >

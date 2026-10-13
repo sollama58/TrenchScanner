@@ -40,7 +40,16 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
     expect(meta.wallets).toBeGreaterThanOrEqual(1);
     const row = await prisma.walletRisk.findUnique({ where: { wallet: dumper } });
     // Three read tapes (the failed one doesn't count), dumped into the stop on all three.
-    expect(row).toMatchObject({ appearances: 3, dumps: 3, medianSupplyPct: 2, wins: 0, earlyWins: 0 });
+    // Three dumps are under the dumper label's four.
+    expect(row).toMatchObject({
+      appearances: 3,
+      dumps: 3,
+      medianSupplyPct: 2,
+      wins: 0,
+      earlyWins: 0,
+      dumper: false,
+      winner: false,
+    });
     expect(row!.score).toBeGreaterThan(0);
     expect(await prisma.walletRisk.findUnique({ where: { wallet: once } })).toBeNull();
   });

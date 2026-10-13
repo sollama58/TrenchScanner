@@ -3,6 +3,7 @@ import {
   coinWalletRisk,
   coinWalletWins,
   isWinnerWallet,
+  walletLabels,
   walletRiskScore,
   walletWinScore,
 } from "./riskScore.js";
@@ -33,9 +34,9 @@ describe("walletRiskScore", () => {
 
 describe("coinWalletRisk", () => {
   const scores = new Map([
-    ["a", { score: 90, dumps: 4 }],
+    ["a", { score: 90, dumps: 4, dumper: true }],
     ["b", { score: 30, dumps: 0 }],
-    ["c", { score: 75, dumps: 2 }],
+    ["c", { score: 75, dumps: 4, dumper: true }],
   ]);
   const lookup = (w: string) => scores.get(w);
 
@@ -91,9 +92,9 @@ describe("walletWinScore", () => {
 
 describe("coinWalletWins", () => {
   const scores = new Map([
-    ["a", { score: 10, dumps: 0, winScore: 85, earlyWins: 3 }],
+    ["a", { score: 10, dumps: 0, winScore: 85, earlyWins: 3, winner: true }],
     ["b", { score: 30, dumps: 0, winScore: 20, earlyWins: 0 }],
-    ["c", { score: 75, dumps: 2, winScore: 50, earlyWins: 2 }],
+    ["c", { score: 75, dumps: 2, winScore: 50, earlyWins: 2, winner: true }],
     ["old", { score: 50, dumps: 1 }],
   ]);
   const lookup = (w: string) => scores.get(w);
@@ -129,5 +130,42 @@ describe("coinWalletWins", () => {
     expect(isWinnerWallet(scores.get("c"))).toBe(true);
     expect(isWinnerWallet(scores.get("b"))).toBe(false);
     expect(isWinnerWallet(undefined)).toBe(false);
+  });
+});
+
+describe("walletLabels", () => {
+  const market = { dumpRate: 0.45, winRate: 0.23 };
+  const stats = (o: Partial<Parameters<typeof walletLabels>[0]>) => ({
+    appearances: 10,
+    dumps: 0,
+    wins: 0,
+    snipes: 0,
+    ...o,
+  });
+
+  it("needs both the count and the rate", () => {
+    expect(walletLabels(stats({ dumps: 3, appearances: 3 }), market).dumper).toBe(false);
+    expect(walletLabels(stats({ dumps: 4, appearances: 4 }), market).dumper).toBe(true);
+    expect(walletLabels(stats({ dumps: 4, appearances: 6 }), market).dumper).toBe(false);
+    expect(walletLabels(stats({ dumps: 6, appearances: 8 }), market).dumper).toBe(true);
+    expect(walletLabels(stats({ wins: 2, appearances: 2 }), market).winner).toBe(false);
+    expect(walletLabels(stats({ wins: 3, appearances: 5 }), market).winner).toBe(true);
+    expect(walletLabels(stats({ wins: 3, appearances: 6 }), market).winner).toBe(false);
+    expect(walletLabels(stats({ snipes: 2, appearances: 2 }), market).sniper).toBe(false);
+    expect(walletLabels(stats({ snipes: 3, appearances: 6 }), market).sniper).toBe(true);
+    expect(walletLabels(stats({ snipes: 3, appearances: 7 }), market).sniper).toBe(false);
+  });
+
+  it("never shows dumper and winner together: the side further above its market wins", () => {
+    // 4 of 5 dumped (0.8 vs 0.45) and 3 of 5 doubled (0.6 vs 0.23): the win side is further out.
+    expect(walletLabels(stats({ dumps: 4, wins: 3, appearances: 5 }), market)).toEqual({
+      dumper: false,
+      winner: true,
+      sniper: false,
+    });
+    // Against a market that doubles as often, the dump side is the stronger claim.
+    expect(
+      walletLabels(stats({ dumps: 4, wins: 3, appearances: 5 }), { dumpRate: 0.2, winRate: 0.5 }),
+    ).toEqual({ dumper: true, winner: false, sniper: false });
   });
 });

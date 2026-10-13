@@ -1,12 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import {
-  KNOWN_DUMPER_DUMPS,
   NARRATIVE_CONTESTANT,
   Prisma,
   prisma,
   RISKY_WALLET_SCORE,
-  WINNER_WALLET_SCORE,
-  KNOWN_WINNER_EARLY_WINS,
   type TokenSageAnalysis,
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
@@ -125,8 +122,8 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
             score: true,
             dumps: true,
             appearances: true,
-            winScore: true,
-            earlyWins: true,
+            dumper: true,
+            winner: true,
           },
         })
       : [];
@@ -139,12 +136,7 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
         })
       : [];
   const kols = new Map(kolRows.map((k) => [k.wallet, k.name]));
-  const opts = {
-    riskyScore: RISKY_WALLET_SCORE,
-    dumperDumps: KNOWN_DUMPER_DUMPS,
-    winnerScore: WINNER_WALLET_SCORE,
-    winnerEarlyWins: KNOWN_WINNER_EARLY_WINS,
-  };
+  const opts = { riskyScore: RISKY_WALLET_SCORE };
   const clusters = Array.isArray(clustered?.linkedClusters)
     ? (clustered.linkedClusters as { funder: string; wallets: { wallet: string }[] }[]).filter(
         (c) => typeof c?.funder === "string" && Array.isArray(c.wallets),

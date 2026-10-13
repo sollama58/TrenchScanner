@@ -72,7 +72,8 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
           wallet: WALLET,
           score: 81,
           appearances: 6,
-          dumps: 3,
+          dumps: 5,
+          dumper: true,
           fastExits: 2,
           snipes: 1,
           solIn: 3,
@@ -142,7 +143,7 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
     expect(res.statusCode).toBe(200);
     const p = res.json<WalletProfile>();
     expect(p.live).toBeNull();
-    expect(p.risk).toMatchObject({ score: 81, coins: 6, dumps: 3 });
+    expect(p.risk).toMatchObject({ score: 81, coins: 6, dumps: 5, dumper: true, winner: false });
     expect(p.funder).toMatchObject({ status: "found", wallet: FUNDER, amountSol: 1.5, label: null });
     expect(p.labels.map((l) => l.text)).toEqual(["Dev", "Risky", "Known dumper"]);
     expect(p.linked).toEqual([

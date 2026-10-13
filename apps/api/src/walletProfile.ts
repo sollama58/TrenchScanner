@@ -2,7 +2,7 @@ import type { WalletIdentityReader } from "./walletIdentity.js";
 import {
   prisma,
   isHotFunder,
-  KNOWN_DUMPER_DUMPS,
+  LAUNCH_SNIPER,
   KNOWN_EXCHANGE_WALLETS,
   RISKY_WALLET_SCORE,
   SAME_TIME_FUNDING_MS,
@@ -135,6 +135,10 @@ export interface WalletProfile {
     wins: number;
     earlyWins: number;
     winScore: number;
+    /** The labels the book decided: at most one of dumper and winner. */
+    dumper: boolean;
+    winner: boolean;
+    sniper: boolean;
     medianSupplyPct: number | null;
     lastSeenAt: string;
     computedAt: string;
@@ -160,6 +164,11 @@ interface RiskRow {
   dumps: number;
   fastExits: number;
   snipes: number;
+  wins: number;
+  /** The count-and-rate labels the wallet book decided (walletLabels in core). */
+  dumper: boolean;
+  winner: boolean;
+  sniper: boolean;
   medianSupplyPct: number | null;
   lastSeenAt: Date;
   computedAt: Date;
@@ -195,14 +204,23 @@ export function walletLabels(input: {
       source: "TrenchScanner risk score",
       detail: `Scored ${Math.round(r.score)} of 100 from ${r.appearances} coins`,
     });
-  if (r && r.dumps >= KNOWN_DUMPER_DUMPS)
+  if (r?.dumper)
     out.push({
       text: "Known dumper",
       tone: "risky",
       source: "TrenchScanner risk score",
-      detail: `Sold into ${r.dumps} stopped calls`,
+      detail: `Sold into the stop on ${r.dumps} of the ${r.appearances} called coins it bought`,
     });
-  if (input.snipes >= 2)
+  if (r?.winner)
+    out.push({
+      text: "Winner",
+      tone: "good",
+      source: "TrenchScanner win score",
+      detail: `${r.wins} of the ${r.appearances} called coins it bought doubled`,
+    });
+  // The book decides the sniper label with its rate rule; a wallet with no book row has fewer
+  // than two coins read, so the count alone can't reach the bar.
+  if (r ? r.sniper : input.snipes >= LAUNCH_SNIPER.minSnipes)
     out.push({
       text: "Launch sniper",
       tone: "risky",
@@ -554,6 +572,9 @@ export async function loadWalletProfile(
           wins: risk.wins,
           earlyWins: risk.earlyWins,
           winScore: risk.winScore,
+          dumper: risk.dumper,
+          winner: risk.winner,
+          sniper: risk.sniper,
           medianSupplyPct: risk.medianSupplyPct,
           lastSeenAt: risk.lastSeenAt.toISOString(),
           computedAt: risk.computedAt.toISOString(),

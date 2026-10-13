@@ -91,6 +91,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
         score: wallet === RISKY ? 88 : 10,
         appearances: 5,
         dumps: wallet === RISKY ? 4 : 0,
+        dumper: wallet === RISKY,
         fastExits: 0,
         snipes: 0,
         solIn: 1,

@@ -51,6 +51,10 @@ export interface WalletProfile {
     wins?: number;
     earlyWins?: number;
     winScore?: number;
+    /** The labels the book decided (at most one of dumper and winner). Absent from older API builds. */
+    dumper?: boolean;
+    winner?: boolean;
+    sniper?: boolean;
     medianSupplyPct: number | null;
     lastSeenAt: string;
     computedAt: string;
@@ -93,8 +97,6 @@ interface WalletCoin {
 const COINS_SHOWN = 8;
 const TRADES_SHOWN = 10;
 const RISKY_SCORE = 70;
-/** Mirrors core's WINNER_WALLET_SCORE. */
-const WINNER_SCORE = 70;
 
 /**
  * One wallet in full, in a dialog: what it is (labels), what it holds and how old it is, who paid
@@ -266,7 +268,7 @@ function age(iso: string | null, floor: boolean): string {
 
 function Profile({ p }: { p: WalletProfile }) {
   const risky = p.risk !== null && p.risk.score >= RISKY_SCORE;
-  const winner = p.risk !== null && (p.risk.winScore ?? 0) >= WINNER_SCORE;
+  const winner = p.risk?.winner === true;
   // One read names its funder and every linked wallet.
   const names = useWalletNames(
     useMemo(() => [p.funder?.wallet ?? null, ...p.linked.map((l) => l.wallet)], [p]),
@@ -432,7 +434,9 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
       <p className="faint small wm-note">
         How often it sold into a call&apos;s stop, against the market&apos;s rate, nudged up by fast exits and
         launch snipes. The win score is the mirror: how often the coins it bought doubled, against the market,
-        nudged up by being in before the call. Updated {ago(risk.computedAt)}.
+        nudged up by being in before the call. Known dumper needs 4+ coins sold into the stop and three
+        quarters of its coins; Winner needs 3+ doubled and 60% of them; a wallet never carries both. Updated{" "}
+        {ago(risk.computedAt)}.
       </p>
     </section>
   );
