@@ -14,7 +14,7 @@ const t = (wallet: string, side: "buy" | "sell", sol: number, atMs: number): Tap
 describe("liveFlags", () => {
   const book = new Map([
     ["risky", { score: 82, dumps: 0 }],
-    ["dumper", { score: 40, dumps: 3 }],
+    ["dumper", { score: 40, dumps: 3, dumper: true }],
     ["fine", { score: 20, dumps: 1 }],
   ]);
   it("sums the flagged wallets' buys and sells, newest first", () => {

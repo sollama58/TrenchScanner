@@ -165,24 +165,18 @@ export interface ActivityRow {
   trades: unknown;
 }
 
-/** A WalletRisk row as the markers read it; the win side is absent on older API builds' callers. */
+/** A WalletRisk row as the markers read it: its score and the labels the rebuild decided. */
 export interface RiskRow {
   score: number;
   dumps: number;
   appearances: number;
-  winScore?: number;
-  earlyWins?: number;
+  /** The count-and-rate labels (walletLabels in core); absent reads as neither. */
+  dumper?: boolean;
+  winner?: boolean;
 }
 export interface MarkOpts {
   riskyScore: number;
-  dumperDumps: number;
-  /** A wallet at or above this win score, or with this many early wins, is a winner. */
-  winnerScore?: number;
-  winnerEarlyWins?: number;
 }
-const isWinner = (k: RiskRow, opts: MarkOpts) =>
-  (opts.winnerScore !== undefined && (k.winScore ?? 0) >= opts.winnerScore) ||
-  (opts.winnerEarlyWins !== undefined && (k.earlyWins ?? 0) >= opts.winnerEarlyWins);
 
 /** Wallets the chart marks at most, riskiest first, and their trades at most in all. */
 export const MAX_MARKED_WALLETS = 40;
@@ -190,11 +184,10 @@ export const MAX_MARKED_TRADES = 2_000;
 
 /**
  * Exported for tests. The wallets in a coin's trade tape worth marking on its chart: a risk score
- * of RISKY_WALLET_SCORE or more, a known dumper (sold into KNOWN_DUMPER_DUMPS stops or more), a
- * member of one of the coin's linked clusters, the coin's creator, a known KOL (`kols`: wallet
- * to name), or a winner wallet (a win score of WINNER_WALLET_SCORE or more, or
- * KNOWN_WINNER_EARLY_WINS early wins). Riskiest first (creator, KOL and linked wallets ahead of unscored ones), capped at
- * MAX_MARKED_WALLETS and MAX_MARKED_TRADES.
+ * of RISKY_WALLET_SCORE or more, a known dumper or a winner (the labels the wallet book carries,
+ * walletLabels in core), a member of one of the coin's linked clusters, the coin's creator, or a
+ * known KOL (`kols`: wallet to name). Riskiest first (creator, KOL and linked wallets ahead of
+ * unscored ones), capped at MAX_MARKED_WALLETS and MAX_MARKED_TRADES.
  */
 export function markedWallets(
   rows: readonly ActivityRow[],
@@ -212,8 +205,8 @@ export function markedWallets(
     const tags: WalletTag[] = [];
     if (r.isCreator) tags.push("creator");
     if (k && k.score >= opts.riskyScore) tags.push("risky");
-    if (k && k.dumps >= opts.dumperDumps) tags.push("dumper");
-    if (k && isWinner(k, opts)) tags.push("winner");
+    if (k?.dumper) tags.push("dumper");
+    if (k?.winner) tags.push("winner");
     if (funder) tags.push("linked");
     const kol = kols.has(r.wallet) ? (kols.get(r.wallet) ?? "") : null;
     if (kol !== null) tags.push("kol");
@@ -369,8 +362,8 @@ export function withLiveTrades(
       const dumps = k?.dumps ?? t.dumps;
       const tags: WalletTag[] = [];
       if (score >= opts.riskyScore) tags.push("risky");
-      if (dumps >= opts.dumperDumps) tags.push("dumper");
-      if (k && isWinner(k, opts)) tags.push("winner");
+      if (k?.dumper) tags.push("dumper");
+      if (k?.winner) tags.push("winner");
       // Flagged when read; a later score may have dropped it, but the trade is still worth marking.
       if (tags.length === 0) tags.push(t.score >= opts.riskyScore ? "risky" : "dumper");
       w = {

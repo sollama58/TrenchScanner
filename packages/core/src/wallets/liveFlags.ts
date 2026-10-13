@@ -1,4 +1,4 @@
-import { KNOWN_DUMPER_DUMPS, RISKY_WALLET_SCORE, type ScoredWallet } from "./riskScore.js";
+import { isDumperWallet, RISKY_WALLET_SCORE, type ScoredWallet } from "./riskScore.js";
 import type { TapeTrade } from "./tradeTape.js";
 
 /**
@@ -8,8 +8,8 @@ import type { TapeTrade } from "./tradeTape.js";
  * window has passed; this is what a filter or a model can read at the call. User decision
  * 2026-10-13: read live trades from Helius for coins close to a call.
  *
- * A flagged wallet is one scored RISKY_WALLET_SCORE or more, or a known dumper (KNOWN_DUMPER_DUMPS
- * dumps or more): the two the Admin Wallets page marks.
+ * A flagged wallet is one scored RISKY_WALLET_SCORE or more, or a known dumper (walletLabels in
+ * riskScore.ts): the two the Admin Wallets page marks.
  */
 
 /** Flagged trades kept on the snapshot for the modal, newest first. */
@@ -41,7 +41,7 @@ export interface LiveFlagsReading {
 }
 
 export function isFlaggedWallet(w: ScoredWallet | undefined): w is ScoredWallet {
-  return !!w && (w.score >= RISKY_WALLET_SCORE || w.dumps >= KNOWN_DUMPER_DUMPS);
+  return !!w && (w.score >= RISKY_WALLET_SCORE || isDumperWallet(w));
 }
 
 export function liveFlags(

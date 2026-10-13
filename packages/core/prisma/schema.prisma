@@ -2023,6 +2023,11 @@ model WalletRisk {
   wins            Int      @default(0)
   earlyWins       Int      @default(0)
   winScore        Float    @default(0)
+  /// The count-and-rate labels (walletLabels in core's wallets/riskScore.ts), decided at the
+  /// rebuild where the market's rates are known: never both dumper and winner.
+  dumper          Boolean  @default(false)
+  winner          Boolean  @default(false)
+  sniper          Boolean  @default(false)
   /// Median % of supply it bought.
   medianSupplyPct Float?
   solIn           Float

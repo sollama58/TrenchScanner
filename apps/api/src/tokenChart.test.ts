@@ -114,12 +114,12 @@ describe("markedWallets", () => {
     trades: null,
     ...extra,
   });
-  const opts = { riskyScore: 70, dumperDumps: 2 };
+  const opts = { riskyScore: 70 };
 
   it("marks risky wallets, known dumpers, linked wallets and the creator, and no one else", () => {
     const risk = new Map([
       ["risky", { score: 82, dumps: 1, appearances: 6 }],
-      ["dumper", { score: 55, dumps: 3, appearances: 9 }],
+      ["dumper", { score: 55, dumps: 7, appearances: 9, dumper: true }],
       ["calm", { score: 20, dumps: 0, appearances: 4 }],
     ]);
     const out = markedWallets(
@@ -266,7 +266,7 @@ describe("withLiveTrades", () => {
     );
     const risk = new Map([
       ["Risky", { score: 75, dumps: 0, appearances: 4 }],
-      ["Dumper", { score: 20, dumps: 5, appearances: 9 }],
+      ["Dumper", { score: 20, dumps: 5, appearances: 9, dumper: true }],
     ]);
     const out = withLiveTrades(tape, live, risk, opts);
     const risky = out.find((w) => w.wallet === "Risky")!;

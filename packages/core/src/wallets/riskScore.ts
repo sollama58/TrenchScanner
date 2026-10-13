@@ -24,8 +24,57 @@ export const WALLET_RISK_WEIGHTS = {
 
 /** A wallet at or above this is "risky" (the Admin list, the supply-held input). */
 export const RISKY_WALLET_SCORE = 70;
-/** A wallet that sold into this many stops is a known dumper. */
-export const KNOWN_DUMPER_DUMPS = 2;
+
+/**
+ * The count-and-rate labels (user ask 2026-10-13, notes/wallet-labels-2026-10-13): a label needs
+ * both enough coins to mean something and a rate well above the market's, because the market's
+ * own rates are high - about 45% of appearances dump into a stop and 23% are in a coin that
+ * doubles - so "two dumps" or "one win in three" reads as noise. Measured on 27k scored wallets:
+ * the old dumper rule (2 dumps) labelled 52% of them and its wallets dumped their next coin at
+ * 1.09x the market; this one labels 5% at 1.36x. The old winner rule (win score 70+ or 2 early
+ * wins) labelled 12% at 0.7-1.4x; this one labels 2% at 1.6x per appearance.
+ */
+export const KNOWN_DUMPER = { minDumps: 4, minRate: 0.75 } as const;
+export const WINNER = { minWins: 3, minRate: 0.6 } as const;
+/** Launch sniper: 3+ coins bought in their first 5 seconds, and at least half of its coins. */
+export const LAUNCH_SNIPER = { minSnipes: 3, minRate: 0.5 } as const;
+
+export interface WalletLabelStats {
+  appearances: number;
+  dumps: number;
+  wins: number;
+  snipes: number;
+}
+
+export interface WalletLabels {
+  dumper: boolean;
+  winner: boolean;
+  sniper: boolean;
+}
+
+/**
+ * Which of the dumper and winner labels a wallet carries, at most one of the two: a wallet whose
+ * record clears both bars (28 of 27k when measured) gets the side further above its market rate
+ * in standard errors, so the two never show together.
+ */
+export function walletLabels(
+  s: WalletLabelStats,
+  market: { dumpRate: number; winRate: number },
+): WalletLabels {
+  const n = Math.max(1, s.appearances);
+  let dumper = s.dumps >= KNOWN_DUMPER.minDumps && s.dumps / n >= KNOWN_DUMPER.minRate;
+  let winner = s.wins >= WINNER.minWins && s.wins / n >= WINNER.minRate;
+  if (dumper && winner) {
+    const z = (x: number, m: number) => (x / n - m) / Math.sqrt(Math.max(1e-6, m * (1 - m)));
+    if (z(s.dumps, market.dumpRate) >= z(s.wins, market.winRate)) winner = false;
+    else dumper = false;
+  }
+  return {
+    dumper,
+    winner,
+    sniper: s.snipes >= LAUNCH_SNIPER.minSnipes && s.snipes / n >= LAUNCH_SNIPER.minRate,
+  };
+}
 
 export interface WalletRiskStats {
   appearances: number;
@@ -77,11 +126,6 @@ export const WALLET_WIN_WEIGHTS = {
   minMarketWinRate: 0.02,
 } as const;
 
-/** A wallet at or above this is a "winner" (the Admin list, the supply-held input). */
-export const WINNER_WALLET_SCORE = 70;
-/** A wallet that bought before the anchor on this many winners is a known winner. */
-export const KNOWN_WINNER_EARLY_WINS = 2;
-
 export interface WalletWinStats {
   appearances: number;
   wins: number;
@@ -104,6 +148,9 @@ export interface ScoredWallet {
   /** The win score and early wins (walletWinScore); 0 on rows from before they were scored. */
   winScore?: number;
   earlyWins?: number;
+  /** The count-and-rate labels (walletLabels), as the book carries them; absent reads as neither. */
+  dumper?: boolean;
+  winner?: boolean;
 }
 
 /** What the scan reads per coin from the win scores (recorded only, not read by the models yet). */
@@ -112,14 +159,18 @@ export interface CoinWalletWins {
   walletWinTop10Max: number | null;
   /** Mean win score of the launch's first buyers that are scored; null when none is. */
   walletWinFirstBuyersMean: number | null;
-  /** % of supply held by top holders scored WINNER_WALLET_SCORE or more; null without the shares. */
+  /** % of supply held by top holders labelled winners; null without the shares. */
   walletWinHighSupplyPct: number | null;
-  /** First buyers that are known winners; null until the first buyers are read. */
+  /** First buyers that are labelled winners; null until the first buyers are read. */
   knownWinnerFirstBuyers: number | null;
 }
 
 export function isWinnerWallet(w: ScoredWallet | undefined): w is ScoredWallet {
-  return !!w && ((w.winScore ?? 0) >= WINNER_WALLET_SCORE || (w.earlyWins ?? 0) >= KNOWN_WINNER_EARLY_WINS);
+  return !!w && w.winner === true;
+}
+
+export function isDumperWallet(w: ScoredWallet | undefined): w is ScoredWallet {
+  return !!w && w.dumper === true;
 }
 
 /** The win-side readings from the same wallets coinWalletRisk reads. */
@@ -142,11 +193,9 @@ export function coinWalletWins(
     walletWinFirstBuyersMean:
       buyerScores.length > 0 ? buyerScores.reduce((s, w) => s + win(w), 0) / buyerScores.length : null,
     walletWinHighSupplyPct: shares
-      ? shares.reduce((s, h) => s + ((lookup(h.owner)?.winScore ?? 0) >= WINNER_WALLET_SCORE ? h.pct : 0), 0)
+      ? shares.reduce((s, h) => s + (isWinnerWallet(lookup(h.owner)) ? h.pct : 0), 0)
       : null,
-    knownWinnerFirstBuyers: buyers
-      ? buyerScores.filter((w) => (w.earlyWins ?? 0) >= KNOWN_WINNER_EARLY_WINS).length
-      : null,
+    knownWinnerFirstBuyers: buyers ? buyerScores.filter(isWinnerWallet).length : null,
   };
 }
 
@@ -174,6 +223,6 @@ export function coinWalletRisk(
     walletRiskHighSupplyPct: shares
       ? shares.reduce((s, h) => s + ((lookup(h.owner)?.score ?? 0) >= RISKY_WALLET_SCORE ? h.pct : 0), 0)
       : null,
-    knownDumperFirstBuyers: buyers ? buyerScores.filter((w) => w.dumps >= KNOWN_DUMPER_DUMPS).length : null,
+    knownDumperFirstBuyers: buyers ? buyerScores.filter(isDumperWallet).length : null,
   };
 }

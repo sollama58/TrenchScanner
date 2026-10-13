@@ -96,7 +96,7 @@ export const SAME_TIME_FUNDING_FEATURES = ["sameTimeFundedPct", "sameTimeCluster
  * Added 2026-10-13 (user ask, notes/holder-data-eval-2026-10-13): the win side of the wallet
  * scores (WalletRisk.winScore, walletWinScore in core's wallets/riskScore.ts): the highest win
  * score among the top-10 holders, the first buyers' mean, the % of supply held by top holders
- * scored WINNER_WALLET_SCORE or more, how many first buyers are known winners, and how many
+ * labelled winners, how many first buyers are labelled winners, and how many
  * winner wallets bought and sold in the coin's newest trades. Null on the same terms as the risk
  * readings. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
  */

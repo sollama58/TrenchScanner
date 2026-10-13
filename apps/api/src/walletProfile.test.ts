@@ -13,6 +13,10 @@ const risk = (over: Partial<Parameters<typeof walletLabels>[0]["risk"] & object>
   dumps: 0,
   fastExits: 0,
   snipes: 0,
+  wins: 0,
+  dumper: false,
+  winner: false,
+  sniper: false,
   medianSupplyPct: null,
   lastSeenAt: new Date(),
   computedAt: new Date(),
@@ -38,11 +42,18 @@ describe("walletLabels", () => {
   it("flags risky, dumper, dev and sniper from what was read", () => {
     const texts = walletLabels({
       ...base,
-      risk: risk({ score: 82, dumps: 3 }),
+      risk: risk({ score: 82, dumps: 4, dumper: true, sniper: true }),
       launches: 2,
       snipes: 4,
     }).map((l) => l.text);
     expect(texts).toEqual(["Dev of 2 coins", "Risky", "Known dumper", "Launch sniper"]);
+  });
+
+  it("labels only what the book decided: dumps and snipes alone don't make a dumper or a sniper", () => {
+    expect(walletLabels({ ...base, risk: risk({ dumps: 3, snipes: 2 }), snipes: 2 })).toEqual([]);
+    expect(walletLabels({ ...base, risk: risk({ wins: 3, winner: true }) }).map((l) => l.text)).toEqual([
+      "Winner",
+    ]);
   });
 
   it("says who funded it when the funder is an exchange", () => {

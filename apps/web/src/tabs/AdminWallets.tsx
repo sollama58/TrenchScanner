@@ -27,7 +27,8 @@ interface Overview {
   riskyScore: number;
   /** The win side. Absent from older API builds. */
   winnerWallets?: number;
-  winnerScore?: number;
+  winnerRule?: { minWins: number; minRate: number };
+  dumperRule?: { minDumps: number; minRate: number };
   tapes: Record<string, number>;
   tapes24h: { status: string; source: string | null; count: number }[];
   stopCauses: {
@@ -46,6 +47,9 @@ interface Overview {
     wins?: number;
     earlyWins?: number;
     winScore?: number;
+    dumper?: boolean;
+    winner?: boolean;
+    sniper?: boolean;
     medianSupplyPct: number | null;
     solIn: number;
     solOut: number;
@@ -94,9 +98,11 @@ const scoreTag = (score: number | null, risky: number) =>
   ) : (
     <Tag tone={score >= risky ? "bad" : score >= 50 ? "warn" : "muted"}>{score.toFixed(0)}</Tag>
   );
-const winTag = (score: number, winner: number) => (
-  <Tag tone={score >= winner ? "ok" : score >= 50 ? "warn" : "muted"}>{score.toFixed(0)}</Tag>
+const winTag = (score: number, winner: boolean) => (
+  <Tag tone={winner ? "ok" : score >= 50 ? "warn" : "muted"}>{score.toFixed(0)}</Tag>
 );
+const labelsOf = (w: { dumper?: boolean; winner?: boolean; sniper?: boolean }) =>
+  [w.dumper && "dumper", w.winner && "winner", w.sniper && "sniper"].filter(Boolean).join(", ") || "–";
 
 export function WalletsAdmin() {
   const q = usePolling<Overview>("/admin/wallets?limit=50", 120_000);
@@ -128,8 +134,13 @@ export function WalletsAdmin() {
                 tone={r.riskyWallets ? "warn" : undefined}
               />
               <Kpi
-                label={`Winners (${r.winnerScore ?? 70}+)`}
+                label="Winners"
                 value={n(r.winnerWallets ?? 0)}
+                sub={
+                  r.winnerRule
+                    ? `${r.winnerRule.minWins}+ doubled, ${Math.round(r.winnerRule.minRate * 100)}% of its coins`
+                    : undefined
+                }
                 tone={r.winnerWallets ? "ok" : undefined}
               />
               <Kpi
@@ -159,11 +170,15 @@ export function WalletsAdmin() {
                 empty="No stopped calls read yet."
               />
             </Panel>
-            <Panel title="Riskiest wallets" note="Seen in 3+ coins. Tap a wallet for its coins.">
+            <Panel
+              title="Riskiest wallets"
+              note={`Seen in 3+ coins. Known dumper needs ${r.dumperRule?.minDumps ?? 4}+ coins sold into the stop and ${Math.round((r.dumperRule?.minRate ?? 0.75) * 100)}% of its coins. Tap a wallet for its coins.`}
+            >
               <Table
                 head={[
                   "Wallet",
                   "Score",
+                  "Labels",
                   "Coins",
                   "Dumps",
                   "Fast exits",
@@ -179,6 +194,7 @@ export function WalletsAdmin() {
                     </button>
                   </span>,
                   scoreTag(w.score, r.riskyScore),
+                  labelsOf(w),
                   n(w.appearances),
                   n(w.dumps),
                   n(w.fastExits),
@@ -191,7 +207,7 @@ export function WalletsAdmin() {
             </Panel>
             <Panel
               title="Winning wallets"
-              note="Seen in 3+ coins, by win score: how often the coins it bought doubled, against the market, nudged up by buying before the call. Tap a wallet for its coins."
+              note="Labelled winners seen in 3+ coins, by win score: how often the coins it bought doubled, against the market, nudged up by buying before the call. Tap a wallet for its coins."
             >
               <Table
                 head={[
@@ -211,7 +227,7 @@ export function WalletsAdmin() {
                       coins
                     </button>
                   </span>,
-                  winTag(w.winScore ?? 0, r.winnerScore ?? 70),
+                  winTag(w.winScore ?? 0, w.winner === true),
                   n(w.appearances),
                   n(w.wins ?? 0),
                   n(w.earlyWins ?? 0),

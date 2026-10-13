@@ -3,8 +3,8 @@ import {
   createLogger,
   walletRiskScore,
   walletWinScore,
+  walletLabels,
   RISKY_WALLET_SCORE,
-  WINNER_WALLET_SCORE,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 
@@ -94,6 +94,10 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
       snipes: Number(r.snipes),
     };
     const wins = { appearances: stats.appearances, wins: Number(r.wins), earlyWins: Number(r.earlyWins) };
+    const labels = walletLabels(
+      { appearances: stats.appearances, dumps: stats.dumps, wins: wins.wins, snipes: stats.snipes },
+      { dumpRate: marketDumpRate, winRate: marketWinRate },
+    );
     return {
       wallet: r.wallet,
       score: walletRiskScore(stats, marketDumpRate),
@@ -101,6 +105,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
       wins: wins.wins,
       earlyWins: wins.earlyWins,
       winScore: walletWinScore(wins, marketWinRate),
+      ...labels,
       medianSupplyPct: r.medianSupplyPct === null ? null : Number(r.medianSupplyPct),
       solIn: Number(r.solIn),
       solOut: Number(r.solOut),
@@ -122,7 +127,9 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
   const meta: JobRunMeta = {
     wallets: data.length,
     risky: data.filter((d) => d.score >= RISKY_WALLET_SCORE).length,
-    winners: data.filter((d) => d.winScore >= WINNER_WALLET_SCORE).length,
+    dumpers: data.filter((d) => d.dumper).length,
+    winners: data.filter((d) => d.winner).length,
+    snipers: data.filter((d) => d.sniper).length,
     marketDumpRate: Math.round(marketDumpRate * 10_000) / 10_000,
     marketWinRate: Math.round(marketWinRate * 10_000) / 10_000,
     appearances,
