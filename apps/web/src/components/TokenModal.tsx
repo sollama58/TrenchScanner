@@ -1,4 +1,5 @@
-import { linkedCountText } from "../bubbleMap";
+import { hasHolderList, linkedCountText, pickReading } from "../bubbleMap";
+import { cachedGet } from "../cache";
 import {
   createContext,
   useContext,
@@ -10,7 +11,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ApiError, type Card } from "../api";
+import { ApiError, type Card, type Snapshot } from "../api";
 import { usePolling } from "../hooks";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
@@ -227,7 +228,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   // One poll for the chart and the wallet sections that read the same answer.
   const chart = usePolling<TokenChart>(`${useTokenApi(mint)}/chart`, CHART_POLL_MS);
   const flagged = useMemo(() => chart.data?.wallets ?? [], [chart.data]);
-  const linked = linkedSeed(card)?.snapshot ?? null;
+  const linked = useHolderReading(card, mint, !!utility);
   const ids = useId().replace(/:/g, "");
   const bodyRef = useRef<HTMLDivElement>(null);
   const active = useActiveSection(bodyRef, ids);
@@ -494,6 +495,31 @@ function FlowSummary({ trades }: { trades: readonly MarkerTrade[] }) {
       </div>
     </div>
   );
+}
+
+/**
+ * The reading the bubble map and the top holders draw: the card's own when it kept a holder list,
+ * else the newest of the coin's scans that did (fetched; a lookup's card is already its latest
+ * scan). Undefined while that loads, null when no scan has a list.
+ */
+function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot | null | undefined {
+  const seed = linkedSeed(card)?.snapshot ?? null;
+  const own = [seed, card.snapshot, card.latestSnapshot].find((s) => s && hasHolderList(s)) ?? null;
+  const [fetched, setFetched] = useState<{ mint: string; snapshot: Snapshot | null } | null>(null);
+  const fetch = !own && !lookup;
+  useEffect(() => {
+    if (!fetch) return;
+    let live = true;
+    cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, 60_000)
+      .then((d) => live && setFetched({ mint, snapshot: pickReading(d.snapshots ?? []) ?? seed }))
+      .catch(() => live && setFetched({ mint, snapshot: seed }));
+    return () => {
+      live = false;
+    };
+  }, [fetch, mint]);
+  if (own) return own;
+  if (!fetch) return seed;
+  return fetched?.mint === mint ? fetched.snapshot : undefined;
 }
 
 /** A group's heading: a small label with a rule running to the edge. */

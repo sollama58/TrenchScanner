@@ -19,7 +19,7 @@ export function TopHolders({
   snapshot,
   flagged,
 }: {
-  snapshot: Snapshot | null;
+  snapshot: Snapshot | null | undefined;
   flagged: readonly FlaggedHolder[];
 }) {
   const [all, setAll] = useState(false);
@@ -110,7 +110,9 @@ export function TopHolders({
         </button>
       )}
       <p className="faint small th-note">
-        Pool aside. The dot is the holder&apos;s cluster in the bubble map; grey is linked to no other holder.
+        {graph.linkedPct === null
+          ? "Pool aside. Who funded these holders isn't checked yet, so none are grouped into clusters."
+          : "Pool aside. The dot is the holder's cluster in the bubble map; grey is linked to no other holder."}
         {total > 0 &&
           graph.linkedPct !== null &&
           (graph.linkedCount

@@ -579,13 +579,22 @@ export function linkedCountText(c: { linked: number; of: number } | null): strin
   return c ? `${c.linked}/${c.of}` : null;
 }
 
-/** The reading to draw: the card's, else the newest scan's with a linked reading. */
-export function pickReading<S extends Pick<Snapshot, "linkedWalletPct" | "linkedClusters">>(
+/** The reading to draw: the newest with linked clusters, else with a holder list, else any linked reading. */
+export function pickReading<S extends Pick<Snapshot, "linkedWalletPct" | "linkedClusters" | "linkedHolders">>(
   snapshots: readonly S[],
 ): S | null {
   return (
     snapshots.find((s) => s.linkedWalletPct != null && (s.linkedClusters?.length ?? 0) > 0) ??
+    snapshots.find(hasHolderList) ??
     snapshots.find((s) => s.linkedWalletPct != null) ??
     null
   );
+}
+
+/**
+ * Whether a reading can draw the bubble map and the holder list: it kept the top holders the scan
+ * read (every scan with a list since 2026-10-13), or found linked clusters.
+ */
+export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolders">): boolean {
+  return (s.linkedHolders?.length ?? 0) > 0 || (s.linkedClusters?.length ?? 0) > 0;
 }

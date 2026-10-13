@@ -181,7 +181,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
         <ShareButton
           title={`${label} bubble map`}
           fileName={`trenchscanner-bubbles-${(loaded.token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
-          caption={`${label} linked wallets on TrenchScanner`}
+          caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
           disabled={!hasMap}
           render={() => renderBubbleCard(graph, loaded.token, names)}
         />
@@ -616,7 +616,11 @@ function NodeDetail({
   if (!n) {
     return (
       <p className="bm-detail muted small">
-        Tap a bubble to open that wallet, or a cluster below to light it up.
+        {graph.clusters.length > 0
+          ? "Tap a bubble to open that wallet, or a cluster below to light it up."
+          : graph.linkedPct === 0
+            ? "No two of these holders share a funder. Tap a bubble to open that wallet."
+            : "Tap a bubble to open that wallet."}
       </p>
     );
   }
@@ -683,7 +687,14 @@ function NodeDetail({
  * card shows, with Share and a button that opens it full size (with its link) in its own dialog.
  * Nothing when the coin has no linked cluster.
  */
-export function BubbleMapSection({ token, snapshot }: { token: Token; snapshot: Snapshot | null }) {
+export function BubbleMapSection({
+  token,
+  snapshot,
+}: {
+  token: Token;
+  /** The reading to draw; undefined while it loads. */
+  snapshot: Snapshot | null | undefined;
+}) {
   const [flagged, setFlagged] = useState<FlaggedHolder[]>([]);
   const mint = token.mintAddress;
   useEffect(() => {
@@ -701,8 +712,22 @@ export function BubbleMapSection({ token, snapshot }: { token: Token; snapshot: 
     [snapshot, flagged],
   );
   const names = useGraphNames(graph);
-  if (!graph || !graph.nodes.some((n) => n.kind === "holder") || graph.clusters.length === 0) return null;
   const label = tokenLabel(token);
+  if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
+    // Every token view shows the map (user ask 2026-10-13); a coin no scan read holders for says so.
+    return (
+      <section className="sage-card bm-section bm-empty">
+        <h4>
+          <BubblesIcon size={14} /> Bubble map
+        </h4>
+        <p className="muted small">
+          {snapshot === undefined
+            ? "Loading the top holders…"
+            : "No holder list for this coin yet: no scan of it has read its top holders. The map and the top holders fill in once one does."}
+        </p>
+      </section>
+    );
+  }
   return (
     <section className="sage-card bm-section">
       <h4>
@@ -711,7 +736,7 @@ export function BubbleMapSection({ token, snapshot }: { token: Token; snapshot: 
           <ShareButton
             title={`${label} bubble map`}
             fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
-            caption={`${label} linked wallets on TrenchScanner`}
+            caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
             iconOnly
             render={() => renderBubbleCard(graph, token, names)}
           />

@@ -71,22 +71,37 @@ export async function renderBubbleCard(
   ctx.fillText(clip(ctx, label, leftW), PAD, 176);
   ctx.fillStyle = INK2;
   ctx.font = `500 21px ${FONT}`;
-  const name = token.name && token.symbol ? `${token.name} · linked wallets` : "Linked wallets";
+  // Without clusters the card is about the holders themselves (every token view has the map).
+  const holdersOnly = graph.clusters.length === 0;
+  const topic = holdersOnly ? "top holders" : "linked wallets";
+  const name =
+    token.name && token.symbol ? `${token.name} · ${topic}` : topic[0]!.toUpperCase() + topic.slice(1);
   ctx.fillText(clip(ctx, name, leftW), PAD, 210);
 
   const linked = graph.linkedPct;
+  const count = graph.linkedCount;
+  const holders = graph.nodes.filter((n) => n.kind === "holder").length;
+  const held = graph.nodes.filter((n) => n.kind === "holder").reduce((t, n) => t + n.pct, 0);
   ctx.fillStyle =
-    (linked !== null && linked >= 30) || (graph.linkedCount !== null && graph.linkedCount.linked >= 15)
+    !holdersOnly && ((linked !== null && linked >= 30) || (count !== null && count.linked >= 15))
       ? "#ff8080"
       : INK;
   ctx.font = `800 76px ${FONT}`;
-  const count = graph.linkedCount;
-  const big = linked === null ? "–" : count ? `${count.linked}/${count.of}` : pctText(linked);
+  const big = holdersOnly
+    ? pctText(graph.top10Pct ?? held)
+    : linked === null
+      ? "–"
+      : count
+        ? `${count.linked}/${count.of}`
+        : pctText(linked);
   ctx.fillText(big, PAD, 300);
   const bigW = ctx.measureText(big).width;
   ctx.fillStyle = MUTED;
   ctx.font = `500 19px ${FONT}`;
-  if (count && linked !== null) {
+  if (holdersOnly) {
+    ctx.fillText("of supply held by", PAD + bigW + 16, 272);
+    ctx.fillText(`the top ${graph.top10Pct !== null ? 10 : holders} holders`, PAD + bigW + 16, 296);
+  } else if (count && linked !== null) {
     ctx.fillText("top holders linked,", PAD + bigW + 16, 272);
     ctx.fillText(`holding ${pctText(linked)}`, PAD + bigW + 16, 296);
   } else {
@@ -118,6 +133,16 @@ export async function renderBubbleCard(
     ctx.font = `700 20px ${FONT}`;
     ctx.fillText(pctText(c.pct), PAD + leftW, y);
     ctx.textAlign = "left";
+    y += 40;
+  }
+  if (holdersOnly) {
+    ctx.fillStyle = INK2;
+    ctx.font = `500 19px ${FONT}`;
+    ctx.fillText(
+      linked === 0 ? "No two of them share a funder" : "Who funded them isn't checked yet",
+      PAD,
+      y,
+    );
     y += 40;
   }
   if (graph.clusters.length > rows.length) {
