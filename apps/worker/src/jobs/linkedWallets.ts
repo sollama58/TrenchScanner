@@ -6,6 +6,7 @@ import {
   isHotFunder,
   linkedWallets,
   prisma,
+  WALLET_DORMANT_GAP_MS,
   type HeliusClient,
   type CexFundedReading,
   type LinkedWalletsReading,
@@ -42,10 +43,21 @@ const FUNDER_RECHECK_MS = 7 * DAY_MS;
 const NONE_READ_AGAIN_BEFORE = new Date("2026-10-13T22:00:00Z");
 
 /**
- * A wallet's funder, null when it has none ("none", "empty", or "busy" while unreadable), and when
- * it was funded (ms epoch, null when not known).
+ * A wallet's funder, null when it has none ("none", "empty", or "busy" while unreadable), when it
+ * was funded (ms epoch, null when not known), and until when that holds: its newest transaction at
+ * the read plus WALLET_DORMANT_GAP_MS, the earliest it could sit idle and be paid again by someone
+ * new (the revived farm on mdj29p8m...pump, 2026-10-13).
  */
-const settledFunders = new SettledAnswers<{ funder: string | null; fundedAtMs: number | null }>(100_000);
+const settledFunders = new SettledAnswers<{
+  funder: string | null;
+  fundedAtMs: number | null;
+  validUntilMs: number;
+}>(100_000);
+
+/** Until when a reading holds; a row without its newest transaction (from before it was kept) holds not at all. */
+function validUntil(lastActivityAt: Date | null | undefined): number {
+  return lastActivityAt ? lastActivityAt.getTime() + WALLET_DORMANT_GAP_MS : 0;
+}
 /** Each funder's hot verdict and when it was read. */
 const hotFunders = new Map<string, { hot: boolean; atMs: number }>();
 const MAX_HOT_ENTRIES = 50_000;
@@ -111,15 +123,22 @@ export async function resolveLinkedWallets(
     ...new Set([...g.holders.map((h) => h.owner), ...(g.creator ? [g.creator] : [])]),
   ];
   const all = [...new Set(groups.flatMap(walletsOf))];
-  const settled = settledFunders.take(all);
-  const funderOf = new Map<string, string | null>([...settled].map(([w, v]) => [w, v.funder]));
-  const fundedAtOf = new Map<string, number | null>([...settled].map(([w, v]) => [w, v.fundedAtMs]));
+  const settled = [...settledFunders.take(all)].filter(([, v]) => v.validUntilMs > now);
+  const funderOf = new Map<string, string | null>(settled.map(([w, v]) => [w, v.funder]));
+  const fundedAtOf = new Map<string, number | null>(settled.map(([w, v]) => [w, v.fundedAtMs]));
 
   const fromTable = all.filter((w) => !funderOf.has(w));
   if (fromTable.length > 0) {
     const rows = await prisma.walletFunder.findMany({
       where: { wallet: { in: fromTable } },
-      select: { wallet: true, funder: true, status: true, checkedAt: true, fundedAt: true },
+      select: {
+        wallet: true,
+        funder: true,
+        status: true,
+        checkedAt: true,
+        fundedAt: true,
+        lastActivityAt: true,
+      },
     });
     // A wallet stored as "busy" (more history than one signatures page) is read again whenever
     // the sorted lookup can reach its first transaction: busy wallets count too (user decision
@@ -128,10 +147,15 @@ export async function resolveLinkedWallets(
     for (const r of rows) {
       if (r.status === "busy" && rereadBusy) continue;
       if (r.status === "none" && r.checkedAt < NONE_READ_AGAIN_BEFORE) continue;
+      // Idle a week since the read (or read before that was kept): it may have been paid again.
+      // A busy row without the sorted lookup stays as it is: reading it again would answer busy.
+      const validUntilMs = validUntil(r.lastActivityAt);
+      if (validUntilMs <= now && (r.status !== "busy" || rereadBusy)) continue;
       const fundedAtMs = r.fundedAt?.getTime() ?? null;
       funderOf.set(r.wallet, r.funder);
       fundedAtOf.set(r.wallet, fundedAtMs);
-      if (r.status !== "busy") settledFunders.remember(r.wallet, { funder: r.funder, fundedAtMs });
+      if (r.status !== "busy")
+        settledFunders.remember(r.wallet, { funder: r.funder, fundedAtMs, validUntilMs });
     }
   }
 
@@ -150,7 +174,7 @@ export async function resolveLinkedWallets(
   }
 
   if (toFetch.length > 0) {
-    const fetched = await helius.getFundersBatch(toFetch);
+    const fetched = await helius.getFundersBatch(toFetch, { nowMs: now });
     calls.getSignaturesForAddress += toFetch.length;
     const rows: {
       wallet: string;
@@ -158,6 +182,9 @@ export async function resolveLinkedWallets(
       funder: string | null;
       amountSol: number | null;
       fundedAt: Date | null;
+      lastActivityAt: Date | null;
+      revived: boolean | null;
+      checkedAt: Date;
     }[] = [];
     for (const wallet of toFetch) {
       const r = fetched.get(wallet) ?? { status: "failed" as const };
@@ -170,14 +197,22 @@ export async function resolveLinkedWallets(
       const fundedAtMs = r.status === "found" ? (r.fundedAt?.getTime() ?? null) : null;
       funderOf.set(wallet, funder);
       fundedAtOf.set(wallet, fundedAtMs);
+      // Without its newest transaction (the sorted lookup alone, or an empty history) the read
+      // time stands in: these are holders, so it is minutes off at most.
+      const lastActivityAt = ("lastActivityAt" in r ? r.lastActivityAt : undefined) ?? new Date(now);
       // A "busy" answer is only for now: read again once the sorted lookup is back.
-      if (r.status !== "busy") settledFunders.remember(wallet, { funder, fundedAtMs });
+      if (r.status !== "busy") {
+        settledFunders.remember(wallet, { funder, fundedAtMs, validUntilMs: validUntil(lastActivityAt) });
+      }
       rows.push({
         wallet,
         status: r.status,
         funder,
         amountSol: r.status === "found" ? r.amountSol : null,
         fundedAt: r.status === "found" ? r.fundedAt : null,
+        lastActivityAt,
+        revived: r.status === "found" || r.status === "none" ? (r.revived ?? false) : null,
+        checkedAt: new Date(now),
       });
     }
     // Transactions read for these (an empty or busy history needs none). A failed one may or may
@@ -187,12 +222,17 @@ export async function resolveLinkedWallets(
     calls.getTransactionsForAddress += read.filter((r) => r.sorted).length;
     if (rows.length > 0) {
       try {
-        // Rows stored as "busy", or as "none" by the first-transaction-only read, are replaced by
-        // the answer read now.
+        // A wallet is read only when its row is missing, busy, or no longer holds, so a settled
+        // answer read now replaces whatever is stored. A busy one replaces only a busy row.
         await prisma.walletFunder.deleteMany({
           where: {
-            wallet: { in: rows.filter((r) => r.status !== "busy").map((r) => r.wallet) },
-            OR: [{ status: "busy" }, { status: "none", checkedAt: { lt: NONE_READ_AGAIN_BEFORE } }],
+            OR: [
+              { wallet: { in: rows.filter((r) => r.status !== "busy").map((r) => r.wallet) } },
+              {
+                wallet: { in: rows.filter((r) => r.status === "busy").map((r) => r.wallet) },
+                status: "busy",
+              },
+            ],
           },
         });
         await prisma.walletFunder.createMany({ data: rows, skipDuplicates: true });

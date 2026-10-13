@@ -748,6 +748,57 @@ describe("HeliusClient.getFundersBatch", () => {
     expect(asked.filter((c) => c.method === "getTransaction").map((c) => c.params[0])).toEqual(["s1", "s2"]);
   });
 
+  it("reads a wallet woken after a week idle for who paid it then, even on a full page", async () => {
+    // An aged farm wallet: one transaction 200 days ago, then paid again an hour before the read.
+    const now = (SECONDS + 200 * 86_400) * 1000;
+    const nowS = now / 1000;
+    const refund = {
+      blockTime: nowS - 3600,
+      meta: { err: null, preBalances: [9 * SOL, 0], postBalances: [7 * SOL - 5000, 2 * SOL] },
+      transaction: { message: { accountKeys: ["R", "w"], header: { numRequiredSignatures: 1 } } },
+    };
+    const refundX = {
+      ...refund,
+      transaction: { message: { accountKeys: ["RX", "x"], header: { numRequiredSignatures: 1 } } },
+    };
+    const txs: Record<string, unknown> = { s1: ataOpened, r1: refund, rx: refundX };
+    const quiet = [
+      { signature: "b2", blockTime: nowS - 60 },
+      { signature: "r1", blockTime: nowS - 3600 },
+      { signature: "s1", blockTime: SECONDS },
+    ];
+    // A full page: a busy stretch after the wake, the gap, and older history past it.
+    const busy = [
+      ...Array.from({ length: 900 }, (_, i) => ({ signature: `n${i}`, blockTime: nowS - 60 - i })),
+      { signature: "rx", blockTime: nowS - 3600 },
+      ...Array.from({ length: 99 }, (_, i) => ({ signature: `o${i}`, blockTime: SECONDS - i })),
+    ];
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) =>
+        c.method === "getSignaturesForAddress"
+          ? { jsonrpc: "2.0", id: c.id, result: c.params[0] === "w" ? quiet : busy }
+          : { jsonrpc: "2.0", id: c.id, result: txs[c.params[0] as string] ?? null },
+      ),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+    const result = await client.getFundersBatch(["w"], { nowMs: now });
+    expect(result.get("w")).toMatchObject({
+      status: "found",
+      funder: "R",
+      fundedAt: new Date((nowS - 3600) * 1000),
+      revived: true,
+      lastActivityAt: new Date((nowS - 60) * 1000),
+    });
+
+    const full = await client.getFundersBatch(["x"], { nowMs: now });
+    // The page is full, but it holds the gap: the stretch's first transaction names the payer,
+    // without the 10-credit sorted lookup.
+    expect(full.get("x")).toMatchObject({ status: "found", funder: "RX", revived: true, reads: 1 });
+    const asked = requests.flatMap((r) => r.body as { method: string; params: unknown[] }[]);
+    expect(asked.map((c) => c.method)).not.toContain("getTransactionsForAddress");
+    expect(asked.filter((c) => c.method === "getTransaction").map((c) => c.params[0])).toEqual(["r1", "rx"]);
+  });
+
   it("reads a busy wallet's oldest transactions in one sorted lookup", async () => {
     const page = Array.from({ length: 1000 }, (_, i) => ({ signature: `s${i}`, blockTime: SECONDS + i }));
     const { url, requests } = await startServer((calls) =>

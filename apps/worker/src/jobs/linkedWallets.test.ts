@@ -146,7 +146,7 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
 
     const on = fakeHelius({ [w("old")]: { ...found(w("H")), sorted: true } });
     const lookups = await resolveLinkedWallets([group], on, { maxNewLookups: 10 });
-    expect(on.getFundersBatch).toHaveBeenCalledWith([w("old")]);
+    expect(on.getFundersBatch).toHaveBeenCalledWith([w("old")], expect.anything());
     expect(lookups.funderOf.get(w("old"))).toBe(w("H"));
     expect(await prisma.walletFunder.findUnique({ where: { wallet: w("old") } })).toMatchObject({
       status: "found",
@@ -161,7 +161,7 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     const group = { mintAddress: w("m4"), holders: [{ owner: w("early"), pct: 7 }] };
     const helius = fakeHelius({ [w("early")]: { ...found(w("K")), reads: 2 } });
     const lookups = await resolveLinkedWallets([group], helius, { maxNewLookups: 10 });
-    expect(helius.getFundersBatch).toHaveBeenCalledWith([w("early")]);
+    expect(helius.getFundersBatch).toHaveBeenCalledWith([w("early")], expect.anything());
     expect(lookups.funderOf.get(w("early"))).toBe(w("K"));
     expect(takeLinkedWalletStats().getTransaction).toBe(2);
     expect(await prisma.walletFunder.findUnique({ where: { wallet: w("early") } })).toMatchObject({
@@ -173,7 +173,7 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
   it("groups holders funded in the same minute, from fetched and stored funding times", async () => {
     const t0 = new Date("2026-10-13T12:00:00Z");
     await prisma.walletFunder.create({
-      data: { wallet: w("st1"), status: "found", funder: w("P1"), fundedAt: t0 },
+      data: { wallet: w("st1"), status: "found", funder: w("P1"), fundedAt: t0, lastActivityAt: new Date() },
     });
     const group = {
       mintAddress: w("m5"),
@@ -197,5 +197,58 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     resetLinkedWallets();
     const again = await resolveLinkedWallets([group], fakeHelius({}), { maxNewLookups: 10 });
     expect(linkedReadingOf(group, again)).toMatchObject({ sameTimeClusterCount: 1 });
+  });
+
+  it("reads a wallet again once it could have sat a week idle, and stores who paid it on waking", async () => {
+    // The farm on mdj29p8m...pump: aged wallets left empty for months, paid again a minute apart
+    // by different payers before the launch. Their stored first-ever funders say nothing today.
+    const DAY = 86_400_000;
+    const old = new Date(Date.now() - 200 * DAY);
+    await prisma.walletFunder.createMany({
+      data: [
+        {
+          wallet: w("rv1"),
+          status: "found",
+          funder: w("Q1"),
+          fundedAt: old,
+          lastActivityAt: new Date(Date.now() - 8 * DAY),
+        },
+        { wallet: w("rv2"), status: "found", funder: w("Q2"), fundedAt: old },
+      ],
+    });
+    const t0 = new Date(Date.now() - 3_600_000);
+    const helius = fakeHelius({
+      [w("rv1")]: { ...found(w("R1")), fundedAt: t0, revived: true, lastActivityAt: new Date() },
+      [w("rv2")]: {
+        ...found(w("R2")),
+        fundedAt: new Date(t0.getTime() + 2_000),
+        revived: true,
+        lastActivityAt: new Date(),
+      },
+    });
+    const group = {
+      mintAddress: w("m6"),
+      holders: [
+        { owner: w("rv1"), pct: 5 },
+        { owner: w("rv2"), pct: 5 },
+      ],
+    };
+    const lookups = await resolveLinkedWallets([group], helius, { maxNewLookups: 10 });
+    expect(helius.getFundersBatch).toHaveBeenCalledWith([w("rv1"), w("rv2")], expect.anything());
+    expect(linkedReadingOf(group, lookups)).toMatchObject({
+      sameTimeClusterCount: 1,
+      sameTimeFundedCount: 2,
+    });
+    expect(await prisma.walletFunder.findUnique({ where: { wallet: w("rv1") } })).toMatchObject({
+      funder: w("R1"),
+      fundedAt: t0,
+      revived: true,
+    });
+
+    // Read now, the rows hold: no read on the next pass.
+    resetLinkedWallets();
+    const quiet = fakeHelius({});
+    await resolveLinkedWallets([group], quiet, { maxNewLookups: 10 });
+    expect(quiet.getFundersBatch).not.toHaveBeenCalled();
   });
 });

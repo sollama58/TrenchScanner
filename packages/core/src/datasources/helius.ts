@@ -131,7 +131,10 @@ export type LaunchBuyersResult =
  * in; "empty": no history at all (no transaction was read); "busy": more history than one
  * signatures page and no sorted lookup to reach its first transactions. `sorted`: read with the
  * 10-credit sorted lookup (a busy wallet); else `reads` is how many 1-credit getTransaction calls
- * the walk took.
+ * the walk took. `revived`: the wallet sat idle WALLET_DORMANT_GAP_MS or more and began again
+ * within REVIVED_FUNDING_WITHIN_MS of the read, so the answer is who paid it at that new start,
+ * not at its first transaction ever. `lastActivityAt`: its newest transaction, when the page was
+ * read; the answer holds until that plus WALLET_DORMANT_GAP_MS, the earliest it could revive.
  */
 export type FunderResult =
   | {
@@ -141,11 +144,21 @@ export type FunderResult =
       fundedAt: Date | null;
       sorted?: boolean;
       reads?: number;
+      revived?: boolean;
+      lastActivityAt?: Date;
     }
-  | { status: "none"; sorted?: boolean; reads?: number }
+  | { status: "none"; sorted?: boolean; reads?: number; revived?: boolean; lastActivityAt?: Date }
   | { status: "empty" }
-  | { status: "busy" }
+  | { status: "busy"; lastActivityAt?: Date }
   | { status: "failed" };
+
+/**
+ * A wallet whose current stretch of activity (activityStretch) began this recently is read for
+ * who paid it at that start: an aged wallet left empty and paid again before a launch, the farm on
+ * mdj29p8m...pump (2026-10-13), whose wallets were re-funded within two minutes of each other by
+ * different payers. Their first-ever funders, months back, say nothing about today.
+ */
+export const REVIVED_FUNDING_WITHIN_MS = 24 * 3_600_000;
 
 /**
  * One wallet as the chain has it now, for the wallet modal (getWalletOverview): its SOL balance and
@@ -908,7 +921,11 @@ export class HeliusClient {
    * instead, 10 credits for all of them (user decision 2026-10-13: busy wallets count too). Every
    * answer but "failed" and "busy" is final and cached by the caller.
    */
-  async getFundersBatch(wallets: string[]): Promise<Map<string, FunderResult>> {
+  async getFundersBatch(
+    wallets: string[],
+    opts: { nowMs?: number } = {},
+  ): Promise<Map<string, FunderResult>> {
+    const nowMs = opts.nowMs ?? Date.now();
     const unique = [...new Set(wallets)];
     const out = new Map<string, FunderResult>();
     if (unique.length === 0) return out;
@@ -920,8 +937,11 @@ export class HeliusClient {
       })),
       15_000,
     );
-    // Each wallet's oldest successful signatures, oldest first: a failed transaction moved no SOL.
+    // Each wallet's oldest successful signatures, oldest first (a failed transaction moved no SOL),
+    // or, for a wallet revived within REVIVED_FUNDING_WITHIN_MS, the oldest of its current stretch.
     const oldest = new Map<string, string[]>();
+    const revived = new Set<string>();
+    const lastActivity = new Map<string, Date>();
     const busy: string[] = [];
     for (const wallet of unique) {
       const res = pages.get(wallet);
@@ -930,19 +950,44 @@ export class HeliusClient {
         continue;
       }
       const sigs = res.result;
-      if (sigs.length === 0) out.set(wallet, { status: "empty" });
-      else if (sigs.length >= FUNDER_SIGNATURES_LIMIT) busy.push(wallet);
-      else {
-        const ok = sigs
-          .filter((s) => s.err == null)
-          .slice(-FUNDER_TXS_WALKED)
-          .reverse()
-          .map((s) => s.signature);
-        if (ok.length === 0) out.set(wallet, { status: "none", reads: 0 });
-        else oldest.set(wallet, ok);
+      if (sigs.length === 0) {
+        out.set(wallet, { status: "empty" });
+        continue;
       }
+      const times = sigs.map((s) => s.blockTime).filter((t): t is number => typeof t === "number");
+      const stretch = activityStretch(times);
+      if (stretch.lastActivityAt) lastActivity.set(wallet, stretch.lastActivityAt);
+      // The stretch starts at the newest gap, which the page holds whether or not it is full: the
+      // last signature at or after activeSince, newest first.
+      const since = stretch.activeSince?.getTime();
+      let start = -1;
+      if (since !== undefined && nowMs - since <= REVIVED_FUNDING_WITHIN_MS) {
+        sigs.forEach((s, i) => {
+          if (typeof s.blockTime === "number" && s.blockTime * 1000 >= since) start = i;
+        });
+      }
+      const walk =
+        start >= 0 ? sigs.slice(0, start + 1) : sigs.length >= FUNDER_SIGNATURES_LIMIT ? null : sigs;
+      if (!walk) {
+        busy.push(wallet);
+        continue;
+      }
+      if (start >= 0) revived.add(wallet);
+      const ok = walk
+        .filter((s) => s.err == null)
+        .slice(-FUNDER_TXS_WALKED)
+        .reverse()
+        .map((s) => s.signature);
+      if (ok.length === 0)
+        out.set(wallet, { status: "none", reads: 0, ...this.stretchOf(wallet, revived, lastActivity) });
+      else oldest.set(wallet, ok);
     }
-    for (const [wallet, result] of await this.fundersOfBusyWallets(busy)) out.set(wallet, result);
+    for (const [wallet, result] of await this.fundersOfBusyWallets(busy)) {
+      out.set(
+        wallet,
+        result.status === "failed" ? result : { ...result, ...this.stretchOf(wallet, revived, lastActivity) },
+      );
+    }
 
     // One transaction per wallet per round, oldest first, until each wallet's walk is decided.
     const walked = new Map<string, ChainTx[]>();
@@ -954,7 +999,12 @@ export class HeliusClient {
           method: "getTransaction",
           params: [
             oldest.get(wallet)![round]!,
-            { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" },
+            // Version 1 too: asking for 0 failed every wallet whose transaction was a v1 one.
+            {
+              encoding: "json",
+              maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+              commitment: "confirmed",
+            },
           ],
         })),
         15_000,
@@ -973,11 +1023,26 @@ export class HeliusClient {
           next.push(wallet);
           continue;
         }
-        out.set(wallet, funderResultOf(found, { reads: round + 1 }));
+        out.set(wallet, {
+          ...funderResultOf(found, { reads: round + 1 }),
+          ...this.stretchOf(wallet, revived, lastActivity),
+        });
       }
       pending = next;
     }
     return out;
+  }
+
+  private stretchOf(
+    wallet: string,
+    revived: ReadonlySet<string>,
+    lastActivity: ReadonlyMap<string, Date>,
+  ): { revived?: true; lastActivityAt?: Date } {
+    const at = lastActivity.get(wallet);
+    return {
+      ...(revived.has(wallet) ? { revived: true as const } : {}),
+      ...(at ? { lastActivityAt: at } : {}),
+    };
   }
 
   /**
