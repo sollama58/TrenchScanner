@@ -447,6 +447,7 @@ const NARRATIVE_TEXT = [
   "referentPostId",
   "lineageSameTicker",
   "timedOut",
+  "trendTerms",
 ] as const;
 
 function str(v: unknown, max: number): string | null {
@@ -493,6 +494,24 @@ export function narrativeText(analysis: unknown): Record<(typeof NARRATIVE_TEXT)
     referentPostId: str(rec(doc.referent).post_id, 40),
     lineageSameTicker: num(lineage.same_ticker),
     timedOut: Array.isArray(doc.timed_out) ? doc.timed_out.filter((t) => typeof t === "string") : [],
+    // Which trending terms the full read matched, by source (Wikipedia, Google Trends, X's
+    // trending list, news, Bluesky), so a trend input can be judged per source.
+    trendTerms: (Array.isArray(rec(doc.trend).terms) ? (rec(doc.trend).terms as unknown[]) : [])
+      .slice(0, 5)
+      .map(rec)
+      .map((t) => ({
+        term: str(t.term, 120),
+        source: str(t.source, 30),
+        score: num(t.score),
+        spike: num(t.spike),
+        rank: num(t.rank),
+        hours: num(t.hours),
+        searches: num(t.searches),
+        posts: num(t.posts),
+        matchedOn: str(t.matched_on, 30),
+        partial: typeof t.partial === "boolean" ? t.partial : null,
+        seenAt: str(t.seen_at, 40),
+      })),
   };
 }
 
