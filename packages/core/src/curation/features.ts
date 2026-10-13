@@ -51,6 +51,20 @@ export const WALLET_RISK_FEATURES = [
 ] as const;
 
 /**
+ * Added 2026-10-13 (the same brief, item 3): linked wallets among the top-10 holders, from who
+ * paid for each one (core's wallets/linkedWallets.ts). The % of supply held by holders in a
+ * cluster (one funder, or one funded another), the cluster count, the largest cluster's %, and the
+ * % tied to the creator. Null until every holder's funder is read, and on every row banked before.
+ * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const LINKED_WALLET_FEATURES = [
+  "linkedWalletPct",
+  "linkedClusterCount",
+  "linkedLargestClusterPct",
+  "linkedCreatorPct",
+] as const;
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -261,6 +275,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   "freshLaunchBuyerPct",
   ...JUPITER_EXTRA_FEATURES,
   ...WALLET_RISK_FEATURES,
+  ...LINKED_WALLET_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -348,6 +363,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The wallet risk readings (added 2026-10-13): recorded to be judged out of sample first, the
   // models thread's call (notes/hit-catch-2026-10-13/wallet-risk-brief.md).
   ...WALLET_RISK_FEATURES,
+  // The linked-wallet readings (added 2026-10-13): recorded first, on the same terms.
+  ...LINKED_WALLET_FEATURES,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -667,6 +684,10 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   walletRiskFirstBuyersMean: "first buyers' wallet risk",
   walletRiskHighSupplyPct: "supply held by risky wallets",
   knownDumperFirstBuyers: "known dumpers among first buyers",
+  linkedWalletPct: "supply held by linked wallets",
+  linkedClusterCount: "linked-wallet clusters",
+  linkedLargestClusterPct: "largest linked cluster",
+  linkedCreatorPct: "supply linked to the creator",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -858,6 +879,10 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     walletRiskFirstBuyersMean: scored.walletRiskFirstBuyersMean ?? null,
     walletRiskHighSupplyPct: scored.walletRiskHighSupplyPct ?? null,
     knownDumperFirstBuyers: scored.knownDumperFirstBuyers ?? null,
+    linkedWalletPct: scored.linkedWalletPct ?? null,
+    linkedClusterCount: scored.linkedClusterCount ?? null,
+    linkedLargestClusterPct: scored.linkedLargestClusterPct ?? null,
+    linkedCreatorPct: scored.linkedCreatorPct ?? null,
     ageMinutes: scored.ageMinutes ?? null,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,

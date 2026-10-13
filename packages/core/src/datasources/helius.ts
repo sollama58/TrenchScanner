@@ -5,6 +5,7 @@ import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
+import { funderFromFirstTransaction } from "../wallets/linkedWallets.js";
 import { holdersFromLargestAccounts, type LargestAccount, type OnChainHolders } from "./onChainHolders.js";
 
 const logger = createLogger("helius");
@@ -90,6 +91,21 @@ export type LaunchBuyersResult =
   | { status: "unsupported" }
   | { status: "failed" };
 
+/**
+ * A wallet's funder (getFundersBatch). "none": its first transaction shows nobody else paying in;
+ * "empty": no history at all (no first transaction was read); "busy": too much history to read
+ * cheaply.
+ */
+export type FunderResult =
+  | { status: "found"; funder: string; amountSol: number; fundedAt: Date | null }
+  | { status: "none" }
+  | { status: "empty" }
+  | { status: "busy" }
+  | { status: "failed" };
+
+/** A funder's newest page of signatures, for the hot-funder check (getFunderActivityBatch). */
+export type FunderActivityResult = { status: "found"; fullPageSpanMs: number | null } | { status: "failed" };
+
 export type MintAuthorityResult =
   { status: "found"; mintAuthorityActive: boolean; freezeAuthorityActive: boolean } | { status: "failed" };
 
@@ -153,6 +169,8 @@ const RPC_METHOD_NOT_FOUND = -32601;
  * the freshness window, which was equally unresolvable at 1000 for a busier wallet.
  */
 const SIGNATURES_PAGE_LIMIT = 200;
+/** getSignaturesForAddress's largest page - still one credit - for the funder reads. */
+const FUNDER_SIGNATURES_LIMIT = 1000;
 
 /**
  * How many consecutive rounds where the Helius-only path returns NOTHING usable before we stop
@@ -803,6 +821,104 @@ export class HeliusClient {
           ? { status: "older-than", boundAt: oldestAt }
           : { status: "found", earliestActivityAt: oldestAt },
       );
+    }
+    return out;
+  }
+
+  /**
+   * Who paid for each wallet: its first transaction's funder (funderFromFirstTransaction), for the
+   * linked-wallets reading (packages/core/src/wallets/linkedWallets.ts). Two 1-credit calls a
+   * wallet: one page of its newest signatures, then, when that page is its whole history, the
+   * oldest of them in full. A wallet with more history than a page is "busy": its first transaction
+   * is out of a cheap read's reach and it is left unlinked rather than paying 10 credits for it.
+   * Every answer but "failed" is final and cached by the caller.
+   */
+  async getFundersBatch(wallets: string[]): Promise<Map<string, FunderResult>> {
+    const unique = [...new Set(wallets)];
+    const out = new Map<string, FunderResult>();
+    if (unique.length === 0) return out;
+    const pages = await this.sendBatched<SignaturesResult>(
+      unique.map((address) => ({
+        id: address,
+        method: "getSignaturesForAddress",
+        params: [address, { limit: FUNDER_SIGNATURES_LIMIT }],
+      })),
+      15_000,
+    );
+    const firstSig = new Map<string, string>();
+    for (const wallet of unique) {
+      const res = pages.get(wallet);
+      if (!res || res.error || !Array.isArray(res.result)) {
+        out.set(wallet, { status: "failed" });
+        continue;
+      }
+      const sigs = res.result;
+      if (sigs.length === 0) out.set(wallet, { status: "empty" });
+      else if (sigs.length >= FUNDER_SIGNATURES_LIMIT) out.set(wallet, { status: "busy" });
+      else firstSig.set(wallet, sigs[sigs.length - 1]!.signature);
+    }
+    if (firstSig.size === 0) return out;
+    const txs = await this.sendBatched<ChainTx | null>(
+      [...firstSig].map(([wallet, signature]) => ({
+        id: wallet,
+        method: "getTransaction",
+        params: [signature, { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" }],
+      })),
+      15_000,
+    );
+    for (const wallet of firstSig.keys()) {
+      const res = txs.get(wallet);
+      if (!res || res.error || !res.result) {
+        out.set(wallet, { status: "failed" });
+        continue;
+      }
+      const found = funderFromFirstTransaction(wallet, res.result);
+      out.set(
+        wallet,
+        found
+          ? {
+              status: "found",
+              funder: found.funder,
+              amountSol: found.amountSol,
+              fundedAt: found.atMs !== null ? new Date(found.atMs) : null,
+            }
+          : { status: "none" },
+      );
+    }
+    return out;
+  }
+
+  /**
+   * For each funder, how long its newest FUNDER_SIGNATURES_LIMIT signatures span, in ms - null when
+   * that page is its whole history. A full page inside a day marks an exchange or service
+   * (isHotFunder). One 1-credit call each.
+   */
+  async getFunderActivityBatch(funders: string[]): Promise<Map<string, FunderActivityResult>> {
+    const unique = [...new Set(funders)];
+    const out = new Map<string, FunderActivityResult>();
+    if (unique.length === 0) return out;
+    const pages = await this.sendBatched<SignaturesResult>(
+      unique.map((address) => ({
+        id: address,
+        method: "getSignaturesForAddress",
+        params: [address, { limit: FUNDER_SIGNATURES_LIMIT }],
+      })),
+      15_000,
+    );
+    for (const funder of unique) {
+      const res = pages.get(funder);
+      if (!res || res.error || !Array.isArray(res.result)) {
+        out.set(funder, { status: "failed" });
+        continue;
+      }
+      const sigs = res.result;
+      const newest = sigs[0]?.blockTime;
+      const oldest = sigs[sigs.length - 1]?.blockTime;
+      out.set(funder, {
+        status: "found",
+        fullPageSpanMs:
+          sigs.length >= FUNDER_SIGNATURES_LIMIT && newest && oldest ? (newest - oldest) * 1000 : null,
+      });
     }
     return out;
   }

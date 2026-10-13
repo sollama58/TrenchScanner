@@ -1,3 +1,4 @@
+import type { LinkedCluster } from "./wallets/linkedWallets.js";
 import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
 import type { NarrativeRead } from "./curation/narrativeFeatures.js";
@@ -178,6 +179,17 @@ export interface OnChainProfile {
   walletRiskHighSupplyPct?: number;
   knownDumperFirstBuyers?: number;
   /**
+   * Linked wallets among the top-10 holders (core's wallets/linkedWallets.ts): % of supply held by
+   * holders in a cluster (one funder paid for them, or one funded another), the cluster count,
+   * the largest cluster's %, and the % tied to the creator. Undefined until every holder's funder
+   * is read. linkedClusters lists the clusters for the alert card.
+   */
+  linkedWalletPct?: number;
+  linkedClusterCount?: number;
+  linkedLargestClusterPct?: number;
+  linkedCreatorPct?: number;
+  linkedClusters?: LinkedCluster[];
+  /**
    * Whether this mint was launched in Pump.fun's Mayhem Mode - see mayhemStateAddress() in
    * solana.ts for how it's detected and why nothing cheaper works. `undefined` means the check
    * hasn't been run or failed, which the rug screen treats as a rejection rather than an
@@ -315,6 +327,8 @@ export interface FilterCriteria {
   maxEmptyTop10WalletPct?: number | null;
   /** Max % of the top-10 holders that were among the launch's first 25 buyers. */
   maxSniperTop10WalletPct?: number | null;
+  /** Max % of supply held by linked top holders (one funder, or funded each other). */
+  maxLinkedWalletPct?: number | null;
   /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */
   minFirstBuyersHolding?: number | null;
   maxFirstBuyersHolding?: number | null;

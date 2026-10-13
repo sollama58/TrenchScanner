@@ -187,6 +187,11 @@ const envSchema = z.object({
   // launch already read, on the same cache as the top-10 check, so repeat bot wallets cost
   // nothing. A launch takes its ten at once or waits a cycle. 0 turns the share off.
   LAUNCH_BUYER_FRESHNESS_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
+  // Cap on NEW wallets per scan cycle whose funder is read for the linked-wallets reading (the
+  // worker's linkedWallets.ts): two 1-credit calls each, plus one per new funder for the exchange
+  // check. Every answer is cached for good, so the steady state pays only for wallets never seen
+  // before. A candidate's top ten and creator go together or wait a cycle. 0 turns the reading off.
+  LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
 
   // The empty-top-10-wallet signal (apps/worker/src/jobs/walletHoldings.ts): how much a top-10
   // holder must hold in tokens that are neither cash (USDC/USDT) nor gas (SOL) before it counts

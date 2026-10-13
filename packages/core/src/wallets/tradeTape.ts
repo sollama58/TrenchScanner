@@ -63,7 +63,7 @@ interface RawBalance {
   uiTokenAmount?: { amount?: string; decimals?: number };
 }
 
-function keysOf(tx: ChainTx): string[] {
+export function keysOf(tx: ChainTx): string[] {
   const keys = (tx.transaction?.message?.accountKeys ?? []).map((k) =>
     typeof k === "string" ? k : (k?.pubkey ?? ""),
   );
@@ -318,6 +318,39 @@ export function keepWalletRow(w: WalletSummary): boolean {
     w.launchSniper ||
     w.top10AtAnchor
   );
+}
+
+/** Trades kept per wallet row (TokenWalletActivity.trades): the first ones, then the last ones. */
+export const TAPE_TRADES_PER_WALLET = 200;
+
+/**
+ * One stored trade: [time in ms, 1 for a buy or -1 for a sell, SOL, whole tokens]. Compact, as a
+ * coin has thousands; enough to put each wallet's buys and sells on a chart.
+ */
+export type StoredTrade = [atMs: number, side: 1 | -1, sol: number, tokens: number];
+
+/**
+ * Each wallet's own trades, oldest first, for its stored row. A wallet with more than
+ * TAPE_TRADES_PER_WALLET keeps the first and last halves of them (a bot looping all session).
+ */
+export function walletTrades(trades: readonly TapeTrade[]): Map<string, StoredTrade[]> {
+  const out = new Map<string, StoredTrade[]>();
+  for (const t of trades) {
+    const row: StoredTrade = [
+      t.atMs,
+      t.side === "buy" ? 1 : -1,
+      Math.round(t.sol * 10_000) / 10_000,
+      Math.round(t.tokens),
+    ];
+    const list = out.get(t.wallet);
+    if (list) list.push(row);
+    else out.set(t.wallet, [row]);
+  }
+  const half = TAPE_TRADES_PER_WALLET / 2;
+  for (const [wallet, list] of out) {
+    if (list.length > TAPE_TRADES_PER_WALLET) out.set(wallet, [...list.slice(0, half), ...list.slice(-half)]);
+  }
+  return out;
 }
 
 /** The roles a seller is counted under, most telling first; each seller counts once, under its first. */

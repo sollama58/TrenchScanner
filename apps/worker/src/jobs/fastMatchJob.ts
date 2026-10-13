@@ -88,6 +88,7 @@ function profileFromSnapshot(
     freshTop10WalletPct: number | null;
     emptyTop10WalletPct: number | null;
     sniperTop10WalletPct: number | null;
+    linkedWalletPct?: number | null;
     devHolding: boolean | null;
   },
 ): OnChainProfile | null {
@@ -117,6 +118,7 @@ function profileFromSnapshot(
     freshTop10WalletPct: snapshot.freshTop10WalletPct ?? undefined,
     emptyTop10WalletPct: snapshot.emptyTop10WalletPct ?? undefined,
     sniperTop10WalletPct: snapshot.sniperTop10WalletPct ?? undefined,
+    linkedWalletPct: snapshot.linkedWalletPct ?? undefined,
     // The scan's resolved answer, carried forward; the fast path has no trade-stream view of its own.
     creatorHolding: snapshot.devHolding ?? undefined,
   };

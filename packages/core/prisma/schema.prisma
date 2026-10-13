@@ -264,6 +264,9 @@ model UserFilter {
   /// Max % of the top-10 holders (pool and LP aside) that were among the launch's first 25
   /// buyers (TokenSnapshot.sniperTop10WalletPct). Skipped while unknown, like the two above.
   maxSniperTop10WalletPct    Float?
+  /// Max % of supply held by linked top holders: wallets one funder paid for, or that funded each
+  /// other (TokenSnapshot.linkedWalletPct, core's wallets/linkedWallets.ts). Skipped while unknown.
+  maxLinkedWalletPct         Float?
   /// Bounds on how many of the launch's first 25 buyers still hold it (TokenSnapshot.firstBuyersHolding).
   minFirstBuyersHolding      Int?
   maxFirstBuyersHolding      Int?
@@ -775,16 +778,16 @@ model CandidateOutcome {
   /// When the history re-grade (apps/worker/src/jobs/labelRegradeJob.ts) looked at this rule-3
   /// row: re-graded to rule 4 from Pump.fun's minute candles, or left as it was when they couldn't
   /// vouch for it (rule3Grade null then). Null on rows it hasn't reached and on rows born rule 4.
-  regradedAt     DateTime?
+  regradedAt DateTime?
   /// The row's rule-3 grade (anchor, aggregates, labels) as it was before the re-grade replaced
   /// it - enough to read the two side by side, or to put it back.
-  rule3Grade     Json?
+  rule3Grade Json?
   /// The rule-4 re-grade of a row that keeps its rule-3 grade because a curated alert's published
   /// verdict was copied from it (labelRegradeJob.ts): the same fields the re-grade writes on other
   /// rows, plus freshGapPct. Training and the exam read it in place of the row's own grade
   /// (trainingGradeOf in curatorTrainingJob.ts), so the moments the models called are graded on
   /// the same rule as the moments they passed on. Null everywhere else.
-  rule4Grade     Json?
+  rule4Grade Json?
 
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
   /// snapshot knew, NOT a snapshot reference, so training data outlives the 30-day
@@ -937,54 +940,64 @@ model TokenSnapshot {
   buys1h            Int?
   sells1h           Int?
 
-  holderCount          Int?
+  holderCount             Int?
   // When holderCount was read (RugCheck's report time; a stale report served past its TTL keeps
   // its own). The holder-growth baselines compare readings, not scans. Null on snapshots written
   // before it existed (read as takenAt) and when the count's time is unknown.
-  holderCountAt        DateTime?
-  holderGrowthPct      Float?
-  top10HolderPct       Float?
-  devWalletPct         Float?
+  holderCountAt           DateTime?
+  holderGrowthPct         Float?
+  top10HolderPct          Float?
+  devWalletPct            Float?
   // RugCheck's own composite risk score/named flags - stored raw (not just baked into
   // rugScreenPassed) now that a user can filter on them directly. See rugScreen.ts's
   // CRITICAL_RISK_FLAGS for which named flags matter to excludeCriticalRiskFlags.
-  riskScore            Float?
-  riskFlags            String[] @default([])
+  riskScore               Float?
+  riskFlags               String[]  @default([])
   // % of the (pool-excluded) top-10 holders whose wallet was funded <24h ago - a sniper/insider
   // signal. Null whenever there was no holder list to check (e.g. RugCheck hadn't indexed the
   // mint) or part of the list was deferred by the per-cycle Helius lookup budget - see
   // apps/worker/src/jobs/walletFreshness.ts. Deliberately null rather than 0 in every one of
   // those cases: 0 would claim we checked the full list and found none fresh.
-  freshTop10WalletPct  Float?
+  freshTop10WalletPct     Float?
   // % of the top-10 holder list holding under WALLET_HOLDINGS_MIN_USD of tokens that are neither
   // cash nor gas. Null under exactly the same conditions as freshTop10WalletPct above, plus one
   // more: an endpoint that doesn't serve the DAS API can't answer it at all.
-  emptyTop10WalletPct  Float?
+  emptyTop10WalletPct     Float?
   // % of the same top-10 list that were among the launch's first 25 buyers (the dev aside) - the
   // snipers still holding. Null until the launch's first buyers have been read (the worker's
   // launchSnipers.ts) or with no holder list.
-  sniperTop10WalletPct Float?
+  sniperTop10WalletPct    Float?
+  // Linked wallets among the top holders (core's wallets/linkedWallets.ts, worker's
+  // linkedWallets.ts): % of supply held by holders in a cluster (one funder paid for them, or one
+  // funded another), how many clusters, the largest one's %, and the % tied to the creator. Null
+  // until every holder's funder is read. linkedClusters keeps the clusters themselves (funder,
+  // wallets and their %) for the alert card's list; null when there are none.
+  linkedWalletPct         Float?
+  linkedClusterCount      Int?
+  linkedLargestClusterPct Float?
+  linkedCreatorPct        Float?
+  linkedClusters          Json?
   // How many holders the two percentages above were computed over. The list is "top 10" by
   // intent, not by guarantee - pool and LP addresses are excluded from it - so a card that wants
   // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots
   // written before this column existed, and on any snapshot with no holder list at all.
-  top10WalletsChecked  Int?
+  top10WalletsChecked     Int?
   // Of the first 25 wallets to buy after launch (the dev aside), how many still hold it, out of
   // firstBuyersSeen (under 25 only while the launch has had fewer buyers). From the worker's
   // PumpPortal trade stream (curation/tradeFlow.ts), so null for a launch it didn't see.
-  firstBuyersHolding   Int?
-  firstBuyersSeen      Int?
+  firstBuyersHolding      Int?
+  firstBuyersSeen         Int?
   // Whether the dev still holds the token (resolveDevHolding: the trade stream's view of the dev's
   // bag, else RugCheck's creator balance). Null when neither knew.
-  devHolding           Boolean?
+  devHolding              Boolean?
   // Whether the mint was launched in Pump.fun's Mayhem Mode - an automatic, non-optional
   // rejection (see rugScreen.ts). Recorded here so the Admin Live Feed can show *why* a token
   // was screened out. Null means the check never ran or failed, which the screen also rejects.
-  isMayhemMode         Boolean?
+  isMayhemMode            Boolean?
   // Whether the mint has graduated off a Pump.fun bonding curve to a real AMM, derived from
   // DexScreener's dexId (see dexscreener.ts's deriveGraduated) - null for anything DexScreener
   // hasn't indexed a pair for at all.
-  graduated            Boolean?
+  graduated               Boolean?
 
   mintAuthorityActive   Boolean?
   freezeAuthorityActive Boolean?
@@ -1764,25 +1777,25 @@ model TokenTradeTape {
   token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
 
   /// The CandidateOutcome the roles are read against (who held what at its anchor).
-  outcomeId  String?
-  anchorAt   DateTime
+  outcomeId String?
+  anchorAt  DateTime
   /// "called": a seat called the coin. "sample": an uncalled decision moment, for comparison.
-  reason     String
+  reason    String
   /// "done": every trade from launch to windowEnd. "partial": the read stopped short of the
   /// launch (too many trades), so launch roles (first buyers, snipers) are unknown, while who sold
   /// after the anchor is still right. "failed": no usable read (retried after retryAt).
-  status     String
+  status    String
   /// "helius" (getTransactionsForAddress on the mint) or "pumpfun" (Pump.fun's trade API).
-  source     String?
-  windowEnd  DateTime
-  launchAt   DateTime?
-  creator    String?
-  trades     Int      @default(0)
-  wallets    Int      @default(0)
+  source    String?
+  windowEnd DateTime
+  launchAt  DateTime?
+  creator   String?
+  trades    Int       @default(0)
+  wallets   Int       @default(0)
   /// Helius pages or Pump.fun calls the read took.
-  calls      Int      @default(0)
-  readAt     DateTime @default(now())
-  retryAt    DateTime?
+  calls     Int       @default(0)
+  readAt    DateTime  @default(now())
+  retryAt   DateTime?
 
   @@index([readAt])
   @@index([status, retryAt])
@@ -1798,37 +1811,41 @@ model TokenWalletActivity {
   token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
   wallet  String
 
-  buys         Int       @default(0)
-  sells        Int       @default(0)
-  solIn        Float     @default(0)
-  solOut       Float     @default(0)
-  tokensBought Float     @default(0)
-  tokensSold   Float     @default(0)
-  firstBuyAt   DateTime?
-  firstSellAt  DateTime?
+  buys            Int       @default(0)
+  sells           Int       @default(0)
+  solIn           Float     @default(0)
+  solOut          Float     @default(0)
+  tokensBought    Float     @default(0)
+  tokensSold      Float     @default(0)
+  firstBuyAt      DateTime?
+  firstSellAt     DateTime?
   /// Tokens held at the tape's anchor, and that as a % of supply.
   heldAtAnchor    Float?
   heldPctAtAnchor Float?
   /// % of supply bought, across the window.
   boughtPct       Float?
 
-  isCreator    Boolean  @default(false)
+  isCreator      Boolean @default(false)
   /// 1-25 when among the launch's first 25 buyers (the creator aside). Null otherwise, and on a
   /// partial tape, where the launch wasn't read.
   firstBuyerRank Int?
   /// Bought within the launch's first 5 seconds.
-  launchSniper Boolean  @default(false)
+  launchSniper   Boolean @default(false)
   /// Among the ten largest holders at the anchor.
-  top10AtAnchor Boolean @default(false)
+  top10AtAnchor  Boolean @default(false)
   /// Sold within 3 minutes of its own first buy.
-  fastExit     Boolean  @default(false)
+  fastExit       Boolean @default(false)
   /// Sold between the reference anchor and the stop, on a reference row that stopped.
   dumpedIntoStop Boolean @default(false)
   /// SOL it took out in that window.
-  dumpSol      Float    @default(0)
+  dumpSol        Float   @default(0)
+  /// Its trades in the tape, oldest first: [ms, 1 buy / -1 sell, SOL, tokens] (StoredTrade in core's
+  /// wallets/tradeTape.ts), the first and last 100 of a wallet with more. For chart markers. Null
+  /// on rows read before it existed.
+  trades         Json?
 
   /// When the tape was read: the activity counts toward wallet scores computed after this.
-  createdAt    DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([tokenId, wallet])
   @@index([wallet])
@@ -1860,4 +1877,32 @@ model WalletRisk {
   computedAt      DateTime
 
   @@index([score])
+}
+
+/// Who paid for each wallet: the funder in its first transaction (core's wallets/linkedWallets.ts,
+/// read by the worker's linkedWallets.ts, two 1-credit calls a wallet). A wallet's first
+/// transaction never changes, so a row is final. `status`: "found" (funder set), "none" (nobody
+/// else paid in), "empty" (no history) or "busy" (more history than one signatures page; left unread). Failed reads
+/// write nothing and are retried.
+model WalletFunder {
+  wallet    String    @id
+  status    String
+  funder    String?
+  amountSol Float?
+  fundedAt  DateTime?
+  checkedAt DateTime  @default(now())
+
+  @@index([funder])
+  @@index([checkedAt])
+}
+
+/// A funder's newest signatures page, for the hot-funder rule (isHotFunder in core): a full page
+/// spanning under a day marks an exchange or service. Re-read after a week.
+model FunderActivity {
+  address        String   @id
+  fullPageSpanMs Float?
+  hot            Boolean
+  checkedAt      DateTime @default(now())
+
+  @@index([checkedAt])
 }

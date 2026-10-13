@@ -44,6 +44,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxFreshTop10WalletPct: 40,
     maxEmptyTop10WalletPct: 60,
     maxSniperTop10WalletPct: null,
+    maxLinkedWalletPct: null,
     minFirstBuyersHolding: null,
     maxFirstBuyersHolding: null,
     narrativeCategories: [],

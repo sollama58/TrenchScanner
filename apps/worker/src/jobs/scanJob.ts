@@ -37,6 +37,7 @@ import {
   type HeliusClient,
   type MintAuthorityResult,
   type OnChainProfile,
+  type LinkedWalletsReading,
   type OnChainHolders,
   type CandidateToken,
   type ScoredToken,
@@ -66,6 +67,14 @@ import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from ".
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import { refreshWalletRiskBook, walletRiskLookup } from "./walletRiskBook.js";
+import {
+  linkedHoldersOf,
+  linkedReadingOf,
+  resolveLinkedWallets,
+  takeLinkedWalletStats,
+  type LinkedGroup,
+  type LinkedWalletLookups,
+} from "./linkedWallets.js";
 import {
   resolveWalletHoldings,
   computeEmptyPct,
@@ -366,6 +375,38 @@ function startSniperStage(
   sniperStageInFlight = settled;
   void settled.then(() => {
     if (sniperStageInFlight === settled) sniperStageInFlight = null;
+  });
+  return work;
+}
+
+/** The linked-wallet reads still running, possibly past a cycle's budget. */
+let linkedStageInFlight: Promise<unknown> | null = null;
+
+/**
+ * Starts this cycle's funder reads for the linked-wallets reading (linkedWallets.ts), or answers
+ * from the caches while the previous cycle's are still running. Never rejects.
+ */
+function startLinkedWalletStage(
+  groups: LinkedGroup[],
+  helius: HeliusClient,
+  env: Env,
+): Promise<LinkedWalletLookups | null> {
+  const cacheOnly = () =>
+    resolveLinkedWallets(groups, helius, { maxNewLookups: 0 }).catch((err: unknown) => {
+      logger.warn("linked-wallet cache read failed", { error: String(err) });
+      return null;
+    });
+  if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0) return Promise.resolve(null);
+  if (linkedStageInFlight) return cacheOnly();
+  const work = resolveLinkedWallets(groups, helius, {
+    maxNewLookups: env.LINKED_WALLET_LOOKUPS_PER_CYCLE,
+  }).catch((err: unknown) => {
+    logger.warn("linked-wallet reads failed - using cached funders", { error: String(err) });
+    return cacheOnly();
+  });
+  linkedStageInFlight = work;
+  void work.finally(() => {
+    if (linkedStageInFlight === work) linkedStageInFlight = null;
   });
   return work;
 }
@@ -835,6 +876,21 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     );
   const sniperStageStartedAt = Date.now();
   const sniperWork = startSniperStage(sniperGroups, deps.helius, env);
+  // The linked-wallets reading: who paid for each top-10 holder and the creator, in the wallet
+  // stage's order (contenders first), on its own budget and the same wait.
+  const linkedGroups: LinkedGroup[] = walletGroups.map((g) => {
+    const profile = onChainByMint.get(g.mintAddress) as
+      { topHolderShares?: { owner: string; pct: number }[]; creator?: string } | undefined;
+    return {
+      mintAddress: g.mintAddress,
+      holders: linkedHoldersOf({
+        top10HolderAddresses: g.addresses,
+        topHolderShares: profile?.topHolderShares,
+      }),
+      creator: profile?.creator ?? null,
+    };
+  });
+  const linkedWork = startLinkedWalletStage(linkedGroups, deps.helius, env);
 
   // A user filter with a wallet criterion holds a match until the figure is in, up to
   // FILTER_WALLET_MAX_WAIT_SECONDS (see resolveAlertTargets), so while any is active every
@@ -945,6 +1001,22 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)),
     )) ?? launchSnipersFromCache(sniperGroups.map((g) => g.mintAddress));
   lap("snipers");
+  let linkedLookups = await withinBudget(
+    linkedWork,
+    Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)),
+  );
+  if (!linkedLookups) {
+    linkedLookups =
+      env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0
+        ? await resolveLinkedWallets(linkedGroups, deps.helius, { maxNewLookups: 0 }).catch(() => null)
+        : null;
+  }
+  const linkedByMint = new Map(
+    linkedLookups
+      ? linkedGroups.map((g) => [g.mintAddress, linkedReadingOf(g, linkedLookups!)] as const)
+      : [],
+  );
+  lap("linkedWallets");
   // The launch buyers' fresh-wallet share, from the buyers the sniper stage just read: started
   // now so it overlaps the quotes and priors below, and waited on briefly before the decisions.
   const launchBuyerMints = sniperGroups.map((g) => g.mintAddress);
@@ -1014,6 +1086,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
           sniperWalletsFromCache(candidate.mintAddress),
           sniperChainAvailable,
           freshQuotes.get(candidate.mintAddress),
+          linkedByMint.get(candidate.mintAddress) ?? null,
         ),
       );
     } catch (err) {
@@ -1103,6 +1176,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       ? { ...dexScreenerStats, quoteCacheHits }
       : dexScreenerStats;
   const jupiterCalls = deps.jupiter?.takeCallStats();
+  // The linked-wallets reads among rpcCalls above, apart, with their credits (1 per call).
+  const linkedWalletCalls = takeLinkedWalletStats();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
   const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
   // Band-entry checks between cycles, and the cycles they started early (this one among them).
@@ -1122,6 +1197,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   return {
     stagesMs,
     rpcCalls,
+    linkedWalletCalls,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
     ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
@@ -1906,14 +1982,12 @@ async function processCandidate(
   sniperWallets?: ReadonlySet<string>,
   sniperChainAvailable = false,
   freshQuote?: FreshQuote,
+  linked: LinkedWalletsReading | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
-  const onChain = withWalletSignals(
-    onChainProfile,
-    earliestActivityByAddress,
-    holdingsByAddress,
-    env,
-    sniperWallets,
+  const onChain = withLinkedWallets(
+    withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
+    linked,
   );
   // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
   // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
@@ -2316,6 +2390,22 @@ export function withWalletSignals(
     // available, which is what a card needs to say "4 of 9" rather than assuming ten.
     top10WalletsChecked: onChain.top10HolderAddresses.length,
     ...walletRiskSignals(onChain, sniperWallets),
+  };
+}
+
+/** The linked-wallets reading on the profile; unknown (left off) without one. Exported for tests. */
+export function withLinkedWallets(
+  onChain: OnChainProfile | null,
+  linked: LinkedWalletsReading | null,
+): OnChainProfile | null {
+  if (!onChain || !linked) return onChain;
+  return {
+    ...onChain,
+    linkedWalletPct: linked.linkedWalletPct,
+    linkedClusterCount: linked.linkedClusterCount,
+    linkedLargestClusterPct: linked.linkedLargestClusterPct,
+    linkedCreatorPct: linked.linkedCreatorPct,
+    linkedClusters: linked.clusters,
   };
 }
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  TAPE_TRADES_PER_WALLET,
+  walletTrades,
   keepWalletRow,
   orderTrades,
   pumpFunCursorBefore,
@@ -189,5 +191,25 @@ describe("summarizeTape and stopCauseOf", () => {
   it("counts a trade the sources both gave once", () => {
     const t = trade("a", "buy", 1, 1, T0);
     expect(orderTrades([t, { ...t }])).toHaveLength(1);
+  });
+});
+
+describe("walletTrades", () => {
+  it("keeps each wallet's trades, oldest first, capped at the first and last halves", () => {
+    const trades = Array.from({ length: TAPE_TRADES_PER_WALLET + 10 }, (_, i) => ({
+      wallet: "bot",
+      side: (i % 2 ? "sell" : "buy") as "buy" | "sell",
+      sol: 0.123456,
+      tokens: 1000.4,
+      atMs: i,
+      tx: `t${i}`,
+    }));
+    trades.push({ wallet: "one", side: "buy", sol: 1, tokens: 5, atMs: 7, tx: "x" });
+    const out = walletTrades(trades);
+    expect(out.get("one")).toEqual([[7, 1, 1, 5]]);
+    const bot = out.get("bot")!;
+    expect(bot).toHaveLength(TAPE_TRADES_PER_WALLET);
+    expect(bot[0]).toEqual([0, 1, 0.1235, 1000]);
+    expect(bot.at(-1)![0]).toBe(TAPE_TRADES_PER_WALLET + 9);
   });
 });

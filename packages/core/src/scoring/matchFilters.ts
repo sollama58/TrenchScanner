@@ -92,6 +92,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  if (
+    filter.maxLinkedWalletPct != null &&
+    token.linkedWalletPct !== undefined &&
+    token.linkedWalletPct > filter.maxLinkedWalletPct
+  ) {
+    return false;
+  }
+
   // Unknown until the launch's first buyers have been read: the floor fails closed, the ceiling
   // skips, per the split above.
   const firstBuyersHolding = token.tradeFlow?.firstBuyersHolding ?? null;
