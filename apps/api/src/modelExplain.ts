@@ -883,3 +883,49 @@ export async function recentSeatCalls(model: string, limit: number) {
 }
 
 export type SeatCall = Awaited<ReturnType<typeof recentSeatCalls>>[number];
+
+/**
+ * GET .../models/:id/weights, for subscribers and guests alike: one seat's slice of the lineup -
+ * what it leans on (its top inputs, or its members' weights for a combiner), its cutoff as a
+ * share of decision moments, and how often it calls - with the decision moments per hour the
+ * cutoff curve's calls per hour are read against. Nothing in it names a token.
+ */
+export interface SeatWeights {
+  model: string;
+  builtAt: Date;
+  role: ContestantRole;
+  kind: string | null;
+  /** Decision moments per hour over the last 24 hours that this seat decides on. */
+  momentsPerHour: number;
+  cutoff: SeatExplain["cutoff"];
+  callsPerHour24h: number;
+  inputs: InputWeight[] | null;
+  inputSample: SeatExplain["inputSample"];
+  members: MemberWeight[] | null;
+  otherSignals: SeatExplain["otherSignals"];
+  rule: string | null;
+}
+
+export function seatWeights(lineup: ModelLineup, id: string): SeatWeights | null {
+  const seat = lineup.seats.find((s) => s.id === id);
+  if (!seat) return null;
+  // The narrative seats decide only on moments that carry TokenSage's deep read.
+  const deepShare = lineup.sample.rows > 0 ? lineup.sample.deepReadRows / lineup.sample.rows : 0;
+  return {
+    model: seat.id,
+    builtAt: lineup.builtAt,
+    role: seat.role,
+    kind: seat.model?.kind ?? null,
+    momentsPerHour:
+      seat.role === "narrative"
+        ? Math.round(lineup.momentsPerHour * deepShare * 10) / 10
+        : lineup.momentsPerHour,
+    cutoff: seat.cutoff,
+    callsPerHour24h: seat.calls.perHour24h,
+    inputs: seat.inputs,
+    inputSample: seat.inputSample,
+    members: seat.members,
+    otherSignals: seat.otherSignals,
+    rule: seat.rule,
+  };
+}

@@ -523,7 +523,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       // TokenSage, the safety screen, training history, filters and outside lookups.
       await registerAdminInsightRoutes(instance);
       // How each model decides: recipes, inputs, member weights, cutoffs, one call explained.
-      await registerAdminModelRoutes(instance, { env });
+      await registerAdminModelRoutes(instance, { env, reports });
       // Wallet risk: the riskiest wallets, one wallet's coins, one coin's wallets, stop causes.
       await registerAdminWalletRoutes(instance);
       // The "Retrain now" button: a request row the trainer picks up within a minute.

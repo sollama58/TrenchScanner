@@ -31,6 +31,7 @@ import {
   type ModelRunHistory,
 } from "../modelInsights.js";
 import { createMarketRows } from "../marketRows.js";
+import { buildModelLineup, seatWeights, type ModelLineup } from "../modelExplain.js";
 import {
   createLighthouseCache,
   lighthouseQuerySchema,
@@ -106,6 +107,9 @@ type CuratedPage = {
  * database), and the keeper now refills it whether or not anyone is reading.
  */
 const INSIGHTS_CACHE_TTL_MS = 10 * 60_000;
+
+/** The model lineup (modelExplain.ts) replays every active model over recent moments. */
+const MODEL_LINEUP_CACHE_TTL_MS = 10 * 60_000;
 
 /**
  * The windows the Model tab offers, and the only ones served. Each is its own cache entry, and
@@ -236,6 +240,16 @@ export function createReportCaches(env: Env) {
     }
     return cache;
   };
+  /**
+   * Every seat's inputs, member weights and cutoff (modelExplain.ts), shared by the Admin models
+   * section and the model detail view's weightings: it replays every active model over recent
+   * moments, so once per training cadence is plenty.
+   */
+  const modelLineup = new SharedCache<ModelLineup>(MODEL_LINEUP_CACHE_TTL_MS, {
+    staleWhileRevalidateMs: REPORT_STALE_MS,
+    name: "model lineup",
+  });
+  const lineup = () => modelLineup.get(() => buildModelLineup(env));
   const lighthouse = createLighthouseCache();
   const lighthouseHistory = createLighthouseHistoryCache();
   /** Market weather: the Stats panel and the Lighthouse's gauge, for subscribers and guests alike. */
@@ -271,6 +285,7 @@ export function createReportCaches(env: Env) {
     leaderboard,
     insights,
     runHistoryFor,
+    lineup,
     lighthouse,
     lighthouseHistory,
     tokenSageShowcase: createTokenSageShowcaseCache(),
@@ -301,6 +316,27 @@ export async function modelRunsRoute(
   const state = await contestState(env);
   if (!state.roster.some((c) => c.id === id)) return reply.code(404).send({ error: "unknown model" });
   return reports.runHistoryFor(id).get(() => buildModelRunHistory(id));
+}
+
+/**
+ * GET .../models/:id/weights, for subscribers and guests alike: what one model leans on and where
+ * its cutoff sits (seatWeights in modelExplain.ts). Nothing in it names a token.
+ */
+export async function modelWeightsRoute(
+  env: Env,
+  reports: ReportCaches,
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const parsed = modelParamsSchema.safeParse(request.params);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+  }
+  const { id } = parsed.data;
+  const state = await contestState(env);
+  if (!state.roster.some((c) => c.id === id)) return reply.code(404).send({ error: "unknown model" });
+  const weights = seatWeights(await reports.lineup(), id);
+  return weights ?? reply.code(404).send({ error: "unknown model" });
 }
 
 export async function registerCuratedRoutes(
@@ -492,6 +528,10 @@ export async function registerCuratedRoutes(
 
   /** One model's training runs (the Models tab's model detail view). */
   app.get("/models/:id/runs", (request, reply) => modelRunsRoute(opts.env, opts.reports, request, reply));
+  /** What one model leans on and its cutoff (the model detail view's weightings and cutoff curve). */
+  app.get("/models/:id/weights", (request, reply) =>
+    modelWeightsRoute(opts.env, opts.reports, request, reply),
+  );
 
   /**
    * The combined feed's settings: which models' calls it shows (checkboxes) and whether it shows

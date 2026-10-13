@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Env } from "@trenchscanner/core";
-import { SharedCache } from "../sharedCache.js";
-import { buildModelLineup, explainCall, recentSeatCalls, type CallExplain } from "../modelExplain.js";
+import type { ReportCaches } from "./curated.js";
+import { explainCall, recentSeatCalls, type CallExplain } from "../modelExplain.js";
 
 /**
  * The Admin "Models" section (modelExplain.ts): every seat's recipe, inputs, member weights and
@@ -10,8 +10,6 @@ import { buildModelLineup, explainCall, recentSeatCalls, type CallExplain } from
  * under its preHandler in server.ts), read-only.
  */
 
-/** The lineup replays every active model over recent moments: once per training cadence is plenty. */
-const LINEUP_CACHE_MS = 10 * 60_000;
 /** A call's explanation never changes once its model and inputs are stored. */
 const EXPLAIN_CACHE_MAX = 64;
 
@@ -19,9 +17,12 @@ const seatSchema = z.object({ seat: z.string().regex(/^[a-z0-9-]{1,40}$/, "not a
 const limitSchema = z.object({ limit: z.coerce.number().int().min(1).max(50).default(15) });
 const alertSchema = z.object({ id: z.string().regex(/^[a-z0-9]{8,40}$/i, "not an alert id") });
 
-export async function registerAdminModelRoutes(app: FastifyInstance, opts: { env: Env }) {
-  const lineup = new SharedCache<Awaited<ReturnType<typeof buildModelLineup>>>(LINEUP_CACHE_MS);
-  app.get("/models/explain", async () => lineup.get(() => buildModelLineup(opts.env)));
+export async function registerAdminModelRoutes(
+  app: FastifyInstance,
+  opts: { env: Env; reports: ReportCaches },
+) {
+  // The same fill the model detail view's weightings read (createReportCaches).
+  app.get("/models/explain", async () => opts.reports.lineup());
 
   app.get("/models/:seat/calls", async (request, reply) => {
     const seat = seatSchema.safeParse(request.params);

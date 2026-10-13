@@ -27,6 +27,7 @@ import { ShareImageDialog } from "../components/ShareImageDialog";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
 import { prefetch } from "../cache";
+import { CURVE_SLICES } from "../cutoffCurve";
 import { usePolling, useNow } from "../hooks";
 import { GUEST_DELAY_MINUTES } from "../session";
 import { ago, pct, signedPct, stakes, tokenLabel, usd } from "../format";
@@ -2018,8 +2019,8 @@ function TrainingPanel({
               bTarget={targets.hitRate4xPct}
               data={run.precisionCurve.map((p, i) => ({
                 // Slices too thin to hold one call are skipped from the front, so align from the end.
-                label: `Top ${CURVE_SLICES[CURVE_SLICES.length - run.precisionCurve.length + i] ?? "?"}`,
-                shortLabel: `${CURVE_SLICES[CURVE_SLICES.length - run.precisionCurve.length + i] ?? "?"}`,
+                label: `Top ${CURVE_SLICES[CURVE_SLICES.length - run.precisionCurve.length + i] ?? "?"}%`,
+                shortLabel: `${CURVE_SLICES[CURVE_SLICES.length - run.precisionCurve.length + i] ?? "?"}%`,
                 a: p.winRatePct,
                 b: p.goalRatePct,
                 sub: `${p.alerts} calls`,
@@ -2111,9 +2112,6 @@ function TrainingPanel({
     </section>
   );
 }
-
-/** precisionCurve's fixed slices, in the order trainer.ts writes them. */
-const CURVE_SLICES = ["1%", "2%", "5%", "10%", "20%", "50%"];
 
 const OUTCOME_TEXT: Record<ModelInsights["recentAiReviews"][number]["outcome"], string> = {
   pending: "◷ in its window",
