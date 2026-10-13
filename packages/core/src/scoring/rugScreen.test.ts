@@ -102,6 +102,14 @@ describe("runRugScreen", () => {
     expect(runRugScreen({ ...safeProfile, top10HolderPct: 39.9 }).passed).toBe(true);
   });
 
+  it("rejects a token whose largest holder owns over 10% of supply, and only once measured", () => {
+    const whale = runRugScreen({ ...safeProfile, largestHolderPct: 12.34 });
+    expect(whale.passed).toBe(false);
+    expect(whale.reasons).toEqual(["largest holder owns 12.3% of supply (over 10%)"]);
+    expect(runRugScreen({ ...safeProfile, largestHolderPct: 10 }).passed).toBe(true);
+    expect(runRugScreen({ ...safeProfile, largestHolderPct: undefined }).passed).toBe(true);
+  });
+
   // Dev wallet %, RugCheck's risk score, and its named risk flags used to be hard-gated here
   // too - they're now opt-in UserFilter criteria instead (see matchFilters.test.ts), so a profile
   // that would have failed on any of those alone now passes the automatic screen. Top-10

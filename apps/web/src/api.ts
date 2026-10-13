@@ -1555,6 +1555,8 @@ export interface MarketLighthouse {
       sniperWalletRejectPct?: number;
       /** Rejected when the top 10 holders own this share of supply or more. */
       top10HolderRejectPct?: number;
+      /** Rejected when the largest single holder owns more than this share of supply. */
+      largestHolderMaxPct?: number;
       cexFundedRejectCount?: number;
       linkedRejectCount?: number;
       /** A graduated token whose bonding curve filled faster than this is rejected; 0 = off. */

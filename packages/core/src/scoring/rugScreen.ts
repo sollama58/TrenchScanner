@@ -52,6 +52,15 @@ export const SAFETY_REJECT_LINKED_COUNT = 15;
 export const SAFETY_REJECT_CEX_FUNDED_PCT = 85;
 
 /**
+ * Over this share of the supply in one holder's hands (pools and LP aside, one wallet's token
+ * accounts summed: largestHolderPct), a token is never alerted (user decision 2026-10-13). One
+ * wallet that big can sell the chart out from under everyone on its own. "Over", not "at or
+ * above": a holder on exactly 10% passes. Applies once measured; rows banked before the share was
+ * recorded have none and pass.
+ */
+export const SAFETY_MAX_LARGEST_HOLDER_PCT = 10;
+
+/**
  * A graduated token must have spent at least this long on its bonding curve (user decision
  * 2026-10-11, 10s at first, then 5s). A curve filled within seconds of launch is a coordinated bundle - the launcher's
  * own wallets buying the whole curve in the first blocks - and the bundle sells into whoever buys
@@ -119,6 +128,14 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
       profile.top10HolderPct,
     ),
   );
+  if (
+    typeof profile.largestHolderPct === "number" &&
+    profile.largestHolderPct > SAFETY_MAX_LARGEST_HOLDER_PCT
+  ) {
+    reasons.push(
+      `largest holder owns ${profile.largestHolderPct.toFixed(1)}% of supply (over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%)`,
+    );
+  }
   if (
     typeof profile.linkedWalletCount === "number" &&
     profile.linkedWalletCount >= SAFETY_REJECT_LINKED_COUNT

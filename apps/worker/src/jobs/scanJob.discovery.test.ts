@@ -62,7 +62,21 @@ describe("a fresh graduate's own pool in its RugCheck holders", () => {
     const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
     const profiles = new Map<string, RugCheckProfile>([
       ["Over", { ...profile(78), mintAddress: "Over" }],
-      ["PoolOnly", { ...poolCounted, mintAddress: "PoolOnly" }],
+      // Over the top-10 cut only with its pool, and no holder over the largest-holder cut without it.
+      [
+        "PoolOnly",
+        {
+          ...profile(52, [
+            { owner: POOL, pct: 21.7 },
+            { owner: "w1", pct: 10 },
+            { owner: "w2", pct: 10 },
+            { owner: "w3", pct: 10 },
+          ]),
+          mintAddress: "PoolOnly",
+        },
+      ],
+      // Under the top-10 cut, but one wallet over the largest-holder cut.
+      ["Whale", { ...profile(20, [{ owner: "w1", pct: 15 }]), mintAddress: "Whale" }],
       ["Old", { ...profile(78), mintAddress: "Old" }],
       ["Under", { ...profile(20), mintAddress: "Under" }],
     ]);
@@ -71,9 +85,10 @@ describe("a fresh graduate's own pool in its RugCheck holders", () => {
       { mintAddress: "PoolOnly", pairAddress: POOL, graduatedAt: at(1) },
       { mintAddress: "Old", pairAddress: "p3", graduatedAt: at(6) },
       { mintAddress: "Under", pairAddress: "p4", graduatedAt: at(1) },
+      { mintAddress: "Whale", pairAddress: "p6", graduatedAt: at(1) },
       { mintAddress: "Curve", pairAddress: "p5" },
     ];
-    expect(freshGraduatesOverCut(candidates, profiles, now)).toEqual(["Over"]);
+    expect(freshGraduatesOverCut(candidates, profiles, now)).toEqual(["Over", "Whale"]);
   });
 });
 

@@ -18,6 +18,7 @@ import {
   runRugScreen,
   withoutVenueHolder,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
+  SAFETY_MAX_LARGEST_HOLDER_PCT,
   sniperShareOfTop10,
   coinWalletRisk,
   coinWalletWins,
@@ -2414,7 +2415,7 @@ const FRESH_GRADUATE_RECHECK_DEADLINE_MS = 5_000;
 
 /**
  * Graduated in the last FRESH_GRADUATE_RECHECK_MINUTES, with a RugCheck report (its own pool left
- * out) whose top ten are at or over the safety screen's concentration cut. Exported for tests.
+ * out) whose top ten, or largest holder, are over the safety screen's concentration cuts. Exported for tests.
  */
 export function freshGraduatesOverCut(
   candidates: Pick<CandidateToken, "mintAddress" | "pairAddress" | "graduatedAt">[],
@@ -2426,8 +2427,12 @@ export function freshGraduatesOverCut(
       if (!c.graduatedAt || now - c.graduatedAt.getTime() > FRESH_GRADUATE_RECHECK_MINUTES * 60_000)
         return false;
       const profile = rugProfiles.get(c.mintAddress);
-      const top10 = profile ? withoutVenueHolder(profile, c.pairAddress).top10HolderPct : undefined;
-      return typeof top10 === "number" && top10 >= SAFETY_REJECT_TOP10_HOLDER_PCT;
+      if (!profile) return false;
+      const { top10HolderPct: top10, largestHolderPct: largest } = withoutVenueHolder(profile, c.pairAddress);
+      return (
+        (typeof top10 === "number" && top10 >= SAFETY_REJECT_TOP10_HOLDER_PCT) ||
+        (typeof largest === "number" && largest > SAFETY_MAX_LARGEST_HOLDER_PCT)
+      );
     })
     .map((c) => c.mintAddress);
 }

@@ -43,7 +43,7 @@ export interface AiReviewVerdict {
 
 export const AI_REVIEW_SYSTEM_PROMPT = `You review Solana memecoin alerts for a trader who buys by hand.
 
-Each alert is a token that already passed an automated rug screen (mint and freeze authority revoked, LP locked or still on the Pump.fun bonding curve, not a Pump.fun Mayhem Mode token, bonding curve not bought out within seconds of launch, top-10 holders not mostly fresh, empty or launch-sniper wallets and owning under 40% of supply, fewer than 15 of the top 20 holders linked and fewer than 17 funded from an exchange) and was ranked among the strongest candidates a scanner found this hour.
+Each alert is a token that already passed an automated rug screen (mint and freeze authority revoked, LP locked or still on the Pump.fun bonding curve, not a Pump.fun Mayhem Mode token, bonding curve not bought out within seconds of launch, top-10 holders not mostly fresh, empty or launch-sniper wallets and owning under 40% of supply, no single holder over 10% of supply, fewer than 15 of the top 20 holders linked and fewer than 17 funded from an exchange) and was ranked among the strongest candidates a scanner found this hour.
 
 Decide whether the trader should buy it right now. An alert is a WIN only if the price reaches ${WIN_MULTIPLE}x the alert price within ${WIN_WINDOW_MINUTES} minutes WITHOUT first falling to ${Math.round(
   DISQUALIFYING_DRAWDOWN_FRACTION * 100,
