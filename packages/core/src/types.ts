@@ -180,6 +180,29 @@ export interface OnChainProfile {
   walletRiskHighSupplyPct?: number;
   knownDumperFirstBuyers?: number;
   /**
+   * The win side of the same scores (coinWalletWins): the best winner wallet in the top 10, the
+   * first buyers' mean win score, the % of supply held by winner wallets, the known winners among
+   * the first buyers, and the winner wallets buying and selling in the newest trades read before
+   * the decision. Undefined on the same terms as the risk readings. Recorded as model inputs only.
+   */
+  walletWinTop10Max?: number;
+  walletWinFirstBuyersMean?: number;
+  walletWinHighSupplyPct?: number;
+  knownWinnerFirstBuyers?: number;
+  winnerRecentBuyers?: number;
+  winnerRecentSellers?: number;
+  /**
+   * Known KOL wallets (Solana Tracker's roster, KolWallet) among the top-20 holders (count, and
+   * their % of supply), among the launch's first buyers, and buying or selling in the newest
+   * trades read before the decision. Undefined without the roster, without the list in question,
+   * or before the roster loads. Recorded as model inputs and on the snapshot.
+   */
+  kolTopHolders?: number;
+  kolTopHolderPct?: number;
+  kolFirstBuyers?: number;
+  kolRecentBuyers?: number;
+  kolRecentSellers?: number;
+  /**
    * Linked wallets among the top-20 holders (top 10 before 2026-10-13) (core's wallets/linkedWallets.ts): % of supply held by
    * holders in a cluster (one funder paid for them, or one funded another), the cluster count,
    * the largest cluster's %, and the % tied to the creator. Undefined until every holder's funder
@@ -190,7 +213,11 @@ export interface OnChainProfile {
   linkedLargestClusterPct?: number;
   linkedCreatorPct?: number;
   linkedClusters?: LinkedCluster[];
-  /** The holders the linked reading covers, with each one's share (LinkedWalletsReading.holders), for the bubble map. */
+  /**
+   * The top holders the scan read (up to CEX_FUNDED_TOP_N, the creator aside), largest first,
+   * with each one's share: the list the linked reading covers, kept on every scan that has one
+   * (user ask 2026-10-13; before that only alongside a cluster), for the bubble map.
+   */
   linkedHolders?: { wallet: string; pct: number }[];
   /**
    * Top holders funded within a minute of each other, whoever paid (core's sameTimeClusters): the

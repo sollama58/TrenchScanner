@@ -82,12 +82,11 @@ export function snapshotDataFor(
     sameTimeClusters: scored.sameTimeClusters?.length
       ? (scored.sameTimeClusters as unknown as Prisma.InputJsonValue)
       : undefined,
-    // Every holder behind the reading, for the bubble map: kept with the clusters (either kind),
-    // as the map opens only on a coin with one.
-    linkedHolders:
-      (scored.linkedClusters?.length || scored.sameTimeClusters?.length) && scored.linkedHolders?.length
-        ? (scored.linkedHolders as unknown as Prisma.InputJsonValue)
-        : undefined,
+    // The top holders the scan read, on every scan that has the list (user ask 2026-10-13; until
+    // then only alongside a cluster), for the bubble map and the holder-list evaluation.
+    linkedHolders: scored.linkedHolders?.length
+      ? (scored.linkedHolders as unknown as Prisma.InputJsonValue)
+      : undefined,
     flaggedBuyers: scored.flaggedBuyers,
     flaggedSellers: scored.flaggedSellers,
     flaggedBuySol: scored.flaggedBuySol,
@@ -96,6 +95,13 @@ export function snapshotDataFor(
     flaggedTrades: scored.flaggedTrades?.length
       ? (scored.flaggedTrades as unknown as Prisma.InputJsonValue)
       : undefined,
+    kolTopHolders: scored.kolTopHolders,
+    kolTopHolderPct: scored.kolTopHolderPct,
+    kolFirstBuyers: scored.kolFirstBuyers,
+    kolRecentBuyers: scored.kolRecentBuyers,
+    kolRecentSellers: scored.kolRecentSellers,
+    winnerRecentBuyers: scored.winnerRecentBuyers,
+    winnerRecentSellers: scored.winnerRecentSellers,
     top10WalletsChecked: scored.top10WalletsChecked,
     firstBuyersHolding: scored.tradeFlow?.firstBuyersHolding ?? null,
     firstBuyersSeen: scored.tradeFlow?.firstBuyersSeen ?? null,

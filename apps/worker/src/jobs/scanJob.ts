@@ -20,6 +20,8 @@ import {
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   sniperShareOfTop10,
   coinWalletRisk,
+  coinWalletWins,
+  isWinnerWallet,
   passesLocalRugScreen,
   passesEventPreGate,
   FRESH_ANCHOR_MAX_RATIO,
@@ -41,6 +43,7 @@ import {
   type CexFundedReading,
   type LinkedWalletsReading,
   type LiveFlagsReading,
+  type LiveTraderCounts,
   type OnChainHolders,
   type CandidateToken,
   type ScoredToken,
@@ -72,6 +75,7 @@ import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from ".
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import { refreshWalletRiskBook, walletRiskLookup } from "./walletRiskBook.js";
+import { kolLookup, refreshKolWalletBook } from "./kolWalletBook.js";
 import {
   cexReadingOf,
   linkedHoldersOf,
@@ -81,7 +85,7 @@ import {
   type LinkedGroup,
   type LinkedWalletLookups,
 } from "./linkedWallets.js";
-import { liveFlagsOf, readLiveTape, takeLiveTapeStats } from "./liveTape.js";
+import { liveFlagsOf, liveTradersOf, readLiveTape, takeLiveTapeStats } from "./liveTape.js";
 import {
   resolveWalletHoldings,
   computeEmptyPct,
@@ -489,6 +493,7 @@ async function scanCycle(
   await refreshScoreWeights();
   // The wallet risk scores the decision moments record (background reload, never waited on).
   refreshWalletRiskBook();
+  refreshKolWalletBook();
   await seedLastScreenPass();
   const stagesMs: Record<string, number> = {};
   let lapStartedAt = startedAt;
@@ -1073,6 +1078,8 @@ async function scanCycle(
   lap("linkedWallets");
   await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
   const riskLookup = walletRiskLookup();
+  const kolIs = kolLookup();
+  const winnerIs = riskLookup ? (wallet: string) => isWinnerWallet(riskLookup(wallet)) : undefined;
   lap("liveTape");
   // The launch buyers' fresh-wallet share, from the buyers the sniper stage just read: started
   // now so it overlaps the quotes and priors below, and waited on briefly before the decisions.
@@ -1146,6 +1153,8 @@ async function scanCycle(
           linkedByMint.get(candidate.mintAddress) ?? null,
           liveFlagsOf(candidate.mintAddress, riskLookup),
           cexByMint.get(candidate.mintAddress) ?? null,
+          liveTradersOf(candidate.mintAddress, kolIs),
+          liveTradersOf(candidate.mintAddress, winnerIs),
         ),
       );
     } catch (err) {
@@ -2048,6 +2057,8 @@ async function processCandidate(
   linked: LinkedWalletsReading | null = null,
   flags: LiveFlagsReading | null = null,
   cex: CexFundedReading | null = null,
+  kolTraders: LiveTraderCounts | null = null,
+  winnerTraders: LiveTraderCounts | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
   const onChain = withLiveFlags(
@@ -2057,6 +2068,8 @@ async function processCandidate(
       cex,
     ),
     flags,
+    kolTraders,
+    winnerTraders,
   );
   // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
   // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
@@ -2462,6 +2475,30 @@ export function withWalletSignals(
     // available, which is what a card needs to say "4 of 9" rather than assuming ten.
     top10WalletsChecked: onChain.top10HolderAddresses.length,
     ...walletRiskSignals(onChain, sniperWallets),
+    ...kolSignals(onChain, sniperWallets),
+  };
+}
+
+/**
+ * The KOL counts (recorded model inputs and snapshot columns): known KOL wallets among the top
+ * holders the scan read (up to CEX_FUNDED_TOP_N) and their share of supply, and among the
+ * launch's first buyers. Nothing while the roster isn't loaded. Exported for tests.
+ */
+export function kolSignals(
+  onChain: Pick<OnChainProfile, "top10HolderAddresses">,
+  sniperWallets: ReadonlySet<string> | undefined,
+  isKol: ((wallet: string) => boolean) | undefined = kolLookup(),
+): Partial<OnChainProfile> {
+  if (!isKol) return {};
+  const holders = linkedHoldersOf(onChain as { topHolderShares?: { owner: string; pct: number }[] });
+  const list =
+    holders.length > 0 ? holders : (onChain.top10HolderAddresses ?? []).map((owner) => ({ owner, pct: 0 }));
+  const kolHolders = list.filter((h) => isKol(h.owner));
+  return {
+    kolTopHolders: list.length > 0 ? kolHolders.length : undefined,
+    kolTopHolderPct:
+      holders.length > 0 ? Math.round(kolHolders.reduce((s, h) => s + h.pct, 0) * 100) / 100 : undefined,
+    kolFirstBuyers: sniperWallets ? [...sniperWallets].filter(isKol).length : undefined,
   };
 }
 
@@ -2472,14 +2509,20 @@ export function withLinkedWallets(
   cex: CexFundedReading | null = null,
 ): OnChainProfile | null {
   if (!onChain) return onChain;
+  // The top holders the scan read, kept whether or not their funders were (user ask 2026-10-13):
+  // the bubble map and the holder-list evaluation want the list on every scan that has one.
+  const holders = linkedHoldersOf(onChain as { topHolderShares?: { owner: string; pct: number }[] })
+    .map((h) => ({ wallet: h.owner, pct: Math.round(h.pct * 100) / 100 }))
+    .sort((a, b) => b.pct - a.pct);
+  const withHolders: OnChainProfile = holders.length > 0 ? { ...onChain, linkedHolders: holders } : onChain;
   const withCex = cex
     ? {
-        ...onChain,
+        ...withHolders,
         cexFundedPct: cex.cexFundedPct,
         cexFundedCount: cex.cexFundedCount,
         cexFundedHolders: cex.cexFundedHolders,
       }
-    : onChain;
+    : withHolders;
   if (!linked) return withCex;
   return {
     ...withCex,
@@ -2499,10 +2542,20 @@ export function withLinkedWallets(
 export function withLiveFlags(
   onChain: OnChainProfile | null,
   flags: LiveFlagsReading | null,
+  kolTraders: LiveTraderCounts | null = null,
+  winnerTraders: LiveTraderCounts | null = null,
 ): OnChainProfile | null {
-  if (!onChain || !flags) return onChain;
-  return {
+  if (!onChain) return onChain;
+  const withTraders = {
     ...onChain,
+    ...(kolTraders ? { kolRecentBuyers: kolTraders.buyers, kolRecentSellers: kolTraders.sellers } : {}),
+    ...(winnerTraders
+      ? { winnerRecentBuyers: winnerTraders.buyers, winnerRecentSellers: winnerTraders.sellers }
+      : {}),
+  };
+  if (!flags) return withTraders;
+  return {
+    ...withTraders,
     flaggedBuyers: flags.flaggedBuyers,
     flaggedSellers: flags.flaggedSellers,
     flaggedBuySol: flags.flaggedBuySol,
@@ -2527,10 +2580,19 @@ function walletRiskSignals(
     topHolderShares: shares,
     firstBuyers: sniperWallets,
   });
+  const w = coinWalletWins(lookup, {
+    top10Holders: onChain.top10HolderAddresses,
+    topHolderShares: shares,
+    firstBuyers: sniperWallets,
+  });
   return {
     walletRiskTop10Max: r.walletRiskTop10Max ?? undefined,
     walletRiskFirstBuyersMean: r.walletRiskFirstBuyersMean ?? undefined,
     walletRiskHighSupplyPct: r.walletRiskHighSupplyPct ?? undefined,
     knownDumperFirstBuyers: r.knownDumperFirstBuyers ?? undefined,
+    walletWinTop10Max: w.walletWinTop10Max ?? undefined,
+    walletWinFirstBuyersMean: w.walletWinFirstBuyersMean ?? undefined,
+    walletWinHighSupplyPct: w.walletWinHighSupplyPct ?? undefined,
+    knownWinnerFirstBuyers: w.knownWinnerFirstBuyers ?? undefined,
   };
 }

@@ -1,9 +1,11 @@
 import {
   createLogger,
   liveFlags,
+  liveTraders,
   tradesFromChainTransactions,
   type HeliusClient,
   type LiveFlagsReading,
+  type LiveTraderCounts,
   type ScoredWallet,
   type TapeTrade,
 } from "@trenchscanner/core";
@@ -86,6 +88,17 @@ export async function readLiveTape(
       }
     }),
   );
+}
+
+/** How many wallets matching `is` traded in a coin's recent page, or null without a recent page. */
+export function liveTradersOf(
+  mint: string,
+  is: ((wallet: string) => boolean) | undefined,
+  nowMs = Date.now(),
+): LiveTraderCounts | null {
+  const page = pages.get(mint);
+  if (!is || !page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return null;
+  return liveTraders(page.trades, is);
 }
 
 /** The flagged-wallet reading for a coin, or null without a recent page or the risk scores. */

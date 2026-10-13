@@ -1017,6 +1017,17 @@ model TokenSnapshot {
   flaggedBuySol           Float?
   flaggedSellSol          Float?
   flaggedTrades           Json?
+  // Known KOL wallets (KolWallet) among the top-20 holders (count and their % of supply), among
+  // the launch's first buyers, and buying or selling in the newest trades read before the
+  // decision; and winner wallets (WalletRisk.winScore) buying or selling in those trades. Null
+  // without the roster or scores, without the list in question, and on scans before they existed.
+  kolTopHolders           Int?
+  kolTopHolderPct         Float?
+  kolFirstBuyers          Int?
+  kolRecentBuyers         Int?
+  kolRecentSellers        Int?
+  winnerRecentBuyers      Int?
+  winnerRecentSellers     Int?
   // How many holders the two percentages above were computed over. The list is "top 10" by
   // intent, not by guarantee - pool and LP addresses are excluded from it - so a card that wants
   // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots
@@ -1981,6 +1992,12 @@ model WalletRisk {
   fastExits       Int
   /// Coins it bought in the launch's first 5 seconds.
   snipes          Int
+  /// The win side (walletWinScore in core's wallets/riskScore.ts): coins it bought whose reference
+  /// row hit 2x, those it bought before that row's anchor, and the 0-100 score they make against
+  /// the market's win rate.
+  wins            Int      @default(0)
+  earlyWins       Int      @default(0)
+  winScore        Float    @default(0)
   /// Median % of supply it bought.
   medianSupplyPct Float?
   solIn           Float
@@ -1989,6 +2006,7 @@ model WalletRisk {
   computedAt      DateTime
 
   @@index([score])
+  @@index([winScore])
 }
 
 /// Who paid for each wallet: the funder in its first transaction (core's wallets/linkedWallets.ts,

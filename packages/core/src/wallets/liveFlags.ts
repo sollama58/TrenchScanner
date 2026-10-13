@@ -86,4 +86,33 @@ export function liveFlags(
   };
 }
 
+/**
+ * How many distinct wallets matching `is` bought and sold in the trades read, and the SOL each
+ * way: the KOL and winner-wallet counts on the live tape (user ask 2026-10-13).
+ */
+export interface LiveTraderCounts {
+  buyers: number;
+  sellers: number;
+  buySol: number;
+  sellSol: number;
+}
+
+export function liveTraders(trades: readonly TapeTrade[], is: (wallet: string) => boolean): LiveTraderCounts {
+  const buyers = new Set<string>();
+  const sellers = new Set<string>();
+  let buySol = 0;
+  let sellSol = 0;
+  for (const t of trades) {
+    if (!is(t.wallet)) continue;
+    if (t.side === "buy") {
+      buyers.add(t.wallet);
+      buySol += t.sol;
+    } else {
+      sellers.add(t.wallet);
+      sellSol += t.sol;
+    }
+  }
+  return { buyers: buyers.size, sellers: sellers.size, buySol: round3(buySol), sellSol: round3(sellSol) };
+}
+
 const round3 = (v: number) => Math.round(v * 1000) / 1000;
