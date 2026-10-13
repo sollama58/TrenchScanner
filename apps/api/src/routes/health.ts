@@ -58,6 +58,8 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every minute: reads called coins' trades for the wallet risk score (tradeTapeJob.ts). Nothing
   // user-facing waits on it.
   "trade-tape": 30 * 60_000,
+  // Hourly: rebuilds the wallet risk scores from the trade tape (walletRiskJob.ts).
+  "wallet-risk": 3 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 /**

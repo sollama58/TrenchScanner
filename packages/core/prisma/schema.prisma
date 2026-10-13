@@ -1834,3 +1834,30 @@ model TokenWalletActivity {
   @@index([wallet])
   @@index([createdAt])
 }
+
+/// Each wallet's composite risk score (0-100), from what it did in the coins whose trade tape was
+/// read (TokenWalletActivity): how often it sold into a stop, against the market's rate, nudged up
+/// by fast exits and launch snipes. Rebuilt whole every hour by the trainer's walletRiskJob.ts
+/// (formula: walletRiskScore in core's wallets/riskScore.ts). Wallets seen in fewer than two coins
+/// are left out. The scan reads it as it stands, so a reading at a decision only ever uses coins
+/// whose outcome was final before the last rebuild - never the coin's own result.
+model WalletRisk {
+  wallet          String   @id
+  score           Float
+  /// Tracked coins it bought.
+  appearances     Int
+  /// Coins where it sold between the call and the stop.
+  dumps           Int
+  /// Coins where it sold within 3 minutes of its own first buy.
+  fastExits       Int
+  /// Coins it bought in the launch's first 5 seconds.
+  snipes          Int
+  /// Median % of supply it bought.
+  medianSupplyPct Float?
+  solIn           Float
+  solOut          Float
+  lastSeenAt      DateTime
+  computedAt      DateTime
+
+  @@index([score])
+}

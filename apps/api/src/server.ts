@@ -32,6 +32,7 @@ import { registerAdminOpsRoutes } from "./routes/adminOps.js";
 import { registerAdminRetrainRoutes } from "./routes/adminRetrain.js";
 import { registerAdminInsightRoutes } from "./routes/adminInsights.js";
 import { registerAdminModelRoutes } from "./routes/adminModels.js";
+import { registerAdminWalletRoutes } from "./routes/adminWallets.js";
 import { registerAdminBackupRoutes } from "./routes/adminBackups.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerAdminAnnouncementRoutes, registerAnnouncementRoutes } from "./routes/announcements.js";
@@ -523,6 +524,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       await registerAdminInsightRoutes(instance);
       // How each model decides: recipes, inputs, member weights, cutoffs, one call explained.
       await registerAdminModelRoutes(instance, { env });
+      // Wallet risk: the riskiest wallets, one wallet's coins, one coin's wallets, stop causes.
+      await registerAdminWalletRoutes(instance);
       // The "Retrain now" button: a request row the trainer picks up within a minute.
       await registerAdminRetrainRoutes(instance);
     },

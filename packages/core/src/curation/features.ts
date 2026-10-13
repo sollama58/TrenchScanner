@@ -35,6 +35,22 @@ import {
 export const JUPITER_EXTRA_FEATURES = ["jupHolderCount"] as const;
 
 /**
+ * Added 2026-10-13 (wallet risk brief, notes/hit-catch-2026-10-13/wallet-risk-brief.md): who the
+ * coin's wallets are, from the wallet risk scores (WalletRisk, rebuilt hourly from the trade tape
+ * of called coins whose outcome was final, so never the coin's own result). The highest score
+ * among the top-10 holders, the mean score of the launch's first buyers, the % of supply held by
+ * top holders scored 70 or more, and how many first buyers are known dumpers. Null when no
+ * wallet in view is scored yet, and on every row banked before. Recorded only
+ * (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const WALLET_RISK_FEATURES = [
+  "walletRiskTop10Max",
+  "walletRiskFirstBuyersMean",
+  "walletRiskHighSupplyPct",
+  "knownDumperFirstBuyers",
+] as const;
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -244,6 +260,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   // before. Never backfilled.
   "freshLaunchBuyerPct",
   ...JUPITER_EXTRA_FEATURES,
+  ...WALLET_RISK_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -328,6 +345,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // removing it here once a few days of decision rows show it separates runners, the
   // under-five-minute coins above all (notes/hit-catch-2026-10-13/inputs.md).
   ...JUPITER_EXTRA_FEATURES,
+  // The wallet risk readings (added 2026-10-13): recorded to be judged out of sample first, the
+  // models thread's call (notes/hit-catch-2026-10-13/wallet-risk-brief.md).
+  ...WALLET_RISK_FEATURES,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -643,6 +663,10 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   jup5mHolderChange: "5m holder change (live)",
   jup1hHolderChange: "1h holder change (live)",
   jupHolderCount: "holders (live)",
+  walletRiskTop10Max: "riskiest top-10 wallet",
+  walletRiskFirstBuyersMean: "first buyers' wallet risk",
+  walletRiskHighSupplyPct: "supply held by risky wallets",
+  knownDumperFirstBuyers: "known dumpers among first buyers",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -830,6 +854,10 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     freshTop10WalletPct: scored.freshTop10WalletPct ?? null,
     emptyTop10WalletPct: scored.emptyTop10WalletPct ?? null,
     sniperTop10WalletPct: scored.sniperTop10WalletPct ?? null,
+    walletRiskTop10Max: scored.walletRiskTop10Max ?? null,
+    walletRiskFirstBuyersMean: scored.walletRiskFirstBuyersMean ?? null,
+    walletRiskHighSupplyPct: scored.walletRiskHighSupplyPct ?? null,
+    knownDumperFirstBuyers: scored.knownDumperFirstBuyers ?? null,
     ageMinutes: scored.ageMinutes ?? null,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,
