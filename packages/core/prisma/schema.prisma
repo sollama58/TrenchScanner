@@ -1387,6 +1387,33 @@ model TokenNarrative {
   xReuseRank            Int?
   /// Strength of the trend hit (trend.score 0-1); null until read or on older rules.
   trendScore            Float?
+  /// TokenSage rules 0.33.0+ (trend.novelty, full reads): how new the newest matching trend was
+  /// at the read, 0-1 (near 0 for a term that trends every day, near 1 for one first listed an
+  /// hour ago). Null on older reads and at basic depth.
+  trendNovelty          Float?
+  /// TokenSage rules 0.34.0+ (POST /v1/tokens:now): the coin's trend block matched again against
+  /// the trend lists of the moment, and how its story trades, refreshed while the coin is in the
+  /// curated band (tokensage/nowReads.ts). nowAt is when TokenSage made the refresh. The heat
+  /// columns describe the story's leading coin on GeckoTerminal (the lineage original's name or
+  /// the referent searched): its market cap, 5 min / 1 h price change, 1 h volume, minutes since
+  /// its 24 h peak and its price against that peak; heatCoins counts the coins on the story,
+  /// heatWaveVolume1hUsd their summed volume, heatIsLeader whether this coin is the leader. All
+  /// null until the first refresh, and the heat columns when the coin has no story to search.
+  nowAt                 DateTime?
+  nowTrendMatched       Boolean?
+  nowTrendScore         Float?
+  nowTrendNovelty       Float?
+  heatCoins             Int?
+  heatLeaderMcapUsd     Float?
+  heatLeaderChange5mPct Float?
+  heatLeaderChange1hPct Float?
+  heatLeaderVolume1hUsd Float?
+  heatWaveVolume1hUsd   Float?
+  heatPeakMinutesAgo    Int?
+  heatFromPeakPct       Float?
+  heatIsLeader          Boolean?
+  /// The refresh as TokenSage sent it (trend and story_heat), for the views and the export.
+  nowRead               Json?
   /// TokenSage rules 0.19.0+ (market.creator_fee): where pump.fun's creator fee goes ("creator",
   /// "holder_rewards", "wallet", "split", "github", "charity", "cashback"; kept open), how it is
   /// routed ("direct", "sharing_config", ...), the creator wallet's own share of it (0-1), whether

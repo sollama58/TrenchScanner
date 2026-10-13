@@ -5,6 +5,8 @@ import {
   tokenSageHints,
   narrativeDepthCovers,
   narrativeFieldsFromAnalysis,
+  nowFieldsFromItem,
+  type TokenSageNowItem,
   tokenSageFlagSeverity,
   tokenSageRulesAtLeast,
   normalizeSocialUrl,
@@ -916,5 +918,61 @@ describe("logo labels and pump.fun pairs (rules 0.25.0, 0.27.0)", () => {
       logoLabel: null,
       logoScore: null,
     });
+  });
+
+  it("reads trend novelty from a read and a decision-time refresh into columns (rules 0.33/0.34)", () => {
+    const read = narrativeFieldsFromAnalysis(
+      { depth: "full", trend: { matched: true, score: 0.5, novelty: 0.72 } } as unknown as TokenSageAnalysis,
+      "complete",
+    );
+    expect(read.trendNovelty).toBe(0.72);
+    const item = {
+      ca: "MINT",
+      status: "complete",
+      as_of: "2026-10-13T21:05:00Z",
+      trend: { matched: true, score: 0.4, novelty: 0.9, terms: [] },
+      story_heat: {
+        story: "Moo Deng",
+        story_kind: "referent",
+        status: "ok",
+        coins: 3,
+        leader: {
+          mint: "LEADER",
+          mcap_usd: 9e7,
+          change_5m_pct: -1.5,
+          change_1h_pct: -12,
+          volume_1h_usd: 1.2e6,
+          peak_minutes_ago: 180.4,
+          from_peak_pct: -25,
+        },
+        wave_volume_1h_usd: 1.3e6,
+      },
+    } as unknown as TokenSageNowItem;
+    const f = nowFieldsFromItem(item, "MINT");
+    expect(f).toMatchObject({
+      nowTrendMatched: true,
+      nowTrendScore: 0.4,
+      nowTrendNovelty: 0.9,
+      heatCoins: 3,
+      heatLeaderMcapUsd: 9e7,
+      heatLeaderChange5mPct: -1.5,
+      heatLeaderChange1hPct: -12,
+      heatLeaderVolume1hUsd: 1.2e6,
+      heatWaveVolume1hUsd: 1.3e6,
+      heatPeakMinutesAgo: 180,
+      heatFromPeakPct: -25,
+      heatIsLeader: false,
+    });
+    expect(f?.nowAt?.toISOString()).toBe("2026-10-13T21:05:00.000Z");
+    expect(nowFieldsFromItem(item, "LEADER")?.heatIsLeader).toBe(true);
+    // A heat reading that failed says nothing about the story; no story at all, the same.
+    const failed = { ...item, story_heat: { status: "rate_limited" } } as unknown as TokenSageNowItem;
+    expect(nowFieldsFromItem(failed, "MINT")).toMatchObject({ heatCoins: null, heatIsLeader: null });
+    expect(nowFieldsFromItem({ ...item, story_heat: null }, "MINT")?.heatLeaderMcapUsd).toBeNull();
+    // Nothing to store without a refresh.
+    expect(nowFieldsFromItem({ ca: "MINT", status: "pending" }, "MINT")).toBeNull();
+    expect(
+      nowFieldsFromItem({ ca: "MINT", status: "unavailable", error: "no_full_read" }, "MINT"),
+    ).toBeNull();
   });
 });

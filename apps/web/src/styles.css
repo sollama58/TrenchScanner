@@ -8255,6 +8255,9 @@ button.small-btn {
 .tab-option p {
   margin: 0;
 }
+.tab-option + .tab-option {
+  margin-top: 16px;
+}
 
 /* The "Pricing Methods Changed" marker on time charts (pricingChange.ts). */
 .pricing-change line {

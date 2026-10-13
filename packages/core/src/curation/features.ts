@@ -18,6 +18,7 @@ import {
   NARRATIVE_FEATURES_V5,
   NARRATIVE_FEATURES_V6,
   NARRATIVE_FEATURES_V7,
+  NARRATIVE_FEATURES_V8,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -309,6 +310,10 @@ export const CANDIDATE_FEATURE_NAMES = [
   // Appended last: the vector's order is fixed, so a saved model reads every older input where it was.
   ...CEX_FUNDED_FEATURES,
   ...SAME_TIME_FUNDING_FEATURES,
+  // Added 2026-10-13 (TokenSage rules 0.33.0 / 0.34.0, curation/narrativeFeatures.ts): trend
+  // novelty, and the trend and story heat as they stand at the decision. Null without a
+  // refresh, and on every row banked before. Never backfilled.
+  ...NARRATIVE_FEATURES_V8,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -404,6 +409,10 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   ...LIVE_FLAG_FEATURES,
   // The same-minute funding groups (added 2026-10-13): recorded first, on the same terms.
   ...SAME_TIME_FUNDING_FEATURES,
+  // TokenSage's trend novelty and decision-time trend and story heat (added 2026-10-13, user
+  // ask "build all of the fixes"): recorded first. Bring them in by removing them here once two
+  // days of decision rows show they separate runners (notes/tokensage-trend-heat-2026-10-13.md).
+  ...NARRATIVE_FEATURES_V8,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */

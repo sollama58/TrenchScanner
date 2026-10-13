@@ -1247,6 +1247,8 @@ export interface FeedAppearance {
   narrativeNote: boolean | null;
   /** The Stream tab, switched on in Settings (absent from older API builds: off). */
   streamTab: boolean;
+  /** The Lighthouse tab, switched on in Settings (absent from older API builds: off). */
+  lighthouseTab: boolean;
   /** Trading sites each card links to; Padre's Trading Terminal by default. */
   quickLinks: QuickLink[];
   hidden: CardField[];
