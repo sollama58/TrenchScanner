@@ -112,21 +112,31 @@ export async function refreshAndFilterToBand(
   // earlier). Most launch runs that double cross $10k inside their first two minutes, so on
   // DexScreener's figures alone a launch reached the band - and the Stream and the models - at
   // $12-15k or more, a minute or more after it crossed $10k.
+  //
+  // Read alongside DexScreener's batches rather than before them: the two are independent, and in
+  // series every cycle's refresh - and every decision behind it - waited on Jupiter first (with
+  // its queue, up to the live budget). Only the fallback's list needs the live answer, and it is
+  // read once DexScreener has answered.
   const live = new Map<string, { token: CandidateToken; at: Date }>();
-  if (liveLaunches && liveLaunches.mints.length > 0) {
-    const liveSeenAt = new Map<string, Date>();
-    const read = await liveLaunches.source
-      .getLaunches(liveLaunches.mints, {
-        timeoutMs: LIVE_LAUNCH_BUDGET_MS,
-        retries: 0,
-        deadlineMs: LIVE_LAUNCH_BUDGET_MS,
-        seenAt: liveSeenAt,
-      })
-      .catch(() => [] as CandidateToken[]);
-    const now = new Date();
-    for (const token of read)
-      live.set(token.mintAddress, { token, at: liveSeenAt.get(token.mintAddress) ?? now });
-  }
+  const liveRead: Promise<void> =
+    liveLaunches && liveLaunches.mints.length > 0
+      ? (async () => {
+          const liveSeenAt = new Map<string, Date>();
+          const read = await liveLaunches.source
+            .getLaunches(liveLaunches.mints, {
+              timeoutMs: LIVE_LAUNCH_BUDGET_MS,
+              retries: 0,
+              deadlineMs: LIVE_LAUNCH_BUDGET_MS,
+              seenAt: liveSeenAt,
+              // What a decision waits on: may take the reserved slots on Jupiter's budget.
+              priority: true,
+            })
+            .catch(() => [] as CandidateToken[]);
+          const now = new Date();
+          for (const token of read)
+            live.set(token.mintAddress, { token, at: liveSeenAt.get(token.mintAddress) ?? now });
+        })()
+      : Promise.resolve();
 
   // Tighter than fetchJson's defaults (10s, two retries), which let one slow batch hold the whole
   // scan cycle for half a minute or more - 47s on 2026-10-04 - when a batch normally answers in
@@ -140,13 +150,17 @@ export async function refreshAndFilterToBand(
     timeoutMs: 5000,
     retries: 1,
     deadlineMs: 10_000,
-    // What puts a coin in front of the safety screen: first call on a fallback's budget.
+    // What puts a coin in front of the safety screen: the reserved slots on DexScreener's budget,
+    // and first call on a fallback's.
     priority: true,
     failed,
     seenAt,
     // A launch the live read priced needs no GeckoTerminal call: that budget stays for the rest.
-    fallbackIfUnlisted: newestLaunches?.filter((m) => !live.has(m)),
+    fallbackIfUnlisted: newestLaunches
+      ? liveRead.then(() => newestLaunches.filter((m) => !live.has(m)))
+      : undefined,
   });
+  await liveRead;
   if (live.size > 0) mergeLiveLaunches(marketData, live, seenAt);
   return {
     partial: failed.size > 0,

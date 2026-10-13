@@ -255,8 +255,15 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // The scan's market-data calls since the last cycle (requests, 429 pauses, time queued, gave
   // up): whether DexScreener is throttling the shared budget, and how much Jupiter took off it.
   // Who priced the newest launches (liveLaunchQuotes), and the band-entry checks between cycles
-  // and the cycles they started early (bandEntryWatch).
-  for (const key of ["dexScreenerCalls", "jupiterCalls", "liveLaunchQuotes", "bandEntryWatch"] as const) {
+  // and the cycles they started early (bandEntryWatch). The cycle's RugCheck reports: cached, and
+  // looked up while it waited (rugCheckLookups).
+  for (const key of [
+    "dexScreenerCalls",
+    "jupiterCalls",
+    "liveLaunchQuotes",
+    "bandEntryWatch",
+    "rugCheckLookups",
+  ] as const) {
     const calls = stageTimings(meta, key);
     if (calls) out[key] = calls;
   }

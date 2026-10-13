@@ -185,6 +185,28 @@ describe("JupiterClient", () => {
     expect(quotes.has("m120")).toBe(false);
   });
 
+  it("keeps its reserve for the scan's fresh quotes while other callers have spent the rest", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = decodeURIComponent(url.split("query=")[1]!).split(",");
+      return Promise.resolve(new Response(JSON.stringify(list.map((id) => ({ id, usdPrice: 1, mcap: 1 })))));
+    });
+    // One call a second once the burst of 5 is spent; 2 of the 5 are reserved.
+    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 60 });
+    const batch = (from: number) => Array.from({ length: 100 }, (_, i) => `m${from + i}`);
+    // The outcome watcher's lookups take the three ordinary slots.
+    await client.getTokensByAddresses([...batch(0), ...batch(100), ...batch(200)], 3, { retries: 0 });
+    // Another ordinary lookup now waits on the reserve: past a short deadline, it gets nothing.
+    const failed = new Set<string>();
+    expect(await client.getTokensByAddresses(batch(300), 1, { deadlineMs: 300, retries: 0, failed })).toEqual(
+      [],
+    );
+    expect(failed.size).toBe(100);
+    // The decision's fresh quotes go out at once on the reserved slots.
+    const startedAt = Date.now();
+    expect((await client.getFreshQuotes(batch(400), { deadlineMs: 300 })).size).toBe(100);
+    expect(Date.now() - startedAt).toBeLessThan(250);
+  });
+
   it("asks 100 mints a call with the key, and fails the mints of a batch that errors", async () => {
     const urls: string[] = [];
     const headers: (Record<string, string> | undefined)[] = [];

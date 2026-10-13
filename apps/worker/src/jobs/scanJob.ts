@@ -654,7 +654,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
   // Cached with a short TTL so the scan cadence and RugCheck's request rate are independent -
   // see resolveRugProfiles. This is what makes a one-minute scan interval affordable.
-  const { profiles: rugProfiles } = await resolveRugProfiles(
+  const { profiles: rugProfiles, stats: rugCheckLookups } = await resolveRugProfiles(
     candidates.map((c) => c.mintAddress),
     deps.rugCheck,
     env.RUGCHECK_CACHE_TTL_MINUTES,
@@ -964,8 +964,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     (await withinBudget(launchBuyerWork, LAUNCH_BUYER_FRESHNESS_BUDGET_MS)) ??
     launchBuyerFreshnessFromCache(launchBuyerMints);
   const perCandidateMatches: number[] = [];
-  const curatedCycle = newCuratedCycle();
-  await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
+  const processOne = (curatedCycle: CuratedCycle) => async (candidate: CandidateToken) => {
     try {
       perCandidateMatches.push(
         await processCandidate(
@@ -998,7 +997,38 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       const tokenId = priors.get(candidate.mintAddress)?.token?.id;
       if (tokenId) dropScanVerdict(tokenId);
     }
-  });
+  };
+  // The cycle's governor pass: of everything the curators would emit, the strongest contenders
+  // within the feed's paced budget actually go out - see emitCuratedCycle. Never fails the cycle.
+  const emitCurated = async (curatedCycle: CuratedCycle): Promise<number> => {
+    try {
+      return await emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint));
+    } catch (err) {
+      logger.error("curated emission pass failed", { error: String(err) });
+      return 0;
+    }
+  };
+  // Only a token past the event pre-gate can be curated (processCandidate), so those are decided
+  // first and their calls go out while the rest of the band is still being processed. The calls
+  // used to wait on every in-band token's snapshot, sample and filter pass - ~600 tokens, 0.3-1.6 s
+  // a cycle and up to 7 s on a slow database (worker health, 2026-10-13) - for nothing they
+  // needed. The rest's user-filter matches never wait on the governor pass: it runs alongside them.
+  // The pre-gate is read here on DexScreener's figures and in processCandidate on the scored
+  // token; one that passes only the latter is still decided, with the rest, and anything it files
+  // goes out in a pass of its own after them.
+  const contenders = candidates.filter((c) => passesEventPreGate(c, curatedBand));
+  const others = candidates.filter((c) => !passesEventPreGate(c, curatedBand));
+  const contenderCycle = newCuratedCycle();
+  await forEachWithConcurrency(contenders, CANDIDATE_CONCURRENCY, processOne(contenderCycle));
+  lap("contenders");
+  const lateCycle = newCuratedCycle();
+  const emissionStartedAt = Date.now();
+  const [contenderEmitted] = await Promise.all([
+    // Its own clock, not a lap: it runs alongside the rest of the band ("candidates").
+    emitCurated(contenderCycle).finally(() => (stagesMs.curated = Date.now() - emissionStartedAt)),
+    forEachWithConcurrency(others, CANDIDATE_CONCURRENCY, processOne(lateCycle)),
+  ]);
+  const curatedEmitted = contenderEmitted + (await emitCurated(lateCycle));
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
   markScanVerdictsPopulated();
   // Every in-band token has now been evaluated against these filters: a filter armed before
@@ -1015,17 +1045,6 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     markFilterPassComplete(activeFilters);
   }
   lap("candidates");
-
-  // The cycle's governor pass: of everything the curators would emit, the strongest contenders
-  // within the feed's paced budget actually go out - see emitCuratedCycle. After user matching
-  // (those alerts must never wait on this), before the peak bookkeeping.
-  let curatedEmitted = 0;
-  try {
-    curatedEmitted = await emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint));
-  } catch (err) {
-    logger.error("curated emission pass failed", { error: String(err) });
-  }
-  lap("curated");
   // Sends the narrative requests this cycle noted. Never awaited: nothing waits on TokenSage.
   void flushNarrativeRequests(env);
   // Match peaks are no longer rolled forward here - they have their own job (createMatchPeaksRunner)
@@ -1089,6 +1108,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats() } : {}),
     // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle.
     sniperReads: takeSniperReadStats(),
+    // This cycle's RugCheck reports: cached, looked up while the cycle waited (fetched, failed,
+    // timedOut), and stale ones served while they refresh behind it - what the rugCheck stage is.
+    rugCheckLookups: { ...rugCheckLookups },
     // Epoch ms of the newest rug-screen (pre-check) pass: the header pill's "last passed pre-check".
     ...(lastScreenPassAt > 0 ? { lastScreenPassAt } : {}),
   };
