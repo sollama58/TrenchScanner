@@ -2467,6 +2467,15 @@ legend {
 .util-count {
   width: 110px;
 }
+.util-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.util-picks .small-btn.active {
+  border-color: var(--brand-ink);
+  color: var(--brand-ink);
+}
 .util-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

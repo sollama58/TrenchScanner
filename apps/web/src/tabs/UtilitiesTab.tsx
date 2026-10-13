@@ -51,8 +51,10 @@ interface UtilityTokenView {
 }
 
 const ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-/** Most credits one burn buys from this panel; a bigger burn can still be made in a few goes. */
-const MAX_CREDITS_PER_BURN = 1_000;
+/** Most credits one burn redeems from this panel; more takes another burn. */
+const MAX_CREDITS_PER_BURN = 100;
+/** One-tap amounts, shown when the wallet holds enough $ASDFASDFA for them. */
+const CREDIT_PICKS = [1, 10, 25, 50, 100];
 const CLAIM_EVERY_MS = 5_000;
 const CLAIM_SLOW_AFTER_MS = 120_000;
 const SYMBOL = "$ASDFASDFA";
@@ -394,7 +396,21 @@ function CreditBurn({
       ) : (
         <>
           <div className="burn-pick">
-            <label htmlFor="credit-count">Credits to buy</label>
+            <label htmlFor="credit-count">Credits to redeem</label>
+            <div className="util-picks" role="group" aria-label="Quick amounts">
+              {CREDIT_PICKS.filter((p) => p <= affordable).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={`small-btn${chosen === p ? " active" : ""}`}
+                  aria-pressed={chosen === p}
+                  disabled={busy}
+                  onClick={() => setWanted(p)}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
             <input
               id="credit-count"
               className="util-count num"
@@ -421,7 +437,7 @@ function CreditBurn({
               <button type="button" className="primary" disabled={busy} onClick={() => void burn(wallet)}>
                 {stage
                   ? STAGE_TEXT[stage]
-                  : `Burn ${formatTokens(raw, decimals)} ${SYMBOL} for ${plural(chosen, "credit")}`}
+                  : `Redeem ${plural(chosen, "credit")} (burns ${formatTokens(raw, decimals)} ${SYMBOL})`}
               </button>
               <span className="faint small">
                 Burned tokens are destroyed for good. Your wallet asks you to approve first.
