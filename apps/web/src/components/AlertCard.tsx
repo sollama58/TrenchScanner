@@ -40,6 +40,7 @@ export function AlertCard({
   const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [linkedOpen, setLinkedOpen] = useState(false);
   const alertMcap = s.marketCapUsd;
   const nowMcap = nowReading(card);
   const move = change(alertMcap, nowMcap);
@@ -82,6 +83,11 @@ export function AlertCard({
   // The share of the top 10 that were the launch's first buyers, at alert time or from a later scan.
   const sniperAtAlert = s.sniperTop10WalletPct ?? null;
   const sniperPct = sniperAtAlert ?? card.latestSnapshot?.sniperTop10WalletPct ?? null;
+  // Linked wallets: top holders one funder paid for (or that funded each other), at alert time or
+  // from a later scan, with the clusters behind the share for the list under the tiles.
+  const linkedFrom = s.linkedWalletPct != null ? s : card.latestSnapshot;
+  const linkedPct = linkedFrom?.linkedWalletPct ?? null;
+  const linkedClusters = linkedFrom?.linkedClusters ?? [];
   // The same fallback for the first-buyers count, read from the launch's first transactions.
   const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
   const firstHolding = buyersFrom?.firstBuyersHolding ?? null;
@@ -98,9 +104,20 @@ export function AlertCard({
   const figCount = (["alert", "now", "peak"] as const).filter(show).length;
   // The volume field is three tiles (5m / 1h / 24h).
   const statCount =
-    (["score", "holders", "age", "top10", "fresh", "empty", "snipers", "sniperTop10", "dev"] as const).filter(
-      show,
-    ).length + (show("vol") ? 3 : 0);
+    (
+      [
+        "score",
+        "holders",
+        "age",
+        "top10",
+        "fresh",
+        "empty",
+        "snipers",
+        "sniperTop10",
+        "linked",
+        "dev",
+      ] as const
+    ).filter(show).length + (show("vol") ? 3 : 0);
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -337,6 +354,15 @@ export function AlertCard({
               explain="top-10 holder wallets that were among the first 25 buyers after launch"
             />
           )}
+          {show("linked") && (
+            <LinkedTile
+              pct={linkedPct}
+              clusters={linkedClusters}
+              atAlert={linkedFrom === s && linkedPct !== null}
+              open={linkedOpen}
+              onToggle={() => setLinkedOpen((o) => !o)}
+            />
+          )}
           {show("dev") && (
             <div
               title={
@@ -354,6 +380,8 @@ export function AlertCard({
           )}
         </dl>
       )}
+
+      {show("linked") && linkedOpen && linkedClusters.length > 0 && <LinkedList clusters={linkedClusters} />}
 
       {curated && show("reasons") && curated.reasons.length > 0 && (
         <ul className="reasons">
@@ -474,6 +502,93 @@ function WalletStat({
     <div className={risky ? "risky" : undefined} title={title}>
       <dt>{label}</dt>
       <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
+    </div>
+  );
+}
+
+/** At or above this share held by linked wallets, the Linked tile reads as a warning. */
+const LINKED_WARN_PCT = 30;
+
+type LinkedClusterView = NonNullable<Card["snapshot"]["linkedClusters"]>[number];
+
+/** The cluster line the tile's tooltip and the list lead with: "4 wallets from one funder hold 31%". */
+export function linkedSummary(clusters: readonly LinkedClusterView[]): string | null {
+  const top = clusters[0];
+  if (!top) return null;
+  const more =
+    clusters.length > 1 ? `, and ${clusters.length - 1} more cluster${clusters.length > 2 ? "s" : ""}` : "";
+  return `${top.wallets.length} wallets from one funder hold ${pct(top.pct)}${top.creatorLinked ? " (tied to the creator)" : ""}${more}`;
+}
+
+/** The Linked tile: the share of supply held by linked top holders. Tapping it opens the list. */
+function LinkedTile({
+  pct: value,
+  clusters,
+  atAlert,
+  open,
+  onToggle,
+}: {
+  pct: number | null;
+  clusters: readonly LinkedClusterView[];
+  atAlert: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const summary = linkedSummary(clusters);
+  const title =
+    value === null
+      ? "Linked: not checked yet. Who paid for each top-10 wallet is read a few tokens per scan."
+      : value === 0
+        ? `Linked: no two top-10 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
+        : `Linked: ${summary ?? `${pct(value)} of supply in linked wallets`}, ${atAlert ? "at alert time" : "from a scan after the alert"}. Tap for the wallets.`;
+  const canOpen = value !== null && clusters.length > 0;
+  return (
+    <div
+      className={value !== null && value >= LINKED_WARN_PCT ? "risky" : undefined}
+      title={title}
+      role={canOpen ? "button" : undefined}
+      tabIndex={canOpen ? 0 : undefined}
+      aria-expanded={canOpen ? open : undefined}
+      onClick={canOpen ? onToggle : undefined}
+      onKeyDown={
+        canOpen ? (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onToggle()) : undefined
+      }
+      style={canOpen ? { cursor: "pointer" } : undefined}
+    >
+      <dt>Linked</dt>
+      <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
+    </div>
+  );
+}
+
+/** The linked clusters under the tiles: each funder and the wallets it paid for, with their %. */
+function LinkedList({ clusters }: { clusters: readonly LinkedClusterView[] }) {
+  return (
+    <div className="linked-list">
+      <p className="muted">{linkedSummary(clusters)}.</p>
+      {clusters.map((c) => (
+        <div key={c.funder} className="linked-cluster">
+          <div>
+            <a href={`https://solscan.io/account/${c.funder}`} target="_blank" rel="noreferrer">
+              Funder {shortAddress(c.funder)}
+            </a>{" "}
+            <span className="muted">
+              · {c.wallets.length} wallets · {pct(c.pct)}
+              {c.creatorLinked ? " · tied to the creator" : ""}
+            </span>
+          </div>
+          <ul>
+            {c.wallets.map((w) => (
+              <li key={w.wallet}>
+                <a href={`https://solscan.io/account/${w.wallet}`} target="_blank" rel="noreferrer">
+                  {shortAddress(w.wallet)}
+                </a>{" "}
+                <span className="num">{pct(w.pct)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
     </div>
   );
 }

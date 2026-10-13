@@ -91,6 +91,14 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxLinkedWalletPct",
+        min: 0,
+        max: 100,
+        label: "Max supply held by linked wallets",
+        hint: "top-10 holders one funder paid for, or that funded each other; tokens not checked yet wait",
+        unit: "%",
+      },
+      {
         key: "minFirstBuyersHolding",
         min: 0,
         max: 25,

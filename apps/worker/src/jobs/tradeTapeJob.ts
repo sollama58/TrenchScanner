@@ -4,6 +4,7 @@ import {
   HttpError,
   Prisma,
   keepWalletRow,
+  walletTrades,
   orderTrades,
   pumpFunCursorBefore,
   stopCauseOf,
@@ -257,6 +258,7 @@ export async function storeTape(
   });
   const byWallet = new Map(summaries.map((s) => [s.wallet, s]));
   const kept = summaries.filter(keepWalletRow);
+  const tradesOf = walletTrades(trades);
   const causes: { id: string; cause: Prisma.InputJsonValue }[] = [];
   for (const o of outcomes) {
     const stop = stoppedAtOf(o);
@@ -315,6 +317,7 @@ export async function storeTape(
             fastExit: w.fastExit,
             dumpedIntoStop: w.dumpedIntoStop,
             dumpSol: w.dumpSol,
+            trades: (tradesOf.get(w.wallet) ?? []) as unknown as Prisma.InputJsonValue,
             createdAt: new Date(nowMs),
           })),
           skipDuplicates: true,

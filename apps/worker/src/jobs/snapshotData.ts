@@ -65,6 +65,14 @@ export function snapshotDataFor(
     freshTop10WalletPct: scored.freshTop10WalletPct,
     emptyTop10WalletPct: scored.emptyTop10WalletPct,
     sniperTop10WalletPct: scored.sniperTop10WalletPct,
+    linkedWalletPct: scored.linkedWalletPct,
+    linkedClusterCount: scored.linkedClusterCount,
+    linkedLargestClusterPct: scored.linkedLargestClusterPct,
+    linkedCreatorPct: scored.linkedCreatorPct,
+    // Only when there is a cluster to list: most coins have none, and this is a column per scan.
+    linkedClusters: scored.linkedClusters?.length
+      ? (scored.linkedClusters as unknown as Prisma.InputJsonValue)
+      : undefined,
     top10WalletsChecked: scored.top10WalletsChecked,
     firstBuyersHolding: scored.tradeFlow?.firstBuyersHolding ?? null,
     firstBuyersSeen: scored.tradeFlow?.firstBuyersSeen ?? null,

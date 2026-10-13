@@ -50,16 +50,20 @@ const DEFAULT_WALLET_WAIT_MS = 180_000;
  * (reported 2026-10-08): resolveAlertTargets holds such a match until the figure lands.
  */
 export function awaitsWalletFigure(
-  scored: Pick<ScoredToken, "freshTop10WalletPct" | "emptyTop10WalletPct" | "sniperTop10WalletPct">,
+  scored: Pick<
+    ScoredToken,
+    "freshTop10WalletPct" | "emptyTop10WalletPct" | "sniperTop10WalletPct" | "linkedWalletPct"
+  >,
   filter: Pick<
     FilterCriteria,
-    "maxFreshTop10WalletPct" | "maxEmptyTop10WalletPct" | "maxSniperTop10WalletPct"
+    "maxFreshTop10WalletPct" | "maxEmptyTop10WalletPct" | "maxSniperTop10WalletPct" | "maxLinkedWalletPct"
   >,
 ): boolean {
   return (
     (filter.maxFreshTop10WalletPct != null && scored.freshTop10WalletPct === undefined) ||
     (filter.maxEmptyTop10WalletPct != null && scored.emptyTop10WalletPct === undefined) ||
-    (filter.maxSniperTop10WalletPct != null && scored.sniperTop10WalletPct === undefined)
+    (filter.maxSniperTop10WalletPct != null && scored.sniperTop10WalletPct === undefined) ||
+    (filter.maxLinkedWalletPct != null && scored.linkedWalletPct === undefined)
   );
 }
 

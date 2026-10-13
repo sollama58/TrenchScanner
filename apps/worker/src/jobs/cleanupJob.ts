@@ -633,6 +633,9 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   );
   const deletedMintAuthorityCache = await sweepCache("MintAuthorityCache", "mintAddress");
   const deletedMayhemCache = await sweepCache("MayhemModeCache", "mintAddress");
+  // Linked wallets (linkedWallets.ts): a funder is final like a first transaction, kept as long.
+  const deletedWalletFunders = await sweepCache("WalletFunder", "wallet");
+  const deletedFunderActivity = await sweepCache("FunderActivity", "address");
   // RugCheckCache is a TTL cache (RUGCHECK_CACHE_TTL_MINUTES), so its rows go stale within
   // minutes - but a stale row is still *kept*, and rewritten in place, for as long as the mint
   // keeps turning up in band. This sweep is for mints that stopped appearing entirely.
@@ -668,6 +671,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedUntrackedSnapshots: snapshotSweep.untracked,
     downsampledSnapshots: snapshotSweep.downsampled,
     deletedCandidateOutcomes: deletedCandidateOutcomes.count,
+    deletedWalletFunders: deletedWalletFunders.count,
+    deletedFunderActivity: deletedFunderActivity.count,
     deletedMatchOutcomes,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,

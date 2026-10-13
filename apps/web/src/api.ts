@@ -141,6 +141,17 @@ export interface Snapshot {
   emptyTop10WalletPct?: number | null;
   /** Share of the top 10 holders (pool and LP aside) that were among the first 25 buyers; null when not checked. */
   sniperTop10WalletPct?: number | null;
+  /** % of supply held by linked top-10 holders (one funder paid for them); null when not checked. */
+  linkedWalletPct?: number | null;
+  /** The clusters behind it, largest first; null or absent with none. */
+  linkedClusters?:
+    | {
+        funder: string;
+        wallets: { wallet: string; pct: number }[];
+        pct: number;
+        creatorLinked: boolean;
+      }[]
+    | null;
   /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
   firstBuyersHolding?: number | null;
   firstBuyersSeen?: number | null;
@@ -712,6 +723,7 @@ export interface FilterInput {
   maxFreshTop10WalletPct: number | null;
   maxEmptyTop10WalletPct: number | null;
   maxSniperTop10WalletPct: number | null;
+  maxLinkedWalletPct: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
   /** TokenSage narrative criteria; every one fails closed until the coin has a read. */
@@ -1103,6 +1115,7 @@ export type CardField =
   | "empty"
   | "snipers"
   | "sniperTop10"
+  | "linked"
   | "dev"
   | "reasons"
   | "mint"

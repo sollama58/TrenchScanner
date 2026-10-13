@@ -33,6 +33,8 @@ export interface RugCheckProfile extends OnChainProfile {
    * profiles cached before it existed, or when the shares can't be trusted.
    */
   topHolderShares?: { owner: string; pct: number }[];
+  /** The creator's wallet, as RugCheck names it. Absent on profiles cached before it was kept. */
+  creator?: string;
 }
 
 /**
@@ -264,6 +266,8 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     lpBurned,
     riskScore: report.score_normalised,
     riskFlags,
+    // For the linked-wallets reading (whose holders the creator funded, or shares a funder with).
+    ...(report.creator ? { creator: report.creator } : {}),
     // Feeds the worker's wallet-freshness check (apps/worker/src/jobs/walletFreshness.ts) - a
     // wallet address per top-10 holder, already pool-excluded above. Falls back to `address` for
     // a holder entry that has no separate `owner` (RugCheck's shape allows both).
