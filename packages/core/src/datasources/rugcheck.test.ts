@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RugCheckClient, toProfile, withoutVenueHolder, type RugCheckReport } from "./rugcheck.js";
+import {
+  largestHolderShare,
+  RugCheckClient,
+  toProfile,
+  withoutVenueHolder,
+  type RugCheckReport,
+} from "./rugcheck.js";
 
 const MINT = "9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump";
 const POOL_AUTHORITY = "FnzKY6x7entQ1eR3D225dQyT7ybfka4PskBMQhb8L3CC";
@@ -234,6 +240,13 @@ describe("withoutVenueHolder", () => {
     const fixed = withoutVenueHolder(profile, NEW_POOL);
     expect(fixed.top10HolderPct).toBeCloseTo(21.2);
     expect(fixed.top10HolderAddresses).toEqual(["wallet-2", "wallet-3"]);
+    expect(profile.largestHolderPct).toBeCloseTo(21.7);
+    expect(fixed.largestHolderPct).toBeCloseTo(12);
+  });
+
+  it("fills in the largest holder on a profile cached before it was kept", () => {
+    const { largestHolderPct: _, ...cached } = toProfile(MINT, report);
+    expect(withoutVenueHolder(cached, undefined).largestHolderPct).toBeCloseTo(21.7);
   });
 
   it("leaves the profile alone when the pool is not a holder, unknown, or the shares are missing", () => {
@@ -255,5 +268,18 @@ describe("withoutVenueHolder", () => {
     );
     expect(fixed.top10HolderPct).toBeCloseTo(30);
     expect(fixed.top10HolderAddresses).toHaveLength(10);
+  });
+});
+
+describe("largestHolderShare", () => {
+  it("sums one owner's accounts and takes the biggest", () => {
+    expect(
+      largestHolderShare([
+        { owner: "a", pct: 6 },
+        { owner: "b", pct: 8 },
+        { owner: "a", pct: 5 },
+      ]),
+    ).toBe(11);
+    expect(largestHolderShare([])).toBeUndefined();
   });
 });

@@ -82,6 +82,7 @@ function profileFromSnapshot(
     holderCount: number | null;
     holderCountAt?: Date | null;
     top10HolderPct: number | null;
+    largestHolderPct?: number | null;
     devWalletPct: number | null;
     riskScore: number | null;
     riskFlags: string[];
@@ -120,6 +121,7 @@ function profileFromSnapshot(
     // The scan's reading, with its own time: the fast snapshot repeats it, it doesn't re-read it.
     holderCountAt: snapshot.holderCountAt ?? undefined,
     top10HolderPct: snapshot.top10HolderPct ?? undefined,
+    largestHolderPct: snapshot.largestHolderPct ?? undefined,
     devWalletPct: snapshot.devWalletPct ?? undefined,
     riskScore: snapshot.riskScore ?? undefined,
     riskFlags: snapshot.riskFlags,

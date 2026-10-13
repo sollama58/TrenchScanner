@@ -118,6 +118,11 @@ export interface OnChainProfile {
    */
   holderCountAt?: Date;
   top10HolderPct?: number;
+  /**
+   * % of supply held by the single largest holder, pools and LP aside (one wallet's several token
+   * accounts summed). Undefined when the holder shares can't be trusted, like top10HolderPct.
+   */
+  largestHolderPct?: number;
   devWalletPct?: number;
   /**
    * Whether the creator's wallet still holds any of the token, from RugCheck's creatorBalance.
@@ -376,6 +381,8 @@ export interface FilterCriteria {
   // only gate for these signals at all. Unset (null/false) means "don't check this," same as
   // every other optional criterion here - not "reject unless known."
   maxTop10HolderPct?: number | null;
+  /** Max % of supply held by the single largest holder, pools aside (largestHolderPct). Skipped while unknown. */
+  maxLargestHolderPct?: number | null;
   maxDevWalletPct?: number | null;
   maxRiskScore?: number | null;
   excludeCriticalRiskFlags?: boolean;

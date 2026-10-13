@@ -796,6 +796,7 @@ export interface FilterInput {
   minVolumeMcapRatio: number | null;
   minHolderGrowthPct: number | null;
   maxTop10HolderPct: number | null;
+  maxLargestHolderPct: number | null;
   maxDevWalletPct: number | null;
   maxRiskScore: number | null;
   excludeCriticalRiskFlags: boolean;

@@ -2397,7 +2397,11 @@ export function buildOnChainProfile(
     freezeAuthorityActive: authorities.freezeAuthorityActive,
     lpBurned: pumpVenue(candidate.dexId),
     ...(holders
-      ? { top10HolderPct: holders.top10HolderPct, top10HolderAddresses: holders.top10HolderAddresses }
+      ? {
+          top10HolderPct: holders.top10HolderPct,
+          largestHolderPct: holders.largestHolderPct,
+          top10HolderAddresses: holders.top10HolderAddresses,
+        }
       : {}),
   };
 }

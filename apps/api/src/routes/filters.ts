@@ -33,6 +33,7 @@ function buildFilterInputSchema(env: Env) {
     minVolumeMcapRatio: z.number().nonnegative().nullable().optional(),
     minHolderGrowthPct: z.number().nullable().optional(),
     maxTop10HolderPct: z.number().min(0).max(100).nullable().optional(),
+    maxLargestHolderPct: z.number().min(0).max(100).nullable().optional(),
     maxDevWalletPct: z.number().min(0).max(100).nullable().optional(),
     maxRiskScore: z.number().min(0).max(100).nullable().optional(),
     excludeCriticalRiskFlags: z.boolean().default(false),
