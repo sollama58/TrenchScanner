@@ -39,7 +39,7 @@ const MAX_LINKED = 24;
 /** Funder statuses that are final answers (see FunderResult in core's helius.ts). */
 const FINAL_FUNDER = new Set(["found", "none", "empty"]);
 
-export type LabelTone = "dev" | "risky" | "linked" | "info" | "good";
+export type LabelTone = "dev" | "risky" | "linked" | "info" | "good" | "pumpfun";
 
 export interface WalletLabel {
   text: string;

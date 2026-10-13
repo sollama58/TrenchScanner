@@ -14,12 +14,16 @@ export function identityLabels(identity: HeliusIdentity | null): WalletLabel[] {
   if (!identity) return [];
   const out: WalletLabel[] = [];
   const seen = new Set<string>();
-  const add = (text: string, detail?: string) => {
+  const add = (text: string, detail?: string, tone: WalletLabel["tone"] = "info") => {
     if (seen.has(text.toLowerCase())) return;
     seen.add(text.toLowerCase());
-    out.push({ text, tone: "info", source: "Helius", detail });
+    out.push({ text, tone, source: "Helius", detail });
   };
-  if (identity.name) add(identity.name, identity.category ?? undefined);
+  // A Pump.fun username shows in quotes, tinted green, as in the holder lists.
+  if (identity.name && identity.pumpfun) {
+    seen.add(identity.name.toLowerCase());
+    out.push({ text: `"${identity.name}"`, tone: "pumpfun", source: "Helius", detail: "Pump.fun username" });
+  } else if (identity.name) add(identity.name, identity.category ?? undefined);
   for (const tag of identity.tags) if (tag !== identity.category) add(tag);
   return out;
 }

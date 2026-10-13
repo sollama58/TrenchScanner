@@ -9,5 +9,6 @@ describe("walletText", () => {
     expect(walletText(W, {})).toBe("5tzF…uAi9");
     expect(walletText(W)).toBe("5tzF…uAi9");
     expect(walletText(null)).toBe("");
+    expect(walletText(W, { [W]: { name: "degen", source: "pumpfun" } })).toBe('"degen"');
   });
 });

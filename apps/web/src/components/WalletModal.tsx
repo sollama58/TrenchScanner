@@ -12,7 +12,7 @@ export interface WalletProfile {
   wallet: string;
   labels: {
     text: string;
-    tone: "dev" | "risky" | "linked" | "info" | "good";
+    tone: "dev" | "risky" | "linked" | "info" | "good" | "pumpfun";
     source: string;
     detail?: string;
   }[];
