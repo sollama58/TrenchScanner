@@ -63,6 +63,9 @@ describe("parseFeedAppearance", () => {
       quickLinks: ["gmgn", "axiom"],
     });
     expect(parseFeedAppearance({ quickLinks: [] }).quickLinks).toEqual([]);
+    // The score tile is hidden by default; an account that saved its own field list keeps it.
+    expect(parseFeedAppearance({}).hidden).toEqual(["score"]);
+    expect(parseFeedAppearance({ hidden: [] }).hidden).toEqual([]);
   });
 
   it("lets an older dashboard build save without the options added since", () => {
