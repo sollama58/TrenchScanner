@@ -34,6 +34,18 @@ describe("PumpPortalStream buffer", () => {
     expect(stream.drain()).toEqual([]);
   });
 
+  it("lists the launches since the last drain, newest first, without draining them", () => {
+    const OTHER = "9GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
+    const GRADUATED = "8GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
+    const stream = new PumpPortalStream("wss://example.invalid", null);
+    stream.handleMessage(JSON.stringify({ mint: MINT, txType: "create" }));
+    stream.handleMessage(JSON.stringify({ mint: GRADUATED, txType: "migrate" }));
+    stream.handleMessage(JSON.stringify({ mint: OTHER, txType: "create" }));
+    expect(stream.pendingLaunches()).toEqual([OTHER, MINT]);
+    expect(stream.drain()).toHaveLength(3);
+    expect(stream.pendingLaunches()).toEqual([]);
+  });
+
   it("is a no-op without a WebSocket implementation", () => {
     const stream = new PumpPortalStream("wss://example.invalid", null);
     expect(() => stream.start()).not.toThrow();
