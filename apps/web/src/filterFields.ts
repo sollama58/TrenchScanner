@@ -99,6 +99,14 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxSameTimeFundedPct",
+        min: 0,
+        max: 100,
+        label: "Max supply funded in the same minute",
+        hint: "top holders whose wallets were funded within a minute of each other, from any funders; tokens not checked yet wait",
+        unit: "%",
+      },
+      {
         key: "minCexFundedPct",
         min: 0,
         max: 100,

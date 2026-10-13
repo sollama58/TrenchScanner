@@ -76,10 +76,16 @@ export function snapshotDataFor(
     linkedClusters: scored.linkedClusters?.length
       ? (scored.linkedClusters as unknown as Prisma.InputJsonValue)
       : undefined,
-    // Every holder behind the reading, for the bubble map: kept with the clusters, as the map
-    // opens only on a coin with one.
+    sameTimeFundedPct: scored.sameTimeFundedPct,
+    sameTimeClusterCount: scored.sameTimeClusterCount,
+    // Only when there is a same-minute group to list, as for the clusters above.
+    sameTimeClusters: scored.sameTimeClusters?.length
+      ? (scored.sameTimeClusters as unknown as Prisma.InputJsonValue)
+      : undefined,
+    // Every holder behind the reading, for the bubble map: kept with the clusters (either kind),
+    // as the map opens only on a coin with one.
     linkedHolders:
-      scored.linkedClusters?.length && scored.linkedHolders?.length
+      (scored.linkedClusters?.length || scored.sameTimeClusters?.length) && scored.linkedHolders?.length
         ? (scored.linkedHolders as unknown as Prisma.InputJsonValue)
         : undefined,
     flaggedBuyers: scored.flaggedBuyers,

@@ -116,6 +116,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   if (
+    filter.maxSameTimeFundedPct != null &&
+    token.sameTimeFundedPct !== undefined &&
+    token.sameTimeFundedPct > filter.maxSameTimeFundedPct
+  ) {
+    return false;
+  }
+
+  if (
     filter.maxFlaggedBuySol != null &&
     token.flaggedBuySol !== undefined &&
     token.flaggedBuySol > filter.maxFlaggedBuySol

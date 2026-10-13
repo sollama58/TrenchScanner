@@ -41,8 +41,11 @@ const FUNDER_RECHECK_MS = 7 * DAY_MS;
  */
 const NONE_READ_AGAIN_BEFORE = new Date("2026-10-13T22:00:00Z");
 
-/** A wallet's funder, null when it has none ("none", "empty", or "busy" while unreadable). */
-const settledFunders = new SettledAnswers<string | null>(100_000);
+/**
+ * A wallet's funder, null when it has none ("none", "empty", or "busy" while unreadable), and when
+ * it was funded (ms epoch, null when not known).
+ */
+const settledFunders = new SettledAnswers<{ funder: string | null; fundedAtMs: number | null }>(100_000);
 /** Each funder's hot verdict and when it was read. */
 const hotFunders = new Map<string, { hot: boolean; atMs: number }>();
 const MAX_HOT_ENTRIES = 50_000;
@@ -85,6 +88,8 @@ export interface LinkedGroup {
 
 export interface LinkedWalletLookups {
   funderOf: Map<string, string | null>;
+  /** When each wallet read was funded, ms epoch; null when not known (no funding, or none kept). */
+  fundedAtOf: Map<string, number | null>;
   hot: (funder: string) => boolean;
   /** Funders whose hot verdict is known. */
   hotKnown: (funder: string) => boolean;
@@ -106,13 +111,15 @@ export async function resolveLinkedWallets(
     ...new Set([...g.holders.map((h) => h.owner), ...(g.creator ? [g.creator] : [])]),
   ];
   const all = [...new Set(groups.flatMap(walletsOf))];
-  const funderOf = new Map<string, string | null>(settledFunders.take(all));
+  const settled = settledFunders.take(all);
+  const funderOf = new Map<string, string | null>([...settled].map(([w, v]) => [w, v.funder]));
+  const fundedAtOf = new Map<string, number | null>([...settled].map(([w, v]) => [w, v.fundedAtMs]));
 
   const fromTable = all.filter((w) => !funderOf.has(w));
   if (fromTable.length > 0) {
     const rows = await prisma.walletFunder.findMany({
       where: { wallet: { in: fromTable } },
-      select: { wallet: true, funder: true, status: true, checkedAt: true },
+      select: { wallet: true, funder: true, status: true, checkedAt: true, fundedAt: true },
     });
     // A wallet stored as "busy" (more history than one signatures page) is read again whenever
     // the sorted lookup can reach its first transaction: busy wallets count too (user decision
@@ -121,8 +128,10 @@ export async function resolveLinkedWallets(
     for (const r of rows) {
       if (r.status === "busy" && rereadBusy) continue;
       if (r.status === "none" && r.checkedAt < NONE_READ_AGAIN_BEFORE) continue;
+      const fundedAtMs = r.fundedAt?.getTime() ?? null;
       funderOf.set(r.wallet, r.funder);
-      if (r.status !== "busy") settledFunders.remember(r.wallet, r.funder);
+      fundedAtOf.set(r.wallet, fundedAtMs);
+      if (r.status !== "busy") settledFunders.remember(r.wallet, { funder: r.funder, fundedAtMs });
     }
   }
 
@@ -158,9 +167,11 @@ export async function resolveLinkedWallets(
       }
       failureBackoff.succeed(wallet);
       const funder = r.status === "found" ? r.funder : null;
+      const fundedAtMs = r.status === "found" ? (r.fundedAt?.getTime() ?? null) : null;
       funderOf.set(wallet, funder);
+      fundedAtOf.set(wallet, fundedAtMs);
       // A "busy" answer is only for now: read again once the sorted lookup is back.
-      if (r.status !== "busy") settledFunders.remember(wallet, funder);
+      if (r.status !== "busy") settledFunders.remember(wallet, { funder, fundedAtMs });
       rows.push({
         wallet,
         status: r.status,
@@ -239,6 +250,7 @@ export async function resolveLinkedWallets(
 
   return {
     funderOf,
+    fundedAtOf,
     hot: (f) =>
       isHotFunder(f, { fullPageSpanMs: null, fundedLast24h: counts.get(f) }) ||
       hotFunders.get(f)?.hot === true,
@@ -295,7 +307,12 @@ export function linkedReadingOf(
   }
   const creatorFunder = creator ? (lookups.funderOf.get(creator) ?? null) : null;
   if (creatorFunder && !lookups.hotKnown(creatorFunder)) return null;
-  return linkedWallets(group.holders, lookups.funderOf, { hot: lookups.hot, creator, creatorFunder });
+  return linkedWallets(group.holders, lookups.funderOf, {
+    hot: lookups.hot,
+    creator,
+    creatorFunder,
+    fundedAtOf: lookups.fundedAtOf,
+  });
 }
 
 /**

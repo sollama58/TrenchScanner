@@ -1,4 +1,4 @@
-import type { LinkedCluster } from "./wallets/linkedWallets.js";
+import type { LinkedCluster, SameTimeCluster } from "./wallets/linkedWallets.js";
 import type { FlaggedTrade } from "./wallets/liveFlags.js";
 import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
@@ -193,6 +193,13 @@ export interface OnChainProfile {
   /** The holders the linked reading covers, with each one's share (LinkedWalletsReading.holders), for the bubble map. */
   linkedHolders?: { wallet: string; pct: number }[];
   /**
+   * Top holders funded within a minute of each other, whoever paid (core's sameTimeClusters): the
+   * % of supply they hold, the group count, and the groups. Read with the linked reading.
+   */
+  sameTimeFundedPct?: number;
+  sameTimeClusterCount?: number;
+  sameTimeClusters?: SameTimeCluster[];
+  /**
    * Of the largest holders (up to 20, the creator aside), the % an exchange or a busy service paid
    * for (core's cexFundedReading), how many, and how many were read. Undefined until every one of
    * their funders is read.
@@ -351,6 +358,8 @@ export interface FilterCriteria {
   maxSniperTop10WalletPct?: number | null;
   /** Max % of supply held by linked top holders (one funder, or funded each other). */
   maxLinkedWalletPct?: number | null;
+  /** Max % of supply held by top holders funded within a minute of each other (sameTimeFundedPct). */
+  maxSameTimeFundedPct?: number | null;
   /** Bounds on the % of the largest holders an exchange paid for (cexFundedPct). Skipped while unknown. */
   minCexFundedPct?: number | null;
   maxCexFundedPct?: number | null;

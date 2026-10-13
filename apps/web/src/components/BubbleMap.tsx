@@ -14,6 +14,7 @@ import {
   layoutGraph,
   pickReading,
   type BubbleGraph,
+  type SameTimeGroup,
   type FlaggedHolder,
   type MapNode,
 } from "../bubbleMap";
@@ -237,6 +238,15 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
           <dt>Largest</dt>
           <dd className="num">{pct(largest, 1)}</dd>
         </div>
+        {graph.sameTimeGroups.length > 0 && (
+          <div
+            className="bm-same-stat"
+            title="Top holders funded within a minute of each other, from any funders"
+          >
+            <dt>Same minute</dt>
+            <dd className="num">{pct(graph.sameTimePct, 1)}</dd>
+          </div>
+        )}
         <div className={risky.length > 0 ? "risky" : undefined}>
           <dt>Risky holders</dt>
           <dd className="num">{risky.length}</dd>
@@ -282,11 +292,32 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
           </li>
         ))}
       </ul>
+      {graph.sameTimeGroups.length > 0 && (
+        <ul className="bm-clusters bm-same-groups">
+          {graph.sameTimeGroups.map((g) => (
+            <li key={g.atMs}>
+              <div className="bm-cluster bm-same">
+                <i className="bm-same-dot" aria-hidden="true" />
+                <span className="bm-cluster-name">
+                  Funded together <span className="num">{fundingTime(g.atMs)}</span>
+                </span>
+                <span className="muted small">
+                  {g.wallets.length} wallets within {Math.max(1, Math.round(g.spanMs / 1000))}s
+                  {sameTimeFunders(g)}
+                </span>
+                <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
       {!compact && (
         <p className="faint small bm-note">
           Each bubble is a top holder, sized by its share of supply. Wallets one funder paid for share a
           colour and a line to that funder; grey ones are linked to no other. A red ring marks a risky wallet
           or known dumper.
+          {graph.sameTimeGroups.length > 0 &&
+            " A dotted ring and line join holders whose wallets were funded within the same minute, whoever paid."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
         </p>
@@ -371,6 +402,23 @@ function BubbleSvg({
             );
           })}
         </g>
+        <g className="bm-same-links">
+          {graph.sameTimeLinks.map((l) => {
+            const a = index.get(l.from);
+            const b = index.get(l.to);
+            if (!a || !b) return null;
+            return (
+              <line
+                key={`${l.from}-${l.to}`}
+                x1={a.x}
+                y1={a.y}
+                x2={b.x}
+                y2={b.y}
+                className={`bm-same-link${lit !== null ? " dim" : ""}`}
+              />
+            );
+          })}
+        </g>
         {order.map((n, i) => (
           <g
             key={n.id}
@@ -441,6 +489,9 @@ function Bubble({ node: n, fill }: { node: MapNode; fill: string }) {
   const by = n.y - n.r * 0.72;
   return (
     <>
+      {n.sameTime !== null && (
+        <circle cx={n.x} cy={n.y} r={n.r + (flaggedRisk ? 9 : 4.5)} className="bm-same-ring" />
+      )}
       {flaggedRisk && <circle cx={n.x} cy={n.y} r={n.r + 4.5} className="bm-risk-ring" />}
       <circle cx={n.x} cy={n.y} r={n.r} fill={fill} className="bm-bubble" style={{ stroke: colour }} />
       {/* A glossy highlight, top left, as on a lit sphere. */}
@@ -472,6 +523,22 @@ function Bubble({ node: n, fill }: { node: MapNode; fill: string }) {
 
 const pctText = (v: number) => `${v < 10 ? v.toFixed(1) : v.toFixed(0)}%`;
 
+/** When a same-minute group was funded: the date and the minute, in the reader's time zone. */
+function fundingTime(atMs: number): string {
+  return new Date(atMs).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** " · from N funders", or " · one funder" when a single wallet paid for them all. */
+function sameTimeFunders(g: SameTimeGroup): string {
+  const funders = new Set(g.wallets.map((w) => w.funder ?? `?${w.wallet}`));
+  return funders.size === 1 ? " · one funder" : ` · from ${funders.size} funders`;
+}
+
 function nodeLabel(n: MapNode, graph: BubbleGraph): string {
   if (n.kind === "rest") return `${n.count} other top holders, ${pctText(n.pct)} together`;
   const cluster = n.cluster === null ? null : graph.clusters[n.cluster];
@@ -483,9 +550,12 @@ function nodeLabel(n: MapNode, graph: BubbleGraph): string {
     n.flags.includes("dumper") ? "known dumper" : null,
     typeof n.kol === "string" ? (n.kol ? `KOL ${n.kol}` : "a KOL") : null,
   ].filter(Boolean);
+  const same = n.sameTime === null ? null : graph.sameTimeGroups[n.sameTime];
   return `Holder ${shortAddress(n.wallet ?? "")}, ${pctText(n.pct)} of supply${
     cluster ? `, funded by ${shortAddress(cluster.funder)}` : ""
-  }${what.length ? `, ${what.join(", ")}` : ""}`;
+  }${same ? `, funded in the same minute as ${same.wallets.length - 1} other top holders` : ""}${
+    what.length ? `, ${what.join(", ")}` : ""
+  }`;
 }
 
 /** What a tapped bubble is, under the map. */
@@ -532,6 +602,12 @@ function NodeDetail({ node: n, graph }: { node: MapNode | null; graph: BubbleGra
       {n.kind === "holder" && cluster && (
         <span className="muted">
           {n.hub ? "funded the others in its cluster" : `funded by ${shortAddress(cluster.funder)}`}
+        </span>
+      )}
+      {n.kind === "holder" && n.sameTime !== null && graph.sameTimeGroups[n.sameTime] && (
+        <span className="tm-tag k-same">
+          Funded same minute as {graph.sameTimeGroups[n.sameTime]!.wallets.length - 1} other
+          {graph.sameTimeGroups[n.sameTime]!.wallets.length === 2 ? "" : "s"}
         </span>
       )}
       {n.score !== null && <span className="muted num">risk {Math.round(n.score)}</span>}

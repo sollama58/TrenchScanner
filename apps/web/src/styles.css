@@ -9369,6 +9369,39 @@ img.tm-avatar {
   stroke-width: 2;
   stroke-dasharray: 4 3;
 }
+/* Holders funded within the same minute, whoever paid: a dotted ring and tie in the neutral ink,
+   apart from the cluster colours, the red risk ring and the amber dev badge. */
+.bm-same-ring {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 2;
+  stroke-dasharray: 0.1 4.5;
+  stroke-linecap: round;
+}
+.bm-same-link {
+  stroke: var(--ink-2);
+  stroke-width: 1.8;
+  stroke-dasharray: 0.1 5;
+  stroke-linecap: round;
+  stroke-opacity: 0.8;
+  transition: stroke-opacity 0.2s;
+}
+.bm-same-link.dim {
+  stroke-opacity: 0.12;
+}
+.bm-same-dot {
+  grid-area: dot;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px dotted var(--ink-2);
+}
+.bm-same {
+  cursor: default;
+}
+.k-same {
+  --mk: var(--ink-2);
+}
 .bm-pct {
   fill: #fff;
   font-weight: 750;
