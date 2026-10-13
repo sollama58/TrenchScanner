@@ -78,7 +78,7 @@ export function AppearancePanel() {
             </div>
           </div>
           <div className="cards preview-cards" {...feedGridProps({ ...look, columns: 1, phoneColumns: 1 })}>
-            <AlertCard card={cards[sample]} now={now} labelSource hide={hidden} />
+            <AlertCard card={cards[sample]} now={now} labelSource hide={hidden} detail={false} />
           </div>
         </div>
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Card, CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
@@ -8,6 +8,12 @@ import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
+
+// The token modal (and its chart) loads the first time a card is opened.
+const TokenModal = lazy(() => import("./TokenModal").then((m) => ({ default: m.TokenModal })));
+
+/** Clicks on these inside a card do their own thing rather than open the token modal. */
+const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='button']";
 
 const LINKS = [
   { label: "Dex", href: (m: string) => `https://dexscreener.com/solana/${m}` },
@@ -20,6 +26,7 @@ export function AlertCard({
   compact = false,
   labelSource = false,
   hide,
+  detail = true,
 }: {
   card: Card;
   now: number;
@@ -28,6 +35,8 @@ export function AlertCard({
   labelSource?: boolean;
   /** Fields the user chose not to see (Settings › Feed appearance). */
   hide?: ReadonlySet<CardField>;
+  /** Clicking the card opens the token modal (off for the Customize preview). */
+  detail?: boolean;
 }) {
   const show = (f: CardField) => !hide?.has(f);
   const s = card.snapshot;
@@ -41,6 +50,7 @@ export function AlertCard({
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [linkedOpen, setLinkedOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const alertMcap = s.marketCapUsd;
   const nowMcap = nowReading(card);
   const move = change(alertMcap, nowMcap);
@@ -71,35 +81,22 @@ export function AlertCard({
     isRunPeak && (!nowCounts || (recordedPeak ?? 0) >= (move ?? 0))
       ? (curated?.outcome.runPeakMinutes ?? null)
       : null;
-  // Measured at alert time when the wallet lookups made it in time; otherwise from a later scan.
-  const freshAtAlert = s.freshTop10WalletPct ?? null;
-  const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
-  const freshPct = freshAtAlert ?? freshLater ?? card.token.lastFreshTop10WalletPct ?? null;
-  // The empty-wallet share, with the same fallback. Both wallet checks are paid lookups with a
-  // per-scan budget, so a token can go unchecked; the tile says so rather than showing a blank.
-  const emptyAtAlert = s.emptyTop10WalletPct ?? null;
-  const emptyPct =
-    emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? card.token.lastEmptyTop10WalletPct ?? null;
-  // The share of the top 10 that were the launch's first buyers, at alert time or from a later scan.
-  const sniperAtAlert = s.sniperTop10WalletPct ?? null;
-  const sniperPct = sniperAtAlert ?? card.latestSnapshot?.sniperTop10WalletPct ?? null;
-  // Linked wallets: top holders one funder paid for (or that funded each other), at alert time or
-  // from a later scan, with the clusters behind the share for the list under the tiles.
-  const linkedFrom = s.linkedWalletPct != null ? s : card.latestSnapshot;
-  const linkedPct = linkedFrom?.linkedWalletPct ?? null;
-  const linkedClusters = linkedFrom?.linkedClusters ?? [];
-  // The same fallback for the first-buyers count, read from the launch's first transactions.
-  const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
-  const firstHolding = buyersFrom?.firstBuyersHolding ?? null;
-  const firstSeen = buyersFrom?.firstBuyersSeen ?? null;
-  // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
-  const devHolding = card.latestSnapshot?.devHolding ?? s.devHolding ?? null;
-  // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
-  // send it to holders, a charity, a GitHub account or other wallets instead of the dev.
-  const fee = card.token.creatorFee;
-  const feeLine = fee?.summary
-    ? `${fee.summary.charAt(0).toUpperCase()}${fee.summary.slice(1).replace(/\.$/, "")}.`
-    : null;
+  const {
+    freshPct,
+    freshAtAlert,
+    emptyPct,
+    emptyAtAlert,
+    sniperPct,
+    sniperAtAlert,
+    linkedPct,
+    linkedAtAlert,
+    linkedClusters,
+    firstHolding,
+    firstSeen,
+    buyersAtAlert,
+    devHolding,
+    feeLine,
+  } = cardReadings(card);
 
   const figCount = (["alert", "now", "peak"] as const).filter(show).length;
   // The volume field is three tiles (5m / 1h / 24h).
@@ -126,9 +123,18 @@ export function AlertCard({
     });
   };
 
+  // A click anywhere on the card that isn't a button or link, and isn't the end of a text selection.
+  const openDetail = (e: React.MouseEvent) => {
+    if (!detail || e.defaultPrevented || e.button !== 0) return;
+    if ((e.target as Element).closest?.(OWN_CLICK)) return;
+    if (window.getSelection?.()?.toString()) return;
+    setDetailOpen(true);
+  };
+
   return (
     <article
-      className={`card tone-${badge.tone}${compact ? " compact" : ""}${labelSource ? (card.kind === "match" ? " src-mine" : " src-model") : ""}`}
+      className={`card tone-${badge.tone}${compact ? " compact" : ""}${labelSource ? (card.kind === "match" ? " src-mine" : " src-model") : ""}${detail ? " opens" : ""}`}
+      onClick={openDetail}
     >
       <header className="card-head">
         <div className={`avatar-wrap tone-${badge.tone}`}>
@@ -136,7 +142,18 @@ export function AlertCard({
         </div>
         <div className="card-title">
           <div className="title-row">
-            <strong className="symbol">{tokenLabel(card.token)}</strong>
+            {detail ? (
+              <button
+                type="button"
+                className="symbol symbol-btn"
+                onClick={() => setDetailOpen(true)}
+                title="Open the token's chart and details"
+              >
+                {tokenLabel(card.token)}
+              </button>
+            ) : (
+              <strong className="symbol">{tokenLabel(card.token)}</strong>
+            )}
             {show("tokenName") && card.token.name && card.token.symbol && (
               <span className="token-name">{card.token.name}</span>
             )}
@@ -337,7 +354,7 @@ export function AlertCard({
                 firstHolding === null
                   ? "First 25 buyers still holding: not checked yet for this token"
                   : `${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
-                      buyersFrom === s ? ", at alert time" : ", from a scan after the alert"
+                      buyersAtAlert ? ", at alert time" : ", from a scan after the alert"
                     }`
               }
             >
@@ -358,7 +375,7 @@ export function AlertCard({
             <LinkedTile
               pct={linkedPct}
               clusters={linkedClusters}
-              atAlert={linkedFrom === s && linkedPct !== null}
+              atAlert={linkedAtAlert && linkedPct !== null}
               open={linkedOpen}
               onToggle={() => setLinkedOpen((o) => !o)}
             />
@@ -458,8 +475,62 @@ export function AlertCard({
           )}
         </footer>
       )}
+      {detailOpen &&
+        createPortal(
+          <Suspense fallback={null}>
+            <TokenModal card={card} now={now} onClose={() => setDetailOpen(false)} />
+          </Suspense>,
+          document.body,
+        )}
     </article>
   );
+}
+
+/**
+ * The wallet and holder readings a card shows, each from the alert's snapshot when the lookup
+ * made it in time, else from a later scan (both wallet checks are paid lookups with a per-scan
+ * budget, so a token can go unchecked). Shared with the token modal.
+ */
+export function cardReadings(card: Card) {
+  const s = card.snapshot;
+  const freshAtAlert = s.freshTop10WalletPct ?? null;
+  const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
+  const freshPct = freshAtAlert ?? freshLater ?? card.token.lastFreshTop10WalletPct ?? null;
+  const emptyAtAlert = s.emptyTop10WalletPct ?? null;
+  const emptyPct =
+    emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? card.token.lastEmptyTop10WalletPct ?? null;
+  // The share of the top 10 that were the launch's first buyers, at alert time or from a later scan.
+  const sniperAtAlert = s.sniperTop10WalletPct ?? null;
+  const sniperPct = sniperAtAlert ?? card.latestSnapshot?.sniperTop10WalletPct ?? null;
+  // Linked wallets: top holders one funder paid for (or that funded each other), at alert time or
+  // from a later scan, with the clusters behind the share for the list under the tiles.
+  const linkedFrom = s.linkedWalletPct != null ? s : card.latestSnapshot;
+  // The same fallback for the first-buyers count, read from the launch's first transactions.
+  const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
+  // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
+  const devHolding = card.latestSnapshot?.devHolding ?? s.devHolding ?? null;
+  // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
+  // send it to holders, a charity, a GitHub account or other wallets instead of the dev.
+  const fee = card.token.creatorFee;
+  const feeLine = fee?.summary
+    ? `${fee.summary.charAt(0).toUpperCase()}${fee.summary.slice(1).replace(/\.$/, "")}.`
+    : null;
+  return {
+    freshPct,
+    freshAtAlert,
+    emptyPct,
+    emptyAtAlert,
+    sniperPct,
+    sniperAtAlert,
+    linkedPct: linkedFrom?.linkedWalletPct ?? null,
+    linkedAtAlert: linkedFrom === s,
+    linkedClusters: linkedFrom?.linkedClusters ?? [],
+    firstHolding: buyersFrom?.firstBuyersHolding ?? null,
+    firstSeen: buyersFrom?.firstBuyersSeen ?? null,
+    buyersAtAlert: buyersFrom === s,
+    devHolding,
+    feeLine,
+  };
 }
 
 /**
@@ -468,13 +539,13 @@ export function AlertCard({
  * empty wallets and launch snipers each fail at 80% or more. A tile turns red only when its reading
  * would fail the screen. SAFETY_REJECT_TOP10_HOLDER_PCT: a top ten owning 40% or more fails too.
  */
-const SAFETY_MAX_FRESH_WALLET_PCT = 70;
-const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
-const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
-const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
+export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
+export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
+export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
+export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 
 /** One wallet-check tile (Fresh, Empty or Top-10 snipers): the share, where it was read, or that it wasn't checked. */
-function WalletStat({
+export function WalletStat({
   label,
   value,
   atAlert,
@@ -507,7 +578,7 @@ function WalletStat({
 }
 
 /** At or above this share held by linked wallets, the Linked tile reads as a warning. */
-const LINKED_WARN_PCT = 30;
+export const LINKED_WARN_PCT = 30;
 
 type LinkedClusterView = NonNullable<Card["snapshot"]["linkedClusters"]>[number];
 
