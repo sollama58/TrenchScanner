@@ -102,3 +102,24 @@ describe("bubble map link", () => {
     );
   });
 });
+
+describe("bubble map holders", () => {
+  it("gives every unlinked holder its own bubble when the scan kept the list", () => {
+    const g = buildGraph({
+      ...snapshot,
+      top10WalletsChecked: 7,
+      linkedHolders: [
+        { wallet: A, pct: 12 },
+        { wallet: B, pct: 9 },
+        { wallet: C, pct: 6 },
+        { wallet: D, pct: 4 },
+        { wallet: R, pct: 8 },
+        { wallet: "Lone2", pct: 5 },
+        { wallet: "Lone3", pct: 4 },
+      ],
+    });
+    const lone = g.nodes.filter((n) => n.kind === "holder" && n.cluster === null).map((n) => n.wallet);
+    expect(lone).toEqual([R, "Lone2", "Lone3"]);
+    expect(g.nodes.some((n) => n.kind === "rest")).toBe(false);
+  });
+});

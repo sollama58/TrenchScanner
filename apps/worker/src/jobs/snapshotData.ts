@@ -73,6 +73,12 @@ export function snapshotDataFor(
     linkedClusters: scored.linkedClusters?.length
       ? (scored.linkedClusters as unknown as Prisma.InputJsonValue)
       : undefined,
+    // Every holder behind the reading, for the bubble map: kept with the clusters, as the map
+    // opens only on a coin with one.
+    linkedHolders:
+      scored.linkedClusters?.length && scored.linkedHolders?.length
+        ? (scored.linkedHolders as unknown as Prisma.InputJsonValue)
+        : undefined,
     flaggedBuyers: scored.flaggedBuyers,
     flaggedSellers: scored.flaggedSellers,
     flaggedBuySol: scored.flaggedBuySol,

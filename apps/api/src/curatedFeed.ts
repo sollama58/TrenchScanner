@@ -490,6 +490,7 @@ export function serializeCuratedAlert(
     linkedLargestClusterPct: null,
     linkedCreatorPct: null,
     linkedClusters: null,
+    linkedHolders: null,
     flaggedBuyers: null,
     flaggedSellers: null,
     flaggedBuySol: null,

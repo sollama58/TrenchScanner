@@ -980,6 +980,9 @@ model TokenSnapshot {
   linkedLargestClusterPct Float?
   linkedCreatorPct        Float?
   linkedClusters          Json?
+  // Every top holder the linked reading covered (the creator aside) and its %, largest first, for
+  // the bubble map; stored only alongside linkedClusters.
+  linkedHolders           Json?
   // Flagged wallets (risky or known dumpers) in the coin's newest page of trades, read from Helius
   // before the decision (core's wallets/liveFlags.ts, worker's liveTape.ts): distinct buyers and
   // sellers and the SOL each way. flaggedTrades keeps the trades themselves (wallet, side, SOL,

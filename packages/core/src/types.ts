@@ -190,6 +190,8 @@ export interface OnChainProfile {
   linkedLargestClusterPct?: number;
   linkedCreatorPct?: number;
   linkedClusters?: LinkedCluster[];
+  /** The holders the linked reading covers, with each one's share (LinkedWalletsReading.holders), for the bubble map. */
+  linkedHolders?: { wallet: string; pct: number }[];
   /**
    * Flagged wallets (risky or known dumpers) in the coin's newest page of trades, read from Helius
    * before the decision (core's wallets/liveFlags.ts, worker's liveTape.ts): distinct buyers and

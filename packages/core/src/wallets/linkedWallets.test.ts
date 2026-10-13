@@ -152,5 +152,9 @@ describe("linkedWallets", () => {
     })!;
     expect(r.linkedCreatorPct).toBe(18);
     expect(r.linkedWalletsChecked).toBe(5);
+    // Every holder but the creator, largest first, for the bubble map.
+    expect(r.holders.map((h) => h.wallet)).not.toContain("creator");
+    expect(r.holders).toHaveLength(5);
+    expect(r.holders.map((h) => h.pct)).toEqual([...r.holders.map((h) => h.pct)].sort((x, y) => y - x));
   });
 });
