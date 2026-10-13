@@ -3,6 +3,8 @@ import {
   bubblesFromUrl,
   bubblesLink,
   buildGraph,
+  linkedCount,
+  linkedCountText,
   clusterHalos,
   graphBounds,
   layoutGraph,
@@ -179,5 +181,33 @@ describe("bubble map halos", () => {
       expect(c.x - c.r).toBeGreaterThanOrEqual(box.x - 1e-6);
       expect(c.y + c.r).toBeLessThanOrEqual(box.y + box.h + 1e-6);
     }
+  });
+});
+
+describe("linkedCount", () => {
+  it("reads the stored count, and counts the clusters' wallets on older scans", () => {
+    expect(linkedCount({ linkedWalletPct: 12, linkedWalletCount: 4, linkedWalletsChecked: 20 })).toEqual({
+      linked: 4,
+      of: 20,
+    });
+    const older = {
+      linkedWalletPct: 12,
+      linkedClusters: [
+        {
+          funder: "F",
+          wallets: [
+            { wallet: "a", pct: 5 },
+            { wallet: "b", pct: 4 },
+          ],
+          pct: 9,
+          creatorLinked: false,
+        },
+        { funder: "G", wallets: [{ wallet: "c", pct: 3 }], pct: 3, creatorLinked: false },
+      ],
+      linkedHolders: Array.from({ length: 18 }, (_, i) => ({ wallet: `w${i}`, pct: 1 })),
+    };
+    expect(linkedCount(older)).toEqual({ linked: 3, of: 18 });
+    expect(linkedCountText(linkedCount(older))).toBe("3/18");
+    expect(linkedCount({ linkedWalletPct: null })).toBeNull();
   });
 });

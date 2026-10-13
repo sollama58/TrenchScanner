@@ -148,6 +148,8 @@ export interface BubbleGraph {
   sameTimePct: number | null;
   /** Share of supply in linked wallets, and the top 10's share, as read. */
   linkedPct: number | null;
+  /** How many top holders are linked, of how many were read. */
+  linkedCount: { linked: number; of: number } | null;
   top10Pct: number | null;
 }
 
@@ -188,6 +190,8 @@ export function buildGraph(
     | "linkedClusters"
     | "linkedHolders"
     | "linkedWalletPct"
+    | "linkedWalletCount"
+    | "linkedWalletsChecked"
     | "top10HolderPct"
     | "top10WalletsChecked"
     | "sameTimeClusters"
@@ -334,6 +338,7 @@ export function buildGraph(
     sameTimeGroups,
     sameTimePct: snapshot.sameTimeFundedPct ?? null,
     linkedPct: snapshot.linkedWalletPct ?? null,
+    linkedCount: linkedCount(snapshot),
     top10Pct: top10,
   };
 }
@@ -517,6 +522,33 @@ export function clusterHalos(graph: BubbleGraph): ClusterHalo[] {
     });
   });
   return out;
+}
+
+/** Holders the linked reading covers when the scan didn't keep the count: the top 20. */
+const LINKED_HOLDERS_READ = 20;
+
+/**
+ * Linked as a count (user ask 2026-10-13): how many top holders are in a linked cluster, of how
+ * many were read, shown "N/20". Scans before the count was kept count the clusters' wallets. Null
+ * when the reading isn't in.
+ */
+export function linkedCount(
+  s: Pick<
+    Snapshot,
+    "linkedWalletPct" | "linkedWalletCount" | "linkedWalletsChecked" | "linkedClusters" | "linkedHolders"
+  >,
+): { linked: number; of: number } | null {
+  if (s.linkedWalletPct == null) return null;
+  if (s.linkedWalletCount != null) {
+    return { linked: s.linkedWalletCount, of: s.linkedWalletsChecked ?? LINKED_HOLDERS_READ };
+  }
+  const wallets = new Set((s.linkedClusters ?? []).flatMap((c) => (c?.wallets ?? []).map((w) => w.wallet)));
+  return { linked: wallets.size, of: s.linkedHolders?.length || LINKED_HOLDERS_READ };
+}
+
+/** "4/20", or null without a reading. */
+export function linkedCountText(c: { linked: number; of: number } | null): string | null {
+  return c ? `${c.linked}/${c.of}` : null;
 }
 
 /** The reading to draw: the card's, else the newest scan's with a linked reading. */

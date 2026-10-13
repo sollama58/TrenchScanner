@@ -67,6 +67,8 @@ export function snapshotDataFor(
     sniperTop10WalletPct: scored.sniperTop10WalletPct,
     linkedWalletPct: scored.linkedWalletPct,
     linkedClusterCount: scored.linkedClusterCount,
+    linkedWalletCount: scored.linkedWalletCount,
+    linkedWalletsChecked: scored.linkedWalletsChecked,
     linkedLargestClusterPct: scored.linkedLargestClusterPct,
     linkedCreatorPct: scored.linkedCreatorPct,
     cexFundedPct: scored.cexFundedPct,

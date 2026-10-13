@@ -12,6 +12,7 @@ import {
   openBubbleMap,
   graphBounds,
   layoutGraph,
+  linkedCountText,
   pickReading,
   type BubbleGraph,
   type SameTimeGroup,
@@ -228,7 +229,12 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
       <dl className="bm-stats">
         <div className={graph.linkedPct !== null && graph.linkedPct >= LINKED_WARN_PCT ? "risky" : undefined}>
           <dt>Linked</dt>
-          <dd className="num">{pct(graph.linkedPct, 1)}</dd>
+          <dd
+            className="num"
+            title={graph.linkedPct === null ? undefined : `${pct(graph.linkedPct, 1)} of supply`}
+          >
+            {linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1)}
+          </dd>
         </div>
         <div>
           <dt>Clusters</dt>

@@ -187,6 +187,9 @@ export interface OnChainProfile {
    */
   linkedWalletPct?: number;
   linkedClusterCount?: number;
+  /** Holders in any cluster, of linkedWalletsChecked holders read (user ask 2026-10-13: Linked as "N/20"). */
+  linkedWalletCount?: number;
+  linkedWalletsChecked?: number;
   linkedLargestClusterPct?: number;
   linkedCreatorPct?: number;
   linkedClusters?: LinkedCluster[];

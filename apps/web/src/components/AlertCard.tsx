@@ -13,7 +13,7 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { openSage } from "../sage";
-import { openBubbleMap, type BubbleSeed } from "../bubbleMap";
+import { linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -98,6 +98,7 @@ export function AlertCard({
     sniperPct,
     sniperAtAlert,
     linkedPct,
+    linkedCount: linkedN,
     linkedAtAlert,
     linkedClusters,
     cexPct,
@@ -388,6 +389,7 @@ export function AlertCard({
           {show("linked") && (
             <LinkedTile
               pct={linkedPct}
+              count={linkedN}
               clusters={linkedClusters}
               atAlert={linkedAtAlert && linkedPct !== null}
               onOpen={() => openBubbleMap(mint, linkedSeed(card))}
@@ -552,6 +554,7 @@ export function cardReadings(card: Card) {
     sniperPct,
     sniperAtAlert,
     linkedPct: linkedFrom?.linkedWalletPct ?? null,
+    linkedCount: linkedFrom ? linkedCount(linkedFrom) : null,
     linkedAtAlert: linkedFrom === s,
     linkedClusters: linkedFrom?.linkedClusters ?? [],
     cexPct: cexFrom?.cexFundedPct ?? null,
@@ -631,14 +634,19 @@ export function linkedSeed(card: Card): BubbleSeed | undefined {
   return from ? { token: card.token, snapshot: from } : undefined;
 }
 
-/** The Linked tile: the share of supply held by linked top holders. Tapping it opens the bubble map. */
+/**
+ * The Linked tile: how many top holders are linked, "N/20" (user ask 2026-10-13), with the supply
+ * they hold in the tooltip. Tapping it opens the bubble map.
+ */
 function LinkedTile({
   pct: value,
+  count,
   clusters,
   atAlert,
   onOpen,
 }: {
   pct: number | null;
+  count: { linked: number; of: number } | null;
   clusters: readonly LinkedClusterView[];
   atAlert: boolean;
   onOpen: () => void;
@@ -649,7 +657,7 @@ function LinkedTile({
       ? "Linked: not checked yet. Who paid for each top-20 wallet is read a few tokens per scan."
       : value === 0
         ? `Linked: no two top-20 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
-        : `Linked: ${summary ?? `${pct(value)} of supply in linked wallets`}, ${atAlert ? "at alert time" : "from a scan after the alert"}. Tap for the bubble map.`;
+        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. Tap for the bubble map.`;
   const canOpen = value !== null && clusters.length > 0;
   return (
     <div
@@ -686,7 +694,9 @@ function LinkedTile({
         Linked
         {canOpen && <BubblesIcon size={12} className="tile-opens-icon" />}
       </dt>
-      <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
+      <dd className={value === null ? "muted" : "num"}>
+        {value === null ? "Not checked" : (linkedCountText(count) ?? pct(value))}
+      </dd>
     </div>
   );
 }

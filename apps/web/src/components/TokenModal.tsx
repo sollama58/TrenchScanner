@@ -1,3 +1,4 @@
+import { linkedCountText } from "../bubbleMap";
 import {
   createContext,
   useContext,
@@ -935,11 +936,13 @@ function StatsCard({ card }: { card: Card }) {
         />
         <div
           className={r.linkedPct !== null && r.linkedPct >= LINKED_WARN_PCT ? "risky" : undefined}
-          title="Share of supply held by top holders one wallet funded (or that funded each other)"
+          title={`Top holders one wallet funded (or that funded each other)${
+            r.linkedPct === null ? "" : `, holding ${pct(r.linkedPct)} of supply`
+          }`}
         >
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>
-            {r.linkedPct === null ? "Not checked" : pct(r.linkedPct)}
+            {r.linkedPct === null ? "Not checked" : (linkedCountText(r.linkedCount) ?? pct(r.linkedPct))}
           </dd>
         </div>
         <div title="How many of the launch's first 25 buyers still hold it">

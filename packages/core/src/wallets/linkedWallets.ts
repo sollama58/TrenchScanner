@@ -180,6 +180,8 @@ export interface LinkedWalletsReading {
   linkedWalletPct: number;
   /** Clusters of two or more holders. */
   linkedClusterCount: number;
+  /** How many holders are in any cluster, of linkedWalletsChecked: the Linked tile's "N/20". */
+  linkedWalletCount: number;
   /** The largest cluster's share of supply, %. 0 with no cluster. */
   linkedLargestClusterPct: number;
   /** % of supply held by holders tied to the creator (the creator's own holding aside). */
@@ -346,6 +348,7 @@ export function linkedWallets(
   return {
     linkedWalletPct: round2(clusters.reduce((s, c) => s + c.pct, 0)),
     linkedClusterCount: clusters.length,
+    linkedWalletCount: clusters.reduce((s, c) => s + c.wallets.length, 0),
     linkedLargestClusterPct: clusters[0]?.pct ?? 0,
     linkedCreatorPct: round2(list.filter((h) => tiedToCreator(h.owner)).reduce((s, h) => s + h.pct, 0)),
     linkedWalletsChecked: list.length,
