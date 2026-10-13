@@ -9,6 +9,7 @@ import {
   clusterHalos,
   graphBounds,
   hasHolderList,
+  holderFreshness,
   layoutGraph,
   pickReading,
 } from "./bubbleMap";
@@ -244,5 +245,19 @@ describe("sameTimeCount", () => {
       }),
     ).toEqual({ linked: 2, of: 20 });
     expect(sameTimeCount({ sameTimeFundedPct: null })).toBeNull();
+  });
+});
+
+describe("holderFreshness", () => {
+  const at = "2026-10-13T23:00:00.000Z";
+  const t = Date.parse(at);
+  it("puts the next update one scan after the reading", () => {
+    expect(holderFreshness(at, t + 20_000)).toEqual({ last: t, next: t + 60_000 });
+  });
+  it("says it is due now once that scan is late", () => {
+    expect(holderFreshness(at, t + 3 * 60_000)).toEqual({ last: t, next: t + 3 * 60_000 });
+  });
+  it("has no next update once the coin has gone unscanned for ten minutes", () => {
+    expect(holderFreshness(at, t + 10 * 60_000)).toEqual({ last: t, next: null });
   });
 });

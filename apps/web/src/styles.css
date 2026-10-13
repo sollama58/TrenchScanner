@@ -9978,6 +9978,11 @@ img.tm-avatar {
   height: 1px;
   background: linear-gradient(90deg, var(--border-strong), transparent);
 }
+.tm-holders-when {
+  margin: -6px 0 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
 .tm-group > .tm-grid,
 .tm-group > .tm-holders {
   margin-top: 0;

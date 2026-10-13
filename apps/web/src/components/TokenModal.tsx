@@ -1,4 +1,4 @@
-import { hasHolderList, linkedCountText, pickReading } from "../bubbleMap";
+import { hasHolderList, holderFreshness, linkedCountText, pickReading } from "../bubbleMap";
 import { cachedGet } from "../cache";
 import {
   createContext,
@@ -355,6 +355,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       <section id={`${ids}-holders`} className="tm-group" aria-labelledby={`${ids}-holders-h`}>
         <GroupLabel id={`${ids}-holders-h`}>Holders</GroupLabel>
+        {linked && hasHolderList(linked) && <HolderFreshness takenAt={linked.takenAt} now={now} />}
         <div className="tm-holders">
           <BubbleMapSection token={card.token} snapshot={linked} />
           <TopHolders snapshot={linked} flagged={flagged} />
@@ -498,13 +499,14 @@ function FlowSummary({ trades }: { trades: readonly MarkerTrade[] }) {
 }
 
 /**
- * The reading the bubble map and the top holders draw: the card's own when it kept a holder list,
+ * The reading the bubble map and the top holders draw: the card's newest that kept a holder list,
  * else the newest of the coin's scans that did (fetched; a lookup's card is already its latest
  * scan). Undefined while that loads, null when no scan has a list.
  */
 function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot | null | undefined {
   const seed = linkedSeed(card)?.snapshot ?? null;
-  const own = [seed, card.snapshot, card.latestSnapshot].find((s) => s && hasHolderList(s)) ?? null;
+  // Newest first, so the section follows the coin's scans and its "Last updated" means it.
+  const own = [card.latestSnapshot, seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
   const [fetched, setFetched] = useState<{ mint: string; snapshot: Snapshot | null } | null>(null);
   const fetch = !own && !lookup;
   useEffect(() => {
@@ -520,6 +522,20 @@ function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot |
   if (own) return own;
   if (!fetch) return seed;
   return fetched?.mint === mint ? fetched.snapshot : undefined;
+}
+
+/** When the holder reading was saved, and when the next is due (user ask 2026-10-13). */
+function HolderFreshness({ takenAt, now }: { takenAt: string; now: number }) {
+  const { last, next } = holderFreshness(takenAt, now);
+  const hm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return (
+    <p className="tm-holders-when">
+      Last updated {hm(last)} ·{" "}
+      {next === null
+        ? "No further updates: the coin is no longer being scanned"
+        : `Next update due ~${hm(next)}`}
+    </p>
+  );
 }
 
 /** A group's heading: a small label with a rule running to the edge. */

@@ -598,3 +598,21 @@ export function pickReading<S extends Pick<Snapshot, "linkedWalletPct" | "linked
 export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolders">): boolean {
   return (s.linkedHolders?.length ?? 0) > 0 || (s.linkedClusters?.length ?? 0) > 0;
 }
+
+/**
+ * How often the worker saves a reading for a coin it is scanning (SCAN_INTERVAL_MINUTES): each
+ * cycle writes a snapshot with the holder list it holds, read at most RUGCHECK_CACHE_TTL_MINUTES ago.
+ */
+export const HOLDER_SCAN_MS = 60_000;
+/** No reading for this long means the worker has stopped scanning the coin (out of band, unviewed). */
+export const HOLDER_STALE_MS = 10 * 60_000;
+
+/**
+ * When the holder reading was saved and when the next one is due: the next scan, or null once
+ * none has come for HOLDER_STALE_MS, so the coin is no longer being scanned.
+ */
+export function holderFreshness(takenAt: string, now: number): { last: number; next: number | null } {
+  const last = Date.parse(takenAt);
+  if (now - last >= HOLDER_STALE_MS) return { last, next: null };
+  return { last, next: Math.max(last + HOLDER_SCAN_MS, now) };
+}
