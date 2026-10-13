@@ -34,6 +34,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     minVolumeMcapRatio: null,
     minHolderGrowthPct: null,
     maxTop10HolderPct: null,
+    maxLargestHolderPct: null,
     maxDevWalletPct: null,
     maxRiskScore: null,
     excludeCriticalRiskFlags: true,

@@ -1018,6 +1018,7 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["maxLinkedCreatorPct", "creator-tied ≤", (v) => `${v}%`],
   ["minLiveHolderCount", "live holders ≥", (v) => String(v)],
   ["maxTop10HolderPct", "top10 ≤", (v) => `${v}%`],
+  ["maxLargestHolderPct", "largest holder ≤", (v) => `${v}%`],
   ["maxDevWalletPct", "dev ≤", (v) => `${v}%`],
   ["maxRiskScore", "risk ≤", (v) => String(v)],
   ["minVolumeMcapRatio", "vol/mcap ≥", (v) => String(v)],

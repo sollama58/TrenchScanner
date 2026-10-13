@@ -47,6 +47,13 @@ describe("matchesFilter", () => {
     expect(matchesFilter(baseToken({ top10HolderPct: undefined }), filter)).toBe(true);
   });
 
+  it("applies maxLargestHolderPct only when known", () => {
+    const filter = { ...baseFilter, maxLargestHolderPct: 10 };
+    expect(matchesFilter(baseToken({ largestHolderPct: 12 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ largestHolderPct: 10 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ largestHolderPct: undefined }), filter)).toBe(true);
+  });
+
   it("applies maxDevWalletPct only when known", () => {
     const filter = { ...baseFilter, maxDevWalletPct: 10 };
     expect(matchesFilter(baseToken({ devWalletPct: 25 }), filter)).toBe(false);

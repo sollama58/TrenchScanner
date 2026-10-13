@@ -46,6 +46,7 @@ export const FILTER_CRITERIA_KEYS = [
   "minVolumeMcapRatio",
   "minHolderGrowthPct",
   "maxTop10HolderPct",
+  "maxLargestHolderPct",
   "maxDevWalletPct",
   "maxRiskScore",
   "excludeCriticalRiskFlags",
@@ -199,7 +200,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     )
     SELECT f."id", f."userId", f."name", f."isActive", f."deletedAt", f."bestRank", f."criteriaChangedAt",
            f."mcapMin", f."mcapMax", f."minVolumeMcapRatio", f."minHolderGrowthPct",
-           f."maxTop10HolderPct", f."maxDevWalletPct", f."maxRiskScore", f."excludeCriticalRiskFlags",
+           f."maxTop10HolderPct", f."maxLargestHolderPct", f."maxDevWalletPct", f."maxRiskScore", f."excludeCriticalRiskFlags",
            f."minTokenAgeMinutes", f."maxTokenAgeMinutes", f."narrativeKeywords", f."minScore",
            f."maxFreshTop10WalletPct", f."maxEmptyTop10WalletPct", f."maxSniperTop10WalletPct", f."maxLinkedWalletPct", f."maxLinkedWalletCount", f."maxFlaggedBuySol", f."minCexFundedCount", f."maxCexFundedCount", f."maxSameTimeFundedPct", f."maxSameTimeFundedCount", f."maxBundledWalletCount", f."maxLinkedCreatorPct", f."minLiveHolderCount", f."minFirstBuyersHolding",
            f."maxFirstBuyersHolding",

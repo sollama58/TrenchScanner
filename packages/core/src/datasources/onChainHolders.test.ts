@@ -33,6 +33,7 @@ describe("holdersFromLargestAccounts", () => {
     expect(holders.top10HolderAddresses).not.toContain(PDA);
     // 5% for the first wallet plus nine at 1%.
     expect(holders.top10HolderPct).toBe(14);
+    expect(holders.largestHolderPct).toBe(5);
   });
 
   it("has no answer without a supply, and no share when the shares can't add up", () => {
