@@ -16,6 +16,7 @@ import {
 } from "@trenchscanner/core";
 import type { Prisma } from "@prisma/client";
 import { forgetNarrativeRead } from "./heldNarrativeReads.js";
+import { flushNowReads } from "./nowReads.js";
 
 const logger = createLogger("tokensage");
 
@@ -289,6 +290,9 @@ export function noteLaunchNarratives(launches: LaunchSighting[], env: Env, now =
 export function startNarrativePolling(env: Env, client?: TokenSageClient): (() => void) | undefined {
   if (!tokenSageEnabled(env) || env.TOKENSAGE_POLL_SECONDS <= 0) return undefined;
   const timer = setInterval(() => {
+    // The decision-time refreshes ride the same timer: a new one is ready seconds after it was
+    // asked for, not a scan cycle later (nowReads.ts; a no-op when nothing is due).
+    void flushNowReads(env, client);
     if (pending.size === 0 && wanted.size === 0) return;
     void flushNarrativeRequests(env, client);
   }, env.TOKENSAGE_POLL_SECONDS * 1000);

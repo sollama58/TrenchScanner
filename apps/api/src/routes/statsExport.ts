@@ -418,6 +418,22 @@ const NARRATIVE_COLUMNS = [
   "xAuthorFollowers",
   "trendMatched",
   "trendScore",
+  "trendNovelty",
+  // TokenSage's decision-time refresh (rules 0.34.0+): the latest one, not the one each decision
+  // saw (that is on the decision rows' ns* inputs).
+  "nowAt",
+  "nowTrendMatched",
+  "nowTrendScore",
+  "nowTrendNovelty",
+  "heatCoins",
+  "heatLeaderMcapUsd",
+  "heatLeaderChange5mPct",
+  "heatLeaderChange1hPct",
+  "heatLeaderVolume1hUsd",
+  "heatWaveVolume1hUsd",
+  "heatPeakMinutesAgo",
+  "heatFromPeakPct",
+  "heatIsLeader",
   "pairKind",
   "pairSymbol",
   "logoLabel",
@@ -511,6 +527,10 @@ export function narrativeText(analysis: unknown): Record<(typeof NARRATIVE_TEXT)
         matchedOn: str(t.matched_on, 30),
         partial: typeof t.partial === "boolean" ? t.partial : null,
         seenAt: str(t.seen_at, 40),
+        // TokenSage rules 0.33.0+: how often it trended before, its direction, and its novelty.
+        daysListed: num(t.days_listed),
+        direction: str(t.direction, 20),
+        novelty: num(t.novelty),
       })),
   };
 }

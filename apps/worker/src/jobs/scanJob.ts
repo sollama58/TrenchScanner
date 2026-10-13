@@ -64,6 +64,7 @@ import {
 } from "../tokensage/prefetch.js";
 import { loadNarrativeReads } from "../tokensage/narrativeReads.js";
 import { noteUtilityLookups } from "../tokensage/utilityLookups.js";
+import { flushNowReads, noteNowWanted, takeNowStats } from "../tokensage/nowReads.js";
 import type { PricePathSeeder } from "./pricePathSeed.js";
 import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
@@ -1204,6 +1205,7 @@ async function scanCycle(
   lap("candidates");
   // Sends the narrative requests this cycle noted. Never awaited: nothing waits on TokenSage.
   void flushNarrativeRequests(env);
+  void flushNowReads(env);
   // Match peaks are no longer rolled forward here - they have their own job (createMatchPeaksRunner)
   // so they stop holding up the next cycle.
 
@@ -1268,7 +1270,7 @@ async function scanCycle(
     matches: matchCount,
     samplesBanked,
     pricePathMints: deps.pricePath?.size ?? 0,
-    ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats() } : {}),
+    ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats(), tokensageNow: takeNowStats() } : {}),
     // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle.
     sniperReads: takeSniperReadStats(),
     // This cycle's RugCheck reports: cached, looked up while the cycle waited (fetched, failed,
@@ -1309,7 +1311,7 @@ async function seedLastScreenPass(): Promise<void> {
  */
 function earlyExitMeta(env: Env): JobRunMeta {
   return {
-    ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats() } : {}),
+    ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats(), tokensageNow: takeNowStats() } : {}),
     sniperReads: takeSniperReadStats(),
     ...scanFailureMeta(),
   };
@@ -2222,6 +2224,9 @@ async function processCandidate(
   noteNarrativeWanted(token.mintAddress, earlyDeep ? "full" : "basic", env, narrativeHints, {
     early: earlyDeep,
   });
+  // In the band, where decisions are made, the read's trend and the story's market are kept
+  // current from TokenSage's refresh (tokensage/nowReads.ts; a no-op without a full read).
+  if (inCuratedBand) noteNowWanted(token.mintAddress, env);
 
   // User matching first, and nothing slower in front of it: this is the product, and every
   // millisecond here is a millisecond between the backend knowing about a token and the person

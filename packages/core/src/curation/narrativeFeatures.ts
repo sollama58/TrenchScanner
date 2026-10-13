@@ -229,6 +229,40 @@ export const NARRATIVE_FEATURES_V7 = [
   "nsXEngagementAgeMin",
 ] as const;
 
+/**
+ * The eighth wave (TokenSage rules 0.33.0 / 0.34.0, 2026-10-13): how new the trend is, and the
+ * coin as it stands at the decision rather than at its read. nsTrendNovelty is the full read's
+ * trend.novelty (near 0 for a term that trends every day, near 1 for one first listed an hour
+ * ago). The rest come from the decision-time refresh (POST /v1/tokens:now, tokensage/nowReads.ts,
+ * re-asked every few minutes while the coin is in the curated band): the trend matched again
+ * against the trend lists of the moment, and how the coin's story trades - its leading coin on
+ * GeckoTerminal (market cap, 5 min / 1 h price change, 1 h volume, minutes since its 24 h peak and
+ * its price against that peak), how many coins are on the story and their summed 1 h volume, and
+ * whether this coin is the leader. nsNowAgeMin is how old the refresh is at the decision. Null
+ * without a refresh, or one older than NOW_FEATURE_MAX_AGE_MIN. Recorded only for now: retired
+ * from the learners until two days of decision rows carry them (features.ts
+ * RETIRED_LEARNER_INPUTS). notes/tokensage-trend-heat-2026-10-13.md.
+ */
+export const NARRATIVE_FEATURES_V8 = [
+  "nsTrendNovelty",
+  "nsNowTrendMatched",
+  "nsNowTrendScore",
+  "nsNowTrendNovelty",
+  "nsHeatCoins",
+  "nsHeatLeaderMcapUsd",
+  "nsHeatLeaderChange5mPct",
+  "nsHeatLeaderChange1hPct",
+  "nsHeatLeaderVolume1hUsd",
+  "nsHeatWaveVolume1hUsd",
+  "nsHeatPeakMinutesAgo",
+  "nsHeatFromPeakPct",
+  "nsHeatIsLeader",
+  "nsNowAgeMin",
+] as const;
+
+/** A refresh older than this at the decision says nothing about "now": its inputs are null. */
+export const NOW_FEATURE_MAX_AGE_MIN = 20;
+
 type LogoGroupFeature = (typeof NARRATIVE_FEATURES_V6)[number] &
   ("nsLogoAnimal" | "nsLogoMeme" | "nsLogoPerson" | "nsLogoRobot" | "nsLogoFood" | "nsLogoText");
 
@@ -275,7 +309,8 @@ export type NarrativeFeatureName =
   | (typeof NARRATIVE_FEATURES_V4)[number]
   | (typeof NARRATIVE_FEATURES_V5)[number]
   | (typeof NARRATIVE_FEATURES_V6)[number]
-  | (typeof NARRATIVE_FEATURES_V7)[number];
+  | (typeof NARRATIVE_FEATURES_V7)[number]
+  | (typeof NARRATIVE_FEATURES_V8)[number];
 
 /** Every narrative feature, in the order the waves were added. */
 export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
@@ -286,6 +321,7 @@ export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
   ...NARRATIVE_FEATURES_V5,
   ...NARRATIVE_FEATURES_V6,
   ...NARRATIVE_FEATURES_V7,
+  ...NARRATIVE_FEATURES_V8,
 ];
 
 /** Second-wave features that are counts, ranks or ages: everything else is a 0/1 bit or a 0-1 share. */
@@ -311,6 +347,16 @@ const NARRATIVE_V7_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<Narrative
   NARRATIVE_FEATURES_V7,
 );
 
+/** Eighth-wave features in dollars, minutes or counts; the price changes stay raw (they go negative). */
+const NARRATIVE_V8_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<NarrativeFeatureName>([
+  "nsHeatCoins",
+  "nsHeatLeaderMcapUsd",
+  "nsHeatLeaderVolume1hUsd",
+  "nsHeatWaveVolume1hUsd",
+  "nsHeatPeakMinutesAgo",
+  "nsNowAgeMin",
+]);
+
 /**
  * First-wave features that are not small: the post's age at launch (minutes, up to years) and how
  * many coins link the same post (up to hundreds, like its twin nsXReuseRank).
@@ -324,7 +370,10 @@ const NARRATIVE_V1_SCALED: ReadonlySet<NarrativeFeatureName> = new Set<Narrative
 export const NARRATIVE_UNTRANSFORMED_FEATURES: readonly NarrativeFeatureName[] =
   ALL_NARRATIVE_FEATURES.filter(
     (name) =>
-      !NARRATIVE_V1_SCALED.has(name) && !NARRATIVE_V2_SCALED.has(name) && !NARRATIVE_V7_SCALED.has(name),
+      !NARRATIVE_V1_SCALED.has(name) &&
+      !NARRATIVE_V2_SCALED.has(name) &&
+      !NARRATIVE_V7_SCALED.has(name) &&
+      !NARRATIVE_V8_SCALED.has(name),
   );
 
 /** The narrative inputs that are 0/1 bits, for anything that phrases a threshold as yes/no. */
@@ -365,6 +414,8 @@ export const NARRATIVE_BIT_FEATURES: readonly NarrativeFeatureName[] = [
   "nsLogoMatchesTheme",
   "nsPairToken",
   "nsPairPumpfun",
+  "nsNowTrendMatched",
+  "nsHeatIsLeader",
 ];
 
 /** The narrative inputs that are 0-1 shares or confidences, shown as a percentage. */
@@ -378,6 +429,9 @@ export const NARRATIVE_SHARE_FEATURES: readonly NarrativeFeatureName[] = [
   "nsFeeCreatorShare",
   "nsXCredibility23",
   "nsLogoScore",
+  "nsTrendNovelty",
+  "nsNowTrendScore",
+  "nsNowTrendNovelty",
 ];
 
 export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
@@ -462,6 +516,20 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsXViews: "X post views",
   nsXViewsPerMin: "X post views per minute",
   nsXEngagementAgeMin: "age of the X post counts",
+  nsTrendNovelty: "trend novelty",
+  nsNowTrendMatched: "trending now",
+  nsNowTrendScore: "trend strength now",
+  nsNowTrendNovelty: "trend novelty now",
+  nsHeatCoins: "coins on the story",
+  nsHeatLeaderMcapUsd: "story leader's market cap",
+  nsHeatLeaderChange5mPct: "story leader, 5 min change",
+  nsHeatLeaderChange1hPct: "story leader, 1 h change",
+  nsHeatLeaderVolume1hUsd: "story leader's 1 h volume",
+  nsHeatWaveVolume1hUsd: "story's 1 h volume",
+  nsHeatPeakMinutesAgo: "minutes since the story leader peaked",
+  nsHeatFromPeakPct: "story leader below its peak",
+  nsHeatIsLeader: "leads its story",
+  nsNowAgeMin: "age of the trend and heat refresh",
 };
 
 /**
@@ -551,6 +619,25 @@ export interface NarrativeRead {
   xViews?: number | null;
   xEngagementAt?: Date | null;
   xPostedAt?: Date | null;
+  /** Rules 0.33.0+, full reads: trend.novelty. Null at basic depth and on older reads. */
+  trendNovelty?: number | null;
+  /**
+   * Rules 0.34.0+: the latest decision-time refresh (TokenNarrative's columns of the same names);
+   * all null before the first one.
+   */
+  nowAt?: Date | null;
+  nowTrendMatched?: boolean | null;
+  nowTrendScore?: number | null;
+  nowTrendNovelty?: number | null;
+  heatCoins?: number | null;
+  heatLeaderMcapUsd?: number | null;
+  heatLeaderChange5mPct?: number | null;
+  heatLeaderChange1hPct?: number | null;
+  heatLeaderVolume1hUsd?: number | null;
+  heatWaveVolume1hUsd?: number | null;
+  heatPeakMinutesAgo?: number | null;
+  heatFromPeakPct?: number | null;
+  heatIsLeader?: boolean | null;
 }
 
 /** The TokenNarrative columns a read is built from (categories is a Json column). */
@@ -613,6 +700,20 @@ export interface NarrativeRow {
   xViews?: number | null;
   xEngagementAt?: Date | null;
   xPostedAt?: Date | null;
+  trendNovelty?: number | null;
+  nowAt?: Date | null;
+  nowTrendMatched?: boolean | null;
+  nowTrendScore?: number | null;
+  nowTrendNovelty?: number | null;
+  heatCoins?: number | null;
+  heatLeaderMcapUsd?: number | null;
+  heatLeaderChange5mPct?: number | null;
+  heatLeaderChange1hPct?: number | null;
+  heatLeaderVolume1hUsd?: number | null;
+  heatWaveVolume1hUsd?: number | null;
+  heatPeakMinutesAgo?: number | null;
+  heatFromPeakPct?: number | null;
+  heatIsLeader?: boolean | null;
 }
 
 /** The columns narrativeReadFromRow needs, for a Prisma `select`. */
@@ -675,6 +776,20 @@ export const NARRATIVE_ROW_SELECT = {
   xViews: true,
   xEngagementAt: true,
   xPostedAt: true,
+  trendNovelty: true,
+  nowAt: true,
+  nowTrendMatched: true,
+  nowTrendScore: true,
+  nowTrendNovelty: true,
+  heatCoins: true,
+  heatLeaderMcapUsd: true,
+  heatLeaderChange5mPct: true,
+  heatLeaderChange1hPct: true,
+  heatLeaderVolume1hUsd: true,
+  heatWaveVolume1hUsd: true,
+  heatPeakMinutesAgo: true,
+  heatFromPeakPct: true,
+  heatIsLeader: true,
 } as const;
 
 /**
@@ -752,6 +867,20 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     xViews: row.xViews ?? null,
     xEngagementAt: row.xEngagementAt ?? null,
     xPostedAt: row.xPostedAt ?? null,
+    trendNovelty: row.trendNovelty ?? null,
+    nowAt: row.nowAt ?? null,
+    nowTrendMatched: row.nowTrendMatched ?? null,
+    nowTrendScore: row.nowTrendScore ?? null,
+    nowTrendNovelty: row.nowTrendNovelty ?? null,
+    heatCoins: row.heatCoins ?? null,
+    heatLeaderMcapUsd: row.heatLeaderMcapUsd ?? null,
+    heatLeaderChange5mPct: row.heatLeaderChange5mPct ?? null,
+    heatLeaderChange1hPct: row.heatLeaderChange1hPct ?? null,
+    heatLeaderVolume1hUsd: row.heatLeaderVolume1hUsd ?? null,
+    heatWaveVolume1hUsd: row.heatWaveVolume1hUsd ?? null,
+    heatPeakMinutesAgo: row.heatPeakMinutesAgo ?? null,
+    heatFromPeakPct: row.heatFromPeakPct ?? null,
+    heatIsLeader: row.heatIsLeader ?? null,
   };
 }
 
@@ -953,6 +1082,43 @@ export function narrativeFeatureValues(
     ...logoFeatureValues(read),
     ...pairFeatureValues(read),
     ...engagementFeatureValues(read, xRead, now),
+    ...nowFeatureValues(read, now),
+  };
+}
+
+function nowFeatureValues(
+  read: NarrativeRead,
+  now: Date,
+): Record<(typeof NARRATIVE_FEATURES_V8)[number], number | null> {
+  const novelty = read.depth === "full" ? (read.trendNovelty ?? null) : null;
+  const at = read.nowAt ?? null;
+  // A refresh stamped a few seconds ahead of this clock is skew, not one from the future.
+  const ageMin = at === null ? null : Math.max(0, (now.getTime() - at.getTime()) / 60_000);
+  if (ageMin === null || ageMin > NOW_FEATURE_MAX_AGE_MIN) {
+    return {
+      ...(Object.fromEntries(NARRATIVE_FEATURES_V8.map((k) => [k, null])) as Record<
+        (typeof NARRATIVE_FEATURES_V8)[number],
+        number | null
+      >),
+      nsTrendNovelty: novelty,
+    };
+  }
+  const flag = (v: boolean | null | undefined) => (v === null || v === undefined ? null : bit(v));
+  return {
+    nsTrendNovelty: novelty,
+    nsNowTrendMatched: flag(read.nowTrendMatched),
+    nsNowTrendScore: read.nowTrendScore ?? null,
+    nsNowTrendNovelty: read.nowTrendNovelty ?? null,
+    nsHeatCoins: read.heatCoins ?? null,
+    nsHeatLeaderMcapUsd: read.heatLeaderMcapUsd ?? null,
+    nsHeatLeaderChange5mPct: read.heatLeaderChange5mPct ?? null,
+    nsHeatLeaderChange1hPct: read.heatLeaderChange1hPct ?? null,
+    nsHeatLeaderVolume1hUsd: read.heatLeaderVolume1hUsd ?? null,
+    nsHeatWaveVolume1hUsd: read.heatWaveVolume1hUsd ?? null,
+    nsHeatPeakMinutesAgo: read.heatPeakMinutesAgo ?? null,
+    nsHeatFromPeakPct: read.heatFromPeakPct ?? null,
+    nsHeatIsLeader: flag(read.heatIsLeader),
+    nsNowAgeMin: ageMin,
   };
 }
 

@@ -418,7 +418,16 @@ export interface TokenSageAnalysis {
       hours?: number | null;
       posts?: number | null;
       headline?: string | null;
+      /**
+       * Rules 0.33.0+, Wikipedia / Google Trends / X: the days in the last month it trended
+       * before this run, rising / steady / falling, and how new it is 0-1. Null for news, Bluesky.
+       */
+      days_listed?: number | null;
+      direction?: string | null;
+      novelty?: number | null;
     }[];
+    /** Rules 0.33.0+: the newest matching term's novelty, 0-1 (0 when nothing matched). */
+    novelty?: number | null;
     /**
      * Rules 0.15.0+, full reads: each source's status ("ok", "stale", "failed", "skipped", "unavailable");
      * five entries from 0.18.0. `detail` says why a source was skipped (an everyday-word name).
@@ -429,6 +438,8 @@ export interface TokenSageAnalysis {
       as_of?: string | null;
       terms?: number | null;
       detail?: string | null;
+      /** Rules 0.33.0+: days of this source's list in the 30-day history window. */
+      history_days?: number | null;
     }[];
   } | null;
   flags?: TokenSageFlag[];
@@ -484,6 +495,43 @@ export interface TokenSageJob {
    * From rules 0.28.0 a job whose worker crashed job_max_attempts times ends failed with
    * "worker died" (before, it stayed pending for good).
    */
+  error?: string | null;
+}
+
+/** The story's leading coin in a decision-time refresh (rules 0.34.0+). */
+export interface TokenSageHeatLeader {
+  mint?: string;
+  name?: string;
+  symbol?: string;
+  pool?: string;
+  mcap_usd?: number | null;
+  change_5m_pct?: number | null;
+  change_1h_pct?: number | null;
+  volume_5m_usd?: number | null;
+  volume_1h_usd?: number | null;
+  peak_minutes_ago?: number | null;
+  from_peak_pct?: number | null;
+}
+
+/** How the coin's story trades now (rules 0.34.0+, from GeckoTerminal). */
+export interface TokenSageStoryHeat {
+  story?: string;
+  story_kind?: string;
+  status?: string;
+  as_of?: string | null;
+  coins?: number | null;
+  leader?: TokenSageHeatLeader | null;
+  wave_volume_1h_usd?: number | null;
+  wave_volume_5m_usd?: number | null;
+}
+
+/** One coin of POST /v1/tokens:now (rules 0.34.0+). */
+export interface TokenSageNowItem {
+  ca: string;
+  status: "complete" | "pending" | "unavailable" | "invalid";
+  as_of?: string | null;
+  trend?: TokenSageAnalysis["trend"];
+  story_heat?: TokenSageStoryHeat | null;
   error?: string | null;
 }
 
@@ -560,6 +608,23 @@ export class TokenSageClient {
       },
     });
     return { items: Array.isArray(body.items) ? body.items : [], fullRemaining };
+  }
+
+  /**
+   * Decision-time refresh (rules 0.34.0+): for coins TokenSage has read at full depth, the trend
+   * block matched against the trend lists of the moment and how the coin's story trades now.
+   * Free (no quota). A refresh older than five minutes comes back `pending` (with the previous
+   * values when there are any) while TokenSage makes a new one; ask again on the next pass.
+   */
+  async now(cas: string[]): Promise<TokenSageNowItem[]> {
+    const body = await fetchJson<{ items?: TokenSageNowItem[] }>(`${this.baseUrl}/v1/tokens:now`, {
+      method: "POST",
+      headers: this.headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ cas: cas.slice(0, TOKENSAGE_BATCH_MAX), wait: 0 }),
+      timeoutMs: Math.max(this.timeoutMs, TOKENSAGE_BATCH_MIN_TIMEOUT_MS),
+      retries: 0,
+    });
+    return Array.isArray(body.items) ? body.items : [];
   }
 
   /**
@@ -669,6 +734,8 @@ export interface TokenNarrativeFields {
   xPostedAt: Date | null;
   /** The name matched a Wikipedia or news spike (trend.matched); null until the full read says. */
   trendMatched: boolean | null;
+  /** Rules 0.33.0+ (trend.novelty): how new the newest matching trend was at the read, 0-1. */
+  trendNovelty: number | null;
   /**
    * Rules 0.15.0+ (TokenNarrative's columns of the same names, all null on older reads): the
    * coin's lineage, the coin it copies, how many coins shared its name, ticker or logo before
@@ -852,6 +919,7 @@ export function narrativeFieldsFromAnalysis(
       bool(account?.made_for_coin) ?? (xRead && flags.includes("x_account_made_for_coin") ? true : null),
     xReuseRank: xRead ? count(x.reuse_rank) : null,
     trendScore: unit(trend?.score),
+    trendNovelty: unit(trend?.novelty),
     depth: doc.depth === "full" ? "full" : "basic",
     status,
     categories,
@@ -908,6 +976,59 @@ function engagementFields(
     xViews: n(engagement?.views),
     xEngagementAt: engagement ? isoDate(engagement.as_of) : null,
     xPostedAt: x ? isoDate(x.created_at) : null,
+  };
+}
+
+/** What a TokenNarrative row stores from one decision-time refresh (rules 0.34.0+). */
+export interface TokenNarrativeNowFields {
+  nowAt: Date | null;
+  nowTrendMatched: boolean | null;
+  nowTrendScore: number | null;
+  nowTrendNovelty: number | null;
+  heatCoins: number | null;
+  heatLeaderMcapUsd: number | null;
+  heatLeaderChange5mPct: number | null;
+  heatLeaderChange1hPct: number | null;
+  heatLeaderVolume1hUsd: number | null;
+  heatWaveVolume1hUsd: number | null;
+  heatPeakMinutesAgo: number | null;
+  heatFromPeakPct: number | null;
+  heatIsLeader: boolean | null;
+}
+
+/**
+ * The columns one refresh stores, or null when the item carries no refresh (pending with
+ * nothing yet, unavailable, invalid). A heat reading that failed (status other than "ok") or a
+ * story with no coin found leaves the leader's columns null. Throws on nothing.
+ */
+export function nowFieldsFromItem(item: TokenSageNowItem, mint: string): TokenNarrativeNowFields | null {
+  const doc = asRecord(item);
+  const at = isoDate(doc?.as_of);
+  if (!doc || at === null || (doc.status !== "complete" && doc.status !== "pending")) return null;
+  const trend = asRecord(doc.trend);
+  const heat = asRecord(doc.story_heat);
+  const ok = heat !== null && heat.status === "ok";
+  const leader = ok ? asRecord(heat.leader) : null;
+  const num = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+  const whole = (value: unknown): number | null => {
+    const n = num(value);
+    return n === null ? null : Math.min(MAX_STORED_COUNT, Math.max(0, Math.round(n)));
+  };
+  return {
+    nowAt: at,
+    nowTrendMatched: trend !== null && typeof trend.matched === "boolean" ? trend.matched : null,
+    nowTrendScore: unit(trend?.score),
+    nowTrendNovelty: unit(trend?.novelty),
+    heatCoins: ok ? whole(heat.coins) : null,
+    heatLeaderMcapUsd: num(leader?.mcap_usd),
+    heatLeaderChange5mPct: num(leader?.change_5m_pct),
+    heatLeaderChange1hPct: num(leader?.change_1h_pct),
+    heatLeaderVolume1hUsd: num(leader?.volume_1h_usd),
+    heatWaveVolume1hUsd: ok ? num(heat.wave_volume_1h_usd) : null,
+    heatPeakMinutesAgo: whole(leader?.peak_minutes_ago),
+    heatFromPeakPct: num(leader?.from_peak_pct),
+    heatIsLeader: leader ? leader.mint === mint : ok ? false : null,
   };
 }
 
