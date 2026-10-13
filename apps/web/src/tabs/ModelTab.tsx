@@ -47,6 +47,7 @@ import {
 } from "./modelShared";
 import { ModelDetailModal } from "./ModelDetail";
 import { renderWeekCard, type WeekCardData } from "./weekCard";
+import { DAY_MS, dayStarts, pricingChangePoint } from "../pricingChange";
 
 /**
  * The Model tab: the curator contest. Several models train on the same graded history, each calls
@@ -1723,6 +1724,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
   const m = LEARNING_METRICS[metric];
   const byDay = new Map(learning.days.map((d) => [d.day, d]));
   const labels = keys.map((k) => (k === today ? "Today" : shortDay(k)));
+  const pricingChange = pricingChangePoint(dayStarts(keys), DAY_MS);
   const nameOf = (id: string) => seats.find((s) => s.id === id)?.name ?? series.get(id)?.name ?? id;
   const modelRows = picked.map((id, i) => {
     const own = new Map((series.get(id)?.days ?? []).map((d) => [d.day, d.rates]));
@@ -1779,6 +1781,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
     labels,
     lines: lines.map((l) => ({ label: l.label, tone: l.tone, values: l.values, week: l.week[metric] })),
     graded: all.graded,
+    pricingChange,
   });
 
   return (
@@ -1880,6 +1883,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
           labels={labels}
           series={lines}
           signed={metric === "ret"}
+          pricingChange={pricingChange}
           subs={keys.map((k) => {
             const d = byDay.get(k);
             return d

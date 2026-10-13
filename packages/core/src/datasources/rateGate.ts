@@ -26,6 +26,11 @@ export interface RateGateOptions {
   perMinute: number;
   /** Requests that may go out back to back before the sustained rate applies. */
   burst: number;
+  /**
+   * Of the burst, the slots only a priority request may take (see acquire): an ordinary request
+   * waits while the bucket holds this many or fewer. 0 (the default) makes every request equal.
+   */
+  reserve?: number;
   /** Name used in the log line a throttle writes. */
   name: string;
   now?: () => number;
@@ -47,6 +52,7 @@ export class RateGate {
   private pausedUntil = 0;
   private stats: RateGateStats = { requests: 0, throttled: 0, waitedMs: 0, gaveUp: 0 };
   private readonly msPerToken: number;
+  private readonly reserve: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -55,21 +61,30 @@ export class RateGate {
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.tokens = Math.max(1, options.burst);
+    // Never the whole burst: an ordinary request must still be able to go out on a full bucket.
+    this.reserve = Math.min(Math.max(0, options.reserve ?? 0), Math.max(1, options.burst) - 1);
     this.refilledAt = this.now();
   }
 
   /**
    * Waits for a slot and takes it. Throws RateGateDeadlineError, without waiting, once the slot
    * would open only after `deadline` (an epoch ms).
+   *
+   * A `priority` request may take the reserved slots too. The scan's band refresh and its fresh
+   * quotes are what a decision waits on; background jobs sharing the budget (the outcome watcher,
+   * live prices) used to drain the bucket just before a cycle, and the refresh then queued at the
+   * sustained rate - 8-10 s of a cycle on about one in six cycles (worker health, 2026-10-13).
+   * With a reserve the background jobs leave that many slots, so a cycle's lookups go out at once.
    */
-  async acquire(deadline = Infinity): Promise<void> {
+  async acquire(deadline = Infinity, priority = false): Promise<void> {
     const startedAt = this.now();
+    const needed = 1 + (priority ? 0 : this.reserve);
     for (;;) {
       const now = this.now();
       this.refill(now);
       const wait = Math.max(
         this.pausedUntil - now,
-        this.tokens >= 1 ? 0 : (1 - this.tokens) * this.msPerToken,
+        this.tokens >= needed ? 0 : (needed - this.tokens) * this.msPerToken,
       );
       if (wait <= 0) {
         this.tokens -= 1;

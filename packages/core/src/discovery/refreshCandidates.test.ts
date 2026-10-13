@@ -119,9 +119,9 @@ describe("refreshAndFilterToBand", () => {
         getTokensByAddresses: async (
           _m: string[],
           _c: number,
-          options: { fallbackIfUnlisted?: string[] },
+          options: { fallbackIfUnlisted?: string[] | Promise<string[]> },
         ) => {
-          fallbackAsked = options.fallbackIfUnlisted;
+          fallbackAsked = await options.fallbackIfUnlisted;
           // DexScreener's reading trails the launch: still under the padded band.
           return [
             { ...candidate("listed", 4_000), priceUsd: 0.000004, buys5m: 12, dexId: "pumpfun" },
@@ -151,6 +151,40 @@ describe("refreshAndFilterToBand", () => {
       expect(result.liveMarketCaps).toContainEqual({ mintAddress: "unlisted", marketCapUsd: 10_500 });
       // Only the launch the live read could not price is left for GeckoTerminal.
       expect(fallbackAsked).toEqual(["untraded"]);
+    });
+
+    it("reads the live prices alongside DexScreener, at priority, not before it", async () => {
+      const order: string[] = [];
+      let releaseLive!: () => void;
+      const liveHeld = new Promise<void>((resolve) => (releaseLive = resolve));
+      let livePriority: boolean | undefined;
+      const dexScreener = {
+        getTokensByAddresses: async () => {
+          order.push("dexscreener");
+          // The live read is still out: DexScreener did not wait on it.
+          releaseLive();
+          return [candidate("older", 30_000)];
+        },
+      } as unknown as DexScreenerClient;
+      const result = await refreshAndFilterToBand(dexScreener, ["older", "fresh"], {
+        mcapMin: 10_000,
+        mcapMax: 1_000_000,
+        liveLaunches: {
+          source: {
+            getLaunches: async (_mints: string[], options?: { priority?: boolean }) => {
+              livePriority = options?.priority;
+              order.push("live asked");
+              await liveHeld;
+              order.push("live answered");
+              return [{ ...candidate("fresh", 11_000), dexId: "pumpfun" }];
+            },
+          },
+          mints: ["fresh"],
+        },
+      });
+      expect(order).toEqual(["live asked", "dexscreener", "live answered"]);
+      expect(livePriority).toBe(true);
+      expect(result.inBand.map((t) => t.mintAddress).sort()).toEqual(["fresh", "older"]);
     });
 
     it("goes on with DexScreener's readings when the live read fails", async () => {

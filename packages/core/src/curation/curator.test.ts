@@ -4,6 +4,7 @@ import {
   evaluateCandidateHeuristic,
   HEURISTIC_CURATOR_SOURCE,
   MAX_EVENT_AGE_MINUTES,
+  PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES,
   passesEventPreGate,
   walletChecksKnown,
 } from "./curator.js";
@@ -244,5 +245,14 @@ describe("passesEventPreGate", () => {
     expect(passesEventPreGate(ready({ buys1h: 40, sells1h: 60 }), band)).toBe(false);
     expect(passesEventPreGate(ready({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
     expect(passesEventPreGate(ready({ priceChange5mPct: -2 }), band)).toBe(false);
+  });
+
+  it("skips the buy-ratio test for a coin under 10 minutes old, but still wants trades and a rising five minutes", () => {
+    const young = (o: Partial<ScoredToken> = {}) => ready({ ageMinutes: 3, buys1h: 20, sells1h: 80, ...o });
+    expect(passesEventPreGate(young(), band)).toBe(true);
+    expect(passesEventPreGate(young({ ageMinutes: PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES }), band)).toBe(false);
+    expect(passesEventPreGate(young({ ageMinutes: undefined }), band)).toBe(false);
+    expect(passesEventPreGate(young({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
+    expect(passesEventPreGate(young({ priceChange5mPct: -2 }), band)).toBe(false);
   });
 });

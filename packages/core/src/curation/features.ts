@@ -24,6 +24,17 @@ import {
 } from "./narrativeFeatures.js";
 
 /**
+ * Added 2026-10-13 (inputs thread, notes/hit-catch-2026-10-13/inputs.md): the holder count on the
+ * same Jupiter answer as the fresh quote, at no extra request. It is seconds old, where RugCheck's
+ * (holderCount) is a cached report that can be minutes old or missing: on 2026-10-12 from 13:00 to
+ * 21:00 UTC most decisions on coins under five minutes old had none. Recorded so it can be judged
+ * on decision rows, not yet read (RETIRED_LEARNER_INPUTS). Null without a quote, and on every row
+ * banked before. (Jupiter's organic-buyer figures were looked at too and left out: on coins under
+ * five minutes old its organic score reads 0 and the organic counts are absent.)
+ */
+export const JUPITER_EXTRA_FEATURES = ["jupHolderCount"] as const;
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -232,6 +243,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   // until the launch and every one of those wallets has been read, and on every row banked
   // before. Never backfilled.
   "freshLaunchBuyerPct",
+  ...JUPITER_EXTRA_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -312,6 +324,10 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // views); bring them in by removing them here once a few days of decision rows show they
   // separate runners (notes/audit-2026-10-12/features.md).
   ...NARRATIVE_FEATURES_V7,
+  // Jupiter's live holder count (added 2026-10-13): recorded to be judged first. Bring it in by
+  // removing it here once a few days of decision rows show it separates runners, the
+  // under-five-minute coins above all (notes/hit-catch-2026-10-13/inputs.md).
+  ...JUPITER_EXTRA_FEATURES,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -626,6 +642,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   jup5mNetBuyers: "5m net buyers (live)",
   jup5mHolderChange: "5m holder change (live)",
   jup1hHolderChange: "1h holder change (live)",
+  jupHolderCount: "holders (live)",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -886,6 +903,7 @@ const FRESH_QUOTE_FEATURES = [
   "jup5mNetBuyers",
   "jup5mHolderChange",
   "jup1hHolderChange",
+  ...JUPITER_EXTRA_FEATURES,
 ] as const satisfies readonly CandidateFeatureName[];
 
 /** The fresh-quote inputs (see CANDIDATE_FEATURE_NAMES), all null without a quote. */
@@ -920,6 +938,7 @@ export function freshQuoteFeatures(
     jup5mNetBuyers: n(s5?.netBuyers),
     jup5mHolderChange: n(s5?.holderChange),
     jup1hHolderChange: n(s1h?.holderChange),
+    jupHolderCount: n(q.holderCount),
   };
 }
 

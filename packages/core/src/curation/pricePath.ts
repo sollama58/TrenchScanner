@@ -145,6 +145,43 @@ export class PricePathBook {
     this.tapes.set(mint, tape);
   }
 
+  /**
+   * Lays earlier observations under a mint's tape: the scan's stored snapshots, for a book that
+   * started after them. The tape lives in memory, so every deploy emptied it, and for the next
+   * half hour every coin read as freshly observed - the 15 and 30-minute returns and the holder
+   * slope, the strongest inputs the models have, went null on every decision (inputs thread,
+   * 2026-10-13: 13-14 deploys in three days). Only ticks older than the tape's first are taken,
+   * spaced as observe() would have kept them, so seeding after the scan has already observed
+   * the mint (or twice) changes nothing it has seen.
+   */
+  seed(
+    mint: string,
+    ticks: readonly { at: Date; priceUsd: number; holders?: number | null; holdersAt?: Date | null }[],
+  ): void {
+    const tape = this.tapes.get(mint);
+    if (!tape && this.tapes.size >= MAX_MINTS) return;
+    const firstAt = tape?.[0]?.at ?? Infinity;
+    const newest = Math.max(tape?.[tape.length - 1]?.at ?? -Infinity, ...ticks.map((t) => t.at.getTime()));
+    const cutoff = newest - TAPE_MS;
+    const earlier: Tick[] = [];
+    for (const t of [...ticks].sort((a, b) => a.at.getTime() - b.at.getTime())) {
+      const at = t.at.getTime();
+      if (!Number.isFinite(t.priceUsd) || t.priceUsd <= 0 || at < cutoff) continue;
+      if (at > firstAt - MIN_TICK_SPACING_MS) break;
+      const last = earlier[earlier.length - 1];
+      if (last && at - last.at < MIN_TICK_SPACING_MS) earlier.pop();
+      earlier.push({
+        at,
+        priceUsd: t.priceUsd,
+        holders: t.holders ?? null,
+        holdersAt: t.holdersAt?.getTime() ?? at,
+      });
+    }
+    if (earlier.length === 0) return;
+    if (tape) tape.unshift(...earlier);
+    else this.tapes.set(mint, earlier);
+  }
+
   /** Forgets every mint not observed since `before` (call between cycles with a stale cutoff). */
   prune(before: Date): void {
     const cutoff = before.getTime();

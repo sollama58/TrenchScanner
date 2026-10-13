@@ -119,6 +119,7 @@ describe("parseJupiterQuotes", () => {
           holderChange: 7,
         },
         stats1h: { priceChange: 80, holderChange: 60 },
+        holderCount: 412,
       },
       { id: "b", usdPrice: 0, mcap: 1_000 },
       { id: "c", usdPrice: 1, mcap: null, fdv: null },
@@ -139,11 +140,13 @@ describe("parseJupiterQuotes", () => {
         holderChange: 7,
       },
       stats1h: { priceChangePct: 80, holderChange: 60 },
+      holderCount: 412,
     });
     expect(quotes[1]!.quote).toMatchObject({
       marketCapUsd: 10_000,
       updatedAt: undefined,
       stats5m: undefined,
+      holderCount: undefined,
     });
   });
 });
@@ -183,6 +186,28 @@ describe("JupiterClient", () => {
     expect(quotes.get("m0")).toMatchObject({ priceUsd: 0.0001, marketCapUsd: 100_000 });
     expect(quotes.get("m0")!.fetchedAt.getTime()).toBeGreaterThanOrEqual(before);
     expect(quotes.has("m120")).toBe(false);
+  });
+
+  it("keeps its reserve for the scan's fresh quotes while other callers have spent the rest", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = decodeURIComponent(url.split("query=")[1]!).split(",");
+      return Promise.resolve(new Response(JSON.stringify(list.map((id) => ({ id, usdPrice: 1, mcap: 1 })))));
+    });
+    // One call a second once the burst of 5 is spent; 2 of the 5 are reserved.
+    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 60 });
+    const batch = (from: number) => Array.from({ length: 100 }, (_, i) => `m${from + i}`);
+    // The outcome watcher's lookups take the three ordinary slots.
+    await client.getTokensByAddresses([...batch(0), ...batch(100), ...batch(200)], 3, { retries: 0 });
+    // Another ordinary lookup now waits on the reserve: past a short deadline, it gets nothing.
+    const failed = new Set<string>();
+    expect(await client.getTokensByAddresses(batch(300), 1, { deadlineMs: 300, retries: 0, failed })).toEqual(
+      [],
+    );
+    expect(failed.size).toBe(100);
+    // The decision's fresh quotes go out at once on the reserved slots.
+    const startedAt = Date.now();
+    expect((await client.getFreshQuotes(batch(400), { deadlineMs: 300 })).size).toBe(100);
+    expect(Date.now() - startedAt).toBeLessThan(250);
   });
 
   it("asks 100 mints a call with the key, and fails the mints of a batch that errors", async () => {

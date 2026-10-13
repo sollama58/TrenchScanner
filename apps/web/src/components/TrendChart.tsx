@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Series, Unit } from "../lighthouseMetrics";
+import { PricingChangeMark } from "./PricingChangeMark";
 
 /**
  * The Lighthouse tab's chart: up to five series over the same buckets as lines, grouped bars or
@@ -17,6 +18,8 @@ export interface TrendChartProps {
   height?: number;
   /** Buckets whose readout should say they are still filling (the current one). */
   partialLast?: boolean;
+  /** Where pricing changed, in bucket widths from the left edge (pricingChangeSlot); null when off-axis. */
+  pricingChange?: number | null;
 }
 
 /** A readable number: counts whole, rates to a decimal, with the unit's sign and suffix. */
@@ -39,7 +42,14 @@ export function niceScale(lo: number, hi: number, ticks = 4): { min: number; max
 
 const cls = (slot: number) => (slot === 0 ? "lh-other" : `lh-s${slot}`);
 
-export function TrendChart({ labels, series, kind, height = 220, partialLast = false }: TrendChartProps) {
+export function TrendChart({
+  labels,
+  series,
+  kind,
+  height = 220,
+  partialLast = false,
+  pricingChange = null,
+}: TrendChartProps) {
   const [hover, setHover] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
@@ -179,6 +189,14 @@ export function TrendChart({ labels, series, kind, height = 220, partialLast = f
                 y2={y(s.target, s.unit)}
               />
             ) : null,
+          )}
+          {pricingChange !== null && (
+            <PricingChangeMark
+              x={padL + pricingChange * slot}
+              top={padT}
+              bottom={padT + plotH}
+              width={width}
+            />
           )}
           {kind === "line" &&
             series.map((s) => <path key={s.id} className={`lht-line ${cls(s.slot)}`} d={linePath(s)} />)}

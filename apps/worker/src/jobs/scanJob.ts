@@ -58,6 +58,7 @@ import {
   tokenSageEnabled,
 } from "../tokensage/prefetch.js";
 import { loadNarrativeReads } from "../tokensage/narrativeReads.js";
+import type { PricePathSeeder } from "./pricePathSeed.js";
 import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
@@ -87,6 +88,7 @@ import {
 } from "./launchSnipers.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
+import { noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
 import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
 import type { JobRunMeta } from "../scheduler.js";
@@ -147,6 +149,8 @@ export interface ScanDeps {
   };
   /** The per-mint price tape the price-path features read from (curation/pricePath.ts). Optional. */
   pricePath?: PricePathBook;
+  /** Refills that tape from stored snapshots after a restart (pricePathSeed.ts). Optional. */
+  pricePathSeeder?: Pick<PricePathSeeder, "seed">;
 }
 
 /**
@@ -654,10 +658,11 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
   // Cached with a short TTL so the scan cadence and RugCheck's request rate are independent -
   // see resolveRugProfiles. This is what makes a one-minute scan interval affordable.
-  const { profiles: rugProfiles } = await resolveRugProfiles(
+  // A young coin failing a holder cut is re-read every minute (see youngHolderRecheck.ts).
+  const { profiles: rugProfiles, stats: rugCheckLookups } = await resolveRugProfiles(
     candidates.map((c) => c.mintAddress),
     deps.rugCheck,
-    env.RUGCHECK_CACHE_TTL_MINUTES,
+    rugCheckTtlFor(env.RUGCHECK_CACHE_TTL_MINUTES),
     env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
     { refreshStaleInBackground: true },
   );
@@ -770,12 +775,18 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // CURATED_REQUIRE_WALLET_CHECKS on they can't be until both checks are known. Churn orders
   // the rest - the cheap stand-in for "likely to get there" available before scoring runs.
   const curatedBand = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
+  // With the coin's age, which the pre-gate's buy-ratio test depends on (see passesEventPreGate).
+  const contender = (c: CandidateToken) =>
+    passesEventPreGate(
+      { ...c, ageMinutes: candidateAgeMinutes(c.pairCreatedAt, firstSeenByMint.get(c.mintAddress)) },
+      curatedBand,
+    );
   const walletGroups = candidates
     .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
     .map((c) => ({
       mintAddress: c.mintAddress,
       addresses: onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? [],
-      contender: passesEventPreGate(c, curatedBand),
+      contender: contender(c),
       // Alerted on while its empty-wallet share was still unknown, or a user-filter match held
       // for a wallet figure (see resolveAlertTargets): next in line after the contenders, so the
       // reading lands within a cycle or two.
@@ -799,7 +810,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
     .map((c) => ({
       mintAddress: c.mintAddress,
-      contender: passesEventPreGate(c, curatedBand),
+      contender: contender(c),
       // A user-filter match held for its top-10 snipers share (see resolveAlertTargets).
       alerted: alertAwaitingWallets(c.mintAddress),
       churn: c.marketCapUsd > 0 ? (c.volume24hUsd ?? 0) / c.marketCapUsd : 0,
@@ -943,7 +954,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     deps.jupiter,
     candidates
       .filter((c) => runRugScreen(onChainByMint.get(c.mintAddress)).passed)
-      .sort((a, b) => Number(passesEventPreGate(b, curatedBand)) - Number(passesEventPreGate(a, curatedBand)))
+      .sort((a, b) => Number(contender(b)) - Number(contender(a)))
       .map((c) => c.mintAddress),
   );
 
@@ -954,6 +965,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   // One reading of the market for the whole cycle - the same context on every sample.
   const marketContext = await loadMarketContext(env, candidates.length);
   deps.pricePath?.prune(new Date(Date.now() - 2 * 3_600_000));
+  deps.pricePathSeeder?.seed(
+    candidates.map((c) => ({ mint: c.mintAddress, tokenId: priors.get(c.mintAddress)?.token?.id })),
+  );
 
   // Read once for the cycle: whether a curated decision should wait for the top-10 snipers share.
   const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;
@@ -964,8 +978,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     (await withinBudget(launchBuyerWork, LAUNCH_BUYER_FRESHNESS_BUDGET_MS)) ??
     launchBuyerFreshnessFromCache(launchBuyerMints);
   const perCandidateMatches: number[] = [];
-  const curatedCycle = newCuratedCycle();
-  await forEachWithConcurrency(candidates, CANDIDATE_CONCURRENCY, async (candidate) => {
+  const processOne = (curatedCycle: CuratedCycle) => async (candidate: CandidateToken) => {
     try {
       perCandidateMatches.push(
         await processCandidate(
@@ -998,7 +1011,38 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
       const tokenId = priors.get(candidate.mintAddress)?.token?.id;
       if (tokenId) dropScanVerdict(tokenId);
     }
-  });
+  };
+  // The cycle's governor pass: of everything the curators would emit, the strongest contenders
+  // within the feed's paced budget actually go out - see emitCuratedCycle. Never fails the cycle.
+  const emitCurated = async (curatedCycle: CuratedCycle): Promise<number> => {
+    try {
+      return await emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint));
+    } catch (err) {
+      logger.error("curated emission pass failed", { error: String(err) });
+      return 0;
+    }
+  };
+  // Only a token past the event pre-gate can be curated (processCandidate), so those are decided
+  // first and their calls go out while the rest of the band is still being processed. The calls
+  // used to wait on every in-band token's snapshot, sample and filter pass - ~600 tokens, 0.3-1.6 s
+  // a cycle and up to 7 s on a slow database (worker health, 2026-10-13) - for nothing they
+  // needed. The rest's user-filter matches never wait on the governor pass: it runs alongside them.
+  // The pre-gate is read here on DexScreener's figures and in processCandidate on the scored
+  // token; one that passes only the latter is still decided, with the rest, and anything it files
+  // goes out in a pass of its own after them.
+  const contenders = candidates.filter((c) => contender(c));
+  const others = candidates.filter((c) => !contender(c));
+  const contenderCycle = newCuratedCycle();
+  await forEachWithConcurrency(contenders, CANDIDATE_CONCURRENCY, processOne(contenderCycle));
+  lap("contenders");
+  const lateCycle = newCuratedCycle();
+  const emissionStartedAt = Date.now();
+  const [contenderEmitted] = await Promise.all([
+    // Its own clock, not a lap: it runs alongside the rest of the band ("candidates").
+    emitCurated(contenderCycle).finally(() => (stagesMs.curated = Date.now() - emissionStartedAt)),
+    forEachWithConcurrency(others, CANDIDATE_CONCURRENCY, processOne(lateCycle)),
+  ]);
+  const curatedEmitted = contenderEmitted + (await emitCurated(lateCycle));
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
   markScanVerdictsPopulated();
   // Every in-band token has now been evaluated against these filters: a filter armed before
@@ -1015,17 +1059,6 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     markFilterPassComplete(activeFilters);
   }
   lap("candidates");
-
-  // The cycle's governor pass: of everything the curators would emit, the strongest contenders
-  // within the feed's paced budget actually go out - see emitCuratedCycle. After user matching
-  // (those alerts must never wait on this), before the peak bookkeeping.
-  let curatedEmitted = 0;
-  try {
-    curatedEmitted = await emitCuratedCycle(curatedCycle, env, (mint) => deps.pumpFun.liveMarketCap(mint));
-  } catch (err) {
-    logger.error("curated emission pass failed", { error: String(err) });
-  }
-  lap("curated");
   // Sends the narrative requests this cycle noted. Never awaited: nothing waits on TokenSage.
   void flushNarrativeRequests(env);
   // Match peaks are no longer rolled forward here - they have their own job (createMatchPeaksRunner)
@@ -1089,6 +1122,9 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats() } : {}),
     // Launch first-buyer reads (the top-10 snipers share) sent, landed and failed since last cycle.
     sniperReads: takeSniperReadStats(),
+    // This cycle's RugCheck reports: cached, looked up while the cycle waited (fetched, failed,
+    // timedOut), and stale ones served while they refresh behind it - what the rugCheck stage is.
+    rugCheckLookups: { ...rugCheckLookups },
     // Epoch ms of the newest rug-screen (pre-check) pass: the header pill's "last passed pre-check".
     ...(lastScreenPassAt > 0 ? { lastScreenPassAt } : {}),
   };
@@ -1798,6 +1834,21 @@ export function persistSnapshot(tokenId: string, prior: CandidatePrior, now: num
   return true;
 }
 
+/**
+ * Minutes since launch from what the cycle knows before scoring: the earlier of the pair's creation
+ * and the watchlist's first sighting (processCandidate's age anchor, less the Token row's).
+ */
+export function candidateAgeMinutes(
+  pairCreatedAt: Date | undefined,
+  firstSeenAt: Date | undefined,
+  now: number = Date.now(),
+): number | undefined {
+  const anchors = [pairCreatedAt, firstSeenAt]
+    .filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()))
+    .map((d) => d.getTime());
+  return anchors.length > 0 ? (now - Math.min(...anchors)) / 60_000 : undefined;
+}
+
 /** How long the decision's fresh-quote read may take (see readFreshQuotes). */
 export const FRESH_QUOTE_BUDGET_MS = 2_500;
 
@@ -1860,6 +1911,7 @@ async function processCandidate(
     .filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()))
     .map((d) => d.getTime());
   const createdAt = ageAnchors.length > 0 ? new Date(Math.min(...ageAnchors)) : undefined;
+  noteHolderCutVerdict(candidate.mintAddress, onChain, createdAt);
 
   // First sighting inside the curated band, stamped once and kept - the anchor for the
   // minutesSinceFirstInBand feature.

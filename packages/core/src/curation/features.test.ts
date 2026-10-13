@@ -251,6 +251,7 @@ describe("buildCandidateFeatures - fresh quote", () => {
             netBuyers: 12,
           },
           stats1h: { priceChangePct: 140, holderChange: 90 },
+          holderCount: 412,
         },
       }),
     );
@@ -264,9 +265,18 @@ describe("buildCandidateFeatures - fresh quote", () => {
     expect(f.jup5mHolderChange).toBeNull();
     expect(f.jup1hHolderChange).toBe(90);
     expect(LEARNER_FEATURE_NAMES).toContain("freshGapPct");
+    // Jupiter's holder count is recorded, not yet read.
+    expect(f.jupHolderCount).toBe(412);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("jupHolderCount");
 
     const none = buildCandidateFeatures(scored({}));
-    for (const k of ["freshGapPct", "jup5mPriceChangePct", "jup5mBuys", "jup5mBuyVolumeShare"] as const) {
+    for (const k of [
+      "freshGapPct",
+      "jup5mPriceChangePct",
+      "jup5mBuys",
+      "jup5mBuyVolumeShare",
+      "jupHolderCount",
+    ] as const) {
       expect(none[k]).toBeNull();
     }
   });
