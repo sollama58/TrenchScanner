@@ -233,13 +233,15 @@ const envSchema = z.object({
   // coins are where most wins are. They're decided with the share if it's in, unknown if not.
   SNIPER_SHARE_WAIT_MIN_AGE_MINUTES: z.coerce.number().nonnegative().default(10),
   // The trade tape of called coins (the trainer's tradeTapeJob.ts): every trade from launch to 30
-  // minutes past the call, for the wallet risk score and the stop causes. Helius pages
-  // (getTransactionsForAddress, 10 credits each) read per one-minute run, on the newest called
-  // coins; 4 caps it at ~40 credits a minute (~58k a day). 0 leaves every coin to Pump.fun's API.
-  TRADE_TAPE_HELIUS_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(4),
-  // Pump.fun trade API calls per run (free, but it answers 429 quickly): the backlog, the coins
-  // too busy for Helius, and a sample of uncalled coins. 0 turns it off.
-  TRADE_TAPE_PUMPFUN_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(4),
+  // minutes past the call, for the wallet risk score and the stop causes. Pump.fun's trade API is
+  // the main source: calls per one-minute run, spaced 6 s (free, but it answers 429 quickly). ~600
+  // coins are called a day at ~20 calls each, so 8 keeps up with some room. 0 turns it off and
+  // leaves every coin to Helius.
+  TRADE_TAPE_PUMPFUN_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(8),
+  // Helius pages (getTransactionsForAddress, 10 credits each) per run, as the backup for coins
+  // Pump.fun couldn't read: 1 caps it at 10 credits a minute (~14k a day, ~0.43M a month). A full
+  // read averages 20+ pages a coin, so Helius as the main source would be 125k+ a day. 0 = off.
+  TRADE_TAPE_HELIUS_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(1),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
   // every few minutes for the band, every minute for a token about to be decided on.
   SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(300),

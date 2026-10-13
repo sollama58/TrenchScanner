@@ -166,7 +166,7 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     });
   });
 
-  it("reads a recent called coin from Helius, page by page", async () => {
+  it("reads every coin from Helius, page by page, when Pump.fun is off", async () => {
     const { token, row } = await seedCalled("helius", new Date(ANCHOR + 5 * MIN));
     const mint = token.mintAddress;
     const bal = (accountIndex: number, owner: string, amount: number) => ({
@@ -222,5 +222,66 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     expect(tape).toMatchObject({ status: "done", source: "helius", creator: dev, trades: 3 });
     const outcome = await prisma.candidateOutcome.findUnique({ where: { id: row.id } });
     expect(outcome!.stopCause).toMatchObject({ sellers: 1, soldSol: 2.5, lead: "launchSnipers" });
+  });
+
+  it("uses Helius only as the backup for a coin Pump.fun couldn't read", async () => {
+    const fresh = await seedCalled("fresh", null);
+    const failed = await seedCalled("pf-failed", null);
+    await prisma.tokenTradeTape.create({
+      data: {
+        tokenId: failed.token.id,
+        anchorAt: new Date(ANCHOR),
+        reason: "called",
+        status: "failed",
+        source: "pumpfun",
+        windowEnd: new Date(ANCHOR + 30 * MIN),
+        retryAt: new Date(NOW - MIN),
+      },
+    });
+    const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+    const asked: string[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m) => {
+        asked.push(m);
+        return {
+          status: "ok",
+          paginationToken: null,
+          txs: [
+            {
+              blockTime: LAUNCH / 1000,
+              transaction: { signatures: ["c"], message: { accountKeys: [dev, "ata"] } },
+              meta: {
+                err: null,
+                preTokenBalances: [],
+                postTokenBalances: [
+                  { accountIndex: 1, mint: m, owner: dev, uiTokenAmount: { amount: "1000000", decimals: 6 } },
+                ],
+                preBalances: [2e9, 0],
+                postBalances: [1e9, 0],
+              },
+            },
+          ],
+        };
+      },
+    };
+    const { stub, calls } = pumpFunStub(fresh.token.mintAddress, [
+      pumpTrade("a", "buy", 1, 1_000_000, LAUNCH),
+    ]);
+    await runTradeTapeJob(
+      { helius, pumpFun: stub },
+      { heliusPagesPerRun: 1, pumpFunCallsPerRun: 4, spacingMs: 0, now: () => NOW },
+    );
+    expect(asked).toEqual([failed.token.mintAddress]);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: failed.token.id } })).toMatchObject({
+      status: "done",
+      source: "helius",
+    });
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: fresh.token.id } })).toMatchObject({
+      status: "done",
+      source: "pumpfun",
+    });
   });
 });
