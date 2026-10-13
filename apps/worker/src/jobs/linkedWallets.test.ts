@@ -169,4 +169,33 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
       funder: w("K"),
     });
   });
+
+  it("groups holders funded in the same minute, from fetched and stored funding times", async () => {
+    const t0 = new Date("2026-10-13T12:00:00Z");
+    await prisma.walletFunder.create({
+      data: { wallet: w("st1"), status: "found", funder: w("P1"), fundedAt: t0 },
+    });
+    const group = {
+      mintAddress: w("m5"),
+      holders: [
+        { owner: w("st1"), pct: 6 },
+        { owner: w("st2"), pct: 5 },
+        { owner: w("st3"), pct: 4 },
+      ],
+    };
+    const helius = fakeHelius({
+      [w("st2")]: { ...found(w("P2")), fundedAt: new Date(t0.getTime() + 30_000) },
+      [w("st3")]: { ...found(w("P3")), fundedAt: new Date(t0.getTime() + 3_600_000) },
+    });
+    const lookups = await resolveLinkedWallets([group], helius, { maxNewLookups: 10 });
+    const reading = linkedReadingOf(group, lookups)!;
+    expect(reading.linkedClusterCount).toBe(0);
+    expect(reading).toMatchObject({ sameTimeClusterCount: 1, sameTimeFundedPct: 11 });
+    expect(reading.sameTimeClusters[0]!.wallets.map((x) => x.wallet)).toEqual([w("st1"), w("st2")]);
+
+    // A fresh process reads the times back from the table.
+    resetLinkedWallets();
+    const again = await resolveLinkedWallets([group], fakeHelius({}), { maxNewLookups: 10 });
+    expect(linkedReadingOf(group, again)).toMatchObject({ sameTimeClusterCount: 1 });
+  });
 });

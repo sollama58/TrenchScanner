@@ -5,6 +5,7 @@ import {
   KNOWN_DUMPER_DUMPS,
   KNOWN_EXCHANGE_WALLETS,
   RISKY_WALLET_SCORE,
+  SAME_TIME_FUNDING_MS,
   type HeliusClient,
   type WalletOverviewResult,
 } from "@trenchscanner/core";
@@ -81,8 +82,11 @@ export interface WalletTrade {
 
 export interface LinkedWallet {
   wallet: string;
-  /** "sibling": its funder paid for this one too. "funded": this wallet paid for it. */
-  relation: "sibling" | "funded";
+  /**
+   * "sibling": its funder paid for this one too. "funded": this wallet paid for it. "same-minute":
+   * funded within a minute of this one, by any funder (core's SAME_TIME_FUNDING_MS).
+   */
+  relation: "sibling" | "funded" | "same-minute";
   amountSol: number | null;
   fundedAt: string | null;
   score: number | null;
@@ -382,7 +386,8 @@ export async function loadWalletProfile(
   }
 
   const funderWallet = funder?.status === "found" ? funder.funder : null;
-  const [funderActivity, fundedLast24h, siblingRows] = await Promise.all([
+  const fundedAt = funder?.status === "found" ? funder.fundedAt : null;
+  const [funderActivity, fundedLast24h, siblingRows, sameMinuteRows] = await Promise.all([
     funderWallet ? prisma.funderActivity.findUnique({ where: { address: funderWallet } }) : null,
     funderWallet
       ? prisma.walletFunder.count({
@@ -400,6 +405,22 @@ export async function loadWalletProfile(
           take: MAX_LINKED,
         })
       : [],
+    // Wallets funded within a minute of this one, whoever paid: a bundle is often paid for by
+    // several wallets at one go (user ask 2026-10-13).
+    fundedAt
+      ? prisma.walletFunder.findMany({
+          where: {
+            status: "found",
+            wallet: { not: wallet },
+            fundedAt: {
+              gte: new Date(fundedAt.getTime() - SAME_TIME_FUNDING_MS),
+              lte: new Date(fundedAt.getTime() + SAME_TIME_FUNDING_MS),
+            },
+          },
+          orderBy: { fundedAt: "asc" },
+          take: MAX_LINKED,
+        })
+      : [],
   ]);
   const funderHot = funderWallet
     ? isHotFunder(funderWallet, {
@@ -411,7 +432,9 @@ export async function loadWalletProfile(
   const siblings = funderHot ? [] : siblingRows;
 
   const outcomeIds = activity.map((a) => a.token.tradeTape?.outcomeId).filter((id): id is string => !!id);
-  const linkedWallets = [...siblings.map((s) => s.wallet), ...fundedRows.map((f) => f.wallet)];
+  const related = new Set([...siblings.map((s) => s.wallet), ...fundedRows.map((f) => f.wallet)]);
+  const sameMinute = sameMinuteRows.filter((r) => !related.has(r.wallet));
+  const linkedWallets = [...related, ...sameMinute.map((r) => r.wallet)];
   const [outcomes, linkedScores] = await Promise.all([
     outcomeIds.length > 0
       ? prisma.candidateOutcome.findMany({
@@ -556,6 +579,13 @@ export async function loadWalletProfile(
         amountSol: f.amountSol,
         fundedAt: iso(f.fundedAt),
         score: scoreOf.get(f.wallet) ?? null,
+      })),
+      ...sameMinute.map((r): LinkedWallet => ({
+        wallet: r.wallet,
+        relation: "same-minute",
+        amountSol: r.amountSol,
+        fundedAt: iso(r.fundedAt),
+        score: scoreOf.get(r.wallet) ?? null,
       })),
     ],
   };

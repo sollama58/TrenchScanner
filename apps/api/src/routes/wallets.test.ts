@@ -19,9 +19,11 @@ const WALLET = address(`${TAG}-wallet`);
 const FUNDER = address(`${TAG}-funder`);
 const SIBLING = address(`${TAG}-sibling`);
 const CHILD = address(`${TAG}-child`);
+const SAME_MINUTE = address(`${TAG}-same-minute`);
+const FUNDED_AT = new Date(Date.now() - 86_400_000 * 3);
 const MINT = address(`${TAG}-mint`);
 const LAUNCH = address(`${TAG}-launch`);
-const WALLETS = [WALLET, SIBLING, CHILD];
+const WALLETS = [WALLET, SIBLING, CHILD, SAME_MINUTE];
 
 describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
   let app: FastifyInstance;
@@ -99,7 +101,14 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
           status: "found",
           funder: FUNDER,
           amountSol: 1.5,
-          fundedAt: new Date(Date.now() - 86_400_000 * 3),
+          fundedAt: FUNDED_AT,
+        },
+        {
+          wallet: SAME_MINUTE,
+          status: "found",
+          funder: address(`${TAG}-other-funder`),
+          amountSol: 0.5,
+          fundedAt: new Date(FUNDED_AT.getTime() + 20_000),
         },
         { wallet: SIBLING, status: "found", funder: FUNDER, amountSol: 0.8, fundedAt: new Date() },
         { wallet: CHILD, status: "found", funder: WALLET, amountSol: 0.2, fundedAt: new Date() },
@@ -139,6 +148,7 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
     expect(p.linked).toEqual([
       expect.objectContaining({ wallet: SIBLING, relation: "sibling", score: 40 }),
       expect.objectContaining({ wallet: CHILD, relation: "funded", score: null }),
+      expect.objectContaining({ wallet: SAME_MINUTE, relation: "same-minute", amountSol: 0.5 }),
     ]);
     expect(p.totals).toMatchObject({ coins: 2, solIn: 3, solOut: 4, netSol: 1, profitable: 1 });
     expect(p.coins.find((c) => c.mint === MINT)).toMatchObject({ netSol: 1.5, roles: ["sniper"] });

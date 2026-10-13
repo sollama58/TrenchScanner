@@ -2484,6 +2484,9 @@ export function withLinkedWallets(
     linkedCreatorPct: linked.linkedCreatorPct,
     linkedClusters: linked.clusters,
     linkedHolders: linked.holders,
+    sameTimeFundedPct: linked.sameTimeFundedPct,
+    sameTimeClusterCount: linked.sameTimeClusterCount,
+    sameTimeClusters: linked.sameTimeClusters,
   };
 }
 

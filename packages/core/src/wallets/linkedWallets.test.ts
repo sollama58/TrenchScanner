@@ -185,3 +185,47 @@ describe("cexFundedReading", () => {
     });
   });
 });
+
+describe("same-time funding", () => {
+  const t0 = 1_700_000_000_000;
+  const holders = [
+    { owner: "a", pct: 6 },
+    { owner: "b", pct: 5 },
+    { owner: "c", pct: 4 },
+    { owner: "d", pct: 3 },
+    { owner: "e", pct: 2 },
+  ];
+  const funders = new Map<string, string | null>([
+    ["a", "F1"],
+    ["b", "F2"],
+    ["c", "F3"],
+    ["d", "F4"],
+    ["e", null],
+  ]);
+
+  it("groups holders funded within a minute of each other, whoever paid", () => {
+    const at = new Map<string, number | null>([
+      ["a", t0],
+      ["b", t0 + 20_000],
+      ["c", t0 + 59_000],
+      ["d", t0 + 61_000],
+      ["e", null],
+    ]);
+    const r = linkedWallets(holders, funders, { hot: notHot, fundedAtOf: at })!;
+    // No shared funder: no linked cluster, but one same-minute group of three.
+    expect(r.linkedClusterCount).toBe(0);
+    expect(r.sameTimeClusterCount).toBe(1);
+    expect(r.sameTimeFundedPct).toBe(15);
+    expect(r.sameTimeClusters[0]).toMatchObject({ atMs: t0, spanMs: 59_000, pct: 15 });
+    expect(r.sameTimeClusters[0]!.wallets.map((w) => [w.wallet, w.funder])).toEqual([
+      ["a", "F1"],
+      ["b", "F2"],
+      ["c", "F3"],
+    ]);
+  });
+
+  it("finds none without funding times", () => {
+    const r = linkedWallets(holders, funders, { hot: notHot })!;
+    expect(r).toMatchObject({ sameTimeClusterCount: 0, sameTimeFundedPct: 0, sameTimeClusters: [] });
+  });
+});

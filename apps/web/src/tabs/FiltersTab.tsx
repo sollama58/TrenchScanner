@@ -48,6 +48,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxFlaggedBuySol: null,
     minCexFundedPct: null,
     maxCexFundedPct: null,
+    maxSameTimeFundedPct: null,
     minFirstBuyersHolding: null,
     maxFirstBuyersHolding: null,
     narrativeCategories: [],

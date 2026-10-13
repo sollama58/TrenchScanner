@@ -170,6 +170,18 @@ export interface Snapshot {
   linkedHolders?: { wallet: string; pct: number }[] | null;
   /** Of the largest holders (up to 20), the % an exchange or a busy service paid for; null when not read. */
   cexFundedPct?: number | null;
+  /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */
+  sameTimeFundedPct?: number | null;
+  sameTimeClusterCount?: number | null;
+  /** The same-minute groups, largest first; null or absent with none. */
+  sameTimeClusters?:
+    | {
+        atMs: number;
+        spanMs: number;
+        wallets: { wallet: string; pct: number; fundedAtMs: number; funder: string | null }[];
+        pct: number;
+      }[]
+    | null;
   cexFundedCount?: number | null;
   cexFundedHolders?: number | null;
   /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
@@ -793,6 +805,7 @@ export interface FilterInput {
   maxFlaggedBuySol: number | null;
   minCexFundedPct: number | null;
   maxCexFundedPct: number | null;
+  maxSameTimeFundedPct: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
   /** TokenSage narrative criteria; every one fails closed until the coin has a read. */

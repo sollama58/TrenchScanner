@@ -55,7 +55,7 @@ export interface WalletProfile {
   launches: WalletCoin[];
   linked: {
     wallet: string;
-    relation: "sibling" | "funded";
+    relation: "sibling" | "funded" | "same-minute";
     amountSol: number | null;
     fundedAt: string | null;
     score: number | null;
@@ -528,6 +528,7 @@ function Trades({ trades }: { trades: WalletProfile["trades"] }) {
 function Linked({ p }: { p: WalletProfile }) {
   const siblings = p.linked.filter((l) => l.relation === "sibling");
   const funded = p.linked.filter((l) => l.relation === "funded");
+  const sameMinute = p.linked.filter((l) => l.relation === "same-minute");
   if (p.linked.length === 0) {
     return (
       <section className="sage-card wm-section">
@@ -571,6 +572,12 @@ function Linked({ p }: { p: WalletProfile }) {
         <>
           <p className="faint small wm-note">Wallets it paid for</p>
           {list(funded)}
+        </>
+      )}
+      {sameMinute.length > 0 && (
+        <>
+          <p className="faint small wm-note">Funded in the same minute, by other funders</p>
+          {list(sameMinute)}
         </>
       )}
     </section>

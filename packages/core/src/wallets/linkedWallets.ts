@@ -189,6 +189,70 @@ export interface LinkedWalletsReading {
   clusters: LinkedCluster[];
   /** Every holder the reading covers (the creator aside) and its share, %, largest first: the bubble map's bubbles. */
   holders: { wallet: string; pct: number }[];
+  /** % of supply held by holders funded within SAME_TIME_FUNDING_MS of each other (any funders). */
+  sameTimeFundedPct: number;
+  /** Groups of two or more holders funded within SAME_TIME_FUNDING_MS of each other. */
+  sameTimeClusterCount: number;
+  sameTimeClusters: SameTimeCluster[];
+}
+
+/**
+ * Holders funded within this long of each other (user ask 2026-10-13: "funded within the same
+ * minute"), from whichever funders: a bundle is often paid for by several wallets, or an exchange
+ * withdrawal to each, at one go, which the shared-funder clusters can't see.
+ */
+export const SAME_TIME_FUNDING_MS = 60_000;
+
+export interface SameTimeCluster {
+  /** When the first of them was funded, ms epoch. */
+  atMs: number;
+  /** From the first funding to the last, ms (at most SAME_TIME_FUNDING_MS). */
+  spanMs: number;
+  /** Holders in the group, largest first, with when each was funded and by whom. */
+  wallets: { wallet: string; pct: number; fundedAtMs: number; funder: string | null }[];
+  /** Their combined share of supply, %. */
+  pct: number;
+}
+
+/**
+ * Groups of holders funded within SAME_TIME_FUNDING_MS of each other: holders in funding-time
+ * order, each group starting at its earliest and taking every holder funded up to a minute after
+ * it. A holder with no known funding time (no SOL ever paid in, or read before the time was kept)
+ * is in none.
+ */
+export function sameTimeClusters(
+  holders: readonly { owner: string; pct: number }[],
+  fundedAtOf: ReadonlyMap<string, number | null>,
+  funderOf: ReadonlyMap<string, string | null> = new Map(),
+): SameTimeCluster[] {
+  const timed = holders
+    .map((h) => ({ ...h, at: fundedAtOf.get(h.owner) ?? null }))
+    .filter((h): h is { owner: string; pct: number; at: number } => h.at !== null)
+    .sort((a, b) => a.at - b.at);
+  const out: SameTimeCluster[] = [];
+  let i = 0;
+  while (i < timed.length) {
+    let j = i + 1;
+    while (j < timed.length && timed[j]!.at - timed[i]!.at <= SAME_TIME_FUNDING_MS) j += 1;
+    const group = timed.slice(i, j);
+    if (group.length >= 2) {
+      out.push({
+        atMs: group[0]!.at,
+        spanMs: group[group.length - 1]!.at - group[0]!.at,
+        wallets: [...group]
+          .sort((a, b) => b.pct - a.pct)
+          .map((h) => ({
+            wallet: h.owner,
+            pct: round2(h.pct),
+            fundedAtMs: h.at,
+            funder: funderOf.get(h.owner) ?? null,
+          })),
+        pct: round2(group.reduce((s, h) => s + h.pct, 0)),
+      });
+    }
+    i = j;
+  }
+  return out.sort((a, b) => b.pct - a.pct);
 }
 
 /**
@@ -204,7 +268,13 @@ export interface LinkedWalletsReading {
 export function linkedWallets(
   holders: readonly { owner: string; pct: number }[],
   funderOf: ReadonlyMap<string, string | null>,
-  opts: { hot: (funder: string) => boolean; creator?: string | null; creatorFunder?: string | null },
+  opts: {
+    hot: (funder: string) => boolean;
+    creator?: string | null;
+    creatorFunder?: string | null;
+    /** When each wallet was funded, ms epoch, for the same-time groups; none without it. */
+    fundedAtOf?: ReadonlyMap<string, number | null>;
+  },
 ): LinkedWalletsReading | null {
   const list = dedupeHolders(holders).filter((h) => h.owner !== opts.creator);
   if (list.length === 0) return null;
@@ -272,6 +342,7 @@ export function linkedWallets(
     });
   }
   clusters.sort((a, b) => b.pct - a.pct);
+  const sameTime = opts.fundedAtOf ? sameTimeClusters(list, opts.fundedAtOf, funderOf) : [];
   return {
     linkedWalletPct: round2(clusters.reduce((s, c) => s + c.pct, 0)),
     linkedClusterCount: clusters.length,
@@ -280,6 +351,9 @@ export function linkedWallets(
     linkedWalletsChecked: list.length,
     clusters,
     holders: [...list].sort((a, b) => b.pct - a.pct).map((h) => ({ wallet: h.owner, pct: round2(h.pct) })),
+    sameTimeFundedPct: round2(sameTime.reduce((s, c) => s + c.pct, 0)),
+    sameTimeClusterCount: sameTime.length,
+    sameTimeClusters: sameTime,
   };
 }
 
