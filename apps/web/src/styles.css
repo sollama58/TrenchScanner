@@ -9377,6 +9377,205 @@ img.tm-avatar {
 .bm-head h2:focus {
   outline: none;
 }
+
+/* Wallet detail modal (components/WalletModal.tsx): the bubble map's dialog and stat tiles, then
+   one card per section. Label tones reuse the flagged-wallet markers' colours. */
+.wm-modal {
+  z-index: 2;
+}
+.wm-short {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.wm-address {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--surface-3);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.wm-address span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wm-address:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+.wm-labels {
+  margin: 10px 0 0 !important;
+  padding: 0;
+  list-style: none;
+  display: flex !important;
+}
+.wm-labels .tm-tag {
+  font-size: 11.5px;
+  padding: 1px 9px;
+  cursor: help;
+}
+.wm-tone-dev {
+  --mk: var(--series-4);
+}
+.wm-tone-risky {
+  --mk: var(--series-5);
+}
+.wm-tone-linked {
+  --mk: var(--series-1);
+}
+.wm-tone-info {
+  --mk: var(--muted);
+}
+.wm-tone-good {
+  --mk: var(--good);
+}
+.wm-sub {
+  margin: -4px 0 4px !important;
+}
+.wm-skeleton {
+  height: 260px;
+}
+.wm-section h4 {
+  margin-bottom: 8px !important;
+}
+.wm-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 !important;
+}
+.wm-wallet {
+  margin: 0;
+  padding: 1px 8px;
+  font-size: 12px;
+  background: var(--surface-3);
+}
+.wm-wallet:hover {
+  text-decoration: underline;
+}
+.wm-facts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.wm-facts div {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  min-width: 0;
+}
+.wm-facts dt {
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wm-facts dd {
+  margin: 0;
+  color: var(--ink) !important;
+  font-weight: 650;
+  font-size: 14px;
+}
+.wm-note {
+  margin: 6px 0 4px !important;
+}
+.wm-pnl {
+  margin: 0 0 8px !important;
+}
+.wm-pnl .num {
+  font-weight: 700;
+}
+.wm-coins,
+.wm-trades,
+.wm-linked {
+  display: grid;
+  gap: 4px !important;
+}
+.wm-coins li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--ink) !important;
+}
+.wm-coins .wm-flow {
+  margin-left: auto;
+}
+.wm-coin {
+  max-width: 14ch;
+  font-weight: 650;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wm-trades li,
+.wm-linked li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--ink) !important;
+}
+.wm-trades li > :nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wm-side {
+  width: 32px;
+  font-weight: 650;
+}
+.wm-linked .tm-score {
+  margin-left: auto;
+}
+.wm-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.wm-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--brand-ink);
+}
+.tm-wallet-btn {
+  padding: 0;
+  font: inherit;
+  color: var(--brand-ink);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.tm-wallet-btn:hover {
+  text-decoration: underline;
+}
+@media (max-width: 640px) {
+  .wm-facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 .tm-legend-note {
   flex-basis: 100%;
 }

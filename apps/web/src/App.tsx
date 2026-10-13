@@ -37,6 +37,7 @@ import { AnnouncementBar } from "./components/AnnouncementBar";
 import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
 import { useBubblesMint } from "./bubbleMap";
+import { useWalletAddress } from "./walletModal";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
 import { StreamView } from "./components/StreamView";
@@ -56,6 +57,10 @@ const SageHost = lazy(() => import("./components/SageView").then((m) => ({ defau
 // The linked-wallets bubble map loads the first time a Linked tile or a ?bubbles= link opens it.
 const BubbleMapHost = lazy(() =>
   import("./components/BubbleMap").then((m) => ({ default: m.BubbleMapHost })),
+);
+// The wallet detail modal loads the first time a wallet or a ?wallet= link opens it.
+const WalletModalHost = lazy(() =>
+  import("./components/WalletModal").then((m) => ({ default: m.WalletModalHost })),
 );
 const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ default: m.BurnPanel })));
 
@@ -95,6 +100,7 @@ export function App() {
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
   const sageMint = useSageMint();
   const bubblesMint = useBubblesMint();
+  const walletAddress = useWalletAddress();
 
   const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
@@ -392,6 +398,11 @@ export function App() {
             <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest onConnect={connectWallet} />
           </Suspense>
         )}
+        {guest && walletAddress && (
+          <Suspense fallback={null}>
+            <WalletModalHost key={walletAddress} wallet={walletAddress} guest onConnect={connectWallet} />
+          </Suspense>
+        )}
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
@@ -414,6 +425,16 @@ export function App() {
             {bubblesMint && (
               <Suspense fallback={null}>
                 <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest={false} onConnect={connectWallet} />
+              </Suspense>
+            )}
+            {walletAddress && (
+              <Suspense fallback={null}>
+                <WalletModalHost
+                  key={walletAddress}
+                  wallet={walletAddress}
+                  guest={false}
+                  onConnect={connectWallet}
+                />
               </Suspense>
             )}
           </AccessGate>

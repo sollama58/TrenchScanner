@@ -16,9 +16,10 @@ import {
   type MapNode,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
+import { openWallet } from "../walletModal";
 import { LINKED_WARN_PCT } from "./AlertCard";
 import { ShareButton } from "./ShareImageDialog";
-import { BubblesIcon, CheckIcon, CloseIcon, ExternalIcon, LinkIcon, LockIcon } from "./Icons";
+import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
 
 /** GET /tokens/:mint: the token and its newest snapshots. */
 type TokenDetail = Token & { snapshots: Snapshot[] };
@@ -477,10 +478,15 @@ function NodeDetail({ node: n, graph }: { node: MapNode | null; graph: BubbleGra
   if (cluster?.creatorLinked) tags.push({ text: "Tied to the creator", tone: "dev" });
   return (
     <div className="bm-detail small">
-      <a className="num" href={`https://solscan.io/account/${n.wallet}`} target="_blank" rel="noreferrer">
+      <button
+        type="button"
+        className="num tm-wallet-btn"
+        onClick={() => n.wallet && openWallet(n.wallet)}
+        title="Open this wallet's details"
+      >
         {n.kind === "funder" ? "Funder " : ""}
-        {shortAddress(n.wallet ?? "")} <ExternalIcon size={11} />
-      </a>
+        {shortAddress(n.wallet ?? "")}
+      </button>
       {n.kind === "holder" && <span className="num">{pctText(n.pct)} of supply</span>}
       {n.kind === "funder" && cluster && (
         <span className="muted">
