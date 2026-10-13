@@ -1,6 +1,7 @@
 import {
   tokenSageHints,
   recordRunProgress,
+  withApiStages,
   floatArrayParam,
   prisma,
   Prisma,
@@ -443,7 +444,17 @@ export function withLaunchSnipers(
   };
 }
 
-export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
+export function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
+  // Each outside call is counted under the stage it was made in ("scan/wallets"), named as lap()
+  // closes the stage - see withApiStages in core's apiUsage.ts.
+  return withApiStages("scan", (apiStage) => scanCycle(deps, env, apiStage));
+}
+
+async function scanCycle(
+  deps: ScanDeps,
+  env: Env,
+  apiStage: (stage: string) => void,
+): Promise<ScanCycleMeta> {
   const startedAt = Date.now();
   logger.info("scan cycle starting");
   // The composite score's newest adopted weights (cached; never fails the cycle).
@@ -457,6 +468,7 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
     const now = Date.now();
     stagesMs[stage] = now - lapStartedAt;
     lapStartedAt = now;
+    apiStage(stage);
     // Visibility only, never awaited: shows on /health/worker which stage a slow run is past.
     void recordRunProgress("scan", stagesMs).catch(() => {});
   };

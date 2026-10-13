@@ -1,5 +1,8 @@
 import "./bootstrap-env.js"; // must run before any @trenchscanner/core import - see file comment
 import {
+  installApiUsageMeter,
+  nameApiHost,
+  withApiFeature,
   loadEnv,
   PricePathBook,
   createLogger,
@@ -91,6 +94,10 @@ const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
 async function main() {
   const env = loadEnv();
   const role = env.WORKER_ROLE;
+  // Counts every outside call for Admin > API usage, before any client below is built. Calls made
+  // outside a job (startup, the stream's side reads) count under the process's own name.
+  if (env.TOKENSAGE_API_URL) nameApiHost(env.TOKENSAGE_API_URL, "tokensage");
+  const stopApiUsageMeter = installApiUsageMeter({ processName: `worker-${role}` });
   const jobs: { name: HeartbeatJob; job: ScheduledJob }[] = [];
   /** Starts a schedule only when this process's role owns the job. */
   const schedule = (job: HeartbeatJob, start: () => ScheduledJob) => {
@@ -185,7 +192,7 @@ async function main() {
               runEarly: {
                 everyMs: BAND_ENTRY_CHECK_MS,
                 quiet: true,
-                due: () => deps.bandEntryWatch!.due(),
+                due: () => withApiFeature("band-entry-watch", () => deps.bandEntryWatch!.due()),
               },
             }
           : {}),
@@ -527,6 +534,7 @@ async function main() {
         ),
       );
     }
+    await stopApiUsageMeter();
     await prisma.$disconnect().catch(() => {});
     process.exit(code);
   };

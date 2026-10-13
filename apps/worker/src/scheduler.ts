@@ -4,6 +4,7 @@ import {
   recordHeartbeat,
   recordRunStart,
   type HeartbeatJob,
+  withApiFeature,
 } from "@trenchscanner/core";
 import { exitForRestart } from "./processExit.js";
 
@@ -196,7 +197,8 @@ export function scheduleInterval(
       await recordRunStart(name, new Date(startedAt)).catch(() => {
         // Visibility only - never worth not running the job over.
       });
-      const meta = await fn();
+      // Every outside call the run makes is counted under the job's name (core's apiUsage.ts).
+      const meta = await withApiFeature(name, fn);
       // The effective cadence rides on the row: the intervals are env-tunable, so /health/worker
       // derives its stale threshold from this rather than a table that drifts from the env.
       await recordHeartbeat(name, {
@@ -379,7 +381,7 @@ export function scheduleDailyAt(
       let meta: JobRunMeta | void;
       let partialError: string | undefined;
       try {
-        meta = await fn();
+        meta = await withApiFeature(name, fn);
       } catch (err) {
         if (err instanceof PartialJobFailure) {
           // Recorded as a success with the error kept - see PartialJobFailure. No retry.

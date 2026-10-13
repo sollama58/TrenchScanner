@@ -6,6 +6,7 @@ import { Kpi, Load, Panel, Table, Tag, Wallet, dollars, ms, n, when } from "./ad
 import { AnnouncementsAdmin } from "./AdminAnnouncements";
 import { ModelsAdmin } from "./AdminModels";
 import { WalletsAdmin } from "./AdminWallets";
+import { UsageAdmin } from "./AdminUsage";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
@@ -33,6 +34,7 @@ const SECTIONS = [
   { id: "backups", label: "Backups" },
   { id: "database", label: "Database" },
   { id: "api", label: "API" },
+  { id: "usage", label: "API usage" },
   { id: "config", label: "Config" },
 ] as const;
 type Section = (typeof SECTIONS)[number]["id"];
@@ -87,6 +89,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
       {section === "backups" && <Backups />}
       {section === "database" && <Database />}
       {section === "api" && <ApiInstance />}
+      {section === "usage" && <UsageAdmin />}
       {section === "config" && <Config />}
     </div>
   );
