@@ -1,0 +1,66 @@
+import { useEffect, useState } from "react";
+
+/**
+ * The wallet modal's URL state: open as `?wallet=<address>` (like `?bubbles=`, bubbleMap.ts), so
+ * a wallet has a link of its own and back closes it. Opened from any wallet the dashboard lists:
+ * the token modal's flagged wallets, the bubble map, the admin wallet lists.
+ */
+
+export const WALLET_PARAM = "wallet";
+const ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const EVENT = "wallet:change";
+
+/** The wallet in the address bar, or null when none (or not an address). */
+export function walletFromUrl(search = window.location.search): string | null {
+  const wallet = new URLSearchParams(search).get(WALLET_PARAM);
+  return wallet && ADDRESS_RE.test(wallet) ? wallet : null;
+}
+
+/** The modal's own link, for the Copy link button: this page with only `?wallet=<address>`. */
+export function walletLink(wallet: string, href = window.location.href): string {
+  const url = new URL(href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set(WALLET_PARAM, wallet);
+  return url.toString();
+}
+
+function write(wallet: string | null) {
+  const url = new URL(window.location.href);
+  if (wallet) url.searchParams.set(WALLET_PARAM, wallet);
+  else url.searchParams.delete(WALLET_PARAM);
+  window.history.replaceState(window.history.state, "", url);
+  window.dispatchEvent(new Event(EVENT));
+}
+
+export function openWallet(wallet: string) {
+  if (ADDRESS_RE.test(wallet)) write(wallet);
+}
+
+export function closeWallet() {
+  write(null);
+}
+
+/** The open wallet, following openWallet/closeWallet and back/forward. */
+export function useWalletAddress(): string | null {
+  const [wallet, setWallet] = useState(walletFromUrl);
+  useEffect(() => {
+    const sync = () => setWallet(walletFromUrl());
+    window.addEventListener(EVENT, sync);
+    window.addEventListener("popstate", sync);
+    return () => {
+      window.removeEventListener(EVENT, sync);
+      window.removeEventListener("popstate", sync);
+    };
+  }, []);
+  return wallet;
+}
+
+/** Outside links for a wallet: explorers and trackers that show it. */
+export const WALLET_LINKS: { label: string; href: (w: string) => string }[] = [
+  { label: "Solscan", href: (w) => `https://solscan.io/account/${w}` },
+  { label: "GMGN", href: (w) => `https://gmgn.ai/sol/address/${w}` },
+  { label: "KOLScan", href: (w) => `https://kolscan.io/account/${w}` },
+  { label: "Birdeye", href: (w) => `https://birdeye.so/profile/${w}?chain=solana` },
+  { label: "Explorer", href: (w) => `https://explorer.solana.com/address/${w}` },
+];

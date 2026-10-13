@@ -42,6 +42,7 @@ import {
 import { WeekChart } from "./WeekChart";
 import { Skeleton } from "./Charts";
 import { openBubbleMap } from "../bubbleMap";
+import { openWallet } from "../walletModal";
 import {
   BrainIcon,
   BubblesIcon,
@@ -484,14 +485,14 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
           return (
             <li key={w.wallet}>
               <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
-              <a
-                className="num tm-wallet"
-                href={`https://solscan.io/account/${w.wallet}`}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                className="num tm-wallet tm-wallet-btn"
+                onClick={() => openWallet(w.wallet)}
+                title="Open this wallet's details"
               >
                 {shortAddress(w.wallet)}
-              </a>
+              </button>
               <span className="tm-tags">
                 {w.tags.map((t) => (
                   <span

@@ -16,31 +16,27 @@ import { keysOf, type ChainTx } from "./tradeTape.js";
 const LAMPORTS_PER_SOL = 1_000_000_000;
 
 /**
- * Exchange hot wallets known to fund wallets in bulk. Not exhaustive: the busy-funder rules
- * (isHotFunder) catch the rest. A wrong entry only stops links through that one address.
+ * Exchange hot wallets known to fund wallets in bulk, with the exchange's name (shown as the
+ * wallet's label in the wallet modal). Not exhaustive: the busy-funder rules (isHotFunder) catch
+ * the rest. A wrong entry only stops links through that one address.
  */
-export const HOT_FUNDER_DENYLIST: ReadonlySet<string> = new Set([
-  // Binance
-  "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9",
-  "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
-  // Coinbase
-  "H8sMJSCQxfKiFTCfDR3DUMLPwcRbM61LGFJ8N4dK3WjS",
-  "2AQdpHJ2JpcEgPiATUXjQxA8QmafFegfQwSLWSprPicm",
-  "GJRs4FwHtemZ5ZE9x3FNvJ8TMwitKTh21yxdRPqn7npE",
-  // OKX
-  "5VCwKtCXgCJ6kit5FybXjvriW3xELsFDhYrPSqtJNmcD",
-  "is6MTRHEgyFLNTfYcuV4QBWLjrZBfmhVNYR6ccgr8KV",
-  // Bybit
-  "AC5RDfQFmDS1deWZos921JfqscXdByf8BKHs5ACWjtW2",
-  // Kraken
-  "FWznbcNXWQuHTawe9RxvQ2LdCENssh12dsznf4RiouN5",
-  // MEXC
-  "ASTyfSima4LLAdDgoFGkgqoKowG1LZFDr9fAQrg7iaJZ",
-  // Gate
-  "u6PJ8DtQuPFnfmwHbGFULQ4u4EgjDiyYKjVEsynXq2w",
-  // KuCoin
-  "BmFdpraQhkiDQE6SnfG5omcA1VwzqfXrwtNYBwWTymy6",
+export const KNOWN_EXCHANGE_WALLETS: ReadonlyMap<string, string> = new Map([
+  ["5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9", "Binance"],
+  ["9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM", "Binance"],
+  ["H8sMJSCQxfKiFTCfDR3DUMLPwcRbM61LGFJ8N4dK3WjS", "Coinbase"],
+  ["2AQdpHJ2JpcEgPiATUXjQxA8QmafFegfQwSLWSprPicm", "Coinbase"],
+  ["GJRs4FwHtemZ5ZE9x3FNvJ8TMwitKTh21yxdRPqn7npE", "Coinbase"],
+  ["5VCwKtCXgCJ6kit5FybXjvriW3xELsFDhYrPSqtJNmcD", "OKX"],
+  ["is6MTRHEgyFLNTfYcuV4QBWLjrZBfmhVNYR6ccgr8KV", "OKX"],
+  ["AC5RDfQFmDS1deWZos921JfqscXdByf8BKHs5ACWjtW2", "Bybit"],
+  ["FWznbcNXWQuHTawe9RxvQ2LdCENssh12dsznf4RiouN5", "Kraken"],
+  ["ASTyfSima4LLAdDgoFGkgqoKowG1LZFDr9fAQrg7iaJZ", "MEXC"],
+  ["u6PJ8DtQuPFnfmwHbGFULQ4u4EgjDiyYKjVEsynXq2w", "Gate"],
+  ["BmFdpraQhkiDQE6SnfG5omcA1VwzqfXrwtNYBwWTymy6", "KuCoin"],
 ]);
+
+/** The exchange hot wallets above, left out as funders. */
+export const HOT_FUNDER_DENYLIST: ReadonlySet<string> = new Set(KNOWN_EXCHANGE_WALLETS.keys());
 
 /**
  * A funder whose newest page of signatures (SIGNATURES_PAGE, one 1-credit call) all fall within
