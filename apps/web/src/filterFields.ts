@@ -56,7 +56,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 100,
         label: "Max top-10 holders",
-        hint: "share of supply",
+        hint: "share of supply the ten largest holders own, pool aside; 40% and over is always rejected",
         unit: "%",
       },
       {
@@ -64,7 +64,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 100,
         label: "Max largest holder",
-        hint: "one wallet's share of supply, pools aside",
+        hint: "one wallet's share of supply, pools aside; over 10% is always rejected",
         unit: "%",
       },
       {
@@ -81,7 +81,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 100,
         label: "Max fresh wallets",
-        hint: "top-10 holders on wallets first used, or used again after a week idle, in the last day",
+        hint: "top-10 holders on wallets first used, or used again after a week idle, in the last day; over 70% is always rejected",
         unit: "%",
       },
       {

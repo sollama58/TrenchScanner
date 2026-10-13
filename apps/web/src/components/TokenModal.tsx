@@ -998,7 +998,7 @@ function StatsCard({ card }: { card: Card }) {
           className={
             r.cexCount !== null && r.cexCount >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined
           }
-          title={`Of the 20 largest holders, how many were opened from an exchange (or a busy service like a bridge). The safety screen rejects ${SAFETY_REJECT_CEX_FUNDED_COUNT} or more.`}
+          title={`Of the ${r.cexHolders ?? 20} largest holders, how many were opened from an exchange (or a busy service like a bridge). The safety screen rejects ${SAFETY_REJECT_CEX_FUNDED_COUNT} or more.`}
         >
           <dt>CEX-funded</dt>
           <dd className={r.cexPct === null ? "muted" : "num"}>
