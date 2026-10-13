@@ -398,8 +398,6 @@ export interface FilterCriteria {
   maxSameTimeFundedPct?: number | null;
   /** Max how many of the top-25 holders were funded within a minute of each other (sameTimeFundedCount). */
   maxSameTimeFundedCount?: number | null;
-  /** Max how many of the top-25 holders share a funder or a funding minute with another (bundledWalletCount). */
-  maxBundledWalletCount?: number | null;
   /** Max % of supply held by top holders tied to the creator (linkedCreatorPct). Skipped while unknown. */
   maxLinkedCreatorPct?: number | null;
   /** Min holders as Jupiter counts them at the decision (freshQuote.holderCount). Fails closed without a quote. */

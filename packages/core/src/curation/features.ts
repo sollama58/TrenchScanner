@@ -90,7 +90,8 @@ export const SAME_TIME_FUNDING_FEATURES = ["sameTimeFundedPct", "sameTimeCluster
  * Added 2026-10-13 (user ask, "Bundled"): of the top-25 holders, how many sit in a same-minute
  * funding group, and how many share a funder or a funding minute with another holder, each counted
  * once (core's linkedWallets). Null until every holder's funder is read, and on every row banked
- * before. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ * before. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days. Later the same
+ * day Linked took in the same-minute holders, so linkedWalletCount equals bundledWalletCount from then on.
  */
 export const BUNDLED_FEATURES = ["sameTimeFundedCount", "bundledWalletCount"] as const;
 

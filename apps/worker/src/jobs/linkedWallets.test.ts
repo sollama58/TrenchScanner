@@ -76,7 +76,9 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     const reading = linkedReadingOf(group, lookups)!;
     expect(reading).toMatchObject({
       linkedClusterCount: 1,
-      linkedWalletPct: 21,
+      // a and b share F; all three were funded the same moment, so c counts as linked too.
+      linkedWalletPct: 25,
+      linkedWalletCount: 3,
       linkedLargestClusterPct: 21,
     });
     expect(helius.getFundersBatch).toHaveBeenCalledTimes(1);
@@ -89,7 +91,7 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     const cached = await resolveLinkedWallets([group], again, { maxNewLookups: 10 });
     expect(again.getFundersBatch).not.toHaveBeenCalled();
     expect(again.getFunderActivityBatch).not.toHaveBeenCalled();
-    expect(linkedReadingOf(group, cached)).toMatchObject({ linkedWalletPct: 21 });
+    expect(linkedReadingOf(group, cached)).toMatchObject({ linkedWalletPct: 25 });
   });
 
   it("reads the exchange-funded share from the same holders", async () => {

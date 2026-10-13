@@ -13,7 +13,7 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { openSage } from "../sage";
-import { bundledCount, linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
+import { linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -99,7 +99,6 @@ export function AlertCard({
     sniperAtAlert,
     linkedPct,
     linkedCount: linkedN,
-    bundledCount: bundled,
     linkedAtAlert,
     linkedClusters,
     cexPct,
@@ -128,7 +127,6 @@ export function AlertCard({
         "sniperTop10",
         "linked",
         "cexFunded",
-        "bundled",
         "dev",
       ] as const
     ).filter(show).length + (show("vol") ? 3 : 0);
@@ -416,22 +414,6 @@ export function AlertCard({
               </dd>
             </div>
           )}
-          {show("bundled") && (
-            <div
-              title={
-                bundled === null
-                  ? "Bundled: not checked yet."
-                  : `Bundled: ${bundled.linked} of the ${bundled.of} largest holders share a funder or a funding minute with another top holder, each counted once, ${
-                      linkedAtAlert ? "at alert time" : "from a scan after the alert"
-                    }.`
-              }
-            >
-              <dt>Bundled</dt>
-              <dd className={bundled === null ? "muted" : "num"}>
-                {bundled === null ? "Not checked" : linkedCountText(bundled)}
-              </dd>
-            </div>
-          )}
           {show("dev") && (
             <div
               title={
@@ -576,7 +558,6 @@ export function cardReadings(card: Card) {
     sniperAtAlert,
     linkedPct: linkedFrom?.linkedWalletPct ?? null,
     linkedCount: linkedFrom ? linkedCount(linkedFrom) : null,
-    bundledCount: linkedFrom ? bundledCount(linkedFrom) : null,
     linkedAtAlert: linkedFrom === s,
     linkedClusters: linkedFrom?.linkedClusters ?? [],
     cexPct: cexFrom?.cexFundedPct ?? null,
@@ -687,9 +668,9 @@ function LinkedTile({
     value === null
       ? "Linked: not checked yet. Who paid for each top-25 wallet is read a few tokens per scan."
       : value === 0
-        ? `Linked: no two top-25 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
+        ? `Linked: no two top-25 wallets share a funder or a funding minute, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
         : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more. Tap for the bubble map.`;
-  const canOpen = value !== null && clusters.length > 0;
+  const canOpen = value !== null && (value > 0 || clusters.length > 0);
   return (
     <div
       className={

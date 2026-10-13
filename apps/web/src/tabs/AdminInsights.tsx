@@ -1014,7 +1014,6 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["maxCexFundedCount", "CEX-funded ≤", (v) => `${v}/20`],
   ["maxSameTimeFundedPct", "funded same minute ≤", (v) => `${v}%`],
   ["maxSameTimeFundedCount", "funded same minute ≤", (v) => `${v}/25`],
-  ["maxBundledWalletCount", "bundled ≤", (v) => `${v}/25`],
   ["maxLinkedCreatorPct", "creator-tied ≤", (v) => `${v}%`],
   ["minLiveHolderCount", "live holders ≥", (v) => String(v)],
   ["maxTop10HolderPct", "top10 ≤", (v) => `${v}%`],

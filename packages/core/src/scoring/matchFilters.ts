@@ -136,13 +136,6 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   ) {
     return false;
   }
-  if (
-    filter.maxBundledWalletCount != null &&
-    token.bundledWalletCount !== undefined &&
-    token.bundledWalletCount > filter.maxBundledWalletCount
-  ) {
-    return false;
-  }
 
   if (
     filter.maxLinkedCreatorPct != null &&

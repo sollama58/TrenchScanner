@@ -102,10 +102,9 @@ export function AppearanceControls() {
     !hidden.has(f) &&
     (f !== "reasons" || look.reasons) &&
     (f !== "sniperTop10" || look.sniperTop10) &&
-    (f !== "cexFunded" || look.cexFunded) &&
-    (f !== "bundled" || look.bundled);
+    (f !== "cexFunded" || look.cexFunded);
   const toggleField = (f: CardField) =>
-    f === "reasons" || f === "sniperTop10" || f === "cexFunded" || f === "bundled"
+    f === "reasons" || f === "sniperTop10" || f === "cexFunded"
       ? // Opt-in: switching it on also unhides it, in case an older preset hid it.
         setAppearance({ [f]: !shown(f), hidden: look.hidden.filter((x) => x !== f) })
       : setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });

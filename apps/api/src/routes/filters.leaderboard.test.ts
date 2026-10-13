@@ -268,6 +268,8 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
       // Superseded by minCexFundedCount/maxCexFundedCount (2026-10-13); read by nothing.
       "minCexFundedPct",
       "maxCexFundedPct",
+      // The Bundled filter, folded into Linked (2026-10-13); read by nothing.
+      "maxBundledWalletCount",
     ]);
     const criteria = Object.keys(row).filter((k) => !notCriteria.has(k));
     expect(criteria.sort()).toEqual([...FILTER_CRITERIA_KEYS].sort());

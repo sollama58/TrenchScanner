@@ -1223,7 +1223,8 @@ function PreChecks({ s }: { s: ScreenedData }) {
           </li>
           <li>The top 10 holders own under {c.top10HolderRejectPct ?? 40}% of supply, pool aside.</li>
           <li>
-            Under {c.linkedRejectCount ?? 20} of the top 25 holders linked (one funder, or funded each other).
+            Under {c.linkedRejectCount ?? 20} of the top 25 holders linked (one funder, funded each other, or
+            funded the same minute).
           </li>
           <li>Under {c.cexFundedRejectCount ?? 17} of the top 20 holders funded from an exchange.</li>
           {(c.minPreBondSeconds ?? 5) > 0 && (

@@ -176,11 +176,14 @@ export interface LinkedCluster {
 }
 
 export interface LinkedWalletsReading {
-  /** % of supply held by top holders in any cluster. */
+  /**
+   * % of supply held by linked top holders: in a cluster, or in a same-minute group (user ask
+   * 2026-10-13: Linked takes in the same-minute holders), each holder once.
+   */
   linkedWalletPct: number;
   /** Clusters of two or more holders. */
   linkedClusterCount: number;
-  /** How many holders are in any cluster, of linkedWalletsChecked: the Linked tile's "N/25". */
+  /** How many holders are in a cluster or a same-minute group, each once, of linkedWalletsChecked: the Linked tile's "N/25". */
   linkedWalletCount: number;
   /** The largest cluster's share of supply, %. 0 with no cluster. */
   linkedLargestClusterPct: number;
@@ -198,9 +201,9 @@ export interface LinkedWalletsReading {
   /** How many holders are in a same-minute group, of linkedWalletsChecked: the "N/25". */
   sameTimeFundedCount: number;
   /**
-   * How many holders share a funder or a funding minute with another holder, each counted once:
-   * the union of the linked clusters and the same-minute groups (user ask 2026-10-13, "Bundled").
-   * A wallet in both counts once, so this is at most linkedWalletCount + sameTimeFundedCount.
+   * How many holders share a funder or a funding minute with another holder, each counted once
+   * (recorded as "Bundled" on 2026-10-13); the same as linkedWalletCount since Linked took in the
+   * same-minute holders.
    */
   bundledWalletCount: number;
   sameTimeClusters: SameTimeCluster[];
@@ -356,10 +359,15 @@ export function linkedWallets(
   }
   clusters.sort((a, b) => b.pct - a.pct);
   const sameTime = opts.fundedAtOf ? sameTimeClusters(list, opts.fundedAtOf, funderOf) : [];
+  // Linked: a shared funder (or one funding another) or a shared funding minute, each holder once.
+  const linked = new Set([
+    ...clusters.flatMap((c) => c.wallets.map((w) => w.wallet)),
+    ...sameTime.flatMap((c) => c.wallets.map((w) => w.wallet)),
+  ]);
   return {
-    linkedWalletPct: round2(clusters.reduce((s, c) => s + c.pct, 0)),
+    linkedWalletPct: round2(list.filter((h) => linked.has(h.owner)).reduce((s, h) => s + h.pct, 0)),
     linkedClusterCount: clusters.length,
-    linkedWalletCount: clusters.reduce((s, c) => s + c.wallets.length, 0),
+    linkedWalletCount: linked.size,
     linkedLargestClusterPct: clusters[0]?.pct ?? 0,
     linkedCreatorPct: round2(list.filter((h) => tiedToCreator(h.owner)).reduce((s, h) => s + h.pct, 0)),
     linkedWalletsChecked: list.length,
@@ -368,10 +376,7 @@ export function linkedWallets(
     sameTimeFundedPct: round2(sameTime.reduce((s, c) => s + c.pct, 0)),
     sameTimeClusterCount: sameTime.length,
     sameTimeFundedCount: sameTime.reduce((n, c) => n + c.wallets.length, 0),
-    bundledWalletCount: new Set([
-      ...clusters.flatMap((c) => c.wallets.map((w) => w.wallet)),
-      ...sameTime.flatMap((c) => c.wallets.map((w) => w.wallet)),
-    ]).size,
+    bundledWalletCount: linked.size,
     sameTimeClusters: sameTime,
   };
 }
@@ -403,7 +408,7 @@ const round2 = (v: number) => Math.round(v * 100) / 100;
 
 /**
  * How many of the largest holders, pools and the creator aside, the linked, same-minute and
- * Bundled counts read (user ask 2026-10-13: the top 25 without the LP; it was RugCheck's 20
+ * linked counts read (user ask 2026-10-13: the top 25 without the LP; it was RugCheck's 20
  * accounts, which with the pool among them left 19).
  */
 export const LINKED_TOP_N = 25;
