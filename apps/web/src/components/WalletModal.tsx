@@ -14,6 +14,13 @@ export interface WalletProfile {
     source: string;
     detail?: string;
   }[];
+  /** On Solana Tracker's KOL roster. Absent from older API builds. */
+  kol?: {
+    name: string | null;
+    twitter: string | null;
+    realizedPnlUsd: number | null;
+    winRate: number | null;
+  } | null;
   live: {
     readAt: string;
     balanceSol: number | null;
@@ -253,6 +260,7 @@ function Profile({ p }: { p: WalletProfile }) {
   const risky = p.risk !== null && p.risk.score >= RISKY_SCORE;
   return (
     <>
+      {p.kol && <Kol kol={p.kol} />}
       {p.labels.length > 0 && (
         <ul className="tm-tags wm-labels" aria-label="Labels">
           {p.labels.map((l) => (
@@ -566,6 +574,24 @@ function Linked({ p }: { p: WalletProfile }) {
         </>
       )}
     </section>
+  );
+}
+
+function Kol({ kol }: { kol: NonNullable<WalletProfile["kol"]> }) {
+  const stats = [
+    kol.realizedPnlUsd !== null && `${usd(kol.realizedPnlUsd)} realised`,
+    kol.winRate !== null && `${Math.round(kol.winRate)}% win rate`,
+  ].filter(Boolean);
+  return (
+    <p className="wm-identity" title="From Solana Tracker's KOL list">
+      <strong>{kol.name ?? "Known KOL"}</strong>
+      {kol.twitter && (
+        <a href={`https://x.com/${encodeURIComponent(kol.twitter)}`} target="_blank" rel="noreferrer">
+          @{kol.twitter} <ExternalIcon size={11} />
+        </a>
+      )}
+      {stats.length > 0 && <span className="num">{stats.join(" · ")}</span>}
+    </p>
   );
 }
 

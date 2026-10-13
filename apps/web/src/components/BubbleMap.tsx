@@ -449,6 +449,7 @@ function nodeLabel(n: MapNode, graph: BubbleGraph): string {
     n.flags.includes("creator") ? "the creator" : null,
     n.flags.includes("risky") ? "risky" : null,
     n.flags.includes("dumper") ? "known dumper" : null,
+    typeof n.kol === "string" ? (n.kol ? `KOL ${n.kol}` : "a KOL") : null,
   ].filter(Boolean);
   return `Holder ${shortAddress(n.wallet ?? "")}, ${pctText(n.pct)} of supply${
     cluster ? `, funded by ${shortAddress(cluster.funder)}` : ""
@@ -475,6 +476,7 @@ function NodeDetail({ node: n, graph }: { node: MapNode | null; graph: BubbleGra
   if (n.flags.includes("creator")) tags.push({ text: "Dev", tone: "dev" });
   if (n.flags.includes("risky")) tags.push({ text: "Risky", tone: "risky" });
   if (n.flags.includes("dumper")) tags.push({ text: "Known dumper", tone: "risky" });
+  if (typeof n.kol === "string") tags.push({ text: n.kol ? `KOL: ${n.kol}` : "KOL", tone: "kol" });
   if (cluster?.creatorLinked) tags.push({ text: "Tied to the creator", tone: "dev" });
   return (
     <div className="bm-detail small">

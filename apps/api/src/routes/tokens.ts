@@ -122,6 +122,14 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
         })
       : [];
   const risk = new Map(scores.map((w) => [w.wallet, w]));
+  const kolRows =
+    rows.length > 0
+      ? await prisma.kolWallet.findMany({
+          where: { wallet: { in: rows.map((r) => r.wallet) } },
+          select: { wallet: true, name: true },
+        })
+      : [];
+  const kols = new Map(kolRows.map((k) => [k.wallet, k.name]));
   const opts = { riskyScore: RISKY_WALLET_SCORE, dumperDumps: KNOWN_DUMPER_DUMPS };
   const clusters = Array.isArray(clustered?.linkedClusters)
     ? (clustered.linkedClusters as { funder: string; wallets: { wallet: string }[] }[]).filter(
@@ -138,7 +146,7 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
         }
       : null,
     live: liveSnaps[0] ? { readAt: liveSnaps[0].takenAt.getTime() } : null,
-    wallets: withLiveTrades(markedWallets(rows, risk, clusters, opts), live, risk, opts),
+    wallets: withLiveTrades(markedWallets(rows, risk, clusters, opts, kols), live, risk, opts),
   };
 }
 

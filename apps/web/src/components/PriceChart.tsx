@@ -23,6 +23,7 @@ const PAD = { l: 8, r: 62, t: 24, b: 24 };
 export const MARKER_LABEL: Record<MarkerTrade["kind"], string> = {
   dev: "Dev",
   risky: "Risky wallet",
+  kol: "KOL",
   linked: "Linked wallet",
 };
 

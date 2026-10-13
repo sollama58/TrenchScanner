@@ -16,6 +16,7 @@ import {
   RugCheckClient,
   HeliusClient,
   SolanaRpc,
+  SolanaTrackerClient,
   lastHeartbeatAt,
   lastSuccessfulRunAt,
   recordHeartbeat,
@@ -54,6 +55,7 @@ import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
+import { runKolWalletsJob } from "./jobs/kolWalletsJob.js";
 import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
@@ -63,6 +65,8 @@ const logger = createLogger("worker");
 
 /** A day plus slack: a daily job whose last run is older than this missed its slot. */
 const DAILY_CATCH_UP_AFTER_HOURS = 26;
+/** When the KOL roster is re-read: a quiet hour, away from the nightly sweeps. */
+const KOL_WALLETS_HOUR_UTC = 6;
 /** How often the AI judge job checks on replay batches and playbook rounds. */
 const AI_JUDGE_INTERVAL_MINUTES = 10;
 /**
@@ -379,6 +383,20 @@ async function main() {
       deadlineMinutes: 30,
     }),
   );
+  // Solana Tracker's KOL roster, daily (kolWalletsJob.ts); immediate on a boot that missed a day.
+  // Only with SOLANA_TRACKER_API_KEY: without it the dashboard shows no KOL labels.
+  const solanaTracker = env.SOLANA_TRACKER_API_KEY
+    ? new SolanaTrackerClient(env.SOLANA_TRACKER_API_KEY)
+    : null;
+  if (solanaTracker)
+    schedule("kol-wallets", () =>
+      scheduleDailyAt(
+        "kol-wallets",
+        () => withJobLock("kol-wallets", () => runKolWalletsJob(solanaTracker)),
+        KOL_WALLETS_HOUR_UTC,
+        { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS },
+      ),
+    );
   // Cleanup, outcome tracking and the AI judge each run under a lock shared by every worker
   // process (see withJobLock): a deploy's old and new trainer side by side ran each of them twice.
   schedule("cleanup", () =>

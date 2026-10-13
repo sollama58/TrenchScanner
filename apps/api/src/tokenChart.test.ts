@@ -144,6 +144,24 @@ describe("markedWallets", () => {
     expect(out.find((w) => w.wallet === "dumper")!.tags).toEqual(["dumper"]);
   });
 
+  it("marks a known KOL with its name, ahead of unscored linked wallets", () => {
+    const out = markedWallets(
+      [row("linked"), row("kol"), row("anon-kol"), row("nobody")],
+      new Map(),
+      [{ funder: "F", wallets: [{ wallet: "linked" }] }],
+      opts,
+      new Map<string, string | null>([
+        ["kol", "Cupsey"],
+        ["anon-kol", null],
+      ]),
+    );
+    expect(out.map((w) => [w.wallet, w.tags, w.kol])).toEqual([
+      ["kol", ["kol"], "Cupsey"],
+      ["anon-kol", ["kol"], ""],
+      ["linked", ["linked"], null],
+    ]);
+  });
+
   it("reads stored trades, dropping malformed ones, else falls back to first buy and sell", () => {
     const risk = new Map([
       ["a", { score: 90, dumps: 0, appearances: 3 }],

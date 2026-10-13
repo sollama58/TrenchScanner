@@ -1952,3 +1952,21 @@ model ApiUsage {
   @@id([bucket, process, provider, endpoint, feature])
   @@index([bucket])
 }
+
+/// Solana Tracker's roster of known KOL wallets, read once a day by the worker's kol-wallets job
+/// (apps/worker/src/jobs/kolWalletsJob.ts). The dashboard labels these wallets as KOLs. A wallet
+/// that drops off the roster is removed once it has gone unseen for a week.
+model KolWallet {
+  wallet         String    @id
+  name           String?
+  /// X handle, without the "@".
+  twitter        String?
+  realizedPnlUsd Float?
+  winRate        Float?
+  lastTradeAt    DateTime?
+  source         String    @default("solanatracker")
+  firstSeenAt    DateTime  @default(now())
+  seenAt         DateTime
+
+  @@index([seenAt])
+}

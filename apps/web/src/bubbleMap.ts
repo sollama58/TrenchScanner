@@ -88,6 +88,8 @@ export interface FlaggedHolder {
   score: number | null;
   dumps: number | null;
   heldPct: number | null;
+  /** A known KOL's name ("" when unnamed), when its tags include "kol". */
+  kol?: string | null;
 }
 
 export type Flag = "risky" | "dumper" | "creator";
@@ -105,6 +107,8 @@ export interface MapNode {
   /** A holder that funded the others in its cluster. */
   hub: boolean;
   flags: Flag[];
+  /** On the KOL list: its name ("" when unnamed). Absent or null otherwise. */
+  kol?: string | null;
   /** Risk score 0-100 from the wallet risk scores, when known. */
   score: number | null;
   dumps: number | null;
@@ -142,6 +146,10 @@ export function radiusFor(pct: number): number {
   return 9 + 8.5 * Math.sqrt(Math.max(0, pct));
 }
 const FUNDER_R = 8;
+
+function kolOf(w: FlaggedHolder | undefined): string | null {
+  return w && w.tags.includes("kol") ? (w.kol ?? "") : null;
+}
 
 function flagsOf(w: FlaggedHolder | undefined): Flag[] {
   if (!w) return [];
@@ -183,6 +191,7 @@ export function buildGraph(
       cluster,
       hub,
       flags: flagsOf(f),
+      kol: kolOf(f),
       score: f?.score ?? null,
       dumps: f?.dumps ?? null,
       count: 1,
@@ -238,7 +247,7 @@ export function buildGraph(
   }
   for (const w of flagged) {
     if (seen.has(w.wallet) || w.heldPct === null || w.heldPct < MIN_FLAGGED_HELD_PCT) continue;
-    if (flagsOf(w).length === 0) continue;
+    if (flagsOf(w).length === 0 && kolOf(w) === null) continue;
     seen.add(w.wallet);
     nodes.push(holder(w.wallet, Math.round(w.heldPct * 100) / 100, null, false));
     shownPct += w.heldPct;

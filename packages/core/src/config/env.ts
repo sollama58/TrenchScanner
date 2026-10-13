@@ -94,6 +94,10 @@ const envSchema = z.object({
   JUPITER_API_KEY: pastedKey,
   // Calls a minute to Jupiter. The free plan allows 60 per account.
   JUPITER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(50),
+  // A Solana Tracker Data API key (solanatracker.io; the free plan is enough). With one, the worker
+  // reads Solana Tracker's KOL roster once a day into KolWallet (jobs/kolWalletsJob.ts), and the
+  // dashboard labels those wallets as KOLs with their name and X handle. Empty: no KOL labels.
+  SOLANA_TRACKER_API_KEY: pastedKey,
   PUMPFUN_BASE_URL: z.string().default("https://frontend-api-v3.pump.fun"),
   // PumpPortal's public data websocket: Pump.fun launches and graduations as they land on chain
   // (apps/worker/src/discovery/pumpPortalStream.ts). Empty disables the stream; discovery then

@@ -25,7 +25,8 @@ import {
  *   PnL is realised SOL only (out minus in); tokens still held are not valued.
  * - Dev launches: the tracked coins whose tape names it the creator.
  * - Labels: TrenchScanner's own (exchange hot wallets, scores, roles) - see walletLabels - then
- *   Helius's name and tags for it (walletIdentity.ts).
+ *   Helius's name and tags for it (walletIdentity.ts), and Solana Tracker's KOL roster (KolWallet,
+ *   read daily by the worker's kol-wallets job).
  */
 
 /** Coins listed per wallet: the newest ones. */
@@ -90,6 +91,13 @@ export interface LinkedWallet {
 export interface WalletProfile {
   wallet: string;
   labels: WalletLabel[];
+  /** On Solana Tracker's KOL roster: its name and X handle. */
+  kol: {
+    name: string | null;
+    twitter: string | null;
+    realizedPnlUsd: number | null;
+    winRate: number | null;
+  } | null;
   live: {
     readAt: string;
     balanceSol: number | null;
@@ -324,7 +332,7 @@ export async function loadWalletProfile(
   identity: WalletIdentityReader | null = null,
 ): Promise<WalletProfile> {
   const identityRead = identity ? identity.labels(wallet).catch(() => []) : Promise.resolve([]);
-  const [risk, funderRow, activityCache, holdings, activity, fundedRows, overview] = await Promise.all([
+  const [risk, funderRow, activityCache, holdings, activity, fundedRows, overview, kol] = await Promise.all([
     prisma.walletRisk.findUnique({ where: { wallet } }),
     prisma.walletFunder.findUnique({ where: { wallet } }),
     prisma.walletActivityCache.findUnique({ where: { address: wallet } }),
@@ -345,6 +353,7 @@ export async function loadWalletProfile(
       take: MAX_LINKED,
     }),
     live ? live.overview(wallet).catch(() => null) : Promise.resolve(null),
+    prisma.kolWallet.findUnique({ where: { wallet } }),
   ]);
 
   // The funder, read now when the linked-wallets job never reached this wallet. Cached in the
@@ -469,11 +478,21 @@ export async function loadWalletProfile(
     live: liveFound,
     fundedCount: fundedRows.length,
   });
+  if (kol)
+    ownLabels.unshift({
+      text: kol.name ? `KOL: ${kol.name}` : "KOL",
+      tone: "good",
+      source: "Solana Tracker KOL list",
+      detail: kol.twitter ? `@${kol.twitter} on X` : undefined,
+    });
   const ownTexts = new Set(ownLabels.map((l) => l.text.toLowerCase()));
 
   return {
     wallet,
     labels: [...ownLabels, ...outside.filter((l) => !ownTexts.has(l.text.toLowerCase()))],
+    kol: kol
+      ? { name: kol.name, twitter: kol.twitter, realizedPnlUsd: kol.realizedPnlUsd, winRate: kol.winRate }
+      : null,
     live: liveFound
       ? {
           readAt: new Date().toISOString(),

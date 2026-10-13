@@ -8678,7 +8678,7 @@ img.tm-avatar {
   }
 }
 
-/* Flagged-wallet markers: dev amber, risky magenta, linked blue (chart slots 4, 5 and 1). */
+/* Flagged-wallet markers: dev amber, risky magenta, KOL green, linked blue (chart slots 4, 5, 3 and 1). */
 .k-dev {
   --mk: var(--series-4);
 }
@@ -8687,6 +8687,9 @@ img.tm-avatar {
 }
 .k-linked {
   --mk: var(--series-1);
+}
+.k-kol {
+  --mk: var(--series-3);
 }
 .pc-mark {
   cursor: pointer;
@@ -9409,6 +9412,23 @@ img.tm-avatar {
 .wm-address:hover {
   color: var(--ink);
   border-color: var(--border-strong);
+}
+.wm-identity {
+  margin: 10px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.wm-identity strong {
+  color: var(--ink);
+}
+.wm-identity a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 .wm-labels {
   margin: 10px 0 0 !important;

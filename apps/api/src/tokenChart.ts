@@ -126,7 +126,7 @@ export class CandleCache {
 }
 
 /** Why a wallet's trades are marked on the chart. */
-export type WalletTag = "risky" | "dumper" | "linked" | "creator";
+export type WalletTag = "risky" | "dumper" | "linked" | "creator" | "kol";
 
 /** One marked trade: [time in ms, 1 buy / -1 sell, SOL (null when only the time is known)]. */
 export type MarkedTrade = [atMs: number, side: 1 | -1, sol: number | null];
@@ -142,6 +142,8 @@ export interface MarkedWallet {
   coins: number | null;
   /** The linked cluster's funder, when it is in one. */
   funder: string | null;
+  /** On Solana Tracker's KOL roster (KolWallet): its name, or "" when the roster has none. */
+  kol?: string | null;
   solIn: number;
   solOut: number;
   /** % of supply it held at the call. */
@@ -170,14 +172,16 @@ export const MAX_MARKED_TRADES = 2_000;
 /**
  * Exported for tests. The wallets in a coin's trade tape worth marking on its chart: a risk score
  * of RISKY_WALLET_SCORE or more, a known dumper (sold into KNOWN_DUMPER_DUMPS stops or more), a
- * member of one of the coin's linked clusters, or the coin's creator. Riskiest first (creator and
- * linked wallets ahead of unscored ones), capped at MAX_MARKED_WALLETS and MAX_MARKED_TRADES.
+ * member of one of the coin's linked clusters, the coin's creator, or a known KOL (`kols`: wallet
+ * to name). Riskiest first (creator, KOL and linked wallets ahead of unscored ones), capped at
+ * MAX_MARKED_WALLETS and MAX_MARKED_TRADES.
  */
 export function markedWallets(
   rows: readonly ActivityRow[],
   risk: ReadonlyMap<string, { score: number; dumps: number; appearances: number }>,
   clusters: readonly { funder: string; wallets: readonly { wallet: string }[] }[],
   opts: { riskyScore: number; dumperDumps: number },
+  kols: ReadonlyMap<string, string | null> = new Map(),
 ): MarkedWallet[] {
   const funderOf = new Map<string, string>();
   for (const c of clusters) for (const w of c.wallets) funderOf.set(w.wallet, c.funder);
@@ -190,6 +194,8 @@ export function markedWallets(
     if (k && k.score >= opts.riskyScore) tags.push("risky");
     if (k && k.dumps >= opts.dumperDumps) tags.push("dumper");
     if (funder) tags.push("linked");
+    const kol = kols.has(r.wallet) ? (kols.get(r.wallet) ?? "") : null;
+    if (kol !== null) tags.push("kol");
     if (tags.length === 0) continue;
     const trades = storedTrades(r.trades) ?? firstTrades(r);
     if (trades.length === 0) continue;
@@ -200,6 +206,7 @@ export function markedWallets(
       dumps: k?.dumps ?? null,
       coins: k?.appearances ?? null,
       funder,
+      kol,
       solIn: r.solIn,
       solOut: r.solOut,
       heldPct: r.heldPctAtAnchor,
@@ -209,10 +216,12 @@ export function markedWallets(
   return rankAndCap(out);
 }
 
-/** Riskiest first (creator and linked wallets ahead of unscored ones), within the caps. */
+/** Riskiest first (creator, KOL and linked wallets ahead of unscored ones), within the caps. */
 function rankAndCap(wallets: MarkedWallet[]): MarkedWallet[] {
   const weight = (w: MarkedWallet) =>
-    (w.tags.includes("creator") ? 1_000 : 0) + (w.score ?? (w.funder ? 50 : 0)) + w.solIn / 1_000;
+    (w.tags.includes("creator") ? 1_000 : 0) +
+    (w.score ?? (w.tags.includes("kol") ? 60 : w.funder ? 50 : 0)) +
+    w.solIn / 1_000;
   wallets.sort((a, b) => weight(b) - weight(a));
   const kept = wallets.slice(0, MAX_MARKED_WALLETS);
   let budget = MAX_MARKED_TRADES;
