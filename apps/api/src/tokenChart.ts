@@ -206,10 +206,15 @@ export function markedWallets(
       trades,
     });
   }
+  return rankAndCap(out);
+}
+
+/** Riskiest first (creator and linked wallets ahead of unscored ones), within the caps. */
+function rankAndCap(wallets: MarkedWallet[]): MarkedWallet[] {
   const weight = (w: MarkedWallet) =>
     (w.tags.includes("creator") ? 1_000 : 0) + (w.score ?? (w.funder ? 50 : 0)) + w.solIn / 1_000;
-  out.sort((a, b) => weight(b) - weight(a));
-  const kept = out.slice(0, MAX_MARKED_WALLETS);
+  wallets.sort((a, b) => weight(b) - weight(a));
+  const kept = wallets.slice(0, MAX_MARKED_WALLETS);
   let budget = MAX_MARKED_TRADES;
   for (const w of kept) {
     if (w.trades.length > budget) w.trades = w.trades.slice(0, Math.max(0, budget));
@@ -273,4 +278,92 @@ export class KeyedCache<T> {
     }
     return value;
   }
+}
+
+/** One flagged trade kept on a snapshot by the live tape (core's wallets/liveFlags.ts FlaggedTrade). */
+interface LiveTrade {
+  wallet: string;
+  side: 1 | -1;
+  sol: number | null;
+  atMs: number;
+  score: number;
+  dumps: number;
+}
+
+/** Two readings of one trade (the live tape and the post-call tape) within this much of each other. */
+const SAME_TRADE_MS = 2_000;
+
+/** A snapshot's flaggedTrades, the well-formed ones. */
+export function parseLiveTrades(raw: unknown): LiveTrade[] {
+  if (!Array.isArray(raw)) return [];
+  const out: LiveTrade[] = [];
+  for (const t of raw as Record<string, unknown>[]) {
+    if (!t || typeof t.wallet !== "string" || typeof t.atMs !== "number" || !Number.isFinite(t.atMs))
+      continue;
+    if (t.side !== "buy" && t.side !== "sell") continue;
+    out.push({
+      wallet: t.wallet,
+      side: t.side === "buy" ? 1 : -1,
+      sol: typeof t.sol === "number" && Number.isFinite(t.sol) ? t.sol : null,
+      atMs: t.atMs,
+      score: typeof t.score === "number" ? t.score : 0,
+      dumps: typeof t.dumps === "number" ? t.dumps : 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Exported for tests. The marked wallets with the flagged trades the live tape read before the
+ * call (each snapshot keeps its newest few) folded in: a wallet the post-call tape hasn't read
+ * yet joins with its live trades, one it has gets any live trade the tape doesn't hold. So the
+ * modal marks risky wallets and known dumpers from the call on, and the tape later fills in the
+ * linked and dev wallets and the trades after it. A wallet's current score (WalletRisk) wins over
+ * the one its trade was read with.
+ */
+export function withLiveTrades(
+  marked: readonly MarkedWallet[],
+  live: readonly LiveTrade[],
+  risk: ReadonlyMap<string, { score: number; dumps: number; appearances: number }>,
+  opts: { riskyScore: number; dumperDumps: number },
+): MarkedWallet[] {
+  if (live.length === 0) return [...marked];
+  const byWallet = new Map(marked.map((w) => [w.wallet, { ...w, tags: [...w.tags], trades: [...w.trades] }]));
+  // Wallets known only from the live tape: their SOL in and out are what it saw.
+  const liveOnly = new Set<string>();
+  for (const t of live) {
+    let w = byWallet.get(t.wallet);
+    if (!w) {
+      const k = risk.get(t.wallet);
+      const score = k?.score ?? t.score;
+      const dumps = k?.dumps ?? t.dumps;
+      const tags: WalletTag[] = [];
+      if (score >= opts.riskyScore) tags.push("risky");
+      if (dumps >= opts.dumperDumps) tags.push("dumper");
+      // Flagged when read; a later score may have dropped it, but the trade is still worth marking.
+      if (tags.length === 0) tags.push(t.score >= opts.riskyScore ? "risky" : "dumper");
+      w = {
+        wallet: t.wallet,
+        tags,
+        score,
+        dumps,
+        coins: k?.appearances ?? null,
+        funder: null,
+        solIn: 0,
+        solOut: 0,
+        heldPct: null,
+        trades: [],
+      };
+      byWallet.set(t.wallet, w);
+      liveOnly.add(t.wallet);
+    }
+    if (w.trades.some(([at, side]) => side === t.side && Math.abs(at - t.atMs) <= SAME_TRADE_MS)) continue;
+    w.trades.push([t.atMs, t.side, t.sol]);
+    if (liveOnly.has(t.wallet)) {
+      if (t.side === 1) w.solIn += t.sol ?? 0;
+      else w.solOut += t.sol ?? 0;
+    }
+  }
+  for (const w of byWallet.values()) w.trades.sort((a, b) => a[0] - b[0]);
+  return rankAndCap([...byWallet.values()]);
 }

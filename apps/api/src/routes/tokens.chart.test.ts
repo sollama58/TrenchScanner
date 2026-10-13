@@ -19,6 +19,7 @@ const MINT = address(`${TAG}-mint`);
 const RISKY = address(`${TAG}-risky`);
 const LINKED = address(`${TAG}-linked`);
 const CALM = address(`${TAG}-calm`);
+const EARLY = address(`${TAG}-early`);
 
 describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
   let app: FastifyInstance;
@@ -49,6 +50,13 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
           marketCapUsd: 20_000,
           linkedClusters: [
             { funder: "Fundr", wallets: [{ wallet: LINKED, pct: 4 }], pct: 4, creatorLinked: false },
+          ],
+          // The live tape before the call: one wallet the post-call tape never saw, one it did.
+          flaggedBuyers: 2,
+          flaggedSellers: 0,
+          flaggedTrades: [
+            { wallet: EARLY, side: "buy", sol: 0.5, atMs: 85_000, score: 72, dumps: 1 },
+            { wallet: RISKY, side: "buy", sol: 2, atMs: 70_500, score: 88, dumps: 4 },
           ],
         },
       ],
@@ -116,7 +124,8 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
     expect(body.candles).toHaveLength(2);
     expect(body.marketCap.map((p) => p.usd)).toEqual([10_000, 20_000]);
     expect(body.tape).toMatchObject({ status: "done", anchorAt: 90_000 });
-    expect(body.wallets.map((w) => w.wallet)).toEqual([RISKY, LINKED]);
+    expect(body.live?.readAt).toBeGreaterThan(0);
+    expect(body.wallets.map((w) => w.wallet)).toEqual([RISKY, EARLY, LINKED]);
     expect(body.wallets[0]).toMatchObject({
       tags: ["risky", "dumper"],
       score: 88,
@@ -125,13 +134,20 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
         [130_000, -1, 3],
       ],
     });
-    expect(body.wallets[1]).toMatchObject({ tags: ["linked"], funder: "Fundr", trades: [[80_000, 1, null]] });
+    expect(body.wallets[1]).toMatchObject({ tags: ["risky"], score: 72, trades: [[85_000, 1, 0.5]] });
+    expect(body.wallets[2]).toMatchObject({ tags: ["linked"], funder: "Fundr", trades: [[80_000, 1, null]] });
   });
 
   it("answers an unknown coin with no candles and nothing to mark", async () => {
     const res = await get(address(`${TAG}-unknown`));
     expect(res.statusCode).toBe(200);
-    expect(res.json<TokenChart>()).toMatchObject({ candles: null, marketCap: [], tape: null, wallets: [] });
+    expect(res.json<TokenChart>()).toMatchObject({
+      candles: null,
+      marketCap: [],
+      tape: null,
+      live: null,
+      wallets: [],
+    });
   });
 
   it("refuses a malformed mint and a reader without a session", async () => {

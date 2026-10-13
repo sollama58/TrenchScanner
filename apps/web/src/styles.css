@@ -9328,3 +9328,6 @@ img.tm-avatar {
 .bm-head h2:focus {
   outline: none;
 }
+.tm-legend-note {
+  flex-basis: 100%;
+}
