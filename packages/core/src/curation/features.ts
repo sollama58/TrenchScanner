@@ -65,6 +65,19 @@ export const LINKED_WALLET_FEATURES = [
 ] as const;
 
 /**
+ * Added 2026-10-13: flagged wallets (risky or known dumpers, core's wallets/liveFlags.ts) trading
+ * the coin in its newest page of trades, read from Helius before the decision: how many bought and
+ * sold, and the SOL each way. Null without a recent page or the wallet scores, and on every row
+ * banked before. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const LIVE_FLAG_FEATURES = [
+  "flaggedBuyers",
+  "flaggedSellers",
+  "flaggedBuySol",
+  "flaggedSellSol",
+] as const;
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -276,6 +289,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...JUPITER_EXTRA_FEATURES,
   ...WALLET_RISK_FEATURES,
   ...LINKED_WALLET_FEATURES,
+  ...LIVE_FLAG_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -365,6 +379,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   ...WALLET_RISK_FEATURES,
   // The linked-wallet readings (added 2026-10-13): recorded first, on the same terms.
   ...LINKED_WALLET_FEATURES,
+  // The live flagged-wallet trades (added 2026-10-13): recorded first, on the same terms.
+  ...LIVE_FLAG_FEATURES,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -688,6 +704,10 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   linkedClusterCount: "linked-wallet clusters",
   linkedLargestClusterPct: "largest linked cluster",
   linkedCreatorPct: "supply linked to the creator",
+  flaggedBuyers: "flagged wallets buying",
+  flaggedSellers: "flagged wallets selling",
+  flaggedBuySol: "SOL bought by flagged wallets",
+  flaggedSellSol: "SOL sold by flagged wallets",
   ...NARRATIVE_FRIENDLY_LABELS,
 };
 
@@ -883,6 +903,10 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     linkedClusterCount: scored.linkedClusterCount ?? null,
     linkedLargestClusterPct: scored.linkedLargestClusterPct ?? null,
     linkedCreatorPct: scored.linkedCreatorPct ?? null,
+    flaggedBuyers: scored.flaggedBuyers ?? null,
+    flaggedSellers: scored.flaggedSellers ?? null,
+    flaggedBuySol: scored.flaggedBuySol ?? null,
+    flaggedSellSol: scored.flaggedSellSol ?? null,
     ageMinutes: scored.ageMinutes ?? null,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,

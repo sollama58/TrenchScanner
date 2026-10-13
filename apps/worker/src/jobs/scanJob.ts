@@ -39,6 +39,7 @@ import {
   type MintAuthorityResult,
   type OnChainProfile,
   type LinkedWalletsReading,
+  type LiveFlagsReading,
   type OnChainHolders,
   type CandidateToken,
   type ScoredToken,
@@ -76,6 +77,7 @@ import {
   type LinkedGroup,
   type LinkedWalletLookups,
 } from "./linkedWallets.js";
+import { liveFlagsOf, readLiveTape, takeLiveTapeStats } from "./liveTape.js";
 import {
   resolveWalletHoldings,
   computeEmptyPct,
@@ -376,6 +378,28 @@ function startSniperStage(
   sniperStageInFlight = settled;
   void settled.then(() => {
     if (sniperStageInFlight === settled) sniperStageInFlight = null;
+  });
+  return work;
+}
+
+/** The live tape's page reads still running, possibly past a cycle's budget. */
+let liveTapeInFlight: Promise<void> | null = null;
+
+/**
+ * Starts this cycle's live tape reads (liveTape.ts) for the coins close to a call, unless the
+ * previous cycle's are still running. Never rejects.
+ */
+function startLiveTapeStage(mints: string[], helius: HeliusClient, env: Env): Promise<void> {
+  if (liveTapeInFlight || env.LIVE_TAPE_PAGES_PER_CYCLE <= 0 || mints.length === 0) {
+    return liveTapeInFlight ?? Promise.resolve();
+  }
+  const work = readLiveTape(mints, helius, {
+    maxPages: env.LIVE_TAPE_PAGES_PER_CYCLE,
+    refreshMs: env.LIVE_TAPE_REFRESH_SECONDS * 1000,
+  }).catch((err: unknown) => logger.warn("live tape reads failed", { error: String(err) }));
+  liveTapeInFlight = work;
+  void work.finally(() => {
+    if (liveTapeInFlight === work) liveTapeInFlight = null;
   });
   return work;
 }
@@ -903,6 +927,13 @@ async function scanCycle(
     };
   });
   const linkedWork = startLinkedWalletStage(linkedGroups, deps.helius, env);
+  // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
+  // for a wallet figure), for the flagged wallets trading it - on the same wait.
+  const liveTapeWork = startLiveTapeStage(
+    sniperGroups.filter((g) => g.contender || g.alerted).map((g) => g.mintAddress),
+    deps.helius,
+    env,
+  );
 
   // A user filter with a wallet criterion holds a match until the figure is in, up to
   // FILTER_WALLET_MAX_WAIT_SECONDS (see resolveAlertTargets), so while any is active every
@@ -1029,6 +1060,9 @@ async function scanCycle(
       : [],
   );
   lap("linkedWallets");
+  await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
+  const riskLookup = walletRiskLookup();
+  lap("liveTape");
   // The launch buyers' fresh-wallet share, from the buyers the sniper stage just read: started
   // now so it overlaps the quotes and priors below, and waited on briefly before the decisions.
   const launchBuyerMints = sniperGroups.map((g) => g.mintAddress);
@@ -1099,6 +1133,7 @@ async function scanCycle(
           sniperChainAvailable,
           freshQuotes.get(candidate.mintAddress),
           linkedByMint.get(candidate.mintAddress) ?? null,
+          liveFlagsOf(candidate.mintAddress, riskLookup),
         ),
       );
     } catch (err) {
@@ -1190,6 +1225,8 @@ async function scanCycle(
   const jupiterCalls = deps.jupiter?.takeCallStats();
   // The linked-wallets reads among rpcCalls above, apart, with their credits (1 per call).
   const linkedWalletCalls = takeLinkedWalletStats();
+  // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
+  const liveTape = takeLiveTapeStats();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
   const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
   // Band-entry checks between cycles, and the cycles they started early (this one among them).
@@ -1210,6 +1247,7 @@ async function scanCycle(
     stagesMs,
     rpcCalls,
     linkedWalletCalls,
+    liveTape,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
     ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
@@ -1995,11 +2033,15 @@ async function processCandidate(
   sniperChainAvailable = false,
   freshQuote?: FreshQuote,
   linked: LinkedWalletsReading | null = null,
+  flags: LiveFlagsReading | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
-  const onChain = withLinkedWallets(
-    withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
-    linked,
+  const onChain = withLiveFlags(
+    withLinkedWallets(
+      withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
+      linked,
+    ),
+    flags,
   );
   // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
   // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
@@ -2418,6 +2460,22 @@ export function withLinkedWallets(
     linkedLargestClusterPct: linked.linkedLargestClusterPct,
     linkedCreatorPct: linked.linkedCreatorPct,
     linkedClusters: linked.clusters,
+  };
+}
+
+/** The live flagged-wallet reading on the profile; unknown (left off) without one. Exported for tests. */
+export function withLiveFlags(
+  onChain: OnChainProfile | null,
+  flags: LiveFlagsReading | null,
+): OnChainProfile | null {
+  if (!onChain || !flags) return onChain;
+  return {
+    ...onChain,
+    flaggedBuyers: flags.flaggedBuyers,
+    flaggedSellers: flags.flaggedSellers,
+    flaggedBuySol: flags.flaggedBuySol,
+    flaggedSellSol: flags.flaggedSellSol,
+    flaggedTrades: flags.flaggedTrades,
   };
 }
 

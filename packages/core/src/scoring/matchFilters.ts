@@ -100,6 +100,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  if (
+    filter.maxFlaggedBuySol != null &&
+    token.flaggedBuySol !== undefined &&
+    token.flaggedBuySol > filter.maxFlaggedBuySol
+  ) {
+    return false;
+  }
+
   // Unknown until the launch's first buyers have been read: the floor fails closed, the ceiling
   // skips, per the split above.
   const firstBuyersHolding = token.tradeFlow?.firstBuyersHolding ?? null;

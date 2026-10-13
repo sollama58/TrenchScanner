@@ -1166,11 +1166,13 @@ export class HeliusClient {
    * (apps/worker/src/jobs/tradeTapeJob.ts). getTransactionsForAddress on the mint, failed ones
    * filtered out server-side, up to 100 a page for 10 credits, from `paginationToken` when given.
    * `untilBlockTime` (unix seconds) asks the server to stop there; the caller still filters by time,
-   * so a server that ignores it costs pages, not correctness. Helius-only: "unsupported" elsewhere.
+   * so a server that ignores it costs pages, not correctness. `newest`: the newest page instead,
+   * newest first (the live tape before a call, apps/worker/src/jobs/liveTape.ts). Helius-only:
+   * "unsupported" elsewhere.
    */
   async getMintTransactionsPage(
     mint: string,
-    opts: { paginationToken?: string; untilBlockTime?: number } = {},
+    opts: { paginationToken?: string; untilBlockTime?: number; newest?: boolean } = {},
   ): Promise<
     | { status: "ok"; txs: ChainTx[]; paginationToken: string | null }
     | { status: "unsupported" }
@@ -1186,7 +1188,7 @@ export class HeliusClient {
             mint,
             {
               transactionDetails: "full",
-              sortOrder: "asc",
+              sortOrder: opts.newest ? "desc" : "asc",
               limit: LAUNCH_TX_PAGE,
               encoding: "json",
               maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,

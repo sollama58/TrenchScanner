@@ -52,18 +52,27 @@ const DEFAULT_WALLET_WAIT_MS = 180_000;
 export function awaitsWalletFigure(
   scored: Pick<
     ScoredToken,
-    "freshTop10WalletPct" | "emptyTop10WalletPct" | "sniperTop10WalletPct" | "linkedWalletPct"
+    | "freshTop10WalletPct"
+    | "emptyTop10WalletPct"
+    | "sniperTop10WalletPct"
+    | "linkedWalletPct"
+    | "flaggedBuySol"
   >,
   filter: Pick<
     FilterCriteria,
-    "maxFreshTop10WalletPct" | "maxEmptyTop10WalletPct" | "maxSniperTop10WalletPct" | "maxLinkedWalletPct"
+    | "maxFreshTop10WalletPct"
+    | "maxEmptyTop10WalletPct"
+    | "maxSniperTop10WalletPct"
+    | "maxLinkedWalletPct"
+    | "maxFlaggedBuySol"
   >,
 ): boolean {
   return (
     (filter.maxFreshTop10WalletPct != null && scored.freshTop10WalletPct === undefined) ||
     (filter.maxEmptyTop10WalletPct != null && scored.emptyTop10WalletPct === undefined) ||
     (filter.maxSniperTop10WalletPct != null && scored.sniperTop10WalletPct === undefined) ||
-    (filter.maxLinkedWalletPct != null && scored.linkedWalletPct === undefined)
+    (filter.maxLinkedWalletPct != null && scored.linkedWalletPct === undefined) ||
+    (filter.maxFlaggedBuySol != null && scored.flaggedBuySol === undefined)
   );
 }
 

@@ -193,6 +193,13 @@ const envSchema = z.object({
   // check. Every answer is cached for good, so the steady state pays only for wallets never seen
   // before. A candidate's top ten and creator go together or wait a cycle. 0 turns the reading off.
   LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
+  // The live tape (worker's liveTape.ts): each coin close to a call (a contender, or an alert held
+  // for a wallet figure) has its newest page of trades read from Helius, 10 credits a page, so the
+  // flagged wallets trading it are known at the decision. At most this many pages a cycle (the
+  // credit ceiling), and a coin's page is read again once it is LIVE_TAPE_REFRESH_SECONDS old.
+  // 0 turns it off.
+  LIVE_TAPE_PAGES_PER_CYCLE: z.coerce.number().int().nonnegative().default(4),
+  LIVE_TAPE_REFRESH_SECONDS: z.coerce.number().int().positive().default(180),
 
   // The empty-top-10-wallet signal (apps/worker/src/jobs/walletHoldings.ts): how much a top-10
   // holder must hold in tokens that are neither cash (USDC/USDT) nor gas (SOL) before it counts
