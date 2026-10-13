@@ -314,6 +314,14 @@ export function AppearanceControls() {
             </>
           )}
         </p>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.bubbleCexLinks}
+            onChange={() => setAppearance({ bubbleCexLinks: !look.bubbleCexLinks })}
+          />
+          Bubble maps: tie together wallets funded by the same exchange
+        </label>
         <div className="field-group">
           <h4>Quick links</h4>
           {QUICK_LINK_SITES.map((l) => (

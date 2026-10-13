@@ -131,6 +131,14 @@ export interface MapLink {
   cluster: number;
 }
 
+/** Holders one exchange (or busy service) funded: each tied to the group's largest. Drawn only. */
+export interface CexLink {
+  from: string;
+  to: string;
+  /** The exchange's address. */
+  funder: string;
+}
+
 /** A same-minute group's tie: each holder to the group's first-funded one. */
 export interface SameTimeLink {
   from: string;
@@ -153,6 +161,11 @@ export interface BubbleGraph {
   /** How many top holders are linked, of how many were read. */
   linkedCount: { linked: number; of: number } | null;
   top10Pct: number | null;
+  /** Ties between holders the same exchange funded, on scans that kept it (drawn only, never counted). */
+  cexLinks: CexLink[];
+  /** How many top holders an exchange funded, of how many were read; and their share of that count. */
+  cexCount: { linked: number; of: number } | null;
+  cexPct: number | null;
 }
 
 /** Flagged holders held under this % of supply at the call are left off the map (not a top holder). */
@@ -199,6 +212,9 @@ export function buildGraph(
     | "sameTimeClusters"
     | "sameTimeFundedPct"
     | "sameTimeFundedCount"
+    | "cexFundedPct"
+    | "cexFundedCount"
+    | "cexFundedHolders"
   >,
   flagged: readonly FlaggedHolder[] = [],
 ): BubbleGraph {
@@ -338,6 +354,12 @@ export function buildGraph(
     links,
     clusters,
     sameTimeLinks,
+    cexLinks: cexLinksOf(snapshot.linkedHolders ?? [], nodes),
+    cexCount:
+      snapshot.cexFundedCount != null && snapshot.cexFundedHolders != null
+        ? { linked: snapshot.cexFundedCount, of: snapshot.cexFundedHolders }
+        : null,
+    cexPct: snapshot.cexFundedPct ?? null,
     sameTimeGroups,
     sameTimePct: snapshot.sameTimeFundedPct ?? null,
     sameTimeCount: sameTimeCount(snapshot),
@@ -345,6 +367,32 @@ export function buildGraph(
     linkedCount: linkedCount(snapshot),
     top10Pct: top10,
   };
+}
+
+/**
+ * Ties between the holders on the map that one exchange funded (linkedHolders' cexFunder): each
+ * to the largest of its group, groups of two or more. Only drawn, so the layout ignores them.
+ */
+export function cexLinksOf(
+  holders: readonly { wallet: string; pct: number; cexFunder?: string }[],
+  nodes: readonly MapNode[],
+): CexLink[] {
+  const onMap = new Map(nodes.filter((n) => n.kind === "holder").map((n) => [n.wallet, n]));
+  const groups = new Map<string, MapNode[]>();
+  for (const h of holders) {
+    const n = h && typeof h.cexFunder === "string" ? onMap.get(h.wallet) : undefined;
+    if (!n) continue;
+    const list = groups.get(h.cexFunder!) ?? [];
+    if (!list.includes(n)) list.push(n);
+    groups.set(h.cexFunder!, list);
+  }
+  const out: CexLink[] = [];
+  for (const [funder, list] of groups) {
+    if (list.length < 2) continue;
+    const [top, ...rest] = [...list].sort((a, b) => b.pct - a.pct);
+    for (const n of rest) out.push({ from: n.id, to: top!.id, funder });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------

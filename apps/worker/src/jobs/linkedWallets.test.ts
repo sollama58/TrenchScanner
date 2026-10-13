@@ -118,6 +118,10 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
       cexFundedPct: 50,
       cexFundedCount: 2,
       cexFundedHolders: 4,
+      cexFunders: [
+        { wallet: w("p"), funder: w("EX") },
+        { wallet: w("r"), funder: w("EX") },
+      ],
     });
   });
 

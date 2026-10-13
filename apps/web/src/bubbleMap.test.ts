@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bubbleNameFit,
+  cexLinksOf,
   bubblesFromUrl,
   bubblesLink,
   buildGraph,
@@ -277,5 +278,38 @@ describe("bubbleNameFit", () => {
   });
   it("leaves a bubble too small for a few letters without one", () => {
     expect(bubbleNameFit(12, "Binance")).toBeNull();
+  });
+});
+
+describe("same-exchange ties", () => {
+  it("ties each holder an exchange funded to the largest of its group, and counts the tile", () => {
+    const g = buildGraph({
+      linkedHolders: [
+        { wallet: A, pct: 5, cexFunder: "EX1" },
+        { wallet: B, pct: 3, cexFunder: "EX2" },
+        { wallet: C, pct: 2, cexFunder: "EX1" },
+        { wallet: D, pct: 1, cexFunder: "EX1" },
+      ],
+      cexFundedCount: 4,
+      cexFundedHolders: 20,
+      cexFundedPct: 20,
+      top10HolderPct: null,
+      top10WalletsChecked: null,
+    });
+    expect(g.cexLinks).toEqual([
+      { from: `h:${C}`, to: `h:${A}`, funder: "EX1" },
+      { from: `h:${D}`, to: `h:${A}`, funder: "EX1" },
+    ]);
+    expect(g.cexCount).toEqual({ linked: 4, of: 20 });
+    // Drawn only: the Linked reading and the clusters don't move.
+    expect(g.clusters).toEqual([]);
+    expect(g.links).toEqual([]);
+  });
+  it("draws nothing for a holder off the map or on older scans", () => {
+    expect(cexLinksOf([{ wallet: A, pct: 5, cexFunder: "EX1" }], [])).toEqual([]);
+    expect(
+      buildGraph({ linkedHolders: [{ wallet: A, pct: 5 }], top10HolderPct: null, top10WalletsChecked: null })
+        .cexLinks,
+    ).toEqual([]);
   });
 });

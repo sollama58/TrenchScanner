@@ -2599,9 +2599,19 @@ export function withLinkedWallets(
         cexFundedHolders: cex.cexFundedHolders,
       }
     : withHolders;
-  if (!linked) return withCex;
+  // Which exchange paid for each holder, on the holder list: the bubble map can tie together
+  // wallets the same exchange funded (drawn only; it changes no reading).
+  const cexOf = new Map((cex?.cexFunders ?? []).map((c) => [c.wallet, c.funder]));
+  const tagCex = (list: { wallet: string; pct: number }[]) =>
+    cexOf.size === 0
+      ? list
+      : list.map((h) => (cexOf.has(h.wallet) ? { ...h, cexFunder: cexOf.get(h.wallet)! } : h));
+  const tagged = withCex.linkedHolders
+    ? { ...withCex, linkedHolders: tagCex(withCex.linkedHolders) }
+    : withCex;
+  if (!linked) return tagged;
   return {
-    ...withCex,
+    ...tagged,
     linkedWalletPct: linked.linkedWalletPct,
     linkedClusterCount: linked.linkedClusterCount,
     linkedWalletCount: linked.linkedWalletCount,
@@ -2609,7 +2619,7 @@ export function withLinkedWallets(
     linkedLargestClusterPct: linked.linkedLargestClusterPct,
     linkedCreatorPct: linked.linkedCreatorPct,
     linkedClusters: linked.clusters,
-    linkedHolders: linked.holders,
+    linkedHolders: tagCex(linked.holders),
     sameTimeFundedPct: linked.sameTimeFundedPct,
     sameTimeClusterCount: linked.sameTimeClusterCount,
     sameTimeFundedCount: linked.sameTimeFundedCount,

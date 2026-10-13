@@ -82,6 +82,8 @@ export const feedAppearanceSchema = z
     sniperTop10: z.boolean().default(false),
     /** The CEX-funded tile (share of the top 20 an exchange paid for); hidden by default. */
     cexFunded: z.boolean().default(false),
+    /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
+    bubbleCexLinks: z.boolean().default(false),
     /** The retired Bundled tile (folded into Linked, 2026-10-13): accepted from older tabs, ignored. */
     bundled: z.boolean().optional(),
     /**
@@ -129,6 +131,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   reasons: false,
   sniperTop10: false,
   cexFunded: false,
+  bubbleCexLinks: false,
   narrativeNote: null,
   streamTab: false,
   lighthouseTab: false,

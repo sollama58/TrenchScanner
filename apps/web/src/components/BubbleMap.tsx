@@ -24,7 +24,13 @@ import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
 import { useWalletNames, walletText, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
-import { LINKED_WARN_PCT, SAFETY_REJECT_LINKED_COUNT } from "./AlertCard";
+import {
+  cexCountText,
+  LINKED_WARN_PCT,
+  SAFETY_REJECT_CEX_FUNDED_COUNT,
+  SAFETY_REJECT_LINKED_COUNT,
+} from "./AlertCard";
+import { useAppearance } from "../appearance";
 import { ShareButton } from "./ShareImageDialog";
 import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
 
@@ -245,6 +251,11 @@ function MapView({
   const lit = node ? node.cluster : focus;
   const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
   const largest = graph.clusters[0]?.pct ?? null;
+  // Same-exchange ties: the viewer's default from Settings, switchable here (user ask 2026-10-13).
+  const { bubbleCexLinks } = useAppearance();
+  const [cexOn, setCexOn] = useState<boolean | null>(null);
+  const showCex = (cexOn ?? bubbleCexLinks) && graph.cexLinks.length > 0;
+  const cex = graph.cexCount;
 
   return (
     <>
@@ -288,13 +299,34 @@ function MapView({
           <dt>Risky holders</dt>
           <dd className="num">{risky.length}</dd>
         </div>
+        <div
+          className={cex !== null && cex.linked >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined}
+          title={
+            cex === null
+              ? "CEX-funded: not checked yet"
+              : `CEX-funded: ${cex.linked} of the ${cex.of} largest holders were opened from an exchange (or a busy service like a bridge)`
+          }
+        >
+          <dt>CEX-funded</dt>
+          <dd className="num">
+            {cex === null ? "-" : (cexCountText(cex.linked, cex.of) ?? pct(graph.cexPct, 0))}
+          </dd>
+        </div>
       </dl>
+      {graph.cexLinks.length > 0 && (
+        <label className="bm-cex-toggle">
+          <input type="checkbox" checked={showCex} onChange={() => setCexOn(!showCex)} />
+          <span className="bm-cex-key" aria-hidden />
+          Link wallets funded by the same exchange
+        </label>
+      )}
       <BubbleSvg
         graph={graph}
         names={names}
         compact={compact}
         picked={picked}
         lit={lit}
+        cexLinks={showCex}
         onPick={(id) => {
           setPicked(id);
           setFocus(null);
@@ -370,6 +402,7 @@ function BubbleSvg({
   compact,
   picked,
   lit,
+  cexLinks,
   onPick,
 }: {
   graph: BubbleGraph;
@@ -377,6 +410,8 @@ function BubbleSvg({
   compact: boolean;
   picked: string | null;
   lit: number | null;
+  /** Draw the same-exchange ties. */
+  cexLinks: boolean;
   onPick: (id: string) => void;
 }) {
   const uid = useId().replace(/:/g, "");
@@ -442,6 +477,25 @@ function BubbleSvg({
             );
           })}
         </g>
+        {cexLinks && (
+          <g className="bm-cex-links">
+            {graph.cexLinks.map((l) => {
+              const a = index.get(l.from);
+              const b = index.get(l.to);
+              if (!a || !b) return null;
+              return (
+                <line
+                  key={`${l.from}-${l.to}`}
+                  x1={a.x}
+                  y1={a.y}
+                  x2={b.x}
+                  y2={b.y}
+                  className={`bm-cex-link${lit !== null ? " dim" : ""}`}
+                />
+              );
+            })}
+          </g>
+        )}
         <g className="bm-same-links">
           {graph.sameTimeLinks.map((l) => {
             const a = index.get(l.from);

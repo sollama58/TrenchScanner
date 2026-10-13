@@ -9231,6 +9231,8 @@ img.tm-avatar {
   --bm-3: var(--brand-a);
   --bm-4: #06b6d4;
   --bm-none: #6b7280;
+  /* Same-exchange ties: a neutral dash, apart from the cluster colours and the reserved markers. */
+  --bm-cex: color-mix(in srgb, var(--ink-2) 75%, transparent);
 }
 @media (min-width: 641px) {
   .bm-modal {
@@ -9379,6 +9381,31 @@ img.tm-avatar {
   stroke-width: 2;
   stroke-dasharray: 0.1 4.5;
   stroke-linecap: round;
+}
+/* Same-exchange ties: drawn only, behind a toggle (off by default; Settings sets the default). */
+.bm-cex-link {
+  stroke: var(--bm-cex);
+  stroke-width: 1.6;
+  stroke-dasharray: 5 4;
+  stroke-linecap: round;
+  stroke-opacity: 0.9;
+  transition: stroke-opacity 0.2s;
+}
+.bm-cex-link.dim {
+  stroke-opacity: 0.12;
+}
+.bm-cex-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -4px 0 8px;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.bm-cex-key {
+  width: 18px;
+  border-top: 2px dashed var(--bm-cex);
 }
 .bm-same-link {
   stroke: var(--ink-2);
