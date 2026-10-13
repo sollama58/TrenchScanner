@@ -188,7 +188,8 @@ const envSchema = z.object({
   // nothing. A launch takes its ten at once or waits a cycle. 0 turns the share off.
   LAUNCH_BUYER_FRESHNESS_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
   // Cap on NEW wallets per scan cycle whose funder is read for the linked-wallets reading (the
-  // worker's linkedWallets.ts): two 1-credit calls each, plus one per new funder for the exchange
+  // worker's linkedWallets.ts): two 1-credit calls each (11 for a wallet with 1,000+ transactions,
+  // whose first one takes the 10-credit sorted lookup), plus one per new funder for the exchange
   // check. Every answer is cached for good, so the steady state pays only for wallets never seen
   // before. A candidate's top ten and creator go together or wait a cycle. 0 turns the reading off.
   LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),

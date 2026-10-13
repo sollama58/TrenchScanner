@@ -14,8 +14,13 @@ const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() =
 const TAG = `linked-test-${Date.now()}`;
 const w = (name: string) => `${TAG}-${name}`;
 
-function fakeHelius(funders: Record<string, FunderResult>, hot: Record<string, boolean> = {}) {
+function fakeHelius(
+  funders: Record<string, FunderResult>,
+  hot: Record<string, boolean> = {},
+  gtfaUsable = true,
+) {
   return {
+    gtfaUsable,
     getFundersBatch: vi.fn(async (wallets: string[]) => {
       return new Map(wallets.map((x) => [x, funders[x] ?? ({ status: "failed" } as FunderResult)]));
     }),
@@ -27,7 +32,7 @@ function fakeHelius(funders: Record<string, FunderResult>, hot: Record<string, b
   };
 }
 
-const found = (funder: string): FunderResult => ({
+const found = (funder: string): Extract<FunderResult, { status: "found" }> => ({
   status: "found",
   funder,
   amountSol: 1,
@@ -57,7 +62,8 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
         [w("a")]: found(w("F")),
         [w("b")]: found(w("F")),
         [w("c")]: found(w("CEX")),
-        [w("dev")]: { status: "busy" },
+        // A busy creator wallet: read with the sorted lookup.
+        [w("dev")]: { ...found(w("D")), sorted: true },
       },
       { [w("CEX")]: true },
     );
@@ -69,7 +75,8 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
       linkedLargestClusterPct: 21,
     });
     expect(helius.getFundersBatch).toHaveBeenCalledTimes(1);
-    expect(takeLinkedWalletStats().credits).toBe(4 + 3 + 2);
+    // Signatures for four, three first transactions, one sorted lookup, three funder checks.
+    expect(takeLinkedWalletStats().credits).toBe(4 + 3 + 10 + 3);
 
     // A fresh process reads it all from the tables, with no calls.
     resetLinkedWallets();
@@ -108,5 +115,22 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
       { owner: "a", pct: 3 },
       { owner: "b", pct: 2 },
     ]);
+  });
+  it("reads a wallet stored as busy again once the sorted lookup can reach it", async () => {
+    await prisma.walletFunder.create({ data: { wallet: w("old"), status: "busy" } });
+    const group = { mintAddress: w("m3"), holders: [{ owner: w("old"), pct: 9 }] };
+    const off = fakeHelius({}, {}, false);
+    const without = await resolveLinkedWallets([group], off, { maxNewLookups: 10 });
+    expect(off.getFundersBatch).not.toHaveBeenCalled();
+    expect(without.funderOf.get(w("old"))).toBeNull();
+
+    const on = fakeHelius({ [w("old")]: { ...found(w("H")), sorted: true } });
+    const lookups = await resolveLinkedWallets([group], on, { maxNewLookups: 10 });
+    expect(on.getFundersBatch).toHaveBeenCalledWith([w("old")]);
+    expect(lookups.funderOf.get(w("old"))).toBe(w("H"));
+    expect(await prisma.walletFunder.findUnique({ where: { wallet: w("old") } })).toMatchObject({
+      status: "found",
+      funder: w("H"),
+    });
   });
 });
