@@ -1919,3 +1919,24 @@ model FunderActivity {
 
   @@index([checkedAt])
 }
+
+/// Outside API calls counted per 5-minute bucket, process, provider, endpoint (the JSON-RPC
+/// method for an RPC host) and feature (the job, and the scan's stage) - core's apiUsage.ts. Each
+/// process adds its in-memory counts in every minute; rows older than 8 days are deleted.
+/// `calls` is the billable unit (a JSON-RPC batch of 80 is 80), `requests` the HTTP requests.
+model ApiUsage {
+  bucket      DateTime
+  process     String
+  provider    String
+  endpoint    String
+  feature     String
+  calls       Int      @default(0)
+  requests    Int      @default(0)
+  errors      Int      @default(0)
+  rateLimited Int      @default(0)
+  credits     Int      @default(0)
+  msTotal     BigInt   @default(0)
+
+  @@id([bucket, process, provider, endpoint, feature])
+  @@index([bucket])
+}

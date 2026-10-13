@@ -15,6 +15,7 @@ import {
   resolveAccess,
   decideAccess,
   prisma,
+  withApiFeature,
 } from "@trenchscanner/core";
 import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
 import { createSessionSigner, verifyRequestSessions, type SessionPayload } from "./auth/session.js";
@@ -29,6 +30,7 @@ import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
 import { registerAdminOpsRoutes } from "./routes/adminOps.js";
+import { registerAdminUsageRoutes } from "./routes/adminUsage.js";
 import { registerAdminRetrainRoutes } from "./routes/adminRetrain.js";
 import { registerAdminInsightRoutes } from "./routes/adminInsights.js";
 import { registerAdminModelRoutes } from "./routes/adminModels.js";
@@ -88,6 +90,17 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     logger.error("unhandled route error", { url: request.url, error: err.message, stack: err.stack });
     const status = err.statusCode ?? 500;
     reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
+  });
+
+  // Outside calls a route makes (a live price, a burn check, chart candles) are counted under the
+  // route in Admin > API usage - see withApiFeature in core's apiUsage.ts. Added before any route
+  // is registered, so every plugin's routes inherit it.
+  app.addHook("onRoute", (route) => {
+    const handler = route.handler;
+    const feature = `api ${route.url}`;
+    route.handler = function (this: FastifyInstance, request, reply) {
+      return withApiFeature(feature, () => handler.call(this, request, reply));
+    };
   });
 
   // Per-route response times for GET /stats/routes (see routeTimings.ts), and a Server-Timing
@@ -528,6 +541,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       await registerAdminWalletRoutes(instance);
       // The "Retrain now" button: a request row the trainer picks up within a minute.
       await registerAdminRetrainRoutes(instance);
+      // Outside API calls and Helius credits per provider, endpoint and feature.
+      await registerAdminUsageRoutes(instance, { env });
     },
     { prefix: "/admin" },
   );

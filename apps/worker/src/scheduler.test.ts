@@ -13,6 +13,7 @@ vi.mock("@trenchscanner/core", () => ({
   },
   lastHeartbeatAt: async () => null,
   lastSuccessfulRunAt: async () => null,
+  withApiFeature: (_feature: string, fn: () => unknown) => fn(),
 }));
 
 const { scheduleInterval, scheduleDailyAt, JobSkipped, PartialJobFailure } = await import("./scheduler.js");

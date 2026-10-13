@@ -1,5 +1,5 @@
 import "./bootstrap-env.js"; // must run before any @trenchscanner/core import - see file comment
-import { loadEnv, createLogger } from "@trenchscanner/core";
+import { loadEnv, createLogger, installApiUsageMeter, nameApiHost } from "@trenchscanner/core";
 import { buildServer } from "./server.js";
 
 const logger = createLogger("api");
@@ -13,6 +13,10 @@ const EXAMPLE_JWT_SECRET = "change-me-to-a-random-64-char-hex-string";
 
 async function main() {
   const env = loadEnv();
+  // Counts every outside call for Admin > API usage (on-demand live prices, burn checks, chart
+  // candles, Telegram), before the server builds any client.
+  if (env.TOKENSAGE_API_URL) nameApiHost(env.TOKENSAGE_API_URL, "tokensage");
+  const stopApiUsageMeter = installApiUsageMeter({ processName: "api" });
 
   if (env.JWT_SECRET === INSECURE_DEFAULT_JWT_SECRET || env.JWT_SECRET === EXAMPLE_JWT_SECRET) {
     if (process.env.NODE_ENV === "production") {
@@ -47,7 +51,7 @@ async function main() {
       process.exit(1);
     }, SHUTDOWN_DEADLINE_MS).unref();
     app.close().then(
-      () => process.exit(0),
+      () => stopApiUsageMeter().finally(() => process.exit(0)),
       (err: unknown) => {
         logger.error("error during shutdown", { error: String(err) });
         process.exit(1);
