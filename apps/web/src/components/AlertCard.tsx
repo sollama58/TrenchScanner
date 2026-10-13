@@ -2,7 +2,16 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Card, CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
-import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SageIcon, SlidersIcon } from "./Icons";
+import {
+  BrainIcon,
+  BubblesIcon,
+  CheckIcon,
+  CopyIcon,
+  ExternalIcon,
+  RobotIcon,
+  SageIcon,
+  SlidersIcon,
+} from "./Icons";
 import { openSage } from "../sage";
 import { openBubbleMap, type BubbleSeed } from "../bubbleMap";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
@@ -646,7 +655,10 @@ function LinkedTile({
           : undefined
       }
     >
-      <dt>Linked</dt>
+      <dt>
+        Linked
+        {canOpen && <BubblesIcon size={12} className="tile-opens-icon" />}
+      </dt>
       <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
     </div>
   );

@@ -124,7 +124,9 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   narrativeNote: null,
   streamTab: false,
   quickLinks: ["terminal"],
-  hidden: [],
+  // The composite score tile is off by default so the stat tiles fill a clean 4 x 2 grid; it can be
+  // switched back on in Customize. An account that saved its own field list keeps that list.
+  hidden: ["score"],
 };
 
 /** The stored JSON as an appearance, field by field: a bad or missing field takes its default. */
@@ -140,7 +142,7 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   const known = new Set<string>(CARD_FIELDS);
   out.hidden = Array.isArray(raw.hidden)
     ? [...new Set(raw.hidden.filter((f): f is string => typeof f === "string" && known.has(f)))]
-    : [];
+    : DEFAULT_FEED_APPEARANCE.hidden;
   const sites = new Set<string>(QUICK_LINKS);
   out.quickLinks = Array.isArray(raw.quickLinks)
     ? [...new Set(raw.quickLinks.filter((l): l is string => typeof l === "string" && sites.has(l)))]
