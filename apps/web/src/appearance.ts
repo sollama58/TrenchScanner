@@ -30,7 +30,9 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   narrativeNote: null,
   streamTab: false,
   quickLinks: ["terminal"],
-  hidden: [],
+  // The composite score tile is off by default so the stat tiles fill a clean 4 x 2 grid; it can be
+  // switched back on in Customize. An account that saved its own field list keeps that list.
+  hidden: ["score"],
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */
@@ -140,7 +142,7 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
       phoneColumns: 2,
       textSize: 90,
       corners: "square",
-      hidden: ["tokenName", "calibrated"],
+      hidden: ["tokenName", "calibrated", "score"],
     },
   },
 ];
@@ -198,7 +200,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
       : d.quickLinks,
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
-      : [],
+      : d.hidden,
   };
 }
 
