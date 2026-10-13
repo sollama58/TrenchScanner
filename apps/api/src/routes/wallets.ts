@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { withApiFeature } from "@trenchscanner/core";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 
 /**
@@ -20,6 +21,7 @@ export async function registerWalletRoutes(app: FastifyInstance, opts: { live: W
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     reply.header("Cache-Control", "private, max-age=30");
-    return loadWalletProfile(parsed.data.wallet, opts.live);
+    // Its chain reads count as "wallet-modal" in Admin > API usage.
+    return withApiFeature("wallet-modal", () => loadWalletProfile(parsed.data.wallet, opts.live));
   });
 }
