@@ -16,7 +16,6 @@ import {
   clip,
   frame,
   pill,
-  roundRect,
 } from "./shareCard";
 
 /** The map's cluster colours on the dark card: the dashboard's dark slots (styles.css .bm-modal). */
@@ -355,22 +354,6 @@ export async function renderBubbleCard(
       ctx.font = `800 ${dev ? 11 : 16}px ${FONT}`;
       ctx.fillText(dev ? "DEV" : "!", bx, by + 1);
     }
-  }
-  // Named wallets (KOLs, exchanges, named services) carry their name under the bubble, drawn last
-  // so no bubble covers it.
-  ctx.font = `600 14px ${FONT}`;
-  for (const n of order) {
-    const name = n.wallet ? names[n.wallet]?.name : undefined;
-    if (!name) continue;
-    const text = name.length > 18 ? `${name.slice(0, 17)}…` : name;
-    const cx = X(n.x);
-    const cy = Y(n.y) + n.r * scale * (n.kind === "funder" ? 0.9 : 1) + 14;
-    const w = ctx.measureText(text).width + 12;
-    ctx.fillStyle = "rgba(10, 12, 18, 0.78)";
-    roundRect(ctx, cx - w / 2, cy - 10, w, 20, 10);
-    ctx.fill();
-    ctx.fillStyle = INK;
-    ctx.fillText(text, cx, cy + 1);
   }
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";

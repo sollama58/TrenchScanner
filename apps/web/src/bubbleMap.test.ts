@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bubbleNameFit,
   bubblesFromUrl,
   bubblesLink,
   buildGraph,
@@ -259,5 +260,22 @@ describe("holderFreshness", () => {
   });
   it("has no next update once the coin has gone unscanned for ten minutes", () => {
     expect(holderFreshness(at, t + 10 * 60_000)).toEqual({ last: t, next: null });
+  });
+});
+
+describe("bubbleNameFit", () => {
+  it("fits a short name whole, small", () => {
+    const fit = bubbleNameFit(40, "Binance");
+    expect(fit?.text).toBe("Binance");
+    expect(fit!.size).toBeLessThanOrEqual(10);
+    expect(fit!.radius).toBeLessThan(40);
+  });
+  it("clips a long name to what the arc holds", () => {
+    const fit = bubbleNameFit(18, "A very long wallet name indeed");
+    expect(fit?.text.endsWith("…")).toBe(true);
+    expect(fit!.text.length).toBeLessThan(30);
+  });
+  it("leaves a bubble too small for a few letters without one", () => {
+    expect(bubbleNameFit(12, "Binance")).toBeNull();
   });
 });

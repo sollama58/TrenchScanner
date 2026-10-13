@@ -9414,6 +9414,16 @@ img.tm-avatar {
   stroke: rgba(0, 0, 0, 0.25);
   stroke-width: 2px;
 }
+.bm-name {
+  fill: rgba(255, 255, 255, 0.86);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-anchor: middle;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.3);
+  stroke-width: 2px;
+}
 .bm-badge circle {
   stroke: var(--surface-solid);
   stroke-width: 1.5;

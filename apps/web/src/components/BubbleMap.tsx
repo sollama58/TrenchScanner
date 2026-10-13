@@ -3,6 +3,7 @@ import { ApiError, type Snapshot, type Token } from "../api";
 import { cachedGet } from "../cache";
 import { ago, pct, shortAddress, tokenLabel } from "../format";
 import {
+  bubbleNameFit,
   bubbleSeed,
   bubblesLink,
   buildGraph,
@@ -488,6 +489,7 @@ function BubbleSvg({
 }
 
 function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: WalletNames }) {
+  const arcId = `bm-arc${useId().replace(/:/g, "")}`;
   const colour = n.cluster === null ? "var(--bm-none)" : `var(--bm-${n.cluster % CLUSTER_COLOURS})`;
   if (n.kind === "funder") {
     const s = n.r * 1.25;
@@ -527,6 +529,8 @@ function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: 
   const fontSize = Math.max(8, Math.min(17, n.r * 0.46));
   const bx = n.x + n.r * 0.72;
   const by = n.y - n.r * 0.72;
+  const name = n.wallet ? names[n.wallet]?.name : undefined;
+  const fit = name ? bubbleNameFit(n.r, name) : null;
   return (
     <>
       {n.sameTime !== null && (
@@ -548,6 +552,21 @@ function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: 
         <text x={n.x} y={n.y} className="bm-pct" style={{ fontSize }}>
           {pctText(n.pct)}
         </text>
+      )}
+      {fit && (
+        <>
+          {/* Left to right through the bottom, so the name reads upright along the inside edge. */}
+          <path
+            id={arcId}
+            d={`M ${n.x - fit.radius} ${n.y} A ${fit.radius} ${fit.radius} 0 0 0 ${n.x + fit.radius} ${n.y}`}
+            fill="none"
+          />
+          <text className="bm-name" style={{ fontSize: fit.size }}>
+            <textPath href={`#${arcId}`} startOffset="50%">
+              {fit.text}
+            </textPath>
+          </text>
+        </>
       )}
       {(flaggedRisk || dev) && (
         <g className={`bm-badge ${dev ? "dev" : "risk"}`}>

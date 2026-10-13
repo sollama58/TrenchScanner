@@ -616,3 +616,21 @@ export function holderFreshness(takenAt: string, now: number): { last: number; n
   if (now - last >= HOLDER_STALE_MS) return { last, next: null };
   return { last, next: Math.max(last + HOLDER_SCAN_MS, now) };
 }
+
+/**
+ * How a wallet's name sits inside its bubble: small, curved along the inside of the bottom edge,
+ * clipped to what the arc holds. Null when the bubble is too small to hold a few letters; its name
+ * is still in the tooltip and the detail panel.
+ */
+export function bubbleNameFit(
+  r: number,
+  name: string,
+): { text: string; size: number; radius: number } | null {
+  if (r < 15) return null;
+  const size = Math.min(10, Math.max(7, r * 0.2));
+  const radius = r - size * 0.45 - 2;
+  // About 80% of the lower half-circle, at roughly 0.56em a character.
+  const fits = Math.floor((Math.PI * radius * 0.8) / (size * 0.56));
+  if (fits < 4) return null;
+  return { text: name.length > fits ? `${name.slice(0, fits - 1)}…` : name, size, radius };
+}
