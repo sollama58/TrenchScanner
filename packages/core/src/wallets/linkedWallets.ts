@@ -195,6 +195,8 @@ export interface LinkedWalletsReading {
   sameTimeFundedPct: number;
   /** Groups of two or more holders funded within SAME_TIME_FUNDING_MS of each other. */
   sameTimeClusterCount: number;
+  /** How many holders are in a same-minute group, of linkedWalletsChecked: the "N/20". */
+  sameTimeFundedCount: number;
   sameTimeClusters: SameTimeCluster[];
 }
 
@@ -356,6 +358,7 @@ export function linkedWallets(
     holders: [...list].sort((a, b) => b.pct - a.pct).map((h) => ({ wallet: h.owner, pct: round2(h.pct) })),
     sameTimeFundedPct: round2(sameTime.reduce((s, c) => s + c.pct, 0)),
     sameTimeClusterCount: sameTime.length,
+    sameTimeFundedCount: sameTime.reduce((n, c) => n + c.wallets.length, 0),
     sameTimeClusters: sameTime,
   };
 }

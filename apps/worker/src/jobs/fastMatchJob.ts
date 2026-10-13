@@ -95,6 +95,7 @@ function profileFromSnapshot(
     cexFundedCount?: number | null;
     cexFundedHolders?: number | null;
     sameTimeFundedPct?: number | null;
+    sameTimeFundedCount?: number | null;
     flaggedBuySol?: number | null;
     devHolding: boolean | null;
   },
@@ -132,6 +133,7 @@ function profileFromSnapshot(
     cexFundedCount: snapshot.cexFundedCount ?? undefined,
     cexFundedHolders: snapshot.cexFundedHolders ?? undefined,
     sameTimeFundedPct: snapshot.sameTimeFundedPct ?? undefined,
+    sameTimeFundedCount: snapshot.sameTimeFundedCount ?? undefined,
     flaggedBuySol: snapshot.flaggedBuySol ?? undefined,
     // The scan's resolved answer, carried forward; the fast path has no trade-stream view of its own.
     creatorHolding: snapshot.devHolding ?? undefined,

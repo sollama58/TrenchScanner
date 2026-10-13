@@ -266,13 +266,19 @@ model UserFilter {
   maxSniperTop10WalletPct    Float?
   /// Max % of supply held by linked top holders: wallets one funder paid for, or that funded each
   /// other (TokenSnapshot.linkedWalletPct, core's wallets/linkedWallets.ts). Skipped while unknown.
+  /// Off the Filters tab since 2026-10-13 (maxLinkedWalletCount replaced it); a saved value still
+  /// applies until cleared.
   maxLinkedWalletPct         Float?
   /// Max how many of the top-20 holders are linked (TokenSnapshot.linkedWalletCount, "N/20").
   /// Skipped while unknown.
   maxLinkedWalletCount       Int?
   /// Max % of supply held by top holders funded within a minute of each other, from any funders
-  /// (TokenSnapshot.sameTimeFundedPct). Skipped while unknown.
+  /// (TokenSnapshot.sameTimeFundedPct). Skipped while unknown. Off the Filters tab since
+  /// 2026-10-13 (the count below replaced it); a saved value still applies until cleared.
   maxSameTimeFundedPct       Float?
+  /// Max how many of the top-20 holders were funded within a minute of each other
+  /// (TokenSnapshot.sameTimeFundedCount, "N/20"). Skipped while unknown.
+  maxSameTimeFundedCount     Int?
   /// Max % of supply held by top holders tied to the creator: wallets the creator funded, that
   /// funded the creator, or with the creator's funder (TokenSnapshot.linkedCreatorPct). Skipped
   /// while unknown.
@@ -1011,6 +1017,7 @@ model TokenSnapshot {
   // funded, by whom, and each wallet's %); null when there are none. Read with the linked reading.
   sameTimeFundedPct       Float?
   sameTimeClusterCount    Int?
+  sameTimeFundedCount     Int?
   sameTimeClusters        Json?
   // Of the largest holders (up to 20, the creator aside), the % an exchange or a busy service paid
   // for (core's cexFundedReading), how many, and how many were read. Null until all were read.

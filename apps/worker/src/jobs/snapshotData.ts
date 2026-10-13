@@ -80,6 +80,7 @@ export function snapshotDataFor(
       : undefined,
     sameTimeFundedPct: scored.sameTimeFundedPct,
     sameTimeClusterCount: scored.sameTimeClusterCount,
+    sameTimeFundedCount: scored.sameTimeFundedCount,
     // Only when there is a same-minute group to list, as for the clusters above.
     sameTimeClusters: scored.sameTimeClusters?.length
       ? (scored.sameTimeClusters as unknown as Prisma.InputJsonValue)

@@ -122,6 +122,15 @@ describe("maxSniperTop10WalletPct", () => {
   });
 });
 
+describe("maxSameTimeFundedCount", () => {
+  it("caps how many top holders were funded in the same minute, and skips an unknown count", () => {
+    const filter = { ...baseFilter, maxSameTimeFundedCount: 4 };
+    expect(matchesFilter(baseToken({ sameTimeFundedCount: 5 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ sameTimeFundedCount: 4 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ sameTimeFundedCount: undefined }), filter)).toBe(true);
+  });
+});
+
 describe("maxLinkedWalletCount", () => {
   it("caps how many top holders are linked, and skips an unknown count", () => {
     const filter = { ...baseFilter, maxLinkedWalletCount: 5 };

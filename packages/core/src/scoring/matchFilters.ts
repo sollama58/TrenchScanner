@@ -129,6 +129,13 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   ) {
     return false;
   }
+  if (
+    filter.maxSameTimeFundedCount != null &&
+    token.sameTimeFundedCount !== undefined &&
+    token.sameTimeFundedCount > filter.maxSameTimeFundedCount
+  ) {
+    return false;
+  }
 
   if (
     filter.maxLinkedCreatorPct != null &&

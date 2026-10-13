@@ -17,6 +17,8 @@ export interface FieldSpec {
   max?: number;
   /** Shows the composite-score explainer (components/ScoreExplainer.tsx) beside the label. */
   explainScore?: boolean;
+  /** Replaced by another field: shown only on a filter that still has a value saved, so it can be cleared. */
+  retired?: boolean;
 }
 
 /** The composite-score setting's label, so lists that show it can attach the explainer. */
@@ -91,14 +93,6 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
-        key: "maxLinkedWalletPct",
-        min: 0,
-        max: 100,
-        label: "Max supply held by linked wallets",
-        hint: "top-20 holders one funder paid for, or that funded each other (top 10 on scans before 2026-10-13); tokens not checked yet wait",
-        unit: "%",
-      },
-      {
         key: "maxLinkedWalletCount",
         min: 0,
         max: 20,
@@ -108,12 +102,31 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         step: 1,
       },
       {
+        key: "maxSameTimeFundedCount",
+        min: 0,
+        max: 20,
+        label: "Max top holders funded in the same minute",
+        hint: "of the 20 largest holders, how many were funded within a minute of each other, from any funders; tokens not checked yet wait",
+        unit: "of 20",
+        step: 1,
+      },
+      {
+        key: "maxLinkedWalletPct",
+        min: 0,
+        max: 100,
+        label: "Max supply held by linked wallets (old)",
+        hint: "replaced by Max linked top holders above; this saved value still applies until you clear it",
+        unit: "%",
+        retired: true,
+      },
+      {
         key: "maxSameTimeFundedPct",
         min: 0,
         max: 100,
-        label: "Max supply funded in the same minute",
-        hint: "top holders whose wallets were funded within a minute of each other, from any funders; tokens not checked yet wait",
+        label: "Max supply funded in the same minute (old)",
+        hint: "replaced by Max top holders funded in the same minute above; this saved value still applies until you clear it",
         unit: "%",
+        retired: true,
       },
       {
         key: "maxLinkedCreatorPct",

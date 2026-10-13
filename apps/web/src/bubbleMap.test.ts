@@ -5,6 +5,7 @@ import {
   buildGraph,
   linkedCount,
   linkedCountText,
+  sameTimeCount,
   clusterHalos,
   graphBounds,
   layoutGraph,
@@ -209,5 +210,26 @@ describe("linkedCount", () => {
     expect(linkedCount(older)).toEqual({ linked: 3, of: 18 });
     expect(linkedCountText(linkedCount(older))).toBe("3/18");
     expect(linkedCount({ linkedWalletPct: null })).toBeNull();
+  });
+});
+
+describe("sameTimeCount", () => {
+  it("reads the stored count, and counts the groups' wallets on older scans", () => {
+    expect(
+      sameTimeCount({
+        sameTimeFundedPct: 9,
+        sameTimeFundedCount: 3,
+        linkedWalletPct: 0,
+        linkedWalletsChecked: 20,
+      }),
+    ).toEqual({ linked: 3, of: 20 });
+    const g = (w: string) => ({ wallet: w, pct: 1, fundedAtMs: 0, funder: null });
+    expect(
+      sameTimeCount({
+        sameTimeFundedPct: 4,
+        sameTimeClusters: [{ atMs: 0, spanMs: 10_000, wallets: [g("a"), g("b")], pct: 2 }],
+      }),
+    ).toEqual({ linked: 2, of: 20 });
+    expect(sameTimeCount({ sameTimeFundedPct: null })).toBeNull();
   });
 });
