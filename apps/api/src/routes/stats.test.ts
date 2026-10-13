@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
+import { readMarketRows } from "../marketRows.js";
 import {
   baselineRates,
   bearerMatches,
@@ -391,6 +392,26 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(res.json().samples.byKind).toEqual([expect.objectContaining({ kind: "event", calls: 3 })]);
+  });
+
+  it("counts the baseline the same from shared market rows as from its own query", async () => {
+    await outcome(400, "event", { hit2x: true, hit4x: true });
+    await outcome(401, "event", { hit2x: true, dq: true });
+    await outcome(402, "event", { hit2x: false });
+    await outcome(403, "event", null);
+    const tenX = await outcome(404, "event", { hit2x: true });
+    await prisma.candidateOutcome.update({
+      where: { id: tenX },
+      data: { hit10xIn1h: true, simReturnPct: 120 },
+    });
+    const missed = await outcome(405, "event", { hit2x: false });
+    await prisma.candidateOutcome.update({ where: { id: missed }, data: { hit10xIn1h: false } });
+    const rows = (await readMarketRows(at(400))).filter((r) => r.at < at(500));
+    expect(rows).toHaveLength(6);
+    const fromRows = await baselineRates(at(400), TARGETS, at(500), rows);
+    const fromQuery = await baselineRates(at(400), TARGETS, at(500));
+    expect(fromRows).toEqual(fromQuery);
+    expect(fromQuery).toMatchObject({ calls: 6, graded: 5, won2x: 2, won4x: 1, doubledAfterStop: 1 });
   });
 
   it("caps the window whichever way it is spelled", async () => {

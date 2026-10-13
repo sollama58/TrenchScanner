@@ -9,8 +9,7 @@ import {
   serializeCuratedAlert,
   withLatestSnapshots,
 } from "../curatedFeed.js";
-import { buildLeaderboard, contestState, modelLabel } from "../contest.js";
-import { buildModelInsights } from "../modelInsights.js";
+import { contestState, modelLabel } from "../contest.js";
 import { leaderboardDaysSchema, modelRunsRoute, reportDaysSchema, type ReportCaches } from "./curated.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
@@ -166,10 +165,7 @@ export async function registerGuestRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const { days } = parsed.data;
-    const [board, state] = await Promise.all([
-      opts.reports.leaderboardFor(days).get(() => buildLeaderboard(opts.env, days)),
-      contestState(opts.env),
-    ]);
+    const [board, state] = await Promise.all([opts.reports.leaderboard(days), contestState(opts.env)]);
     return {
       ...board,
       selectedModel: state.defaultModels[0],
@@ -195,9 +191,7 @@ export async function registerGuestRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const { days } = parsed.data;
-    const insights = await opts.reports
-      .insightsFor(days, false)
-      .get(() => buildModelInsights(opts.env, days, false));
+    const insights = await opts.reports.insights(days, false);
     return { ...insights, recentAiReviews: [] };
   });
 

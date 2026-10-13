@@ -123,11 +123,20 @@ function latest(a: Date | null, b: Date | null): Date | null {
 
 export async function registerHealthRoutes(
   app: FastifyInstance,
-  opts: { env?: Pick<Env, "AI_DAILY_BUDGET_USD" | "AI_BUDGET_REVIEW_RESERVE_PCT"> } = {},
+  opts: {
+    env?: Pick<Env, "AI_DAILY_BUDGET_USD" | "AI_BUDGET_REVIEW_RESERVE_PCT">;
+    /** True from listen until the report keeper's first pass is done (server.ts). */
+    warming?: () => boolean;
+  } = {},
 ) {
   const budgetEnv = opts.env ?? { AI_DAILY_BUDGET_USD: 10, AI_BUDGET_REVIEW_RESERVE_PCT: 40 };
   /** Plain liveness check - what Render's healthCheckPath hits. */
-  app.get("/", async () => ({ ok: true }));
+  // A fresh instance reports unhealthy until its report caches are filled (capped in server.ts), so
+  // a deploy keeps traffic on the old instance meanwhile and no reader meets an empty cache.
+  app.get("/", async (_request, reply) => {
+    if (opts.warming?.()) return reply.code(503).send({ ok: false, warming: true });
+    return { ok: true };
+  });
 
   /**
    * State of this instance's push channel. Worth surfacing because a broken LISTEN connection is

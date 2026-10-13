@@ -68,6 +68,13 @@ const LIVE_REFRESH_CALLS_PER_MINUTE = 120;
 const LIVE_REFRESH_CALLS_PER_USER_PER_MINUTE = 15;
 /** A request this slow gets a log line of its own, so a slow call shows up without asking. */
 const SLOW_REQUEST_LOG_MS = 2_000;
+/**
+ * Longest a fresh instance answers /health with 503 while its report caches fill; past this it
+ * goes healthy regardless, with whatever the keeper has filled (the Models tab's reports come
+ * first). Under a minute on purpose: Render restarts a running instance whose checks fail for
+ * 60 seconds, so a longer hold could turn a crash restart into a restart loop.
+ */
+const REPORT_WARM_CAP_MS = 45_000;
 
 export async function buildServer(env: Env): Promise<FastifyInstance> {
   const app = Fastify({ loggerInstance: fastifyLogger(), disableRequestLogging: true, trustProxy: true });
@@ -433,7 +440,10 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     await viewStamps.stop();
   });
 
-  await app.register(registerHealthRoutes, { prefix: "/health", env });
+  // Set once listening, cleared when the report keeper's first pass ends (or REPORT_WARM_CAP_MS
+  // passes): /health answers 503 meanwhile. Never set on a test server, which never listens.
+  let warming = false;
+  await app.register(registerHealthRoutes, { prefix: "/health", env, warming: () => warming });
   await app.register(registerConfigRoutes, { prefix: "/config", env });
   // Public like /config: the admin's banner shows to guests and the signed-out page too.
   await app.register(registerAnnouncementRoutes, { prefix: "/announcement" });
@@ -455,12 +465,22 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Report caches warm themselves once the server is actually listening - so a real start pays
   // for its first fills before any reader does, and a test server (inject, never listen) runs none.
   const warmers: (() => void)[] = [];
+  let warmCap: ReturnType<typeof setTimeout> | undefined;
+  const warmed = () => {
+    warming = false;
+    clearTimeout(warmCap);
+  };
   app.addHook("onListen", async () => {
+    warming = true;
+    // However slow the first pass is, the instance goes healthy within the cap: a deploy must
+    // never fail because the database was slow to answer a report.
+    warmCap = setTimeout(warmed, REPORT_WARM_CAP_MS);
+    warmCap.unref();
     for (const warm of warmers) warm();
   });
 
   // The Models tab's reports, read by subscribers (/curated) and guests (/guest) from one fill.
-  const reports = createReportCaches();
+  const reports = createReportCaches(env);
   await app.register(registerCuratedRoutes, {
     prefix: "/curated",
     reports,
@@ -469,6 +489,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     matchStream,
     viewStamps,
     warmers,
+    ready: warmed,
   });
   // The read-only feed for visitors without a wallet: its own route, so no paid route's gate is loosened.
   await app.register(registerGuestRoutes, { prefix: "/guest", env, viewStamps, reports });

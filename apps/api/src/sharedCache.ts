@@ -19,6 +19,40 @@ export interface SharedCacheOptions {
    * lands and must never answer with the pre-alert rows.
    */
   staleWhileRevalidateMs?: number;
+  /**
+   * Names the cache in GET /stats/caches (cacheReport below), which reports each named cache's
+   * TTL, age and how long its fills take. Unnamed caches (the per-user feed pages) are left out.
+   */
+  name?: string;
+}
+
+/** What GET /stats/caches reports for one named cache. */
+export interface CacheReportRow {
+  name: string;
+  ttlSeconds: number;
+  staleWhileRevalidateSeconds: number;
+  /** How old the value being served is, in seconds; null before the first fill. */
+  ageSeconds: number | null;
+  filling: boolean;
+  fills: number;
+  failedFills: number;
+  lastFillMs: number | null;
+  maxFillMs: number | null;
+  meanFillMs: number | null;
+  /** Readers who had to wait on a fill (cold cache, or past the stale window). */
+  waitedOnFill: number;
+  /** Readers answered with an expired value while it refilled behind them. */
+  servedStale: number;
+}
+
+/** Every named cache in this process, for cacheReport(). Caches are created once per key and live as long as the process. */
+const named = new Set<SharedCache<unknown>>();
+
+/** The named caches, slowest fill first: the order someone hunting for a slow page wants. */
+export function cacheReport(): CacheReportRow[] {
+  return [...named]
+    .map((c) => c.report())
+    .sort((a, b) => (b.maxFillMs ?? 0) - (a.maxFillMs ?? 0) || a.name.localeCompare(b.name));
 }
 
 /**
@@ -46,12 +80,17 @@ export class SharedCache<T> {
   /** Bumped by clear(): a fill that started before the bump must not store its (older) result. */
   private generation = 0;
   private readonly staleMs: number;
+  private readonly name: string | undefined;
+  private readonly stats = { fills: 0, failed: 0, lastMs: 0, maxMs: 0, totalMs: 0, waited: 0, stale: 0 };
+  private filledAt = 0;
 
   constructor(
     private readonly ttlMs: number,
     opts: SharedCacheOptions = {},
   ) {
     this.staleMs = opts.staleWhileRevalidateMs ?? 0;
+    this.name = opts.name;
+    if (this.name) named.add(this as SharedCache<unknown>);
   }
 
   /**
@@ -65,8 +104,10 @@ export class SharedCache<T> {
       // Stale but usable: answer now, refresh once in the background. A failed refresh already
       // falls back to this same value inside fill(), so nothing here can reject.
       if (!this.inFlight) void this.fill(produce).catch(() => {});
+      this.stats.stale += 1;
       return this.value.data;
     }
+    this.stats.waited += 1;
     if (this.inFlight) return this.inFlight;
     return this.fill(produce);
   }
@@ -76,9 +117,13 @@ export class SharedCache<T> {
    * startup so the first reader after a deploy doesn't pay for it, or to refill one before a
    * reader finds it expired. Resolves when that fill settles (at once when none was needed), so a
    * caller can run several one after another. Never rejects.
+   *
+   * `aheadMs` refills a value that is still fresh but expires within that long: a keeper that
+   * checks every minute passes a little over a minute, so the value is replaced before it ever
+   * expires and no reader is the one to notice it has.
    */
-  warm(produce: () => Promise<T>): Promise<void> {
-    if (this.value && this.value.expiresAt > Date.now()) return Promise.resolve();
+  warm(produce: () => Promise<T>, aheadMs = 0): Promise<void> {
+    if (this.value && this.value.expiresAt - aheadMs > Date.now()) return Promise.resolve();
     if (this.inFlight) return Promise.resolve();
     return this.fill(produce).then(
       () => undefined,
@@ -88,12 +133,22 @@ export class SharedCache<T> {
 
   private fill(produce: () => Promise<T>): Promise<T> {
     const generation = this.generation;
+    const started = performance.now();
     const fill: Promise<T> = produce()
       .then((data) => {
-        if (generation === this.generation) this.value = { data, expiresAt: Date.now() + this.ttlMs };
+        const ms = performance.now() - started;
+        this.stats.fills += 1;
+        this.stats.lastMs = ms;
+        this.stats.maxMs = Math.max(this.stats.maxMs, ms);
+        this.stats.totalMs += ms;
+        if (generation === this.generation) {
+          this.value = { data, expiresAt: Date.now() + this.ttlMs };
+          this.filledAt = Date.now();
+        }
         return data;
       })
       .catch((err: unknown) => {
+        this.stats.failed += 1;
         // Serve a stale value over failing the page: a feed a few seconds old is a better answer
         // than an error, and the next request retries. Only a cold cache propagates the error.
         if (this.value) {
@@ -117,6 +172,25 @@ export class SharedCache<T> {
       );
     this.inFlight = fill;
     return fill;
+  }
+
+  report(): CacheReportRow {
+    const s = this.stats;
+    const ms = (n: number) => Math.round(n);
+    return {
+      name: this.name ?? "(unnamed)",
+      ttlSeconds: Math.round(this.ttlMs / 1000),
+      staleWhileRevalidateSeconds: Math.round(this.staleMs / 1000),
+      ageSeconds: this.value ? Math.round((Date.now() - this.filledAt) / 1000) : null,
+      filling: this.inFlight !== undefined,
+      fills: s.fills,
+      failedFills: s.failed,
+      lastFillMs: s.fills > 0 ? ms(s.lastMs) : null,
+      maxFillMs: s.fills > 0 ? ms(s.maxMs) : null,
+      meanFillMs: s.fills > 0 ? ms(s.totalMs / s.fills) : null,
+      waitedOnFill: s.waited,
+      servedStale: s.stale,
+    };
   }
 
   /** Test seam: forget everything, as if the process had just started. */

@@ -219,6 +219,9 @@ export async function buildTokenSageShowcase(now = new Date()) {
 export type TokenSageShowcase = Awaited<ReturnType<typeof buildTokenSageShowcase>>;
 
 export function createTokenSageShowcaseCache() {
-  const cache = new SharedCache<TokenSageShowcase>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
+  const cache = new SharedCache<TokenSageShowcase>(CACHE_MS, {
+    staleWhileRevalidateMs: STALE_MS,
+    name: "tokensage showcase",
+  });
   return () => cache.get(() => buildTokenSageShowcase());
 }

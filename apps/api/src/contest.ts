@@ -48,6 +48,7 @@ import {
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
 import { baselineRates, type GradedRates } from "./routes/stats.js";
+import type { MarketRowSource } from "./marketRows.js";
 import type { FastifyRequest } from "fastify";
 
 /**
@@ -405,7 +406,12 @@ export interface EvolutionEvent {
 
 const EVOLUTION_HISTORY_LIMIT = 20;
 
-export async function buildLeaderboard(env: Env, days: number): Promise<Leaderboard> {
+export async function buildLeaderboard(
+  env: Env,
+  days: number,
+  /** Shared market rows (marketRows.ts); without them, or past their span, the market is read here. */
+  market?: MarketRowSource,
+): Promise<Leaderboard> {
   const since = new Date(Date.now() - days * 86_400_000);
   const targets: PrecisionTargets = {
     winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
@@ -413,7 +419,7 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
     minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
-  const state = await contestState(env);
+  const [state, marketRows] = await Promise.all([contestState(env), market ? market(since) : null]);
   const [live, liveHigh, history, probation, lifts, baseline, catches] = await Promise.all([
     liveCallRecords(
       state.roster.map((c) => c.id),
@@ -450,15 +456,22 @@ export async function buildLeaderboard(env: Env, days: number): Promise<Leaderbo
       state.roster.map((c) => c.id),
       since,
       state.lanes,
+      marketRows ?? undefined,
     ),
-    baselineRates(since, {
-      hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
-      hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
-    }),
+    baselineRates(
+      since,
+      {
+        hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
+        hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
+      },
+      undefined,
+      marketRows,
+    ),
     liveCatchRates(
       state.roster.map((c) => c.id),
       since,
       state.lanes,
+      marketRows ?? undefined,
     ),
   ]);
   const laneBySlot = new Map(state.lanes.map((l) => [l.slot, l]));

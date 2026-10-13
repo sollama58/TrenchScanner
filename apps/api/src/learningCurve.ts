@@ -7,7 +7,9 @@ import {
   notRetiredModelSql,
   REPORTED_LABEL_RULE,
   type PrecisionTargets,
+  type MarketRow,
 } from "@trenchscanner/core";
+import { marketCounts, type MarketRowSource } from "./marketRows.js";
 import { MIN_GRADED_FOR_VERDICT, type GradedCounts, type Targets } from "./routes/stats.js";
 
 /**
@@ -410,11 +412,25 @@ export function buildLearningRuns(rows: RawRun[], targets: PrecisionTargets): Le
     });
 }
 
+/** The market line's day rows from shared market rows: the same columns its query returns. */
+function marketDays(rows: readonly MarketRow[]): RawDay[] {
+  const byDay = new Map<string, MarketRow[]>();
+  for (const r of rows) {
+    const day = r.at.toISOString().slice(0, 10);
+    const list = byDay.get(day);
+    if (list) list.push(r);
+    else byDay.set(day, [r]);
+  }
+  return [...byDay].map(([day, list]) => ({ day, ...marketCounts(list) }));
+}
+
 export async function buildLearningCurve(
   since: Date,
   until: Date,
   targets: Targets,
   days: number,
+  /** Shared market rows (marketRows.ts); without them, or past their span, the market is read here. */
+  marketSource?: MarketRowSource,
 ): Promise<LearningCurve> {
   // The trend compares the newest TREND_SPAN_DAYS days with the TREND_SPAN_DAYS before them, so
   // the day reads reach back two spans even when the window is shorter. Reading only the window
@@ -431,7 +447,7 @@ export async function buildLearningCurve(
   // Decision moments by UTC day. Only current-rule labels: rows graded from the scan price answer
   // an easier question (about twice the base rate), and a day of them next to a day of fill-graded
   // rows would read as the market halving.
-  const marketRows = prisma.$queryRaw<RawDay[]>`
+  const readMarket = () => prisma.$queryRaw<RawDay[]>`
     SELECT to_char(date_trunc('day', "anchorAt"), 'YYYY-MM-DD') AS day,
            count(*) AS calls,
            count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
@@ -450,6 +466,9 @@ export async function buildLearningCurve(
       AND ${walletSafetyCutsSql()}
       AND "labelRule" >= ${REPORTED_LABEL_RULE}
     GROUP BY 1`;
+  const marketRows: Promise<RawDay[]> = (
+    marketSource ? marketSource(trendSince) : Promise.resolve(null)
+  ).then((held) => (held ? marketDays(held.filter((r) => r.at < until)) : readMarket()));
   // Every model's calls by UTC day, graded the same way (see buildHitRateReport for the label
   // sources). A call whose training row was graded under the legacy rule is left out for the same
   // reason as above; one whose row is gone keeps its own copied verdict.

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SharedCache, SharedCacheMap } from "./sharedCache.js";
+import { cacheReport, SharedCache, SharedCacheMap } from "./sharedCache.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -239,5 +239,21 @@ describe("SharedCacheMap", () => {
     caches.clearWhere((key) => key.endsWith(":rules"));
     expect(await caches.for("alice:rules").get(fill)).toBe(3);
     expect(await caches.for("bob:trees").get(fill)).toBe(2);
+  });
+  it("warm() with aheadMs refills a value that is still fresh but expires within that long", async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new SharedCache<string>(60_000, { name: "test ahead" });
+      await cache.warm(async () => "first");
+      vi.advanceTimersByTime(30_000);
+      await cache.warm(async () => "too early", 20_000);
+      expect(await cache.get(async () => "unused")).toBe("first");
+      await cache.warm(async () => "second", 40_000);
+      expect(await cache.get(async () => "unused")).toBe("second");
+      const row = cacheReport().find((r) => r.name === "test ahead");
+      expect(row).toMatchObject({ ttlSeconds: 60, fills: 2, failedFills: 0, waitedOnFill: 0, ageSeconds: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

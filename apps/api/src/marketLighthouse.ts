@@ -39,6 +39,14 @@ const DAY_MS = 24 * HOUR_MS;
 /** Aggregates over a day or more of rows: one fill per window, however many tabs open the modal. */
 const CACHE_MS = 5 * 60_000;
 /**
+ * The week's window, and the 30-day signals, move by a few minutes' reads in a week's: refilled
+ * every 15 minutes rather than 5. Its fill is the Lighthouse's heaviest (a dozen aggregates over a
+ * week of TokenSage reads, 7-13 s on production's database, mostly waiting on disk), and every
+ * one of them held the database busy for whatever else was loading.
+ */
+const LONG_WINDOW_CACHE_MS = 15 * 60_000;
+const cacheMsFor = (days: number) => (days >= 7 ? LONG_WINDOW_CACHE_MS : CACHE_MS);
+/**
  * How long past CACHE_MS an answer may still be served while its refill runs. keepWarm() normally
  * refills well inside CACHE_MS; this only covers a refill that is slow or failing, and past it a
  * reader waits rather than read something older.
@@ -666,12 +674,18 @@ export type MarketLighthouse = Omit<WindowLighthouse, "screened"> & {
  */
 export function createLighthouseCache() {
   const caches = new Map<number, SharedCache<WindowLighthouse>>();
-  const hoursCache = new SharedCache<ScreenedHourRow[]>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
+  const hoursCache = new SharedCache<ScreenedHourRow[]>(CACHE_MS, {
+    staleWhileRevalidateMs: STALE_MS,
+    name: "lighthouse screened hours",
+  });
   const hourCaches = new Map<string, SharedCache<ScreenedByHourOfDay>>();
   const windowCache = (days: number) => {
     let cache = caches.get(days);
     if (!cache) {
-      cache = new SharedCache<WindowLighthouse>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
+      cache = new SharedCache<WindowLighthouse>(cacheMsFor(days), {
+        staleWhileRevalidateMs: STALE_MS,
+        name: `lighthouse ${days}d`,
+      });
       // Bounded by the schema: one per LIGHTHOUSE_WINDOWS.
       caches.set(days, cache);
     }
@@ -681,7 +695,10 @@ export function createLighthouseCache() {
   const signalCache = (days: number) => {
     let cache = signalCaches.get(days);
     if (!cache) {
-      cache = new SharedCache<LighthouseSignals>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
+      cache = new SharedCache<LighthouseSignals>(cacheMsFor(days), {
+        staleWhileRevalidateMs: STALE_MS,
+        name: `lighthouse signals ${days}d`,
+      });
       // Bounded by the schema: one per SIGNAL_WINDOWS outside LIGHTHOUSE_WINDOWS.
       signalCaches.set(days, cache);
     }
@@ -709,14 +726,15 @@ export function createLighthouseCache() {
   /**
    * Starts a refill of every window, and of the hourly rows, whose answer is due or missing; a
    * fresh one, or one already filling, is left alone. One window at a time, so the refills never
-   * hold more than one window's queries on the pool. Never rejects.
+   * hold more than one window's queries on the pool. `aheadMs` also refills one expiring within
+   * that long (SharedCache.warm). Never rejects.
    */
-  const keepWarm = async (env: Env): Promise<void> => {
+  const keepWarm = async (env: Env, aheadMs = 0): Promise<void> => {
     for (const days of LIGHTHOUSE_WINDOWS)
-      await windowCache(days).warm(() => buildMarketLighthouse(env, days));
-    await hoursCache.warm(screenedHours);
+      await windowCache(days).warm(() => buildMarketLighthouse(env, days), aheadMs);
+    await hoursCache.warm(screenedHours, aheadMs);
     for (const days of SIGNAL_WINDOWS)
-      if (!isFullWindow(days)) await signalCache(days).warm(() => buildLighthouseSignals(days));
+      if (!isFullWindow(days)) await signalCache(days).warm(() => buildLighthouseSignals(days), aheadMs);
   };
   return Object.assign(read, { keepWarm, signals });
 }

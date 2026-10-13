@@ -15,9 +15,11 @@ import {
   firstCallOnRowSql,
   notRetiredModelSql,
   type Env,
+  type MarketRow,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
-import { SharedCache } from "../sharedCache.js";
+import { cacheReport, SharedCache } from "../sharedCache.js";
+import { marketCounts } from "../marketRows.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { exportQuerySchema, exportWindow, startExport } from "./statsExport.js";
 import { buildScreenFunnel, SCREEN_FUNNEL_MAX_HOURS } from "../screenFunnel.js";
@@ -274,7 +276,14 @@ export async function baselineRates(
   targets: Targets,
   /** The window's end; open (up to now) unless given, as the leaderboard reads it. */
   until?: Date,
+  /** The market's rows over the window when the caller holds them (marketRows.ts); read here otherwise. */
+  rows?: readonly MarketRow[] | null,
 ): Promise<GradedRates> {
+  if (rows) {
+    // The baseline never carried a simulated return; leave it off so the answer stays the same shape.
+    const { sim_calls: _calls, sim_sum: _sum, ...counts } = marketCounts(rows);
+    return withRates(toCounts(counts), targets);
+  }
   const [row] = await prisma.$queryRaw<RawCounts[]>`
     SELECT count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
@@ -418,6 +427,19 @@ export async function registerStatsRoutes(
         uptimeSeconds: Math.round(process.uptime()),
         routes: opts.timings?.summary() ?? [],
       };
+    },
+  );
+
+  /**
+   * The shared report caches (sharedCache.ts cacheReport): each one's TTL, how old its answer is,
+   * how long its fills take, and how often a reader waited on one. Per process, since its start.
+   */
+  app.get(
+    "/caches",
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      return { uptimeSeconds: Math.round(process.uptime()), caches: cacheReport() };
     },
   );
 
