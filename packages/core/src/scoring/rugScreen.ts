@@ -45,10 +45,10 @@ export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
 /**
  * At or above this many of the top-25 holders (pools aside) linked (one funder paid for them, or
  * they funded each other: core's linkedWallets, linkedWalletCount), a token is never alerted (user
- * decision 2026-10-13, "15/20", carried to the top 25 as 19/25, the same 75%). Banked rows carry it
+ * decision 2026-10-13, "15/20", then 20/25 on the top 25). Banked rows carry it
  * as the linkedWalletCount feature since 2026-10-13; older rows have none and pass.
  */
-export const SAFETY_REJECT_LINKED_COUNT = 19;
+export const SAFETY_REJECT_LINKED_COUNT = 20;
 export const SAFETY_REJECT_CEX_FUNDED_PCT = 85;
 
 /**

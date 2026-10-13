@@ -601,8 +601,8 @@ export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
-/** SAFETY_REJECT_LINKED_COUNT: 19 or more of the top 25 holders (pools aside) linked fails. */
-export const SAFETY_REJECT_LINKED_COUNT = 19;
+/** SAFETY_REJECT_LINKED_COUNT: 20 or more of the top 25 holders (pools aside) linked fails. */
+export const SAFETY_REJECT_LINKED_COUNT = 20;
 /** SAFETY_REJECT_CEX_FUNDED_COUNT: 17 or more of the top 20 holders funded from an exchange fails. */
 export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
 

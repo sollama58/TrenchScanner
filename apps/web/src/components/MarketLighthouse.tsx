@@ -866,7 +866,7 @@ function Screened({
   const latest = buckets.length - 1;
   const shown = hover !== null && hover <= latest ? hover : latest;
   const focus = buckets[shown];
-  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty and under ${s.checks.sniperWalletRejectPct ?? 80}% launch-sniper top-10 wallets, top 10 owning under ${s.checks.top10HolderRejectPct ?? 40}%, under ${s.checks.linkedRejectCount ?? 19} of the top 25 linked and under ${s.checks.cexFundedRejectCount ?? 17} funded from an exchange${(s.checks.minPreBondSeconds ?? 5) > 0 ? `, bonding curve not filled inside ${s.checks.minPreBondSeconds ?? 5}s of launch` : ""}) and looks ready to decide on.`;
+  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty and under ${s.checks.sniperWalletRejectPct ?? 80}% launch-sniper top-10 wallets, top 10 owning under ${s.checks.top10HolderRejectPct ?? 40}%, under ${s.checks.linkedRejectCount ?? 20} of the top 25 linked and under ${s.checks.cexFundedRejectCount ?? 17} funded from an exchange${(s.checks.minPreBondSeconds ?? 5) > 0 ? `, bonding curve not filled inside ${s.checks.minPreBondSeconds ?? 5}s of launch` : ""}) and looks ready to decide on.`;
 
   return (
     <section className="lh-section lh-screened">
@@ -1223,7 +1223,7 @@ function PreChecks({ s }: { s: ScreenedData }) {
           </li>
           <li>The top 10 holders own under {c.top10HolderRejectPct ?? 40}% of supply, pool aside.</li>
           <li>
-            Under {c.linkedRejectCount ?? 19} of the top 25 holders linked (one funder, or funded each other).
+            Under {c.linkedRejectCount ?? 20} of the top 25 holders linked (one funder, or funded each other).
           </li>
           <li>Under {c.cexFundedRejectCount ?? 17} of the top 20 holders funded from an exchange.</li>
           {(c.minPreBondSeconds ?? 5) > 0 && (

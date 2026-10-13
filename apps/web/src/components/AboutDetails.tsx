@@ -121,7 +121,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             </tr>
             <tr>
               <td>Linked top-25 holders (pool aside)</td>
-              <td>19 of 25 or more</td>
+              <td>20 of 25 or more</td>
             </tr>
             <tr>
               <td>Top-20 holders funded from an exchange</td>

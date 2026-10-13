@@ -97,7 +97,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 25,
         label: "Max linked top holders",
-        hint: "of the 25 largest holders (pool aside), how many one funder paid for, or that funded each other; 19 and over is always rejected; tokens not checked yet wait",
+        hint: "of the 25 largest holders (pool aside), how many one funder paid for, or that funded each other; 20 and over is always rejected; tokens not checked yet wait",
         unit: "of 25",
         step: 1,
       },
