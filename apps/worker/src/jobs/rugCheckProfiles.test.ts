@@ -111,6 +111,24 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("takes a mint's own TTL when given one per mint", async () => {
+    const [young, other] = [mint("ttl-young"), mint("ttl-other")];
+    const { client, calls } = fakeClient({
+      [young]: { status: "found", profile: profile(young, 1) },
+      [other]: { status: "found", profile: profile(other, 2) },
+    });
+    await resolveRugProfiles([young, other], client, 5);
+    await prisma.rugCheckCache.updateMany({
+      where: { mintAddress: { in: [young, other] } },
+      data: { checkedAt: new Date(Date.now() - 2 * 60_000) },
+    });
+    calls.length = 0;
+
+    const again = await resolveRugProfiles([young, other], client, (m) => (m === young ? 1 : 5));
+    expect(calls.flat()).toEqual([young]);
+    expect(again.stats).toMatchObject({ cached: 1, fetched: 1 });
+  });
+
   it("caches a genuine 'no report' so a brand-new mint isn't re-requested every cycle", async () => {
     // The busiest case, not the rarest: a mint RugCheck hasn't indexed yet is exactly the kind
     // that keeps turning up in band cycle after cycle.

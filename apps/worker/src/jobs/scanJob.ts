@@ -87,6 +87,7 @@ import {
 } from "./launchSnipers.js";
 import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
+import { noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
 import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
 import type { JobRunMeta } from "../scheduler.js";
@@ -654,10 +655,11 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
   // Cached with a short TTL so the scan cadence and RugCheck's request rate are independent -
   // see resolveRugProfiles. This is what makes a one-minute scan interval affordable.
+  // A young coin failing a holder cut is re-read every minute (see youngHolderRecheck.ts).
   const { profiles: rugProfiles } = await resolveRugProfiles(
     candidates.map((c) => c.mintAddress),
     deps.rugCheck,
-    env.RUGCHECK_CACHE_TTL_MINUTES,
+    rugCheckTtlFor(env.RUGCHECK_CACHE_TTL_MINUTES),
     env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
     { refreshStaleInBackground: true },
   );
@@ -1860,6 +1862,7 @@ async function processCandidate(
     .filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()))
     .map((d) => d.getTime());
   const createdAt = ageAnchors.length > 0 ? new Date(Math.min(...ageAnchors)) : undefined;
+  noteHolderCutVerdict(candidate.mintAddress, onChain, createdAt);
 
   // First sighting inside the curated band, stamped once and kept - the anchor for the
   // minutesSinceFirstInBand feature.

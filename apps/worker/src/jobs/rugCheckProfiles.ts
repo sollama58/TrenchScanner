@@ -156,7 +156,8 @@ async function fetchAndCache(
 export async function resolveRugProfiles(
   mintAddresses: string[],
   rugCheck: RugCheckClient,
-  ttlMinutes: number,
+  /** One TTL for every mint, or a mint's own (a young coin failing a holder cut - see youngHolderRecheck.ts). */
+  ttlMinutes: number | ((mintAddress: string) => number),
   /** Most network lookups this call makes - see the budget note below. */
   maxLookups: number = Infinity,
   opts: { refreshStaleInBackground?: boolean; awaitDeadlineMs?: number } = {},
@@ -170,11 +171,12 @@ export async function resolveRugProfiles(
 
   // Every cached row, stale ones included: past the lookup budget a stale answer stands in.
   const rows = await prisma.rugCheckCache.findMany({ where: { mintAddress: { in: unique } } });
-  const ttlCutoff = Date.now() - ttlMinutes * 60_000;
-  const fresh = rows.filter((r) => r.checkedAt.getTime() > ttlCutoff);
-  const staleRows = new Map(
-    rows.filter((r) => r.checkedAt.getTime() <= ttlCutoff).map((r) => [r.mintAddress, r]),
-  );
+  const asOf = Date.now();
+  const ttlOf = typeof ttlMinutes === "number" ? () => ttlMinutes : ttlMinutes;
+  const isFresh = (r: { mintAddress: string; checkedAt: Date }) =>
+    r.checkedAt.getTime() > asOf - ttlOf(r.mintAddress) * 60_000;
+  const fresh = rows.filter(isFresh);
+  const staleRows = new Map(rows.filter((r) => !isFresh(r)).map((r) => [r.mintAddress, r]));
 
   const hit = new Set<string>();
   for (const row of fresh) {
