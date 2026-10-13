@@ -50,6 +50,7 @@ function buildFilterInputSchema(env: Env) {
     maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxSniperTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxLinkedWalletPct: z.number().min(0).max(100).nullable().optional(),
+    maxFlaggedBuySol: z.number().min(0).max(10_000).nullable().optional(),
     minFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
     maxFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
     // TokenSage narrative criteria (core matchFilters.ts). Labels are TokenSage's own slugs, a

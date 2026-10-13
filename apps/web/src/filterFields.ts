@@ -99,6 +99,15 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxFlaggedBuySol",
+        min: 0,
+        max: 100,
+        label: "Max SOL bought by flagged wallets",
+        hint: "risky wallets and known dumpers in the coin's newest trades, read before the call; tokens not read yet wait",
+        unit: "SOL",
+        step: 0.1,
+      },
+      {
         key: "minFirstBuyersHolding",
         min: 0,
         max: 25,

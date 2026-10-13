@@ -267,6 +267,9 @@ model UserFilter {
   /// Max % of supply held by linked top holders: wallets one funder paid for, or that funded each
   /// other (TokenSnapshot.linkedWalletPct, core's wallets/linkedWallets.ts). Skipped while unknown.
   maxLinkedWalletPct         Float?
+  /// Max SOL flagged wallets (risky or known dumpers) bought in the coin's newest trades
+  /// (TokenSnapshot.flaggedBuySol, core's wallets/liveFlags.ts). Skipped while unknown.
+  maxFlaggedBuySol           Float?
   /// Bounds on how many of the launch's first 25 buyers still hold it (TokenSnapshot.firstBuyersHolding).
   minFirstBuyersHolding      Int?
   maxFirstBuyersHolding      Int?
@@ -977,6 +980,15 @@ model TokenSnapshot {
   linkedLargestClusterPct Float?
   linkedCreatorPct        Float?
   linkedClusters          Json?
+  // Flagged wallets (risky or known dumpers) in the coin's newest page of trades, read from Helius
+  // before the decision (core's wallets/liveFlags.ts, worker's liveTape.ts): distinct buyers and
+  // sellers and the SOL each way. flaggedTrades keeps the trades themselves (wallet, side, SOL,
+  // time, score, dumps) for the modal; null when there are none. Null without a recent page.
+  flaggedBuyers           Int?
+  flaggedSellers          Int?
+  flaggedBuySol           Float?
+  flaggedSellSol          Float?
+  flaggedTrades           Json?
   // How many holders the two percentages above were computed over. The list is "top 10" by
   // intent, not by guarantee - pool and LP addresses are excluded from it - so a card that wants
   // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots
