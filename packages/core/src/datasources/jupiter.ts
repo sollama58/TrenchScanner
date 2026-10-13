@@ -48,6 +48,13 @@ const BATCH_SIZE = 100;
 /** The free plan allows 60 calls a minute per account; this leaves a little room. */
 export const DEFAULT_JUPITER_REQUESTS_PER_MINUTE = 50;
 const GATE_BURST = 5;
+/**
+ * Of that burst, the slots only the scan's own reads (`priority`: the band refresh's launch prices
+ * and the decision's fresh quotes) may take. The outcome watcher, wallet valuation and the
+ * band-entry checks share this budget, and on 2026-10-13 a cycle's fresh quotes queued up to 2.5 s
+ * behind them - every decision in that cycle waiting with them.
+ */
+export const JUPITER_PRIORITY_RESERVE = 2;
 
 export interface JupiterClientOptions {
   apiKey: string;
@@ -76,6 +83,7 @@ export class JupiterClient {
       name: "jupiter",
       perMinute: options.requestsPerMinute ?? DEFAULT_JUPITER_REQUESTS_PER_MINUTE,
       burst: GATE_BURST,
+      reserve: JUPITER_PRIORITY_RESERVE,
     });
   }
 
@@ -120,7 +128,7 @@ export class JupiterClient {
     const found = await this.search(
       mintAddresses,
       options.concurrency ?? 3,
-      { deadlineMs: options.deadlineMs, timeoutMs: options.deadlineMs, retries: 0 },
+      { deadlineMs: options.deadlineMs, timeoutMs: options.deadlineMs, retries: 0, priority: true },
       (body, requested) => parseJupiterQuotes(body, requested),
     );
     return new Map(
@@ -134,7 +142,7 @@ export class JupiterClient {
     options: Omit<TokenLookupOptions, "seenAt">,
     parse: (body: unknown, requested: Set<string>) => T[],
   ): Promise<{ token: T; answered: Date }[]> {
-    const { deadlineMs, failed, priority: _priority, mayBeUnindexed: _unindexed, ...fetchOptions } = options;
+    const { deadlineMs, failed, priority, mayBeUnindexed: _unindexed, ...fetchOptions } = options;
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
     const chunks: string[][] = [];
@@ -142,7 +150,7 @@ export class JupiterClient {
 
     const deadline = deadlineMs === undefined ? Infinity : Date.now() + deadlineMs;
     const gate = {
-      acquire: () => this.gate.acquire(deadline),
+      acquire: () => this.gate.acquire(deadline, priority === true),
       throttled: (delayMs: number) => this.gate.throttled(delayMs),
     };
     const results: { token: T; answered: Date }[] = [];

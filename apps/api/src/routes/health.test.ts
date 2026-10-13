@@ -124,18 +124,19 @@ describe("public worker health: snipers share reads", () => {
 
 /** Who priced the newest launches, and the band-entry checks between cycles, reach it too. */
 describe("public worker health: live launch prices and band-entry checks", () => {
-  it("carries the scan's liveLaunchQuotes and bandEntryWatch counts", () => {
+  it("carries the scan's liveLaunchQuotes, bandEntryWatch and rugCheckLookups counts", () => {
     const liveLaunchQuotes = { asked: 40, jupiter: 38, backupAsked: 2, backup: 1, unpriced: 1 };
     const bandEntryWatch = { checks: 4, wakes: 1, newLaunchWakes: 1 };
+    const rugCheckLookups = { requested: 600, cached: 560, fetched: 12, failed: 1, timedOut: 1, reused: 27 };
     const row = {
       job: "scan",
       lastRunAt: new Date(1_000),
       lastSuccessAt: null,
       lastError: null,
-      meta: { durationMs: 900, liveLaunchQuotes, bandEntryWatch },
+      meta: { durationMs: 900, liveLaunchQuotes, bandEntryWatch, rugCheckLookups },
     };
     const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
-    expect(s.lastRun).toMatchObject({ liveLaunchQuotes, bandEntryWatch });
+    expect(s.lastRun).toMatchObject({ liveLaunchQuotes, bandEntryWatch, rugCheckLookups });
   });
 });
 
