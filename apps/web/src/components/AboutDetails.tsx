@@ -102,7 +102,9 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <td>The launch used it</td>
             </tr>
             <tr>
-              <td>Fresh top-10 wallets</td>
+              <td>
+                Fresh top-10 wallets (first used, or used again after a week or more idle, in the last day)
+              </td>
               <td>Over 70%</td>
             </tr>
             <tr>

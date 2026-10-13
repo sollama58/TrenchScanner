@@ -1212,7 +1212,10 @@ function PreChecks({ s }: { s: ScreenedData }) {
           <li>Mint and freeze authority renounced, so supply can&apos;t be inflated or holders frozen.</li>
           <li>Liquidity burned or locked on its own pool, so it can&apos;t be pulled.</li>
           <li>Not a Pump.fun Mayhem Mode token, whose early trading is run by bots.</li>
-          <li>No more than {c.freshWalletMaxPct}% of the top 10 holders on wallets under a day old.</li>
+          <li>
+            No more than {c.freshWalletMaxPct}% of the top 10 holders on fresh wallets: first used, or used
+            again after a week or more idle, in the last day.
+          </li>
           <li>Under {c.emptyWalletRejectPct}% of the top 10 holders on otherwise empty wallets.</li>
           <li>
             Under {c.sniperWalletRejectPct ?? 80}% of the top 10 holders being the launch&apos;s first 25

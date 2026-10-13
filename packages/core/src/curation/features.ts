@@ -727,7 +727,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   firstBuyersSupplyPct: "first 25 buyers' share of supply",
   launchBundledBuyers: "buyers bundled with the launch",
   devBuySupplyPct: "dev's launch buy, % of supply",
-  freshLaunchBuyerPct: "launch buyers on brand-new wallets",
+  freshLaunchBuyerPct: "launch buyers on fresh wallets",
   devHolding: "dev still holding",
   textCopycatRisk: "copycat name",
   textNarrativeStrength: "narrative strength",
