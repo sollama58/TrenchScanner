@@ -520,8 +520,8 @@ function ChartCard({
   what: string;
 }) {
   const utility = useContext(UtilityContext);
-  // A lookup has no alert to start from: it opens on the coin's whole history.
-  const [range, setRange] = useState<Range>(utility ? "all" : "alert");
+  // A lookup has no call to look around or start from: it opens on the coin's whole history.
+  const [range, setRange] = useState<Range>(utility ? "all" : "model");
   const [hidden, setHidden] = useState<ReadonlySet<MarkerKind>>(() => new Set());
   const [height, setHeight] = useState(() => (window.innerWidth <= 640 ? 210 : 260));
   useEffect(() => {
@@ -607,7 +607,7 @@ function ChartCard({
             </span>
           )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
-            {RANGES.map((r) => (
+            {RANGES.filter((r) => !utility || r.id !== "model").map((r) => (
               <button
                 key={r.id}
                 type="button"
