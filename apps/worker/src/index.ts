@@ -133,7 +133,9 @@ async function main() {
     // The newest launches' live prices in the band refresh: Jupiter, CoinGecko for what it misses.
     liveLaunches: jupiter ? new LiveLaunchQuotes(jupiter, geckoTerminal) : undefined,
     // Starts the scan early when a young launch crosses into the band between cycles.
-    bandEntryWatch: jupiter ? new BandEntryWatch(jupiter, env.MCAP_FILTER_MIN) : undefined,
+    bandEntryWatch: jupiter
+      ? new BandEntryWatch(jupiter, env.MCAP_FILTER_MIN, () => stream?.pendingLaunches() ?? [])
+      : undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     stream,

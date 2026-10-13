@@ -233,6 +233,18 @@ export class PumpPortalStream {
     return events;
   }
 
+  /**
+   * The launches created since the last drain, newest first, left buffered for the scan: what
+   * BandEntryWatch checks between cycles, since a launch that crosses $10k in its first seconds
+   * would otherwise wait for the next cycle to be noticed at all.
+   */
+  pendingLaunches(): string[] {
+    return [...this.buffer.values()]
+      .filter((e) => e.kind === "create")
+      .map((e) => e.mintAddress)
+      .reverse();
+  }
+
   /** Visible for tests: what an incoming message does. */
   handleMessage(raw: string, at: number = Date.now()): void {
     if (this.book) {

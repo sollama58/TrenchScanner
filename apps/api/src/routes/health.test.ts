@@ -122,6 +122,23 @@ describe("public worker health: snipers share reads", () => {
   });
 });
 
+/** Who priced the newest launches, and the band-entry checks between cycles, reach it too. */
+describe("public worker health: live launch prices and band-entry checks", () => {
+  it("carries the scan's liveLaunchQuotes and bandEntryWatch counts", () => {
+    const liveLaunchQuotes = { asked: 40, jupiter: 38, backupAsked: 2, backup: 1, unpriced: 1 };
+    const bandEntryWatch = { checks: 4, wakes: 1, newLaunchWakes: 1 };
+    const row = {
+      job: "scan",
+      lastRunAt: new Date(1_000),
+      lastSuccessAt: null,
+      lastError: null,
+      meta: { durationMs: 900, liveLaunchQuotes, bandEntryWatch },
+    };
+    const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
+    expect(s.lastRun).toMatchObject({ liveLaunchQuotes, bandEntryWatch });
+  });
+});
+
 /** A run that did nothing says why, so a reviewer with no key doesn't read as a healthy success. */
 describe("public worker health: skipped runs", () => {
   it("carries the job's skipped reason", () => {
