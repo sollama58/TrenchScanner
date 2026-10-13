@@ -88,6 +88,8 @@ export interface CuratorTrainingConfig {
   runWeightPerDoubling?: number;
   /** Fewest wins a judged exam fold must hold (env CURATOR_EXAM_MIN_FOLD_WINS). */
   minTestWins?: number;
+  /** The share of decision moments, newest first, the exam grades (env CURATOR_EXAM_SHARE). Default 0.5. */
+  examShare?: number;
   /**
    * The confidence rank above which a call is tiered "high conviction" (env
    * CURATED_HIGH_CONVICTION_RANK): 0.995 = the top half-percent of decision moments. Omitted =
@@ -473,6 +475,7 @@ async function sitRecipeExam(
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
     minTestWins: cfg.minTestWins,
+    examShare: cfg.examShare,
   });
   // Calibrated in RANK units: each fold model and the shipped model put probabilities on their
   // own scales, so a raw probability that hit 75% on the fold models says nothing about the

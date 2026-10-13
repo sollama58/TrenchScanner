@@ -777,6 +777,12 @@ model CandidateOutcome {
   /// The row's rule-3 grade (anchor, aggregates, labels) as it was before the re-grade replaced
   /// it - enough to read the two side by side, or to put it back.
   rule3Grade     Json?
+  /// The rule-4 re-grade of a row that keeps its rule-3 grade because a curated alert's published
+  /// verdict was copied from it (labelRegradeJob.ts): the same fields the re-grade writes on other
+  /// rows, plus freshGapPct. Training and the exam read it in place of the row's own grade
+  /// (trainingGradeOf in curatorTrainingJob.ts), so the moments the models called are graded on
+  /// the same rule as the moments they passed on. Null everywhere else.
+  rule4Grade     Json?
 
   /// The feature vector at the anchor, as {name: number|null} - a denormalized copy of what the
   /// snapshot knew, NOT a snapshot reference, so training data outlives the 30-day

@@ -48,6 +48,7 @@ import {
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
+import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
@@ -381,11 +382,16 @@ async function main() {
         // is a retrain nobody asked for, and while the scanner and trainer were one process it
         // landed on the cold first scan cycles too. The first run waits for the slot the last
         // finished run set - read from the heartbeat row, so a redeploy keeps the cadence.
-        firstRunDelayMs: async () => {
-          const last = await lastHeartbeatAt("curator-training");
-          if (!last) return 0;
-          return last.getTime() + env.CURATOR_TRAINING_INTERVAL_HOURS * 3_600_000 - Date.now();
-        },
+        // A run a deploy cut short is redone shortly after boot (trainingFirstRunDelayMs).
+        firstRunDelayMs: async () =>
+          trainingFirstRunDelayMs(
+            await prisma.systemHeartbeat.findUnique({
+              where: { job: "curator-training" },
+              select: { lastRunAt: true, lastError: true, meta: true },
+            }),
+            env.CURATOR_TRAINING_INTERVAL_HOURS * 3_600_000,
+            Date.now(),
+          ),
       },
     ),
   );

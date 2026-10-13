@@ -1206,7 +1206,7 @@ export interface WalkForwardResult {
   outOfSampleRanks: ScoredOutcome[];
   /**
    * The rows the ranks were measured against: every emittable test row of every judged fold
-   * (the newest half of the history). thresholdAtRank scores these with the shipped model.
+   * (the newest examShare of the history). thresholdAtRank scores these with the shipped model.
    */
   decisionReference: TrainingRow[];
   /**
@@ -1233,7 +1233,7 @@ export interface ExamPopulation {
   /** Decision rows the exam could grade (in band, current label rule), and how many were pseudo-events. */
   decisionRows: number;
   pseudoRows: number;
-  /** Wins in the newest half of the event rows alone, against the floor the folds needed. */
+  /** Wins in the exam share (newest examShare) of the event rows alone, against the floor the folds needed. */
   eventWinsNewestHalf: number;
   eventWinsNeeded: number;
 }
@@ -1241,6 +1241,11 @@ export interface ExamPopulation {
 export interface WalkForwardOptions {
   /** How many sequential test folds to carve out of the newest part of the history. */
   folds?: number;
+  /**
+   * The share of the decision rows, newest first, that the test folds tile. Default 0.5; the
+   * rest only ever trains.
+   */
+  examShare?: number;
   /** A fold whose training slice is thinner than this is skipped as meaningless. */
   minTrainRows?: number;
   /** A fold whose test slice is thinner than this is skipped as noise. */
@@ -1400,15 +1405,16 @@ export async function walkForwardEvaluate(
     (!opts.decisionRowsOnly || isDecisionRow(r, opts.mcapBand)) &&
     (!currentRuleOnly || isCurrentLabelRule(r));
 
-  // The folds tile the newest half of the DECISION rows, not of every row: the exam grades
+  // The folds tile the newest examShare of the DECISION rows, not of every row: the exam grades
   // decision moments, and when those are a thin, recent slice of a window dominated by hourly
   // background samples (or by legacy-rule rows), tiling every row put them all in the last fold
   // and left the others with nothing to grade. Rows that are not decision rows still train every
   // fold they precede.
   // Event rows alone when they can fill every fold (see ExamPopulation); pseudo-events only
   // while they can't. Rows with no sampleKind (tests, offline scripts) count as events.
+  const examShare = Math.min(0.9, Math.max(0.1, opts.examShare ?? 0.5));
   const winsNewestHalf = (list: TrainingRow[]) =>
-    list.slice(Math.floor(list.length * 0.5)).filter((r) => r.labelValue > 0).length;
+    list.slice(Math.floor(list.length * (1 - examShare))).filter((r) => r.labelValue > 0).length;
   const withPseudo = sorted.filter(inBand);
   const eventsOnly = withPseudo.filter((r) => r.sampleKind !== "hourly");
   const eventWinsNewestHalf = winsNewestHalf(eventsOnly);
@@ -1448,10 +1454,10 @@ export async function walkForwardEvaluate(
   const scoredFolds: ScoredFold[] = [];
 
   if (sorted.length >= minTrainRows + minTestRows && decisionSorted.length > 0) {
-    // Test folds tile the newest 50% of the decision rows; everything anchored before a fold's
+    // Test folds tile the newest examShare of the decision rows; everything anchored before a fold's
     // first row is its training floor. Each later fold trains on strictly more history,
     // mirroring how the training job will actually behave as data accumulates.
-    const testStartIndex = Math.floor(decisionSorted.length * 0.5);
+    const testStartIndex = Math.floor(decisionSorted.length * (1 - examShare));
     const testRowsTotal = decisionSorted.length - testStartIndex;
     const perFold = Math.floor(testRowsTotal / foldCount);
 

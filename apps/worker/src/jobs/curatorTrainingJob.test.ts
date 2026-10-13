@@ -21,6 +21,7 @@ import {
   withFixedShape,
   withoutEventTwins,
   runPeakOf,
+  trainingGradeOf,
 } from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
@@ -398,6 +399,56 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     expect(
       rows.map((r) => `${r.sampleKind}@${(r.anchorAt.getTime() - windowStart.getTime()) / 60_000}`),
     ).toEqual(["event@3", "hourly@1"]);
+  });
+});
+
+describe("trainingGradeOf", () => {
+  const base = {
+    labelValue: 1.2,
+    labelRule: 3,
+    anchorPriceUsd: 1,
+    signalPriceUsd: 1,
+    anchorMcapUsd: 10_000,
+    maxDrawdown1hPct: -10,
+    peak1hReturnPct: 150,
+    peakBeforeStopPriceUsd: 2.5,
+    hit10xIn1h: false,
+    features: { mcapUsd: 10_000 },
+  };
+
+  it("reads an alerted row's rule-4 grade in place of its published rule-3 one", () => {
+    const g = trainingGradeOf({
+      ...base,
+      rule4Grade: {
+        labelValue: 0,
+        anchorPriceUsd: 1.6,
+        signalPriceUsd: 1.6,
+        anchorMcapUsd: 16_000,
+        maxDrawdown1hPct: -60,
+        peak1hReturnPct: 40,
+        peakBeforeStopPriceUsd: null,
+        hit10xIn1h: false,
+        freshGapPct: 60,
+      },
+    });
+    expect(g).toMatchObject({
+      labelRule: 4,
+      labelValue: 0,
+      anchorPriceUsd: 1.6,
+      anchorMcapUsd: 16_000,
+      maxDrawdown1hPct: -60,
+      peakBeforeStopPriceUsd: null,
+      features: { mcapUsd: 10_000, freshGapPct: 60 },
+    });
+  });
+
+  it("leaves rows without one, and rows already on rule 4, as they are", () => {
+    const plain = { ...base, rule4Grade: null };
+    expect(trainingGradeOf(plain)).toBe(plain);
+    const born4 = { ...base, labelRule: 4, rule4Grade: { labelValue: 0, anchorPriceUsd: 2 } };
+    expect(trainingGradeOf(born4)).toBe(born4);
+    const broken = { ...base, rule4Grade: { anchorPriceUsd: 2 } };
+    expect(trainingGradeOf(broken)).toBe(broken);
   });
 });
 
