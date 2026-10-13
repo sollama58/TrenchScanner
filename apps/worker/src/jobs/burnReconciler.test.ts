@@ -1,5 +1,13 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { prisma, type Env, type SolanaRpc } from "@trenchscanner/core";
+import {
+  BURN_CREDIT_MEMO,
+  prisma,
+  SPL_TOKEN_PROGRAM_ID,
+  SUBSCRIPTION_MINT,
+  SUBSCRIPTION_RAW_PER_MONTH,
+  type Env,
+  type SolanaRpc,
+} from "@trenchscanner/core";
 import { reconcileBurns } from "./burnReconciler.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -214,5 +222,62 @@ describe.skipIf(!dbAvailable)("reconcileBurns: cold-start backfill", () => {
     expect(cursor.backfillBefore).toBe("sig-9999");
     expect(cursor.scanFloor).not.toBeNull();
     expect(cursor.scanFloor!.getTime()).toBeLessThan(Date.now() - 0.9 * DAY);
+  });
+});
+
+describe.skipIf(!dbAvailable)("reconcileBurns: Burn Credits burns", () => {
+  const env = { BURN_SCAN_COLD_START_DAYS: 400 } as Env;
+  const RUN = Date.now();
+  const WALLET = `ReconcileCreditWallet${RUN}`;
+  const SIG = `ReconcileCreditSig${RUN}`;
+
+  afterAll(async () => {
+    await prisma.burnCreditEntry.deleteMany({ where: { wallet: WALLET } });
+    await prisma.burnEvent.deleteMany({ where: { burnerWallet: WALLET } });
+    await prisma.burnScanCursor.deleteMany({ where: { id: "burn-scan" } });
+  });
+
+  it("puts a memo-tagged burn in the credit ledger and buys no months with it", async () => {
+    await prisma.burnScanCursor.deleteMany({ where: { id: "burn-scan" } });
+    // Two months' worth of tokens: without the memo this would be a subscription burn.
+    const amount = (SUBSCRIPTION_RAW_PER_MONTH * 2n).toString();
+    const rpc = {
+      async getSignaturesForAddress() {
+        return [{ signature: SIG, blockTime: Math.floor(Date.now() / 1000), err: null }];
+      },
+      async getParsedTransactions(sigs: string[]) {
+        return new Map(
+          sigs.map((s) => [
+            s,
+            {
+              slot: 1,
+              blockTime: Math.floor(Date.now() / 1000),
+              transaction: {
+                signatures: [s],
+                message: {
+                  instructions: [
+                    {
+                      program: "spl-token",
+                      programId: SPL_TOKEN_PROGRAM_ID,
+                      parsed: { type: "burn", info: { mint: SUBSCRIPTION_MINT, authority: WALLET, amount } },
+                    },
+                    { program: "spl-memo", parsed: BURN_CREDIT_MEMO },
+                  ],
+                },
+              },
+              meta: { err: null },
+            },
+          ]),
+        );
+      },
+    } as unknown as SolanaRpc;
+
+    const result = await reconcileBurns(env, rpc);
+    expect(result.creditBurns).toBe(1);
+    expect(result.burnsFound).toBe(0);
+    expect(await prisma.burnEvent.count({ where: { burnerWallet: WALLET } })).toBe(0);
+    const entry = await prisma.burnCreditEntry.findUniqueOrThrow({ where: { burnSignature: SIG } });
+    expect(entry.wallet).toBe(WALLET);
+    expect(entry.delta).toBeGreaterThan(0);
   });
 });

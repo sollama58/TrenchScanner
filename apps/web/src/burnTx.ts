@@ -15,6 +15,8 @@ import bs58 from "bs58";
 
 export const SPL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 export const COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111111";
+/** SPL Memo v2: tags a Burn Credits burn (BURN_CREDIT_MEMO in core) so it buys credits, not months. */
+export const MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 
 /** A burnChecked costs ~4.5k compute units; this leaves room without paying for a 200k default. */
 export const BURN_COMPUTE_UNITS = 20_000;
@@ -37,6 +39,8 @@ export interface BurnTransactionInput {
   rawAmount: bigint;
   /** A recent blockhash, base58. */
   blockhash: string;
+  /** A memo to add after the burn (SPL Memo, no signer accounts): the Burn Credits tag. */
+  memo?: string;
 }
 
 function key(address: string, what: string): Uint8Array {
@@ -89,20 +93,24 @@ export function burnMessage(input: BurnTransactionInput): Uint8Array {
   const account = key(input.tokenAccount, "token account");
   const mint = key(input.mint, "mint");
   const blockhash = key(input.blockhash, "blockhash");
+  const memo = input.memo === undefined ? null : new TextEncoder().encode(input.memo);
+  if (memo !== null && (memo.length === 0 || memo.length > 200)) throw new Error("Bad memo");
   const keys = [
     owner,
     account,
     mint,
     key(COMPUTE_BUDGET_PROGRAM, "program"),
     key(SPL_TOKEN_PROGRAM, "program"),
+    ...(memo === null ? [] : [key(MEMO_PROGRAM, "program")]),
   ];
   // Duplicate keys would make the indexes below point at the wrong account; the chain would reject
   // the transaction, but better never to ask the wallet to sign it.
   if (new Set(keys.map((k) => bs58.encode(k))).size !== keys.length) throw new Error("Duplicate accounts");
 
   // Account order is the header's contract: writable signers, then writable non-signers, then
-  // read-only non-signers. Indexes: 0 owner, 1 token account, 2 mint, 3 compute budget, 4 token.
-  const header = [1, 0, 2];
+  // read-only non-signers. Indexes: 0 owner, 1 token account, 2 mint, 3 compute budget, 4 token,
+  // then 5 memo when there is one.
+  const header = [1, 0, memo === null ? 2 : 3];
   const instructions: { program: number; accounts: number[]; data: number[] }[] = [
     { program: 3, accounts: [], data: [SET_COMPUTE_UNIT_LIMIT, ...u32le(BURN_COMPUTE_UNITS)] },
     { program: 3, accounts: [], data: [SET_COMPUTE_UNIT_PRICE, ...u64le(BURN_PRIORITY_MICROLAMPORTS)] },
@@ -111,6 +119,7 @@ export function burnMessage(input: BurnTransactionInput): Uint8Array {
       accounts: [1, 2, 0],
       data: [BURN_CHECKED, ...u64le(input.rawAmount), input.decimals],
     },
+    ...(memo === null ? [] : [{ program: 5, accounts: [], data: [...memo] }]),
   ];
 
   const bytes: number[] = [...header, ...compactU16(keys.length)];

@@ -69,6 +69,8 @@ export function burnWallet(owner: string): BurnWallet | null {
 // ---- A burn sent but not yet credited, kept across reloads ----
 
 const PENDING_KEY = "ts-pending-burn";
+/** A Burn Credits burn waiting to be credited: kept apart so neither panel picks up the other's. */
+export const PENDING_CREDIT_KEY = "ts-pending-credit-burn";
 /** The reconciler credits a landed burn within minutes; past this the note is only clutter. */
 const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -84,9 +86,9 @@ export interface PendingBurn {
  * mid-burn goes back to checking on it instead of offering a fresh burn button - the moment a
  * second, unintended burn is most likely.
  */
-export function readPendingBurn(wallet: string): PendingBurn | null {
+export function readPendingBurn(wallet: string, storageKey = PENDING_KEY): PendingBurn | null {
   try {
-    const raw = localStorage.getItem(PENDING_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return null;
     const p = JSON.parse(raw) as Partial<PendingBurn>;
     if (
@@ -102,17 +104,17 @@ export function readPendingBurn(wallet: string): PendingBurn | null {
   }
 }
 
-function savePendingBurn(p: PendingBurn): void {
+function savePendingBurn(p: PendingBurn, storageKey = PENDING_KEY): void {
   try {
-    localStorage.setItem(PENDING_KEY, JSON.stringify(p));
+    localStorage.setItem(storageKey, JSON.stringify(p));
   } catch {
     // Blocked storage: the burn is still tracked for as long as this page stays open.
   }
 }
 
-export function clearPendingBurn(): void {
+export function clearPendingBurn(storageKey = PENDING_KEY): void {
   try {
-    localStorage.removeItem(PENDING_KEY);
+    localStorage.removeItem(storageKey);
   } catch {
     // Nothing was kept.
   }
@@ -139,6 +141,10 @@ export interface BurnRequest {
   decimals: number;
   rawAmount: bigint;
   months: number;
+  /** The Burn Credits tag: a burn with it buys credits instead of months (burnTx.ts). */
+  memo?: string;
+  /** Where the sent-but-not-credited burn is remembered (PENDING_CREDIT_KEY for a credits burn). */
+  pendingKey?: string;
   /** Called as the burn moves along, for the button's label. */
   onStage?: (stage: "connecting" | "preparing" | "signing" | "sending") => void;
 }
@@ -178,12 +184,13 @@ export async function sendBurn(req: BurnRequest): Promise<string> {
     decimals: req.decimals,
     rawAmount: req.rawAmount,
     blockhash,
+    memo: req.memo,
   });
 
   const features = req.wallet.wallet.features as Partial<SolanaSignTransactionFeature> &
     Partial<SolanaSignAndSendTransactionFeature>;
   const pending = (signature: string) =>
-    savePendingBurn({ signature, wallet: req.owner, months: req.months, at: Date.now() });
+    savePendingBurn({ signature, wallet: req.owner, months: req.months, at: Date.now() }, req.pendingKey);
 
   const signer = features[SolanaSignTransaction];
   if (signer) {
@@ -219,7 +226,7 @@ export async function sendBurn(req: BurnRequest): Promise<string> {
       // else - a dropped connection, a proxy's error page - may have come after the relay.
       const refused =
         e instanceof ApiError && typeof (e.body as { error?: unknown } | null)?.error === "string";
-      if (refused) clearPendingBurn();
+      if (refused) clearPendingBurn(req.pendingKey);
       else if (signature) throw new BurnUncertainError(networkLost, signature);
       throw e;
     }
@@ -262,6 +269,32 @@ export async function claimBurn(signature: string): Promise<ClaimResult> {
     if (r.status === "held")
       return { status: "held", message: r.message ?? "That burn belongs to another wallet." };
     return { status: "credited", expiresAt: r.expiresAt ?? null };
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 400) {
+      const body = e.body as { error?: unknown } | null;
+      return { status: "rejected", message: typeof body?.error === "string" ? body.error : e.message };
+    }
+    return { status: "pending" };
+  }
+}
+
+export type CreditClaimResult =
+  | { status: "credited"; balance: number; credits: number | null }
+  | { status: "pending"; message?: string }
+  | { status: "held"; message: string }
+  | { status: "rejected"; message: string };
+
+/** Asks the API to credit a Burn Credits burn (POST /utilities/claim); same rules as claimBurn. */
+export async function claimCreditBurn(signature: string): Promise<CreditClaimResult> {
+  try {
+    const r = await post<{ status: string; balance?: number; credits?: number; message?: string }>(
+      "/utilities/claim",
+      { signature },
+    );
+    if (r.status === "pending") return { status: "pending", message: r.message };
+    if (r.status === "held")
+      return { status: "held", message: r.message ?? "That burn belongs to another wallet." };
+    return { status: "credited", balance: r.balance ?? 0, credits: r.credits ?? null };
   } catch (e) {
     if (e instanceof ApiError && e.status === 400) {
       const body = e.body as { error?: unknown } | null;

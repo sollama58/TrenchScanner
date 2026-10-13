@@ -62,6 +62,7 @@ import {
   tokenSageEnabled,
 } from "../tokensage/prefetch.js";
 import { loadNarrativeReads } from "../tokensage/narrativeReads.js";
+import { noteUtilityLookups } from "../tokensage/utilityLookups.js";
 import type { PricePathSeeder } from "./pricePathSeed.js";
 import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
@@ -647,6 +648,10 @@ async function scanCycle(
     orderBy: { lastViewedAt: "desc" },
     take: env.LIVE_PRICE_MAX_TRACKED,
   });
+  // Coins looked up in the Utilities tab are among the viewed ones; each also wants a full read.
+  void noteUtilityLookups(env).catch((err: unknown) =>
+    logger.warn("failed to note looked-up tokens for TokenSage", { error: String(err) }),
+  );
   const trackedMints = new Set(tracked.map((t) => t.mintAddress));
   const viewedOffWatchlist = activelyViewed.filter((t) => !trackedMints.has(t.mintAddress));
   // When each reading below was taken, so the live figures written from them carry that time.

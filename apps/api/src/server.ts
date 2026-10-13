@@ -30,6 +30,7 @@ import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
 import { registerAdminOpsRoutes } from "./routes/adminOps.js";
+import { registerAdminCreditRoutes } from "./routes/adminCredits.js";
 import { registerAdminUsageRoutes } from "./routes/adminUsage.js";
 import { registerAdminRetrainRoutes } from "./routes/adminRetrain.js";
 import { registerAdminInsightRoutes } from "./routes/adminInsights.js";
@@ -44,6 +45,7 @@ import { registerStatsRoutes } from "./routes/stats.js";
 import { registerStatsModelRoutes } from "./routes/statsModels.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
+import { registerUtilityRoutes } from "./routes/utilities.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
@@ -510,6 +512,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerTokenRoutes, { prefix: "/tokens" });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
+  // The Utilities tab: token and wallet lookups paid for with Burn Credits.
+  await app.register(registerUtilityRoutes, { prefix: "/utilities", dexScreener, rpc, viewStamps });
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
@@ -523,6 +527,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     async (instance) => {
       instance.addHook("preHandler", instance.authenticateAdmin);
       await registerAdminSubscriptionRoutes(instance);
+      // Burn Credits: the ratio, each utility's cost, grants and the ledger.
+      await registerAdminCreditRoutes(instance);
       await registerAdminAnnouncementRoutes(instance);
     },
     { prefix: "/admin" },

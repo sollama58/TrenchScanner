@@ -11,6 +11,7 @@ import {
   ExternalIcon,
   GearIcon,
   LighthouseIcon,
+  ToolsIcon,
   LogoMark,
   LockIcon,
   LogoutIcon,
@@ -57,6 +58,8 @@ const SageHost = lazy(() => import("./components/SageView").then((m) => ({ defau
 const BubbleMapHost = lazy(() =>
   import("./components/BubbleMap").then((m) => ({ default: m.BubbleMapHost })),
 );
+// Utilities: its own chunk, loaded the first time the tab opens.
+const UtilitiesTab = lazy(() => import("./tabs/UtilitiesTab").then((m) => ({ default: m.UtilitiesTab })));
 const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ default: m.BurnPanel })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
@@ -67,6 +70,8 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
   { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
+  // Lookups paid for with Burn Credits: open to any signed-in wallet, subscribed or not.
+  { id: "utilities", label: "Utilities", Icon: ToolsIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
@@ -393,7 +398,21 @@ export function App() {
           </Suspense>
         )}
         {signedIn && (
-          <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
+          <AccessGate
+            walletAddress={session.user.walletAddress}
+            onSignedOut={signOut}
+            openView={
+              // Utilities is paid per lookup with Burn Credits, so a wallet without a subscription
+              // gets the tab itself rather than the paywall.
+              tab === "utilities" ? (
+                <div className="tab-view" key={tab}>
+                  <Suspense fallback={<Boot />}>
+                    <UtilitiesTab walletAddress={session.user.walletAddress} hasAccess={false} />
+                  </Suspense>
+                </div>
+              ) : undefined
+            }
+          >
             <AlertNotifier />
             <div className="tab-view" key={tab}>
               <Suspense fallback={<Boot />}>
@@ -402,6 +421,7 @@ export function App() {
                 {tab === "model" && <ModelTab />}
                 {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab goTo={goTo} />}
+                {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} hasAccess />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
@@ -536,10 +556,13 @@ function AccessGate({
   children,
   walletAddress,
   onSignedOut,
+  openView,
 }: {
   children: React.ReactNode;
   walletAddress: string;
   onSignedOut: () => void;
+  /** Shown in place of the paywall to a wallet without access: a tab that doesn't need it. */
+  openView?: React.ReactNode;
 }) {
   const { data, error, reload } = usePolling<Subscription>("/subscription", 300_000);
   const hasAccess = data?.hasAccess === true;
@@ -574,6 +597,7 @@ function AccessGate({
   }
   if (!data) return <Boot />;
   if (!data.hasAccess) {
+    if (openView) return <>{openView}</>;
     return (
       <section className="panel paywall">
         <span className="paywall-icon">

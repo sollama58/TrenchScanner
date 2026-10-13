@@ -1561,6 +1561,51 @@ model BurnEvent {
   @@index([creditedAt])
 }
 
+/// The Burn Credit ledger: append-only, one row per change to a wallet's balance. A wallet's
+/// balance is the sum of its deltas; nothing is ever updated or deleted in place.
+///
+/// Credits come only from burns of $ASDFASDFA verified on-chain that carry the burn-credits memo
+/// (BURN_CREDIT_MEMO), so a burn buys either subscription months (BurnEvent) or credits, never
+/// both. Keyed by wallet rather than user: credits follow the wallet that burned, whether or not it
+/// had signed in yet. Spent one lookup at a time by the Utilities tab (apps/api routes/utilities.ts).
+model BurnCreditEntry {
+  id              String   @id @default(cuid())
+  wallet          String
+  /// Credits added (a burn, an admin grant) or taken (a lookup, as a negative number).
+  delta           Int
+  /// "burn" | "spend" | "grant"
+  kind            String
+  /// The burn's transaction signature. UNIQUE: the replay guard, as on BurnEvent, so a burn is
+  /// credited exactly once however many times it is claimed or found by the reconciler.
+  burnSignature   String?  @unique
+  /// The burn's amount in base units (a u64 as a decimal string), and the ratio it was credited at.
+  rawAmount       String?
+  tokensPerCredit Int?
+  /// A spend's utility ("token" | "wallet") and what it looked up (a mint or a wallet address).
+  utility         String?
+  subject         String?
+  /// A grant's reason, or which path found a burn ("claim" | "reconciler").
+  note            String?
+  createdAt       DateTime @default(now())
+
+  @@index([wallet, createdAt])
+  @@index([wallet, utility, subject, createdAt])
+}
+
+/// What Burn Credits cost and what the utilities charge, editable from the Admin tab. One row,
+/// id "burn-credits"; the defaults below apply until an admin saves.
+model BurnCreditSettings {
+  id               String   @id @default("burn-credits")
+  /// Whole $ASDFASDFA burned per credit.
+  tokensPerCredit  Int      @default(500)
+  /// Credits per lookup, for each utility.
+  tokenLookupCost  Int      @default(1)
+  walletLookupCost Int      @default(1)
+  /// The admin wallet that last changed it.
+  updatedBy        String?
+  updatedAt        DateTime @updatedAt
+}
+
 /// Wallets that get in free, managed from the Admin Panel.
 ///
 /// Keyed by wallet rather than by user id so a wallet can be whitelisted before it has ever signed

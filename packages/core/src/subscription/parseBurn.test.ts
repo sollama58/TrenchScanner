@@ -1,6 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { parseBurnTransaction, type ParsedTransaction, type ParsedInstruction } from "./parseBurn.js";
-import { SUBSCRIPTION_MINT, SUBSCRIPTION_RAW_PER_MONTH, SPL_TOKEN_PROGRAM_ID } from "./constants.js";
+import {
+  carriesCreditMemo,
+  parseBurnTransaction,
+  type ParsedTransaction,
+  type ParsedInstruction,
+} from "./parseBurn.js";
+import {
+  BURN_CREDIT_MEMO,
+  SUBSCRIPTION_MINT,
+  SUBSCRIPTION_RAW_PER_MONTH,
+  SPL_TOKEN_PROGRAM_ID,
+} from "./constants.js";
+
+/** A token instruction, whose `parsed` is always the object form. */
+type TokenIx = ParsedInstruction & { parsed: { type?: string; info: Record<string, unknown> } };
 
 const WALLET = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
 const OTHER = "3nQq9BsCW87d97TXJSDpbD5jBkheTqA83TZRuJosgXyZ";
@@ -16,7 +29,7 @@ function burnIx(
     programId?: string;
     checked?: boolean;
   } = {},
-): ParsedInstruction {
+): TokenIx {
   const info: Record<string, unknown> = { mint: over.mint ?? SUBSCRIPTION_MINT };
   if (over.authority !== null) info.authority = over.authority ?? WALLET;
   if (over.multisigAuthority) info.multisigAuthority = over.multisigAuthority;
@@ -155,7 +168,7 @@ describe("parseBurnTransaction", () => {
   it("credits the token account's owner, not the delegate who signed the burn", () => {
     const ACCOUNT = "9BTvwo4Ci2Qui8A8F8iqAeBjv7TGW23H9nSvTcTLzAeg";
     const ix = burnIx({ authority: OTHER });
-    ix.parsed!.info!.account = ACCOUNT;
+    ix.parsed.info.account = ACCOUNT;
     const delegated = tx([ix], {
       transaction: {
         signatures: ["sig"],
@@ -178,7 +191,7 @@ describe("parseBurnTransaction", () => {
 
   it("falls back to the authority when the transaction carries no token balances", () => {
     const ix = burnIx({ authority: OTHER });
-    ix.parsed!.info!.account = "9BTvwo4Ci2Qui8A8F8iqAeBjv7TGW23H9nSvTcTLzAeg";
+    ix.parsed.info.account = "9BTvwo4Ci2Qui8A8F8iqAeBjv7TGW23H9nSvTcTLzAeg";
     const result = parseBurnTransaction(tx([ix]));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.credit.burnerWallet).toBe(OTHER);
@@ -240,7 +253,7 @@ describe("parseBurnTransaction", () => {
       parsed: {
         type: "burn",
         info: {
-          ...REAL_MAINNET_BURN.parsed!.info,
+          ...(REAL_MAINNET_BURN.parsed as { info?: Record<string, unknown> }).info,
           mint: SUBSCRIPTION_MINT,
           amount: SUBSCRIPTION_RAW_PER_MONTH.toString(),
         },
@@ -259,5 +272,31 @@ describe("parseBurnTransaction", () => {
     const result = parseBurnTransaction(tx([burnIx()], { blockTime: null }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.credit.blockTime).toBeNull();
+  });
+});
+
+describe("Burn Credits memo", () => {
+  const memo = (text: string): ParsedInstruction => ({
+    program: "spl-memo",
+    programId: "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+    parsed: text,
+  });
+
+  it("a burn tagged for credits buys no months, whatever its size", () => {
+    const big = (SUBSCRIPTION_RAW_PER_MONTH * 3n).toString();
+    expect(parseBurnTransaction(tx([burnIx({ amount: big }), memo(BURN_CREDIT_MEMO)]), "sig")).toEqual({
+      ok: false,
+      reason: "credit_burn",
+    });
+  });
+
+  it("any other memo leaves a subscription burn as it was", () => {
+    expect(parseBurnTransaction(tx([burnIx(), memo("gm")])).ok).toBe(true);
+  });
+
+  it("reads the credits memo only from the Memo program", () => {
+    const fake: ParsedInstruction = { program: "other", programId: OTHER, parsed: BURN_CREDIT_MEMO };
+    expect(carriesCreditMemo(tx([burnIx(), fake]))).toBe(false);
+    expect(carriesCreditMemo(tx([burnIx(), memo(BURN_CREDIT_MEMO)]))).toBe(true);
   });
 });

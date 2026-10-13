@@ -164,6 +164,20 @@ Three independent paths grant access, so no single failure can take a paying use
 Crediting is idempotent - the burn's transaction signature is unique in the ledger - so all three
 can run at once, and any of them can be retried, without granting the same burn twice.
 
+### Burn Credits (the Utilities tab)
+
+The Utilities tab's lookups (any coin by contract address, any wallet) are paid per use with
+**Burn Credits**, earned by burning $ASDFASDFA: 500 per credit, and 1 credit per lookup, all three
+editable in Admin > Burn Credits. Any signed-in wallet can use them, subscribed or not.
+
+A credits burn carries an SPL Memo, `trenchscanner:burn-credits`, in the same transaction. That
+memo is what keeps the two kinds of burn apart on-chain: a burn with it buys credits and never
+subscription time, a burn without it buys months and never credits. Credits are read back from the
+chain (the burned account's owner, the amount burned), never taken from the client, and land in an
+append-only ledger (`BurnCreditEntry`) whose unique burn signature credits each burn once, through
+`POST /utilities/claim` or the same burn reconciler. A lookup takes its credit only after it
+succeeds, and re-opening it within an hour is free.
+
 ### Choosing an RPC (`SOLANA_RPC_URL`)
 
 Leave it empty to use Helius: with `SOLANA_RPC_URL` unset (or set to one of the public endpoints
