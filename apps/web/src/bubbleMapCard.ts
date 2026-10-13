@@ -1,7 +1,7 @@
 import type { Token } from "./api";
 import { clusterHalos, graphBounds, HALO_PAD, type BubbleGraph, type MapNode } from "./bubbleMap";
 import { shortAddress, tokenLabel } from "./format";
-import { isPumpfunName, walletNameText, walletText, type WalletNames } from "./walletNames";
+import { walletText, type WalletNames } from "./walletNames";
 import {
   CARD_H,
   CARD_W,
@@ -22,8 +22,6 @@ import {
 /** The map's cluster colours on the dark card: the dashboard's dark slots (styles.css .bm-modal). */
 const CLUSTER = ["#3987e5", "#199e70", "#d95926", "#8b5cf6", "#06b6d4"];
 const RISK = "#ef4444";
-/** A Pump.fun username's light green (the dark theme's --good-ink). */
-const PUMPFUN = "#4ade80";
 const DEV = "#fab219";
 /** Same-minute funding: a dotted ring and tie in light ink, apart from the cluster colours. */
 const SAME = "rgba(235, 238, 245, 0.85)";
@@ -362,9 +360,8 @@ export async function renderBubbleCard(
   // so no bubble covers it.
   ctx.font = `600 14px ${FONT}`;
   for (const n of order) {
-    const named = n.wallet ? names[n.wallet] : undefined;
-    if (!named) continue;
-    const name = walletNameText(named);
+    const name = n.wallet ? names[n.wallet]?.name : undefined;
+    if (!name) continue;
     const text = name.length > 18 ? `${name.slice(0, 17)}…` : name;
     const cx = X(n.x);
     const cy = Y(n.y) + n.r * scale * (n.kind === "funder" ? 0.9 : 1) + 14;
@@ -372,8 +369,7 @@ export async function renderBubbleCard(
     ctx.fillStyle = "rgba(10, 12, 18, 0.78)";
     roundRect(ctx, cx - w / 2, cy - 10, w, 20, 10);
     ctx.fill();
-    // A Pump.fun username in light green, as in the dashboard's lists.
-    ctx.fillStyle = isPumpfunName(named) ? PUMPFUN : INK;
+    ctx.fillStyle = INK;
     ctx.fillText(text, cx, cy + 1);
   }
   ctx.textAlign = "left";
