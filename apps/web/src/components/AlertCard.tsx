@@ -4,6 +4,7 @@ import type { Card, CardField } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SageIcon, SlidersIcon } from "./Icons";
 import { openSage } from "../sage";
+import { openBubbleMap, type BubbleSeed } from "../bubbleMap";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -49,7 +50,6 @@ export function AlertCard({
   const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [linkedOpen, setLinkedOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const alertMcap = s.marketCapUsd;
   const nowMcap = nowReading(card);
@@ -376,8 +376,7 @@ export function AlertCard({
               pct={linkedPct}
               clusters={linkedClusters}
               atAlert={linkedAtAlert && linkedPct !== null}
-              open={linkedOpen}
-              onToggle={() => setLinkedOpen((o) => !o)}
+              onOpen={() => openBubbleMap(mint, linkedSeed(card))}
             />
           )}
           {show("dev") && (
@@ -397,8 +396,6 @@ export function AlertCard({
           )}
         </dl>
       )}
-
-      {show("linked") && linkedOpen && linkedClusters.length > 0 && <LinkedList clusters={linkedClusters} />}
 
       {curated && show("reasons") && curated.reasons.length > 0 && (
         <ul className="reasons">
@@ -591,19 +588,24 @@ export function linkedSummary(clusters: readonly LinkedClusterView[]): string | 
   return `${top.wallets.length} wallets from one funder hold ${pct(top.pct)}${top.creatorLinked ? " (tied to the creator)" : ""}${more}`;
 }
 
-/** The Linked tile: the share of supply held by linked top holders. Tapping it opens the list. */
+/** The reading behind the Linked tile, for the bubble map to draw the same one. */
+export function linkedSeed(card: Card): BubbleSeed | undefined {
+  const s = card.snapshot;
+  const from = s.linkedWalletPct != null ? s : card.latestSnapshot;
+  return from ? { token: card.token, snapshot: from } : undefined;
+}
+
+/** The Linked tile: the share of supply held by linked top holders. Tapping it opens the bubble map. */
 function LinkedTile({
   pct: value,
   clusters,
   atAlert,
-  open,
-  onToggle,
+  onOpen,
 }: {
   pct: number | null;
   clusters: readonly LinkedClusterView[];
   atAlert: boolean;
-  open: boolean;
-  onToggle: () => void;
+  onOpen: () => void;
 }) {
   const summary = linkedSummary(clusters);
   const title =
@@ -611,55 +613,41 @@ function LinkedTile({
       ? "Linked: not checked yet. Who paid for each top-10 wallet is read a few tokens per scan."
       : value === 0
         ? `Linked: no two top-10 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
-        : `Linked: ${summary ?? `${pct(value)} of supply in linked wallets`}, ${atAlert ? "at alert time" : "from a scan after the alert"}. Tap for the wallets.`;
+        : `Linked: ${summary ?? `${pct(value)} of supply in linked wallets`}, ${atAlert ? "at alert time" : "from a scan after the alert"}. Tap for the bubble map.`;
   const canOpen = value !== null && clusters.length > 0;
   return (
     <div
-      className={value !== null && value >= LINKED_WARN_PCT ? "risky" : undefined}
+      className={
+        `${value !== null && value >= LINKED_WARN_PCT ? "risky" : ""}${canOpen ? " tile-opens" : ""}`.trim() ||
+        undefined
+      }
       title={title}
       role={canOpen ? "button" : undefined}
       tabIndex={canOpen ? 0 : undefined}
-      aria-expanded={canOpen ? open : undefined}
-      onClick={canOpen ? onToggle : undefined}
-      onKeyDown={
-        canOpen ? (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onToggle()) : undefined
+      aria-haspopup={canOpen ? "dialog" : undefined}
+      onClick={
+        canOpen
+          ? (e) => {
+              // The card opens the token modal on a click; this tile opens the map instead.
+              e.stopPropagation();
+              onOpen();
+            }
+          : undefined
       }
-      style={canOpen ? { cursor: "pointer" } : undefined}
+      onKeyDown={
+        canOpen
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpen();
+              }
+            }
+          : undefined
+      }
     >
       <dt>Linked</dt>
       <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
-    </div>
-  );
-}
-
-/** The linked clusters under the tiles: each funder and the wallets it paid for, with their %. */
-function LinkedList({ clusters }: { clusters: readonly LinkedClusterView[] }) {
-  return (
-    <div className="linked-list">
-      <p className="muted">{linkedSummary(clusters)}.</p>
-      {clusters.map((c) => (
-        <div key={c.funder} className="linked-cluster">
-          <div>
-            <a href={`https://solscan.io/account/${c.funder}`} target="_blank" rel="noreferrer">
-              Funder {shortAddress(c.funder)}
-            </a>{" "}
-            <span className="muted">
-              · {c.wallets.length} wallets · {pct(c.pct)}
-              {c.creatorLinked ? " · tied to the creator" : ""}
-            </span>
-          </div>
-          <ul>
-            {c.wallets.map((w) => (
-              <li key={w.wallet}>
-                <a href={`https://solscan.io/account/${w.wallet}`} target="_blank" rel="noreferrer">
-                  {shortAddress(w.wallet)}
-                </a>{" "}
-                <span className="num">{pct(w.pct)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
     </div>
   );
 }

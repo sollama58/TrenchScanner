@@ -134,6 +134,8 @@ export interface Snapshot {
   holderCount: number | null;
   holderGrowthPct: number | null;
   top10HolderPct: number | null;
+  /** How many holders the top-10 list held (pool and LP aside); null on older snapshots. */
+  top10WalletsChecked?: number | null;
   devWalletPct: number | null;
   riskScore: number | null;
   freshTop10WalletPct: number | null;
