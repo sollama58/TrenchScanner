@@ -38,6 +38,12 @@ export const KNOWN_DUMPER = { minDumps: 4, minRate: 0.75 } as const;
 export const WINNER = { minWins: 3, minRate: 0.6 } as const;
 /** Launch sniper: 3+ coins bought in their first 5 seconds, and at least half of its coins. */
 export const LAUNCH_SNIPER = { minSnipes: 3, minRate: 0.5 } as const;
+/**
+ * No label at all under this many called coins on record (user decision 2026-10-13: 10). With
+ * it, the dumper label covers 0.9% of scored wallets at 1.45x on later coins, the winner label
+ * 0.1% at 1.78x (was 4.7% / 2.4% without it).
+ */
+export const MIN_LABEL_APPEARANCES = 10;
 
 export interface WalletLabelStats {
   appearances: number;
@@ -62,6 +68,7 @@ export function walletLabels(
   market: { dumpRate: number; winRate: number },
 ): WalletLabels {
   const n = Math.max(1, s.appearances);
+  if (s.appearances < MIN_LABEL_APPEARANCES) return { dumper: false, winner: false, sniper: false };
   let dumper = s.dumps >= KNOWN_DUMPER.minDumps && s.dumps / n >= KNOWN_DUMPER.minRate;
   let winner = s.wins >= WINNER.minWins && s.wins / n >= WINNER.minRate;
   if (dumper && winner) {

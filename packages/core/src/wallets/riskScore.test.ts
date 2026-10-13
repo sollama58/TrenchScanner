@@ -144,28 +144,38 @@ describe("walletLabels", () => {
   });
 
   it("needs both the count and the rate", () => {
-    expect(walletLabels(stats({ dumps: 3, appearances: 3 }), market).dumper).toBe(false);
-    expect(walletLabels(stats({ dumps: 4, appearances: 4 }), market).dumper).toBe(true);
-    expect(walletLabels(stats({ dumps: 4, appearances: 6 }), market).dumper).toBe(false);
-    expect(walletLabels(stats({ dumps: 6, appearances: 8 }), market).dumper).toBe(true);
-    expect(walletLabels(stats({ wins: 2, appearances: 2 }), market).winner).toBe(false);
-    expect(walletLabels(stats({ wins: 3, appearances: 5 }), market).winner).toBe(true);
-    expect(walletLabels(stats({ wins: 3, appearances: 6 }), market).winner).toBe(false);
-    expect(walletLabels(stats({ snipes: 2, appearances: 2 }), market).sniper).toBe(false);
-    expect(walletLabels(stats({ snipes: 3, appearances: 6 }), market).sniper).toBe(true);
-    expect(walletLabels(stats({ snipes: 3, appearances: 7 }), market).sniper).toBe(false);
+    expect(walletLabels(stats({ dumps: 3, appearances: 10 }), market).dumper).toBe(false);
+    expect(walletLabels(stats({ dumps: 8, appearances: 10 }), market).dumper).toBe(true);
+    expect(walletLabels(stats({ dumps: 7, appearances: 10 }), market).dumper).toBe(false);
+    expect(walletLabels(stats({ dumps: 9, appearances: 12 }), market).dumper).toBe(true);
+    expect(walletLabels(stats({ wins: 2, appearances: 10 }), market).winner).toBe(false);
+    expect(walletLabels(stats({ wins: 6, appearances: 10 }), market).winner).toBe(true);
+    expect(walletLabels(stats({ wins: 5, appearances: 10 }), market).winner).toBe(false);
+    expect(walletLabels(stats({ snipes: 2, appearances: 10 }), market).sniper).toBe(false);
+    expect(walletLabels(stats({ snipes: 5, appearances: 10 }), market).sniper).toBe(true);
+    expect(walletLabels(stats({ snipes: 5, appearances: 11 }), market).sniper).toBe(false);
+  });
+
+  it("gives no label at all under ten coins on record", () => {
+    // Every rate clears its bar; only the coin count is short.
+    expect(walletLabels(stats({ dumps: 9, wins: 9, snipes: 9, appearances: 9 }), market)).toEqual({
+      dumper: false,
+      winner: false,
+      sniper: false,
+    });
+    expect(walletLabels(stats({ dumps: 10, appearances: 10 }), market).dumper).toBe(true);
   });
 
   it("never shows dumper and winner together: the side further above its market wins", () => {
-    // 4 of 5 dumped (0.8 vs 0.45) and 3 of 5 doubled (0.6 vs 0.23): the win side is further out.
-    expect(walletLabels(stats({ dumps: 4, wins: 3, appearances: 5 }), market)).toEqual({
+    // 8 of 10 dumped (0.8 vs 0.45) and 6 of 10 doubled (0.6 vs 0.23): the win side is further out.
+    expect(walletLabels(stats({ dumps: 8, wins: 6, appearances: 10 }), market)).toEqual({
       dumper: false,
       winner: true,
       sniper: false,
     });
     // Against a market that doubles as often, the dump side is the stronger claim.
     expect(
-      walletLabels(stats({ dumps: 4, wins: 3, appearances: 5 }), { dumpRate: 0.2, winRate: 0.5 }),
+      walletLabels(stats({ dumps: 8, wins: 6, appearances: 10 }), { dumpRate: 0.2, winRate: 0.5 }),
     ).toEqual({ dumper: true, winner: false, sniper: false });
   });
 });
