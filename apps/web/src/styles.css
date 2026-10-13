@@ -9396,6 +9396,25 @@ img.tm-avatar {
 .bm-cex-link.dim {
   stroke-opacity: 0.12;
 }
+.bm-cex-tag rect {
+  fill: var(--surface-2);
+  stroke: var(--bm-cex);
+  stroke-width: 1;
+}
+.bm-cex-tag text {
+  fill: var(--ink-2);
+  font-size: 8.5px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.bm-cex-tags {
+  pointer-events: none;
+}
+.bm-cex-dot {
+  grid-area: dot;
+  align-self: center;
+}
 .bm-cex-toggle {
   display: flex;
   align-items: center;

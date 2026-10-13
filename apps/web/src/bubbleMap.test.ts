@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bubbleNameFit,
+  cexGroupsOf,
   cexLinksOf,
   MAP_COLOURS,
   nodeSlot,
@@ -313,6 +314,22 @@ describe("same-exchange ties", () => {
     // Drawn only: the Linked reading and the clusters don't move.
     expect(g.clusters).toEqual([]);
     expect(g.links).toEqual([]);
+  });
+  it("lists each exchange's holders and share, largest first", () => {
+    const g = buildGraph({
+      linkedHolders: [
+        { wallet: A, pct: 5, cexFunder: "EX1" },
+        { wallet: B, pct: 3, cexFunder: "EX2" },
+        { wallet: C, pct: 2, cexFunder: "EX1" },
+        { wallet: D, pct: 4, cexFunder: "EX2" },
+      ],
+      top10HolderPct: null,
+      top10WalletsChecked: null,
+    });
+    expect(cexGroupsOf(g).map((x) => [x.funder, x.nodes.length, x.pct])).toEqual([
+      ["EX1", 2, 7],
+      ["EX2", 2, 7],
+    ]);
   });
   it("draws nothing for a holder off the map or on older scans", () => {
     expect(cexLinksOf([{ wallet: A, pct: 5, cexFunder: "EX1" }], [])).toEqual([]);

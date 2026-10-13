@@ -4,6 +4,7 @@ import { cachedGet } from "../cache";
 import { ago, pct, shortAddress, tokenLabel } from "../format";
 import {
   bubbleNameFit,
+  cexGroupsOf,
   MAP_COLOURS,
   nodeSlot,
   sameTimeSlot,
@@ -47,7 +48,14 @@ export const CLUSTER_COLOURS = MAP_COLOURS;
 function useGraphNames(graph: BubbleGraph | null): WalletNames {
   return useWalletNames(
     useMemo(
-      () => (graph ? [...graph.nodes.map((n) => n.wallet), ...graph.clusters.map((c) => c.funder)] : []),
+      () =>
+        graph
+          ? [
+              ...graph.nodes.map((n) => n.wallet),
+              ...graph.clusters.map((c) => c.funder),
+              ...graph.cexLinks.map((l) => l.funder),
+            ]
+          : [],
       [graph],
     ),
   );
@@ -365,6 +373,22 @@ function MapView({
           </li>
         ))}
       </ul>
+      {showCex && (
+        <ul className="bm-clusters bm-cex-groups">
+          {cexGroupsOf(graph).map((g) => (
+            <li key={g.funder}>
+              <div className="bm-cluster bm-same" style={{ "--bm": "var(--bm-none)" } as React.CSSProperties}>
+                <i className="bm-cex-key bm-cex-dot" aria-hidden="true" />
+                <span className="bm-cluster-name">
+                  Exchange <WalletText wallet={g.funder} names={names} />
+                </span>
+                <span className="muted small">{g.nodes.length} wallets it funded</span>
+                <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
       {graph.sameTimeGroups.length > 0 && (
         <ul className="bm-clusters bm-same-groups">
           {graph.sameTimeGroups.map((g, i) => (
@@ -547,6 +571,30 @@ function BubbleSvg({
             />
           </g>
         ))}
+        {cexLinks && (
+          // Drawn last, over the bubbles, so a name never hides behind one.
+          <g className="bm-cex-tags">
+            {cexGroupsOf(graph).map((g) => {
+              // The exchange's name, on the group's first tie.
+              const l = graph.cexLinks.find((x) => x.funder === g.funder);
+              const a = l && index.get(l.from);
+              const b = l && index.get(l.to);
+              if (!a || !b) return null;
+              const text = clipName(walletText(g.funder, names), 14);
+              const w = text.length * 5.1 + 10;
+              const x = (a.x + b.x) / 2;
+              const y = (a.y + b.y) / 2;
+              return (
+                <g key={`tag-${g.funder}`} className="bm-cex-tag">
+                  <rect x={x - w / 2} y={y - 7} width={w} height={14} rx={7} />
+                  <text x={x} y={y}>
+                    {text}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
       </svg>
     </div>
   );

@@ -415,6 +415,27 @@ export function cexLinksOf(
   return out;
 }
 
+/** The same-exchange groups behind the ties: each exchange, its holders on the map, and their share; largest first. */
+export function cexGroupsOf(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): {
+  funder: string;
+  nodes: MapNode[];
+  pct: number;
+}[] {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const groups = new Map<string, Set<string>>();
+  for (const l of graph.cexLinks) {
+    const ids = groups.get(l.funder) ?? new Set<string>();
+    ids.add(l.to).add(l.from);
+    groups.set(l.funder, ids);
+  }
+  return [...groups]
+    .map(([funder, ids]) => {
+      const nodes = [...ids].map((id) => byId.get(id)).filter((n): n is MapNode => !!n);
+      return { funder, nodes, pct: Math.round(nodes.reduce((s, n) => s + n.pct, 0) * 100) / 100 };
+    })
+    .sort((a, b) => b.pct - a.pct);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The layout
 
