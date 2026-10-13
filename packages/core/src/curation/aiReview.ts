@@ -1,6 +1,6 @@
 import type { ScoredToken } from "../types.js";
 import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
-import { FIRST_BUYERS, resolveDevHolding } from "./tradeFlow.js";
+import { FIRST_BUYERS, FRESH_LAUNCH_BUYERS, resolveDevHolding } from "./tradeFlow.js";
 import { CREATOR_UNKNOWN_FLAG } from "../datasources/rugcheck.js";
 import { TOKENSAGE_LOGO_MIN_SCORE } from "../datasources/tokensage.js";
 import { buildCandidateFeatures } from "./features.js";
@@ -376,6 +376,11 @@ function tradeFlowLines(scored: ScoredToken): string[] {
         ? `; ${f.launchBundledBuyers} of them bought in the launch's own slot (bundled)`
         : "";
     lines.push(`- those first buyers bought ${f.firstBuyersSupplyPct.toFixed(1)}% of the supply${bundled}`);
+  }
+  if (typeof f.freshLaunchBuyerPct === "number") {
+    lines.push(
+      `- launch buyers on brand-new wallets (first used within 24h before launch): ${f.freshLaunchBuyerPct.toFixed(0)}% of the first ${FRESH_LAUNCH_BUYERS}`,
+    );
   }
   if (typeof f.devBuySupplyPct === "number") {
     lines.push(`- dev bought ${f.devBuySupplyPct.toFixed(1)}% of the supply in the create transaction`);

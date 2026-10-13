@@ -4,7 +4,7 @@ import { FailureBackoff } from "./failureBackoff.js";
 
 const logger = createLogger("wallet-freshness");
 
-const FRESH_WITHIN_HOURS = 24;
+export const FRESH_WITHIN_HOURS = 24;
 
 /**
  * Wallets whose lookup FAILED (transport error, rate limit, RPC error - never a real answer),

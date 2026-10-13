@@ -29,6 +29,8 @@ interface Entry {
   buyers: LaunchBuyer[];
   /** The launch's shape, from the same read (launchFigures). */
   figures: LaunchFigures;
+  /** Block time of the create transaction, when the read gave one. */
+  launchAt: Date | null;
   complete: boolean;
   readAt: number;
   /** Re-reads of an incomplete launch so far: each waits twice as long as the last. */
@@ -152,6 +154,22 @@ export function sniperWalletsFromCache(mint: string, now = Date.now()): Readonly
 }
 
 /**
+ * The wallets of the launch's first `count` buyers and when it launched - what the launch-buyer
+ * fresh-wallet share (launchBuyerFreshness.ts) reads. Undefined until a read has found that many
+ * (or the whole launch, when it had fewer) and while the launch time is unknown: a share over a
+ * shorter list than the buyers there will be would change as the rest arrive.
+ */
+export function launchBuyersFromCache(
+  mint: string,
+  count: number,
+): { wallets: string[]; launchAt: Date } | undefined {
+  const e = entries.get(mint);
+  if (!e || !e.launchAt || e.buyers.length === 0) return undefined;
+  if (e.buyers.length < count && !e.complete) return undefined;
+  return { wallets: [...new Set(e.buyers.slice(0, count).map((b) => b.wallet))], launchAt: e.launchAt };
+}
+
+/**
  * Whether the top-10 snipers share can never be measured for this mint, so nothing should wait
  * for it: its history doesn't start at a curve launch (read, with no buyers). A read still to
  * come, or one that failed, is not this; an endpoint that can't read launch buyers right now is
@@ -212,6 +230,7 @@ export async function resolveLaunchSnipers(
         remember(mint, {
           buyers: r.buyers,
           figures: launchFigures(r),
+          launchAt: r.launchAt,
           complete: r.complete,
           readAt: now,
           rereads: prev ? prev.rereads + 1 : 0,

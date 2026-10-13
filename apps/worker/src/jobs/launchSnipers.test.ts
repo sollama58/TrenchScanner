@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_TRADE_FLOW, type HeliusClient, type LaunchBuyersResult } from "@trenchscanner/core";
 import {
+  launchBuyersFromCache,
   launchSnipersFromCache,
   resetLaunchSnipersCache,
   resolveLaunchSnipers,
@@ -331,5 +332,36 @@ describe("sniperShareReady", () => {
 
   it("doesn't wait at all with the bound at 0", () => {
     expect(sniperShareReady(unknown, true, { ...W, maxMs: 0 }, 0)).toBe(true);
+  });
+});
+
+describe("launchBuyersFromCache", () => {
+  beforeEach(() => resetLaunchSnipersCache());
+
+  it("gives the first buyers' wallets and the launch time once enough are read", async () => {
+    const launchAt = new Date("2026-10-12T17:20:20Z");
+    const { helius } = fakeHelius({ found: { A: 12, B: 4, C: 3 }, complete: { C: true } });
+    (helius.getLaunchBuyersBatch as ReturnType<typeof vi.fn>).mockImplementation(async (mints: string[]) => {
+      const counts: Record<string, number> = { A: 12, B: 4, C: 3 };
+      return new Map(
+        mints.map((m) => [
+          m,
+          { status: "found", complete: m === "C", buyers: buyers(m, counts[m]!), launchAt, ...LAUNCH },
+        ]),
+      );
+    });
+    await resolveLaunchSnipers(
+      ["A", "B", "C"].map((mintAddress) => ({ mintAddress, contender: true })),
+      helius,
+      { ...opts, now: 0 },
+    );
+    expect(launchBuyersFromCache("A", 10)).toEqual({
+      wallets: Array.from({ length: 10 }, (_, i) => `A-w${i}`),
+      launchAt,
+    });
+    // Four buyers so far, more to come: a share over them would change.
+    expect(launchBuyersFromCache("B", 10)).toBeUndefined();
+    // A launch that had only three buyers in all.
+    expect(launchBuyersFromCache("C", 10)?.wallets).toHaveLength(3);
   });
 });

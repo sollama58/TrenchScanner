@@ -225,6 +225,13 @@ export const CANDIDATE_FEATURE_NAMES = [
   "jup5mNetBuyers",
   "jup5mHolderChange",
   "jup1hHolderChange",
+  // Added 2026-10-12 (user decision, fresh-wallet thread): of the launch's first ten buyers (the
+  // dev aside), the % whose wallet was first used within 24h before the launch. The top-10
+  // fresh-wallet share can't see a bundle of brand-new wallets that sells out in the first minute
+  // or two - it reads the holders left after them - while the buyers at launch never change. Null
+  // until the launch and every one of those wallets has been read, and on every row banked
+  // before. Never backfilled.
+  "freshLaunchBuyerPct",
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -333,6 +340,7 @@ export const SAFETY_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
   "firstBuyersSupplyPct",
   "launchBundledBuyers",
   "devBuySupplyPct",
+  "freshLaunchBuyerPct",
   "firstBuyersHolding",
 ]);
 
@@ -361,6 +369,7 @@ export const LAUNCH_SHAPE_FEATURES = [
   "firstBuyersSupplyPct",
   "launchBundledBuyers",
   "devBuySupplyPct",
+  "freshLaunchBuyerPct",
 ] as const satisfies readonly (CandidateFeatureName & keyof TradeFlowFeatures)[];
 
 /**
@@ -574,6 +583,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   firstBuyersSupplyPct: "first 25 buyers' share of supply",
   launchBundledBuyers: "buyers bundled with the launch",
   devBuySupplyPct: "dev's launch buy, % of supply",
+  freshLaunchBuyerPct: "launch buyers on brand-new wallets",
   devHolding: "dev still holding",
   textCopycatRisk: "copycat name",
   textNarrativeStrength: "narrative strength",

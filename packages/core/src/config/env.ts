@@ -182,6 +182,11 @@ const envSchema = z.object({
   // flood of new tokens) so the pass can never blow through the Helius Dev tier. Wallets over
   // the cap simply stay unknown for a cycle and retry on the next.
   WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(50),
+  // Cap on UNCACHED wallet first-transaction lookups per scan cycle for the launch-buyer
+  // fresh-wallet share (the worker's launchBuyerFreshness.ts): the first ten buyers of each
+  // launch already read, on the same cache as the top-10 check, so repeat bot wallets cost
+  // nothing. A launch takes its ten at once or waits a cycle. 0 turns the share off.
+  LAUNCH_BUYER_FRESHNESS_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
 
   // The empty-top-10-wallet signal (apps/worker/src/jobs/walletHoldings.ts): how much a top-10
   // holder must hold in tokens that are neither cash (USDC/USDT) nor gas (SOL) before it counts
