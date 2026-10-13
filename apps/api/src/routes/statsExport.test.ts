@@ -65,7 +65,18 @@ describe("export query", () => {
         matched: true,
         terms: [
           { term: "Plague (disease)", source: "wikipedia", spike: 4.2, score: 0.43, matched_on: "name" },
-          { term: "plague", source: "x_trends", rank: 7, hours: 5, score: 0.5, partial: false, extra: "x" },
+          {
+            term: "plague",
+            source: "x_trends",
+            rank: 7,
+            hours: 5,
+            score: 0.5,
+            partial: false,
+            extra: "x",
+            days_listed: 2,
+            direction: "rising",
+            novelty: 0.41,
+          },
         ],
       },
     });
@@ -82,6 +93,9 @@ describe("export query", () => {
         matchedOn: "name",
         partial: null,
         seenAt: null,
+        daysListed: null,
+        direction: null,
+        novelty: null,
       },
       {
         term: "plague",
@@ -95,6 +109,9 @@ describe("export query", () => {
         matchedOn: null,
         partial: false,
         seenAt: null,
+        daysListed: 2,
+        direction: "rising",
+        novelty: 0.41,
       },
     ]);
   });

@@ -6,6 +6,7 @@ import {
   NARRATIVE_FEATURES_V4,
   NARRATIVE_FEATURES_V6,
   NARRATIVE_FEATURES_V7,
+  NARRATIVE_FEATURES_V8,
   narrativeFeatureValues,
   narrativeIsLateCopy,
   narrativeReferentNamed,
@@ -356,6 +357,54 @@ describe("round trip through a stored feature vector", () => {
       nsXCredibility: 0.032,
       nsXCredibility23: null,
     });
+  });
+
+  it("reads trend novelty and the decision-time refresh (rules 0.33/0.34), and nothing stale", () => {
+    const now = new Date("2026-10-13T21:10:00Z");
+    const none = narrativeFeatureValues(narrativeReadFromRow(row()), now);
+    for (const name of NARRATIVE_FEATURES_V8) expect(none[name]).toBeNull();
+    const refreshed = {
+      depth: "full",
+      trendNovelty: 0.8,
+      nowAt: new Date("2026-10-13T21:05:00Z"),
+      nowTrendMatched: true,
+      nowTrendScore: 0.4,
+      nowTrendNovelty: 0.9,
+      heatCoins: 3,
+      heatLeaderMcapUsd: 9e7,
+      heatLeaderChange5mPct: -1.5,
+      heatLeaderChange1hPct: -12,
+      heatLeaderVolume1hUsd: 1.2e6,
+      heatWaveVolume1hUsd: 1.3e6,
+      heatPeakMinutesAgo: 180,
+      heatFromPeakPct: -25,
+      heatIsLeader: false,
+    } as const;
+    expect(narrativeFeatureValues(narrativeReadFromRow(row(refreshed)), now)).toMatchObject({
+      nsTrendNovelty: 0.8,
+      nsNowTrendMatched: 1,
+      nsNowTrendScore: 0.4,
+      nsNowTrendNovelty: 0.9,
+      nsHeatCoins: 3,
+      nsHeatLeaderMcapUsd: 9e7,
+      nsHeatLeaderChange5mPct: -1.5,
+      nsHeatLeaderChange1hPct: -12,
+      nsHeatLeaderVolume1hUsd: 1.2e6,
+      nsHeatWaveVolume1hUsd: 1.3e6,
+      nsHeatPeakMinutesAgo: 180,
+      nsHeatFromPeakPct: -25,
+      nsHeatIsLeader: 0,
+      nsNowAgeMin: 5,
+    });
+    // A refresh older than NOW_FEATURE_MAX_AGE_MIN says nothing about now; the read's novelty stays.
+    const stale = narrativeFeatureValues(
+      narrativeReadFromRow(row({ ...refreshed, nowAt: new Date("2026-10-13T20:40:00Z") })),
+      now,
+    );
+    expect(stale.nsTrendNovelty).toBe(0.8);
+    for (const name of NARRATIVE_FEATURES_V8.filter((n) => n !== "nsTrendNovelty")) {
+      expect(stale[name]).toBeNull();
+    }
   });
 
   it("reads the X post's engagement (rules 0.30.0) as of the decision, and nothing without a read post", () => {
