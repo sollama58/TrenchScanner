@@ -43,12 +43,12 @@ export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
 
 /**
- * At or above this many of the top-20 holders linked (one funder paid for them, or they funded
- * each other: core's linkedWallets, linkedWalletCount), a token is never alerted (user decision
- * 2026-10-13, "15/20"). Banked rows carry it as the linkedWalletCount feature since 2026-10-13;
- * older rows have none and pass.
+ * At or above this many of the top-25 holders (pools aside) linked (one funder paid for them, or
+ * they funded each other: core's linkedWallets, linkedWalletCount), a token is never alerted (user
+ * decision 2026-10-13, "15/20", carried to the top 25 as 19/25, the same 75%). Banked rows carry it
+ * as the linkedWalletCount feature since 2026-10-13; older rows have none and pass.
  */
-export const SAFETY_REJECT_LINKED_COUNT = 15;
+export const SAFETY_REJECT_LINKED_COUNT = 19;
 export const SAFETY_REJECT_CEX_FUNDED_PCT = 85;
 
 /**
@@ -124,7 +124,7 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
     profile.linkedWalletCount >= SAFETY_REJECT_LINKED_COUNT
   ) {
     reasons.push(
-      `${profile.linkedWalletCount} of the ${profile.linkedWalletsChecked ?? 20} top holders are linked (${SAFETY_REJECT_LINKED_COUNT} or more)`,
+      `${profile.linkedWalletCount} of the ${profile.linkedWalletsChecked ?? 25} top holders are linked (${SAFETY_REJECT_LINKED_COUNT} or more)`,
     );
   }
   if (

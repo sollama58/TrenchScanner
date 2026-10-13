@@ -706,6 +706,56 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
   });
 });
 
+describe("HeliusClient.getTopHoldersBatch", () => {
+  const row = (owner: string, amount: bigint) => {
+    const bytes = Buffer.alloc(40);
+    Buffer.from(bs58.decode(owner)).copy(bytes, 0);
+    bytes.writeBigUInt64LE(amount, 32);
+    return { pubkey: "acct", account: { data: [bytes.toString("base64"), "base64"] } };
+  };
+
+  it("reads every account of the mint under its program and keeps the largest wallets", async () => {
+    const seen: { method: string; params: unknown[] }[] = [];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        seen.push({ method: c.method, params: c.params });
+        if (c.method === "getMultipleAccounts")
+          return {
+            jsonrpc: "2.0",
+            id: c.id,
+            result: {
+              value: [
+                {
+                  owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+                  data: { parsed: { info: { supply: "1000" } } },
+                },
+              ],
+            },
+          };
+        return { jsonrpc: "2.0", id: c.id, result: [row(CURVE, 800n), row(WALLET, 150n)] };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    const result = await client.getTopHoldersBatch(["mintA"], 25);
+    expect(result.get("mintA")).toEqual({ status: "found", holders: [{ owner: WALLET, pct: 15 }] });
+    const gpa = seen.find((c) => c.method === "getProgramAccounts")!;
+    expect(gpa.params[0]).toBe("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+    expect(JSON.stringify(gpa.params[1])).toContain('"bytes":"mintA"');
+  });
+
+  it("fails a mint that isn't a token mint, or whose accounts didn't come back", async () => {
+    const { url } = await startServer((calls) =>
+      calls.map((c) =>
+        c.method === "getMultipleAccounts"
+          ? { jsonrpc: "2.0", id: c.id, result: { value: [{ owner: "someProgram", data: {} }] } }
+          : { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } },
+      ),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({ status: "failed" });
+  });
+});
+
 describe("HeliusClient.getFundersBatch", () => {
   const SOL = 1_000_000_000;
   /** A token account opened for the wallet by someone else: no SOL moves to it. */

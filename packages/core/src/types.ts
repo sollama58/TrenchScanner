@@ -203,14 +203,14 @@ export interface OnChainProfile {
   kolRecentBuyers?: number;
   kolRecentSellers?: number;
   /**
-   * Linked wallets among the top-20 holders (top 10 before 2026-10-13) (core's wallets/linkedWallets.ts): % of supply held by
+   * Linked wallets among the top-25 holders, pools aside (top 10, then RugCheck's 20, before) (core's wallets/linkedWallets.ts): % of supply held by
    * holders in a cluster (one funder paid for them, or one funded another), the cluster count,
    * the largest cluster's %, and the % tied to the creator. Undefined until every holder's funder
    * is read. linkedClusters lists the clusters for the alert card.
    */
   linkedWalletPct?: number;
   linkedClusterCount?: number;
-  /** Holders in any cluster, of linkedWalletsChecked holders read (user ask 2026-10-13: Linked as "N/20"). */
+  /** Holders in any cluster, of linkedWalletsChecked holders read (user ask 2026-10-13: Linked as "N/25"). */
   linkedWalletCount?: number;
   linkedWalletsChecked?: number;
   linkedLargestClusterPct?: number;
@@ -228,7 +228,7 @@ export interface OnChainProfile {
    */
   sameTimeFundedPct?: number;
   sameTimeClusterCount?: number;
-  /** Holders in a same-minute group, of linkedWalletsChecked (user ask 2026-10-13: "N/20"). */
+  /** Holders in a same-minute group, of linkedWalletsChecked (user ask 2026-10-13: "N/25"). */
   sameTimeFundedCount?: number;
   /** Holders sharing a funder or a funding minute with another, each once (LinkedWalletsReading.bundledWalletCount). */
   bundledWalletCount?: number;
@@ -392,13 +392,13 @@ export interface FilterCriteria {
   maxSniperTop10WalletPct?: number | null;
   /** Max % of supply held by linked top holders (one funder, or funded each other). */
   maxLinkedWalletPct?: number | null;
-  /** Max how many of the top-20 holders are linked (linkedWalletCount). Skipped while unknown. */
+  /** Max how many of the top-25 holders are linked (linkedWalletCount). Skipped while unknown. */
   maxLinkedWalletCount?: number | null;
   /** Max % of supply held by top holders funded within a minute of each other (sameTimeFundedPct). */
   maxSameTimeFundedPct?: number | null;
-  /** Max how many of the top-20 holders were funded within a minute of each other (sameTimeFundedCount). */
+  /** Max how many of the top-25 holders were funded within a minute of each other (sameTimeFundedCount). */
   maxSameTimeFundedCount?: number | null;
-  /** Max how many of the top-20 holders share a funder or a funding minute with another (bundledWalletCount). */
+  /** Max how many of the top-25 holders share a funder or a funding minute with another (bundledWalletCount). */
   maxBundledWalletCount?: number | null;
   /** Max % of supply held by top holders tied to the creator (linkedCreatorPct). Skipped while unknown. */
   maxLinkedCreatorPct?: number | null;

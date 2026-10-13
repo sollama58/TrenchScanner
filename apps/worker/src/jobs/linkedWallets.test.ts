@@ -3,8 +3,12 @@ import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, type FunderActivityResult, type FunderResult } from "@trenchscanner/core";
 import {
+  cachedTopHolders,
   cexReadingOf,
   linkedHoldersOf,
+  readTopHolders,
+  TOP_HOLDERS_REFRESH_MS,
+  type LinkedGroup,
   linkedReadingOf,
   resetLinkedWallets,
   resolveLinkedWallets,
@@ -250,5 +254,47 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     const quiet = fakeHelius({});
     await resolveLinkedWallets([group], quiet, { maxNewLookups: 10 });
     expect(quiet.getFundersBatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("readTopHolders", () => {
+  beforeEach(() => resetLinkedWallets());
+
+  it("puts the chain's top 25 on each group, contenders first, within the budget, and keeps it a while", async () => {
+    const top = Array.from({ length: 26 }, (_, i) => ({ owner: `h${i}`, pct: 30 - i }));
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[], n: number) => {
+        expect(n).toBe(26);
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: top }]));
+      }),
+    };
+    const groups: LinkedGroup[] = ["mA", "mB"].map((m) => ({
+      mintAddress: m,
+      holders: [{ owner: "rugcheck", pct: 1 }],
+    }));
+    await readTopHolders(groups, helius, { maxReads: 1, nowMs: 0 });
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledWith(["mA"], 26);
+    expect(groups[0]!.holders).toHaveLength(26);
+    expect(groups[1]!.holders).toEqual([{ owner: "rugcheck", pct: 1 }]);
+    expect(cachedTopHolders("mA", 1)).toBe(top);
+    expect(cachedTopHolders("mB", 1)).toBeUndefined();
+
+    // Fresh lists aren't read again; the next mint is.
+    await readTopHolders(groups, helius, { maxReads: 1, nowMs: 1 });
+    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mB"], 26);
+    await readTopHolders(groups, helius, { maxReads: 2, nowMs: TOP_HOLDERS_REFRESH_MS });
+    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mA"], 26);
+  });
+
+  it("leaves a group on RugCheck's list when the read fails", async () => {
+    const helius = {
+      getTopHoldersBatch: vi.fn(
+        async (mints: string[]) => new Map(mints.map((m) => [m, { status: "failed" as const }])),
+      ),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mC", holders: [{ owner: "rugcheck", pct: 1 }] }];
+    await readTopHolders(groups, helius, { maxReads: 4 });
+    expect(groups[0]!.holders).toEqual([{ owner: "rugcheck", pct: 1 }]);
+    expect(cachedTopHolders("mC")).toBeUndefined();
   });
 });

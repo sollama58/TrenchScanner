@@ -987,7 +987,7 @@ function StatsCard({ card }: { card: Card }) {
           }
           title={`Top holders one wallet funded (or that funded each other)${
             r.linkedPct === null ? "" : `, holding ${pct(r.linkedPct)} of supply`
-          }. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more of the top 20.`}
+          }. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more of the top 25.`}
         >
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>

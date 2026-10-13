@@ -155,7 +155,7 @@ export interface Snapshot {
   flaggedTrades?:
     | { wallet: string; side: "buy" | "sell"; sol: number; atMs: number; score: number; dumps: number }[]
     | null;
-  /** % of supply held by linked top-20 holders (one funder paid for them); null when not checked. */
+  /** % of supply held by linked top-25 holders (one funder paid for them); null when not checked. */
   linkedWalletPct?: number | null;
   /** How many top holders are linked, of how many were read; null on scans before it was kept. */
   linkedWalletCount?: number | null;

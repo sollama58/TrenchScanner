@@ -52,7 +52,7 @@ export const WALLET_RISK_FEATURES = [
 ] as const;
 
 /**
- * Added 2026-10-13 (the same brief, item 3): linked wallets among the top holders (top 10, then top 20 from later on 2026-10-13), from who
+ * Added 2026-10-13 (the same brief, item 3): linked wallets among the top holders (top 10, then top 20 from later on 2026-10-13, then the top 25 pools aside), from who
  * paid for each one (core's wallets/linkedWallets.ts). The % of supply held by holders in a
  * cluster (one funder, or one funded another), the cluster count, the largest cluster's %, and the
  * % tied to the creator. Null until every holder's funder is read, and on every row banked before.
@@ -64,7 +64,7 @@ export const LINKED_WALLET_FEATURES = [
   "linkedLargestClusterPct",
   "linkedCreatorPct",
   // Added 2026-10-13 (notes/holder-data-eval-2026-10-13): the count form of the same reading, so
-  // "N of 20 top wallets linked" can be judged against the supply share. How many of the covered
+  // "N of 25 top wallets linked" can be judged against the supply share. How many of the covered
   // holders sit in a cluster, and how many holders the reading covered. Null with the rest.
   "linkedWalletCount",
   "linkedWalletsChecked",
@@ -87,7 +87,7 @@ export const CEX_FUNDED_FEATURES = ["cexFundedPct"] as const;
 export const SAME_TIME_FUNDING_FEATURES = ["sameTimeFundedPct", "sameTimeClusterCount"] as const;
 
 /**
- * Added 2026-10-13 (user ask, "Bundled"): of the top-20 holders, how many sit in a same-minute
+ * Added 2026-10-13 (user ask, "Bundled"): of the top-25 holders, how many sit in a same-minute
  * funding group, and how many share a funder or a funding minute with another holder, each counted
  * once (core's linkedWallets). Null until every holder's funder is read, and on every row banked
  * before. Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
-import { holdersFromLargestAccounts } from "./onChainHolders.js";
+import { holdersFromLargestAccounts, topWalletsFromAccounts } from "./onChainHolders.js";
 import { isWalletAddress, mayhemStateAddress } from "../solana.js";
 
 /** A real wallet address: a public key on the curve. */
@@ -40,5 +40,23 @@ describe("holdersFromLargestAccounts", () => {
     const over = holdersFromLargestAccounts([{ owner: wallet(1), amount: SUPPLY * 2n }], SUPPLY)!;
     expect(over.top10HolderPct).toBeUndefined();
     expect(over.top10HolderAddresses).toEqual([wallet(1)]);
+  });
+});
+
+describe("topWalletsFromAccounts", () => {
+  it("keeps the n largest wallets past the pool, counting a wallet's accounts once", () => {
+    const accounts = [
+      { owner: PDA, amount: pct(70) },
+      { owner: "11111111111111111111111111111111", amount: pct(9) },
+      { owner: wallet(1), amount: pct(3) },
+      { owner: wallet(1), amount: pct(2) },
+      ...Array.from({ length: 30 }, (_, i) => ({ owner: wallet(10 + i), amount: pct(0.5) })),
+    ];
+    const top = topWalletsFromAccounts(accounts, SUPPLY, 25)!;
+    expect(top).toHaveLength(25);
+    expect(top[0]).toEqual({ owner: wallet(1), pct: 5 });
+    expect(top.map((h) => h.owner)).not.toContain(PDA);
+    expect(top[24]!.pct).toBe(0.5);
+    expect(topWalletsFromAccounts(accounts, 0n, 25)).toBeNull();
   });
 });

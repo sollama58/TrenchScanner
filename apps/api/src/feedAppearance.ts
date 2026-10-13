@@ -83,7 +83,7 @@ export const feedAppearanceSchema = z
     sniperTop10: z.boolean().default(false),
     /** The CEX-funded tile (share of the top 20 an exchange paid for); hidden by default. */
     cexFunded: z.boolean().default(false),
-    /** The Bundled tile (top-20 holders sharing a funder or funding minute); hidden by default. */
+    /** The Bundled tile (top-25 holders sharing a funder or funding minute); hidden by default. */
     bundled: z.boolean().default(false),
     /**
      * The Narrative seat's "agrees"/"warns" note on other models' cards and Telegram alerts. Null

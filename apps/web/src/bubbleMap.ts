@@ -532,12 +532,12 @@ export function clusterHalos(graph: BubbleGraph): ClusterHalo[] {
   return out;
 }
 
-/** Holders the linked reading covers when the scan didn't keep the count: the top 20. */
+/** Holders the linked reading covered on scans that didn't keep the count: RugCheck's top 20. */
 const LINKED_HOLDERS_READ = 20;
 
 /**
  * Linked as a count (user ask 2026-10-13): how many top holders are in a linked cluster, of how
- * many were read, shown "N/20". Scans before the count was kept count the clusters' wallets. Null
+ * many were read, shown "N/25". Scans before the count was kept count the clusters' wallets. Null
  * when the reading isn't in.
  */
 export function linkedCount(
@@ -556,7 +556,7 @@ export function linkedCount(
 
 /**
  * Same-minute funding as a count (user ask 2026-10-13): how many top holders sit in a same-minute
- * group, of how many were read, "N/20". Scans before the count was kept count the groups' wallets.
+ * group, of how many were read, "N/25". Scans before the count was kept count the groups' wallets.
  */
 export function sameTimeCount(
   s: Pick<
@@ -580,7 +580,7 @@ export function sameTimeCount(
 
 /**
  * Bundled (user ask 2026-10-13): how many top holders share a funder or a funding minute with any
- * other top holder, each wallet counted once (the union of linked and same-minute), "N/20". Scans
+ * other top holder, each wallet counted once (the union of linked and same-minute), "N/25". Scans
  * before the count was kept count the union of the stored clusters' and groups' wallets.
  */
 export function bundledCount(

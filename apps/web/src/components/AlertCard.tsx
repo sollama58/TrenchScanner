@@ -601,8 +601,8 @@ export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
-/** SAFETY_REJECT_LINKED_COUNT: 15 or more of the top 20 holders linked fails. */
-export const SAFETY_REJECT_LINKED_COUNT = 15;
+/** SAFETY_REJECT_LINKED_COUNT: 19 or more of the top 25 holders (pools aside) linked fails. */
+export const SAFETY_REJECT_LINKED_COUNT = 19;
 /** SAFETY_REJECT_CEX_FUNDED_COUNT: 17 or more of the top 20 holders funded from an exchange fails. */
 export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
 
@@ -666,7 +666,7 @@ export function linkedSeed(card: Card): BubbleSeed | undefined {
 }
 
 /**
- * The Linked tile: how many top holders are linked, "N/20" (user ask 2026-10-13), with the supply
+ * The Linked tile: how many top holders are linked, "N/25" (user ask 2026-10-13), with the supply
  * they hold in the tooltip. Tapping it opens the bubble map.
  */
 function LinkedTile({
@@ -685,9 +685,9 @@ function LinkedTile({
   const summary = linkedSummary(clusters);
   const title =
     value === null
-      ? "Linked: not checked yet. Who paid for each top-20 wallet is read a few tokens per scan."
+      ? "Linked: not checked yet. Who paid for each top-25 wallet is read a few tokens per scan."
       : value === 0
-        ? `Linked: no two top-20 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
+        ? `Linked: no two top-25 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
         : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more. Tap for the bubble map.`;
   const canOpen = value !== null && clusters.length > 0;
   return (

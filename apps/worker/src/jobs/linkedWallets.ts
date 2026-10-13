@@ -4,6 +4,7 @@ import {
   createLogger,
   HOT_FUNDER_WINDOW_MS,
   isHotFunder,
+  LINKED_TOP_N,
   linkedWallets,
   prisma,
   WALLET_DORMANT_GAP_MS,
@@ -18,7 +19,7 @@ const logger = createLogger("linked-wallets");
 
 /**
  * The linked-wallets reading for each candidate (core's wallets/linkedWallets.ts): who paid for
- * each of its top-20 holders and its creator, and whether those funders are exchanges.
+ * each of its top-25 holders (pools aside) and its creator, and whether those funders are exchanges.
  *
  * Every answer is cached. A wallet's funder never changes (WalletFunder, kept for good like
  * WalletActivityCache); a funder's hot verdict is re-read after a week (FunderActivity). So the
@@ -88,6 +89,7 @@ export function takeLinkedWalletStats(): {
 export function resetLinkedWallets(): void {
   settledFunders.clear();
   hotFunders.clear();
+  topHolderLists.clear();
   failureBackoff.clear();
   takeLinkedWalletStats();
 }
@@ -320,14 +322,66 @@ async function fundedLast24h(funders: string[], now: number): Promise<Map<string
 }
 
 /**
- * The reading's holders: the largest holders RugCheck listed, with each one's share, up to
- * CEX_FUNDED_TOP_N (top 20 since 2026-10-13, user decision; the top 10 before). Empty without the list.
+ * The reading's holders when the chain's list isn't in yet: the largest holders RugCheck listed,
+ * with each one's share (its 20 accounts, the pool aside). Empty without the list.
  */
 export function linkedHoldersOf(profile: {
   top10HolderAddresses?: string[];
   topHolderShares?: { owner: string; pct: number }[];
 }): { owner: string; pct: number }[] {
   return (profile.topHolderShares ?? []).slice(0, CEX_FUNDED_TOP_N);
+}
+
+/** How long a mint's holder list stands before it is read again; holders trade, funders don't. */
+export const TOP_HOLDERS_REFRESH_MS = 10 * 60_000;
+/** Past this a list is too old to stand in while the new read waits. */
+const TOP_HOLDERS_MAX_AGE_MS = 60 * 60_000;
+/** Each mint's largest wallets from the chain (LINKED_TOP_N and one more, for the creator) and when read. */
+const topHolderLists = new Map<string, { holders: { owner: string; pct: number }[]; atMs: number }>();
+const MAX_TOP_HOLDER_LISTS = 5_000;
+
+/** The chain's top-holder list for a mint while it is fresh enough to use, else undefined. */
+export function cachedTopHolders(
+  mintAddress: string,
+  nowMs = Date.now(),
+): { owner: string; pct: number }[] | undefined {
+  const entry = topHolderLists.get(mintAddress);
+  return entry && nowMs - entry.atMs < TOP_HOLDERS_MAX_AGE_MS ? entry.holders : undefined;
+}
+
+/**
+ * Reads the top-25 holder list (pools aside) for groups without a fresh one, in the groups' order
+ * (contenders first), at most `maxReads` mints, and puts each list read on its group: the linked
+ * reading's holders past RugCheck's 20 accounts. A failed read leaves the group as it was.
+ */
+export async function readTopHolders(
+  groups: LinkedGroup[],
+  helius: Pick<HeliusClient, "getTopHoldersBatch">,
+  opts: { maxReads: number; nowMs?: number },
+): Promise<void> {
+  const now = opts.nowMs ?? Date.now();
+  const due = groups
+    .filter((g) => {
+      const entry = topHolderLists.get(g.mintAddress);
+      return !entry || now - entry.atMs >= TOP_HOLDERS_REFRESH_MS;
+    })
+    .slice(0, Math.max(0, opts.maxReads));
+  if (due.length === 0) return;
+  const read = await helius.getTopHoldersBatch(
+    due.map((g) => g.mintAddress),
+    LINKED_TOP_N + 1,
+  );
+  for (const g of due) {
+    const r = read.get(g.mintAddress);
+    if (r?.status !== "found" || r.holders.length === 0) continue;
+    if (topHolderLists.size >= MAX_TOP_HOLDER_LISTS) {
+      const oldest = topHolderLists.keys().next().value;
+      if (oldest !== undefined) topHolderLists.delete(oldest);
+    }
+    topHolderLists.delete(g.mintAddress);
+    topHolderLists.set(g.mintAddress, { holders: r.holders, atMs: now });
+    g.holders = r.holders;
+  }
 }
 
 /**
