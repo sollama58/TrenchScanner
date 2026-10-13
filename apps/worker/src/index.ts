@@ -49,6 +49,7 @@ import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
+import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
@@ -355,6 +356,12 @@ async function main() {
       { deadlineMinutes: 15 },
     );
   });
+  // The wallet risk scores, rebuilt from the trade tape (walletRiskJob.ts). Immediate on boot.
+  schedule("wallet-risk", () =>
+    scheduleInterval("wallet-risk", () => withJobLock("wallet-risk", () => runWalletRiskJob()), 60, {
+      deadlineMinutes: 30,
+    }),
+  );
   // Cleanup, outcome tracking and the AI judge each run under a lock shared by every worker
   // process (see withJobLock): a deploy's old and new trainer side by side ran each of them twice.
   schedule("cleanup", () =>

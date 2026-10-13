@@ -168,6 +168,16 @@ export interface OnChainProfile {
    */
   top10WalletsChecked?: number;
   /**
+   * The wallet risk readings (core's wallets/riskScore.ts, coinWalletRisk), from the worker's
+   * in-memory copy of WalletRisk: the riskiest top-10 holder, the first buyers' mean score, the %
+   * of supply held by risky top holders, and the known dumpers among the first buyers. Undefined
+   * when no wallet in view is scored, or before the scores load. Recorded as model inputs only.
+   */
+  walletRiskTop10Max?: number;
+  walletRiskFirstBuyersMean?: number;
+  walletRiskHighSupplyPct?: number;
+  knownDumperFirstBuyers?: number;
+  /**
    * Whether this mint was launched in Pump.fun's Mayhem Mode - see mayhemStateAddress() in
    * solana.ts for how it's detected and why nothing cheaper works. `undefined` means the check
    * hasn't been run or failed, which the rug screen treats as a rejection rather than an

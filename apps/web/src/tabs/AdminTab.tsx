@@ -5,6 +5,7 @@ import { usePolling } from "../hooks";
 import { Kpi, Load, Panel, Table, Tag, Wallet, dollars, ms, n, when } from "./adminShared";
 import { AnnouncementsAdmin } from "./AdminAnnouncements";
 import { ModelsAdmin } from "./AdminModels";
+import { WalletsAdmin } from "./AdminWallets";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
@@ -20,6 +21,7 @@ const SECTIONS = [
   { id: "worker", label: "Worker" },
   { id: "alerts", label: "Alerts" },
   { id: "models", label: "Models" },
+  { id: "wallets", label: "Wallets" },
   { id: "training", label: "Training" },
   { id: "tokensage", label: "TokenSage" },
   { id: "screen", label: "Safety screen" },
@@ -73,6 +75,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
       {section === "worker" && <Worker />}
       {section === "alerts" && <Alerts />}
       {section === "models" && <ModelsAdmin />}
+      {section === "wallets" && <WalletsAdmin />}
       {section === "training" && <Training />}
       {section === "tokensage" && <TokenSageAdmin />}
       {section === "screen" && <SafetyScreen />}

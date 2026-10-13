@@ -20,6 +20,7 @@ export * from "./datasources/onChainHolders.js";
 export * from "./datasources/helius.js";
 export * from "./datasources/launchBuyers.js";
 export * from "./wallets/tradeTape.js";
+export * from "./wallets/riskScore.js";
 export * from "./datasources/tokensage.js";
 
 export * from "./discovery/refreshCandidates.js";

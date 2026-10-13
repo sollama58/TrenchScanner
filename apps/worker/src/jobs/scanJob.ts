@@ -18,6 +18,7 @@ import {
   withoutVenueHolder,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   sniperShareOfTop10,
+  coinWalletRisk,
   passesLocalRugScreen,
   passesEventPreGate,
   FRESH_ANCHOR_MAX_RATIO,
@@ -64,6 +65,7 @@ import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
+import { refreshWalletRiskBook, walletRiskLookup } from "./walletRiskBook.js";
 import {
   resolveWalletHoldings,
   computeEmptyPct,
@@ -405,6 +407,8 @@ export async function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleM
   logger.info("scan cycle starting");
   // The composite score's newest adopted weights (cached; never fails the cycle).
   await refreshScoreWeights();
+  // The wallet risk scores the decision moments record (background reload, never waited on).
+  refreshWalletRiskBook();
   await seedLastScreenPass();
   const stagesMs: Record<string, number> = {};
   let lapStartedAt = startedAt;
@@ -2311,5 +2315,30 @@ export function withWalletSignals(
     // Recorded even when both percentages came back unknown: it describes the list that was
     // available, which is what a card needs to say "4 of 9" rather than assuming ten.
     top10WalletsChecked: onChain.top10HolderAddresses.length,
+    ...walletRiskSignals(onChain, sniperWallets),
+  };
+}
+
+/**
+ * The wallet risk readings (recorded model inputs only, coinWalletRisk in core): who the top
+ * holders and first buyers are, from the hourly scores. Nothing while the scores aren't loaded.
+ */
+function walletRiskSignals(
+  onChain: OnChainProfile,
+  sniperWallets: ReadonlySet<string> | undefined,
+): Partial<OnChainProfile> {
+  const lookup = walletRiskLookup();
+  if (!lookup) return {};
+  const shares = (onChain as { topHolderShares?: { owner: string; pct: number }[] }).topHolderShares;
+  const r = coinWalletRisk(lookup, {
+    top10Holders: onChain.top10HolderAddresses,
+    topHolderShares: shares,
+    firstBuyers: sniperWallets,
+  });
+  return {
+    walletRiskTop10Max: r.walletRiskTop10Max ?? undefined,
+    walletRiskFirstBuyersMean: r.walletRiskFirstBuyersMean ?? undefined,
+    walletRiskHighSupplyPct: r.walletRiskHighSupplyPct ?? undefined,
+    knownDumperFirstBuyers: r.knownDumperFirstBuyers ?? undefined,
   };
 }
