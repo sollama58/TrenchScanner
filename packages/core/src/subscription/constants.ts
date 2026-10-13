@@ -32,3 +32,16 @@ export const MAX_MONTHS_PER_BURN = 12;
 
 /** The SPL Token program, whose `burn` / `burnChecked` instructions are the only ones that count. */
 export const SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+
+/**
+ * The memo a Burn Credits burn carries (SPL Memo, in the same transaction as the burn). It is what
+ * tells the two kinds of burn apart on-chain: a burn with it buys credits (credits.ts), one
+ * without it buys subscription months (parseBurn.ts), and neither path will credit the other's.
+ */
+export const BURN_CREDIT_MEMO = "trenchscanner:burn-credits";
+
+/** SPL Memo v2 (what the dashboard uses) and v1, whose instructions jsonParsed labels "spl-memo". */
+export const MEMO_PROGRAM_IDS: ReadonlySet<string> = new Set([
+  "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+  "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo",
+]);

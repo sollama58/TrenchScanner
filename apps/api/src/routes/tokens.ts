@@ -178,35 +178,10 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       reply.code(400).send({ error: "not a valid mint" });
       return;
     }
-    const [candles, token] = await Promise.all([
-      candleCache.get(mintAddress),
-      prisma.token.findUnique({ where: { mintAddress }, select: { id: true } }),
-    ]);
-    const [snapshots, flagged] = token
-      ? await Promise.all([
-          prisma.tokenSnapshot.findMany({
-            where: { tokenId: token.id },
-            orderBy: { takenAt: "desc" },
-            take: CHART_SNAPSHOT_POINTS,
-            select: { takenAt: true, marketCapUsd: true },
-          }),
-          walletCache.get(token.id, () => chartWallets(token.id)),
-        ])
-      : [[], { tape: null, live: null, wallets: [] }];
     // The browser may reuse it for a few seconds; the candles themselves are cached here for 30.
     reply.header("Cache-Control", "private, max-age=15");
-    return {
-      mint: mintAddress,
-      candles: candles && candles.length > 0 ? candles : null,
-      marketCap: snapshots
-        .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
-        .reverse()
-        .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd })),
-      ...flagged,
-    };
+    return readTokenChart(mintAddress);
   });
-
-  const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);
 
   /** TokenSage's read of the token, for the card's TokenSage view (src/tokenSageView.ts). */
   app.get("/:mintAddress/sage", async (request, reply): Promise<SageView | undefined> => {
@@ -215,95 +190,133 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       reply.code(400).send({ error: "not a valid mint" });
       return;
     }
-    const [row, token] = await Promise.all([
-      prisma.tokenNarrative.findUnique({
-        where: { mintAddress },
-        select: {
-          depth: true,
-          status: true,
-          failReason: true,
-          categories: true,
-          mainCategory: true,
-          analysis: true,
-        },
-      }),
-      prisma.token.findUnique({
-        where: { mintAddress },
-        select: { id: true, symbol: true, name: true, imageUrl: true, firstSeenAt: true },
-      }),
-    ]);
-    const [snapshots, labels, judged] = await Promise.all([
-      token
-        ? prisma.tokenSnapshot.findMany({
-            where: { tokenId: token.id },
-            orderBy: { takenAt: "desc" },
-            take: SAGE_CHART_POINTS,
-            select: { takenAt: true, marketCapUsd: true },
-          })
-        : [],
-      row?.categories
-        ? weekLabels.get(() =>
-            prisma.lighthouseDayLabel.findMany({
-              where: {
-                dimension: "category",
-                day: { gte: new Date(Date.now() - TRACK_DAYS * 86_400_000) },
-              },
-              select: { day: true, label: true, count: true, alerts: true, graded: true, won2x: true },
-            }),
-          )
-        : [],
-      // The Narrative seat's judgments of this coin: its own calls and the notes it left on
-      // other seats' cards. A coin carries a handful of cards at most.
-      token
-        ? prisma.curatedAlert.findMany({
-            where: {
-              tokenId: token.id,
-              narrativeRationale: { not: Prisma.DbNull },
-              OR: [{ model: NARRATIVE_CONTESTANT }, { narrativeVerdict: { not: null } }],
-            },
-            orderBy: { createdAt: "desc" },
-            take: 10,
-            select: {
-              model: true,
-              createdAt: true,
-              narrativeVerdict: true,
-              narrativeNotedAt: true,
-              narrativeRationale: true,
-            },
-          })
-        : ([] as NarrativeAlertRow[]),
-    ]);
-    const read =
-      row?.status === "failed"
-        ? null
-        : sageRead(row?.analysis as TokenSageAnalysis | null, row?.depth ?? "basic");
-    return {
-      mint: mintAddress,
-      token: token
-        ? {
-            symbol: token.symbol,
-            name: token.name,
-            imageUrl: token.imageUrl,
-            firstSeenAt: token.firstSeenAt.toISOString(),
-          }
-        : null,
-      status: read
-        ? "ok"
-        : row?.status === "failed"
-          ? "failed"
-          : row && row.analysis === null
-            ? "expired"
-            : "none",
-      failReason: row?.status === "failed" ? failCode(row.failReason) : null,
-      read,
-      marketCap: snapshots
-        .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
-        .reverse()
-        .map((s) => ({ t: s.takenAt.toISOString(), usd: s.marketCapUsd })),
-      track: read ? sageTrack(labels, row?.categories, row?.mainCategory) : null,
-      narrative: sageNarrative(judged),
-    };
+    return readTokenSage(mintAddress);
   });
+}
+
+/**
+ * The token modal's chart for one mint (GET /tokens/:mint/chart, and the Utilities tab's token
+ * lookup): Pump.fun's minute candles, the scan's market caps, and the coin's flagged wallets.
+ */
+export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
+  const [candles, token] = await Promise.all([
+    candleCache.get(mintAddress),
+    prisma.token.findUnique({ where: { mintAddress }, select: { id: true } }),
+  ]);
+  const [snapshots, flagged] = token
+    ? await Promise.all([
+        prisma.tokenSnapshot.findMany({
+          where: { tokenId: token.id },
+          orderBy: { takenAt: "desc" },
+          take: CHART_SNAPSHOT_POINTS,
+          select: { takenAt: true, marketCapUsd: true },
+        }),
+        walletCache.get(token.id, () => chartWallets(token.id)),
+      ])
+    : [[], { tape: null, live: null, wallets: [] }];
+  return {
+    mint: mintAddress,
+    candles: candles && candles.length > 0 ? candles : null,
+    marketCap: snapshots
+      .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
+      .reverse()
+      .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd })),
+    ...flagged,
+  };
+}
+
+const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);
+
+/** TokenSage's read of one mint, as the token modal shows it (GET /tokens/:mint/sage). */
+export async function readTokenSage(mintAddress: string): Promise<SageView> {
+  const [row, token] = await Promise.all([
+    prisma.tokenNarrative.findUnique({
+      where: { mintAddress },
+      select: {
+        depth: true,
+        status: true,
+        failReason: true,
+        categories: true,
+        mainCategory: true,
+        analysis: true,
+      },
+    }),
+    prisma.token.findUnique({
+      where: { mintAddress },
+      select: { id: true, symbol: true, name: true, imageUrl: true, firstSeenAt: true },
+    }),
+  ]);
+  const [snapshots, labels, judged] = await Promise.all([
+    token
+      ? prisma.tokenSnapshot.findMany({
+          where: { tokenId: token.id },
+          orderBy: { takenAt: "desc" },
+          take: SAGE_CHART_POINTS,
+          select: { takenAt: true, marketCapUsd: true },
+        })
+      : [],
+    row?.categories
+      ? weekLabels.get(() =>
+          prisma.lighthouseDayLabel.findMany({
+            where: {
+              dimension: "category",
+              day: { gte: new Date(Date.now() - TRACK_DAYS * 86_400_000) },
+            },
+            select: { day: true, label: true, count: true, alerts: true, graded: true, won2x: true },
+          }),
+        )
+      : [],
+    // The Narrative seat's judgments of this coin: its own calls and the notes it left on
+    // other seats' cards. A coin carries a handful of cards at most.
+    token
+      ? prisma.curatedAlert.findMany({
+          where: {
+            tokenId: token.id,
+            narrativeRationale: { not: Prisma.DbNull },
+            OR: [{ model: NARRATIVE_CONTESTANT }, { narrativeVerdict: { not: null } }],
+          },
+          orderBy: { createdAt: "desc" },
+          take: 10,
+          select: {
+            model: true,
+            createdAt: true,
+            narrativeVerdict: true,
+            narrativeNotedAt: true,
+            narrativeRationale: true,
+          },
+        })
+      : ([] as NarrativeAlertRow[]),
+  ]);
+  const read =
+    row?.status === "failed"
+      ? null
+      : sageRead(row?.analysis as TokenSageAnalysis | null, row?.depth ?? "basic");
+  return {
+    mint: mintAddress,
+    token: token
+      ? {
+          symbol: token.symbol,
+          name: token.name,
+          imageUrl: token.imageUrl,
+          firstSeenAt: token.firstSeenAt.toISOString(),
+        }
+      : null,
+    status: read
+      ? "ok"
+      : row?.status === "failed"
+        ? "failed"
+        : row && row.analysis === null
+          ? "expired"
+          : "none",
+    failReason: row?.status === "failed" ? failCode(row.failReason) : null,
+    read,
+    marketCap: snapshots
+      .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
+      .reverse()
+      .map((s) => ({ t: s.takenAt.toISOString(), usd: s.marketCapUsd })),
+    track: read ? sageTrack(labels, row?.categories, row?.mainCategory) : null,
+    narrative: sageNarrative(judged),
+  };
 }
 
 /**

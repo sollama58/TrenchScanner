@@ -1,6 +1,8 @@
 import { createLogger } from "../logger.js";
 import {
+  BURN_CREDIT_MEMO,
   MAX_MONTHS_PER_BURN,
+  MEMO_PROGRAM_IDS,
   SPL_TOKEN_PROGRAM_ID,
   SUBSCRIPTION_MINT,
   SUBSCRIPTION_RAW_PER_MONTH,
@@ -16,10 +18,13 @@ const logger = createLogger("parse-burn");
 export interface ParsedInstruction {
   program?: string;
   programId?: string;
-  parsed?: {
-    type?: string;
-    info?: Record<string, unknown>;
-  };
+  /** An object for token instructions; the memo text itself for an SPL Memo instruction. */
+  parsed?:
+    | {
+        type?: string;
+        info?: Record<string, unknown>;
+      }
+    | string;
 }
 
 /** A `jsonParsed` token balance: which account (by index into accountKeys) and whose it is. */
@@ -67,9 +72,16 @@ export type BurnRejection =
   | "wrong_mint"
   | "insufficient_amount"
   | "no_authority"
-  | "signature_mismatch";
+  | "signature_mismatch"
+  /** Tagged with the Burn Credits memo: it bought credits, not subscription months. */
+  | "credit_burn";
 
 export type ParseBurnResult = { ok: true; credit: BurnCredit } | { ok: false; reason: BurnRejection };
+
+/** A token instruction's parsed body; null for a memo (whose `parsed` is its text) or none. */
+function parsedOf(ix: ParsedInstruction): { type?: string; info?: Record<string, unknown> } | null {
+  return typeof ix.parsed === "object" && ix.parsed !== null ? ix.parsed : null;
+}
 
 /** Reads a string field, tolerating the RPC returning a PublicKey-like object. */
 function readString(value: unknown): string | null {
@@ -140,7 +152,7 @@ function tokenAccountOwner(tx: ParsedTransaction, account: string): string | nul
 
 /** Is this instruction a burn of the subscription mint, issued by the SPL Token program? */
 function isSubscriptionBurn(ix: ParsedInstruction): boolean {
-  const type = ix.parsed?.type;
+  const type = parsedOf(ix)?.type;
   if (type !== "burn" && type !== "burnChecked") return false;
 
   // Anyone can deploy a program that emits an instruction the parser labels "burn". Requiring the
@@ -153,7 +165,7 @@ function isSubscriptionBurn(ix: ParsedInstruction): boolean {
   if (programId !== undefined && programId !== SPL_TOKEN_PROGRAM_ID) return false;
   if (program === undefined && programId === undefined) return false;
 
-  return readString(ix.parsed?.info?.mint) === SUBSCRIPTION_MINT;
+  return readString(parsedOf(ix)?.info?.mint) === SUBSCRIPTION_MINT;
 }
 
 /**
@@ -175,6 +187,44 @@ function isSubscriptionBurn(ix: ParsedInstruction): boolean {
  * first thing anyone would ask of it is a refund.
  */
 export function parseBurnTransaction(tx: ParsedTransaction, signature?: string): ParseBurnResult {
+  // A burn tagged for Burn Credits bought credits (credits.ts), not months: one burn pays for one
+  // thing, and the memo on the chain says which.
+  if (!tx.meta?.err && carriesCreditMemo(tx)) {
+    const id = tx.transaction?.signatures?.[0];
+    if (signature !== undefined && id !== undefined && id !== signature) {
+      return { ok: false, reason: "signature_mismatch" };
+    }
+    return { ok: false, reason: "credit_burn" };
+  }
+  const burned = largestBurn(tx, signature);
+  if (!burned.ok) return burned;
+  const best = burned.burn;
+  if (best.amount < SUBSCRIPTION_RAW_PER_MONTH) {
+    return { ok: false, reason: "insufficient_amount" };
+  }
+
+  const months = Math.min(MAX_MONTHS_PER_BURN, Number(best.amount / SUBSCRIPTION_RAW_PER_MONTH));
+
+  return {
+    ok: true,
+    credit: {
+      burnerWallet: best.wallet,
+      rawAmount: best.amount,
+      months,
+      slot: BigInt(tx.slot ?? 0),
+      blockTime: typeof tx.blockTime === "number" ? new Date(tx.blockTime * 1000) : null,
+    },
+  };
+}
+
+/**
+ * The transaction's burn of the subscription mint, summed per owner, and the owner who burned the
+ * most - the attribution rules parseBurnTransaction describes, shared with the Burn Credit parser.
+ */
+export function largestBurn(
+  tx: ParsedTransaction,
+  signature?: string,
+): { ok: true; burn: { wallet: string; amount: bigint } } | { ok: false; reason: BurnRejection } {
   // The ledger is keyed by the signature we asked for, so it must be THE transaction's id - its
   // first signature. A co-signer's signature names the same transaction, and if any RPC ever
   // resolved one, the same burn could be credited once under each signer's signature.
@@ -187,7 +237,7 @@ export function parseBurnTransaction(tx: ParsedTransaction, signature?: string):
   if (tx.meta?.err) return { ok: false, reason: "transaction_failed" };
 
   const burns = allInstructions(tx).filter(
-    (ix) => ix.parsed?.type === "burn" || ix.parsed?.type === "burnChecked",
+    (ix) => parsedOf(ix)?.type === "burn" || parsedOf(ix)?.type === "burnChecked",
   );
   if (burns.length === 0) return { ok: false, reason: "no_burn_instruction" };
 
@@ -199,7 +249,7 @@ export function parseBurnTransaction(tx: ParsedTransaction, signature?: string):
   // tokens together into one qualifying total.
   const byOwner = new Map<string, bigint>();
   for (const ix of ofOurMint) {
-    const info = ix.parsed?.info ?? {};
+    const info = parsedOf(ix)?.info ?? {};
     // `authority` for a single-owner account; `multisigAuthority` when the account is owned by an
     // SPL multisig, in which case that address is the owner of record. Either may be a delegate.
     const authority = readString(info.authority) ?? readString(info.multisigAuthority);
@@ -223,22 +273,21 @@ export function parseBurnTransaction(tx: ParsedTransaction, signature?: string):
   for (const [wallet, amount] of byOwner) {
     if (best === null || amount > best.amount) best = { wallet, amount };
   }
-  if (best === null || best.amount < SUBSCRIPTION_RAW_PER_MONTH) {
-    return { ok: false, reason: "insufficient_amount" };
-  }
+  if (best === null) return { ok: false, reason: "no_authority" };
+  return { ok: true, burn: best };
+}
 
-  const months = Math.min(MAX_MONTHS_PER_BURN, Number(best.amount / SUBSCRIPTION_RAW_PER_MONTH));
-
-  return {
-    ok: true,
-    credit: {
-      burnerWallet: best.wallet,
-      rawAmount: best.amount,
-      months,
-      slot: BigInt(tx.slot ?? 0),
-      blockTime: typeof tx.blockTime === "number" ? new Date(tx.blockTime * 1000) : null,
-    },
-  };
+/**
+ * Whether the transaction carries the Burn Credits memo (BURN_CREDIT_MEMO), from the SPL Memo
+ * program. The dashboard's credit burn adds it (apps/web/src/burnTx.ts); jsonParsed reports a
+ * memo instruction's `parsed` as the memo text itself.
+ */
+export function carriesCreditMemo(tx: ParsedTransaction): boolean {
+  return allInstructions(tx).some((ix) => {
+    const isMemo =
+      ix.program === "spl-memo" || (ix.programId !== undefined && MEMO_PROGRAM_IDS.has(ix.programId));
+    return isMemo && typeof ix.parsed === "string" && ix.parsed.trim() === BURN_CREDIT_MEMO;
+  });
 }
 
 /** Human-readable reason, for the API's error responses. */
@@ -256,5 +305,7 @@ export function describeRejection(reason: BurnRejection): string {
       return "Couldn't tell which wallet authorised that burn.";
     case "signature_mismatch":
       return "Use the transaction's own signature (the first one) to claim it.";
+    case "credit_burn":
+      return "That burn was made for Burn Credits, so it counts toward credits, not a subscription.";
   }
 }

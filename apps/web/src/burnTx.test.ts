@@ -1,6 +1,6 @@
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
-import { buildBurnTransaction, COMPUTE_BUDGET_PROGRAM, SPL_TOKEN_PROGRAM } from "./burnTx";
+import { buildBurnTransaction, COMPUTE_BUDGET_PROGRAM, MEMO_PROGRAM, SPL_TOKEN_PROGRAM } from "./burnTx";
 
 const MINT = "9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Spump";
 const OWNER = bs58.encode(Uint8Array.from({ length: 32 }, (_, i) => i + 1));
@@ -72,5 +72,29 @@ describe("buildBurnTransaction", () => {
     expect(() => buildBurnTransaction({ ...base, rawAmount: 1n << 64n })).toThrow();
     expect(() => buildBurnTransaction({ ...base, tokenAccount: OWNER, rawAmount: 1n })).toThrow();
     expect(() => buildBurnTransaction({ ...base, owner: "not-an-address", rawAmount: 1n })).toThrow();
+  });
+});
+
+describe("buildBurnTransaction with a memo", () => {
+  it("adds the memo after the burn, from the Memo program, with no accounts", () => {
+    const tx = decode(
+      buildBurnTransaction({
+        owner: OWNER,
+        tokenAccount: ACCOUNT,
+        mint: MINT,
+        decimals: 6,
+        rawAmount: 500n * 10n ** 6n,
+        blockhash: BLOCKHASH,
+        memo: "trenchscanner:burn-credits",
+      }),
+    );
+    expect(tx.rest).toBe(0);
+    expect(tx.header).toEqual([1, 0, 3]);
+    expect(tx.ixs).toHaveLength(4);
+    expect(tx.ixs[2]!.program).toBe(SPL_TOKEN_PROGRAM);
+    const memo = tx.ixs[3]!;
+    expect(memo.program).toBe(MEMO_PROGRAM);
+    expect(memo.accounts).toEqual([]);
+    expect(new TextDecoder().decode(memo.data)).toBe("trenchscanner:burn-credits");
   });
 });

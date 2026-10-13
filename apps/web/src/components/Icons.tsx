@@ -37,6 +37,28 @@ export const StreamIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** The Utilities tab: a wrench. */
+export const ToolsIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+  </Svg>
+);
+
+/** Burn Credits: a flame. */
+export const FlameIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3-1-5.5 1-8.5z" />
+  </Svg>
+);
+
+/** A lookup: a magnifying glass. */
+export const SearchIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="11" cy="11" r="6" />
+    <path d="M20 20l-4.5-4.5" />
+  </Svg>
+);
+
 export const BrainIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" />

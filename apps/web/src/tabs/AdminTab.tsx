@@ -7,6 +7,7 @@ import { AnnouncementsAdmin } from "./AdminAnnouncements";
 import { ModelsAdmin } from "./AdminModels";
 import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
+import { CreditsAdmin } from "./AdminCredits";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
@@ -29,6 +30,7 @@ const SECTIONS = [
   { id: "filters", label: "Filters" },
   { id: "users", label: "Users" },
   { id: "access", label: "Access" },
+  { id: "credits", label: "Burn Credits" },
   { id: "announce", label: "Announcements" },
   { id: "ai", label: "AI" },
   { id: "backups", label: "Backups" },
@@ -84,6 +86,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
       {section === "filters" && <FiltersAdmin />}
       {section === "users" && <Users />}
       {section === "access" && <Access />}
+      {section === "credits" && <CreditsAdmin />}
       {section === "announce" && <AnnouncementsAdmin />}
       {section === "ai" && <Ai />}
       {section === "backups" && <Backups />}

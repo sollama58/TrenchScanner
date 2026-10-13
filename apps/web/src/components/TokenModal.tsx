@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type Card } from "../api";
 import { usePolling } from "../hooks";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
@@ -108,6 +108,25 @@ const LINKS = [
 ];
 
 /**
+ * The Utilities tab's token lookup opens this same modal for any mint (UtilitiesTab.tsx): its data
+ * comes from the lookup's own routes, and there is no call to explain.
+ */
+export interface UtilityMode {
+  /** Where the chart and the TokenSage read come from: "/utilities/token" instead of "/tokens". */
+  apiBase: string;
+  /** Whether the lookup's fresh scan has landed yet. */
+  scan: "scanning" | "scanned";
+}
+
+const UtilityContext = createContext<UtilityMode | null>(null);
+
+/** The modal's data routes for a mint: the feed's, or a utility lookup's. */
+function useTokenApi(mint: string): string {
+  const utility = useContext(UtilityContext);
+  return `${utility?.apiBase ?? "/tokens"}/${encodeURIComponent(mint)}`;
+}
+
+/**
  * Everything about one token on a feed card, in a native modal dialog (a centred panel on desktop,
  * a sheet from the bottom on phones): its market-cap chart since launch with the alert marked, the
  * card's numbers, why it was called, and TokenSage's read. Opened by clicking a card.
@@ -116,7 +135,17 @@ const LINKS = [
  * (GET /tokens/:mint/chart) and the TokenSage read (GET /tokens/:mint/sage) are fetched here and
  * need access, so a guest sees the card's numbers with the rest locked.
  */
-export function TokenModal({ card, now, onClose }: { card: Card; now: number; onClose: () => void }) {
+export function TokenModal({
+  card,
+  now,
+  onClose,
+  utility = null,
+}: {
+  card: Card;
+  now: number;
+  onClose: () => void;
+  utility?: UtilityMode | null;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
@@ -136,7 +165,9 @@ export function TokenModal({ card, now, onClose }: { card: Card; now: number; on
         if (e.target === e.currentTarget) ref.current?.close();
       }}
     >
-      <TokenBody card={card} now={now} onClose={() => ref.current?.close()} />
+      <UtilityContext.Provider value={utility}>
+        <TokenBody card={card} now={now} onClose={() => ref.current?.close()} />
+      </UtilityContext.Provider>
     </dialog>
   );
 }
@@ -161,7 +192,8 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const { quickLinks } = useAppearance();
   const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   const label = tokenLabel(card.token);
-  const what = card.kind === "stream" ? "Passed screen" : curated ? "Called" : "Alert";
+  const utility = useContext(UtilityContext);
+  const what = utility ? "Scanned" : card.kind === "stream" ? "Passed screen" : curated ? "Called" : "Alert";
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -199,7 +231,11 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
                 <span className={`badge ${badge.tone}`}>{badge.text}</span>
               )}
               <span className="when">
-                {what} {ago(new Date(alertAt), now)}
+                {utility?.scan === "scanning" ? (
+                  <span className="tm-scanning">Scanning now…</span>
+                ) : (
+                  `${what} ${ago(new Date(alertAt), now)}`
+                )}
               </span>
               {card.kind === "match" && card.filter && (
                 <span className="pill pill-mine">{card.filter.name}</span>
@@ -225,7 +261,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       <section className="tm-figs" aria-label="Market cap">
         <div className="tm-fig">
-          <label>{what === "Passed screen" ? "At screen" : "At alert"}</label>
+          <label>{utility ? "At scan" : what === "Passed screen" ? "At screen" : "At alert"}</label>
           <span className="num">{usd(alertMcap)}</span>
         </div>
         <div className="tm-fig">
@@ -245,7 +281,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
           )}
         </div>
         <div className="tm-fig">
-          <label>Age at alert</label>
+          <label>{utility ? "Age" : "Age at alert"}</label>
           <span className="num">{minutes(s.ageMinutes)}</span>
           {s.liquidityUsd != null && <small className="num muted">Liq {usd(s.liquidityUsd)}</small>}
         </div>
@@ -253,10 +289,15 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       <ChartCard card={card} alertAt={alertAt} alertMcap={alertMcap} what={what} />
 
-      <div className="tm-grid">
+      {utility ? (
+        // A lookup has no call to explain: the numbers take the full width.
         <StatsCard card={card} />
-        <CallCard card={card} />
-      </div>
+      ) : (
+        <div className="tm-grid">
+          <StatsCard card={card} />
+          <CallCard card={card} />
+        </div>
+      )}
 
       <BubbleMapSection token={card.token} snapshot={linkedSeed(card)?.snapshot ?? null} />
 
@@ -306,8 +347,10 @@ function ChartCard({
   what: string;
 }) {
   const mint = card.token.mintAddress;
-  const { data, error } = usePolling<TokenChart>(`/tokens/${encodeURIComponent(mint)}/chart`, CHART_POLL_MS);
-  const [range, setRange] = useState<Range>("alert");
+  const { data, error } = usePolling<TokenChart>(`${useTokenApi(mint)}/chart`, CHART_POLL_MS);
+  const utility = useContext(UtilityContext);
+  // A lookup has no alert to start from: it opens on the coin's whole history.
+  const [range, setRange] = useState<Range>(utility ? "all" : "alert");
   const [hidden, setHidden] = useState<ReadonlySet<MarkerKind>>(() => new Set());
   const [height, setHeight] = useState(() => (window.innerWidth <= 640 ? 210 : 260));
   useEffect(() => {
@@ -389,7 +432,7 @@ function ChartCard({
                 aria-pressed={range === r.id}
                 onClick={() => setRange(r.id)}
               >
-                {r.label}
+                {utility && r.id === "alert" ? "From scan" : r.label}
               </button>
             ))}
           </span>
@@ -576,13 +619,16 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
 function StatsCard({ card }: { card: Card }) {
   const s = card.snapshot;
   const r = cardReadings(card);
+  const utility = useContext(UtilityContext);
   const { scale } = useScoreWeights();
   const { scoreColor } = useAppearance();
   const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
   const latest = card.latestSnapshot;
   return (
     <section className="sage-card">
-      <h4>At the alert</h4>
+      <h4>
+        {utility ? (utility.scan === "scanning" ? "Market data (scanning…)" : "At the scan") : "At the alert"}
+      </h4>
       <dl className="tm-stats">
         <div>
           <dt>Score</dt>
@@ -761,7 +807,9 @@ function CallCard({ card }: { card: Card }) {
  * trending on, and how calls on coins like it (its narrative) did this week.
  */
 function SageSection({ mint }: { mint: string }) {
-  const { data, error } = usePolling<SageView>(`/tokens/${encodeURIComponent(mint)}/sage`, 120_000);
+  const utility = useContext(UtilityContext);
+  // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
+  const { data, error } = usePolling<SageView>(`${useTokenApi(mint)}/sage`, utility ? 20_000 : 120_000);
   const r = data?.read ?? null;
   return (
     <>
@@ -782,6 +830,7 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
   const r = data?.read ?? null;
   const locked = error && !data ? lockedText(error, "TokenSage read") : null;
   const ref = r?.referent ?? null;
+  const utility = useContext(UtilityContext);
   const copyMark = r?.copyMark ? (LINEAGE[r.copyMark] ?? LINEAGE.copy) : undefined;
   const flags = r ? [...r.flags].sort((a, b) => rank(a.severity) - rank(b.severity)).slice(0, 5) : [];
   return (
@@ -810,7 +859,9 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
             ? "TokenSage couldn't read this coin."
             : data.status === "expired"
               ? "TokenSage's read of this coin has been cleared (reads are kept for three weeks)."
-              : "TokenSage hasn't read this coin yet."}
+              : utility
+                ? "TokenSage is reading this coin now. Its read shows here as soon as it lands."
+                : "TokenSage hasn't read this coin yet."}
         </p>
       )}
       {r && (

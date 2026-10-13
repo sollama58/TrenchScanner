@@ -2414,6 +2414,191 @@ legend {
 .burn-section h3 {
   margin: 0 0 6px;
 }
+
+/* ---------- Utilities (tabs/UtilitiesTab.tsx) ---------- */
+.utilities {
+  max-width: 980px;
+  margin: 0 auto;
+}
+.util-intro h1 {
+  font-size: 30px;
+  margin: 6px 0 6px;
+}
+.util-intro p {
+  margin: 0;
+  max-width: 640px;
+}
+.util-credits .section-head {
+  align-items: center;
+}
+.util-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.util-balance .num {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.util-balance .num.muted {
+  color: var(--muted);
+  background: none;
+}
+.util-rates {
+  margin: 0 0 4px;
+}
+.util-burn {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.util-count {
+  width: 110px;
+}
+.util-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.util-picks .small-btn.active {
+  border-color: var(--brand-ink);
+  color: var(--brand-ink);
+}
+.util-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+.util-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.util-card .section-head {
+  margin-bottom: 0;
+}
+.util-card p {
+  margin: 0;
+}
+.util-cost {
+  flex: none;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--brand-ink);
+  background: color-mix(in srgb, var(--brand-a) 14%, transparent);
+}
+.util-form {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+.util-form input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+.util-form button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.util-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.util-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+.util-list li:first-child {
+  border-top: none;
+}
+.util-avatar.avatar {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  font-size: 11px;
+}
+.util-what {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.util-what strong,
+.util-what span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.small-btn {
+  flex: none;
+  font-size: 12px;
+  padding: 5px 10px;
+}
+.util-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 50;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  border-radius: var(--radius-s);
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+}
+.tm-scanning {
+  color: var(--brand-ink);
+  animation: tm-scan-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tm-scan-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tm-scanning {
+    animation: none;
+  }
+}
+@media (max-width: 760px) {
+  .util-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .util-intro h1 {
+    font-size: 24px;
+  }
+  /* The balance and the cost pill are small: they stay beside their headings. */
+  .util-credits .section-head,
+  .util-card .section-head {
+    flex-direction: row;
+    align-items: center;
+  }
+  .util-balance .num {
+    font-size: 28px;
+  }
+  .util-form {
+    flex-direction: column;
+  }
+}
 .signin-burn {
   margin: 14px 0 0;
 }

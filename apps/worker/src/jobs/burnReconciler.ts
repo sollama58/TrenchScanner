@@ -1,7 +1,10 @@
 import {
+  carriesCreditMemo,
   createLogger,
   creditBurn,
+  creditBurnCredits,
   parseBurnTransaction,
+  parseCreditBurnTransaction,
   prisma,
   SolanaRpc,
   SUBSCRIPTION_MINT,
@@ -48,6 +51,8 @@ export interface ReconcileResult {
   credited: number;
   held: number;
   alreadyCredited: number;
+  /** Burns tagged for Burn Credits newly recorded in the credit ledger. */
+  creditBurns: number;
   /** Whether a fetch failed and left part of this pass's ground for the next one - see index.ts. */
   stoppedEarly: boolean;
 }
@@ -76,6 +81,7 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
     credited: 0,
     held: 0,
     alreadyCredited: 0,
+    creditBurns: 0,
     stoppedEarly: false,
   };
 
@@ -286,14 +292,19 @@ async function processSignatures(
 
   // Which of these we have already stored, so a re-walk after an RPC failure doesn't re-fetch
   // every transaction it already knows about.
-  const known = new Set(
-    (
-      await prisma.burnEvent.findMany({
-        where: { signature: { in: pending.map((p) => p.signature) } },
-        select: { signature: true },
-      })
-    ).map((b) => b.signature),
-  );
+  // Both ledgers: a burn tagged for Burn Credits is recorded in BurnCreditEntry instead.
+  const signatures = pending.map((p) => p.signature);
+  const [subscriptionBurns, creditBurns] = await Promise.all([
+    prisma.burnEvent.findMany({ where: { signature: { in: signatures } }, select: { signature: true } }),
+    prisma.burnCreditEntry.findMany({
+      where: { burnSignature: { in: signatures } },
+      select: { burnSignature: true },
+    }),
+  ]);
+  const known = new Set([
+    ...subscriptionBurns.map((b) => b.signature),
+    ...creditBurns.flatMap((b) => (b.burnSignature ? [b.burnSignature] : [])),
+  ]);
 
   let lastProcessed: string | null = null;
   let completed = true;
@@ -325,6 +336,24 @@ async function processSignatures(
         completed = false;
         result.stoppedEarly = true;
         break outer;
+      }
+
+      // A burn made for Burn Credits goes to the credit ledger, never to subscription months.
+      if (carriesCreditMemo(tx)) {
+        const credit = parseCreditBurnTransaction(tx, signature);
+        if (credit.ok) {
+          const outcome = await creditBurnCredits(signature, credit.burn, "reconciler");
+          if (outcome.status === "credited") {
+            result.creditBurns += 1;
+            logger.info("credited an unclaimed Burn Credits burn", {
+              signature,
+              wallet: outcome.wallet,
+              credits: outcome.credits,
+            });
+          }
+        }
+        lastProcessed = signature;
+        continue;
       }
 
       const verdict = parseBurnTransaction(tx, signature);

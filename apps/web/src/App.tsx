@@ -11,6 +11,7 @@ import {
   ExternalIcon,
   GearIcon,
   LighthouseIcon,
+  ToolsIcon,
   LogoMark,
   LockIcon,
   LogoutIcon,
@@ -58,6 +59,8 @@ const SageHost = lazy(() => import("./components/SageView").then((m) => ({ defau
 const BubbleMapHost = lazy(() =>
   import("./components/BubbleMap").then((m) => ({ default: m.BubbleMapHost })),
 );
+// Utilities: its own chunk, loaded the first time the tab opens.
+const UtilitiesTab = lazy(() => import("./tabs/UtilitiesTab").then((m) => ({ default: m.UtilitiesTab })));
 // The wallet detail modal loads the first time a wallet or a ?wallet= link opens it.
 const WalletModalHost = lazy(() =>
   import("./components/WalletModal").then((m) => ({ default: m.WalletModalHost })),
@@ -72,6 +75,8 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
   { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
+  // Lookups paid for with Burn Credits, on top of a subscription.
+  { id: "utilities", label: "Utilities", Icon: ToolsIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
@@ -413,6 +418,7 @@ export function App() {
                 {tab === "model" && <ModelTab />}
                 {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab goTo={goTo} />}
+                {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
