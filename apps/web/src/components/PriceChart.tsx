@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { change, signedPct, usd } from "../format";
-import { walletText, type WalletNames } from "../walletNames";
+import { isPumpfunName, walletText, type WalletNames } from "../walletNames";
 import {
   groupMarkers,
   mcapAxis,
@@ -516,7 +516,10 @@ function MarkerTip({
         {g.wallets > 1 ? ` by ${g.wallets} wallets` : ""} · {timeLabel(g.trades[0]!.t, 0)}
       </span>
       {wallets.slice(0, 3).map(([w, sol]) => (
-        <span key={w} className={`pc-mark-wallet${names?.[w] ? "" : " num"}`}>
+        <span
+          key={w}
+          className={`pc-mark-wallet${names?.[w] ? "" : " num"}${isPumpfunName(names?.[w]) ? " pumpfun-name" : ""}`}
+        >
           {walletText(w, names)}
           {known ? ` · ${sol.toFixed(sol >= 10 ? 0 : 2)} SOL` : ""}
         </span>

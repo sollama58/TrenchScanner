@@ -4,14 +4,15 @@ import { shortAddress } from "./format";
 
 /**
  * The names holder and wallet lists show in place of an address (POST /wallets/names): a KOL's
- * name, else Helius's identity name, else TrenchScanner's exchange label. Each list asks once for
+ * name, else Helius's identity name, else TrenchScanner's exchange label. A Pump.fun username
+ * shows in quotes ("NAME"), tinted light green (the `pumpfun-name` class in styles.css). Each list asks once for
  * the wallets it shows that aren't known yet; answers are kept for the session, so a list opened
  * again (or another list with the same wallets) asks nothing.
  */
 
 export interface WalletName {
   name: string;
-  source: "kol" | "identity" | "exchange";
+  source: "kol" | "identity" | "pumpfun" | "exchange";
 }
 
 /** Wallet to name, for the wallets that have one. */
@@ -79,10 +80,19 @@ export function useWalletNames(wallets: readonly (string | null | undefined)[]):
   }, [key, v]);
 }
 
-/** A wallet as plain text: its name when it has one, else its short address. */
+/** Whether a name is a Pump.fun username: shown quoted, with the `pumpfun-name` class. */
+export const isPumpfunName = (n: WalletName | null | undefined): boolean => n?.source === "pumpfun";
+
+/** A name as the dashboard shows it: a Pump.fun username in quotes ("NAME"), any other as it is. */
+export function walletNameText(n: WalletName): string {
+  return isPumpfunName(n) ? `"${n.name}"` : n.name;
+}
+
+/** A wallet as plain text: its name when it has one (see walletNameText), else its short address. */
 export function walletText(wallet: string | null | undefined, names?: WalletNames): string {
   if (!wallet) return "";
-  return names?.[wallet]?.name ?? shortAddress(wallet);
+  const n = names?.[wallet];
+  return n ? walletNameText(n) : shortAddress(wallet);
 }
 
 /** For tests: forget every answer. */

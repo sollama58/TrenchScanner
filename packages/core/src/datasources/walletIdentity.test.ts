@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanWalletName, HeliusIdentityClient } from "./walletIdentity.js";
+import { cleanWalletName, HeliusIdentityClient, isPumpfunName } from "./walletIdentity.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -75,6 +75,25 @@ describe("cleanWalletName", () => {
     expect(cleanWalletName('"degenking" on Pumpfun')).toBe("degenking");
     expect(cleanWalletName("\u201cMoon Boy\u201d on Pump.fun")).toBe("Moon Boy");
     expect(cleanWalletName('"x" on pump fun')).toBe("x");
+  });
+
+  it("marks a Pump.fun username, in a batch read too", async () => {
+    expect(isPumpfunName('"degenking" on Pumpfun')).toBe(true);
+    expect(isPumpfunName("Binance 1")).toBe(false);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(json([{ address: "a", type: "wallet", name: '"degen" on Pumpfun', tags: [] }])),
+    );
+    const res = await new HeliusIdentityClient("key").batchIdentity(["a"]);
+    expect(res.status === "found" ? res.value.get("a") : null).toEqual({
+      type: "wallet",
+      name: "degen",
+      category: null,
+      tags: [],
+      pumpfun: true,
+    });
   });
 
   it("leaves every other name alone", () => {

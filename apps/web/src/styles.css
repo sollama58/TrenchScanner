@@ -9702,6 +9702,10 @@ img.tm-avatar {
 .wm-tone-good {
   --mk: var(--good);
 }
+.wm-tone-pumpfun {
+  --mk: var(--good);
+  color: var(--good-ink);
+}
 .wm-sub {
   margin: -4px 0 4px !important;
 }
@@ -9850,6 +9854,13 @@ img.tm-avatar {
 }
 .wallet-name.src-kol {
   color: color-mix(in srgb, var(--series-3) 70%, var(--ink));
+}
+/* A Pump.fun username, wherever a wallet name shows: in quotes (walletNameText), shaded light green. */
+.pumpfun-name {
+  padding: 0 5px;
+  border-radius: 5px;
+  color: var(--good-ink);
+  background: color-mix(in srgb, var(--good) 14%, transparent);
 }
 @media (max-width: 640px) {
   .wallet-name {

@@ -24,4 +24,13 @@ describe("pickWalletName", () => {
       pickWalletName({ kol: null, identity: { ...identity, name: null }, exchange: undefined }),
     ).toBeNull();
   });
+
+  it("marks a Pump.fun username", () => {
+    expect(
+      pickWalletName({ kol: null, identity: { ...identity, name: "degen", pumpfun: true }, exchange: null }),
+    ).toEqual({
+      name: "degen",
+      source: "pumpfun",
+    });
+  });
 });

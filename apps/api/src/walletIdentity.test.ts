@@ -15,6 +15,9 @@ describe("identityLabels", () => {
       { text: "Hot Wallet", tone: "info", source: "Helius", detail: undefined },
     ]);
     expect(identityLabels(null)).toEqual([]);
+    expect(
+      identityLabels({ type: "wallet", name: "degen", category: null, tags: [], pumpfun: true }),
+    ).toEqual([{ text: '"degen"', tone: "pumpfun", source: "Helius", detail: "Pump.fun username" }]);
   });
 });
 
