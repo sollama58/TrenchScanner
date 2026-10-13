@@ -116,6 +116,21 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxLinkedCreatorPct",
+        min: 0,
+        max: 100,
+        label: "Max supply tied to the creator",
+        hint: "top-20 holders the creator funded, that funded the creator, or that share the creator's funder; tokens not checked yet wait",
+        unit: "%",
+      },
+      {
+        key: "minLiveHolderCount",
+        min: 0,
+        label: "Min holders (live)",
+        hint: "Jupiter's holder count seconds before the alert; coins under 40 doubled half as often on 2026-10-13; tokens without a quote are skipped",
+        step: 1,
+      },
+      {
         key: "minCexFundedCount",
         min: 0,
         max: 20,

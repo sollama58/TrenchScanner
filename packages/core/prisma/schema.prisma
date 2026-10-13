@@ -273,6 +273,13 @@ model UserFilter {
   /// Max % of supply held by top holders funded within a minute of each other, from any funders
   /// (TokenSnapshot.sameTimeFundedPct). Skipped while unknown.
   maxSameTimeFundedPct       Float?
+  /// Max % of supply held by top holders tied to the creator: wallets the creator funded, that
+  /// funded the creator, or with the creator's funder (TokenSnapshot.linkedCreatorPct). Skipped
+  /// while unknown.
+  maxLinkedCreatorPct        Float?
+  /// Min holders as Jupiter counts them at the decision (the fresh quote's holderCount, seconds
+  /// old). Fails closed without a quote, like the other floors.
+  minLiveHolderCount         Int?
   /// Superseded by the counts below (user ask 2026-10-13, "#/20"); kept, read by nothing, as the
   /// migration copied them across.
   minCexFundedPct            Float?

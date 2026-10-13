@@ -810,6 +810,8 @@ export interface FilterInput {
   minCexFundedCount: number | null;
   maxCexFundedCount: number | null;
   maxSameTimeFundedPct: number | null;
+  maxLinkedCreatorPct: number | null;
+  minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
   /** TokenSage narrative criteria; every one fails closed until the coin has a read. */
