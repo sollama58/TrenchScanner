@@ -9834,6 +9834,25 @@ img.tm-avatar {
 .tm-wallet-btn:hover {
   text-decoration: underline;
 }
+/* A named wallet (a KOL, an exchange, a named service) in a list, in place of its address. */
+.wallet-name {
+  display: inline-block;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-family: var(--font);
+  font-weight: 650;
+}
+.wallet-name.src-kol {
+  color: color-mix(in srgb, var(--series-3) 70%, var(--ink));
+}
+@media (max-width: 640px) {
+  .wallet-name {
+    max-width: 13ch;
+  }
+}
 @media (max-width: 640px) {
   .wm-facts {
     grid-template-columns: repeat(3, minmax(0, 1fr));

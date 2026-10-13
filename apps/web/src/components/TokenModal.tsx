@@ -56,6 +56,8 @@ import { Skeleton } from "./Charts";
 import { openWallet } from "../walletModal";
 import { BubbleMapSection } from "./BubbleMap";
 import { TopHolders } from "./TopHolders";
+import { WalletText } from "./WalletText";
+import { useWalletNames, walletText } from "../walletNames";
 import {
   BrainIcon,
   ChartIcon,
@@ -593,6 +595,8 @@ function ChartCard({
       }),
     [flagged, hidden],
   );
+  // The marker tips name the wallets that traded (the flagged list below reads the same names).
+  const names = useWalletNames(useMemo(() => flagged.map((w) => w.wallet), [flagged]));
   const counts = MARKER_KINDS.map((k) => ({ k, n: flagged.filter((w) => kindOf(w) === k).length }));
   const toggle = (k: MarkerKind) =>
     setHidden((h) => {
@@ -650,6 +654,7 @@ function ChartCard({
             markers={markers}
             seenUntil={range === "model" ? alertAt : undefined}
             scans={view.scans}
+            names={names}
             height={height}
             ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
           />
@@ -755,6 +760,10 @@ const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: stri
 function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
   const [all, setAll] = useState(false);
   const shown = all ? wallets : wallets.slice(0, 6);
+  // One read names the whole list (and the funders its Linked tags mention).
+  const names = useWalletNames(
+    useMemo(() => wallets.flatMap((w) => [w.wallet, w.funder ?? null]), [wallets]),
+  );
   return (
     <section className="sage-card tm-wallets">
       <h4>
@@ -787,11 +796,11 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                 <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
                 <button
                   type="button"
-                  className="num tm-wallet tm-wallet-btn"
+                  className="tm-wallet tm-wallet-btn"
                   onClick={() => openWallet(w.wallet)}
                   title="Open this wallet's details"
                 >
-                  {shortAddress(w.wallet)}
+                  <WalletText wallet={w.wallet} names={names} />
                 </button>
                 <span className="tm-tags">
                   {w.tags.map((t) => (
@@ -800,13 +809,15 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                       className={`tm-tag k-${TAG_TEXT[t].tone}`}
                       title={
                         t === "linked" && w.funder
-                          ? `Funded by ${shortAddress(w.funder)}, like other top holders`
+                          ? `Funded by ${walletText(w.funder, names)}, like other top holders`
                           : t === "dumper" && w.dumps !== null
                             ? `Sold into ${w.dumps} stopped calls`
                             : undefined
                       }
                     >
-                      {t === "kol" && w.kol ? `KOL: ${w.kol}` : TAG_TEXT[t].text}
+                      {t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
+                        ? `KOL: ${w.kol}`
+                        : TAG_TEXT[t].text}
                     </span>
                   ))}
                 </span>

@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { change, shortAddress, signedPct, usd } from "../format";
+import { change, signedPct, usd } from "../format";
+import { walletText, type WalletNames } from "../walletNames";
 import {
   groupMarkers,
   mcapAxis,
@@ -72,6 +73,7 @@ export function PriceChart({
   markers = [],
   seenUntil,
   scans = [],
+  names,
   height,
   ariaLabel,
 }: {
@@ -85,6 +87,8 @@ export function PriceChart({
   seenUntil?: number;
   /** Model View: the scan readings the model read, drawn as dots on their market caps. */
   scans?: Point[];
+  /** Names for the markers' wallets (KOLs, exchanges), shown in place of their addresses. */
+  names?: WalletNames;
   height: number;
   ariaLabel: string;
 }) {
@@ -448,7 +452,7 @@ export function PriceChart({
         </span>
       ))}
 
-      {mark && <MarkerTip group={mark.g} x={mark.x} y={mark.y} width={width} />}
+      {mark && <MarkerTip group={mark.g} x={mark.x} y={mark.y} width={width} names={names} />}
 
       {h && !mark && (
         <div
@@ -472,7 +476,19 @@ export function PriceChart({
 }
 
 /** What one marker stands for: who traded, which way, and how much. */
-function MarkerTip({ group: g, x, y, width }: { group: MarkerGroup; x: number; y: number; width: number }) {
+function MarkerTip({
+  group: g,
+  x,
+  y,
+  width,
+  names,
+}: {
+  group: MarkerGroup;
+  x: number;
+  y: number;
+  width: number;
+  names?: WalletNames;
+}) {
   const known = g.trades.some((t) => t.sol !== null);
   // The wallets in it, the biggest traders first.
   const byWallet = new Map<string, number>();
@@ -499,8 +515,8 @@ function MarkerTip({ group: g, x, y, width }: { group: MarkerGroup; x: number; y
         {g.wallets > 1 ? ` by ${g.wallets} wallets` : ""} · {timeLabel(g.trades[0]!.t, 0)}
       </span>
       {wallets.slice(0, 3).map(([w, sol]) => (
-        <span key={w} className="pc-mark-wallet num">
-          {shortAddress(w)}
+        <span key={w} className={`pc-mark-wallet${names?.[w] ? "" : " num"}`}>
+          {walletText(w, names)}
           {known ? ` · ${sol.toFixed(sol >= 10 ? 0 : 2)} SOL` : ""}
         </span>
       ))}

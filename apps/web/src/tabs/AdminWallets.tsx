@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { usePolling } from "../hooks";
 import { pct } from "../format";
+import { useWalletNames } from "../walletNames";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
 
 /**
@@ -91,6 +92,7 @@ export function WalletsAdmin() {
   const q = usePolling<Overview>("/admin/wallets?limit=50", 120_000);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<string | null>(null);
+  const names = useWalletNames(useMemo(() => q.data?.wallets.map((w) => w.wallet) ?? [], [q.data]));
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const v = search.trim();
@@ -153,7 +155,7 @@ export function WalletsAdmin() {
                 ]}
                 rows={r.wallets.map((w) => [
                   <span key="w">
-                    <Wallet address={w.wallet} />{" "}
+                    <Wallet address={w.wallet} names={names} />{" "}
                     <button className="link small" onClick={() => setOpen(w.wallet)}>
                       coins
                     </button>
@@ -239,6 +241,7 @@ function Lookup({ address, risky }: { address: string; risky: number }) {
 }
 
 function CoinView({ c, risky }: { c: CoinDetail; risky: number }) {
+  const names = useWalletNames(useMemo(() => c.wallets.map((w) => w.wallet), [c]));
   return (
     <Panel
       title={`${c.symbol ?? "Coin"}: holders and first buyers`}
@@ -262,7 +265,7 @@ function CoinView({ c, risky }: { c: CoinDetail; risky: number }) {
       <Table
         head={["Wallet", "Score", "Coins", "Held at call", "Roles", "SOL in / out"]}
         rows={c.wallets.map((w) => [
-          <Wallet key="w" address={w.wallet} />,
+          <Wallet key="w" address={w.wallet} names={names} />,
           scoreTag(w.score, risky),
           n(w.coins),
           w.heldPctAtAnchor === null ? "–" : pct(w.heldPctAtAnchor, 1),

@@ -3,6 +3,8 @@ import { Skeleton } from "../components/Charts";
 import type { Loadable } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
+import type { WalletNames } from "../walletNames";
+import { WalletText } from "../components/WalletText";
 
 /** The building blocks every Admin section shares: panels, tables, KPI tiles and formatters. */
 
@@ -119,15 +121,20 @@ export const Tag = ({ tone, children }: { tone: "ok" | "warn" | "bad" | "muted";
   <span className={`admin-tag-${tone}`}>{children}</span>
 );
 
-export function Wallet({ address }: { address: string }) {
+/** A wallet that opens its modal: its name when `names` has one (a holder list), else its short address. */
+export function Wallet({ address, names }: { address: string; names?: WalletNames }) {
   return (
     <button
       type="button"
-      className="num tm-wallet-btn"
+      className="tm-wallet-btn"
       onClick={() => openWallet(address)}
       title={`${address}: open its details`}
     >
-      {shortAddress(address)}
+      {names?.[address] ? (
+        <WalletText wallet={address} names={names} />
+      ) : (
+        <span className="num">{shortAddress(address)}</span>
+      )}
     </button>
   );
 }

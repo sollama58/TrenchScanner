@@ -25,7 +25,7 @@ describe("WalletIdentityReader", () => {
       value: { type: "exchange", name: "OKX", category: null, tags: [] },
     }));
     const reader = new WalletIdentityReader(
-      { identity: call },
+      { identity: call, batchIdentity: vi.fn() },
       { ttlMs: 60_000, perMinute: 2, maxEntries: 10 },
     );
     expect((await reader.labels("a", 0)).map((l) => l.text)).toEqual(["OKX"]);
@@ -38,11 +38,34 @@ describe("WalletIdentityReader", () => {
 
   it("leaves a plan that can't read it alone for an hour", async () => {
     const call = vi.fn(async (): Promise<IdentityRead<HeliusIdentity>> => ({ status: "unavailable" }));
-    const reader = new WalletIdentityReader({ identity: call });
+    const reader = new WalletIdentityReader({ identity: call, batchIdentity: vi.fn() });
     await reader.labels("a", 0);
     await reader.labels("b", 60_000);
     expect(call).toHaveBeenCalledTimes(1);
     await reader.labels("b", 3_700_000);
     expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a list's misses in one batch and serves the rest from the cache", async () => {
+    const batch = vi.fn(async (wallets: readonly string[]) => ({
+      status: "found" as const,
+      value: new Map<string, HeliusIdentity | null>(
+        wallets.map((w) => [
+          w,
+          w === "a" ? { type: "exchange", name: "OKX", category: null, tags: [] } : null,
+        ]),
+      ),
+    }));
+    const reader = new WalletIdentityReader({ identity: vi.fn(), batchIdentity: batch });
+    const first = await reader.identities(["a", "b", "a"], 0);
+    expect([...first.entries()]).toEqual([
+      ["a", { type: "exchange", name: "OKX", category: null, tags: [] }],
+      ["b", null],
+    ]);
+    expect(batch).toHaveBeenCalledWith(["a", "b"]);
+    await reader.identities(["a", "b", "c"], 1_000);
+    expect(batch).toHaveBeenLastCalledWith(["c"]);
+    expect(batch).toHaveBeenCalledTimes(2);
+    expect((await reader.labels("a", 2_000)).map((l) => l.text)).toEqual(["OKX"]);
   });
 });
