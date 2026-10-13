@@ -103,14 +103,21 @@ function kindOf(w: FlaggedWallet): MarkerKind {
   return "linked";
 }
 
-type Range = "alert" | "1h" | "all";
-const RANGES: { id: Range; label: string }[] = [
+type Range = "model" | "alert" | "1h" | "all";
+const RANGES: { id: Range; label: string; title?: string }[] = [
+  {
+    id: "model",
+    label: "Model View",
+    title: "Up to 5 minutes either side of the call: what the model had to go on, and what came next",
+  },
   { id: "alert", label: "From alert" },
   { id: "1h", label: "1h" },
   { id: "all", label: "All" },
 ];
 /** How much of the run-up the "From alert" view shows before the alert. */
 const LEAD_IN_MS = 10 * 60_000;
+/** How far either side of the call "Model View" reaches (never before the first trade). */
+const MODEL_SPAN_MS = 5 * 60_000;
 /** Points drawn at most: enough for a smooth line, few enough that each one stays hoverable. */
 const MAX_POINTS = 200;
 const CHART_POLL_MS = 30_000;
@@ -541,7 +548,8 @@ function ChartCard({
     const source: Point[] = fromCandles
       ? data.candles!.map((c) => ({ t: c.t, v: c.c }))
       : data.marketCap.map((p) => ({ t: p.t, v: p.usd }));
-    if (source.length < 2) return { points: [] as Point[], fromCandles, step: undefined };
+    if (source.length < 2)
+      return { points: [] as Point[], fromCandles, step: undefined, scans: [] as Point[] };
     const first = source[0]!.t;
     const last = source[source.length - 1]!.t;
     const from =
@@ -549,12 +557,24 @@ function ChartCard({
         ? first
         : range === "1h"
           ? last - 3_600_000
-          : // From the alert: unless the data starts after it (then all of it).
-            alertAt - LEAD_IN_MS > first
-            ? alertAt - LEAD_IN_MS
-            : first;
-    const step = pointWidthMs(last - Math.max(from, first) + 60_000, MAX_POINTS);
-    return { points: linePoints(source, from, step), fromCandles, step: fromCandles ? step : undefined };
+          : range === "model"
+            ? Math.max(first, alertAt - MODEL_SPAN_MS)
+            : // From the alert: unless the data starts after it (then all of it).
+              alertAt - LEAD_IN_MS > first
+              ? alertAt - LEAD_IN_MS
+              : first;
+    const to = range === "model" ? alertAt + MODEL_SPAN_MS : last;
+    const step = pointWidthMs(Math.min(to, last) - Math.max(from, first) + 60_000, MAX_POINTS);
+    return {
+      points: linePoints(source, from, step, to),
+      fromCandles,
+      step: fromCandles ? step : undefined,
+      // The scans the model read before calling it, drawn as dots in Model View.
+      scans:
+        range === "model"
+          ? data.marketCap.filter((p) => p.t >= from && p.t <= alertAt).map((p) => ({ t: p.t, v: p.usd }))
+          : [],
+    };
   }, [data, range, alertAt]);
 
   const markers = useMemo<MarkerTrade[]>(
@@ -593,6 +613,7 @@ function ChartCard({
                 type="button"
                 className={`tm-range${range === r.id ? " on" : ""}`}
                 aria-pressed={range === r.id}
+                title={r.title}
                 onClick={() => setRange(r.id)}
               >
                 {utility && r.id === "alert" ? "From scan" : r.label}
@@ -620,9 +641,20 @@ function ChartCard({
             stepMs={view.step}
             events={events}
             markers={markers}
+            seenUntil={range === "model" ? alertAt : undefined}
+            scans={view.scans}
             height={height}
             ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
           />
+        )}
+        {range === "model" && view && view.points.length >= 2 && (
+          <p className="faint small tm-model-note">
+            <i className="tm-scan-dot" aria-hidden="true" />{" "}
+            {view.scans.length > 0
+              ? `The ${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read before the call. `
+              : ""}
+            Up to 5 minutes either side of the call; the shaded part came after it, so the model never saw it.
+          </p>
         )}
         {data && (
           <div className="tm-legend">

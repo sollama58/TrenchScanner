@@ -10311,3 +10311,42 @@ img.tm-avatar {
 .pc-peak {
   pointer-events: none;
 }
+/* Model View: what came after the call is shaded; the scans the model read are dots. */
+.pc-unseen rect {
+  fill: var(--ink);
+  opacity: 0.045;
+}
+.pc-zone {
+  paint-order: stroke;
+  stroke: var(--surface-2);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  fill: var(--muted);
+}
+.pc-zone.seen {
+  fill: var(--brand-ink);
+}
+.pc-scan {
+  fill: var(--surface-2);
+  stroke: var(--brand-ink);
+  stroke-width: 2;
+}
+.tm-model-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+.tm-scan-dot {
+  flex: none;
+  margin-top: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--brand-ink);
+  background: var(--surface-2);
+}

@@ -70,6 +70,8 @@ export function PriceChart({
   stepMs,
   events,
   markers = [],
+  seenUntil,
+  scans = [],
   height,
   ariaLabel,
 }: {
@@ -79,6 +81,10 @@ export function PriceChart({
   events: ChartEvent[];
   /** Flagged wallets' trades, drawn as B and S badges (buys under the line, sells over it) and summed in a lane under the plot. */
   markers?: MarkerTrade[];
+  /** Model View: the call's time. Everything after it is shaded as what the model didn't see. */
+  seenUntil?: number;
+  /** Model View: the scan readings the model read, drawn as dots on their market caps. */
+  scans?: Point[];
   height: number;
   ariaLabel: string;
 }) {
@@ -169,8 +175,8 @@ export function PriceChart({
     let y = ly + dir * (9 + r);
     for (let tries = 0; tries < 24; tries++) {
       if (y < top || y > low) {
-        // Out of room above or below the line: start a new column beside it.
-        x = Math.min(width - PAD.r - r - 2, x + r * 2 + 3);
+        // Out of room above or below the line: start a new column beside it, toward the middle.
+        x += (lx > width / 2 ? -1 : 1) * (r * 2 + 3);
         y = ly + dir * (9 + r);
       }
       const hit = placed.find((q) => Math.hypot(q.x - x, q.y - y) < q.r + r + 3);
@@ -271,10 +277,39 @@ export function PriceChart({
           />
         ))}
 
+        {seenUntil !== undefined && seenUntil >= geo.t0 && seenUntil < geo.t1 && (
+          <g className="pc-unseen" aria-hidden="true">
+            <rect
+              x={x(seenUntil)}
+              y={PAD.t - 6}
+              width={width - PAD.r - x(seenUntil)}
+              height={bottom - PAD.t + 6}
+            />
+            {x(seenUntil) - PAD.l > 90 && (
+              <text x={x(seenUntil) - 8} y={PAD.t + 28} textAnchor="end" className="pc-zone seen">
+                What the model saw
+              </text>
+            )}
+            {width - PAD.r - x(seenUntil) > 90 && (
+              <text x={x(seenUntil) + 8} y={PAD.t + 28} className="pc-zone">
+                After the call
+              </text>
+            )}
+          </g>
+        )}
+
         <path d={area} fill={`url(#${id}-area)`} />
         <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />
         <path d={line} className="pc-glow" stroke={`url(#${id}-stroke)`} />
         <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
+
+        {scans
+          .filter((s) => s.t >= geo.t0 && s.t <= geo.t1)
+          .map((s) => (
+            <circle key={`scan-${s.t}`} cx={x(s.t)} cy={axis.y(s.v)} r={3.5} className="pc-scan">
+              <title>{`Scan at ${timeLabel(s.t, 0)}: ${usd(s.v)}`}</title>
+            </circle>
+          ))}
 
         {showPeak && (
           <g className="pc-peak">
