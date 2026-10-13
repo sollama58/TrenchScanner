@@ -93,12 +93,13 @@ export type LaunchBuyersResult =
 
 /**
  * A wallet's funder (getFundersBatch). "none": its first transaction shows nobody else paying in;
- * "empty": no history at all (no first transaction was read); "busy": too much history to read
- * cheaply.
+ * "empty": no history at all (no first transaction was read); "busy": more history than one
+ * signatures page and no sorted lookup to reach its first transaction. `sorted`: read with the
+ * 10-credit sorted lookup (a busy wallet) rather than the 1-credit getTransaction.
  */
 export type FunderResult =
-  | { status: "found"; funder: string; amountSol: number; fundedAt: Date | null }
-  | { status: "none" }
+  | { status: "found"; funder: string; amountSol: number; fundedAt: Date | null; sorted?: boolean }
+  | { status: "none"; sorted?: boolean }
   | { status: "empty" }
   | { status: "busy" }
   | { status: "failed" };
@@ -829,9 +830,10 @@ export class HeliusClient {
    * Who paid for each wallet: its first transaction's funder (funderFromFirstTransaction), for the
    * linked-wallets reading (packages/core/src/wallets/linkedWallets.ts). Two 1-credit calls a
    * wallet: one page of its newest signatures, then, when that page is its whole history, the
-   * oldest of them in full. A wallet with more history than a page is "busy": its first transaction
-   * is out of a cheap read's reach and it is left unlinked rather than paying 10 credits for it.
-   * Every answer but "failed" is final and cached by the caller.
+   * oldest of them in full. A wallet with more history than a page (an active trader, a bot, a
+   * dev's long-used wallet) has its first transaction read with the sorted lookup instead, 10
+   * credits (user decision 2026-10-13: busy wallets count too). Every answer but "failed" and
+   * "busy" is final and cached by the caller.
    */
   async getFundersBatch(wallets: string[]): Promise<Map<string, FunderResult>> {
     const unique = [...new Set(wallets)];
@@ -846,6 +848,7 @@ export class HeliusClient {
       15_000,
     );
     const firstSig = new Map<string, string>();
+    const busy: string[] = [];
     for (const wallet of unique) {
       const res = pages.get(wallet);
       if (!res || res.error || !Array.isArray(res.result)) {
@@ -854,9 +857,10 @@ export class HeliusClient {
       }
       const sigs = res.result;
       if (sigs.length === 0) out.set(wallet, { status: "empty" });
-      else if (sigs.length >= FUNDER_SIGNATURES_LIMIT) out.set(wallet, { status: "busy" });
+      else if (sigs.length >= FUNDER_SIGNATURES_LIMIT) busy.push(wallet);
       else firstSig.set(wallet, sigs[sigs.length - 1]!.signature);
     }
+    for (const [wallet, result] of await this.fundersOfBusyWallets(busy)) out.set(wallet, result);
     if (firstSig.size === 0) return out;
     const txs = await this.sendBatched<ChainTx | null>(
       [...firstSig].map(([wallet, signature]) => ({
@@ -883,6 +887,67 @@ export class HeliusClient {
               fundedAt: found.atMs !== null ? new Date(found.atMs) : null,
             }
           : { status: "none" },
+      );
+    }
+    return out;
+  }
+
+  /**
+   * The funder of each wallet with more history than one signatures page: its first transaction in
+   * full, from getTransactionsForAddress sorted oldest first (10 credits each). "busy" without that
+   * method (another provider, or Helius standing it down), so the caller can read it again later.
+   */
+  private async fundersOfBusyWallets(wallets: string[]): Promise<Map<string, FunderResult>> {
+    const out = new Map<string, FunderResult>();
+    if (wallets.length === 0) return out;
+    if (!this.gtfaUsable) {
+      for (const wallet of wallets) out.set(wallet, { status: "busy" });
+      return out;
+    }
+    const responses = await this.sendBatched<{ data?: ChainTx[] }>(
+      wallets.map((address) => ({
+        id: address,
+        method: "getTransactionsForAddress",
+        params: [
+          address,
+          {
+            transactionDetails: "full",
+            sortOrder: "asc",
+            limit: 1,
+            encoding: "json",
+            maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+            filters: { status: "succeeded" },
+          },
+        ],
+      })),
+      20_000,
+      // Billed whether or not the answer arrives in time, as for the launch read.
+      { retryOnTimeout: false },
+    );
+    for (const wallet of wallets) {
+      const res = responses.get(wallet);
+      if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
+        this.gtfaUnavailable = true;
+        out.set(wallet, { status: "busy" });
+        continue;
+      }
+      const tx = res?.result?.data?.[0];
+      if (!res || res.error || !Array.isArray(res.result?.data)) {
+        out.set(wallet, { status: "failed" });
+        continue;
+      }
+      const found = tx ? funderFromFirstTransaction(wallet, tx) : null;
+      out.set(
+        wallet,
+        found
+          ? {
+              status: "found",
+              funder: found.funder,
+              amountSol: found.amountSol,
+              fundedAt: found.atMs !== null ? new Date(found.atMs) : null,
+              sorted: true,
+            }
+          : { status: "none", sorted: true },
       );
     }
     return out;

@@ -19,7 +19,8 @@ const logger = createLogger("linked-wallets");
  * Every answer is cached. A wallet's funder never changes (WalletFunder, kept for good like
  * WalletActivityCache); a funder's hot verdict is re-read after a week (FunderActivity). So the
  * steady state pays only for wallets and funders never seen before: two 1-credit calls per new
- * wallet (its signatures, then its first transaction) and one per new funder. New reads are
+ * wallet (its signatures, then its first transaction), 11 for a busy wallet whose first
+ * transaction is past the signatures page (the sorted lookup is 10), and one per new funder. New reads are
  * budgeted per cycle (env LINKED_WALLET_LOOKUPS_PER_CYCLE), a whole candidate at a time and
  * contenders first, as the wallet-freshness pass does: a reading is all-or-nothing, so half a
  * candidate's wallets read is worth nothing yet.
@@ -29,7 +30,7 @@ const DAY_MS = 24 * 3_600_000;
 /** How long a funder's hot verdict stands before it is read again. */
 const FUNDER_RECHECK_MS = 7 * DAY_MS;
 
-/** A wallet's funder, null when it has none we read ("none" or "busy"). Final once known. */
+/** A wallet's funder, null when it has none ("none", "empty", or "busy" while unreadable). */
 const settledFunders = new SettledAnswers<string | null>(100_000);
 /** Each funder's hot verdict and when it was read. */
 const hotFunders = new Map<string, { hot: boolean; atMs: number }>();
@@ -37,16 +38,23 @@ const MAX_HOT_ENTRIES = 50_000;
 const failureBackoff = new FailureBackoff();
 
 /** Calls sent since the last takeLinkedWalletStats(), by method. */
-let calls = { getSignaturesForAddress: 0, getTransaction: 0 };
+let calls = { getSignaturesForAddress: 0, getTransaction: 0, getTransactionsForAddress: 0 };
 
-/** Credits spent since the last call (each method is 1 credit), for the scan's heartbeat. */
+/**
+ * Calls and credits since the last call, for the scan's heartbeat: 1 credit each, but 10 for the
+ * sorted lookup a busy wallet's first transaction takes.
+ */
 export function takeLinkedWalletStats(): {
   getSignaturesForAddress: number;
   getTransaction: number;
+  getTransactionsForAddress: number;
   credits: number;
 } {
-  const out = { ...calls, credits: calls.getSignaturesForAddress + calls.getTransaction };
-  calls = { getSignaturesForAddress: 0, getTransaction: 0 };
+  const out = {
+    ...calls,
+    credits: calls.getSignaturesForAddress + calls.getTransaction + 10 * calls.getTransactionsForAddress,
+  };
+  calls = { getSignaturesForAddress: 0, getTransaction: 0, getTransactionsForAddress: 0 };
   return out;
 }
 
@@ -78,7 +86,7 @@ export interface LinkedWalletLookups {
  */
 export async function resolveLinkedWallets(
   groups: readonly LinkedGroup[],
-  helius: Pick<HeliusClient, "getFundersBatch" | "getFunderActivityBatch">,
+  helius: Pick<HeliusClient, "getFundersBatch" | "getFunderActivityBatch" | "gtfaUsable">,
   opts: { maxNewLookups: number; nowMs?: number },
 ): Promise<LinkedWalletLookups> {
   const now = opts.nowMs ?? Date.now();
@@ -93,11 +101,16 @@ export async function resolveLinkedWallets(
   if (fromTable.length > 0) {
     const rows = await prisma.walletFunder.findMany({
       where: { wallet: { in: fromTable } },
-      select: { wallet: true, funder: true },
+      select: { wallet: true, funder: true, status: true },
     });
+    // A wallet stored as "busy" (more history than one signatures page) is read again whenever
+    // the sorted lookup can reach its first transaction: busy wallets count too (user decision
+    // 2026-10-13). Without that lookup it stays unlinked, as before.
+    const rereadBusy = helius.gtfaUsable;
     for (const r of rows) {
+      if (r.status === "busy" && rereadBusy) continue;
       funderOf.set(r.wallet, r.funder);
-      settledFunders.remember(r.wallet, r.funder);
+      if (r.status !== "busy") settledFunders.remember(r.wallet, r.funder);
     }
   }
 
@@ -134,7 +147,8 @@ export async function resolveLinkedWallets(
       failureBackoff.succeed(wallet);
       const funder = r.status === "found" ? r.funder : null;
       funderOf.set(wallet, funder);
-      settledFunders.remember(wallet, funder);
+      // A "busy" answer is only for now: read again once the sorted lookup is back.
+      if (r.status !== "busy") settledFunders.remember(wallet, funder);
       rows.push({
         wallet,
         status: r.status,
@@ -145,11 +159,18 @@ export async function resolveLinkedWallets(
     }
     // A first transaction was read for these (an empty or busy history needs none). A failed one
     // may or may not have got that far; counted as not, so the figure is a floor.
-    calls.getTransaction += [...fetched.values()].filter(
-      (r) => r.status === "found" || r.status === "none",
-    ).length;
+    const read = [...fetched.values()].filter((r) => r.status === "found" || r.status === "none");
+    calls.getTransaction += read.filter((r) => !r.sorted).length;
+    calls.getTransactionsForAddress += read.filter((r) => r.sorted).length;
     if (rows.length > 0) {
       try {
+        // Rows stored as "busy" before are replaced by the answer read now.
+        await prisma.walletFunder.deleteMany({
+          where: {
+            wallet: { in: rows.filter((r) => r.status !== "busy").map((r) => r.wallet) },
+            status: "busy",
+          },
+        });
         await prisma.walletFunder.createMany({ data: rows, skipDuplicates: true });
       } catch (err) {
         logger.warn("failed to store wallet funders", { count: rows.length, error: String(err) });

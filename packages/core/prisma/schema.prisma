@@ -1880,10 +1880,11 @@ model WalletRisk {
 }
 
 /// Who paid for each wallet: the funder in its first transaction (core's wallets/linkedWallets.ts,
-/// read by the worker's linkedWallets.ts, two 1-credit calls a wallet). A wallet's first
-/// transaction never changes, so a row is final. `status`: "found" (funder set), "none" (nobody
-/// else paid in), "empty" (no history) or "busy" (more history than one signatures page; left unread). Failed reads
-/// write nothing and are retried.
+/// read by the worker's linkedWallets.ts, two 1-credit calls a wallet, 11 for one with more
+/// history than a signatures page). A wallet's first transaction never changes, so a row is final.
+/// `status`: "found" (funder set), "none" (nobody else paid in), "empty" (no history) or "busy"
+/// (more history than one signatures page and no sorted lookup to reach the first transaction;
+/// read again once there is one). Failed reads write nothing and are retried.
 model WalletFunder {
   wallet    String    @id
   status    String
