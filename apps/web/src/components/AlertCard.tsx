@@ -350,7 +350,7 @@ export function AlertCard({
               value={freshPct}
               failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
               atAlert={freshAtAlert !== null}
-              explain="top-10 holder wallets first used in the last 24h"
+              explain="top-10 holder wallets first used, or used again after a week or more idle, in the last 24h"
             />
           )}
           {show("empty") && (

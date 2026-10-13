@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { OnChainProfile, RugScreenResult } from "../types.js";
 
-/** Above this share of the top-10 holders on wallets under a day old, a token is never alerted. */
+/** Above this share of the top-10 holders on fresh wallets (new, or used again after a week idle, within a day), a token is never alerted. */
 export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 
 /**

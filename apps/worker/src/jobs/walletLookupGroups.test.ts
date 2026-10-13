@@ -34,7 +34,14 @@ describe.skipIf(!dbAvailable)("resolveEarliestActivity lookupGroups", () => {
   it("looks up only the first groups, answers the rest from the cache, and reports its lookups", async () => {
     // The scan waits on the contenders' lookups and leaves the rest to a backfill behind it.
     const [c1, c2, cached, uncached] = [wallet("c1"), wallet("c2"), wallet("cached"), wallet("uncached")];
-    await prisma.walletActivityCache.create({ data: { address: cached, earliestActivityAt: LONG_AGO } });
+    await prisma.walletActivityCache.create({
+      data: {
+        address: cached,
+        earliestActivityAt: LONG_AGO,
+        activeSince: LONG_AGO,
+        lastActivityAt: new Date(),
+      },
+    });
     const { helius, calls } = fakeHelius();
     let reported = -1;
 

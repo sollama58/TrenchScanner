@@ -1,5 +1,5 @@
 import { SettledAnswers } from "./settledAnswers.js";
-import { prisma, createLogger, type HeliusClient } from "@trenchscanner/core";
+import { prisma, createLogger, WALLET_DORMANT_GAP_MS, type HeliusClient } from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
 
 const logger = createLogger("wallet-freshness");
@@ -47,7 +47,8 @@ export interface WalletFreshnessOptions {
 }
 
 /**
- * Resolves earliest-activity timestamps for whole GROUPS of wallets - one group per candidate's
+ * Resolves when each wallet's current stretch of activity began (its first transaction after its
+ * last idle week, else its first ever) for whole GROUPS of wallets - one group per candidate's
  * top-10 holder list, in priority order - in one batched, cached pass.
  *
  * Groups, not a flat list, because computeFreshPct is all-or-nothing: a candidate with nine of
@@ -57,10 +58,10 @@ export interface WalletFreshnessOptions {
  * actually be completed. Earlier groups win, so callers should pass the candidates most likely
  * to be curated first.
  *
- * See WalletActivityCache in schema.prisma for why the cache exists: a wallet's earliest-ever
- * transaction never changes once known, so re-fetching it for a wallet we've already seen is
- * pure waste, whether that's on a later scan cycle or as a top holder of a different token in
- * the same cycle.
+ * See WalletActivityCache in schema.prisma for why the cache exists: when a wallet's current
+ * stretch began can't change until it has sat idle a full WALLET_DORMANT_GAP_MS, so re-fetching it
+ * before then is pure waste, whether that's on a later scan cycle or as a top holder of a different
+ * token in the same cycle.
  *
  * A null value in the returned map means "no usable timestamp" and covers both a definitively
  * indeterminate answer and a bound that is itself inside the freshness window; computeFreshPct
@@ -68,8 +69,26 @@ export interface WalletFreshnessOptions {
  * didn't fit the budget, or the lookup failed), which computeFreshPct reports as unknown rather
  * than guessing.
  */
-/** WalletActivityCache's answers, held in memory too - they never change once written. */
-export const settledActivity = new SettledAnswers<Date | null>(50_000);
+/**
+ * WalletActivityCache's answers, held in memory too: when the wallet's current stretch of activity
+ * began (null: no usable timestamp), and until when that holds - its newest transaction at the
+ * read plus WALLET_DORMANT_GAP_MS, the earliest a new stretch could begin.
+ */
+interface ActivityAnswer {
+  activeSince: Date | null;
+  validUntilMs: number;
+}
+export const settledActivity = new SettledAnswers<ActivityAnswer>(50_000);
+
+/** A cached row's answer, or null when it must be read again (expired, or written before stretches were kept). */
+function rowAnswer(row: {
+  earliestActivityAt: Date | null;
+  activeSince: Date | null;
+  lastActivityAt: Date | null;
+}): ActivityAnswer | null {
+  if (!row.lastActivityAt) return null;
+  return { activeSince: row.activeSince, validUntilMs: row.lastActivityAt.getTime() + WALLET_DORMANT_GAP_MS };
+}
 
 export async function resolveEarliestActivity(
   groups: string[][],
@@ -83,16 +102,23 @@ export async function resolveEarliestActivity(
   const unique = [...new Set(groups.flat())];
   if (unique.length === 0) return result;
 
-  // Settled answers this process already read come from memory; only the rest from the table.
-  for (const [address, at] of settledActivity.take(unique)) result.set(address, at);
+  // Answers this process already read come from memory; only the rest from the table. Either is
+  // used only while it still holds (see ActivityAnswer); past that the wallet is read again.
+  for (const [address, answer] of settledActivity.take(unique)) {
+    if (answer.validUntilMs > now) result.set(address, answer.activeSince);
+  }
   const fromTable = unique.filter((a) => !result.has(a));
-  const cached =
+  const rows =
     fromTable.length === 0
       ? []
       : await prisma.walletActivityCache.findMany({ where: { address: { in: fromTable } } });
-  for (const row of cached) {
-    result.set(row.address, row.earliestActivityAt);
-    settledActivity.remember(row.address, row.earliestActivityAt);
+  const cached: typeof rows = [];
+  for (const row of rows) {
+    const answer = rowAnswer(row);
+    if (!answer || answer.validUntilMs <= now) continue;
+    cached.push(row);
+    result.set(row.address, answer.activeSince);
+    settledActivity.remember(row.address, answer);
   }
 
   // Whole groups only, in the order given, until the budget is spent. A group holding a wallet
@@ -151,14 +177,38 @@ export async function resolveEarliestActivity(
   const fetched = await helius.getEarliestActivityBatch(toFetch, {
     boundSufficientBefore: new Date(freshCutoffMs),
   });
-  const toCache: { address: string; earliestActivityAt: Date | null }[] = [];
+  // A "found" or settled "older-than" answer is cached with its stretch. Without the newest
+  // transaction (only the exact method without a signatures page answers that way) the read
+  // time stands in for it: these are holders who just bought, so it is minutes off at most.
+  const toCache: {
+    address: string;
+    earliestActivityAt: Date | null;
+    activeSince: Date | null;
+    lastActivityAt: Date;
+  }[] = [];
   let failedCount = 0;
   for (const address of toFetch) {
     const outcome = fetched.get(address) ?? { status: "failed" as const };
     if (outcome.status !== "failed") failureBackoff.succeed(address);
     if (outcome.status === "found") {
-      result.set(address, outcome.earliestActivityAt);
-      toCache.push({ address, earliestActivityAt: outcome.earliestActivityAt });
+      const activeSince = outcome.activeSince ?? outcome.earliestActivityAt;
+      result.set(address, activeSince);
+      toCache.push({
+        address,
+        earliestActivityAt: outcome.earliestActivityAt,
+        activeSince,
+        lastActivityAt: outcome.lastActivityAt ?? new Date(now),
+      });
+    } else if (outcome.status === "older-than" && outcome.activeSince) {
+      // The page itself holds an idle gap, so when the current stretch began is known exactly,
+      // however old the wallet's first transaction.
+      result.set(address, outcome.activeSince);
+      toCache.push({
+        address,
+        earliestActivityAt: outcome.boundAt,
+        activeSince: outcome.activeSince,
+        lastActivityAt: outcome.lastActivityAt ?? new Date(now),
+      });
     } else if (outcome.status === "older-than") {
       // An upper bound on the true first transaction. If it already sits outside the freshness
       // window the wallet can never be "funded recently" again - the window only slides forward
@@ -166,7 +216,12 @@ export async function resolveEarliestActivity(
       // INSIDE the window says only "this wallet is busy", which settles nothing.
       if (outcome.boundAt.getTime() < freshCutoffMs) {
         result.set(address, outcome.boundAt);
-        toCache.push({ address, earliestActivityAt: outcome.boundAt });
+        toCache.push({
+          address,
+          earliestActivityAt: outcome.boundAt,
+          activeSince: outcome.boundAt,
+          lastActivityAt: outcome.lastActivityAt ?? new Date(now),
+        });
       } else {
         // Only the signatures-only path answers this way (the Helius path settles it exactly). A
         // busy wallet may well have been funded this very day - a sniper bot that has fired a
@@ -177,20 +232,37 @@ export async function resolveEarliestActivity(
       }
     } else if (outcome.status === "indeterminate") {
       result.set(address, null);
-      toCache.push({ address, earliestActivityAt: null });
+      toCache.push({ address, earliestActivityAt: null, activeSince: null, lastActivityAt: new Date(now) });
     } else {
       failureBackoff.fail(address, now);
       failedCount += 1;
     }
   }
 
-  for (const row of toCache) settledActivity.remember(row.address, row.earliestActivityAt);
+  for (const row of toCache) {
+    settledActivity.remember(row.address, {
+      activeSince: row.activeSince,
+      validUntilMs: row.lastActivityAt.getTime() + WALLET_DORMANT_GAP_MS,
+    });
+  }
   if (toCache.length > 0) {
     try {
-      // A cached earliest-activity is immutable, so an existing row is always as good as the one
-      // we'd write - skipDuplicates makes this a single statement and sidesteps races with
-      // another worker resolving the same wallet concurrently.
-      await prisma.walletActivityCache.createMany({ data: toCache, skipDuplicates: true });
+      // Upserts: a wallet is read again once its row has expired (or predates the stretch
+      // columns), and the new reading replaces the old. One transaction for the batch.
+      await prisma.$transaction(
+        toCache.map((row) =>
+          prisma.walletActivityCache.upsert({
+            where: { address: row.address },
+            create: { ...row, checkedAt: new Date(now) },
+            update: {
+              earliestActivityAt: row.earliestActivityAt,
+              activeSince: row.activeSince,
+              lastActivityAt: row.lastActivityAt,
+              checkedAt: new Date(now),
+            },
+          }),
+        ),
+      );
     } catch (err) {
       // Caching is a pure optimization - failing to persist it only costs a re-fetch next cycle.
       logger.warn("failed to persist wallet activity cache", { count: toCache.length, error: String(err) });
@@ -227,8 +299,9 @@ async function refreshStaleCacheStamps(addresses: string[], now: number): Promis
 }
 
 /**
- * % of `addresses` whose resolved earliest activity is within the last 24h - i.e. wallets that
- * appear to exist only to have bought into this one launch. Returns null (not 0) when there's
+ * % of `addresses` whose current stretch of activity began within the last 24h - wallets that
+ * appear to exist only to have bought into this one launch: brand new, or aged and left idle a
+ * week or more before being paid again (see EarliestActivityResult.activeSince in helius.ts). Returns null (not 0) when there's
  * nothing to check, so callers can tell "nothing to check" apart from "checked, found none fresh."
  *
  * A null entry in `earliestByAddress` is treated as "not fresh" here, not "unknown, don't

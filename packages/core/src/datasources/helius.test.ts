@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HeliusClient } from "./helius.js";
+import { activityStretch, HeliusClient, WALLET_DORMANT_GAP_MS } from "./helius.js";
 import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
@@ -82,9 +82,9 @@ describe("HeliusClient.getEarliestActivityBatch (non-Helius endpoint)", () => {
 
     const result = await client.getEarliestActivityBatch(["a", "b", "c"]);
 
-    expect(result.get("a")).toEqual({ status: "found", earliestActivityAt: new Date(times.a! * 1000) });
-    expect(result.get("b")).toEqual({ status: "found", earliestActivityAt: new Date(times.b! * 1000) });
-    expect(result.get("c")).toEqual({ status: "found", earliestActivityAt: new Date(times.c! * 1000) });
+    expect(result.get("a")).toMatchObject({ status: "found", earliestActivityAt: new Date(times.a! * 1000) });
+    expect(result.get("b")).toMatchObject({ status: "found", earliestActivityAt: new Date(times.b! * 1000) });
+    expect(result.get("c")).toMatchObject({ status: "found", earliestActivityAt: new Date(times.c! * 1000) });
   });
 
   it("takes the OLDEST signature (last element) from the newest-first fallback response", async () => {
@@ -101,7 +101,7 @@ describe("HeliusClient.getEarliestActivityBatch (non-Helius endpoint)", () => {
     const client = new HeliusClient({ rpcUrl: url });
 
     const result = await client.getEarliestActivityBatch(["a"]);
-    expect(result.get("a")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+    expect(result.get("a")).toMatchObject({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
   });
 
   it("reports indeterminate (not failed) for an address with no signatures", async () => {
@@ -137,7 +137,7 @@ describe("HeliusClient.getEarliestActivityBatch (non-Helius endpoint)", () => {
     );
     const client = new HeliusClient({ rpcUrl: url });
 
-    expect((await client.getEarliestActivityBatch(["a"])).get("a")).toEqual({
+    expect((await client.getEarliestActivityBatch(["a"])).get("a")).toMatchObject({
       status: "older-than",
       boundAt: new Date((SECONDS + 1) * 1000),
     });
@@ -206,7 +206,7 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
       limit: 1,
       transactionDetails: "signatures",
     });
-    expect(result.get("a")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+    expect(result.get("a")).toMatchObject({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
   });
 
   it("falls back to getSignaturesForAddress when getTransactionsForAddress isn't served", async () => {
@@ -225,7 +225,7 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
 
     const methods = requests.map((r) => (r.body as { method: string }[])[0]!.method);
     expect(methods).toEqual(["getTransactionsForAddress", "getSignaturesForAddress"]);
-    expect(result.get("a")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+    expect(result.get("a")).toMatchObject({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
   });
 
   it("falls back when the endpoint rejects the method at the HTTP level, not as a JSON-RPC error", async () => {
@@ -265,7 +265,7 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
     const result = await client.getEarliestActivityBatch(["a"]);
 
     expect(sawGtfa).toBe(true);
-    expect(result.get("a")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+    expect(result.get("a")).toMatchObject({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
   });
 
   it("keeps trying the Helius path through a brief outage, then latches if it stays barren", async () => {
@@ -293,7 +293,10 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
     requests.length = 0;
     const recovered = await client.getEarliestActivityBatch(["b"]);
     expect((requests[0]!.body as { method: string }[])[0]!.method).toBe("getTransactionsForAddress");
-    expect(recovered.get("b")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+    expect(recovered.get("b")).toMatchObject({
+      status: "found",
+      earliestActivityAt: new Date(SECONDS * 1000),
+    });
 
     // Now let it stay broken for the full latch threshold.
     failGtfa = true;
@@ -316,7 +319,7 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
       requests.length = 0;
       const back = await client.getEarliestActivityBatch(["e"]);
       expect((requests[0]!.body as { method: string }[])[0]!.method).toBe("getTransactionsForAddress");
-      expect(back.get("e")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+      expect(back.get("e")).toMatchObject({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
     } finally {
       vi.useRealTimers();
     }
@@ -338,7 +341,7 @@ describe("HeliusClient.getEarliestActivityBatch (Helius endpoint)", () => {
     expect(client.earliestActivityMethod).toBe("getTransactionsForAddress");
     down = false;
     const result = await client.getEarliestActivityBatch(["b"]);
-    expect(result.get("b")).toEqual({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
+    expect(result.get("b")).toMatchObject({ status: "found", earliestActivityAt: new Date(SECONDS * 1000) });
   }, 30_000);
 
   it("latches the fallback so later batches skip getTransactionsForAddress entirely", async () => {
@@ -412,12 +415,15 @@ describe("HeliusClient.getEarliestActivityBatch with boundSufficientBefore", () 
     expect(sent.filter(([m]) => m === "getTransactionsForAddress")).toEqual([
       ["getTransactionsForAddress", "busy"],
     ]);
-    expect(result.get("new")).toEqual({
+    expect(result.get("new")).toMatchObject({
       status: "found",
       earliestActivityAt: new Date((cutoff + 60) * 1000),
     });
-    expect(result.get("old")).toEqual({ status: "older-than", boundAt: new Date((cutoff - 60) * 1000) });
-    expect(result.get("busy")).toEqual({
+    expect(result.get("old")).toMatchObject({
+      status: "older-than",
+      boundAt: new Date((cutoff - 60) * 1000),
+    });
+    expect(result.get("busy")).toMatchObject({
       status: "found",
       earliestActivityAt: new Date((cutoff - 5) * 1000),
     });
@@ -758,5 +764,64 @@ describe("HeliusClient.getFundersBatch", () => {
       .flatMap((r) => r.body as { method: string; params: [string, Record<string, unknown>] }[])
       .find((c) => c.method === "getTransactionsForAddress");
     expect(sorted!.params[1]).toMatchObject({ sortOrder: "asc", limit: 4 });
+  });
+});
+
+describe("activityStretch", () => {
+  const DAY = 86_400;
+  const now = 1_800_000_000;
+
+  it("starts the stretch after the newest week-long idle gap", () => {
+    // An aged farm wallet: a few transactions months ago, empty since, paid again an hour ago.
+    const times = [now, now - 1800, now - 3600, now - 200 * DAY, now - 201 * DAY];
+    expect(activityStretch(times)).toEqual({
+      activeSince: new Date((now - 3600) * 1000),
+      lastActivityAt: new Date(now * 1000),
+    });
+  });
+
+  it("finds no start when no gap reaches a week", () => {
+    const gap = WALLET_DORMANT_GAP_MS / 1000 - 60;
+    expect(activityStretch([now, now - gap, now - 2 * gap])).toEqual({
+      lastActivityAt: new Date(now * 1000),
+    });
+    expect(activityStretch([])).toEqual({});
+  });
+});
+
+describe("HeliusClient.getEarliestActivityBatch on an aged wallet", () => {
+  it("reports when its current stretch began, and settles a full page that holds the gap", async () => {
+    const DAY = 86_400;
+    const sig = (t: number, i: number) => ({ signature: `s${t}-${i}`, blockTime: t });
+    const revived = [SECONDS, SECONDS - 3600, SECONDS - 300 * DAY].map(sig);
+    const busyRevived = [
+      ...Array.from({ length: 150 }, (_, i) => sig(SECONDS - i * 10, i)),
+      ...Array.from({ length: 50 }, (_, i) => sig(SECONDS - 90 * DAY - i, i)),
+    ];
+    const { url, requests } = await startServer((body) =>
+      (body as { id: string; method: string; params: [string] }[]).map((c) => ({
+        jsonrpc: "2.0",
+        id: c.id,
+        result: c.params[0] === "revived" ? revived : busyRevived,
+      })),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+
+    const result = await client.getEarliestActivityBatch(["revived", "busy"], {
+      boundSufficientBefore: new Date((SECONDS - DAY) * 1000),
+    });
+
+    expect(result.get("revived")).toEqual({
+      status: "found",
+      earliestActivityAt: new Date((SECONDS - 300 * DAY) * 1000),
+      activeSince: new Date((SECONDS - 3600) * 1000),
+      lastActivityAt: new Date(SECONDS * 1000),
+    });
+    expect(result.get("busy")).toMatchObject({
+      status: "older-than",
+      activeSince: new Date((SECONDS - 149 * 10) * 1000),
+    });
+    const methods = requests.flatMap((r) => (r.body as { method: string }[]).map((c) => c.method));
+    expect(methods).not.toContain("getTransactionsForAddress");
   });
 });

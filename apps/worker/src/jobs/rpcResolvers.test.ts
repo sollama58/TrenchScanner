@@ -2,7 +2,7 @@
 import "../bootstrap-env.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv, type HeliusClient } from "@trenchscanner/core";
-import { resolveEarliestActivity, resetWalletFailureBackoff } from "./walletFreshness.js";
+import { computeFreshPct, resolveEarliestActivity, resetWalletFailureBackoff } from "./walletFreshness.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveMayhemMode, resetMayhemFailureBackoff } from "./mayhemMode.js";
 
@@ -125,7 +125,12 @@ describe.skipIf(!dbAvailable)("resolveEarliestActivity", () => {
   it("never re-fetches a wallet the cache already answers", async () => {
     const address = `${TAG}-cached`;
     await prisma.walletActivityCache.create({
-      data: { address, earliestActivityAt: new Date(Date.now() - 100 * HOUR) },
+      data: {
+        address,
+        earliestActivityAt: new Date(Date.now() - 100 * HOUR),
+        activeSince: new Date(Date.now() - 100 * HOUR),
+        lastActivityAt: new Date(Date.now() - HOUR),
+      },
     });
     const { client, asked } = stubHelius();
 
@@ -135,6 +140,73 @@ describe.skipIf(!dbAvailable)("resolveEarliestActivity", () => {
 
     expect(asked.wallets).toEqual([]);
     expect(result.get(address)).toBeInstanceOf(Date);
+  });
+
+  it("reads a wallet again once a new stretch of activity could have begun", async () => {
+    // A row holds until its newest transaction plus a week idle: an aged wallet can sit empty
+    // that long and be paid again, and then it is fresh. Rows from before the stretch columns
+    // are read again too.
+    const [expired, legacy] = [`${TAG}-expired`, `${TAG}-legacy`];
+    await prisma.walletActivityCache.createMany({
+      data: [
+        {
+          address: expired,
+          earliestActivityAt: new Date(Date.now() - 300 * 24 * HOUR),
+          activeSince: new Date(Date.now() - 300 * 24 * HOUR),
+          lastActivityAt: new Date(Date.now() - 8 * 24 * HOUR),
+        },
+        { address: legacy, earliestActivityAt: new Date(Date.now() - 300 * 24 * HOUR) },
+      ],
+    });
+    const activeSince = new Date(Date.now() - HOUR);
+    const { client, asked } = stubHelius({
+      getEarliestActivityBatch: async (addresses: string[]) => {
+        asked.wallets.push(addresses);
+        return new Map(
+          addresses.map((a) => [
+            a,
+            {
+              status: "found" as const,
+              earliestActivityAt: new Date(Date.now() - 300 * 24 * HOUR),
+              activeSince,
+              lastActivityAt: new Date(),
+            },
+          ]),
+        );
+      },
+    });
+
+    const result = await resolveEarliestActivity([[expired, legacy]], client);
+
+    expect(asked.wallets).toEqual([[expired, legacy]]);
+    expect(result.get(expired)).toEqual(activeSince);
+    expect(computeFreshPct([expired, legacy], result)).toBe(100);
+    const row = await prisma.walletActivityCache.findUniqueOrThrow({ where: { address: legacy } });
+    expect(row.activeSince).toEqual(activeSince);
+    expect(row.earliestActivityAt!.getTime()).toBeLessThan(Date.now() - 200 * 24 * HOUR);
+  });
+
+  it("dates an aged wallet by when its current stretch began, from a page with an idle gap", async () => {
+    const address = `${TAG}-revived`;
+    const activeSince = new Date(Date.now() - 2 * HOUR);
+    const { client } = stubHelius({
+      getEarliestActivityBatch: async () =>
+        new Map([
+          [
+            address,
+            {
+              status: "older-than" as const,
+              boundAt: new Date(Date.now() - 200 * 24 * HOUR),
+              activeSince,
+              lastActivityAt: new Date(),
+            },
+          ],
+        ]),
+    });
+
+    const result = await resolveEarliestActivity([[address]], client);
+    expect(result.get(address)).toEqual(activeSince);
+    expect(computeFreshPct([address], result)).toBe(100);
   });
 });
 

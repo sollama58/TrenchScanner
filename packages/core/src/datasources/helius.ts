@@ -72,12 +72,47 @@ interface TransactionsForAddressResult {
  * the true earliest activity. For the only question this feeds - "was this wallet funded
  * recently?" - a bound that already sits outside the freshness window answers it completely,
  * and keeps answering it as the window slides forward.
+ *
+ * `activeSince` and `lastActivityAt` come from the signatures page, when it was read: the first
+ * transaction after the wallet's last idle stretch of WALLET_DORMANT_GAP_MS or more (its first
+ * transaction ever when it has none), and its newest. A wallet bought months ago, left empty and
+ * paid again an hour before a launch has an old first transaction but a fresh `activeSince` - the
+ * aged-wallet farm that read 0% fresh on mdj29p8m...pump (2026-10-13). On an "older-than" page it
+ * is set only when the page itself holds such a gap; otherwise the stretch reaches past the page.
  */
 export type EarliestActivityResult =
-  | { status: "found"; earliestActivityAt: Date }
-  | { status: "older-than"; boundAt: Date }
+  | { status: "found"; earliestActivityAt: Date; activeSince?: Date; lastActivityAt?: Date }
+  | { status: "older-than"; boundAt: Date; activeSince?: Date; lastActivityAt?: Date }
   | { status: "indeterminate" }
   | { status: "failed" };
+
+/**
+ * An idle stretch at least this long ends a wallet's previous life: activity after it counts as a
+ * fresh start. Real traders rarely sit a week without a single transaction and then put a top-ten
+ * stake into a launch; the farm wallets on 2026-10-13 had sat empty for 10 to 290 days.
+ */
+export const WALLET_DORMANT_GAP_MS = 7 * 86_400_000;
+
+/**
+ * The current stretch of a newest-first list of block times (seconds): when it began (the first
+ * transaction after the newest gap of WALLET_DORMANT_GAP_MS or more) and the newest transaction.
+ * `activeSince` is undefined when no gap is in the list - the stretch then begins at or before
+ * its oldest entry. Exported for tests.
+ */
+export function activityStretch(newestFirst: readonly number[]): {
+  activeSince?: Date;
+  lastActivityAt?: Date;
+} {
+  if (newestFirst.length === 0) return {};
+  const gapS = WALLET_DORMANT_GAP_MS / 1000;
+  const lastActivityAt = new Date(newestFirst[0]! * 1000);
+  for (let i = 0; i + 1 < newestFirst.length; i++) {
+    if (newestFirst[i]! - newestFirst[i + 1]! >= gapS) {
+      return { activeSince: new Date(newestFirst[i]! * 1000), lastActivityAt };
+    }
+  }
+  return { lastActivityAt };
+}
 
 /**
  * A launch's first buyers, read from the mint's earliest transactions (see launchBuyers.ts).
@@ -770,18 +805,22 @@ export class HeliusClient {
       // Only a bound inside the window goes on to the exact method. A cheap lookup that failed
       // stays failed (the caller backs it off and asks again): escalating it sent every wallet of
       // a timed-out signatures batch to the 10-credit method on the same slow provider.
+      // A page that holds an idle gap already says when the current stretch began.
       const unsettled = unique.filter((address) => {
         const r = cheap.get(address);
-        return r?.status === "older-than" && r.boundAt.getTime() >= sufficientMs;
+        return r?.status === "older-than" && r.boundAt.getTime() >= sufficientMs && !r.activeSince;
       });
       if (unsettled.length === 0) return cheap;
       const exact = await this.earliestViaGetTransactionsForAddress(unsettled);
       // An unsettled address takes the exact answer or none. Its cheap result is a bound INSIDE
       // the window, which says only "busy", and handing it on when the exact lookup failed had
       // the caller cache a recently funded busy wallet as "not fresh" for good, off one 429.
-      // Failed, it is retried on a later cycle instead.
+      // Failed, it is retried on a later cycle instead. The page's newest transaction rides along.
       for (const address of unsettled) {
-        cheap.set(address, exact?.get(address) ?? { status: "failed" });
+        const r = exact?.get(address);
+        const before = cheap.get(address);
+        const lastActivityAt = before?.status === "older-than" ? before.lastActivityAt : undefined;
+        cheap.set(address, r?.status === "found" ? { ...r, lastActivityAt } : (r ?? { status: "failed" }));
       }
       return cheap;
     }
@@ -838,13 +877,21 @@ export class HeliusClient {
         continue;
       }
       const oldestAt = new Date(oldest.blockTime * 1000);
+      const times = sigs.map((s) => s.blockTime).filter((t): t is number => typeof t === "number");
+      const stretch = activityStretch(times);
       // A full page means older history exists beyond it, so this is a bound rather than the
-      // true first transaction; a partial page IS the wallet's whole history.
+      // true first transaction; a partial page IS the wallet's whole history, so with no idle gap
+      // in it the current stretch began at its first transaction.
       out.set(
         address,
         sigs.length >= SIGNATURES_PAGE_LIMIT
-          ? { status: "older-than", boundAt: oldestAt }
-          : { status: "found", earliestActivityAt: oldestAt },
+          ? { status: "older-than", boundAt: oldestAt, ...stretch }
+          : {
+              status: "found",
+              earliestActivityAt: oldestAt,
+              activeSince: stretch.activeSince ?? oldestAt,
+              lastActivityAt: stretch.lastActivityAt,
+            },
       );
     }
     return out;
