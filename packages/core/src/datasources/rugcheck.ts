@@ -48,9 +48,14 @@ export interface RugCheckProfile extends OnChainProfile {
  * among its holders or the shares to recompute from are missing.
  */
 export function withoutVenueHolder(
-  profile: RugCheckProfile,
+  cached: RugCheckProfile,
   venueAddress: string | undefined,
 ): RugCheckProfile {
+  // Profiles cached before largestHolderPct existed still carry the shares it comes from.
+  const profile =
+    cached.largestHolderPct === undefined && cached.topHolderShares?.length
+      ? { ...cached, largestHolderPct: largestHolderShare(cached.topHolderShares) }
+      : cached;
   const shares = profile.topHolderShares;
   if (!venueAddress || !shares?.some((h) => h.owner === venueAddress)) return profile;
   const rest = shares.filter((h) => h.owner !== venueAddress);
@@ -58,9 +63,20 @@ export function withoutVenueHolder(
   return {
     ...profile,
     top10HolderPct: top.length > 0 ? top.reduce((sum, h) => sum + h.pct, 0) : undefined,
+    largestHolderPct: largestHolderShare(rest),
     top10HolderAddresses: [...new Set(top.map((h) => h.owner))],
     topHolderShares: rest,
   };
+}
+
+/**
+ * The largest single holder's share of supply: one owner's several token accounts summed, since
+ * RugCheck lists accounts. Undefined for an empty list.
+ */
+export function largestHolderShare(shares: readonly { owner: string; pct: number }[]): number | undefined {
+  const byOwner = new Map<string, number>();
+  for (const h of shares) byOwner.set(h.owner, (byOwner.get(h.owner) ?? 0) + h.pct);
+  return byOwner.size > 0 ? Math.max(...byOwner.values()) : undefined;
 }
 
 /**
@@ -258,6 +274,9 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     holderCount:
       typeof report.totalHolders === "number" && report.totalHolders > 0 ? report.totalHolders : undefined,
     top10HolderPct: realHolders.length > 0 && sharesConsistent ? top10HolderPct : undefined,
+    largestHolderPct: sharesConsistent
+      ? largestHolderShare(realHolders.map((h) => ({ owner: h.owner ?? h.address, pct: h.pct ?? 0 })))
+      : undefined,
     devWalletPct: sharesConsistent ? devHolder?.pct : undefined,
     creatorHolding:
       report.creator && typeof report.creatorBalance === "number" ? report.creatorBalance > 0 : undefined,

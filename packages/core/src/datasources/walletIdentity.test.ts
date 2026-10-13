@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HeliusIdentityClient } from "./walletIdentity.js";
+import { cleanWalletName, HeliusIdentityClient } from "./walletIdentity.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -67,5 +67,18 @@ describe("HeliusIdentityClient", () => {
   it("says a plan that can't read a batch is unavailable", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ error: "requires a paid plan" }, 403)));
     expect(await new HeliusIdentityClient("key").batchIdentity(["a"])).toEqual({ status: "unavailable" });
+  });
+});
+
+describe("cleanWalletName", () => {
+  it('shows a "NAME" on Pumpfun label as just NAME', () => {
+    expect(cleanWalletName('"degenking" on Pumpfun')).toBe("degenking");
+    expect(cleanWalletName("\u201cMoon Boy\u201d on Pump.fun")).toBe("Moon Boy");
+    expect(cleanWalletName('"x" on pump fun')).toBe("x");
+  });
+
+  it("leaves every other name alone", () => {
+    expect(cleanWalletName("Binance 1")).toBe("Binance 1");
+    expect(cleanWalletName('"quoted" on Raydium')).toBe('"quoted" on Raydium');
   });
 });

@@ -243,6 +243,9 @@ model UserFilter {
   // freeze authority or LP lock, so they moved to being opt-in criteria instead. Unset (null/
   // false) means "don't check this," not "reject unless known" - see matchFilters.ts.
   maxTop10HolderPct          Float? // top-10 holder concentration, %
+  /// Max % of supply held by the single largest holder, pools aside (TokenSnapshot.largestHolderPct).
+  /// Skipped while unknown.
+  maxLargestHolderPct        Float?
   maxDevWalletPct            Float? // creator's own holding, % (only if they rank in the top 10)
   maxRiskScore               Float? // RugCheck's own composite risk score, 0-100 (higher = riskier)
   excludeCriticalRiskFlags   Boolean  @default(false) // e.g. "Creator history of rugged tokens"
@@ -980,6 +983,9 @@ model TokenSnapshot {
   holderCountAt           DateTime?
   holderGrowthPct         Float?
   top10HolderPct          Float?
+  /// % of supply held by the single largest holder, pools and LP aside: one wallet's token accounts
+  /// summed. Null when the holder shares couldn't be trusted, and on scans before 2026-10-13.
+  largestHolderPct        Float?
   devWalletPct            Float?
   // RugCheck's own composite risk score/named flags - stored raw (not just baked into
   // rugScreenPassed) now that a user can filter on them directly. See rugScreen.ts's

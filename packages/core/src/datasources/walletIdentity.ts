@@ -25,13 +25,26 @@ const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length > 0) : [];
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim().length > 0 ? v.trim() : null);
 
+/** `"NAME" on Pumpfun` (Pump.fun usernames, as Helius names them), with straight or curly quotes. */
+const PUMPFUN_NAME_RE = /^["\u201c\u201d](.+?)["\u201c\u201d]\s+on\s+pump\.?\s?fun$/i;
+
+/**
+ * A wallet's name as the dashboard shows it: a Pump.fun username labelled `"NAME" on Pumpfun`
+ * becomes just NAME (user ask 2026-10-13); anything else is left as it is.
+ */
+export function cleanWalletName(name: string): string {
+  const m = PUMPFUN_NAME_RE.exec(name.trim());
+  return m ? m[1]!.trim() : name.trim();
+}
+
 /** One identity entry, or null when Helius names nothing (no name and no tags). */
 function parseIdentity(raw: Record<string, unknown>): HeliusIdentity | null {
+  const name = str(raw.name);
   const value: HeliusIdentity = {
     type: str(raw.type),
-    name: str(raw.name),
+    name: name ? cleanWalletName(name) : null,
     category: str(raw.category),
-    tags: strings(raw.tags),
+    tags: strings(raw.tags).map(cleanWalletName),
   };
   return value.name || value.tags.length > 0 ? value : null;
 }

@@ -50,6 +50,7 @@ export function snapshotDataFor(
     holderCountAt: scored.holderCountAt ?? null,
     holderGrowthPct: scored.holderGrowthPct,
     top10HolderPct: scored.top10HolderPct,
+    largestHolderPct: scored.largestHolderPct,
     devWalletPct: scored.devWalletPct,
     mintAuthorityActive: scored.mintAuthorityActive,
     freezeAuthorityActive: scored.freezeAuthorityActive,

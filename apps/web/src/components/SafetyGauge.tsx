@@ -42,8 +42,8 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
       <p className="faint small">
         Every new token the scanner checked in the last {span}: the ones that cleared our safety screen, and
         the ones it turned away as Likely Rugs (mint or freeze authority kept, liquidity not locked, Mayhem
-        Mode, a bundled launch, a top 10 that is farmed, sniped or too concentrated, or a top 25 that is
-        mostly linked or a top 20 mostly exchange-funded).
+        Mode, a bundled launch, a top 10 that is farmed, sniped or too concentrated, a single holder over 10%,
+        a top 25 that is mostly linked, or a top 20 mostly exchange-funded).
       </p>
 
       {okPct === null || rugPct === null || text === null ? (

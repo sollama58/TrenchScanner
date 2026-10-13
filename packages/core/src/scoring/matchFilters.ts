@@ -53,6 +53,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   if (
+    filter.maxLargestHolderPct != null &&
+    token.largestHolderPct !== undefined &&
+    token.largestHolderPct > filter.maxLargestHolderPct
+  ) {
+    return false;
+  }
+
+  if (
     filter.maxDevWalletPct != null &&
     token.devWalletPct !== undefined &&
     token.devWalletPct > filter.maxDevWalletPct

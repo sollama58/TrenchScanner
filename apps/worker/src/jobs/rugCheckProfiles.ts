@@ -26,6 +26,7 @@ const cachedProfileSchema = z
     mintAddress: z.string(),
     holderCount: z.number().optional(),
     top10HolderPct: z.number().optional(),
+    largestHolderPct: z.number().optional(),
     devWalletPct: z.number().optional(),
     mintAuthorityActive: z.boolean(),
     freezeAuthorityActive: z.boolean(),

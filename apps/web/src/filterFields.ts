@@ -60,6 +60,14 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxLargestHolderPct",
+        min: 0,
+        max: 100,
+        label: "Max largest holder",
+        hint: "one wallet's share of supply, pools aside",
+        unit: "%",
+      },
+      {
         key: "maxDevWalletPct",
         min: 0,
         max: 100,

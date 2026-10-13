@@ -120,6 +120,10 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <td>40% or more (pool aside)</td>
             </tr>
             <tr>
+              <td>Largest single holder&apos;s share of supply</td>
+              <td>Over 10% (pool aside)</td>
+            </tr>
+            <tr>
               <td>Linked top-25 holders (pool aside)</td>
               <td>20 of 25 or more</td>
             </tr>

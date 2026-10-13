@@ -16,6 +16,8 @@ export interface LargestAccount {
 export interface OnChainHolders {
   /** % of supply held by the ten largest wallets; undefined when the shares can't be trusted. */
   top10HolderPct?: number;
+  /** % of supply held by the largest wallet; undefined when the shares can't be trusted. */
+  largestHolderPct?: number;
   /** The ten largest wallets, largest first. */
   top10HolderAddresses: string[];
 }
@@ -44,8 +46,10 @@ export function holdersFromLargestAccounts(
   const held = top.reduce((sum, [, amount]) => sum + amount, 0n);
   // Hundredths of a percent, in integers, so a 1e9-supply mint's figures don't lose precision.
   const pct = Number((held * 10_000n) / supply) / 100;
+  const largest = top.length > 0 ? Number((top[0]![1] * 10_000n) / supply) / 100 : undefined;
   return {
     top10HolderPct: pct <= MAX_TOP10_SHARE_PCT ? pct : undefined,
+    largestHolderPct: pct <= MAX_TOP10_SHARE_PCT ? largest : undefined,
     top10HolderAddresses: top.map(([owner]) => owner),
   };
 }
