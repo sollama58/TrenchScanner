@@ -114,9 +114,8 @@ export async function resolvePreBondSeconds(
   env: Pick<Env, "SAFETY_MIN_PREBOND_SECONDS" | "PREBOND_LOOKUPS_MAX_PER_CYCLE">,
   now = Date.now(),
 ): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
   const floorMs = env.SAFETY_MIN_PREBOND_SECONDS * 1000;
-  if (floorMs <= 0) return out;
+  if (floorMs <= 0) return new Map();
   let budget = env.PREBOND_LOOKUPS_MAX_PER_CYCLE;
 
   // A curve pair is created with the coin: its creation time is the launch.
@@ -126,9 +125,6 @@ export async function resolvePreBondSeconds(
       remember(launches, c.mintAddress, ms);
     }
   }
-
-  const graduatedAt = (c: PreBondCandidate): number | undefined =>
-    validMs(c.graduatedAt) ?? graduations.get(c.mintAddress);
 
   const poolLookups = candidates
     .filter(
@@ -184,6 +180,18 @@ export async function resolvePreBondSeconds(
     });
   }
 
+  return knownPreBondSeconds(candidates);
+}
+
+const graduatedAt = (c: PreBondCandidate): number | undefined =>
+  validMs(c.graduatedAt) ?? graduations.get(c.mintAddress);
+
+/**
+ * Seconds on the curve for each candidate whose launch and graduation are both already known in
+ * this process - no lookup. What resolvePreBondSeconds answers from once its lookups are done.
+ */
+export function knownPreBondSeconds(candidates: ReadonlyArray<PreBondCandidate>): Map<string, number> {
+  const out = new Map<string, number>();
   for (const c of candidates) {
     const grad = graduatedAt(c);
     const launched = launches.get(c.mintAddress);

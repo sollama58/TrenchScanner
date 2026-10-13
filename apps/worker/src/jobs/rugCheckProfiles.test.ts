@@ -129,6 +129,27 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(again.stats).toMatchObject({ cached: 1, fetched: 1 });
   });
 
+  it("never refreshes a mint given an infinite TTL, but still reads one it has no report for", async () => {
+    // How the scan holds a coin already rejected for good (see settledRejects.ts): its last report
+    // stands however old, and only a coin never read at all costs a lookup.
+    const [settled, unread] = [mint("settled"), mint("settled-unread")];
+    const { client, calls } = fakeClient({
+      [settled]: { status: "found", profile: profile(settled, 7) },
+      [unread]: { status: "found", profile: profile(unread, 8) },
+    });
+    await resolveRugProfiles([settled], client, 5);
+    await prisma.rugCheckCache.update({
+      where: { mintAddress: settled },
+      data: { checkedAt: new Date(Date.now() - 24 * 60 * 60_000) },
+    });
+    calls.length = 0;
+
+    const again = await resolveRugProfiles([settled, unread], client, () => Infinity);
+    expect(calls.flat()).toEqual([unread]);
+    expect(again.profiles.get(settled)?.holderCount).toBe(7);
+    expect(again.profiles.get(unread)?.holderCount).toBe(8);
+  });
+
   it("caches a genuine 'no report' so a brand-new mint isn't re-requested every cycle", async () => {
     // The busiest case, not the rarest: a mint RugCheck hasn't indexed yet is exactly the kind
     // that keeps turning up in band cycle after cycle.
