@@ -52,10 +52,51 @@ describe("export query", () => {
       referentPostId: null,
       lineageSameTicker: null,
       timedOut: [],
+      trendTerms: [],
     });
     expect(narrativeText(null).copyOf).toEqual([]);
     expect(exportQuerySchema.parse({ dataset: "narratives" }).dataset).toBe("narratives");
     expect(csvColumns("narratives")).toContain("referentLabel");
+  });
+
+  it("pulls the trending terms the full read matched, per source", () => {
+    const t = narrativeText({
+      trend: {
+        matched: true,
+        terms: [
+          { term: "Plague (disease)", source: "wikipedia", spike: 4.2, score: 0.43, matched_on: "name" },
+          { term: "plague", source: "x_trends", rank: 7, hours: 5, score: 0.5, partial: false, extra: "x" },
+        ],
+      },
+    });
+    expect(t.trendTerms).toEqual([
+      {
+        term: "Plague (disease)",
+        source: "wikipedia",
+        score: 0.43,
+        spike: 4.2,
+        rank: null,
+        hours: null,
+        searches: null,
+        posts: null,
+        matchedOn: "name",
+        partial: null,
+        seenAt: null,
+      },
+      {
+        term: "plague",
+        source: "x_trends",
+        score: 0.5,
+        spike: null,
+        rank: 7,
+        hours: 5,
+        searches: null,
+        posts: null,
+        matchedOn: null,
+        partial: false,
+        seenAt: null,
+      },
+    ]);
   });
 
   it("pulls the X post's engagement and the newer read fields (TokenSage rules 0.30.0+)", () => {
