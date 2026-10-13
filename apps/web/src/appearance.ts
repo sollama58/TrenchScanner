@@ -31,9 +31,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   narrativeNote: null,
   streamTab: false,
   quickLinks: ["terminal"],
-  // The composite score tile is off by default so the stat tiles fill a clean 4 x 2 grid; it can be
-  // switched back on in Customize. An account that saved its own field list keeps that list.
-  hidden: ["score"],
+  // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
+  // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that
+  // saved its own field list keeps that list.
+  hidden: ["score", "sage"],
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */
@@ -125,7 +126,18 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
     hint: "Price boxes and the key wallet checks",
     look: {
       density: "compact",
-      hidden: ["tokenName", "calibrated", "ath", "score", "holders", "age", "top10", "snipers", "mint"],
+      hidden: [
+        "tokenName",
+        "calibrated",
+        "ath",
+        "score",
+        "holders",
+        "age",
+        "top10",
+        "snipers",
+        "mint",
+        "sage",
+      ],
       learningNote: false,
     },
   },
@@ -145,7 +157,7 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
       phoneColumns: 2,
       textSize: 90,
       corners: "square",
-      hidden: ["tokenName", "calibrated", "score"],
+      hidden: ["tokenName", "calibrated", "score", "sage"],
     },
   },
 ];

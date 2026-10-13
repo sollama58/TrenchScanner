@@ -128,9 +128,10 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   narrativeNote: null,
   streamTab: false,
   quickLinks: ["terminal"],
-  // The composite score tile is off by default so the stat tiles fill a clean 4 x 2 grid; it can be
-  // switched back on in Customize. An account that saved its own field list keeps that list.
-  hidden: ["score"],
+  // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
+  // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that
+  // saved its own field list keeps that list.
+  hidden: ["score", "sage"],
 };
 
 /** The stored JSON as an appearance, field by field: a bad or missing field takes its default. */

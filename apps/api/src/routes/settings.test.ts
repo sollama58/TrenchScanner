@@ -63,8 +63,8 @@ describe("parseFeedAppearance", () => {
       quickLinks: ["gmgn", "axiom"],
     });
     expect(parseFeedAppearance({ quickLinks: [] }).quickLinks).toEqual([]);
-    // The score tile is hidden by default; an account that saved its own field list keeps it.
-    expect(parseFeedAppearance({}).hidden).toEqual(["score"]);
+    // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.
+    expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage"]);
     expect(parseFeedAppearance({ hidden: [] }).hidden).toEqual([]);
   });
 
